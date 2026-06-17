@@ -1,0 +1,160 @@
+# CLAUDE.md — AudioSilo Server
+
+Guidance for working in this repository. Keep this file updated as the codebase
+evolves.
+
+## What this is
+
+A self-hosted **audiobook server** in Go. **API only** — no bundled web UI (the
+frontend ships separately). It must be **safe to expose to the internet** for
+inexperienced users: secure defaults, no default passwords, app-layer hardening,
+configurable TLS.
+
+Module path: `github.com/kodestar/audiosilo-server`.
+
+## Build / test / run
+
+```sh
+go build ./...                 # build everything
+go test ./...                  # unit + integration tests (in-memory SQLite + testdata fixtures)
+go vet ./...
+go build -o bin/audiosilo ./cmd/audiosilo
+./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
+```
+
+Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe).
+
+## Design priorities (in order)
+
+1. Safe to expose to the internet.
+2. Fast regardless of library size (FTS5 + keyset pagination).
+3. No-wait first connection (the filesystem view needs no indexing).
+4. Portable: the filesystem is the source of truth for content; the database is
+   a **rebuildable** index/cache. Never put content only in the DB.
+
+## Package layout
+
+```
+cmd/audiosilo/        entrypoint: flag wiring, first-run bootstrap, library sync, startup scan
+internal/config/      YAML + env config, validation, secure defaults
+internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
+internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
+internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
+internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
+internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (layout-aware path parsing)
+internal/media/       Range streaming, download, embedded cover extraction
+internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
+internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
+internal/web/         baked-in admin/connect UI (embedded vanilla HTML/CSS/JS, no build step)
+testdata/library/     tiny generated M4B fixtures used by tests
+```
+
+Dependency direction: `api` → (`auth`, `catalog`, `library`, `media`, `config`);
+`library` → (`catalog`, `metadata`, `config`); everything DB-backed → `store`.
+`api` is transport-only — keep business logic out of handlers.
+
+## Identity = the filesystem path
+
+Audiobook metadata is unreliable, so **the path is the identity**. Content is
+addressed by `(library_id, rel_path)`; playback, progress, bookmarks, notes and
+share membership all key on the path. `books.id` is an internal, rebuildable
+index artifact — never put it in the API contract or in durable user state. A
+cheap fingerprint (sha256 of size + first/last 64KB, stored in `books.content_hash`)
+is used **only** to detect moves; it is not an identity.
+
+## Data model (SQLite, see internal/store/migrations/)
+
+`users`, `tokens` (sessions + pairing, hashed), `auth_codes`, `libraries`,
+`books` (+ `content_hash` fingerprint), `book_files`, `chapters` (with
+`file_path`), `books_fts` (standalone FTS5). Durable user state is **path-keyed**
+and decoupled from the index (no FK to books): `progress`/`bookmarks`/`notes`/
+`listening_history` on `(user_id, library_id, rel_path)`. Sharing:
+`shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
+`user_share_access`.
+
+Book identity carries `author`/`series`/`title` plus optional `asin`/`isbn` so a
+future metadata site can attach enrichment without reshaping the schema.
+
+## Conventions
+
+- **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
+  never edit an applied migration. Applied names are tracked in `schema_migrations`.
+- **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords
+  use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
+  first-run banner prints them once and is the only place they appear.
+- **SQLite** runs with a single open connection (writers serialize) + WAL.
+- **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
+  endpoints to OFFSET for large tables.
+- **Path safety**: any filesystem access derived from user input goes through
+  `library.SafeJoin`, which rejects traversal outside the library root.
+- **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
+  chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
+  is the handle (a query param, to avoid encoded-slash issues). `item`/`chapters`/
+  `cover` resolve `(library, path)` to a book via `GetBookByPath`, indexing on
+  demand (`Scanner.IndexPath`) if the scan hasn't reached it; `stream` serves an
+  audio file path directly. The `/fs` view annotates book entries with metadata
+  (`is_book` + title/author/…); the client acts on the entry's `path`.
+- **Sharing & access (shares)**: access is via `shares` = named sets of path
+  rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
+  (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
+  `Scope.VisibleInBrowse` filters `/fs` to a navigable subtree, and
+  `pathFilterSQL` scopes `ListBooks`/`Search`. Every content handler authorizes
+  the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`.
+  Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
+- **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
+  new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
+  durable state old→new (`catalog.MoveDurableState`). Re-tagging keeps state via
+  the path key; moving keeps it via the fingerprint.
+- **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/layout/
+  default_view and triggers a background rescan (layout changes how books are
+  discovered); `DELETE /admin/libraries/{id}` removes the library + its index
+  (files on disk untouched). Both are surfaced in the admin console.
+- **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
+  ties) in `catalog.SaveProgress` — the realtime layer (Phase C) must reuse it so
+  REST and WebSocket writes converge.
+- **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
+  multi-file mp3 parts share one shape: each chapter carries `file_path` (the
+  library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and
+  `book_offset` (its start on the whole-book timeline). For folder books the
+  scanner probes each part and, if a part has its own embedded chapters (a single
+  chaptered m4b in its own book folder), expands those; otherwise the whole part
+  becomes one chapter. `GET /libraries/{id}/chapters?path=` returns
+  `{chapters, files, duration}`; a player renders single- and multi-file books
+  identically.
+- ffprobe is optional; code paths must degrade gracefully when it is absent
+  (path-derived metadata still works).
+- **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
+  (and does NOT prune) if a library root is missing/unreadable, or if it returns
+  zero audio files while books are still indexed. This protects the index — and
+  the progress/bookmarks that cascade from it — when a network share (SMB/NFS)
+  is unmounted. Library roots are always local paths; mount remote shares first.
+
+## Roadmap
+
+- **Phase A (done)**: auth/QR, admin, 3 views, scanner, FTS search, pagination,
+  Range streaming, per-user listening state.
+- **Phase A.1 (done)**: baked-in web UI (`internal/web`) — public connect page
+  (auth-code box → QR + links) and an admin console (login, users, libraries,
+  access grants, auth codes, rescan, edit-layout, delete). Static client over the
+  JSON API; the API enforces the admin role, so the HTML itself is unprivileged.
+  The audiobook *player* frontend remains a separate future project, not in this repo.
+- **Phase A.2 (done)**: path identity + **filesystem-based shares** (named sets of
+  path rules; filtered-tree browse; whole-library sugar), durable state re-keyed to
+  the path, and cheap **move-tracking**. Admin console has a **Shares** section with
+  a filesystem path picker.
+- **Phase B**: `POST /uploads` → parse + placement suggestion (layout-aware);
+  AAX→M4B conversion (user-supplied activation bytes, never stored).
+- **Phase C**: `?transcode=` on the stream endpoint (ffmpeg pipe); WebSocket
+  `/api/v1/ws` realtime sync reusing the last-write-wins merge + offline replay.
+- **Phase D (designed)**: server federation — peering, remote shelves, hybrid
+  routing (proxy catalog + signed direct stream), reusing shares as the share unit.
+  See the plan file.
+
+`GET /api/v1/server` advertises capability flags (`upload`, `transcode`,
+`websocket`); flip them on as phases land.
+
+## API surface
+
+See `internal/api/api.go` for the full route table. Public: `/server`,
+`/auth/redeem`, `/auth/exchange`, `/auth/login`. Everything else needs a session
+bearer token; `/admin/*` additionally requires the admin role.

@@ -1,0 +1,215 @@
+package catalog
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/store"
+)
+
+func newTestCatalog(t *testing.T) (*Catalog, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return New(db, time.Now), ctx
+}
+
+func seedUser(t *testing.T, c *Catalog, ctx context.Context) int64 {
+	t.Helper()
+	res, err := c.db.ExecContext(ctx,
+		`INSERT INTO users(username, password_hash, role, created_at, updated_at)
+		 VALUES('u','x','user','t','t')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+func TestUpsertAndGetBook(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	id, err := c.UpsertBook(ctx, &Book{
+		LibraryID: lib.ID, RelPath: "a/b.m4b", Title: "Title", Author: "Auth", Series: "Ser", SeriesIndex: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Upserting the same rel_path updates rather than duplicates.
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "a/b.m4b", Title: "Title2"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.GetBook(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "Title2" {
+		t.Fatalf("expected updated title, got %q", got.Title)
+	}
+}
+
+func TestKeysetPaginationStable(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	for i := 0; i < 10; i++ {
+		if _, err := c.UpsertBook(ctx, &Book{
+			LibraryID: lib.ID, RelPath: fmt.Sprintf("b%02d.m4b", i),
+			Title: fmt.Sprintf("Title %02d", i), Author: fmt.Sprintf("Author %02d", i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	cursor := ""
+	pages := 0
+	for {
+		page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Sort: "author", Limit: 3, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range page.Books {
+			if seen[b.RelPath] {
+				t.Fatalf("duplicate across pages: %s", b.RelPath)
+			}
+			seen[b.RelPath] = true
+		}
+		pages++
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+		if pages > 20 {
+			t.Fatal("pagination did not terminate")
+		}
+	}
+	if len(seen) != 10 {
+		t.Fatalf("expected 10 unique books across pages, got %d", len(seen))
+	}
+}
+
+func TestSearchFTS(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "1.m4b", Title: "Unsouled", Author: "Will Wight", Series: "Cradle"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "2.m4b", Title: "Soulsmith", Author: "Will Wight", Series: "Cradle"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "3.m4b", Title: "The Final Empire", Author: "Brandon Sanderson"})
+
+	all := []Scope{{LibraryID: lib.ID, AllowAll: true}}
+	// Prefix match on title.
+	res, err := c.Search(ctx, "soul", all, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Title != "Soulsmith" {
+		t.Fatalf("prefix search = %+v", res)
+	}
+	// Author match returns both Will Wight books.
+	res, _ = c.Search(ctx, "wight", all, 10)
+	if len(res) != 2 {
+		t.Fatalf("author search expected 2, got %d", len(res))
+	}
+	// Scoping: no scopes yields nothing.
+	if res, _ := c.Search(ctx, "wight", nil, 10); len(res) != 0 {
+		t.Fatalf("expected no results without access, got %d", len(res))
+	}
+}
+
+func TestProgressLastWriteWins(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	uid := seedUser(t, c, ctx)
+	ref := Ref{LibraryID: lib.ID, Path: "Author/Book.m4b"}
+
+	t0 := time.Now().UTC()
+	if _, err := c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 100, UpdatedAt: t0.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	// A stale (older) update must be ignored.
+	saved, err := c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 50, UpdatedAt: t0.Add(-time.Minute).Format(time.RFC3339)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Position != 100 {
+		t.Fatalf("stale update should be ignored, position = %v", saved.Position)
+	}
+	// A newer update wins.
+	saved, _ = c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 200, UpdatedAt: t0.Add(time.Minute).Format(time.RFC3339)})
+	if saved.Position != 200 {
+		t.Fatalf("newer update should win, position = %v", saved.Position)
+	}
+}
+
+func TestMoveDurableState(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	uid := seedUser(t, c, ctx)
+	old := Ref{LibraryID: lib.ID, Path: "old/Book.m4b"}
+	if _, err := c.SaveProgress(ctx, uid, Progress{Ref: old, Position: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.MoveDurableState(ctx, lib.ID, "old/Book.m4b", "new/Book.m4b"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := c.GetProgress(ctx, uid, old); p != nil {
+		t.Fatal("progress should no longer be at the old path")
+	}
+	moved, _ := c.GetProgress(ctx, uid, Ref{LibraryID: lib.ID, Path: "new/Book.m4b"})
+	if moved == nil || moved.Position != 42 {
+		t.Fatalf("progress should have moved to the new path: %+v", moved)
+	}
+}
+
+func TestUpdateLibrary(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp", Layout: "books_in_folder"})
+	// Patch only the layout; other fields are preserved.
+	updated, err := c.UpdateLibrary(ctx, lib.ID, Library{Layout: "chapters_in_folder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Layout != "chapters_in_folder" || updated.Name != "L" || updated.Root != "/tmp" {
+		t.Fatalf("unexpected update result: %+v", updated)
+	}
+	got, _ := c.GetLibrary(ctx, lib.ID)
+	if got.Layout != "chapters_in_folder" {
+		t.Fatalf("layout not persisted: %q", got.Layout)
+	}
+}
+
+func TestDeleteLibraryRemovesBooksAndFTS(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "1.m4b", Title: "Unsouled", Author: "Will Wight"})
+	if err := c.DeleteLibrary(ctx, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetLibrary(ctx, lib.ID); err != ErrNotFound {
+		t.Fatalf("expected library gone, got %v", err)
+	}
+	// The FTS index must not retain orphaned rows for the deleted library.
+	all := []Scope{{LibraryID: lib.ID, AllowAll: true}}
+	if hits, _ := c.Search(ctx, "unsouled", all, 10); len(hits) != 0 {
+		t.Fatalf("expected no FTS hits after delete, got %d", len(hits))
+	}
+}
+
+func TestDeleteBooksNotIn(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "keep.m4b", Title: "Keep"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "gone.m4b", Title: "Gone"})
+	n, err := c.DeleteBooksNotIn(ctx, lib.ID, map[string]bool{"keep.m4b": true})
+	if err != nil || n != 1 {
+		t.Fatalf("expected 1 removed, got %d err=%v", n, err)
+	}
+	page, _ := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID})
+	if len(page.Books) != 1 || page.Books[0].RelPath != "keep.m4b" {
+		t.Fatalf("unexpected remaining books: %+v", page.Books)
+	}
+}

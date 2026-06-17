@@ -1,0 +1,43 @@
+# AudioSilo server configuration.
+#
+# This file is written to <data-dir>/config.yaml on first run with secure
+# defaults. Edit it and restart, or override selected values with environment
+# variables (shown in brackets). Command-line flags set the data dir and
+# ffprobe path: `audiosilo --data ./data --ffprobe ffprobe`.
+
+# Address to listen on.                              [AUDIOSILO_BIND]
+bind: "0.0.0.0:8080"
+
+# Externally reachable base URL. Used to build QR pairing payloads. If empty it
+# is derived from the incoming request.               [AUDIOSILO_PUBLIC_URL]
+public_url: ""
+
+tls:
+  # off        - plain HTTP (use behind a reverse proxy that terminates TLS)
+  # selfsigned - generate & persist a self-signed cert (default; good for LAN)
+  # autocert   - automatic Let's Encrypt certificates (requires public hostname)
+  mode: "selfsigned"                                # [AUDIOSILO_TLS_MODE]
+  hosts: []          # autocert: hostnames to obtain certs for [AUDIOSILO_TLS_HOSTS]
+  cache_dir: ""      # autocert cert cache (default <data>/certs)
+  cert_file: ""      # selfsigned: optional explicit cert path
+  key_file: ""       # selfsigned: optional explicit key path
+
+# CIDRs whose X-Forwarded-For header is trusted. Set this when running behind a
+# reverse proxy so client IPs (used for rate limiting) are accurate.
+trusted_proxies: []                                 # [AUDIOSILO_TRUSTED_PROXIES]
+# e.g. ["127.0.0.1/32", "10.0.0.0/8"]
+
+# Allowed browser origins for CORS. Empty = no cross-origin CORS headers granted
+# (native apps and same-origin web clients still work). "*" disables the check.
+cors_origins: []                                    # [AUDIOSILO_CORS_ORIGINS]
+
+# Maximum request/upload body size in bytes (uploads land in Phase B).
+max_upload_bytes: 2147483648                        # [AUDIOSILO_MAX_UPLOAD_BYTES] (2 GiB)
+
+# Libraries to expose. Declaring them here syncs them into the database and
+# scans them on startup; you can also create libraries at runtime via the admin
+# API. layout is one of: flat | chapters_in_folder | books_in_folder.
+libraries: []
+# - name: "Main"
+#   root: "/srv/audiobooks"
+#   layout: "books_in_folder"

@@ -1,0 +1,9 @@
+# Build output
+/bin/
+/audiosilo
+
+# Runtime data (database, config, generated certs)
+/data/
+
+# OS / editor cruft
+.DS_Store

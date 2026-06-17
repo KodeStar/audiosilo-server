@@ -1,0 +1,512 @@
+package library
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
+)
+
+// Scanner walks library roots and keeps the catalog index up to date. The
+// filesystem view does not depend on it, so scanning can run in the background
+// after startup without blocking client browsing.
+type Scanner struct {
+	cat         *catalog.Catalog
+	ffprobePath string
+	log         *slog.Logger
+
+	mu       sync.Mutex
+	scanning map[int64]bool // library IDs currently scanning
+}
+
+// NewScanner returns a Scanner. ffprobePath may be "" to skip ffprobe.
+func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Scanner {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Scanner{cat: cat, ffprobePath: ffprobePath, log: log, scanning: map[int64]bool{}}
+}
+
+// ScanResult summarizes a scan.
+type ScanResult struct {
+	Indexed int
+	Removed int
+	Elapsed time.Duration
+}
+
+// ErrLibraryUnavailable means the library root could not be read, or it
+// returned no audio files while the index still has books — a strong signal
+// that a network share (e.g. SMB/NFS) is unmounted. The scanner refuses to
+// prune in this case so a dropped mount never wipes the index (and, via
+// cascade, users' progress/bookmarks).
+var ErrLibraryUnavailable = errors.New("library root unavailable; skipping scan to protect the index")
+
+// ErrNotIndexable means a resolved path is not a book (e.g. a non-audio file, or
+// a directory in a file-per-book layout).
+var ErrNotIndexable = errors.New("path is not an indexable book")
+
+// coverNames are sibling image files treated as a book's cover.
+var coverNames = []string{"cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.png"}
+
+// Scan indexes a single library. It is safe to call concurrently for different
+// libraries; concurrent calls for the same library are coalesced (the second
+// returns immediately).
+func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, error) {
+	s.mu.Lock()
+	if s.scanning[lib.ID] {
+		s.mu.Unlock()
+		return &ScanResult{}, nil
+	}
+	s.scanning[lib.ID] = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.scanning, lib.ID)
+		s.mu.Unlock()
+	}()
+
+	start := time.Now()
+	sigs, err := s.cat.Signatures(ctx, lib.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Guard against an unavailable root (e.g. an unmounted network share):
+	// WalkDir would otherwise silently yield zero files and the prune step
+	// would wipe the index. Fail fast before discovery.
+	if info, statErr := os.Stat(lib.Root); statErr != nil || !info.IsDir() {
+		return nil, fmt.Errorf("%w: %q: %v", ErrLibraryUnavailable, lib.Root, statErr)
+	}
+
+	books, err := discoverBooks(lib)
+	if err != nil {
+		return nil, err
+	}
+
+	// A root that exists but now contains no audio files, while the index still
+	// has books, almost always means the mount dropped to an empty directory.
+	// Refuse to prune so the index (and cascaded progress/bookmarks) survive.
+	if len(books) == 0 && len(sigs) > 0 {
+		return nil, fmt.Errorf("%w: %q returned 0 audio files but %d are indexed",
+			ErrLibraryUnavailable, lib.Root, len(sigs))
+	}
+
+	// Carry user state across moved/renamed files before indexing.
+	s.detectMoves(ctx, lib, sigs, books)
+
+	res := &ScanResult{}
+	keep := make(map[string]bool, len(books))
+	for _, b := range books {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
+		keep[b.RelPath] = true
+		if old, ok := sigs[b.RelPath]; ok && old.MTime == b.MTime && old.Size == b.Size {
+			continue // unchanged since last scan
+		}
+		s.enrich(lib, b)
+		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
+			s.log.Warn("index book failed", "library", lib.Name, "path", b.RelPath, "err", err)
+			continue
+		}
+		res.Indexed++
+	}
+
+	removed, err := s.cat.DeleteBooksNotIn(ctx, lib.ID, keep)
+	if err != nil {
+		return res, err
+	}
+	res.Removed = removed
+	res.Elapsed = time.Since(start)
+	s.log.Info("library scanned", "library", lib.Name,
+		"indexed", res.Indexed, "removed", res.Removed, "elapsed", res.Elapsed)
+	return res, nil
+}
+
+// enrich fills metadata for a book from its primary file (tags + ffprobe) and
+// folder context (path heuristics, sibling cover art).
+func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
+	primary := b.RelPath
+	if b.IsFolder && len(b.Files) > 0 {
+		primary = b.Files[0].RelPath
+	}
+	// Baseline from the path (layout-aware), then overlay embedded tags/probe
+	// which are authoritative when present.
+	base := metadata.DeriveFromPath(lib.Layout, b.RelPath, b.IsFolder)
+	b.Title, b.Author, b.Series, b.SeriesIndex = base.Title, base.Author, base.Series, base.SeriesIndex
+
+	abs := filepath.Join(lib.Root, filepath.FromSlash(primary))
+	md, _ := metadata.Extract(abs, s.ffprobePath)
+	if md != nil {
+		b.Title = firstNonEmpty(md.Title, b.Title)
+		b.Author = firstNonEmpty(md.Author, b.Author)
+		b.Series = firstNonEmpty(md.Series, b.Series)
+		if md.SeriesIndex != 0 {
+			b.SeriesIndex = md.SeriesIndex
+		}
+		b.Narrator = md.Narrator
+	}
+
+	// Move-detection fingerprint (reused content_hash column); skip if already
+	// computed during move detection.
+	if b.ContentHash == "" {
+		b.ContentHash = fingerprintFile(abs)
+	}
+
+	// Normalize chapters so single-file and multi-file books look the same to a
+	// client (see metadata.Chapter).
+	if b.IsFolder {
+		s.buildMultiFileChapters(lib, b)
+	} else {
+		b.Chapters = singleFileChapters(md, b.RelPath)
+		if md != nil && md.Duration > 0 {
+			b.Duration = md.Duration
+		}
+	}
+	// Sibling cover art takes precedence; otherwise the cover handler falls back
+	// to embedded art from the primary file.
+	dir := filepath.Dir(filepath.Join(lib.Root, filepath.FromSlash(b.RelPath)))
+	for _, name := range coverNames {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			rel, _ := filepath.Rel(lib.Root, filepath.Join(dir, name))
+			b.CoverPath = filepath.ToSlash(rel)
+			break
+		}
+	}
+}
+
+// singleFileChapters takes embedded chapters from a single-file book and marks
+// them as living in file 0 (path relPath), with the in-file start doubling as
+// the book offset.
+func singleFileChapters(md *metadata.Metadata, relPath string) []metadata.Chapter {
+	if md == nil {
+		return nil
+	}
+	out := make([]metadata.Chapter, len(md.Chapters))
+	for i, ch := range md.Chapters {
+		ch.FileIndex = 0
+		ch.FilePath = relPath
+		ch.BookOffset = ch.Start
+		out[i] = ch
+	}
+	return out
+}
+
+// buildMultiFileChapters builds a normalized chapter list for a folder book.
+// For each part it measures the duration and, crucially, if that file has its
+// own embedded chapters (e.g. a single m4b living in its own book folder) it
+// expands them; otherwise the whole file becomes one chapter. Book offsets are
+// cumulative across parts, and the book's total duration is the sum. This makes
+// a single chaptered m4b and a folder of split mp3s render identically.
+func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
+	var cum float64
+	idx := 0
+	for i := range b.Files {
+		f := &b.Files[i]
+		abs := filepath.Join(lib.Root, filepath.FromSlash(f.RelPath))
+		md, _ := metadata.Extract(abs, s.ffprobePath)
+		var dur float64
+		if md != nil {
+			dur = md.Duration
+		}
+		f.Duration = dur
+
+		if md != nil && len(md.Chapters) > 0 {
+			for _, ch := range md.Chapters {
+				b.Chapters = append(b.Chapters, metadata.Chapter{
+					Index:      idx,
+					Title:      ch.Title,
+					FileIndex:  f.Seq,
+					FilePath:   f.RelPath,
+					Start:      ch.Start,
+					End:        ch.End,
+					BookOffset: cum + ch.Start,
+				})
+				idx++
+			}
+		} else {
+			b.Chapters = append(b.Chapters, metadata.Chapter{
+				Index:      idx,
+				Title:      partTitle(f.RelPath),
+				FileIndex:  f.Seq,
+				FilePath:   f.RelPath,
+				Start:      0,
+				End:        dur,
+				BookOffset: cum,
+			})
+			idx++
+		}
+		cum += dur
+	}
+	b.Duration = cum
+}
+
+// partTitle derives a chapter title from a part's filename, stripping the
+// extension and any leading track number ("03 - Chapter Three" -> "Chapter Three").
+func partTitle(relPath string) string {
+	name := filepath.Base(relPath)
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	if _, title := metadata.SplitSeriesIndex(name); title != "" {
+		return title
+	}
+	return name
+}
+
+// discoverBooks groups a library's audio files into books per its layout.
+func discoverBooks(lib catalog.Library) ([]*catalog.Book, error) {
+	switch lib.Layout {
+	case config.LayoutChaptersInFolder:
+		return discoverFolderBooks(lib)
+	default: // flat, books_in_folder
+		return discoverFileBooks(lib)
+	}
+}
+
+// discoverFileBooks treats each audio file as a single-file book.
+func discoverFileBooks(lib catalog.Library) ([]*catalog.Book, error) {
+	var books []*catalog.Book
+	err := filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if d.IsDir() || strings.HasPrefix(d.Name(), ".") || !metadata.IsAudio(d.Name()) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		books = append(books, fileBook(lib, path, info))
+		return nil
+	})
+	return books, err
+}
+
+// discoverFolderBooks treats each directory that directly contains audio files
+// as one (possibly multi-file) book.
+func discoverFolderBooks(lib catalog.Library) ([]*catalog.Book, error) {
+	dirs := map[string]bool{}
+	err := filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || strings.HasPrefix(d.Name(), ".") || !metadata.IsAudio(d.Name()) {
+			return nil
+		}
+		dirs[filepath.Dir(path)] = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	var books []*catalog.Book
+	for dir := range dirs {
+		if b := folderBook(lib, dir); b != nil {
+			books = append(books, b)
+		}
+	}
+	return books, nil
+}
+
+// fileBook builds a single-file book for the audio file at absPath.
+func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Book {
+	rel, _ := filepath.Rel(lib.Root, absPath)
+	return &catalog.Book{
+		LibraryID: lib.ID,
+		RelPath:   filepath.ToSlash(rel),
+		Format:    ext(filepath.Base(absPath)),
+		Size:      info.Size(),
+		MTime:     info.ModTime().Unix(),
+	}
+}
+
+// folderBook builds a (possibly multi-file) book from the audio files directly
+// inside absDir, or returns nil if the directory contains no audio. os.ReadDir
+// returns entries already sorted by name, giving stable part ordering.
+func folderBook(lib catalog.Library, absDir string) *catalog.Book {
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return nil
+	}
+	var files []catalog.BookFile
+	var totalSize, maxMTime int64
+	for _, de := range entries {
+		if de.IsDir() || strings.HasPrefix(de.Name(), ".") || !metadata.IsAudio(de.Name()) {
+			continue
+		}
+		info, ierr := de.Info()
+		if ierr != nil {
+			continue
+		}
+		frel, _ := filepath.Rel(lib.Root, filepath.Join(absDir, de.Name()))
+		files = append(files, catalog.BookFile{
+			RelPath: filepath.ToSlash(frel), Seq: len(files), Format: ext(de.Name()), Size: info.Size(),
+		})
+		totalSize += info.Size()
+		if m := info.ModTime().Unix(); m > maxMTime {
+			maxMTime = m
+		}
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	rel, _ := filepath.Rel(lib.Root, absDir)
+	return &catalog.Book{
+		LibraryID: lib.ID,
+		RelPath:   filepath.ToSlash(rel),
+		IsFolder:  true,
+		Format:    files[0].Format,
+		Size:      totalSize,
+		MTime:     maxMTime,
+		Files:     files,
+	}
+}
+
+// IndexPath indexes a single browsed path on demand and returns the resulting
+// book (with chapters). It lets a client act on something it found in the
+// filesystem view before the background scan has reached it. In a
+// chapters_in_folder library, resolving either the book folder or a file inside
+// it yields the same folder book.
+func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
+	abs, err := SafeJoin(lib.Root, relPath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
+	}
+
+	var book *catalog.Book
+	if lib.Layout == config.LayoutChaptersInFolder {
+		dir := abs
+		if !info.IsDir() {
+			dir = filepath.Dir(abs) // the book is the containing folder
+		}
+		book = folderBook(lib, dir)
+	} else {
+		if info.IsDir() {
+			return nil, fmt.Errorf("%w: a directory is not a book in the %q layout", ErrNotIndexable, lib.Layout)
+		}
+		if !metadata.IsAudio(abs) {
+			return nil, fmt.Errorf("%w: %q is not an audio file", ErrNotIndexable, filepath.Base(abs))
+		}
+		book = fileBook(lib, abs, info)
+	}
+	if book == nil {
+		return nil, fmt.Errorf("%w: no audio found at %q", ErrNotIndexable, relPath)
+	}
+
+	s.enrich(lib, book)
+	id, err := s.cat.UpsertBook(ctx, book)
+	if err != nil {
+		return nil, err
+	}
+	return s.cat.GetBook(ctx, id)
+}
+
+func ext(name string) string {
+	return strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+const fingerprintChunk = 64 * 1024 // bytes hashed from the head and tail
+
+// fingerprintFile returns a cheap content fingerprint — sha256 of
+// (size, first 64KB, last 64KB) — used only to detect "same content, new path"
+// moves. It is not a full hash (large files stay cheap) and intentionally not a
+// durable identity (that is the path). Returns "" on error.
+func fingerprintFile(absPath string) string {
+	f, err := os.Open(absPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	h := sha256.New()
+	fmt.Fprintf(h, "%d:", info.Size())
+	head := make([]byte, fingerprintChunk)
+	n, _ := io.ReadFull(f, head)
+	h.Write(head[:n])
+	if info.Size() > int64(fingerprintChunk) {
+		tail := make([]byte, fingerprintChunk)
+		if m, err := f.ReadAt(tail, info.Size()-int64(fingerprintChunk)); err == nil || m > 0 {
+			h.Write(tail[:m])
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// detectMoves migrates durable user state (progress/bookmarks/notes/history)
+// from a vanished path to a new path with matching content, so a moved/renamed
+// file keeps its state. It only does work when something both disappeared and
+// appeared, keeping fingerprinting off the hot path of normal scans.
+func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map[string]catalog.Signature, books []*catalog.Book) {
+	discovered := make(map[string]bool, len(books))
+	for _, b := range books {
+		discovered[b.RelPath] = true
+	}
+	var disappeared []string
+	for relPath := range sigs {
+		if !discovered[relPath] {
+			disappeared = append(disappeared, relPath)
+		}
+	}
+	var newBooks []*catalog.Book
+	for _, b := range books {
+		if _, existed := sigs[b.RelPath]; !existed {
+			newBooks = append(newBooks, b)
+		}
+	}
+	if len(disappeared) == 0 || len(newBooks) == 0 {
+		return
+	}
+	oldFP, err := s.cat.FingerprintsForPaths(ctx, lib.ID, disappeared)
+	if err != nil {
+		s.log.Warn("move detection: load fingerprints failed", "library", lib.Name, "err", err)
+		return
+	}
+	for _, nb := range newBooks {
+		primary := nb.RelPath
+		if nb.IsFolder && len(nb.Files) > 0 {
+			primary = nb.Files[0].RelPath
+		}
+		fp := fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primary)))
+		nb.ContentHash = fp // reused by enrich, avoiding a second read
+		if fp == "" {
+			continue
+		}
+		for oldPath, ofp := range oldFP {
+			if ofp == fp {
+				if err := s.cat.MoveDurableState(ctx, lib.ID, oldPath, nb.RelPath); err != nil {
+					s.log.Warn("move state failed", "from", oldPath, "to", nb.RelPath, "err", err)
+				} else {
+					s.log.Info("detected move", "library", lib.Name, "from", oldPath, "to", nb.RelPath)
+				}
+				delete(oldFP, oldPath)
+				break
+			}
+		}
+	}
+}

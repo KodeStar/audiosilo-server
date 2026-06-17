@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AudioSilo — Admin</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <!-- Login -->
+  <div id="login-view" class="center">
+    <div class="card narrow">
+      <div class="brand"><span class="dot"></span> AudioSilo</div>
+      <h1 style="margin-top:16px">Admin sign in</h1>
+      <form id="login-form">
+        <label for="username">Username</label>
+        <input id="username" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <div class="spacer"></div>
+        <button type="submit" style="width:100%">Sign in</button>
+      </form>
+      <div id="login-msg" class="msg error"></div>
+      <p class="muted" style="margin-top:16px"><a href="/">← Back to connect</a></p>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dash-view" class="wrap hidden">
+    <div class="topbar">
+      <div class="brand"><span class="dot"></span> AudioSilo <span class="muted" style="font-weight:400">admin</span></div>
+      <div class="inline">
+        <span id="who" class="muted"></span>
+        <button id="logout" class="secondary small">Sign out</button>
+      </div>
+    </div>
+
+    <div id="global-msg" class="msg"></div>
+
+    <!-- Libraries -->
+    <h2>Libraries</h2>
+    <form id="lib-form" class="row">
+      <div><label for="lib-name">Name</label><input id="lib-name" required></div>
+      <div style="flex:2"><label for="lib-root">Root path</label><input id="lib-root" placeholder="/srv/audiobooks" required></div>
+      <div><label for="lib-layout">Layout</label>
+        <select id="lib-layout">
+          <option value="books_in_folder">books_in_folder</option>
+          <option value="chapters_in_folder">chapters_in_folder</option>
+          <option value="flat">flat</option>
+        </select>
+      </div>
+      <div class="row tight"><button type="submit">Add</button></div>
+    </form>
+    <table><thead><tr><th>ID</th><th>Name</th><th>Root</th><th>Layout</th><th></th></tr></thead>
+      <tbody id="lib-rows"></tbody>
+    </table>
+
+    <div class="grid2">
+      <!-- Users -->
+      <div>
+        <h2>Users</h2>
+        <form id="user-form">
+          <div class="row">
+            <div><label for="u-name">Username</label><input id="u-name" required></div>
+            <div><label for="u-pass">Password</label><input id="u-pass" type="password" required></div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <div><label for="u-role">Role</label>
+              <select id="u-role"><option value="user">user</option><option value="admin">admin</option></select>
+            </div>
+            <div class="row tight" style="align-items:flex-end"><button type="submit">Create user</button></div>
+          </div>
+        </form>
+        <table><thead><tr><th>User</th><th>Role</th><th></th></tr></thead>
+          <tbody id="user-rows"></tbody>
+        </table>
+      </div>
+
+      <!-- Whole-library access (sugar) -->
+      <div>
+        <h2>Whole-library access</h2>
+        <form id="access-form">
+          <label for="a-user">User</label><select id="a-user"></select>
+          <label for="a-lib">Library</label><select id="a-lib"></select>
+          <div class="spacer"></div>
+          <button type="submit">Grant whole library</button>
+        </form>
+        <p class="muted">Quick grant of an entire library. For partial access (an author, a
+          series, a single book), use Shares below.</p>
+      </div>
+    </div>
+
+    <!-- Shares: filesystem-based partial sharing -->
+    <h2>Shares</h2>
+    <p class="muted">A share is a named set of filesystem paths — a whole author, one series, a
+      single book, or a whole library. Grant shares to users for partial access.</p>
+    <form id="share-form" class="row">
+      <div style="flex:2"><label for="s-name">New share name</label><input id="s-name" placeholder="e.g. Kids" required></div>
+      <div class="row tight"><button type="submit">Create share</button></div>
+    </form>
+    <div id="share-list"></div>
+
+    <!-- Inline filesystem path picker -->
+    <div id="picker" class="card hidden" style="margin-top:16px">
+      <div class="topbar" style="margin-bottom:12px">
+        <strong>Pick a path for share “<span id="picker-share"></span>”</strong>
+        <button id="picker-close" class="secondary small">Close</button>
+      </div>
+      <div class="inline">
+        <label style="margin:0">Library</label>
+        <select id="picker-lib" style="max-width:240px"></select>
+        <span id="picker-crumb" class="muted code"></span>
+      </div>
+      <table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="picker-rows"></tbody></table>
+    </div>
+  </div>
+
+  <script src="/assets/admin.js"></script>
+</body>
+</html>
