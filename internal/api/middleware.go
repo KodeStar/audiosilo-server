@@ -117,11 +117,18 @@ func (a *API) rateLimit(next http.Handler) http.Handler {
 	})
 }
 
-// bearerToken extracts a token from the Authorization header.
+// bearerToken extracts a session token from the Authorization header, falling
+// back to a `token` query parameter when the header is absent. The query
+// fallback exists for browser media elements (<img>/<audio>), which cannot set
+// an Authorization header, so the web client can still authenticate GET
+// requests for covers and audio streams.
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if after, ok := strings.CutPrefix(h, "Bearer "); ok {
 		return strings.TrimSpace(after)
+	}
+	if t := strings.TrimSpace(r.URL.Query().Get("token")); t != "" {
+		return t
 	}
 	return ""
 }
