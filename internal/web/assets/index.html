@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AudioSilo — Connect</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="center">
+    <div class="card narrow">
+      <div class="brand"><span class="dot"></span> AudioSilo</div>
+      <h1 style="margin-top:16px">Connect a device</h1>
+      <p class="muted">Enter the auth code from your server administrator.</p>
+
+      <form id="redeem-form">
+        <label for="code">Auth code</label>
+        <input id="code" name="code" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" required>
+        <div class="spacer"></div>
+        <button type="submit" style="width:100%">Continue</button>
+      </form>
+
+      <div id="msg" class="msg error"></div>
+
+      <div id="result" class="hidden">
+        <h2>Scan to pair</h2>
+        <div class="qr"><img id="qr" alt="Pairing QR code"></div>
+        <p class="muted" style="text-align:center">Scan with the AudioSilo mobile app to finish pairing.</p>
+        <div class="links">
+          <a id="link-admin" href="/admin">Admin section</a>
+          <a id="link-web" href="#" aria-disabled="true">Web player (coming soon)</a>
+          <a id="link-apps" href="#" aria-disabled="true">Mobile apps (coming soon)</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/assets/connect.js"></script>
+</body>
+</html>
