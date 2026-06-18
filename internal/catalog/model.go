@@ -45,6 +45,7 @@ type Book struct {
 	Format      string             `json:"format"`
 	Size        int64              `json:"size"`
 	MTime       int64              `json:"-"`
+	AddedAt     string             `json:"added_at,omitempty"` // RFC3339; filesystem birth time (scanner)
 	ContentHash string             `json:"-"`
 	Files       []BookFile         `json:"files,omitempty"`
 	Chapters    []metadata.Chapter `json:"chapters,omitempty"`

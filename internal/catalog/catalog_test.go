@@ -120,6 +120,64 @@ func TestSearchFTS(t *testing.T) {
 	}
 }
 
+func TestRecentBooksCrossLibrary(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
+	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/tmp/b"})
+
+	// AddedAt drives the order (newest first), independent of insertion order.
+	c.UpsertBook(ctx, &Book{LibraryID: libA.ID, RelPath: "old.m4b", Title: "Old", AddedAt: "2024-01-01T00:00:00Z"})
+	c.UpsertBook(ctx, &Book{LibraryID: libB.ID, RelPath: "new.m4b", Title: "New", AddedAt: "2024-03-01T00:00:00Z"})
+	c.UpsertBook(ctx, &Book{LibraryID: libA.ID, RelPath: "mid.m4b", Title: "Mid", AddedAt: "2024-02-01T00:00:00Z"})
+
+	scopes := []Scope{{LibraryID: libA.ID, AllowAll: true}, {LibraryID: libB.ID, AllowAll: true}}
+	got, err := c.RecentBooks(ctx, scopes, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"New", "Mid", "Old"} // newest added first, spanning both libraries
+	if len(got) != len(want) {
+		t.Fatalf("expected %d books, got %d: %+v", len(want), len(got), got)
+	}
+	for i, title := range want {
+		if got[i].Title != title {
+			t.Fatalf("position %d = %q, want %q (order %+v)", i, got[i].Title, title, got)
+		}
+	}
+
+	// Scoping: a path-restricted scope only sees matching books; no scope sees none.
+	scoped := []Scope{{LibraryID: libA.ID, Paths: []string{"mid.m4b"}}}
+	if res, _ := c.RecentBooks(ctx, scoped, 10); len(res) != 1 || res[0].Title != "Mid" {
+		t.Fatalf("path-scoped recent = %+v", res)
+	}
+	if res, _ := c.RecentBooks(ctx, nil, 10); len(res) != 0 {
+		t.Fatalf("expected no results without access, got %d", len(res))
+	}
+}
+
+func TestRecentSortUsesAddedAt(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	// Insert in an order that differs from added_at order to prove the sort key.
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "1.m4b", Title: "First", AddedAt: "2024-02-01T00:00:00Z"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "2.m4b", Title: "Second", AddedAt: "2024-03-01T00:00:00Z"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "3.m4b", Title: "Third", AddedAt: "2024-01-01T00:00:00Z"})
+
+	page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Sort: "recent", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Second", "First", "Third"}
+	if len(page.Books) != len(want) {
+		t.Fatalf("expected %d, got %d", len(want), len(page.Books))
+	}
+	for i, title := range want {
+		if page.Books[i].Title != title {
+			t.Fatalf("position %d = %q, want %q", i, page.Books[i].Title, title)
+		}
+	}
+}
+
 func TestProgressLastWriteWins(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})

@@ -26,8 +26,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
 		     series_index, narrator, duration, asin, isbn, cover_path, format, size,
-		     mtime, content_hash, indexed_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		     mtime, content_hash, indexed_at, added_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 		     series=excluded.series, series_index=excluded.series_index,
@@ -35,10 +35,12 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 		     isbn=excluded.isbn, cover_path=excluded.cover_path, format=excluded.format,
 		     size=excluded.size, mtime=excluded.mtime, content_hash=excluded.content_hash,
 		     indexed_at=excluded.indexed_at
+		     -- added_at intentionally not updated: it records first-seen, so a
+		     -- re-index of an existing book keeps its original added date.
 		 RETURNING id`,
 		b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
 		b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
-		b.Format, b.Size, b.MTime, b.ContentHash, c.ts()).Scan(&id)
+		b.Format, b.Size, b.MTime, b.ContentHash, c.ts(), b.AddedAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -205,13 +207,14 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 }
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
-	series_index, narrator, duration, asin, isbn, cover_path, format, size, mtime, content_hash`
+	series_index, narrator, duration, asin, isbn, cover_path, format, size, mtime,
+	added_at, content_hash`
 
 func scanBook(row interface{ Scan(...any) error }) (*Book, error) {
 	var b Book
 	err := row.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
 		&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
-		&b.CoverPath, &b.Format, &b.Size, &b.MTime, &b.ContentHash)
+		&b.CoverPath, &b.Format, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash)
 	if err != nil {
 		return nil, err
 	}
@@ -304,14 +307,15 @@ type Page struct {
 	NextCursor string `json:"next_cursor,omitempty"`
 }
 
-// sortColumn is the textual column used by a sort's keyset. "recent" uses a
-// pure-id keyset (empty col) since ids increase monotonically with indexing.
+// sortColumn is the textual column used by a sort's keyset. "recent" orders by
+// added_at (filesystem-derived, set by the scanner) so the order is stable across
+// re-indexes; id breaks ties.
 func sortColumn(sort string) (col string, asc bool) {
 	switch sort {
 	case "title":
 		return "title", true
 	case "recent":
-		return "", false
+		return "added_at", false
 	default:
 		return "author", true
 	}
@@ -393,14 +397,54 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 	return page, nil
 }
 
+// RecentBooks returns the most recently added books across the caller's accessible
+// libraries (newest first), each restricted to that library's share path rules.
+// A single cross-library query — unlike per-library ListBooks — so a client can
+// render one merged "recently added" list without fanning out and concatenating.
+func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([]Book, error) {
+	if len(scopes) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var conds []string
+	var args []any
+	for _, s := range scopes {
+		frag, fargs := pathFilterSQL("rel_path", s)
+		conds = append(conds, "(library_id = ? AND "+frag+")")
+		args = append(args, s.LibraryID)
+		args = append(args, fargs...)
+	}
+	args = append(args, limit)
+	q := `SELECT ` + bookCols + ` FROM books WHERE (` + strings.Join(conds, " OR ") + `)
+		ORDER BY added_at DESC, id DESC LIMIT ?`
+	rows, err := c.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Book
+	for rows.Next() {
+		b, err := scanBook(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *b)
+	}
+	return out, rows.Err()
+}
+
 func sortValue(b *Book, col string) string {
 	switch col {
 	case "title":
 		return b.Title
 	case "author":
 		return b.Author
+	case "added_at":
+		return b.AddedAt
 	default:
-		return "" // recent: id-only cursor
+		return ""
 	}
 }
 

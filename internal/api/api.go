@@ -73,6 +73,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireAuth(http.HandlerFunc(a.handleCover)))
 	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireAuth(http.HandlerFunc(a.handleStream)))
 	mux.Handle("GET /api/v1/search", a.requireAuth(http.HandlerFunc(a.handleSearch)))
+	mux.Handle("GET /api/v1/books/recent", a.requireAuth(http.HandlerFunc(a.handleRecentBooks)))
 
 	// Per-user listening state, addressed by (library, path).
 	mux.Handle("GET /api/v1/me/progress", a.requireAuth(http.HandlerFunc(a.handleListProgress)))

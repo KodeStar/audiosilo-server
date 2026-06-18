@@ -89,6 +89,10 @@ func TestScannerIndexesFixtures(t *testing.T) {
 	if first.Author != "Brandon Sanderson" || first.Series != "Mistborn" || first.Title != "The Final Empire" {
 		t.Fatalf("unexpected first book: %+v", first)
 	}
+	// The scanner stamps added_at from the filesystem (birth time / mtime).
+	if _, err := time.Parse(time.RFC3339, first.AddedAt); err != nil {
+		t.Fatalf("added_at not a valid RFC3339 timestamp: %q (%v)", first.AddedAt, err)
+	}
 
 	// A second scan with no changes should index nothing (incremental skip).
 	res2, _ := scanner.Scan(ctx, *lib)

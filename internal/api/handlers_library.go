@@ -180,6 +180,25 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"books": books})
 }
 
+// handleRecentBooks returns the most recently added books across every library
+// the caller can reach, scoped to their share path rules. A single cross-library
+// endpoint so clients render one merged "recently added" list (rather than
+// fanning out to each library's /books and concatenating).
+func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == "admin")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load books")
+		return
+	}
+	books, err := a.cat.RecentBooks(r.Context(), scopes, queryInt(r, "limit", 50))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load books")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"books": books})
+}
+
 // handleItem returns full book detail (metadata + files + chapters) for a path,
 // indexing it on demand if needed.
 func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
