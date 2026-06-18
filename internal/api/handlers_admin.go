@@ -168,6 +168,17 @@ func (a *API) handleScanLibrary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "scan started"})
 }
 
+// handleScanStatus reports progress of the (possibly running) scan for a library
+// so the admin UI can show a counter.
+func (a *API) handleScanStatus(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library id")
+		return
+	}
+	writeJSON(w, http.StatusOK, a.scanner.Progress(id))
+}
+
 // backgroundScan runs a library scan detached from the request lifecycle.
 func (a *API) backgroundScan(lib catalog.Library) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)

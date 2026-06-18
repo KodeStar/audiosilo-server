@@ -113,8 +113,9 @@ func (c *Catalog) BooksByPaths(ctx context.Context, libraryID int64, paths []str
 
 // Signature captures the on-disk fingerprint used to skip unchanged books.
 type Signature struct {
-	MTime int64
-	Size  int64
+	MTime    int64
+	Size     int64
+	Duration float64
 }
 
 // FingerprintsForPaths returns the stored content fingerprint (content_hash)
@@ -152,7 +153,7 @@ func (c *Catalog) FingerprintsForPaths(ctx context.Context, libraryID int64, pat
 // by rel_path. The scanner uses it to skip re-extracting unchanged books.
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, mtime, size FROM books WHERE library_id = ?`, libraryID)
+		`SELECT rel_path, mtime, size, duration FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +162,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	for rows.Next() {
 		var rel string
 		var sig Signature
-		if err := rows.Scan(&rel, &sig.MTime, &sig.Size); err != nil {
+		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration); err != nil {
 			return nil, err
 		}
 		out[rel] = sig

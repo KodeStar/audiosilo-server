@@ -29,7 +29,17 @@ type Scanner struct {
 	log         *slog.Logger
 
 	mu       sync.Mutex
-	scanning map[int64]bool // library IDs currently scanning
+	scanning map[int64]bool         // library IDs currently scanning
+	progress map[int64]ScanProgress // latest progress per library (for the admin UI)
+}
+
+// ScanProgress reports how far a (possibly running) library scan has gotten, so
+// the admin UI can show a counter instead of guessing.
+type ScanProgress struct {
+	Running bool `json:"running"`
+	Total   int  `json:"total"`
+	Done    int  `json:"done"`
+	Indexed int  `json:"indexed"`
 }
 
 // NewScanner returns a Scanner. ffprobePath may be "" to skip ffprobe.
@@ -37,7 +47,27 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Scanner{cat: cat, ffprobePath: ffprobePath, log: log, scanning: map[int64]bool{}}
+	return &Scanner{
+		cat:         cat,
+		ffprobePath: ffprobePath,
+		log:         log,
+		scanning:    map[int64]bool{},
+		progress:    map[int64]ScanProgress{},
+	}
+}
+
+// Progress returns the latest scan progress for a library (the zero value if it
+// has never been scanned this process).
+func (s *Scanner) Progress(libID int64) ScanProgress {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.progress[libID]
+}
+
+func (s *Scanner) setProgress(libID int64, p ScanProgress) {
+	s.mu.Lock()
+	s.progress[libID] = p
+	s.mu.Unlock()
 }
 
 // ScanResult summarizes a scan.
@@ -72,9 +102,13 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 	}
 	s.scanning[lib.ID] = true
 	s.mu.Unlock()
+	s.setProgress(lib.ID, ScanProgress{Running: true})
 	defer func() {
 		s.mu.Lock()
 		delete(s.scanning, lib.ID)
+		p := s.progress[lib.ID]
+		p.Running = false
+		s.progress[lib.ID] = p
 		s.mu.Unlock()
 	}()
 
@@ -109,13 +143,16 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 
 	res := &ScanResult{}
 	keep := make(map[string]bool, len(books))
-	for _, b := range books {
+	for i, b := range books {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
+		s.setProgress(lib.ID, ScanProgress{Running: true, Total: len(books), Done: i, Indexed: res.Indexed})
 		keep[b.RelPath] = true
-		if old, ok := sigs[b.RelPath]; ok && old.MTime == b.MTime && old.Size == b.Size {
-			continue // unchanged since last scan
+		if old, ok := sigs[b.RelPath]; ok && old.MTime == b.MTime && old.Size == b.Size &&
+			(old.Duration > 0 || s.ffprobePath == "") {
+			continue // unchanged since last scan; skip unless a prior probe stored
+			// no duration and ffprobe is now available to backfill it
 		}
 		s.enrich(lib, b)
 		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
@@ -124,6 +161,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 		}
 		res.Indexed++
 	}
+	s.setProgress(lib.ID, ScanProgress{Running: true, Total: len(books), Done: len(books), Indexed: res.Indexed})
 
 	removed, err := s.cat.DeleteBooksNotIn(ctx, lib.ID, keep)
 	if err != nil {
@@ -174,6 +212,9 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 		b.Chapters = singleFileChapters(md, b.RelPath)
 		if md != nil && md.Duration > 0 {
 			b.Duration = md.Duration
+		} else if n := len(b.Chapters); n > 0 {
+			// No format duration (some m4b); fall back to the last chapter's end.
+			b.Duration = b.Chapters[n-1].End
 		}
 	}
 	// Sibling cover art takes precedence; otherwise the cover handler falls back
@@ -222,8 +263,6 @@ func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
 		if md != nil {
 			dur = md.Duration
 		}
-		f.Duration = dur
-
 		if md != nil && len(md.Chapters) > 0 {
 			for _, ch := range md.Chapters {
 				b.Chapters = append(b.Chapters, metadata.Chapter{
@@ -237,6 +276,11 @@ func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
 				})
 				idx++
 			}
+			// ffprobe can report no format duration for a chaptered m4b; fall
+			// back to the last chapter's end so durations/offsets stay correct.
+			if dur <= 0 {
+				dur = md.Chapters[len(md.Chapters)-1].End
+			}
 		} else {
 			b.Chapters = append(b.Chapters, metadata.Chapter{
 				Index:      idx,
@@ -249,6 +293,7 @@ func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
 			})
 			idx++
 		}
+		f.Duration = dur
 		cum += dur
 	}
 	b.Duration = cum

@@ -156,12 +156,36 @@ function deleteLibBtn(l) {
   });
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 function scanBtn(id) {
   const b = button("Rescan", "secondary small", async () => {
-    try { await api("POST", `/admin/libraries/${id}/scan`); flash("Rescan started."); }
-    catch (err) { flash(err.message, "error"); }
+    try {
+      await api("POST", `/admin/libraries/${id}/scan`);
+      flash("Rescan started.");
+      pollScan(id, b);
+    } catch (err) { flash(err.message, "error"); }
   });
+  pollScan(id, b); // reflect a scan already running (e.g. after a page refresh)
   return b;
+}
+
+// pollScan updates the button label with live progress until the scan finishes.
+async function pollScan(id, b) {
+  for (;;) {
+    let p;
+    try { p = await api("GET", `/admin/libraries/${id}/scan`); }
+    catch { break; }
+    if (!p || !p.running) {
+      if (b.disabled) flash("Rescan complete.");
+      b.disabled = false;
+      b.textContent = "Rescan";
+      break;
+    }
+    b.disabled = true;
+    b.textContent = p.total ? `Scanning ${p.done}/${p.total}…` : "Scanning…";
+    await sleep(1000);
+  }
 }
 
 // Users
