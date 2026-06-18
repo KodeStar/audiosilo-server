@@ -84,6 +84,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/notes", a.requireAuth(http.HandlerFunc(a.handleListNotes)))
 	mux.Handle("POST /api/v1/libraries/{id}/notes", a.requireAuth(http.HandlerFunc(a.handleAddNote)))
 	mux.Handle("DELETE /api/v1/notes/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteNote)))
+	mux.Handle("GET /api/v1/me/history", a.requireAuth(http.HandlerFunc(a.handleListAllHistory)))
+	mux.Handle("GET /api/v1/libraries/{id}/history", a.requireAuth(http.HandlerFunc(a.handleListHistory)))
+	mux.Handle("POST /api/v1/libraries/{id}/history", a.requireAuth(http.HandlerFunc(a.handleAddHistory)))
 
 	// Admin.
 	mux.Handle("GET /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleListUsers)))

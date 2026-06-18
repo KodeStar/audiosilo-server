@@ -251,3 +251,57 @@ func (c *Catalog) AddHistory(ctx context.Context, userID int64, ref Ref, from, t
 		 VALUES(?,?,?,?,?,?,?)`, userID, ref.LibraryID, ref.Path, from, to, startedAt, endedAt)
 	return err
 }
+
+// History is a recorded listening span.
+type History struct {
+	ID int64 `json:"id"`
+	Ref
+	From      float64 `json:"from_pos"`
+	To        float64 `json:"to_pos"`
+	StartedAt string  `json:"started_at"`
+	EndedAt   string  `json:"ended_at"`
+}
+
+func clampHistoryLimit(limit int) int {
+	if limit <= 0 || limit > 500 {
+		return 100
+	}
+	return limit
+}
+
+func scanHistory(rows *sql.Rows) ([]History, error) {
+	defer rows.Close()
+	var out []History
+	for rows.Next() {
+		var h History
+		if err := rows.Scan(&h.ID, &h.LibraryID, &h.Path, &h.From, &h.To, &h.StartedAt, &h.EndedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// ListHistory returns a user's listening history for a book path, newest first.
+func (c *Catalog) ListHistory(ctx context.Context, userID int64, ref Ref, limit int) ([]History, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT id, library_id, rel_path, from_pos, to_pos, started_at, ended_at FROM listening_history
+		  WHERE user_id = ? AND library_id = ? AND rel_path = ? ORDER BY ended_at DESC LIMIT ?`,
+		userID, ref.LibraryID, ref.Path, clampHistoryLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	return scanHistory(rows)
+}
+
+// ListAllHistory returns a user's recent listening history across all books.
+func (c *Catalog) ListAllHistory(ctx context.Context, userID int64, limit int) ([]History, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT id, library_id, rel_path, from_pos, to_pos, started_at, ended_at FROM listening_history
+		  WHERE user_id = ? ORDER BY ended_at DESC LIMIT ?`,
+		userID, clampHistoryLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	return scanHistory(rows)
+}
