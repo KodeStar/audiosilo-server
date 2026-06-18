@@ -363,6 +363,17 @@ func discoverFolderBooks(lib catalog.Library) ([]*catalog.Book, error) {
 	return books, nil
 }
 
+// addedAt is when a book first appeared on disk: the file's birth (creation)
+// time where the OS/filesystem records it, otherwise its mtime. Formatted as
+// RFC3339 UTC to match the other timestamp columns and sort lexicographically.
+func addedAt(absPath string, info os.FileInfo) string {
+	t := info.ModTime()
+	if bt, ok := birthTime(absPath, info); ok && !bt.IsZero() {
+		t = bt
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 // fileBook builds a single-file book for the audio file at absPath.
 func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Book {
 	rel, _ := filepath.Rel(lib.Root, absPath)
@@ -372,6 +383,7 @@ func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Bo
 		Format:    ext(filepath.Base(absPath)),
 		Size:      info.Size(),
 		MTime:     info.ModTime().Unix(),
+		AddedAt:   addedAt(absPath, info),
 	}
 }
 
@@ -385,6 +397,7 @@ func folderBook(lib catalog.Library, absDir string) *catalog.Book {
 	}
 	var files []catalog.BookFile
 	var totalSize, maxMTime int64
+	var added string // earliest file added time = when the book first appeared
 	for _, de := range entries {
 		if de.IsDir() || strings.HasPrefix(de.Name(), ".") || !metadata.IsAudio(de.Name()) {
 			continue
@@ -393,13 +406,17 @@ func folderBook(lib catalog.Library, absDir string) *catalog.Book {
 		if ierr != nil {
 			continue
 		}
-		frel, _ := filepath.Rel(lib.Root, filepath.Join(absDir, de.Name()))
+		abs := filepath.Join(absDir, de.Name())
+		frel, _ := filepath.Rel(lib.Root, abs)
 		files = append(files, catalog.BookFile{
 			RelPath: filepath.ToSlash(frel), Seq: len(files), Format: ext(de.Name()), Size: info.Size(),
 		})
 		totalSize += info.Size()
 		if m := info.ModTime().Unix(); m > maxMTime {
 			maxMTime = m
+		}
+		if a := addedAt(abs, info); added == "" || a < added {
+			added = a // RFC3339 UTC sorts lexicographically, so min string = earliest
 		}
 	}
 	if len(files) == 0 {
@@ -413,6 +430,7 @@ func folderBook(lib catalog.Library, absDir string) *catalog.Book {
 		Format:    files[0].Format,
 		Size:      totalSize,
 		MTime:     maxMTime,
+		AddedAt:   added,
 		Files:     files,
 	}
 }
