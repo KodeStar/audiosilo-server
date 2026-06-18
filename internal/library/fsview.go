@@ -90,10 +90,6 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 		if strings.HasPrefix(name, ".") {
 			continue // hide dotfiles
 		}
-		info, err := de.Info()
-		if err != nil {
-			continue
-		}
 		childRel := name
 		if cleanRel != "" {
 			childRel = cleanRel + "/" + name
@@ -101,13 +97,25 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 		if allow != nil && !allow(childRel) {
 			continue // outside the caller's share scope
 		}
+		isDir := de.IsDir()
+		// os.ReadDir already provides name + type for free; only files need a
+		// per-entry stat (for Size, used to compute bitrate). Skipping it for
+		// directories avoids one network round-trip per entry — the difference
+		// between a snappy and a multi-second author listing on a network mount.
+		var size, modTime int64
+		if !isDir {
+			if info, err := de.Info(); err == nil {
+				size = info.Size()
+				modTime = info.ModTime().Unix()
+			}
+		}
 		entries = append(entries, Entry{
 			Name:    name,
 			Path:    childRel,
-			IsDir:   de.IsDir(),
-			IsAudio: !de.IsDir() && metadata.IsAudio(name),
-			Size:    info.Size(),
-			ModTime: info.ModTime().Unix(),
+			IsDir:   isDir,
+			IsAudio: !isDir && metadata.IsAudio(name),
+			Size:    size,
+			ModTime: modTime,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
