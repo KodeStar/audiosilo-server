@@ -154,13 +154,14 @@ func (a *API) handleRevokeAuthCode(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Invite-friendly defaults: an auth code minted from the admin console is meant
-// to onboard a single person and may travel in a copy-invite URL, so bound the
-// blast radius if it leaks. Callers that pass explicit max_uses/ttl_days keep
-// full control (the first-run bootstrap code in cmd/audiosilo stays unbounded).
+// Invite-friendly defaults: applied only when the request omits the field, so a
+// caller (or the admin console) can still ask for unlimited uses / no expiry with
+// an explicit 0. Bounded by default to limit the blast radius if a link leaks; the
+// first-run bootstrap code in cmd/audiosilo calls CreateAuthCode directly and is
+// unaffected.
 const (
-	defaultAuthCodeMaxUses = 1
-	defaultAuthCodeTTLDays = 7
+	defaultAuthCodeMaxUses = 5
+	defaultAuthCodeTTLDays = 1
 )
 
 // handleCreateAuthCode mints a redeemable auth code for a user. The code is
@@ -174,20 +175,31 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
+	// Pointers distinguish "omitted" (apply the default) from an explicit 0
+	// (max_uses 0 = unlimited, ttl_days 0 = never expires) — both of which
+	// CreateAuthCode supports.
 	var req struct {
 		Label   string `json:"label"`
-		MaxUses int    `json:"max_uses"`
-		TTLDays int    `json:"ttl_days"`
+		MaxUses *int   `json:"max_uses"`
+		TTLDays *int   `json:"ttl_days"`
 	}
 	_ = decodeJSON(r, &req, 0)
-	if req.MaxUses <= 0 {
-		req.MaxUses = defaultAuthCodeMaxUses
+	maxUses := defaultAuthCodeMaxUses
+	if req.MaxUses != nil {
+		maxUses = *req.MaxUses
 	}
-	if req.TTLDays <= 0 {
-		req.TTLDays = defaultAuthCodeTTLDays
+	if maxUses < 0 {
+		maxUses = 0
 	}
-	ttl := time.Duration(req.TTLDays) * 24 * time.Hour
-	code, err := a.auth.CreateAuthCode(r.Context(), id, req.Label, req.MaxUses, ttl)
+	ttlDays := defaultAuthCodeTTLDays
+	if req.TTLDays != nil {
+		ttlDays = *req.TTLDays
+	}
+	var ttl time.Duration
+	if ttlDays > 0 {
+		ttl = time.Duration(ttlDays) * 24 * time.Hour
+	}
+	code, err := a.auth.CreateAuthCode(r.Context(), id, req.Label, maxUses, ttl)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create auth code")
 		return
