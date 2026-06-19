@@ -184,6 +184,44 @@
     </div>
   </div>
 
+  <div id="modal-invite" class="modal-scrim">
+    <div class="modal">
+      <div class="mhead"><h2>Create invite</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <form id="invite-form">
+        <div class="field"><label for="inv-uses">Uses</label>
+          <select id="inv-uses">
+            <option value="1">1 use</option>
+            <option value="5" selected>5 uses</option>
+            <option value="0">Unlimited</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input id="inv-uses-custom" class="hidden" type="number" min="1" step="1" placeholder="Number of uses">
+        </div>
+        <div class="field"><label for="inv-expiry">Expires</label>
+          <select id="inv-expiry">
+            <option value="1" selected>1 day</option>
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+            <option value="0">Never</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input id="inv-expiry-custom" class="hidden" type="number" min="1" step="1" placeholder="Days until expiry">
+        </div>
+        <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Create invite</button></div>
+      </form>
+      <div id="invite-result" class="hidden">
+        <p class="muted">Share either the link or the code. The code is shown once — copy it now.</p>
+        <div class="field"><label>Invite link</label>
+          <div class="inline"><span id="inv-link" class="code"></span><button type="button" class="secondary small" id="inv-copy-link">Copy link</button></div>
+        </div>
+        <div class="field"><label>Auth code</label>
+          <div class="inline"><span id="inv-code" class="code"></span><button type="button" class="secondary small" id="inv-copy-code">Copy code</button></div>
+        </div>
+        <div class="mactions"><button type="button" id="inv-done">Done</button></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ===== Toast ===== -->
   <div id="toast" class="toast"></div>
 
