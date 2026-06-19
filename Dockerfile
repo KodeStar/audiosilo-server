@@ -26,12 +26,17 @@ FROM ${WEB_IMAGE} AS web
 
 # --- final image ---------------------------------------------------------------
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates ffmpeg \
-    && adduser -D -u 10001 audiosilo
+RUN apk add --no-cache ca-certificates ffmpeg su-exec
 COPY --from=build /out/audiosilo /usr/local/bin/audiosilo
 COPY --from=web   /web           /app/web
-ENV AUDIOSILO_WEB_DIR=/app/web
-USER audiosilo
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Default to uid/gid 1000; override with PUID/PGID to match your data dir's owner
+# (Unraid: 99/100). The entrypoint chowns /data and drops to that user.
+ENV AUDIOSILO_WEB_DIR=/app/web \
+    PUID=1000 \
+    PGID=1000
 VOLUME /data
 EXPOSE 8080
-ENTRYPOINT ["audiosilo", "--data", "/data"]
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["audiosilo", "--data", "/data"]
