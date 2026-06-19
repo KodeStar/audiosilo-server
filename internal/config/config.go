@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -62,6 +63,26 @@ type TLSConfig struct {
 	KeyFile  string   `yaml:"key_file"`  // selfsigned/manual: optional persisted key
 }
 
+// DemoConfig configures public demo mode: when enabled, an unauthenticated
+// visitor can mint a throwaway account via POST /api/v1/demo/session (granted the
+// named library), and idle demo accounts are reaped in the background.
+type DemoConfig struct {
+	Enabled  bool   `yaml:"enabled"`   // activate demo mode
+	Library  string `yaml:"library"`   // name of the library demo users are granted
+	MaxUsers int    `yaml:"max_users"` // hard cap on live demo users (0 = unlimited)
+	IdleTTL  string `yaml:"idle_ttl"`  // reap demo users idle longer than this, e.g. "24h" (default 24h)
+}
+
+// IdleTTLDuration parses IdleTTL, falling back to 24h when empty or invalid.
+func (d DemoConfig) IdleTTLDuration() time.Duration {
+	if d.IdleTTL != "" {
+		if v, err := time.ParseDuration(d.IdleTTL); err == nil && v > 0 {
+			return v
+		}
+	}
+	return 24 * time.Hour
+}
+
 // Config is the full server configuration.
 type Config struct {
 	// DataDir is where the database, config and generated certs live. It is not
@@ -77,6 +98,7 @@ type Config struct {
 	WebDir         string        `yaml:"web_dir"`   // directory of the prebuilt web player served at /web; empty disables it
 	AppLinks       AppLinkConfig `yaml:"app_links"` // optional native deep-link association (well-known files)
 	Libraries      []Library     `yaml:"libraries"`
+	Demo           DemoConfig    `yaml:"demo"` // public demo mode (throwaway accounts)
 }
 
 // ConfigFileName is the config file stored inside the data directory.
@@ -167,6 +189,22 @@ func applyEnv(c *Config) {
 			c.MaxUploadBytes = n
 		}
 	}
+	if v := os.Getenv("AUDIOSILO_DEMO_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Demo.Enabled = b
+		}
+	}
+	if v := os.Getenv("AUDIOSILO_DEMO_LIBRARY"); v != "" {
+		c.Demo.Library = v
+	}
+	if v := os.Getenv("AUDIOSILO_DEMO_MAX_USERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Demo.MaxUsers = n
+		}
+	}
+	if v := os.Getenv("AUDIOSILO_DEMO_IDLE_TTL"); v != "" {
+		c.Demo.IdleTTL = v
+	}
 }
 
 func splitList(v string) []string {
@@ -217,6 +255,16 @@ func (c *Config) Validate() error {
 		case "", LayoutFlat, LayoutChaptersInFolder, LayoutBooksInFolder:
 		default:
 			return fmt.Errorf("library %q: invalid layout %q", lib.Name, lib.Layout)
+		}
+	}
+	if c.Demo.Enabled {
+		if c.Demo.Library == "" {
+			return errors.New("demo mode requires demo.library")
+		}
+		if c.Demo.IdleTTL != "" {
+			if _, err := time.ParseDuration(c.Demo.IdleTTL); err != nil {
+				return fmt.Errorf("invalid demo.idle_ttl %q: %w", c.Demo.IdleTTL, err)
+			}
 		}
 	}
 	return nil
