@@ -48,6 +48,11 @@ func Register(mux *http.ServeMux, webDir string) error {
 	}
 	assets := http.StripPrefix("/assets/", http.FileServerFS(sub))
 	mux.Handle("GET /assets/", noSniff(assets))
+	// Browsers request /favicon.ico at the site root by default; point it at the
+	// embedded SVG mark (the HTML pages also link it explicitly via <link rel=icon>).
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/assets/favicon.svg", http.StatusMovedPermanently)
+	})
 	mux.HandleFunc("GET /admin", page(sub, "admin.html"))
 	mux.HandleFunc("GET /admin/", page(sub, "admin.html"))
 	mux.HandleFunc("GET /connect", page(sub, "index.html"))
