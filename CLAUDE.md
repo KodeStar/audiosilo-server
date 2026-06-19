@@ -20,6 +20,9 @@ go test ./...                  # unit + integration tests (in-memory SQLite + te
 go vet ./...
 go build -o bin/audiosilo ./cmd/audiosilo
 ./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
+
+AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that dir
+scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
 ```
 
 Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe).
@@ -45,8 +48,11 @@ internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (layout-a
 internal/media/       Range streaming, download, embedded cover extraction
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
-internal/web/         baked-in admin/connect UI (embedded vanilla HTML/CSS/JS, no build step)
+internal/web/         baked-in admin/connect UI (vanilla HTML/CSS/JS, no build step);
+                      also serves the web player at /web from web_dir (not vendored here)
 testdata/library/     tiny generated M4B fixtures used by tests
+Dockerfile            multi-stage build that bakes a pinned web build into /app/web
+scripts/build-web.sh  dev helper: build the frontend export locally for AUDIOSILO_WEB_DIR
 ```
 
 Dependency direction: `api` → (`auth`, `catalog`, `library`, `media`, `config`);
@@ -82,6 +88,36 @@ future metadata site can attach enrichment without reshaping the schema.
 - **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords
   use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
   first-run banner prints them once and is the only place they appear.
+- **Connect / invite / pairing flow** (`internal/web` connect page + `api/qr.go`):
+  the admin's **Copy invite** button mints an auth code and shares
+  `<base>/connect#code=...` — the code rides in the URL **fragment** so it never
+  reaches the server or its logs. The connect page auto-redeems a fragment code,
+  showing a QR plus **Open in app** / **Open web player** buttons. `buildPairing`
+  emits two carriers for the single-use pairing token: `web_url`
+  (`<base>/web/connect?token=` — encoded in the QR; opens the app via a Universal/
+  App Link when the domain is claimed, else the embedded web player) and `uri`
+  (`audiosilo://connect?...` — custom scheme, launches an installed app on any
+  domain). Auth codes minted via the admin API default to single-use / 7-day
+  expiry (`defaultAuthCode*` in `handlers_admin.go`); explicit values override.
+- **Web player at `/web`** (`web.go`, served from `cfg.WebDir`): a separate Expo
+  Router project (`~/dev/audiosilo-frontend`) exported as a static site. It is
+  **not vendored** in this repo or the binary — the server serves it at runtime
+  from `web_dir` (env `AUDIOSILO_WEB_DIR`), which the Docker image bakes in at
+  `/app/web` from a pinned prebuilt frontend image (see `Dockerfile`). Empty
+  `web_dir` → `/web` is unmounted and the `web_player` capability is false. The
+  export must be built with `baseUrl=/web` (frontend `app.json experiments.baseUrl`)
+  so asset URLs resolve under the subpath. The handler resolves per-route HTML,
+  falls back to `index.html` for client-routed deep links, 404s missing assets,
+  and sets a **scoped CSP** per HTML response (strict `script-src` with a sha256
+  hash of that doc's inline scripts; `style-src` allows `'unsafe-inline'` for
+  react-native-web's runtime styles). Admin/connect pages keep the stricter
+  site-wide CSP. Compatibility is by construction (the image pins a matching web
+  build); native apps negotiate via `GET /server` capability flags.
+- **Native deep-link association**: `GET /.well-known/apple-app-site-association`
+  and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
+  YAML) and 404 when unset. They only enable auto-app-launch for domains the
+  shipped app build claims — self-hosted arbitrary domains fall back to the web
+  player + the custom-scheme "Open in app" button.
 - **SQLite** runs with a single open connection (writers serialize) + WAL.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
@@ -137,7 +173,11 @@ future metadata site can attach enrichment without reshaping the schema.
   (auth-code box → QR + links) and an admin console (login, users, libraries,
   access grants, auth codes, rescan, edit-layout, delete). Static client over the
   JSON API; the API enforces the admin role, so the HTML itself is unprivileged.
-  The audiobook *player* frontend remains a separate future project, not in this repo.
+- **Phase A.3 (done)**: **copy-invite** links (fragment-carried auth code →
+  auto-redeem connect screen), app-or-web QR (HTTPS `web_url` for Universal/App
+  Links + `audiosilo://` custom scheme), and the **web player** served at `/web`
+  from `web_dir`. The player is the audiosilo-frontend Expo export, baked into the
+  Docker image (pinned, not vendored in this repo); updates ship as a new image.
 - **Phase A.2 (done)**: path identity + **filesystem-based shares** (named sets of
   path rules; filtered-tree browse; whole-library sugar), durable state re-keyed to
   the path, and cheap **move-tracking**. Admin console has a **Shares** section with
@@ -150,11 +190,12 @@ future metadata site can attach enrichment without reshaping the schema.
   routing (proxy catalog + signed direct stream), reusing shares as the share unit.
   See the plan file.
 
-`GET /api/v1/server` advertises capability flags (`upload`, `transcode`,
-`websocket`); flip them on as phases land.
+`GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
+`upload`, `transcode`, `websocket`); flip them on as phases land.
 
 ## API surface
 
 See `internal/api/api.go` for the full route table. Public: `/server`,
-`/auth/redeem`, `/auth/exchange`, `/auth/login`. Everything else needs a session
-bearer token; `/admin/*` additionally requires the admin role.
+`/auth/redeem`, `/auth/exchange`, `/auth/login`, the well-known association files,
+and the static UI (`/`, `/connect`, `/admin`, `/web/...`). Everything else needs a
+session bearer token; `/admin/*` additionally requires the admin role.

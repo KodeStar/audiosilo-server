@@ -1,0 +1,6 @@
+.git
+bin/
+data/
+*.md
+.github/
+internal/web/player/

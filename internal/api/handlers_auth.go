@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
 // pairingTTL bounds how long a pairing token is valid before it must be
@@ -20,10 +21,11 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"version": Version,
 		"api":     "v1",
 		"capabilities": map[string]bool{
-			"admin_ui":  true,  // baked-in admin console at /admin
-			"transcode": false, // Phase C
-			"upload":    false, // Phase B
-			"websocket": false, // Phase C
+			"admin_ui":   true,                        // baked-in admin console at /admin
+			"web_player": web.HasPlayer(a.cfg.WebDir), // web player served at /web (when web_dir is populated)
+			"transcode":  false,                       // Phase C
+			"upload":     false,                       // Phase B
+			"websocket":  false,                       // Phase C
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
