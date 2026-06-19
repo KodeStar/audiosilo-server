@@ -8,113 +8,184 @@
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
-  <!-- Login -->
+  <!-- ===== Login ===== -->
   <div id="login-view" class="center">
     <div class="card narrow">
-      <div class="brand"><span class="dot"></span> AudioSilo</div>
-      <h1 style="margin-top:16px">Admin sign in</h1>
+      <div class="brand">
+        <img class="logo" src="/assets/favicon.svg" alt="">
+        <span class="wordmark"><span class="a">AUDIO</span><span class="s">SILO</span></span>
+      </div>
+      <div class="spacer"></div>
+      <h1>Admin sign in</h1>
+      <p class="muted">Sign in with an administrator account.</p>
       <form id="login-form">
-        <label for="username">Username</label>
-        <input id="username" autocomplete="username" required>
-        <label for="password">Password</label>
-        <input id="password" type="password" autocomplete="current-password" required>
         <div class="spacer"></div>
-        <button type="submit" style="width:100%">Sign in</button>
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="block">Sign in</button>
       </form>
       <div id="login-msg" class="msg error"></div>
-      <p class="muted" style="margin-top:16px"><a href="/">← Back to connect</a></p>
+      <p class="muted"><a href="/">← Back to connect</a></p>
     </div>
   </div>
 
-  <!-- Dashboard -->
-  <div id="dash-view" class="wrap hidden">
-    <div class="topbar">
-      <div class="brand"><span class="dot"></span> AudioSilo <span class="muted" style="font-weight:400">admin</span></div>
-      <div class="inline">
-        <span id="who" class="muted"></span>
-        <button id="logout" class="secondary small">Sign out</button>
+  <!-- ===== App shell ===== -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand sm">
+        <img class="logo" src="/assets/favicon.svg" alt="">
+        <span class="wordmark"><span class="a">AUDIO</span><span class="s">SILO</span> <span class="tag">admin</span></span>
       </div>
-    </div>
-
-    <div id="global-msg" class="msg"></div>
-
-    <!-- Libraries -->
-    <h2>Libraries</h2>
-    <form id="lib-form" class="row">
-      <div><label for="lib-name">Name</label><input id="lib-name" required></div>
-      <div style="flex:2"><label for="lib-root">Root path</label><input id="lib-root" placeholder="/srv/audiobooks" required></div>
-      <div><label for="lib-layout">Layout</label>
-        <select id="lib-layout">
-          <option value="books_in_folder">books_in_folder</option>
-          <option value="chapters_in_folder">chapters_in_folder</option>
-          <option value="flat">flat</option>
-        </select>
+      <nav class="nav" id="nav">
+        <button type="button" data-section="overview" class="active"><span class="ico">▦</span> Overview</button>
+        <button type="button" data-section="libraries"><span class="ico">▤</span> Libraries</button>
+        <button type="button" data-section="users"><span class="ico">◍</span> Users</button>
+        <button type="button" data-section="shares"><span class="ico">⧉</span> Shares</button>
+      </nav>
+      <div class="foot">
+        <div class="who">Signed in as <strong id="who"></strong></div>
+        <button id="logout" type="button" class="secondary small block">Sign out</button>
       </div>
-      <div class="row tight"><button type="submit">Add</button></div>
-    </form>
-    <table><thead><tr><th>ID</th><th>Name</th><th>Root</th><th>Layout</th><th></th></tr></thead>
-      <tbody id="lib-rows"></tbody>
-    </table>
+    </aside>
 
-    <div class="grid2">
+    <main class="main">
+      <!-- Overview / Stats -->
+      <section id="sec-overview" class="section active">
+        <div class="page-head"><div><h1>Overview</h1><div class="sub">Library size and what people are listening to.</div></div></div>
+        <div class="stat-grid" id="stat-grid"></div>
+        <div class="card">
+          <h3>Books per library</h3>
+          <div id="lib-counts"></div>
+        </div>
+        <div class="card">
+          <h3>Currently listening</h3>
+          <div id="listening"></div>
+        </div>
+      </section>
+
+      <!-- Libraries -->
+      <section id="sec-libraries" class="section">
+        <div class="page-head">
+          <div><h1>Libraries</h1><div class="sub">Folders scanned for audiobooks.</div></div>
+          <button id="add-lib-btn" type="button">+ Add library</button>
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr><th>Name</th><th>Root</th><th>Layout</th><th></th></tr></thead>
+            <tbody id="lib-rows"></tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Users -->
-      <div>
-        <h2>Users</h2>
-        <form id="user-form">
-          <div class="row">
-            <div><label for="u-name">Username</label><input id="u-name" required></div>
-            <div><label for="u-pass">Password</label><input id="u-pass" type="password" required></div>
-          </div>
-          <div class="row" style="margin-top:8px">
-            <div><label for="u-role">Role</label>
-              <select id="u-role"><option value="user">user</option><option value="admin">admin</option></select>
-            </div>
-            <div class="row tight" style="align-items:flex-end"><button type="submit">Create user</button></div>
-          </div>
-        </form>
-        <table><thead><tr><th>User</th><th>Role</th><th></th></tr></thead>
-          <tbody id="user-rows"></tbody>
-        </table>
-      </div>
+      <section id="sec-users" class="section">
+        <div class="page-head">
+          <div><h1>Users</h1><div class="sub">Click a row to manage role, access and invite codes.</div></div>
+          <button id="add-user-btn" type="button">+ Create user</button>
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr><th>User</th><th>Role</th><th>Last active</th><th></th></tr></thead>
+            <tbody id="user-rows"></tbody>
+          </table>
+        </div>
+      </section>
 
-      <!-- Whole-library access (sugar) -->
-      <div>
-        <h2>Whole-library access</h2>
-        <form id="access-form">
-          <label for="a-user">User</label><select id="a-user"></select>
-          <label for="a-lib">Library</label><select id="a-lib"></select>
-          <div class="spacer"></div>
-          <button type="submit">Grant whole library</button>
-        </form>
-        <p class="muted">Quick grant of an entire library. For partial access (an author, a
-          series, a single book), use Shares below.</p>
-      </div>
+      <!-- Shares -->
+      <section id="sec-shares" class="section">
+        <div class="page-head">
+          <div><h1>Shares</h1><div class="sub">Named sets of filesystem paths — an author, a series, one book, or a whole library. Grant them to people from the Users page.</div></div>
+          <button id="add-share-btn" type="button">+ Create share</button>
+        </div>
+        <div id="share-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ===== User detail drawer ===== -->
+  <div id="drawer-scrim" class="scrim"></div>
+  <aside id="user-drawer" class="drawer" aria-hidden="true">
+    <div class="dhead">
+      <div class="brand sm"><span class="wordmark" id="drawer-title"></span></div>
+      <button id="drawer-close" type="button" class="iconbtn" aria-label="Close">✕</button>
     </div>
+    <div class="dbody" id="drawer-body"></div>
+  </aside>
 
-    <!-- Shares: filesystem-based partial sharing -->
-    <h2>Shares</h2>
-    <p class="muted">A share is a named set of filesystem paths — a whole author, one series, a
-      single book, or a whole library. Grant shares to users for partial access.</p>
-    <form id="share-form" class="row">
-      <div style="flex:2"><label for="s-name">New share name</label><input id="s-name" placeholder="e.g. Kids" required></div>
-      <div class="row tight"><button type="submit">Create share</button></div>
-    </form>
-    <div id="share-list"></div>
-
-    <!-- Inline filesystem path picker -->
-    <div id="picker" class="card hidden" style="margin-top:16px">
-      <div class="topbar" style="margin-bottom:12px">
-        <strong>Pick a path for share “<span id="picker-share"></span>”</strong>
-        <button id="picker-close" class="secondary small">Close</button>
-      </div>
-      <div class="inline">
-        <label style="margin:0">Library</label>
-        <select id="picker-lib" style="max-width:240px"></select>
-        <span id="picker-crumb" class="muted code"></span>
-      </div>
-      <table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="picker-rows"></tbody></table>
+  <!-- ===== Modals ===== -->
+  <div id="modal-library" class="modal-scrim">
+    <div class="modal">
+      <div class="mhead"><h2>Add library</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <form id="lib-form">
+        <div class="field"><label for="lib-name">Name</label><input id="lib-name" required></div>
+        <div class="field"><label for="lib-root">Root path</label><input id="lib-root" placeholder="/srv/audiobooks" required></div>
+        <div class="field"><label for="lib-layout">Layout</label>
+          <select id="lib-layout">
+            <option value="books_in_folder">books_in_folder</option>
+            <option value="chapters_in_folder">chapters_in_folder</option>
+            <option value="flat">flat</option>
+          </select>
+        </div>
+        <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Add library</button></div>
+      </form>
     </div>
   </div>
+
+  <div id="modal-user" class="modal-scrim">
+    <div class="modal">
+      <div class="mhead"><h2>Create user</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <form id="user-form">
+        <div class="field"><label for="u-name">Username</label><input id="u-name" required></div>
+        <div class="field"><label for="u-role">Role</label>
+          <select id="u-role"><option value="user">user</option><option value="admin">admin</option></select>
+        </div>
+        <div class="field"><label for="u-pass">Password</label>
+          <input id="u-pass" type="password" autocomplete="new-password">
+          <p class="muted" id="u-pass-hint">Optional — leave blank for a player-only account that pairs via an invite code.</p>
+        </div>
+        <div class="field"><label for="u-access">Access</label>
+          <select id="u-access">
+            <option value="none">No access</option>
+            <option value="library">Whole library</option>
+            <option value="shares">Specific shares</option>
+          </select>
+        </div>
+        <div class="field hidden" id="u-access-libs-field"><label for="u-access-libs">Libraries</label><select id="u-access-libs" multiple></select></div>
+        <div class="field hidden" id="u-access-shares-field"><label for="u-access-shares">Shares</label><select id="u-access-shares" multiple></select></div>
+        <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Create user</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="modal-share" class="modal-scrim">
+    <div class="modal">
+      <div class="mhead"><h2>Create share</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <form id="share-form">
+        <div class="field"><label for="s-name">Share name</label><input id="s-name" placeholder="e.g. Kids" required></div>
+        <p class="muted">Create the share, then add paths to it and grant it to users.</p>
+        <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Create share</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="modal-picker" class="modal-scrim">
+    <div class="modal">
+      <div class="mhead"><h2>Add path to “<span id="picker-share"></span>”</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <div class="field"><label for="picker-lib">Library</label><select id="picker-lib"></select></div>
+      <div class="inline"><span class="muted">Location:</span> <span id="picker-crumb" class="code"></span></div>
+      <div class="spacer"></div>
+      <table><tbody id="picker-rows"></tbody></table>
+    </div>
+  </div>
+
+  <!-- ===== Toast ===== -->
+  <div id="toast" class="toast"></div>
 
   <script src="/assets/admin.js"></script>
 </body>

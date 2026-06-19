@@ -321,6 +321,27 @@ func sortColumn(sort string) (col string, asc bool) {
 	}
 }
 
+// CountBooksByLibrary returns the number of indexed books per library id. Used
+// by the admin stats view; cheap (a single grouped count over the index).
+func (c *Catalog) CountBooksByLibrary(ctx context.Context) (map[int64]int, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT library_id, COUNT(*) FROM books GROUP BY library_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]int{}
+	for rows.Next() {
+		var libID int64
+		var n int
+		if err := rows.Scan(&libID, &n); err != nil {
+			return nil, err
+		}
+		out[libID] = n
+	}
+	return out, rows.Err()
+}
+
 // ListBooks returns a page of books using keyset pagination so paging stays
 // O(1) regardless of how deep into a large library the caller is.
 func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error) {

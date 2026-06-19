@@ -142,6 +142,55 @@ func (c *Catalog) ListProgress(ctx context.Context, userID int64) ([]Progress, e
 	return out, rows.Err()
 }
 
+// ListeningRow is one user's progress on one book, enriched with book metadata
+// (title/author) for the admin stats view. Title/author may be empty if the
+// scan has not reached the path yet (durable state is path-keyed, not FK'd).
+type ListeningRow struct {
+	UserID    int64   `json:"user_id"`
+	Username  string  `json:"username"`
+	LibraryID int64   `json:"library_id"`
+	Path      string  `json:"path"`
+	Title     string  `json:"title"`
+	Author    string  `json:"author"`
+	Position  float64 `json:"position"`
+	Duration  float64 `json:"duration"`
+	Finished  bool    `json:"finished"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+// ListeningOverview returns every user's playback progress joined to book
+// metadata, newest first. Admin-scoped (no path filtering); intended for the
+// stats dashboard. Books are LEFT-joined on the path identity so progress shows
+// even before/without an index entry.
+func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]ListeningRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT p.user_id, u.username, p.library_id, p.rel_path,
+		        COALESCE(b.title, ''), COALESCE(b.author, ''),
+		        p.position, p.duration, p.finished, p.updated_at
+		   FROM progress p
+		   JOIN users u ON u.id = p.user_id
+		   LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
+		  ORDER BY p.updated_at DESC
+		  LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ListeningRow
+	for rows.Next() {
+		var r ListeningRow
+		if err := rows.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path,
+			&r.Title, &r.Author, &r.Position, &r.Duration, &r.Finished, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // MoveDurableState migrates a user-state from an old path to a new one within a
 // library, used by the scanner when it detects a file move. It is a no-op if
 // nothing references the old path.

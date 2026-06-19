@@ -103,6 +103,103 @@ func TestExpiredTokenRejected(t *testing.T) {
 	}
 }
 
+func TestOptionalPasswordForNonAdmins(t *testing.T) {
+	s, ctx := newTestService(t)
+	// A non-admin may be created without a password (auth-code pairing only).
+	u, err := s.CreateUser(ctx, "kid", "", RoleUser)
+	if err != nil {
+		t.Fatalf("create password-less user: %v", err)
+	}
+	if u.HasPassword {
+		t.Fatal("password-less user should report HasPassword=false")
+	}
+	// Such an account can never password-login, whatever is presented.
+	if _, err := s.Authenticate(ctx, "kid", ""); err != ErrInvalidCreds {
+		t.Fatalf("empty password should be rejected, got %v", err)
+	}
+	if _, err := s.Authenticate(ctx, "kid", "guess"); err != ErrInvalidCreds {
+		t.Fatalf("any password should be rejected, got %v", err)
+	}
+	// Admins still require a password.
+	if _, err := s.CreateUser(ctx, "boss", "", RoleAdmin); err == nil {
+		t.Fatal("expected error creating password-less admin")
+	}
+}
+
+func TestSetRoleGuards(t *testing.T) {
+	s, ctx := newTestService(t)
+	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
+	kid, _ := s.CreateUser(ctx, "kid", "", RoleUser)
+
+	// Promoting a password-less account to admin is refused until it has a password.
+	if err := s.SetRole(ctx, kid.ID, RoleAdmin); err != ErrAdminNeedsPassword {
+		t.Fatalf("expected ErrAdminNeedsPassword, got %v", err)
+	}
+	if err := s.SetPassword(ctx, kid.ID, "kid-password"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRole(ctx, kid.ID, RoleAdmin); err != nil {
+		t.Fatalf("promote after setting password: %v", err)
+	}
+
+	// Now there are two admins; demoting the original is allowed.
+	if err := s.SetRole(ctx, admin.ID, RoleUser); err != nil {
+		t.Fatalf("demote with another admin present: %v", err)
+	}
+	// kid is the last admin — demoting/disabling must be refused.
+	if err := s.SetRole(ctx, kid.ID, RoleUser); err != ErrLastAdmin {
+		t.Fatalf("expected ErrLastAdmin on demote, got %v", err)
+	}
+	if err := s.SetDisabled(ctx, kid.ID, true); err != ErrLastAdmin {
+		t.Fatalf("expected ErrLastAdmin on disable, got %v", err)
+	}
+}
+
+func TestClearingAdminPasswordRefused(t *testing.T) {
+	s, ctx := newTestService(t)
+	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
+	if err := s.SetPassword(ctx, admin.ID, ""); err != ErrAdminNeedsPassword {
+		t.Fatalf("expected ErrAdminNeedsPassword clearing admin password, got %v", err)
+	}
+}
+
+func TestListAndRevokeAuthCodes(t *testing.T) {
+	s, ctx := newTestService(t)
+	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
+	if _, err := s.CreateAuthCode(ctx, admin.ID, "invite", 1, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	codes, err := s.ListAuthCodes(ctx, admin.ID)
+	if err != nil || len(codes) != 1 {
+		t.Fatalf("list auth codes: %v len=%d", err, len(codes))
+	}
+	if codes[0].Label != "invite" || codes[0].MaxUses != 1 || codes[0].ExpiresAt == "" {
+		t.Fatalf("unexpected code metadata: %+v", codes[0])
+	}
+	if err := s.RevokeAuthCode(ctx, codes[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if codes, _ := s.ListAuthCodes(ctx, admin.ID); len(codes) != 0 {
+		t.Fatalf("expected no codes after revoke, got %d", len(codes))
+	}
+}
+
+func TestLastSeenTracksTokenActivity(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
+	if got, _ := s.GetUser(ctx, u.ID); got.LastSeenAt != "" {
+		t.Fatalf("fresh user should have no last-seen, got %q", got.LastSeenAt)
+	}
+	secret, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	if _, err := s.ResolveToken(ctx, secret, KindSession); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetUser(ctx, u.ID)
+	if got.LastSeenAt == "" {
+		t.Fatal("last-seen should be set after an authenticated request")
+	}
+}
+
 func TestAuthCodeRedeem(t *testing.T) {
 	s, ctx := newTestService(t)
 	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)

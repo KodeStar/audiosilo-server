@@ -94,10 +94,13 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/libraries/{id}/history", a.requireAuth(http.HandlerFunc(a.handleAddHistory)))
 
 	// Admin.
+	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
 	mux.Handle("GET /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleListUsers)))
 	mux.Handle("POST /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleCreateUser)))
-	mux.Handle("POST /api/v1/admin/users/{id}/disable", a.requireAdmin(http.HandlerFunc(a.handleDisableUser)))
+	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetUserDetail)))
+	mux.Handle("PATCH /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateUser)))
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
+	mux.Handle("DELETE /api/v1/admin/authcodes/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeAuthCode)))
 	mux.Handle("GET /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleAdminListLibraries)))
 	mux.Handle("POST /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleCreateLibrary)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateLibrary)))

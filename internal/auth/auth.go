@@ -29,6 +29,11 @@ var (
 	ErrInvalidCreds = errors.New("invalid credentials")
 	ErrInvalidToken = errors.New("invalid or expired token")
 	ErrInvalidCode  = errors.New("invalid or expired auth code")
+	// ErrLastAdmin is returned when an operation would leave no enabled admin.
+	ErrLastAdmin = errors.New("cannot remove the last admin")
+	// ErrAdminNeedsPassword is returned when an account would become (or remain)
+	// an admin without a password to sign in to the console.
+	ErrAdminNeedsPassword = errors.New("admin accounts require a password")
 )
 
 // User is an account record (without the password hash for callers).
@@ -37,6 +42,14 @@ type User struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
 	Disabled bool   `json:"disabled"`
+	// HasPassword reports whether the account can sign in with a password. It is
+	// false for password-less accounts (non-admins onboarded purely via auth-code
+	// pairing); such accounts never satisfy Authenticate.
+	HasPassword bool `json:"has_password"`
+	// LastSeenAt is the RFC3339 time of the user's most recent authenticated API
+	// activity, derived from the newest tokens.last_seen across their tokens
+	// (empty if they have never made an authenticated request).
+	LastSeenAt string `json:"last_seen_at,omitempty"`
 }
 
 // Service provides authentication and account operations backed by the store.
@@ -55,17 +68,27 @@ func New(db *store.DB, now func() time.Time) *Service {
 
 func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
 
-// CreateUser creates an account and returns it.
+// CreateUser creates an account and returns it. A password is required for
+// admins (who sign in to the console); non-admins may be created password-less
+// (password == ""), in which case they onboard purely via auth-code pairing and
+// can never password-login. An empty password is stored as an empty hash, never
+// a hash of "".
 func (s *Service) CreateUser(ctx context.Context, username, password, role string) (*User, error) {
-	if username == "" || password == "" {
-		return nil, errors.New("username and password are required")
+	if username == "" {
+		return nil, errors.New("username is required")
 	}
 	if role != RoleAdmin {
 		role = RoleUser
 	}
-	hash, err := HashPassword(password)
-	if err != nil {
-		return nil, err
+	if password == "" && role == RoleAdmin {
+		return nil, errors.New("a password is required for admin accounts")
+	}
+	hash := ""
+	if password != "" {
+		var err error
+		if hash, err = HashPassword(password); err != nil {
+			return nil, err
+		}
 	}
 	now := s.ts()
 	res, err := s.db.ExecContext(ctx,
@@ -75,7 +98,7 @@ func (s *Service) CreateUser(ctx context.Context, username, password, role strin
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
-	return &User{ID: id, Username: username, Role: role}, nil
+	return &User{ID: id, Username: username, Role: role, HasPassword: hash != ""}, nil
 }
 
 // AdminExists reports whether at least one admin account is present.
@@ -102,6 +125,11 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	}
 	if err != nil {
 		return nil, err
+	}
+	if hash == "" {
+		// Password-less account (auth-code pairing only): no password can match.
+		_, _ = VerifyPassword(password, dummyHash)
+		return nil, ErrInvalidCreds
 	}
 	ok, err := VerifyPassword(password, hash)
 	if err != nil || !ok {
@@ -196,6 +224,48 @@ func (s *Service) CreateAuthCode(ctx context.Context, userID int64, label string
 	return code, nil
 }
 
+// AuthCode describes an issued auth code for admin display. The plaintext code
+// is never included — only its hash is stored, by design — so this carries the
+// code's metadata only (label, lifetimes and usage).
+type AuthCode struct {
+	ID        int64  `json:"id"`
+	Label     string `json:"label"`
+	MaxUses   int    `json:"max_uses"` // 0 = unlimited
+	Uses      int    `json:"uses"`
+	ExpiresAt string `json:"expires_at,omitempty"` // empty = no expiry
+	CreatedAt string `json:"created_at"`
+}
+
+// ListAuthCodes returns the auth codes issued for a user, newest first.
+func (s *Service) ListAuthCodes(ctx context.Context, userID int64) ([]AuthCode, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, label, max_uses, uses, expires_at, created_at
+		   FROM auth_codes WHERE user_id = ? ORDER BY created_at DESC, id DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuthCode
+	for rows.Next() {
+		var (
+			c       AuthCode
+			expires sql.NullString
+		)
+		if err := rows.Scan(&c.ID, &c.Label, &c.MaxUses, &c.Uses, &expires, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		c.ExpiresAt = expires.String
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// RevokeAuthCode deletes an issued auth code by id, immediately invalidating it.
+func (s *Service) RevokeAuthCode(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM auth_codes WHERE id = ?`, id)
+	return err
+}
+
 // RedeemAuthCode validates a presented code, increments its use counter and
 // returns the bound user. The caller typically then issues a pairing token.
 func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error) {
@@ -236,12 +306,31 @@ func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error
 	return u, nil
 }
 
+// userColumns selects the user fields plus a derived last-activity timestamp
+// (the newest tokens.last_seen across the account's tokens). Activity is bumped
+// on every authenticated request in ResolveToken, so this reflects last use, not
+// just sign-in, without a dedicated column or extra writes.
+const userColumns = `u.id, u.username, u.role, u.disabled, u.password_hash,
+	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id)`
+
+func scanUser(row interface{ Scan(...any) error }) (User, error) {
+	var (
+		u        User
+		hash     string
+		lastSeen sql.NullString
+	)
+	if err := row.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &lastSeen); err != nil {
+		return u, err
+	}
+	u.HasPassword = hash != ""
+	u.LastSeenAt = lastSeen.String
+	return u, nil
+}
+
 // GetUser returns a user by ID.
 func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
-	var u User
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, role, disabled FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled)
+	u, err := scanUser(s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users u WHERE u.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -251,15 +340,15 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 // ListUsers returns all accounts ordered by username.
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, role, disabled FROM users ORDER BY username`)
+		`SELECT `+userColumns+` FROM users u ORDER BY u.username`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []User
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled); err != nil {
+		u, err := scanUser(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -267,9 +356,87 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	return out, rows.Err()
 }
 
-// SetDisabled enables or disables an account.
+// countEnabledAdmins returns the number of enabled admin accounts, optionally
+// excluding one user id (pass 0 to exclude none). Used to prevent locking the
+// last admin out of the console by demotion or disabling.
+func (s *Service) countEnabledAdmins(ctx context.Context, exclude int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE role = ? AND disabled = 0 AND id != ?`,
+		RoleAdmin, exclude).Scan(&n)
+	return n, err
+}
+
+// SetDisabled enables or disables an account. Disabling the last enabled admin
+// is refused so the console can never be locked out.
 func (s *Service) SetDisabled(ctx context.Context, id int64, disabled bool) error {
+	if disabled {
+		u, err := s.GetUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		if u.Role == RoleAdmin {
+			others, err := s.countEnabledAdmins(ctx, id)
+			if err != nil {
+				return err
+			}
+			if others == 0 {
+				return ErrLastAdmin
+			}
+		}
+	}
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?`, disabled, s.ts(), id)
+	return err
+}
+
+// SetRole changes an account's role. Demoting the last enabled admin is refused.
+// Promoting a password-less account to admin requires a password to be set first
+// (see SetPassword) — admins must be able to sign in to the console.
+func (s *Service) SetRole(ctx context.Context, id int64, role string) error {
+	if role != RoleAdmin {
+		role = RoleUser
+	}
+	u, err := s.GetUser(ctx, id)
+	if err != nil {
+		return err
+	}
+	if u.Role == RoleAdmin && role != RoleAdmin {
+		others, err := s.countEnabledAdmins(ctx, id)
+		if err != nil {
+			return err
+		}
+		if others == 0 {
+			return ErrLastAdmin
+		}
+	}
+	if role == RoleAdmin && !u.HasPassword {
+		return ErrAdminNeedsPassword
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, role, s.ts(), id)
+	return err
+}
+
+// SetPassword sets (or clears) an account's password. A non-empty password is
+// hashed with argon2id; an empty password clears it (only valid for non-admins).
+func (s *Service) SetPassword(ctx context.Context, id int64, password string) error {
+	hash := ""
+	if password != "" {
+		var err error
+		if hash, err = HashPassword(password); err != nil {
+			return err
+		}
+	} else {
+		u, err := s.GetUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		if u.Role == RoleAdmin {
+			return ErrAdminNeedsPassword
+		}
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, s.ts(), id)
 	return err
 }

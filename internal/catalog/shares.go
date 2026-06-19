@@ -166,6 +166,37 @@ func (c *Catalog) UserScopes(ctx context.Context, userID int64, isAdmin bool) ([
 	return out, nil
 }
 
+// UserShares returns the shares granted to a user (with their path rules),
+// ordered by name. Used by the admin console to show what a user can access.
+func (c *Catalog) UserShares(ctx context.Context, userID int64) ([]Share, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT s.id, s.name, s.description, s.read_only
+		   FROM shares s
+		   JOIN user_share_access usa ON usa.share_id = s.id
+		  WHERE usa.user_id = ? ORDER BY s.name`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Share
+	for rows.Next() {
+		s, err := scanShare(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].Paths, err = c.ListSharePaths(ctx, out[i].ID); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // AccessibleLibraries returns libraries the user can reach (admins: all).
 func (c *Catalog) AccessibleLibraries(ctx context.Context, userID int64, isAdmin bool) ([]Library, error) {
 	if isAdmin {

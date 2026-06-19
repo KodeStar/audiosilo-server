@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -21,13 +22,15 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
-		Password string `json:"password"`
+		Password string `json:"password"` // optional for non-admins (auth-code pairing only)
 		Role     string `json:"role"`
 	}
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	// CreateUser enforces the password rules (required for admins, optional
+	// otherwise), so the transport layer stays a thin pass-through.
 	u, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, req.Role)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -36,21 +39,116 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, u)
 }
 
-func (a *API) handleDisableUser(w http.ResponseWriter, r *http.Request) {
+// handleGetUserDetail returns one account plus everything the admin console
+// needs to manage it: the libraries it can reach, the shares granted to it, and
+// its issued auth codes (metadata only — the plaintext codes are never stored).
+func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	u, err := a.auth.GetUser(r.Context(), id)
+	if errors.Is(err, auth.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load user")
+		return
+	}
+	isAdmin := u.Role == auth.RoleAdmin
+	libs, err := a.cat.AccessibleLibraries(r.Context(), id, isAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load access")
+		return
+	}
+	shares, err := a.cat.UserShares(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load shares")
+		return
+	}
+	codes, err := a.auth.ListAuthCodes(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load auth codes")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user":                 u,
+		"accessible_libraries": libs,
+		"shares":               shares,
+		"auth_codes":           codes,
+	})
+}
+
+// handleUpdateUser patches an account in place: role, password and/or disabled
+// state (any subset). It replaces the old delete-and-recreate dance and the
+// separate disable endpoint. Apply password before role so promoting a
+// password-less account to admin in one request passes the admin-password guard.
+func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 	var req struct {
-		Disabled bool `json:"disabled"`
+		Role     *string `json:"role"`
+		Password *string `json:"password"`
+		Disabled *bool   `json:"disabled"`
 	}
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := a.auth.SetDisabled(r.Context(), id, req.Disabled); err != nil {
+	if req.Password != nil {
+		if err := a.auth.SetPassword(r.Context(), id, *req.Password); err != nil {
+			writeUserError(w, err)
+			return
+		}
+	}
+	if req.Role != nil {
+		if err := a.auth.SetRole(r.Context(), id, *req.Role); err != nil {
+			writeUserError(w, err)
+			return
+		}
+	}
+	if req.Disabled != nil {
+		if err := a.auth.SetDisabled(r.Context(), id, *req.Disabled); err != nil {
+			writeUserError(w, err)
+			return
+		}
+	}
+	u, err := a.auth.GetUser(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load user")
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
+}
+
+// writeUserError maps auth account-management errors to HTTP statuses.
+func writeUserError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, auth.ErrNotFound):
+		writeError(w, http.StatusNotFound, "user not found")
+	case errors.Is(err, auth.ErrLastAdmin):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, auth.ErrAdminNeedsPassword):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
 		writeError(w, http.StatusInternalServerError, "could not update user")
+	}
+}
+
+// handleRevokeAuthCode deletes an issued auth code, immediately invalidating it.
+func (a *API) handleRevokeAuthCode(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid auth code id")
+		return
+	}
+	if err := a.auth.RevokeAuthCode(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not revoke auth code")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
