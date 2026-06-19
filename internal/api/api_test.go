@@ -25,11 +25,19 @@ type testEnv struct {
 	srv      *httptest.Server
 	auth     *auth.Service
 	cat      *catalog.Catalog
+	cfg      *config.Config
 	adminID  int64
 	authCode string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
+	return newTestEnvWith(t, nil)
+}
+
+// newTestEnvWith builds a test env, optionally mutating the config before the
+// handler is constructed (needed for routes registered at build time, e.g. the
+// demo root redirect).
+func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	db, err := store.Open(ctx, ":memory:")
@@ -44,11 +52,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	code, _ := authSvc.CreateAuthCode(ctx, admin.ID, "test", 0, 0)
 
 	cfg := config.Default(t.TempDir())
+	if configure != nil {
+		configure(cfg)
+	}
 	scanner := library.NewScanner(cat, "", slog.Default())
 	a := New(cfg, authSvc, cat, scanner, slog.Default())
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
-	return &testEnv{srv: srv, auth: authSvc, cat: cat, adminID: admin.ID, authCode: code}
+	return &testEnv{srv: srv, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code}
 }
 
 func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Response, string) {
