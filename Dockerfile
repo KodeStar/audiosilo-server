@@ -5,6 +5,14 @@
 # and the bundled player ship as one known-compatible artifact. Updating either is
 # a new image + `docker pull` — the web build never lives in the /data volume.
 
+# Pinned prebuilt web player image (audiosilo-frontend CI publishes a tiny image
+# holding only its static web export, built with baseUrl=/web). Override per
+# release: --build-arg WEB_IMAGE=ghcr.io/<owner>/audiosilo-web:<version> (the
+# reference must be lowercase). Declared before any FROM so it is usable in the
+# `FROM ${WEB_IMAGE}` below. To build a server-only image (web_player off, /web
+# unmounted), comment out the web stage and the COPY --from=web line.
+ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
+
 # --- build the Go server -------------------------------------------------------
 FROM golang:1.25-alpine AS build
 WORKDIR /src
@@ -14,11 +22,6 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/audiosilo ./cmd/audiosilo
 
 # --- pin the prebuilt web player ----------------------------------------------
-# audiosilo-frontend CI publishes a tiny image holding only its static web export
-# (built with baseUrl=/web). Pin it per release. To build a server-only image
-# (web_player capability off, /web unmounted), comment out this stage and the
-# COPY --from=web below.
-ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
 FROM ${WEB_IMAGE} AS web
 
 # --- final image ---------------------------------------------------------------
