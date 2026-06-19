@@ -34,6 +34,22 @@ cors_origins: []                                    # [AUDIOSILO_CORS_ORIGINS]
 # Maximum request/upload body size in bytes (uploads land in Phase B).
 max_upload_bytes: 2147483648                        # [AUDIOSILO_MAX_UPLOAD_BYTES] (2 GiB)
 
+# Directory holding the prebuilt web player, served at /web. Empty disables it
+# (the web_player capability then reports false). The Docker image bakes a pinned
+# build in at /app/web; for local dev point this at an Expo export (see
+# scripts/build-web.sh).                              [AUDIOSILO_WEB_DIR]
+web_dir: ""
+
+# Native deep-link association. When set, the server serves
+# /.well-known/apple-app-site-association and /.well-known/assetlinks.json so a
+# phone can open the installed app straight from a pairing/invite link (iOS
+# Universal Links / Android App Links). Leave empty to fall back to the web
+# player. The app build must also claim this domain. (YAML only; no env override.)
+app_links:
+  apple_app_ids: []      # ["<TEAMID>.com.anonymous.audiosilo"]
+  android_package: ""    # "com.anonymous.audiosilo"
+  android_sha256: []     # ["AA:BB:CC:..."] signing-cert SHA-256 fingerprints
+
 # Libraries to expose. Declaring them here syncs them into the database and
 # scans them on startup; you can also create libraries at runtime via the admin
 # API. layout is one of: flat | chapters_in_folder | books_in_folder.
