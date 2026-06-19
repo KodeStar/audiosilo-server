@@ -145,6 +145,20 @@ future metadata site can attach enrichment without reshaping the schema.
   default_view and triggers a background rescan (layout changes how books are
   discovered); `DELETE /admin/libraries/{id}` removes the library + its index
   (files on disk untouched). Both are surfaced in the admin console.
+- **User/account admin**: `PATCH /admin/users/{id}` edits role/password/disabled
+  in place (`auth.SetRole`/`SetPassword`/`SetDisabled`) — no delete-and-recreate.
+  Two safety guards live in `auth`: the **last enabled admin** can't be demoted or
+  disabled (`ErrLastAdmin`), and an admin must keep a password (`ErrAdminNeedsPassword`).
+  **Passwords are optional for non-admins** (stored as an empty hash; `Authenticate`
+  rejects empty-hash accounts) — player-only users onboard purely via auth-code
+  pairing. `GET /admin/users/{id}` returns a user + accessible libraries + granted
+  shares + issued auth codes (metadata only; codes are unretrievable by design);
+  `DELETE /admin/authcodes/{id}` revokes a code. A user's **last activity** is
+  derived from `MAX(tokens.last_seen)` (bumped on every authenticated request in
+  `ResolveToken`) — there is no `last_login` column; don't add one.
+- **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
+  counts (`catalog.CountBooksByLibrary`) and a cross-user "currently listening"
+  feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path).
 - **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
   ties) in `catalog.SaveProgress` — the realtime layer (Phase C) must reuse it so
   REST and WebSocket writes converge.
@@ -173,6 +187,12 @@ future metadata site can attach enrichment without reshaping the schema.
   (auth-code box → QR + links) and an admin console (login, users, libraries,
   access grants, auth codes, rescan, edit-layout, delete). Static client over the
   JSON API; the API enforces the admin role, so the HTML itself is unprivileged.
+  The console takes its design cues from the Expo player (pink `#db2777` accent,
+  self-hosted Roboto in `assets/fonts/`, dark-mode-first, logo + wordmark): a
+  sidebar-section layout (Overview/Stats, Libraries, Users, Shares) with forms in
+  modals and a per-user detail drawer (role/password/disable, access, invite-code
+  status). All styling lives in `assets/style.css` and all behaviour in external
+  JS — no inline `<style>`/`style=`/`<script>`, so the strict same-origin CSP holds.
 - **Phase A.3 (done)**: **copy-invite** links (fragment-carried auth code →
   auto-redeem connect screen), app-or-web QR (HTTPS `web_url` for Universal/App
   Links + `audiosilo://` custom scheme), and the **web player** served at `/web`

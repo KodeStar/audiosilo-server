@@ -10,15 +10,21 @@
 <body>
   <div class="center">
     <div class="card narrow">
-      <div class="brand"><span class="dot"></span> AudioSilo</div>
-      <h1 style="margin-top:16px">Connect a device</h1>
+      <div class="brand">
+        <img class="logo" src="/assets/favicon.svg" alt="">
+        <span class="wordmark"><span class="a">AUDIO</span><span class="s">SILO</span></span>
+      </div>
+      <div class="spacer"></div>
+      <h1>Connect a device</h1>
       <p class="muted">Enter the auth code from your server administrator.</p>
 
       <form id="redeem-form">
-        <label for="code">Auth code</label>
-        <input id="code" name="code" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" required>
         <div class="spacer"></div>
-        <button type="submit" style="width:100%">Continue</button>
+        <div class="field">
+          <label for="code">Auth code</label>
+          <input id="code" name="code" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" required>
+        </div>
+        <button type="submit" class="block">Continue</button>
       </form>
 
       <div id="msg" class="msg error"></div>
@@ -26,10 +32,10 @@
       <div id="result" class="hidden">
         <h2>Scan to pair</h2>
         <div class="qr"><img id="qr" alt="Pairing QR code"></div>
-        <p class="muted" style="text-align:center">Scan with your phone to open the app, or continue on this device.</p>
+        <p class="muted">Scan with your phone to open the app, or continue on this device.</p>
         <div class="links">
           <a id="link-app" href="#" aria-disabled="true">Open in app</a>
-          <a id="link-web" href="#" aria-disabled="true">Open web player</a>
+          <a id="link-web" href="#" aria-disabled="true" class="primary">Open web player</a>
           <a id="link-admin" href="/admin">Admin section</a>
         </div>
       </div>

@@ -32,6 +32,48 @@ func seedUser(t *testing.T, c *Catalog, ctx context.Context) int64 {
 	return id
 }
 
+func TestCountBooksByLibrary(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
+	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/tmp/b"})
+	c.UpsertBook(ctx, &Book{LibraryID: libA.ID, RelPath: "1.m4b", Title: "One"})
+	c.UpsertBook(ctx, &Book{LibraryID: libA.ID, RelPath: "2.m4b", Title: "Two"})
+	c.UpsertBook(ctx, &Book{LibraryID: libB.ID, RelPath: "3.m4b", Title: "Three"})
+
+	counts, err := c.CountBooksByLibrary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts[libA.ID] != 2 || counts[libB.ID] != 1 {
+		t.Fatalf("unexpected counts: %+v", counts)
+	}
+}
+
+func TestListeningOverview(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	uid := seedUser(t, c, ctx)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "book.m4b", Title: "Mistborn", Author: "Sanderson"})
+	if _, err := c.SaveProgress(ctx, uid, Progress{Ref: Ref{LibraryID: lib.ID, Path: "book.m4b"}, Position: 30, Duration: 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := c.ListeningOverview(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 listening row, got %d", len(rows))
+	}
+	r := rows[0]
+	if r.UserID != uid || r.Username != "u" || r.Title != "Mistborn" || r.Author != "Sanderson" {
+		t.Fatalf("unexpected row: %+v", r)
+	}
+	if r.Position != 30 || r.Duration != 100 {
+		t.Fatalf("unexpected progress: %+v", r)
+	}
+}
+
 func TestUpsertAndGetBook(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
