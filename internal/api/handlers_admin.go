@@ -56,8 +56,20 @@ func (a *API) handleDisableUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Invite-friendly defaults: an auth code minted from the admin console is meant
+// to onboard a single person and may travel in a copy-invite URL, so bound the
+// blast radius if it leaks. Callers that pass explicit max_uses/ttl_days keep
+// full control (the first-run bootstrap code in cmd/audiosilo stays unbounded).
+const (
+	defaultAuthCodeMaxUses = 1
+	defaultAuthCodeTTLDays = 7
+)
+
 // handleCreateAuthCode mints a redeemable auth code for a user. The code is
-// returned once and only its hash is stored.
+// returned once and only its hash is stored. The response also carries an
+// invite_url that drops the recipient straight onto the connect/QR screen with
+// the code pre-filled (the code rides in the URL fragment, so it never reaches
+// the server or its logs).
 func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -70,16 +82,22 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 		TTLDays int    `json:"ttl_days"`
 	}
 	_ = decodeJSON(r, &req, 0)
-	var ttl time.Duration
-	if req.TTLDays > 0 {
-		ttl = time.Duration(req.TTLDays) * 24 * time.Hour
+	if req.MaxUses <= 0 {
+		req.MaxUses = defaultAuthCodeMaxUses
 	}
+	if req.TTLDays <= 0 {
+		req.TTLDays = defaultAuthCodeTTLDays
+	}
+	ttl := time.Duration(req.TTLDays) * 24 * time.Hour
 	code, err := a.auth.CreateAuthCode(r.Context(), id, req.Label, req.MaxUses, ttl)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create auth code")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"auth_code": code})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"auth_code":  code,
+		"invite_url": a.inviteURL(r, code),
+	})
 }
 
 func (a *API) handleAdminListLibraries(w http.ResponseWriter, r *http.Request) {

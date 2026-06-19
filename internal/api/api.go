@@ -58,6 +58,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/exchange", a.handleExchange)
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
 
+	// Native deep-link association files (public; 404 unless configured).
+	mux.HandleFunc("GET /.well-known/apple-app-site-association", a.handleAppleAppSiteAssociation)
+	mux.HandleFunc("GET /.well-known/assetlinks.json", a.handleAssetLinks)
+
 	// Authenticated (session token).
 	mux.Handle("POST /api/v1/auth/pair", a.requireAuth(http.HandlerFunc(a.handlePair)))
 	mux.Handle("POST /api/v1/auth/logout", a.requireAuth(http.HandlerFunc(a.handleLogout)))
@@ -116,7 +120,7 @@ func (a *API) Handler() http.Handler {
 	// Baked-in web UI: the public connect page and the admin console. API routes
 	// above are more specific, so ServeMux still prefers them over the "/"
 	// catch-all the web package registers.
-	if err := web.Register(mux); err != nil {
+	if err := web.Register(mux, a.cfg.WebDir); err != nil {
 		a.log.Error("failed to register web UI", "err", err)
 	}
 

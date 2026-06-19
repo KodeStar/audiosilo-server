@@ -214,7 +214,7 @@ async function loadUsers() {
     name.append(u.username + " ");
     if (u.role === "admin") name.append(pill("admin", "admin"));
     if (u.disabled) name.append(pill("disabled", "off"));
-    tr.append(name, td(u.role), actionTd(authCodeBtn(u.id), disableBtn(u)));
+    tr.append(name, td(u.role), actionTd(copyInviteBtn(u.id), authCodeBtn(u.id), disableBtn(u)));
     rows.appendChild(tr);
   });
   fillSelect("a-user", users, (u) => u.username);
@@ -227,6 +227,44 @@ function authCodeBtn(userId) {
       flash("Auth code (copy now): " + auth_code);
     } catch (err) { flash(err.message, "error"); }
   });
+}
+
+// copyInviteBtn mints an auth code and copies a shareable link that drops the
+// recipient straight onto the connect/QR screen (code pre-filled in the URL
+// fragment, so the secret never reaches the server).
+function copyInviteBtn(userId) {
+  return button("Copy invite", "secondary small", async () => {
+    try {
+      const { invite_url } = await api("POST", `/admin/users/${userId}/authcode`, { label: "invite" });
+      if (await copyToClipboard(invite_url)) flash("Invite link copied to clipboard.");
+      else flash("Invite link (copy now): " + invite_url);
+    } catch (err) { flash(err.message, "error"); }
+  });
+}
+
+// copyToClipboard prefers the async Clipboard API (HTTPS/localhost) and falls
+// back to execCommand for plain-HTTP LAN setups where it is unavailable.
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to legacy path */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 function disableBtn(u) {

@@ -1,0 +1,24 @@
+# Minimal AudioSilo deployment. Update the backend or the bundled web player by
+# bumping the image tag (or pulling a rebuilt :latest) and re-upping:
+#   docker compose pull && docker compose up -d
+#
+# The web player ships inside the image; only /data is persisted (db, config,
+# certs). See Dockerfile for how a pinned web build is baked in.
+services:
+  audiosilo:
+    image: ghcr.io/kodestar/audiosilo-server:latest
+    # Or build locally, pinning the web player image:
+    # build:
+    #   context: .
+    #   args:
+    #     WEB_IMAGE: ghcr.io/kodestar/audiosilo-web:1.0.0
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data        # db, config, certs (first run prints admin creds once)
+      - /srv/audiobooks:/library:ro
+    environment:
+      # AUDIOSILO_PUBLIC_URL: "https://books.example.com"  # used in QR/invite links
+      # AUDIOSILO_TLS_MODE: "off"                          # behind a TLS-terminating proxy
+      AUDIOSILO_WEB_DIR: /app/web

@@ -40,6 +40,19 @@ type Library struct {
 	Layout string `yaml:"layout"` // flat | chapters_in_folder | books_in_folder
 }
 
+// AppLinkConfig holds the identifiers needed to serve the well-known association
+// files (apple-app-site-association, assetlinks.json) so that a domain pointed at
+// this server can deep-link straight into the installed mobile app (iOS Universal
+// Links / Android App Links). It is optional: when AppleAppIDs and AndroidPackage
+// are both empty the well-known endpoints return 404 and clients fall back to the
+// embedded web player. Self-hosted note: the app build must also claim this domain,
+// so this only enables auto-launch for domains the shipped app knows about.
+type AppLinkConfig struct {
+	AppleAppIDs    []string `yaml:"apple_app_ids"`   // "<TEAMID>.<bundleId>" entries, e.g. ABCDE12345.com.anonymous.audiosilo
+	AndroidPackage string   `yaml:"android_package"` // e.g. com.anonymous.audiosilo
+	AndroidSHA256  []string `yaml:"android_sha256"`  // signing-cert SHA-256 fingerprints (colon-separated uppercase hex)
+}
+
 // TLSConfig holds TLS-related settings.
 type TLSConfig struct {
 	Mode     TLSMode  `yaml:"mode"`
@@ -55,13 +68,15 @@ type Config struct {
 	// serialized; it is supplied on the command line / environment.
 	DataDir string `yaml:"-"`
 
-	Bind           string    `yaml:"bind"`       // host:port to listen on
-	PublicURL      string    `yaml:"public_url"` // externally reachable base URL, used in QR payloads
-	TLS            TLSConfig `yaml:"tls"`
-	TrustedProxies []string  `yaml:"trusted_proxies"` // CIDRs whose X-Forwarded-For is trusted
-	CORSOrigins    []string  `yaml:"cors_origins"`    // allowed web origins ("*" to disable check)
-	MaxUploadBytes int64     `yaml:"max_upload_bytes"`
-	Libraries      []Library `yaml:"libraries"`
+	Bind           string        `yaml:"bind"`       // host:port to listen on
+	PublicURL      string        `yaml:"public_url"` // externally reachable base URL, used in QR payloads
+	TLS            TLSConfig     `yaml:"tls"`
+	TrustedProxies []string      `yaml:"trusted_proxies"` // CIDRs whose X-Forwarded-For is trusted
+	CORSOrigins    []string      `yaml:"cors_origins"`    // allowed web origins ("*" to disable check)
+	MaxUploadBytes int64         `yaml:"max_upload_bytes"`
+	WebDir         string        `yaml:"web_dir"`   // directory of the prebuilt web player served at /web; empty disables it
+	AppLinks       AppLinkConfig `yaml:"app_links"` // optional native deep-link association (well-known files)
+	Libraries      []Library     `yaml:"libraries"`
 }
 
 // ConfigFileName is the config file stored inside the data directory.
@@ -131,6 +146,9 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("AUDIOSILO_PUBLIC_URL"); v != "" {
 		c.PublicURL = v
+	}
+	if v := os.Getenv("AUDIOSILO_WEB_DIR"); v != "" {
+		c.WebDir = v
 	}
 	if v := os.Getenv("AUDIOSILO_TLS_MODE"); v != "" {
 		c.TLS.Mode = TLSMode(v)
