@@ -95,6 +95,44 @@ func TestSharesAndUserScope(t *testing.T) {
 	}
 }
 
+// TestGrantWholeLibraryHealsRulelessShare guards the case observed in production:
+// a "Library: <name>" share exists but has lost its "" path rule (however it
+// arose — a server/schema update, a manual edit, an FK cascade). Such a share
+// grants nothing, so re-granting whole-library access must re-add the rule rather
+// than just hand out the rule-less share.
+func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "audiobooks", Root: "/tmp"})
+	uid := seedUser(t, c, ctx)
+	if err := c.GrantWholeLibrary(ctx, uid, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drive the share into the broken state: it exists, but with no path rule.
+	share, err := c.shareByName(ctx, "Library: audiobooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveSharePath(ctx, share.ID, PathRule{LibraryID: lib.ID, Path: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if sc, _ := c.UserScope(ctx, uid, lib.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
+		t.Fatalf("precondition: rule-less share should grant nothing, got %+v", sc)
+	}
+
+	// Re-granting whole-library access must heal the share.
+	if err := c.GrantWholeLibrary(ctx, uid, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sc, _ := c.UserScope(ctx, uid, lib.ID, false); !sc.AllowAll {
+		t.Fatalf("re-grant should yield AllowAll, got %+v", sc)
+	}
+	libs, _ := c.AccessibleLibraries(ctx, uid, false)
+	if len(libs) != 1 || libs[0].ID != lib.ID {
+		t.Fatalf("expected the library to be accessible after re-grant, got %+v", libs)
+	}
+}
+
 func TestScopedListBooks(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})

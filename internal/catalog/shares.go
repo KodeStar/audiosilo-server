@@ -376,13 +376,16 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	share, err := c.shareByName(ctx, name)
 	if errors.Is(err, ErrNotFound) {
 		share, err = c.CreateShare(ctx, Share{Name: name, Description: "Whole library", ReadOnly: false})
-		if err != nil {
-			return err
-		}
-		if err := c.AddSharePath(ctx, share.ID, PathRule{LibraryID: libraryID, Path: ""}); err != nil {
-			return err
-		}
-	} else if err != nil {
+	}
+	if err != nil {
+		return err
+	}
+	// Always ensure the whole-library rule exists, not just on creation: a
+	// same-named library that was deleted and recreated cascade-deletes the old
+	// rule (share_paths FK) while the share row survives, leaving a rule-less
+	// share that grants nothing. AddSharePath is INSERT OR IGNORE, so re-running
+	// is cheap and self-heals such orphaned shares.
+	if err := c.AddSharePath(ctx, share.ID, PathRule{LibraryID: libraryID, Path: ""}); err != nil {
 		return err
 	}
 	return c.GrantShare(ctx, userID, share.ID)
