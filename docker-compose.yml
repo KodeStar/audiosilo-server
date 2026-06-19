@@ -4,6 +4,10 @@
 #
 # The web player ships inside the image; only /data is persisted (db, config,
 # certs). See Dockerfile for how a pinned web build is baked in.
+#
+# PERMISSIONS: set PUID/PGID to the user that should own /data (the entrypoint
+# chowns it and runs the server as that user, so it works with any volume
+# ownership). Unraid: PUID=99 PGID=100. Generic Linux: your `id -u` / `id -g`.
 services:
   audiosilo:
     image: ghcr.io/kodestar/audiosilo-server:latest
@@ -19,6 +23,8 @@ services:
       - ./data:/data        # db, config, certs (first run prints admin creds once)
       - /srv/audiobooks:/library:ro
     environment:
+      PUID: "1000"          # owner of /data (Unraid: 99)
+      PGID: "1000"          # group of /data (Unraid: 100)
       # AUDIOSILO_PUBLIC_URL: "https://books.example.com"  # used in QR/invite links
       # AUDIOSILO_TLS_MODE: "off"                          # behind a TLS-terminating proxy
       AUDIOSILO_WEB_DIR: /app/web
