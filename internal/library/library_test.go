@@ -27,13 +27,16 @@ func TestSafeJoinRejectsTraversal(t *testing.T) {
 			t.Errorf("SafeJoin(%q) should have been rejected", bad)
 		}
 	}
-	// A normal relative path resolves within root.
+	// A normal relative path resolves within root. SafeJoin canonicalizes the
+	// root's symlinks (e.g. macOS /var -> /private/var), so compare against the
+	// resolved root.
 	got, err := SafeJoin(root, "Author/Book.m4b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Dir(filepath.Dir(got)) != root {
-		t.Fatalf("resolved path %q not under root %q", got, root)
+	resolvedRoot, _ := filepath.EvalSymlinks(root)
+	if filepath.Dir(filepath.Dir(got)) != resolvedRoot {
+		t.Fatalf("resolved path %q not under root %q", got, resolvedRoot)
 	}
 }
 

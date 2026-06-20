@@ -7,19 +7,27 @@ import (
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
 const ipKey ctxKey = 1
 
 // secureHeaders sets conservative security headers suitable for an API exposed
 // to the internet.
-func secureHeaders(next http.Handler) http.Handler {
+func (a *API) secureHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cross-Origin-Resource-Policy", "same-site")
+		// HSTS only when we terminate TLS with a real, publicly-trusted cert
+		// (autocert). Never for selfsigned: pinning HSTS would make the
+		// unavoidable certificate warning impossible to bypass and lock users
+		// out. With mode off (behind a reverse proxy) the proxy owns HSTS.
+		if a.cfg.TLS.Mode == config.TLSAutocert {
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

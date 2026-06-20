@@ -34,7 +34,23 @@ var (
 	// ErrAdminNeedsPassword is returned when an account would become (or remain)
 	// an admin without a password to sign in to the console.
 	ErrAdminNeedsPassword = errors.New("admin accounts require a password")
+	// ErrPasswordTooShort is returned when a non-empty password is below the
+	// minimum length.
+	ErrPasswordTooShort = errors.New("password must be at least 8 characters")
 )
+
+// MinPasswordLen is the minimum length for a non-empty account password.
+const MinPasswordLen = 8
+
+// validatePassword enforces the minimum length for a non-empty password. An
+// empty password is permitted here (it means "password-less" for non-admins, or
+// "clear"); the admin-needs-a-password rule is enforced separately by callers.
+func validatePassword(password string) error {
+	if password != "" && len(password) < MinPasswordLen {
+		return ErrPasswordTooShort
+	}
+	return nil
+}
 
 // User is an account record (without the password hash for callers).
 type User struct {
@@ -82,6 +98,9 @@ func (s *Service) CreateUser(ctx context.Context, username, password, role strin
 	}
 	if password == "" && role == RoleAdmin {
 		return nil, errors.New("a password is required for admin accounts")
+	}
+	if err := validatePassword(password); err != nil {
+		return nil, err
 	}
 	hash := ""
 	if password != "" {
@@ -142,8 +161,10 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 }
 
 // dummyHash is a precomputed argon2id hash used to equalize timing for unknown
-// usernames. It corresponds to a random password no one knows.
-const dummyHash = "$argon2id$v=19$m=65536,t=1,p=4$YWFhYWFhYWFhYWFhYWFhYQ$3KhZ0r0u2y0xq8b9oQzWtkqj9o0a9hZ0r0u2y0xq8b8"
+// usernames. It corresponds to a random password no one knows. Its cost
+// parameters mirror the real ones (argonTime/argonMemory in hash.go) so the
+// dummy verify does the same work and doesn't leak account existence by timing.
+const dummyHash = "$argon2id$v=19$m=65536,t=2,p=4$YWFhYWFhYWFhYWFhYWFhYQ$3KhZ0r0u2y0xq8b9oQzWtkqj9o0a9hZ0r0u2y0xq8b8"
 
 // IssueToken creates a token of the given kind for a user and returns the
 // secret (shown once). ttl <= 0 means no expiry.
@@ -421,6 +442,9 @@ func (s *Service) SetRole(ctx context.Context, id int64, role string) error {
 // SetPassword sets (or clears) an account's password. A non-empty password is
 // hashed with argon2id; an empty password clears it (only valid for non-admins).
 func (s *Service) SetPassword(ctx context.Context, id int64, password string) error {
+	if err := validatePassword(password); err != nil {
+		return err
+	}
 	hash := ""
 	if password != "" {
 		var err error
