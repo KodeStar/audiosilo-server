@@ -305,6 +305,30 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 	}
 }
 
+// TestUpdateUserShortPasswordRejected covers the writeUserError mapping for the
+// password-length rule: a too-short password on PATCH /admin/users/{id} must be a
+// 400 (validation) carrying the reason, not a generic 500.
+func TestUpdateUserShortPasswordRejected(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	path := "/api/v1/admin/users/" + strconv.FormatInt(member.ID, 10)
+
+	resp, body := e.do(t, "PATCH", path, adminTok, `{"password":"short"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("short password update = %d, want 400 (%s)", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "at least") {
+		t.Fatalf("expected the password-length reason in the body, got %s", body)
+	}
+
+	// A sufficiently long password is accepted.
+	if resp, body := e.do(t, "PATCH", path, adminTok, `{"password":"longenough"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid password update = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+}
+
 func TestLoginLockout(t *testing.T) {
 	e := newTestEnv(t)
 	// Exhaust the failure budget with wrong passwords.

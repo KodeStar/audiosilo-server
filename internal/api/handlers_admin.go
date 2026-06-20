@@ -135,6 +135,8 @@ func writeUserError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, auth.ErrAdminNeedsPassword):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, auth.ErrPasswordTooShort):
+		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "could not update user")
 	}

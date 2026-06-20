@@ -31,6 +31,29 @@ func TestLimiterLockoutAndWindowExpiry(t *testing.T) {
 	}
 }
 
+// Acquire gates the demo-session endpoint: it must meter every admitted attempt
+// (so the Nth call within the window is denied) and recover after the window.
+func TestLimiterAcquire(t *testing.T) {
+	now := time.Now()
+	l := newLimiter(5, 15*time.Minute) // mirrors the demoLimiter config
+	l.now = func() time.Time { return now }
+	const ip = "1.2.3.4"
+
+	for i := 1; i <= 5; i++ {
+		if !l.Acquire(ip) {
+			t.Fatalf("attempt %d should be admitted (cap is 5)", i)
+		}
+	}
+	if l.Acquire(ip) {
+		t.Fatal("the 6th attempt within the window must be denied")
+	}
+
+	now = now.Add(16 * time.Minute) // wait out the window
+	if !l.Acquire(ip) {
+		t.Fatal("after the window a fresh attempt must be admitted again")
+	}
+}
+
 func TestLimiterReset(t *testing.T) {
 	l := newLimiter(2, time.Minute)
 	l.Fail("k")

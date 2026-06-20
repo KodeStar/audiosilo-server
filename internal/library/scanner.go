@@ -441,10 +441,16 @@ func folderBook(lib catalog.Library, absDir string) *catalog.Book {
 // chapters_in_folder library, resolving either the book folder or a file inside
 // it yields the same folder book.
 func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
-	abs, err := SafeJoin(lib.Root, relPath)
-	if err != nil {
+	// SafeJoin is the security gate (rejects traversal and symlink escapes). It
+	// returns a symlink-RESOLVED path, but we derive the working path from an
+	// unresolved join so the rel_path computed by fileBook/folderBook matches the
+	// full scan, which walks lib.Root unresolved. Using SafeJoin's resolved path
+	// here would yield a "../"-laden rel_path whenever any component of lib.Root
+	// is a symlink (e.g. macOS /tmp -> /private/tmp, or a NAS /data -> /mnt/...).
+	if _, err := SafeJoin(lib.Root, relPath); err != nil {
 		return nil, err
 	}
+	abs := filepath.Join(lib.Root, filepath.FromSlash(relPath))
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)

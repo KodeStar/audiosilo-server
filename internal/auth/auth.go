@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -96,6 +95,17 @@ func (s *Service) ts() string { return s.now().UTC().Format(time.RFC3339) }
 // can never password-login. An empty password is stored as an empty hash, never
 // a hash of "".
 func (s *Service) CreateUser(ctx context.Context, username, password, role string) (*User, error) {
+	return s.createUser(ctx, username, password, role, false)
+}
+
+// CreateDemoUser creates a password-less, non-admin throwaway account flagged
+// is_demo so the background reaper can sweep idle ones by flag (never by username
+// prefix, which would catch real accounts an admin named "demo_*").
+func (s *Service) CreateDemoUser(ctx context.Context, username string) (*User, error) {
+	return s.createUser(ctx, username, "", RoleUser, true)
+}
+
+func (s *Service) createUser(ctx context.Context, username, password, role string, isDemo bool) (*User, error) {
 	if username == "" {
 		return nil, errors.New("username is required")
 	}
@@ -117,8 +127,8 @@ func (s *Service) CreateUser(ctx context.Context, username, password, role strin
 	}
 	now := s.ts()
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users(username, password_hash, role, created_at, updated_at)
-		 VALUES(?,?,?,?,?)`, username, hash, role, now, now)
+		`INSERT INTO users(username, password_hash, role, is_demo, created_at, updated_at)
+		 VALUES(?,?,?,?,?,?)`, username, hash, role, isDemo, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -383,38 +393,31 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	return out, rows.Err()
 }
 
-// escapeLike escapes LIKE wildcards so a literal prefix can be matched with
-// `LIKE escapeLike(prefix)+"%" ESCAPE '\'`.
-func escapeLike(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
-}
-
-// CountUsersWithPrefix returns the number of accounts whose username starts with
-// prefix. Used to cap the number of live demo accounts.
-func (s *Service) CountUsersWithPrefix(ctx context.Context, prefix string) (int, error) {
+// CountDemoUsers returns the number of live demo accounts (is_demo = 1). Used to
+// cap how many can exist at once.
+func (s *Service) CountDemoUsers(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM users WHERE username LIKE ? ESCAPE '\'`,
-		escapeLike(prefix)+"%").Scan(&n)
+		`SELECT COUNT(*) FROM users WHERE is_demo = 1`).Scan(&n)
 	return n, err
 }
 
-// ReapIdleDemoUsers deletes accounts whose username starts with prefix and whose
-// most recent token activity (or, lacking any, their creation time) is older than
-// cutoff. Their child rows (progress, bookmarks, notes, history, tokens, share
-// grants) cascade via ON DELETE CASCADE. Returns the number of accounts deleted.
-// Timestamps are stored as RFC3339 UTC, so the lexical comparison is chronological.
-func (s *Service) ReapIdleDemoUsers(ctx context.Context, prefix string, cutoff time.Time) (int64, error) {
+// ReapIdleDemoUsers deletes demo accounts (is_demo = 1) whose most recent token
+// activity (or, lacking any, their creation time) is older than cutoff. Their
+// child rows (progress, bookmarks, notes, history, tokens, share grants) cascade
+// via ON DELETE CASCADE. Returns the number of accounts deleted. Timestamps are
+// stored as RFC3339 UTC, so the lexical comparison is chronological.
+func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int64, error) {
 	cut := cutoff.UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM users
-		  WHERE username LIKE ? ESCAPE '\'
+		  WHERE is_demo = 1
 		    AND COALESCE(
 		          (SELECT MAX(COALESCE(t.last_seen, t.created_at))
 		             FROM tokens t WHERE t.user_id = users.id),
 		          users.created_at
 		        ) < ?`,
-		escapeLike(prefix)+"%", cut)
+		cut)
 	if err != nil {
 		return 0, err
 	}

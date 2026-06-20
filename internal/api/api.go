@@ -18,6 +18,12 @@ import (
 // Version is the API/server version reported by GET /api/v1/server.
 const Version = "0.1.0"
 
+// webDemoPath is the web player's instant-demo screen, under the /web mount. The
+// site root redirects here in demo mode. It is a route in the separately-shipped
+// frontend, so this is the single point of coupling — keep it in sync with the
+// player's router (the Docker image pins a matching web build).
+const webDemoPath = "/web/demo"
+
 // API holds handler dependencies.
 type API struct {
 	cfg     *config.Config
@@ -136,7 +142,7 @@ func (a *API) Handler() http.Handler {
 	// package's "/" catch-all, leaving /connect, /admin and the rest untouched.
 	if a.cfg.Demo.Enabled && web.HasPlayer(a.cfg.WebDir) {
 		mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/web/demo", http.StatusFound)
+			http.Redirect(w, r, webDemoPath, http.StatusFound)
 		})
 	}
 

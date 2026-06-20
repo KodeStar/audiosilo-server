@@ -121,11 +121,15 @@ func isNewer(candidate, current Progress) bool {
 	return candidate.Version > current.Version
 }
 
-// ListProgress returns all progress rows for a user (for offline sync seeding).
-func (c *Catalog) ListProgress(ctx context.Context, userID int64) ([]Progress, error) {
+// ListProgress returns a user's progress rows scoped to paths they can still
+// access (for offline sync seeding). scopes is the caller's effective access (see
+// UserScopes); an empty slice yields no rows.
+func (c *Catalog) ListProgress(ctx context.Context, userID int64, scopes []Scope) ([]Progress, error) {
+	filter, fargs := scopesFilterSQL("library_id", "rel_path", scopes)
+	args := append([]any{userID}, fargs...)
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at
-		   FROM progress WHERE user_id = ?`, userID)
+		   FROM progress WHERE user_id = ? AND `+filter, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -343,12 +347,16 @@ func (c *Catalog) ListHistory(ctx context.Context, userID int64, ref Ref, limit 
 	return scanHistory(rows)
 }
 
-// ListAllHistory returns a user's recent listening history across all books.
-func (c *Catalog) ListAllHistory(ctx context.Context, userID int64, limit int) ([]History, error) {
+// ListAllHistory returns a user's recent listening history across all books,
+// scoped to paths they can still access. The scope filter is applied in the query
+// so LIMIT counts only accessible rows (see UserScopes); empty scopes yield none.
+func (c *Catalog) ListAllHistory(ctx context.Context, userID int64, scopes []Scope, limit int) ([]History, error) {
+	filter, fargs := scopesFilterSQL("library_id", "rel_path", scopes)
+	args := append([]any{userID}, fargs...)
+	args = append(args, clampHistoryLimit(limit))
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT id, library_id, rel_path, from_pos, to_pos, started_at, ended_at FROM listening_history
-		  WHERE user_id = ? ORDER BY ended_at DESC LIMIT ?`,
-		userID, clampHistoryLimit(limit))
+		  WHERE user_id = ? AND `+filter+` ORDER BY ended_at DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
