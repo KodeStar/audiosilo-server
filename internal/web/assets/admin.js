@@ -875,7 +875,17 @@ function usesLabel(c) {
 }
 
 // ---- Boot ----
+// Show the running server's version in the sidebar. /server is public, so this
+// works regardless of auth state and never blocks the dashboard.
+async function loadServerVersion() {
+  try {
+    const info = await api("GET", "/server");
+    if (info.version) el("server-version").textContent = "Server v" + info.version;
+  } catch (_) { /* non-fatal: just leave the version blank */ }
+}
+
 (async function boot() {
+  loadServerVersion();
   if (!token) return; // show login
   try {
     const me = await api("GET", "/me");

@@ -15,8 +15,11 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
-// Version is the API/server version reported by GET /api/v1/server.
-const Version = "0.1.0"
+// Version is the server version reported by GET /api/v1/server (and shown in the
+// admin console + web player). It is overridden at build time from the release
+// git tag via -ldflags "-X .../internal/api.Version=<tag>" (see Dockerfile +
+// image.yml); an un-stamped build (e.g. local `go build`/`go run`) reports "dev".
+var Version = "dev"
 
 // webDemoPath is the web player's instant-demo screen, under the /web mount. The
 // site root redirects here in demo mode. It is a route in the separately-shipped
