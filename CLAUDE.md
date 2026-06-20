@@ -53,7 +53,7 @@ internal/store/       SQLite (modernc, pure Go) open + embedded migrations (inte
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
-internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing); GroupKey (auto book/folder detection)
+internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
@@ -172,15 +172,18 @@ future metadata site can attach enrichment without reshaping the schema.
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint.
-- **Auto book/folder detection**: there is **no per-library layout**. The scanner
-  classifies each directory on its own (`booksInDir`/`dirIsOneBook` in
-  `library/scanner.go`): a folder whose name parses as an indexed book, or whose
-  audio files share a normalized stem (`metadata.GroupKey`), is one (multi-file)
-  book; a folder of distinct-titled files is one book per file; root-level files
-  are individual books (the old "flat" case). So a **mixed** library works without
-  configuration. For the rare folder it gets wrong, an admin sets a **per-folder
-  override** — `folder_overrides(library_id, path, mode)`, `mode ∈ {book,
-  collection}` — durable, path-keyed config (no FK to the rebuildable index, like
+- **Auto book/folder detection**: there is **no per-library layout**. The model
+  (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
+  convention (and Audiobookshelf): **a directory that directly contains audio is
+  ONE book**, with all those files as its tracks/chapters — whether it holds a
+  single m4b or fifty distinctly-named mp3 chapters (do NOT split a folder's files
+  into separate books by filename; that produced one phantom book per chapter).
+  The only per-file case is the **library root** (loose files there are individual
+  single-file books — the old "flat"). A folder of loose single-file books
+  (`books_in_folder`) is expressed with a **per-folder override**:
+  `folder_overrides(library_id, path, mode)`, `mode ∈ {book, collection}` —
+  `collection` = one book per file, `book` = force folder-is-one-book. Overrides
+  are durable, path-keyed config (no FK to the rebuildable index, like
   progress/bookmarks). `PUT/DELETE /admin/libraries/{id}/folder-override?path=`
   sets/clears it and rescans; the admin console's per-library **Detection** browser
   drives it. `GET /fs` annotates each entry's effective `override`.

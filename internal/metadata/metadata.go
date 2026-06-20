@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/dhowden/tag"
 )
@@ -160,68 +159,6 @@ func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 		m.Author = ancestors[n-2]
 	}
 	return m
-}
-
-// NormAlnum reduces a string to its lowercase letters and digits, dropping
-// spaces, punctuation and case. Used by the book/folder auto-detector to compare
-// names robustly.
-func NormAlnum(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// GroupKey reduces a filename to a key shared by parts of the same multi-file
-// book: it drops the extension, a leading volume/track index ("01 - "), a
-// trailing part/track marker ("- 001", "Part 3", "CD2"), then normalizes. Parts
-// of one book collapse to the same key; distinct titles do not.
-func GroupKey(name string) string {
-	name = strings.TrimSuffix(name, filepath.Ext(name))
-	_, name = splitSeriesIndex(name)
-	name = stripTrailingIndex(name)
-	return NormAlnum(name)
-}
-
-// stripTrailingIndex removes a trailing part/track marker so "Dungeon Born - 001"
-// and "Dungeon Born - 002" collapse to "Dungeon Born". It strips trailing digits
-// plus an optional preceding marker word (Part/Track/CD/Disc/…); leading indices
-// are handled by splitSeriesIndex.
-func stripTrailingIndex(s string) string {
-	s = strings.TrimRight(strings.TrimSpace(s), " -_.")
-	i := len(s)
-	for i > 0 && s[i-1] >= '0' && s[i-1] <= '9' {
-		i--
-	}
-	if i == len(s) {
-		return s // no trailing number
-	}
-	head := strings.TrimRight(s[:i], " -_.#")
-	for _, tok := range []string{"part", "pt", "chapter", "ch", "track", "disc", "disk", "cd", "vol", "volume", "book"} {
-		if hasTrailingWord(head, tok) {
-			head = strings.TrimRight(head[:len(head)-len(tok)], " -_.#")
-			break
-		}
-	}
-	return strings.TrimSpace(head)
-}
-
-// hasTrailingWord reports whether s ends with word on a separator boundary.
-func hasTrailingWord(s, word string) bool {
-	if len(s) < len(word) || !strings.EqualFold(s[len(s)-len(word):], word) {
-		return false
-	}
-	if len(s) == len(word) {
-		return true
-	}
-	switch s[len(s)-len(word)-1] {
-	case ' ', '-', '_', '.':
-		return true
-	}
-	return false
 }
 
 // SplitSeriesIndex parses a leading volume/track number out of a name like
