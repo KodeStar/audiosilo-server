@@ -112,6 +112,10 @@ seed_one() {
   i=0
   while IFS= read -r name; do
     [ -z "$name" ] && continue
+    # Defend against archive.org file names that carry path segments: keep only
+    # the basename and reject traversal so a download can't escape the book folder.
+    name="${name##*/}"
+    case "$name" in ""|.|..) echo "    skip: unsafe file name"; continue ;; esac
     i=$((i + 1))
     printf -v idx '%03d' "$i"
     target="$out/$idx - $name"
