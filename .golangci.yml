@@ -1,0 +1,88 @@
+# golangci-lint v2 config (required for Go 1.25). Curated for a security-focused,
+# internet-exposed server: high signal, low noise. Adopted at a baseline that is
+# green on today's code — intentional, documented suppressions only; no source
+# behaviour was changed to satisfy the linter. Run: `golangci-lint run`.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - bodyclose # response bodies must be closed (web/federation HTTP clients)
+    - errcheck # unchecked errors (tuned below for deliberate Close ignores)
+    - gosec # security: weak crypto, file inclusion, subprocess, etc.
+    - govet # mirrors `go vet`; printf/copylocks/struct-tag bugs
+    - ineffassign # ineffectual assignments
+    - misspell # typos in comments and user-facing error strings
+    - noctx # DB/HTTP calls should carry a context (the code already does)
+    - rowserrcheck # rows.Err() must be checked after iteration
+    - sqlclosecheck # sql.Rows/Stmt must be closed (single SQLite conn — a leak deadlocks writers)
+    - staticcheck # the highest-value linter: SA* bugs, dead code, simplifications
+    - unused # dead internal symbols as the surface evolves
+  settings:
+    errcheck:
+      # Closing a read-only handle, rolling back an already-failed/committed tx,
+      # or writing to an in-memory hash are best-effort operations whose error
+      # can't be acted on — intentionally unchecked throughout the codebase.
+      exclude-functions:
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Tx).Rollback
+        - fmt.Fprintf # only ever writes to a hash.Hash (sha256), which never errors
+    gosec:
+      excludes:
+        # G304: file paths derived from user input are validated through
+        # library.SafeJoin (and share-scope checks) before any os.Open. SafeJoin
+        # is the single audited gate; see internal/library/fsview.go and the
+        # SafeJoin regression test. (Tracked as finding S1: add EvalSymlinks
+        # before Phase B uploads.)
+        - G304
+        # G204: the only subprocess is ffprobe, invoked with a fixed argv and a
+        # validated absolute path — never a shell string. See internal/metadata/probe.go.
+        - G204
+        # G104: unhandled errors are covered more precisely by errcheck (above);
+        # gosec's duplicate is pure noise on the deliberate Close ignores.
+        - G104
+        # G115: int->uint32 conversions here are bounded constants (e.g. an
+        # argon2 key length), not attacker-influenced; this rule is false-positive heavy.
+        - G115
+  exclusions:
+    rules:
+      # Tests favour terseness; the security linters target production code paths.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - bodyclose
+          - noctx
+      # Background library scans must outlive the HTTP request, so they
+      # deliberately use a detached context (using the request ctx would cancel
+      # the scan when the response returns). G118 flags exactly that pattern.
+      - path: internal/api/handlers_admin.go
+        linters:
+          - gosec
+        text: G118
+      # QF1001 (apply De Morgan's law) is a stylistic quickfix hint; the explicit
+      # negated form in the FTS tokenizer is intentionally readable.
+      - linters:
+          - staticcheck
+        text: QF1001
+      # DeleteBooksNotIn closes its cursor *before* issuing DELETEs on purpose:
+      # SQLite runs on a single connection, so holding an open rows cursor during
+      # writes would deadlock. The manual (non-defer) Close is required here, not
+      # a leak — suppress only the "should use defer" style hint, keeping the
+      # "never closed" leak detection active for the rest of the file.
+      - path: internal/catalog/books.go
+        linters:
+          - sqlclosecheck
+        text: Close should use defer
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
