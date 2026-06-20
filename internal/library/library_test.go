@@ -310,6 +310,44 @@ func TestIndexPathOnDemand(t *testing.T) {
 	}
 }
 
+// TestIndexPathSymlinkedRoot guards against a regression where SafeJoin's
+// symlink-resolved path leaked into the scanner's rel_path derivation: when the
+// library root is reached through a symlink (e.g. macOS /tmp -> /private/tmp or a
+// NAS /data -> /mnt/...), on-demand IndexPath must still record the requested
+// rel_path, not a "../"-laden one computed against the unresolved root.
+func TestIndexPathSymlinkedRoot(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	cat := catalog.New(db, time.Now)
+
+	real, _ := filepath.Abs(testdataRoot(t))
+	link := filepath.Join(t.TempDir(), "library-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
+		Name: "Main", Root: link, Layout: config.LayoutBooksInFolder,
+	})
+	scanner := NewScanner(cat, "", slog.Default())
+
+	rel := "Will Wight/Cradle/01 - Unsouled.m4b"
+	book, err := scanner.IndexPath(ctx, *lib, rel)
+	if err != nil {
+		t.Fatalf("IndexPath through symlinked root: %v", err)
+	}
+	if book.RelPath != rel {
+		t.Fatalf("rel_path = %q, want %q (symlinked root must not corrupt rel_path)", book.RelPath, rel)
+	}
+	// And the book must be retrievable by the path the client actually requested.
+	if _, err := cat.GetBookByPath(ctx, lib.ID, rel); err != nil {
+		t.Fatalf("GetBookByPath(%q) after on-demand index: %v", rel, err)
+	}
+}
+
 func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, ":memory:")

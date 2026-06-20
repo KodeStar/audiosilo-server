@@ -18,8 +18,12 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "demo mode is not enabled")
 		return
 	}
+	// Acquire atomically records this attempt and reports whether it is under the
+	// per-IP cap. Metering at admission (not on success) means a partial failure
+	// after CreateUser still counts, and there is no Allowed/Fail race that would
+	// let concurrent requests slip past the cap.
 	ip := clientIP(r)
-	if !a.demoLimiter.Allowed(ip) {
+	if !a.demoLimiter.Acquire(ip) {
 		writeError(w, http.StatusTooManyRequests, "too many demo sessions, try again later")
 		return
 	}
@@ -42,7 +46,7 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 
 	// Cap live demo accounts so abuse can't grow the database unbounded.
 	if a.cfg.Demo.MaxUsers > 0 {
-		n, err := a.auth.CountUsersWithPrefix(r.Context(), auth.DemoUsernamePrefix)
+		n, err := a.auth.CountDemoUsers(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "could not check demo capacity")
 			return
@@ -53,7 +57,7 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	u, err := a.auth.CreateUser(r.Context(), auth.DemoUsernamePrefix+randomDemoSuffix(), "", auth.RoleUser)
+	u, err := a.auth.CreateDemoUser(r.Context(), auth.DemoUsernamePrefix+randomDemoSuffix())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create demo account")
 		return
@@ -81,7 +85,6 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.demoLimiter.Fail(ip) // meter successful creations toward the per-IP cap
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":   session,
 		"user":    u,

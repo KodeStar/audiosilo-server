@@ -172,7 +172,7 @@ func initialScan(ctx context.Context, cat *catalog.Catalog, scanner *library.Sca
 func demoReaper(ctx context.Context, authSvc *auth.Service, idleTTL time.Duration, log *slog.Logger) {
 	const interval = 15 * time.Minute
 	reap := func() {
-		n, err := authSvc.ReapIdleDemoUsers(ctx, auth.DemoUsernamePrefix, time.Now().Add(-idleTTL))
+		n, err := authSvc.ReapIdleDemoUsers(ctx, time.Now().Add(-idleTTL))
 		if err != nil {
 			log.Warn("demo reaper failed", "err", err)
 			return

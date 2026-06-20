@@ -51,6 +51,32 @@ func (l *limiter) Allowed(key string) bool {
 	return true
 }
 
+// Acquire atomically records an attempt and reports whether it was permitted
+// (i.e. the key was not already locked out). Unlike a separate Allowed()+Fail()
+// it cannot race, so every admitted attempt counts toward the cap — suitable for
+// gating account-creating endpoints (demo sessions) where partial failures and
+// concurrent requests must both be metered.
+func (l *limiter) Acquire(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	l.sweep(now)
+	e := l.entries[key]
+	if e == nil || now.Sub(e.last) > l.window {
+		e = &lockEntry{}
+		l.entries[key] = e
+	}
+	if !e.until.IsZero() && now.Before(e.until) {
+		return false // already locked out
+	}
+	e.failures++
+	e.last = now
+	if e.failures >= l.maxFailures {
+		e.until = now.Add(l.window)
+	}
+	return true
+}
+
 // Fail records a failed attempt and locks the key once over the threshold.
 func (l *limiter) Fail(key string) {
 	l.mu.Lock()

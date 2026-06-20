@@ -87,6 +87,27 @@ func pathFilterSQL(col string, s Scope) (string, []any) {
 	return "(" + strings.Join(conds, " OR ") + ")", args
 }
 
+// scopesFilterSQL builds a WHERE fragment (plus args) restricting rows to the
+// caller's per-library scopes: libCol must equal a scope's library and pathCol
+// must be granted by that scope (via pathFilterSQL). Returns ("0", nil) when the
+// caller has no scopes (no access). Used to scope the cross-library listing
+// endpoints (progress/history) at the query layer, so LIMIT applies to accessible
+// rows and access control stays out of the transport layer.
+func scopesFilterSQL(libCol, pathCol string, scopes []Scope) (string, []any) {
+	if len(scopes) == 0 {
+		return "0", nil
+	}
+	var ors []string
+	var args []any
+	for _, s := range scopes {
+		frag, fargs := pathFilterSQL(pathCol, s)
+		ors = append(ors, "("+libCol+" = ? AND "+frag+")")
+		args = append(args, s.LibraryID)
+		args = append(args, fargs...)
+	}
+	return "(" + strings.Join(ors, " OR ") + ")", args
+}
+
 // UserScope returns a user's effective scope within one library. Admins get
 // AllowAll. A non-admin with no grants gets an empty scope (no access).
 func (c *Catalog) UserScope(ctx context.Context, userID, libraryID int64, isAdmin bool) (Scope, error) {
