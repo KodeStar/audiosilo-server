@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
@@ -69,9 +68,7 @@ func TestScannerIndexesFixtures(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
-	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
-		Name: "Main", Root: root, Layout: config.LayoutBooksInFolder,
-	})
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 
 	// ffprobe "" keeps the test independent of an installed ffmpeg; path-derived
 	// metadata still populates title/author/series.
@@ -123,7 +120,7 @@ func TestScannerMultiFileChapters(t *testing.T) {
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "multifile"))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
-		Name: "Multi", Root: root, Layout: config.LayoutChaptersInFolder,
+		Name: "Multi", Root: root,
 	})
 	scanner := NewScanner(cat, "ffprobe", slog.Default())
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
@@ -171,7 +168,7 @@ func TestScannerFolderBookExpandsEmbeddedChapters(t *testing.T) {
 	// "books in their own folders" layout.
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "folderbook"))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
-		Name: "FolderBooks", Root: root, Layout: config.LayoutChaptersInFolder,
+		Name: "FolderBooks", Root: root,
 	})
 	scanner := NewScanner(cat, "ffprobe", slog.Default())
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
@@ -227,7 +224,7 @@ func TestScannerMoveTracking(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, oldRel), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "M", Root: root, Layout: config.LayoutBooksInFolder})
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "M", Root: root})
 	scanner := NewScanner(cat, "", slog.Default())
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
@@ -281,7 +278,7 @@ func TestIndexPathOnDemand(t *testing.T) {
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
-		Name: "Main", Root: root, Layout: config.LayoutBooksInFolder,
+		Name: "Main", Root: root,
 	})
 	scanner := NewScanner(cat, "", slog.Default())
 
@@ -329,9 +326,7 @@ func TestIndexPathSymlinkedRoot(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skipf("symlinks unsupported on this platform: %v", err)
 	}
-	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
-		Name: "Main", Root: link, Layout: config.LayoutBooksInFolder,
-	})
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: link})
 	scanner := NewScanner(cat, "", slog.Default())
 
 	rel := "Will Wight/Cradle/01 - Unsouled.m4b"
@@ -358,7 +353,7 @@ func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
-		Name: "Main", Root: root, Layout: config.LayoutBooksInFolder,
+		Name: "Main", Root: root,
 	})
 	scanner := NewScanner(cat, "", slog.Default())
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
@@ -393,5 +388,163 @@ func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 	}
 	if indexed() != 3 {
 		t.Fatalf("index was pruned despite empty root: %d remain", indexed())
+	}
+}
+
+// newScanEnv builds an in-memory catalog + scanner (ffprobe disabled).
+func newScanEnv(t *testing.T) (*catalog.Catalog, *Scanner, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	cat := catalog.New(db, time.Now)
+	return cat, NewScanner(cat, "", slog.Default()), ctx
+}
+
+// copyFixtureM4B writes a copy of a fixture audiobook to dst (creating parents).
+func copyFixtureM4B(t *testing.T, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(testdataRoot(t), "Will Wight", "Cradle", "01 - Unsouled.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestScannerAutoDetectsMixedLibrary verifies per-folder detection: a folder of
+// shared-stem parts becomes one multi-file book, while a sibling folder of
+// distinct-titled files becomes one book per file — in the same library, with no
+// layout setting.
+func TestScannerAutoDetectsMixedLibrary(t *testing.T) {
+	cat, scanner, ctx := newScanEnv(t)
+	root := t.TempDir()
+	// Multi-file book: parts share a stem in their own folder.
+	copyFixtureM4B(t, filepath.Join(root, "Dakota Krout", "Divine Dungeon", "Dungeon Born", "Dungeon Born - 001.m4b"))
+	copyFixtureM4B(t, filepath.Join(root, "Dakota Krout", "Divine Dungeon", "Dungeon Born", "Dungeon Born - 002.m4b"))
+	// Single-file books: distinct titles directly in a series folder.
+	copyFixtureM4B(t, filepath.Join(root, "Will Wight", "Cradle", "01 - Unsouled.m4b"))
+	copyFixtureM4B(t, filepath.Join(root, "Will Wight", "Cradle", "02 - Soulsmith.m4b"))
+
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Mixed", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+
+	page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
+	if len(page.Books) != 3 {
+		t.Fatalf("expected 3 books (1 folder + 2 files), got %d", len(page.Books))
+	}
+	folders := 0
+	for _, b := range page.Books {
+		if b.IsFolder {
+			folders++
+		}
+	}
+	if folders != 1 {
+		t.Fatalf("expected exactly 1 multi-file (folder) book, got %d", folders)
+	}
+	fb, err := cat.GetBookByPath(ctx, lib.ID, "Dakota Krout/Divine Dungeon/Dungeon Born")
+	if err != nil {
+		t.Fatalf("parts folder should be one book keyed by the folder: %v", err)
+	}
+	if !fb.IsFolder || len(fb.Files) != 2 {
+		t.Fatalf("parts folder book = folder:%v files:%d", fb.IsFolder, len(fb.Files))
+	}
+}
+
+// TestScannerFolderOverrides verifies an admin override flips a folder's
+// classification, and that IndexPath honors it on demand.
+func TestScannerFolderOverrides(t *testing.T) {
+	cat, scanner, ctx := newScanEnv(t)
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Dungeon Born", "Dungeon Born - 001.m4b"))
+	copyFixtureM4B(t, filepath.Join(root, "Dungeon Born", "Dungeon Born - 002.m4b"))
+	copyFixtureM4B(t, filepath.Join(root, "Cradle", "01 - Unsouled.m4b"))
+	copyFixtureM4B(t, filepath.Join(root, "Cradle", "02 - Soulsmith.m4b"))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "O", Root: root})
+
+	// Force the opposite of auto: the distinct-titles folder becomes one book, the
+	// parts folder becomes separate books.
+	if err := cat.SetFolderOverride(ctx, lib.ID, "Cradle", catalog.OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SetFolderOverride(ctx, lib.ID, "Dungeon Born", catalog.OverrideCollection); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := cat.GetBookByPath(ctx, lib.ID, "Cradle"); err != nil {
+		t.Fatalf("override book: Cradle should be one folder book: %v", err)
+	}
+	if _, err := cat.GetBookByPath(ctx, lib.ID, "Dungeon Born/Dungeon Born - 001.m4b"); err != nil {
+		t.Fatalf("override collection: each part should be its own book: %v", err)
+	}
+	page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
+	if len(page.Books) != 3 { // 1 (Cradle) + 2 (Dungeon Born files)
+		t.Fatalf("expected 3 books after overrides, got %d", len(page.Books))
+	}
+
+	// IndexPath honors the override: a file inside the forced-book folder resolves
+	// to the folder book.
+	b, err := scanner.IndexPath(ctx, *lib, "Cradle/01 - Unsouled.m4b")
+	if err != nil {
+		t.Fatalf("IndexPath under book override: %v", err)
+	}
+	if !b.IsFolder || b.RelPath != "Cradle" {
+		t.Fatalf("expected the Cradle folder book, got folder:%v path:%q", b.IsFolder, b.RelPath)
+	}
+}
+
+// TestBrowseFSHidesNonAudio verifies the filesystem view lists audio files and
+// directories only, so a client never opens a .jpg/.nfo as a book.
+func TestBrowseFSHidesNonAudio(t *testing.T) {
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Book", "audio.m4b"))
+	for _, name := range []string{"cover.jpg", "notes.nfo", "desc.txt"} {
+		if err := os.WriteFile(filepath.Join(root, "Book", name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "Subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	listing, err := BrowseFS(root, "Book", 0, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotAudio := false
+	for _, e := range listing.Entries {
+		if !e.IsDir && !e.IsAudio {
+			t.Fatalf("non-audio file leaked into browse: %q", e.Name)
+		}
+		if e.Name == "audio.m4b" {
+			gotAudio = true
+		}
+	}
+	if !gotAudio {
+		t.Fatal("audio file missing from browse")
+	}
+
+	// Directories remain navigable.
+	top, _ := BrowseFS(root, "", 0, 100, nil)
+	hasDir := false
+	for _, e := range top.Entries {
+		if e.IsDir && e.Name == "Subdir" {
+			hasDir = true
+		}
+	}
+	if !hasDir {
+		t.Fatal("directories should remain navigable in browse")
 	}
 }

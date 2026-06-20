@@ -18,11 +18,13 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
 type testEnv struct {
 	srv      *httptest.Server
+	api      *API
 	auth     *auth.Service
 	cat      *catalog.Catalog
 	cfg      *config.Config
@@ -56,10 +58,10 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 		configure(cfg)
 	}
 	scanner := library.NewScanner(cat, "", slog.Default())
-	a := New(cfg, authSvc, cat, scanner, slog.Default())
+	a := New(cfg, authSvc, cat, scanner, "", slog.Default())
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
-	return &testEnv{srv: srv, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code}
+	return &testEnv{srv: srv, api: a, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code}
 }
 
 func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Response, string) {
@@ -135,7 +137,7 @@ func TestPathTraversalRejected(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root, Layout: config.LayoutBooksInFolder})
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	token, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
 
 	path := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/fs?path=../../../etc"
@@ -148,7 +150,7 @@ func TestBrowseFSAnnotatesIndexedBooks(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root, Layout: config.LayoutBooksInFolder})
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	// Index it so the hybrid view has book ids to attach.
 	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
@@ -183,7 +185,7 @@ func TestItemResolvesOnDemand(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root, Layout: config.LayoutBooksInFolder})
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	token, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
 
 	// No scan has run. Requesting an item by path must index it on the fly.
@@ -213,7 +215,7 @@ func TestScopedShareAccess(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root, Layout: config.LayoutBooksInFolder})
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +351,7 @@ func TestListProgressScopeFiltered(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root, Layout: config.LayoutBooksInFolder})
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
@@ -384,5 +386,77 @@ func TestListProgressScopeFiltered(t *testing.T) {
 	}
 	if strings.Contains(body, "Brandon Sanderson") {
 		t.Fatalf("progress for a revoked path leaked: %s", body)
+	}
+}
+
+func TestStreamTranscode(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+
+	// A non-admin granted only the "Will Wight" subtree.
+	kid, _ := e.auth.CreateUser(ctx, "kid", "kid-password", auth.RoleUser)
+	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Wight only"})
+	e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"})
+	e.cat.GrantShare(ctx, kid.ID, share.ID)
+	token, _ := e.auth.IssueToken(ctx, kid.ID, auth.KindSession, "t", 0)
+	libPath := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10)
+
+	in := libPath + "/stream?transcode=1&path=" + url.QueryEscape("Will Wight/Cradle/01 - Unsouled.m4b")
+	out := libPath + "/stream?transcode=1&path=" + url.QueryEscape("Brandon Sanderson/Mistborn/01 - The Final Empire.m4b")
+
+	// Denied: an out-of-scope path is rejected before any transcoding.
+	if resp, _ := e.do(t, "GET", out, token, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for out-of-scope transcode, got %d", resp.StatusCode)
+	}
+
+	// With ffmpeg disabled, an in-scope transcode is unavailable (503), not served.
+	if resp, _ := e.do(t, "GET", in, token, ""); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when ffmpeg disabled, got %d", resp.StatusCode)
+	}
+
+	// Allowed: enable ffmpeg and the in-scope path transcodes to MP3.
+	if !media.HasFFmpeg("ffmpeg") {
+		t.Skip("ffmpeg not available; skipping the positive transcode assertion")
+	}
+	e.api.ffmpeg = "ffmpeg" // the handler reads this per-request
+	resp, _ := e.do(t, "GET", in, token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 transcoding an in-scope book, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "audio/mpeg" {
+		t.Fatalf("transcode Content-Type = %q, want audio/mpeg", ct)
+	}
+}
+
+func TestFolderOverrideEndpointRequiresAdmin(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
+	path := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/folder-override?path=Some/Folder"
+
+	// A non-admin is rejected by requireAdmin.
+	member, _ := e.auth.CreateUser(ctx, "member", "member-password", auth.RoleUser)
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+	if resp, _ := e.do(t, "PUT", path, memberTok, `{"mode":"book"}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin folder-override = %d, want 403", resp.StatusCode)
+	}
+
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	if resp, body := e.do(t, "PUT", path, adminTok, `{"mode":"book"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin set override = %d %s, want 200", resp.StatusCode, body)
+	}
+	if resp, _ := e.do(t, "PUT", path, adminTok, `{"mode":"weird"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid mode = %d, want 400", resp.StatusCode)
+	}
+	if ovr, _ := e.cat.FolderOverrides(ctx, lib.ID); ovr["Some/Folder"] != catalog.OverrideBook {
+		t.Fatalf("override not persisted: %+v", ovr)
+	}
+	if resp, _ := e.do(t, "DELETE", path, adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin clear override should be 200")
+	}
+	if ovr, _ := e.cat.FolderOverrides(ctx, lib.ID); len(ovr) != 0 {
+		t.Fatalf("override not cleared: %+v", ovr)
 	}
 }

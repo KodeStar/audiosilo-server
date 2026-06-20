@@ -26,7 +26,8 @@ AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that 
 scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
 ```
 
-Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe).
+Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
+`--ffmpeg` (`""` disables on-the-fly transcoding).
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`** — CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
@@ -52,7 +53,7 @@ internal/store/       SQLite (modernc, pure Go) open + embedded migrations (inte
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
-internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (layout-aware path parsing)
+internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing); GroupKey (auto book/folder detection)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
@@ -78,13 +79,14 @@ is used **only** to detect moves; it is not an identity.
 
 ## Data model (SQLite, see internal/store/migrations/)
 
-`users`, `tokens` (sessions + pairing, hashed), `auth_codes`, `libraries`,
-`books` (+ `content_hash` fingerprint), `book_files`, `chapters` (with
-`file_path`), `books_fts` (standalone FTS5). Durable user state is **path-keyed**
-and decoupled from the index (no FK to books): `progress`/`bookmarks`/`notes`/
-`listening_history` on `(user_id, library_id, rel_path)`. Sharing:
-`shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
-`user_share_access`.
+`users`, `tokens` (sessions + pairing, hashed), `auth_codes`, `libraries` (no
+`layout` column — shape is auto-detected), `books` (+ `content_hash` fingerprint,
++ `codec`), `book_files`, `chapters` (with `file_path`), `books_fts` (standalone
+FTS5). Durable user state is **path-keyed** and decoupled from the index (no FK to
+books): `progress`/`bookmarks`/`notes`/`listening_history` on `(user_id,
+library_id, rel_path)`, plus `folder_overrides` (`library_id, path, mode`) which
+pins a folder's book/collection classification. Sharing: `shares` (named),
+`share_paths` (`library_id`, `path`; `""` = whole library), `user_share_access`.
 
 Book identity carries `author`/`series`/`title` plus optional `asin`/`isbn` so a
 future metadata site can attach enrichment without reshaping the schema.
@@ -145,8 +147,20 @@ future metadata site can attach enrichment without reshaping the schema.
   is the handle (a query param, to avoid encoded-slash issues). `item`/`chapters`/
   `cover` resolve `(library, path)` to a book via `GetBookByPath`, indexing on
   demand (`Scanner.IndexPath`) if the scan hasn't reached it; `stream` serves an
-  audio file path directly. The `/fs` view annotates book entries with metadata
-  (`is_book` + title/author/…); the client acts on the entry's `path`.
+  audio file path directly, or transcodes it with `?transcode=1` (see below). The
+  `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
+  `.nfo` are filtered in `BrowseFS` so a click is always playable) and annotates
+  book entries with metadata (`is_book` + title/author/…); the client acts on the
+  entry's `path`.
+- **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
+  (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`.
+- **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
+  through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
+  `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
+  re-request). Direct serving + Range stays the default. The scanner records each
+  book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
+  expose `direct_playable` (via `media.DirectPlayable`) so a client knows when to
+  transcode. Gated by the `--ffmpeg` flag (the `transcode` capability reflects it).
 - **Sharing & access (shares)**: access is via `shares` = named sets of path
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
   (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
@@ -158,10 +172,21 @@ future metadata site can attach enrichment without reshaping the schema.
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). Re-tagging keeps state via
   the path key; moving keeps it via the fingerprint.
-- **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/layout/
-  default_view and triggers a background rescan (layout changes how books are
-  discovered); `DELETE /admin/libraries/{id}` removes the library + its index
-  (files on disk untouched). Both are surfaced in the admin console.
+- **Auto book/folder detection**: there is **no per-library layout**. The scanner
+  classifies each directory on its own (`booksInDir`/`dirIsOneBook` in
+  `library/scanner.go`): a folder whose name parses as an indexed book, or whose
+  audio files share a normalized stem (`metadata.GroupKey`), is one (multi-file)
+  book; a folder of distinct-titled files is one book per file; root-level files
+  are individual books (the old "flat" case). So a **mixed** library works without
+  configuration. For the rare folder it gets wrong, an admin sets a **per-folder
+  override** — `folder_overrides(library_id, path, mode)`, `mode ∈ {book,
+  collection}` — durable, path-keyed config (no FK to the rebuildable index, like
+  progress/bookmarks). `PUT/DELETE /admin/libraries/{id}/folder-override?path=`
+  sets/clears it and rescans; the admin console's per-library **Detection** browser
+  drives it. `GET /fs` annotates each entry's effective `override`.
+- **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/default_view and
+  triggers a background rescan; `DELETE /admin/libraries/{id}` removes the library
+  + its index (files on disk untouched). Both are surfaced in the admin console.
 - **User/account admin**: `PATCH /admin/users/{id}` edits role/password/disabled
   in place (`auth.SetRole`/`SetPassword`/`SetDisabled`) — no delete-and-recreate.
   Two safety guards live in `auth`: the **last enabled admin** can't be demoted or
@@ -189,7 +214,8 @@ future metadata site can attach enrichment without reshaping the schema.
   `{chapters, files, duration}`; a player renders single- and multi-file books
   identically.
 - ffprobe is optional; code paths must degrade gracefully when it is absent
-  (path-derived metadata still works).
+  (path-derived metadata still works; codec is left unknown → `direct_playable`
+  defaults to true). ffmpeg is likewise optional (transcoding off without it).
 - **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
   (and does NOT prune) if a library root is missing/unreadable, or if it returns
   zero audio files while books are still indexed. This protects the index — and
@@ -202,7 +228,7 @@ future metadata site can attach enrichment without reshaping the schema.
   Range streaming, per-user listening state.
 - **Phase A.1 (done)**: baked-in web UI (`internal/web`) — public connect page
   (auth-code box → QR + links) and an admin console (login, users, libraries,
-  access grants, auth codes, rescan, edit-layout, delete). Static client over the
+  access grants, auth codes, rescan, folder-detection overrides, delete). Static client over the
   JSON API; the API enforces the admin role, so the HTML itself is unprivileged.
   The console takes its design cues from the Expo player (pink `#db2777` accent,
   self-hosted Roboto in `assets/fonts/`, dark-mode-first, logo + wordmark): a
@@ -219,16 +245,18 @@ future metadata site can attach enrichment without reshaping the schema.
   path rules; filtered-tree browse; whole-library sugar), durable state re-keyed to
   the path, and cheap **move-tracking**. Admin console has a **Shares** section with
   a filesystem path picker.
-- **Phase B**: `POST /uploads` → parse + placement suggestion (layout-aware);
-  AAX→M4B conversion (user-supplied activation bytes, never stored).
-- **Phase C**: `?transcode=` on the stream endpoint (ffmpeg pipe); WebSocket
-  `/api/v1/ws` realtime sync reusing the last-write-wins merge + offline replay.
+- **Phase B**: `POST /uploads` → parse + placement suggestion; AAX→M4B conversion
+  (user-supplied activation bytes, never stored).
+- **Phase C**: `?transcode=` on the stream endpoint (ffmpeg pipe to MP3) — **done**
+  (see Transcoding above). Remaining: WebSocket `/api/v1/ws` realtime sync reusing
+  the last-write-wins merge + offline replay.
 - **Phase D (designed)**: server federation — peering, remote shelves, hybrid
   routing (proxy catalog + signed direct stream), reusing shares as the share unit.
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`); flip them on as phases land.
+`upload`, `transcode`, `websocket`); flip them on as phases land. `transcode`
+already reflects whether ffmpeg is configured.
 
 ## API surface
 

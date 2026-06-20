@@ -169,7 +169,6 @@ el("lib-form").addEventListener("submit", async (e) => {
     await api("POST", "/admin/libraries", {
       name: el("lib-name").value.trim(),
       root: el("lib-root").value.trim(),
-      layout: el("lib-layout").value,
     });
     el("lib-form").reset();
     closeModals();
@@ -185,38 +184,21 @@ async function loadLibraries() {
   rows.innerHTML = "";
   librariesCache.forEach((l) => {
     const tr = document.createElement("tr");
-    tr.append(td(l.name), td(l.root, "code"), layoutCell(l), actionTd(scanBtn(l.id), deleteLibBtn(l)));
+    tr.append(td(l.name), td(l.root, "code"), actionTd(detectBtn(l), scanBtn(l.id), deleteLibBtn(l)));
     rows.appendChild(tr);
   });
   if (!librariesCache.length) {
     const tr = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 4;
+    cell.colSpan = 3;
     cell.append(emptyNote("No libraries yet — add one to start scanning."));
     tr.append(cell);
     rows.appendChild(tr);
   }
 }
 
-const LAYOUTS = ["books_in_folder", "chapters_in_folder", "flat"];
-function layoutCell(l) {
-  const d = document.createElement("td");
-  const sel = document.createElement("select");
-  LAYOUTS.forEach((opt) => {
-    const o = document.createElement("option");
-    o.value = opt;
-    o.textContent = opt;
-    if (opt === l.layout) o.selected = true;
-    sel.appendChild(o);
-  });
-  sel.addEventListener("change", async () => {
-    try {
-      await api("PATCH", `/admin/libraries/${l.id}`, { layout: sel.value });
-      toast(`Layout set to ${sel.value} — rescanning.`);
-    } catch (err) { toast(err.message, "error"); sel.value = l.layout; }
-  });
-  d.appendChild(sel);
-  return d;
+function detectBtn(l) {
+  return button("Detection", "secondary small", () => openDetect(l));
 }
 
 function deleteLibBtn(l) {
@@ -755,6 +737,74 @@ async function pickerNavigate(path) {
     const action = entry.is_dir || entry.is_audio
       ? actionTd(button("Share this", "small", () => addPickedPath(entry.path)))
       : document.createElement("td");
+    tr.append(name, action);
+    rows.appendChild(tr);
+  });
+}
+
+// ---- Folder detection overrides (modal) ----
+let detectLib = null;
+
+function openDetect(lib) {
+  detectLib = lib.id;
+  el("detect-lib").textContent = lib.name;
+  openModal("modal-detect");
+  detectNavigate("");
+}
+
+const DETECT_MODES = [["", "Auto"], ["book", "One book"], ["collection", "Separate books"]];
+
+async function detectNavigate(path) {
+  el("detect-crumb").textContent = "/" + path;
+  const rows = el("detect-rows");
+  rows.innerHTML = "";
+
+  let listing;
+  try { listing = await api("GET", `/libraries/${detectLib}/fs?path=${encodeURIComponent(path)}&limit=500`); }
+  catch (err) { toast(err.message, "error"); return; }
+
+  if (path) {
+    const up = document.createElement("tr");
+    const upName = document.createElement("td");
+    const parent = path.split("/").slice(0, -1).join("/");
+    const a = document.createElement("a");
+    a.href = "#";
+    a.textContent = "⬆ ..";
+    a.addEventListener("click", (e) => { e.preventDefault(); detectNavigate(parent); });
+    upName.append(a);
+    up.append(upName, document.createElement("td"));
+    rows.appendChild(up);
+  }
+
+  (listing.entries || []).forEach((entry) => {
+    if (!entry.is_dir) return; // overrides apply to folders
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    const a = document.createElement("a");
+    a.href = "#";
+    a.textContent = "📁 " + entry.name + (entry.is_book ? " · book" : "");
+    a.addEventListener("click", (e) => { e.preventDefault(); detectNavigate(entry.path); });
+    name.appendChild(a);
+
+    const sel = document.createElement("select");
+    DETECT_MODES.forEach(([value, label]) => {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = label;
+      if ((entry.override || "") === value) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener("change", async () => {
+      const q = `?path=${encodeURIComponent(entry.path)}`;
+      try {
+        if (sel.value === "") await api("DELETE", `/admin/libraries/${detectLib}/folder-override${q}`);
+        else await api("PUT", `/admin/libraries/${detectLib}/folder-override${q}`, { mode: sel.value });
+        entry.override = sel.value;
+        toast("Detection updated — rescanning.");
+      } catch (err) { toast(err.message, "error"); sel.value = entry.override || ""; }
+    });
+    const action = document.createElement("td");
+    action.appendChild(sel);
     tr.append(name, action);
     rows.appendChild(tr);
   });

@@ -8,6 +8,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
@@ -241,9 +242,9 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, created)
 }
 
-// handleUpdateLibrary edits a library's mutable fields (name/root/layout/
-// default_view). Because changing the layout or root invalidates the index, it
-// kicks off a background rescan; browsing still works immediately.
+// handleUpdateLibrary edits a library's mutable fields (name/root/default_view).
+// Because changing the root invalidates the index, it kicks off a background
+// rescan; browsing still works immediately.
 func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -266,6 +267,78 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	go a.backgroundScan(*updated)
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// handleSetFolderOverride forces how a folder is classified by the auto book
+// detector ("book" = one multi-file book, "collection" = one book per file),
+// then rescans the library so the change takes effect.
+func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library id")
+		return
+	}
+	lib, err := a.cat.GetLibrary(r.Context(), id)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "library not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load library")
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if _, err := library.SafeJoin(lib.Root, path); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if err := a.cat.SetFolderOverride(r.Context(), id, path, req.Mode); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	go a.backgroundScan(*lib)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "override set", "path": path, "mode": req.Mode})
+}
+
+// handleDeleteFolderOverride clears a folder's detection override (reverting it
+// to auto-detection) and rescans the library.
+func (a *API) handleDeleteFolderOverride(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library id")
+		return
+	}
+	lib, err := a.cat.GetLibrary(r.Context(), id)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "library not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load library")
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if err := a.cat.DeleteFolderOverride(r.Context(), id, path); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not clear override")
+		return
+	}
+	go a.backgroundScan(*lib)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "override cleared", "path": path})
 }
 
 // handleDeleteLibrary removes a library and everything indexed under it. The

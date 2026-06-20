@@ -23,7 +23,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"capabilities": map[string]bool{
 			"admin_ui":   true,                        // baked-in admin console at /admin
 			"web_player": web.HasPlayer(a.cfg.WebDir), // web player served at /web (when web_dir is populated)
-			"transcode":  false,                       // Phase C
+			"transcode":  a.ffmpeg != "",              // on-the-fly MP3 transcoding via ffmpeg
 			"upload":     false,                       // Phase B
 			"websocket":  false,                       // Phase C
 		},
