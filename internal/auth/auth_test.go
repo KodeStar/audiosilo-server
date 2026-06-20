@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -217,5 +219,33 @@ func TestAuthCodeRedeem(t *testing.T) {
 	}
 	if _, err := s.RedeemAuthCode(ctx, "BOGUS-CODE-0000-0000"); err != ErrInvalidCode {
 		t.Fatalf("expected ErrInvalidCode for bogus, got %v", err)
+	}
+}
+
+// TestAuthCodeRedeemConcurrent guards the use-counter against a check-then-
+// increment race: with max_uses = 2, exactly two of many concurrent redemptions
+// may succeed (the WHERE-guarded UPDATE is the single atomic claim point).
+func TestAuthCodeRedeemConcurrent(t *testing.T) {
+	s, ctx := newTestService(t)
+	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
+	code, err := s.CreateAuthCode(ctx, admin.ID, "test", 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 8
+	var ok int64
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := s.RedeemAuthCode(ctx, code); err == nil {
+				atomic.AddInt64(&ok, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok != 2 {
+		t.Fatalf("redeemed %d times, want exactly 2 (cap must hold under concurrency)", ok)
 	}
 }
