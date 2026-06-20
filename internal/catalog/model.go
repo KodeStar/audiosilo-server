@@ -18,12 +18,14 @@ const (
 	ViewHybrid     = "hybrid"
 )
 
-// Library is a configured root of audiobooks.
+// Library is a configured root of audiobooks. Its shape (single-file books,
+// folder-per-book, multi-file parts) is auto-detected per folder by the scanner;
+// there is no library-wide layout setting. Folders the detector gets wrong can be
+// corrected with a per-folder override (see folder_overrides.go).
 type Library struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
 	Root        string `json:"root"`
-	Layout      string `json:"layout"`
 	DefaultView string `json:"default_view"`
 }
 
@@ -43,12 +45,18 @@ type Book struct {
 	ISBN        string             `json:"isbn,omitempty"`
 	CoverPath   string             `json:"-"`
 	Format      string             `json:"format"`
+	Codec       string             `json:"codec,omitempty"` // audio codec (ffprobe); "" when unknown
 	Size        int64              `json:"size"`
 	MTime       int64              `json:"-"`
 	AddedAt     string             `json:"added_at,omitempty"` // RFC3339; filesystem birth time (scanner)
 	ContentHash string             `json:"-"`
 	Files       []BookFile         `json:"files,omitempty"`
 	Chapters    []metadata.Chapter `json:"chapters,omitempty"`
+
+	// DirectPlayable, when set, reports whether the audio codec plays natively in
+	// browsers (so the client knows when to request ?transcode=1). Computed by the
+	// API for single-book responses; nil/omitted in list views.
+	DirectPlayable *bool `json:"direct_playable,omitempty"`
 }
 
 // BookFile is one audio file belonging to a multi-file book.

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/dhowden/tag"
 )
@@ -39,13 +40,16 @@ type Metadata struct {
 	Narrator    string    `json:"narrator"`
 	Duration    float64   `json:"duration"`
 	Format      string    `json:"format"`
+	Codec       string    `json:"codec"` // audio codec from ffprobe (e.g. aac, mp3, ac3)
 	HasCover    bool      `json:"has_cover"`
 	Chapters    []Chapter `json:"chapters,omitempty"`
 }
 
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
+// .mp4 is included because audiobooks are sometimes delivered as AAC-in-MP4;
+// media.ServeFile serves it as audio/mp4 and the transcoder covers odd codecs.
 var AudioExtensions = map[string]bool{
-	".m4b": true, ".m4a": true, ".mp3": true, ".aax": true,
+	".m4b": true, ".m4a": true, ".mp4": true, ".mp3": true, ".aax": true,
 	".flac": true, ".ogg": true, ".opus": true,
 }
 
@@ -123,23 +127,19 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// Storage layout identifiers (mirrors config). Path derivation differs because
-// a book is a file (flat / books_in_folder) or a folder (chapters_in_folder).
-const (
-	LayoutFlat             = "flat"
-	LayoutChaptersInFolder = "chapters_in_folder"
-	LayoutBooksInFolder    = "books_in_folder"
-)
-
-// DeriveFromPath infers title/series/author/index from a book's relative path
-// given the library layout. The book identity is the filename (file books) or
-// the folder name (folder books); the two ancestor directories are treated as
+// DeriveFromPath infers title/series/author/index from a book's relative path.
+// The book identity is the filename (single-file books) or the folder name
+// (multi-file / folder books); the two ancestor directories are treated as
 // series and author respectively:
 //
-//	books_in_folder:    Author/Series/01 - Title.m4b
-//	chapters_in_folder: Author/Series/01 - Title/  (isFolder)
-//	flat:               01 - Title.m4b  (no series/author)
-func DeriveFromPath(layout, relPath string, isFolder bool) *Metadata {
+//	Author/Series/01 - Title.m4b   (single-file book)
+//	Author/Series/01 - Title/      (folder book, isFolder)
+//	01 - Title.m4b                 (no ancestors -> no series/author)
+//
+// Derivation is purely structural now that libraries auto-detect their shape: a
+// book sitting at the library root simply has no ancestors and so carries no
+// hierarchy (the former "flat" layout falls out for free).
+func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 	m := &Metadata{}
 	segments := strings.Split(strings.Trim(filepath.ToSlash(relPath), "/"), "/")
 	if len(segments) == 0 {
@@ -153,9 +153,6 @@ func DeriveFromPath(layout, relPath string, isFolder bool) *Metadata {
 	ancestors := segments[:len(segments)-1]
 
 	m.SeriesIndex, m.Title = splitSeriesIndex(name)
-	if layout == LayoutFlat {
-		return m // flat libraries carry no author/series hierarchy
-	}
 	if n := len(ancestors); n >= 1 {
 		m.Series = ancestors[n-1]
 	}
@@ -163,6 +160,68 @@ func DeriveFromPath(layout, relPath string, isFolder bool) *Metadata {
 		m.Author = ancestors[n-2]
 	}
 	return m
+}
+
+// NormAlnum reduces a string to its lowercase letters and digits, dropping
+// spaces, punctuation and case. Used by the book/folder auto-detector to compare
+// names robustly.
+func NormAlnum(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// GroupKey reduces a filename to a key shared by parts of the same multi-file
+// book: it drops the extension, a leading volume/track index ("01 - "), a
+// trailing part/track marker ("- 001", "Part 3", "CD2"), then normalizes. Parts
+// of one book collapse to the same key; distinct titles do not.
+func GroupKey(name string) string {
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	_, name = splitSeriesIndex(name)
+	name = stripTrailingIndex(name)
+	return NormAlnum(name)
+}
+
+// stripTrailingIndex removes a trailing part/track marker so "Dungeon Born - 001"
+// and "Dungeon Born - 002" collapse to "Dungeon Born". It strips trailing digits
+// plus an optional preceding marker word (Part/Track/CD/Disc/…); leading indices
+// are handled by splitSeriesIndex.
+func stripTrailingIndex(s string) string {
+	s = strings.TrimRight(strings.TrimSpace(s), " -_.")
+	i := len(s)
+	for i > 0 && s[i-1] >= '0' && s[i-1] <= '9' {
+		i--
+	}
+	if i == len(s) {
+		return s // no trailing number
+	}
+	head := strings.TrimRight(s[:i], " -_.#")
+	for _, tok := range []string{"part", "pt", "chapter", "ch", "track", "disc", "disk", "cd", "vol", "volume", "book"} {
+		if hasTrailingWord(head, tok) {
+			head = strings.TrimRight(head[:len(head)-len(tok)], " -_.#")
+			break
+		}
+	}
+	return strings.TrimSpace(head)
+}
+
+// hasTrailingWord reports whether s ends with word on a separator boundary.
+func hasTrailingWord(s, word string) bool {
+	if len(s) < len(word) || !strings.EqualFold(s[len(s)-len(word):], word) {
+		return false
+	}
+	if len(s) == len(word) {
+		return true
+	}
+	switch s[len(s)-len(word)-1] {
+	case ' ', '-', '_', '.':
+		return true
+	}
+	return false
 }
 
 // SplitSeriesIndex parses a leading volume/track number out of a name like

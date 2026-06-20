@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -84,8 +83,9 @@ type ScanResult struct {
 // cascade, users' progress/bookmarks).
 var ErrLibraryUnavailable = errors.New("library root unavailable; skipping scan to protect the index")
 
-// ErrNotIndexable means a resolved path is not a book (e.g. a non-audio file, or
-// a directory in a file-per-book layout).
+// ErrNotIndexable means a resolved path is not a book (e.g. a directory that
+// holds no audio directly, or a directory the detector treats as a collection of
+// separate books rather than one book).
 var ErrNotIndexable = errors.New("path is not an indexable book")
 
 // coverNames are sibling image files treated as a book's cover.
@@ -125,7 +125,11 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 		return nil, fmt.Errorf("%w: %q: %v", ErrLibraryUnavailable, lib.Root, statErr)
 	}
 
-	books, err := discoverBooks(lib)
+	overrides, err := s.cat.FolderOverrides(ctx, lib.ID)
+	if err != nil {
+		return nil, err
+	}
+	books, err := discoverAuto(lib, overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -181,9 +185,9 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	if b.IsFolder && len(b.Files) > 0 {
 		primary = b.Files[0].RelPath
 	}
-	// Baseline from the path (layout-aware), then overlay embedded tags/probe
-	// which are authoritative when present.
-	base := metadata.DeriveFromPath(lib.Layout, b.RelPath, b.IsFolder)
+	// Baseline from the path, then overlay embedded tags/probe which are
+	// authoritative when present.
+	base := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	b.Title, b.Author, b.Series, b.SeriesIndex = base.Title, base.Author, base.Series, base.SeriesIndex
 
 	abs := filepath.Join(lib.Root, filepath.FromSlash(primary))
@@ -196,6 +200,7 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 			b.SeriesIndex = md.SeriesIndex
 		}
 		b.Narrator = md.Narrator
+		b.Codec = md.Codec
 	}
 
 	// Move-detection fingerprint (reused content_hash column); skip if already
@@ -310,39 +315,12 @@ func partTitle(relPath string) string {
 	return name
 }
 
-// discoverBooks groups a library's audio files into books per its layout.
-func discoverBooks(lib catalog.Library) ([]*catalog.Book, error) {
-	switch lib.Layout {
-	case config.LayoutChaptersInFolder:
-		return discoverFolderBooks(lib)
-	default: // flat, books_in_folder
-		return discoverFileBooks(lib)
-	}
-}
-
-// discoverFileBooks treats each audio file as a single-file book.
-func discoverFileBooks(lib catalog.Library) ([]*catalog.Book, error) {
-	var books []*catalog.Book
-	err := filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries
-		}
-		if d.IsDir() || strings.HasPrefix(d.Name(), ".") || !metadata.IsAudio(d.Name()) {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		books = append(books, fileBook(lib, path, info))
-		return nil
-	})
-	return books, err
-}
-
-// discoverFolderBooks treats each directory that directly contains audio files
-// as one (possibly multi-file) book.
-func discoverFolderBooks(lib catalog.Library) ([]*catalog.Book, error) {
+// discoverAuto walks a library and classifies each directory that directly
+// contains audio files on its own — so a mixed library (some folders are one
+// multi-file book, others hold several single-file books) is handled without any
+// layout setting. overrides forces a folder's interpretation when the heuristic
+// gets it wrong (see booksInDir).
+func discoverAuto(lib catalog.Library, overrides map[string]string) ([]*catalog.Book, error) {
 	dirs := map[string]bool{}
 	err := filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || strings.HasPrefix(d.Name(), ".") || !metadata.IsAudio(d.Name()) {
@@ -354,13 +332,115 @@ func discoverFolderBooks(lib catalog.Library) ([]*catalog.Book, error) {
 	if err != nil {
 		return nil, err
 	}
+	rootClean := filepath.Clean(lib.Root)
 	var books []*catalog.Book
 	for dir := range dirs {
-		if b := folderBook(lib, dir); b != nil {
-			books = append(books, b)
-		}
+		books = append(books, booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides)...)
 	}
 	return books, nil
+}
+
+// booksInDir turns the audio files directly inside absDir into books. The
+// decision — one (multi-file) book for the whole folder, or one book per file —
+// follows, in order: an explicit override, the root special case (root files are
+// always individual books), then the auto heuristic in dirIsOneBook.
+func booksInDir(lib catalog.Library, absDir string, isRoot bool, overrides map[string]string) []*catalog.Book {
+	audio := audioEntries(absDir)
+	if len(audio) == 0 {
+		return nil
+	}
+	relDir := relPathOf(lib.Root, absDir)
+	asBook := func() []*catalog.Book {
+		if b := folderBook(lib, absDir); b != nil {
+			return []*catalog.Book{b}
+		}
+		return nil
+	}
+	switch overrides[relDir] {
+	case catalog.OverrideBook:
+		return asBook()
+	case catalog.OverrideCollection:
+		return fileBooksIn(lib, absDir, audio)
+	}
+	if !isRoot && dirIsOneBook(absDir, audio) {
+		return asBook()
+	}
+	return fileBooksIn(lib, absDir, audio)
+}
+
+// dirIsOneBook reports whether the audio files directly inside absDir are parts
+// of a single book (rather than separate single-file books). Signals, in order:
+//   - the folder name itself parses as an indexed book ("01 - Storm Front");
+//   - the files share one normalized stem (multi-file parts like "X - 001/002");
+//   - a lone file whose name matches the folder (a dedicated book folder),
+//     as opposed to one book sitting in a series folder.
+func dirIsOneBook(absDir string, audio []os.DirEntry) bool {
+	if idx, _ := metadata.SplitSeriesIndex(filepath.Base(absDir)); idx != 0 {
+		return true
+	}
+	keys := map[string]bool{}
+	for _, de := range audio {
+		keys[metadata.GroupKey(de.Name())] = true
+	}
+	if len(keys) != 1 {
+		return false // several distinct titles -> separate books
+	}
+	if len(audio) >= 2 {
+		return true // multiple parts sharing a stem
+	}
+	return folderNamesBook(filepath.Base(absDir), audio[0].Name())
+}
+
+// folderNamesBook reports whether a folder appears to be named after the single
+// audio file it holds (so the folder is the book), e.g.
+// "AF01 - Shade's First Rule"/"Shade's First Rule.m4b".
+func folderNamesBook(folder, file string) bool {
+	f := metadata.NormAlnum(folder)
+	g := metadata.GroupKey(file)
+	if len(f) < 4 || len(g) < 4 {
+		return false
+	}
+	return strings.Contains(f, g) || strings.Contains(g, f)
+}
+
+// audioEntries returns the non-hidden audio files directly inside absDir, in the
+// stable name order os.ReadDir provides.
+func audioEntries(absDir string) []os.DirEntry {
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return nil
+	}
+	var audio []os.DirEntry
+	for _, de := range entries {
+		if de.IsDir() || strings.HasPrefix(de.Name(), ".") || !metadata.IsAudio(de.Name()) {
+			continue
+		}
+		audio = append(audio, de)
+	}
+	return audio
+}
+
+// fileBooksIn builds one single-file book per audio file in absDir.
+func fileBooksIn(lib catalog.Library, absDir string, audio []os.DirEntry) []*catalog.Book {
+	var books []*catalog.Book
+	for _, de := range audio {
+		info, err := de.Info()
+		if err != nil {
+			continue
+		}
+		books = append(books, fileBook(lib, filepath.Join(absDir, de.Name()), info))
+	}
+	return books
+}
+
+// relPathOf returns absDir as a slash-separated path relative to root ("" for
+// the root itself), matching the rel_path keys used elsewhere.
+func relPathOf(root, absDir string) string {
+	rel, err := filepath.Rel(root, absDir)
+	if err != nil || rel == "." {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
 
 // addedAt is when a book first appeared on disk: the file's birth (creation)
@@ -437,9 +517,9 @@ func folderBook(lib catalog.Library, absDir string) *catalog.Book {
 
 // IndexPath indexes a single browsed path on demand and returns the resulting
 // book (with chapters). It lets a client act on something it found in the
-// filesystem view before the background scan has reached it. In a
-// chapters_in_folder library, resolving either the book folder or a file inside
-// it yields the same folder book.
+// filesystem view before the background scan has reached it. When a folder is a
+// single (multi-file) book, resolving either the book folder or a file inside it
+// yields that same folder book.
 func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
 	// SafeJoin is the security gate (rejects traversal and symlink escapes). It
 	// returns a symlink-RESOLVED path, but we derive the working path from an
@@ -456,24 +536,22 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
 	}
 
-	var book *catalog.Book
-	if lib.Layout == config.LayoutChaptersInFolder {
-		dir := abs
-		if !info.IsDir() {
-			dir = filepath.Dir(abs) // the book is the containing folder
-		}
-		book = folderBook(lib, dir)
-	} else {
-		if info.IsDir() {
-			return nil, fmt.Errorf("%w: a directory is not a book in the %q layout", ErrNotIndexable, lib.Layout)
-		}
-		if !metadata.IsAudio(abs) {
-			return nil, fmt.Errorf("%w: %q is not an audio file", ErrNotIndexable, filepath.Base(abs))
-		}
-		book = fileBook(lib, abs, info)
+	overrides, err := s.cat.FolderOverrides(ctx, lib.ID)
+	if err != nil {
+		return nil, err
 	}
+	// Classify the containing directory exactly as a full scan would, then pick
+	// the book the requested path resolves to: the folder book itself, a
+	// single-file book, or the folder book a clicked part belongs to.
+	dir := abs
+	if !info.IsDir() {
+		dir = filepath.Dir(abs)
+	}
+	rootClean := filepath.Clean(lib.Root)
+	candidates := booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides)
+	book := pickBook(candidates, relPathOf(lib.Root, abs))
 	if book == nil {
-		return nil, fmt.Errorf("%w: no audio found at %q", ErrNotIndexable, relPath)
+		return nil, fmt.Errorf("%w: no book at %q", ErrNotIndexable, relPath)
 	}
 
 	s.enrich(lib, book)
@@ -482,6 +560,23 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 		return nil, err
 	}
 	return s.cat.GetBook(ctx, id)
+}
+
+// pickBook returns the book from candidates whose path matches want — the book's
+// own rel_path (single-file or folder book) or, for a part the client clicked
+// inside a folder book, one of that book's files.
+func pickBook(candidates []*catalog.Book, want string) *catalog.Book {
+	for _, b := range candidates {
+		if b.RelPath == want {
+			return b
+		}
+		for _, f := range b.Files {
+			if f.RelPath == want {
+				return b
+			}
+		}
+	}
+	return nil
 }
 
 func ext(name string) string {

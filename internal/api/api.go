@@ -30,6 +30,7 @@ type API struct {
 	auth    *auth.Service
 	cat     *catalog.Catalog
 	scanner *library.Scanner
+	ffmpeg  string // path to ffmpeg for on-the-fly transcoding; "" disables it
 	log     *slog.Logger
 
 	loginLimiter  *limiter // per-IP lockout for password login
@@ -38,8 +39,9 @@ type API struct {
 	ipLimiter     *ipRateLimiter
 }
 
-// New constructs an API.
-func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanner *library.Scanner, log *slog.Logger) *API {
+// New constructs an API. ffmpeg is the path to an ffmpeg binary used for
+// on-the-fly transcoding ("" disables it).
+func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanner *library.Scanner, ffmpeg string, log *slog.Logger) *API {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -48,6 +50,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		auth:          authSvc,
 		cat:           cat,
 		scanner:       scanner,
+		ffmpeg:        ffmpeg,
 		log:           log,
 		loginLimiter:  newLimiter(10, 15*time.Minute),
 		redeemLimiter: newLimiter(10, 15*time.Minute),
@@ -114,6 +117,8 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleCreateLibrary)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateLibrary)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteLibrary)))
+	mux.Handle("PUT /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleSetFolderOverride)))
+	mux.Handle("DELETE /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleDeleteFolderOverride)))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanLibrary)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanStatus)))
 
