@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -23,6 +24,11 @@ const (
 	KindPairing = "pairing"
 )
 
+// DemoUsernamePrefix marks throwaway accounts created by public demo mode. The
+// demo session endpoint creates `demo_<random>` users and the background reaper
+// deletes idle ones by this prefix.
+const DemoUsernamePrefix = "demo_"
+
 // Errors returned by the service.
 var (
 	ErrNotFound     = errors.New("not found")
@@ -34,7 +40,23 @@ var (
 	// ErrAdminNeedsPassword is returned when an account would become (or remain)
 	// an admin without a password to sign in to the console.
 	ErrAdminNeedsPassword = errors.New("admin accounts require a password")
+	// ErrPasswordTooShort is returned when a non-empty password is below the
+	// minimum length.
+	ErrPasswordTooShort = errors.New("password must be at least 8 characters")
 )
+
+// MinPasswordLen is the minimum length for a non-empty account password.
+const MinPasswordLen = 8
+
+// validatePassword enforces the minimum length for a non-empty password. An
+// empty password is permitted here (it means "password-less" for non-admins, or
+// "clear"); the admin-needs-a-password rule is enforced separately by callers.
+func validatePassword(password string) error {
+	if password != "" && len(password) < MinPasswordLen {
+		return ErrPasswordTooShort
+	}
+	return nil
+}
 
 // User is an account record (without the password hash for callers).
 type User struct {
@@ -82,6 +104,9 @@ func (s *Service) CreateUser(ctx context.Context, username, password, role strin
 	}
 	if password == "" && role == RoleAdmin {
 		return nil, errors.New("a password is required for admin accounts")
+	}
+	if err := validatePassword(password); err != nil {
+		return nil, err
 	}
 	hash := ""
 	if password != "" {
@@ -142,8 +167,10 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 }
 
 // dummyHash is a precomputed argon2id hash used to equalize timing for unknown
-// usernames. It corresponds to a random password no one knows.
-const dummyHash = "$argon2id$v=19$m=65536,t=1,p=4$YWFhYWFhYWFhYWFhYWFhYQ$3KhZ0r0u2y0xq8b9oQzWtkqj9o0a9hZ0r0u2y0xq8b8"
+// usernames. It corresponds to a random password no one knows. Its cost
+// parameters mirror the real ones (argonTime/argonMemory in hash.go) so the
+// dummy verify does the same work and doesn't leak account existence by timing.
+const dummyHash = "$argon2id$v=19$m=65536,t=2,p=4$YWFhYWFhYWFhYWFhYWFhYQ$3KhZ0r0u2y0xq8b9oQzWtkqj9o0a9hZ0r0u2y0xq8b8"
 
 // IssueToken creates a token of the given kind for a user and returns the
 // secret (shown once). ttl <= 0 means no expiry.
@@ -356,6 +383,45 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	return out, rows.Err()
 }
 
+// escapeLike escapes LIKE wildcards so a literal prefix can be matched with
+// `LIKE escapeLike(prefix)+"%" ESCAPE '\'`.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// CountUsersWithPrefix returns the number of accounts whose username starts with
+// prefix. Used to cap the number of live demo accounts.
+func (s *Service) CountUsersWithPrefix(ctx context.Context, prefix string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE username LIKE ? ESCAPE '\'`,
+		escapeLike(prefix)+"%").Scan(&n)
+	return n, err
+}
+
+// ReapIdleDemoUsers deletes accounts whose username starts with prefix and whose
+// most recent token activity (or, lacking any, their creation time) is older than
+// cutoff. Their child rows (progress, bookmarks, notes, history, tokens, share
+// grants) cascade via ON DELETE CASCADE. Returns the number of accounts deleted.
+// Timestamps are stored as RFC3339 UTC, so the lexical comparison is chronological.
+func (s *Service) ReapIdleDemoUsers(ctx context.Context, prefix string, cutoff time.Time) (int64, error) {
+	cut := cutoff.UTC().Format(time.RFC3339)
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM users
+		  WHERE username LIKE ? ESCAPE '\'
+		    AND COALESCE(
+		          (SELECT MAX(COALESCE(t.last_seen, t.created_at))
+		             FROM tokens t WHERE t.user_id = users.id),
+		          users.created_at
+		        ) < ?`,
+		escapeLike(prefix)+"%", cut)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // countEnabledAdmins returns the number of enabled admin accounts, optionally
 // excluding one user id (pass 0 to exclude none). Used to prevent locking the
 // last admin out of the console by demotion or disabling.
@@ -421,6 +487,9 @@ func (s *Service) SetRole(ctx context.Context, id int64, role string) error {
 // SetPassword sets (or clears) an account's password. A non-empty password is
 // hashed with argon2id; an empty password clears it (only valid for non-admins).
 func (s *Service) SetPassword(ctx context.Context, id int64, password string) error {
+	if err := validatePassword(password); err != nil {
+		return err
+	}
 	hash := ""
 	if password != "" {
 		var err error

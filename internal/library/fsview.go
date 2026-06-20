@@ -48,21 +48,60 @@ type Listing struct {
 }
 
 // SafeJoin resolves relPath against root, guaranteeing the result stays within
-// root. It defends against ".." traversal and absolute-path injection.
+// root. It defends against ".." traversal, absolute-path injection, and symlinks
+// inside the root that point outside it.
 func SafeJoin(root, relPath string) (string, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
 	}
+	// Resolve symlinks in the root itself so containment is checked against the
+	// real directory (the root is operator-configured and expected to exist).
+	if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
+		rootAbs = resolved
+	}
 	full := filepath.Join(rootAbs, filepath.FromSlash(relPath))
-	// Reject any path that resolves outside the root (".." traversal). An
-	// absolute relPath is treated as relative to the root by filepath.Join, so
-	// it stays contained; only genuine escapes produce a ".." relative path.
-	rel, err := filepath.Rel(rootAbs, full)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// Lexical containment first: reject ".." traversal. An absolute relPath is
+	// treated as relative to the root by filepath.Join, so it stays contained;
+	// only genuine escapes produce a ".." relative path. This also covers paths
+	// that don't exist yet (which EvalSymlinks can't resolve).
+	if !withinRoot(rootAbs, full) {
+		return "", ErrOutsideRoot
+	}
+	// Symlink-aware containment: resolve symlinks in the longest existing prefix
+	// of the target and re-check, so a symlink inside the root that points
+	// outside it is rejected rather than followed.
+	if !withinRoot(rootAbs, resolveExisting(full)) {
 		return "", ErrOutsideRoot
 	}
 	return full, nil
+}
+
+// withinRoot reports whether p is the root itself or nested under it.
+func withinRoot(rootAbs, p string) bool {
+	rel, err := filepath.Rel(rootAbs, p)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// resolveExisting resolves symlinks in the longest existing prefix of p and
+// re-appends the (not-yet-existing) remainder, so containment can be checked even
+// for a path that has not been created yet.
+func resolveExisting(p string) string {
+	rest := ""
+	for cur := p; ; {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p // nothing along the path exists to resolve
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // BrowseFS lists a directory within a library root with offset pagination.

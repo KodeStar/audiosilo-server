@@ -25,11 +25,19 @@ type testEnv struct {
 	srv      *httptest.Server
 	auth     *auth.Service
 	cat      *catalog.Catalog
+	cfg      *config.Config
 	adminID  int64
 	authCode string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
+	return newTestEnvWith(t, nil)
+}
+
+// newTestEnvWith builds a test env, optionally mutating the config before the
+// handler is constructed (needed for routes registered at build time, e.g. the
+// demo root redirect).
+func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	db, err := store.Open(ctx, ":memory:")
@@ -44,11 +52,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	code, _ := authSvc.CreateAuthCode(ctx, admin.ID, "test", 0, 0)
 
 	cfg := config.Default(t.TempDir())
+	if configure != nil {
+		configure(cfg)
+	}
 	scanner := library.NewScanner(cat, "", slog.Default())
 	a := New(cfg, authSvc, cat, scanner, slog.Default())
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
-	return &testEnv{srv: srv, auth: authSvc, cat: cat, adminID: admin.ID, authCode: code}
+	return &testEnv{srv: srv, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code}
 }
 
 func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Response, string) {
@@ -304,5 +315,50 @@ func TestLoginLockout(t *testing.T) {
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("expected lockout (429) after repeated failures, got %d", last)
+	}
+}
+
+// TestListProgressScopeFiltered covers review finding S4: GET /me/progress must
+// not return durable state for paths the caller can no longer access (e.g. after
+// a share is narrowed/revoked).
+func TestListProgressScopeFiltered(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root, Layout: config.LayoutBooksInFolder})
+	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	kid, _ := e.auth.CreateUser(ctx, "kid", "kid-password", auth.RoleUser)
+	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "All"})
+	e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: ""}) // whole library
+	e.cat.GrantShare(ctx, kid.ID, share.ID)
+	token, _ := e.auth.IssueToken(ctx, kid.ID, auth.KindSession, "t", 0)
+	libPath := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10)
+
+	wight := url.QueryEscape("Will Wight/Cradle/01 - Unsouled.m4b")
+	sanderson := url.QueryEscape("Brandon Sanderson/Mistborn/01 - The Final Empire.m4b")
+	for _, p := range []string{wight, sanderson} {
+		if resp, _ := e.do(t, "PUT", libPath+"/progress?path="+p, token, `{"position":5,"duration":100}`); resp.StatusCode != 200 {
+			t.Fatalf("put progress %s: %d", p, resp.StatusCode)
+		}
+	}
+
+	// While the whole-library grant stands, both are returned.
+	_, body := e.do(t, "GET", "/api/v1/me/progress", token, "")
+	if !strings.Contains(body, "Will Wight") || !strings.Contains(body, "Brandon Sanderson") {
+		t.Fatalf("expected both books before narrowing: %s", body)
+	}
+
+	// Narrow the grant to the Will Wight subtree; the Sanderson progress must no
+	// longer be returned.
+	e.cat.RemoveSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: ""})
+	e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"})
+	_, body = e.do(t, "GET", "/api/v1/me/progress", token, "")
+	if !strings.Contains(body, "Will Wight") {
+		t.Fatalf("granted book should remain: %s", body)
+	}
+	if strings.Contains(body, "Brandon Sanderson") {
+		t.Fatalf("progress for a revoked path leaked: %s", body)
 	}
 }
