@@ -30,6 +30,9 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
 		},
+		"demo": map[string]bool{
+			"enabled": a.cfg.Demo.Enabled, // clients show a "Try the demo" affordance
+		},
 	})
 }
 
