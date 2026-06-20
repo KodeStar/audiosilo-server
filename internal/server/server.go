@@ -26,8 +26,13 @@ func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slo
 		Handler:           handler,
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		// No write timeout: audio streaming/transcoding responses are long-lived.
+		// ReadTimeout bounds reading the whole request (headers + body), so a slow
+		// client can't hold a control-plane connection open indefinitely. It is
+		// safe for streaming, which is a GET with no request body. There is
+		// deliberately no WriteTimeout: audio streaming/transcoding responses are
+		// long-lived.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)

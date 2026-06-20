@@ -57,3 +57,14 @@ libraries: []
 # - name: "Main"
 #   root: "/srv/audiobooks"
 #   layout: "books_in_folder"
+
+# Public demo mode. When enabled, an unauthenticated visitor can mint a throwaway
+# account via POST /api/v1/demo/session that is granted the named library; idle
+# demo accounts (and their data) are reaped automatically. Intended for a public
+# demo instance (e.g. demo.audiosilo.app). Seed the library with public-domain
+# audiobooks via scripts/seed-librivox.sh.
+demo:
+  enabled: false       # [AUDIOSILO_DEMO_ENABLED]
+  library: ""          # name of a library above to grant demo users [AUDIOSILO_DEMO_LIBRARY]
+  max_users: 0         # cap on live demo users, 0 = unlimited [AUDIOSILO_DEMO_MAX_USERS]
+  idle_ttl: "24h"      # reap demo users idle longer than this [AUDIOSILO_DEMO_IDLE_TTL]

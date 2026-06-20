@@ -28,6 +28,7 @@ type API struct {
 
 	loginLimiter  *limiter // per-IP lockout for password login
 	redeemLimiter *limiter // per-IP lockout for auth-code redemption
+	demoLimiter   *limiter // per-IP cap on demo account creation
 	ipLimiter     *ipRateLimiter
 }
 
@@ -44,7 +45,8 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		log:           log,
 		loginLimiter:  newLimiter(10, 15*time.Minute),
 		redeemLimiter: newLimiter(10, 15*time.Minute),
-		ipLimiter:     newIPRateLimiter(20, 40), // ~20 req/s, burst 40, per IP
+		demoLimiter:   newLimiter(5, 15*time.Minute), // ≤5 demo accounts per IP / 15 min
+		ipLimiter:     newIPRateLimiter(20, 40),      // ~20 req/s, burst 40, per IP
 	}
 }
 
@@ -57,6 +59,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/redeem", a.handleRedeem)
 	mux.HandleFunc("POST /api/v1/auth/exchange", a.handleExchange)
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
+	mux.HandleFunc("POST /api/v1/demo/session", a.handleDemoSession)
 
 	// Native deep-link association files (public; 404 unless configured).
 	mux.HandleFunc("GET /.well-known/apple-app-site-association", a.handleAppleAppSiteAssociation)
@@ -127,12 +130,22 @@ func (a *API) Handler() http.Handler {
 		a.log.Error("failed to register web UI", "err", err)
 	}
 
+	// In demo mode, send the exact site root to the web player's demo screen so a
+	// visitor to demo.audiosilo.app lands straight on the instant-demo flow — no
+	// reverse-proxy rewrite required. `/{$}` matches only "/" and outranks the web
+	// package's "/" catch-all, leaving /connect, /admin and the rest untouched.
+	if a.cfg.Demo.Enabled && web.HasPlayer(a.cfg.WebDir) {
+		mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/web/demo", http.StatusFound)
+		})
+	}
+
 	// Global middleware (outermost first): security headers, CORS, real-IP,
 	// then per-IP rate limiting.
 	var h http.Handler = mux
 	h = a.rateLimit(h)
 	h = a.realIP(h)
 	h = a.cors(h)
-	h = secureHeaders(h)
+	h = a.secureHeaders(h)
 	return h
 }

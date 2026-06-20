@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -10,8 +11,24 @@ import (
 // matching the path-based identity. Each handler authorizes the path against
 // the caller's share scope via authorizedPath.
 
-// handleListProgress returns all of the caller's progress rows, used to seed an
-// offline client's local copy on first sync.
+// userScopeMap returns the caller's effective access scope keyed by library,
+// used to filter the cross-library listing endpoints (progress/history) to
+// content the caller can still reach — so durable state for a since-revoked
+// share isn't read back. Admins get AllowAll for every library.
+func (a *API) userScopeMap(r *http.Request, u *auth.User) (map[int64]catalog.Scope, error) {
+	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[int64]catalog.Scope, len(scopes))
+	for _, s := range scopes {
+		m[s.LibraryID] = s
+	}
+	return m, nil
+}
+
+// handleListProgress returns the caller's progress rows (for paths they can
+// still access), used to seed an offline client's local copy on first sync.
 func (a *API) handleListProgress(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	items, err := a.cat.ListProgress(r.Context(), u.ID)
@@ -19,7 +36,18 @@ func (a *API) handleListProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load progress")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"progress": items})
+	scopes, err := a.userScopeMap(r, u)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load progress")
+		return
+	}
+	allowed := items[:0]
+	for _, it := range items {
+		if s, ok := scopes[it.LibraryID]; ok && s.Allows(it.Path) {
+			allowed = append(allowed, it)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"progress": allowed})
 }
 
 func (a *API) handleGetProgress(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +187,8 @@ func (a *API) handleDeleteNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleListAllHistory returns the caller's recent listening history across books.
+// handleListAllHistory returns the caller's recent listening history across
+// books, filtered to paths the caller can still access.
 func (a *API) handleListAllHistory(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	items, err := a.cat.ListAllHistory(r.Context(), u.ID, queryInt(r, "limit", 100))
@@ -167,7 +196,18 @@ func (a *API) handleListAllHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load history")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"history": items})
+	scopes, err := a.userScopeMap(r, u)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load history")
+		return
+	}
+	allowed := items[:0]
+	for _, it := range items {
+		if s, ok := scopes[it.LibraryID]; ok && s.Allows(it.Path) {
+			allowed = append(allowed, it)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"history": allowed})
 }
 
 func (a *API) handleListHistory(w http.ResponseWriter, r *http.Request) {

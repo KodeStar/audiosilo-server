@@ -87,6 +87,11 @@ func run() error {
 	}
 	go initialScan(ctx, cat, scanner, log)
 
+	// In demo mode, reap idle throwaway accounts in the background.
+	if cfg.Demo.Enabled {
+		go demoReaper(ctx, authSvc, cfg.Demo.IdleTTLDuration(), log)
+	}
+
 	a := api.New(cfg, authSvc, cat, scanner, log)
 	return server.Run(ctx, cfg, a.Handler(), log)
 }
@@ -157,6 +162,34 @@ func initialScan(ctx context.Context, cat *catalog.Catalog, scanner *library.Sca
 	for _, l := range libs {
 		if _, err := scanner.Scan(ctx, l); err != nil {
 			log.Warn("initial scan failed", "library", l.Name, "err", err)
+		}
+	}
+}
+
+// demoReaper periodically deletes demo accounts idle longer than idleTTL, keeping
+// a public demo instance clean. It sweeps once at startup and then on a fixed
+// interval until ctx is cancelled.
+func demoReaper(ctx context.Context, authSvc *auth.Service, idleTTL time.Duration, log *slog.Logger) {
+	const interval = 15 * time.Minute
+	reap := func() {
+		n, err := authSvc.ReapIdleDemoUsers(ctx, auth.DemoUsernamePrefix, time.Now().Add(-idleTTL))
+		if err != nil {
+			log.Warn("demo reaper failed", "err", err)
+			return
+		}
+		if n > 0 {
+			log.Info("demo reaper removed idle accounts", "count", n)
+		}
+	}
+	reap()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reap()
 		}
 	}
 }

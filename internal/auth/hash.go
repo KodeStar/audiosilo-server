@@ -15,9 +15,10 @@ import (
 )
 
 // argon2id parameters. Tuned for an interactive login on modest self-hosted
-// hardware; raise memory/time if you run on something beefier.
+// hardware; raise memory/time if you run on something beefier. Memory (64 MiB)
+// comfortably exceeds the OWASP floor; time=2 is cheap defense-in-depth.
 const (
-	argonTime    = 1
+	argonTime    = 2
 	argonMemory  = 64 * 1024 // KiB => 64 MiB
 	argonThreads = 4
 	argonKeyLen  = 32

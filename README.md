@@ -154,15 +154,32 @@ the user that should own `/data` (Unraid: `99`/`100`; generic Linux: your `id -u
 it works regardless of how the mounted volume is owned. Update — server or the
 bundled player — is always a new image: `docker compose pull && docker compose up -d`.
 
-## Testing
+## Testing & CI
+
+Run the same checks CI runs, locally:
 
 ```sh
-go test ./...
+go build ./...                 # compiles everything
+go vet ./...                   # static checks
+go test -race ./...            # unit + integration tests (in-memory SQLite + testdata fixtures)
+golangci-lint run              # linting (v2; config in .golangci.yml)
 ```
 
 Tests use in-memory SQLite and the fixtures under [`testdata/`](testdata/) (tiny
-generated M4B files), covering auth, the catalog/search/pagination, the scanner,
-path-traversal defense, and the HTTP auth flow.
+generated M4B files), covering auth/token resolution, the catalog/search/pagination,
+the scanner, path-traversal defense (`SafeJoin`), share-scope enforcement, rate
+limiting, media range/streaming, config validation, and the HTTP auth flow.
+
+A few scanner tests need **ffprobe** (real durations / embedded chapters); without
+it they `t.Skip` and the suite still passes. Install `ffmpeg` to run them
+(`brew install ffmpeg` / `apt-get install ffmpeg`). Install the linter once with
+`golangci-lint` v2 (`brew install golangci-lint`, or the
+[official installer](https://golangci-lint.run/welcome/install/)).
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs build + vet + race
+tests + lint on every pull request and push to `main`, and **gates merges**
+(ffmpeg is installed in CI so the gated tests run). The image build
+([`image.yml`](.github/workflows/image.yml)) stays separate and only runs on tags.
 
 ## Architecture & maintainers
 

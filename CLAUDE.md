@@ -16,8 +16,9 @@ Module path: `github.com/kodestar/audiosilo-server`.
 
 ```sh
 go build ./...                 # build everything
-go test ./...                  # unit + integration tests (in-memory SQLite + testdata fixtures)
-go vet ./...
+go vet ./...                   # static checks
+go test -race ./...            # unit + integration tests (in-memory SQLite + testdata fixtures)
+golangci-lint run              # lint (v2 required for Go 1.25; config .golangci.yml)
 go build -o bin/audiosilo ./cmd/audiosilo
 ./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
 
@@ -26,6 +27,13 @@ scripts/build-web.sh                 # dev helper: build the frontend export loc
 ```
 
 Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe).
+
+**Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
+&& golangci-lint run`** — CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+gates all four on every PR/push. A few scanner tests need `ffmpeg` (ffprobe);
+without it they `t.Skip` (CI installs it). The linter is adopted at a **green
+baseline** — its suppressions in `.golangci.yml` are documented and intentional;
+fix new findings rather than widening the excludes.
 
 ## Design priorities (in order)
 
@@ -83,6 +91,15 @@ future metadata site can attach enrichment without reshaping the schema.
 
 ## Conventions
 
+- **Every feature ships with a test.** Handler/integration tests use the
+  `newTestEnv` harness in `internal/api/api_test.go` (in-memory SQLite +
+  `testdata/library` fixtures); pure-logic tests sit next to the code (see
+  `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
+  `internal/web/web_test.go`). **Security-critical code requires both an allowed
+  and a denied regression test** — anything touching `library.SafeJoin`,
+  `Scope.Allows`/`VisibleInBrowse`/`pathFilterSQL`, the rate limiters,
+  `auth.ResolveToken`, or `web.htmlCSP`. Keep business logic in the non-`api`
+  packages so it stays unit-testable (`api` is transport-only).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
 - **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords

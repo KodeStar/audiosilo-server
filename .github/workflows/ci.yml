@@ -1,0 +1,59 @@
+# Gates every pull request and push to main on build + vet + race tests + lint.
+# The image build (image.yml) stays separate and only runs on tags.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ffprobe powers the duration/embedded-chapter scanner tests; without it
+      # those tests t.Skip (the suite still passes), so install it to keep them live.
+      - name: Install ffmpeg (ffprobe)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race + coverage)
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: ignore
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # golangci-lint-action@v8 installs golangci-lint v2 (required for Go 1.25)
+      # and manages its own cache; config is .golangci.yml.
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
