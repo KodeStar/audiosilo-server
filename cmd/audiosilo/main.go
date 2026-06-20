@@ -89,6 +89,12 @@ func run() error {
 
 	// In demo mode, reap idle throwaway accounts in the background.
 	if cfg.Demo.Enabled {
+		// Surface a misconfigured demo.library at boot rather than only as a 500 on
+		// the first visitor — the library may not be declared/seeded yet.
+		if _, err := cat.GetLibraryByName(ctx, cfg.Demo.Library); err != nil {
+			log.Warn("demo mode enabled but demo.library not found; demo sessions will fail until it exists",
+				"library", cfg.Demo.Library, "err", err)
+		}
 		go demoReaper(ctx, authSvc, cfg.Demo.IdleTTLDuration(), log)
 	}
 
