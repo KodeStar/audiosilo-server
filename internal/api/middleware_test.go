@@ -66,7 +66,8 @@ func TestIsTrusted(t *testing.T) {
 }
 
 func TestSecureHeaders(t *testing.T) {
-	h := secureHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	a := &API{cfg: &config.Config{TLS: config.TLSConfig{Mode: config.TLSOff}}}
+	h := a.secureHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	rec := httptest.NewRecorder()
@@ -81,6 +82,28 @@ func TestSecureHeaders(t *testing.T) {
 		if got := rec.Header().Get(k); got != v {
 			t.Fatalf("header %s = %q, want %q", k, got, v)
 		}
+	}
+	// With TLS off (reverse proxy owns TLS), we don't assert HSTS.
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Fatalf("unexpected HSTS with TLS off: %q", got)
+	}
+}
+
+// HSTS is emitted only with a real public cert (autocert), never selfsigned —
+// pinning HSTS behind a self-signed cert would lock users out (review finding S6).
+func TestSecureHeadersHSTS(t *testing.T) {
+	serve := func(mode config.TLSMode) string {
+		a := &API{cfg: &config.Config{TLS: config.TLSConfig{Mode: mode}}}
+		rec := httptest.NewRecorder()
+		a.secureHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
+			ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		return rec.Header().Get("Strict-Transport-Security")
+	}
+	if serve(config.TLSAutocert) == "" {
+		t.Fatal("expected HSTS with autocert TLS")
+	}
+	if got := serve(config.TLSSelfSigned); got != "" {
+		t.Fatalf("selfsigned must not set HSTS, got %q", got)
 	}
 }
 

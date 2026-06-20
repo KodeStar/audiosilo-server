@@ -1,6 +1,7 @@
 package library
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ import (
 // derived from user input, so it gets explicit allow + deny coverage.
 func TestSafeJoin(t *testing.T) {
 	root := t.TempDir()
-	rootAbs, _ := filepath.Abs(root)
+	rootAbs, _ := filepath.EvalSymlinks(root)
 
 	cases := []struct {
 		name    string
@@ -47,8 +48,32 @@ func TestSafeJoin(t *testing.T) {
 	}
 }
 
-// NOTE (review finding S1): SafeJoin does lexical containment only — it does not
-// call filepath.EvalSymlinks, so a symlink *inside* the root that points outside
-// is currently followed. Low risk today (no API lets a non-operator create
-// symlinks), but harden with EvalSymlinks before Phase B uploads land. When that
-// fix is made, add a symlink-escape case to TestSafeJoin above.
+// TestSafeJoinSymlinkEscape covers review finding S1: a symlink inside the root
+// that points outside it must be rejected (not followed), while a symlink that
+// stays inside the root is still allowed.
+func TestSafeJoinSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir() // a sibling directory outside the root
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A symlink inside the root pointing outside it must be rejected.
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	if got, err := SafeJoin(root, "escape/secret.txt"); err == nil {
+		t.Fatalf("SafeJoin followed a symlink out of the root: %q", got)
+	}
+
+	// A symlink that stays inside the root is fine.
+	if err := os.Mkdir(filepath.Join(root, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "inside")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	if _, err := SafeJoin(root, "inside"); err != nil {
+		t.Fatalf("SafeJoin rejected an in-root symlink: %v", err)
+	}
+}

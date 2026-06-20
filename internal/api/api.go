@@ -133,6 +133,6 @@ func (a *API) Handler() http.Handler {
 	h = a.rateLimit(h)
 	h = a.realIP(h)
 	h = a.cors(h)
-	h = secureHeaders(h)
+	h = a.secureHeaders(h)
 	return h
 }

@@ -13,6 +13,7 @@ type limiter struct {
 	maxFailures int
 	window      time.Duration
 	entries     map[string]*lockEntry
+	lastSweep   time.Time
 	now         func() time.Time
 }
 
@@ -55,6 +56,7 @@ func (l *limiter) Fail(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
+	l.sweep(now)
 	e := l.entries[key]
 	if e == nil || now.Sub(e.last) > l.window {
 		e = &lockEntry{}
@@ -74,13 +76,32 @@ func (l *limiter) Reset(key string) {
 	delete(l.entries, key)
 }
 
+// sweep drops stale, unlocked entries so a flood of distinct keys can't grow the
+// map without bound. It runs at most once per window (caller holds the lock).
+func (l *limiter) sweep(now time.Time) {
+	if now.Sub(l.lastSweep) < l.window {
+		return
+	}
+	l.lastSweep = now
+	for k, e := range l.entries {
+		if now.Before(e.until) {
+			continue // still locked out — keep
+		}
+		if now.Sub(e.last) > l.window {
+			delete(l.entries, k)
+		}
+	}
+}
+
 // ipRateLimiter is a per-IP token-bucket limiter for overall request rate.
 type ipRateLimiter struct {
-	mu      sync.Mutex
-	rate    float64 // tokens per second
-	burst   float64 // bucket capacity
-	buckets map[string]*bucket
-	now     func() time.Time
+	mu        sync.Mutex
+	rate      float64 // tokens per second
+	burst     float64 // bucket capacity
+	buckets   map[string]*bucket
+	idleTTL   time.Duration // drop buckets idle longer than this (they've refilled to full)
+	lastSweep time.Time
+	now       func() time.Time
 }
 
 type bucket struct {
@@ -89,11 +110,34 @@ type bucket struct {
 }
 
 func newIPRateLimiter(ratePerSec, burst float64) *ipRateLimiter {
+	// A bucket idle long enough to refill to full is equivalent to a fresh one,
+	// so it can be evicted. Use the refill time (with margin), floored at 1 min.
+	idle := time.Minute
+	if ratePerSec > 0 {
+		if refill := time.Duration(burst / ratePerSec * 2 * float64(time.Second)); refill > idle {
+			idle = refill
+		}
+	}
 	return &ipRateLimiter{
 		rate:    ratePerSec,
 		burst:   burst,
 		buckets: map[string]*bucket{},
+		idleTTL: idle,
 		now:     time.Now,
+	}
+}
+
+// sweep drops buckets idle long enough to have refilled to full, bounding memory
+// under a flood of distinct IPs. Runs at most once per idleTTL (caller holds lock).
+func (r *ipRateLimiter) sweep(now time.Time) {
+	if now.Sub(r.lastSweep) < r.idleTTL {
+		return
+	}
+	r.lastSweep = now
+	for k, b := range r.buckets {
+		if now.Sub(b.last) > r.idleTTL {
+			delete(r.buckets, k)
+		}
 	}
 }
 
@@ -102,6 +146,7 @@ func (r *ipRateLimiter) Allow(ip string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
+	r.sweep(now)
 	b := r.buckets[ip]
 	if b == nil {
 		r.buckets[ip] = &bucket{tokens: r.burst - 1, last: now}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -63,5 +64,42 @@ func TestIPRateLimiterBucket(t *testing.T) {
 	now = now.Add(100 * time.Millisecond) // refills 0.1s * 10/s = 1 token
 	if !r.Allow(ip) {
 		t.Fatal("request allowed again after the bucket refills")
+	}
+}
+
+// A flood of distinct IPs must not grow the bucket map without bound.
+func TestIPRateLimiterEviction(t *testing.T) {
+	now := time.Now()
+	r := newIPRateLimiter(20, 40)
+	r.now = func() time.Time { return now }
+	for i := 0; i < 100; i++ {
+		r.Allow(fmt.Sprintf("10.0.0.%d", i))
+	}
+	if len(r.buckets) != 100 {
+		t.Fatalf("expected 100 buckets, got %d", len(r.buckets))
+	}
+	// Advance past the idle TTL; the next call sweeps the now-stale buckets.
+	now = now.Add(r.idleTTL + time.Second)
+	r.Allow("10.0.0.200")
+	if len(r.buckets) > 1 {
+		t.Fatalf("stale buckets not evicted: %d remain", len(r.buckets))
+	}
+}
+
+// The login/redeem failure limiter must likewise evict stale, unlocked entries.
+func TestLimiterEviction(t *testing.T) {
+	now := time.Now()
+	l := newLimiter(3, time.Minute)
+	l.now = func() time.Time { return now }
+	for i := 0; i < 50; i++ {
+		l.Fail(fmt.Sprintf("k%d", i))
+	}
+	if len(l.entries) != 50 {
+		t.Fatalf("expected 50 entries, got %d", len(l.entries))
+	}
+	now = now.Add(2 * time.Minute) // past the window
+	l.Fail("k-new")
+	if len(l.entries) > 1 {
+		t.Fatalf("stale entries not evicted: %d remain", len(l.entries))
 	}
 }
