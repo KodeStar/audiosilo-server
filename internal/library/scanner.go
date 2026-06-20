@@ -129,10 +129,14 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 	if err != nil {
 		return nil, err
 	}
+	// Discovery walks the whole tree (slow on a large network share) and emits no
+	// per-file output, so bookend it with logs — otherwise a long scan looks hung.
+	s.log.Info("scan started: discovering books", "library", lib.Name, "root", lib.Root)
 	books, err := discoverAuto(lib, overrides)
 	if err != nil {
 		return nil, err
 	}
+	s.log.Info("discovery complete; indexing", "library", lib.Name, "books", len(books))
 
 	// A root that exists but now contains no audio files, while the index still
 	// has books, almost always means the mount dropped to an empty directory.
@@ -147,16 +151,24 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 
 	res := &ScanResult{}
 	keep := make(map[string]bool, len(books))
+	lastLog := time.Now()
 	for i, b := range books {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
 		s.setProgress(lib.ID, ScanProgress{Running: true, Total: len(books), Done: i, Indexed: res.Indexed})
+		// Heartbeat so a long indexing pass (ffprobe per file over a network share)
+		// shows progress in the logs, not just in the admin UI counter.
+		if time.Since(lastLog) >= 15*time.Second {
+			s.log.Info("scan progress", "library", lib.Name, "done", i, "total", len(books), "indexed", res.Indexed)
+			lastLog = time.Now()
+		}
 		keep[b.RelPath] = true
 		if old, ok := sigs[b.RelPath]; ok && old.MTime == b.MTime && old.Size == b.Size &&
-			(old.Duration > 0 || s.ffprobePath == "") {
-			continue // unchanged since last scan; skip unless a prior probe stored
-			// no duration and ffprobe is now available to backfill it
+			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "")) {
+			continue // unchanged since last scan; only skip the probe when ffprobe
+			// is disabled, or a prior probe already stored both duration and codec
+			// (so books indexed before the codec column get it backfilled).
 		}
 		s.enrich(lib, b)
 		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
