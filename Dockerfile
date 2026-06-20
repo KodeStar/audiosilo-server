@@ -16,10 +16,15 @@ ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
 # --- build the Go server -------------------------------------------------------
 FROM golang:1.25-alpine AS build
 WORKDIR /src
+# Release version stamped into the binary (reported by GET /server, the admin
+# console and the web player). image.yml passes the release tag; defaults to dev.
+ARG VERSION=dev
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/audiosilo ./cmd/audiosilo
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X github.com/kodestar/audiosilo-server/internal/api.Version=${VERSION}" \
+    -o /out/audiosilo ./cmd/audiosilo
 
 # --- pin the prebuilt web player ----------------------------------------------
 FROM ${WEB_IMAGE} AS web
