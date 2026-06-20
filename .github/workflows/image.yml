@@ -57,5 +57,6 @@ jobs:
           push: true
           build-args: |
             WEB_IMAGE=ghcr.io/${{ steps.owner.outputs.lc }}/audiosilo-web:${{ github.event.inputs.web_version || 'latest' }}
+            VERSION=${{ steps.meta.outputs.version || 'dev' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
