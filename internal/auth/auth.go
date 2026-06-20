@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -22,6 +23,11 @@ const (
 	KindSession = "session"
 	KindPairing = "pairing"
 )
+
+// DemoUsernamePrefix marks throwaway accounts created by public demo mode. The
+// demo session endpoint creates `demo_<random>` users and the background reaper
+// deletes idle ones by this prefix.
+const DemoUsernamePrefix = "demo_"
 
 // Errors returned by the service.
 var (
@@ -375,6 +381,45 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// escapeLike escapes LIKE wildcards so a literal prefix can be matched with
+// `LIKE escapeLike(prefix)+"%" ESCAPE '\'`.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// CountUsersWithPrefix returns the number of accounts whose username starts with
+// prefix. Used to cap the number of live demo accounts.
+func (s *Service) CountUsersWithPrefix(ctx context.Context, prefix string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE username LIKE ? ESCAPE '\'`,
+		escapeLike(prefix)+"%").Scan(&n)
+	return n, err
+}
+
+// ReapIdleDemoUsers deletes accounts whose username starts with prefix and whose
+// most recent token activity (or, lacking any, their creation time) is older than
+// cutoff. Their child rows (progress, bookmarks, notes, history, tokens, share
+// grants) cascade via ON DELETE CASCADE. Returns the number of accounts deleted.
+// Timestamps are stored as RFC3339 UTC, so the lexical comparison is chronological.
+func (s *Service) ReapIdleDemoUsers(ctx context.Context, prefix string, cutoff time.Time) (int64, error) {
+	cut := cutoff.UTC().Format(time.RFC3339)
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM users
+		  WHERE username LIKE ? ESCAPE '\'
+		    AND COALESCE(
+		          (SELECT MAX(COALESCE(t.last_seen, t.created_at))
+		             FROM tokens t WHERE t.user_id = users.id),
+		          users.created_at
+		        ) < ?`,
+		escapeLike(prefix)+"%", cut)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // countEnabledAdmins returns the number of enabled admin accounts, optionally
