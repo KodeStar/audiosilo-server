@@ -71,27 +71,34 @@ func TestScannerIndexesFixtures(t *testing.T) {
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 
 	// ffprobe "" keeps the test independent of an installed ffmpeg; path-derived
-	// metadata still populates title/author/series.
+	// metadata still populates title/author/series. Each book lives in its own
+	// folder (the default "folder = one book" model): "Brandon Sanderson/Mistborn"
+	// (1 track) and "Will Wight/Cradle" (2 tracks).
 	scanner := NewScanner(cat, "", slog.Default())
 	res, err := scanner.Scan(ctx, *lib)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Indexed != 3 {
-		t.Fatalf("expected 3 indexed books, got %d", res.Indexed)
+	if res.Indexed != 2 {
+		t.Fatalf("expected 2 indexed books (one per folder), got %d", res.Indexed)
 	}
 
 	page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID, Sort: "author"})
-	if len(page.Books) != 3 {
-		t.Fatalf("expected 3 books, got %d", len(page.Books))
+	if len(page.Books) != 2 {
+		t.Fatalf("expected 2 books, got %d", len(page.Books))
 	}
 	first := page.Books[0]
-	if first.Author != "Brandon Sanderson" || first.Series != "Mistborn" || first.Title != "The Final Empire" {
+	if first.Author != "Brandon Sanderson" || first.Title != "The Final Empire" || !first.IsFolder {
 		t.Fatalf("unexpected first book: %+v", first)
 	}
 	// The scanner stamps added_at from the filesystem (birth time / mtime).
 	if _, err := time.Parse(time.RFC3339, first.AddedAt); err != nil {
 		t.Fatalf("added_at not a valid RFC3339 timestamp: %q (%v)", first.AddedAt, err)
+	}
+	// The Cradle folder is one book carrying both files as tracks.
+	cradle, err := cat.GetBookByPath(ctx, lib.ID, "Will Wight/Cradle")
+	if err != nil || !cradle.IsFolder || len(cradle.Files) != 2 {
+		t.Fatalf("Cradle should be one folder book with 2 tracks: %+v (err %v)", cradle, err)
 	}
 
 	// A second scan with no changes should index nothing (incremental skip).
@@ -100,7 +107,8 @@ func TestScannerIndexesFixtures(t *testing.T) {
 		t.Fatalf("expected incremental no-op, indexed %d", res2.Indexed)
 	}
 
-	// FTS search works over scanned data.
+	// FTS search works over scanned data (the Cradle book's title comes from its
+	// primary track's tag).
 	hits, _ := cat.Search(ctx, "unsouled", []catalog.Scope{{LibraryID: lib.ID, AllowAll: true}}, 10)
 	if len(hits) != 1 || hits[0].Title != "Unsouled" {
 		t.Fatalf("search result = %+v", hits)
@@ -210,27 +218,18 @@ func TestScannerMoveTracking(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	cat := catalog.New(db, time.Now)
 
-	// A library we can mutate: copy one fixture book into a temp dir.
+	// A library we can mutate: a book lives in its own folder (folder = one book),
+	// so the book's path is the folder path.
 	root := t.TempDir()
-	srcDir := filepath.Join(root, "Author", "Series")
-	if err := os.MkdirAll(srcDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(testdataRoot(t), "Will Wight", "Cradle", "01 - Unsouled.m4b"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldRel := "Author/Series/01 - Unsouled.m4b"
-	if err := os.WriteFile(filepath.Join(root, oldRel), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	oldRel := "Author/Series/Unsouled"
+	copyFixtureM4B(t, filepath.Join(root, oldRel, "01 - Unsouled.m4b"))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "M", Root: root})
 	scanner := NewScanner(cat, "", slog.Default())
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
 
-	// Record progress on the original path.
+	// Record progress on the original (folder) path.
 	uid := seedUserID(t, db)
 	if _, err := cat.SaveProgress(ctx, uid, catalog.Progress{
 		Ref: catalog.Ref{LibraryID: lib.ID, Path: oldRel}, Position: 99,
@@ -238,8 +237,9 @@ func TestScannerMoveTracking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Rename the file on disk, then rescan: move-tracking should carry progress.
-	newRel := "Author/Series/01 - Unsouled (2024).m4b"
+	// Rename the book folder on disk, then rescan: move-tracking (keyed on the
+	// primary file's fingerprint) should carry progress to the new folder path.
+	newRel := "Author/Series/Unsouled (2024)"
 	if err := os.Rename(filepath.Join(root, oldRel), filepath.Join(root, newRel)); err != nil {
 		t.Fatal(err)
 	}
@@ -329,17 +329,19 @@ func TestIndexPathSymlinkedRoot(t *testing.T) {
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: link})
 	scanner := NewScanner(cat, "", slog.Default())
 
-	rel := "Will Wight/Cradle/01 - Unsouled.m4b"
-	book, err := scanner.IndexPath(ctx, *lib, rel)
+	// Resolving a file inside a book folder yields that folder book; its rel_path
+	// must be the clean folder path, never a symlink-resolved "../"-laden one.
+	book, err := scanner.IndexPath(ctx, *lib, "Will Wight/Cradle/01 - Unsouled.m4b")
 	if err != nil {
 		t.Fatalf("IndexPath through symlinked root: %v", err)
 	}
-	if book.RelPath != rel {
-		t.Fatalf("rel_path = %q, want %q (symlinked root must not corrupt rel_path)", book.RelPath, rel)
+	const wantRel = "Will Wight/Cradle"
+	if book.RelPath != wantRel {
+		t.Fatalf("rel_path = %q, want %q (symlinked root must not corrupt rel_path)", book.RelPath, wantRel)
 	}
-	// And the book must be retrievable by the path the client actually requested.
-	if _, err := cat.GetBookByPath(ctx, lib.ID, rel); err != nil {
-		t.Fatalf("GetBookByPath(%q) after on-demand index: %v", rel, err)
+	// And the book must be retrievable by its folder path.
+	if _, err := cat.GetBookByPath(ctx, lib.ID, wantRel); err != nil {
+		t.Fatalf("GetBookByPath(%q) after on-demand index: %v", wantRel, err)
 	}
 }
 
@@ -364,8 +366,8 @@ func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 		page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
 		return len(page.Books)
 	}
-	if indexed() != 3 {
-		t.Fatalf("setup: expected 3 indexed, got %d", indexed())
+	if indexed() != 2 {
+		t.Fatalf("setup: expected 2 indexed, got %d", indexed())
 	}
 
 	// Case 1: root no longer exists (share unmounted). Scan must abort without
@@ -375,7 +377,7 @@ func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 	if _, err := scanner.Scan(ctx, missing); !errors.Is(err, ErrLibraryUnavailable) {
 		t.Fatalf("expected ErrLibraryUnavailable for missing root, got %v", err)
 	}
-	if indexed() != 3 {
+	if indexed() != 2 {
 		t.Fatalf("index was pruned despite missing root: %d remain", indexed())
 	}
 
@@ -386,7 +388,7 @@ func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 	if _, err := scanner.Scan(ctx, empty); !errors.Is(err, ErrLibraryUnavailable) {
 		t.Fatalf("expected ErrLibraryUnavailable for empty root, got %v", err)
 	}
-	if indexed() != 3 {
+	if indexed() != 2 {
 		t.Fatalf("index was pruned despite empty root: %d remain", indexed())
 	}
 }
@@ -419,89 +421,98 @@ func copyFixtureM4B(t *testing.T, dst string) {
 	}
 }
 
-// TestScannerAutoDetectsMixedLibrary verifies per-folder detection: a folder of
-// shared-stem parts becomes one multi-file book, while a sibling folder of
-// distinct-titled files becomes one book per file — in the same library, with no
-// layout setting.
-func TestScannerAutoDetectsMixedLibrary(t *testing.T) {
+// TestScannerFolderIsOneBook is the regression guard for the "every chapter
+// counted as a book" bug: a folder of audio is ONE book regardless of how its
+// files are named (distinct chapter titles included), single-file book folders
+// key on the folder, and only audio directly at the library root is per-file.
+func TestScannerFolderIsOneBook(t *testing.T) {
 	cat, scanner, ctx := newScanEnv(t)
 	root := t.TempDir()
-	// Multi-file book: parts share a stem in their own folder.
-	copyFixtureM4B(t, filepath.Join(root, "Dakota Krout", "Divine Dungeon", "Dungeon Born", "Dungeon Born - 001.m4b"))
-	copyFixtureM4B(t, filepath.Join(root, "Dakota Krout", "Divine Dungeon", "Dungeon Born", "Dungeon Born - 002.m4b"))
-	// Single-file books: distinct titles directly in a series folder.
-	copyFixtureM4B(t, filepath.Join(root, "Will Wight", "Cradle", "01 - Unsouled.m4b"))
-	copyFixtureM4B(t, filepath.Join(root, "Will Wight", "Cradle", "02 - Soulsmith.m4b"))
+	// A multi-track book whose chapter files have DISTINCT titles — the case that
+	// used to explode into one book per chapter.
+	base := filepath.Join(root, "Lee Child", "Jack Reacher", "JR04 - Running Blind")
+	copyFixtureM4B(t, filepath.Join(base, "01 - The Setup.mp3"))
+	copyFixtureM4B(t, filepath.Join(base, "02 - The Chase.mp3"))
+	copyFixtureM4B(t, filepath.Join(base, "03 - The Reveal.mp3"))
+	// A single-file book in its own folder.
+	copyFixtureM4B(t, filepath.Join(root, "Casualfarmer", "Beware of Chicken", "BOC01", "Beware of Chicken.m4b"))
+	// A loose file directly at the library root (flat) is its own book.
+	copyFixtureM4B(t, filepath.Join(root, "A Standalone Title.m4b"))
 
-	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Mixed", Root: root})
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "FolderPerBook", Root: root})
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
 
 	page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
 	if len(page.Books) != 3 {
-		t.Fatalf("expected 3 books (1 folder + 2 files), got %d", len(page.Books))
+		t.Fatalf("expected 3 books (2 folders + 1 root file), got %d", len(page.Books))
 	}
-	folders := 0
-	for _, b := range page.Books {
-		if b.IsFolder {
-			folders++
-		}
+	rb, err := cat.GetBookByPath(ctx, lib.ID, "Lee Child/Jack Reacher/JR04 - Running Blind")
+	if err != nil || !rb.IsFolder || len(rb.Files) != 3 {
+		t.Fatalf("multi-chapter folder must be ONE book with 3 tracks: %+v (err %v)", rb, err)
 	}
-	if folders != 1 {
-		t.Fatalf("expected exactly 1 multi-file (folder) book, got %d", folders)
+	if b, err := cat.GetBookByPath(ctx, lib.ID, "Casualfarmer/Beware of Chicken/BOC01"); err != nil || !b.IsFolder {
+		t.Fatalf("single-file book must key on its folder: %+v (err %v)", b, err)
 	}
-	fb, err := cat.GetBookByPath(ctx, lib.ID, "Dakota Krout/Divine Dungeon/Dungeon Born")
-	if err != nil {
-		t.Fatalf("parts folder should be one book keyed by the folder: %v", err)
-	}
-	if !fb.IsFolder || len(fb.Files) != 2 {
-		t.Fatalf("parts folder book = folder:%v files:%d", fb.IsFolder, len(fb.Files))
+	if b, err := cat.GetBookByPath(ctx, lib.ID, "A Standalone Title.m4b"); err != nil || b.IsFolder {
+		t.Fatalf("a root-level file must be its own single-file book: %+v (err %v)", b, err)
 	}
 }
 
-// TestScannerFolderOverrides verifies an admin override flips a folder's
-// classification, and that IndexPath honors it on demand.
+// TestScannerFolderOverrides verifies the per-folder override: collection splits
+// a folder into one book per file (the books_in_folder case), and IndexPath
+// honors it; clearing reverts to one folder book.
 func TestScannerFolderOverrides(t *testing.T) {
 	cat, scanner, ctx := newScanEnv(t)
 	root := t.TempDir()
-	copyFixtureM4B(t, filepath.Join(root, "Dungeon Born", "Dungeon Born - 001.m4b"))
-	copyFixtureM4B(t, filepath.Join(root, "Dungeon Born", "Dungeon Born - 002.m4b"))
-	copyFixtureM4B(t, filepath.Join(root, "Cradle", "01 - Unsouled.m4b"))
-	copyFixtureM4B(t, filepath.Join(root, "Cradle", "02 - Soulsmith.m4b"))
+	dir := filepath.Join(root, "Will Wight", "Cradle")
+	copyFixtureM4B(t, filepath.Join(dir, "01 - Unsouled.m4b"))
+	copyFixtureM4B(t, filepath.Join(dir, "02 - Soulsmith.m4b"))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "O", Root: root})
 
-	// Force the opposite of auto: the distinct-titles folder becomes one book, the
-	// parts folder becomes separate books.
-	if err := cat.SetFolderOverride(ctx, lib.ID, "Cradle", catalog.OverrideBook); err != nil {
+	// Default: the folder is ONE book with both files as tracks.
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.SetFolderOverride(ctx, lib.ID, "Dungeon Born", catalog.OverrideCollection); err != nil {
+	page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
+	if len(page.Books) != 1 || !page.Books[0].IsFolder {
+		t.Fatalf("default: folder should be one book, got %d", len(page.Books))
+	}
+
+	// collection override: each file becomes its own book.
+	if err := cat.SetFolderOverride(ctx, lib.ID, "Will Wight/Cradle", catalog.OverrideCollection); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := scanner.Scan(ctx, *lib); err != nil {
 		t.Fatal(err)
 	}
-
-	if _, err := cat.GetBookByPath(ctx, lib.ID, "Cradle"); err != nil {
-		t.Fatalf("override book: Cradle should be one folder book: %v", err)
+	page, _ = cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
+	if len(page.Books) != 2 {
+		t.Fatalf("collection override: expected 2 single-file books, got %d", len(page.Books))
 	}
-	if _, err := cat.GetBookByPath(ctx, lib.ID, "Dungeon Born/Dungeon Born - 001.m4b"); err != nil {
-		t.Fatalf("override collection: each part should be its own book: %v", err)
-	}
-	page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
-	if len(page.Books) != 3 { // 1 (Cradle) + 2 (Dungeon Born files)
-		t.Fatalf("expected 3 books after overrides, got %d", len(page.Books))
+	for _, p := range []string{"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b"} {
+		if _, err := cat.GetBookByPath(ctx, lib.ID, p); err != nil {
+			t.Fatalf("expected a single-file book at %q: %v", p, err)
+		}
 	}
 
-	// IndexPath honors the override: a file inside the forced-book folder resolves
-	// to the folder book.
-	b, err := scanner.IndexPath(ctx, *lib, "Cradle/01 - Unsouled.m4b")
-	if err != nil {
-		t.Fatalf("IndexPath under book override: %v", err)
+	// IndexPath honors the override: a file is its own book, not the folder.
+	b, err := scanner.IndexPath(ctx, *lib, "Will Wight/Cradle/01 - Unsouled.m4b")
+	if err != nil || b.IsFolder || b.RelPath != "Will Wight/Cradle/01 - Unsouled.m4b" {
+		t.Fatalf("IndexPath under collection override should be the single-file book: %+v (err %v)", b, err)
 	}
-	if !b.IsFolder || b.RelPath != "Cradle" {
-		t.Fatalf("expected the Cradle folder book, got folder:%v path:%q", b.IsFolder, b.RelPath)
+
+	// Clearing reverts to one folder book.
+	if err := cat.DeleteFolderOverride(ctx, lib.ID, "Will Wight/Cradle"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	page, _ = cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
+	if len(page.Books) != 1 || !page.Books[0].IsFolder {
+		t.Fatalf("after clearing override: expected one folder book, got %d", len(page.Books))
 	}
 }
 

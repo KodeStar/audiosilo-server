@@ -157,10 +157,13 @@ func TestBrowseFSAnnotatesIndexedBooks(t *testing.T) {
 	}
 	token, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
 
-	_, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/fs?path=Will%20Wight/Cradle", token, "")
+	// A book is its folder (folder = one book), so browsing the series folder shows
+	// the "Cradle" directory annotated as a book with metadata.
+	_, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/fs?path=Will%20Wight", token, "")
 	var listing struct {
 		Entries []struct {
 			Name   string `json:"name"`
+			IsDir  bool   `json:"is_dir"`
 			IsBook bool   `json:"is_book"`
 			Title  string `json:"title"`
 			Author string `json:"author"`
@@ -169,15 +172,23 @@ func TestBrowseFSAnnotatesIndexedBooks(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &listing); err != nil {
 		t.Fatalf("decode: %v (%s)", err, body)
 	}
-	if len(listing.Entries) != 2 {
-		t.Fatalf("expected 2 book files, got %d (%s)", len(listing.Entries), body)
+	var cradle *struct {
+		Name   string `json:"name"`
+		IsDir  bool   `json:"is_dir"`
+		IsBook bool   `json:"is_book"`
+		Title  string `json:"title"`
+		Author string `json:"author"`
 	}
-	// Every audio entry is annotated as a book with metadata; the client acts on
-	// it by its path.
-	for _, e := range listing.Entries {
-		if !e.IsBook || e.Title == "" || e.Author != "Will Wight" {
-			t.Fatalf("entry not annotated with book: %+v", e)
+	for i := range listing.Entries {
+		if listing.Entries[i].Name == "Cradle" {
+			cradle = &listing.Entries[i]
 		}
+	}
+	if cradle == nil {
+		t.Fatalf("expected a Cradle entry (%s)", body)
+	}
+	if !cradle.IsDir || !cradle.IsBook || cradle.Title == "" || cradle.Author != "Will Wight" {
+		t.Fatalf("Cradle folder not annotated as a book: %+v", *cradle)
 	}
 }
 

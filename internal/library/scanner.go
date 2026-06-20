@@ -340,67 +340,35 @@ func discoverAuto(lib catalog.Library, overrides map[string]string) ([]*catalog.
 	return books, nil
 }
 
-// booksInDir turns the audio files directly inside absDir into books. The
-// decision — one (multi-file) book for the whole folder, or one book per file —
-// follows, in order: an explicit override, the root special case (root files are
-// always individual books), then the auto heuristic in dirIsOneBook.
+// booksInDir turns the audio files directly inside absDir into books. The model
+// matches the dominant "folder per book" convention (and Audiobookshelf): a
+// directory that directly contains audio is ONE book, with all those files as its
+// tracks/chapters — whether it holds a single m4b or fifty mp3 chapters. The two
+// exceptions: audio sitting directly in the library root has no enclosing book
+// folder, so each such file is its own single-file book ("flat"); and a folder of
+// loose single-file books (one book per file) is expressed with the `collection`
+// override. `book` forces the folder-is-one-book reading (e.g. at the root).
 func booksInDir(lib catalog.Library, absDir string, isRoot bool, overrides map[string]string) []*catalog.Book {
 	audio := audioEntries(absDir)
 	if len(audio) == 0 {
 		return nil
 	}
-	relDir := relPathOf(lib.Root, absDir)
 	asBook := func() []*catalog.Book {
 		if b := folderBook(lib, absDir); b != nil {
 			return []*catalog.Book{b}
 		}
 		return nil
 	}
-	switch overrides[relDir] {
+	switch overrides[relPathOf(lib.Root, absDir)] {
 	case catalog.OverrideBook:
 		return asBook()
 	case catalog.OverrideCollection:
 		return fileBooksIn(lib, absDir, audio)
 	}
-	if !isRoot && dirIsOneBook(absDir, audio) {
-		return asBook()
+	if isRoot {
+		return fileBooksIn(lib, absDir, audio)
 	}
-	return fileBooksIn(lib, absDir, audio)
-}
-
-// dirIsOneBook reports whether the audio files directly inside absDir are parts
-// of a single book (rather than separate single-file books). Signals, in order:
-//   - the folder name itself parses as an indexed book ("01 - Storm Front");
-//   - the files share one normalized stem (multi-file parts like "X - 001/002");
-//   - a lone file whose name matches the folder (a dedicated book folder),
-//     as opposed to one book sitting in a series folder.
-func dirIsOneBook(absDir string, audio []os.DirEntry) bool {
-	if idx, _ := metadata.SplitSeriesIndex(filepath.Base(absDir)); idx != 0 {
-		return true
-	}
-	keys := map[string]bool{}
-	for _, de := range audio {
-		keys[metadata.GroupKey(de.Name())] = true
-	}
-	if len(keys) != 1 {
-		return false // several distinct titles -> separate books
-	}
-	if len(audio) >= 2 {
-		return true // multiple parts sharing a stem
-	}
-	return folderNamesBook(filepath.Base(absDir), audio[0].Name())
-}
-
-// folderNamesBook reports whether a folder appears to be named after the single
-// audio file it holds (so the folder is the book), e.g.
-// "AF01 - Shade's First Rule"/"Shade's First Rule.m4b".
-func folderNamesBook(folder, file string) bool {
-	f := metadata.NormAlnum(folder)
-	g := metadata.GroupKey(file)
-	if len(f) < 4 || len(g) < 4 {
-		return false
-	}
-	return strings.Contains(f, g) || strings.Contains(g, f)
+	return asBook()
 }
 
 // audioEntries returns the non-hidden audio files directly inside absDir, in the

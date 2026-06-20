@@ -58,25 +58,6 @@ func TestDeriveFromPath(t *testing.T) {
 	}
 }
 
-func TestGroupKey(t *testing.T) {
-	// Parts of one book share a key, regardless of separator/padding.
-	parts := []string{"Dungeon Born - 001.mp3", "Dungeon Born - 002.mp3", "Dungeon Born - 050.mp3"}
-	want := GroupKey(parts[0])
-	for _, p := range parts[1:] {
-		if GroupKey(p) != want {
-			t.Errorf("GroupKey(%q)=%q, want %q", p, GroupKey(p), want)
-		}
-	}
-	// Pure-number parts collapse (the folder name is the title).
-	if GroupKey("001.mp3") != GroupKey("002.mp3") {
-		t.Error("pure-number parts should share a group key")
-	}
-	// Distinct titles must not collapse.
-	if GroupKey("01 - Unsouled.m4b") == GroupKey("02 - Soulsmith.m4b") {
-		t.Error("distinct titles should not share a group key")
-	}
-}
-
 func TestIsAudio(t *testing.T) {
 	if !IsAudio("foo.m4b") || !IsAudio("BAR.MP3") || !IsAudio("part.mp4") {
 		t.Error("expected audio extensions recognized")
