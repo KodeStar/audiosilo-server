@@ -36,6 +36,11 @@ type Entry struct {
 	Series      string  `json:"series,omitempty"`
 	SeriesIndex float64 `json:"series_index,omitempty"`
 	Duration    float64 `json:"duration,omitempty"`
+
+	// Override is the explicit per-folder detection override set for this
+	// directory ("book" or "collection"), empty when auto-detected. Surfaced so
+	// the admin console can show and toggle it.
+	Override string `json:"override,omitempty"`
 }
 
 // Listing is a page of directory entries.
@@ -135,6 +140,9 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 		}
 		if allow != nil && !allow(childRel) {
 			continue // outside the caller's share scope
+		}
+		if !de.IsDir() && !metadata.IsAudio(name) {
+			continue // hide non-audio files; clicking one can't open a book
 		}
 		isDir := de.IsDir()
 		// os.ReadDir already provides name + type for free; only files need a

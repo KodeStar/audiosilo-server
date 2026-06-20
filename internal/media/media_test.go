@@ -108,6 +108,50 @@ func TestServeFile(t *testing.T) {
 	})
 }
 
+func TestDirectPlayable(t *testing.T) {
+	for _, codec := range []string{"aac", "MP3", "flac", "opus", "vorbis", ""} {
+		if !DirectPlayable(codec) {
+			t.Errorf("DirectPlayable(%q) = false, want true", codec)
+		}
+	}
+	for _, codec := range []string{"ac3", "eac3", "dts", "wmav2"} {
+		if DirectPlayable(codec) {
+			t.Errorf("DirectPlayable(%q) = true, want false", codec)
+		}
+	}
+}
+
+func TestTranscode(t *testing.T) {
+	if !HasFFmpeg("ffmpeg") {
+		t.Skip("ffmpeg not available; transcoding requires it")
+	}
+	// A fixture m4b (AAC) is fine input — we only assert it re-encodes to MP3.
+	src := filepath.Join("..", "..", "testdata", "library", "Will Wight", "Cradle", "01 - Unsouled.m4b")
+	if _, err := os.Stat(src); err != nil {
+		t.Skipf("fixture missing: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	Transcode(rec, req, src, "ffmpeg", 0, nil)
+
+	res := rec.Result()
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); ct != "audio/mpeg" {
+		t.Fatalf("Content-Type = %q, want audio/mpeg", ct)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if len(body) == 0 {
+		t.Fatal("transcoded output is empty")
+	}
+	// MP3 frames start with 0xFF or an ID3 header; just confirm real bytes came out.
+	if body[0] != 0xFF && string(body[:3]) != "ID3" {
+		t.Fatalf("output does not look like MP3 (first bytes %x)", body[:min(4, len(body))])
+	}
+}
+
 func writeTempFile(t *testing.T, name string, data []byte) *os.File {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)

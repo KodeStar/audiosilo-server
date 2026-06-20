@@ -25,22 +25,22 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 	var id int64
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
-		     series_index, narrator, duration, asin, isbn, cover_path, format, size,
+		     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
 		     mtime, content_hash, indexed_at, added_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 		     series=excluded.series, series_index=excluded.series_index,
 		     narrator=excluded.narrator, duration=excluded.duration, asin=excluded.asin,
 		     isbn=excluded.isbn, cover_path=excluded.cover_path, format=excluded.format,
-		     size=excluded.size, mtime=excluded.mtime, content_hash=excluded.content_hash,
-		     indexed_at=excluded.indexed_at
+		     codec=excluded.codec, size=excluded.size, mtime=excluded.mtime,
+		     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at
 		     -- added_at intentionally not updated: it records first-seen, so a
 		     -- re-index of an existing book keeps its original added date.
 		 RETURNING id`,
 		b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
 		b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
-		b.Format, b.Size, b.MTime, b.ContentHash, c.ts(), b.AddedAt).Scan(&id)
+		b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, c.ts(), b.AddedAt).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -207,14 +207,14 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 }
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
-	series_index, narrator, duration, asin, isbn, cover_path, format, size, mtime,
+	series_index, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash`
 
 func scanBook(row interface{ Scan(...any) error }) (*Book, error) {
 	var b Book
 	err := row.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
 		&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
-		&b.CoverPath, &b.Format, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash)
+		&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash)
 	if err != nil {
 		return nil, err
 	}

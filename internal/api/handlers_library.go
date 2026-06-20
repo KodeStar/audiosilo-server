@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -121,6 +122,12 @@ func (a *API) annotateWithBooks(r *http.Request, libraryID int64, listing *libra
 		a.log.Warn("annotate fs listing failed", "library", libraryID, "err", err)
 		return
 	}
+	// Per-folder detection overrides let the console show/toggle a folder's
+	// classification; best-effort, so a failure here doesn't drop the listing.
+	overrides, err := a.cat.FolderOverrides(r.Context(), libraryID)
+	if err != nil {
+		a.log.Warn("annotate fs overrides failed", "library", libraryID, "err", err)
+	}
 	for i := range listing.Entries {
 		e := &listing.Entries[i]
 		if b, ok := books[e.Path]; ok {
@@ -130,6 +137,9 @@ func (a *API) annotateWithBooks(r *http.Request, libraryID int64, listing *libra
 			e.Series = b.Series
 			e.SeriesIndex = b.SeriesIndex
 			e.Duration = b.Duration
+		}
+		if m, ok := overrides[e.Path]; ok {
+			e.Override = m
 		}
 	}
 }
@@ -214,6 +224,8 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "could not load book")
 	default:
+		dp := media.DirectPlayable(book.Codec)
+		book.DirectPlayable = &dp
 		writeJSON(w, http.StatusOK, book)
 	}
 }
@@ -233,17 +245,22 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"library_id": lib.ID,
-		"path":       book.RelPath,
-		"duration":   book.Duration,
-		"is_folder":  book.IsFolder,
-		"files":      book.Files,
-		"chapters":   book.Chapters,
+		"library_id":      lib.ID,
+		"path":            book.RelPath,
+		"duration":        book.Duration,
+		"is_folder":       book.IsFolder,
+		"files":           book.Files,
+		"chapters":        book.Chapters,
+		"codec":           book.Codec,
+		"direct_playable": media.DirectPlayable(book.Codec),
 	})
 }
 
-// handleStream serves an audio file by path with Range support; ?download=1 for
-// a direct download. The path is the actual audio file (a chapter's file_path).
+// handleStream serves an audio file by path. By default it streams the file with
+// Range support (?download=1 forces a download). With ?transcode=1 it re-encodes
+// to MP3 via ffmpeg for codecs browsers can't decode; ?t=<seconds> starts that
+// transcode mid-file (transcoded output is not byte-seekable, so seeking is by
+// re-requesting). The path is the actual audio file (a chapter's file_path).
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	lib, path, status, msg := a.authorizedPath(r)
 	if status != 0 {
@@ -253,6 +270,15 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	abs, err := library.SafeJoin(lib.Root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	if r.URL.Query().Get("transcode") == "1" {
+		if a.ffmpeg == "" {
+			writeError(w, http.StatusServiceUnavailable, "transcoding is not available on this server")
+			return
+		}
+		start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
+		media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
 		return
 	}
 	media.ServeFile(w, r, abs, r.URL.Query().Get("download") == "1")

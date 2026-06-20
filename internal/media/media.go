@@ -1,19 +1,38 @@
 // Package media serves audiobook bytes to clients. It uses http.ServeContent so
-// HTTP Range requests (seek/scrub, resumable downloads) work out of the box,
-// and extracts embedded cover art on demand. On-the-fly transcoding is a
-// Phase C addition; today the file is served directly.
+// HTTP Range requests (seek/scrub, resumable downloads) work out of the box, and
+// extracts embedded cover art on demand. For files whose codec a browser can't
+// decode it can transcode to MP3 on the fly via ffmpeg (see Transcode).
 package media
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/dhowden/tag"
 )
+
+// browserCodecs are audio codecs mainstream browsers decode natively, so they
+// can be streamed directly instead of transcoded.
+var browserCodecs = map[string]bool{
+	"aac": true, "mp4a": true, "mp3": true, "mp2": true,
+	"flac": true, "opus": true, "vorbis": true, "pcm_s16le": true, "wav": true,
+}
+
+// DirectPlayable reports whether codec plays natively in browsers. An empty
+// codec (ffprobe unavailable / not yet probed) is treated as playable: the
+// client streams directly and can fall back to ?transcode=1 if that fails.
+func DirectPlayable(codec string) bool {
+	if codec == "" {
+		return true
+	}
+	return browserCodecs[strings.ToLower(codec)]
+}
 
 // sniffAudioType inspects the leading bytes of f to identify the audio container
 // from its actual content (not the file extension), then seeks back to the
@@ -104,6 +123,70 @@ func ServeFile(w http.ResponseWriter, r *http.Request, absPath string, download 
 	// ServeContent negotiates Range, sets Content-Type from the extension (unless
 	// already set above), and handles conditional/partial responses.
 	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), f)
+}
+
+// Transcode streams absPath re-encoded to MP3 via ffmpeg, starting startSec into
+// the file. It is the fallback for codecs browsers can't decode natively. The
+// output is not byte-seekable (no Range / Content-Length); a client seeks by
+// re-requesting with a new startSec. The ffmpeg process is bound to the request
+// context, so a client disconnect kills it. log may be nil.
+func Transcode(w http.ResponseWriter, r *http.Request, absPath, ffmpegPath string, startSec float64, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	args := []string{"-nostdin", "-loglevel", "error"}
+	if startSec > 0 {
+		// Input-side seek (fast): ffmpeg jumps near startSec before decoding.
+		args = append(args, "-ss", strconv.FormatFloat(startSec, 'f', 3, 64))
+	}
+	args = append(args,
+		"-i", absPath,
+		"-vn",                // drop any cover-art/video stream
+		"-c:a", "libmp3lame", // broadly compatible output
+		"-b:a", "128k",
+		"-f", "mp3",
+		"pipe:1",
+	)
+	cmd := exec.CommandContext(r.Context(), ffmpegPath, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		http.Error(w, "transcode failed", http.StatusInternalServerError)
+		return
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		http.Error(w, "transcode failed", http.StatusInternalServerError)
+		return
+	}
+	// Headers must go out before the body; no Accept-Ranges since the stream is
+	// not byte-seekable.
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Accept-Ranges", "none")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, stdout); err != nil {
+		// Client disconnect / broken pipe is normal (seek, pause, navigate away).
+		log.Debug("transcode copy ended", "path", absPath, "err", err)
+	}
+	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
+		// Only a real ffmpeg failure (not a client cancel) is worth warning about.
+		log.Warn("ffmpeg transcode failed", "path", absPath, "err", err, "stderr", strings.TrimSpace(stderr.String()))
+	}
+}
+
+// HasFFmpeg reports whether an ffmpeg binary is resolvable at ffmpegPath (or on
+// PATH when ffmpegPath is "ffmpeg"). Empty path means transcoding is disabled.
+func HasFFmpeg(ffmpegPath string) bool {
+	if ffmpegPath == "" {
+		return false
+	}
+	_, err := exec.LookPath(ffmpegPath)
+	return err == nil
 }
 
 // EmbeddedCover returns embedded cover art from absPath, if present.

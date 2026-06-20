@@ -126,13 +126,7 @@
       <form id="lib-form">
         <div class="field"><label for="lib-name">Name</label><input id="lib-name" required></div>
         <div class="field"><label for="lib-root">Root path</label><input id="lib-root" placeholder="/srv/audiobooks" required></div>
-        <div class="field"><label for="lib-layout">Layout</label>
-          <select id="lib-layout">
-            <option value="books_in_folder">books_in_folder</option>
-            <option value="chapters_in_folder">chapters_in_folder</option>
-            <option value="flat">flat</option>
-          </select>
-        </div>
+        <p class="muted">Book vs. folder structure is detected automatically — no layout to choose. Use “Detection” on a library to correct any folder it gets wrong.</p>
         <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Add library</button></div>
       </form>
     </div>
@@ -182,6 +176,17 @@
       <div class="inline"><span class="muted">Location:</span> <span id="picker-crumb" class="code"></span></div>
       <div class="spacer"></div>
       <table><tbody id="picker-rows"></tbody></table>
+    </div>
+  </div>
+
+  <div id="modal-detect" class="modal-scrim">
+    <div class="modal">
+      <div class="mhead"><h2>Folder detection — <span id="detect-lib"></span></h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <p class="muted">Each folder is auto-detected. Override one that's wrong: “One book” groups all its audio as a single book; “Separate books” treats each file as its own book.</p>
+      <div class="inline"><span class="muted">Location:</span> <span id="detect-crumb" class="code"></span></div>
+      <div class="spacer"></div>
+      <table><tbody id="detect-rows"></tbody></table>
+      <div class="mactions"><button type="button" class="secondary" data-close>Done</button></div>
     </div>
   </div>
 

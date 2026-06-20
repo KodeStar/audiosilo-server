@@ -55,7 +55,7 @@ func TestDemoSessionFlow(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	if _, err := e.cat.CreateLibrary(ctx, catalog.Library{
-		Name: "Demo", Root: t.TempDir(), Layout: config.LayoutBooksInFolder,
+		Name: "Demo", Root: t.TempDir(),
 	}); err != nil {
 		t.Fatal(err)
 	}

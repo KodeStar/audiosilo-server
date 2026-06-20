@@ -34,11 +34,12 @@ const (
 	TLSAutocert TLSMode = "autocert"
 )
 
-// Library is a named root directory containing audiobooks.
+// Library is a named root directory containing audiobooks. The scanner
+// auto-detects each folder's shape (single-file books, folder-per-book,
+// multi-file parts); there is no layout setting to configure.
 type Library struct {
-	Name   string `yaml:"name"`
-	Root   string `yaml:"root"`
-	Layout string `yaml:"layout"` // flat | chapters_in_folder | books_in_folder
+	Name string `yaml:"name"`
+	Root string `yaml:"root"`
 }
 
 // AppLinkConfig holds the identifiers needed to serve the well-known association
@@ -269,11 +270,6 @@ func (c *Config) Validate() error {
 		if lib.Root == "" {
 			return fmt.Errorf("library %q: root is required", lib.Name)
 		}
-		switch lib.Layout {
-		case "", LayoutFlat, LayoutChaptersInFolder, LayoutBooksInFolder:
-		default:
-			return fmt.Errorf("library %q: invalid layout %q", lib.Name, lib.Layout)
-		}
 	}
 	if c.Demo.Enabled {
 		if c.Demo.Library == "" {
@@ -287,10 +283,3 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
-
-// Storage layout identifiers.
-const (
-	LayoutFlat             = "flat"
-	LayoutChaptersInFolder = "chapters_in_folder"
-	LayoutBooksInFolder    = "books_in_folder"
-)
