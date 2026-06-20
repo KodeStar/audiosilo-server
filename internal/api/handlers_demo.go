@@ -18,6 +18,15 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "demo mode is not enabled")
 		return
 	}
+	// Resolve the demo library first so a misconfigured demo.library fails fast
+	// without consuming the caller's per-IP budget.
+	lib, err := a.cat.GetLibraryByName(r.Context(), a.cfg.Demo.Library)
+	if err != nil {
+		a.log.Error("demo: configured library not found", "library", a.cfg.Demo.Library, "err", err)
+		writeError(w, http.StatusInternalServerError, "demo library is not available")
+		return
+	}
+
 	// Acquire atomically records this attempt and reports whether it is under the
 	// per-IP cap. Metering at admission (not on success) means a partial failure
 	// after CreateUser still counts, and there is no Allowed/Fail race that would
@@ -37,21 +46,15 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		deviceName = "Demo"
 	}
 
-	lib, err := a.cat.GetLibraryByName(r.Context(), a.cfg.Demo.Library)
-	if err != nil {
-		a.log.Error("demo: configured library not found", "library", a.cfg.Demo.Library, "err", err)
-		writeError(w, http.StatusInternalServerError, "demo library is not available")
-		return
-	}
-
-	// Cap live demo accounts so abuse can't grow the database unbounded.
-	if a.cfg.Demo.MaxUsers > 0 {
+	// Cap live demo accounts so abuse can't grow the database unbounded. An unset
+	// demo.max_users falls back to a safe default; an explicit 0 means unlimited.
+	if limit := a.cfg.Demo.EffectiveMaxUsers(); limit > 0 {
 		n, err := a.auth.CountDemoUsers(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "could not check demo capacity")
 			return
 		}
-		if n >= a.cfg.Demo.MaxUsers {
+		if n >= limit {
 			writeError(w, http.StatusServiceUnavailable, "demo is at capacity, try again later")
 			return
 		}
