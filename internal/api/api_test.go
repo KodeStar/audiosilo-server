@@ -244,6 +244,56 @@ func TestScopedShareAccess(t *testing.T) {
 	}
 }
 
+func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	codePath := "/api/v1/admin/users/" + strconv.FormatInt(member.ID, 10) + "/authcode"
+
+	mintCode := func(body string) string {
+		t.Helper()
+		resp, b := e.do(t, "POST", codePath, adminTok, body)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create authcode: %d %s", resp.StatusCode, b)
+		}
+		var out struct {
+			AuthCode string `json:"auth_code"`
+		}
+		json.Unmarshal([]byte(b), &out)
+		if out.AuthCode == "" {
+			t.Fatalf("no auth_code in response: %s", b)
+		}
+		return out.AuthCode
+	}
+	redeem := func(code string) int {
+		t.Helper()
+		resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
+		return resp.StatusCode
+	}
+
+	// Explicit 0 = unlimited uses / no expiry must pass through (not clobbered to
+	// the bounded default), so the same code redeems repeatedly.
+	unlimited := mintCode(`{"max_uses":0,"ttl_days":0}`)
+	for i := 0; i < 3; i++ {
+		if got := redeem(unlimited); got != http.StatusOK {
+			t.Fatalf("unlimited code redeem #%d = %d, want 200", i+1, got)
+		}
+	}
+
+	// Omitting the fields applies the bounded default (5 uses): the 6th redeem
+	// fails because the code is used up.
+	bounded := mintCode(`{}`)
+	for i := 0; i < defaultAuthCodeMaxUses; i++ {
+		if got := redeem(bounded); got != http.StatusOK {
+			t.Fatalf("bounded code redeem #%d = %d, want 200", i+1, got)
+		}
+	}
+	if got := redeem(bounded); got != http.StatusUnauthorized {
+		t.Fatalf("redeem past the use limit = %d, want 401", got)
+	}
+}
+
 func TestLoginLockout(t *testing.T) {
 	e := newTestEnv(t)
 	// Exhaust the failure budget with wrong passwords.
