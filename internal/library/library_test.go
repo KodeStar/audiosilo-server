@@ -516,6 +516,50 @@ func TestScannerFolderOverrides(t *testing.T) {
 	}
 }
 
+// TestScannerBackfillsMissingCodec guards the cross-deploy gap: a book indexed
+// before the codec column existed (codec empty, but with a stored duration) must
+// be re-probed on the next scan so its codec backfills — otherwise direct_playable
+// can't be trusted for already-indexed libraries.
+func TestScannerBackfillsMissingCodec(t *testing.T) {
+	if !metadata.HasFFprobe("ffprobe") {
+		t.Skip("ffprobe required to read codec")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	cat := catalog.New(db, time.Now)
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "Book Folder", "audio.m4b"))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "C", Root: root})
+	scanner := NewScanner(cat, "ffprobe", slog.Default())
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	b, err := cat.GetBookByPath(ctx, lib.ID, "Book Folder")
+	if err != nil || b.Codec == "" {
+		t.Fatalf("first scan should record a codec: %+v (err %v)", b, err)
+	}
+
+	// Simulate a row indexed before the codec column: clear codec, keep duration.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET codec='' WHERE id = ?`, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Rescan: mtime/size are unchanged, but the missing codec forces a re-probe.
+	res, err := scanner.Scan(ctx, *lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Indexed != 1 {
+		t.Fatalf("codec-less book should be re-probed, indexed=%d", res.Indexed)
+	}
+	if b2, _ := cat.GetBookByPath(ctx, lib.ID, "Book Folder"); b2.Codec == "" {
+		t.Fatal("codec was not backfilled on rescan")
+	}
+}
+
 // TestBrowseFSHidesNonAudio verifies the filesystem view lists audio files and
 // directories only, so a client never opens a .jpg/.nfo as a book.
 func TestBrowseFSHidesNonAudio(t *testing.T) {
