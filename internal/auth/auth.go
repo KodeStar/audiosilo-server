@@ -308,13 +308,12 @@ func (s *Service) RevokeAuthCode(ctx context.Context, id int64) error {
 func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error) {
 	hash := hashSecret(normalizeCode(code))
 	var (
-		id, userID    int64
-		maxUses, uses int
-		expires       sql.NullString
+		id, userID int64
+		expires    sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, max_uses, uses, expires_at FROM auth_codes WHERE code_hash = ?`, hash).
-		Scan(&id, &userID, &maxUses, &uses, &expires)
+		`SELECT id, user_id, expires_at FROM auth_codes WHERE code_hash = ?`, hash).
+		Scan(&id, &userID, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrInvalidCode
 	}
@@ -326,12 +325,18 @@ func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error
 			return nil, ErrInvalidCode
 		}
 	}
-	if maxUses > 0 && uses >= maxUses {
-		return nil, ErrInvalidCode
-	}
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE auth_codes SET uses = uses + 1 WHERE id = ?`, id); err != nil {
+	// Atomically claim a use: folding the "under the cap" check into the increment
+	// keeps redemption correct under concurrency. A separate SELECT-then-UPDATE
+	// could let two requests both pass the check and push uses past max_uses.
+	// max_uses = 0 means unlimited; RowsAffected == 0 means already exhausted.
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE auth_codes SET uses = uses + 1
+		   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)`, id)
+	if err != nil {
 		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrInvalidCode
 	}
 	u, err := s.GetUser(ctx, userID)
 	if err != nil {
