@@ -42,9 +42,13 @@ linters:
         # SafeJoin regression test. (Tracked as finding S1: add EvalSymlinks
         # before Phase B uploads.)
         - G304
-        # G204: the only subprocess is ffprobe, invoked with a fixed argv and a
-        # validated absolute path — never a shell string. See internal/metadata/probe.go.
+        # G204 / G702: the only subprocesses are ffprobe (metadata) and ffmpeg
+        # (internal/media/media.go Transcode), each invoked with a fixed argv and a
+        # library.SafeJoin-validated absolute path — never a shell string, and the
+        # binary path is operator-configured (--ffprobe/--ffmpeg). G702 is gosec's
+        # taint-analysis duplicate of the same subprocess-injection concern.
         - G204
+        - G702
         # G104: unhandled errors are covered more precisely by errcheck (above);
         # gosec's duplicate is pure noise on the deliberate Close ignores.
         - G104

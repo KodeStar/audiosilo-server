@@ -11,6 +11,10 @@ import (
 
 // ffprobeOutput is the subset of ffprobe -print_format json we consume.
 type ffprobeOutput struct {
+	Streams []struct {
+		CodecName string `json:"codec_name"`
+		CodecType string `json:"codec_type"`
+	} `json:"streams"`
 	Format struct {
 		Duration string            `json:"duration"`
 		Tags     map[string]string `json:"tags"`
@@ -26,11 +30,14 @@ type ffprobeOutput struct {
 
 type probeResult struct {
 	Duration float64
+	Codec    string
 	Tags     map[string]string
 	Chapters []Chapter
 }
 
-// probe runs ffprobe to obtain duration, chapters and container tags.
+// probe runs ffprobe to obtain duration, the audio codec, chapters and container
+// tags. -select_streams a:0 limits -show_streams to the first audio stream so we
+// read the codec that actually needs (or doesn't need) transcoding.
 func probe(path, ffprobePath string) (*probeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -39,6 +46,8 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 		"-print_format", "json",
 		"-show_format",
 		"-show_chapters",
+		"-show_streams",
+		"-select_streams", "a:0",
 		path,
 	)
 	out, err := cmd.Output()
@@ -50,6 +59,9 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 		return nil, err
 	}
 	res := &probeResult{Tags: normalizeTags(parsed.Format.Tags)}
+	if len(parsed.Streams) > 0 {
+		res.Codec = parsed.Streams[0].CodecName
+	}
 	res.Duration, _ = strconv.ParseFloat(parsed.Format.Duration, 64)
 	for i, ch := range parsed.Chapters {
 		start, _ := strconv.ParseFloat(ch.StartTime, 64)
@@ -72,6 +84,9 @@ func normalizeTags(in map[string]string) map[string]string {
 func applyProbe(m *Metadata, p *probeResult) {
 	if p.Duration > 0 {
 		m.Duration = p.Duration
+	}
+	if p.Codec != "" {
+		m.Codec = p.Codec
 	}
 	if len(p.Chapters) > 0 {
 		m.Chapters = p.Chapters

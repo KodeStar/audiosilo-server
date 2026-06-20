@@ -23,6 +23,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -38,6 +39,7 @@ func main() {
 func run() error {
 	dataDir := flag.String("data", "./data", "data directory (config, database, certs)")
 	ffprobePath := flag.String("ffprobe", "ffprobe", "path to ffprobe binary (\"\" to disable)")
+	ffmpegPath := flag.String("ffmpeg", "ffmpeg", "path to ffmpeg binary for on-the-fly transcoding (\"\" to disable)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -74,6 +76,12 @@ func run() error {
 	}
 	scanner := library.NewScanner(cat, ffprobe, log)
 
+	ffmpeg := *ffmpegPath
+	if ffmpeg != "" && !media.HasFFmpeg(ffmpeg) {
+		log.Warn("ffmpeg not found; on-the-fly transcoding will be unavailable", "path", ffmpeg)
+		ffmpeg = ""
+	}
+
 	if firstRun {
 		if err := bootstrap(ctx, cfg, authSvc, log); err != nil {
 			return err
@@ -98,7 +106,7 @@ func run() error {
 		go demoReaper(ctx, authSvc, cfg.Demo.IdleTTLDuration(), log)
 	}
 
-	a := api.New(cfg, authSvc, cat, scanner, log)
+	a := api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
 	return server.Run(ctx, cfg, a.Handler(), log)
 }
 
@@ -150,7 +158,7 @@ func syncLibraries(ctx context.Context, cfg *config.Config, cat *catalog.Catalog
 			return err
 		}
 		if _, err := cat.UpsertLibraryByName(ctx, catalog.Library{
-			Name: l.Name, Root: root, Layout: l.Layout,
+			Name: l.Name, Root: root,
 		}); err != nil {
 			return err
 		}

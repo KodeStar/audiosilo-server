@@ -38,7 +38,7 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 	}
 
 	cfg.Bind = "127.0.0.1:9999"
-	cfg.Libraries = []Library{{Name: "Books", Root: "/srv/books", Layout: LayoutFlat}}
+	cfg.Libraries = []Library{{Name: "Books", Root: "/srv/books"}}
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -87,7 +87,6 @@ func TestValidate(t *testing.T) {
 			c.Libraries = []Library{{Name: "A", Root: "/a"}, {Name: "A", Root: "/b"}}
 		}, true},
 		{"library missing root", func(c *Config) { c.Libraries = []Library{{Name: "A"}} }, true},
-		{"invalid layout", func(c *Config) { c.Libraries = []Library{{Name: "A", Root: "/a", Layout: "weird"}} }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -267,18 +267,52 @@ func TestMoveDurableState(t *testing.T) {
 
 func TestUpdateLibrary(t *testing.T) {
 	c, ctx := newTestCatalog(t)
-	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp", Layout: "books_in_folder"})
-	// Patch only the layout; other fields are preserved.
-	updated, err := c.UpdateLibrary(ctx, lib.ID, Library{Layout: "chapters_in_folder"})
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	// Patch only the root; other fields are preserved.
+	updated, err := c.UpdateLibrary(ctx, lib.ID, Library{Root: "/srv/books"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Layout != "chapters_in_folder" || updated.Name != "L" || updated.Root != "/tmp" {
+	if updated.Root != "/srv/books" || updated.Name != "L" {
 		t.Fatalf("unexpected update result: %+v", updated)
 	}
 	got, _ := c.GetLibrary(ctx, lib.ID)
-	if got.Layout != "chapters_in_folder" {
-		t.Fatalf("layout not persisted: %q", got.Layout)
+	if got.Root != "/srv/books" {
+		t.Fatalf("root not persisted: %q", got.Root)
+	}
+}
+
+func TestFolderOverridesCRUD(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+
+	if err := c.SetFolderOverride(ctx, lib.ID, "Author/Series", OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	// Invalid modes are rejected.
+	if err := c.SetFolderOverride(ctx, lib.ID, "Other", "weird"); err == nil {
+		t.Fatal("expected invalid mode to be rejected")
+	}
+	got, err := c.FolderOverrides(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["Author/Series"] != OverrideBook || len(got) != 1 {
+		t.Fatalf("unexpected overrides: %+v", got)
+	}
+	// Upsert changes the mode in place.
+	if err := c.SetFolderOverride(ctx, lib.ID, "Author/Series", OverrideCollection); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = c.FolderOverrides(ctx, lib.ID)
+	if got["Author/Series"] != OverrideCollection {
+		t.Fatalf("override not updated in place: %+v", got)
+	}
+	if err := c.DeleteFolderOverride(ctx, lib.ID, "Author/Series"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := c.FolderOverrides(ctx, lib.ID); len(got) != 0 {
+		t.Fatalf("override not deleted: %+v", got)
 	}
 }
 
