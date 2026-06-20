@@ -67,10 +67,28 @@ type TLSConfig struct {
 // visitor can mint a throwaway account via POST /api/v1/demo/session (granted the
 // named library), and idle demo accounts are reaped in the background.
 type DemoConfig struct {
-	Enabled  bool   `yaml:"enabled"`   // activate demo mode
-	Library  string `yaml:"library"`   // name of the library demo users are granted
-	MaxUsers int    `yaml:"max_users"` // hard cap on live demo users (0 = unlimited)
-	IdleTTL  string `yaml:"idle_ttl"`  // reap demo users idle longer than this, e.g. "24h" (default 24h)
+	Enabled  bool   `yaml:"enabled"`             // activate demo mode
+	Library  string `yaml:"library"`             // name of the library demo users are granted
+	MaxUsers *int   `yaml:"max_users,omitempty"` // cap on live demo users; unset = safe default, explicit 0 = unlimited
+	IdleTTL  string `yaml:"idle_ttl"`            // reap demo users idle longer than this, e.g. "24h" (default 24h)
+}
+
+// DefaultDemoMaxUsers caps concurrent live demo accounts when demo mode is on
+// but demo.max_users is left unset. An exposed demo instance is otherwise
+// unbounded: the per-IP creation limit is bypassable by rotating source IPs
+// (trivial on an IPv6 /64), so without a global cap an attacker could grow the
+// database far faster than the idle reaper trims it. Set an explicit
+// demo.max_users to override (use 0 for unlimited, opting into that risk).
+const DefaultDemoMaxUsers = 200
+
+// EffectiveMaxUsers returns the cap on concurrent live demo accounts: the
+// configured value when set (an explicit 0 means unlimited), or
+// DefaultDemoMaxUsers when unset.
+func (d DemoConfig) EffectiveMaxUsers() int {
+	if d.MaxUsers != nil {
+		return *d.MaxUsers
+	}
+	return DefaultDemoMaxUsers
 }
 
 // IdleTTLDuration parses IdleTTL, falling back to 24h when empty or invalid.
@@ -199,7 +217,7 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("AUDIOSILO_DEMO_MAX_USERS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
-			c.Demo.MaxUsers = n
+			c.Demo.MaxUsers = &n
 		}
 	}
 	if v := os.Getenv("AUDIOSILO_DEMO_IDLE_TTL"); v != "" {

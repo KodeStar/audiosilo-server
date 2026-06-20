@@ -44,14 +44,15 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cap live demo accounts so abuse can't grow the database unbounded.
-	if a.cfg.Demo.MaxUsers > 0 {
+	// Cap live demo accounts so abuse can't grow the database unbounded. An unset
+	// demo.max_users falls back to a safe default; an explicit 0 means unlimited.
+	if limit := a.cfg.Demo.EffectiveMaxUsers(); limit > 0 {
 		n, err := a.auth.CountDemoUsers(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "could not check demo capacity")
 			return
 		}
-		if n >= a.cfg.Demo.MaxUsers {
+		if n >= limit {
 			writeError(w, http.StatusServiceUnavailable, "demo is at capacity, try again later")
 			return
 		}

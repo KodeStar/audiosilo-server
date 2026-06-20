@@ -104,14 +104,39 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// TestDemoEffectiveMaxUsers pins the safe-by-default semantics: unset falls back
+// to a bounded cap (not unlimited), while an explicit 0 opts into unlimited.
+func TestDemoEffectiveMaxUsers(t *testing.T) {
+	if got := (DemoConfig{}).EffectiveMaxUsers(); got != DefaultDemoMaxUsers {
+		t.Fatalf("unset max_users = %d, want default %d", got, DefaultDemoMaxUsers)
+	}
+	zero := 0
+	if got := (DemoConfig{MaxUsers: &zero}).EffectiveMaxUsers(); got != 0 {
+		t.Fatalf("explicit 0 max_users = %d, want 0 (unlimited)", got)
+	}
+	fifty := 50
+	if got := (DemoConfig{MaxUsers: &fifty}).EffectiveMaxUsers(); got != 50 {
+		t.Fatalf("explicit max_users = %d, want 50", got)
+	}
+}
+
 func TestApplyEnvOverrides(t *testing.T) {
 	t.Setenv("AUDIOSILO_BIND", "0.0.0.0:9000")
 	t.Setenv("AUDIOSILO_TLS_MODE", "off")
 	t.Setenv("AUDIOSILO_CORS_ORIGINS", "https://a.com, https://b.com")
 	t.Setenv("AUDIOSILO_TRUSTED_PROXIES", "10.0.0.0/8")
+	t.Setenv("AUDIOSILO_DEMO_ENABLED", "true")
+	t.Setenv("AUDIOSILO_DEMO_MAX_USERS", "42")
 
 	c := Default(t.TempDir())
 	applyEnv(c)
+
+	if !c.Demo.Enabled {
+		t.Fatal("demo enabled override not applied")
+	}
+	if c.Demo.MaxUsers == nil || *c.Demo.MaxUsers != 42 {
+		t.Fatalf("demo max_users = %v, want 42", c.Demo.MaxUsers)
+	}
 
 	if c.Bind != "0.0.0.0:9000" {
 		t.Fatalf("bind = %q", c.Bind)
