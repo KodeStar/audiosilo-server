@@ -392,10 +392,7 @@ async function renderUserDrawer(userId) {
   if (!codes.length) codesBlock.append(emptyNote("No invite codes issued."));
   codes.forEach((c) => codesBlock.append(codeCard(c, userId)));
   const actions = div("inline");
-  actions.append(
-    button("Generate code", "secondary small", () => generateCode(userId, false)),
-    button("Copy invite link", "secondary small", () => generateCode(userId, true)),
-  );
+  actions.append(button("Create invite", "secondary small", () => openInvite(userId)));
   codesBlock.append(spacerNode(), actions);
   body.append(codesBlock);
 }
@@ -531,19 +528,68 @@ function accessAdder(userId) {
   return wrap;
 }
 
-async function generateCode(userId, asLink) {
-  try {
-    const data = await api("POST", `/admin/users/${userId}/authcode`, { label: asLink ? "invite" : "admin-web" });
-    if (asLink) {
-      if (await copyToClipboard(data.invite_url)) toast("Invite link copied to clipboard.");
-      else toast("Invite link (copy now): " + data.invite_url);
-    } else {
-      if (await copyToClipboard(data.auth_code)) toast("Auth code copied: " + data.auth_code);
-      else toast("Auth code (copy now): " + data.auth_code);
-    }
-    renderUserDrawer(userId);
-  } catch (err) { toast(err.message, "error"); }
+// ---- Invite creation ----
+// One dialog mints a code with chosen uses/expiry and shows both the invite link
+// and the raw code, each copyable. The code is returned once, so this is the only
+// chance to copy it.
+let inviteUserId = null;
+
+function openInvite(userId) {
+  inviteUserId = userId;
+  el("invite-form").reset(); // restores the selected defaults (5 uses / 1 day)
+  el("inv-uses-custom").classList.add("hidden");
+  el("inv-expiry-custom").classList.add("hidden");
+  el("invite-form").classList.remove("hidden");
+  el("invite-result").classList.add("hidden");
+  openModal("modal-invite");
 }
+
+// Reveal a "Custom…" number input only when its select chooses custom.
+function wireCustom(selectId, inputId) {
+  const sel = el(selectId), inp = el(inputId);
+  sel.addEventListener("change", () => {
+    const custom = sel.value === "custom";
+    inp.classList.toggle("hidden", !custom);
+    if (custom) inp.focus();
+  });
+}
+wireCustom("inv-uses", "inv-uses-custom");
+wireCustom("inv-expiry", "inv-expiry-custom");
+
+// Resolve a preset select (+ its custom input) to an integer (0 = unlimited/never
+// for the fixed options), or null when a custom value is required but invalid.
+function presetValue(selectId, inputId) {
+  const sel = el(selectId);
+  if (sel.value !== "custom") return Number(sel.value);
+  const n = parseInt(el(inputId).value, 10);
+  return Number.isFinite(n) && n >= 1 ? n : null;
+}
+
+el("invite-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const maxUses = presetValue("inv-uses", "inv-uses-custom");
+  const ttlDays = presetValue("inv-expiry", "inv-expiry-custom");
+  if (maxUses === null || ttlDays === null) { toast("Enter a custom value of 1 or more.", "error"); return; }
+  try {
+    const data = await api("POST", `/admin/users/${inviteUserId}/authcode`,
+      { label: "invite", max_uses: maxUses, ttl_days: ttlDays });
+    el("inv-link").textContent = data.invite_url;
+    el("inv-code").textContent = data.auth_code;
+    el("invite-form").classList.add("hidden");
+    el("invite-result").classList.remove("hidden");
+  } catch (err) { toast(err.message, "error"); }
+});
+
+async function copyField(text, label) {
+  if (await copyToClipboard(text)) toast(label + " copied.");
+  else toast(label + " (copy now): " + text);
+}
+el("inv-copy-link").addEventListener("click", () => copyField(el("inv-link").textContent, "Invite link"));
+el("inv-copy-code").addEventListener("click", () => copyField(el("inv-code").textContent, "Auth code"));
+el("inv-done").addEventListener("click", () => {
+  closeModals();
+  if (inviteUserId != null) renderUserDrawer(inviteUserId);
+});
 
 async function copyToClipboard(text) {
   try {
