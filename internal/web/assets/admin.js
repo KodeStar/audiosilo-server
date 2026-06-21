@@ -351,6 +351,7 @@ async function renderUserDrawer(userId) {
     kvNode("Role", roleControl(u)),
     kvNode("Status", statusControl(u)),
     kvNode("Password", passwordControl(u)),
+    kvNode("Recovery code", recoveryControl(u)),
     kvNode("Last active", textNode(fmtRelative(u.last_seen_at))),
   );
   body.append(account);
@@ -368,14 +369,19 @@ async function renderUserDrawer(userId) {
   }
   body.append(access);
 
-  // --- Invite codes ---
-  const codesBlock = block("Invite codes");
+  // --- Invites ---
+  // One active (pending) invite per user; accepted/expired/used-up ones collapse
+  // into History so the list can't pile up. Recovery is separate (Account block).
+  const codesBlock = block("Invites");
   const codes = d.auth_codes || [];
-  if (!codes.length) codesBlock.append(emptyNote("No invite codes issued."));
-  codes.forEach((c) => codesBlock.append(codeCard(c, userId)));
+  const pending = codes.filter(codePending);
+  const history = codes.filter((c) => !codePending(c));
+  if (pending.length) pending.forEach((c) => codesBlock.append(codeCard(c, userId)));
+  else codesBlock.append(emptyNote("No pending invite."));
   const actions = div("inline");
-  actions.append(button("Create invite", "secondary small", () => openInvite(userId)));
+  actions.append(button(pending.length ? "New invite" : "Create invite", "secondary small", () => openInvite(userId)));
   codesBlock.append(spacerNode(), actions);
+  if (history.length) codesBlock.append(historyDisclosure(history, userId));
   body.append(codesBlock);
 }
 
@@ -437,14 +443,55 @@ function passwordControl(u) {
   return wrap;
 }
 
+// Recovery codes are user-owned (minted from the player's own settings), so the
+// admin view just reports whether the user can self-recover — plus a Revoke, the
+// only lever to kill a leaked/compromised recovery code.
+function recoveryControl(u) {
+  const wrap = div("inline");
+  wrap.append(pill(u.has_recovery ? "set" : "none", u.has_recovery ? "ok" : "muted"));
+  if (u.has_recovery) {
+    wrap.append(button("Revoke", "danger small", async () => {
+      try { await api("DELETE", `/admin/users/${u.id}/recovery`); toast("Recovery code revoked."); renderUserDrawer(u.id); }
+      catch (err) { toast(err.message, "error"); }
+    }));
+  }
+  return wrap;
+}
+
+// Invite state predicates. An invite is "active" (the one active invite per user,
+// resendable) while it can still be redeemed — not expired and not used up.
+// redeemed_at only records that it has been accepted at least once; a multi-use
+// invite stays active until its uses run out. Spent/expired invites fall into
+// History.
+function codeExpired(c) { return !!c.expires_at && new Date(c.expires_at).getTime() <= Date.now(); }
+function codeUsedUp(c) { return c.max_uses > 0 && c.uses >= c.max_uses; }
+function codePending(c) { return !codeExpired(c) && !codeUsedUp(c); }
+
+function statusPill(c) {
+  if (codePending(c)) {
+    if (!c.expires_at) return ["active", "ok"];
+    const e = expiryLabel(c.expires_at);
+    return [e.text, e.cls];
+  }
+  if (c.redeemed_at) return ["accepted", "ok"];
+  if (codeExpired(c)) return ["expired", "off"];
+  return ["used up", "muted"];
+}
+
 function codeCard(c, userId) {
   const card = div("codecard");
   const top = div("top");
   const label = document.createElement("strong");
   label.textContent = c.label || "invite";
-  const exp = expiryLabel(c.expires_at);
+  const [text, cls] = statusPill(c);
   const tail = div("inline");
-  tail.append(pill(exp.text, exp.cls));
+  tail.append(pill(text, cls));
+  if (codePending(c)) {
+    tail.append(button("Resend", "secondary small", async () => {
+      try { showInviteResult(userId, await api("POST", `/admin/authcodes/${c.id}/rotate`, {})); }
+      catch (err) { toast(err.message, "error"); }
+    }));
+  }
   tail.append(button("Revoke", "danger small", async () => {
     try { await api("DELETE", `/admin/authcodes/${c.id}`); toast("Code revoked."); renderUserDrawer(userId); }
     catch (err) { toast(err.message, "error"); }
@@ -452,9 +499,25 @@ function codeCard(c, userId) {
   top.append(label, tail);
   card.append(top);
   const sub = div("sub");
-  sub.append(span("Issued " + fmtRelative(c.created_at)), span(usesLabel(c)));
+  // "Accepted" is only meaningful for a spent/expired (history) invite; an active
+  // invite shows when it was issued, with usesLabel conveying any partial use.
+  const issued = !codePending(c) && c.redeemed_at
+    ? "Accepted " + fmtRelative(c.redeemed_at)
+    : "Issued " + fmtRelative(c.created_at);
+  sub.append(span(issued), span(usesLabel(c)));
   card.append(sub);
   return card;
+}
+
+// historyDisclosure collapses spent/expired invites behind a toggle so the drawer
+// stays clean while keeping an audit trail.
+function historyDisclosure(history, userId) {
+  const wrap = div();
+  const items = div("hidden");
+  history.forEach((c) => items.append(codeCard(c, userId)));
+  const toggle = button(`History (${history.length})`, "small", () => items.classList.toggle("hidden"));
+  wrap.append(spacerNode(), toggle, items);
+  return wrap;
 }
 
 // grantRow renders one access grant (a named share or a whole-library sugar
@@ -555,12 +618,21 @@ el("invite-form").addEventListener("submit", async (e) => {
   try {
     const data = await api("POST", `/admin/users/${inviteUserId}/authcode`,
       { label: "invite", max_uses: maxUses, ttl_days: ttlDays });
-    el("inv-link").textContent = data.invite_url;
-    el("inv-code").textContent = data.auth_code;
-    el("invite-form").classList.add("hidden");
-    el("invite-result").classList.remove("hidden");
+    showInviteResult(inviteUserId, data);
   } catch (err) { toast(err.message, "error"); }
 });
+
+// Show the invite modal's result panel with a freshly minted or rotated code +
+// link (returned once — this is the only chance to copy them). Shared by Create
+// invite and Resend; the latter opens the modal straight to the result.
+function showInviteResult(userId, data) {
+  inviteUserId = userId;
+  el("inv-link").textContent = data.invite_url;
+  el("inv-code").textContent = data.auth_code;
+  el("invite-form").classList.add("hidden");
+  el("invite-result").classList.remove("hidden");
+  openModal("modal-invite");
+}
 
 async function copyField(text, label) {
   if (await copyToClipboard(text)) toast(label + " copied.");

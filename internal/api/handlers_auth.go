@@ -95,9 +95,14 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.auth.RevokeToken(r.Context(), req.PairingToken)
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": session,
-		"user":  u,
+		"user":  full,
 	})
 }
 
@@ -129,7 +134,12 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": u})
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": full})
 }
 
 // handlePair issues a fresh pairing QR for the already-authenticated user, e.g.
@@ -158,7 +168,100 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleMe returns the authenticated user.
+// handleMe returns the authenticated user, reloaded so the derived
+// has_password/has_recovery/last_seen_at fields are present.
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, userFrom(r.Context()))
+	u := userFrom(r.Context())
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	writeJSON(w, http.StatusOK, full)
+}
+
+// handleSetPassword lets the signed-in user set or change their own password —
+// the conventional way back in after a sign-out. The primary case is a
+// password-less player setting their first one (no current password to present),
+// so no challenge is required then; but changing an existing password requires
+// the current one, so a stolen session token can't plant a persistent credential.
+// Clearing a password is admin-only (PATCH /admin/users); self-service rejects an
+// empty password so a user can't lock themselves out. Refused for demo accounts.
+func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
+	if !a.accountLimiter.Acquire(clientIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+		return
+	}
+	u := userFrom(r.Context())
+	var req struct {
+		Password        string `json:"password"`
+		CurrentPassword string `json:"current_password"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if req.Password == "" {
+		writeError(w, http.StatusBadRequest, "password is required")
+		return
+	}
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	if full.IsDemo {
+		writeError(w, http.StatusForbidden, "not available for demo accounts")
+		return
+	}
+	if full.HasPassword {
+		if err := a.auth.CheckPassword(r.Context(), u.ID, req.CurrentPassword); err != nil {
+			writeError(w, http.StatusUnauthorized, "current password is incorrect")
+			return
+		}
+	}
+	if err := a.auth.SetPassword(r.Context(), u.ID, req.Password); err != nil {
+		writeUserError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGenerateRecovery mints (or replaces) the signed-in user's durable
+// recovery code and returns it once. Saved by the user, it lets them re-pair on
+// any device via the connect screen without an admin — the recovery path for
+// password-less accounts. Reuses the redeem flow (it is just an auth code).
+// Rate-limited and refused for demo accounts so a throwaway session can't mint a
+// durable login.
+func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
+	if !a.accountLimiter.Acquire(clientIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+		return
+	}
+	u := userFrom(r.Context())
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	if full.IsDemo {
+		writeError(w, http.StatusForbidden, "not available for demo accounts")
+		return
+	}
+	code, err := a.auth.GenerateRecoveryCode(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not generate recovery code")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"recovery_code": code})
+}
+
+// handleDeleteRecovery removes the signed-in user's recovery code.
+func (a *API) handleDeleteRecovery(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	if err := a.auth.ClearRecoveryCode(r.Context(), u.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not clear recovery code")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
