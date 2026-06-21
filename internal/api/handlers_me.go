@@ -225,3 +225,53 @@ func (a *API) handleAddHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusCreated)
 }
+
+// handleListFavourites returns the caller's favourites across every library they
+// can still reach (for the Favourites shelf + home section), enriched with book
+// metadata. The access scope is resolved here and the filtering happens in the
+// catalog query, so a since-revoked share's favourites aren't read back.
+func (a *API) handleListFavourites(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load favourites")
+		return
+	}
+	items, err := a.cat.ListAllFavourites(r.Context(), u.ID, scopes)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load favourites")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"favourites": items})
+}
+
+// handleAddFavourite hearts a path for the caller (idempotent).
+func (a *API) handleAddFavourite(w http.ResponseWriter, r *http.Request) {
+	lib, path, status, msg := a.authorizedPath(r)
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	u := userFrom(r.Context())
+	if err := a.cat.AddFavourite(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: path}); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not save favourite")
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+// handleRemoveFavourite clears the caller's favourite for a path (idempotent).
+// Keyed by ?path= (one favourite per user+library+path), like progress.
+func (a *API) handleRemoveFavourite(w http.ResponseWriter, r *http.Request) {
+	lib, path, status, msg := a.authorizedPath(r)
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	u := userFrom(r.Context())
+	if err := a.cat.RemoveFavourite(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: path}); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not remove favourite")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
