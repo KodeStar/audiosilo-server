@@ -444,25 +444,38 @@ function passwordControl(u) {
 }
 
 // Recovery codes are user-owned (minted from the player's own settings), so the
-// admin view is read-only — it just reports whether the user can self-recover.
+// admin view just reports whether the user can self-recover — plus a Revoke, the
+// only lever to kill a leaked/compromised recovery code.
 function recoveryControl(u) {
   const wrap = div("inline");
   wrap.append(pill(u.has_recovery ? "set" : "none", u.has_recovery ? "ok" : "muted"));
+  if (u.has_recovery) {
+    wrap.append(button("Revoke", "danger small", async () => {
+      try { await api("DELETE", `/admin/users/${u.id}/recovery`); toast("Recovery code revoked."); renderUserDrawer(u.id); }
+      catch (err) { toast(err.message, "error"); }
+    }));
+  }
   return wrap;
 }
 
-// Invite state predicates. A pending invite has never been redeemed, hasn't
-// expired and still has uses left — the one an admin can resend.
+// Invite state predicates. An invite is "active" (the one active invite per user,
+// resendable) while it can still be redeemed — not expired and not used up.
+// redeemed_at only records that it has been accepted at least once; a multi-use
+// invite stays active until its uses run out. Spent/expired invites fall into
+// History.
 function codeExpired(c) { return !!c.expires_at && new Date(c.expires_at).getTime() <= Date.now(); }
 function codeUsedUp(c) { return c.max_uses > 0 && c.uses >= c.max_uses; }
-function codePending(c) { return !c.redeemed_at && !codeExpired(c) && !codeUsedUp(c); }
+function codePending(c) { return !codeExpired(c) && !codeUsedUp(c); }
 
 function statusPill(c) {
-  if (codePending(c)) { const e = expiryLabel(c.expires_at); return [e.text, e.cls]; }
+  if (codePending(c)) {
+    if (!c.expires_at) return ["active", "ok"];
+    const e = expiryLabel(c.expires_at);
+    return [e.text, e.cls];
+  }
   if (c.redeemed_at) return ["accepted", "ok"];
   if (codeExpired(c)) return ["expired", "off"];
-  if (codeUsedUp(c)) return ["used up", "muted"];
-  return ["—", "muted"];
+  return ["used up", "muted"];
 }
 
 function codeCard(c, userId) {
@@ -486,7 +499,11 @@ function codeCard(c, userId) {
   top.append(label, tail);
   card.append(top);
   const sub = div("sub");
-  const issued = c.redeemed_at ? "Accepted " + fmtRelative(c.redeemed_at) : "Issued " + fmtRelative(c.created_at);
+  // "Accepted" is only meaningful for a spent/expired (history) invite; an active
+  // invite shows when it was issued, with usesLabel conveying any partial use.
+  const issued = !codePending(c) && c.redeemed_at
+    ? "Accepted " + fmtRelative(c.redeemed_at)
+    : "Issued " + fmtRelative(c.created_at);
   sub.append(span(issued), span(usesLabel(c)));
   card.append(sub);
   return card;
@@ -495,7 +512,7 @@ function codeCard(c, userId) {
 // historyDisclosure collapses spent/expired invites behind a toggle so the drawer
 // stays clean while keeping an audit trail.
 function historyDisclosure(history, userId) {
-  const wrap = div("");
+  const wrap = div();
   const items = div("hidden");
   history.forEach((c) => items.append(codeCard(c, userId)));
   const toggle = button(`History (${history.length})`, "small", () => items.classList.toggle("hidden"));
