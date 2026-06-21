@@ -119,7 +119,7 @@ the server at it:
 
 ```sh
 scripts/build-web.sh                                   # exports into <frontend>/dist, prints the env to set
-AUDIOSILO_WEB_DIR=~/dev/audiosilo-frontend/dist ./bin/audiosilo --data ./data
+AUDIOSILO_WEB_DIR=~/dev/audiosilo/audiosilo-frontend/dist ./bin/audiosilo --data ./data
 ```
 
 ## Exposing to the internet safely

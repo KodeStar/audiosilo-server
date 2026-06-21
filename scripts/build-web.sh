@@ -13,7 +13,7 @@
 #   FRONTEND_DIR=/path/to/audiosilo-frontend scripts/build-web.sh
 set -euo pipefail
 
-FRONTEND_DIR="${FRONTEND_DIR:-$HOME/dev/audiosilo-frontend}"
+FRONTEND_DIR="${FRONTEND_DIR:-$HOME/dev/audiosilo/audiosilo-frontend}"
 DEST="${DEST:-$FRONTEND_DIR/dist}"
 BASE_URL="/web"
 
