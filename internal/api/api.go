@@ -80,6 +80,11 @@ func (a *API) Handler() http.Handler {
 	// Authenticated (session token).
 	mux.Handle("POST /api/v1/auth/pair", a.requireAuth(http.HandlerFunc(a.handlePair)))
 	mux.Handle("POST /api/v1/auth/logout", a.requireAuth(http.HandlerFunc(a.handleLogout)))
+	// Self-service recovery: set your own password and/or mint a durable recovery
+	// code so you can get back in after signing out without an admin.
+	mux.Handle("POST /api/v1/auth/password", a.requireAuth(http.HandlerFunc(a.handleSetPassword)))
+	mux.Handle("POST /api/v1/auth/recovery", a.requireAuth(http.HandlerFunc(a.handleGenerateRecovery)))
+	mux.Handle("DELETE /api/v1/auth/recovery", a.requireAuth(http.HandlerFunc(a.handleDeleteRecovery)))
 	mux.Handle("GET /api/v1/me", a.requireAuth(http.HandlerFunc(a.handleMe)))
 
 	// Content is addressed by (library, path) via ?path= — the path is the
@@ -118,6 +123,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetUserDetail)))
 	mux.Handle("PATCH /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateUser)))
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
+	mux.Handle("POST /api/v1/admin/authcodes/{id}/rotate", a.requireAdmin(http.HandlerFunc(a.handleRotateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/authcodes/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeAuthCode)))
 	mux.Handle("GET /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleAdminListLibraries)))
 	mux.Handle("POST /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleCreateLibrary)))
