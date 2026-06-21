@@ -268,6 +268,57 @@ func TestScopedShareAccess(t *testing.T) {
 	}
 }
 
+func TestFavourites(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+
+	// A non-admin granted only the "Will Wight" subtree.
+	kid, _ := e.auth.CreateUser(ctx, "kid", "kid-password", auth.RoleUser)
+	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Wight only"})
+	e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"})
+	e.cat.GrantShare(ctx, kid.ID, share.ID)
+	token, _ := e.auth.IssueToken(ctx, kid.ID, auth.KindSession, "t", 0)
+	libPath := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10)
+
+	// Favourite a folder within the grant (allowed).
+	fav := libPath + "/favourites?path=" + url.QueryEscape("Will Wight/Cradle")
+	if resp, b := e.do(t, "POST", fav, token, ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("favourite a granted path: %d %s", resp.StatusCode, b)
+	}
+	// Idempotent: re-favouriting still succeeds.
+	if resp, _ := e.do(t, "POST", fav, token, ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("re-favourite should be idempotent, got %d", resp.StatusCode)
+	}
+
+	// It comes back in the cross-library list.
+	_, body := e.do(t, "GET", "/api/v1/me/favourites", token, "")
+	if !strings.Contains(body, "Will Wight/Cradle") {
+		t.Fatalf("favourite not listed: %s", body)
+	}
+
+	// Denied: favouriting a path outside the grant is forbidden and never stored.
+	out := libPath + "/favourites?path=" + url.QueryEscape("Brandon Sanderson/Mistborn")
+	if resp, _ := e.do(t, "POST", out, token, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 favouriting outside the grant, got %d", resp.StatusCode)
+	}
+	if _, body := e.do(t, "GET", "/api/v1/me/favourites", token, ""); strings.Contains(body, "Brandon Sanderson") {
+		t.Fatalf("forbidden favourite leaked into the list: %s", body)
+	}
+
+	// Remove round-trips by path.
+	if resp, _ := e.do(t, "DELETE", fav, token, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete favourite: %d", resp.StatusCode)
+	}
+	if _, body := e.do(t, "GET", "/api/v1/me/favourites", token, ""); strings.Contains(body, "Will Wight/Cradle") {
+		t.Fatalf("favourite not removed: %s", body)
+	}
+}
+
 func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
