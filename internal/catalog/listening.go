@@ -199,7 +199,7 @@ func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]Listening
 // library, used by the scanner when it detects a file move. It is a no-op if
 // nothing references the old path.
 func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath, newPath string) error {
-	for _, table := range []string{"progress", "bookmarks", "notes", "listening_history"} {
+	for _, table := range []string{"progress", "bookmarks", "notes", "listening_history", "favourites"} {
 		if _, err := c.db.ExecContext(ctx,
 			`UPDATE `+table+` SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			newPath, libraryID, oldPath); err != nil {

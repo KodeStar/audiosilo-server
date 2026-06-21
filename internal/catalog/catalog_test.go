@@ -253,6 +253,9 @@ func TestMoveDurableState(t *testing.T) {
 	if _, err := c.SaveProgress(ctx, uid, Progress{Ref: old, Position: 42}); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.AddFavourite(ctx, uid, old); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.MoveDurableState(ctx, lib.ID, "old/Book.m4b", "new/Book.m4b"); err != nil {
 		t.Fatal(err)
 	}
@@ -262,6 +265,74 @@ func TestMoveDurableState(t *testing.T) {
 	moved, _ := c.GetProgress(ctx, uid, Ref{LibraryID: lib.ID, Path: "new/Book.m4b"})
 	if moved == nil || moved.Position != 42 {
 		t.Fatalf("progress should have moved to the new path: %+v", moved)
+	}
+	// The favourite follows the move too.
+	favs, _ := c.ListAllFavourites(ctx, uid, []Scope{{LibraryID: lib.ID, AllowAll: true}})
+	if len(favs) != 1 || favs[0].Path != "new/Book.m4b" {
+		t.Fatalf("favourite should have moved to the new path: %+v", favs)
+	}
+}
+
+func TestFavouritesCRUDAndScope(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	uid := seedUser(t, c, ctx)
+	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
+	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/tmp/b"})
+	// A book folder favourite is enriched from the index; a plain navigation
+	// folder favourite has no matching book row (is_book=false).
+	c.UpsertBook(ctx, &Book{LibraryID: libA.ID, RelPath: "Sanderson/Mistborn", Title: "Mistborn", Author: "Sanderson", Duration: 3600})
+	bookRef := Ref{LibraryID: libA.ID, Path: "Sanderson/Mistborn"}
+	folderRef := Ref{LibraryID: libA.ID, Path: "Sanderson"}
+	otherLib := Ref{LibraryID: libB.ID, Path: "x.m4b"}
+
+	for _, ref := range []Ref{bookRef, folderRef, otherLib} {
+		if err := c.AddFavourite(ctx, uid, ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Re-favouriting is idempotent (no duplicate, no error).
+	if err := c.AddFavourite(ctx, uid, bookRef); err != nil {
+		t.Fatal(err)
+	}
+
+	allScopes := []Scope{{LibraryID: libA.ID, AllowAll: true}, {LibraryID: libB.ID, AllowAll: true}}
+	favs, err := c.ListAllFavourites(ctx, uid, allScopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(favs) != 3 {
+		t.Fatalf("expected 3 favourites, got %d: %+v", len(favs), favs)
+	}
+	byPath := map[string]Favourite{}
+	for _, f := range favs {
+		byPath[f.Path] = f
+	}
+	if b := byPath["Sanderson/Mistborn"]; !b.IsBook || b.Title != "Mistborn" || b.Duration != 3600 {
+		t.Fatalf("book favourite not enriched: %+v", b)
+	}
+	if f := byPath["Sanderson"]; f.IsBook || f.Title != "" {
+		t.Fatalf("navigation-folder favourite should not be a book: %+v", f)
+	}
+
+	// Scope filtering: a path-restricted scope only sees matching favourites; no
+	// scope sees none.
+	scoped := []Scope{{LibraryID: libA.ID, Paths: []string{"Sanderson/Mistborn"}}}
+	if res, _ := c.ListAllFavourites(ctx, uid, scoped); len(res) != 1 || res[0].Path != "Sanderson/Mistborn" {
+		t.Fatalf("path-scoped favourites = %+v", res)
+	}
+	if res, _ := c.ListAllFavourites(ctx, uid, nil); len(res) != 0 {
+		t.Fatalf("expected no favourites without access, got %d", len(res))
+	}
+
+	// Removal is idempotent.
+	if err := c.RemoveFavourite(ctx, uid, bookRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveFavourite(ctx, uid, bookRef); err != nil {
+		t.Fatal(err)
+	}
+	if res, _ := c.ListAllFavourites(ctx, uid, allScopes); len(res) != 2 {
+		t.Fatalf("expected 2 favourites after removal, got %d", len(res))
 	}
 }
 

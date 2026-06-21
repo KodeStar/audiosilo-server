@@ -107,6 +107,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/me/history", a.requireAuth(http.HandlerFunc(a.handleListAllHistory)))
 	mux.Handle("GET /api/v1/libraries/{id}/history", a.requireAuth(http.HandlerFunc(a.handleListHistory)))
 	mux.Handle("POST /api/v1/libraries/{id}/history", a.requireAuth(http.HandlerFunc(a.handleAddHistory)))
+	mux.Handle("GET /api/v1/me/favourites", a.requireAuth(http.HandlerFunc(a.handleListFavourites)))
+	mux.Handle("POST /api/v1/libraries/{id}/favourites", a.requireAuth(http.HandlerFunc(a.handleAddFavourite)))
+	mux.Handle("DELETE /api/v1/libraries/{id}/favourites", a.requireAuth(http.HandlerFunc(a.handleRemoveFavourite)))
 
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
