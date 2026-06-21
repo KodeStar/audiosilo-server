@@ -522,3 +522,139 @@ func TestFolderOverrideEndpointRequiresAdmin(t *testing.T) {
 		t.Fatalf("override not cleared: %+v", ovr)
 	}
 }
+
+// meFlags fetches GET /me and returns the recovery/password capability flags the
+// client uses to drive the sign-out recovery warning.
+func (e *testEnv) meFlags(t *testing.T, token string) (hasPassword, hasRecovery bool) {
+	t.Helper()
+	resp, body := e.do(t, "GET", "/api/v1/me", token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("me: %d %s", resp.StatusCode, body)
+	}
+	var u struct {
+		HasPassword bool `json:"has_password"`
+		HasRecovery bool `json:"has_recovery"`
+	}
+	json.Unmarshal([]byte(body), &u)
+	return u.HasPassword, u.HasRecovery
+}
+
+// TestSelfServicePassword: a password-less player sets their own password (no
+// admin, no current-password challenge) and can then password-login. The admin
+// can't clear their own password through the same endpoint (denied path).
+func TestSelfServicePassword(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser) // password-less
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+
+	if hasPw, _ := e.meFlags(t, memberTok); hasPw {
+		t.Fatal("password-less member should report has_password=false")
+	}
+	if resp, body := e.do(t, "POST", "/api/v1/auth/password", memberTok, `{"password":"longenough"}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("set own password = %d %s, want 204", resp.StatusCode, body)
+	}
+	if hasPw, _ := e.meFlags(t, memberTok); !hasPw {
+		t.Fatal("member should report has_password=true after setting one")
+	}
+	// The new password is now a way back in via /auth/login.
+	if resp, body := e.do(t, "POST", "/api/v1/auth/login", "", `{"username":"member","password":"longenough"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("login with self-set password = %d %s, want 200", resp.StatusCode, body)
+	}
+
+	// Denied: an admin may not clear their own password (would lock the console).
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	if resp, body := e.do(t, "POST", "/api/v1/auth/password", adminTok, `{"password":""}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("admin clearing own password = %d %s, want 400", resp.StatusCode, body)
+	}
+}
+
+// TestSelfServiceRecovery: a player mints a durable recovery code, it redeems
+// repeatedly through the normal connect flow, and clearing it removes the flag.
+func TestSelfServiceRecovery(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+
+	resp, body := e.do(t, "POST", "/api/v1/auth/recovery", memberTok, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("generate recovery = %d %s, want 201", resp.StatusCode, body)
+	}
+	var out struct {
+		RecoveryCode string `json:"recovery_code"`
+	}
+	json.Unmarshal([]byte(body), &out)
+	if out.RecoveryCode == "" {
+		t.Fatalf("no recovery_code: %s", body)
+	}
+	if _, hasRec := e.meFlags(t, memberTok); !hasRec {
+		t.Fatal("member should report has_recovery=true")
+	}
+	// Durable & reusable: redeems through the public connect flow more than once.
+	for i := 0; i < 2; i++ {
+		if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+out.RecoveryCode+`"}`); resp.StatusCode != http.StatusOK {
+			t.Fatalf("recovery redeem #%d failed", i+1)
+		}
+	}
+	if resp, _ := e.do(t, "DELETE", "/api/v1/auth/recovery", memberTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("clear recovery should be 204")
+	}
+	if _, hasRec := e.meFlags(t, memberTok); hasRec {
+		t.Fatal("member should report has_recovery=false after clearing")
+	}
+}
+
+// TestRotateAndSupersedeInvite covers the admin "Resend" (rotate-in-place) and
+// the one-active-invite-per-user supersede on mint.
+func TestRotateAndSupersedeInvite(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	mintPath := "/api/v1/admin/users/" + strconv.FormatInt(member.ID, 10) + "/authcode"
+
+	mint := func() string {
+		t.Helper()
+		resp, b := e.do(t, "POST", mintPath, adminTok, `{}`)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("mint invite: %d %s", resp.StatusCode, b)
+		}
+		var out struct {
+			AuthCode string `json:"auth_code"`
+		}
+		json.Unmarshal([]byte(b), &out)
+		return out.AuthCode
+	}
+
+	// Minting a second invite supersedes the first pending one (no pile-up).
+	mint()
+	second := mint()
+	codes, _ := e.auth.ListAuthCodes(ctx, member.ID)
+	if len(codes) != 1 {
+		t.Fatalf("expected one pending invite after a second mint, got %d", len(codes))
+	}
+
+	// Rotate (Resend): old code dies, new one redeems.
+	id := strconv.FormatInt(codes[0].ID, 10)
+	resp, b := e.do(t, "POST", "/api/v1/admin/authcodes/"+id+"/rotate", adminTok, `{}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rotate: %d %s", resp.StatusCode, b)
+	}
+	var rotated struct {
+		AuthCode string `json:"auth_code"`
+	}
+	json.Unmarshal([]byte(b), &rotated)
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+second+`"}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("superseded/rotated old code = %d, want 401", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+rotated.AuthCode+`"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("rotated new code should redeem (200)")
+	}
+
+	// A non-admin cannot rotate.
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+	if resp, _ := e.do(t, "POST", "/api/v1/admin/authcodes/"+id+"/rotate", memberTok, `{}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin rotate = %d, want 403", resp.StatusCode)
+	}
+}

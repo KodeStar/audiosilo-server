@@ -23,6 +23,16 @@ const (
 	KindPairing = "pairing"
 )
 
+// Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
+// and lifetime); a recovery code is a durable, reusable credential the user holds
+// to re-authenticate themselves after signing out or losing a device — so
+// recovery never needs an admin to mint a fresh invite. Both redeem through the
+// same path; only their ownership and lifetime differ.
+const (
+	CodeInvite   = "invite"
+	CodeRecovery = "recovery"
+)
+
 // DemoUsernamePrefix marks throwaway accounts created by public demo mode. The
 // demo session endpoint creates `demo_<random>` users and the background reaper
 // deletes idle ones by this prefix.
@@ -67,6 +77,10 @@ type User struct {
 	// false for password-less accounts (non-admins onboarded purely via auth-code
 	// pairing); such accounts never satisfy Authenticate.
 	HasPassword bool `json:"has_password"`
+	// HasRecovery reports whether the user holds a durable recovery code they can
+	// use to re-authenticate without an admin. Drives the "you have no way back
+	// in" warning shown at sign-out.
+	HasRecovery bool `json:"has_recovery"`
 	// LastSeenAt is the RFC3339 time of the user's most recent authenticated API
 	// activity, derived from the newest tokens.last_seen across their tokens
 	// (empty if they have never made an authenticated request).
@@ -253,31 +267,103 @@ func (s *Service) CreateAuthCode(ctx context.Context, userID int64, label string
 		expires = s.now().Add(ttl).UTC().Format(time.RFC3339)
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO auth_codes(code_hash, user_id, label, max_uses, expires_at, created_at)
-		 VALUES(?,?,?,?,?,?)`, hash, userID, label, maxUses, expires, s.ts())
+		`INSERT INTO auth_codes(code_hash, user_id, label, max_uses, expires_at, created_at, kind)
+		 VALUES(?,?,?,?,?,?,?)`, hash, userID, label, maxUses, expires, s.ts(), CodeInvite)
 	if err != nil {
 		return "", err
 	}
 	return code, nil
 }
 
+// RotateAuthCode regenerates an existing invite's secret in place: the old
+// link/code stops working and a fresh one is returned (once), without leaving a
+// new row behind. Use counter and redeemed_at reset so the invite is "pending"
+// again. Only invite-kind codes rotate (recovery codes are user-owned); a missing
+// or non-invite id returns ErrNotFound. This backs the admin "Resend".
+func (s *Service) RotateAuthCode(ctx context.Context, id int64, maxUses int, ttl time.Duration) (string, error) {
+	code, hash, err := generateAuthCode()
+	if err != nil {
+		return "", err
+	}
+	var expires any
+	if ttl > 0 {
+		expires = s.now().Add(ttl).UTC().Format(time.RFC3339)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE auth_codes
+		    SET code_hash = ?, max_uses = ?, uses = 0, expires_at = ?,
+		        created_at = ?, redeemed_at = NULL
+		  WHERE id = ? AND kind = ?`,
+		hash, maxUses, expires, s.ts(), id, CodeInvite)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrNotFound
+	}
+	return code, nil
+}
+
+// SupersedePendingInvites deletes a user's never-redeemed invites so minting a
+// fresh one leaves a single active invite per user, instead of a growing pile.
+// Accepted/expired invites are kept as history.
+func (s *Service) SupersedePendingInvites(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ? AND uses = 0`,
+		userID, CodeInvite)
+	return err
+}
+
+// GenerateRecoveryCode mints a durable, reusable recovery code the user holds to
+// re-authenticate after signing out or losing a device. It replaces any existing
+// recovery code for the user (so there is always at most one) and is returned
+// once. Recovery codes never expire and have no use cap; they redeem through the
+// same path as invites.
+func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (string, error) {
+	code, hash, err := generateAuthCode()
+	if err != nil {
+		return "", err
+	}
+	if err := s.ClearRecoveryCode(ctx, userID); err != nil {
+		return "", err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO auth_codes(code_hash, user_id, label, max_uses, expires_at, created_at, kind)
+		 VALUES(?,?,?,?,?,?,?)`, hash, userID, "recovery", 0, nil, s.ts(), CodeRecovery)
+	if err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// ClearRecoveryCode removes a user's recovery code, if any.
+func (s *Service) ClearRecoveryCode(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery)
+	return err
+}
+
 // AuthCode describes an issued auth code for admin display. The plaintext code
 // is never included — only its hash is stored, by design — so this carries the
 // code's metadata only (label, lifetimes and usage).
 type AuthCode struct {
-	ID        int64  `json:"id"`
-	Label     string `json:"label"`
-	MaxUses   int    `json:"max_uses"` // 0 = unlimited
-	Uses      int    `json:"uses"`
-	ExpiresAt string `json:"expires_at,omitempty"` // empty = no expiry
-	CreatedAt string `json:"created_at"`
+	ID         int64  `json:"id"`
+	Label      string `json:"label"`
+	MaxUses    int    `json:"max_uses"` // 0 = unlimited
+	Uses       int    `json:"uses"`
+	ExpiresAt  string `json:"expires_at,omitempty"`  // empty = no expiry
+	RedeemedAt string `json:"redeemed_at,omitempty"` // empty = never redeemed (pending)
+	CreatedAt  string `json:"created_at"`
 }
 
-// ListAuthCodes returns the auth codes issued for a user, newest first.
+// ListAuthCodes returns the invite codes issued for a user, newest first.
+// Recovery codes are deliberately excluded — they are user-owned and surfaced to
+// the admin only as the User.HasRecovery flag, never as an actionable invite.
 func (s *Service) ListAuthCodes(ctx context.Context, userID int64) ([]AuthCode, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, label, max_uses, uses, expires_at, created_at
-		   FROM auth_codes WHERE user_id = ? ORDER BY created_at DESC, id DESC`, userID)
+		`SELECT id, label, max_uses, uses, expires_at, redeemed_at, created_at
+		   FROM auth_codes WHERE user_id = ? AND kind = ?
+		   ORDER BY created_at DESC, id DESC`, userID, CodeInvite)
 	if err != nil {
 		return nil, err
 	}
@@ -285,13 +371,15 @@ func (s *Service) ListAuthCodes(ctx context.Context, userID int64) ([]AuthCode, 
 	var out []AuthCode
 	for rows.Next() {
 		var (
-			c       AuthCode
-			expires sql.NullString
+			c        AuthCode
+			expires  sql.NullString
+			redeemed sql.NullString
 		)
-		if err := rows.Scan(&c.ID, &c.Label, &c.MaxUses, &c.Uses, &expires, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Label, &c.MaxUses, &c.Uses, &expires, &redeemed, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		c.ExpiresAt = expires.String
+		c.RedeemedAt = redeemed.String
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -338,6 +426,11 @@ func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, ErrInvalidCode
 	}
+	// Stamp the first redemption so the admin console can tell a pending invite
+	// from an accepted one. No-op on later redeems (recovery codes redeem
+	// repeatedly) and on codes already accepted.
+	_, _ = s.db.ExecContext(ctx,
+		`UPDATE auth_codes SET redeemed_at = ? WHERE id = ? AND redeemed_at IS NULL`, s.ts(), id)
 	u, err := s.GetUser(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -353,19 +446,22 @@ func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error
 // on every authenticated request in ResolveToken, so this reflects last use, not
 // just sign-in, without a dedicated column or extra writes.
 const userColumns = `u.id, u.username, u.role, u.disabled, u.password_hash,
-	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id)`
+	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id),
+	EXISTS(SELECT 1 FROM auth_codes c WHERE c.user_id = u.id AND c.kind = 'recovery')`
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var (
-		u        User
-		hash     string
-		lastSeen sql.NullString
+		u           User
+		hash        string
+		lastSeen    sql.NullString
+		hasRecovery bool
 	)
-	if err := row.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &lastSeen); err != nil {
+	if err := row.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &lastSeen, &hasRecovery); err != nil {
 		return u, err
 	}
 	u.HasPassword = hash != ""
 	u.LastSeenAt = lastSeen.String
+	u.HasRecovery = hasRecovery
 	return u, nil
 }
 

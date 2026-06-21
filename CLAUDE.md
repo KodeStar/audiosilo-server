@@ -116,8 +116,21 @@ future metadata site can attach enrichment without reshaping the schema.
   (`<base>/web/connect?token=` — encoded in the QR; opens the app via a Universal/
   App Link when the domain is claimed, else the embedded web player) and `uri`
   (`audiosilo://connect?...` — custom scheme, launches an installed app on any
-  domain). Auth codes minted via the admin API default to single-use / 7-day
+  domain). Invite codes minted via the admin API default to 5 uses / 1-day
   expiry (`defaultAuthCode*` in `handlers_admin.go`); explicit values override.
+- **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
+  `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
+  expires). Both redeem through the same `RedeemAuthCode` → pairing → exchange path.
+  Recovery decouples re-auth from invitation: a signed-out/password-less user mints a
+  recovery code from the player's Settings (`POST /auth/recovery`) and re-pairs without
+  an admin. `ListAuthCodes` returns only invites; recovery presence surfaces as
+  `User.HasRecovery`. **Invite hygiene**: minting supersedes a user's pending invites
+  (`SupersedePendingInvites`) so there's one active invite each, and `POST
+  /admin/authcodes/{id}/rotate` (`RotateAuthCode`) regenerates an invite's secret in
+  place (the admin "Resend") — `redeemed_at` flips pending→accepted for the console's
+  pending/history split. **Self-service password**: `POST /auth/password` reuses
+  `SetPassword` (the admin-must-keep-a-password guard still holds) so a player can set
+  their own and recover via `/auth/login`.
 - **Web player at `/web`** (`web.go`, served from `cfg.WebDir`): a separate Expo
   Router project (`~/dev/audiosilo/audiosilo-frontend`) exported as a static site. It is
   **not vendored** in this repo or the binary — the server serves it at runtime

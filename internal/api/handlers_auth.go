@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -97,7 +98,7 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	_ = a.auth.RevokeToken(r.Context(), req.PairingToken)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": session,
-		"user":  u,
+		"user":  a.fullUser(r.Context(), u),
 	})
 }
 
@@ -129,7 +130,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": u})
+	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": a.fullUser(r.Context(), u)})
 }
 
 // handlePair issues a fresh pairing QR for the already-authenticated user, e.g.
@@ -160,5 +161,61 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 // handleMe returns the authenticated user.
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, userFrom(r.Context()))
+	writeJSON(w, http.StatusOK, a.fullUser(r.Context(), userFrom(r.Context())))
+}
+
+// handleSetPassword lets the signed-in user set, change or (for non-admins)
+// clear their own password — the conventional way back in after a sign-out. No
+// current-password challenge: the session bearer is the authorization, and the
+// primary case is a password-less player setting their first one (they have no
+// old password to present). Admins can't clear theirs (ErrAdminNeedsPassword).
+func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if err := a.auth.SetPassword(r.Context(), u.ID, req.Password); err != nil {
+		writeUserError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGenerateRecovery mints (or replaces) the signed-in user's durable
+// recovery code and returns it once. Saved by the user, it lets them re-pair on
+// any device via the connect screen without an admin — the recovery path for
+// password-less accounts. Reuses the redeem flow (it is just an auth code).
+func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	code, err := a.auth.GenerateRecoveryCode(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not generate recovery code")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"recovery_code": code})
+}
+
+// handleDeleteRecovery removes the signed-in user's recovery code.
+func (a *API) handleDeleteRecovery(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	if err := a.auth.ClearRecoveryCode(r.Context(), u.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not clear recovery code")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// fullUser enriches a token-resolved user (which carries only id/username/role/
+// disabled) with the derived has_password/has_recovery/last_seen_at fields the
+// client needs to drive the sign-out recovery warning. Falls back to the
+// lightweight user if the lookup fails.
+func (a *API) fullUser(ctx context.Context, u *auth.User) *auth.User {
+	if full, err := a.auth.GetUser(ctx, u.ID); err == nil {
+		return full
+	}
+	return u
 }

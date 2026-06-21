@@ -187,20 +187,13 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 		TTLDays *int   `json:"ttl_days"`
 	}
 	_ = decodeJSON(r, &req, 0)
-	maxUses := defaultAuthCodeMaxUses
-	if req.MaxUses != nil {
-		maxUses = *req.MaxUses
-	}
-	if maxUses < 0 {
-		maxUses = 0
-	}
-	ttlDays := defaultAuthCodeTTLDays
-	if req.TTLDays != nil {
-		ttlDays = *req.TTLDays
-	}
-	var ttl time.Duration
-	if ttlDays > 0 {
-		ttl = time.Duration(ttlDays) * 24 * time.Hour
+	maxUses, ttl := resolveAuthCodeLifetime(req.MaxUses, req.TTLDays)
+	// One active invite per user: drop this user's never-redeemed invites so the
+	// fresh one supersedes them instead of piling up. Accepted/expired invites
+	// stay as history.
+	if err := a.auth.SupersedePendingInvites(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not supersede pending invites")
+		return
 	}
 	code, err := a.auth.CreateAuthCode(r.Context(), id, req.Label, maxUses, ttl)
 	if err != nil {
@@ -208,6 +201,56 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
+		"auth_code":  code,
+		"invite_url": a.inviteURL(r, code),
+	})
+}
+
+// resolveAuthCodeLifetime applies the invite-friendly defaults when a field is
+// omitted; an explicit negative max_uses is clamped to 0 (unlimited).
+func resolveAuthCodeLifetime(maxUsesPtr, ttlDaysPtr *int) (maxUses int, ttl time.Duration) {
+	maxUses = defaultAuthCodeMaxUses
+	if maxUsesPtr != nil {
+		maxUses = *maxUsesPtr
+	}
+	if maxUses < 0 {
+		maxUses = 0
+	}
+	ttlDays := defaultAuthCodeTTLDays
+	if ttlDaysPtr != nil {
+		ttlDays = *ttlDaysPtr
+	}
+	if ttlDays > 0 {
+		ttl = time.Duration(ttlDays) * 24 * time.Hour
+	}
+	return maxUses, ttl
+}
+
+// handleRotateAuthCode regenerates an existing invite's secret in place and
+// returns the new code + invite link once. This is the admin "Resend": the old
+// link dies, no new row is created, and the invite is pending again.
+func (a *API) handleRotateAuthCode(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid auth code id")
+		return
+	}
+	var req struct {
+		MaxUses *int `json:"max_uses"`
+		TTLDays *int `json:"ttl_days"`
+	}
+	_ = decodeJSON(r, &req, 0)
+	maxUses, ttl := resolveAuthCodeLifetime(req.MaxUses, req.TTLDays)
+	code, err := a.auth.RotateAuthCode(r.Context(), id, maxUses, ttl)
+	if errors.Is(err, auth.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "invite not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not rotate auth code")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
 		"auth_code":  code,
 		"invite_url": a.inviteURL(r, code),
 	})
