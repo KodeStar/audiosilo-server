@@ -658,3 +658,85 @@ func TestRotateAndSupersedeInvite(t *testing.T) {
 		t.Fatalf("non-admin rotate = %d, want 403", resp.StatusCode)
 	}
 }
+
+// TestAdminClearsRecovery: an admin can revoke a user's durable recovery code
+// (the only lever to kill a leaked one); a non-admin cannot.
+func TestAdminClearsRecovery(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+
+	if _, err := e.auth.GenerateRecoveryCode(ctx, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, hasRec := e.meFlags(t, memberTok); !hasRec {
+		t.Fatal("member should report has_recovery=true")
+	}
+	path := "/api/v1/admin/users/" + strconv.FormatInt(member.ID, 10) + "/recovery"
+	// Denied: a non-admin cannot revoke a recovery code.
+	if resp, _ := e.do(t, "DELETE", path, memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin clear recovery = %d, want 403", resp.StatusCode)
+	}
+	// Allowed: the admin revokes it.
+	if resp, b := e.do(t, "DELETE", path, adminTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("admin clear recovery = %d %s, want 204", resp.StatusCode, b)
+	}
+	if _, hasRec := e.meFlags(t, memberTok); hasRec {
+		t.Fatal("recovery should be gone after admin revoke")
+	}
+}
+
+// TestPasswordChangeRequiresCurrent: a password-less player sets a first password
+// with no challenge, but changing an existing password requires the correct
+// current one — so a session bearer alone can't silently replace a known password.
+func TestPasswordChangeRequiresCurrent(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser) // password-less
+	tok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+
+	if resp, b := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"firstpass1"}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("first set = %d %s, want 204", resp.StatusCode, b)
+	}
+	// Empty password is rejected (self-clear would risk lockout).
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":""}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty password = %d, want 400", resp.StatusCode)
+	}
+	// Change without / with the wrong current password is rejected.
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"secondpass1"}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("change without current = %d, want 401", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"secondpass1","current_password":"nope"}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("change with wrong current = %d, want 401", resp.StatusCode)
+	}
+	// Correct current password lets the change through; the new password logs in.
+	if resp, b := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"secondpass1","current_password":"firstpass1"}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("change with correct current = %d %s, want 204", resp.StatusCode, b)
+	}
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/login", "", `{"username":"member","password":"secondpass1"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("login with new password = %d, want 200", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/login", "", `{"username":"member","password":"firstpass1"}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old password still works = %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestDemoCannotSelfRecover: a throwaway demo session may not mint a durable
+// recovery code or set a password (either would outlive the idle reaper).
+func TestDemoCannotSelfRecover(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	demo, err := e.auth.CreateDemoUser(ctx, auth.DemoUsernamePrefix+"abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := e.auth.IssueToken(ctx, demo.ID, auth.KindSession, "t", 0)
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/recovery", tok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("demo recovery = %d, want 403", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "POST", "/api/v1/auth/password", tok, `{"password":"longenough"}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("demo set-password = %d, want 403", resp.StatusCode)
+	}
+}

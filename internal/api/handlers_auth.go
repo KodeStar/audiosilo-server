@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -96,9 +95,14 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.auth.RevokeToken(r.Context(), req.PairingToken)
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": session,
-		"user":  a.fullUser(r.Context(), u),
+		"user":  full,
 	})
 }
 
@@ -130,7 +134,12 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": a.fullUser(r.Context(), u)})
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": full})
 }
 
 // handlePair issues a fresh pairing QR for the already-authenticated user, e.g.
@@ -159,24 +168,57 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleMe returns the authenticated user.
+// handleMe returns the authenticated user, reloaded so the derived
+// has_password/has_recovery/last_seen_at fields are present.
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.fullUser(r.Context(), userFrom(r.Context())))
+	u := userFrom(r.Context())
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	writeJSON(w, http.StatusOK, full)
 }
 
-// handleSetPassword lets the signed-in user set, change or (for non-admins)
-// clear their own password — the conventional way back in after a sign-out. No
-// current-password challenge: the session bearer is the authorization, and the
-// primary case is a password-less player setting their first one (they have no
-// old password to present). Admins can't clear theirs (ErrAdminNeedsPassword).
+// handleSetPassword lets the signed-in user set or change their own password —
+// the conventional way back in after a sign-out. The primary case is a
+// password-less player setting their first one (no current password to present),
+// so no challenge is required then; but changing an existing password requires
+// the current one, so a stolen session token can't plant a persistent credential.
+// Clearing a password is admin-only (PATCH /admin/users); self-service rejects an
+// empty password so a user can't lock themselves out. Refused for demo accounts.
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
+	if !a.accountLimiter.Acquire(clientIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+		return
+	}
 	u := userFrom(r.Context())
 	var req struct {
-		Password string `json:"password"`
+		Password        string `json:"password"`
+		CurrentPassword string `json:"current_password"`
 	}
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+	if req.Password == "" {
+		writeError(w, http.StatusBadRequest, "password is required")
+		return
+	}
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	if full.IsDemo {
+		writeError(w, http.StatusForbidden, "not available for demo accounts")
+		return
+	}
+	if full.HasPassword {
+		if err := a.auth.CheckPassword(r.Context(), u.ID, req.CurrentPassword); err != nil {
+			writeError(w, http.StatusUnauthorized, "current password is incorrect")
+			return
+		}
 	}
 	if err := a.auth.SetPassword(r.Context(), u.ID, req.Password); err != nil {
 		writeUserError(w, err)
@@ -189,8 +231,23 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 // recovery code and returns it once. Saved by the user, it lets them re-pair on
 // any device via the connect screen without an admin — the recovery path for
 // password-less accounts. Reuses the redeem flow (it is just an auth code).
+// Rate-limited and refused for demo accounts so a throwaway session can't mint a
+// durable login.
 func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
+	if !a.accountLimiter.Acquire(clientIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+		return
+	}
 	u := userFrom(r.Context())
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	if full.IsDemo {
+		writeError(w, http.StatusForbidden, "not available for demo accounts")
+		return
+	}
 	code, err := a.auth.GenerateRecoveryCode(r.Context(), u.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate recovery code")
@@ -207,15 +264,4 @@ func (a *API) handleDeleteRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// fullUser enriches a token-resolved user (which carries only id/username/role/
-// disabled) with the derived has_password/has_recovery/last_seen_at fields the
-// client needs to drive the sign-out recovery warning. Falls back to the
-// lightweight user if the lookup fails.
-func (a *API) fullUser(ctx context.Context, u *auth.User) *auth.User {
-	if full, err := a.auth.GetUser(ctx, u.ID); err == nil {
-		return full
-	}
-	return u
 }

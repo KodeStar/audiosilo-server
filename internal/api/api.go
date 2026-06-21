@@ -36,10 +36,11 @@ type API struct {
 	ffmpeg  string // path to ffmpeg for on-the-fly transcoding; "" disables it
 	log     *slog.Logger
 
-	loginLimiter  *limiter // per-IP lockout for password login
-	redeemLimiter *limiter // per-IP lockout for auth-code redemption
-	demoLimiter   *limiter // per-IP cap on demo account creation
-	ipLimiter     *ipRateLimiter
+	loginLimiter   *limiter // per-IP lockout for password login
+	redeemLimiter  *limiter // per-IP lockout for auth-code redemption
+	demoLimiter    *limiter // per-IP cap on demo account creation
+	accountLimiter *limiter // per-IP cap on self-service password/recovery mutations
+	ipLimiter      *ipRateLimiter
 }
 
 // New constructs an API. ffmpeg is the path to an ffmpeg binary used for
@@ -49,16 +50,17 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		log = slog.Default()
 	}
 	return &API{
-		cfg:           cfg,
-		auth:          authSvc,
-		cat:           cat,
-		scanner:       scanner,
-		ffmpeg:        ffmpeg,
-		log:           log,
-		loginLimiter:  newLimiter(10, 15*time.Minute),
-		redeemLimiter: newLimiter(10, 15*time.Minute),
-		demoLimiter:   newLimiter(5, 15*time.Minute), // ≤5 demo accounts per IP / 15 min
-		ipLimiter:     newIPRateLimiter(20, 40),      // ~20 req/s, burst 40, per IP
+		cfg:            cfg,
+		auth:           authSvc,
+		cat:            cat,
+		scanner:        scanner,
+		ffmpeg:         ffmpeg,
+		log:            log,
+		loginLimiter:   newLimiter(10, 15*time.Minute),
+		redeemLimiter:  newLimiter(10, 15*time.Minute),
+		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
+		accountLimiter: newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
+		ipLimiter:      newIPRateLimiter(20, 40),       // ~20 req/s, burst 40, per IP
 	}
 }
 
@@ -123,6 +125,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetUserDetail)))
 	mux.Handle("PATCH /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateUser)))
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
+	mux.Handle("DELETE /api/v1/admin/users/{id}/recovery", a.requireAdmin(http.HandlerFunc(a.handleAdminClearRecovery)))
 	mux.Handle("POST /api/v1/admin/authcodes/{id}/rotate", a.requireAdmin(http.HandlerFunc(a.handleRotateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/authcodes/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeAuthCode)))
 	mux.Handle("GET /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleAdminListLibraries)))

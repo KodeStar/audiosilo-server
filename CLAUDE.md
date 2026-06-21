@@ -120,17 +120,29 @@ future metadata site can attach enrichment without reshaping the schema.
   expiry (`defaultAuthCode*` in `handlers_admin.go`); explicit values override.
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
   `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
-  expires). Both redeem through the same `RedeemAuthCode` → pairing → exchange path.
-  Recovery decouples re-auth from invitation: a signed-out/password-less user mints a
-  recovery code from the player's Settings (`POST /auth/recovery`) and re-pairs without
-  an admin. `ListAuthCodes` returns only invites; recovery presence surfaces as
-  `User.HasRecovery`. **Invite hygiene**: minting supersedes a user's pending invites
-  (`SupersedePendingInvites`) so there's one active invite each, and `POST
-  /admin/authcodes/{id}/rotate` (`RotateAuthCode`) regenerates an invite's secret in
-  place (the admin "Resend") — `redeemed_at` flips pending→accepted for the console's
-  pending/history split. **Self-service password**: `POST /auth/password` reuses
-  `SetPassword` (the admin-must-keep-a-password guard still holds) so a player can set
-  their own and recover via `/auth/login`.
+  expires). Both redeem through the same `RedeemAuthCode` → pairing → exchange path;
+  `RedeemAuthCode` resolves and rejects a disabled/deleted user **before** consuming a
+  use, and folds the first-redemption `redeemed_at` stamp into the atomic claim, so a
+  rejected attempt never burns a use or marks an invite accepted. Recovery decouples
+  re-auth from invitation: a signed-out/password-less user mints a recovery code from
+  the player's Settings (`POST /auth/recovery`) and re-pairs without an admin. Recovery
+  mint/redeem and `POST /auth/password` are gated by `accountLimiter` and **refused for
+  demo accounts** (`User.IsDemo`) so a throwaway session can't forge a durable login.
+  `ListAuthCodes` returns only invites; recovery presence surfaces as
+  `User.HasRecovery`, and the admin can revoke a leaked one via `DELETE
+  /admin/users/{id}/recovery` (`ClearRecoveryCode`) — the only lever, since recovery
+  codes aren't listable. **Invite hygiene**: `CreateInvite` mints and, in one
+  transaction, supersedes the user's other *still-redeemable* invites
+  (`supersedeActiveInvites` — not expired, not used-up) so there's exactly one active
+  invite each; spent/expired ones stay as history. `POST /admin/authcodes/{id}/rotate`
+  (`RotateAuthCode`) regenerates an invite's secret in place (the admin "Resend"),
+  **preserving** its `max_uses` and renewing its expiry for the original window (never
+  silently downgrading to defaults); `redeemed_at` records acceptance but the console
+  buckets invites by whether they are still redeemable, not by `redeemed_at`. **Self-
+  service password**: `POST /auth/password` reuses `SetPassword`; setting a first
+  password needs no challenge, but changing an existing one requires `current_password`
+  (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
+  admin-must-keep-a-password guard still holds.
 - **Web player at `/web`** (`web.go`, served from `cfg.WebDir`): a separate Expo
   Router project (`~/dev/audiosilo/audiosilo-frontend`) exported as a static site. It is
   **not vendored** in this repo or the binary — the server serves it at runtime

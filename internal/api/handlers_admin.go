@@ -188,14 +188,9 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeJSON(r, &req, 0)
 	maxUses, ttl := resolveAuthCodeLifetime(req.MaxUses, req.TTLDays)
-	// One active invite per user: drop this user's never-redeemed invites so the
-	// fresh one supersedes them instead of piling up. Accepted/expired invites
-	// stay as history.
-	if err := a.auth.SupersedePendingInvites(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not supersede pending invites")
-		return
-	}
-	code, err := a.auth.CreateAuthCode(r.Context(), id, req.Label, maxUses, ttl)
+	// One active invite per user: minting atomically supersedes the user's other
+	// still-redeemable invites (used-up/expired ones stay as history).
+	code, err := a.auth.CreateInvite(r.Context(), id, req.Label, maxUses, ttl)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create auth code")
 		return
@@ -228,20 +223,16 @@ func resolveAuthCodeLifetime(maxUsesPtr, ttlDaysPtr *int) (maxUses int, ttl time
 
 // handleRotateAuthCode regenerates an existing invite's secret in place and
 // returns the new code + invite link once. This is the admin "Resend": the old
-// link dies, no new row is created, and the invite is pending again.
+// link dies, no new row is created, and the invite is pending again. The invite's
+// max_uses and lifetime window are preserved (the expiry is renewed for the same
+// duration), so resending never silently downgrades a custom invite.
 func (a *API) handleRotateAuthCode(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid auth code id")
 		return
 	}
-	var req struct {
-		MaxUses *int `json:"max_uses"`
-		TTLDays *int `json:"ttl_days"`
-	}
-	_ = decodeJSON(r, &req, 0)
-	maxUses, ttl := resolveAuthCodeLifetime(req.MaxUses, req.TTLDays)
-	code, err := a.auth.RotateAuthCode(r.Context(), id, maxUses, ttl)
+	code, err := a.auth.RotateAuthCode(r.Context(), id)
 	if errors.Is(err, auth.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "invite not found")
 		return
@@ -254,6 +245,23 @@ func (a *API) handleRotateAuthCode(w http.ResponseWriter, r *http.Request) {
 		"auth_code":  code,
 		"invite_url": a.inviteURL(r, code),
 	})
+}
+
+// handleAdminClearRecovery revokes a user's durable recovery code. Recovery codes
+// are user-owned and never surfaced as listable invites, so this is the admin's
+// only lever to kill a leaked/compromised one (disabling the account only pauses
+// it). No-op if the user has none.
+func (a *API) handleAdminClearRecovery(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if err := a.auth.ClearRecoveryCode(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not clear recovery code")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) handleAdminListLibraries(w http.ResponseWriter, r *http.Request) {
