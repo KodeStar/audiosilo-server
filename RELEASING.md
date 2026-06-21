@@ -60,6 +60,6 @@ docker push ghcr.io/kodestar/audiosilo-server:dev
 
 ```sh
 scripts/build-web.sh    # builds the frontend export, prints the AUDIOSILO_WEB_DIR to use
-AUDIOSILO_WEB_DIR=~/dev/audiosilo-frontend/dist AUDIOSILO_TLS_MODE=off \
+AUDIOSILO_WEB_DIR=~/dev/audiosilo/audiosilo-frontend/dist AUDIOSILO_TLS_MODE=off \
   ./bin/audiosilo --data ./data
 ```
