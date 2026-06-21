@@ -249,3 +249,228 @@ func TestAuthCodeRedeemConcurrent(t *testing.T) {
 		t.Fatalf("redeemed %d times, want exactly 2 (cap must hold under concurrency)", ok)
 	}
 }
+
+func TestRedeemStampsRedeemedAt(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	code, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
+	if codes, _ := s.ListAuthCodes(ctx, u.ID); codes[0].RedeemedAt != "" {
+		t.Fatalf("fresh invite should be pending (no redeemed_at), got %q", codes[0].RedeemedAt)
+	}
+	if _, err := s.RedeemAuthCode(ctx, code); err != nil {
+		t.Fatal(err)
+	}
+	codes, _ := s.ListAuthCodes(ctx, u.ID)
+	if codes[0].RedeemedAt == "" {
+		t.Fatal("redeemed_at should be set after the first redemption (accepted)")
+	}
+}
+
+func TestRotateAuthCode(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	old, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
+	if _, err := s.RedeemAuthCode(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	id := mustOneInviteID(t, s, ctx, u.ID)
+
+	fresh, err := s.RotateAuthCode(ctx, id)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if fresh == old {
+		t.Fatal("rotate must produce a new secret")
+	}
+	// The old code stops working; the fresh one redeems; rotating made it pending.
+	if _, err := s.RedeemAuthCode(ctx, old); err != ErrInvalidCode {
+		t.Fatalf("old code after rotate = %v, want ErrInvalidCode", err)
+	}
+	if _, err := s.RedeemAuthCode(ctx, fresh); err != nil {
+		t.Fatalf("fresh code redeem: %v", err)
+	}
+	// Rotating still leaves a single invite row (in place, not a new one).
+	if codes, _ := s.ListAuthCodes(ctx, u.ID); len(codes) != 1 {
+		t.Fatalf("expected exactly one invite row after rotate, got %d", len(codes))
+	}
+	// A non-existent id is a not-found.
+	if _, err := s.RotateAuthCode(ctx, 999999); err != ErrNotFound {
+		t.Fatalf("rotate missing id = %v, want ErrNotFound", err)
+	}
+}
+
+// TestRotatePreservesLifetime: rotating ("Resend") keeps the invite's max_uses
+// and renews its expiry window, rather than silently resetting to defaults.
+func TestRotatePreservesLifetime(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	if _, err := s.CreateAuthCode(ctx, u.ID, "invite", 50, 30*24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	id := mustOneInviteID(t, s, ctx, u.ID)
+	if _, err := s.RotateAuthCode(ctx, id); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	codes, _ := s.ListAuthCodes(ctx, u.ID)
+	if len(codes) != 1 || codes[0].MaxUses != 50 {
+		t.Fatalf("rotate must preserve max_uses=50, got %+v", codes)
+	}
+	if codes[0].ExpiresAt == "" {
+		t.Fatal("rotate must renew (not drop) the expiry window")
+	}
+	if exp, err := time.Parse(time.RFC3339, codes[0].ExpiresAt); err != nil || time.Until(exp) < 20*24*time.Hour {
+		t.Fatalf("rotate should renew ~30d expiry, got %q", codes[0].ExpiresAt)
+	}
+}
+
+func TestRotateRefusesRecoveryCode(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The recovery row exists but is not an invite; rotate must not touch it.
+	var id int64
+	s.db.QueryRowContext(ctx, `SELECT id FROM auth_codes WHERE user_id = ? AND kind = ?`, u.ID, CodeRecovery).Scan(&id)
+	if _, err := s.RotateAuthCode(ctx, id); err != ErrNotFound {
+		t.Fatalf("rotate recovery code = %v, want ErrNotFound", err)
+	}
+}
+
+// TestCreateInviteSupersedesActive: minting supersedes the user's still-redeemable
+// invites (so there is one active invite), but leaves spent/used-up ones as
+// history. A partially-redeemed multi-use invite counts as active and is replaced.
+func TestCreateInviteSupersedesActive(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	// A spent (used-up) invite is history and must survive a new mint.
+	spent, _ := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
+	if _, err := s.RedeemAuthCode(ctx, spent); err != nil { // uses=1 >= max → used up
+		t.Fatal(err)
+	}
+	// A still-redeemable invite is active and must be superseded by a new mint.
+	active, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
+	fresh, err := s.CreateInvite(ctx, u.ID, "invite", 5, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemAuthCode(ctx, active); err != ErrInvalidCode {
+		t.Fatalf("superseded active invite = %v, want ErrInvalidCode", err)
+	}
+	if _, err := s.RedeemAuthCode(ctx, fresh); err != nil {
+		t.Fatalf("fresh invite should redeem: %v", err)
+	}
+	// Two invite rows remain: the spent history one and the fresh one.
+	if codes, _ := s.ListAuthCodes(ctx, u.ID); len(codes) != 2 {
+		t.Fatalf("expected spent(history)+fresh = 2 invites, got %d", len(codes))
+	}
+}
+
+// TestRecoveryRedeemReturnsOwner: a recovery code redeems as its owner, never
+// another account — guards the user binding (account-takeover class).
+func TestRecoveryRedeemReturnsOwner(t *testing.T) {
+	s, ctx := newTestService(t)
+	alice, _ := s.CreateUser(ctx, "alice", "", RoleUser)
+	if _, err := s.CreateUser(ctx, "bob", "", RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	code, err := s.GenerateRecoveryCode(ctx, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.RedeemAuthCode(ctx, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != alice.ID {
+		t.Fatalf("recovery redeemed as user %d, want owner %d", got.ID, alice.ID)
+	}
+}
+
+// TestRedeemDisabledRejectedWithoutBurningUse: a disabled account's code is
+// rejected before any use is consumed or the invite is marked accepted, and
+// access is restored on re-enable. Covers invites and recovery codes (both
+// security-critical, both an allowed and a denied path).
+func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	invite, _ := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
+	recovery, err := s.GenerateRecoveryCode(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDisabled(ctx, u.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemAuthCode(ctx, invite); err != ErrInvalidCode {
+		t.Fatalf("disabled invite redeem = %v, want ErrInvalidCode", err)
+	}
+	if _, err := s.RedeemAuthCode(ctx, recovery); err != ErrInvalidCode {
+		t.Fatalf("disabled recovery redeem = %v, want ErrInvalidCode", err)
+	}
+	// The rejected attempt must not have consumed the invite's single use or
+	// stamped it accepted.
+	if codes, _ := s.ListAuthCodes(ctx, u.ID); len(codes) != 1 || codes[0].Uses != 0 || codes[0].RedeemedAt != "" {
+		t.Fatalf("disabled attempt burned a use or stamped accepted: %+v", codes)
+	}
+	// Re-enabling restores access; the codes weren't consumed.
+	if err := s.SetDisabled(ctx, u.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemAuthCode(ctx, invite); err != nil {
+		t.Fatalf("invite redeem after re-enable: %v", err)
+	}
+	if _, err := s.RedeemAuthCode(ctx, recovery); err != nil {
+		t.Fatalf("recovery redeem after re-enable: %v", err)
+	}
+}
+
+func TestRecoveryCodeLifecycle(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	if got, _ := s.GetUser(ctx, u.ID); got.HasRecovery {
+		t.Fatal("fresh user should have no recovery code")
+	}
+	code, err := s.GenerateRecoveryCode(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetUser(ctx, u.ID); !got.HasRecovery {
+		t.Fatal("HasRecovery should be true after generating a recovery code")
+	}
+	// Recovery codes are excluded from the admin invite list.
+	if codes, _ := s.ListAuthCodes(ctx, u.ID); len(codes) != 0 {
+		t.Fatalf("recovery code must not appear as an invite, got %d", len(codes))
+	}
+	// Durable & reusable: it redeems repeatedly (unlike a bounded invite).
+	for i := 0; i < 3; i++ {
+		if _, err := s.RedeemAuthCode(ctx, code); err != nil {
+			t.Fatalf("recovery redeem #%d: %v", i+1, err)
+		}
+	}
+	// Regenerating replaces the old one (old fails, exactly one row remains).
+	fresh, _ := s.GenerateRecoveryCode(ctx, u.ID)
+	if _, err := s.RedeemAuthCode(ctx, code); err != ErrInvalidCode {
+		t.Fatalf("old recovery code after regen = %v, want ErrInvalidCode", err)
+	}
+	if _, err := s.RedeemAuthCode(ctx, fresh); err != nil {
+		t.Fatalf("fresh recovery code: %v", err)
+	}
+	// Clearing removes it.
+	if err := s.ClearRecoveryCode(ctx, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetUser(ctx, u.ID); got.HasRecovery {
+		t.Fatal("HasRecovery should be false after clearing")
+	}
+}
+
+// mustOneInviteID returns the id of the single invite row for a user.
+func mustOneInviteID(t *testing.T, s *Service, ctx context.Context, userID int64) int64 {
+	t.Helper()
+	codes, err := s.ListAuthCodes(ctx, userID)
+	if err != nil || len(codes) != 1 {
+		t.Fatalf("expected one invite, got %d (err=%v)", len(codes), err)
+	}
+	return codes[0].ID
+}
