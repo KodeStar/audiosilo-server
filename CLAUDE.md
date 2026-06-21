@@ -119,7 +119,7 @@ future metadata site can attach enrichment without reshaping the schema.
   domain). Auth codes minted via the admin API default to single-use / 7-day
   expiry (`defaultAuthCode*` in `handlers_admin.go`); explicit values override.
 - **Web player at `/web`** (`web.go`, served from `cfg.WebDir`): a separate Expo
-  Router project (`~/dev/audiosilo-frontend`) exported as a static site. It is
+  Router project (`~/dev/audiosilo/audiosilo-frontend`) exported as a static site. It is
   **not vendored** in this repo or the binary — the server serves it at runtime
   from `web_dir` (env `AUDIOSILO_WEB_DIR`), which the Docker image bakes in at
   `/app/web` from a pinned prebuilt frontend image (see `Dockerfile`). Empty
