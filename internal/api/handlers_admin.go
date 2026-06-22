@@ -320,6 +320,29 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// handleReorderLibraries sets the libraries' display order from an ordered list
+// of ids (position 0 first). That order is also the tiebreaker when the same book
+// appears in more than one library: the copy in the earlier library wins de-dup.
+func (a *API) handleReorderLibraries(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if err := a.cat.ReorderLibraries(r.Context(), req.IDs); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not reorder libraries")
+		return
+	}
+	libs, err := a.cat.ListLibraries(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list libraries")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"libraries": libs})
+}
+
 // handleSetFolderOverride forces how a folder is classified by the auto book
 // detector ("book" = one multi-file book, "collection" = one book per file),
 // then rescans the library so the change takes effect.

@@ -26,10 +26,12 @@ func (c *Catalog) Search(ctx context.Context, query string, scopes []Scope, limi
 		args = append(args, s.LibraryID)
 		args = append(args, fargs...)
 	}
-	args = append(args, limit)
+	// Over-fetch ranked rows so de-dup can still return up to `limit` distinct books.
+	args = append(args, dedupFetch(limit))
 
-	q := `SELECT ` + prefixCols("b.") + `
-		FROM books_fts f JOIN books b ON b.id = f.rowid
+	q := `SELECT ` + prefixCols("b.") + dedupCols + `
+		FROM books_fts f
+		JOIN books b ON b.id = f.rowid` + dedupJoins + `
 		WHERE books_fts MATCH ? AND (` + strings.Join(scopeConds, " OR ") + `)
 		ORDER BY rank LIMIT ?`
 	rows, err := c.db.QueryContext(ctx, q, args...)
@@ -37,15 +39,18 @@ func (c *Catalog) Search(ctx context.Context, query string, scopes []Scope, limi
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Book
+	var cands []candidate
 	for rows.Next() {
-		b, err := scanBook(rows)
+		cand, err := scanCandidate(rows, len(cands))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *b)
+		cands = append(cands, cand)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return dedupBooks(cands, limit), nil
 }
 
 func prefixCols(p string) string {

@@ -166,6 +166,70 @@ func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 // reuse by the scanner when titling multi-file parts.
 func SplitSeriesIndex(name string) (float64, string) { return splitSeriesIndex(name) }
 
+// discLabels are the words that, together with a number, form a generic part
+// label ("Track 01", "Disc 2", "CD1").
+var discLabels = map[string]bool{"track": true, "chapter": true, "part": true, "disc": true, "disk": true, "cd": true}
+
+// IsGenericTitle reports whether a title carries no real book identity — a bare
+// number or a "track/chapter/part/disc N"-style label (e.g. "Track 01"). It is
+// token-based, so real titles that merely start with such a word ("Part of Your
+// World") are NOT flagged: every token must be a number or a disc label, with at
+// least one number present. Such a title (common in poorly-tagged files) should
+// not override a path-derived title, nor be used to match two books as the same.
+func IsGenericTitle(title string) bool {
+	// Normalize: lowercase, collapse any run of non-alphanumerics to one space.
+	var b strings.Builder
+	space := false
+	for _, r := range strings.ToLower(title) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			space = false
+		case !space:
+			b.WriteByte(' ')
+			space = true
+		}
+	}
+	t := strings.TrimSpace(b.String())
+	if t == "" {
+		return true
+	}
+	hasNumber := false
+	for _, tok := range strings.Fields(t) {
+		switch {
+		case isAllDigits(tok):
+			hasNumber = true
+		case discLabels[tok]:
+			// a bare label word; contributes no number on its own
+		default:
+			// a label with digits attached, e.g. "cd1" / "disc02"?
+			ok := false
+			for lbl := range discLabels {
+				if rest, found := strings.CutPrefix(tok, lbl); found && rest != "" && isAllDigits(rest) {
+					ok, hasNumber = true, true
+					break
+				}
+			}
+			if !ok {
+				return false // a real word — not a generic label
+			}
+		}
+	}
+	return hasNumber
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // splitSeriesIndex parses a leading volume number out of names like
 // "01 - Unsouled", "C02 Soulsmith", "Book 3 - Title".
 func splitSeriesIndex(name string) (float64, string) {

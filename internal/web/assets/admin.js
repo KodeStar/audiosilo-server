@@ -182,9 +182,13 @@ async function loadLibraries() {
   librariesCache = libraries || [];
   const rows = el("lib-rows");
   rows.innerHTML = "";
-  librariesCache.forEach((l) => {
+  librariesCache.forEach((l, i) => {
     const tr = document.createElement("tr");
-    tr.append(td(l.name), td(l.root, "code"), actionTd(detectBtn(l), scanBtn(l.id), deleteLibBtn(l)));
+    tr.append(
+      td(l.name),
+      td(l.root, "code"),
+      actionTd(...reorderBtns(i, librariesCache.length), detectBtn(l), scanBtn(l.id), deleteLibBtn(l)),
+    );
     rows.appendChild(tr);
   });
   if (!librariesCache.length) {
@@ -194,6 +198,33 @@ async function loadLibraries() {
     cell.append(emptyNote("No libraries yet — add one to start scanning."));
     tr.append(cell);
     rows.appendChild(tr);
+  }
+}
+
+// Library order is the tiebreaker when the same book exists in more than one
+// library: with all else equal, the copy in the higher (earlier) library wins
+// de-duplication in search and "recently added". These buttons move a library
+// up/down and persist the new order.
+function reorderBtns(idx, count) {
+  const up = button("↑", "secondary small", () => moveLib(idx, -1));
+  const down = button("↓", "secondary small", () => moveLib(idx, 1));
+  up.disabled = idx === 0;
+  down.disabled = idx === count - 1;
+  up.title = "Move up (wins duplicates)";
+  down.title = "Move down";
+  return [up, down];
+}
+
+async function moveLib(idx, delta) {
+  const j = idx + delta;
+  if (j < 0 || j >= librariesCache.length) return;
+  const ids = librariesCache.map((x) => x.id);
+  [ids[idx], ids[j]] = [ids[j], ids[idx]];
+  try {
+    await api("PUT", "/admin/libraries/order", { ids });
+    await loadLibraries();
+  } catch (err) {
+    toast(err.message, "error");
   }
 }
 

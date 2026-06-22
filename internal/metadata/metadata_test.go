@@ -66,3 +66,25 @@ func TestIsAudio(t *testing.T) {
 		t.Error("expected non-audio rejected")
 	}
 }
+
+func TestIsGenericTitle(t *testing.T) {
+	generic := []string{
+		"", "Track 01", "track 1", "Chapter 12", "Part 3", "Disc 2",
+		"CD 1", "CD1", "disc02", "01", "1", "  07. ", "Track 1 - 2",
+	}
+	for _, s := range generic {
+		if !IsGenericTitle(s) {
+			t.Errorf("IsGenericTitle(%q) = false, want true", s)
+		}
+	}
+	// Real titles — including ones that merely start with a label word.
+	real := []string{
+		"A Christmas Carol", "Unsouled", "How to Train Your Dragon",
+		"Part of Your World", "Chapter and Verse", "Track Changes", "CD Projekt",
+	}
+	for _, s := range real {
+		if IsGenericTitle(s) {
+			t.Errorf("IsGenericTitle(%q) = true, want false", s)
+		}
+	}
+}
