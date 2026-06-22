@@ -130,6 +130,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/authcodes/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeAuthCode)))
 	mux.Handle("GET /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleAdminListLibraries)))
 	mux.Handle("POST /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleCreateLibrary)))
+	mux.Handle("PUT /api/v1/admin/libraries/order", a.requireAdmin(http.HandlerFunc(a.handleReorderLibraries)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateLibrary)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteLibrary)))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleSetFolderOverride)))
