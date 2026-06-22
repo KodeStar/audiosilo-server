@@ -421,6 +421,94 @@ func copyFixtureM4B(t *testing.T, dst string) {
 	}
 }
 
+// TestScannerFindsFolderCover guards the cover-art lookup: a folder book's cover
+// lives INSIDE the folder (the demo bug was looking in the parent), an arbitrary
+// image in a book folder is used as a fallback, and a loose single-file book picks
+// up a conventionally-named cover beside it.
+func TestScannerFindsFolderCover(t *testing.T) {
+	cat, scanner, ctx := newScanEnv(t)
+	root := t.TempDir()
+	writeImg := func(p string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte("img"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Folder book with a conventionally-named cover inside the folder.
+	named := filepath.Join(root, "Charles Dickens - A Christmas Carol")
+	copyFixtureM4B(t, filepath.Join(named, "01.mp3"))
+	copyFixtureM4B(t, filepath.Join(named, "02.mp3"))
+	writeImg(filepath.Join(named, "cover.jpg"))
+	// Folder book whose only image is non-conventionally named → first-image fallback.
+	anyimg := filepath.Join(root, "Some Author - Some Book")
+	copyFixtureM4B(t, filepath.Join(anyimg, "01.mp3"))
+	writeImg(filepath.Join(anyimg, "art.png"))
+	// Folder book with a thumbnail (sorts first) and a "cover"-named image → the
+	// cover-named one wins over the arbitrary thumbnail.
+	coverish := filepath.Join(root, "Thumbnail Author - Book")
+	copyFixtureM4B(t, filepath.Join(coverish, "01.mp3"))
+	writeImg(filepath.Join(coverish, "61AbCd._SL500_.jpg"))
+	writeImg(filepath.Join(coverish, "Book - Cover.jpg"))
+	// Multi-CD book: audio lives in CD subfolders, the cover sits in the parent.
+	cd := filepath.Join(root, "Big Series", "The Big Book")
+	copyFixtureM4B(t, filepath.Join(cd, "CD1", "01.mp3"))
+	copyFixtureM4B(t, filepath.Join(cd, "CD2", "01.mp3"))
+	writeImg(filepath.Join(cd, "cover.jpg"))
+	// Loose single-file book at the root with a named cover beside it.
+	copyFixtureM4B(t, filepath.Join(root, "Standalone.m4b"))
+	writeImg(filepath.Join(root, "cover.jpg"))
+
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Covers", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	check := func(path, want string) {
+		t.Helper()
+		b, err := cat.GetBookByPath(ctx, lib.ID, path)
+		if err != nil {
+			t.Fatalf("get %q: %v", path, err)
+		}
+		if b.CoverPath != want {
+			t.Fatalf("book %q cover = %q, want %q", path, b.CoverPath, want)
+		}
+	}
+	check("Charles Dickens - A Christmas Carol", "Charles Dickens - A Christmas Carol/cover.jpg")
+	check("Some Author - Some Book", "Some Author - Some Book/art.png")
+	check("Thumbnail Author - Book", "Thumbnail Author - Book/Book - Cover.jpg")
+	check("Big Series/The Big Book/CD1", "Big Series/The Big Book/cover.jpg")
+	check("Big Series/The Big Book/CD2", "Big Series/The Big Book/cover.jpg")
+	check("Standalone.m4b", "cover.jpg")
+}
+
+func TestChooseTitle(t *testing.T) {
+	// A meaningful embedded title wins; a missing or generic one falls back to the
+	// path-derived title.
+	cases := []struct{ embedded, path, want string }{
+		{"Unsouled", "01 - Unsouled", "Unsouled"},
+		{"", "A Christmas Carol", "A Christmas Carol"},
+		{"Track 01", "A Christmas Carol", "A Christmas Carol"},
+		{"Chapter 5", "CD1", "CD1"},
+	}
+	for _, c := range cases {
+		if got := chooseTitle(c.embedded, c.path); got != c.want {
+			t.Errorf("chooseTitle(%q, %q) = %q, want %q", c.embedded, c.path, got, c.want)
+		}
+	}
+}
+
+func TestIsDiscFolder(t *testing.T) {
+	for _, s := range []string{"CD1", "CD 1", "cd01", "Disc 2", "disk3", "CD"} {
+		if !isDiscFolder(s) {
+			t.Errorf("isDiscFolder(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"The Big Book", "CD Projekt", "Disco Inferno", "Author Name"} {
+		if isDiscFolder(s) {
+			t.Errorf("isDiscFolder(%q) = true, want false", s)
+		}
+	}
+}
+
 // TestScannerFolderIsOneBook is the regression guard for the "every chapter
 // counted as a book" bug: a folder of audio is ONE book regardless of how its
 // files are named (distinct chapter titles included), single-file book folders

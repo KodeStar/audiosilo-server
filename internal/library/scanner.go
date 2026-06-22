@@ -205,7 +205,7 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	abs := filepath.Join(lib.Root, filepath.FromSlash(primary))
 	md, _ := metadata.Extract(abs, s.ffprobePath)
 	if md != nil {
-		b.Title = firstNonEmpty(md.Title, b.Title)
+		b.Title = chooseTitle(md.Title, b.Title)
 		b.Author = firstNonEmpty(md.Author, b.Author)
 		b.Series = firstNonEmpty(md.Series, b.Series)
 		if md.SeriesIndex != 0 {
@@ -235,15 +235,103 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 		}
 	}
 	// Sibling cover art takes precedence; otherwise the cover handler falls back
-	// to embedded art from the primary file.
-	dir := filepath.Dir(filepath.Join(lib.Root, filepath.FromSlash(b.RelPath)))
-	for _, name := range coverNames {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			rel, _ := filepath.Rel(lib.Root, filepath.Join(dir, name))
-			b.CoverPath = filepath.ToSlash(rel)
-			break
+	// to embedded art from the primary file. A folder book's art lives INSIDE the
+	// book folder; a loose single-file book's art sits in the same directory.
+	bookAbs := filepath.Join(lib.Root, filepath.FromSlash(b.RelPath))
+	if b.IsFolder {
+		b.CoverPath = findCover(lib.Root, bookAbs, true)
+		// A multi-CD book's art often sits in the parent (e.g. ".../Book/CD1" with
+		// the cover in ".../Book"); fall back there for disc-part subfolders.
+		if b.CoverPath == "" && isDiscFolder(filepath.Base(bookAbs)) {
+			b.CoverPath = findCover(lib.Root, filepath.Dir(bookAbs), true)
+		}
+	} else {
+		b.CoverPath = findCover(lib.Root, filepath.Dir(bookAbs), false)
+	}
+}
+
+// chooseTitle prefers a meaningful embedded title, falling back to the
+// path-derived title when the embedded one is missing or generic ("Track 01").
+func chooseTitle(embedded, pathDerived string) string {
+	if embedded != "" && !metadata.IsGenericTitle(embedded) {
+		return embedded
+	}
+	return pathDerived
+}
+
+// isDiscFolder reports whether a folder name is a disc/part subfolder like "CD1",
+// "CD 2" or "Disc 3" — used to look one level up for a multi-CD book's cover.
+func isDiscFolder(name string) bool {
+	n := strings.NewReplacer(" ", "", "-", "", ".", "", "_", "").Replace(strings.ToLower(strings.TrimSpace(name)))
+	for _, p := range []string{"cd", "disc", "disk"} {
+		if !strings.HasPrefix(n, p) {
+			continue
+		}
+		rest := n[len(p):]
+		if rest == "" {
+			return true
+		}
+		allDigits := true
+		for _, r := range rest {
+			if r < '0' || r > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return true
 		}
 	}
+	return false
+}
+
+// imageExts are image types accepted as a fallback cover when no conventionally
+// named file is present.
+var imageExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true, ".gif": true}
+
+// findCover returns a library-relative path to a book's cover image in dir: a
+// conventionally-named file (cover.jpg, folder.png, …) if present, else — only
+// when anyImage is set (a book's own folder, where a stray image is almost
+// certainly its cover) — the first image file alphabetically. Returns "" if none,
+// so the cover handler falls back to embedded art.
+func findCover(root, dir string, anyImage bool) string {
+	for _, name := range coverNames {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			rel, _ := filepath.Rel(root, filepath.Join(dir, name))
+			return filepath.ToSlash(rel)
+		}
+	}
+	if !anyImage {
+		return ""
+	}
+	entries, err := os.ReadDir(dir) // sorted by name
+	if err != nil {
+		return ""
+	}
+	var firstImage, coverish string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !imageExts[strings.ToLower(filepath.Ext(name))] {
+			continue
+		}
+		if firstImage == "" {
+			firstImage = name
+		}
+		// Prefer a "cover"-named image (e.g. "<book> - Cover.jpg") over an arbitrary
+		// one like an Amazon thumbnail ("71AbC...._SL500_.jpg").
+		if coverish == "" && strings.Contains(strings.ToLower(name), "cover") {
+			coverish = name
+		}
+	}
+	pick := coverish
+	if pick == "" {
+		pick = firstImage
+	}
+	if pick == "" {
+		return ""
+	}
+	rel, _ := filepath.Rel(root, filepath.Join(dir, pick))
+	return filepath.ToSlash(rel)
 }
 
 // singleFileChapters takes embedded chapters from a single-file book and marks
