@@ -27,6 +27,9 @@ type Library struct {
 	Name        string `json:"name"`
 	Root        string `json:"root"`
 	DefaultView string `json:"default_view"`
+	// SortOrder is the library's display order (lower first). It also breaks ties
+	// when de-duplicating identical copies of a book across libraries.
+	SortOrder int `json:"sort_order"`
 }
 
 // Book is an indexed audiobook (single file or a folder of files).
@@ -57,6 +60,30 @@ type Book struct {
 	// browsers (so the client knows when to request ?transcode=1). Computed by the
 	// API for single-book responses; nil/omitted in list views.
 	DirectPlayable *bool `json:"direct_playable,omitempty"`
+
+	// DedupKey groups copies of the same logical book (across libraries, and later
+	// across servers) so a client can collapse duplicates. It is a display-grouping
+	// HINT, not an identity — never key durable state on it. Set on de-duplicated
+	// list responses (search / recent).
+	DedupKey string `json:"dedup_key,omitempty"`
+	// MultiFile reports whether the book has more than one audio file (a multipart
+	// book). Used to rank copies when de-duplicating (a single file beats a
+	// multipart copy). Set on de-duplicated list responses; nil/omitted elsewhere.
+	MultiFile *bool `json:"multi_file,omitempty"`
+	// OtherLocations are the same book's other (non-winning) copies in a
+	// de-duplicated list, so a client can show "also on X" and let the user switch.
+	OtherLocations []BookLocation `json:"other_locations,omitempty"`
+}
+
+// BookLocation points at one copy of a book in a particular library — used to
+// list the non-winning copies behind a de-duplicated search/recent result.
+type BookLocation struct {
+	LibraryID   int64  `json:"library_id"`
+	LibraryName string `json:"library_name"`
+	Path        string `json:"path"`
+	Format      string `json:"format,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+	MultiFile   bool   `json:"multi_file,omitempty"`
 }
 
 // BookFile is one audio file belonging to a multi-file book.

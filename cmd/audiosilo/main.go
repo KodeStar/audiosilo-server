@@ -82,10 +82,17 @@ func run() error {
 		ffmpeg = ""
 	}
 
+	// Persist a default config the first time (when none existed yet).
 	if firstRun {
-		if err := bootstrap(ctx, cfg, authSvc, log); err != nil {
+		if err := cfg.Save(); err != nil {
 			return err
 		}
+	}
+	// Ensure an admin exists, keyed off the database — NOT config-file existence.
+	// Dropping in a config.yaml before the first start must still create the admin
+	// and print the one-time credentials banner (otherwise there's no way in).
+	if err := ensureAdmin(ctx, cfg, authSvc); err != nil {
+		return err
 	}
 
 	// Sync libraries declared in config into the database, then scan them in the
@@ -110,14 +117,13 @@ func run() error {
 	return server.Run(ctx, cfg, a.Handler(), log)
 }
 
-// bootstrap creates the admin account + an auth code on first run, prints the
-// credentials once, and persists the config file.
-func bootstrap(ctx context.Context, cfg *config.Config, authSvc *auth.Service, log *slog.Logger) error {
+// ensureAdmin creates the admin account + an initial auth code when none exists
+// yet, printing the credentials exactly once. It keys off the database (whether an
+// admin exists), not config-file existence, so a pre-supplied config.yaml does not
+// suppress first-run admin creation.
+func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service) error {
 	exists, err := authSvc.AdminExists(ctx)
 	if err != nil {
-		return err
-	}
-	if err := cfg.Save(); err != nil {
 		return err
 	}
 	if exists {

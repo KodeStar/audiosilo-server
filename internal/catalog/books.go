@@ -435,28 +435,34 @@ func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([
 	var conds []string
 	var args []any
 	for _, s := range scopes {
-		frag, fargs := pathFilterSQL("rel_path", s)
-		conds = append(conds, "(library_id = ? AND "+frag+")")
+		frag, fargs := pathFilterSQL("b.rel_path", s)
+		conds = append(conds, "(b.library_id = ? AND "+frag+")")
 		args = append(args, s.LibraryID)
 		args = append(args, fargs...)
 	}
-	args = append(args, limit)
-	q := `SELECT ` + bookCols + ` FROM books WHERE (` + strings.Join(conds, " OR ") + `)
-		ORDER BY added_at DESC, id DESC LIMIT ?`
+	// Over-fetch so de-dup can still return up to `limit` distinct books.
+	args = append(args, dedupFetch(limit))
+	q := `SELECT ` + prefixCols("b.") + dedupCols + `
+		FROM books b` + dedupJoins + `
+		WHERE (` + strings.Join(conds, " OR ") + `)
+		ORDER BY b.added_at DESC, b.id DESC LIMIT ?`
 	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Book
+	var cands []candidate
 	for rows.Next() {
-		b, err := scanBook(rows)
+		cand, err := scanCandidate(rows, len(cands))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *b)
+		cands = append(cands, cand)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return dedupBooks(cands, limit), nil
 }
 
 func sortValue(b *Book, col string) string {

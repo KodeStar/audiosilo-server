@@ -85,7 +85,7 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 
 func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 	var l Library
-	if err := row.Scan(&l.ID, &l.Name, &l.Root, &l.DefaultView); err != nil {
+	if err := row.Scan(&l.ID, &l.Name, &l.Root, &l.DefaultView, &l.SortOrder); err != nil {
 		return nil, err
 	}
 	return &l, nil
@@ -94,7 +94,7 @@ func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 // GetLibrary returns a library by ID.
 func (c *Catalog) GetLibrary(ctx context.Context, id int64) (*Library, error) {
 	row := c.db.QueryRowContext(ctx,
-		`SELECT id, name, root, default_view FROM libraries WHERE id = ?`, id)
+		`SELECT id, name, root, default_view, sort_order FROM libraries WHERE id = ?`, id)
 	l, err := scanLibrary(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -105,7 +105,7 @@ func (c *Catalog) GetLibrary(ctx context.Context, id int64) (*Library, error) {
 // GetLibraryByName returns a library by name.
 func (c *Catalog) GetLibraryByName(ctx context.Context, name string) (*Library, error) {
 	row := c.db.QueryRowContext(ctx,
-		`SELECT id, name, root, default_view FROM libraries WHERE name = ?`, name)
+		`SELECT id, name, root, default_view, sort_order FROM libraries WHERE name = ?`, name)
 	l, err := scanLibrary(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -113,15 +113,34 @@ func (c *Catalog) GetLibraryByName(ctx context.Context, name string) (*Library, 
 	return l, err
 }
 
-// ListLibraries returns all libraries.
+// ListLibraries returns all libraries in display order (sort_order, then name).
 func (c *Catalog) ListLibraries(ctx context.Context) ([]Library, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT id, name, root, default_view FROM libraries ORDER BY name`)
+		`SELECT id, name, root, default_view, sort_order FROM libraries ORDER BY sort_order, name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	return collectLibraries(rows)
+}
+
+// ReorderLibraries sets each library's sort_order to its position in ids (0-based)
+// in one transaction; libraries not listed keep their current order. This is the
+// admin "reorder libraries" control, and the order it sets is the tiebreaker used
+// when de-duplicating identical copies of a book across libraries.
+func (c *Catalog) ReorderLibraries(ctx context.Context, ids []int64) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, id := range ids {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE libraries SET sort_order = ? WHERE id = ?`, i, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func collectLibraries(rows *sql.Rows) ([]Library, error) {

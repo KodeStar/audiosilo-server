@@ -224,11 +224,11 @@ func (c *Catalog) AccessibleLibraries(ctx context.Context, userID int64, isAdmin
 		return c.ListLibraries(ctx)
 	}
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT l.id, l.name, l.root, l.default_view
+		`SELECT DISTINCT l.id, l.name, l.root, l.default_view, l.sort_order
 		   FROM libraries l
 		   JOIN share_paths sp ON sp.library_id = l.id
 		   JOIN user_share_access usa ON usa.share_id = sp.share_id
-		  WHERE usa.user_id = ? ORDER BY l.name`, userID)
+		  WHERE usa.user_id = ? ORDER BY l.sort_order, l.name`, userID)
 	if err != nil {
 		return nil, err
 	}
