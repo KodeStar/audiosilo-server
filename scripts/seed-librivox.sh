@@ -2,9 +2,10 @@
 #
 # Seed a demo audiobook library with public-domain LibriVox recordings hosted on
 # the Internet Archive. Intended for a public demo instance (see demo mode in
-# config.yaml: `demo.enabled`). It writes a `books_in_folder` layout — one folder
-# per book (`<Author> - <Title>/NN - <file>.mp3` + `cover.jpg`) — which the
-# scanner indexes on startup.
+# config.yaml: `demo.enabled`). It writes an `<Author>/<Title>/NN - <file>.mp3`
+# (+ `cover.jpg`) tree — the standard folder-per-book convention the scanner
+# auto-detects on startup (each `<Title>` directory holds one book's audio, and
+# multiple titles group under a shared author folder).
 #
 # Folder/title/author and the chapter file list are resolved live from the
 # archive.org metadata API, so you only curate item identifiers (below). Re-runs
@@ -30,13 +31,33 @@ DRY_RUN="${DRY_RUN:-0}"
 
 # Curated archive.org identifiers (LibriVox public-domain audiobooks). Override by
 # passing identifiers as arguments after DEST. Verify ids with DRY_RUN=1.
+# Grouped by author so the `<Author>/<Title>/` tree shows 2–3 books per author
+# (where LibriVox has them). Books group under one author folder only when their
+# archive.org `creator` strings match exactly, so keep an author's items
+# consistent (e.g. all "Sir Arthur Conan Doyle", not a mix with "Arthur Conan
+# Doyle"). Sun Tzu stays single — LibriVox has no other Sun Tzu work.
 DEFAULT_IDS=(
-  solo_pride_librivox                     # Pride and Prejudice — Jane Austen
-  adventures_sherlock_holmes_rg_librivox  # The Adventures of Sherlock Holmes — Conan Doyle
-  alice_in_wonderland_librivox            # Alice's Adventures in Wonderland — Lewis Carroll
-  callofthewild_tc_1010_librivox          # The Call of the Wild — Jack London
-  christmas_carol_1111_librivox           # A Christmas Carol — Charles Dickens
-  art_of_war_librivox                     # The Art of War — Sun Tzu
+  # Jane Austen
+  solo_pride_librivox                     # Pride and Prejudice (version 2)
+  persuasion_0905_librivox                # Persuasion
+  northanger_abbey_librivox               # Northanger Abbey
+  # Sir Arthur Conan Doyle
+  adventures_sherlock_holmes_rg_librivox  # The Adventures of Sherlock Holmes (version 2)
+  hound_baskervilles_librivox             # The Hound of the Baskervilles
+  memoirs_holmes_0709_librivox            # The Memoirs of Sherlock Holmes
+  # Lewis Carroll
+  alice_in_wonderland_librivox            # Alice's Adventures in Wonderland
+  looking-glass_librivox                  # Through the Looking-Glass
+  # Jack London
+  callofthewild_tc_1010_librivox          # The Call of the Wild
+  white_fang_librivox                     # White Fang
+  scarlet_plague_0907_librivox            # The Scarlet Plague
+  # Charles Dickens
+  christmas_carol_1111_librivox           # A Christmas Carol
+  tale_two_cities_librivox                # A Tale of Two Cities
+  oliver_twist_librivox                   # Oliver Twist
+  # Sun Tzu
+  art_of_war_librivox                     # The Art of War
 )
 
 # First non-flag arg overrides DEST; remaining args override the identifier list.
@@ -71,8 +92,15 @@ if isinstance(creator, list):
     creator = creator[0] if creator else "LibriVox"
 def slug(s):
     s = re.sub(r"[\\/:*?\"<>|]+", " ", str(s)).strip()
-    return re.sub(r"\s+", " ", s)[:120]
-print(slug(creator) + " - " + slug(title))
+    # Collapse whitespace and strip leading/trailing dots/spaces so a metadata
+    # value can never become "." / ".." and escape the library root once it is
+    # used as a path segment.
+    return re.sub(r"\s+", " ", s).strip(" .")[:120].strip(" .")
+author = slug(creator) or "LibriVox"
+book = slug(title) or sys.argv[1]
+# "<Author>/<Title>" — the scanner treats each title directory (which holds the
+# audio) as one book and groups titles by the same author under one folder.
+print(author + "/" + book)
 files = data.get("files", [])
 chosen = []
 for fmt in ("128Kbps MP3", "64Kbps MP3", "VBR MP3"):
@@ -147,8 +175,9 @@ for id in "${IDS[@]}"; do
 done
 
 echo
-echo "Done. Point a library at this directory (layout: books_in_folder) and set"
-echo "demo.library to its name, e.g. in config.yaml:"
+echo "Done. Point a library at this directory and set demo.library to its name;"
+echo "the scanner auto-detects each <Author>/<Title>/ folder as one book. e.g. in"
+echo "config.yaml:"
 echo "  libraries:"
-echo "    - { name: \"Demo\", root: \"$DEST\", layout: \"books_in_folder\" }"
+echo "    - { name: \"Demo\", root: \"$DEST\" }"
 echo "  demo: { enabled: true, library: \"Demo\" }"
