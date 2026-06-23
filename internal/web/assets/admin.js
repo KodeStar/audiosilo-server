@@ -24,7 +24,7 @@ async function api(method, path, body) {
   const resp = await fetch("/api/v1" + path, opts);
   if (resp.status === 401) {
     logout();
-    throw new Error("Session expired. Please sign in again.");
+    throw new Error(asI18n.t("admin.toast.sessionExpired"));
   }
   const text = await resp.text();
   const data = text ? JSON.parse(text) : {};
@@ -57,7 +57,7 @@ el("login-form").addEventListener("submit", async (e) => {
   try {
     const data = await postLogin(el("username").value, el("password").value);
     if (data.user.role !== "admin") {
-      msg.textContent = "This account is not an administrator.";
+      msg.textContent = asI18n.t("admin.login.notAdmin");
       msg.classList.add("show");
       return;
     }
@@ -66,7 +66,7 @@ el("login-form").addEventListener("submit", async (e) => {
     el("who").textContent = data.user.username;
     enterDashboard();
   } catch (err) {
-    msg.textContent = err.message || "Sign in failed.";
+    msg.textContent = err.message || asI18n.t("admin.login.failed");
     msg.classList.add("show");
   }
 });
@@ -78,7 +78,7 @@ async function postLogin(username, password) {
     body: JSON.stringify({ username, password, device_name: "admin-web" }),
   });
   const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || "Sign in failed.");
+  if (!resp.ok) throw new Error(data.error || asI18n.t("admin.login.failed"));
   return data;
 }
 
@@ -116,24 +116,24 @@ async function loadStats() {
   const grid = el("stat-grid");
   grid.innerHTML = "";
   grid.append(
-    statCard(s.total_books, "Books"),
-    statCard(s.total_libraries, "Libraries"),
-    statCard(s.total_users, "Users"),
-    statCard(active, "Listening now"),
+    statCard(s.total_books, asI18n.t("admin.stat.books")),
+    statCard(s.total_libraries, asI18n.t("admin.stat.libraries")),
+    statCard(s.total_users, asI18n.t("admin.stat.users")),
+    statCard(active, asI18n.t("admin.stat.listeningNow")),
   );
 
   const counts = el("lib-counts");
   counts.innerHTML = "";
-  if (!(s.libraries || []).length) counts.append(emptyNote("No libraries yet."));
+  if (!(s.libraries || []).length) counts.append(emptyNote(asI18n.t("admin.overview.noLibraries")));
   (s.libraries || []).forEach((l) => {
     const row = div("kv");
-    row.append(span(l.name), span(l.book_count + " books"));
+    row.append(span(l.name), span(asI18n.t("admin.overview.bookCount", { count: l.book_count })));
     counts.append(row);
   });
 
   const list = el("listening");
   list.innerHTML = "";
-  if (!(s.listening || []).length) { list.append(emptyNote("Nobody is listening yet.")); return; }
+  if (!(s.listening || []).length) { list.append(emptyNote(asI18n.t("admin.overview.nobodyListening"))); return; }
   (s.listening || []).forEach((r) => list.append(listenRow(r)));
 }
 
@@ -148,7 +148,7 @@ function listenRow(r) {
   const row = div("listen-row" + (r.finished ? " done" : ""));
   row.append(div("who", r.username));
   const meta = div("meta");
-  const title = r.title || baseName(r.path) || "(unknown)";
+  const title = r.title || baseName(r.path) || asI18n.t("admin.overview.unknownTitle");
   const sub = (r.author ? r.author + " · " : "") + fmtRelative(r.updated_at);
   meta.append(div("t", title), div("sub", sub));
   const bar = div("bar");
@@ -156,7 +156,7 @@ function listenRow(r) {
   fill.style.width = pct + "%";
   bar.append(fill);
   meta.append(bar);
-  row.append(meta, div("pct", r.finished ? "done" : pct + "%"));
+  row.append(meta, div("pct", r.finished ? asI18n.t("admin.overview.done") : pct + "%"));
   return row;
 }
 
@@ -172,7 +172,7 @@ el("lib-form").addEventListener("submit", async (e) => {
     });
     el("lib-form").reset();
     closeModals();
-    toast("Library added — scanning in the background.");
+    toast(asI18n.t("admin.toast.libraryAdded"));
     await loadLibraries();
   } catch (err) { toast(err.message, "error"); }
 });
@@ -195,7 +195,7 @@ async function loadLibraries() {
     const tr = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 3;
-    cell.append(emptyNote("No libraries yet — add one to start scanning."));
+    cell.append(emptyNote(asI18n.t("admin.libraries.empty")));
     tr.append(cell);
     rows.appendChild(tr);
   }
@@ -210,8 +210,8 @@ function reorderBtns(idx, count) {
   const down = button("↓", "secondary small", () => moveLib(idx, 1));
   up.disabled = idx === 0;
   down.disabled = idx === count - 1;
-  up.title = "Move up (wins duplicates)";
-  down.title = "Move down";
+  up.title = asI18n.t("admin.libraries.moveUp");
+  down.title = asI18n.t("admin.libraries.moveDown");
   return [up, down];
 }
 
@@ -229,13 +229,13 @@ async function moveLib(idx, delta) {
 }
 
 function detectBtn(l) {
-  return button("Detection", "secondary small", () => openDetect(l));
+  return button(asI18n.t("admin.libraries.detection"), "secondary small", () => openDetect(l));
 }
 
 function deleteLibBtn(l) {
-  return button("Delete", "danger small", async () => {
-    if (!confirm(`Delete library "${l.name}"? Files on disk are kept; only the index is removed.`)) return;
-    try { await api("DELETE", `/admin/libraries/${l.id}`); toast("Library deleted."); await loadLibraries(); }
+  return button(asI18n.t("admin.common.delete"), "danger small", async () => {
+    if (!confirm(asI18n.t("admin.confirm.deleteLibrary", { name: l.name }))) return;
+    try { await api("DELETE", `/admin/libraries/${l.id}`); toast(asI18n.t("admin.toast.libraryDeleted")); await loadLibraries(); }
     catch (err) { toast(err.message, "error"); }
   });
 }
@@ -243,8 +243,8 @@ function deleteLibBtn(l) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function scanBtn(id) {
-  const b = button("Rescan", "secondary small", async () => {
-    try { await api("POST", `/admin/libraries/${id}/scan`); toast("Rescan started."); pollScan(id, b); }
+  const b = button(asI18n.t("admin.scan.rescan"), "secondary small", async () => {
+    try { await api("POST", `/admin/libraries/${id}/scan`); toast(asI18n.t("admin.toast.rescanStarted")); pollScan(id, b); }
     catch (err) { toast(err.message, "error"); }
   });
   pollScan(id, b); // reflect a scan already running (e.g. after a page refresh)
@@ -257,13 +257,13 @@ async function pollScan(id, b) {
     try { p = await api("GET", `/admin/libraries/${id}/scan`); }
     catch { break; }
     if (!p || !p.running) {
-      if (b.disabled) toast("Rescan complete.");
+      if (b.disabled) toast(asI18n.t("admin.toast.rescanComplete"));
       b.disabled = false;
-      b.textContent = "Rescan";
+      b.textContent = asI18n.t("admin.scan.rescan");
       break;
     }
     b.disabled = true;
-    b.textContent = p.total ? `Scanning ${p.done}/${p.total}…` : "Scanning…";
+    b.textContent = p.total ? asI18n.t("admin.scan.scanningProgress", { done: p.done, total: p.total }) : asI18n.t("admin.scan.scanning");
     await sleep(1000);
   }
 }
@@ -284,8 +284,8 @@ function updatePassHint() {
   const admin = el("u-role").value === "admin";
   el("u-pass").required = admin;
   el("u-pass-hint").textContent = admin
-    ? "Required — admins sign in to this console."
-    : "Optional — leave blank for a player-only account that pairs via an invite code.";
+    ? asI18n.t("admin.userModal.passHintRequired")
+    : asI18n.t("admin.userModal.passHintOptional");
 }
 
 // updateAccessFields reveals the libraries / shares multiselect that matches the
@@ -317,7 +317,7 @@ el("user-form").addEventListener("submit", async (e) => {
     }
     el("user-form").reset();
     closeModals();
-    toast("User created.");
+    toast(asI18n.t("admin.toast.userCreated"));
     await Promise.all([loadUsers(), loadShares()]);
   } catch (err) { toast(err.message, "error"); }
 });
@@ -334,11 +334,11 @@ async function loadUsers() {
     const strong = document.createElement("strong");
     strong.textContent = u.username;
     name.append(strong, " ");
-    if (u.disabled) name.append(pill("disabled", "off"));
-    if (!u.has_password && u.role !== "admin") name.append(pill("invite-only", "muted"));
+    if (u.disabled) name.append(pill(asI18n.t("admin.users.pillDisabled"), "off"));
+    if (!u.has_password && u.role !== "admin") name.append(pill(asI18n.t("admin.users.pillInviteOnly"), "muted"));
 
     const role = document.createElement("td");
-    role.append(u.role === "admin" ? pill("admin", "admin") : span(u.role));
+    role.append(u.role === "admin" ? pill(asI18n.t("admin.role.admin"), "admin") : span(roleLabel(u.role)));
 
     const chev = document.createElement("td");
     chev.append(span("›", "right"));
@@ -377,57 +377,63 @@ async function renderUserDrawer(userId) {
   el("drawer-title").textContent = u.username;
 
   // --- Account ---
-  const account = block("Account");
+  const account = block(asI18n.t("admin.drawer.account"));
   account.append(
-    kvNode("Role", roleControl(u)),
-    kvNode("Status", statusControl(u)),
-    kvNode("Password", passwordControl(u)),
-    kvNode("Recovery code", recoveryControl(u)),
-    kvNode("Last active", textNode(fmtRelative(u.last_seen_at))),
+    kvNode(asI18n.t("admin.drawer.role"), roleControl(u)),
+    kvNode(asI18n.t("admin.drawer.status"), statusControl(u)),
+    kvNode(asI18n.t("admin.drawer.password"), passwordControl(u)),
+    kvNode(asI18n.t("admin.drawer.recoveryCode"), recoveryControl(u)),
+    kvNode(asI18n.t("admin.drawer.lastActive"), textNode(fmtRelative(u.last_seen_at))),
   );
   body.append(account);
 
   // --- Access ---
-  const access = block("Access");
+  const access = block(asI18n.t("admin.drawer.access"));
   if (u.role === "admin") {
-    access.append(textNode("Administrator — full access to all libraries."));
+    access.append(textNode(asI18n.t("admin.drawer.adminAccess")));
   } else {
     const shares = d.shares || [];
-    access.append(subLabel("Granted access"));
+    access.append(subLabel(asI18n.t("admin.drawer.grantedAccess")));
     if (shares.length) shares.forEach((s) => access.append(grantRow(s, u.id)));
-    else access.append(emptyNote("No access granted yet."));
-    access.append(spacerNode(), subLabel("Grant access"), accessAdder(u.id));
+    else access.append(emptyNote(asI18n.t("admin.drawer.noAccess")));
+    access.append(spacerNode(), subLabel(asI18n.t("admin.drawer.grantAccess")), accessAdder(u.id));
   }
   body.append(access);
 
   // --- Invites ---
   // One active (pending) invite per user; accepted/expired/used-up ones collapse
   // into History so the list can't pile up. Recovery is separate (Account block).
-  const codesBlock = block("Invites");
+  const codesBlock = block(asI18n.t("admin.drawer.invites"));
   const codes = d.auth_codes || [];
   const pending = codes.filter(codePending);
   const history = codes.filter((c) => !codePending(c));
   if (pending.length) pending.forEach((c) => codesBlock.append(codeCard(c, userId)));
-  else codesBlock.append(emptyNote("No pending invite."));
+  else codesBlock.append(emptyNote(asI18n.t("admin.drawer.noPendingInvite")));
   const actions = div("inline");
-  actions.append(button(pending.length ? "New invite" : "Create invite", "secondary small", () => openInvite(userId)));
+  actions.append(button(pending.length ? asI18n.t("admin.drawer.newInvite") : asI18n.t("admin.invite.title"), "secondary small", () => openInvite(userId)));
   codesBlock.append(spacerNode(), actions);
   if (history.length) codesBlock.append(historyDisclosure(history, userId));
   body.append(codesBlock);
+}
+
+// roleLabel maps a server role identifier to its localized label, falling back to
+// the raw identifier for any role the UI doesn't know about.
+function roleLabel(role) {
+  return role === "admin" ? asI18n.t("admin.role.admin") : role === "user" ? asI18n.t("admin.role.user") : role;
 }
 
 function roleControl(u) {
   const sel = document.createElement("select");
   ["user", "admin"].forEach((r) => {
     const o = document.createElement("option");
-    o.value = r; o.textContent = r;
+    o.value = r; o.textContent = roleLabel(r);
     if (u.role === r) o.selected = true;
     sel.appendChild(o);
   });
   sel.addEventListener("change", async () => {
     try {
       await api("PATCH", `/admin/users/${u.id}`, { role: sel.value });
-      toast(`Role changed to ${sel.value}.`);
+      toast(asI18n.t("admin.toast.roleChanged", { role: roleLabel(sel.value) }));
       await loadUsers();
       renderUserDrawer(u.id);
     } catch (err) { toast(err.message, "error"); sel.value = u.role; }
@@ -437,11 +443,11 @@ function roleControl(u) {
 
 function statusControl(u) {
   const wrap = div("inline");
-  wrap.append(pill(u.disabled ? "disabled" : "enabled", u.disabled ? "off" : "ok"));
-  wrap.append(button(u.disabled ? "Enable" : "Disable", "small", async () => {
+  wrap.append(pill(u.disabled ? asI18n.t("admin.drawer.statusDisabled") : asI18n.t("admin.drawer.statusEnabled"), u.disabled ? "off" : "ok"));
+  wrap.append(button(u.disabled ? asI18n.t("admin.drawer.enable") : asI18n.t("admin.drawer.disable"), "small", async () => {
     try {
       await api("PATCH", `/admin/users/${u.id}`, { disabled: !u.disabled });
-      toast(u.disabled ? "User enabled." : "User disabled.");
+      toast(u.disabled ? asI18n.t("admin.toast.userEnabled") : asI18n.t("admin.toast.userDisabled"));
       await loadUsers();
       renderUserDrawer(u.id);
     } catch (err) { toast(err.message, "error"); }
@@ -451,21 +457,21 @@ function statusControl(u) {
 
 function passwordControl(u) {
   const wrap = div("inline");
-  wrap.append(pill(u.has_password ? "set" : "none", u.has_password ? "ok" : "muted"));
+  wrap.append(pill(u.has_password ? asI18n.t("admin.drawer.passwordSet") : asI18n.t("admin.drawer.passwordNone"), u.has_password ? "ok" : "muted"));
   const inp = document.createElement("input");
   inp.type = "password";
-  inp.placeholder = "New password";
+  inp.placeholder = asI18n.t("admin.drawer.newPassword");
   inp.classList.add("hidden");
-  const save = button("Save", "small", async () => {
+  const save = button(asI18n.t("admin.common.save"), "small", async () => {
     try {
       await api("PATCH", `/admin/users/${u.id}`, { password: inp.value });
-      toast("Password updated.");
+      toast(asI18n.t("admin.toast.passwordUpdated"));
       await loadUsers();
       renderUserDrawer(u.id);
     } catch (err) { toast(err.message, "error"); }
   });
   save.classList.add("hidden");
-  const setBtn = button(u.has_password ? "Change" : "Set password", "small", () => {
+  const setBtn = button(u.has_password ? asI18n.t("admin.drawer.changePassword") : asI18n.t("admin.drawer.setPassword"), "small", () => {
     inp.classList.toggle("hidden");
     save.classList.toggle("hidden");
     if (!inp.classList.contains("hidden")) inp.focus();
@@ -479,10 +485,10 @@ function passwordControl(u) {
 // only lever to kill a leaked/compromised recovery code.
 function recoveryControl(u) {
   const wrap = div("inline");
-  wrap.append(pill(u.has_recovery ? "set" : "none", u.has_recovery ? "ok" : "muted"));
+  wrap.append(pill(u.has_recovery ? asI18n.t("admin.drawer.recoverySet") : asI18n.t("admin.drawer.recoveryNone"), u.has_recovery ? "ok" : "muted"));
   if (u.has_recovery) {
-    wrap.append(button("Revoke", "danger small", async () => {
-      try { await api("DELETE", `/admin/users/${u.id}/recovery`); toast("Recovery code revoked."); renderUserDrawer(u.id); }
+    wrap.append(button(asI18n.t("admin.common.revoke"), "danger small", async () => {
+      try { await api("DELETE", `/admin/users/${u.id}/recovery`); toast(asI18n.t("admin.toast.recoveryRevoked")); renderUserDrawer(u.id); }
       catch (err) { toast(err.message, "error"); }
     }));
   }
@@ -500,31 +506,31 @@ function codePending(c) { return !codeExpired(c) && !codeUsedUp(c); }
 
 function statusPill(c) {
   if (codePending(c)) {
-    if (!c.expires_at) return ["active", "ok"];
+    if (!c.expires_at) return [asI18n.t("admin.code.active"), "ok"];
     const e = expiryLabel(c.expires_at);
     return [e.text, e.cls];
   }
-  if (c.redeemed_at) return ["accepted", "ok"];
-  if (codeExpired(c)) return ["expired", "off"];
-  return ["used up", "muted"];
+  if (c.redeemed_at) return [asI18n.t("admin.code.accepted"), "ok"];
+  if (codeExpired(c)) return [asI18n.t("admin.code.expired"), "off"];
+  return [asI18n.t("admin.code.usedUp"), "muted"];
 }
 
 function codeCard(c, userId) {
   const card = div("codecard");
   const top = div("top");
   const label = document.createElement("strong");
-  label.textContent = c.label || "invite";
+  label.textContent = c.label || asI18n.t("admin.code.invite");
   const [text, cls] = statusPill(c);
   const tail = div("inline");
   tail.append(pill(text, cls));
   if (codePending(c)) {
-    tail.append(button("Resend", "secondary small", async () => {
+    tail.append(button(asI18n.t("admin.code.resend"), "secondary small", async () => {
       try { showInviteResult(userId, await api("POST", `/admin/authcodes/${c.id}/rotate`, {})); }
       catch (err) { toast(err.message, "error"); }
     }));
   }
-  tail.append(button("Revoke", "danger small", async () => {
-    try { await api("DELETE", `/admin/authcodes/${c.id}`); toast("Code revoked."); renderUserDrawer(userId); }
+  tail.append(button(asI18n.t("admin.common.revoke"), "danger small", async () => {
+    try { await api("DELETE", `/admin/authcodes/${c.id}`); toast(asI18n.t("admin.toast.codeRevoked")); renderUserDrawer(userId); }
     catch (err) { toast(err.message, "error"); }
   }));
   top.append(label, tail);
@@ -533,8 +539,8 @@ function codeCard(c, userId) {
   // "Accepted" is only meaningful for a spent/expired (history) invite; an active
   // invite shows when it was issued, with usesLabel conveying any partial use.
   const issued = !codePending(c) && c.redeemed_at
-    ? "Accepted " + fmtRelative(c.redeemed_at)
-    : "Issued " + fmtRelative(c.created_at);
+    ? asI18n.t("admin.code.acceptedAt", { time: fmtRelative(c.redeemed_at) })
+    : asI18n.t("admin.code.issuedAt", { time: fmtRelative(c.created_at) });
   sub.append(span(issued), span(usesLabel(c)));
   card.append(sub);
   return card;
@@ -546,7 +552,7 @@ function historyDisclosure(history, userId) {
   const wrap = div();
   const items = div("hidden");
   history.forEach((c) => items.append(codeCard(c, userId)));
-  const toggle = button(`History (${history.length})`, "small", () => items.classList.toggle("hidden"));
+  const toggle = button(asI18n.t("admin.code.history", { count: history.length }), "small", () => items.classList.toggle("hidden"));
   wrap.append(spacerNode(), toggle, items);
   return wrap;
 }
@@ -558,13 +564,13 @@ function grantRow(s, userId) {
   const top = div("top");
   const nm = document.createElement("strong");
   nm.textContent = s.name;
-  top.append(nm, button("Revoke", "danger small", async () => {
-    try { await api("DELETE", "/admin/share-access", { user_id: userId, share_id: s.id }); toast("Access revoked."); await loadShares(); renderUserDrawer(userId); }
+  top.append(nm, button(asI18n.t("admin.common.revoke"), "danger small", async () => {
+    try { await api("DELETE", "/admin/share-access", { user_id: userId, share_id: s.id }); toast(asI18n.t("admin.toast.accessRevoked")); await loadShares(); renderUserDrawer(userId); }
     catch (err) { toast(err.message, "error"); }
   }));
   sc.append(top);
   const chips = div("inline");
-  (s.paths || []).forEach((r) => chips.append(chip(libName(r.library_id) + (r.path ? " › " + r.path : " (whole library)"))));
+  (s.paths || []).forEach((r) => chips.append(chip(pathChipLabel(r))));
   if ((s.paths || []).length) sc.append(chips);
   return sc;
 }
@@ -574,7 +580,7 @@ function grantRow(s, userId) {
 function accessAdder(userId) {
   const wrap = div("inline");
   const kind = document.createElement("select");
-  [["library", "Whole library"], ["share", "Share"]].forEach(([v, l]) => {
+  [["library", asI18n.t("admin.access.wholeLibrary")], ["share", asI18n.t("admin.access.share")]].forEach(([v, l]) => {
     const o = document.createElement("option");
     o.value = v; o.textContent = l;
     kind.append(o);
@@ -590,12 +596,12 @@ function accessAdder(userId) {
   }
   kind.addEventListener("change", fillTarget);
   fillTarget();
-  const grant = button("Grant", "small", async () => {
+  const grant = button(asI18n.t("admin.access.grant"), "small", async () => {
     if (!target.value) return;
     try {
       if (kind.value === "library") await api("POST", "/admin/library-access", { user_id: userId, library_id: Number(target.value) });
       else await api("POST", "/admin/share-access", { user_id: userId, share_id: Number(target.value) });
-      toast("Access granted.");
+      toast(asI18n.t("admin.toast.accessGranted"));
       await loadShares();
       renderUserDrawer(userId);
     } catch (err) { toast(err.message, "error"); }
@@ -645,7 +651,7 @@ el("invite-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const maxUses = presetValue("inv-uses", "inv-uses-custom");
   const ttlDays = presetValue("inv-expiry", "inv-expiry-custom");
-  if (maxUses === null || ttlDays === null) { toast("Enter a custom value of 1 or more.", "error"); return; }
+  if (maxUses === null || ttlDays === null) { toast(asI18n.t("admin.invite.customError"), "error"); return; }
   try {
     const data = await api("POST", `/admin/users/${inviteUserId}/authcode`,
       { label: "invite", max_uses: maxUses, ttl_days: ttlDays });
@@ -666,11 +672,11 @@ function showInviteResult(userId, data) {
 }
 
 async function copyField(text, label) {
-  if (await copyToClipboard(text)) toast(label + " copied.");
-  else toast(label + " (copy now): " + text);
+  if (await copyToClipboard(text)) toast(asI18n.t("admin.toast.copied", { label }));
+  else toast(asI18n.t("admin.toast.copyManual", { label, text }));
 }
-el("inv-copy-link").addEventListener("click", () => copyField(el("inv-link").textContent, "Invite link"));
-el("inv-copy-code").addEventListener("click", () => copyField(el("inv-code").textContent, "Auth code"));
+el("inv-copy-link").addEventListener("click", () => copyField(el("inv-link").textContent, asI18n.t("admin.invite.linkLabel")));
+el("inv-copy-code").addEventListener("click", () => copyField(el("inv-code").textContent, asI18n.t("admin.invite.codeLabel")));
 el("inv-done").addEventListener("click", () => {
   closeModals();
   if (inviteUserId != null) renderUserDrawer(inviteUserId);
@@ -705,7 +711,7 @@ el("share-form").addEventListener("submit", async (e) => {
     await api("POST", "/admin/shares", { name: el("s-name").value.trim() });
     el("share-form").reset();
     closeModals();
-    toast("Share created.");
+    toast(asI18n.t("admin.toast.shareCreated"));
     await loadShares();
   } catch (err) { toast(err.message, "error"); }
 });
@@ -715,13 +721,19 @@ async function loadShares() {
   sharesCache = shares || [];
   const list = el("share-list");
   list.innerHTML = "";
-  if (!sharesCache.length) { list.append(card(emptyNote("No shares yet — create one, then grant it from the Users page."))); return; }
+  if (!sharesCache.length) { list.append(card(emptyNote(asI18n.t("admin.shares.empty")))); return; }
   sharesCache.forEach((s) => list.appendChild(shareCard(s)));
 }
 
 function libName(id) {
   const l = librariesCache.find((x) => x.id === id);
-  return l ? l.name : `lib ${id}`;
+  return l ? l.name : asI18n.t("admin.shares.libFallback", { id });
+}
+
+// pathChipLabel renders one share path rule as "Library › sub/path" or
+// "Library (whole library)" for the empty ("") whole-library rule.
+function pathChipLabel(r) {
+  return r.path ? libName(r.library_id) + " › " + r.path : asI18n.t("admin.shares.wholeLibraryChip", { library: libName(r.library_id) });
 }
 
 function shareCard(s) {
@@ -734,14 +746,13 @@ function shareCard(s) {
 
   const chips = div("inline");
   (s.paths || []).forEach((r) => {
-    const label = libName(r.library_id) + (r.path ? " › " + r.path : " (whole library)");
     const ch = document.createElement("span");
     ch.className = "chip";
-    ch.append(document.createTextNode(label));
+    ch.append(document.createTextNode(pathChipLabel(r)));
     const x = document.createElement("span");
     x.className = "x";
     x.textContent = "✕";
-    x.title = "Remove path";
+    x.title = asI18n.t("admin.shares.removePath");
     x.addEventListener("click", async () => {
       try { await api("DELETE", `/admin/shares/${s.id}/paths`, { library_id: r.library_id, path: r.path }); await loadShares(); }
       catch (err) { toast(err.message, "error"); }
@@ -749,20 +760,20 @@ function shareCard(s) {
     ch.append(x);
     chips.appendChild(ch);
   });
-  if (!(s.paths || []).length) chips.append(emptyNote("No paths yet — add one."));
+  if (!(s.paths || []).length) chips.append(emptyNote(asI18n.t("admin.shares.noPaths")));
   c.appendChild(chips);
 
   const controls = div("inline");
-  controls.append(button("Browse & add path", "secondary small", () => openPicker(s)));
+  controls.append(button(asI18n.t("admin.shares.browseAdd"), "secondary small", () => openPicker(s)));
   c.appendChild(spacerNode());
   c.appendChild(controls);
   return c;
 }
 
 function deleteShareBtn(s) {
-  return button("Delete share", "danger small", async () => {
-    if (!confirm(`Delete share "${s.name}"? Users lose the access it granted.`)) return;
-    try { await api("DELETE", `/admin/shares/${s.id}`); toast("Share deleted."); await loadShares(); }
+  return button(asI18n.t("admin.shares.deleteShare"), "danger small", async () => {
+    if (!confirm(asI18n.t("admin.confirm.deleteShare", { name: s.name }))) return;
+    try { await api("DELETE", `/admin/shares/${s.id}`); toast(asI18n.t("admin.toast.shareDeleted")); await loadShares(); }
     catch (err) { toast(err.message, "error"); }
   });
 }
@@ -789,7 +800,7 @@ el("picker-lib").addEventListener("change", () => {
 async function addPickedPath(path) {
   try {
     await api("POST", `/admin/shares/${pickerShare.id}/paths`, { library_id: Number(pickerLib), path });
-    toast(path ? `Added "${path}".` : "Added whole library.");
+    toast(path ? asI18n.t("admin.toast.pathAdded", { path }) : asI18n.t("admin.toast.wholeLibraryAdded"));
     closeModals();
     await loadShares();
   } catch (err) { toast(err.message, "error"); }
@@ -803,9 +814,9 @@ async function pickerNavigate(path) {
   const here = document.createElement("tr");
   const hereLabel = document.createElement("td");
   const em = document.createElement("em");
-  em.textContent = path ? "this folder" : "whole library";
+  em.textContent = path ? asI18n.t("admin.picker.thisFolder") : asI18n.t("admin.picker.wholeLibrary");
   hereLabel.append(em);
-  here.append(hereLabel, actionTd(button(path ? "Share this folder" : "Share whole library", "small", () => addPickedPath(path))));
+  here.append(hereLabel, actionTd(button(path ? asI18n.t("admin.picker.shareThisFolder") : asI18n.t("admin.picker.shareWholeLibrary"), "small", () => addPickedPath(path))));
   rows.appendChild(here);
 
   let listing;
@@ -838,7 +849,7 @@ async function pickerNavigate(path) {
       name.textContent = (entry.is_audio ? "🎧 " : "📄 ") + entry.name;
     }
     const action = entry.is_dir || entry.is_audio
-      ? actionTd(button("Share this", "small", () => addPickedPath(entry.path)))
+      ? actionTd(button(asI18n.t("admin.picker.shareThis"), "small", () => addPickedPath(entry.path)))
       : document.createElement("td");
     tr.append(name, action);
     rows.appendChild(tr);
@@ -855,7 +866,9 @@ function openDetect(lib) {
   detectNavigate("");
 }
 
-const DETECT_MODES = [["", "Auto"], ["book", "One book"], ["collection", "Separate books"]];
+// DETECT_MODES pairs each override value with its i18n key; the label is resolved
+// at render time (so a language switch re-applies on the next open).
+const DETECT_MODES = [["", "admin.detect.auto"], ["book", "admin.detect.oneBook"], ["collection", "admin.detect.separateBooks"]];
 
 async function detectNavigate(path) {
   el("detect-crumb").textContent = "/" + path;
@@ -885,15 +898,15 @@ async function detectNavigate(path) {
     const name = document.createElement("td");
     const a = document.createElement("a");
     a.href = "#";
-    a.textContent = "📁 " + entry.name + (entry.is_book ? " · book" : "");
+    a.textContent = "📁 " + entry.name + (entry.is_book ? asI18n.t("admin.detect.bookSuffix") : "");
     a.addEventListener("click", (e) => { e.preventDefault(); detectNavigate(entry.path); });
     name.appendChild(a);
 
     const sel = document.createElement("select");
-    DETECT_MODES.forEach(([value, label]) => {
+    DETECT_MODES.forEach(([value, labelKey]) => {
       const o = document.createElement("option");
       o.value = value;
-      o.textContent = label;
+      o.textContent = asI18n.t(labelKey);
       if ((entry.override || "") === value) o.selected = true;
       sel.appendChild(o);
     });
@@ -903,7 +916,7 @@ async function detectNavigate(path) {
         if (sel.value === "") await api("DELETE", `/admin/libraries/${detectLib}/folder-override${q}`);
         else await api("PUT", `/admin/libraries/${detectLib}/folder-override${q}`, { mode: sel.value });
         entry.override = sel.value;
-        toast("Detection updated — rescanning.");
+        toast(asI18n.t("admin.toast.detectionUpdated"));
       } catch (err) { toast(err.message, "error"); sel.value = entry.override || ""; }
     });
     const action = document.createElement("td");
@@ -996,35 +1009,35 @@ function selectedValues(id) {
 function baseName(p) { if (!p) return ""; const parts = p.split("/"); return parts[parts.length - 1]; }
 
 function fmtRelative(ts) {
-  if (!ts) return "never";
+  if (!ts) return asI18n.t("admin.time.never");
   const then = new Date(ts).getTime();
   if (isNaN(then)) return "—";
   const s = Math.floor((Date.now() - then) / 1000);
-  if (s < 45) return "just now";
-  if (s < 3600) return Math.floor(s / 60) + "m ago";
-  if (s < 86400) return Math.floor(s / 3600) + "h ago";
-  if (s < 86400 * 30) return Math.floor(s / 86400) + "d ago";
+  if (s < 45) return asI18n.t("admin.time.justNow");
+  if (s < 3600) return asI18n.t("admin.time.minutesAgo", { n: Math.floor(s / 60) });
+  if (s < 86400) return asI18n.t("admin.time.hoursAgo", { n: Math.floor(s / 3600) });
+  if (s < 86400 * 30) return asI18n.t("admin.time.daysAgo", { n: Math.floor(s / 86400) });
   return new Date(ts).toLocaleDateString();
 }
 
 function expiryLabel(expiresAt) {
-  if (!expiresAt) return { text: "no expiry", cls: "muted" };
+  if (!expiresAt) return { text: asI18n.t("admin.code.noExpiry"), cls: "muted" };
   const ms = new Date(expiresAt).getTime() - Date.now();
-  if (ms <= 0) return { text: "expired", cls: "off" };
-  return { text: shortDur(ms) + " left", cls: "ok" };
+  if (ms <= 0) return { text: asI18n.t("admin.code.expired"), cls: "off" };
+  return { text: asI18n.t("admin.code.timeLeft", { dur: shortDur(ms) }), cls: "ok" };
 }
 function shortDur(ms) {
   const s = Math.floor(ms / 1000);
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m`;
-  return `${s}s`;
+  if (d > 0) return asI18n.t("admin.dur.dh", { d, h });
+  if (h > 0) return asI18n.t("admin.dur.hm", { h, m });
+  if (m > 0) return asI18n.t("admin.dur.m", { m });
+  return asI18n.t("admin.dur.s", { s });
 }
 function usesLabel(c) {
-  if (c.max_uses === 0) return c.uses > 0 ? `used ${c.uses}× (unlimited)` : "unused (unlimited)";
+  if (c.max_uses === 0) return c.uses > 0 ? asI18n.t("admin.uses.unlimitedUsed", { n: c.uses }) : asI18n.t("admin.uses.unlimitedUnused");
   const usedUp = c.uses >= c.max_uses;
-  return `${c.uses}/${c.max_uses} used${usedUp ? " — used up" : ""}`;
+  return usedUp ? asI18n.t("admin.uses.usedUp", { used: c.uses, max: c.max_uses }) : asI18n.t("admin.uses.used", { used: c.uses, max: c.max_uses });
 }
 
 // ---- Boot ----
@@ -1033,7 +1046,7 @@ function usesLabel(c) {
 async function loadServerVersion() {
   try {
     const info = await api("GET", "/server");
-    if (info.version) el("server-version").textContent = "Server v" + info.version;
+    if (info.version) el("server-version").textContent = asI18n.t("admin.foot.serverVersion", { version: info.version });
   } catch (_) { /* non-fatal: just leave the version blank */ }
 }
 

@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,6 +64,76 @@ func TestHTMLCSP(t *testing.T) {
 	}
 	if !strings.Contains(csp, "style-src 'self' 'unsafe-inline'") {
 		t.Errorf("CSP should allow inline styles:\n%s", csp)
+	}
+}
+
+// TestI18nAssets checks the baked-in admin/connect i18n is served under the strict
+// same-origin CSP: the engine + dictionary load as external assets, the admin/connect
+// pages reference them, and those pages stay inline-script-free (an inline <script>
+// would silently break under script-src 'self', which carries no hash for them).
+func TestI18nAssets(t *testing.T) {
+	mux := http.NewServeMux()
+	if err := Register(mux, ""); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	c := ts.Client()
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	// The engine and dictionary are served as static assets under the strict CSP.
+	for _, p := range []string{"/assets/i18n.js", "/assets/i18n-dict.js"} {
+		resp, err := c.Get(ts.URL + p)
+		if err != nil {
+			t.Fatalf("GET %s: %v", p, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", p, resp.StatusCode)
+		}
+		if csp := resp.Header.Get("Content-Security-Policy"); csp != contentSecurityPolicy {
+			t.Errorf("GET %s CSP = %q, want the strict same-origin policy", p, csp)
+		}
+		if len(body) == 0 {
+			t.Errorf("GET %s served an empty body", p)
+		}
+	}
+
+	// The dictionary must define every supported language.
+	resp, err := c.Get(ts.URL + "/assets/i18n-dict.js")
+	if err != nil {
+		t.Fatalf("GET dict: %v", err)
+	}
+	dict, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	for _, lang := range []string{"en", "es", "fr", "de", "pt", "it"} {
+		if !strings.Contains(string(dict), lang+": {") {
+			t.Errorf("i18n-dict.js is missing the %q language block", lang)
+		}
+	}
+
+	// The admin + connect pages keep the strict CSP, load the i18n scripts, and
+	// carry no inline <script> (every <script> must be external 'self').
+	for _, p := range []string{"/admin", "/"} {
+		resp, err := c.Get(ts.URL + p)
+		if err != nil {
+			t.Fatalf("GET %s: %v", p, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if csp := resp.Header.Get("Content-Security-Policy"); csp != contentSecurityPolicy {
+			t.Errorf("GET %s CSP = %q, want the strict same-origin policy", p, csp)
+		}
+		html := string(body)
+		if !strings.Contains(html, "/assets/i18n.js") || !strings.Contains(html, "/assets/i18n-dict.js") {
+			t.Errorf("GET %s does not load the i18n scripts", p)
+		}
+		for _, m := range inlineScriptRE.FindAllStringSubmatch(html, -1) {
+			if !strings.Contains(strings.ToLower(m[1]), "src=") {
+				t.Errorf("GET %s has an inline <script> that breaks the strict CSP: %.40q", p, m[2])
+			}
+		}
 	}
 }
 
