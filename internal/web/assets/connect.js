@@ -22,18 +22,18 @@ async function redeem(code) {
     });
     const data = await resp.json();
     if (!resp.ok) {
-      showError(data.error || "Could not redeem auth code.");
+      showError(data.error || asI18n.t("connect.redeemError"));
       return;
     }
     // The QR encodes data.web_url: scanning opens the app (when it claims this
     // domain) or the embedded web player, which exchanges the single-use token.
     document.getElementById("qr").src = data.qr_png_data_uri;
-    if (data.uri) setLink("link-app", data.uri, "Open in app");
-    if (data.web_url) setLink("link-web", data.web_url, "Open web player");
+    if (data.uri) setLink("link-app", data.uri, asI18n.t("connect.openApp"));
+    if (data.web_url) setLink("link-web", data.web_url, asI18n.t("connect.openWeb"));
     form.classList.add("hidden");
     result.classList.remove("hidden");
   } catch (err) {
-    showError("Network error. Is the server reachable?");
+    showError(asI18n.t("connect.networkError"));
   }
 }
 
