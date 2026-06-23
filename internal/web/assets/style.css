@@ -275,3 +275,21 @@ tr.clickable:hover td { background: var(--surface-alt); }
   .main { padding: 20px 16px 48px; }
   .drawer { width: 100%; }
 }
+
+/* Language selector — connect footer, admin login card, admin sidebar foot. */
+.lang-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.lang-select {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.sidebar .foot .lang-row { margin-top: 12px; }

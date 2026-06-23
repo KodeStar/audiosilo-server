@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AudioSilo — Admin</title>
+  <title data-i18n="admin.docTitle">AudioSilo — Admin</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="/assets/style.css">
 </head>
@@ -16,22 +16,26 @@
         <span class="wordmark"><span class="a">AUDIO</span><span class="s">SILO</span></span>
       </div>
       <div class="spacer"></div>
-      <h1>Admin sign in</h1>
-      <p class="muted">Sign in with an administrator account.</p>
+      <h1 data-i18n="admin.login.title">Admin sign in</h1>
+      <p class="muted" data-i18n="admin.login.intro">Sign in with an administrator account.</p>
       <form id="login-form">
         <div class="spacer"></div>
         <div class="field">
-          <label for="username">Username</label>
+          <label for="username" data-i18n="admin.login.username">Username</label>
           <input id="username" autocomplete="username" required>
         </div>
         <div class="field">
-          <label for="password">Password</label>
+          <label for="password" data-i18n="admin.login.password">Password</label>
           <input id="password" type="password" autocomplete="current-password" required>
         </div>
-        <button type="submit" class="block">Sign in</button>
+        <button type="submit" class="block" data-i18n="admin.login.submit">Sign in</button>
       </form>
       <div id="login-msg" class="msg error"></div>
-      <p class="muted"><a href="/">← Back to connect</a></p>
+      <p class="muted"><a href="/" data-i18n="admin.login.back">← Back to connect</a></p>
+      <div class="lang-row">
+        <label for="login-lang" data-i18n="ui.language">Language</label>
+        <select id="login-lang" class="lang-select" data-i18n-switch aria-label="Language"></select>
+      </div>
     </div>
   </div>
 
@@ -43,14 +47,18 @@
         <span class="wordmark"><span class="a">AUDIO</span><span class="s">SILO</span> <span class="tag">admin</span></span>
       </div>
       <nav class="nav" id="nav">
-        <button type="button" data-section="overview" class="active"><span class="ico">▦</span> Overview</button>
-        <button type="button" data-section="libraries"><span class="ico">▤</span> Libraries</button>
-        <button type="button" data-section="users"><span class="ico">◍</span> Users</button>
-        <button type="button" data-section="shares"><span class="ico">⧉</span> Shares</button>
+        <button type="button" data-section="overview" class="active"><span class="ico">▦</span> <span data-i18n="admin.nav.overview">Overview</span></button>
+        <button type="button" data-section="libraries"><span class="ico">▤</span> <span data-i18n="admin.nav.libraries">Libraries</span></button>
+        <button type="button" data-section="users"><span class="ico">◍</span> <span data-i18n="admin.nav.users">Users</span></button>
+        <button type="button" data-section="shares"><span class="ico">⧉</span> <span data-i18n="admin.nav.shares">Shares</span></button>
       </nav>
       <div class="foot">
-        <div class="who">Signed in as <strong id="who"></strong></div>
-        <button id="logout" type="button" class="secondary small block">Sign out</button>
+        <div class="who"><span data-i18n="admin.foot.signedInAs">Signed in as</span> <strong id="who"></strong></div>
+        <button id="logout" type="button" class="secondary small block" data-i18n="admin.foot.signOut">Sign out</button>
+        <div class="lang-row">
+          <label for="lang" data-i18n="ui.language">Language</label>
+          <select id="lang" class="lang-select" data-i18n-switch aria-label="Language"></select>
+        </div>
         <div class="ver" id="server-version"></div>
       </div>
     </aside>
@@ -58,14 +66,14 @@
     <main class="main">
       <!-- Overview / Stats -->
       <section id="sec-overview" class="section active">
-        <div class="page-head"><div><h1>Overview</h1><div class="sub">Library size and what people are listening to.</div></div></div>
+        <div class="page-head"><div><h1 data-i18n="admin.overview.title">Overview</h1><div class="sub" data-i18n="admin.overview.sub">Library size and what people are listening to.</div></div></div>
         <div class="stat-grid" id="stat-grid"></div>
         <div class="card">
-          <h3>Books per library</h3>
+          <h3 data-i18n="admin.overview.booksPerLibrary">Books per library</h3>
           <div id="lib-counts"></div>
         </div>
         <div class="card">
-          <h3>Currently listening</h3>
+          <h3 data-i18n="admin.overview.currentlyListening">Currently listening</h3>
           <div id="listening"></div>
         </div>
       </section>
@@ -73,12 +81,12 @@
       <!-- Libraries -->
       <section id="sec-libraries" class="section">
         <div class="page-head">
-          <div><h1>Libraries</h1><div class="sub">Folders scanned for audiobooks.</div></div>
-          <button id="add-lib-btn" type="button">+ Add library</button>
+          <div><h1 data-i18n="admin.libraries.title">Libraries</h1><div class="sub" data-i18n="admin.libraries.sub">Folders scanned for audiobooks.</div></div>
+          <button id="add-lib-btn" type="button" data-i18n="admin.libraries.add">+ Add library</button>
         </div>
         <div class="card">
           <table>
-            <thead><tr><th>Name</th><th>Root</th><th>Layout</th><th></th></tr></thead>
+            <thead><tr><th data-i18n="admin.libraries.colName">Name</th><th data-i18n="admin.libraries.colRoot">Root</th><th data-i18n="admin.libraries.colLayout">Layout</th><th></th></tr></thead>
             <tbody id="lib-rows"></tbody>
           </table>
         </div>
@@ -87,12 +95,12 @@
       <!-- Users -->
       <section id="sec-users" class="section">
         <div class="page-head">
-          <div><h1>Users</h1><div class="sub">Click a row to manage role, access and invite codes.</div></div>
-          <button id="add-user-btn" type="button">+ Create user</button>
+          <div><h1 data-i18n="admin.users.title">Users</h1><div class="sub" data-i18n="admin.users.sub">Click a row to manage role, access and invite codes.</div></div>
+          <button id="add-user-btn" type="button" data-i18n="admin.users.create">+ Create user</button>
         </div>
         <div class="card">
           <table>
-            <thead><tr><th>User</th><th>Role</th><th>Last active</th><th></th></tr></thead>
+            <thead><tr><th data-i18n="admin.users.colUser">User</th><th data-i18n="admin.users.colRole">Role</th><th data-i18n="admin.users.colLastActive">Last active</th><th></th></tr></thead>
             <tbody id="user-rows"></tbody>
           </table>
         </div>
@@ -101,8 +109,8 @@
       <!-- Shares -->
       <section id="sec-shares" class="section">
         <div class="page-head">
-          <div><h1>Shares</h1><div class="sub">Named sets of filesystem paths — an author, a series, one book, or a whole library. Grant them to people from the Users page.</div></div>
-          <button id="add-share-btn" type="button">+ Create share</button>
+          <div><h1 data-i18n="admin.shares.title">Shares</h1><div class="sub" data-i18n="admin.shares.sub">Named sets of filesystem paths — an author, a series, one book, or a whole library. Grant them to people from the Users page.</div></div>
+          <button id="add-share-btn" type="button" data-i18n="admin.shares.create">+ Create share</button>
         </div>
         <div id="share-list"></div>
       </section>
@@ -114,7 +122,7 @@
   <aside id="user-drawer" class="drawer" aria-hidden="true">
     <div class="dhead">
       <div class="brand sm"><span class="wordmark" id="drawer-title"></span></div>
-      <button id="drawer-close" type="button" class="iconbtn" aria-label="Close">✕</button>
+      <button id="drawer-close" type="button" class="iconbtn" aria-label="Close" data-i18n-aria="admin.drawer.close">✕</button>
     </div>
     <div class="dbody" id="drawer-body"></div>
   </aside>
@@ -122,58 +130,58 @@
   <!-- ===== Modals ===== -->
   <div id="modal-library" class="modal-scrim">
     <div class="modal">
-      <div class="mhead"><h2>Add library</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <div class="mhead"><h2 data-i18n="admin.libModal.title">Add library</h2><button type="button" class="iconbtn" data-close>✕</button></div>
       <form id="lib-form">
-        <div class="field"><label for="lib-name">Name</label><input id="lib-name" required></div>
-        <div class="field"><label for="lib-root">Root path</label><input id="lib-root" placeholder="/srv/audiobooks" required></div>
-        <p class="muted">Book vs. folder structure is detected automatically — no layout to choose. Use “Detection” on a library to correct any folder it gets wrong.</p>
-        <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Add library</button></div>
+        <div class="field"><label for="lib-name" data-i18n="admin.libModal.name">Name</label><input id="lib-name" required></div>
+        <div class="field"><label for="lib-root" data-i18n="admin.libModal.root">Root path</label><input id="lib-root" placeholder="/srv/audiobooks" required></div>
+        <p class="muted" data-i18n="admin.libModal.help">Book vs. folder structure is detected automatically — no layout to choose. Use “Detection” on a library to correct any folder it gets wrong.</p>
+        <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.cancel">Cancel</button><button type="submit" data-i18n="admin.libModal.submit">Add library</button></div>
       </form>
     </div>
   </div>
 
   <div id="modal-user" class="modal-scrim">
     <div class="modal">
-      <div class="mhead"><h2>Create user</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <div class="mhead"><h2 data-i18n="admin.userModal.title">Create user</h2><button type="button" class="iconbtn" data-close>✕</button></div>
       <form id="user-form">
-        <div class="field"><label for="u-name">Username</label><input id="u-name" required></div>
-        <div class="field"><label for="u-role">Role</label>
-          <select id="u-role"><option value="user">user</option><option value="admin">admin</option></select>
+        <div class="field"><label for="u-name" data-i18n="admin.userModal.username">Username</label><input id="u-name" required></div>
+        <div class="field"><label for="u-role" data-i18n="admin.userModal.role">Role</label>
+          <select id="u-role"><option value="user" data-i18n="admin.role.user">user</option><option value="admin" data-i18n="admin.role.admin">admin</option></select>
         </div>
-        <div class="field"><label for="u-pass">Password</label>
+        <div class="field"><label for="u-pass" data-i18n="admin.userModal.password">Password</label>
           <input id="u-pass" type="password" autocomplete="new-password">
-          <p class="muted" id="u-pass-hint">Optional — leave blank for a player-only account that pairs via an invite code.</p>
+          <p class="muted" id="u-pass-hint" data-i18n="admin.userModal.passHintOptional">Optional — leave blank for a player-only account that pairs via an invite code.</p>
         </div>
-        <div class="field"><label for="u-access">Access</label>
+        <div class="field"><label for="u-access" data-i18n="admin.userModal.access">Access</label>
           <select id="u-access">
-            <option value="none">No access</option>
-            <option value="library">Whole library</option>
-            <option value="shares">Specific shares</option>
+            <option value="none" data-i18n="admin.userModal.accessNone">No access</option>
+            <option value="library" data-i18n="admin.userModal.accessLibrary">Whole library</option>
+            <option value="shares" data-i18n="admin.userModal.accessShares">Specific shares</option>
           </select>
         </div>
-        <div class="field hidden" id="u-access-libs-field"><label for="u-access-libs">Libraries</label><select id="u-access-libs" multiple></select></div>
-        <div class="field hidden" id="u-access-shares-field"><label for="u-access-shares">Shares</label><select id="u-access-shares" multiple></select></div>
-        <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Create user</button></div>
+        <div class="field hidden" id="u-access-libs-field"><label for="u-access-libs" data-i18n="admin.userModal.libraries">Libraries</label><select id="u-access-libs" multiple></select></div>
+        <div class="field hidden" id="u-access-shares-field"><label for="u-access-shares" data-i18n="admin.userModal.shares">Shares</label><select id="u-access-shares" multiple></select></div>
+        <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.cancel">Cancel</button><button type="submit" data-i18n="admin.userModal.submit">Create user</button></div>
       </form>
     </div>
   </div>
 
   <div id="modal-share" class="modal-scrim">
     <div class="modal">
-      <div class="mhead"><h2>Create share</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <div class="mhead"><h2 data-i18n="admin.shareModal.title">Create share</h2><button type="button" class="iconbtn" data-close>✕</button></div>
       <form id="share-form">
-        <div class="field"><label for="s-name">Share name</label><input id="s-name" placeholder="e.g. Kids" required></div>
-        <p class="muted">Create the share, then add paths to it and grant it to users.</p>
-        <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Create share</button></div>
+        <div class="field"><label for="s-name" data-i18n="admin.shareModal.name">Share name</label><input id="s-name" placeholder="e.g. Kids" data-i18n-placeholder="admin.shareModal.namePlaceholder" required></div>
+        <p class="muted" data-i18n="admin.shareModal.help">Create the share, then add paths to it and grant it to users.</p>
+        <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.cancel">Cancel</button><button type="submit" data-i18n="admin.shareModal.submit">Create share</button></div>
       </form>
     </div>
   </div>
 
   <div id="modal-picker" class="modal-scrim">
     <div class="modal">
-      <div class="mhead"><h2>Add path to “<span id="picker-share"></span>”</h2><button type="button" class="iconbtn" data-close>✕</button></div>
-      <div class="field"><label for="picker-lib">Library</label><select id="picker-lib"></select></div>
-      <div class="inline"><span class="muted">Location:</span> <span id="picker-crumb" class="code"></span></div>
+      <div class="mhead"><h2><span data-i18n="admin.picker.title">Add path to</span> “<span id="picker-share"></span>”</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <div class="field"><label for="picker-lib" data-i18n="admin.picker.library">Library</label><select id="picker-lib"></select></div>
+      <div class="inline"><span class="muted" data-i18n="admin.common.location">Location:</span> <span id="picker-crumb" class="code"></span></div>
       <div class="spacer"></div>
       <table><tbody id="picker-rows"></tbody></table>
     </div>
@@ -181,49 +189,49 @@
 
   <div id="modal-detect" class="modal-scrim">
     <div class="modal">
-      <div class="mhead"><h2>Folder detection — <span id="detect-lib"></span></h2><button type="button" class="iconbtn" data-close>✕</button></div>
-      <p class="muted">Each folder is auto-detected. Override one that's wrong: “One book” groups all its audio as a single book; “Separate books” treats each file as its own book.</p>
-      <div class="inline"><span class="muted">Location:</span> <span id="detect-crumb" class="code"></span></div>
+      <div class="mhead"><h2><span data-i18n="admin.detect.title">Folder detection</span> — <span id="detect-lib"></span></h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <p class="muted" data-i18n="admin.detect.help">Each folder is auto-detected. Override one that's wrong: “One book” groups all its audio as a single book; “Separate books” treats each file as its own book.</p>
+      <div class="inline"><span class="muted" data-i18n="admin.common.location">Location:</span> <span id="detect-crumb" class="code"></span></div>
       <div class="spacer"></div>
       <table><tbody id="detect-rows"></tbody></table>
-      <div class="mactions"><button type="button" class="secondary" data-close>Done</button></div>
+      <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.done">Done</button></div>
     </div>
   </div>
 
   <div id="modal-invite" class="modal-scrim">
     <div class="modal">
-      <div class="mhead"><h2>Create invite</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <div class="mhead"><h2 data-i18n="admin.invite.title">Create invite</h2><button type="button" class="iconbtn" data-close>✕</button></div>
       <form id="invite-form">
-        <div class="field"><label for="inv-uses">Uses</label>
+        <div class="field"><label for="inv-uses" data-i18n="admin.invite.uses">Uses</label>
           <select id="inv-uses">
-            <option value="1">1 use</option>
-            <option value="5" selected>5 uses</option>
-            <option value="0">Unlimited</option>
-            <option value="custom">Custom…</option>
+            <option value="1" data-i18n="admin.invite.uses1">1 use</option>
+            <option value="5" selected data-i18n="admin.invite.uses5">5 uses</option>
+            <option value="0" data-i18n="admin.invite.usesUnlimited">Unlimited</option>
+            <option value="custom" data-i18n="admin.invite.custom">Custom…</option>
           </select>
-          <input id="inv-uses-custom" class="hidden" type="number" min="1" step="1" placeholder="Number of uses">
+          <input id="inv-uses-custom" class="hidden" type="number" min="1" step="1" placeholder="Number of uses" data-i18n-placeholder="admin.invite.usesPlaceholder">
         </div>
-        <div class="field"><label for="inv-expiry">Expires</label>
+        <div class="field"><label for="inv-expiry" data-i18n="admin.invite.expires">Expires</label>
           <select id="inv-expiry">
-            <option value="1" selected>1 day</option>
-            <option value="7">7 days</option>
-            <option value="30">30 days</option>
-            <option value="0">Never</option>
-            <option value="custom">Custom…</option>
+            <option value="1" selected data-i18n="admin.invite.expiry1">1 day</option>
+            <option value="7" data-i18n="admin.invite.expiry7">7 days</option>
+            <option value="30" data-i18n="admin.invite.expiry30">30 days</option>
+            <option value="0" data-i18n="admin.invite.expiryNever">Never</option>
+            <option value="custom" data-i18n="admin.invite.custom">Custom…</option>
           </select>
-          <input id="inv-expiry-custom" class="hidden" type="number" min="1" step="1" placeholder="Days until expiry">
+          <input id="inv-expiry-custom" class="hidden" type="number" min="1" step="1" placeholder="Days until expiry" data-i18n-placeholder="admin.invite.expiryPlaceholder">
         </div>
-        <div class="mactions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit">Create invite</button></div>
+        <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.cancel">Cancel</button><button type="submit" data-i18n="admin.invite.submit">Create invite</button></div>
       </form>
       <div id="invite-result" class="hidden">
-        <p class="muted">Share either the link or the code. The code is shown once — copy it now.</p>
-        <div class="field"><label>Invite link</label>
-          <div class="inline"><span id="inv-link" class="code"></span><button type="button" class="secondary small" id="inv-copy-link">Copy link</button></div>
+        <p class="muted" data-i18n="admin.invite.resultHelp">Share either the link or the code. The code is shown once — copy it now.</p>
+        <div class="field"><label data-i18n="admin.invite.linkLabel">Invite link</label>
+          <div class="inline"><span id="inv-link" class="code"></span><button type="button" class="secondary small" id="inv-copy-link" data-i18n="admin.invite.copyLink">Copy link</button></div>
         </div>
-        <div class="field"><label>Auth code</label>
-          <div class="inline"><span id="inv-code" class="code"></span><button type="button" class="secondary small" id="inv-copy-code">Copy code</button></div>
+        <div class="field"><label data-i18n="admin.invite.codeLabel">Auth code</label>
+          <div class="inline"><span id="inv-code" class="code"></span><button type="button" class="secondary small" id="inv-copy-code" data-i18n="admin.invite.copyCode">Copy code</button></div>
         </div>
-        <div class="mactions"><button type="button" id="inv-done">Done</button></div>
+        <div class="mactions"><button type="button" id="inv-done" data-i18n="admin.common.done">Done</button></div>
       </div>
     </div>
   </div>
@@ -231,6 +239,8 @@
   <!-- ===== Toast ===== -->
   <div id="toast" class="toast"></div>
 
+  <script src="/assets/i18n-dict.js"></script>
+  <script src="/assets/i18n.js"></script>
   <script src="/assets/admin.js"></script>
 </body>
 </html>

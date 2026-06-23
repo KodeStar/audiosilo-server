@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AudioSilo — Connect</title>
+  <title data-i18n="connect.docTitle">AudioSilo — Connect</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="/assets/style.css">
 </head>
@@ -15,32 +15,39 @@
         <span class="wordmark"><span class="a">AUDIO</span><span class="s">SILO</span></span>
       </div>
       <div class="spacer"></div>
-      <h1>Connect a device</h1>
-      <p class="muted">Enter the auth code from your server administrator.</p>
+      <h1 data-i18n="connect.heading">Connect a device</h1>
+      <p class="muted" data-i18n="connect.intro">Enter the auth code from your server administrator.</p>
 
       <form id="redeem-form">
         <div class="spacer"></div>
         <div class="field">
-          <label for="code">Auth code</label>
+          <label for="code" data-i18n="connect.codeLabel">Auth code</label>
           <input id="code" name="code" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" required>
         </div>
-        <button type="submit" class="block">Continue</button>
+        <button type="submit" class="block" data-i18n="connect.continue">Continue</button>
       </form>
 
       <div id="msg" class="msg error"></div>
 
       <div id="result" class="hidden">
-        <h2>Scan to pair</h2>
-        <div class="qr"><img id="qr" alt="Pairing QR code"></div>
-        <p class="muted">Scan with your phone to open the app, or continue on this device.</p>
+        <h2 data-i18n="connect.scanHeading">Scan to pair</h2>
+        <div class="qr"><img id="qr" alt="Pairing QR code" data-i18n-alt="connect.qrAlt"></div>
+        <p class="muted" data-i18n="connect.scanHint">Scan with your phone to open the app, or continue on this device.</p>
         <div class="links">
-          <a id="link-app" href="#" aria-disabled="true">Open in app</a>
-          <a id="link-web" href="#" aria-disabled="true" class="primary">Open web player</a>
-          <a id="link-admin" href="/admin">Admin section</a>
+          <a id="link-app" href="#" aria-disabled="true" data-i18n="connect.openApp">Open in app</a>
+          <a id="link-web" href="#" aria-disabled="true" class="primary" data-i18n="connect.openWeb">Open web player</a>
+          <a id="link-admin" href="/admin" data-i18n="connect.adminSection">Admin section</a>
         </div>
+      </div>
+
+      <div class="lang-row">
+        <label for="lang" data-i18n="ui.language">Language</label>
+        <select id="lang" class="lang-select" data-i18n-switch aria-label="Language"></select>
       </div>
     </div>
   </div>
+  <script src="/assets/i18n-dict.js"></script>
+  <script src="/assets/i18n.js"></script>
   <script src="/assets/connect.js"></script>
 </body>
 </html>
