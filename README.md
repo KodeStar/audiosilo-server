@@ -34,11 +34,12 @@ planned separately.
   to users for partial access; they browse a **filtered tree** scoped to what
   they're allowed, and the computed view + search are scoped to match.
 - **Admin** — create users, create libraries, build/grant shares, mint auth
-  codes, edit library layout, trigger rescans.
-- **Three library views** — **Filesystem** (browse as-is, instant, no indexing),
-  **Computed** (catalog from tags/path), **Hybrid** (default; filesystem enriched
-  with indexed metadata). Storage layouts: `flat`, `chapters_in_folder`,
-  `books_in_folder`.
+  codes, reorder libraries, trigger rescans.
+- **Auto-detected folder shape** — no per-library layout to configure: the
+  scanner classifies each folder on its own (a directory of audio is one book;
+  loose files at the root are single-file books), and a folder the heuristic gets
+  wrong is fixed with a per-folder override (`book` | `collection`). The default
+  **Hybrid** view is the filesystem browsed as-is, enriched with indexed metadata.
 - **Fast search** — SQLite FTS5, fast at thousands of books; **keyset pagination**.
 - **Streaming** — HTTP Range (seek/scrub) by path, direct download, cover art.
 - **Normalized chapters** — single-file m4b chapters and multi-file mp3 parts
@@ -46,7 +47,8 @@ planned separately.
 - **Per-user listening state** — progress, bookmarks, notes, history, playback
   speed, with last-write-wins reconciliation (the basis for realtime sync).
 - **Baked-in web UI** — a public connect page at `/` (and `/connect`) and an admin
-  console at `/admin` (users, libraries incl. layout edit/delete, **shares** with a
+  console at `/admin` (users, libraries incl. edit/delete + folder-detection
+  overrides, **shares** with a
   filesystem path picker, auth codes + copy-invite, rescans). Vanilla HTML/CSS/JS,
   no build step, served from the same binary.
 
@@ -81,7 +83,7 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
 # Add a library (admin), then browse it immediately via the filesystem view:
 TOKEN=...   # from the login response
 curl -X POST http://localhost:8080/api/v1/admin/libraries -H "Authorization: Bearer $TOKEN" \
-  -d '{"name":"Main","root":"/path/to/audiobooks","layout":"books_in_folder"}'
+  -d '{"name":"Main","root":"/path/to/audiobooks"}'
 curl "http://localhost:8080/api/v1/libraries/1/fs" -H "Authorization: Bearer $TOKEN"
 ```
 

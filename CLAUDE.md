@@ -5,8 +5,9 @@ evolves.
 
 ## What this is
 
-A self-hosted **audiobook server** in Go. **API only** — no bundled web UI (the
-frontend ships separately). It must be **safe to expose to the internet** for
+A self-hosted **audiobook server** in Go: a JSON API plus a **baked-in
+admin/connect web UI**; the separate player frontend is served at `/web` from
+`web_dir` (not vendored). It must be **safe to expose to the internet** for
 inexperienced users: secure defaults, no default passwords, app-layer hardening,
 configurable TLS.
 
@@ -35,6 +36,11 @@ gates all four on every PR/push. A few scanner tests need `ffmpeg` (ffprobe);
 without it they `t.Skip` (CI installs it). The linter is adopted at a **green
 baseline** — its suppressions in `.golangci.yml` are documented and intentional;
 fix new findings rather than widening the excludes.
+
+> Before adding code, read the workspace **[CODE-HEALTH.md](../CODE-HEALTH.md)** —
+> Definition of Done + the recurring drift patterns (wire-contract, dead code,
+> stale docs, untested packages) a full review found. Conventions only help if
+> they're checked; that file is the checklist.
 
 ## Design priorities (in order)
 

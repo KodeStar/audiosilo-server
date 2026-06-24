@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,5 +42,30 @@ func TestEnsureAdminKeysOffDatabase(t *testing.T) {
 	}
 	if users, _ := authSvc.ListUsers(ctx); len(users) != 1 {
 		t.Fatalf("ensureAdmin should be idempotent, got %d users", len(users))
+	}
+}
+
+// TestRandomSecret pins randomSecret's entropy and encoding: it carries exactly
+// nBytes of decoded entropy, is URL-safe (no '+', '/' or '=' padding), and is
+// unpredictable (two calls differ).
+func TestRandomSecret(t *testing.T) {
+	for _, n := range []int{1, 16, 32} {
+		s := randomSecret(n)
+
+		decoded, err := base64.RawURLEncoding.DecodeString(s)
+		if err != nil {
+			t.Fatalf("randomSecret(%d) = %q does not base64url-decode: %v", n, s, err)
+		}
+		if len(decoded) != n {
+			t.Fatalf("randomSecret(%d) decoded to %d bytes, want %d", n, len(decoded), n)
+		}
+		if strings.ContainsAny(s, "+/=") {
+			t.Fatalf("randomSecret(%d) = %q contains non-URL-safe characters", n, s)
+		}
+	}
+
+	// Two calls must not collide (vanishingly unlikely for crypto/rand entropy).
+	if a, b := randomSecret(32), randomSecret(32); a == b {
+		t.Fatalf("two randomSecret calls returned the same value %q", a)
 	}
 }

@@ -15,8 +15,10 @@ import (
 // Chapter is one playable unit, normalized so a client can treat embedded m4b
 // chapters and separate multi-file parts identically:
 //
-//   - FileIndex selects which book file to stream (0 for single-file books);
-//     play it via /books/{id}/stream?file=<FileIndex>.
+//   - FileIndex is the 0-based ordinal of the book file the chapter lives in
+//     (matching BookFile.Seq; 0 for single-file books), used for ordering.
+//     Streaming is path-addressed: play FilePath via
+//     /libraries/{id}/stream?path=<FilePath>.
 //   - Start/End are offsets *within that file* — seek to Start.
 //   - BookOffset is the chapter's start on the whole-book timeline (the sum of
 //     earlier files' durations), so progress can use one continuous position.
@@ -82,23 +84,21 @@ func Extract(path, ffprobePath string) (*Metadata, error) {
 }
 
 func applyTags(m *Metadata, md tag.Metadata) {
-	if title := md.Album(); title != "" { // audiobook title commonly in album
+	if title := firstNonEmpty(md.Album(), md.Title()); title != "" { // audiobook title commonly in album
 		m.Title = title
-	} else if t := md.Title(); t != "" {
-		m.Title = t
 	}
 	if a := firstNonEmpty(md.AlbumArtist(), md.Artist()); a != "" {
 		m.Author = a
 	}
-	if c := md.Composer(); c != "" {
+	if c := strings.TrimSpace(md.Composer()); c != "" {
 		m.Narrator = c
 	}
 	if raw := md.Raw(); raw != nil {
 		if v := rawString(raw, "series", "©grp", "show", "TXXX:SERIES"); v != "" {
-			m.Series = v
+			m.Series = strings.TrimSpace(v)
 		}
 		if v := rawString(raw, "narrator", "©nrt", "----:com.apple.iTunes:NARRATOR"); v != "" {
-			m.Narrator = v
+			m.Narrator = strings.TrimSpace(v)
 		}
 	}
 	if md.Picture() != nil {

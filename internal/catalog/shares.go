@@ -14,11 +14,15 @@ import (
 
 // Share is a named, grantable bundle of path rules.
 type Share struct {
-	ID          int64      `json:"id"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	ReadOnly    bool       `json:"read_only"`
-	Paths       []PathRule `json:"paths,omitempty"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// ReadOnly is reserved/forward-looking: it is persisted and editable but not
+	// yet enforced anywhere (the content API exposes no per-share write path, so
+	// all share access is already read-only). Gate a future write/upload path on
+	// it when one exists.
+	ReadOnly bool       `json:"read_only"`
+	Paths    []PathRule `json:"paths,omitempty"`
 }
 
 // PathRule grants a path (and everything under it) within a library.
@@ -81,11 +85,25 @@ func pathFilterSQL(col string, s Scope) (string, []any) {
 	var conds []string
 	var args []any
 	for _, p := range s.Paths {
-		conds = append(conds, "("+col+" = ? OR "+col+" LIKE ? || '/%')")
-		args = append(args, p, p)
+		// The exact-match arm binds p literally; the subtree arm uses LIKE, so
+		// p must have its LIKE metacharacters ('%', '_', and the escape char)
+		// escaped or an ordinary folder name like "Sci_Fi" would over-match a
+		// sibling "SciXFi/...". This keeps the SQL filter consistent with the
+		// authoritative Go gate (pathAllowedBy), which uses a literal prefix.
+		conds = append(conds, "("+col+" = ? OR "+col+` LIKE ? ESCAPE '\')`)
+		args = append(args, p, escapeLike(p)+"/%")
 	}
 	return "(" + strings.Join(conds, " OR ") + ")", args
 }
+
+// escapeLike escapes the SQLite LIKE wildcards ('%', '_') and the backslash
+// escape character so a value can be used as a literal prefix in a
+// `LIKE ? ESCAPE '\'` pattern.
+func escapeLike(s string) string {
+	return likeEscaper.Replace(s)
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // scopesFilterSQL builds a WHERE fragment (plus args) restricting rows to the
 // caller's per-library scopes: libCol must equal a scope's library and pathCol

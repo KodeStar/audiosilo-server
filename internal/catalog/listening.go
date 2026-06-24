@@ -199,14 +199,29 @@ func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]Listening
 // library, used by the scanner when it detects a file move. It is a no-op if
 // nothing references the old path.
 func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath, newPath string) error {
-	for _, table := range []string{"progress", "bookmarks", "notes", "listening_history", "favourites"} {
-		if _, err := c.db.ExecContext(ctx,
-			`UPDATE `+table+` SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-			newPath, libraryID, oldPath); err != nil {
+	// Wrap the five updates in one transaction so a "move" either fully applies
+	// or fully rolls back, rather than leaving durable user state half-migrated
+	// across tables if a statement fails midway.
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Constant per-table statements (no concatenation) so the table name can
+	// never be anything but this fixed allowlist.
+	stmts := []string{
+		`UPDATE progress SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+		`UPDATE bookmarks SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+		`UPDATE notes SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+		`UPDATE listening_history SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+		`UPDATE favourites SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // AddBookmark stores a bookmark and returns it with its ID.
