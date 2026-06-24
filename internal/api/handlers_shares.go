@@ -46,13 +46,20 @@ func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := a.cat.CreateShare(r.Context(), s)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.log.Warn("create share failed", "name", s.Name, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not create share")
 		return
 	}
-	// Add any path rules supplied at creation.
+	// Add any path rules supplied at creation. These writes aren't in the same
+	// transaction as the share row, so on failure delete the just-created share
+	// rather than leaving a partial/orphaned share behind.
 	for _, rule := range s.Paths {
 		if err := a.cat.AddSharePath(r.Context(), created.ID, rule); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			a.log.Warn("create share: add path failed, rolling back", "share", created.ID, "err", err)
+			if delErr := a.cat.DeleteShare(r.Context(), created.ID); delErr != nil {
+				a.log.Warn("create share: rollback delete failed", "share", created.ID, "err", delErr)
+			}
+			writeError(w, http.StatusInternalServerError, "could not create share")
 			return
 		}
 	}

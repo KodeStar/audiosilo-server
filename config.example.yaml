@@ -52,11 +52,13 @@ app_links:
 
 # Libraries to expose. Declaring them here syncs them into the database and
 # scans them on startup; you can also create libraries at runtime via the admin
-# API. layout is one of: flat | chapters_in_folder | books_in_folder.
+# API. Folder shape (single-file books, folder-per-book, multi-file parts) is
+# auto-detected per folder by the scanner — there is no layout to configure; a
+# folder the detector gets wrong is fixed via the admin folder-override endpoint
+# (mode: book | collection).
 libraries: []
 # - name: "Main"
 #   root: "/srv/audiobooks"
-#   layout: "books_in_folder"
 
 # Public demo mode. When enabled, an unauthenticated visitor can mint a throwaway
 # account via POST /api/v1/demo/session that is granted the named library; idle
@@ -66,5 +68,5 @@ libraries: []
 demo:
   enabled: false       # [AUDIOSILO_DEMO_ENABLED]
   library: ""          # name of a library above to grant demo users [AUDIOSILO_DEMO_LIBRARY]
-  max_users: 0         # cap on live demo users, 0 = unlimited [AUDIOSILO_DEMO_MAX_USERS]
+  # max_users: 200     # cap on live demo users; omit for the safe default of 200, explicit 0 = unlimited (opt-in risk) [AUDIOSILO_DEMO_MAX_USERS]
   idle_ttl: "24h"      # reap demo users idle longer than this [AUDIOSILO_DEMO_IDLE_TTL]

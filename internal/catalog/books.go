@@ -377,21 +377,15 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 	if opt.Cursor != "" {
 		cval, cid, err := decodeCursor(opt.Cursor)
 		if err != nil {
-			return nil, fmt.Errorf("invalid cursor: %w", err)
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
 		}
-		if col == "" { // id-only keyset (recent)
-			where = append(where, fmt.Sprintf("id %s ?", cmp))
-			args = append(args, cid)
-		} else { // row-value keyset on (col, id) — index-friendly and stable
-			where = append(where, fmt.Sprintf("(%s, id) %s (?, ?)", col, cmp))
-			args = append(args, cval, cid)
-		}
+		// sortColumn always yields a non-empty column, so paginate on the
+		// (col, id) row-value keyset — index-friendly and stable across ties.
+		where = append(where, fmt.Sprintf("(%s, id) %s (?, ?)", col, cmp))
+		args = append(args, cval, cid)
 	}
 
-	orderBy := "id " + order
-	if col != "" {
-		orderBy = col + " " + order + ", id " + order
-	}
+	orderBy := col + " " + order + ", id " + order
 	query := fmt.Sprintf(`SELECT %s FROM books WHERE %s ORDER BY %s LIMIT ?`,
 		bookCols, strings.Join(where, " AND "), orderBy)
 	args = append(args, opt.Limit+1) // fetch one extra to detect a next page

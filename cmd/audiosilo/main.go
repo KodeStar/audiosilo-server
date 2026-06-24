@@ -214,7 +214,8 @@ func demoReaper(ctx context.Context, authSvc *auth.Service, idleTTL time.Duratio
 	}
 }
 
-// randomSecret returns a URL-safe random string with at least nBytes of entropy.
+// randomSecret returns a URL-safe random string carrying nBytes of entropy (the
+// encoded string is longer than nBytes characters).
 func randomSecret(nBytes int) string {
 	buf := make([]byte, nBytes)
 	if _, err := rand.Read(buf); err != nil {

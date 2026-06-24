@@ -167,7 +167,12 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 		Scope:     &scope,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, catalog.ErrInvalidCursor) {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		a.log.Warn("list books failed", "library", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load books")
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
@@ -240,8 +245,13 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	book, err := a.bookForPath(r.Context(), lib, path)
-	if err != nil {
+	switch {
+	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no book at that path")
+		return
+	case err != nil:
+		a.log.Warn("load chapters failed", "library", lib.ID, "path", path, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load chapters")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -293,8 +303,13 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	book, err := a.bookForPath(r.Context(), lib, path)
-	if err != nil {
+	switch {
+	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no cover")
+		return
+	case err != nil:
+		a.log.Warn("load cover failed", "library", lib.ID, "path", path, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load cover")
 		return
 	}
 	if book.CoverPath != "" {

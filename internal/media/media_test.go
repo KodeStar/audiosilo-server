@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,6 +42,11 @@ func TestSniffAudioType(t *testing.T) {
 		{"id3 mp3", []byte("ID3\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00"), "audio/mpeg"},
 		{"mp4 ftyp", append([]byte{0, 0, 0, 0x18}, []byte("ftypM4A ")...), "audio/mp4"},
 		{"riff wave", append([]byte("RIFF\x00\x00\x00\x00"), []byte("WAVE")...), "audio/wav"},
+		// ADTS AAC: 0xFF sync with layer bits 00 (0xF1). Its sync word also matches
+		// the MPEG mask, so sniffAudioType checks ADTS *before* MP3 — pin that order.
+		{"adts aac", []byte{0xFF, 0xF1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, "audio/aac"},
+		// MP3 frame sync (0xFF 0xFB) — must not be misread as ADTS.
+		{"mp3 frame sync", []byte{0xFF, 0xFB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, "audio/mpeg"},
 		{"unrecognized", []byte("not audio at all"), ""},
 	}
 	for _, tc := range cases {
@@ -150,6 +156,67 @@ func TestTranscode(t *testing.T) {
 	if body[0] != 0xFF && string(body[:3]) != "ID3" {
 		t.Fatalf("output does not look like MP3 (first bytes %x)", body[:min(4, len(body))])
 	}
+}
+
+func TestHasFFmpeg(t *testing.T) {
+	if HasFFmpeg("") {
+		t.Error(`HasFFmpeg("") = true, want false (empty path disables transcoding)`)
+	}
+	if HasFFmpeg("definitely-not-a-real-binary-xyz") {
+		t.Error(`HasFFmpeg("definitely-not-a-real-binary-xyz") = true, want false`)
+	}
+}
+
+func TestEmbeddedCover(t *testing.T) {
+	t.Run("file without embedded art reports ok=false", func(t *testing.T) {
+		// None of the committed fixtures carry embedded art; the plain m4b below is
+		// the no-art case.
+		src := filepath.Join("..", "..", "testdata", "library", "Will Wight", "Cradle", "01 - Unsouled.m4b")
+		if _, err := os.Stat(src); err != nil {
+			t.Skipf("fixture missing: %v", err)
+		}
+		if _, _, ok := EmbeddedCover(src); ok {
+			t.Fatal("EmbeddedCover reported art for a fixture that has none")
+		}
+	})
+
+	t.Run("missing file reports ok=false", func(t *testing.T) {
+		if _, _, ok := EmbeddedCover(filepath.Join(t.TempDir(), "nope.m4b")); ok {
+			t.Fatal("EmbeddedCover reported art for a missing file")
+		}
+	})
+
+	t.Run("file with embedded art reports ok=true with data and mime", func(t *testing.T) {
+		// No committed fixture has embedded cover art, so synthesize one with ffmpeg:
+		// a 1s tone plus a solid-color JPEG stored as an attached_pic stream.
+		if !HasFFmpeg("ffmpeg") {
+			t.Skip("ffmpeg not available; cannot synthesize an art-bearing fixture")
+		}
+		path := filepath.Join(t.TempDir(), "withart.m4b")
+		cmd := exec.Command("ffmpeg", "-nostdin", "-loglevel", "error",
+			"-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+			"-f", "lavfi", "-i", "color=c=red:s=64x64:d=1",
+			"-frames:v", "1",
+			"-map", "0:a", "-map", "1:v",
+			"-c:a", "aac", "-c:v", "mjpeg",
+			"-disposition:v", "attached_pic",
+			"-f", "mp4", "-y", path,
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("ffmpeg could not build an art-bearing fixture: %v\n%s", err, out)
+		}
+
+		data, mime, ok := EmbeddedCover(path)
+		if !ok {
+			t.Fatal("EmbeddedCover ok = false, want true for a fixture with embedded art")
+		}
+		if len(data) == 0 {
+			t.Fatal("EmbeddedCover returned empty data for a fixture with embedded art")
+		}
+		if mime == "" {
+			t.Fatal("EmbeddedCover returned empty mime for a fixture with embedded art")
+		}
+	})
 }
 
 func writeTempFile(t *testing.T, name string, data []byte) *os.File {

@@ -29,12 +29,17 @@ type DB struct {
 // pending migrations. Pass ":memory:" for tests. Recommended pragmas for a
 // server workload are enabled via the connection string.
 func Open(ctx context.Context, dsn string) (*DB, error) {
-	conn := dsn
-	if !strings.Contains(conn, "?") {
-		// WAL for concurrent readers, busy_timeout to ride out brief locks,
-		// foreign_keys for referential integrity.
-		conn += "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+	// WAL for concurrent readers, busy_timeout to ride out brief locks, and
+	// foreign_keys for referential integrity. foreign_keys defaults OFF per
+	// SQLite connection, and the schema relies on ~28 ON DELETE CASCADE rules,
+	// so these pragmas must always be applied — append with the right separator
+	// rather than skipping them when the caller's DSN already carries query
+	// params (which would silently disable every cascade delete).
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
 	}
+	conn := dsn + sep + "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
 	sqlDB, err := sql.Open("sqlite", conn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)

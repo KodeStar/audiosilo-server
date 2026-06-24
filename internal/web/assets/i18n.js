@@ -5,7 +5,7 @@
 // ready when admin.js/connect.js render dynamic content, with no fetch race or flash.
 // English is the base + fallback; other languages may be partial.
 //
-// Static markup is tagged with data-i18n / data-i18n-placeholder / data-i18n-title /
+// Static markup is tagged with data-i18n / data-i18n-placeholder / data-i18n-alt /
 // data-i18n-aria and translated by apply(); dynamic strings call asI18n.t(key, vars).
 // Loaded as an external script so the strict CSP (script-src 'self') is unaffected.
 (function () {
@@ -55,9 +55,6 @@
     });
     root.querySelectorAll("[data-i18n-placeholder]").forEach(function (el) {
       el.setAttribute("placeholder", t(el.getAttribute("data-i18n-placeholder")));
-    });
-    root.querySelectorAll("[data-i18n-title]").forEach(function (el) {
-      el.setAttribute("title", t(el.getAttribute("data-i18n-title")));
     });
     root.querySelectorAll("[data-i18n-alt]").forEach(function (el) {
       el.setAttribute("alt", t(el.getAttribute("data-i18n-alt")));

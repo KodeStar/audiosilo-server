@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -61,6 +62,72 @@ func TestCreateAuthenticateUser(t *testing.T) {
 	}
 	if _, err := s.Authenticate(ctx, "admin", "nope"); err != ErrInvalidCreds {
 		t.Fatalf("expected ErrInvalidCreds, got %v", err)
+	}
+}
+
+// TestPasswordLengthBoundary pins the MinPasswordLen boundary through both
+// CreateUser and SetPassword: a 7-char password is rejected, an 8-char one is
+// accepted, and an empty password is allowed (password-less non-admin).
+func TestPasswordLengthBoundary(t *testing.T) {
+	s, ctx := newTestService(t)
+
+	// CreateUser: 7 chars (one below the minimum) is rejected.
+	if _, err := s.CreateUser(ctx, "short", "1234567", RoleUser); !errors.Is(err, ErrPasswordTooShort) {
+		t.Fatalf("CreateUser with 7-char password: err = %v, want ErrPasswordTooShort", err)
+	}
+	// CreateUser: exactly 8 chars is accepted.
+	u, err := s.CreateUser(ctx, "exact", "12345678", RoleUser)
+	if err != nil {
+		t.Fatalf("CreateUser with 8-char password: %v", err)
+	}
+	// CreateUser: empty password is allowed for a non-admin (password-less).
+	if _, err := s.CreateUser(ctx, "nopass", "", RoleUser); err != nil {
+		t.Fatalf("CreateUser with empty password (non-admin): %v", err)
+	}
+
+	// SetPassword: 7 chars is rejected.
+	if err := s.SetPassword(ctx, u.ID, "1234567"); !errors.Is(err, ErrPasswordTooShort) {
+		t.Fatalf("SetPassword with 7-char password: err = %v, want ErrPasswordTooShort", err)
+	}
+	// SetPassword: exactly 8 chars is accepted.
+	if err := s.SetPassword(ctx, u.ID, "abcdefgh"); err != nil {
+		t.Fatalf("SetPassword with 8-char password: %v", err)
+	}
+	// SetPassword: clearing to empty is allowed for a non-admin.
+	if err := s.SetPassword(ctx, u.ID, ""); err != nil {
+		t.Fatalf("SetPassword with empty password (non-admin): %v", err)
+	}
+}
+
+// TestCheckPassword pins the self-service password challenge: the correct
+// password matches, a wrong one and a password-less account both report
+// ErrInvalidCreds, and a missing user reports ErrNotFound.
+func TestCheckPassword(t *testing.T) {
+	s, ctx := newTestService(t)
+
+	u, err := s.CreateUser(ctx, "alice", "correct-pw", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckPassword(ctx, u.ID, "correct-pw"); err != nil {
+		t.Fatalf("correct password: err = %v, want nil", err)
+	}
+	if err := s.CheckPassword(ctx, u.ID, "wrong-pw"); !errors.Is(err, ErrInvalidCreds) {
+		t.Fatalf("wrong password: err = %v, want ErrInvalidCreds", err)
+	}
+
+	// A password-less account (empty hash) can never be challenged.
+	pwless, err := s.CreateUser(ctx, "bob", "", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckPassword(ctx, pwless.ID, ""); !errors.Is(err, ErrInvalidCreds) {
+		t.Fatalf("password-less account: err = %v, want ErrInvalidCreds", err)
+	}
+
+	// A non-existent user id resolves to ErrNotFound (no row to scan).
+	if err := s.CheckPassword(ctx, 999999, "anything"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing user: err = %v, want ErrNotFound", err)
 	}
 }
 

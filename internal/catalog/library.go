@@ -9,6 +9,10 @@ import (
 // ErrNotFound is returned when a library or book does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrInvalidCursor marks a malformed pagination cursor so the transport layer
+// can map it to 400 (client error) and distinguish it from an internal failure.
+var ErrInvalidCursor = errors.New("invalid cursor")
+
 // CreateLibrary inserts a library and returns it with its assigned ID.
 func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, error) {
 	if lib.DefaultView == "" {
