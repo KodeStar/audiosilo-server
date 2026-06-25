@@ -207,8 +207,10 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// Constant per-table statements (no concatenation) so the table name can
-	// never be anything but this fixed allowlist.
+	// One fully-constant UPDATE per durable-state table, iterated. The statements
+	// are spelled out rather than built as `"UPDATE "+table+...` on purpose: that
+	// concatenation trips gosec G202 (the project lints at a green baseline), and
+	// only the values are bound parameters here anyway. Add a table -> add a line.
 	stmts := []string{
 		`UPDATE progress SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 		`UPDATE bookmarks SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,

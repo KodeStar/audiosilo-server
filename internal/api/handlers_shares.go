@@ -44,24 +44,13 @@ func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	// CreateShare inserts the share row and any supplied path rules atomically,
+	// so a failed rule rolls the whole thing back — no orphaned share to clean up
+	// from the transport layer.
 	created, err := a.cat.CreateShare(r.Context(), s)
 	if err != nil {
-		a.log.Warn("create share failed", "name", s.Name, "err", err)
-		writeError(w, http.StatusInternalServerError, "could not create share")
+		a.writeCatalogError(w, err, "create share failed", "could not create share", "name", s.Name)
 		return
-	}
-	// Add any path rules supplied at creation. These writes aren't in the same
-	// transaction as the share row, so on failure delete the just-created share
-	// rather than leaving a partial/orphaned share behind.
-	for _, rule := range s.Paths {
-		if err := a.cat.AddSharePath(r.Context(), created.ID, rule); err != nil {
-			a.log.Warn("create share: add path failed, rolling back", "share", created.ID, "err", err)
-			if delErr := a.cat.DeleteShare(r.Context(), created.ID); delErr != nil {
-				a.log.Warn("create share: rollback delete failed", "share", created.ID, "err", delErr)
-			}
-			writeError(w, http.StatusInternalServerError, "could not create share")
-			return
-		}
 	}
 	full, _ := a.cat.GetShare(r.Context(), created.ID)
 	writeJSON(w, http.StatusCreated, full)
@@ -84,7 +73,7 @@ func (a *API) handleUpdateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.writeCatalogError(w, err, "update share failed", "could not update share", "share", id)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
