@@ -1,0 +1,100 @@
+# GoReleaser config for AudioSilo native distribution.
+#
+# Produces self-contained, cross-platform binaries on each `v*` tag (see
+# .github/workflows/release.yml) so non-Docker home users can download one file
+# and run it. The server is CGO-free (modernc SQLite), so all targets
+# cross-compile from a single Linux runner with no C toolchain.
+#
+# Self-contained where it's cheap: the web player is embedded via `-tags
+# embedplayer` (scripts/fetch-web-player.sh populates internal/web/player/ from the
+# pinned web image before building). ffmpeg/ffprobe are NOT bundled — they're often
+# already installed and large, so the server prefers a local copy (PATH or next to
+# the binary) and otherwise fetches one on demand into the data dir (see
+# internal/app). This keeps the download small.
+#
+# The Docker image keeps its own pipeline (Dockerfile + image.yml); this is purely
+# the native-binary path. Validate locally with:
+#   goreleaser check
+#   goreleaser build --snapshot --clean --skip=before --single-target
+version: 2
+
+project_name: audiosilo
+
+before:
+  hooks:
+    # CI-only (needs network + the pinned web image). Skip locally with --skip=before;
+    # the committed internal/web/player/.gitkeep keeps -tags embedplayer compiling.
+    - ./scripts/fetch-web-player.sh
+
+builds:
+  - id: audiosilo
+    main: ./cmd/audiosilo
+    binary: audiosilo
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -tags=embedplayer
+    ldflags:
+      - -s -w -X github.com/kodestar/audiosilo-server/internal/api.Version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: native
+    ids: [audiosilo]
+    name_template: "audiosilo_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Windows users expect a .zip; everyone else a .tar.gz.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+      - RELEASING.md
+
+# Linux .deb/.rpm: depend on the distro's ffmpeg rather than bundling, and install
+# a systemd unit. Home users on Linux who'd rather not use a package can take the
+# tarball above (which bundles ffmpeg) instead.
+nfpms:
+  - id: linux-packages
+    ids: [audiosilo]
+    package_name: audiosilo
+    vendor: AudioSilo
+    homepage: https://github.com/kodestar/audiosilo-server
+    maintainer: AudioSilo <noreply@audiosilo.app>
+    description: Self-hosted audiobook server (JSON API + admin UI + web player).
+    license: MIT
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    dependencies:
+      - ffmpeg
+    contents:
+      - src: packaging/systemd/audiosilo.service
+        dst: /lib/systemd/system/audiosilo.service
+        type: config
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: KodeStar
+    name: audiosilo-server
+  draft: true # let a human review the release notes/artifacts before publishing
+  footer: |
+    ---
+    Native builds bundle ffmpeg + the web player. Prefer Docker for advanced /
+    multi-user setups: `ghcr.io/kodestar/audiosilo-server`.

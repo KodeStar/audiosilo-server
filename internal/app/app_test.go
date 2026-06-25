@@ -1,11 +1,13 @@
-package main
+package app
 
 import (
 	"context"
 	"encoding/base64"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +88,40 @@ func TestRandomSecret(t *testing.T) {
 	// Two calls must not collide (vanishingly unlikely for crypto/rand entropy).
 	if a, b := randomSecret(32), randomSecret(32); a == b {
 		t.Fatalf("two randomSecret calls returned the same value %q", a)
+	}
+}
+
+// TestResolveTool covers the bundled-ffmpeg lookup: empty/explicit paths pass
+// through; a bare name resolves to a tool sitting next to the executable, else
+// falls back to the bare name (PATH lookup happens later).
+func TestResolveTool(t *testing.T) {
+	if got := resolveTool(""); got != "" {
+		t.Errorf(`resolveTool("") = %q, want ""`, got)
+	}
+	explicit := filepath.Join(string(os.PathSeparator)+"usr", "bin", "ffmpeg")
+	if got := resolveTool(explicit); got != explicit {
+		t.Errorf("resolveTool(explicit) = %q, want unchanged %q", got, explicit)
+	}
+	if got := resolveTool("definitely-not-bundled-xyz"); got != "definitely-not-bundled-xyz" {
+		t.Errorf("resolveTool(bare, none bundled) = %q, want the bare name", got)
+	}
+
+	// A bare name that exists next to the executable resolves to it.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("os.Executable unavailable")
+	}
+	name := "as-test-tool"
+	cand := filepath.Join(filepath.Dir(exe), name)
+	if runtime.GOOS == "windows" {
+		cand += ".exe"
+	}
+	if err := os.WriteFile(cand, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Skipf("cannot write next to test binary: %v", err)
+	}
+	defer os.Remove(cand)
+	if got := resolveTool(name); got != cand {
+		t.Errorf("resolveTool(bundled bare) = %q, want %q", got, cand)
 	}
 }
 

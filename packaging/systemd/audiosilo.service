@@ -1,0 +1,33 @@
+[Unit]
+Description=AudioSilo audiobook server
+Documentation=https://github.com/kodestar/audiosilo-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The .deb/.rpm doesn't create the user or data dir (packages shouldn't silently
+# add users); do it once before `systemctl enable --now audiosilo`:
+#   sudo useradd --system --home /var/lib/audiosilo --shell /usr/sbin/nologin audiosilo
+#   sudo install -d -o audiosilo -g audiosilo /var/lib/audiosilo
+# Then point a library at your books from the admin console (or run `audiosilo
+# --setup` once for the browser wizard).
+User=audiosilo
+Group=audiosilo
+ExecStart=/usr/bin/audiosilo --data /var/lib/audiosilo
+Restart=on-failure
+RestartSec=5
+
+# Hardening. ProtectHome=read-only (not true) so libraries kept under /home are
+# still readable; the data dir under /var/lib is the only writable path.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/audiosilo
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

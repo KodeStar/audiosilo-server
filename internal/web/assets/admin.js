@@ -8,6 +8,7 @@ let token = localStorage.getItem(TOKEN_KEY);
 let usersCache = [];
 let librariesCache = [];
 let sharesCache = [];
+let myUserId = null; // the signed-in admin's own id (to guard self-delete)
 
 const el = (id) => document.getElementById(id);
 const loginView = el("login-view");
@@ -63,6 +64,7 @@ el("login-form").addEventListener("submit", async (e) => {
     }
     token = data.token;
     localStorage.setItem(TOKEN_KEY, token);
+    myUserId = data.user.id;
     el("who").textContent = data.user.username;
     enterDashboard();
   } catch (err) {
@@ -414,6 +416,26 @@ async function renderUserDrawer(userId) {
   codesBlock.append(spacerNode(), actions);
   if (history.length) codesBlock.append(historyDisclosure(history, userId));
   body.append(codesBlock);
+
+  // --- Danger zone: delete account ---
+  const danger = block(asI18n.t("admin.drawer.dangerZone"));
+  if (u.id === myUserId) {
+    danger.append(emptyNote(asI18n.t("admin.drawer.deleteSelfHint")));
+  } else {
+    danger.append(subLabel(asI18n.t("admin.drawer.deleteUserHint")));
+    danger.append(
+      button(asI18n.t("admin.drawer.deleteUser"), "danger small", async () => {
+        if (!confirm(asI18n.t("admin.confirm.deleteUser", { name: u.username }))) return;
+        try {
+          await api("DELETE", `/admin/users/${u.id}`);
+          toast(asI18n.t("admin.toast.userDeleted"));
+          closeDrawer();
+          await loadUsers();
+        } catch (err) { toast(err.message, "error"); }
+      }),
+    );
+  }
+  body.append(danger);
 }
 
 // roleLabel maps a server role identifier to its localized label, falling back to
@@ -703,15 +725,37 @@ async function copyToClipboard(text) {
 }
 
 // ================= Shares =================
-el("add-share-btn").addEventListener("click", () => openModal("modal-share"));
+// editingShareId is null in create mode, or the id of the share being renamed.
+let editingShareId = null;
+
+el("add-share-btn").addEventListener("click", () => openShareModal(null));
+
+// openShareModal drives the shared modal for both creating and renaming: edit mode
+// prefills the name and switches the title/submit copy. The same modal-share form
+// submits to POST (create) or PATCH (rename) accordingly.
+function openShareModal(share) {
+  editingShareId = share ? share.id : null;
+  el("s-name").value = share ? share.name : "";
+  el("share-modal-title").textContent = asI18n.t(share ? "admin.shareModal.editTitle" : "admin.shareModal.title");
+  el("share-submit").textContent = asI18n.t(share ? "admin.shareModal.editSubmit" : "admin.shareModal.submit");
+  el("share-modal-help").classList.toggle("hidden", !!share); // the "then add paths" hint is create-only
+  openModal("modal-share");
+}
 
 el("share-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const name = el("s-name").value.trim();
   try {
-    await api("POST", "/admin/shares", { name: el("s-name").value.trim() });
+    if (editingShareId !== null) {
+      await api("PATCH", `/admin/shares/${editingShareId}`, { name });
+      toast(asI18n.t("admin.toast.shareUpdated"));
+    } else {
+      await api("POST", "/admin/shares", { name });
+      toast(asI18n.t("admin.toast.shareCreated"));
+    }
     el("share-form").reset();
+    editingShareId = null;
     closeModals();
-    toast(asI18n.t("admin.toast.shareCreated"));
     await loadShares();
   } catch (err) { toast(err.message, "error"); }
 });
@@ -741,7 +785,12 @@ function shareCard(s) {
   const head = div("page-head");
   const title = document.createElement("h2");
   title.textContent = s.name;
-  head.append(title, deleteShareBtn(s));
+  const actions = div("inline");
+  actions.append(
+    button(asI18n.t("admin.shares.editShare"), "ghost small", () => openShareModal(s)),
+    deleteShareBtn(s),
+  );
+  head.append(title, actions);
   c.appendChild(head);
 
   const chips = div("inline");
@@ -1056,7 +1105,20 @@ async function loadServerVersion() {
   try {
     const me = await api("GET", "/me");
     if (me.role !== "admin") { logout(); return; }
+    myUserId = me.id;
     el("who").textContent = me.username;
     await enterDashboard();
   } catch (_) { /* api() already handled 401 by logging out */ }
 })();
+
+// ---- PWA ----
+// Register the service worker so the admin console is installable and the shell
+// works offline. Service workers require a secure context, so this is a no-op
+// over plain http on a LAN IP — it works on localhost or trusted HTTPS, which is
+// the normal case for a locally-run server. The browser provides its own install
+// affordance; we add no in-app button.
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => { /* non-fatal */ });
+  });
+}
