@@ -523,6 +523,68 @@ func TestFolderOverrideEndpointRequiresAdmin(t *testing.T) {
 	}
 }
 
+// TestDuplicateNameReturnsConflict pins that a duplicate library/share name is a
+// 409 Conflict, not the opaque 500 the blanket error->500 mapping produced — and
+// that the leak-free message is returned (no raw "UNIQUE constraint failed").
+func TestDuplicateNameReturnsConflict(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	root := t.TempDir()
+
+	// Library: first create OK, duplicate name -> 409.
+	body := `{"name":"Main","root":"` + root + `"}`
+	if resp, b := e.do(t, "POST", "/api/v1/admin/libraries", adminTok, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first library = %d %s, want 201", resp.StatusCode, b)
+	}
+	resp, b := e.do(t, "POST", "/api/v1/admin/libraries", adminTok, body)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate library = %d %s, want 409", resp.StatusCode, b)
+	}
+	if strings.Contains(b, "UNIQUE") || strings.Contains(b, "constraint") {
+		t.Fatalf("error body leaked SQL detail: %s", b)
+	}
+
+	// Share: duplicate create -> 409, and a rename collision -> 409 (was a 400
+	// that leaked the raw constraint message).
+	if resp, b := e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":"S1"}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first share = %d %s, want 201", resp.StatusCode, b)
+	}
+	if resp, b := e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":"S1"}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate share create = %d %s, want 409", resp.StatusCode, b)
+	}
+	var s2 catalog.Share
+	_, b = e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"name":"S2"}`)
+	json.Unmarshal([]byte(b), &s2)
+	rename := "/api/v1/admin/shares/" + strconv.FormatInt(s2.ID, 10)
+	if resp, b := e.do(t, "PATCH", rename, adminTok, `{"name":"S1"}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("share rename collision = %d %s, want 409", resp.StatusCode, b)
+	} else if strings.Contains(b, "UNIQUE") || strings.Contains(b, "constraint") {
+		t.Fatalf("rename error leaked SQL detail: %s", b)
+	}
+}
+
+// TestContentPathOutsideRootIsBadRequest is the denied regression: a content
+// request whose ?path= escapes the library root returns 400 (invalid path) — the
+// same status /stream gives — not the 500 the error-handling refactor produced
+// when SafeJoin's ErrOutsideRoot fell through to the generic internal-error arm.
+func TestContentPathOutsideRootIsBadRequest(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	libPath := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10)
+	escape := url.QueryEscape("../../../../etc/passwd")
+
+	for _, ep := range []string{"/item", "/chapters", "/cover"} {
+		resp, body := e.do(t, "GET", libPath+ep+"?path="+escape, adminTok, "")
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s with out-of-root path = %d %s, want 400", ep, resp.StatusCode, body)
+		}
+	}
+}
+
 // meFlags fetches GET /me and returns the recovery/password capability flags the
 // client uses to drive the sign-out recovery warning.
 func (e *testEnv) meFlags(t *testing.T, token string) (hasPassword, hasRecovery bool) {

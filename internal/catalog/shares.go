@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
 // Sharing is filesystem-based: a Share is a named set of path rules, where each
@@ -256,19 +258,42 @@ func (c *Catalog) AccessibleLibraries(ctx context.Context, userID int64, isAdmin
 
 // --- Share CRUD + membership + grants ---
 
-// CreateShare creates a share (without paths) and returns it.
+// CreateShare creates a share together with any path rules in s.Paths, all in
+// one transaction: either the share row and every rule land, or nothing does.
+// This keeps the share-with-rules creation atomic in the catalog instead of
+// leaving the transport layer to compensate with a manual rollback delete (which
+// can itself fail, e.g. on a cancelled request context).
 func (c *Catalog) CreateShare(ctx context.Context, s Share) (*Share, error) {
-	ro := 1
-	if !s.ReadOnly {
-		ro = 0
-	}
-	res, err := c.db.ExecContext(ctx,
-		`INSERT INTO shares(name, description, read_only, created_at) VALUES(?,?,?,?)`,
-		s.Name, s.Description, ro, c.ts())
+	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = tx.Rollback() }()
+
+	ro := 0
+	if s.ReadOnly {
+		ro = 1
+	}
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO shares(name, description, read_only, created_at) VALUES(?,?,?,?)`,
+		s.Name, s.Description, ro, c.ts())
+	if err != nil {
+		if store.IsUniqueViolation(err) {
+			return nil, ErrNameTaken
+		}
+		return nil, err
+	}
 	s.ID, _ = res.LastInsertId()
+	for _, rule := range s.Paths {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO share_paths(share_id, library_id, path) VALUES(?,?,?)`,
+			s.ID, rule.LibraryID, rule.Path); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return &s, nil
 }
 
@@ -342,6 +367,9 @@ func (c *Catalog) UpdateShare(ctx context.Context, id int64, in Share) (*Share, 
 	if _, err := c.db.ExecContext(ctx,
 		`UPDATE shares SET name = ?, description = ?, read_only = ? WHERE id = ?`,
 		existing.Name, existing.Description, ro, id); err != nil {
+		if store.IsUniqueViolation(err) {
+			return nil, ErrNameTaken
+		}
 		return nil, err
 	}
 	return existing, nil

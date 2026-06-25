@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+
+	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
 // ErrNotFound is returned when a library or book does not exist.
@@ -12,6 +14,11 @@ var ErrNotFound = errors.New("not found")
 // ErrInvalidCursor marks a malformed pagination cursor so the transport layer
 // can map it to 400 (client error) and distinguish it from an internal failure.
 var ErrInvalidCursor = errors.New("invalid cursor")
+
+// ErrNameTaken marks a create or rename that collides with an existing unique
+// name (a library or share). The transport layer maps it to 409 Conflict so a
+// recoverable client mistake isn't reported as an internal server error.
+var ErrNameTaken = errors.New("name already taken")
 
 // CreateLibrary inserts a library and returns it with its assigned ID.
 func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, error) {
@@ -22,6 +29,9 @@ func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, err
 		`INSERT INTO libraries(name, root, default_view, created_at)
 		 VALUES(?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, c.ts())
 	if err != nil {
+		if store.IsUniqueViolation(err) {
+			return nil, ErrNameTaken
+		}
 		return nil, err
 	}
 	lib.ID, _ = res.LastInsertId()
@@ -71,6 +81,9 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in Library) (*Lib
 	if _, err := c.db.ExecContext(ctx,
 		`UPDATE libraries SET name = ?, root = ?, default_view = ? WHERE id = ?`,
 		existing.Name, existing.Root, existing.DefaultView, id); err != nil {
+		if store.IsUniqueViolation(err) {
+			return nil, ErrNameTaken
+		}
 		return nil, err
 	}
 	return existing, nil

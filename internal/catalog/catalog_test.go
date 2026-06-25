@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -360,9 +361,9 @@ func TestFolderOverridesCRUD(t *testing.T) {
 	if err := c.SetFolderOverride(ctx, lib.ID, "Author/Series", OverrideBook); err != nil {
 		t.Fatal(err)
 	}
-	// Invalid modes are rejected.
-	if err := c.SetFolderOverride(ctx, lib.ID, "Other", "weird"); err == nil {
-		t.Fatal("expected invalid mode to be rejected")
+	// Invalid modes are rejected with the typed sentinel (mapped to 400 by the API).
+	if err := c.SetFolderOverride(ctx, lib.ID, "Other", "weird"); !errors.Is(err, ErrInvalidOverrideMode) {
+		t.Fatalf("invalid mode: err = %v, want ErrInvalidOverrideMode", err)
 	}
 	got, err := c.FolderOverrides(ctx, lib.ID)
 	if err != nil {
@@ -384,6 +385,108 @@ func TestFolderOverridesCRUD(t *testing.T) {
 	}
 	if got, _ := c.FolderOverrides(ctx, lib.ID); len(got) != 0 {
 		t.Fatalf("override not deleted: %+v", got)
+	}
+}
+
+// TestUniqueNameReturnsErrNameTaken pins that a duplicate library or share name
+// surfaces as the typed ErrNameTaken sentinel (which the API maps to 409), not a
+// raw SQLite constraint error that leaked through as an opaque 500.
+func TestUniqueNameReturnsErrNameTaken(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+
+	if _, err := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/other"}); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("duplicate library name: err = %v, want ErrNameTaken", err)
+	}
+
+	if _, err := c.CreateShare(ctx, Share{Name: "Sci-Fi"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateShare(ctx, Share{Name: "Sci-Fi"}); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("duplicate share name (create): err = %v, want ErrNameTaken", err)
+	}
+	// Renaming a second share onto an existing name is the same collision.
+	other, err := c.CreateShare(ctx, Share{Name: "Fantasy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpdateShare(ctx, other.ID, Share{Name: "Sci-Fi"}); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("duplicate share name (rename): err = %v, want ErrNameTaken", err)
+	}
+}
+
+// TestCreateShareWithPathsIsAtomic verifies CreateShare inserts the share and its
+// path rules in one transaction: a rule referencing a non-existent library fails
+// the FK insert and rolls back the whole share, leaving nothing behind (the
+// orphan the old transport-layer compensating delete tried to clean up by hand).
+func TestCreateShareWithPathsIsAtomic(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp"})
+
+	// Happy path: the share and its rule both land.
+	created, err := c.CreateShare(ctx, Share{Name: "Good", Paths: []PathRule{{LibraryID: lib.ID, Path: "Author"}}})
+	if err != nil {
+		t.Fatalf("create share with valid path: %v", err)
+	}
+	if rules, _ := c.ListSharePaths(ctx, created.ID); len(rules) != 1 || rules[0].Path != "Author" {
+		t.Fatalf("path rule not persisted: %+v", rules)
+	}
+
+	// Rollback: a rule with a dangling library_id fails the FK insert, so the
+	// share row must not survive.
+	if _, err := c.CreateShare(ctx, Share{Name: "Bad", Paths: []PathRule{{LibraryID: 999999, Path: "x"}}}); err == nil {
+		t.Fatal("expected a FK error for a rule referencing a non-existent library")
+	}
+	shares, err := c.ListShares(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range shares {
+		if s.Name == "Bad" {
+			t.Fatalf("rolled-back share leaked: %+v", shares)
+		}
+	}
+}
+
+// TestPathFilterMatchesScopeAllows is the parity guard for the two encodings of
+// the same path-containment predicate: the Go gate Scope.Allows and the SQL
+// pathFilterSQL used by ListBooks/Search/RecentBooks. A book at path P under a
+// scope must be returned by the scoped list query IFF Scope.Allows(P) — if the
+// two ever diverge (e.g. a future change to segment-boundary or escape handling
+// applied to only one), this fails. Covers wildcard, boundary, and exact cases.
+func TestPathFilterMatchesScopeAllows(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+
+	rules := []string{"Sci_Fi", "Fantasy/Sanderson", "100%Pure"}
+	paths := []string{
+		"Sci_Fi/A/Dune.m4b",         // under a rule with a LIKE wildcard ('_')
+		"SciXFi/B/Leak.m4b",         // wildcard-matching sibling — must NOT match
+		"Fantasy/Sanderson/Way.m4b", // under an exact-prefix rule
+		"Fantasy/SandersonX/No.m4b", // boundary sibling — must NOT match
+		"Fantasy/Hobb/Other.m4b",    // different subtree — must NOT match
+		"100%Pure/C/Yes.m4b",        // under a rule with a LIKE wildcard ('%')
+		"100XPure/D/No.m4b",         // '%'-matching sibling — must NOT match
+	}
+	for i, p := range paths {
+		c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, Title: fmt.Sprintf("T%d", i), Author: "A"})
+	}
+
+	scope := Scope{LibraryID: lib.ID, Paths: rules}
+	page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Scope: &scope, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inSQL := map[string]bool{}
+	for _, b := range page.Books {
+		inSQL[b.RelPath] = true
+	}
+	for _, p := range paths {
+		if got, want := inSQL[p], scope.Allows(p); got != want {
+			t.Fatalf("divergence at %q: ListBooks returned=%v, Scope.Allows=%v", p, got, want)
+		}
 	}
 }
 
