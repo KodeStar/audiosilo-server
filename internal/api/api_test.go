@@ -723,6 +723,70 @@ func TestPasswordChangeRequiresCurrent(t *testing.T) {
 	}
 }
 
+// TestShareAdminHandlers covers the share-admin transport layer (only the
+// catalog layer was tested before): create with its path loop *and* the
+// orphan-cleanup rollback, in-place update, validation, not-found, and the admin
+// gate (denied for non-admins).
+func TestShareAdminHandlers(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+
+	// Create a share with an initial path rule; the response carries the rule
+	// (exercises handleCreateShare's AddSharePath loop on the happy path).
+	create := `{"name":"Wight","paths":[{"library_id":` + strconv.FormatInt(lib.ID, 10) + `,"path":"Will Wight"}]}`
+	resp, b := e.do(t, "POST", "/api/v1/admin/shares", adminTok, create)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create share = %d %s, want 201", resp.StatusCode, b)
+	}
+	var created catalog.Share
+	json.Unmarshal([]byte(b), &created)
+	if created.ID == 0 || len(created.Paths) != 1 || created.Paths[0].Path != "Will Wight" {
+		t.Fatalf("created share missing its path rule: %s", b)
+	}
+
+	// A nameless share is a 400.
+	if resp, _ := e.do(t, "POST", "/api/v1/admin/shares", adminTok, `{"paths":[]}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("nameless share = %d, want 400", resp.StatusCode)
+	}
+
+	// Rollback: a rule referencing a non-existent library fails the FK insert, so
+	// the just-created share row must be deleted, not left orphaned.
+	bad := `{"name":"Orphan","paths":[{"library_id":999999,"path":"x"}]}`
+	if resp, _ := e.do(t, "POST", "/api/v1/admin/shares", adminTok, bad); resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("share with bad path rule = %d, want 500", resp.StatusCode)
+	}
+	if _, list := e.do(t, "GET", "/api/v1/admin/shares", adminTok, ""); strings.Contains(list, "Orphan") {
+		t.Fatalf("rolled-back share leaked into the list: %s", list)
+	}
+
+	// Update renames in place (200) and the change is visible on GET.
+	idPath := "/api/v1/admin/shares/" + strconv.FormatInt(created.ID, 10)
+	if resp, b := e.do(t, "PATCH", idPath, adminTok, `{"name":"Renamed"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("update share = %d %s, want 200", resp.StatusCode, b)
+	}
+	if _, b := e.do(t, "GET", idPath, adminTok, ""); !strings.Contains(b, "Renamed") {
+		t.Fatalf("rename not reflected: %s", b)
+	}
+
+	// Updating a non-existent share is a 404.
+	if resp, _ := e.do(t, "PATCH", "/api/v1/admin/shares/999999", adminTok, `{"name":"x"}`); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("update missing share = %d, want 404", resp.StatusCode)
+	}
+
+	// Denied: a non-admin can neither create nor update shares.
+	member, _ := e.auth.CreateUser(ctx, "member", "member-password", auth.RoleUser)
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+	if resp, _ := e.do(t, "POST", "/api/v1/admin/shares", memberTok, `{"name":"x"}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin create share = %d, want 403", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "PATCH", idPath, memberTok, `{"name":"x"}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin update share = %d, want 403", resp.StatusCode)
+	}
+}
+
 // TestDemoCannotSelfRecover: a throwaway demo session may not mint a durable
 // recovery code or set a password (either would outlive the idle reaper).
 func TestDemoCannotSelfRecover(t *testing.T) {
