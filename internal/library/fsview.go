@@ -17,10 +17,10 @@ import (
 // ErrOutsideRoot is returned when a requested path escapes the library root.
 var ErrOutsideRoot = errors.New("path escapes library root")
 
-// Entry is one item in a directory listing. The Book* fields are populated
-// (hybrid view) when the entry corresponds to an indexed book — a file for
-// flat/books_in_folder libraries, or a folder for chapters_in_folder — so a
-// browsing client can act on it directly via /books/{book_id}/...
+// Entry is one item in a directory listing. The Book* fields are populated by
+// the API layer (annotateWithBooks) when the entry resolves to an indexed book
+// under the current per-folder detection (there is no library-wide layout). A
+// browsing client acts on the entry by its Path (?path=), never a book id.
 type Entry struct {
 	Name    string `json:"name"`
 	Path    string `json:"path"` // path relative to the library root, slash-separated

@@ -125,26 +125,42 @@ func (a *API) rateLimit(next http.Handler) http.Handler {
 	})
 }
 
-// bearerToken extracts a session token from the Authorization header, falling
-// back to a `token` query parameter when the header is absent. The query
-// fallback exists for browser media elements (<img>/<audio>), which cannot set
-// an Authorization header, so the web client can still authenticate GET
-// requests for covers and audio streams.
-func bearerToken(r *http.Request) string {
+// bearerToken extracts a session token from the Authorization header. When
+// allowQuery is set it additionally accepts the token as a `token` query
+// parameter — used ONLY for media GETs (covers/audio), where browser
+// <img>/<audio> elements cannot set an Authorization header. The fallback is
+// deliberately NOT accepted on other routes: a session token in a query string
+// can leak into access logs and Referer headers, so it stays confined to the
+// media handlers that actually need it (see requireMediaAuth).
+func bearerToken(r *http.Request, allowQuery bool) string {
 	h := r.Header.Get("Authorization")
 	if after, ok := strings.CutPrefix(h, "Bearer "); ok {
 		return strings.TrimSpace(after)
 	}
-	if t := strings.TrimSpace(r.URL.Query().Get("token")); t != "" {
-		return t
+	if allowQuery {
+		if t := strings.TrimSpace(r.URL.Query().Get("token")); t != "" {
+			return t
+		}
 	}
 	return ""
 }
 
-// requireAuth authenticates a session token and injects the user into context.
+// requireAuth authenticates a session token (Authorization header only) and
+// injects the user into context.
 func (a *API) requireAuth(next http.Handler) http.Handler {
+	return a.authenticate(next, false)
+}
+
+// requireMediaAuth is requireAuth that additionally accepts the session token as
+// a `token` query parameter, for browser media elements that cannot set headers.
+// Restrict its use to cover/stream GETs (see bearerToken).
+func (a *API) requireMediaAuth(next http.Handler) http.Handler {
+	return a.authenticate(next, true)
+}
+
+func (a *API) authenticate(next http.Handler, allowQueryToken bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := bearerToken(r)
+		token := bearerToken(r, allowQueryToken)
 		if token == "" {
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
 			return

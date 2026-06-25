@@ -18,10 +18,13 @@ import (
 )
 
 // browserCodecs are audio codecs mainstream browsers decode natively, so they
-// can be streamed directly instead of transcoded.
+// can be streamed directly instead of transcoded. Keys are ffprobe codec_name
+// values (DirectPlayable is only ever called with book.Codec, which is populated
+// verbatim from ffprobe) — e.g. AAC-in-MP4 reports "aac" (not the "mp4a" tag) and
+// WAV reports "pcm_s16le" (not the "wav" container name).
 var browserCodecs = map[string]bool{
-	"aac": true, "mp4a": true, "mp3": true, "mp2": true,
-	"flac": true, "opus": true, "vorbis": true, "pcm_s16le": true, "wav": true,
+	"aac": true, "mp3": true, "mp2": true,
+	"flac": true, "opus": true, "vorbis": true, "pcm_s16le": true,
 }
 
 // DirectPlayable reports whether codec plays natively in browsers. An empty

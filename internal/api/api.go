@@ -96,8 +96,10 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/books", a.requireAuth(http.HandlerFunc(a.handleListBooks)))
 	mux.Handle("GET /api/v1/libraries/{id}/item", a.requireAuth(http.HandlerFunc(a.handleItem)))
 	mux.Handle("GET /api/v1/libraries/{id}/chapters", a.requireAuth(http.HandlerFunc(a.handleChapters)))
-	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireAuth(http.HandlerFunc(a.handleCover)))
-	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireAuth(http.HandlerFunc(a.handleStream)))
+	// Media GETs accept the session token as a ?token= query param (browser
+	// <img>/<audio> can't set headers); other routes do not (see requireMediaAuth).
+	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireMediaAuth(http.HandlerFunc(a.handleCover)))
+	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireMediaAuth(http.HandlerFunc(a.handleStream)))
 	mux.Handle("GET /api/v1/search", a.requireAuth(http.HandlerFunc(a.handleSearch)))
 	mux.Handle("GET /api/v1/books/recent", a.requireAuth(http.HandlerFunc(a.handleRecentBooks)))
 

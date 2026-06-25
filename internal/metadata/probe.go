@@ -111,20 +111,6 @@ func applyProbe(m *Metadata, p *probeResult) {
 	}
 }
 
-// ProbeDuration returns the duration in seconds of a single media file, or 0 if
-// ffprobe is unavailable or the file cannot be read. Used to measure each part
-// of a multi-file book.
-func ProbeDuration(path, ffprobePath string) float64 {
-	if ffprobePath == "" {
-		return 0
-	}
-	p, err := probe(path, ffprobePath)
-	if err != nil {
-		return 0
-	}
-	return p.Duration
-}
-
 // HasFFprobe reports whether an ffprobe binary is resolvable at the given path
 // (or on PATH when path is "ffprobe").
 func HasFFprobe(ffprobePath string) bool {

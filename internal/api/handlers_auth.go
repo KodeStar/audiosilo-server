@@ -161,7 +161,7 @@ func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout revokes the caller's current session token.
 func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if err := a.auth.RevokeToken(r.Context(), bearerToken(r)); err != nil {
+	if err := a.auth.RevokeToken(r.Context(), bearerToken(r, false)); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not revoke token")
 		return
 	}

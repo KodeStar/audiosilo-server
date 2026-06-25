@@ -67,6 +67,31 @@ func TestHTMLCSP(t *testing.T) {
 	}
 }
 
+// TestHTMLCSPScriptSrcExcludesUnsafeInline is the security-load-bearing DENIED
+// direction: hashing inline scripts is pointless if 'unsafe-inline' is also
+// present (a single 'unsafe-inline' makes the browser ignore every hash), so the
+// script-src directive must NOT carry 'unsafe-inline'. The style-src directive
+// legitimately does, so this asserts on the script-src segment specifically.
+func TestHTMLCSPScriptSrcExcludesUnsafeInline(t *testing.T) {
+	html := []byte(`<script type="module">console.log(1)</script><script src="/x.js"></script>`)
+	csp := htmlCSP(html)
+
+	// Directives are joined with "; "; pull out the script-src one.
+	var scriptSrc string
+	for _, dir := range strings.Split(csp, "; ") {
+		if strings.HasPrefix(dir, "script-src ") {
+			scriptSrc = dir
+			break
+		}
+	}
+	if scriptSrc == "" {
+		t.Fatalf("CSP has no script-src directive:\n%s", csp)
+	}
+	if strings.Contains(scriptSrc, "'unsafe-inline'") {
+		t.Errorf("script-src must not allow 'unsafe-inline' (it nullifies the inline-script hashes): %q", scriptSrc)
+	}
+}
+
 // TestI18nAssets checks the baked-in admin/connect i18n is served under the strict
 // same-origin CSP: the engine + dictionary load as external assets, the admin/connect
 // pages reference them, and those pages stay inline-script-free (an inline <script>

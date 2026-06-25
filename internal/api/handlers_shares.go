@@ -44,17 +44,13 @@ func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	// CreateShare inserts the share row and any supplied path rules atomically,
+	// so a failed rule rolls the whole thing back — no orphaned share to clean up
+	// from the transport layer.
 	created, err := a.cat.CreateShare(r.Context(), s)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.writeCatalogError(w, err, "create share failed", "could not create share", "name", s.Name)
 		return
-	}
-	// Add any path rules supplied at creation.
-	for _, rule := range s.Paths {
-		if err := a.cat.AddSharePath(r.Context(), created.ID, rule); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 	full, _ := a.cat.GetShare(r.Context(), created.ID)
 	writeJSON(w, http.StatusCreated, full)
@@ -77,7 +73,7 @@ func (a *API) handleUpdateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.writeCatalogError(w, err, "update share failed", "could not update share", "share", id)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)

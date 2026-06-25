@@ -11,12 +11,8 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
-// Views.
-const (
-	ViewFilesystem = "filesystem"
-	ViewComputed   = "computed"
-	ViewHybrid     = "hybrid"
-)
+// ViewHybrid is the default library view (filesystem browse + indexed metadata).
+const ViewHybrid = "hybrid"
 
 // Library is a configured root of audiobooks. Its shape (single-file books,
 // folder-per-book, multi-file parts) is auto-detected per folder by the scanner;

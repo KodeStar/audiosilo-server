@@ -21,7 +21,7 @@ func TestReorderLibrariesEndpoint(t *testing.T) {
 
 	member, _ := e.auth.CreateUser(ctx, "member", "member-password", auth.RoleUser)
 	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
-	body := `{"ids":[` + itoa(libB.ID) + `,` + itoa(libA.ID) + `]}`
+	body := `{"ids":[` + strconv.FormatInt(libB.ID, 10) + `,` + strconv.FormatInt(libA.ID, 10) + `]}`
 	if resp, _ := e.do(t, "PUT", "/api/v1/admin/libraries/order", memberTok, body); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("non-admin reorder = %d, want 403", resp.StatusCode)
 	}
@@ -81,5 +81,3 @@ func TestSearchDedupWire(t *testing.T) {
 		t.Fatalf("unexpected winner/other_locations: %+v", b)
 	}
 }
-
-func itoa(n int64) string { return strconv.FormatInt(n, 10) }

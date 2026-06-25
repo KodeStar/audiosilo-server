@@ -285,7 +285,7 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := a.cat.CreateLibrary(r.Context(), lib)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.writeCatalogError(w, err, "create library failed", "could not create library", "name", lib.Name)
 		return
 	}
 	// Kick off an initial scan in the background; browsing works immediately.
@@ -313,7 +313,7 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
 		return
 	}
 	go a.backgroundScan(*updated)
@@ -377,8 +377,10 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	// The {book, collection} allowlist is enforced once in catalog.SetFolderOverride
+	// (returning ErrInvalidOverrideMode); the mapper turns that into a 400 here.
 	if err := a.cat.SetFolderOverride(r.Context(), id, path, req.Mode); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.writeCatalogError(w, err, "set folder override failed", "could not set folder override", "library", id, "path", path)
 		return
 	}
 	go a.backgroundScan(*lib)
@@ -437,8 +439,13 @@ func (a *API) handleScanLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lib, err := a.cat.GetLibrary(r.Context(), id)
-	if err != nil {
+	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "library not found")
+		return
+	}
+	if err != nil {
+		a.log.Warn("scan library: load failed", "library", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load library")
 		return
 	}
 	go a.backgroundScan(*lib)
