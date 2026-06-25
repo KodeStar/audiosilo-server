@@ -1,0 +1,3 @@
+# Placeholder so `//go:embed all:player` compiles in -tags embedplayer builds
+even before the release pipeline populates this directory with the prebuilt
+web-player export. Everything else here is gitignored.

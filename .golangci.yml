@@ -67,10 +67,17 @@ linters:
       # Background library scans must outlive the HTTP request, so they
       # deliberately use a detached context (using the request ctx would cancel
       # the scan when the response returns). G118 flags exactly that pattern.
-      - path: internal/api/handlers_admin.go
+      # handlers_setup.go kicks off the same backgroundScan from the setup wizard.
+      - path: internal/api/handlers_(admin|setup)\.go
         linters:
           - gosec
         text: G118
+      # toolfetch writes the ffmpeg/ffprobe binaries it downloads, which MUST be
+      # executable — G302 (file perms ≤0600) cannot apply to a tool binary.
+      - path: internal/toolfetch/toolfetch\.go
+        linters:
+          - gosec
+        text: G302
       # QF1001 (apply De Morgan's law) is a stylistic quickfix hint; the explicit
       # negated form in the FTS tokenizer is intentionally readable.
       - linters:

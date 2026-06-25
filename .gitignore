@@ -1,6 +1,10 @@
 # Build output
 /bin/
 /audiosilo
+/dist/
+
+# Throwaway goreleaser config used for local snapshot validation
+/.goreleaser.test.yml
 
 # Runtime data (database, config, generated certs)
 /data/

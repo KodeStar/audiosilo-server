@@ -46,6 +46,26 @@ docker build --build-arg WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest \
 docker push ghcr.io/kodestar/audiosilo-server:dev
 ```
 
+## 2b — native binaries (GitHub Releases)
+
+The same `v*` tag also triggers `.github/workflows/release.yml` (GoReleaser,
+`.goreleaser.yml`): self-contained cross-platform binaries for home users who
+don't want Docker. It embeds the web player (`-tags embedplayer`, populated from
+the pinned web image by `scripts/fetch-web-player.sh`), producing `.tar.gz`/`.zip`
+archives, `.deb`/`.rpm` packages and `checksums.txt` as a **draft** GitHub Release
+to review and publish. ffmpeg/ffprobe are not bundled — the server uses a local
+copy or auto-downloads one into `<data>/tools` on first run (see DISTRIBUTION.md).
+Publish the web image first (step 1) so the embedded player matches. The full
+distribution strategy (and the deferred desktop installers/tray) lives in the
+workspace [DISTRIBUTION.md](../DISTRIBUTION.md).
+
+Validate the GoReleaser config locally without releasing:
+
+```sh
+goreleaser check
+goreleaser build --snapshot --clean --skip=before --single-target
+```
+
 ## 3 — end-to-end smoke test
 
 1. `docker compose up -d`; grab the admin password from `docker compose logs`.

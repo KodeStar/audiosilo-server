@@ -849,6 +849,138 @@ func TestShareAdminHandlers(t *testing.T) {
 	}
 }
 
+// TestDeleteUserHandler covers DELETE /admin/users/{id}: an admin can delete a
+// normal user (204) and their session immediately stops resolving (the tokens
+// cascade), but a non-admin is forbidden (403), an admin cannot delete itself
+// (400), and an unknown id is 404.
+func TestDeleteUserHandler(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+
+	member, _ := e.auth.CreateUser(ctx, "member", "member-password", auth.RoleUser)
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+	memberPath := "/api/v1/admin/users/" + strconv.FormatInt(member.ID, 10)
+
+	// Denied: a non-admin can't delete anyone.
+	if resp, _ := e.do(t, "DELETE", memberPath, memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin delete = %d, want 403", resp.StatusCode)
+	}
+	// Denied: an admin can't delete its own account (disable instead).
+	selfPath := "/api/v1/admin/users/" + strconv.FormatInt(e.adminID, 10)
+	if resp, _ := e.do(t, "DELETE", selfPath, adminTok, ""); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("self-delete = %d, want 400", resp.StatusCode)
+	}
+	// Allowed: admin deletes the member.
+	if resp, b := e.do(t, "DELETE", memberPath, adminTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete member = %d %s, want 204", resp.StatusCode, b)
+	}
+	// The member is gone and their session no longer resolves (tokens cascade).
+	if resp, _ := e.do(t, "GET", memberPath, adminTok, ""); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted member detail = %d, want 404", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", "/api/v1/me", memberTok, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("deleted user's token still works = %d, want 401", resp.StatusCode)
+	}
+	// Unknown id is a 404.
+	if resp, _ := e.do(t, "DELETE", "/api/v1/admin/users/999999", adminTok, ""); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("delete unknown = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestSetupWizard covers the first-run /setup flow: it serves while no admin
+// exists, rejects a wrong token (403) and a missing folder (400) without creating
+// anything, creates the admin + library on a valid token (201), and then
+// self-closes (409 + the page redirects to /admin). A server that never enabled
+// the wizard exposes no /setup surface (404).
+func TestSetupWizard(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	authSvc := auth.New(db, time.Now)
+	cat := catalog.New(db, time.Now)
+	cfg := config.Default(t.TempDir())
+	scanner := library.NewScanner(cat, "", slog.Default())
+	a := New(cfg, authSvc, cat, scanner, "", slog.Default())
+	const tok = "test-setup-token"
+	a.EnableSetup(tok)
+	srv := httptest.NewServer(a.Handler())
+	t.Cleanup(srv.Close)
+
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	do := func(method, path, body string) (*http.Response, string) {
+		var r io.Reader
+		if body != "" {
+			r = strings.NewReader(body)
+		}
+		req, _ := http.NewRequest(method, srv.URL+path, r)
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, string(b)
+	}
+
+	booksDir := t.TempDir() // a folder that actually exists (the handler checks)
+
+	// The wizard serves while no admin exists.
+	if resp, b := do("GET", "/setup", ""); resp.StatusCode != http.StatusOK || !strings.Contains(b, "setup-form") {
+		t.Fatalf("GET /setup = %d, want 200 with the setup form", resp.StatusCode)
+	}
+
+	// Denied: wrong token (403), and a non-existent folder (400). Neither creates
+	// an admin.
+	bad := `{"token":"nope","password":"longenough","library_name":"Books","library_root":"` + booksDir + `"}`
+	if resp, _ := do("POST", "/setup", bad); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("setup wrong token = %d, want 403", resp.StatusCode)
+	}
+	noRoot := `{"token":"` + tok + `","password":"longenough","library_name":"Books","library_root":"/no/such/dir/xyz123"}`
+	if resp, _ := do("POST", "/setup", noRoot); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("setup missing folder = %d, want 400", resp.StatusCode)
+	}
+	if ok, _ := authSvc.AdminExists(ctx); ok {
+		t.Fatal("a rejected setup attempt created an admin")
+	}
+
+	// Allowed: valid token + inputs creates the admin and the library.
+	good := `{"token":"` + tok + `","username":"boss","password":"longenough","library_name":"Books","library_root":"` + booksDir + `"}`
+	if resp, b := do("POST", "/setup", good); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("setup = %d %s, want 201", resp.StatusCode, b)
+	}
+	if ok, _ := authSvc.AdminExists(ctx); !ok {
+		t.Fatal("setup did not create an admin")
+	}
+	if libs, _ := cat.ListLibraries(ctx); len(libs) != 1 || libs[0].Name != "Books" {
+		t.Fatalf("setup did not create the library: %+v", libs)
+	}
+
+	// Self-closes once an admin exists: POST is refused and GET redirects to /admin.
+	if resp, _ := do("POST", "/setup", good); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("setup after completion = %d, want 409", resp.StatusCode)
+	}
+	if resp, _ := do("GET", "/setup", ""); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin" {
+		t.Fatalf("GET /setup after completion = %d (Location %q), want 303 → /admin", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	// A server that never enabled setup exposes no /setup surface.
+	a2 := New(config.Default(t.TempDir()), auth.New(db, time.Now), cat, scanner, "", slog.Default())
+	srv2 := httptest.NewServer(a2.Handler())
+	t.Cleanup(srv2.Close)
+	resp, err := noFollow.Get(srv2.URL + "/setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /setup with wizard disabled = %d, want 404", resp.StatusCode)
+	}
+}
+
 // TestDemoCannotSelfRecover: a throwaway demo session may not mint a durable
 // recovery code or set a password (either would outlive the idle reaper).
 func TestDemoCannotSelfRecover(t *testing.T) {

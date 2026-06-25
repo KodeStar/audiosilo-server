@@ -646,6 +646,30 @@ func (s *Service) SetDisabled(ctx context.Context, id int64, disabled bool) erro
 	return err
 }
 
+// DeleteUser permanently removes an account. Deleting the last enabled admin is
+// refused (ErrLastAdmin) so the console can never be locked out; deleting an
+// unknown id is ErrNotFound. All of the user's durable state — sessions, auth
+// codes, progress, bookmarks, notes, listening history and share grants — is
+// removed by the schema's ON DELETE CASCADE rules (foreign_keys is ON, see
+// store.Open). Files on disk are untouched (the library is the source of truth).
+func (s *Service) DeleteUser(ctx context.Context, id int64) error {
+	u, err := s.GetUser(ctx, id)
+	if err != nil {
+		return err
+	}
+	if u.Role == RoleAdmin && !u.Disabled {
+		others, err := s.countEnabledAdmins(ctx, id)
+		if err != nil {
+			return err
+		}
+		if others == 0 {
+			return ErrLastAdmin
+		}
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	return err
+}
+
 // SetRole changes an account's role. Demoting the last enabled admin is refused.
 // Promoting a password-less account to admin requires a password to be set first
 // (see SetPassword) — admins must be able to sign in to the console.
