@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,10 @@ import (
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
+
+// migrations apply in lexical filename order, so each must carry the NNNN_
+// sequence prefix; a misnamed file would silently run out of sequence.
+var migrationName = regexp.MustCompile(`^\d{4}_.*\.sql$`)
 
 // DB wraps *sql.DB with AudioSilo-specific helpers.
 type DB struct {
@@ -71,9 +76,13 @@ func (db *DB) migrate(ctx context.Context) error {
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			names = append(names, e.Name())
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
 		}
+		if !migrationName.MatchString(e.Name()) {
+			return fmt.Errorf("invalid migration filename %q: must match NNNN_*.sql", e.Name())
+		}
+		names = append(names, e.Name())
 	}
 	sort.Strings(names)
 
