@@ -41,8 +41,9 @@ func tlsConfig(cfg *config.Config) (*tls.Config, error) {
 }
 
 // loadOrCreateSelfSigned reuses a persisted cert/key pair when present,
-// otherwise generates a long-lived self-signed certificate and saves it so the
-// fingerprint is stable across restarts (important for clients that pin it).
+// otherwise generates a long-lived self-signed certificate and saves it so a
+// user who manually trusted the cert (LAN browsers / OS trust store) doesn't
+// have to re-trust it after every restart.
 func loadOrCreateSelfSigned(cfg *config.Config) (tls.Certificate, error) {
 	certPath := cfg.TLS.CertFile
 	keyPath := cfg.TLS.KeyFile
@@ -62,7 +63,10 @@ func loadOrCreateSelfSigned(cfg *config.Config) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
 	tmpl := x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "AudioSilo"},

@@ -131,7 +131,7 @@ func (s *Service) createUser(ctx context.Context, username, password, role strin
 		role = RoleUser
 	}
 	if password == "" && role == RoleAdmin {
-		return nil, errors.New("a password is required for admin accounts")
+		return nil, ErrAdminNeedsPassword
 	}
 	if err := validatePassword(password); err != nil {
 		return nil, err
@@ -151,7 +151,7 @@ func (s *Service) createUser(ctx context.Context, username, password, role strin
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
-	return &User{ID: id, Username: username, Role: role, HasPassword: hash != ""}, nil
+	return &User{ID: id, Username: username, Role: role, HasPassword: hash != "", IsDemo: isDemo}, nil
 }
 
 // AdminExists reports whether at least one admin account is present.

@@ -132,7 +132,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 	// Discovery walks the whole tree (slow on a large network share) and emits no
 	// per-file output, so bookend it with logs — otherwise a long scan looks hung.
 	s.log.Info("scan started: discovering books", "library", lib.Name, "root", lib.Root)
-	books, err := discoverAuto(lib, overrides)
+	books, err := discoverAuto(lib, overrides, s.log)
 	if err != nil {
 		return nil, err
 	}
@@ -420,10 +420,20 @@ func partTitle(relPath string) string {
 // multi-file book, others hold several single-file books) is handled without any
 // layout setting. overrides forces a folder's interpretation when the heuristic
 // gets it wrong (see booksInDir).
-func discoverAuto(lib catalog.Library, overrides map[string]string) ([]*catalog.Book, error) {
+func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Logger) ([]*catalog.Book, error) {
 	dirs := map[string]bool{}
 	err := filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || strings.HasPrefix(d.Name(), ".") || !metadata.IsAudio(d.Name()) {
+		if err != nil {
+			// A per-entry error (commonly a permission-denied subtree on a
+			// partially-readable mount) would otherwise silently drop those books
+			// — and the prune step then removes them. Warn and skip just the
+			// unreadable entry rather than aborting the whole scan. WalkDir won't
+			// descend into a directory we return nil for after an error.
+			log.Warn("skipping unreadable path during discovery",
+				"library", lib.Name, "path", path, "err", err)
+			return nil
+		}
+		if d.IsDir() || strings.HasPrefix(d.Name(), ".") || !metadata.IsAudio(d.Name()) {
 			return nil
 		}
 		dirs[filepath.Dir(path)] = true

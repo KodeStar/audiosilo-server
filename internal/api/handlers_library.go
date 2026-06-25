@@ -167,7 +167,7 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 		Scope:     &scope,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		a.writeCatalogError(w, err, "list books failed", "could not load books", "library", id)
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
@@ -222,7 +222,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no book at that path")
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, "could not load book")
+		a.writeCatalogError(w, err, "load book failed", "could not load book", "library", lib.ID, "path", path)
 	default:
 		dp := media.DirectPlayable(book.Codec)
 		book.DirectPlayable = &dp
@@ -240,8 +240,12 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	book, err := a.bookForPath(r.Context(), lib, path)
-	if err != nil {
+	switch {
+	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no book at that path")
+		return
+	case err != nil:
+		a.writeCatalogError(w, err, "load chapters failed", "could not load chapters", "library", lib.ID, "path", path)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -293,8 +297,12 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	book, err := a.bookForPath(r.Context(), lib, path)
-	if err != nil {
+	switch {
+	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no cover")
+		return
+	case err != nil:
+		a.writeCatalogError(w, err, "load cover failed", "could not load cover", "library", lib.ID, "path", path)
 		return
 	}
 	if book.CoverPath != "" {

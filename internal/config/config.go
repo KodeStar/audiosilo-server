@@ -111,11 +111,11 @@ type Config struct {
 	Bind           string        `yaml:"bind"`       // host:port to listen on
 	PublicURL      string        `yaml:"public_url"` // externally reachable base URL, used in QR payloads
 	TLS            TLSConfig     `yaml:"tls"`
-	TrustedProxies []string      `yaml:"trusted_proxies"` // CIDRs whose X-Forwarded-For is trusted
-	CORSOrigins    []string      `yaml:"cors_origins"`    // allowed web origins ("*" to disable check)
-	MaxUploadBytes int64         `yaml:"max_upload_bytes"`
-	WebDir         string        `yaml:"web_dir"`   // directory of the prebuilt web player served at /web; empty disables it
-	AppLinks       AppLinkConfig `yaml:"app_links"` // optional native deep-link association (well-known files)
+	TrustedProxies []string      `yaml:"trusted_proxies"`  // CIDRs whose X-Forwarded-For is trusted
+	CORSOrigins    []string      `yaml:"cors_origins"`     // allowed web origins ("*" to disable check)
+	MaxUploadBytes int64         `yaml:"max_upload_bytes"` // reserved for Phase B uploads; not yet enforced (JSON bodies use a fixed 1 MiB cap)
+	WebDir         string        `yaml:"web_dir"`          // directory of the prebuilt web player served at /web; empty disables it
+	AppLinks       AppLinkConfig `yaml:"app_links"`        // optional native deep-link association (well-known files)
 	Libraries      []Library     `yaml:"libraries"`
 	Demo           DemoConfig    `yaml:"demo"` // public demo mode (throwaway accounts)
 }
@@ -276,8 +276,15 @@ func (c *Config) Validate() error {
 			return errors.New("demo mode requires demo.library")
 		}
 		if c.Demo.IdleTTL != "" {
-			if _, err := time.ParseDuration(c.Demo.IdleTTL); err != nil {
+			d, err := time.ParseDuration(c.Demo.IdleTTL)
+			if err != nil {
 				return fmt.Errorf("invalid demo.idle_ttl %q: %w", c.Demo.IdleTTL, err)
+			}
+			// A non-positive TTL is silently replaced by the 24h fallback at
+			// runtime (IdleTTLDuration), so reject it here instead of letting
+			// the operator's value be discarded without a signal.
+			if d <= 0 {
+				return fmt.Errorf("demo.idle_ttl must be positive, got %q", c.Demo.IdleTTL)
 			}
 		}
 	}

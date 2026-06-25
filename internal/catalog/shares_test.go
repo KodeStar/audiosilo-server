@@ -149,6 +149,56 @@ func TestScopedListBooks(t *testing.T) {
 	}
 }
 
+// TestScopedListBooksLikeWildcards is the denied regression for the LIKE-escape
+// fix in pathFilterSQL: a share path containing a SQL LIKE metacharacter ('_')
+// must NOT over-match a sibling folder. Granting "Sci_Fi" must not leak books
+// under "SciXFi" (which an unescaped `LIKE 'Sci_Fi/%'` would match, since '_'
+// is a single-char wildcard), keeping the SQL list filter consistent with the
+// authoritative Go gate Scope.Allows.
+func TestScopedListBooksLikeWildcards(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "Sci_Fi/A/Dune.m4b", Title: "Dune", Author: "Herbert"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "SciXFi/B/Leak.m4b", Title: "Leak", Author: "Nobody"})
+
+	scope := Scope{LibraryID: lib.ID, Paths: []string{"Sci_Fi"}}
+
+	// Allowed: the granted subtree is returned.
+	if !scope.Allows("Sci_Fi/A/Dune.m4b") {
+		t.Fatal("scope should allow the granted Sci_Fi subtree")
+	}
+	// Denied: the sibling differing only at the '_' position is not granted.
+	if scope.Allows("SciXFi/B/Leak.m4b") {
+		t.Fatal("scope must not allow the wildcard-matching sibling SciXFi")
+	}
+
+	page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Scope: &scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Books) != 1 || page.Books[0].Title != "Dune" {
+		t.Fatalf("scoped list must exclude the SciXFi sibling, got %+v", page.Books)
+	}
+
+	hits, err := c.Search(ctx, "Leak", []Scope{scope}, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("scoped search must not leak the SciXFi sibling, got %+v", hits)
+	}
+
+	recent, err := c.RecentBooks(ctx, []Scope{scope}, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range recent {
+		if b.RelPath == "SciXFi/B/Leak.m4b" {
+			t.Fatalf("scoped recent must not leak the SciXFi sibling, got %+v", recent)
+		}
+	}
+}
+
 func seedUserNamed(t *testing.T, c *Catalog, ctx context.Context, name string) int64 {
 	t.Helper()
 	res, err := c.db.ExecContext(ctx,

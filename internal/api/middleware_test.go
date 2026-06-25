@@ -14,14 +14,19 @@ func TestBearerToken(t *testing.T) {
 		name       string
 		authHeader string
 		query      string
+		allowQuery bool
 		want       string
 	}{
-		{"bearer header", "Bearer abc", "", "abc"},
-		{"bearer trims surrounding space", "Bearer   abc  ", "", "abc"},
-		{"query fallback for media elements", "", "tok123", "tok123"},
-		{"header wins over query", "Bearer abc", "tok123", "abc"},
-		{"non-bearer header ignored", "Basic xyz", "", ""},
-		{"empty", "", "", ""},
+		{"bearer header", "Bearer abc", "", false, "abc"},
+		{"bearer trims surrounding space", "Bearer   abc  ", "", false, "abc"},
+		// The query fallback is honoured only when explicitly allowed (media GETs)...
+		{"query allowed for media elements", "", "tok123", true, "tok123"},
+		// ...and ignored otherwise, so a session token can't ride the query string
+		// on non-media routes (where it could leak into access logs / Referer).
+		{"query ignored on non-media routes", "", "tok123", false, ""},
+		{"header wins over allowed query", "Bearer abc", "tok123", true, "abc"},
+		{"non-bearer header ignored", "Basic xyz", "", true, ""},
+		{"empty", "", "", true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -34,7 +39,7 @@ func TestBearerToken(t *testing.T) {
 				q.Set("token", tc.query)
 				r.URL.RawQuery = q.Encode()
 			}
-			if got := bearerToken(r); got != tc.want {
+			if got := bearerToken(r, tc.allowQuery); got != tc.want {
 				t.Fatalf("bearerToken = %q, want %q", got, tc.want)
 			}
 		})

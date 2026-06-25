@@ -2,8 +2,13 @@ package catalog
 
 import (
 	"context"
-	"fmt"
+	"errors"
 )
+
+// ErrInvalidOverrideMode marks a folder override whose mode is outside the
+// {book, collection} allowlist. The transport layer maps it to 400 — the single
+// source of truth for the allowlist lives here, not duplicated in the handler.
+var ErrInvalidOverrideMode = errors.New(`folder override mode must be "book" or "collection"`)
 
 // Folder detection override modes. The scanner auto-classifies each folder as a
 // single book or a collection of separate books; an admin can override a folder
@@ -40,7 +45,7 @@ func (c *Catalog) FolderOverrides(ctx context.Context, libraryID int64) (map[str
 // SetFolderOverride upserts a detection override for a folder.
 func (c *Catalog) SetFolderOverride(ctx context.Context, libraryID int64, path, mode string) error {
 	if mode != OverrideBook && mode != OverrideCollection {
-		return fmt.Errorf("invalid folder override mode %q", mode)
+		return ErrInvalidOverrideMode
 	}
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO folder_overrides(library_id, path, mode, updated_at) VALUES(?,?,?,?)

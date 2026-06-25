@@ -96,9 +96,13 @@ func page(fsys fs.FS, name string) http.HandlerFunc {
 	}
 }
 
+// noSniff wraps the static /assets/ file server with the site-wide CSP and the
+// X-Content-Type-Options: nosniff header, so the served CSS/JS get MIME-sniffing
+// protection consistent with the player assets.
 func noSniff(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(w, r)
 	})
 }

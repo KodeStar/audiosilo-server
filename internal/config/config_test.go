@@ -4,6 +4,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestDefaultIsSecure(t *testing.T) {
@@ -116,6 +117,32 @@ func TestDemoEffectiveMaxUsers(t *testing.T) {
 	fifty := 50
 	if got := (DemoConfig{MaxUsers: &fifty}).EffectiveMaxUsers(); got != 50 {
 		t.Fatalf("explicit max_users = %d, want 50", got)
+	}
+}
+
+// TestIdleTTLDuration pins the safe fallback: an empty, unparseable or
+// non-positive idle_ttl resolves to the 24h default, while a valid positive
+// duration is honored.
+func TestIdleTTLDuration(t *testing.T) {
+	const fallback = 24 * time.Hour
+	cases := []struct {
+		name string
+		ttl  string
+		want time.Duration
+	}{
+		{"empty falls back", "", fallback},
+		{"unparseable falls back", "not-a-duration", fallback},
+		{"negative falls back", "-5h", fallback},
+		{"zero falls back", "0s", fallback},
+		{"valid positive honored", "1h", time.Hour},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DemoConfig{IdleTTL: tc.ttl}.IdleTTLDuration()
+			if got != tc.want {
+				t.Fatalf("IdleTTLDuration(%q) = %v, want %v", tc.ttl, got, tc.want)
+			}
+		})
 	}
 }
 
