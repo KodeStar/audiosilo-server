@@ -45,6 +45,45 @@ func TestNormalizeCodeForgiving(t *testing.T) {
 	}
 }
 
+func TestDeleteUser(t *testing.T) {
+	s, ctx := newTestService(t)
+	admin, err := s.CreateUser(ctx, "admin", "s3cret-pass", RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := s.CreateUser(ctx, "member", "", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Deleting a normal user succeeds and the row is gone.
+	if err := s.DeleteUser(ctx, member.ID); err != nil {
+		t.Fatalf("delete member: %v", err)
+	}
+	if _, err := s.GetUser(ctx, member.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted member still present: %v", err)
+	}
+
+	// Deleting an unknown id is ErrNotFound.
+	if err := s.DeleteUser(ctx, 999999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete unknown = %v, want ErrNotFound", err)
+	}
+
+	// The last enabled admin can't be deleted (lockout guard).
+	if err := s.DeleteUser(ctx, admin.ID); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("delete last admin = %v, want ErrLastAdmin", err)
+	}
+
+	// With a second admin, deleting one of them is allowed.
+	admin2, err := s.CreateUser(ctx, "admin2", "s3cret-pass", RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteUser(ctx, admin2.ID); err != nil {
+		t.Fatalf("delete admin2 with another admin present: %v", err)
+	}
+}
+
 func TestCreateAuthenticateUser(t *testing.T) {
 	s, ctx := newTestService(t)
 	if _, err := s.CreateUser(ctx, "admin", "s3cret-pass", RoleAdmin); err != nil {

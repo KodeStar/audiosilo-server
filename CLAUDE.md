@@ -28,7 +28,32 @@ scripts/build-web.sh                 # dev helper: build the frontend export loc
 ```
 
 Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
-`--ffmpeg` (`""` disables on-the-fly transcoding).
+`--ffmpeg` (`""` disables on-the-fly transcoding), `--setup` (first-run **web
+setup wizard** instead of the auto-admin banner — see below).
+
+**Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
+`.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace
+`DISTRIBUTION.md`): the binary is CGO-free so it cross-compiles everywhere. Two
+build-time knobs make it self-contained for home users: `-tags embedplayer` bakes
+the web player into the binary (`internal/web/player/`, gitignored, populated from
+the pinned web image by `scripts/fetch-web-player.sh`) so `/web` works with no
+`web_dir`. **ffmpeg/ffprobe are NOT bundled** (large, and usually already present):
+`internal/app.resolveTools` prefers a local copy (explicit `--ffmpeg`/`--ffprobe`
+path → next to the binary → `$PATH`) and, only if none is found, auto-downloads a
+cached static build into `<data>/tools` (`internal/toolfetch`, HTTPS, self-checked
+by running `-version`; degrades gracefully offline and retries next start). Native
+GUI installers + a system-tray launcher are a **planned follow-up** (see
+DISTRIBUTION.md).
+
+**First-run setup wizard** (`--setup`, intended default for a future GUI launcher):
+instead of auto-creating the admin and printing credentials, the server mints a
+one-time setup token and enables a guarded browser wizard at `/setup` (handlers in
+`internal/api/handlers_setup.go`, page in `internal/web/assets/setup.{html,js}`).
+The wizard sets the admin password and the books folder; the token rides in the URL
+**fragment** (`/setup#token=…`, never logged), POST verifies it in constant time,
+and the wizard **self-closes the moment an admin exists** (404 when never enabled).
+`API.EnableSetup(token)` turns it on; `internal/app` prints the URL and reports it
+via `Options.OnURL` (for a future GUI launcher to open a browser).
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`** — CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
@@ -53,7 +78,8 @@ fix new findings rather than widening the excludes.
 ## Package layout
 
 ```
-cmd/audiosilo/        entrypoint: flag wiring, first-run bootstrap, library sync, startup scan
+cmd/audiosilo/        entrypoint: flag wiring; delegates to internal/app.Run
+internal/app/         shared run loop (config→store→services→bootstrap→serve); reusable by a future GUI launcher
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
@@ -61,6 +87,7 @@ internal/catalog/     libraries, access grants, books, FTS search, listening sta
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
+internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
 internal/web/         baked-in admin/connect UI (vanilla HTML/CSS/JS, no build step);
@@ -222,9 +249,15 @@ future metadata site can attach enrichment without reshaping the schema.
   triggers a background rescan; `DELETE /admin/libraries/{id}` removes the library
   + its index (files on disk untouched). Both are surfaced in the admin console.
 - **User/account admin**: `PATCH /admin/users/{id}` edits role/password/disabled
-  in place (`auth.SetRole`/`SetPassword`/`SetDisabled`) — no delete-and-recreate.
-  Two safety guards live in `auth`: the **last enabled admin** can't be demoted or
-  disabled (`ErrLastAdmin`), and an admin must keep a password (`ErrAdminNeedsPassword`).
+  in place (`auth.SetRole`/`SetPassword`/`SetDisabled`); `DELETE /admin/users/{id}`
+  (`auth.DeleteUser` → `handleDeleteUser`) permanently removes an account and all
+  of its durable state via the schema's `ON DELETE CASCADE` (sessions, auth codes,
+  progress/bookmarks/notes/history, share grants) — files on disk are untouched.
+  Two safety guards live in `auth`: the **last enabled admin** can't be demoted,
+  disabled, or deleted (`ErrLastAdmin`), and an admin must keep a password
+  (`ErrAdminNeedsPassword`); the **delete handler additionally refuses self-delete**
+  (an admin disables its own account instead, never deletes it). Disabling stays the
+  reversible option; deletion is the irreversible one.
   **Passwords are optional for non-admins** (stored as an empty hash; `Authenticate`
   rejects empty-hash accounts) — player-only users onboard purely via auth-code
   pairing. `GET /admin/users/{id}` returns a user + accessible libraries + granted

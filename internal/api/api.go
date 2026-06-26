@@ -36,6 +36,14 @@ type API struct {
 	ffmpeg  string // path to ffmpeg for on-the-fly transcoding; "" disables it
 	log     *slog.Logger
 
+	// setupToken, when non-empty, enables the first-run web setup wizard (GET/POST
+	// /setup): the wizard creates the first admin + a library. It is a one-time
+	// secret the caller must present (carried in the URL fragment, never logged) so
+	// a remote visitor can't seize an un-set-up server. The wizard also self-closes
+	// once an admin exists. Empty = wizard disabled (the headless default, which
+	// bootstraps the admin via the printed first-run banner instead).
+	setupToken string
+
 	loginLimiter   *limiter // per-IP lockout for password login
 	redeemLimiter  *limiter // per-IP lockout for auth-code redemption
 	demoLimiter    *limiter // per-IP cap on demo account creation
@@ -64,6 +72,11 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	}
 }
 
+// EnableSetup turns on the first-run setup wizard, guarded by token (a one-time
+// secret carried in the /setup URL fragment). Call before Handler(). The wizard
+// still refuses to run once an admin exists, so this is safe to leave enabled.
+func (a *API) EnableSetup(token string) { a.setupToken = token }
+
 // Handler returns the root http.Handler with all routes and global middleware.
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -74,6 +87,11 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/exchange", a.handleExchange)
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
 	mux.HandleFunc("POST /api/v1/demo/session", a.handleDemoSession)
+
+	// First-run setup wizard (public; self-disables once an admin exists and 404s
+	// unless the launcher enabled it via EnableSetup). Token-guarded on POST.
+	mux.HandleFunc("GET /setup", a.handleSetupPage)
+	mux.HandleFunc("POST /setup", a.handleSetup)
 
 	// Native deep-link association files (public; 404 unless configured).
 	mux.HandleFunc("GET /.well-known/apple-app-site-association", a.handleAppleAppSiteAssociation)
@@ -126,6 +144,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleCreateUser)))
 	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetUserDetail)))
 	mux.Handle("PATCH /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateUser)))
+	mux.Handle("DELETE /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteUser)))
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/users/{id}/recovery", a.requireAdmin(http.HandlerFunc(a.handleAdminClearRecovery)))
 	mux.Handle("POST /api/v1/admin/authcodes/{id}/rotate", a.requireAdmin(http.HandlerFunc(a.handleRotateAuthCode)))

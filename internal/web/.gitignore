@@ -1,0 +1,4 @@
+# The embedded web player export (release builds populate this from the pinned
+# web image). Keep only the placeholder in git.
+/player/*
+!/player/.gitkeep

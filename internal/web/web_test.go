@@ -162,6 +162,75 @@ func TestI18nAssets(t *testing.T) {
 	}
 }
 
+// TestAdminPWA checks the admin console is installable: the service worker is
+// served from the site root (so its scope covers /admin) with a JS content type,
+// the web manifest is served with the correct content type and names the app, and
+// the admin page links the manifest. The strict CSP must permit both (manifest-src
+// + worker-src 'self').
+func TestAdminPWA(t *testing.T) {
+	mux := http.NewServeMux()
+	if err := Register(mux, ""); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	c := ts.Client()
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	// The service worker is served at the ROOT (not /assets/) so scope = "/".
+	resp, err := c.Get(ts.URL + "/sw.js")
+	if err != nil {
+		t.Fatalf("GET /sw.js: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /sw.js = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("GET /sw.js Content-Type = %q, want a javascript type", ct)
+	}
+	if len(body) == 0 {
+		t.Error("GET /sw.js served an empty body")
+	}
+
+	// The web manifest gets the explicit application/manifest+json type and names
+	// the app (Go's mime table doesn't know .webmanifest, so this must be set).
+	resp, err = c.Get(ts.URL + "/manifest.webmanifest")
+	if err != nil {
+		t.Fatalf("GET /manifest.webmanifest: %v", err)
+	}
+	mani, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /manifest.webmanifest = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/manifest+json" {
+		t.Errorf("manifest Content-Type = %q, want application/manifest+json", ct)
+	}
+	if !strings.Contains(string(mani), "AudioSilo Admin") {
+		t.Errorf("manifest does not name the admin app:\n%s", mani)
+	}
+
+	// The strict CSP must allow the SW + manifest to load.
+	for _, want := range []string{"worker-src 'self'", "manifest-src 'self'"} {
+		if !strings.Contains(contentSecurityPolicy, want) {
+			t.Errorf("contentSecurityPolicy missing %q for the admin PWA:\n%s", want, contentSecurityPolicy)
+		}
+	}
+
+	// The admin page links the manifest so the browser can offer "Install".
+	resp, err = c.Get(ts.URL + "/admin")
+	if err != nil {
+		t.Fatalf("GET /admin: %v", err)
+	}
+	admin, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(admin), `rel="manifest"`) {
+		t.Error("/admin does not link the web manifest")
+	}
+}
+
 // TestPlayerServing exercises /web routing: per-route HTML, the SPA fallback for
 // client-routed deep links, 404 for missing assets, and a disabled /web when
 // web_dir is empty.
