@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AudioSilo — Setup</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <!-- First-run setup wizard. Served only until an admin exists, and POST is
+       token-guarded. All behaviour lives in /assets/setup.js (strict CSP). -->
+  <div class="center">
+    <div class="card narrow">
+      <div class="brand">
+        <img class="logo" src="/assets/favicon.svg" alt="">
+        <span class="wordmark"><span class="a">AUDIO</span><span class="s">SILO</span></span>
+      </div>
+      <div class="spacer"></div>
+      <h1>Welcome — let's set up your server</h1>
+      <p class="muted">Create your admin account and point AudioSilo at the folder where your audiobooks live. You can change all of this later in the admin console.</p>
+
+      <form id="setup-form">
+        <div class="spacer"></div>
+        <div class="field">
+          <label for="username">Admin username</label>
+          <input id="username" value="admin" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="password">Admin password</label>
+          <input id="password" type="password" autocomplete="new-password" required>
+          <p class="muted">At least 8 characters — you'll sign in with this.</p>
+        </div>
+        <div class="field">
+          <label for="library-name">Library name</label>
+          <input id="library-name" value="Audiobooks" required>
+        </div>
+        <div class="field">
+          <label for="library-root">Books folder (full path on this computer)</label>
+          <input id="library-root" placeholder="/Users/you/Audiobooks" required>
+        </div>
+        <button type="submit" class="block" id="setup-submit">Finish setup</button>
+      </form>
+      <div id="setup-msg" class="msg error"></div>
+
+      <div id="setup-done" class="hidden">
+        <div class="spacer"></div>
+        <h2>You're all set 🎉</h2>
+        <p class="muted">Your library is scanning now. Open the admin console to manage it, or the web player to start listening.</p>
+        <div class="inline">
+          <a href="/admin"><button type="button">Open admin console</button></a>
+          <a href="/web"><button type="button" class="secondary">Open web player</button></a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/assets/setup.js"></script>
+</body>
+</html>

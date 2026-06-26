@@ -28,8 +28,27 @@ var assetsFS embed.FS
 
 // contentSecurityPolicy locks the admin/connect UI down to same-origin resources.
 // data: is allowed for images so the QR pairing PNG (a data URI) renders.
+// manifest-src and worker-src ('self') let the admin console install as a PWA:
+// fetch its web manifest and register its same-origin service worker (/sw.js).
 const contentSecurityPolicy = "default-src 'self'; img-src 'self' data:; " +
-	"style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+	"style-src 'self'; script-src 'self'; connect-src 'self'; " +
+	"manifest-src 'self'; worker-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+// ContentSecurityPolicy is the strict same-origin CSP applied to the baked-in
+// admin/connect pages. Exported so the api package can apply the identical policy
+// to the first-run setup page it serves (the setup flow lives in api because it
+// creates the admin account).
+const ContentSecurityPolicy = contentSecurityPolicy
+
+// Asset returns an embedded UI asset by name (e.g. "setup.html"). Used by the api
+// package to serve the first-run setup page; callers set the content type + CSP.
+func Asset(name string) ([]byte, error) {
+	sub, err := fs.Sub(assetsFS, "assets")
+	if err != nil {
+		return nil, err
+	}
+	return fs.ReadFile(sub, name)
+}
 
 // Register mounts the web UI on mux:
 //
@@ -53,6 +72,12 @@ func Register(mux *http.ServeMux, webDir string) error {
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/assets/favicon.svg", http.StatusMovedPermanently)
 	})
+	// The admin console's PWA service worker and web manifest are served from the
+	// site root: a service worker can only control pages at or below its own URL,
+	// so /sw.js (scope "/") is what lets it control /admin. The manifest gets an
+	// explicit content type because Go's mime table doesn't know ".webmanifest".
+	mux.HandleFunc("GET /sw.js", rootAsset(sub, "sw.js", "text/javascript; charset=utf-8", true))
+	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(sub, "manifest.webmanifest", "application/manifest+json", false))
 	mux.HandleFunc("GET /admin", page(sub, "admin.html"))
 	mux.HandleFunc("GET /admin/", page(sub, "admin.html"))
 	mux.HandleFunc("GET /connect", page(sub, "index.html"))
@@ -66,20 +91,54 @@ func Register(mux *http.ServeMux, webDir string) error {
 		page(sub, "index.html")(w, r)
 	})
 
-	if webDir != "" {
-		mux.Handle("GET /web/", playerHandler(os.DirFS(webDir)))
+	if fsys, ok := playerFS(webDir); ok && isFile(fsys, "index.html") {
+		mux.Handle("GET /web/", playerHandler(fsys))
 	}
 	return nil
 }
 
-// HasPlayer reports whether webDir holds a usable web-player build (an
-// index.html). Used to gate the web_player capability flag.
-func HasPlayer(webDir string) bool {
-	if webDir == "" {
-		return false
+// playerFS chooses where to serve the web player from: a player embedded in the
+// binary (release builds, -tags embedplayer) takes precedence; otherwise web_dir
+// on disk (env AUDIOSILO_WEB_DIR / config web_dir). Returns (nil, false) when
+// neither is available.
+func playerFS(webDir string) (fs.FS, bool) {
+	if fsys, ok := embeddedPlayer(); ok {
+		return fsys, true
 	}
-	info, err := os.Stat(webDir + "/index.html")
-	return err == nil && !info.IsDir()
+	if webDir != "" {
+		return os.DirFS(webDir), true
+	}
+	return nil, false
+}
+
+// HasPlayer reports whether a usable web-player build (an index.html) is
+// available — embedded or under webDir. Used to gate the web_player capability
+// flag and to mount /web.
+func HasPlayer(webDir string) bool {
+	fsys, ok := playerFS(webDir)
+	return ok && isFile(fsys, "index.html")
+}
+
+// rootAsset serves one embedded asset from the site root (not under /assets/),
+// with an explicit content type and the strict same-origin CSP. Used for the PWA
+// service worker and web manifest, which must live at the root for the worker's
+// scope to cover /admin. noCache disables HTTP caching (so an updated worker is
+// picked up promptly).
+func rootAsset(fsys fs.FS, name, contentType string, noCache bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		data, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if noCache {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		_, _ = w.Write(data)
+	}
 }
 
 // page returns a handler that serves a single HTML file with a strict CSP.

@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title data-i18n="admin.docTitle">AudioSilo — Admin</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <!-- Installable PWA (admin console). The service worker is registered in admin.js. -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#7c3aed">
+  <link rel="apple-touch-icon" href="/assets/icon-192.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="AudioSilo Admin">
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -168,11 +175,11 @@
 
   <div id="modal-share" class="modal-scrim">
     <div class="modal">
-      <div class="mhead"><h2 data-i18n="admin.shareModal.title">Create share</h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <div class="mhead"><h2 id="share-modal-title" data-i18n="admin.shareModal.title">Create share</h2><button type="button" class="iconbtn" data-close>✕</button></div>
       <form id="share-form">
         <div class="field"><label for="s-name" data-i18n="admin.shareModal.name">Share name</label><input id="s-name" placeholder="e.g. Kids" data-i18n-placeholder="admin.shareModal.namePlaceholder" required></div>
-        <p class="muted" data-i18n="admin.shareModal.help">Create the share, then add paths to it and grant it to users.</p>
-        <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.cancel">Cancel</button><button type="submit" data-i18n="admin.shareModal.submit">Create share</button></div>
+        <p class="muted" id="share-modal-help" data-i18n="admin.shareModal.help">Create the share, then add paths to it and grant it to users.</p>
+        <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.cancel">Cancel</button><button type="submit" id="share-submit" data-i18n="admin.shareModal.submit">Create share</button></div>
       </form>
     </div>
   </div>

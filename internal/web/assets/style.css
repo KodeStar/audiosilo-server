@@ -1,8 +1,10 @@
 /* AudioSilo admin/connect UI. Design cues are ported from the Expo player
-   (~/dev/audiosilo-frontend): pink #db2777 accent, Roboto, dark-mode-first,
-   borders-instead-of-shadows. The pages are served under a strict same-origin
-   CSP (style-src 'self'; script-src 'self'), so ALL styling lives here — there
-   are no inline <style> blocks or style="" attributes in the HTML. */
+   (~/dev/audiosilo-frontend): Roboto, dark-mode-first, borders-instead-of-shadows.
+   The accent is Tailwind violet (#7c3aed) — deliberately distinct from the player's
+   pink (#db2777) so the admin console reads as a different surface at a glance.
+   The pages are served under a strict same-origin CSP (style-src 'self';
+   script-src 'self'), so ALL styling lives here — there are no inline <style>
+   blocks or style="" attributes in the HTML. */
 
 /* Self-hosted Roboto (latin) — no CDN, so it works offline and under the CSP. */
 @font-face {
@@ -28,9 +30,9 @@
 }
 
 :root {
-  --primary: #db2777;
-  --primary-press: #be185d;
-  --primary-soft: rgba(219, 39, 119, 0.14);
+  --primary: #7c3aed;        /* violet-600 */
+  --primary-press: #6d28d9;  /* violet-700 */
+  --primary-soft: rgba(124, 58, 237, 0.14);
   --blue: #3b82f6;
   --bg: #1f2937;        /* gray-800 */
   --surface: #1a2331;   /* gray-840 */

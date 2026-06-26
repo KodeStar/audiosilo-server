@@ -127,6 +127,28 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, u)
 }
 
+// handleDeleteUser permanently removes an account and all of its durable state
+// (sessions, auth codes, progress/bookmarks/notes/history, share grants) via the
+// schema's cascade. Two guards: an admin cannot delete their own account (disable
+// it instead — prevents self-lockout and fat-finger loss), and auth.DeleteUser
+// refuses the last enabled admin (ErrLastAdmin → 409).
+func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if caller := userFrom(r.Context()); caller != nil && caller.ID == id {
+		writeError(w, http.StatusBadRequest, "you cannot delete your own account — disable it instead")
+		return
+	}
+	if err := a.auth.DeleteUser(r.Context(), id); err != nil {
+		writeUserError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // writeUserError maps auth account-management errors to HTTP statuses.
 func writeUserError(w http.ResponseWriter, err error) {
 	switch {
