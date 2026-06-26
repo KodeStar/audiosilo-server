@@ -16,7 +16,12 @@ echo "fetch-web-player: populating $DEST from $WEB_IMAGE"
 rm -rf "$DEST"
 mkdir -p "$DEST"
 
-cid="$(docker create "$WEB_IMAGE")"
+# The web image is `FROM scratch` (see audiosilo-frontend/Dockerfile.web) with no
+# ENTRYPOINT/CMD, so a bare `docker create` is rejected ("no command specified").
+# Supply a placeholder command: `docker create` only records it in the container
+# config — the container is never started (we just `docker cp` out of its layer), so
+# the command is never executed and need not exist in the image.
+cid="$(docker create "$WEB_IMAGE" /audiosilo-web-export)"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 # The web image holds the static export at /web (built with baseUrl=/web).
 docker cp "$cid:/web/." "$DEST/"
