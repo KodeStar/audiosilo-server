@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -34,6 +35,25 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"enabled": a.cfg.Demo.Enabled, // clients show a "Try the demo" affordance
 		},
 	})
+}
+
+// healthTimeout bounds the /healthz database probe so it returns promptly even
+// when the writer is stalled (the reader pool answers it).
+const healthTimeout = 2 * time.Second
+
+// handleHealth reports whether the database is reachable for reads. Public and
+// unauthenticated so it can back a container/orchestrator healthcheck (a wedged
+// backend then restarts itself). It probes the reader pool under a short,
+// independent deadline, so it stays green while reads serve and only fails when
+// the database is genuinely unreachable.
+func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
+	defer cancel()
+	if err := a.cat.Ping(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleRedeem exchanges an auth code for a short-lived pairing token plus a QR

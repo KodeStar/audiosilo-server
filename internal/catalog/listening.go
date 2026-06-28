@@ -202,28 +202,25 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 	// Wrap the five updates in one transaction so a "move" either fully applies
 	// or fully rolls back, rather than leaving durable user state half-migrated
 	// across tables if a statement fails midway.
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	// One fully-constant UPDATE per durable-state table, iterated. The statements
-	// are spelled out rather than built as `"UPDATE "+table+...` on purpose: that
-	// concatenation trips gosec G202 (the project lints at a green baseline), and
-	// only the values are bound parameters here anyway. Add a table -> add a line.
-	stmts := []string{
-		`UPDATE progress SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-		`UPDATE bookmarks SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-		`UPDATE notes SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-		`UPDATE listening_history SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-		`UPDATE favourites SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-	}
-	for _, stmt := range stmts {
-		if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {
-			return err
+	return c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
+		// One fully-constant UPDATE per durable-state table, iterated. The statements
+		// are spelled out rather than built as `"UPDATE "+table+...` on purpose: that
+		// concatenation trips gosec G202 (the project lints at a green baseline), and
+		// only the values are bound parameters here anyway. Add a table -> add a line.
+		stmts := []string{
+			`UPDATE progress SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+			`UPDATE bookmarks SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+			`UPDATE notes SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+			`UPDATE listening_history SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+			`UPDATE favourites SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 		}
-	}
-	return tx.Commit()
+		for _, stmt := range stmts {
+			if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // AddBookmark stores a bookmark and returns it with its ID.
