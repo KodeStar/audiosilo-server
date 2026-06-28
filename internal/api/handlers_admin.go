@@ -485,9 +485,11 @@ func (a *API) handleScanStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.scanner.Progress(id))
 }
 
-// backgroundScan runs a library scan detached from the request lifecycle.
+// backgroundScan runs a library scan detached from the request lifecycle but
+// bound to the server lifecycle (a.baseCtx), so shutdown cancels an in-flight scan
+// instead of leaving it running detached.
 func (a *API) backgroundScan(lib catalog.Library) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	ctx, cancel := context.WithTimeout(a.baseCtx, time.Hour)
 	defer cancel()
 	if _, err := a.scanner.Scan(ctx, lib); err != nil {
 		a.log.Warn("background scan failed", "library", lib.Name, "err", err)

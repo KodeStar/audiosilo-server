@@ -73,11 +73,11 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	db, err := store.Open(ctx, filepath.Join(abs, "audiosilo.db"))
+	db, err := store.Open(ctx, filepath.Join(abs, "audiosilo.db"), store.WithLogger(log))
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	authSvc := auth.New(db, time.Now)
 	cat := catalog.New(db, time.Now)
@@ -129,6 +129,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	a := api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
+	a.SetBaseContext(ctx) // bind detached background work (scans) to the server lifecycle
 	if setupToken != "" {
 		a.EnableSetup(setupToken)
 		setupBanner(cfg, setupToken)
