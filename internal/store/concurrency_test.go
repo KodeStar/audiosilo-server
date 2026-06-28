@@ -110,3 +110,51 @@ func TestPing(t *testing.T) {
 		t.Fatal("Ping after Close should fail")
 	}
 }
+
+// TestReaderSeesCommittedWritesAndRejectsWrites guards the two invariants the
+// reader/writer split rests on, neither of which the :memory: API suite exercises
+// (there reader == writer, a single pool):
+//   - the reader pool observes a write committed on the writer pool (WAL
+//     cross-connection visibility) — the read-your-writes guarantee that
+//     on-demand indexing relies on (UpsertBook on the writer, then GetBook on
+//     the reader);
+//   - the reader pool is genuinely read-only (query_only), so a write
+//     accidentally routed through QueryContext/QueryRowContext fails loudly here
+//     instead of only in production against the file-backed DB.
+func TestReaderSeesCommittedWritesAndRejectsWrites(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if db.reader == db.writer {
+		t.Fatal("expected a separate reader pool for a file-backed DB")
+	}
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE probe (x INTEGER)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if err := db.WithTx(ctx, "insert", func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `INSERT INTO probe(x) VALUES(42)`)
+		return e
+	}); err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+
+	// The reader pool (a distinct connection) must see the just-committed row.
+	var x int
+	if err := db.QueryRowContext(ctx, `SELECT x FROM probe`).Scan(&x); err != nil {
+		t.Fatalf("read via reader pool: %v", err)
+	}
+	if x != 42 {
+		t.Fatalf("reader saw x=%d, want 42 (cross-pool read-your-writes broken)", x)
+	}
+
+	// A write on the reader pool must be refused — query_only(ON) is what stops a
+	// stray read-executor write from silently corrupting via the wrong pool.
+	if _, err := db.reader.ExecContext(ctx, `INSERT INTO probe(x) VALUES(1)`); err == nil {
+		t.Fatal("reader pool accepted a write; query_only(ON) is not in effect")
+	}
+}

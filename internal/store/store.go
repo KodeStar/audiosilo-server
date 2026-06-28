@@ -102,8 +102,12 @@ func dsnPragmas(dsn string, extra ...string) string {
 }
 
 // isMemoryDSN reports whether dsn names an in-memory database, which is
-// per-connection and so cannot be backed by a second pool.
-func isMemoryDSN(dsn string) bool { return strings.Contains(dsn, ":memory:") }
+// per-connection and so cannot be backed by a second pool. Both spellings count:
+// the bare ":memory:" and the URI form "mode=memory" — missing the latter would
+// open a second reader pool over a distinct, empty in-memory database.
+func isMemoryDSN(dsn string) bool {
+	return strings.Contains(dsn, ":memory:") || strings.Contains(dsn, "mode=memory")
+}
 
 // Open opens (creating if needed) the SQLite database at dsn and applies any
 // pending migrations. Pass ":memory:" for tests.
@@ -190,23 +194,26 @@ func (db *DB) Ping(ctx context.Context) error {
 
 // WithTx runs fn inside a writer transaction, committing on success and rolling
 // back on error (or panic). name labels the operation in the slow-transaction log.
-func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) error {
+func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) (err error) {
 	start := time.Now()
+	// Log a slow transaction regardless of outcome: a tx that stalls and then
+	// fails (e.g. the request timeout cancels its context after ~25s) is the
+	// backend-lockup precursor this warning exists to surface, so the check must
+	// not sit only on the success path. Deferred so it fires on every return.
+	defer func() {
+		if el := time.Since(start); el >= slowTxThreshold {
+			db.log.Warn("slow db transaction", "op", name, "elapsed", el.String(), "err", err)
+		}
+	}()
 	tx, err := db.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
-	if err := fn(tx); err != nil {
+	if err = fn(tx); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	if el := time.Since(start); el >= slowTxThreshold {
-		db.log.Warn("slow db transaction", "op", name, "elapsed", el.String())
-	}
-	return nil
+	return tx.Commit()
 }
 
 // startStatsSampler periodically logs writer-pool contention. A growing WaitCount
