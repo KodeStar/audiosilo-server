@@ -16,69 +16,68 @@ import (
 // replaces its files and chapters and refreshes the FTS row. It returns the
 // book ID.
 func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
 	var id int64
-	err = tx.QueryRowContext(ctx,
-		`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
-		     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
-		     mtime, content_hash, indexed_at, added_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		 ON CONFLICT(library_id, rel_path) DO UPDATE SET
-		     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
-		     series=excluded.series, series_index=excluded.series_index,
-		     narrator=excluded.narrator, duration=excluded.duration, asin=excluded.asin,
-		     isbn=excluded.isbn, cover_path=excluded.cover_path, format=excluded.format,
-		     codec=excluded.codec, size=excluded.size, mtime=excluded.mtime,
-		     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at
-		     -- added_at intentionally not updated: it records first-seen, so a
-		     -- re-index of an existing book keeps its original added date.
-		 RETURNING id`,
-		b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
-		b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
-		b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, c.ts(), b.AddedAt).Scan(&id)
+	err := c.db.WithTx(ctx, "UpsertBook", func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx,
+			`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
+			     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
+			     mtime, content_hash, indexed_at, added_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
+			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
+			     series=excluded.series, series_index=excluded.series_index,
+			     narrator=excluded.narrator, duration=excluded.duration, asin=excluded.asin,
+			     isbn=excluded.isbn, cover_path=excluded.cover_path, format=excluded.format,
+			     codec=excluded.codec, size=excluded.size, mtime=excluded.mtime,
+			     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at
+			     -- added_at intentionally not updated: it records first-seen, so a
+			     -- re-index of an existing book keeps its original added date.
+			 RETURNING id`,
+			b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
+			b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
+			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, c.ts(), b.AddedAt).Scan(&id); err != nil {
+			return err
+		}
+		b.ID = id
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM book_files WHERE book_id = ?`, id); err != nil {
+			return err
+		}
+		for _, f := range b.Files {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO book_files(book_id, rel_path, seq, duration, format, size)
+				 VALUES(?,?,?,?,?,?)`, id, f.RelPath, f.Seq, f.Duration, f.Format, f.Size); err != nil {
+				return err
+			}
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM chapters WHERE book_id = ?`, id); err != nil {
+			return err
+		}
+		for _, ch := range b.Chapters {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO chapters(book_id, idx, title, file_index, file_path, start, "end", book_offset)
+				 VALUES(?,?,?,?,?,?,?,?)`,
+				id, ch.Index, ch.Title, ch.FileIndex, ch.FilePath, ch.Start, ch.End, ch.BookOffset); err != nil {
+				return err
+			}
+		}
+
+		// Refresh FTS: delete-then-insert keyed by rowid = book id.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO books_fts(rowid, title, author, series, narrator) VALUES(?,?,?,?,?)`,
+			id, b.Title, b.Author, b.Series, b.Narrator); err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
 		return 0, err
 	}
-	b.ID = id
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM book_files WHERE book_id = ?`, id); err != nil {
-		return 0, err
-	}
-	for _, f := range b.Files {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO book_files(book_id, rel_path, seq, duration, format, size)
-			 VALUES(?,?,?,?,?,?)`, id, f.RelPath, f.Seq, f.Duration, f.Format, f.Size); err != nil {
-			return 0, err
-		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM chapters WHERE book_id = ?`, id); err != nil {
-		return 0, err
-	}
-	for _, ch := range b.Chapters {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO chapters(book_id, idx, title, file_index, file_path, start, "end", book_offset)
-			 VALUES(?,?,?,?,?,?,?,?)`,
-			id, ch.Index, ch.Title, ch.FileIndex, ch.FilePath, ch.Start, ch.End, ch.BookOffset); err != nil {
-			return 0, err
-		}
-	}
-
-	// Refresh FTS: delete-then-insert keyed by rowid = book id.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
-		return 0, err
-	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO books_fts(rowid, title, author, series, narrator) VALUES(?,?,?,?,?)`,
-		id, b.Title, b.Author, b.Series, b.Narrator); err != nil {
-		return 0, err
-	}
-	return id, tx.Commit()
+	return id, nil
 }
 
 // BooksByPaths returns the books in a library whose rel_path is in paths, keyed

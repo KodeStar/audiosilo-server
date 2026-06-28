@@ -146,18 +146,15 @@ func (c *Catalog) ListLibraries(ctx context.Context) ([]Library, error) {
 // admin "reorder libraries" control, and the order it sets is the tiebreaker used
 // when de-duplicating identical copies of a book across libraries.
 func (c *Catalog) ReorderLibraries(ctx context.Context, ids []int64) error {
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for i, id := range ids {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE libraries SET sort_order = ? WHERE id = ?`, i, id); err != nil {
-			return err
+	return c.db.WithTx(ctx, "ReorderLibraries", func(tx *sql.Tx) error {
+		for i, id := range ids {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE libraries SET sort_order = ? WHERE id = ?`, i, id); err != nil {
+				return err
+			}
 		}
-	}
-	return tx.Commit()
+		return nil
+	})
 }
 
 func collectLibraries(rows *sql.Rows) ([]Library, error) {

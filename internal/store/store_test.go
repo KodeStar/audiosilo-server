@@ -13,7 +13,7 @@ import (
 func countMigrations(t *testing.T, db *DB) int {
 	t.Helper()
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
+	if err := db.writer.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
 	return n
@@ -82,8 +82,10 @@ func TestForeignKeysEnabled(t *testing.T) {
 	}
 	defer db.Close()
 
+	// Check the writer connection: cascade deletes run on it, so its
+	// foreign_keys pragma is the one that matters.
 	var on int
-	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&on); err != nil {
+	if err := db.writer.QueryRow(`PRAGMA foreign_keys`).Scan(&on); err != nil {
 		t.Fatalf("PRAGMA foreign_keys: %v", err)
 	}
 	if on != 1 {
@@ -129,7 +131,7 @@ func TestMigrationRunnerRollsBackOnBadBody(t *testing.T) {
 
 	// The partial work (the rollback_probe table) must have been discarded.
 	var name string
-	err = db.QueryRow(
+	err = db.writer.QueryRow(
 		`SELECT name FROM sqlite_master WHERE type='table' AND name='rollback_probe'`,
 	).Scan(&name)
 	if err == nil {
