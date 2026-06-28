@@ -5,12 +5,47 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
 const ipKey ctxKey = 1
+
+// requestTimeout bounds how long a non-streaming request may run. Its purpose is
+// resilience, not latency policing: if the single writer connection is held by a
+// slow/stuck operation (e.g. a write stalled on a network volume), a request that
+// queues for it would otherwise hang forever — there is deliberately no HTTP
+// WriteTimeout (audio streams must run long), so nothing would ever release it.
+// The deadline cancels the request context (aborting the blocked DB call) and
+// returns 503 instead of wedging the connection. It must comfortably exceed the
+// slowest legitimate synchronous request (e.g. a large library cascade-delete);
+// scan endpoints return immediately since they run the scan in a goroutine.
+const requestTimeout = 30 * time.Second
+
+// isStreamingPath reports whether a request path serves a long-lived or large
+// body that must NOT be bounded by requestTimeout: audio streaming/transcoding
+// (cover/stream) and the web player's static asset mount.
+func isStreamingPath(p string) bool {
+	return strings.HasSuffix(p, "/stream") ||
+		strings.HasSuffix(p, "/cover") ||
+		p == "/web" || strings.HasPrefix(p, "/web/")
+}
+
+// timeout wraps non-streaming handlers in http.TimeoutHandler, which cancels the
+// request context at the deadline and emits a 503. Streaming routes pass through
+// unbounded (see isStreamingPath).
+func (a *API) timeout(next http.Handler) http.Handler {
+	timed := http.TimeoutHandler(next, a.timeoutDur, `{"error":"request timed out"}`)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isStreamingPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		timed.ServeHTTP(w, r)
+	})
+}
 
 // secureHeaders sets conservative security headers suitable for an API exposed
 // to the internet.

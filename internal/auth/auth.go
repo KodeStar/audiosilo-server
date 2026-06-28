@@ -307,18 +307,12 @@ func (s *Service) CreateInvite(ctx context.Context, userID int64, label string, 
 	if err != nil {
 		return "", err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := supersedeActiveInvites(ctx, tx, userID, s.ts()); err != nil {
-		return "", err
-	}
-	if err := insertAuthCode(ctx, tx, hash, userID, label, maxUses, s.expiresAt(ttl), s.ts(), CodeInvite); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
+	if err := s.db.WithTx(ctx, "CreateInvite", func(tx *sql.Tx) error {
+		if err := supersedeActiveInvites(ctx, tx, userID, s.ts()); err != nil {
+			return err
+		}
+		return insertAuthCode(ctx, tx, hash, userID, label, maxUses, s.expiresAt(ttl), s.ts(), CodeInvite)
+	}); err != nil {
 		return "", err
 	}
 	return code, nil
@@ -398,19 +392,13 @@ func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (strin
 	if err != nil {
 		return "", err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {
-		return "", err
-	}
-	if err := insertAuthCode(ctx, tx, hash, userID, CodeRecovery, 0, nil, s.ts(), CodeRecovery); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
+	if err := s.db.WithTx(ctx, "GenerateRecoveryCode", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {
+			return err
+		}
+		return insertAuthCode(ctx, tx, hash, userID, CodeRecovery, 0, nil, s.ts(), CodeRecovery)
+	}); err != nil {
 		return "", err
 	}
 	return code, nil

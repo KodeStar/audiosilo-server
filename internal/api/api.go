@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -36,6 +37,16 @@ type API struct {
 	ffmpeg  string // path to ffmpeg for on-the-fly transcoding; "" disables it
 	log     *slog.Logger
 
+	// baseCtx is the server lifecycle context; background work detached from a
+	// request (e.g. backgroundScan) derives from it so it's cancelled on shutdown
+	// instead of running detached. Defaults to context.Background(); the app wires
+	// the real one via SetBaseContext.
+	baseCtx context.Context
+
+	// timeoutDur bounds non-streaming requests (see the timeout middleware).
+	// Defaults to requestTimeout; a field so tests can shorten it.
+	timeoutDur time.Duration
+
 	// setupToken, when non-empty, enables the first-run web setup wizard (GET/POST
 	// /setup): the wizard creates the first admin + a library. It is a one-time
 	// secret the caller must present (carried in the URL fragment, never logged) so
@@ -64,6 +75,8 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		scanner:        scanner,
 		ffmpeg:         ffmpeg,
 		log:            log,
+		baseCtx:        context.Background(),
+		timeoutDur:     requestTimeout,
 		loginLimiter:   newLimiter(10, 15*time.Minute),
 		redeemLimiter:  newLimiter(10, 15*time.Minute),
 		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
@@ -77,12 +90,20 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 // still refuses to run once an admin exists, so this is safe to leave enabled.
 func (a *API) EnableSetup(token string) { a.setupToken = token }
 
+// SetBaseContext sets the server lifecycle context that detached background work
+// derives from, so it's cancelled on shutdown. Call before Handler().
+func (a *API) SetBaseContext(ctx context.Context) { a.baseCtx = ctx }
+
 // Handler returns the root http.Handler with all routes and global middleware.
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Public.
 	mux.HandleFunc("GET /api/v1/server", a.handleServerInfo)
+	// Liveness/readiness probe (public): reports DB read-reachability for a
+	// container healthcheck. Both /healthz and the API-prefixed form are served.
+	mux.HandleFunc("GET /healthz", a.handleHealth)
+	mux.HandleFunc("GET /api/v1/healthz", a.handleHealth)
 	mux.HandleFunc("POST /api/v1/auth/redeem", a.handleRedeem)
 	mux.HandleFunc("POST /api/v1/auth/exchange", a.handleExchange)
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
@@ -189,8 +210,11 @@ func (a *API) Handler() http.Handler {
 	}
 
 	// Global middleware (outermost first): security headers, CORS, real-IP,
-	// then per-IP rate limiting.
+	// per-IP rate limiting, then a per-request timeout. timeout is innermost so it
+	// bounds only the handler/DB work (not the rate-limit/CORS layers) and so a
+	// stuck DB connection fails fast with 503 instead of hanging forever.
 	var h http.Handler = mux
+	h = a.timeout(h)
 	h = a.rateLimit(h)
 	h = a.realIP(h)
 	h = a.cors(h)

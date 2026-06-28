@@ -5,6 +5,7 @@
 package catalog
 
 import (
+	"context"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -104,5 +105,8 @@ func New(db *store.DB, now func() time.Time) *Catalog {
 	}
 	return &Catalog{db: db, now: now}
 }
+
+// Ping verifies the underlying database is reachable for reads (backs GET /healthz).
+func (c *Catalog) Ping(ctx context.Context) error { return c.db.Ping(ctx) }
 
 func (c *Catalog) ts() string { return c.now().UTC().Format(time.RFC3339) }

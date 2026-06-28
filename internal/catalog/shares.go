@@ -264,34 +264,31 @@ func (c *Catalog) AccessibleLibraries(ctx context.Context, userID int64, isAdmin
 // leaving the transport layer to compensate with a manual rollback delete (which
 // can itself fail, e.g. on a cancelled request context).
 func (c *Catalog) CreateShare(ctx context.Context, s Share) (*Share, error) {
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	ro := 0
-	if s.ReadOnly {
-		ro = 1
-	}
-	res, err := tx.ExecContext(ctx,
-		`INSERT INTO shares(name, description, read_only, created_at) VALUES(?,?,?,?)`,
-		s.Name, s.Description, ro, c.ts())
-	if err != nil {
-		if store.IsUniqueViolation(err) {
-			return nil, ErrNameTaken
+	err := c.db.WithTx(ctx, "CreateShare", func(tx *sql.Tx) error {
+		ro := 0
+		if s.ReadOnly {
+			ro = 1
 		}
-		return nil, err
-	}
-	s.ID, _ = res.LastInsertId()
-	for _, rule := range s.Paths {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO share_paths(share_id, library_id, path) VALUES(?,?,?)`,
-			s.ID, rule.LibraryID, rule.Path); err != nil {
-			return nil, err
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO shares(name, description, read_only, created_at) VALUES(?,?,?,?)`,
+			s.Name, s.Description, ro, c.ts())
+		if err != nil {
+			if store.IsUniqueViolation(err) {
+				return ErrNameTaken
+			}
+			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
+		s.ID, _ = res.LastInsertId()
+		for _, rule := range s.Paths {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT OR IGNORE INTO share_paths(share_id, library_id, path) VALUES(?,?,?)`,
+				s.ID, rule.LibraryID, rule.Path); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &s, nil
