@@ -10,7 +10,7 @@
 # pinned web image before building). ffmpeg/ffprobe are NOT bundled — they're often
 # already installed and large, so the server prefers a local copy (PATH or next to
 # the binary) and otherwise fetches one on demand into the data dir (see
-# internal/app). This keeps the download small.
+# pkg/launcher). This keeps the download small.
 #
 # The Docker image keeps its own pipeline (Dockerfile + image.yml); this is purely
 # the native-binary path. Validate locally with:

@@ -92,6 +92,14 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	applyOverrides(cfg, opts)
+	// Overrides are applied after Load's validation, so re-validate before the
+	// config is used (and, on firstRun, persisted): an embedding launcher can pass
+	// a malformed Bind/TLSMode or a library with an empty/duplicate name, and an
+	// unchecked value would otherwise scan the wrong root or bake an unbootable
+	// config.yaml that fails Load on the next start.
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration after applying overrides: %w", err)
+	}
 
 	db, err := store.Open(ctx, filepath.Join(abs, "audiosilo.db"), store.WithLogger(log))
 	if err != nil {
