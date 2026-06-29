@@ -1,8 +1,10 @@
-// Package app holds the AudioSilo server's run loop: load config, open the
+// Package launcher holds the AudioSilo server's run loop: load config, open the
 // database, wire the services, bootstrap first-run state, and serve until the
 // context is cancelled. It is shared by the headless `audiosilo` command and the
-// desktop tray build (`audiosilo-desktop`) so both behave identically.
-package app
+// audiosilo-manager desktop app, which runs it in-process, so both behave
+// identically. This package is public (under pkg/) precisely so the manager (a
+// separate module) can import Run/Options.
+package launcher
 
 import (
 	"context"
@@ -49,6 +51,23 @@ type Options struct {
 	// the token-carrying /setup URL when first-run setup is pending, otherwise the
 	// web player (or admin console). A GUI launcher can use it to open a browser.
 	OnURL func(url string)
+
+	// Optional config overrides, applied on top of the loaded config.yaml for an
+	// embedding launcher (the audiosilo-manager desktop app) that controls the
+	// server in-process without hand-writing YAML. Empty/zero fields are ignored,
+	// so the headless `audiosilo` command (which sets none) is unaffected. When the
+	// config is first created these are persisted to config.yaml.
+	Bind      string    // host:port to listen on, e.g. "127.0.0.1:8080"
+	TLSMode   string    // "off" | "selfsigned" | "autocert"
+	PublicURL string    // externally reachable base URL (e.g. a Cloudflare Tunnel URL)
+	Libraries []Library // when non-nil, replaces the configured libraries
+}
+
+// Library mirrors config.Library for the public Options override API (so an
+// external module can declare a library without naming an internal type).
+type Library struct {
+	Name string
+	Root string
 }
 
 // Run loads configuration from opts.DataDir, opens the store, wires the services,
@@ -72,6 +91,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	applyOverrides(cfg, opts)
 
 	db, err := store.Open(ctx, filepath.Join(abs, "audiosilo.db"), store.WithLogger(log))
 	if err != nil {
@@ -142,6 +162,27 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	return server.Run(ctx, cfg, a.Handler(), log)
+}
+
+// applyOverrides layers the (optional) Options overrides on top of the loaded
+// config. Empty/zero fields are left untouched, so a caller that sets none (the
+// headless command) gets the file's configuration verbatim.
+func applyOverrides(cfg *config.Config, opts Options) {
+	if opts.Bind != "" {
+		cfg.Bind = opts.Bind
+	}
+	if opts.TLSMode != "" {
+		cfg.TLS.Mode = config.TLSMode(opts.TLSMode)
+	}
+	if opts.PublicURL != "" {
+		cfg.PublicURL = opts.PublicURL
+	}
+	if opts.Libraries != nil {
+		cfg.Libraries = make([]config.Library, len(opts.Libraries))
+		for i, l := range opts.Libraries {
+			cfg.Libraries[i] = config.Library{Name: l.Name, Root: l.Root}
+		}
+	}
 }
 
 // openURL is the URL the user should open in a browser: the token-carrying setup

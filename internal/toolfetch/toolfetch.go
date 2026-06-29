@@ -2,7 +2,7 @@
 // have them, so native (non-Docker) builds stay a small download instead of
 // bundling ~100 MB of media tools most machines already have.
 //
-// Resolution order is owned by the caller (internal/app): an explicit path, then
+// Resolution order is owned by the caller (pkg/launcher): an explicit path, then
 // next to the executable, then $PATH. Only when none of those turn up a tool does
 // the caller fall back here, which caches a static build under <data>/tools/ and
 // reuses it forever. Everything degrades gracefully: offline or an unsupported

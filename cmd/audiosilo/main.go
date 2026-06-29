@@ -3,7 +3,7 @@
 //
 // On first run it generates an admin account and an auth code, printing both to
 // stdout exactly once. Configuration lives in <data>/config.yaml. The actual run
-// loop lives in internal/app so the desktop tray build can share it.
+// loop lives in pkg/launcher so the audiosilo-manager desktop app can share it.
 package main
 
 import (
@@ -14,7 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/kodestar/audiosilo-server/internal/app"
+	"github.com/kodestar/audiosilo-server/pkg/launcher"
 )
 
 func main() {
@@ -27,7 +27,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := app.Run(ctx, app.Options{
+	if err := launcher.Run(ctx, launcher.Options{
 		DataDir:     *dataDir,
 		FFprobePath: *ffprobePath,
 		FFmpegPath:  *ffmpegPath,

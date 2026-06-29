@@ -38,7 +38,7 @@ build-time knobs make it self-contained for home users: `-tags embedplayer` bake
 the web player into the binary (`internal/web/player/`, gitignored, populated from
 the pinned web image by `scripts/fetch-web-player.sh`) so `/web` works with no
 `web_dir`. **ffmpeg/ffprobe are NOT bundled** (large, and usually already present):
-`internal/app.resolveTools` prefers a local copy (explicit `--ffmpeg`/`--ffprobe`
+`pkg/launcher.resolveTools` prefers a local copy (explicit `--ffmpeg`/`--ffprobe`
 path → next to the binary → `$PATH`) and, only if none is found, auto-downloads a
 cached static build into `<data>/tools` (`internal/toolfetch`, HTTPS, self-checked
 by running `-version`; degrades gracefully offline and retries next start). Native
@@ -52,8 +52,9 @@ one-time setup token and enables a guarded browser wizard at `/setup` (handlers 
 The wizard sets the admin password and the books folder; the token rides in the URL
 **fragment** (`/setup#token=…`, never logged), POST verifies it in constant time,
 and the wizard **self-closes the moment an admin exists** (404 when never enabled).
-`API.EnableSetup(token)` turns it on; `internal/app` prints the URL and reports it
-via `Options.OnURL` (for a future GUI launcher to open a browser).
+`API.EnableSetup(token)` turns it on; `pkg/launcher` prints the URL and reports it
+via `Options.OnURL` (so the audiosilo-manager desktop app, which runs the server
+in-process, can open a browser).
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`** — CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
@@ -78,8 +79,8 @@ fix new findings rather than widening the excludes.
 ## Package layout
 
 ```
-cmd/audiosilo/        entrypoint: flag wiring; delegates to internal/app.Run
-internal/app/         shared run loop (config→store→services→bootstrap→serve); reusable by a future GUI launcher
+cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
+pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so the audiosilo-manager desktop app runs it in-process (Run/Options)
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
