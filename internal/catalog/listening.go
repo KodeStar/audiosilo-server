@@ -199,7 +199,7 @@ func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]Listening
 // library, used by the scanner when it detects a file move. It is a no-op if
 // nothing references the old path.
 func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath, newPath string) error {
-	// Wrap the five updates in one transaction so a "move" either fully applies
+	// Wrap the updates in one transaction so a "move" either fully applies
 	// or fully rolls back, rather than leaving durable user state half-migrated
 	// across tables if a statement fails midway.
 	return c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
@@ -213,6 +213,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 			`UPDATE notes SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			`UPDATE listening_history SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			`UPDATE favourites SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+			// book_enrichment is keyed on the book path too, so a move must carry the
+			// attached ASIN/ISBN to the new path or the moved book silently loses it.
+			`UPDATE book_enrichment SET path = ? WHERE library_id = ? AND path = ?`,
 		}
 		for _, stmt := range stmts {
 			if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {

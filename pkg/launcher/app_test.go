@@ -1,4 +1,4 @@
-package app
+package launcher
 
 import (
 	"context"
@@ -122,6 +122,50 @@ func TestResolveTool(t *testing.T) {
 	defer os.Remove(cand)
 	if got := resolveTool(name); got != cand {
 		t.Errorf("resolveTool(bundled bare) = %q, want %q", got, cand)
+	}
+}
+
+// applyOverrides must layer non-empty Options fields onto the loaded config and
+// leave the rest untouched, so a caller that sets none gets the file verbatim.
+func TestApplyOverrides(t *testing.T) {
+	cfg := config.Default("/data")
+	applyOverrides(cfg, Options{
+		Bind:      "127.0.0.1:9000",
+		TLSMode:   "off",
+		PublicURL: "https://example.test/",
+		Libraries: []Library{{Name: "Books", Root: "/srv/books"}},
+	})
+	if cfg.Bind != "127.0.0.1:9000" {
+		t.Errorf("Bind = %q, want overridden", cfg.Bind)
+	}
+	if cfg.TLS.Mode != config.TLSOff {
+		t.Errorf("TLS.Mode = %q, want off", cfg.TLS.Mode)
+	}
+	if cfg.PublicURL != "https://example.test/" {
+		t.Errorf("PublicURL = %q, want overridden", cfg.PublicURL)
+	}
+	if len(cfg.Libraries) != 1 || cfg.Libraries[0] != (config.Library{Name: "Books", Root: "/srv/books"}) {
+		t.Errorf("Libraries = %+v, want one overridden library", cfg.Libraries)
+	}
+
+	// Empty Options leave the loaded config untouched (the headless path).
+	base := config.Default("/data")
+	want := *base
+	applyOverrides(base, Options{})
+	if base.Bind != want.Bind || base.TLS.Mode != want.TLS.Mode || base.PublicURL != want.PublicURL {
+		t.Errorf("empty overrides mutated config: %+v", base)
+	}
+}
+
+// Run re-validates after applying overrides, so a malformed override (e.g. a
+// library with an empty root, which an embedder like the manager can pass when no
+// folder is chosen) is rejected instead of scanning the process cwd or persisting
+// an unbootable config.yaml.
+func TestApplyOverridesRejectedByValidate(t *testing.T) {
+	cfg := config.Default("/data")
+	applyOverrides(cfg, Options{Libraries: []Library{{Name: "Books", Root: ""}}})
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected Validate to reject a library override with an empty root")
 	}
 }
 

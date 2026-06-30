@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -407,6 +408,55 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 	}
 	go a.backgroundScan(*lib)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "override set", "path": path, "mode": req.Mode})
+}
+
+// handleSetEnrichment attaches path-keyed metadata (ASIN/ISBN) to a book. The
+// manager calls this after matching an external source (e.g. an Audible library) to
+// an indexed book, so a book scanned without an ASIN gains one — making future
+// matches exact. The enrichment is durable and survives a re-scan
+// (catalog.ApplyEnrichments); no file on disk is modified, so the network API stays
+// non-destructive.
+func (a *API) handleSetEnrichment(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library id")
+		return
+	}
+	lib, err := a.cat.GetLibrary(r.Context(), id)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "library not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load library")
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if _, err := library.SafeJoin(lib.Root, path); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	var req struct {
+		ASIN string `json:"asin"`
+		ISBN string `json:"isbn"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if strings.TrimSpace(req.ASIN) == "" && strings.TrimSpace(req.ISBN) == "" {
+		writeError(w, http.StatusBadRequest, "asin or isbn is required")
+		return
+	}
+	if err := a.cat.SetEnrichment(r.Context(), id, path, req.ASIN, req.ISBN); err != nil {
+		a.writeCatalogError(w, err, "set enrichment failed", "could not set enrichment", "library", id, "path", path)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "enrichment set", "path": path})
 }
 
 // handleDeleteFolderOverride clears a folder's detection override (reverting it
