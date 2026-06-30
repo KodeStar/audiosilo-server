@@ -18,8 +18,6 @@ flags. (Owner `kodestar` is from the module path; the CI workflows use
 
 ## One-time setup
 
-- In **audiosilo-frontend**, add the Actions secret `FONTAWESOME_NPM_AUTH_TOKEN`
-  (needed by `npm ci`; see its `.npmrc`).
 - After the first push, make both GHCR packages **public**, or `docker login
   ghcr.io` on the deploy host so it can pull private images.
 
