@@ -523,6 +523,64 @@ func TestFolderOverrideEndpointRequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestEnrichmentEndpoint(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
+	book := &catalog.Book{LibraryID: lib.ID, RelPath: "Author/Book", Title: "Book", Author: "Author", AddedAt: "2020-01-01"}
+	if _, err := e.cat.UpsertBook(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	url := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/enrichment?path=Author/Book"
+
+	// A non-admin is rejected by requireAdmin.
+	member, _ := e.auth.CreateUser(ctx, "member", "member-password", auth.RoleUser)
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+	if resp, _ := e.do(t, "PUT", url, memberTok, `{"asin":"B0EVIL"}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin enrichment = %d, want 403", resp.StatusCode)
+	}
+
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	if resp, body := e.do(t, "PUT", url, adminTok, `{"asin":"B0ABC123"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin set enrichment = %d %s, want 200", resp.StatusCode, body)
+	}
+	got, err := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book")
+	if err != nil {
+		t.Fatalf("get book after enrichment: %v", err)
+	}
+	if got.ASIN != "B0ABC123" {
+		t.Fatalf("enrichment not applied to book: asin=%q", got.ASIN)
+	}
+
+	// SafeJoin denial: a path-traversal attempt is a 400, never a write or a 500.
+	// CLAUDE.md requires both an allowed and a denied test for anything that calls
+	// library.SafeJoin.
+	evil := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/enrichment?path=../../../etc/passwd"
+	if resp, _ := e.do(t, "PUT", evil, adminTok, `{"asin":"B0BAD"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("traversal enrichment = %d, want 400", resp.StatusCode)
+	}
+	// A blank payload is a 400, not a silent 200 no-op.
+	if resp, _ := e.do(t, "PUT", url, adminTok, `{}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("blank enrichment = %d, want 400", resp.StatusCode)
+	}
+
+	// Durability: a rebuild re-indexes the book without an ASIN; ApplyEnrichments
+	// (which the scanner runs) must restore it.
+	rebuilt := &catalog.Book{LibraryID: lib.ID, RelPath: "Author/Book", Title: "Book", Author: "Author", AddedAt: "2020-01-01"}
+	if _, err := e.cat.UpsertBook(ctx, rebuilt); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book"); b.ASIN != "" {
+		t.Fatalf("expected ASIN cleared by rebuild, got %q", b.ASIN)
+	}
+	if err := e.cat.ApplyEnrichments(ctx, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book"); b.ASIN != "B0ABC123" {
+		t.Fatalf("enrichment not restored after rebuild: %q", b.ASIN)
+	}
+}
+
 // TestDuplicateNameReturnsConflict pins that a duplicate library/share name is a
 // 409 Conflict, not the opaque 500 the blanket error->500 mapping produced — and
 // that the leak-free message is returned (no raw "UNIQUE constraint failed").
