@@ -81,6 +81,7 @@ fix new findings rather than widening the excludes.
 ```
 cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
 pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so the audiosilo-manager desktop app runs it in-process (Run/Options)
+pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle) — same-book identification across messy titles; shared with the manager, usable for server-side enrichment/dedup
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
@@ -119,8 +120,11 @@ is used **only** to detect moves; it is not an identity.
 FTS5). Durable user state is **path-keyed** and decoupled from the index (no FK to
 books): `progress`/`bookmarks`/`notes`/`listening_history` on `(user_id,
 library_id, rel_path)`, plus `folder_overrides` (`library_id, path, mode`) which
-pins a folder's book/collection classification. Sharing: `shares` (named),
-`share_paths` (`library_id`, `path`; `""` = whole library), `user_share_access`.
+pins a folder's book/collection classification, and `book_enrichment`
+(`library_id, path, asin, isbn`) which attaches metadata to a book (set by the
+manager when it matches an external source) — both durable, path-keyed, no FK to
+the index. Sharing: `shares` (named), `share_paths` (`library_id`, `path`;
+`""` = whole library), `user_share_access`.
 
 Book identity carries `author`/`series`/`title` plus optional `asin`/`isbn` so a
 future metadata site can attach enrichment without reshaping the schema.
