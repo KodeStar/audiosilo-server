@@ -545,8 +545,23 @@ func TestEnrichmentEndpoint(t *testing.T) {
 		t.Fatalf("admin set enrichment = %d %s, want 200", resp.StatusCode, body)
 	}
 	got, err := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book")
-	if err != nil || got.ASIN != "B0ABC123" {
-		t.Fatalf("enrichment not applied to book: asin=%q err=%v", got.ASIN, err)
+	if err != nil {
+		t.Fatalf("get book after enrichment: %v", err)
+	}
+	if got.ASIN != "B0ABC123" {
+		t.Fatalf("enrichment not applied to book: asin=%q", got.ASIN)
+	}
+
+	// SafeJoin denial: a path-traversal attempt is a 400, never a write or a 500.
+	// CLAUDE.md requires both an allowed and a denied test for anything that calls
+	// library.SafeJoin.
+	evil := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/enrichment?path=../../../etc/passwd"
+	if resp, _ := e.do(t, "PUT", evil, adminTok, `{"asin":"B0BAD"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("traversal enrichment = %d, want 400", resp.StatusCode)
+	}
+	// A blank payload is a 400, not a silent 200 no-op.
+	if resp, _ := e.do(t, "PUT", url, adminTok, `{}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("blank enrichment = %d, want 400", resp.StatusCode)
 	}
 
 	// Durability: a rebuild re-indexes the book without an ASIN; ApplyEnrichments

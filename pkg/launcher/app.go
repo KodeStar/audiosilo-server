@@ -163,8 +163,9 @@ func Run(ctx context.Context, opts Options) error {
 		setupBanner(cfg, setupToken)
 	}
 
-	// Tell the caller (the desktop tray) which URL to open: the setup wizard while
-	// first-run setup is pending, otherwise the player (or admin console).
+	// Tell the caller (the audiosilo-manager desktop app) which URL to open: the
+	// setup wizard while first-run setup is pending, otherwise the player (or admin
+	// console).
 	if opts.OnURL != nil {
 		opts.OnURL(openURL(cfg, setupToken))
 	}

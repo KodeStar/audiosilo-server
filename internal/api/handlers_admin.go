@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -445,6 +446,10 @@ func (a *API) handleSetEnrichment(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if strings.TrimSpace(req.ASIN) == "" && strings.TrimSpace(req.ISBN) == "" {
+		writeError(w, http.StatusBadRequest, "asin or isbn is required")
 		return
 	}
 	if err := a.cat.SetEnrichment(r.Context(), id, path, req.ASIN, req.ISBN); err != nil {
