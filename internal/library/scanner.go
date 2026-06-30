@@ -644,8 +644,10 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 		return nil, err
 	}
 	// Restore any path-keyed enrichment (e.g. an ASIN) onto this just-indexed book.
-	if err := s.cat.ApplyEnrichments(ctx, lib.ID); err != nil {
-		s.log.Warn("apply enrichments failed", "library", lib.Name, "err", err)
+	// Scope it to the one book we resolved — IndexPath is a hot per-request path, so
+	// re-sweeping the whole library here would be O(enriched books) per lookup.
+	if err := s.cat.ApplyEnrichment(ctx, lib.ID, book.RelPath); err != nil {
+		s.log.Warn("apply enrichment failed", "library", lib.Name, "path", book.RelPath, "err", err)
 	}
 	return s.cat.GetBook(ctx, id)
 }

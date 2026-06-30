@@ -163,17 +163,48 @@ func tidyTitle(s string) string {
 	return strings.Trim(s, " -:,;|.")
 }
 
-// removeFold removes every case-insensitive occurrence of sub from s.
+// removeFold removes every case-insensitive occurrence of sub from s, replacing
+// each with a space. It searches a lowercased copy but maps each match's byte
+// offsets back onto s rune-by-rune, so a rune whose lowercase form differs in byte
+// length (e.g. 'İ' → "i", 'ẞ' → "ß") can't desync the offsets and corrupt the
+// result — the naive `s[:i] + s[i+len(sub):]` did, because i indexes the lowercased
+// string, not s.
 func removeFold(s, sub string) string {
-	ls, lsub := strings.ToLower(s), strings.ToLower(sub)
-	for {
-		i := strings.Index(ls, lsub)
-		if i < 0 {
-			return s
-		}
-		s = s[:i] + " " + s[i+len(sub):]
-		ls = ls[:i] + " " + ls[i+len(sub):]
+	lsub := strings.ToLower(sub)
+	if lsub == "" {
+		return s
 	}
+	var b strings.Builder
+	for s != "" {
+		i := strings.Index(strings.ToLower(s), lsub)
+		if i < 0 {
+			b.WriteString(s)
+			break
+		}
+		// Map the lowercased match span [i, i+len(lsub)) onto byte offsets in s by
+		// lowering s one rune at a time until the lowered length reaches each bound.
+		start, end, lowered := -1, -1, 0
+		for off, r := range s {
+			if lowered == i {
+				start = off
+			}
+			lowered += len(strings.ToLower(string(r)))
+			if lowered == i+len(lsub) {
+				end = off + len(string(r))
+				break
+			}
+		}
+		if start < 0 || end < 0 {
+			// Match straddles a rune whose case expansion has no clean byte boundary;
+			// leave the remainder untouched rather than corrupt it.
+			b.WriteString(s)
+			break
+		}
+		b.WriteString(s[:start])
+		b.WriteByte(' ')
+		s = s[end:]
+	}
+	return b.String()
 }
 
 // genreFluff marks a trailing ": …"/" - …" subtitle made up entirely of these words

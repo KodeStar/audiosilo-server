@@ -1,6 +1,9 @@
 package match
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Cases drawn from a real 1080-book library: full Audible titles with series
 // prefixes + "(Book N)", clean book titles, shortcode prefixes, series suffixes, and
@@ -67,6 +70,19 @@ func TestCleanTitle(t *testing.T) {
 		if got := CleanTitle(tc.title, tc.series); got != tc.want {
 			t.Errorf("CleanTitle(%q, %q) = %q, want %q", tc.title, tc.series, got, tc.want)
 		}
+	}
+}
+
+// TestRemoveFoldNonASCII pins that removeFold no longer corrupts titles containing
+// a rune whose lowercase form differs in byte length (e.g. 'İ' U+0130 → "i"). The
+// old version sliced s with byte offsets taken from its lowercased copy, dropping
+// or garbling such characters.
+func TestRemoveFoldNonASCII(t *testing.T) {
+	if got := strings.TrimSpace(removeFold("İstanbul Saga", "Saga")); got != "İstanbul" {
+		t.Errorf("removeFold corrupted non-ASCII title: got %q, want %q", got, "İstanbul")
+	}
+	if got := CleanTitle("İstanbul: The Saga Begins", "The Saga"); !strings.Contains(got, "İstanbul") {
+		t.Errorf("CleanTitle corrupted non-ASCII title: got %q, want it to contain %q", got, "İstanbul")
 	}
 }
 
