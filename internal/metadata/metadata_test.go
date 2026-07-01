@@ -69,6 +69,11 @@ func TestIsAudio(t *testing.T) {
 	if IsAudio("cover.jpg") || IsAudio("notes.txt") {
 		t.Error("expected non-audio rejected")
 	}
+	// Audible DRM formats are intentionally not indexed — the server can't stream
+	// them, and one next to its converted .m4b would double up the book's chapters.
+	if IsAudio("book.aax") || IsAudio("book.aaxc") || IsAudio("BOOK.AAX") {
+		t.Error("expected Audible DRM (.aax/.aaxc) rejected")
+	}
 }
 
 func TestApplyProbePrecedence(t *testing.T) {
