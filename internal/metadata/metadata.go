@@ -49,8 +49,14 @@ type Metadata struct {
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
 // .mp4 is included because audiobooks are sometimes delivered as AAC-in-MP4;
 // media.ServeFile serves it as audio/mp4 and the transcoder covers odd codecs.
+//
+// Audible DRM formats (.aax/.aaxc) are intentionally excluded: the server can never
+// stream them (they need per-account decryption), and indexing an .aax that sits
+// next to its converted .m4b would lump both into one book with duplicated chapters
+// and an unplayable track. The manager converts .aax/.aaxc to .m4b before content
+// enters a library, so a library should only ever hold the playable .m4b.
 var AudioExtensions = map[string]bool{
-	".m4b": true, ".m4a": true, ".mp4": true, ".mp3": true, ".aax": true,
+	".m4b": true, ".m4a": true, ".mp4": true, ".mp3": true,
 	".flac": true, ".ogg": true, ".opus": true,
 }
 
