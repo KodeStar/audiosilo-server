@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -545,6 +546,48 @@ func TestScannerFolderIsOneBook(t *testing.T) {
 	}
 	if b, err := cat.GetBookByPath(ctx, lib.ID, "A Standalone Title.m4b"); err != nil || b.IsFolder {
 		t.Fatalf("a root-level file must be its own single-file book: %+v (err %v)", b, err)
+	}
+}
+
+// TestScannerIgnoresAAX covers the Audible DRM case: an .aax sitting next to its
+// converted .m4b must NOT join the book (it can't be streamed, and indexing it
+// doubled up the chapters), and a folder holding ONLY an .aax yields no book.
+func TestScannerIgnoresAAX(t *testing.T) {
+	cat, scanner, ctx := newScanEnv(t)
+	root := t.TempDir()
+	// A converted book with the original .aax left alongside it.
+	base := filepath.Join(root, "Andy Weir", "Project Hail Mary")
+	copyFixtureM4B(t, filepath.Join(base, "Project Hail Mary.m4b"))
+	if err := os.WriteFile(filepath.Join(base, "Project Hail Mary.aax"), []byte("drm"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A folder with only an unconverted .aax — nothing playable, so no book.
+	onlyAax := filepath.Join(root, "Andy Weir", "The Martian")
+	if err := os.MkdirAll(onlyAax, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(onlyAax, "The Martian.aax"), []byte("drm"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "AAX", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+
+	page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
+	if len(page.Books) != 1 {
+		t.Fatalf("expected 1 book (the .m4b only; the .aax-only folder is skipped), got %d", len(page.Books))
+	}
+	b, err := cat.GetBookByPath(ctx, lib.ID, "Andy Weir/Project Hail Mary")
+	if err != nil || !b.IsFolder || len(b.Files) != 1 {
+		t.Fatalf("the .aax must not join the book: want 1 file, got %+v (err %v)", b, err)
+	}
+	if strings.HasSuffix(strings.ToLower(b.Files[0].RelPath), ".aax") {
+		t.Fatalf("the indexed file must be the .m4b, not the .aax: %q", b.Files[0].RelPath)
+	}
+	if _, err := cat.GetBookByPath(ctx, lib.ID, "Andy Weir/The Martian"); err == nil {
+		t.Fatal("a folder with only an .aax must not produce a book")
 	}
 }
 
