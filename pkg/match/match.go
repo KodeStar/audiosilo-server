@@ -55,7 +55,7 @@ func Best(books []Book, q Query) (int, bool) {
 			return i, true
 		}
 	}
-	qSeries := normalizeSeries(q.Series)
+	qSeries := NormalizeSeries(q.Series)
 	qToks := titleTokens(q.Title, q.Series)
 	if len(qToks) == 0 {
 		qToks = titleTokens(q.TitleShort, q.Series)
@@ -68,7 +68,7 @@ func Best(books []Book, q Query) (int, bool) {
 		if !authorMatch(b.Author, q.Author) {
 			continue
 		}
-		sameSeries := qSeries != "" && normalizeSeries(b.Series) == qSeries
+		sameSeries := qSeries != "" && NormalizeSeries(b.Series) == qSeries
 		score := tokenScore(qToks, titleTokens(b.Title, b.Series))
 		if sameSeries {
 			score += 0.5 // series agreement is a strong confirmation
@@ -305,7 +305,7 @@ func tokenScore(a, b map[string]struct{}) float64 {
 // authorMatch is tolerant of multi-author / "and"-joined credits: a normalized
 // equality, or one author string contained in the other.
 func authorMatch(a, b string) bool {
-	na, nb := normalize(a), normalize(b)
+	na, nb := Normalize(a), Normalize(b)
 	if na == "" || nb == "" {
 		return false
 	}
@@ -314,9 +314,10 @@ func authorMatch(a, b string) bool {
 
 func seqEqual(a, b float64) bool { return a-b > -0.001 && a-b < 0.001 }
 
-// normalizeSeries normalizes a series name for tolerant matching, dropping a leading
-// article so "The Primal Hunter" and "Primal Hunter" compare equal.
-func normalizeSeries(s string) string {
+// NormalizeSeries normalizes a series name for tolerant matching, dropping a leading
+// article so "The Primal Hunter" and "Primal Hunter" compare equal. Exported so the
+// manager identifies series identically to the server (shared matcher).
+func NormalizeSeries(s string) string {
 	t := strings.ToLower(strings.TrimSpace(s))
 	for _, art := range []string{"the ", "a ", "an "} {
 		if strings.HasPrefix(t, art) {
@@ -324,11 +325,13 @@ func normalizeSeries(s string) string {
 			break
 		}
 	}
-	return normalize(t)
+	return Normalize(t)
 }
 
-// normalize lowercases and strips non-alphanumeric runes for tolerant matching.
-func normalize(s string) string {
+// Normalize lowercases and strips non-alphanumeric runes for tolerant matching (so
+// "L. A. McBride" and "L.A. McBride" compare equal). Exported so the manager
+// normalizes authors/titles identically to the server (shared matcher).
+func Normalize(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
