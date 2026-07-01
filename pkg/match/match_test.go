@@ -103,3 +103,33 @@ func TestSeqFromTitle(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalize(t *testing.T) {
+	cases := map[string]string{
+		"L. A. McBride":     "lamcbride",
+		"L.A. McBride":      "lamcbride", // differently-spaced initials normalize equal
+		"Brandon Sanderson": "brandonsanderson",
+		"  Will  Wight  ":   "willwight",
+		"":                  "",
+	}
+	for in, want := range cases {
+		if got := Normalize(in); got != want {
+			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestNormalizeSeries(t *testing.T) {
+	cases := map[string]string{
+		"The Primal Hunter": "primalhunter",
+		"primal hunter":     "primalhunter",
+		"A Court of Thorns": "courtofthorns",
+		"Theory of Magic":   "theoryofmagic", // "the" only stripped as a whole word
+		"  Cradle  ":        "cradle",
+	}
+	for in, want := range cases {
+		if got := NormalizeSeries(in); got != want {
+			t.Errorf("NormalizeSeries(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
