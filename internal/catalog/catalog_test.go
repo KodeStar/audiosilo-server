@@ -476,7 +476,7 @@ func TestUniqueNameReturnsErrNameTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	dup := "Sci-Fi"
-	if _, err := c.UpdateShare(ctx, other.ID, &dup, nil, nil); !errors.Is(err, ErrNameTaken) {
+	if _, err := c.UpdateShare(ctx, other.ID, ShareUpdate{Name: &dup}); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("duplicate share name (rename): err = %v, want ErrNameTaken", err)
 	}
 }
@@ -490,7 +490,7 @@ func TestUpdateSharePreservesOmittedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	newName := "Kids v2"
-	updated, err := c.UpdateShare(ctx, created.ID, &newName, nil, nil)
+	updated, err := c.UpdateShare(ctx, created.ID, ShareUpdate{Name: &newName})
 	if err != nil {
 		t.Fatal(err)
 	}

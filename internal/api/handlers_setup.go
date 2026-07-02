@@ -102,7 +102,7 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// closes the wizard; the admin can finish adding the library from the console.
 	adminUser, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, auth.RoleAdmin)
 	if err != nil {
-		writeUserError(w, err)
+		a.writeUserError(w, err, "could not create user")
 		return
 	}
 	lib, err := a.cat.CreateLibrary(r.Context(), catalog.Library{Name: req.LibraryName, Root: root})

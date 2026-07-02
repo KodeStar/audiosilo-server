@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -128,11 +129,13 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 	}
 
 	entries := make([]Entry, 0, len(dirEntries))
-	cleanRel := strings.Trim(filepath.ToSlash(filepath.Clean("/"+relPath)), "/")
+	// The canonical rel path prefixes each entry's Path; scope checks and
+	// persisted path keys rely on this same form (see catalog.CleanRelPath).
+	cleanRel := catalog.CleanRelPath(relPath)
 	for _, de := range dirEntries {
 		name := de.Name()
-		if strings.HasPrefix(name, ".") {
-			continue // hide dotfiles
+		if isHidden(name) {
+			continue // hidden here AND skipped by the scanner (see isHidden)
 		}
 		childRel := name
 		if cleanRel != "" {

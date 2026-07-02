@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -70,6 +71,17 @@ func decodeJSON(r *http.Request, v any, maxBytes int64) error {
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxBytes))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// decodeJSONOptional is decodeJSON for endpoints whose body is optional: an
+// absent/empty body leaves v at its zero value and returns nil, but a body that
+// is present and malformed (or carries an unknown field) is still an error -
+// optional means omittable, not a silent fall-through to the defaults.
+func decodeJSONOptional(r *http.Request, v any, maxBytes int64) error {
+	if err := decodeJSON(r, v, maxBytes); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 // pathInt parses an int64 path value (e.g. {id}).

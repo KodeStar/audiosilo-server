@@ -74,7 +74,11 @@ func (c *Catalog) GetProgress(ctx context.Context, userID int64, ref Ref) (*Prog
 // It returns the effective stored progress. This is the same merge the realtime
 // sync layer will reuse, so REST and WebSocket writes converge.
 func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (*Progress, error) {
-	in.UpdatedAt = sanitizeUpdatedAt(in.UpdatedAt, c.now().UTC())
+	// Distrust an unparseable or far-future client timestamp (see
+	// plausibleUpdatedAt) and substitute server time.
+	if !plausibleUpdatedAt(in.UpdatedAt, c.now()) {
+		in.UpdatedAt = c.ts()
+	}
 	if in.PlaybackSpeed <= 0 {
 		in.PlaybackSpeed = 1.0
 	}
@@ -108,20 +112,17 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 	return &in, nil
 }
 
-// sanitizeUpdatedAt returns a trustworthy RFC3339 timestamp for a progress write.
-// The client supplies updated_at, and last-write-wins compares it against the
-// stored value - so a client with a broken clock (or a garbage value) that sent a
-// far-future timestamp would win every future comparison and permanently wedge the
-// book's progress at that write. We accept the client's value only if it parses and
-// is not implausibly ahead of the server clock (a small skew is allowed so genuine
-// cross-device ordering still works); otherwise we substitute server time.
-func sanitizeUpdatedAt(v string, now time.Time) string {
+// plausibleUpdatedAt reports whether a client-supplied updated_at can be
+// trusted for last-write-wins: it must parse and not be implausibly ahead of
+// the server clock (a small skew is allowed so genuine cross-device ordering
+// still works). Without this check a client with a broken clock (or a garbage
+// value) sending a far-future timestamp would win every future comparison and
+// permanently wedge the book's progress at that write; the caller substitutes
+// server time (c.ts()) instead.
+func plausibleUpdatedAt(v string, now time.Time) bool {
 	const maxSkew = 5 * time.Minute
 	t, err := time.Parse(time.RFC3339, v)
-	if err != nil || t.After(now.Add(maxSkew)) {
-		return now.Format(time.RFC3339Nano)
-	}
-	return v
+	return err == nil && !t.After(now.Add(maxSkew))
 }
 
 // isNewer reports whether candidate should replace current under last-write-wins

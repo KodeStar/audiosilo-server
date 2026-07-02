@@ -93,6 +93,23 @@ var ErrNotIndexable = errors.New("path is not an indexable book")
 // coverNames are sibling image files treated as a book's cover.
 var coverNames = []string{"cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.png"}
 
+// isHidden reports whether a file/directory name is hidden (dot-prefixed).
+// Discovery and the /fs browse view must agree on this - anything the scanner
+// skips must also be invisible when browsing (and vice versa), or it would
+// index books a client can't reach - so every hidden-name check in the package
+// goes through here.
+func isHidden(name string) bool { return strings.HasPrefix(name, ".") }
+
+// primaryPath returns the file whose bytes represent a book (used for tag
+// extraction and content fingerprinting): the book itself for a single-file
+// book, else its first part.
+func primaryPath(b *catalog.Book) string {
+	if b.IsFolder && len(b.Files) > 0 {
+		return b.Files[0].RelPath
+	}
+	return b.RelPath
+}
+
 // Scan indexes a single library. It is safe to call concurrently for different
 // libraries; concurrent calls for the same library are coalesced (the second
 // returns immediately).
@@ -167,14 +184,23 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 		}
 		keep[b.RelPath] = true
 		if old, ok := sigs[b.RelPath]; ok && old.MTime == b.MTime && old.Size == b.Size &&
-			old.ContentHash != "" &&
 			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "")) {
-			continue // unchanged since last scan; only skip the probe when ffprobe
-			// is disabled, or a prior probe already stored both duration and codec
-			// (so books indexed before the codec column get it backfilled). A book
-			// whose fingerprint never landed (empty content_hash - a one-off read
-			// error) is re-enriched so it gets one; without it, a later move of that
-			// book couldn't be detected and its progress would be stranded.
+			// Unchanged since last scan; only skip the probe when ffprobe is
+			// disabled, or a prior probe already stored both duration and codec
+			// (so books indexed before the codec column get it backfilled).
+			if old.ContentHash != "" {
+				continue
+			}
+			// The fingerprint never landed (a one-off read error). Without one a
+			// later move of this book couldn't be detected and its progress would
+			// be stranded, so re-enrich to backfill it - but probe the fingerprint
+			// first: if the file still can't be read, the full re-enrich would fail
+			// the same way, so a persistently unreadable book costs one cheap
+			// failed open per scan instead of an ffprobe sweep forever.
+			b.ContentHash = fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primaryPath(b))))
+			if b.ContentHash == "" {
+				continue
+			}
 		}
 		s.enrich(lib, b)
 		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
@@ -214,10 +240,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 // enrich fills metadata for a book from its primary file (tags + ffprobe) and
 // folder context (path heuristics, sibling cover art).
 func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
-	primary := b.RelPath
-	if b.IsFolder && len(b.Files) > 0 {
-		primary = b.Files[0].RelPath
-	}
+	primary := primaryPath(b)
 	// Baseline from the path, then overlay embedded tags/probe which are
 	// authoritative when present.
 	base := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
@@ -462,13 +485,14 @@ func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Lo
 			// Skip hidden directories (.Trash-1000, Syncthing .stversions, .git) so
 			// their audio isn't indexed into books unreachable via the fs browse view
 			// (which also hides them). Never skip the library root itself, even when
-			// its own name begins with a dot.
-			if filepath.Clean(path) != rootClean && strings.HasPrefix(d.Name(), ".") {
+			// its own name begins with a dot; WalkDir passes the root argument
+			// verbatim, so a direct comparison identifies the root callback.
+			if path != lib.Root && isHidden(d.Name()) {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if strings.HasPrefix(d.Name(), ".") || !metadata.IsAudio(d.Name()) {
+		if isHidden(d.Name()) || !metadata.IsAudio(d.Name()) {
 			return nil
 		}
 		dirs[filepath.Dir(path)] = true
@@ -523,7 +547,7 @@ func audioEntries(absDir string) []os.DirEntry {
 	}
 	var audio []os.DirEntry
 	for _, de := range entries {
-		if de.IsDir() || strings.HasPrefix(de.Name(), ".") || !metadata.IsAudio(de.Name()) {
+		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) {
 			continue
 		}
 		audio = append(audio, de)
@@ -590,7 +614,7 @@ func folderBook(lib catalog.Library, absDir string) *catalog.Book {
 	var totalSize, maxMTime int64
 	var added string // earliest file added time = when the book first appeared
 	for _, de := range entries {
-		if de.IsDir() || strings.HasPrefix(de.Name(), ".") || !metadata.IsAudio(de.Name()) {
+		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) {
 			continue
 		}
 		info, ierr := de.Info()
@@ -763,17 +787,16 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 	if len(disappeared) == 0 || len(newBooks) == 0 {
 		return
 	}
-	oldFP, err := s.cat.FingerprintsForPaths(ctx, lib.ID, disappeared)
-	if err != nil {
-		s.log.Warn("move detection: load fingerprints failed", "library", lib.Name, "err", err)
-		return
+	// The stored fingerprints for the disappeared paths are already in sigs
+	// (Signatures selects content_hash), so no extra query is needed.
+	oldFP := make(map[string]string, len(disappeared))
+	for _, p := range disappeared {
+		if h := sigs[p].ContentHash; h != "" {
+			oldFP[p] = h
+		}
 	}
 	for _, nb := range newBooks {
-		primary := nb.RelPath
-		if nb.IsFolder && len(nb.Files) > 0 {
-			primary = nb.Files[0].RelPath
-		}
-		fp := fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primary)))
+		fp := fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primaryPath(nb))))
 		nb.ContentHash = fp // reused by enrich, avoiding a second read
 		if fp == "" {
 			continue
