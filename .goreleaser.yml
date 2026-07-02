@@ -55,7 +55,7 @@ archives:
 
 # Linux .deb/.rpm: depend on the distro's ffmpeg rather than bundling, and install
 # a systemd unit. Home users on Linux who'd rather not use a package can take the
-# tarball above (which bundles ffmpeg) instead.
+# tarball above instead (ffmpeg is found locally or auto-downloaded on first use).
 nfpms:
   - id: linux-packages
     ids: [audiosilo]
@@ -96,5 +96,6 @@ release:
   draft: true # let a human review the release notes/artifacts before publishing
   footer: |
     ---
-    Native builds bundle ffmpeg + the web player. Prefer Docker for advanced /
-    multi-user setups: `ghcr.io/kodestar/audiosilo-server`.
+    Native builds embed the web player; ffmpeg/ffprobe are found locally or
+    auto-downloaded on first use. Prefer Docker for advanced / multi-user
+    setups: `ghcr.io/kodestar/audiosilo-server`.

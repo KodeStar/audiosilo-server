@@ -23,11 +23,14 @@
 #   scripts/seed-librivox.sh /data/demo-library
 #   DRY_RUN=1 scripts/seed-librivox.sh           # list what would be downloaded
 #   scripts/seed-librivox.sh ./demo-library pride_and_prejudice_0711_librivox
+#   MAX_FILES=3 scripts/seed-librivox.sh ./lib   # cap chapter files per book
+#                                                # (small/fast seeds for screenshots)
 set -euo pipefail
 
 DEST_DEFAULT="${DEST:-./demo-library}"
 DEST="$DEST_DEFAULT"
 DRY_RUN="${DRY_RUN:-0}"
+MAX_FILES="${MAX_FILES:-0}"   # >0 = download at most this many chapter files per book
 
 # Curated archive.org identifiers (LibriVox public-domain audiobooks). Override by
 # passing identifiers as arguments after DEST. Verify ids with DRY_RUN=1.
@@ -140,6 +143,9 @@ seed_one() {
   i=0
   while IFS= read -r name; do
     [ -z "$name" ] && continue
+    if [ "$MAX_FILES" -gt 0 ] && [ "$i" -ge "$MAX_FILES" ]; then
+      break
+    fi
     # Defend against archive.org file names that carry path segments: keep only
     # the basename and reject traversal so a download can't escape the book folder.
     name="${name##*/}"

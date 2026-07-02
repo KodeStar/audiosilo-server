@@ -68,6 +68,20 @@ fix new findings rather than widening the excludes.
 > stale docs, untested packages) a full review found. Conventions only help if
 > they're checked; that file is the checklist.
 
+## Documentation
+
+The product docs live in [`../audiosilo-docs`](../audiosilo-docs/) (Docusaurus:
+User Guide + Developer Docs, generated screenshots). **Updating them is part of
+Definition of Done**: a change here that touches behaviour, UI, config, or the
+wire format updates the affected pages in the same logical change — for this
+repo that's chiefly `docs-developers/server/**` (the **API reference**
+`server/api/reference.md` on every wire change, `server/configuration.md` on
+any config/flag change) plus the User Guide's getting-started/admin pages, and
+regenerated screenshots (`audiosilo-docs/screenshots/run.sh`) when the baked-in
+admin/connect UI changes. Mapping table:
+`audiosilo-docs/docs-developers/contributing/documentation.md`. Docs gate:
+`npm run build` in audiosilo-docs.
+
 ## Design priorities (in order)
 
 1. Safe to expose to the internet.
@@ -200,7 +214,8 @@ future metadata site can attach enrichment without reshaping the schema.
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
   shipped app build claims — self-hosted arbitrary domains fall back to the web
   player + the custom-scheme "Open in app" button.
-- **SQLite** runs with a single open connection (writers serialize) + WAL.
+- **SQLite** runs with a single write connection (writers serialize) plus a
+  read-only reader pool, WAL mode.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
 - **Path safety**: any filesystem access derived from user input goes through
