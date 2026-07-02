@@ -10,7 +10,7 @@
 // Exact title equality therefore matches almost nothing. Best instead scores each
 // same-author candidate on the overlap of its significant title tokens (with the
 // series name and "(Book N)" fluff stripped), boosted when the series and the
-// sequence agree — deriving the sequence from the title when it isn't a column.
+// sequence agree - deriving the sequence from the title when it isn't a column.
 // Tuned against a real 1080-book / 720-book pairing (~4% → ~88% matched, no false
 // positives in audit).
 package match
@@ -49,7 +49,7 @@ const threshold = 1.0
 // Best returns the index of the best-matching book and whether it cleared the
 // confidence threshold (-1, false when none match).
 func Best(books []Book, q Query) (int, bool) {
-	// 1. ASIN — exact, highest confidence (rare in practice, but decisive).
+	// 1. ASIN - exact, highest confidence (rare in practice, but decisive).
 	for i := range books {
 		if q.ASIN != "" && books[i].ASIN != "" && strings.EqualFold(q.ASIN, books[i].ASIN) {
 			return i, true
@@ -74,7 +74,7 @@ func Best(books []Book, q Query) (int, bool) {
 			score += 0.5 // series agreement is a strong confirmation
 			// Same series + same sequence is near-certain. Many libraries leave the
 			// series index at 0 and put the number in the title ("… 3", "(Book 5)"),
-			// so derive it from the title when the field is empty — this is what
+			// so derive it from the title when the field is empty - this is what
 			// matches progression-fantasy books whose title is just "Series Name N"
 			// (the residual tokens are only the number, which is dropped).
 			if bSeq, ok := bookSeq(b); ok && qHasSeq && seqEqual(bSeq, qSeq) {
@@ -91,7 +91,7 @@ func Best(books []Book, q Query) (int, bool) {
 	return -1, false
 }
 
-// matchNoise strips parenthetical/bracketed groups and "book N"/"vol N" run tokens —
+// matchNoise strips parenthetical/bracketed groups and "book N"/"vol N" run tokens -
 // the formatting that differs between sources' titles.
 var matchNoise = regexp.MustCompile(`(?i)[\(\[][^\)\]]*[\)\]]|\b(?:book|bk|vol|volume|part|pt|episode|ep|#)\s*\.?\s*\d+(?:\.\d+)?\b`)
 
@@ -122,7 +122,7 @@ func CleanTitle(title, series string) string {
 }
 
 // SeqFromTitle extracts a series sequence from a title by stripping the series name
-// and taking the first remaining number — the sequence in titles like "… 3",
+// and taking the first remaining number - the sequence in titles like "… 3",
 // "(Book 5)", "5: A …". Reports false when there is none.
 func SeqFromTitle(title, series string) (float64, bool) {
 	t := title
@@ -167,7 +167,7 @@ func tidyTitle(s string) string {
 // each with a space. It searches a lowercased copy but maps each match's byte
 // offsets back onto s rune-by-rune, so a rune whose lowercase form differs in byte
 // length (e.g. 'İ' → "i", 'ẞ' → "ß") can't desync the offsets and corrupt the
-// result — the naive `s[:i] + s[i+len(sub):]` did, because i indexes the lowercased
+// result - the naive `s[:i] + s[i+len(sub):]` did, because i indexes the lowercased
 // string, not s.
 func removeFold(s, sub string) string {
 	lsub := strings.ToLower(sub)
@@ -208,7 +208,7 @@ func removeFold(s, sub string) string {
 }
 
 // genreFluff marks a trailing ": …"/" - …" subtitle made up entirely of these words
-// as boilerplate to drop — "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure" →
+// as boilerplate to drop - "Dungeon Crawler Carl: A LitRPG/Gamelit Adventure" →
 // "Dungeon Crawler Carl".
 var genreFluff = map[string]bool{
 	"litrpg": true, "gamelit": true, "gamlit": true, "progression": true,

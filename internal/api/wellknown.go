@@ -7,7 +7,7 @@ import "net/http"
 // Links). They are public and config-driven: when the relevant identifiers are
 // unset the endpoints 404 and clients fall back to the embedded web player. Note
 // that the app build must also claim the domain, so these only enable auto-launch
-// for domains the shipped app knows about — see config.AppLinkConfig.
+// for domains the shipped app knows about - see config.AppLinkConfig.
 
 // appLinkPaths are the URL paths that should open the app: the QR/pairing handoff
 // and the copy-invite connect page.

@@ -1,5 +1,5 @@
 -- Path-keyed metadata enrichment (ASIN/ISBN), attached by the manager when it
--- matches an external source (e.g. an Audible library) to an indexed book — so a
+-- matches an external source (e.g. an Audible library) to an indexed book - so a
 -- book scanned without an ASIN gains one, making future matches exact.
 --
 -- Durable, path-keyed config deliberately NOT FK'd to the rebuildable books index

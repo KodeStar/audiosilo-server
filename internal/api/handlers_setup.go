@@ -97,7 +97,7 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create the admin first (CreateUser enforces the password rules — admins must
+	// Create the admin first (CreateUser enforces the password rules - admins must
 	// have one). If anything below fails the admin still exists, which correctly
 	// closes the wizard; the admin can finish adding the library from the console.
 	adminUser, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, auth.RoleAdmin)

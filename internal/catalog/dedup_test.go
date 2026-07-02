@@ -124,7 +124,7 @@ func TestDedupGenericTitlesAndDistinctLocations(t *testing.T) {
 			libName: libName, fileCount: 1, sortOrder: sortOrder, rankIdx: rank,
 		}
 	}
-	// Different books sharing a generic title + author must NOT merge — only their
+	// Different books sharing a generic title + author must NOT merge - only their
 	// (differing) content fingerprints decide, and those differ.
 	generic := []candidate{
 		mk(1, "A", "Track 01", "Cressida Cowell", "hashA", 0, 0),
@@ -146,9 +146,9 @@ func TestDedupGenericTitlesAndDistinctLocations(t *testing.T) {
 	// copies, and never the winner's own library.
 	multi := []candidate{
 		mk(1, "A", "The Hobbit", "Tolkien", "h", 0, 0), // winner (lib A)
-		mk(1, "A", "The Hobbit", "Tolkien", "h", 0, 1), // 2nd copy in lib A — must not appear
+		mk(1, "A", "The Hobbit", "Tolkien", "h", 0, 1), // 2nd copy in lib A - must not appear
 		mk(2, "B", "The Hobbit", "Tolkien", "h", 1, 2), // lib B copy
-		mk(2, "B", "The Hobbit", "Tolkien", "h", 1, 3), // 2nd copy in lib B — collapse to one
+		mk(2, "B", "The Hobbit", "Tolkien", "h", 1, 3), // 2nd copy in lib B - collapse to one
 	}
 	out := dedupBooks(multi, 0)
 	if len(out) != 1 {

@@ -112,7 +112,7 @@ func playerFS(webDir string) (fs.FS, bool) {
 }
 
 // HasPlayer reports whether a usable web-player build (an index.html) is
-// available — embedded or under webDir. Used to gate the web_player capability
+// available - embedded or under webDir. Used to gate the web_player capability
 // flag and to mount /web.
 func HasPlayer(webDir string) bool {
 	fsys, ok := playerFS(webDir)

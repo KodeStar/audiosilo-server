@@ -9,7 +9,7 @@ import (
 )
 
 // TestTimeoutMiddlewareFiresOnSlowRequest asserts a non-streaming request that
-// outlives the deadline gets a prompt 503 instead of hanging — the core of the
+// outlives the deadline gets a prompt 503 instead of hanging - the core of the
 // "self-recovering" fix. (The request context is also cancelled, which in
 // production aborts the stuck DB call.)
 func TestTimeoutMiddlewareFiresOnSlowRequest(t *testing.T) {
@@ -38,7 +38,7 @@ func TestTimeoutMiddlewareFiresOnSlowRequest(t *testing.T) {
 
 // TestTimeoutMiddlewareExemptsStreaming asserts streaming routes are NOT bounded:
 // a /stream handler that runs past the deadline still completes (audio playback
-// must not be cut off — there is deliberately no WriteTimeout either).
+// must not be cut off - there is deliberately no WriteTimeout either).
 func TestTimeoutMiddlewareExemptsStreaming(t *testing.T) {
 	a := &API{timeoutDur: 50 * time.Millisecond}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

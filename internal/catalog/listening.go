@@ -8,7 +8,7 @@ import (
 )
 
 // Durable user state (progress, bookmarks, notes, history) is keyed by the
-// filesystem path — (user_id, library_id, rel_path) — not the rebuildable
+// filesystem path - (user_id, library_id, rel_path) - not the rebuildable
 // book id, so it survives DB rebuilds, re-tagging, and being recorded before a
 // scan reaches the file. rel_path is the *book* path (the folder for a
 // chapters_in_folder book, the file otherwise); positions are on the whole-book
@@ -74,9 +74,7 @@ func (c *Catalog) GetProgress(ctx context.Context, userID int64, ref Ref) (*Prog
 // It returns the effective stored progress. This is the same merge the realtime
 // sync layer will reuse, so REST and WebSocket writes converge.
 func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (*Progress, error) {
-	if in.UpdatedAt == "" {
-		in.UpdatedAt = c.ts()
-	}
+	in.UpdatedAt = sanitizeUpdatedAt(in.UpdatedAt, c.now().UTC())
 	if in.PlaybackSpeed <= 0 {
 		in.PlaybackSpeed = 1.0
 	}
@@ -108,6 +106,22 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 		return nil, err
 	}
 	return &in, nil
+}
+
+// sanitizeUpdatedAt returns a trustworthy RFC3339 timestamp for a progress write.
+// The client supplies updated_at, and last-write-wins compares it against the
+// stored value - so a client with a broken clock (or a garbage value) that sent a
+// far-future timestamp would win every future comparison and permanently wedge the
+// book's progress at that write. We accept the client's value only if it parses and
+// is not implausibly ahead of the server clock (a small skew is allowed so genuine
+// cross-device ordering still works); otherwise we substitute server time.
+func sanitizeUpdatedAt(v string, now time.Time) string {
+	const maxSkew = 5 * time.Minute
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil || t.After(now.Add(maxSkew)) {
+		return now.Format(time.RFC3339Nano)
+	}
+	return v
 }
 
 // isNewer reports whether candidate should replace current under last-write-wins

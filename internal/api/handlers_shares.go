@@ -45,7 +45,7 @@ func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// CreateShare inserts the share row and any supplied path rules atomically,
-	// so a failed rule rolls the whole thing back — no orphaned share to clean up
+	// so a failed rule rolls the whole thing back - no orphaned share to clean up
 	// from the transport layer.
 	created, err := a.cat.CreateShare(r.Context(), s)
 	if err != nil {
@@ -62,12 +62,18 @@ func (a *API) handleUpdateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid share id")
 		return
 	}
-	var s catalog.Share
-	if err := decodeJSON(r, &s, 0); err != nil {
+	// Pointer fields distinguish "omitted" from "set to empty" so a partial PATCH
+	// doesn't clear the fields it didn't mention.
+	var req struct {
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+		ReadOnly    *bool   `json:"read_only"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	updated, err := a.cat.UpdateShare(r.Context(), id, s)
+	updated, err := a.cat.UpdateShare(r.Context(), id, req.Name, req.Description, req.ReadOnly)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "share not found")
 		return

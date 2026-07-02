@@ -14,8 +14,8 @@ import (
 // internal/web/player/ is gitignored (only a .gitkeep is committed); the release
 // pipeline populates it from the pinned web image/export before building with
 // `-tags embedplayer`. A build without that population still compiles (the
-// committed .gitkeep satisfies the embed) but exposes no player — HasPlayer is
-// false because there's no index.html — degrading exactly like an empty web_dir.
+// committed .gitkeep satisfies the embed) but exposes no player - HasPlayer is
+// false because there's no index.html - degrading exactly like an empty web_dir.
 //
 //go:embed all:player
 var playerEmbed embed.FS

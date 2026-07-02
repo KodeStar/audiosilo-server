@@ -1,7 +1,7 @@
 // Admin console. A static client over the JSON API; the server enforces the
 // admin role on every /admin/* call, so this file holds no privileged logic.
 // All behaviour is wired with addEventListener (no inline handlers) and all
-// styling comes from style.css — the page runs under a strict same-origin CSP.
+// styling comes from style.css - the page runs under a strict same-origin CSP.
 const TOKEN_KEY = "audiosilo_token";
 let token = localStorage.getItem(TOKEN_KEY);
 
@@ -503,7 +503,7 @@ function passwordControl(u) {
 }
 
 // Recovery codes are user-owned (minted from the player's own settings), so the
-// admin view just reports whether the user can self-recover — plus a Revoke, the
+// admin view just reports whether the user can self-recover - plus a Revoke, the
 // only lever to kill a leaked/compromised recovery code.
 function recoveryControl(u) {
   const wrap = div("inline");
@@ -518,7 +518,7 @@ function recoveryControl(u) {
 }
 
 // Invite state predicates. An invite is "active" (the one active invite per user,
-// resendable) while it can still be redeemed — not expired and not used up.
+// resendable) while it can still be redeemed - not expired and not used up.
 // redeemed_at only records that it has been accepted at least once; a multi-use
 // invite stays active until its uses run out. Spent/expired invites fall into
 // History.
@@ -682,7 +682,7 @@ el("invite-form").addEventListener("submit", async (e) => {
 });
 
 // Show the invite modal's result panel with a freshly minted or rotated code +
-// link (returned once — this is the only chance to copy them). Shared by Create
+// link (returned once - this is the only chance to copy them). Shared by Create
 // invite and Resend; the latter opens the modal straight to the result.
 function showInviteResult(userId, data) {
   inviteUserId = userId;
@@ -1060,7 +1060,7 @@ function baseName(p) { if (!p) return ""; const parts = p.split("/"); return par
 function fmtRelative(ts) {
   if (!ts) return asI18n.t("admin.time.never");
   const then = new Date(ts).getTime();
-  if (isNaN(then)) return "—";
+  if (isNaN(then)) return "-";
   const s = Math.floor((Date.now() - then) / 1000);
   if (s < 45) return asI18n.t("admin.time.justNow");
   if (s < 3600) return asI18n.t("admin.time.minutesAgo", { n: Math.floor(s / 60) });
@@ -1114,7 +1114,7 @@ async function loadServerVersion() {
 // ---- PWA ----
 // Register the service worker so the admin console is installable and the shell
 // works offline. Service workers require a secure context, so this is a no-op
-// over plain http on a LAN IP — it works on localhost or trusted HTTPS, which is
+// over plain http on a LAN IP - it works on localhost or trusted HTTPS, which is
 // the normal case for a locally-run server. The browser provides its own install
 // affordance; we add no in-app button.
 if ("serviceWorker" in navigator && window.isSecureContext) {

@@ -111,7 +111,7 @@ func normalizeCode(code string) string {
 }
 
 // hashSecret hashes a presented secret for constant-effort DB lookup. Tokens
-// and codes have full entropy, so a fast hash (SHA-256) is appropriate here —
+// and codes have full entropy, so a fast hash (SHA-256) is appropriate here -
 // argon2id is reserved for low-entropy user passwords.
 func hashSecret(secret string) string {
 	sum := sha256.Sum256([]byte(secret))

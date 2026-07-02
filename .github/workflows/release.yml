@@ -1,11 +1,11 @@
 # Native binary release (GoReleaser). On each v* tag this builds self-contained,
 # cross-platform binaries for home users who don't want Docker: the web player is
 # embedded (-tags embedplayer, populated from the pinned web image). ffmpeg +
-# ffprobe are NOT bundled — the launcher finds a local copy or auto-downloads a
+# ffprobe are NOT bundled - the launcher finds a local copy or auto-downloads a
 # cached build on first use (internal/toolfetch). Outputs archives, .deb/.rpm and
 # checksums to a DRAFT GitHub Release for review before publishing.
 #
-# This is independent of the Docker image pipeline (image.yml) — both can run on
+# This is independent of the Docker image pipeline (image.yml) - both can run on
 # the same tag. Publish the web image first (frontend → audiosilo-web) so the
 # embedded player matches, exactly as for the Docker build.
 name: release (native binaries)

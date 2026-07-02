@@ -254,7 +254,7 @@ func TestSetRoleGuards(t *testing.T) {
 	if err := s.SetRole(ctx, admin.ID, RoleUser); err != nil {
 		t.Fatalf("demote with another admin present: %v", err)
 	}
-	// kid is the last admin — demoting/disabling must be refused.
+	// kid is the last admin - demoting/disabling must be refused.
 	if err := s.SetRole(ctx, kid.ID, RoleUser); err != ErrLastAdmin {
 		t.Fatalf("expected ErrLastAdmin on demote, got %v", err)
 	}
@@ -473,7 +473,7 @@ func TestCreateInviteSupersedesActive(t *testing.T) {
 }
 
 // TestRecoveryRedeemReturnsOwner: a recovery code redeems as its owner, never
-// another account — guards the user binding (account-takeover class).
+// another account - guards the user binding (account-takeover class).
 func TestRecoveryRedeemReturnsOwner(t *testing.T) {
 	s, ctx := newTestService(t)
 	alice, _ := s.CreateUser(ctx, "alice", "", RoleUser)

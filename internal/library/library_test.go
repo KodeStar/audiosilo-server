@@ -173,7 +173,7 @@ func TestScannerFolderBookExpandsEmbeddedChapters(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 	cat := catalog.New(db, time.Now)
-	// A single chaptered m4b living in its own book folder — the common
+	// A single chaptered m4b living in its own book folder - the common
 	// "books in their own folders" layout.
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "folderbook"))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
@@ -517,7 +517,7 @@ func TestIsDiscFolder(t *testing.T) {
 func TestScannerFolderIsOneBook(t *testing.T) {
 	cat, scanner, ctx := newScanEnv(t)
 	root := t.TempDir()
-	// A multi-track book whose chapter files have DISTINCT titles — the case that
+	// A multi-track book whose chapter files have DISTINCT titles - the case that
 	// used to explode into one book per chapter.
 	base := filepath.Join(root, "Lee Child", "Jack Reacher", "JR04 - Running Blind")
 	copyFixtureM4B(t, filepath.Join(base, "01 - The Setup.mp3"))
@@ -561,7 +561,7 @@ func TestScannerIgnoresAAX(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "Project Hail Mary.aax"), []byte("drm"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A folder with only an unconverted .aax — nothing playable, so no book.
+	// A folder with only an unconverted .aax - nothing playable, so no book.
 	onlyAax := filepath.Join(root, "Andy Weir", "The Martian")
 	if err := os.MkdirAll(onlyAax, 0o755); err != nil {
 		t.Fatal(err)
@@ -649,7 +649,7 @@ func TestScannerFolderOverrides(t *testing.T) {
 
 // TestScannerBackfillsMissingCodec guards the cross-deploy gap: a book indexed
 // before the codec column existed (codec empty, but with a stored duration) must
-// be re-probed on the next scan so its codec backfills — otherwise direct_playable
+// be re-probed on the next scan so its codec backfills - otherwise direct_playable
 // can't be trusted for already-indexed libraries.
 func TestScannerBackfillsMissingCodec(t *testing.T) {
 	if !metadata.HasFFprobe("ffprobe") {

@@ -582,7 +582,7 @@ func TestEnrichmentEndpoint(t *testing.T) {
 }
 
 // TestDuplicateNameReturnsConflict pins that a duplicate library/share name is a
-// 409 Conflict, not the opaque 500 the blanket error->500 mapping produced — and
+// 409 Conflict, not the opaque 500 the blanket error->500 mapping produced - and
 // that the leak-free message is returned (no raw "UNIQUE constraint failed").
 func TestDuplicateNameReturnsConflict(t *testing.T) {
 	e := newTestEnv(t)
@@ -622,11 +622,12 @@ func TestDuplicateNameReturnsConflict(t *testing.T) {
 	}
 }
 
-// TestContentPathOutsideRootIsBadRequest is the denied regression: a content
-// request whose ?path= escapes the library root returns 400 (invalid path) — the
-// same status /stream gives — not the 500 the error-handling refactor produced
-// when SafeJoin's ErrOutsideRoot fell through to the generic internal-error arm.
-func TestContentPathOutsideRootIsBadRequest(t *testing.T) {
+// TestContentPathTraversalIsNeutralized is the denied regression: a content request
+// whose ?path= tries to climb out of the library root with ".." is normalized
+// (clamped at the root) BEFORE it is used, so it can never resolve to a file outside
+// the root. For an admin (AllowAll) the clamped path just doesn't exist → 404; the
+// point is that /etc/passwd is never served and the request never 500s.
+func TestContentPathTraversalIsNeutralized(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -635,10 +636,56 @@ func TestContentPathOutsideRootIsBadRequest(t *testing.T) {
 	libPath := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10)
 	escape := url.QueryEscape("../../../../etc/passwd")
 
-	for _, ep := range []string{"/item", "/chapters", "/cover"} {
+	for _, ep := range []string{"/item", "/chapters", "/cover", "/stream"} {
 		resp, body := e.do(t, "GET", libPath+ep+"?path="+escape, adminTok, "")
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Fatalf("%s with out-of-root path = %d %s, want 400", ep, resp.StatusCode, body)
+		if resp.StatusCode == http.StatusOK || resp.StatusCode >= 500 {
+			t.Fatalf("%s with traversal path = %d %s, want a clean 4xx (not 200/5xx)", ep, resp.StatusCode, body)
+		}
+		if strings.Contains(body, "root:") {
+			t.Fatalf("%s leaked /etc/passwd content: %s", ep, body)
+		}
+	}
+}
+
+// TestScopedPathTraversalDenied is the security regression for the ".." scope
+// bypass: a non-admin granted only a subtree cannot use ".." to climb out of it and
+// reach a sibling's content. Before normalization, pathAllowedBy's literal prefix
+// match accepted "AuthorA/../AuthorB/..." under an "AuthorA" grant and SafeJoin then
+// collapsed the "..", streaming the out-of-scope file.
+func TestScopedPathTraversalDenied(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+
+	// Grant a member a subtree that does not include the sibling we try to reach.
+	member, _ := e.auth.CreateUser(ctx, "member", "member-password", auth.RoleUser)
+	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Grant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "AuthorA"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantShare(ctx, member.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+	libPath := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10)
+
+	// Allowed: a path inside the grant is authorized (200/404 depending on existence,
+	// but never 403).
+	inScope := url.QueryEscape("AuthorA/book.m4b")
+	if resp, body := e.do(t, "GET", libPath+"/item?path="+inScope, memberTok, ""); resp.StatusCode == http.StatusForbidden {
+		t.Fatalf("in-scope path denied: %d %s", resp.StatusCode, body)
+	}
+
+	// Denied: climbing out of the grant with ".." must be 403 on every content route.
+	escape := url.QueryEscape("AuthorA/../AuthorB/secret.m4b")
+	for _, ep := range []string{"/item", "/chapters", "/cover", "/stream"} {
+		resp, body := e.do(t, "GET", libPath+ep+"?path="+escape, memberTok, "")
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s traversal out of scope = %d %s, want 403", ep, resp.StatusCode, body)
 		}
 	}
 }
@@ -810,7 +857,7 @@ func TestAdminClearsRecovery(t *testing.T) {
 
 // TestPasswordChangeRequiresCurrent: a password-less player sets a first password
 // with no challenge, but changing an existing password requires the correct
-// current one — so a session bearer alone can't silently replace a known password.
+// current one - so a session bearer alone can't silently replace a known password.
 func TestPasswordChangeRequiresCurrent(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()

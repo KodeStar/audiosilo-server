@@ -7,7 +7,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
-// Per-user listening state is addressed by (library, path) — the book path —
+// Per-user listening state is addressed by (library, path) - the book path -
 // matching the path-based identity. Each handler authorizes the path against
 // the caller's share scope via authorizedPath.
 

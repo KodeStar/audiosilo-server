@@ -25,7 +25,7 @@ const (
 
 // Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
 // and lifetime); a recovery code is a durable, reusable credential the user holds
-// to re-authenticate themselves after signing out or losing a device — so
+// to re-authenticate themselves after signing out or losing a device - so
 // recovery never needs an admin to mint a fresh invite. Both redeem through the
 // same path; only their ownership and lifetime differ.
 const (
@@ -52,6 +52,10 @@ var (
 	// ErrPasswordTooShort is returned when a non-empty password is below the
 	// minimum length.
 	ErrPasswordTooShort = errors.New("password must be at least 8 characters")
+	// ErrUsernameTaken is returned when creating a user whose username already
+	// exists, so the transport layer can map it to 409 instead of echoing the raw
+	// SQLite unique-constraint string.
+	ErrUsernameTaken = errors.New("username already taken")
 )
 
 // MinPasswordLen is the minimum length for a non-empty account password.
@@ -148,6 +152,9 @@ func (s *Service) createUser(ctx context.Context, username, password, role strin
 		`INSERT INTO users(username, password_hash, role, is_demo, created_at, updated_at)
 		 VALUES(?,?,?,?,?,?)`, username, hash, role, isDemo, now, now)
 	if err != nil {
+		if store.IsUniqueViolation(err) {
+			return nil, ErrUsernameTaken
+		}
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
@@ -284,7 +291,7 @@ func insertAuthCode(ctx context.Context, ex sqlExecer, hash string, userID int64
 }
 
 // CreateAuthCode generates a redeemable invite code bound to a user, without the
-// supersede-on-mint hygiene — used by the first-run bootstrap, which has no prior
+// supersede-on-mint hygiene - used by the first-run bootstrap, which has no prior
 // invites to supersede. maxUses 0 means unlimited; ttl <= 0 means no expiry. The
 // code is returned once. Admin minting goes through CreateInvite.
 func (s *Service) CreateAuthCode(ctx context.Context, userID int64, label string, maxUses int, ttl time.Duration) (string, error) {
@@ -318,8 +325,8 @@ func (s *Service) CreateInvite(ctx context.Context, userID int64, label string, 
 	return code, nil
 }
 
-// supersedeActiveInvites deletes a user's still-redeemable invites — those not
-// used up and not expired — so a freshly minted invite is the only active one.
+// supersedeActiveInvites deletes a user's still-redeemable invites - those not
+// used up and not expired - so a freshly minted invite is the only active one.
 // Used-up and expired invites are kept as history. now is an RFC3339 UTC stamp,
 // as is expires_at, so the lexical comparison is chronological.
 func supersedeActiveInvites(ctx context.Context, ex sqlExecer, userID int64, now string) error {
@@ -358,7 +365,7 @@ func (s *Service) RotateAuthCode(ctx context.Context, id int64) (string, error) 
 		return "", err
 	}
 	// Renew the expiry for the same duration the invite was originally granted,
-	// measured from now — preserving the admin's chosen lifetime without storing
+	// measured from now - preserving the admin's chosen lifetime without storing
 	// the TTL separately.
 	var newExpires any
 	if expires.Valid && expires.String != "" {
@@ -413,7 +420,7 @@ func (s *Service) ClearRecoveryCode(ctx context.Context, userID int64) error {
 }
 
 // AuthCode describes an issued auth code for admin display. The plaintext code
-// is never included — only its hash is stored, by design — so this carries the
+// is never included - only its hash is stored, by design - so this carries the
 // code's metadata only (label, lifetimes and usage).
 type AuthCode struct {
 	ID         int64  `json:"id"`
@@ -426,7 +433,7 @@ type AuthCode struct {
 }
 
 // ListAuthCodes returns the invite codes issued for a user, newest first.
-// Recovery codes are deliberately excluded — they are user-owned and surfaced to
+// Recovery codes are deliberately excluded - they are user-owned and surfaced to
 // the admin only as the User.HasRecovery flag, never as an actionable invite.
 func (s *Service) ListAuthCodes(ctx context.Context, userID int64) ([]AuthCode, error) {
 	rows, err := s.db.QueryContext(ctx,
@@ -636,8 +643,8 @@ func (s *Service) SetDisabled(ctx context.Context, id int64, disabled bool) erro
 
 // DeleteUser permanently removes an account. Deleting the last enabled admin is
 // refused (ErrLastAdmin) so the console can never be locked out; deleting an
-// unknown id is ErrNotFound. All of the user's durable state — sessions, auth
-// codes, progress, bookmarks, notes, listening history and share grants — is
+// unknown id is ErrNotFound. All of the user's durable state - sessions, auth
+// codes, progress, bookmarks, notes, listening history and share grants - is
 // removed by the schema's ON DELETE CASCADE rules (foreign_keys is ON, see
 // store.Open). Files on disk are untouched (the library is the source of truth).
 func (s *Service) DeleteUser(ctx context.Context, id int64) error {
@@ -660,7 +667,7 @@ func (s *Service) DeleteUser(ctx context.Context, id int64) error {
 
 // SetRole changes an account's role. Demoting the last enabled admin is refused.
 // Promoting a password-less account to admin requires a password to be set first
-// (see SetPassword) — admins must be able to sign in to the console.
+// (see SetPassword) - admins must be able to sign in to the console.
 func (s *Service) SetRole(ctx context.Context, id int64, role string) error {
 	if role != RoleAdmin {
 		role = RoleUser

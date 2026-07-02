@@ -1,7 +1,7 @@
 // Tiny i18n engine for the baked-in admin/connect UI. No build step, no deps.
 //
 // The dictionary is a plain object on `window.asI18nDict` (see i18n-dict.js), loaded
-// synchronously BEFORE this script and before the page script — so `asI18n.t()` is
+// synchronously BEFORE this script and before the page script - so `asI18n.t()` is
 // ready when admin.js/connect.js render dynamic content, with no fetch race or flash.
 // English is the base + fallback; other languages may be partial.
 //
@@ -21,7 +21,7 @@
       var saved = localStorage.getItem(STORE_KEY);
       if (saved && SUPPORTED.indexOf(saved) >= 0) return saved;
     } catch (e) {
-      /* localStorage unavailable (private mode) — fall through to navigator */
+      /* localStorage unavailable (private mode) - fall through to navigator */
     }
     var langs = navigator.languages || [navigator.language || "en"];
     for (var i = 0; i < langs.length; i++) {

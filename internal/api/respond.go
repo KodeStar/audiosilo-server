@@ -39,7 +39,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // writeCatalogError maps a catalog/library error to an HTTP response. The
 // cross-cutting domain sentinels that don't need a handler-specific message get
 // a clean, leak-free 4xx; anything else is treated as an unexpected internal
-// failure — logged with the supplied op + key/values and returned as a generic
+// failure - logged with the supplied op + key/values and returned as a generic
 // 500. Centralising this is what keeps every handler's error->status mapping
 // exhaustive: a newly added sentinel is handled in one place rather than
 // silently falling through to 500 in the handlers that forgot to special-case
