@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -39,6 +41,20 @@ type Scope struct {
 	LibraryID int64
 	AllowAll  bool
 	Paths     []string
+}
+
+// CleanRelPath canonicalizes a library-relative path: separators become slashes,
+// "." and ".." segments collapse (a leading ".." clamps at the root instead of
+// escaping it), and enclosing slashes are trimmed - "" addresses the library
+// root. Security-relevant: pathAllowedBy is a literal prefix match, so without
+// prior normalization "Author A/../Author B/x.m4b" passes an "Author A" grant
+// and the filesystem join then collapses the ".." to reach the out-of-scope
+// file. The scope gate, the eventual SafeJoin, and every persisted path key
+// (share rules, folder overrides, enrichment, progress) must all see the same
+// canonical form, so every user-supplied rel path goes through here before it
+// is checked or stored.
+func CleanRelPath(p string) string {
+	return strings.Trim(path.Clean("/"+filepath.ToSlash(p)), "/")
 }
 
 // pathAllowedBy reports whether p is granted by rule path rp (segment-boundary
@@ -282,7 +298,7 @@ func (c *Catalog) CreateShare(ctx context.Context, s Share) (*Share, error) {
 		for _, rule := range s.Paths {
 			if _, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO share_paths(share_id, library_id, path) VALUES(?,?,?)`,
-				s.ID, rule.LibraryID, rule.Path); err != nil {
+				s.ID, rule.LibraryID, CleanRelPath(rule.Path)); err != nil {
 				return err
 			}
 		}
@@ -346,23 +362,30 @@ func (c *Catalog) ListShares(ctx context.Context) ([]Share, error) {
 	return out, nil
 }
 
-// UpdateShare patches a share. Each field is a pointer so an omitted field is
-// left unchanged (a PATCH that sends only {"name":...} must not wipe the
-// description or read_only flag); a nil name, or an explicit empty name, keeps
-// the existing name.
-func (c *Catalog) UpdateShare(ctx context.Context, id int64, name, description *string, readOnly *bool) (*Share, error) {
+// ShareUpdate is a partial share patch. Each field is a pointer so an omitted
+// field is left unchanged (a PATCH that sends only {"name":...} must not wipe
+// the description or read_only flag).
+type ShareUpdate struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	ReadOnly    *bool   `json:"read_only"`
+}
+
+// UpdateShare patches a share (see ShareUpdate for the omitted-field
+// semantics). A nil name, or an explicit empty name, keeps the existing name.
+func (c *Catalog) UpdateShare(ctx context.Context, id int64, in ShareUpdate) (*Share, error) {
 	existing, err := c.GetShare(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if name != nil && *name != "" {
-		existing.Name = *name
+	if in.Name != nil && *in.Name != "" {
+		existing.Name = *in.Name
 	}
-	if description != nil {
-		existing.Description = *description
+	if in.Description != nil {
+		existing.Description = *in.Description
 	}
-	if readOnly != nil {
-		existing.ReadOnly = *readOnly
+	if in.ReadOnly != nil {
+		existing.ReadOnly = *in.ReadOnly
 	}
 	ro := 0
 	if existing.ReadOnly {
@@ -385,11 +408,13 @@ func (c *Catalog) DeleteShare(ctx context.Context, id int64) error {
 	return err
 }
 
-// AddSharePath adds a path rule to a share.
+// AddSharePath adds a path rule to a share. The path is canonicalized on write
+// (a non-canonical rule would never prefix-match a request path, silently
+// granting nothing).
 func (c *Catalog) AddSharePath(ctx context.Context, shareID int64, rule PathRule) error {
 	_, err := c.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO share_paths(share_id, library_id, path) VALUES(?,?,?)`,
-		shareID, rule.LibraryID, rule.Path)
+		shareID, rule.LibraryID, CleanRelPath(rule.Path))
 	return err
 }
 
@@ -397,7 +422,7 @@ func (c *Catalog) AddSharePath(ctx context.Context, shareID int64, rule PathRule
 func (c *Catalog) RemoveSharePath(ctx context.Context, shareID int64, rule PathRule) error {
 	_, err := c.db.ExecContext(ctx,
 		`DELETE FROM share_paths WHERE share_id = ? AND library_id = ? AND path = ?`,
-		shareID, rule.LibraryID, rule.Path)
+		shareID, rule.LibraryID, CleanRelPath(rule.Path))
 	return err
 }
 

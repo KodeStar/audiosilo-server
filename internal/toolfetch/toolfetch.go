@@ -275,33 +275,27 @@ func copyExec(src, dst string) error {
 	return writeExec(dst, io.LimitReader(in, maxToolBytes))
 }
 
-// writeExec writes r to path (0o755), replacing any existing file.
-// writeExec writes r to path atomically: it streams into a sibling temp file and
-// renames it into place only after a clean close, so a process killed mid-copy can
-// never leave a truncated binary at the final path (which Ensure would then adopt
-// forever, since a stat can't tell a partial file from a whole one).
+// writeExec writes r to path (0o755) atomically: it streams into a sibling temp
+// file and renames it into place only after a clean close, so a process killed
+// mid-copy can never leave a truncated binary at the final path (which Ensure
+// would then adopt forever, since a stat can't tell a partial file from a whole
+// one).
 func writeExec(path string, r io.Reader) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".partial-"+filepath.Base(path)+"-")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed into place
 	if _, err := io.Copy(tmp, r); err != nil {
 		tmp.Close()
-		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := os.Chmod(tmpName, 0o755); err != nil {
-		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	return nil
+	return os.Rename(tmpName, path)
 }

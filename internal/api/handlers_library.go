@@ -4,26 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"path"
 	"strconv"
-	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
-
-// cleanRelPath normalizes a user-supplied ?path= to a canonical library-relative
-// path BEFORE it is scope-checked. Without this a ".." segment defeats a subtree
-// share: pathAllowedBy uses a literal prefix match, so "Author A/../Author B/x.m4b"
-// passes an "Author A" grant, and SafeJoin later collapses the ".." to reach the
-// out-of-scope file. Cleaning with a leading slash clamps any leading ".." at the
-// root (matching how BrowseFS already normalizes before applying VisibleInBrowse),
-// so the scope check and the eventual SafeJoin operate on the same canonical path.
-func cleanRelPath(p string) string {
-	return strings.Trim(path.Clean("/"+p), "/")
-}
 
 // handleListLibraries lists libraries the caller can reach (via any share).
 func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
@@ -68,14 +55,10 @@ func (a *API) authorizedPath(r *http.Request) (*catalog.Library, string, int, st
 	if status != 0 {
 		return nil, "", status, msg
 	}
-	rel := r.URL.Query().Get("path")
-	if rel == "" {
-		return nil, "", http.StatusBadRequest, "path is required"
-	}
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
-	// past a subtree grant (see cleanRelPath). An input that cleans away to nothing
-	// (".", "/", "Author/..") addresses no content.
-	rel = cleanRelPath(rel)
+	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
+	// to nothing ("", ".", "/", "Author/..") addresses no content.
+	rel := catalog.CleanRelPath(r.URL.Query().Get("path"))
 	if rel == "" {
 		return nil, "", http.StatusBadRequest, "path is required"
 	}
@@ -270,22 +253,21 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Emit [] rather than null for empty files/chapters so the envelope matches the
-	// hand-mirrored client types (which declare these as non-null arrays).
-	files := book.Files
-	if files == nil {
-		files = []catalog.BookFile{}
+	// hand-mirrored client types (which declare these as non-null arrays). book is
+	// a fresh per-request value, so normalizing in place is safe.
+	if book.Files == nil {
+		book.Files = []catalog.BookFile{}
 	}
-	chapters := book.Chapters
-	if chapters == nil {
-		chapters = []metadata.Chapter{}
+	if book.Chapters == nil {
+		book.Chapters = []metadata.Chapter{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"library_id":      lib.ID,
 		"path":            book.RelPath,
 		"duration":        book.Duration,
 		"is_folder":       book.IsFolder,
-		"files":           files,
-		"chapters":        chapters,
+		"files":           book.Files,
+		"chapters":        book.Chapters,
 		"codec":           book.Codec,
 		"direct_playable": media.DirectPlayable(book.Codec),
 	})

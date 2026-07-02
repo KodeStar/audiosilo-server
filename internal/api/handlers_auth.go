@@ -241,7 +241,7 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.auth.SetPassword(r.Context(), u.ID, req.Password); err != nil {
-		writeUserError(w, err)
+		a.writeUserError(w, err, "could not update password")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

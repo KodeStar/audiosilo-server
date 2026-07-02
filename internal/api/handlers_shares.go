@@ -62,18 +62,14 @@ func (a *API) handleUpdateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid share id")
 		return
 	}
-	// Pointer fields distinguish "omitted" from "set to empty" so a partial PATCH
-	// doesn't clear the fields it didn't mention.
-	var req struct {
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
-		ReadOnly    *bool   `json:"read_only"`
-	}
+	// Pointer fields (see catalog.ShareUpdate) distinguish "omitted" from "set to
+	// empty" so a partial PATCH doesn't clear the fields it didn't mention.
+	var req catalog.ShareUpdate
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	updated, err := a.cat.UpdateShare(r.Context(), id, req.Name, req.Description, req.ReadOnly)
+	updated, err := a.cat.UpdateShare(r.Context(), id, req)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "share not found")
 		return

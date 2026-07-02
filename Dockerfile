@@ -14,15 +14,21 @@
 ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
 
 # --- build the Go server -------------------------------------------------------
-FROM golang:1.25-alpine AS build
+# Pinned to the build host's platform: the binary is CGO-free, so multi-arch legs
+# cross-compile natively via GOOS/GOARCH instead of running the whole Go toolchain
+# under QEMU emulation (which made the arm64 image build many times slower).
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 WORKDIR /src
 # Release version stamped into the binary (reported by GET /server, the admin
 # console and the web player). image.yml passes the release tag; defaults to dev.
 ARG VERSION=dev
+# Target platform for the cross-compile, provided by BuildKit per leg (empty on
+# a legacy single-platform build, where the host defaults apply).
+ARG TARGETOS TARGETARCH
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
     -ldflags="-s -w -X github.com/kodestar/audiosilo-server/internal/api.Version=${VERSION}" \
     -o /out/audiosilo ./cmd/audiosilo
 

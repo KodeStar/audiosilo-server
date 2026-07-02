@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -37,19 +36,12 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// CreateUser enforces the password rules (required for admins, optional
-	// otherwise). Map its typed errors to the right status; never echo a raw DB
-	// error (a duplicate username must not leak the SQLite constraint string).
+	// otherwise); writeUserError maps its typed errors to the right status and
+	// never echoes a raw DB error (a duplicate username must not leak the SQLite
+	// constraint string).
 	u, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, req.Role)
-	switch {
-	case errors.Is(err, auth.ErrUsernameTaken):
-		writeError(w, http.StatusConflict, "username already taken")
-		return
-	case errors.Is(err, auth.ErrAdminNeedsPassword) || errors.Is(err, auth.ErrPasswordTooShort):
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	case err != nil:
-		a.log.Warn("create user failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not create user")
+	if err != nil {
+		a.writeUserError(w, err, "could not create user")
 		return
 	}
 	writeJSON(w, http.StatusCreated, u)
@@ -118,19 +110,19 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Password != nil {
 		if err := a.auth.SetPassword(r.Context(), id, *req.Password); err != nil {
-			writeUserError(w, err)
+			a.writeUserError(w, err, "could not update user")
 			return
 		}
 	}
 	if req.Role != nil {
 		if err := a.auth.SetRole(r.Context(), id, *req.Role); err != nil {
-			writeUserError(w, err)
+			a.writeUserError(w, err, "could not update user")
 			return
 		}
 	}
 	if req.Disabled != nil {
 		if err := a.auth.SetDisabled(r.Context(), id, *req.Disabled); err != nil {
-			writeUserError(w, err)
+			a.writeUserError(w, err, "could not update user")
 			return
 		}
 	}
@@ -158,25 +150,30 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.auth.DeleteUser(r.Context(), id); err != nil {
-		writeUserError(w, err)
+		a.writeUserError(w, err, "could not delete user")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeUserError maps auth account-management errors to HTTP statuses.
-func writeUserError(w http.ResponseWriter, err error) {
+// writeUserError maps auth account-management errors to HTTP statuses - the
+// auth twin of writeCatalogError, and like it centralized so a newly added
+// sentinel is handled once rather than falling through to 500 in the handlers
+// that forgot to special-case it. Anything unmapped is logged and returned as a
+// generic 500 with the caller-supplied message.
+func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string) {
 	switch {
 	case errors.Is(err, auth.ErrNotFound):
 		writeError(w, http.StatusNotFound, "user not found")
+	case errors.Is(err, auth.ErrUsernameTaken):
+		writeError(w, http.StatusConflict, "username already taken")
 	case errors.Is(err, auth.ErrLastAdmin):
 		writeError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, auth.ErrAdminNeedsPassword):
-		writeError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, auth.ErrPasswordTooShort):
+	case errors.Is(err, auth.ErrAdminNeedsPassword), errors.Is(err, auth.ErrPasswordTooShort):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, "could not update user")
+		a.log.Warn(genericMsg, "err", err)
+		writeError(w, http.StatusInternalServerError, genericMsg)
 	}
 }
 
@@ -223,10 +220,9 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 		MaxUses *int   `json:"max_uses"`
 		TTLDays *int   `json:"ttl_days"`
 	}
-	// An empty body (io.EOF) is fine - mint an invite with the defaults. A body
-	// that is present but malformed (or carries an unknown field) is a client error,
-	// not a silent fall-through to the defaults.
-	if err := decodeJSON(r, &req, 0); err != nil && !errors.Is(err, io.EOF) {
+	// An empty body is fine - mint an invite with the defaults (decodeJSONOptional
+	// still rejects a malformed body).
+	if err := decodeJSONOptional(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}

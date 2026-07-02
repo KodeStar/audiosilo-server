@@ -123,37 +123,6 @@ type Signature struct {
 	ContentHash string
 }
 
-// FingerprintsForPaths returns the stored content fingerprint (content_hash)
-// for the given rel_paths in a library, keyed by rel_path. Used by the scanner
-// to match a vanished file to a newly-appeared one (move detection).
-func (c *Catalog) FingerprintsForPaths(ctx context.Context, libraryID int64, paths []string) (map[string]string, error) {
-	out := map[string]string{}
-	if len(paths) == 0 {
-		return out, nil
-	}
-	placeholders := make([]string, len(paths))
-	args := []any{libraryID}
-	for i, p := range paths {
-		placeholders[i] = "?"
-		args = append(args, p)
-	}
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, content_hash FROM books WHERE library_id = ? AND rel_path IN (`+
-			strings.Join(placeholders, ",")+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var rel, fp string
-		if err := rows.Scan(&rel, &fp); err != nil {
-			return nil, err
-		}
-		out[rel] = fp
-	}
-	return out, rows.Err()
-}
-
 // Signatures returns the stored mtime/size for every book in a library, keyed
 // by rel_path. The scanner uses it to skip re-extracting unchanged books.
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {

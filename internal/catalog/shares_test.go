@@ -5,6 +5,35 @@ import (
 	"testing"
 )
 
+// TestCleanRelPath pins the canonicalization every user-supplied rel path goes
+// through before a scope check or a persisted path key. The denied cases are the
+// security-critical ones: ".." must clamp at the root, never escape it, and must
+// collapse before the literal prefix match in pathAllowedBy sees the path.
+func TestCleanRelPath(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		// Canonical inputs pass through untouched.
+		{"", ""},
+		{"Author/Book.m4b", "Author/Book.m4b"},
+		// Cosmetic variants normalize to the same key.
+		{"/", ""},
+		{".", ""},
+		{"/Author/Book.m4b/", "Author/Book.m4b"},
+		{"Author//Book.m4b", "Author/Book.m4b"},
+		{"./Author/./Book.m4b", "Author/Book.m4b"},
+		// Traversal clamps at the root instead of escaping it.
+		{"../../../etc/passwd", "etc/passwd"},
+		{"AuthorA/../AuthorB/x.m4b", "AuthorB/x.m4b"},
+		{"Author/..", ""},
+	}
+	for _, c := range cases {
+		if got := CleanRelPath(c.in); got != c.want {
+			t.Errorf("CleanRelPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestScopeAllows(t *testing.T) {
 	s := Scope{Paths: []string{"A. F. Kay/Divine Apostasy", "Other/One Book.m4b"}}
 	cases := []struct {
