@@ -200,7 +200,7 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, full)
 }
 
-// handleSetPassword lets the signed-in user set or change their own password —
+// handleSetPassword lets the signed-in user set or change their own password -
 // the conventional way back in after a sign-out. The primary case is a
 // password-less player setting their first one (no current password to present),
 // so no challenge is required then; but changing an existing password requires
@@ -249,7 +249,7 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 
 // handleGenerateRecovery mints (or replaces) the signed-in user's durable
 // recovery code and returns it once. Saved by the user, it lets them re-pair on
-// any device via the connect screen without an admin — the recovery path for
+// any device via the connect screen without an admin - the recovery path for
 // password-less accounts. Reuses the redeem flow (it is just an auth code).
 // Rate-limited and refused for demo accounts so a throwaway session can't mint a
 // durable login.

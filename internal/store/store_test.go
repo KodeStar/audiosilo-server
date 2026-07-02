@@ -70,7 +70,7 @@ func TestMigrationsIdempotent(t *testing.T) {
 	}
 }
 
-// TestForeignKeysEnabled asserts the foreign_keys pragma is ON after Open — the
+// TestForeignKeysEnabled asserts the foreign_keys pragma is ON after Open - the
 // schema relies on ON DELETE CASCADE rules that silently no-op when it is off.
 func TestForeignKeysEnabled(t *testing.T) {
 	ctx := context.Background()

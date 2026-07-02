@@ -97,7 +97,7 @@ func TestSharesAndUserScope(t *testing.T) {
 
 // TestGrantWholeLibraryHealsRulelessShare guards the case observed in production:
 // a "Library: <name>" share exists but has lost its "" path rule (however it
-// arose — a server/schema update, a manual edit, an FK cascade). Such a share
+// arose - a server/schema update, a manual edit, an FK cascade). Such a share
 // grants nothing, so re-granting whole-library access must re-add the rule rather
 // than just hand out the rule-less share.
 func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {

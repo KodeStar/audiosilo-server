@@ -6,7 +6,7 @@ import (
 )
 
 // ErrInvalidOverrideMode marks a folder override whose mode is outside the
-// {book, collection} allowlist. The transport layer maps it to 400 — the single
+// {book, collection} allowlist. The transport layer maps it to 400 - the single
 // source of truth for the allowlist lives here, not duplicated in the handler.
 var ErrInvalidOverrideMode = errors.New(`folder override mode must be "book" or "collection"`)
 

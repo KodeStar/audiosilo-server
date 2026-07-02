@@ -4,12 +4,26 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path"
 	"strconv"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
+
+// cleanRelPath normalizes a user-supplied ?path= to a canonical library-relative
+// path BEFORE it is scope-checked. Without this a ".." segment defeats a subtree
+// share: pathAllowedBy uses a literal prefix match, so "Author A/../Author B/x.m4b"
+// passes an "Author A" grant, and SafeJoin later collapses the ".." to reach the
+// out-of-scope file. Cleaning with a leading slash clamps any leading ".." at the
+// root (matching how BrowseFS already normalizes before applying VisibleInBrowse),
+// so the scope check and the eventual SafeJoin operate on the same canonical path.
+func cleanRelPath(p string) string {
+	return strings.Trim(path.Clean("/"+p), "/")
+}
 
 // handleListLibraries lists libraries the caller can reach (via any share).
 func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
@@ -54,14 +68,21 @@ func (a *API) authorizedPath(r *http.Request) (*catalog.Library, string, int, st
 	if status != 0 {
 		return nil, "", status, msg
 	}
-	path := r.URL.Query().Get("path")
-	if path == "" {
+	rel := r.URL.Query().Get("path")
+	if rel == "" {
 		return nil, "", http.StatusBadRequest, "path is required"
 	}
-	if !scope.Allows(path) {
+	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
+	// past a subtree grant (see cleanRelPath). An input that cleans away to nothing
+	// (".", "/", "Author/..") addresses no content.
+	rel = cleanRelPath(rel)
+	if rel == "" {
+		return nil, "", http.StatusBadRequest, "path is required"
+	}
+	if !scope.Allows(rel) {
 		return nil, "", http.StatusForbidden, "no access to this path"
 	}
-	return lib, path, 0, ""
+	return lib, rel, 0, ""
 }
 
 // bookForPath returns the indexed book for a (library, path), indexing it on
@@ -248,13 +269,23 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "load chapters failed", "could not load chapters", "library", lib.ID, "path", path)
 		return
 	}
+	// Emit [] rather than null for empty files/chapters so the envelope matches the
+	// hand-mirrored client types (which declare these as non-null arrays).
+	files := book.Files
+	if files == nil {
+		files = []catalog.BookFile{}
+	}
+	chapters := book.Chapters
+	if chapters == nil {
+		chapters = []metadata.Chapter{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"library_id":      lib.ID,
 		"path":            book.RelPath,
 		"duration":        book.Duration,
 		"is_folder":       book.IsFolder,
-		"files":           book.Files,
-		"chapters":        book.Chapters,
+		"files":           files,
+		"chapters":        chapters,
 		"codec":           book.Codec,
 		"direct_playable": media.DirectPlayable(book.Codec),
 	})
@@ -266,12 +297,21 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 // transcode mid-file (transcoded output is not byte-seekable, so seeking is by
 // re-requesting). The path is the actual audio file (a chapter's file_path).
 func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, rel, status, msg := a.authorizedPath(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	abs, err := library.SafeJoin(lib.Root, path)
+	// Only ever stream recognized audio. The scope check bounds this to the caller's
+	// grant, but the library root can also hold non-audio sidecar files (.nfo, .jpg,
+	// a stray .env/backup); BrowseFS hides those from listings, and cover art has its
+	// own endpoint, so serving them here would be an avenue to exfiltrate arbitrary
+	// in-scope files by guessing paths.
+	if !metadata.IsAudio(rel) {
+		writeError(w, http.StatusNotFound, "not an audio file")
+		return
+	}
+	abs, err := library.SafeJoin(lib.Root, rel)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
@@ -279,6 +319,16 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("transcode") == "1" {
 		if a.ffmpeg == "" {
 			writeError(w, http.StatusServiceUnavailable, "transcoding is not available on this server")
+			return
+		}
+		// Bound concurrent ffmpeg processes; when saturated, ask the client to retry
+		// rather than forking another core-pinning encoder.
+		select {
+		case a.transcodeSem <- struct{}{}:
+			defer func() { <-a.transcodeSem }()
+		default:
+			w.Header().Set("Retry-After", "5")
+			writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
 			return
 		}
 		start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)

@@ -28,7 +28,7 @@ import (
 
 // candidate is a book row enriched with the per-library/-file facts needed to
 // de-duplicate and rank it. rankIdx is its position in the source ordering (FTS
-// rank for search, added_at for recent) — lower is better — and is the final,
+// rank for search, added_at for recent) - lower is better - and is the final,
 // always-unique tiebreaker so ranking is a total order.
 type candidate struct {
 	book      Book
@@ -140,8 +140,8 @@ func dedupBooks(cands []candidate, limit int) []Book {
 	return out
 }
 
-// otherLocations returns the same book's best copy in each OTHER library — one
-// entry per distinct library, never the winner's own — ordered by library order
+// otherLocations returns the same book's best copy in each OTHER library - one
+// entry per distinct library, never the winner's own - ordered by library order
 // then name. This keeps "also in A, B" clean: no repeated libraries even when a
 // library holds several copies of the book.
 func otherLocations(cands []candidate, members []int, win int) []BookLocation {
@@ -266,7 +266,7 @@ func exposedDedupKey(b Book) string {
 
 // metaKey is the normalized author|title|narrator identity, or "" when the
 // metadata is too weak to safely merge two books on. It requires a real author
-// AND a non-generic title — without that guard, generically-tagged files (every
+// AND a non-generic title - without that guard, generically-tagged files (every
 // "Track 01", every "Chapter 1") collide into one giant false group. Such books
 // still de-dup via the content fingerprint / asin / isbn.
 func metaKey(b Book) string {

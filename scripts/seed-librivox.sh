@@ -3,7 +3,7 @@
 # Seed a demo audiobook library with public-domain LibriVox recordings hosted on
 # the Internet Archive. Intended for a public demo instance (see demo mode in
 # config.yaml: `demo.enabled`). It writes an `<Author>/<Title>/NN - <file>.mp3`
-# (+ `cover.jpg`) tree — the standard folder-per-book convention the scanner
+# (+ `cover.jpg`) tree - the standard folder-per-book convention the scanner
 # auto-detects on startup (each `<Title>` directory holds one book's audio, and
 # multiple titles group under a shared author folder).
 #
@@ -38,7 +38,7 @@ MAX_FILES="${MAX_FILES:-0}"   # >0 = download at most this many chapter files pe
 # (where LibriVox has them). Books group under one author folder only when their
 # archive.org `creator` strings match exactly, so keep an author's items
 # consistent (e.g. all "Sir Arthur Conan Doyle", not a mix with "Arthur Conan
-# Doyle"). Sun Tzu stays single — LibriVox has no other Sun Tzu work.
+# Doyle"). Sun Tzu stays single - LibriVox has no other Sun Tzu work.
 DEFAULT_IDS=(
   # Jane Austen
   solo_pride_librivox                     # Pride and Prejudice (version 2)
@@ -80,7 +80,7 @@ done
 
 mkdir -p "$DEST"
 echo "Seeding ${#IDS[@]} LibriVox item(s) into: $DEST"
-[ "$DRY_RUN" = "1" ] && echo "(dry run — no files will be downloaded)"
+[ "$DRY_RUN" = "1" ] && echo "(dry run - no files will be downloaded)"
 
 # Parses an archive.org metadata JSON document (stdin). Prints the destination
 # folder name on line 1, then one chapter file name per subsequent line, choosing
@@ -101,7 +101,7 @@ def slug(s):
     return re.sub(r"\s+", " ", s).strip(" .")[:120].strip(" .")
 author = slug(creator) or "LibriVox"
 book = slug(title) or sys.argv[1]
-# "<Author>/<Title>" — the scanner treats each title directory (which holds the
+# "<Author>/<Title>" - the scanner treats each title directory (which holds the
 # audio) as one book and groups titles by the same author under one folder.
 print(author + "/" + book)
 files = data.get("files", [])
@@ -163,7 +163,12 @@ seed_one() {
       continue
     fi
     echo "    fetch: $idx - $name"
-    curl -fSL --retry 3 -o "$target" "https://archive.org/download/$id/$name"
+    # Skip (don't abort) on a failed chapter, and never leave a truncated file
+    # behind - a half-written $target would be treated as "exists" on the next run.
+    if ! curl -fSL --retry 3 --remove-on-error -o "$target" "https://archive.org/download/$id/$name"; then
+      echo "    (skip: download failed for $name)"
+      rm -f "$target"
+    fi
   done < <(tail -n +2 "$tmp")
   rm -f "$tmp"
 

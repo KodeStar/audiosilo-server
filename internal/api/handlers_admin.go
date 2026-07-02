@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -31,11 +32,24 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	if req.Username == "" {
+		writeError(w, http.StatusBadRequest, "username is required")
+		return
+	}
 	// CreateUser enforces the password rules (required for admins, optional
-	// otherwise), so the transport layer stays a thin pass-through.
+	// otherwise). Map its typed errors to the right status; never echo a raw DB
+	// error (a duplicate username must not leak the SQLite constraint string).
 	u, err := a.auth.CreateUser(r.Context(), req.Username, req.Password, req.Role)
-	if err != nil {
+	switch {
+	case errors.Is(err, auth.ErrUsernameTaken):
+		writeError(w, http.StatusConflict, "username already taken")
+		return
+	case errors.Is(err, auth.ErrAdminNeedsPassword) || errors.Is(err, auth.ErrPasswordTooShort):
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	case err != nil:
+		a.log.Warn("create user failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not create user")
 		return
 	}
 	writeJSON(w, http.StatusCreated, u)
@@ -43,7 +57,7 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 // handleGetUserDetail returns one account plus everything the admin console
 // needs to manage it: the libraries it can reach, the shares granted to it, and
-// its issued auth codes (metadata only — the plaintext codes are never stored).
+// its issued auth codes (metadata only - the plaintext codes are never stored).
 func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -131,7 +145,7 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 // handleDeleteUser permanently removes an account and all of its durable state
 // (sessions, auth codes, progress/bookmarks/notes/history, share grants) via the
 // schema's cascade. Two guards: an admin cannot delete their own account (disable
-// it instead — prevents self-lockout and fat-finger loss), and auth.DeleteUser
+// it instead - prevents self-lockout and fat-finger loss), and auth.DeleteUser
 // refuses the last enabled admin (ErrLastAdmin → 409).
 func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
@@ -140,7 +154,7 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if caller := userFrom(r.Context()); caller != nil && caller.ID == id {
-		writeError(w, http.StatusBadRequest, "you cannot delete your own account — disable it instead")
+		writeError(w, http.StatusBadRequest, "you cannot delete your own account - disable it instead")
 		return
 	}
 	if err := a.auth.DeleteUser(r.Context(), id); err != nil {
@@ -202,14 +216,20 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Pointers distinguish "omitted" (apply the default) from an explicit 0
-	// (max_uses 0 = unlimited, ttl_days 0 = never expires) — both of which
+	// (max_uses 0 = unlimited, ttl_days 0 = never expires) - both of which
 	// CreateAuthCode supports.
 	var req struct {
 		Label   string `json:"label"`
 		MaxUses *int   `json:"max_uses"`
 		TTLDays *int   `json:"ttl_days"`
 	}
-	_ = decodeJSON(r, &req, 0)
+	// An empty body (io.EOF) is fine - mint an invite with the defaults. A body
+	// that is present but malformed (or carries an unknown field) is a client error,
+	// not a silent fall-through to the defaults.
+	if err := decodeJSON(r, &req, 0); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
 	maxUses, ttl := resolveAuthCodeLifetime(req.MaxUses, req.TTLDays)
 	// One active invite per user: minting atomically supersedes the user's other
 	// still-redeemable invites (used-up/expired ones stay as history).
@@ -412,7 +432,7 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 
 // handleSetEnrichment attaches path-keyed metadata (ASIN/ISBN) to a book. The
 // manager calls this after matching an external source (e.g. an Audible library) to
-// an indexed book, so a book scanned without an ASIN gains one — making future
+// an indexed book, so a book scanned without an ASIN gains one - making future
 // matches exact. The enrichment is durable and survives a re-scan
 // (catalog.ApplyEnrichments); no file on disk is modified, so the network API stays
 // non-destructive.

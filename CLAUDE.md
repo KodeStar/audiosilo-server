@@ -1,4 +1,4 @@
-# CLAUDE.md — AudioSilo Server
+# CLAUDE.md - AudioSilo Server
 
 Guidance for working in this repository. Keep this file updated as the codebase
 evolves.
@@ -29,7 +29,7 @@ scripts/build-web.sh                 # dev helper: build the frontend export loc
 
 Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
 `--ffmpeg` (`""` disables on-the-fly transcoding), `--setup` (first-run **web
-setup wizard** instead of the auto-admin banner — see below).
+setup wizard** instead of the auto-admin banner - see below).
 
 **Native distribution** (GoReleaser → GitHub Releases on `v*` tags, see
 `.goreleaser.yml` + `.github/workflows/release.yml`, and the workspace
@@ -57,13 +57,13 @@ via `Options.OnURL` (so the audiosilo-manager desktop app, which runs the server
 in-process, can open a browser).
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
-&& golangci-lint run`** — CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+&& golangci-lint run`** - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
 gates all four on every PR/push. A few scanner tests need `ffmpeg` (ffprobe);
 without it they `t.Skip` (CI installs it). The linter is adopted at a **green
-baseline** — its suppressions in `.golangci.yml` are documented and intentional;
+baseline** - its suppressions in `.golangci.yml` are documented and intentional;
 fix new findings rather than widening the excludes.
 
-> Before adding code, read the workspace **[CODE-HEALTH.md](../CODE-HEALTH.md)** —
+> Before adding code, read the workspace **[CODE-HEALTH.md](../CODE-HEALTH.md)** -
 > Definition of Done + the recurring drift patterns (wire-contract, dead code,
 > stale docs, untested packages) a full review found. Conventions only help if
 > they're checked; that file is the checklist.
@@ -73,7 +73,7 @@ fix new findings rather than widening the excludes.
 The product docs live in [`../audiosilo-docs`](../audiosilo-docs/) (Docusaurus:
 User Guide + Developer Docs, generated screenshots). **Updating them is part of
 Definition of Done**: a change here that touches behaviour, UI, config, or the
-wire format updates the affected pages in the same logical change — for this
+wire format updates the affected pages in the same logical change - for this
 repo that's chiefly `docs-developers/server/**` (the **API reference**
 `server/api/reference.md` on every wire change, `server/configuration.md` on
 any config/flag change) plus the User Guide's getting-started/admin pages, and
@@ -95,7 +95,7 @@ admin/connect UI changes. Mapping table:
 ```
 cmd/audiosilo/        entrypoint: flag wiring; delegates to pkg/launcher.Run
 pkg/launcher/         shared run loop (config→store→services→bootstrap→serve); PUBLIC so the audiosilo-manager desktop app runs it in-process (Run/Options)
-pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle) — same-book identification across messy titles; shared with the manager, usable for server-side enrichment/dedup
+pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle) - same-book identification across messy titles; shared with the manager, usable for server-side enrichment/dedup
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
@@ -115,28 +115,28 @@ scripts/build-web.sh  dev helper: build the frontend export locally for AUDIOSIL
 
 Dependency direction: `api` → (`auth`, `catalog`, `library`, `media`, `config`);
 `library` → (`catalog`, `metadata`, `config`); everything DB-backed → `store`.
-`api` is transport-only — keep business logic out of handlers.
+`api` is transport-only - keep business logic out of handlers.
 
 ## Identity = the filesystem path
 
 Audiobook metadata is unreliable, so **the path is the identity**. Content is
 addressed by `(library_id, rel_path)`; playback, progress, bookmarks, notes and
 share membership all key on the path. `books.id` is an internal, rebuildable
-index artifact — never put it in the API contract or in durable user state. A
+index artifact - never put it in the API contract or in durable user state. A
 cheap fingerprint (sha256 of size + first/last 64KB, stored in `books.content_hash`)
 is used **only** to detect moves; it is not an identity.
 
 ## Data model (SQLite, see internal/store/migrations/)
 
 `users`, `tokens` (sessions + pairing, hashed), `auth_codes`, `libraries` (no
-`layout` column — shape is auto-detected), `books` (+ `content_hash` fingerprint,
+`layout` column - shape is auto-detected), `books` (+ `content_hash` fingerprint,
 + `codec`), `book_files`, `chapters` (with `file_path`), `books_fts` (standalone
 FTS5). Durable user state is **path-keyed** and decoupled from the index (no FK to
 books): `progress`/`bookmarks`/`notes`/`listening_history` on `(user_id,
 library_id, rel_path)`, plus `folder_overrides` (`library_id, path, mode`) which
 pins a folder's book/collection classification, and `book_enrichment`
 (`library_id, path, asin, isbn`) which attaches metadata to a book (set by the
-manager when it matches an external source) — both durable, path-keyed, no FK to
+manager when it matches an external source) - both durable, path-keyed, no FK to
 the index. Sharing: `shares` (named), `share_paths` (`library_id`, `path`;
 `""` = whole library), `user_share_access`.
 
@@ -150,7 +150,7 @@ future metadata site can attach enrichment without reshaping the schema.
   `testdata/library` fixtures); pure-logic tests sit next to the code (see
   `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
-  and a denied regression test** — anything touching `library.SafeJoin`,
+  and a denied regression test** - anything touching `library.SafeJoin`,
   `Scope.Allows`/`VisibleInBrowse`/`pathFilterSQL`, the rate limiters,
   `auth.ResolveToken`, or `web.htmlCSP`. Keep business logic in the non-`api`
   packages so it stays unit-testable (`api` is transport-only).
@@ -161,13 +161,13 @@ future metadata site can attach enrichment without reshaping the schema.
   first-run banner prints them once and is the only place they appear.
 - **Connect / invite / pairing flow** (`internal/web` connect page + `api/qr.go`):
   the admin's **Copy invite** button mints an auth code and shares
-  `<base>/connect#code=...` — the code rides in the URL **fragment** so it never
+  `<base>/connect#code=...` - the code rides in the URL **fragment** so it never
   reaches the server or its logs. The connect page auto-redeems a fragment code,
   showing a QR plus **Open in app** / **Open web player** buttons. `buildPairing`
   emits two carriers for the single-use pairing token: `web_url`
-  (`<base>/web/connect?token=` — encoded in the QR; opens the app via a Universal/
+  (`<base>/web/connect?token=` - encoded in the QR; opens the app via a Universal/
   App Link when the domain is claimed, else the embedded web player) and `uri`
-  (`audiosilo://connect?...` — custom scheme, launches an installed app on any
+  (`audiosilo://connect?...` - custom scheme, launches an installed app on any
   domain). Invite codes minted via the admin API default to 5 uses / 1-day
   expiry (`defaultAuthCode*` in `handlers_admin.go`); explicit values override.
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
@@ -182,10 +182,10 @@ future metadata site can attach enrichment without reshaping the schema.
   demo accounts** (`User.IsDemo`) so a throwaway session can't forge a durable login.
   `ListAuthCodes` returns only invites; recovery presence surfaces as
   `User.HasRecovery`, and the admin can revoke a leaked one via `DELETE
-  /admin/users/{id}/recovery` (`ClearRecoveryCode`) — the only lever, since recovery
+  /admin/users/{id}/recovery` (`ClearRecoveryCode`) - the only lever, since recovery
   codes aren't listable. **Invite hygiene**: `CreateInvite` mints and, in one
   transaction, supersedes the user's other *still-redeemable* invites
-  (`supersedeActiveInvites` — not expired, not used-up) so there's exactly one active
+  (`supersedeActiveInvites` - not expired, not used-up) so there's exactly one active
   invite each; spent/expired ones stay as history. `POST /admin/authcodes/{id}/rotate`
   (`RotateAuthCode`) regenerates an invite's secret in place (the admin "Resend"),
   **preserving** its `max_uses` and renewing its expiry for the original window (never
@@ -197,7 +197,7 @@ future metadata site can attach enrichment without reshaping the schema.
   admin-must-keep-a-password guard still holds.
 - **Web player at `/web`** (`web.go`, served from `cfg.WebDir`): a separate Expo
   Router project (`~/dev/audiosilo/audiosilo-frontend`) exported as a static site. It is
-  **not vendored** in this repo or the binary — the server serves it at runtime
+  **not vendored** in this repo or the binary - the server serves it at runtime
   from `web_dir` (env `AUDIOSILO_WEB_DIR`), which the Docker image bakes in at
   `/app/web` from a pinned prebuilt frontend image (see `Dockerfile`). Empty
   `web_dir` → `/web` is unmounted and the `web_player` capability is false. The
@@ -212,7 +212,7 @@ future metadata site can attach enrichment without reshaping the schema.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
-  shipped app build claims — self-hosted arbitrary domains fall back to the web
+  shipped app build claims - self-hosted arbitrary domains fall back to the web
   player + the custom-scheme "Open in app" button.
 - **SQLite** runs with a single write connection (writers serialize) plus a
   read-only reader pool, WAL mode.
@@ -253,13 +253,13 @@ future metadata site can attach enrichment without reshaping the schema.
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
   convention (and Audiobookshelf): **a directory that directly contains audio is
-  ONE book**, with all those files as its tracks/chapters — whether it holds a
+  ONE book**, with all those files as its tracks/chapters - whether it holds a
   single m4b or fifty distinctly-named mp3 chapters (do NOT split a folder's files
   into separate books by filename; that produced one phantom book per chapter).
   The only per-file case is the **library root** (loose files there are individual
-  single-file books — the old "flat"). A folder of loose single-file books
+  single-file books - the old "flat"). A folder of loose single-file books
   (`books_in_folder`) is expressed with a **per-folder override**:
-  `folder_overrides(library_id, path, mode)`, `mode ∈ {book, collection}` —
+  `folder_overrides(library_id, path, mode)`, `mode ∈ {book, collection}` -
   `collection` = one book per file, `book` = force folder-is-one-book. Overrides
   are durable, path-keyed config (no FK to the rebuildable index, like
   progress/bookmarks). `PUT/DELETE /admin/libraries/{id}/folder-override?path=`
@@ -272,24 +272,24 @@ future metadata site can attach enrichment without reshaping the schema.
   in place (`auth.SetRole`/`SetPassword`/`SetDisabled`); `DELETE /admin/users/{id}`
   (`auth.DeleteUser` → `handleDeleteUser`) permanently removes an account and all
   of its durable state via the schema's `ON DELETE CASCADE` (sessions, auth codes,
-  progress/bookmarks/notes/history, share grants) — files on disk are untouched.
+  progress/bookmarks/notes/history, share grants) - files on disk are untouched.
   Two safety guards live in `auth`: the **last enabled admin** can't be demoted,
   disabled, or deleted (`ErrLastAdmin`), and an admin must keep a password
   (`ErrAdminNeedsPassword`); the **delete handler additionally refuses self-delete**
   (an admin disables its own account instead, never deletes it). Disabling stays the
   reversible option; deletion is the irreversible one.
   **Passwords are optional for non-admins** (stored as an empty hash; `Authenticate`
-  rejects empty-hash accounts) — player-only users onboard purely via auth-code
+  rejects empty-hash accounts) - player-only users onboard purely via auth-code
   pairing. `GET /admin/users/{id}` returns a user + accessible libraries + granted
   shares + issued auth codes (metadata only; codes are unretrievable by design);
   `DELETE /admin/authcodes/{id}` revokes a code. A user's **last activity** is
   derived from `MAX(tokens.last_seen)` (bumped on every authenticated request in
-  `ResolveToken`) — there is no `last_login` column; don't add one.
+  `ResolveToken`) - there is no `last_login` column; don't add one.
 - **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
   counts (`catalog.CountBooksByLibrary`) and a cross-user "currently listening"
   feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path).
 - **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
-  ties) in `catalog.SaveProgress` — the realtime layer (Phase C) must reuse it so
+  ties) in `catalog.SaveProgress` - the realtime layer (Phase C) must reuse it so
   REST and WebSocket writes converge.
 - **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
   multi-file mp3 parts share one shape: each chapter carries `file_path` (the
@@ -305,15 +305,15 @@ future metadata site can attach enrichment without reshaping the schema.
   defaults to true). ffmpeg is likewise optional (transcoding off without it).
 - **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
   (and does NOT prune) if a library root is missing/unreadable, or if it returns
-  zero audio files while books are still indexed. This protects the index — and
-  the progress/bookmarks that cascade from it — when a network share (SMB/NFS)
+  zero audio files while books are still indexed. This protects the index - and
+  the progress/bookmarks that cascade from it - when a network share (SMB/NFS)
   is unmounted. Library roots are always local paths; mount remote shares first.
 
 ## Roadmap
 
 - **Phase A (done)**: auth/QR, admin, 3 views, scanner, FTS search, pagination,
   Range streaming, per-user listening state.
-- **Phase A.1 (done)**: baked-in web UI (`internal/web`) — public connect page
+- **Phase A.1 (done)**: baked-in web UI (`internal/web`) - public connect page
   (auth-code box → QR + links) and an admin console (login, users, libraries,
   access grants, auth codes, rescan, folder-detection overrides, delete). Static client over the
   JSON API; the API enforces the admin role, so the HTML itself is unprivileged.
@@ -322,7 +322,7 @@ future metadata site can attach enrichment without reshaping the schema.
   sidebar-section layout (Overview/Stats, Libraries, Users, Shares) with forms in
   modals and a per-user detail drawer (role/password/disable, access, invite-code
   status). All styling lives in `assets/style.css` and all behaviour in external
-  JS — no inline `<style>`/`style=`/`<script>`, so the strict same-origin CSP holds.
+  JS - no inline `<style>`/`style=`/`<script>`, so the strict same-origin CSP holds.
 - **Phase A.3 (done)**: **copy-invite** links (fragment-carried auth code →
   auto-redeem connect screen), app-or-web QR (HTTPS `web_url` for Universal/App
   Links + `audiosilo://` custom scheme), and the **web player** served at `/web`
@@ -334,10 +334,10 @@ future metadata site can attach enrichment without reshaping the schema.
   a filesystem path picker.
 - **Phase B**: `POST /uploads` → parse + placement suggestion; AAX→M4B conversion
   (user-supplied activation bytes, never stored).
-- **Phase C**: `?transcode=` on the stream endpoint (ffmpeg pipe to MP3) — **done**
+- **Phase C**: `?transcode=` on the stream endpoint (ffmpeg pipe to MP3) - **done**
   (see Transcoding above). Remaining: WebSocket `/api/v1/ws` realtime sync reusing
   the last-write-wins merge + offline replay.
-- **Phase D (designed)**: server federation — peering, remote shelves, hybrid
+- **Phase D (designed)**: server federation - peering, remote shelves, hybrid
   routing (proxy catalog + signed direct stream), reusing shares as the share unit.
   See the plan file.
 

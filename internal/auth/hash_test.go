@@ -11,7 +11,7 @@ import (
 // accounts so that path does the same argon2 work as a real verify. If dummyHash's
 // embedded cost params drift from the live constants (e.g. someone bumps argonTime
 // without regenerating the string), the dummy verify would do less work and leak
-// account existence by timing — so this test fails loudly on any mismatch.
+// account existence by timing - so this test fails loudly on any mismatch.
 func TestDummyHashMatchesParams(t *testing.T) {
 	parts := strings.Split(dummyHash, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" {
@@ -23,7 +23,7 @@ func TestDummyHashMatchesParams(t *testing.T) {
 		t.Fatalf("parse dummyHash params %q: %v", parts[3], err)
 	}
 	if mem != argonMemory || tm != argonTime || threads != argonThreads {
-		t.Fatalf("dummyHash params m=%d,t=%d,p=%d must match the argon constants m=%d,t=%d,p=%d — regenerate dummyHash",
+		t.Fatalf("dummyHash params m=%d,t=%d,p=%d must match the argon constants m=%d,t=%d,p=%d - regenerate dummyHash",
 			mem, tm, threads, argonMemory, argonTime, argonThreads)
 	}
 

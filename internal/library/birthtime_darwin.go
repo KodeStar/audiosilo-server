@@ -9,7 +9,7 @@ import (
 )
 
 // birthTime returns the file's creation (birth) time from the stat struct that
-// the os.FileInfo already carries — no extra syscall needed on Darwin.
+// the os.FileInfo already carries - no extra syscall needed on Darwin.
 func birthTime(_ string, info os.FileInfo) (time.Time, bool) {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {

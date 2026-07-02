@@ -346,17 +346,24 @@ func (c *Catalog) ListShares(ctx context.Context) ([]Share, error) {
 	return out, nil
 }
 
-// UpdateShare patches name/description/read_only (non-empty name only).
-func (c *Catalog) UpdateShare(ctx context.Context, id int64, in Share) (*Share, error) {
+// UpdateShare patches a share. Each field is a pointer so an omitted field is
+// left unchanged (a PATCH that sends only {"name":...} must not wipe the
+// description or read_only flag); a nil name, or an explicit empty name, keeps
+// the existing name.
+func (c *Catalog) UpdateShare(ctx context.Context, id int64, name, description *string, readOnly *bool) (*Share, error) {
 	existing, err := c.GetShare(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if in.Name != "" {
-		existing.Name = in.Name
+	if name != nil && *name != "" {
+		existing.Name = *name
 	}
-	existing.Description = in.Description
-	existing.ReadOnly = in.ReadOnly
+	if description != nil {
+		existing.Description = *description
+	}
+	if readOnly != nil {
+		existing.ReadOnly = *readOnly
+	}
 	ro := 0
 	if existing.ReadOnly {
 		ro = 1

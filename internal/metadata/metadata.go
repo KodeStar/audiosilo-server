@@ -19,7 +19,7 @@ import (
 //     (matching BookFile.Seq; 0 for single-file books), used for ordering.
 //     Streaming is path-addressed: play FilePath via
 //     /libraries/{id}/stream?path=<FilePath>.
-//   - Start/End are offsets *within that file* — seek to Start.
+//   - Start/End are offsets *within that file* - seek to Start.
 //   - BookOffset is the chapter's start on the whole-book timeline (the sum of
 //     earlier files' durations), so progress can use one continuous position.
 type Chapter struct {
@@ -67,7 +67,7 @@ func IsAudio(path string) bool {
 
 // Extract reads embedded metadata (tags + ffprobe) for the file at path.
 // ffprobePath may be empty to skip ffprobe-based duration/chapter extraction.
-// Path-based inference is intentionally not done here — the scanner applies it
+// Path-based inference is intentionally not done here - the scanner applies it
 // with knowledge of the library's storage layout (see DeriveFromPath).
 func Extract(path, ffprobePath string) (*Metadata, error) {
 	m := &Metadata{Format: strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")}
@@ -176,7 +176,7 @@ func SplitSeriesIndex(name string) (float64, string) { return splitSeriesIndex(n
 // label ("Track 01", "Disc 2", "CD1").
 var discLabels = map[string]bool{"track": true, "chapter": true, "part": true, "disc": true, "disk": true, "cd": true}
 
-// IsGenericTitle reports whether a title carries no real book identity — a bare
+// IsGenericTitle reports whether a title carries no real book identity - a bare
 // number or a "track/chapter/part/disc N"-style label (e.g. "Track 01"). It is
 // token-based, so real titles that merely start with such a word ("Part of Your
 // World") are NOT flagged: every token must be a number or a disc label, with at
@@ -217,7 +217,7 @@ func IsGenericTitle(title string) bool {
 				}
 			}
 			if !ok {
-				return false // a real word — not a generic label
+				return false // a real word - not a generic label
 			}
 		}
 	}
@@ -241,9 +241,11 @@ func isAllDigits(s string) bool {
 func splitSeriesIndex(name string) (float64, string) {
 	s := strings.TrimSpace(name)
 	lower := strings.ToLower(s)
+	explicit := false
 	for _, prefix := range []string{"book ", "vol ", "vol. ", "volume ", "c", "#"} {
 		if strings.HasPrefix(lower, prefix) {
 			s = strings.TrimSpace(s[len(prefix):])
+			explicit = true
 			break
 		}
 	}
@@ -253,6 +255,13 @@ func splitSeriesIndex(name string) (float64, string) {
 		i++
 	}
 	if i == 0 {
+		return 0, strings.TrimSpace(name)
+	}
+	// A bare leading number of 4+ digits (e.g. "1984", "2001 A Space Odyssey") is far
+	// more likely a year or part of the title than a volume number, so only accept it
+	// as a series index when it was explicitly marked ("Book 1984", "#1984"). This
+	// keeps ordinary volume numbers (up to 999) working while not mangling titles.
+	if !explicit && i >= 4 {
 		return 0, strings.TrimSpace(name)
 	}
 	idx, _ := strconv.ParseFloat(s[:i], 64)

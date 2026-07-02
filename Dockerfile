@@ -3,7 +3,7 @@
 # AudioSilo server image. The web player is NOT vendored in this repo; it is baked
 # in here at image-build time from a pinned, prebuilt frontend image so the server
 # and the bundled player ship as one known-compatible artifact. Updating either is
-# a new image + `docker pull` — the web build never lives in the /data volume.
+# a new image + `docker pull` - the web build never lives in the /data volume.
 
 # Pinned prebuilt web player image (audiosilo-frontend CI publishes a tiny image
 # holding only its static web export, built with baseUrl=/web). Override per

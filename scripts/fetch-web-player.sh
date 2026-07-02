@@ -19,7 +19,7 @@ mkdir -p "$DEST"
 # The web image is `FROM scratch` (see audiosilo-frontend/Dockerfile.web) with no
 # ENTRYPOINT/CMD, so a bare `docker create` is rejected ("no command specified").
 # Supply a placeholder command: `docker create` only records it in the container
-# config — the container is never started (we just `docker cp` out of its layer), so
+# config - the container is never started (we just `docker cp` out of its layer), so
 # the command is never executed and need not exist in the image.
 cid="$(docker create "$WEB_IMAGE" /audiosilo-web-export)"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
@@ -27,7 +27,7 @@ trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 docker cp "$cid:/web/." "$DEST/"
 
 if [ ! -f "$DEST/index.html" ]; then
-  echo "fetch-web-player: ERROR — $DEST/index.html missing after copy" >&2
+  echo "fetch-web-player: ERROR - $DEST/index.html missing after copy" >&2
   exit 1
 fi
 echo "fetch-web-player: done ($(find "$DEST" -type f | wc -l | tr -d ' ') files)"

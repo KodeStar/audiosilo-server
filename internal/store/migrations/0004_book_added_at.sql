@@ -1,6 +1,6 @@
 -- Track when a book was added, sourced from the filesystem (birth time, falling
--- back to mtime) by the scanner. Unlike the auto-increment id — which the old
--- "recent" sort relied on and which a full re-index reshuffles — this is a stable
+-- back to mtime) by the scanner. Unlike the auto-increment id - which the old
+-- "recent" sort relied on and which a full re-index reshuffles - this is a stable
 -- chronological key that also works for a single cross-library "recently added"
 -- query.
 --
