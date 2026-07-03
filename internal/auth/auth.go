@@ -242,32 +242,41 @@ func (s *Service) insertToken(ctx context.Context, userID int64, hash, kind, dev
 // bumping last_seen. Revoked/expired tokens return ErrInvalidToken.
 func (s *Service) ResolveToken(ctx context.Context, secret, kind string) (*User, error) {
 	hash := hashSecret(secret)
+	u, _, err := s.lookupToken(ctx, hash, kind)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE tokens SET last_seen = ? WHERE token_hash = ?`, s.ts(), hash)
+	return u, nil
+}
+
+// lookupToken resolves a token hash of the given kind to its (partial) user and
+// parent auth-code link, applying the shared validity checks: unknown, revoked
+// and expired tokens and disabled users all return ErrInvalidToken. The single
+// definition of "is this token valid", shared by ResolveToken (every
+// authenticated request) and ConsumePairingToken (exchange).
+func (s *Service) lookupToken(ctx context.Context, hash, kind string) (*User, sql.NullInt64, error) {
 	var (
 		u       User
 		expires sql.NullString
 		revoked bool
+		codeID  sql.NullInt64
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.role, u.disabled, t.expires_at, t.revoked
+		`SELECT u.id, u.username, u.role, u.disabled, t.expires_at, t.revoked, t.auth_code_id
 		   FROM tokens t JOIN users u ON u.id = t.user_id
 		  WHERE t.token_hash = ? AND t.kind = ?`, hash, kind).
-		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &expires, &revoked)
+		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &expires, &revoked, &codeID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrInvalidToken
+		return nil, codeID, ErrInvalidToken
 	}
 	if err != nil {
-		return nil, err
+		return nil, codeID, err
 	}
-	if revoked || u.Disabled {
-		return nil, ErrInvalidToken
+	if revoked || u.Disabled || s.pastExpiry(expires) {
+		return nil, codeID, ErrInvalidToken
 	}
-	if expires.Valid {
-		if t, perr := time.Parse(time.RFC3339, expires.String); perr == nil && s.now().After(t) {
-			return nil, ErrInvalidToken
-		}
-	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE tokens SET last_seen = ? WHERE token_hash = ?`, s.ts(), hash)
-	return &u, nil
+	return &u, codeID, nil
 }
 
 // RevokeToken revokes a token by its secret.
@@ -290,6 +299,17 @@ func (s *Service) expiresAt(ttl time.Duration) any {
 		return nil
 	}
 	return s.now().Add(ttl).UTC().Format(time.RFC3339)
+}
+
+// pastExpiry reports whether an RFC3339 expiry stamp is in the past - the
+// read-side twin of expiresAt. NULL (no expiry) and unparsable stamps count as
+// not expired.
+func (s *Service) pastExpiry(expires sql.NullString) bool {
+	if !expires.Valid {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, expires.String)
+	return err == nil && s.now().After(t)
 }
 
 // insertAuthCode writes one auth_codes row. Shared by invite and recovery mints
@@ -497,17 +517,30 @@ type RedeemedCode struct {
 }
 
 // UsesRemaining reports how many more devices can pair via this code, or nil
-// for unlimited. Advisory: concurrent exchanges may consume uses after it is
+// for unlimited. Always >= 1: ResolveAuthCode (the only constructor) rejects
+// exhausted codes. Advisory: concurrent exchanges may consume uses after it is
 // computed.
 func (rc *RedeemedCode) UsesRemaining() *int {
 	if rc.MaxUses == 0 {
 		return nil
 	}
 	n := rc.MaxUses - rc.Uses
-	if n < 0 {
-		n = 0
-	}
 	return &n
+}
+
+// codeState classifies whether an auth code can still claim a use:
+// ErrCodeExpired past its expiry, ErrCodeExhausted at its use cap, nil while
+// redeemable. The single Go definition of code liveness, shared by
+// ResolveAuthCode and the failed-claim classification in ConsumePairingToken;
+// the claim UPDATE's WHERE clause is its atomic SQL twin.
+func (s *Service) codeState(maxUses, uses int, expires sql.NullString) error {
+	if s.pastExpiry(expires) {
+		return ErrCodeExpired
+	}
+	if maxUses > 0 && uses >= maxUses {
+		return ErrCodeExhausted
+	}
+	return nil
 }
 
 // ResolveAuthCode validates a presented code and returns it with its bound
@@ -531,15 +564,10 @@ func (s *Service) ResolveAuthCode(ctx context.Context, code string) (*RedeemedCo
 	if err != nil {
 		return nil, err
 	}
-	if expires.Valid {
-		if t, perr := time.Parse(time.RFC3339, expires.String); perr == nil && s.now().After(t) {
-			return nil, ErrInvalidCode
-		}
-		rc.ExpiresAt = expires.String
-	}
-	if rc.MaxUses > 0 && rc.Uses >= rc.MaxUses {
+	if s.codeState(rc.MaxUses, rc.Uses, expires) != nil {
 		return nil, ErrInvalidCode
 	}
+	rc.ExpiresAt = expires.String
 	u, err := s.GetUser(ctx, userID)
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrInvalidCode
@@ -554,22 +582,26 @@ func (s *Service) ResolveAuthCode(ctx context.Context, code string) (*RedeemedCo
 	return &rc, nil
 }
 
+// recoveryPairingTTL bounds a pairing token minted from a recovery code: the
+// code itself never expires, so the token carries a short lifetime of its own
+// (multi-scan within it) instead of being eternal.
+const recoveryPairingTTL = 10 * time.Minute
+
 // IssuePairingToken mints a pairing token linked to rc's code, making the QR
 // built from it as redeemable as the code itself: exchange claims a use on the
 // code, and the token dies with the code (cascade on delete/supersede, revoke
 // on rotate). Invite-kind tokens carry no expiry of their own - the parent
 // invite's expiry and use cap govern them at exchange, which is what lets
 // ConsumePairingToken report "invite has expired" rather than a generic token
-// error. Recovery-kind tokens get recoveryTTL instead, so a never-expiring
-// recovery code doesn't mint an eternal token.
-func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode, recoveryTTL time.Duration) (string, error) {
+// error. Recovery-kind tokens get recoveryPairingTTL instead.
+func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (string, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
 		return "", err
 	}
 	var expires any
 	if rc.Kind == CodeRecovery {
-		expires = s.expiresAt(recoveryTTL)
+		expires = s.expiresAt(recoveryPairingTTL)
 	}
 	if err := s.insertToken(ctx, rc.User.ID, hash, KindPairing, "", expires, rc.CodeID); err != nil {
 		return "", err
@@ -588,30 +620,9 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode, recov
 // use is consumed.
 func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User, error) {
 	hash := hashSecret(secret)
-	var (
-		u       User
-		expires sql.NullString
-		revoked bool
-		codeID  sql.NullInt64
-	)
-	err := s.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.role, u.disabled, t.expires_at, t.revoked, t.auth_code_id
-		   FROM tokens t JOIN users u ON u.id = t.user_id
-		  WHERE t.token_hash = ? AND t.kind = ?`, hash, KindPairing).
-		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &expires, &revoked, &codeID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrInvalidToken
-	}
+	u, codeID, err := s.lookupToken(ctx, hash, KindPairing)
 	if err != nil {
 		return nil, err
-	}
-	if revoked || u.Disabled {
-		return nil, ErrInvalidToken
-	}
-	if expires.Valid {
-		if t, perr := time.Parse(time.RFC3339, expires.String); perr == nil && s.now().After(t) {
-			return nil, ErrInvalidToken
-		}
 	}
 	now := s.ts()
 	if !codeID.Valid {
@@ -623,7 +634,7 @@ func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User
 		if n, _ := res.RowsAffected(); n == 0 {
 			return nil, ErrInvalidToken
 		}
-		return &u, nil
+		return u, nil
 	}
 	// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
 	// chronological (same convention as supersedeActiveInvites).
@@ -650,15 +661,15 @@ func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User
 		if cerr != nil {
 			return nil, cerr
 		}
-		if cexp.Valid {
-			if t, perr := time.Parse(time.RFC3339, cexp.String); perr == nil && s.now().After(t) {
-				return nil, ErrCodeExpired
-			}
+		if serr := s.codeState(maxUses, uses, cexp); serr != nil {
+			return nil, serr
 		}
+		// Unreachable unless the SQL and Go liveness checks disagree; report the
+		// claim failure as exhaustion rather than inventing a new state.
 		return nil, ErrCodeExhausted
 	}
 	_, _ = s.db.ExecContext(ctx, `UPDATE tokens SET last_seen = ? WHERE token_hash = ?`, now, hash)
-	return &u, nil
+	return u, nil
 }
 
 // userColumns selects the user fields plus a derived last-activity timestamp

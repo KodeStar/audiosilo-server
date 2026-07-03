@@ -11,9 +11,10 @@ import (
 )
 
 // pairingTTL bounds how long an UNLINKED pairing token is valid (/auth/pair,
-// demo sessions) and how long a recovery-derived one lasts. Invite-derived
-// pairing tokens instead inherit the invite's own expiry, so the QR built from
-// one stays scannable for as long as the invite is redeemable.
+// demo sessions). Tokens minted by redeeming a code get their lifetime from
+// internal/auth instead: invite-derived ones inherit the invite's own expiry -
+// so the QR built from one stays scannable for as long as the invite is
+// redeemable - and recovery-derived ones carry a short TTL of their own.
 const pairingTTL = 10 * time.Minute
 
 // handleServerInfo reports server identity and capabilities. Public so a client
@@ -65,8 +66,7 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 // backs the "enter your auth code" connect screen.
 func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !a.redeemLimiter.Allowed(ip) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.redeemLimiter.Allowed(ip)) {
 		return
 	}
 	var req struct {
@@ -84,7 +84,7 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	}
 	a.redeemLimiter.Reset(ip)
 
-	token, err := a.auth.IssuePairingToken(r.Context(), rc, pairingTTL)
+	token, err := a.auth.IssuePairingToken(r.Context(), rc)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue pairing token")
 		return
@@ -108,8 +108,7 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 // after a successful claim burns a use, same failure shape redeem had).
 func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !a.redeemLimiter.Allowed(ip) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.redeemLimiter.Allowed(ip)) {
 		return
 	}
 	var req struct {
@@ -153,8 +152,7 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 // handleLogin authenticates username/password and issues a session token.
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !a.loginLimiter.Allowed(ip) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.loginLimiter.Allowed(ip)) {
 		return
 	}
 	var req struct {
@@ -234,8 +232,7 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // Clearing a password is admin-only (PATCH /admin/users); self-service rejects an
 // empty password so a user can't lock themselves out. Refused for demo accounts.
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
-	if !a.accountLimiter.Acquire(clientIP(r)) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
 		return
 	}
 	u := userFrom(r.Context())
@@ -280,8 +277,7 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 // Rate-limited and refused for demo accounts so a throwaway session can't mint a
 // durable login.
 func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
-	if !a.accountLimiter.Acquire(clientIP(r)) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
 		return
 	}
 	u := userFrom(r.Context())
