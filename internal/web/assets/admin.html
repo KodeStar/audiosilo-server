@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title data-i18n="admin.docTitle">AudioSilo — Admin</title>
+  <title data-i18n="admin.docTitle">AudioSilo - Admin</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <!-- Installable PWA (admin console). The service worker is registered in admin.js. -->
   <link rel="manifest" href="/manifest.webmanifest">
@@ -116,7 +116,7 @@
       <!-- Shares -->
       <section id="sec-shares" class="section">
         <div class="page-head">
-          <div><h1 data-i18n="admin.shares.title">Shares</h1><div class="sub" data-i18n="admin.shares.sub">Named sets of filesystem paths — an author, a series, one book, or a whole library. Grant them to people from the Users page.</div></div>
+          <div><h1 data-i18n="admin.shares.title">Shares</h1><div class="sub" data-i18n="admin.shares.sub">Named sets of filesystem paths - an author, a series, one book, or a whole library. Grant them to people from the Users page.</div></div>
           <button id="add-share-btn" type="button" data-i18n="admin.shares.create">+ Create share</button>
         </div>
         <div id="share-list"></div>
@@ -141,7 +141,7 @@
       <form id="lib-form">
         <div class="field"><label for="lib-name" data-i18n="admin.libModal.name">Name</label><input id="lib-name" required></div>
         <div class="field"><label for="lib-root" data-i18n="admin.libModal.root">Root path</label><input id="lib-root" placeholder="/srv/audiobooks" required></div>
-        <p class="muted" data-i18n="admin.libModal.help">Book vs. folder structure is detected automatically — no layout to choose. Use “Detection” on a library to correct any folder it gets wrong.</p>
+        <p class="muted" data-i18n="admin.libModal.help">Book vs. folder structure is detected automatically - no layout to choose. Use “Detection” on a library to correct any folder it gets wrong.</p>
         <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.cancel">Cancel</button><button type="submit" data-i18n="admin.libModal.submit">Add library</button></div>
       </form>
     </div>
@@ -157,7 +157,7 @@
         </div>
         <div class="field"><label for="u-pass" data-i18n="admin.userModal.password">Password</label>
           <input id="u-pass" type="password" autocomplete="new-password">
-          <p class="muted" id="u-pass-hint" data-i18n="admin.userModal.passHintOptional">Optional — leave blank for a player-only account that pairs via an invite code.</p>
+          <p class="muted" id="u-pass-hint" data-i18n="admin.userModal.passHintOptional">Optional - leave blank for a player-only account that pairs via an invite code.</p>
         </div>
         <div class="field"><label for="u-access" data-i18n="admin.userModal.access">Access</label>
           <select id="u-access">
@@ -196,7 +196,7 @@
 
   <div id="modal-detect" class="modal-scrim">
     <div class="modal">
-      <div class="mhead"><h2><span data-i18n="admin.detect.title">Folder detection</span> — <span id="detect-lib"></span></h2><button type="button" class="iconbtn" data-close>✕</button></div>
+      <div class="mhead"><h2><span data-i18n="admin.detect.title">Folder detection</span> - <span id="detect-lib"></span></h2><button type="button" class="iconbtn" data-close>✕</button></div>
       <p class="muted" data-i18n="admin.detect.help">Each folder is auto-detected. Override one that's wrong: “One book” groups all its audio as a single book; “Separate books” treats each file as its own book.</p>
       <div class="inline"><span class="muted" data-i18n="admin.common.location">Location:</span> <span id="detect-crumb" class="code"></span></div>
       <div class="spacer"></div>
@@ -231,7 +231,7 @@
         <div class="mactions"><button type="button" class="secondary" data-close data-i18n="admin.common.cancel">Cancel</button><button type="submit" data-i18n="admin.invite.submit">Create invite</button></div>
       </form>
       <div id="invite-result" class="hidden">
-        <p class="muted" data-i18n="admin.invite.resultHelp">Share either the link or the code. The code is shown once — copy it now.</p>
+        <p class="muted" data-i18n="admin.invite.resultHelp">Share either the link or the code. The code is shown once - copy it now.</p>
         <div class="field"><label data-i18n="admin.invite.linkLabel">Invite link</label>
           <div class="inline"><span id="inv-link" class="code"></span><button type="button" class="secondary small" id="inv-copy-link" data-i18n="admin.invite.copyLink">Copy link</button></div>
         </div>

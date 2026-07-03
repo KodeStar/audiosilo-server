@@ -20,7 +20,7 @@ import (
 // browserCodecs are audio codecs mainstream browsers decode natively, so they
 // can be streamed directly instead of transcoded. Keys are ffprobe codec_name
 // values (DirectPlayable is only ever called with book.Codec, which is populated
-// verbatim from ffprobe) — e.g. AAC-in-MP4 reports "aac" (not the "mp4a" tag) and
+// verbatim from ffprobe) - e.g. AAC-in-MP4 reports "aac" (not the "mp4a" tag) and
 // WAV reports "pcm_s16le" (not the "wav" container name).
 var browserCodecs = map[string]bool{
 	"aac": true, "mp3": true, "mp2": true,
@@ -55,7 +55,7 @@ func sniffAudioType(f *os.File) string {
 	case len(b) >= 12 && string(b[0:4]) == "RIFF" && string(b[8:12]) == "WAVE":
 		return "audio/wav"
 	case len(b) >= 3 && string(b[0:3]) == "ID3":
-		return "audio/mpeg" // ID3 tag — MP3
+		return "audio/mpeg" // ID3 tag - MP3
 	case len(b) >= 2 && b[0] == 0xFF && b[1]&0xF6 == 0xF0:
 		// ADTS AAC: 12-bit sync (0xFFF) with layer bits == 00. Checked before
 		// the MP3 case because its sync word also matches the MPEG mask.
@@ -63,7 +63,7 @@ func sniffAudioType(f *os.File) string {
 	case len(b) >= 2 && b[0] == 0xFF && b[1]&0xE0 == 0xE0:
 		return "audio/mpeg" // MPEG-1/2 Audio Layer III (MP3)
 	case len(b) >= 8 && string(b[4:8]) == "ftyp":
-		return "audio/mp4" // ISO base media (m4a/m4b/mp4) — AAC or ALAC inside
+		return "audio/mp4" // ISO base media (m4a/m4b/mp4) - AAC or ALAC inside
 	}
 	return ""
 }

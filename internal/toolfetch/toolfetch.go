@@ -94,10 +94,18 @@ func cachedOne(dir, tool string) string {
 // Ensure returns usable ffmpeg/ffprobe paths under dir, downloading a static build
 // for the current platform if they aren't cached yet. Either result is "" when the
 // tool couldn't be made available (offline, unsupported platform, or a failed
-// integrity check) — the caller degrades gracefully and retries next start.
+// integrity check) - the caller degrades gracefully and retries next start.
 func Ensure(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe string) {
+	// Verify the cached copies rather than trusting a bare stat - a download killed
+	// mid-write (before writeExec became atomic, or a disk/FS fault) can leave a
+	// non-runnable binary that a stat happily reports as present. verified discards a
+	// failing one so we fall through and re-download it.
 	if ffmpeg, ffprobe = Cached(dir); ffmpeg != "" && ffprobe != "" {
-		return ffmpeg, ffprobe
+		ffmpeg = verified(ctx, ffmpeg, log)
+		ffprobe = verified(ctx, ffprobe, log)
+		if ffmpeg != "" && ffprobe != "" {
+			return ffmpeg, ffprobe
+		}
 	}
 	s, ok := specFor(runtime.GOOS, runtime.GOARCH)
 	if !ok {
@@ -109,7 +117,7 @@ func Ensure(ctx context.Context, dir string, log *slog.Logger) (ffmpeg, ffprobe 
 		log.Warn("ffmpeg auto-download: cannot create tools dir", "dir", dir, "err", err)
 		return Cached(dir)
 	}
-	log.Info("ffmpeg/ffprobe not found locally — downloading a static build (one time)", "into", dir)
+	log.Info("ffmpeg/ffprobe not found locally - downloading a static build (one time)", "into", dir)
 	if err := download(ctx, s, dir); err != nil {
 		log.Warn("ffmpeg auto-download failed; running without it (will retry next start)", "err", err)
 		return Cached(dir)
@@ -225,7 +233,7 @@ func fetchArchive(ctx context.Context, url, kind, destDir string) error {
 }
 
 // extractZip writes only the ffmpeg/ffprobe binaries from a zip stream into
-// destDir (basename only — avoids zip-slip and skips the rest of the archive).
+// destDir (basename only - avoids zip-slip and skips the rest of the archive).
 func extractZip(r io.Reader, destDir string) error {
 	buf, err := io.ReadAll(io.LimitReader(r, maxToolBytes+1))
 	if err != nil {
@@ -267,15 +275,27 @@ func copyExec(src, dst string) error {
 	return writeExec(dst, io.LimitReader(in, maxToolBytes))
 }
 
-// writeExec writes r to path (0o755), replacing any existing file.
+// writeExec writes r to path (0o755) atomically: it streams into a sibling temp
+// file and renames it into place only after a clean close, so a process killed
+// mid-copy can never leave a truncated binary at the final path (which Ensure
+// would then adopt forever, since a stat can't tell a partial file from a whole
+// one).
 func writeExec(path string, r io.Reader) error {
-	out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".partial-"+filepath.Base(path)+"-")
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, r); err != nil {
-		out.Close()
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed into place
+	if _, err := io.Copy(tmp, r); err != nil {
+		tmp.Close()
 		return err
 	}
-	return out.Close()
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o755); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

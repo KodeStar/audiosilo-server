@@ -2,8 +2,9 @@
 #
 # This file is written to <data-dir>/config.yaml on first run with secure
 # defaults. Edit it and restart, or override selected values with environment
-# variables (shown in brackets). Command-line flags set the data dir and
-# ffprobe path: `audiosilo --data ./data --ffprobe ffprobe`.
+# variables (shown in brackets). Command-line flags are: --data (data dir),
+# --ffprobe / --ffmpeg (tool paths; "" disables each), and --setup (first-run web
+# setup wizard): `audiosilo --data ./data`.
 
 # Address to listen on.                              [AUDIOSILO_BIND]
 bind: "0.0.0.0:8080"
@@ -53,7 +54,7 @@ app_links:
 # Libraries to expose. Declaring them here syncs them into the database and
 # scans them on startup; you can also create libraries at runtime via the admin
 # API. Folder shape (single-file books, folder-per-book, multi-file parts) is
-# auto-detected per folder by the scanner — there is no layout to configure; a
+# auto-detected per folder by the scanner - there is no layout to configure; a
 # folder the detector gets wrong is fixed via the admin folder-override endpoint
 # (mode: book | collection).
 libraries: []

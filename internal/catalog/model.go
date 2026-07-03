@@ -60,7 +60,7 @@ type Book struct {
 
 	// DedupKey groups copies of the same logical book (across libraries, and later
 	// across servers) so a client can collapse duplicates. It is a display-grouping
-	// HINT, not an identity — never key durable state on it. Set on de-duplicated
+	// HINT, not an identity - never key durable state on it. Set on de-duplicated
 	// list responses (search / recent).
 	DedupKey string `json:"dedup_key,omitempty"`
 	// MultiFile reports whether the book has more than one audio file (a multipart
@@ -72,7 +72,7 @@ type Book struct {
 	OtherLocations []BookLocation `json:"other_locations,omitempty"`
 }
 
-// BookLocation points at one copy of a book in a particular library — used to
+// BookLocation points at one copy of a book in a particular library - used to
 // list the non-winning copies behind a de-duplicated search/recent result.
 type BookLocation struct {
 	LibraryID   int64  `json:"library_id"`
@@ -109,4 +109,8 @@ func New(db *store.DB, now func() time.Time) *Catalog {
 // Ping verifies the underlying database is reachable for reads (backs GET /healthz).
 func (c *Catalog) Ping(ctx context.Context) error { return c.db.Ping(ctx) }
 
-func (c *Catalog) ts() string { return c.now().UTC().Format(time.RFC3339) }
+// ts is the server's current time as an RFC3339Nano string. Nanosecond precision
+// (rather than whole-second RFC3339) keeps two server-stamped writes in the same
+// wall-clock second distinguishable for last-write-wins reconciliation; parsers
+// using the plain RFC3339 layout still accept the fractional form.
+func (c *Catalog) ts() string { return c.now().UTC().Format(time.RFC3339Nano) }

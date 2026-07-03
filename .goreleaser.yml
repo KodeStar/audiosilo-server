@@ -7,7 +7,7 @@
 #
 # Self-contained where it's cheap: the web player is embedded via `-tags
 # embedplayer` (scripts/fetch-web-player.sh populates internal/web/player/ from the
-# pinned web image before building). ffmpeg/ffprobe are NOT bundled — they're often
+# pinned web image before building). ffmpeg/ffprobe are NOT bundled - they're often
 # already installed and large, so the server prefers a local copy (PATH or next to
 # the binary) and otherwise fetches one on demand into the data dir (see
 # pkg/launcher). This keeps the download small.

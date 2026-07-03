@@ -8,7 +8,7 @@ import (
 )
 
 // Durable user state (progress, bookmarks, notes, history) is keyed by the
-// filesystem path — (user_id, library_id, rel_path) — not the rebuildable
+// filesystem path - (user_id, library_id, rel_path) - not the rebuildable
 // book id, so it survives DB rebuilds, re-tagging, and being recorded before a
 // scan reaches the file. rel_path is the *book* path (the folder for a
 // chapters_in_folder book, the file otherwise); positions are on the whole-book
@@ -74,7 +74,9 @@ func (c *Catalog) GetProgress(ctx context.Context, userID int64, ref Ref) (*Prog
 // It returns the effective stored progress. This is the same merge the realtime
 // sync layer will reuse, so REST and WebSocket writes converge.
 func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (*Progress, error) {
-	if in.UpdatedAt == "" {
+	// Distrust an unparseable or far-future client timestamp (see
+	// plausibleUpdatedAt) and substitute server time.
+	if !plausibleUpdatedAt(in.UpdatedAt, c.now()) {
 		in.UpdatedAt = c.ts()
 	}
 	if in.PlaybackSpeed <= 0 {
@@ -108,6 +110,19 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 		return nil, err
 	}
 	return &in, nil
+}
+
+// plausibleUpdatedAt reports whether a client-supplied updated_at can be
+// trusted for last-write-wins: it must parse and not be implausibly ahead of
+// the server clock (a small skew is allowed so genuine cross-device ordering
+// still works). Without this check a client with a broken clock (or a garbage
+// value) sending a far-future timestamp would win every future comparison and
+// permanently wedge the book's progress at that write; the caller substitutes
+// server time (c.ts()) instead.
+func plausibleUpdatedAt(v string, now time.Time) bool {
+	const maxSkew = 5 * time.Minute
+	t, err := time.Parse(time.RFC3339, v)
+	return err == nil && !t.After(now.Add(maxSkew))
 }
 
 // isNewer reports whether candidate should replace current under last-write-wins

@@ -16,7 +16,7 @@ const ipKey ctxKey = 1
 // requestTimeout bounds how long a non-streaming request may run. Its purpose is
 // resilience, not latency policing: if the single writer connection is held by a
 // slow/stuck operation (e.g. a write stalled on a network volume), a request that
-// queues for it would otherwise hang forever — there is deliberately no HTTP
+// queues for it would otherwise hang forever - there is deliberately no HTTP
 // WriteTimeout (audio streams must run long), so nothing would ever release it.
 // The deadline cancels the request context (aborting the blocked DB call) and
 // returns 503 instead of wedging the connection. It must comfortably exceed the
@@ -162,7 +162,7 @@ func (a *API) rateLimit(next http.Handler) http.Handler {
 
 // bearerToken extracts a session token from the Authorization header. When
 // allowQuery is set it additionally accepts the token as a `token` query
-// parameter — used ONLY for media GETs (covers/audio), where browser
+// parameter - used ONLY for media GETs (covers/audio), where browser
 // <img>/<audio> elements cannot set an Authorization header. The fallback is
 // deliberately NOT accepted on other routes: a session token in a query string
 // can leak into access logs and Referer headers, so it stays confined to the

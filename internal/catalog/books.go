@@ -116,48 +116,18 @@ func (c *Catalog) BooksByPaths(ctx context.Context, libraryID int64, paths []str
 // the stored Duration/Codec so the scanner can re-probe entries that predate a
 // metadata column (e.g. codec) and never had it backfilled.
 type Signature struct {
-	MTime    int64
-	Size     int64
-	Duration float64
-	Codec    string
-}
-
-// FingerprintsForPaths returns the stored content fingerprint (content_hash)
-// for the given rel_paths in a library, keyed by rel_path. Used by the scanner
-// to match a vanished file to a newly-appeared one (move detection).
-func (c *Catalog) FingerprintsForPaths(ctx context.Context, libraryID int64, paths []string) (map[string]string, error) {
-	out := map[string]string{}
-	if len(paths) == 0 {
-		return out, nil
-	}
-	placeholders := make([]string, len(paths))
-	args := []any{libraryID}
-	for i, p := range paths {
-		placeholders[i] = "?"
-		args = append(args, p)
-	}
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, content_hash FROM books WHERE library_id = ? AND rel_path IN (`+
-			strings.Join(placeholders, ",")+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var rel, fp string
-		if err := rows.Scan(&rel, &fp); err != nil {
-			return nil, err
-		}
-		out[rel] = fp
-	}
-	return out, rows.Err()
+	MTime       int64
+	Size        int64
+	Duration    float64
+	Codec       string
+	ContentHash string
 }
 
 // Signatures returns the stored mtime/size for every book in a library, keyed
 // by rel_path. The scanner uses it to skip re-extracting unchanged books.
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, mtime, size, duration, codec FROM books WHERE library_id = ?`, libraryID)
+		`SELECT rel_path, mtime, size, duration, codec, content_hash FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +136,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	for rows.Next() {
 		var rel string
 		var sig Signature
-		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec); err != nil {
+		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash); err != nil {
 			return nil, err
 		}
 		out[rel] = sig
@@ -379,7 +349,7 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 			return nil, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
 		}
 		// sortColumn always yields a non-empty column, so paginate on the
-		// (col, id) row-value keyset — index-friendly and stable across ties.
+		// (col, id) row-value keyset - index-friendly and stable across ties.
 		where = append(where, fmt.Sprintf("(%s, id) %s (?, ?)", col, cmp))
 		args = append(args, cval, cid)
 	}
@@ -416,7 +386,7 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 
 // RecentBooks returns the most recently added books across the caller's accessible
 // libraries (newest first), each restricted to that library's share path rules.
-// A single cross-library query — unlike per-library ListBooks — so a client can
+// A single cross-library query - unlike per-library ListBooks - so a client can
 // render one merged "recently added" list without fanning out and concatenating.
 func (c *Catalog) RecentBooks(ctx context.Context, scopes []Scope, limit int) ([]Book, error) {
 	if len(scopes) == 0 {

@@ -48,7 +48,7 @@ func TestReaderServesReadsDuringWriteTx(t *testing.T) {
 			t.Fatalf("read during write tx: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("read blocked while a write transaction held the writer — reader pool is not isolating reads")
+		t.Fatal("read blocked while a write transaction held the writer - reader pool is not isolating reads")
 	}
 }
 
@@ -115,7 +115,7 @@ func TestPing(t *testing.T) {
 // reader/writer split rests on, neither of which the :memory: API suite exercises
 // (there reader == writer, a single pool):
 //   - the reader pool observes a write committed on the writer pool (WAL
-//     cross-connection visibility) — the read-your-writes guarantee that
+//     cross-connection visibility) - the read-your-writes guarantee that
 //     on-demand indexing relies on (UpsertBook on the writer, then GetBook on
 //     the reader);
 //   - the reader pool is genuinely read-only (query_only), so a write
@@ -152,7 +152,7 @@ func TestReaderSeesCommittedWritesAndRejectsWrites(t *testing.T) {
 		t.Fatalf("reader saw x=%d, want 42 (cross-pool read-your-writes broken)", x)
 	}
 
-	// A write on the reader pool must be refused — query_only(ON) is what stops a
+	// A write on the reader pool must be refused - query_only(ON) is what stops a
 	// stray read-executor write from silently corrupting via the wrong pool.
 	if _, err := db.reader.ExecContext(ctx, `INSERT INTO probe(x) VALUES(1)`); err == nil {
 		t.Fatal("reader pool accepted a write; query_only(ON) is not in effect")

@@ -94,7 +94,7 @@ func TestSecureHeaders(t *testing.T) {
 	}
 }
 
-// HSTS is emitted only with a real public cert (autocert), never selfsigned —
+// HSTS is emitted only with a real public cert (autocert), never selfsigned -
 // pinning HSTS behind a self-signed cert would lock users out (review finding S6).
 func TestSecureHeadersHSTS(t *testing.T) {
 	serve := func(mode config.TLSMode) string {

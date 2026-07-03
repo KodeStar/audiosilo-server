@@ -37,14 +37,14 @@ type Options struct {
 	DataDir string
 	// FFprobePath / FFmpegPath are the configured tool paths ("" disables the
 	// tool). A bare command name is resolved next to the executable first (so a
-	// bundled ffmpeg is found), then on PATH — see resolveTool.
+	// bundled ffmpeg is found), then on PATH - see resolveTool.
 	FFprobePath string
 	FFmpegPath  string
 	// Log is the logger to use; if nil a default stderr text logger is created.
 	Log *slog.Logger
 	// Setup selects the first-run flow. false (default, headless): auto-create the
 	// admin and print the one-time credentials banner. true (CLI --setup, or a
-	// future GUI launcher): leave the admin to the browser setup wizard — when no
+	// future GUI launcher): leave the admin to the browser setup wizard - when no
 	// admin exists yet a token-guarded /setup is enabled instead.
 	Setup bool
 	// OnURL, if set, is called once at startup with the URL the user should open:
@@ -120,7 +120,7 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 
-	// First-run bootstrap — two mutually-exclusive paths:
+	// First-run bootstrap - two mutually-exclusive paths:
 	//   - default (headless/docker): auto-create the admin + print the one-time
 	//     credentials banner, keyed off the database (not config-file existence).
 	//   - setup mode (desktop / --setup): leave the admin to the browser wizard;
@@ -148,7 +148,7 @@ func Run(ctx context.Context, opts Options) error {
 	// In demo mode, reap idle throwaway accounts in the background.
 	if cfg.Demo.Enabled {
 		// Surface a misconfigured demo.library at boot rather than only as a 500 on
-		// the first visitor — the library may not be declared/seeded yet.
+		// the first visitor - the library may not be declared/seeded yet.
 		if _, err := cat.GetLibraryByName(ctx, cfg.Demo.Library); err != nil {
 			log.Warn("demo mode enabled but demo.library not found; demo sessions will fail until it exists",
 				"library", cfg.Demo.Library, "err", err)
@@ -212,7 +212,7 @@ func openURL(cfg *config.Config, setupToken string) string {
 // baseURL builds a best-effort browser base URL from config: the configured
 // public_url wins; otherwise scheme is derived from the TLS mode and the host
 // from bind (a wildcard bind becomes localhost, which is the reachable address on
-// the machine running the server — and a secure context for the admin PWA).
+// the machine running the server - and a secure context for the admin PWA).
 func baseURL(cfg *config.Config) string {
 	if cfg.PublicURL != "" {
 		return strings.TrimRight(cfg.PublicURL, "/")
@@ -292,7 +292,7 @@ func localTool(configured string) string {
 }
 
 // resolveTool maps a bare ffmpeg/ffprobe command name (no path separator) to a
-// copy sitting next to the running executable, if present — so a tool dropped
+// copy sitting next to the running executable, if present - so a tool dropped
 // beside the binary is found without touching PATH. An empty string (disabled), an
 // explicit path, or a bare name with no neighbour is returned unchanged (the
 // caller then resolves it via PATH).
@@ -341,7 +341,7 @@ func ensureAdmin(ctx context.Context, cfg *config.Config, authSvc *auth.Service)
 
 func banner(cfg *config.Config, password, code string) {
 	fmt.Println("\n========================================================")
-	fmt.Println(" AudioSilo first-run setup — store these now, shown once")
+	fmt.Println(" AudioSilo first-run setup - store these now, shown once")
 	fmt.Println("========================================================")
 	fmt.Printf("  Admin username : admin\n")
 	fmt.Printf("  Admin password : %s\n", password)

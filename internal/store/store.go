@@ -33,7 +33,7 @@ var migrationName = regexp.MustCompile(`^\d{4}_.*\.sql$`)
 // constraint violation, so the transport layer can map a duplicate-name insert
 // to a 409 Conflict instead of an opaque 500. Connections enable extended result
 // codes (see the modernc driver), so the error carries the specific
-// SQLITE_CONSTRAINT_UNIQUE code — distinct from e.g. a FOREIGN KEY violation,
+// SQLITE_CONSTRAINT_UNIQUE code - distinct from e.g. a FOREIGN KEY violation,
 // which stays a generic internal error.
 func IsUniqueViolation(err error) bool {
 	var serr *sqlite.Error
@@ -79,13 +79,13 @@ func WithLogger(l *slog.Logger) Option {
 
 // slowTxThreshold is how long a single transaction may run before WithTx logs it.
 // A write transaction should be milliseconds; seconds means a slow volume or
-// contention — the signal that precedes a backend-wide stall.
+// contention - the signal that precedes a backend-wide stall.
 const slowTxThreshold = 2 * time.Second
 
 // dsnPragmas appends AudioSilo's required pragmas to a DSN. WAL for concurrent
 // readers, busy_timeout to ride out brief locks, and foreign_keys for referential
 // integrity. foreign_keys defaults OFF per SQLite connection, and the schema
-// relies on ~28 ON DELETE CASCADE rules, so these must always be applied — append
+// relies on ~28 ON DELETE CASCADE rules, so these must always be applied - append
 // with the right separator rather than skipping them when the DSN already carries
 // query params (which would silently disable every cascade delete). extra carries
 // per-pool pragmas (e.g. query_only for the reader).
@@ -103,7 +103,7 @@ func dsnPragmas(dsn string, extra ...string) string {
 
 // isMemoryDSN reports whether dsn names an in-memory database, which is
 // per-connection and so cannot be backed by a second pool. Both spellings count:
-// the bare ":memory:" and the URI form "mode=memory" — missing the latter would
+// the bare ":memory:" and the URI form "mode=memory" - missing the latter would
 // open a second reader pool over a distinct, empty in-memory database.
 func isMemoryDSN(dsn string) bool {
 	return strings.Contains(dsn, ":memory:") || strings.Contains(dsn, "mode=memory")
@@ -217,7 +217,7 @@ func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) (
 }
 
 // startStatsSampler periodically logs writer-pool contention. A growing WaitCount
-// means callers are queueing for the single writer connection — the direct signal
+// means callers are queueing for the single writer connection - the direct signal
 // that a slow hold is starving the backend (which previously surfaced only as an
 // unexplained freeze). Stopped by Close.
 func (db *DB) startStatsSampler() {

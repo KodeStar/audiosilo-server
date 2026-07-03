@@ -77,10 +77,12 @@ type ScanResult struct {
 }
 
 // ErrLibraryUnavailable means the library root could not be read, or it
-// returned no audio files while the index still has books — a strong signal
+// returned no audio files while the index still has books - a strong signal
 // that a network share (e.g. SMB/NFS) is unmounted. The scanner refuses to
-// prune in this case so a dropped mount never wipes the index (and, via
-// cascade, users' progress/bookmarks).
+// prune in this case so a dropped mount never wipes the rebuildable index.
+// (Durable user state - progress/bookmarks/notes - is path-keyed with no FK to
+// books since migration 0003, so it would survive a prune anyway; protecting the
+// index still avoids a needless full re-scan and a transient empty catalog.)
 var ErrLibraryUnavailable = errors.New("library root unavailable; skipping scan to protect the index")
 
 // ErrNotIndexable means a resolved path is not a book (e.g. a directory that
@@ -90,6 +92,23 @@ var ErrNotIndexable = errors.New("path is not an indexable book")
 
 // coverNames are sibling image files treated as a book's cover.
 var coverNames = []string{"cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.png"}
+
+// isHidden reports whether a file/directory name is hidden (dot-prefixed).
+// Discovery and the /fs browse view must agree on this - anything the scanner
+// skips must also be invisible when browsing (and vice versa), or it would
+// index books a client can't reach - so every hidden-name check in the package
+// goes through here.
+func isHidden(name string) bool { return strings.HasPrefix(name, ".") }
+
+// primaryPath returns the file whose bytes represent a book (used for tag
+// extraction and content fingerprinting): the book itself for a single-file
+// book, else its first part.
+func primaryPath(b *catalog.Book) string {
+	if b.IsFolder && len(b.Files) > 0 {
+		return b.Files[0].RelPath
+	}
+	return b.RelPath
+}
 
 // Scan indexes a single library. It is safe to call concurrently for different
 // libraries; concurrent calls for the same library are coalesced (the second
@@ -130,9 +149,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 		return nil, err
 	}
 	// Discovery walks the whole tree (slow on a large network share) and emits no
-	// per-file output, so bookend it with logs — otherwise a long scan looks hung.
+	// per-file output, so bookend it with logs - otherwise a long scan looks hung.
 	s.log.Info("scan started: discovering books", "library", lib.Name, "root", lib.Root)
-	books, err := discoverAuto(lib, overrides, s.log)
+	books, partialDiscovery, err := discoverAuto(lib, overrides, s.log)
 	if err != nil {
 		return nil, err
 	}
@@ -166,9 +185,22 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 		keep[b.RelPath] = true
 		if old, ok := sigs[b.RelPath]; ok && old.MTime == b.MTime && old.Size == b.Size &&
 			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "")) {
-			continue // unchanged since last scan; only skip the probe when ffprobe
-			// is disabled, or a prior probe already stored both duration and codec
+			// Unchanged since last scan; only skip the probe when ffprobe is
+			// disabled, or a prior probe already stored both duration and codec
 			// (so books indexed before the codec column get it backfilled).
+			if old.ContentHash != "" {
+				continue
+			}
+			// The fingerprint never landed (a one-off read error). Without one a
+			// later move of this book couldn't be detected and its progress would
+			// be stranded, so re-enrich to backfill it - but probe the fingerprint
+			// first: if the file still can't be read, the full re-enrich would fail
+			// the same way, so a persistently unreadable book costs one cheap
+			// failed open per scan instead of an ffprobe sweep forever.
+			b.ContentHash = fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primaryPath(b))))
+			if b.ContentHash == "" {
+				continue
+			}
 		}
 		s.enrich(lib, b)
 		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
@@ -179,13 +211,22 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 	}
 	s.setProgress(lib.ID, ScanProgress{Running: true, Total: len(books), Done: len(books), Indexed: res.Indexed})
 
-	removed, err := s.cat.DeleteBooksNotIn(ctx, lib.ID, keep)
-	if err != nil {
-		return res, err
+	// Only prune when discovery saw the whole tree. If a subtree was unreadable
+	// (partialDiscovery), its books are missing from `keep` through a mount/permission
+	// fault, not a real deletion - pruning would drop still-present books and their
+	// cascaded index rows. Skip it; a later clean scan reconciles genuine deletions.
+	if partialDiscovery {
+		s.log.Warn("skipping prune after partial discovery to protect the index",
+			"library", lib.Name)
+	} else {
+		removed, err := s.cat.DeleteBooksNotIn(ctx, lib.ID, keep)
+		if err != nil {
+			return res, err
+		}
+		res.Removed = removed
 	}
-	res.Removed = removed
 	// Re-apply path-keyed enrichment (e.g. ASINs attached by the manager) onto the
-	// freshly-indexed books — it lives outside the rebuildable index, so a scan must
+	// freshly-indexed books - it lives outside the rebuildable index, so a scan must
 	// restore it.
 	if err := s.cat.ApplyEnrichments(ctx, lib.ID); err != nil {
 		s.log.Warn("apply enrichments failed", "library", lib.Name, "err", err)
@@ -199,10 +240,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 // enrich fills metadata for a book from its primary file (tags + ffprobe) and
 // folder context (path heuristics, sibling cover art).
 func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
-	primary := b.RelPath
-	if b.IsFolder && len(b.Files) > 0 {
-		primary = b.Files[0].RelPath
-	}
+	primary := primaryPath(b)
 	// Baseline from the path, then overlay embedded tags/probe which are
 	// authoritative when present.
 	base := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
@@ -266,7 +304,7 @@ func chooseTitle(embedded, pathDerived string) string {
 }
 
 // isDiscFolder reports whether a folder name is a disc/part subfolder like "CD1",
-// "CD 2" or "Disc 3" — used to look one level up for a multi-CD book's cover.
+// "CD 2" or "Disc 3" - used to look one level up for a multi-CD book's cover.
 func isDiscFolder(name string) bool {
 	n := strings.NewReplacer(" ", "", "-", "", ".", "", "_", "").Replace(strings.ToLower(strings.TrimSpace(name)))
 	for _, p := range []string{"cd", "disc", "disk"} {
@@ -296,9 +334,9 @@ func isDiscFolder(name string) bool {
 var imageExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true, ".gif": true}
 
 // findCover returns a library-relative path to a book's cover image in dir: a
-// conventionally-named file (cover.jpg, folder.png, …) if present, else — only
+// conventionally-named file (cover.jpg, folder.png, …) if present, else - only
 // when anyImage is set (a book's own folder, where a stray image is almost
-// certainly its cover) — the first image file alphabetically. Returns "" if none,
+// certainly its cover) - the first image file alphabetically. Returns "" if none,
 // so the cover handler falls back to embedded art.
 func findCover(root, dir string, anyImage bool) string {
 	for _, name := range coverNames {
@@ -422,44 +460,57 @@ func partTitle(relPath string) string {
 }
 
 // discoverAuto walks a library and classifies each directory that directly
-// contains audio files on its own — so a mixed library (some folders are one
+// contains audio files on its own - so a mixed library (some folders are one
 // multi-file book, others hold several single-file books) is handled without any
 // layout setting. overrides forces a folder's interpretation when the heuristic
 // gets it wrong (see booksInDir).
-func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Logger) ([]*catalog.Book, error) {
+// The bool return reports whether discovery hit any per-entry error (an
+// unreadable/permission-denied subtree on a partially-mounted share). When true,
+// the caller must NOT prune: the books under the failed subtree are absent from the
+// result through no fault of the filesystem-of-truth, and pruning them would drop a
+// still-present book and its cascaded index rows until the mount recovers.
+func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Logger) (books []*catalog.Book, hadErrors bool, err error) {
 	dirs := map[string]bool{}
-	err := filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// A per-entry error (commonly a permission-denied subtree on a
-			// partially-readable mount) would otherwise silently drop those books
-			// — and the prune step then removes them. Warn and skip just the
-			// unreadable entry rather than aborting the whole scan. WalkDir won't
-			// descend into a directory we return nil for after an error.
+	rootClean := filepath.Clean(lib.Root)
+	err = filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			// Warn and skip just the unreadable entry rather than aborting the whole
+			// scan, but record that discovery was partial so the caller skips pruning.
+			hadErrors = true
 			log.Warn("skipping unreadable path during discovery",
-				"library", lib.Name, "path", path, "err", err)
+				"library", lib.Name, "path", path, "err", walkErr)
 			return nil
 		}
-		if d.IsDir() || strings.HasPrefix(d.Name(), ".") || !metadata.IsAudio(d.Name()) {
+		if d.IsDir() {
+			// Skip hidden directories (.Trash-1000, Syncthing .stversions, .git) so
+			// their audio isn't indexed into books unreachable via the fs browse view
+			// (which also hides them). Never skip the library root itself, even when
+			// its own name begins with a dot; WalkDir passes the root argument
+			// verbatim, so a direct comparison identifies the root callback.
+			if path != lib.Root && isHidden(d.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if isHidden(d.Name()) || !metadata.IsAudio(d.Name()) {
 			return nil
 		}
 		dirs[filepath.Dir(path)] = true
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, hadErrors, err
 	}
-	rootClean := filepath.Clean(lib.Root)
-	var books []*catalog.Book
 	for dir := range dirs {
 		books = append(books, booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides)...)
 	}
-	return books, nil
+	return books, hadErrors, nil
 }
 
 // booksInDir turns the audio files directly inside absDir into books. The model
 // matches the dominant "folder per book" convention (and Audiobookshelf): a
 // directory that directly contains audio is ONE book, with all those files as its
-// tracks/chapters — whether it holds a single m4b or fifty mp3 chapters. The two
+// tracks/chapters - whether it holds a single m4b or fifty mp3 chapters. The two
 // exceptions: audio sitting directly in the library root has no enclosing book
 // folder, so each such file is its own single-file book ("flat"); and a folder of
 // loose single-file books (one book per file) is expressed with the `collection`
@@ -496,7 +547,7 @@ func audioEntries(absDir string) []os.DirEntry {
 	}
 	var audio []os.DirEntry
 	for _, de := range entries {
-		if de.IsDir() || strings.HasPrefix(de.Name(), ".") || !metadata.IsAudio(de.Name()) {
+		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) {
 			continue
 		}
 		audio = append(audio, de)
@@ -563,7 +614,7 @@ func folderBook(lib catalog.Library, absDir string) *catalog.Book {
 	var totalSize, maxMTime int64
 	var added string // earliest file added time = when the book first appeared
 	for _, de := range entries {
-		if de.IsDir() || strings.HasPrefix(de.Name(), ".") || !metadata.IsAudio(de.Name()) {
+		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) {
 			continue
 		}
 		info, ierr := de.Info()
@@ -644,7 +695,7 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 		return nil, err
 	}
 	// Restore any path-keyed enrichment (e.g. an ASIN) onto this just-indexed book.
-	// Scope it to the one book we resolved — IndexPath is a hot per-request path, so
+	// Scope it to the one book we resolved - IndexPath is a hot per-request path, so
 	// re-sweeping the whole library here would be O(enriched books) per lookup.
 	if err := s.cat.ApplyEnrichment(ctx, lib.ID, book.RelPath); err != nil {
 		s.log.Warn("apply enrichment failed", "library", lib.Name, "path", book.RelPath, "err", err)
@@ -652,7 +703,7 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 	return s.cat.GetBook(ctx, id)
 }
 
-// pickBook returns the book from candidates whose path matches want — the book's
+// pickBook returns the book from candidates whose path matches want - the book's
 // own rel_path (single-file or folder book) or, for a part the client clicked
 // inside a folder book, one of that book's files.
 func pickBook(candidates []*catalog.Book, want string) *catalog.Book {
@@ -684,8 +735,8 @@ func firstNonEmpty(vals ...string) string {
 
 const fingerprintChunk = 64 * 1024 // bytes hashed from the head and tail
 
-// fingerprintFile returns a cheap content fingerprint — sha256 of
-// (size, first 64KB, last 64KB) — used only to detect "same content, new path"
+// fingerprintFile returns a cheap content fingerprint - sha256 of
+// (size, first 64KB, last 64KB) - used only to detect "same content, new path"
 // moves. It is not a full hash (large files stay cheap) and intentionally not a
 // durable identity (that is the path). Returns "" on error.
 func fingerprintFile(absPath string) string {
@@ -736,17 +787,16 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 	if len(disappeared) == 0 || len(newBooks) == 0 {
 		return
 	}
-	oldFP, err := s.cat.FingerprintsForPaths(ctx, lib.ID, disappeared)
-	if err != nil {
-		s.log.Warn("move detection: load fingerprints failed", "library", lib.Name, "err", err)
-		return
+	// The stored fingerprints for the disappeared paths are already in sigs
+	// (Signatures selects content_hash), so no extra query is needed.
+	oldFP := make(map[string]string, len(disappeared))
+	for _, p := range disappeared {
+		if h := sigs[p].ContentHash; h != "" {
+			oldFP[p] = h
+		}
 	}
 	for _, nb := range newBooks {
-		primary := nb.RelPath
-		if nb.IsFolder && len(nb.Files) > 0 {
-			primary = nb.Files[0].RelPath
-		}
-		fp := fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primary)))
+		fp := fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primaryPath(nb))))
 		nb.ContentHash = fp // reused by enrich, avoiding a second read
 		if fp == "" {
 			continue
