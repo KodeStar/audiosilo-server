@@ -18,6 +18,13 @@ func TestSplitSeriesIndex(t *testing.T) {
 		{"#4 Reaper", 4, "Reaper"},
 		{"Unsouled", 0, "Unsouled"},
 		{"  7. Wintersteel ", 7, "Wintersteel"},
+		// A bare year/large number is a title, not a volume index...
+		{"1984", 0, "1984"},
+		{"2001 A Space Odyssey", 0, "2001 A Space Odyssey"},
+		// ...unless it is explicitly marked as a volume.
+		{"Book 1984 - Title", 1984, "Title"},
+		// Realistic three-digit volume numbers still parse.
+		{"100 - Long Series Vol", 100, "Long Series Vol"},
 	}
 	for _, c := range cases {
 		idx, title := splitSeriesIndex(c.in)
@@ -69,7 +76,7 @@ func TestIsAudio(t *testing.T) {
 	if IsAudio("cover.jpg") || IsAudio("notes.txt") {
 		t.Error("expected non-audio rejected")
 	}
-	// Audible DRM formats are intentionally not indexed — the server can't stream
+	// Audible DRM formats are intentionally not indexed - the server can't stream
 	// them, and one next to its converted .m4b would double up the book's chapters.
 	if IsAudio("book.aax") || IsAudio("book.aaxc") || IsAudio("BOOK.AAX") {
 		t.Error("expected Audible DRM (.aax/.aaxc) rejected")
@@ -252,7 +259,7 @@ func TestIsGenericTitle(t *testing.T) {
 			t.Errorf("IsGenericTitle(%q) = false, want true", s)
 		}
 	}
-	// Real titles — including ones that merely start with a label word.
+	// Real titles - including ones that merely start with a label word.
 	real := []string{
 		"A Christmas Carol", "Unsouled", "How to Train Your Dragon",
 		"Part of Your World", "Chapter and Verse", "Track Changes", "CD Projekt",

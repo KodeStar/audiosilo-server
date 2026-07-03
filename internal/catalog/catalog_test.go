@@ -142,8 +142,17 @@ func TestSearchFTS(t *testing.T) {
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "1.m4b", Title: "Unsouled", Author: "Will Wight", Series: "Cradle"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "2.m4b", Title: "Soulsmith", Author: "Will Wight", Series: "Cradle"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "3.m4b", Title: "The Final Empire", Author: "Brandon Sanderson"})
+	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "4.m4b", Title: "Война и мир", Author: "Толстой"})
 
 	all := []Scope{{LibraryID: lib.ID, AllowAll: true}}
+	// Non-Latin (Cyrillic) titles must be searchable - the FTS index handles them,
+	// so the query tokenizer must not discard non-ASCII runes.
+	if res, _ := c.Search(ctx, "Война", all, 10); len(res) != 1 || res[0].Title != "Война и мир" {
+		t.Fatalf("cyrillic search = %+v", res)
+	}
+	if res, _ := c.Search(ctx, "Толстой", all, 10); len(res) != 1 {
+		t.Fatalf("cyrillic author search expected 1, got %d", len(res))
+	}
 	// Prefix match on title.
 	res, err := c.Search(ctx, "soul", all, 10)
 	if err != nil {
@@ -243,6 +252,46 @@ func TestProgressLastWriteWins(t *testing.T) {
 	saved, _ = c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 200, UpdatedAt: t0.Add(time.Minute).Format(time.RFC3339)})
 	if saved.Position != 200 {
 		t.Fatalf("newer update should win, position = %v", saved.Position)
+	}
+}
+
+// TestProgressRejectsFutureTimestamp guards the last-write-wins wedge: a client with
+// a broken clock (or a garbage updated_at) must not be able to store a far-future
+// timestamp that then makes every subsequent legitimate save look stale forever.
+func TestProgressRejectsFutureTimestamp(t *testing.T) {
+	// Pin the server clock so "future" is deterministic.
+	fixed := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	c, ctx := newTestCatalog(t)
+	c.now = func() time.Time { return fixed }
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	uid := seedUser(t, c, ctx)
+	ref := Ref{LibraryID: lib.ID, Path: "Author/Book.m4b"}
+
+	// A far-future timestamp is clamped to server time on write.
+	saved, err := c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 10, UpdatedAt: "9999-01-01T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := time.Parse(time.RFC3339, saved.UpdatedAt); got.After(fixed.Add(time.Hour)) {
+		t.Fatalf("future updated_at was not clamped: %s", saved.UpdatedAt)
+	}
+
+	// A later legitimate save must therefore win. Before the clamp, the stored
+	// far-future timestamp would beat every real timestamp forever (permanent wedge);
+	// now the stored value is server time, so a save even a minute later wins.
+	later := fixed.Add(time.Minute).Format(time.RFC3339)
+	saved, err = c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 250, UpdatedAt: later})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Position != 250 {
+		t.Fatalf("progress wedged after a future timestamp: position = %v", saved.Position)
+	}
+
+	// An unparseable timestamp is likewise replaced with server time (not stored raw).
+	saved, _ = c.SaveProgress(ctx, uid, Progress{Ref: Ref{LibraryID: lib.ID, Path: "x.m4b"}, Position: 5, UpdatedAt: "not-a-date"})
+	if _, err := time.Parse(time.RFC3339, saved.UpdatedAt); err != nil {
+		t.Fatalf("garbage updated_at was stored raw: %q", saved.UpdatedAt)
 	}
 }
 
@@ -426,8 +475,33 @@ func TestUniqueNameReturnsErrNameTaken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.UpdateShare(ctx, other.ID, Share{Name: "Sci-Fi"}); !errors.Is(err, ErrNameTaken) {
+	dup := "Sci-Fi"
+	if _, err := c.UpdateShare(ctx, other.ID, ShareUpdate{Name: &dup}); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("duplicate share name (rename): err = %v, want ErrNameTaken", err)
+	}
+}
+
+// TestUpdateSharePreservesOmittedFields verifies a partial PATCH (nil fields) does
+// not wipe the share's description or read_only flag.
+func TestUpdateSharePreservesOmittedFields(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	created, err := c.CreateShare(ctx, Share{Name: "Kids", Description: "family listening", ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newName := "Kids v2"
+	updated, err := c.UpdateShare(ctx, created.ID, ShareUpdate{Name: &newName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "Kids v2" {
+		t.Fatalf("name = %q, want %q", updated.Name, "Kids v2")
+	}
+	if updated.Description != "family listening" {
+		t.Fatalf("description was wiped: %q", updated.Description)
+	}
+	if !updated.ReadOnly {
+		t.Fatal("read_only was reset to false by a name-only patch")
 	}
 }
 
@@ -467,7 +541,7 @@ func TestCreateShareWithPathsIsAtomic(t *testing.T) {
 // TestPathFilterMatchesScopeAllows is the parity guard for the two encodings of
 // the same path-containment predicate: the Go gate Scope.Allows and the SQL
 // pathFilterSQL used by ListBooks/Search/RecentBooks. A book at path P under a
-// scope must be returned by the scoped list query IFF Scope.Allows(P) — if the
+// scope must be returned by the scoped list query IFF Scope.Allows(P) - if the
 // two ever diverge (e.g. a future change to segment-boundary or escape handling
 // applied to only one), this fails. Covers wildcard, boundary, and exact cases.
 func TestPathFilterMatchesScopeAllows(t *testing.T) {
@@ -477,12 +551,12 @@ func TestPathFilterMatchesScopeAllows(t *testing.T) {
 	rules := []string{"Sci_Fi", "Fantasy/Sanderson", "100%Pure"}
 	paths := []string{
 		"Sci_Fi/A/Dune.m4b",         // under a rule with a LIKE wildcard ('_')
-		"SciXFi/B/Leak.m4b",         // wildcard-matching sibling — must NOT match
+		"SciXFi/B/Leak.m4b",         // wildcard-matching sibling - must NOT match
 		"Fantasy/Sanderson/Way.m4b", // under an exact-prefix rule
-		"Fantasy/SandersonX/No.m4b", // boundary sibling — must NOT match
-		"Fantasy/Hobb/Other.m4b",    // different subtree — must NOT match
+		"Fantasy/SandersonX/No.m4b", // boundary sibling - must NOT match
+		"Fantasy/Hobb/Other.m4b",    // different subtree - must NOT match
 		"100%Pure/C/Yes.m4b",        // under a rule with a LIKE wildcard ('%')
-		"100XPure/D/No.m4b",         // '%'-matching sibling — must NOT match
+		"100XPure/D/No.m4b",         // '%'-matching sibling - must NOT match
 	}
 	for i, p := range paths {
 		c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, Title: fmt.Sprintf("T%d", i), Author: "A"})

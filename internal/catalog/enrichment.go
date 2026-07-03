@@ -19,10 +19,13 @@ const applyEnrichmentToPathSQL = `UPDATE books SET
 
 // SetEnrichment attaches durable, path-keyed metadata (ASIN/ISBN) to a book and
 // applies it to the current index row immediately. The book_enrichment table is not
-// FK'd to the rebuildable books index, so the enrichment survives a re-scan — see
+// FK'd to the rebuildable books index, so the enrichment survives a re-scan - see
 // ApplyEnrichments, which the scanner calls to re-apply it onto freshly-indexed
 // books. A blank field leaves any existing enrichment for that field untouched.
 func (c *Catalog) SetEnrichment(ctx context.Context, libraryID int64, path, asin, isbn string) error {
+	// Canonicalize the key on write (see CleanRelPath) so it matches the
+	// scanner's rel_path keys - a non-canonical key would never re-apply.
+	path = CleanRelPath(path)
 	asin, isbn = strings.TrimSpace(asin), strings.TrimSpace(isbn)
 	if asin == "" && isbn == "" {
 		return nil

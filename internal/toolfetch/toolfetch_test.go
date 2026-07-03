@@ -60,7 +60,7 @@ func TestEnsureUsesCache(t *testing.T) {
 }
 
 // extractZip must pull only ffmpeg/ffprobe (by basename, from any subdir) and mark
-// them executable, ignoring everything else — and never escape destDir.
+// them executable, ignoring everything else - and never escape destDir.
 func TestExtractZip(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)

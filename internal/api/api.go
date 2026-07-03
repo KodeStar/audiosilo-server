@@ -24,7 +24,7 @@ var Version = "dev"
 
 // webDemoPath is the web player's instant-demo screen, under the /web mount. The
 // site root redirects here in demo mode. It is a route in the separately-shipped
-// frontend, so this is the single point of coupling — keep it in sync with the
+// frontend, so this is the single point of coupling - keep it in sync with the
 // player's router (the Docker image pins a matching web build).
 const webDemoPath = "/web/demo"
 
@@ -60,6 +60,12 @@ type API struct {
 	demoLimiter    *limiter // per-IP cap on demo account creation
 	accountLimiter *limiter // per-IP cap on self-service password/recovery mutations
 	ipLimiter      *ipRateLimiter
+
+	// transcodeSem bounds the number of concurrent ffmpeg transcodes. Each transcode
+	// is a long-lived process pinning roughly a core; without a cap a single client
+	// (or any demo visitor) opening many ?transcode=1 streams could exhaust CPU on a
+	// small self-hosted box. A full channel returns 503 rather than forking more.
+	transcodeSem chan struct{}
 }
 
 // New constructs an API. ffmpeg is the path to an ffmpeg binary used for
@@ -82,8 +88,12 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
 		accountLimiter: newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
 		ipLimiter:      newIPRateLimiter(20, 40),       // ~20 req/s, burst 40, per IP
+		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 	}
 }
+
+// maxConcurrentTranscodes caps simultaneous ffmpeg transcodes across all clients.
+const maxConcurrentTranscodes = 4
 
 // EnableSetup turns on the first-run setup wizard, guarded by token (a one-time
 // secret carried in the /setup URL fragment). Call before Handler(). The wizard
@@ -128,7 +138,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/auth/recovery", a.requireAuth(http.HandlerFunc(a.handleDeleteRecovery)))
 	mux.Handle("GET /api/v1/me", a.requireAuth(http.HandlerFunc(a.handleMe)))
 
-	// Content is addressed by (library, path) via ?path= — the path is the
+	// Content is addressed by (library, path) via ?path= - the path is the
 	// identity. The filesystem view is filtered to the caller's share scope.
 	mux.Handle("GET /api/v1/libraries", a.requireAuth(http.HandlerFunc(a.handleListLibraries)))
 	mux.Handle("GET /api/v1/libraries/{id}/fs", a.requireAuth(http.HandlerFunc(a.handleBrowseFS)))
@@ -201,7 +211,7 @@ func (a *API) Handler() http.Handler {
 	}
 
 	// In demo mode, send the exact site root to the web player's demo screen so a
-	// visitor to demo.audiosilo.app lands straight on the instant-demo flow — no
+	// visitor to demo.audiosilo.app lands straight on the instant-demo flow - no
 	// reverse-proxy rewrite required. `/{$}` matches only "/" and outranks the web
 	// package's "/" catch-all, leaving /connect, /admin and the rest untouched.
 	if a.cfg.Demo.Enabled && web.HasPlayer(a.cfg.WebDir) {

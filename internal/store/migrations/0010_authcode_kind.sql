@@ -3,7 +3,7 @@
 --
 -- Recovery decouples re-authentication from invitation: an invite is a bounded,
 -- single-purpose onboarding secret, while a recovery code is a durable, reusable
--- credential the user holds to get back in after signing out or losing a device —
+-- credential the user holds to get back in after signing out or losing a device -
 -- without an admin minting a fresh invite each time. Both live in auth_codes and
 -- redeem through the same path; only their lifetime/ownership differ.
 --
@@ -17,7 +17,7 @@
 ALTER TABLE auth_codes ADD COLUMN kind TEXT NOT NULL DEFAULT 'invite';
 ALTER TABLE auth_codes ADD COLUMN redeemed_at TEXT;
 
--- Backfill: an already-used invite is, by definition, accepted — stamp it (with
+-- Backfill: an already-used invite is, by definition, accepted - stamp it (with
 -- the closest timestamp we have) so its "accepted" label is right for codes
 -- issued before this column existed.
 UPDATE auth_codes SET redeemed_at = created_at WHERE uses > 0 AND redeemed_at IS NULL;

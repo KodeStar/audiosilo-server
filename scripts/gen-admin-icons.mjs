@@ -1,5 +1,5 @@
 // Generates the admin-console PWA PNG icons from the violet mark in
-// internal/web/assets/favicon.svg — the single source of truth for the admin
+// internal/web/assets/favicon.svg - the single source of truth for the admin
 // brand (keep them in sync; re-run this after editing favicon.svg's colour/mark).
 //
 // The server has no JS build step, so the generated PNGs are committed. To

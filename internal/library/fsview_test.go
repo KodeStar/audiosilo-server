@@ -183,7 +183,7 @@ func TestBrowseFSPagination(t *testing.T) {
 }
 
 // TestBrowseFSAllowFilter verifies the allow predicate gates entries by their
-// library-relative path AND that filtering happens before pagination — so a page
+// library-relative path AND that filtering happens before pagination - so a page
 // stays full of permitted entries rather than being thinned by denied ones.
 func TestBrowseFSAllowFilter(t *testing.T) {
 	root := t.TempDir()

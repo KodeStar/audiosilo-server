@@ -177,7 +177,7 @@ func TestBookmarkDeleteOwnershipScoped(t *testing.T) {
 	}
 
 	// B's delete by id is scoped to B's rows, so it affects 0 rows (handler still
-	// returns 204 — the SQL is a no-op, not an error).
+	// returns 204 - the SQL is a no-op, not an error).
 	delBM := "/api/v1/bookmarks/" + strconv.FormatInt(bm.ID, 10)
 	e.do(t, "DELETE", delBM, tokB, "")
 

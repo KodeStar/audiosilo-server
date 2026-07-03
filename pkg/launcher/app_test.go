@@ -34,8 +34,8 @@ func discardLog() *slog.Logger {
 }
 
 // ensureAdmin must create the admin from DATABASE state, not config-file
-// existence — so dropping in a config.yaml before the first start can't suppress
-// first-run admin creation — and it must be idempotent on later starts.
+// existence - so dropping in a config.yaml before the first start can't suppress
+// first-run admin creation - and it must be idempotent on later starts.
 func TestEnsureAdminKeysOffDatabase(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, ":memory:")
@@ -240,7 +240,7 @@ func TestDemoReaperSweepsThenExits(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		// A negative idle TTL puts the cutoff in the future, so the startup sweep
-		// reaps every demo account — proving the sweep runs before the loop.
+		// reaps every demo account - proving the sweep runs before the loop.
 		demoReaper(ctx, authSvc, -time.Minute, discardLog())
 		close(done)
 	}()

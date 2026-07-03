@@ -40,7 +40,11 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DeviceName string `json:"device_name"`
 	}
-	_ = decodeJSON(r, &req, 0) // body is optional
+	// Body is optional (defaults apply); a malformed one is still a client error.
+	if err := decodeJSONOptional(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
 	deviceName := req.DeviceName
 	if deviceName == "" {
 		deviceName = "Demo"

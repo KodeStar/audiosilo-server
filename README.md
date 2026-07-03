@@ -14,39 +14,39 @@ planned separately.
 
 ## Features (this iteration)
 
-- **Connect flow with copy-invite + app-or-web QR** — admins mint an auth code or
+- **Connect flow with copy-invite + app-or-web QR** - admins mint an auth code or
   click **Copy invite** for a shareable link (`/connect#code=…`, the code rides in
   the URL fragment so it never hits server logs). The connect screen shows a QR
   encoding an HTTPS link plus **Open in app** / **Open web player**: scanning opens
   the native app (when it claims the domain) or the web player, which exchanges a
   single-use pairing token for a device-scoped session. Username/password login is
   also supported.
-- **Web player at `/web`** — the audiosilo-frontend web build, served from
+- **Web player at `/web`** - the audiosilo-frontend web build, served from
   `web_dir` (not vendored; baked into the Docker image). Reports a `web_player`
   capability flag via `GET /api/v1/server`.
-- **Path is the identity** — content is addressed by `(library, path)`, not a
+- **Path is the identity** - content is addressed by `(library, path)`, not a
   fragile database id. The filesystem is the source of truth (audiobook metadata
   is often junk); playback, progress, bookmarks and sharing all key on the path,
   so they survive DB rebuilds and re-tagging. A cheap fingerprint provides
   **move-tracking**: rename a file and its progress follows it.
-- **Filesystem-based sharing** — a **share** is a named set of filesystem paths
+- **Filesystem-based sharing** - a **share** is a named set of filesystem paths
   (a whole author, one series, a single book, or a whole library). Grant shares
   to users for partial access; they browse a **filtered tree** scoped to what
   they're allowed, and the computed view + search are scoped to match.
-- **Admin** — create users, create libraries, build/grant shares, mint auth
+- **Admin** - create users, create libraries, build/grant shares, mint auth
   codes, reorder libraries, trigger rescans.
-- **Auto-detected folder shape** — no per-library layout to configure: the
+- **Auto-detected folder shape** - no per-library layout to configure: the
   scanner classifies each folder on its own (a directory of audio is one book;
   loose files at the root are single-file books), and a folder the heuristic gets
   wrong is fixed with a per-folder override (`book` | `collection`). The default
   **Hybrid** view is the filesystem browsed as-is, enriched with indexed metadata.
-- **Fast search** — SQLite FTS5, fast at thousands of books; **keyset pagination**.
-- **Streaming** — HTTP Range (seek/scrub) by path, direct download, cover art.
-- **Normalized chapters** — single-file m4b chapters and multi-file mp3 parts
+- **Fast search** - SQLite FTS5, fast at thousands of books; **keyset pagination**.
+- **Streaming** - HTTP Range (seek/scrub) by path, direct download, cover art.
+- **Normalized chapters** - single-file m4b chapters and multi-file mp3 parts
   share one shape; each chapter carries the `file_path` to play.
-- **Per-user listening state** — progress, bookmarks, notes, history, playback
+- **Per-user listening state** - progress, bookmarks, notes, history, playback
   speed, with last-write-wins reconciliation (the basis for realtime sync).
-- **Baked-in web UI** — a public connect page at `/` (and `/connect`) and an admin
+- **Baked-in web UI** - a public connect page at `/` (and `/connect`) and an admin
   console at `/admin` (users, libraries incl. edit/delete + folder-detection
   overrides, **shares** with a
   filesystem path picker, auth codes + copy-invite, rescans). Vanilla HTML/CSS/JS,
@@ -59,7 +59,7 @@ on-the-fly transcoding and WebSocket realtime sync (Phase C); server federation
 ## Requirements
 
 - Go 1.25+ (to build from source), or Docker (to run the published image).
-- **ffmpeg/ffprobe** (optional but recommended) — used for durations, chapters,
+- **ffmpeg/ffprobe** (optional but recommended) - used for durations, chapters,
   and (later) transcoding/AAX. Without it the server still runs; durations and
   chapters are simply unavailable. (The Docker image includes ffmpeg.)
 
@@ -73,7 +73,7 @@ go build -o bin/audiosilo ./cmd/audiosilo
 # Default TLS is a self-signed cert (HTTPS); for plain HTTP locally use TLS off:
 AUDIOSILO_TLS_MODE=off ./bin/audiosilo --data ./data
 
-# In another terminal — discover the server (public):
+# In another terminal - discover the server (public):
 curl http://localhost:8080/api/v1/server
 
 # Log in (or redeem the auth code) to get a session token:
@@ -113,7 +113,7 @@ configure `app_links` so the server publishes the matching
 When `web_dir` points at a built web player (the Expo web export from
 `audiosilo-frontend`, built with `baseUrl=/web`), the server serves it at `/web`
 with an SPA fallback and a scoped CSP. It is **not** stored in this repo or the
-binary — the Docker image bakes a pinned build in at `/app/web`. Empty `web_dir` →
+binary - the Docker image bakes a pinned build in at `/app/web`. Empty `web_dir` →
 `/web` is unmounted and `web_player` is `false` in `GET /api/v1/server`.
 
 For local development without Docker, build the export into a directory and point
@@ -128,11 +128,11 @@ AUDIOSILO_WEB_DIR=~/dev/audiosilo/audiosilo-frontend/dist ./bin/audiosilo --data
 
 TLS is configurable (see `tls.mode` in the config):
 
-- `selfsigned` (default) — generates and persists a self-signed cert. Good for a
+- `selfsigned` (default) - generates and persists a self-signed cert. Good for a
   LAN; clients must accept it.
-- `autocert` — automatic Let's Encrypt certificates (set `tls.hosts`). Needs a
+- `autocert` - automatic Let's Encrypt certificates (set `tls.hosts`). Needs a
   public hostname reachable on :443.
-- `off` — plain HTTP for use **behind a reverse proxy** (Caddy/nginx/Traefik).
+- `off` - plain HTTP for use **behind a reverse proxy** (Caddy/nginx/Traefik).
   Set `trusted_proxies` so client IPs (used for rate limiting) are accurate.
 
 App-layer protections are always on: per-IP request rate limiting, brute-force
@@ -152,9 +152,9 @@ docker compose logs            # first run prints the admin password + auth code
 Edit `docker-compose.yml` to mount your audiobooks read-only, persist `./data`, and
 set `AUDIOSILO_PUBLIC_URL` (used to build QR/invite links). Set **`PUID`/`PGID`** to
 the user that should own `/data` (Unraid: `99`/`100`; generic Linux: your `id -u`/
-`id -g`) — the entrypoint chowns the data dir and runs the server as that user, so
-it works regardless of how the mounted volume is owned. Update — server or the
-bundled player — is always a new image: `docker compose pull && docker compose up -d`.
+`id -g`) - the entrypoint chowns the data dir and runs the server as that user, so
+it works regardless of how the mounted volume is owned. Update - server or the
+bundled player - is always a new image: `docker compose pull && docker compose up -d`.
 
 ## Testing & CI
 

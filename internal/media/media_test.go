@@ -43,9 +43,9 @@ func TestSniffAudioType(t *testing.T) {
 		{"mp4 ftyp", append([]byte{0, 0, 0, 0x18}, []byte("ftypM4A ")...), "audio/mp4"},
 		{"riff wave", append([]byte("RIFF\x00\x00\x00\x00"), []byte("WAVE")...), "audio/wav"},
 		// ADTS AAC: 0xFF sync with layer bits 00 (0xF1). Its sync word also matches
-		// the MPEG mask, so sniffAudioType checks ADTS *before* MP3 — pin that order.
+		// the MPEG mask, so sniffAudioType checks ADTS *before* MP3 - pin that order.
 		{"adts aac", []byte{0xFF, 0xF1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, "audio/aac"},
-		// MP3 frame sync (0xFF 0xFB) — must not be misread as ADTS.
+		// MP3 frame sync (0xFF 0xFB) - must not be misread as ADTS.
 		{"mp3 frame sync", []byte{0xFF, 0xFB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, "audio/mpeg"},
 		{"unrecognized", []byte("not audio at all"), ""},
 	}
@@ -131,7 +131,7 @@ func TestTranscode(t *testing.T) {
 	if !HasFFmpeg("ffmpeg") {
 		t.Skip("ffmpeg not available; transcoding requires it")
 	}
-	// A fixture m4b (AAC) is fine input — we only assert it re-encodes to MP3.
+	// A fixture m4b (AAC) is fine input - we only assert it re-encodes to MP3.
 	src := filepath.Join("..", "..", "testdata", "library", "Will Wight", "Cradle", "01 - Unsouled.m4b")
 	if _, err := os.Stat(src); err != nil {
 		t.Skipf("fixture missing: %v", err)

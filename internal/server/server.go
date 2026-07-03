@@ -24,7 +24,7 @@ func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slo
 	}
 	// autocert (ACME TLS-ALPN-01/HTTP-01) only validates when Let's Encrypt can
 	// reach this server on port 443. The default bind is :8080, so warn loudly
-	// rather than let issuance fail silently — unless external :443 is forwarded
+	// rather than let issuance fail silently - unless external :443 is forwarded
 	// here at the NAT/OS level, in which case the warning is harmless.
 	if cfg.TLS.Mode == config.TLSAutocert {
 		if _, port, splitErr := net.SplitHostPort(cfg.Bind); splitErr == nil && port != "443" {

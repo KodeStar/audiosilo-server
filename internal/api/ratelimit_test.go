@@ -81,7 +81,7 @@ func TestIPRateLimiterBucket(t *testing.T) {
 		t.Fatal("second request consumes the last burst token")
 	}
 	if r.Allow(ip) {
-		t.Fatal("third request must be denied — bucket empty")
+		t.Fatal("third request must be denied - bucket empty")
 	}
 
 	now = now.Add(100 * time.Millisecond) // refills 0.1s * 10/s = 1 token

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -113,7 +114,7 @@ func resolveExisting(p string) string {
 // relPath "" (or "/") lists the root. Directories sort before files, both
 // alphabetically, giving a stable order for paging. If allow is non-nil, only
 // entries for which it returns true are included (applied before pagination so
-// pages stay full) — used to scope browsing to a share's path rules.
+// pages stay full) - used to scope browsing to a share's path rules.
 func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string) bool) (*Listing, error) {
 	full, err := SafeJoin(root, relPath)
 	if err != nil {
@@ -128,11 +129,13 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 	}
 
 	entries := make([]Entry, 0, len(dirEntries))
-	cleanRel := strings.Trim(filepath.ToSlash(filepath.Clean("/"+relPath)), "/")
+	// The canonical rel path prefixes each entry's Path; scope checks and
+	// persisted path keys rely on this same form (see catalog.CleanRelPath).
+	cleanRel := catalog.CleanRelPath(relPath)
 	for _, de := range dirEntries {
 		name := de.Name()
-		if strings.HasPrefix(name, ".") {
-			continue // hide dotfiles
+		if isHidden(name) {
+			continue // hidden here AND skipped by the scanner (see isHidden)
 		}
 		childRel := name
 		if cleanRel != "" {
@@ -147,7 +150,7 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 		isDir := de.IsDir()
 		// os.ReadDir already provides name + type for free; only files need a
 		// per-entry stat (for Size, used to compute bitrate). Skipping it for
-		// directories avoids one network round-trip per entry — the difference
+		// directories avoids one network round-trip per entry - the difference
 		// between a snappy and a multi-second author listing on a network mount.
 		var size, modTime int64
 		if !isDir {

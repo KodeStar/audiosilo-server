@@ -43,7 +43,7 @@ func (c *Catalog) RemoveFavourite(ctx context.Context, userID int64, ref Ref) er
 // still reach, newest first. The scope filter is applied in the query (see
 // UserScopes), so favourites under a since-revoked share are not returned and an
 // empty scope yields none. Books are LEFT-joined on the path identity to enrich
-// each row with title/author/etc. — left empty for a plain navigation folder.
+// each row with title/author/etc. - left empty for a plain navigation folder.
 func (c *Catalog) ListAllFavourites(ctx context.Context, userID int64, scopes []Scope) ([]Favourite, error) {
 	filter, fargs := scopesFilterSQL("f.library_id", "f.rel_path", scopes)
 	args := append([]any{userID}, fargs...)

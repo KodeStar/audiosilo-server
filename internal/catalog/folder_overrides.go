@@ -6,7 +6,7 @@ import (
 )
 
 // ErrInvalidOverrideMode marks a folder override whose mode is outside the
-// {book, collection} allowlist. The transport layer maps it to 400 — the single
+// {book, collection} allowlist. The transport layer maps it to 400 - the single
 // source of truth for the allowlist lives here, not duplicated in the handler.
 var ErrInvalidOverrideMode = errors.New(`folder override mode must be "book" or "collection"`)
 
@@ -42,7 +42,9 @@ func (c *Catalog) FolderOverrides(ctx context.Context, libraryID int64) (map[str
 	return out, rows.Err()
 }
 
-// SetFolderOverride upserts a detection override for a folder.
+// SetFolderOverride upserts a detection override for a folder. The path is
+// canonicalized on write (see CleanRelPath) so it matches the scanner's
+// rel_path keys - a non-canonical key would silently never take effect.
 func (c *Catalog) SetFolderOverride(ctx context.Context, libraryID int64, path, mode string) error {
 	if mode != OverrideBook && mode != OverrideCollection {
 		return ErrInvalidOverrideMode
@@ -50,13 +52,13 @@ func (c *Catalog) SetFolderOverride(ctx context.Context, libraryID int64, path, 
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO folder_overrides(library_id, path, mode, updated_at) VALUES(?,?,?,?)
 		 ON CONFLICT(library_id, path) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at`,
-		libraryID, path, mode, c.ts())
+		libraryID, CleanRelPath(path), mode, c.ts())
 	return err
 }
 
 // DeleteFolderOverride removes a folder's override, reverting it to auto-detection.
 func (c *Catalog) DeleteFolderOverride(ctx context.Context, libraryID int64, path string) error {
 	_, err := c.db.ExecContext(ctx,
-		`DELETE FROM folder_overrides WHERE library_id = ? AND path = ?`, libraryID, path)
+		`DELETE FROM folder_overrides WHERE library_id = ? AND path = ?`, libraryID, CleanRelPath(path))
 	return err
 }

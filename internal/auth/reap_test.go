@@ -13,7 +13,7 @@ func TestReapIdleDemoUsers(t *testing.T) {
 	keeper, _ := s.CreateUser(ctx, "real_user", "", RoleUser)
 	// A real account an admin happened to name with the demo prefix: it is NOT
 	// is_demo, so the reaper must never touch it even when idle (the flag, not the
-	// username, decides — this is the regression guard for reaping by prefix).
+	// username, decides - this is the regression guard for reaping by prefix).
 	prefixed, _ := s.CreateUser(ctx, DemoUsernamePrefix+"realadmin", "", RoleUser)
 
 	for _, id := range []int64{old.ID, fresh.ID, keeper.ID, prefixed.ID} {

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"strings"
+	"unicode"
 )
 
 // Search runs a full-text query over the catalog (title/author/series/narrator)
@@ -64,9 +65,16 @@ func prefixCols(p string) string {
 // buildMatchQuery turns free user input into a safe FTS5 prefix query. Each
 // token becomes a prefix match ("foo*") and tokens are ANDed, which gives
 // type-ahead behavior without exposing FTS5 operator syntax to the user.
+//
+// Tokens are split on anything that is not a letter or digit in ANY script, so
+// non-Latin titles (Cyrillic, CJK, accented Latin) search correctly - the FTS5
+// unicode61 tokenizer indexed them, and splitting on ASCII-only ranges would
+// discard every non-ASCII rune and return no results. A token only ever contains
+// letters/digits, so it can never carry an embedded quote or FTS operator, which
+// keeps the quoted-prefix construction injection-safe.
 func buildMatchQuery(input string) string {
 	fields := strings.FieldsFunc(input, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+		return !(unicode.IsLetter(r) || unicode.IsDigit(r))
 	})
 	var terms []string
 	for _, f := range fields {
