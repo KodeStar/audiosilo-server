@@ -519,9 +519,10 @@ function recoveryControl(u) {
 
 // Invite state predicates. An invite is "active" (the one active invite per user,
 // resendable) while it can still be redeemed - not expired and not used up.
-// redeemed_at only records that it has been accepted at least once; a multi-use
-// invite stays active until its uses run out. Spent/expired invites fall into
-// History.
+// uses counts devices that actually paired (the exchange step) - opening the
+// invite link costs nothing - and redeemed_at records that at least one device
+// has; a multi-use invite stays active until its uses run out. Spent/expired
+// invites fall into History.
 function codeExpired(c) { return !!c.expires_at && new Date(c.expires_at).getTime() <= Date.now(); }
 function codeUsedUp(c) { return c.max_uses > 0 && c.uses >= c.max_uses; }
 function codePending(c) { return !codeExpired(c) && !codeUsedUp(c); }

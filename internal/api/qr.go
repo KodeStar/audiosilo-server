@@ -15,7 +15,10 @@ import (
 // App Link) and otherwise opens the embedded web player's connect route, which
 // exchanges the pairing token. URI is the custom-scheme equivalent for an explicit
 // "Open in app" action (custom schemes are not domain-bound, so they launch an
-// installed app on any self-hosted domain).
+// installed app on any self-hosted domain). The pairing token is as redeemable as
+// its origin: redeemed from an invite it inherits the invite's uses and expiry (one
+// QR can pair several devices); from a recovery code it lasts pairingTTL; from
+// /auth/pair or the demo flow it is single-use and lasts pairingTTL.
 type PairingPayload struct {
 	ServerName   string   `json:"server_name"`
 	BaseURL      string   `json:"base_url"`
@@ -24,6 +27,12 @@ type PairingPayload struct {
 	WebURL       string   `json:"web_url"` // https://<base>/web/connect?token=... (encoded in the QR)
 	PNGDataURI   string   `json:"qr_png_data_uri"`
 	Links        AppLinks `json:"links"`
+	// CodeExpiresAt/UsesRemaining describe the parent invite when the token was
+	// minted by redeeming one, so the connect page can say how far the QR goes.
+	// Advisory: concurrent exchanges may consume uses after the redeem. Empty/nil
+	// for recovery codes, /auth/pair and demo tokens (and nil = unlimited).
+	CodeExpiresAt string `json:"code_expires_at,omitempty"`
+	UsesRemaining *int   `json:"uses_remaining,omitempty"`
 }
 
 // AppLinks points clients at the ways to connect. Mobile app stores are
@@ -64,8 +73,8 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	webURL := base + "/web/connect?" + url.Values{"token": {token}}.Encode()
 	// Custom-scheme deep link for an explicit "Open in app" button. Custom schemes
 	// are not domain-bound, so this launches an installed app on any self-hosted
-	// domain. The pairing token is single-use, so whichever client consumes the
-	// link performs the one exchange.
+	// domain. How many devices can exchange the token is governed by its origin
+	// (see PairingPayload): an invite-derived token honors the invite's uses.
 	appURI := "audiosilo://connect?" + url.Values{
 		"server": {base},
 		"token":  {token},

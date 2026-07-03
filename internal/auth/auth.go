@@ -44,6 +44,13 @@ var (
 	ErrInvalidCreds = errors.New("invalid credentials")
 	ErrInvalidToken = errors.New("invalid or expired token")
 	ErrInvalidCode  = errors.New("invalid or expired auth code")
+	// ErrCodeExhausted is returned by ConsumePairingToken when the parent invite
+	// has no uses left, so the transport can tell "the invite is spent" apart
+	// from a bogus token.
+	ErrCodeExhausted = errors.New("invite has no uses left")
+	// ErrCodeExpired is returned by ConsumePairingToken when the parent invite
+	// expired between redeem and exchange.
+	ErrCodeExpired = errors.New("invite has expired")
 	// ErrLastAdmin is returned when an operation would leave no enabled admin.
 	ErrLastAdmin = errors.New("cannot remove the last admin")
 	// ErrAdminNeedsPassword is returned when an account would become (or remain)
@@ -208,23 +215,27 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 const dummyHash = "$argon2id$v=19$m=65536,t=2,p=4$YWFhYWFhYWFhYWFhYWFhYQ$3KhZ0r0u2y0xq8b9oQzWtkqj9o0a9hZ0r0u2y0xq8b8"
 
 // IssueToken creates a token of the given kind for a user and returns the
-// secret (shown once). ttl <= 0 means no expiry.
+// secret (shown once). ttl <= 0 means no expiry. Tokens minted here are
+// unlinked (no parent auth code); pairing tokens derived from a redeemed code
+// go through IssuePairingToken instead.
 func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName string, ttl time.Duration) (string, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
 		return "", err
 	}
-	var expires any
-	if ttl > 0 {
-		expires = s.now().Add(ttl).UTC().Format(time.RFC3339)
-	}
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at)
-		 VALUES(?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires)
-	if err != nil {
+	if err := s.insertToken(ctx, userID, hash, kind, deviceName, s.expiresAt(ttl), nil); err != nil {
 		return "", err
 	}
 	return secret, nil
+}
+
+// insertToken writes one tokens row - the single place the column list lives.
+// expires and authCodeID are nil for "no expiry" / "unlinked".
+func (s *Service) insertToken(ctx context.Context, userID int64, hash, kind, deviceName string, expires, authCodeID any) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id)
+		 VALUES(?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID)
+	return err
 }
 
 // ResolveToken validates a presented token secret and returns its user, also
@@ -344,47 +355,52 @@ func supersedeActiveInvites(ctx context.Context, ex sqlExecer, userID int64, now
 // behind. The invite's max_uses is preserved, its use counter and redeemed_at are
 // reset (pending again), and its expiry is renewed for the same window it was
 // originally granted (so resending a nearly-/already-expired invite yields a
-// usable one). Only invite-kind codes rotate (recovery codes are user-owned); a
-// missing or non-invite id returns ErrNotFound. This backs the admin "Resend".
+// usable one). Pairing tokens linked to the code are revoked in the same
+// transaction - the row survives rotation, so the delete cascade never fires -
+// which disconnects any QR still on screen from the old secret. Only invite-kind
+// codes rotate (recovery codes are user-owned); a missing or non-invite id
+// returns ErrNotFound. This backs the admin "Resend".
 func (s *Service) RotateAuthCode(ctx context.Context, id int64) (string, error) {
-	var (
-		createdAt string
-		expires   sql.NullString
-	)
-	err := s.db.QueryRowContext(ctx,
-		`SELECT created_at, expires_at FROM auth_codes WHERE id = ? AND kind = ?`,
-		id, CodeInvite).Scan(&createdAt, &expires)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrNotFound
-	}
-	if err != nil {
-		return "", err
-	}
 	code, hash, err := generateAuthCode()
 	if err != nil {
 		return "", err
 	}
-	// Renew the expiry for the same duration the invite was originally granted,
-	// measured from now - preserving the admin's chosen lifetime without storing
-	// the TTL separately.
-	var newExpires any
-	if expires.Valid && expires.String != "" {
-		if c, e1 := time.Parse(time.RFC3339, createdAt); e1 == nil {
-			if x, e2 := time.Parse(time.RFC3339, expires.String); e2 == nil && x.After(c) {
-				newExpires = s.now().Add(x.Sub(c)).UTC().Format(time.RFC3339)
+	if err := s.db.WithTx(ctx, "RotateAuthCode", func(tx *sql.Tx) error {
+		var (
+			createdAt string
+			expires   sql.NullString
+		)
+		err := tx.QueryRowContext(ctx,
+			`SELECT created_at, expires_at FROM auth_codes WHERE id = ? AND kind = ?`,
+			id, CodeInvite).Scan(&createdAt, &expires)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		// Renew the expiry for the same duration the invite was originally granted,
+		// measured from now - preserving the admin's chosen lifetime without storing
+		// the TTL separately.
+		var newExpires any
+		if expires.Valid && expires.String != "" {
+			if c, e1 := time.Parse(time.RFC3339, createdAt); e1 == nil {
+				if x, e2 := time.Parse(time.RFC3339, expires.String); e2 == nil && x.After(c) {
+					newExpires = s.now().Add(x.Sub(c)).UTC().Format(time.RFC3339)
+				}
 			}
 		}
-	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE auth_codes
-		    SET code_hash = ?, uses = 0, created_at = ?, expires_at = ?, redeemed_at = NULL
-		  WHERE id = ? AND kind = ?`,
-		hash, s.ts(), newExpires, id, CodeInvite)
-	if err != nil {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE auth_codes
+			    SET code_hash = ?, uses = 0, created_at = ?, expires_at = ?, redeemed_at = NULL
+			  WHERE id = ? AND kind = ?`,
+			hash, s.ts(), newExpires, id, CodeInvite); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1 WHERE auth_code_id = ?`, id)
+		return err
+	}); err != nil {
 		return "", err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return "", ErrNotFound
 	}
 	return code, nil
 }
@@ -467,21 +483,48 @@ func (s *Service) RevokeAuthCode(ctx context.Context, id int64) error {
 	return err
 }
 
-// RedeemAuthCode validates a presented code and returns the bound user. The use
-// counter is claimed atomically (folding the under-the-cap check into the
-// increment keeps redemption correct under concurrency), and the first redemption
-// stamps redeemed_at in the same write. A disabled or deleted user is rejected
-// before any use is consumed, so a rejected attempt never burns a use or marks an
-// invite as accepted. The caller typically then issues a pairing token.
-func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error) {
+// RedeemedCode is a validated auth code resolved WITHOUT consuming a use. The
+// use is claimed when a device actually pairs (ConsumePairingToken), so opening
+// an invite link never burns a use on its own.
+type RedeemedCode struct {
+	User    *User
+	CodeID  int64
+	Kind    string // CodeInvite | CodeRecovery
+	MaxUses int    // 0 = unlimited
+	Uses    int
+	// ExpiresAt is the code's RFC3339 UTC expiry, "" = never.
+	ExpiresAt string
+}
+
+// UsesRemaining reports how many more devices can pair via this code, or nil
+// for unlimited. Advisory: concurrent exchanges may consume uses after it is
+// computed.
+func (rc *RedeemedCode) UsesRemaining() *int {
+	if rc.MaxUses == 0 {
+		return nil
+	}
+	n := rc.MaxUses - rc.Uses
+	if n < 0 {
+		n = 0
+	}
+	return &n
+}
+
+// ResolveAuthCode validates a presented code and returns it with its bound
+// user - without consuming a use. Expired, exhausted, and disabled-/deleted-user
+// codes are rejected (so the caller never renders a QR that could not exchange),
+// but nothing is written: no use is burned and redeemed_at is not stamped. The
+// caller typically then mints a linked pairing token via IssuePairingToken.
+func (s *Service) ResolveAuthCode(ctx context.Context, code string) (*RedeemedCode, error) {
 	hash := hashSecret(normalizeCode(code))
 	var (
-		id, userID int64
-		expires    sql.NullString
+		rc      RedeemedCode
+		userID  int64
+		expires sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, expires_at FROM auth_codes WHERE code_hash = ?`, hash).
-		Scan(&id, &userID, &expires)
+		`SELECT id, user_id, kind, max_uses, uses, expires_at FROM auth_codes WHERE code_hash = ?`, hash).
+		Scan(&rc.CodeID, &userID, &rc.Kind, &rc.MaxUses, &rc.Uses, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrInvalidCode
 	}
@@ -492,9 +535,11 @@ func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error
 		if t, perr := time.Parse(time.RFC3339, expires.String); perr == nil && s.now().After(t) {
 			return nil, ErrInvalidCode
 		}
+		rc.ExpiresAt = expires.String
 	}
-	// Resolve the bound user first: a disabled or deleted account must not be able
-	// to consume a use or flip the invite to "accepted".
+	if rc.MaxUses > 0 && rc.Uses >= rc.MaxUses {
+		return nil, ErrInvalidCode
+	}
 	u, err := s.GetUser(ctx, userID)
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrInvalidCode
@@ -505,21 +550,115 @@ func (s *Service) RedeemAuthCode(ctx context.Context, code string) (*User, error
 	if u.Disabled {
 		return nil, ErrInvalidCode
 	}
-	// Atomically claim a use and stamp the first redemption. A separate
-	// SELECT-then-UPDATE could let two requests both pass the cap check and push
-	// uses past max_uses. max_uses = 0 means unlimited; RowsAffected == 0 means
-	// already exhausted. COALESCE leaves an earlier redeemed_at intact (recovery
-	// codes redeem repeatedly).
+	rc.User = u
+	return &rc, nil
+}
+
+// IssuePairingToken mints a pairing token linked to rc's code, making the QR
+// built from it as redeemable as the code itself: exchange claims a use on the
+// code, and the token dies with the code (cascade on delete/supersede, revoke
+// on rotate). Invite-kind tokens carry no expiry of their own - the parent
+// invite's expiry and use cap govern them at exchange, which is what lets
+// ConsumePairingToken report "invite has expired" rather than a generic token
+// error. Recovery-kind tokens get recoveryTTL instead, so a never-expiring
+// recovery code doesn't mint an eternal token.
+func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode, recoveryTTL time.Duration) (string, error) {
+	secret, hash, err := generateToken()
+	if err != nil {
+		return "", err
+	}
+	var expires any
+	if rc.Kind == CodeRecovery {
+		expires = s.expiresAt(recoveryTTL)
+	}
+	if err := s.insertToken(ctx, rc.User.ID, hash, KindPairing, "", expires, rc.CodeID); err != nil {
+		return "", err
+	}
+	return secret, nil
+}
+
+// ConsumePairingToken validates a pairing token and consumes it, returning the
+// bound user. An UNLINKED token (minted by /auth/pair, the demo flow, or
+// pre-migration) is atomically revoked - strictly single-use, and the
+// revoke-if-not-revoked write means two racing exchanges cannot both win. A
+// LINKED token instead atomically claims one use on its parent code - folding
+// the cap check, the code-expiry check, and the first-claim redeemed_at stamp
+// into one UPDATE - and is NOT revoked: the code's cap and expiry govern how
+// many more devices may pair with it. A disabled user is rejected before any
+// use is consumed.
+func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User, error) {
+	hash := hashSecret(secret)
+	var (
+		u       User
+		expires sql.NullString
+		revoked bool
+		codeID  sql.NullInt64
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT u.id, u.username, u.role, u.disabled, t.expires_at, t.revoked, t.auth_code_id
+		   FROM tokens t JOIN users u ON u.id = t.user_id
+		  WHERE t.token_hash = ? AND t.kind = ?`, hash, KindPairing).
+		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &expires, &revoked, &codeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrInvalidToken
+	}
+	if err != nil {
+		return nil, err
+	}
+	if revoked || u.Disabled {
+		return nil, ErrInvalidToken
+	}
+	if expires.Valid {
+		if t, perr := time.Parse(time.RFC3339, expires.String); perr == nil && s.now().After(t) {
+			return nil, ErrInvalidToken
+		}
+	}
+	now := s.ts()
+	if !codeID.Valid {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND revoked = 0`, now, hash)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil, ErrInvalidToken
+		}
+		return &u, nil
+	}
+	// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
+	// chronological (same convention as supersedeActiveInvites).
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE auth_codes SET uses = uses + 1, redeemed_at = COALESCE(redeemed_at, ?)
-		   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)`, s.ts(), id)
+		   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)
+		     AND (expires_at IS NULL OR expires_at > ?)`, now, codeID.Int64, now)
 	if err != nil {
 		return nil, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return nil, ErrInvalidCode
+		// Read-only classification so the transport can tell the user why: the
+		// invite being gone means the token is orphaned (treat as invalid).
+		var (
+			maxUses, uses int
+			cexp          sql.NullString
+		)
+		cerr := s.db.QueryRowContext(ctx,
+			`SELECT max_uses, uses, expires_at FROM auth_codes WHERE id = ?`, codeID.Int64).
+			Scan(&maxUses, &uses, &cexp)
+		if errors.Is(cerr, sql.ErrNoRows) {
+			return nil, ErrInvalidToken
+		}
+		if cerr != nil {
+			return nil, cerr
+		}
+		if cexp.Valid {
+			if t, perr := time.Parse(time.RFC3339, cexp.String); perr == nil && s.now().After(t) {
+				return nil, ErrCodeExpired
+			}
+		}
+		return nil, ErrCodeExhausted
 	}
-	return u, nil
+	_, _ = s.db.ExecContext(ctx, `UPDATE tokens SET last_seen = ? WHERE token_hash = ?`, now, hash)
+	return &u, nil
 }
 
 // userColumns selects the user fields plus a derived last-activity timestamp
