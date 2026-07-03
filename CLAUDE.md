@@ -128,7 +128,9 @@ is used **only** to detect moves; it is not an identity.
 
 ## Data model (SQLite, see internal/store/migrations/)
 
-`users`, `tokens` (sessions + pairing, hashed), `auth_codes`, `libraries` (no
+`users`, `tokens` (sessions + pairing, hashed; pairing tokens minted from an
+auth code carry `auth_code_id` - `0014` migration - so they live and die with
+the code), `auth_codes`, `libraries` (no
 `layout` column - shape is auto-detected), `books` (+ `content_hash` fingerprint,
 + `codec`), `book_files`, `chapters` (with `file_path`), `books_fts` (standalone
 FTS5). Durable user state is **path-keyed** and decoupled from the index (no FK to
@@ -164,18 +166,29 @@ future metadata site can attach enrichment without reshaping the schema.
   `<base>/connect#code=...` - the code rides in the URL **fragment** so it never
   reaches the server or its logs. The connect page auto-redeems a fragment code,
   showing a QR plus **Open in app** / **Open web player** buttons. `buildPairing`
-  emits two carriers for the single-use pairing token: `web_url`
+  emits two carriers for the pairing token: `web_url`
   (`<base>/web/connect?token=` - encoded in the QR; opens the app via a Universal/
   App Link when the domain is claimed, else the embedded web player) and `uri`
   (`audiosilo://connect?...` - custom scheme, launches an installed app on any
-  domain). Invite codes minted via the admin API default to 5 uses / 1-day
-  expiry (`defaultAuthCode*` in `handlers_admin.go`); explicit values override.
+  domain). **The QR is as redeemable as the invite**: a pairing token minted by
+  redeeming a code is linked to it (`tokens.auth_code_id`) and inherits the
+  invite's uses/expiry, so each device being set up can scan the same QR (the
+  redeem response's `uses_remaining`/`code_expires_at` advertise the budget);
+  recovery-derived tokens instead last `pairingTTL` (multi-scan within it), and
+  `/auth/pair` + demo tokens stay unlinked/single-use. Invite codes minted via
+  the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
+  `handlers_admin.go`); explicit values override.
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
   `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
-  expires). Both redeem through the same `RedeemAuthCode` → pairing → exchange path;
-  `RedeemAuthCode` resolves and rejects a disabled/deleted user **before** consuming a
-  use, and folds the first-redemption `redeemed_at` stamp into the atomic claim, so a
-  rejected attempt never burns a use or marks an invite accepted. Recovery decouples
+  expires). Both pair through the same `ResolveAuthCode` → `IssuePairingToken` →
+  `ConsumePairingToken` path. **Redeem validates without consuming** (opening an
+  invite link costs nothing); **exchange claims the use** - `ConsumePairingToken`
+  folds the cap check, the code-expiry check and the first-claim `redeemed_at`
+  stamp into one atomic UPDATE, and rejects a disabled/deleted user first, so a
+  rejected attempt never burns a use or marks an invite accepted (`uses` counts
+  devices that actually paired). Linked pairing tokens die with their code: delete/
+  supersede/recovery-regeneration cascade (`ON DELETE CASCADE`), rotate revokes
+  them explicitly. Recovery decouples
   re-auth from invitation: a signed-out/password-less user mints a recovery code from
   the player's Settings (`POST /auth/recovery`) and re-pairs without an admin. Recovery
   mint/redeem and `POST /auth/password` are gated by `accountLimiter` and **refused for
@@ -189,8 +202,10 @@ future metadata site can attach enrichment without reshaping the schema.
   invite each; spent/expired ones stay as history. `POST /admin/authcodes/{id}/rotate`
   (`RotateAuthCode`) regenerates an invite's secret in place (the admin "Resend"),
   **preserving** its `max_uses` and renewing its expiry for the original window (never
-  silently downgrading to defaults); `redeemed_at` records acceptance but the console
-  buckets invites by whether they are still redeemable, not by `redeemed_at`. **Self-
+  silently downgrading to defaults) and **revoking the invite's outstanding pairing
+  tokens** (a QR already on screen dies with the old secret); `redeemed_at` records
+  acceptance (first successful exchange) but the console buckets invites by whether
+  they are still redeemable, not by `redeemed_at`. **Self-
   service password**: `POST /auth/password` reuses `SetPassword`; setting a first
   password needs no challenge, but changing an existing one requires `current_password`
   (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
