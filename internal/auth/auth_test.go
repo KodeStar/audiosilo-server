@@ -22,6 +22,20 @@ func newTestService(t *testing.T) (*Service, context.Context) {
 	return New(db, time.Now), ctx
 }
 
+// newTestServiceWithClock builds a service on a frozen clock; tests advance it
+// through the returned pointer to cross expiry boundaries.
+func newTestServiceWithClock(t *testing.T) (*Service, context.Context, *time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	now := time.Now()
+	return New(db, func() time.Time { return now }), ctx, &now
+}
+
 func TestPasswordHashRoundTrip(t *testing.T) {
 	hash, err := HashPassword("correct horse battery staple")
 	if err != nil {
@@ -195,17 +209,10 @@ func TestTokenLifecycle(t *testing.T) {
 }
 
 func TestExpiredTokenRejected(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	now := time.Now()
-	s := New(db, func() time.Time { return now })
+	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
 	secret, _ := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
-	now = now.Add(2 * time.Minute) // advance past expiry
+	*now = now.Add(2 * time.Minute) // advance past expiry
 	if _, err := s.ResolveToken(ctx, secret, KindPairing); err != ErrInvalidToken {
 		t.Fatalf("expected expired token rejected, got %v", err)
 	}
@@ -316,7 +323,7 @@ func pairThrough(t *testing.T, s *Service, ctx context.Context, code string) str
 	if err != nil {
 		t.Fatalf("resolve code: %v", err)
 	}
-	secret, err := s.IssuePairingToken(ctx, rc, 10*time.Minute)
+	secret, err := s.IssuePairingToken(ctx, rc)
 	if err != nil {
 		t.Fatalf("issue pairing token: %v", err)
 	}
@@ -462,21 +469,14 @@ func TestExchangeStampsRedeemedAt(t *testing.T) {
 // TestExpiredInviteRefusesExchange: an invite-derived token dies with the
 // invite's expiry - the claim rejects it with ErrCodeExpired and burns nothing.
 func TestExpiredInviteRefusesExchange(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	now := time.Now()
-	s := New(db, func() time.Time { return now })
+	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, time.Hour)
 	tok := pairThrough(t, s, ctx, code)
 	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(2 * time.Hour) // advance past the invite's expiry
+	*now = now.Add(2 * time.Hour) // advance past the invite's expiry
 	if _, err := s.ConsumePairingToken(ctx, tok); !errors.Is(err, ErrCodeExpired) {
 		t.Fatalf("expected ErrCodeExpired past invite expiry, got %v", err)
 	}
@@ -489,27 +489,13 @@ func TestExpiredInviteRefusesExchange(t *testing.T) {
 // TTL, not the code's (infinite) lifetime - otherwise pasting a recovery code
 // into the connect page would mint an eternal QR.
 func TestRecoveryPairingTokenTTL(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	now := time.Now()
-	s := New(db, func() time.Time { return now })
+	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, err := s.GenerateRecoveryCode(ctx, u.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rc, err := s.ResolveAuthCode(ctx, code)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tok, err := s.IssuePairingToken(ctx, rc, 10*time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tok := pairThrough(t, s, ctx, code)
 	// Within the window it exchanges repeatedly (max_uses = 0, nothing to claim
 	// down); past the TTL it is refused.
 	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
@@ -518,7 +504,7 @@ func TestRecoveryPairingTokenTTL(t *testing.T) {
 	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(11 * time.Minute)
+	*now = now.Add(recoveryPairingTTL + time.Minute)
 	if _, err := s.ConsumePairingToken(ctx, tok); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("expected ErrInvalidToken past TTL, got %v", err)
 	}

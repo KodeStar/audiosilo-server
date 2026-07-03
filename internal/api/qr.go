@@ -17,8 +17,8 @@ import (
 // "Open in app" action (custom schemes are not domain-bound, so they launch an
 // installed app on any self-hosted domain). The pairing token is as redeemable as
 // its origin: redeemed from an invite it inherits the invite's uses and expiry (one
-// QR can pair several devices); from a recovery code it lasts pairingTTL; from
-// /auth/pair or the demo flow it is single-use and lasts pairingTTL.
+// QR can pair several devices); from a recovery code it carries a short TTL of its
+// own; from /auth/pair or the demo flow it is single-use and lasts pairingTTL.
 type PairingPayload struct {
 	ServerName   string   `json:"server_name"`
 	BaseURL      string   `json:"base_url"`

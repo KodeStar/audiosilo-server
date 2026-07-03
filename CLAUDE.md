@@ -174,7 +174,8 @@ future metadata site can attach enrichment without reshaping the schema.
   redeeming a code is linked to it (`tokens.auth_code_id`) and inherits the
   invite's uses/expiry, so each device being set up can scan the same QR (the
   redeem response's `uses_remaining`/`code_expires_at` advertise the budget);
-  recovery-derived tokens instead last `pairingTTL` (multi-scan within it), and
+  recovery-derived tokens instead last `auth.recoveryPairingTTL` (multi-scan
+  within it), and
   `/auth/pair` + demo tokens stay unlinked/single-use. Invite codes minted via
   the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
   `handlers_admin.go`); explicit values override.

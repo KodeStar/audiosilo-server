@@ -83,6 +83,29 @@ func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Resp
 	return resp, string(b)
 }
 
+// redeemCode POSTs /auth/redeem and returns the status, the minted pairing
+// token, and the advertised uses_remaining (nil = absent/unlimited) - the wire
+// plumbing shared by every redeem/exchange test.
+func (e *testEnv) redeemCode(t *testing.T, code string) (int, string, *int) {
+	t.Helper()
+	resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
+	var out struct {
+		PairingToken  string `json:"pairing_token"`
+		UsesRemaining *int   `json:"uses_remaining"`
+	}
+	json.Unmarshal([]byte(b), &out)
+	return resp.StatusCode, out.PairingToken, out.UsesRemaining
+}
+
+// exchangeToken POSTs /auth/exchange and returns the status and body (the
+// session envelope, or the error message on refusal).
+func (e *testEnv) exchangeToken(t *testing.T, pairingToken, device string) (int, string) {
+	t.Helper()
+	resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "",
+		`{"pairing_token":"`+pairingToken+`","device_name":"`+device+`"}`)
+	return resp.StatusCode, b
+}
+
 func TestServerInfoPublic(t *testing.T) {
 	e := newTestEnv(t)
 	resp, body := e.do(t, "GET", "/api/v1/server", "", "")
@@ -113,8 +136,7 @@ func TestRedeemExchangeFlow(t *testing.T) {
 		t.Fatalf("missing pairing token or QR: %s", body)
 	}
 
-	_, body = e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+redeem.PairingToken+`","device_name":"phone"}`)
+	_, body = e.exchangeToken(t, redeem.PairingToken, "phone")
 	var ex struct {
 		Token string `json:"token"`
 	}
@@ -129,9 +151,8 @@ func TestRedeemExchangeFlow(t *testing.T) {
 	// An invite-derived pairing token is NOT single-use: it stays valid for as
 	// long as the invite has uses left (the bootstrap code is unlimited), so
 	// another device can scan the same QR.
-	if resp, body := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+redeem.PairingToken+`","device_name":"tablet"}`); resp.StatusCode != 200 {
-		t.Fatalf("second device on the same QR: %d %s", resp.StatusCode, body)
+	if status, body := e.exchangeToken(t, redeem.PairingToken, "tablet"); status != 200 {
+		t.Fatalf("second device on the same QR: %d %s", status, body)
 	}
 }
 
@@ -161,13 +182,11 @@ func TestPairTokenSingleUse(t *testing.T) {
 	if pair.UsesRemaining != nil || pair.CodeExpiresAt != "" {
 		t.Fatalf("pair payload should carry no invite budget: %s", body)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+pair.PairingToken+`","device_name":"d1"}`); resp.StatusCode != 200 {
-		t.Fatalf("first exchange: %d", resp.StatusCode)
+	if status, _ := e.exchangeToken(t, pair.PairingToken, "d1"); status != 200 {
+		t.Fatalf("first exchange: %d", status)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+pair.PairingToken+`","device_name":"d2"}`); resp.StatusCode != 401 {
-		t.Fatalf("expected pair token to be single-use, got %d", resp.StatusCode)
+	if status, _ := e.exchangeToken(t, pair.PairingToken, "d2"); status != 401 {
+		t.Fatalf("expected pair token to be single-use, got %d", status)
 	}
 }
 
@@ -379,29 +398,12 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 		}
 		return out.AuthCode
 	}
-	redeem := func(code string) (int, string, *int) {
-		t.Helper()
-		resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
-		var out struct {
-			PairingToken  string `json:"pairing_token"`
-			UsesRemaining *int   `json:"uses_remaining"`
-		}
-		json.Unmarshal([]byte(b), &out)
-		return resp.StatusCode, out.PairingToken, out.UsesRemaining
-	}
-	exchange := func(tok, device string) (int, string) {
-		t.Helper()
-		resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "",
-			`{"pairing_token":"`+tok+`","device_name":"`+device+`"}`)
-		return resp.StatusCode, b
-	}
-
 	// Explicit 0 = unlimited uses / no expiry must pass through (not clobbered to
 	// the bounded default), so the same code redeems repeatedly and reports no
 	// use budget.
 	unlimited := mintCode(`{"max_uses":0,"ttl_days":0}`)
 	for i := 0; i < 3; i++ {
-		got, _, remaining := redeem(unlimited)
+		got, _, remaining := e.redeemCode(t, unlimited)
 		if got != http.StatusOK {
 			t.Fatalf("unlimited code redeem #%d = %d, want 200", i+1, got)
 		}
@@ -414,7 +416,7 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 	// at exchange, not redeem: ONE redeem's QR token pairs 5 devices, the 6th
 	// exchange is refused as spent, and then the invite itself no longer redeems.
 	bounded := mintCode(`{}`)
-	status, tok, remaining := redeem(bounded)
+	status, tok, remaining := e.redeemCode(t, bounded)
 	if status != http.StatusOK {
 		t.Fatalf("bounded code redeem = %d, want 200", status)
 	}
@@ -422,15 +424,15 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 		t.Fatalf("uses_remaining = %v, want %d", remaining, defaultAuthCodeMaxUses)
 	}
 	for i := 0; i < defaultAuthCodeMaxUses; i++ {
-		if got, b := exchange(tok, "device"+strconv.Itoa(i)); got != http.StatusOK {
+		if got, b := e.exchangeToken(t, tok, "device"+strconv.Itoa(i)); got != http.StatusOK {
 			t.Fatalf("exchange #%d = %d %s, want 200", i+1, got, b)
 		}
 	}
-	got, b := exchange(tok, "one-too-many")
+	got, b := e.exchangeToken(t, tok, "one-too-many")
 	if got != http.StatusUnauthorized || !strings.Contains(b, "invite already used") {
 		t.Fatalf("exchange past the use limit = %d %s, want 401 + exhausted message", got, b)
 	}
-	if got, _, _ := redeem(bounded); got != http.StatusUnauthorized {
+	if got, _, _ := e.redeemCode(t, bounded); got != http.StatusUnauthorized {
 		t.Fatalf("redeem of a spent invite = %d, want 401", got)
 	}
 }
@@ -449,21 +451,16 @@ func TestMultipleRedeemsShareCap(t *testing.T) {
 
 	redeemToken := func() string {
 		t.Helper()
-		resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("redeem: %d %s", resp.StatusCode, b)
+		status, tok, _ := e.redeemCode(t, code)
+		if status != http.StatusOK {
+			t.Fatalf("redeem: %d", status)
 		}
-		var out struct {
-			PairingToken string `json:"pairing_token"`
-		}
-		json.Unmarshal([]byte(b), &out)
-		return out.PairingToken
+		return tok
 	}
 	exchange := func(tok string) int {
 		t.Helper()
-		resp, _ := e.do(t, "POST", "/api/v1/auth/exchange", "",
-			`{"pairing_token":"`+tok+`","device_name":"d"}`)
-		return resp.StatusCode
+		status, _ := e.exchangeToken(t, tok, "d")
+		return status
 	}
 
 	a, b := redeemToken(), redeemToken()
@@ -496,21 +493,16 @@ func TestExchangeDisabledUserRefusedNoBurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, body := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("redeem: %d %s", resp.StatusCode, body)
+	status, ptok, _ := e.redeemCode(t, code)
+	if status != http.StatusOK {
+		t.Fatalf("redeem: %d", status)
 	}
-	var redeem struct {
-		PairingToken string `json:"pairing_token"`
-	}
-	json.Unmarshal([]byte(body), &redeem)
 
 	if err := e.auth.SetDisabled(ctx, member.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+redeem.PairingToken+`","device_name":"d"}`); resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("disabled exchange = %d, want 401", resp.StatusCode)
+	if status, _ := e.exchangeToken(t, ptok, "d"); status != http.StatusUnauthorized {
+		t.Fatalf("disabled exchange = %d, want 401", status)
 	}
 	codes, _ := e.auth.ListAuthCodes(ctx, member.ID)
 	if len(codes) != 1 || codes[0].Uses != 0 {
@@ -519,9 +511,8 @@ func TestExchangeDisabledUserRefusedNoBurn(t *testing.T) {
 	if err := e.auth.SetDisabled(ctx, member.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+redeem.PairingToken+`","device_name":"d"}`); resp.StatusCode != http.StatusOK {
-		t.Fatalf("exchange after re-enable = %d, want 200", resp.StatusCode)
+	if status, _ := e.exchangeToken(t, ptok, "d"); status != http.StatusOK {
+		t.Fatalf("exchange after re-enable = %d, want 200", status)
 	}
 	if codes, _ := e.auth.ListAuthCodes(ctx, member.ID); codes[0].Uses != 1 {
 		t.Fatalf("successful exchange should claim the use: %+v", codes)
@@ -919,7 +910,7 @@ func TestSelfServiceRecovery(t *testing.T) {
 	}
 	// Durable & reusable: redeems through the public connect flow more than once.
 	for i := 0; i < 2; i++ {
-		if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+out.RecoveryCode+`"}`); resp.StatusCode != http.StatusOK {
+		if status, _, _ := e.redeemCode(t, out.RecoveryCode); status != http.StatusOK {
 			t.Fatalf("recovery redeem #%d failed", i+1)
 		}
 	}
@@ -963,18 +954,14 @@ func TestRotateAndSupersedeInvite(t *testing.T) {
 
 	// Redeem the active invite first: the QR token minted from it must die when
 	// the invite is rotated (Resend disconnects QRs already on screen).
-	resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+second+`"}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("redeem before rotate: %d %s", resp.StatusCode, b)
+	status, preRotateTok, _ := e.redeemCode(t, second)
+	if status != http.StatusOK {
+		t.Fatalf("redeem before rotate: %d", status)
 	}
-	var preRotate struct {
-		PairingToken string `json:"pairing_token"`
-	}
-	json.Unmarshal([]byte(b), &preRotate)
 
 	// Rotate (Resend): old code dies, new one redeems.
 	id := strconv.FormatInt(codes[0].ID, 10)
-	resp, b = e.do(t, "POST", "/api/v1/admin/authcodes/"+id+"/rotate", adminTok, `{}`)
+	resp, b := e.do(t, "POST", "/api/v1/admin/authcodes/"+id+"/rotate", adminTok, `{}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("rotate: %d %s", resp.StatusCode, b)
 	}
@@ -982,14 +969,13 @@ func TestRotateAndSupersedeInvite(t *testing.T) {
 		AuthCode string `json:"auth_code"`
 	}
 	json.Unmarshal([]byte(b), &rotated)
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+second+`"}`); resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("superseded/rotated old code = %d, want 401", resp.StatusCode)
+	if status, _, _ := e.redeemCode(t, second); status != http.StatusUnauthorized {
+		t.Fatalf("superseded/rotated old code = %d, want 401", status)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+preRotate.PairingToken+`","device_name":"d"}`); resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("pre-rotate QR token = %d, want 401 after Resend", resp.StatusCode)
+	if status, _ := e.exchangeToken(t, preRotateTok, "d"); status != http.StatusUnauthorized {
+		t.Fatalf("pre-rotate QR token = %d, want 401 after Resend", status)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+rotated.AuthCode+`"}`); resp.StatusCode != http.StatusOK {
+	if status, _, _ := e.redeemCode(t, rotated.AuthCode); status != http.StatusOK {
 		t.Fatalf("rotated new code should redeem (200)")
 	}
 
