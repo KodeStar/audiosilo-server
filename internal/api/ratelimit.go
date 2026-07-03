@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"sync"
 	"time"
 )
@@ -21,6 +22,16 @@ type lockEntry struct {
 	failures int
 	until    time.Time
 	last     time.Time
+}
+
+// allowAttempt writes the shared 429 and reports false when a limiter refused
+// the caller (the result of Allowed or Acquire), so every credential handler
+// gates with one line.
+func allowAttempt(w http.ResponseWriter, allowed bool) bool {
+	if !allowed {
+		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	}
+	return allowed
 }
 
 func newLimiter(maxFailures int, window time.Duration) *limiter {

@@ -83,6 +83,29 @@ func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Resp
 	return resp, string(b)
 }
 
+// redeemCode POSTs /auth/redeem and returns the status, the minted pairing
+// token, and the advertised uses_remaining (nil = absent/unlimited) - the wire
+// plumbing shared by every redeem/exchange test.
+func (e *testEnv) redeemCode(t *testing.T, code string) (int, string, *int) {
+	t.Helper()
+	resp, b := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
+	var out struct {
+		PairingToken  string `json:"pairing_token"`
+		UsesRemaining *int   `json:"uses_remaining"`
+	}
+	json.Unmarshal([]byte(b), &out)
+	return resp.StatusCode, out.PairingToken, out.UsesRemaining
+}
+
+// exchangeToken POSTs /auth/exchange and returns the status and body (the
+// session envelope, or the error message on refusal).
+func (e *testEnv) exchangeToken(t *testing.T, pairingToken, device string) (int, string) {
+	t.Helper()
+	resp, b := e.do(t, "POST", "/api/v1/auth/exchange", "",
+		`{"pairing_token":"`+pairingToken+`","device_name":"`+device+`"}`)
+	return resp.StatusCode, b
+}
+
 func TestServerInfoPublic(t *testing.T) {
 	e := newTestEnv(t)
 	resp, body := e.do(t, "GET", "/api/v1/server", "", "")
@@ -113,8 +136,7 @@ func TestRedeemExchangeFlow(t *testing.T) {
 		t.Fatalf("missing pairing token or QR: %s", body)
 	}
 
-	_, body = e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+redeem.PairingToken+`","device_name":"phone"}`)
+	_, body = e.exchangeToken(t, redeem.PairingToken, "phone")
 	var ex struct {
 		Token string `json:"token"`
 	}
@@ -126,10 +148,45 @@ func TestRedeemExchangeFlow(t *testing.T) {
 	if resp, _ := e.do(t, "GET", "/api/v1/me", ex.Token, ""); resp.StatusCode != 200 {
 		t.Fatalf("me: %d", resp.StatusCode)
 	}
-	// The pairing token is single-use (revoked on exchange).
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/exchange", "",
-		`{"pairing_token":"`+redeem.PairingToken+`"}`); resp.StatusCode != 401 {
-		t.Fatalf("expected pairing token to be single-use, got %d", resp.StatusCode)
+	// An invite-derived pairing token is NOT single-use: it stays valid for as
+	// long as the invite has uses left (the bootstrap code is unlimited), so
+	// another device can scan the same QR.
+	if status, body := e.exchangeToken(t, redeem.PairingToken, "tablet"); status != 200 {
+		t.Fatalf("second device on the same QR: %d %s", status, body)
+	}
+}
+
+// TestPairTokenSingleUse: tokens from POST /auth/pair (add-a-device from an
+// existing session) have no parent invite and stay strictly single-use
+// (allowed + denied).
+func TestPairTokenSingleUse(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	memberTok, _ := e.auth.IssueToken(ctx, member.ID, auth.KindSession, "t", 0)
+
+	resp, body := e.do(t, "POST", "/api/v1/auth/pair", memberTok, "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("pair: %d %s", resp.StatusCode, body)
+	}
+	var pair struct {
+		PairingToken  string `json:"pairing_token"`
+		UsesRemaining *int   `json:"uses_remaining"`
+		CodeExpiresAt string `json:"code_expires_at"`
+	}
+	json.Unmarshal([]byte(body), &pair)
+	if pair.PairingToken == "" {
+		t.Fatalf("no pairing token: %s", body)
+	}
+	// The invite-budget fields describe a parent invite; /auth/pair has none.
+	if pair.UsesRemaining != nil || pair.CodeExpiresAt != "" {
+		t.Fatalf("pair payload should carry no invite budget: %s", body)
+	}
+	if status, _ := e.exchangeToken(t, pair.PairingToken, "d1"); status != 200 {
+		t.Fatalf("first exchange: %d", status)
+	}
+	if status, _ := e.exchangeToken(t, pair.PairingToken, "d2"); status != 401 {
+		t.Fatalf("expected pair token to be single-use, got %d", status)
 	}
 }
 
@@ -341,31 +398,124 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 		}
 		return out.AuthCode
 	}
-	redeem := func(code string) int {
-		t.Helper()
-		resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+code+`"}`)
-		return resp.StatusCode
-	}
-
 	// Explicit 0 = unlimited uses / no expiry must pass through (not clobbered to
-	// the bounded default), so the same code redeems repeatedly.
+	// the bounded default), so the same code redeems repeatedly and reports no
+	// use budget.
 	unlimited := mintCode(`{"max_uses":0,"ttl_days":0}`)
 	for i := 0; i < 3; i++ {
-		if got := redeem(unlimited); got != http.StatusOK {
+		got, _, remaining := e.redeemCode(t, unlimited)
+		if got != http.StatusOK {
 			t.Fatalf("unlimited code redeem #%d = %d, want 200", i+1, got)
+		}
+		if remaining != nil {
+			t.Fatalf("unlimited code should report no uses_remaining, got %d", *remaining)
 		}
 	}
 
-	// Omitting the fields applies the bounded default (5 uses): the 6th redeem
-	// fails because the code is used up.
+	// Omitting the fields applies the bounded default (5 uses). Uses are claimed
+	// at exchange, not redeem: ONE redeem's QR token pairs 5 devices, the 6th
+	// exchange is refused as spent, and then the invite itself no longer redeems.
 	bounded := mintCode(`{}`)
+	status, tok, remaining := e.redeemCode(t, bounded)
+	if status != http.StatusOK {
+		t.Fatalf("bounded code redeem = %d, want 200", status)
+	}
+	if remaining == nil || *remaining != defaultAuthCodeMaxUses {
+		t.Fatalf("uses_remaining = %v, want %d", remaining, defaultAuthCodeMaxUses)
+	}
 	for i := 0; i < defaultAuthCodeMaxUses; i++ {
-		if got := redeem(bounded); got != http.StatusOK {
-			t.Fatalf("bounded code redeem #%d = %d, want 200", i+1, got)
+		if got, b := e.exchangeToken(t, tok, "device"+strconv.Itoa(i)); got != http.StatusOK {
+			t.Fatalf("exchange #%d = %d %s, want 200", i+1, got, b)
 		}
 	}
-	if got := redeem(bounded); got != http.StatusUnauthorized {
-		t.Fatalf("redeem past the use limit = %d, want 401", got)
+	got, b := e.exchangeToken(t, tok, "one-too-many")
+	if got != http.StatusUnauthorized || !strings.Contains(b, "invite already used") {
+		t.Fatalf("exchange past the use limit = %d %s, want 401 + exhausted message", got, b)
+	}
+	if got, _, _ := e.redeemCode(t, bounded); got != http.StatusUnauthorized {
+		t.Fatalf("redeem of a spent invite = %d, want 401", got)
+	}
+}
+
+// TestMultipleRedeemsShareCap: opening the invite link more than once mints
+// distinct pairing tokens that all draw on the SAME invite budget - the cap
+// binds across tokens, not per token.
+func TestMultipleRedeemsShareCap(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	code, err := e.auth.CreateAuthCode(ctx, member.ID, "invite", 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	redeemToken := func() string {
+		t.Helper()
+		status, tok, _ := e.redeemCode(t, code)
+		if status != http.StatusOK {
+			t.Fatalf("redeem: %d", status)
+		}
+		return tok
+	}
+	exchange := func(tok string) int {
+		t.Helper()
+		status, _ := e.exchangeToken(t, tok, "d")
+		return status
+	}
+
+	a, b := redeemToken(), redeemToken()
+	if a == b {
+		t.Fatal("each redeem should mint a distinct pairing token")
+	}
+	if got := exchange(a); got != http.StatusOK {
+		t.Fatalf("exchange A = %d, want 200", got)
+	}
+	if got := exchange(b); got != http.StatusOK {
+		t.Fatalf("exchange B = %d, want 200", got)
+	}
+	// Two uses spent: both tokens are dead now, whichever is presented.
+	if got := exchange(a); got != http.StatusUnauthorized {
+		t.Fatalf("exchange A past cap = %d, want 401", got)
+	}
+	if got := exchange(b); got != http.StatusUnauthorized {
+		t.Fatalf("exchange B past cap = %d, want 401", got)
+	}
+}
+
+// TestExchangeDisabledUserRefusedNoBurn: disabling an account kills its
+// outstanding pairing QR at the exchange step without burning an invite use;
+// re-enabling restores it (allowed + denied).
+func TestExchangeDisabledUserRefusedNoBurn(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
+	code, err := e.auth.CreateAuthCode(ctx, member.ID, "invite", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, ptok, _ := e.redeemCode(t, code)
+	if status != http.StatusOK {
+		t.Fatalf("redeem: %d", status)
+	}
+
+	if err := e.auth.SetDisabled(ctx, member.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := e.exchangeToken(t, ptok, "d"); status != http.StatusUnauthorized {
+		t.Fatalf("disabled exchange = %d, want 401", status)
+	}
+	codes, _ := e.auth.ListAuthCodes(ctx, member.ID)
+	if len(codes) != 1 || codes[0].Uses != 0 {
+		t.Fatalf("refused exchange must not burn a use: %+v", codes)
+	}
+	if err := e.auth.SetDisabled(ctx, member.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := e.exchangeToken(t, ptok, "d"); status != http.StatusOK {
+		t.Fatalf("exchange after re-enable = %d, want 200", status)
+	}
+	if codes, _ := e.auth.ListAuthCodes(ctx, member.ID); codes[0].Uses != 1 {
+		t.Fatalf("successful exchange should claim the use: %+v", codes)
 	}
 }
 
@@ -760,7 +910,7 @@ func TestSelfServiceRecovery(t *testing.T) {
 	}
 	// Durable & reusable: redeems through the public connect flow more than once.
 	for i := 0; i < 2; i++ {
-		if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+out.RecoveryCode+`"}`); resp.StatusCode != http.StatusOK {
+		if status, _, _ := e.redeemCode(t, out.RecoveryCode); status != http.StatusOK {
 			t.Fatalf("recovery redeem #%d failed", i+1)
 		}
 	}
@@ -802,6 +952,13 @@ func TestRotateAndSupersedeInvite(t *testing.T) {
 		t.Fatalf("expected one pending invite after a second mint, got %d", len(codes))
 	}
 
+	// Redeem the active invite first: the QR token minted from it must die when
+	// the invite is rotated (Resend disconnects QRs already on screen).
+	status, preRotateTok, _ := e.redeemCode(t, second)
+	if status != http.StatusOK {
+		t.Fatalf("redeem before rotate: %d", status)
+	}
+
 	// Rotate (Resend): old code dies, new one redeems.
 	id := strconv.FormatInt(codes[0].ID, 10)
 	resp, b := e.do(t, "POST", "/api/v1/admin/authcodes/"+id+"/rotate", adminTok, `{}`)
@@ -812,10 +969,13 @@ func TestRotateAndSupersedeInvite(t *testing.T) {
 		AuthCode string `json:"auth_code"`
 	}
 	json.Unmarshal([]byte(b), &rotated)
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+second+`"}`); resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("superseded/rotated old code = %d, want 401", resp.StatusCode)
+	if status, _, _ := e.redeemCode(t, second); status != http.StatusUnauthorized {
+		t.Fatalf("superseded/rotated old code = %d, want 401", status)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+rotated.AuthCode+`"}`); resp.StatusCode != http.StatusOK {
+	if status, _ := e.exchangeToken(t, preRotateTok, "d"); status != http.StatusUnauthorized {
+		t.Fatalf("pre-rotate QR token = %d, want 401 after Resend", status)
+	}
+	if status, _, _ := e.redeemCode(t, rotated.AuthCode); status != http.StatusOK {
 		t.Fatalf("rotated new code should redeem (200)")
 	}
 

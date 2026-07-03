@@ -26,8 +26,16 @@ async function redeem(code) {
       return;
     }
     // The QR encodes data.web_url: scanning opens the app (when it claims this
-    // domain) or the embedded web player, which exchanges the single-use token.
+    // domain) or the embedded web player, which exchanges the pairing token. A
+    // token redeemed from an invite honors the invite's uses/expiry, so each
+    // device being set up can scan the same QR; uses_remaining reports that
+    // budget (absent = unlimited or not invite-derived).
     document.getElementById("qr").src = data.qr_png_data_uri;
+    if (data.uses_remaining != null) {
+      const note = document.getElementById("uses-note");
+      note.textContent = asI18n.t("connect.usesRemaining", { n: data.uses_remaining });
+      note.classList.remove("hidden");
+    }
     if (data.uri) setLink("link-app", data.uri, asI18n.t("connect.openApp"));
     if (data.web_url) setLink("link-web", data.web_url, asI18n.t("connect.openWeb"));
     form.classList.add("hidden");

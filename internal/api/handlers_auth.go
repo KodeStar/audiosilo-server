@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -9,8 +10,11 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
-// pairingTTL bounds how long a pairing token is valid before it must be
-// re-issued by redeeming the auth code again.
+// pairingTTL bounds how long an UNLINKED pairing token is valid (/auth/pair,
+// demo sessions). Tokens minted by redeeming a code get their lifetime from
+// internal/auth instead: invite-derived ones inherit the invite's own expiry -
+// so the QR built from one stays scannable for as long as the invite is
+// redeemable - and recovery-derived ones carry a short TTL of their own.
 const pairingTTL = 10 * time.Minute
 
 // handleServerInfo reports server identity and capabilities. Public so a client
@@ -56,12 +60,13 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleRedeem exchanges an auth code for a short-lived pairing token plus a QR
-// payload. This backs the "enter your auth code" connect screen.
+// handleRedeem validates an auth code and returns a pairing token plus a QR
+// payload, WITHOUT consuming a use - the use is claimed when a device actually
+// exchanges (handleExchange), so opening an invite link costs nothing. This
+// backs the "enter your auth code" connect screen.
 func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !a.redeemLimiter.Allowed(ip) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.redeemLimiter.Allowed(ip)) {
 		return
 	}
 	var req struct {
@@ -71,7 +76,7 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "code is required")
 		return
 	}
-	u, err := a.auth.RedeemAuthCode(r.Context(), req.Code)
+	rc, err := a.auth.ResolveAuthCode(r.Context(), req.Code)
 	if err != nil {
 		a.redeemLimiter.Fail(ip)
 		writeError(w, http.StatusUnauthorized, "invalid or expired auth code")
@@ -79,7 +84,7 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	}
 	a.redeemLimiter.Reset(ip)
 
-	token, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindPairing, "", pairingTTL)
+	token, err := a.auth.IssuePairingToken(r.Context(), rc)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue pairing token")
 		return
@@ -89,13 +94,23 @@ func (a *API) handleRedeem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not build pairing payload")
 		return
 	}
+	payload.CodeExpiresAt = rc.ExpiresAt
+	payload.UsesRemaining = rc.UsesRemaining()
 	writeJSON(w, http.StatusOK, payload)
 }
 
 // handleExchange turns a pairing token (scanned from a QR) into a durable,
-// device-named session token. The pairing token is single-use: it is revoked on
-// success.
+// device-named session token. This is where an invite use is claimed: a token
+// linked to an auth code stays valid afterwards - governed by the code's
+// remaining uses and expiry - so one QR can pair several devices; an unlinked
+// token (/auth/pair, demo) is single-use and revoked here. Exchange shares the
+// redeem limiter since it is now the claim point (a session-issuance failure
+// after a successful claim burns a use, same failure shape redeem had).
 func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if !allowAttempt(w, a.redeemLimiter.Allowed(ip)) {
+		return
+	}
 	var req struct {
 		PairingToken string `json:"pairing_token"`
 		DeviceName   string `json:"device_name"`
@@ -104,17 +119,25 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "pairing_token is required")
 		return
 	}
-	u, err := a.auth.ResolveToken(r.Context(), req.PairingToken, auth.KindPairing)
+	u, err := a.auth.ConsumePairingToken(r.Context(), req.PairingToken)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid or expired pairing token")
+		a.redeemLimiter.Fail(ip)
+		switch {
+		case errors.Is(err, auth.ErrCodeExhausted):
+			writeError(w, http.StatusUnauthorized, "invite already used on all its devices - ask for a new invite")
+		case errors.Is(err, auth.ErrCodeExpired):
+			writeError(w, http.StatusUnauthorized, "invite has expired - ask for a new invite")
+		default:
+			writeError(w, http.StatusUnauthorized, "invalid or expired pairing token")
+		}
 		return
 	}
+	a.redeemLimiter.Reset(ip)
 	session, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindSession, req.DeviceName, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
 	}
-	_ = a.auth.RevokeToken(r.Context(), req.PairingToken)
 	full, err := a.auth.GetUser(r.Context(), u.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load account")
@@ -129,8 +152,7 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 // handleLogin authenticates username/password and issues a session token.
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !a.loginLimiter.Allowed(ip) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.loginLimiter.Allowed(ip)) {
 		return
 	}
 	var req struct {
@@ -163,7 +185,9 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePair issues a fresh pairing QR for the already-authenticated user, e.g.
-// to add another device from an existing session.
+// to add another device from an existing session. The token is deliberately
+// UNLINKED (no parent auth code): single-use and 10-minute, since the user is
+// present and can mint another with a tap.
 func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	token, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindPairing, "", pairingTTL)
@@ -208,8 +232,7 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // Clearing a password is admin-only (PATCH /admin/users); self-service rejects an
 // empty password so a user can't lock themselves out. Refused for demo accounts.
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
-	if !a.accountLimiter.Acquire(clientIP(r)) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
 		return
 	}
 	u := userFrom(r.Context())
@@ -254,8 +277,7 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 // Rate-limited and refused for demo accounts so a throwaway session can't mint a
 // durable login.
 func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
-	if !a.accountLimiter.Acquire(clientIP(r)) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
 		return
 	}
 	u := userFrom(r.Context())
