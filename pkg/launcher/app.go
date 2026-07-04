@@ -101,6 +101,11 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("invalid configuration after applying overrides: %w", err)
 	}
 
+	// Mint a stable per-install identity the first time (also self-heals an existing
+	// install that predates server_id). Persisted to config.yaml below so it survives
+	// a database rebuild; clients key their per-server state on it.
+	mintedServerID := ensureServerID(cfg)
+
 	db, err := store.Open(ctx, filepath.Join(abs, "audiosilo.db"), store.WithLogger(log))
 	if err != nil {
 		return err
@@ -113,8 +118,9 @@ func Run(ctx context.Context, opts Options) error {
 	ffmpeg, ffprobe := resolveTools(ctx, abs, opts, log)
 	scanner := library.NewScanner(cat, ffprobe, log)
 
-	// Persist a default config the first time (when none existed yet).
-	if firstRun {
+	// Persist a default config the first time (when none existed yet), or when we
+	// just minted a server_id for an install that predates it.
+	if firstRun || mintedServerID {
 		if err := cfg.Save(); err != nil {
 			return err
 		}
@@ -409,6 +415,20 @@ func demoReaper(ctx context.Context, authSvc *auth.Service, idleTTL time.Duratio
 			reap()
 		}
 	}
+}
+
+// ensureServerID mints a stable per-install identity into cfg the first time (and
+// self-heals an install that predates server_id), returning whether it minted one so
+// the caller persists config.yaml. The id lives in config (not the rebuildable
+// database) so it survives a rescan/rebuild; clients key their per-server state on it,
+// so it must never change. URL-safe so it can be both a route segment and a directory
+// name on the client.
+func ensureServerID(cfg *config.Config) bool {
+	if cfg.ServerID != "" {
+		return false
+	}
+	cfg.ServerID = randomSecret(16)
+	return true
 }
 
 // randomSecret returns a URL-safe random string carrying nBytes of entropy (the

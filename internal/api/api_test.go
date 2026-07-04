@@ -114,6 +114,24 @@ func TestServerInfoPublic(t *testing.T) {
 	}
 }
 
+// TestServerIDInResponses covers that the stable per-install identity is advertised
+// on /server AND handed back at pairing (exchange), so a client can key its
+// per-server state the moment it pairs without a second request.
+func TestServerIDInResponses(t *testing.T) {
+	e := newTestEnvWith(t, func(c *config.Config) { c.ServerID = "srv-test-id" })
+
+	_, body := e.do(t, "GET", "/api/v1/server", "", "")
+	if !strings.Contains(body, `"server_id":"srv-test-id"`) {
+		t.Fatalf("/server missing server_id: %s", body)
+	}
+
+	_, ptok, _ := e.redeemCode(t, e.authCode)
+	status, exBody := e.exchangeToken(t, ptok, "device")
+	if status != 200 || !strings.Contains(exBody, `"server_id":"srv-test-id"`) {
+		t.Fatalf("exchange missing server_id: %d %s", status, exBody)
+	}
+}
+
 func TestUnauthenticatedRejected(t *testing.T) {
 	e := newTestEnv(t)
 	if resp, _ := e.do(t, "GET", "/api/v1/libraries", "", ""); resp.StatusCode != 401 {

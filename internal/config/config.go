@@ -108,6 +108,12 @@ type Config struct {
 	// serialized; it is supplied on the command line / environment.
 	DataDir string `yaml:"-"`
 
+	// ServerID is a stable, per-install identity minted once (see launcher
+	// bootstrap) and persisted here in config.yaml so it survives a database
+	// rebuild. Clients key their per-server state (downloads, progress, cache)
+	// on it, so it must never change for the life of the install.
+	ServerID string `yaml:"server_id"`
+
 	Bind           string        `yaml:"bind"`       // host:port to listen on
 	PublicURL      string        `yaml:"public_url"` // externally reachable base URL, used in QR payloads
 	TLS            TLSConfig     `yaml:"tls"`
