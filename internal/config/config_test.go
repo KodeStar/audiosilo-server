@@ -40,6 +40,7 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 
 	cfg.Bind = "127.0.0.1:9999"
 	cfg.Libraries = []Library{{Name: "Books", Root: "/srv/books"}}
+	cfg.ServerID = "srv-abc123" // the launcher mints this; it must persist verbatim
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -53,6 +54,9 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 	}
 	if got.Bind != "127.0.0.1:9999" || len(got.Libraries) != 1 || got.Libraries[0].Name != "Books" {
 		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	if got.ServerID != "srv-abc123" {
+		t.Fatalf("server id must survive Save/Load, got %q", got.ServerID)
 	}
 
 	// Secrets-adjacent config is written owner-only.

@@ -93,9 +93,10 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"token":   session,
-		"user":    u,
-		"pairing": payload,
+		"token":     session,
+		"user":      u,
+		"pairing":   payload,
+		"server_id": a.cfg.ServerID,
 	})
 }
 

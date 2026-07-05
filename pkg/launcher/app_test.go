@@ -91,6 +91,26 @@ func TestRandomSecret(t *testing.T) {
 	}
 }
 
+// TestEnsureServerID covers minting once and self-healing: an empty ServerID is
+// filled and reported minted; an existing one is preserved and reported not-minted
+// (so the caller doesn't needlessly rewrite config, and the id never changes).
+func TestEnsureServerID(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	if !ensureServerID(cfg) || cfg.ServerID == "" {
+		t.Fatalf("first call must mint a non-empty id, got %q", cfg.ServerID)
+	}
+	id := cfg.ServerID
+	if strings.ContainsAny(id, "+/=") {
+		t.Fatalf("server id %q must be URL-safe (it becomes a route segment + dir name)", id)
+	}
+	if ensureServerID(cfg) {
+		t.Fatal("second call must not re-mint an existing id")
+	}
+	if cfg.ServerID != id {
+		t.Fatalf("existing server id must be preserved, got %q want %q", cfg.ServerID, id)
+	}
+}
+
 // TestResolveTool covers the bundled-ffmpeg lookup: empty/explicit paths pass
 // through; a bare name resolves to a tool sitting next to the executable, else
 // falls back to the bare name (PATH lookup happens later).
