@@ -211,6 +211,23 @@ future metadata site can attach enrichment without reshaping the schema.
   password needs no challenge, but changing an existing one requires `current_password`
   (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
   admin-must-keep-a-password guard still holds.
+- **Personal API keys (`tokens.kind='api'`)**: user-minted, **non-expiring** bearer
+  tokens for headless integrations, owner-scoped mint/list/revoke via
+  `POST`/`GET`/`DELETE /auth/tokens` (`IssueAPIToken`/`ListAPITokens`/
+  `RevokeTokenByID`; label carried in `device_name`, ≤100 chars). `requireAuth` now
+  accepts **session OR api** (`ResolveTokenKinds(KindSession, KindAPI)`), so a key
+  authenticates like a session acting as its owner (an admin's key passes
+  `requireAdmin`; media `?token=` accepts it too) but is never valid for pairing
+  `/auth/exchange`; a pairing token is never accepted as a bearer credential.
+  Secrets are stored SHA-256-only and shown once; create/list/revoke go through
+  `gateSelfService` (shared `accountLimiter` + demo refusal). **Containment**: a key
+  authenticates as its owner but cannot mint a *fresh durable credential* -
+  `ResolveTokenKinds` returns the matched kind and `denyAPIKey` refuses an api-key
+  caller (403) on `POST /auth/{tokens,recovery,pair,password}`, so revoking a leaked
+  key cuts off everything it could reach (it cannot spawn another key/recovery
+  code/pairing token/password that outlives its own revocation - GitHub's "a token
+  cannot create tokens"). It may still list/revoke keys and clear a recovery code
+  (those only reduce access). Surfaced by the `api_keys` capability.
 - **Web player at `/web`** (`web.go`, served from `cfg.WebDir`): a separate Expo
   Router project (`~/dev/audiosilo/audiosilo-frontend`) exported as a static site. It is
   **not vendored** in this repo or the binary - the server serves it at runtime
@@ -358,8 +375,9 @@ future metadata site can attach enrichment without reshaping the schema.
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`); flip them on as phases land. `transcode`
-already reflects whether ffmpeg is configured.
+`upload`, `transcode`, `websocket`, `api_keys`); flip them on as phases land.
+`transcode` already reflects whether ffmpeg is configured; `api_keys` is true
+(user-minted personal access tokens are supported).
 
 ## API surface
 

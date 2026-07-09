@@ -15,12 +15,23 @@ import (
 
 type ctxKey int
 
-const userKey ctxKey = iota
+const (
+	userKey ctxKey = iota
+	tokenKindKey
+)
 
 // userFrom returns the authenticated user from the request context.
 func userFrom(ctx context.Context) *auth.User {
 	u, _ := ctx.Value(userKey).(*auth.User)
 	return u
+}
+
+// tokenKindFrom returns the kind of credential that authenticated the request
+// (auth.KindSession or auth.KindAPI), or "" if the request is unauthenticated.
+// Set by the authenticate middleware; read by denyAPIKey.
+func tokenKindFrom(ctx context.Context) string {
+	k, _ := ctx.Value(tokenKindKey).(string)
+	return k
 }
 
 // writeJSON writes v as JSON with the given status.

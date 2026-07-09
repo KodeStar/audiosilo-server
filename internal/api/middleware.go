@@ -180,15 +180,18 @@ func bearerToken(r *http.Request, allowQuery bool) string {
 	return ""
 }
 
-// requireAuth authenticates a session token (Authorization header only) and
-// injects the user into context.
+// requireAuth authenticates a session token or a personal API key (Authorization
+// header only) and injects the user into context. An API key acts as its owner,
+// so it satisfies requireAuth (and requireAdmin, when the owner is an admin)
+// exactly like a session; a pairing token is never accepted here.
 func (a *API) requireAuth(next http.Handler) http.Handler {
 	return a.authenticate(next, false)
 }
 
-// requireMediaAuth is requireAuth that additionally accepts the session token as
-// a `token` query parameter, for browser media elements that cannot set headers.
-// Restrict its use to cover/stream GETs (see bearerToken).
+// requireMediaAuth is requireAuth that additionally accepts the credential as a
+// `token` query parameter, for browser media elements that cannot set headers.
+// Restrict its use to cover/stream GETs (see bearerToken). An API key works here
+// too (it behaves as a session everywhere a session does).
 func (a *API) requireMediaAuth(next http.Handler) http.Handler {
 	return a.authenticate(next, true)
 }
@@ -200,12 +203,17 @@ func (a *API) authenticate(next http.Handler, allowQueryToken bool) http.Handler
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
-		u, err := a.auth.ResolveToken(r.Context(), token, auth.KindSession)
+		// Session OR api key - both authenticate; pairing tokens are excluded, so
+		// a QR/pairing secret can never be used as a durable credential here.
+		u, kind, err := a.auth.ResolveTokenKinds(r.Context(), token, auth.KindSession, auth.KindAPI)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
 		}
+		// Carry the matched kind so credential-minting handlers can bar an api
+		// key (denyAPIKey) - a leaked key must not spawn a durable credential.
 		ctx := context.WithValue(r.Context(), userKey, u)
+		ctx = context.WithValue(ctx, tokenKindKey, kind)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

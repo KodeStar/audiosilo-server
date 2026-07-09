@@ -136,6 +136,11 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/auth/password", a.requireAuth(http.HandlerFunc(a.handleSetPassword)))
 	mux.Handle("POST /api/v1/auth/recovery", a.requireAuth(http.HandlerFunc(a.handleGenerateRecovery)))
 	mux.Handle("DELETE /api/v1/auth/recovery", a.requireAuth(http.HandlerFunc(a.handleDeleteRecovery)))
+	// Personal API keys: user-minted, non-expiring bearer credentials for headless
+	// integrations. Owner-scoped mint/list/revoke; each key acts as its owner.
+	mux.Handle("POST /api/v1/auth/tokens", a.requireAuth(http.HandlerFunc(a.handleCreateAPIToken)))
+	mux.Handle("GET /api/v1/auth/tokens", a.requireAuth(http.HandlerFunc(a.handleListAPITokens)))
+	mux.Handle("DELETE /api/v1/auth/tokens/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeAPIToken)))
 	mux.Handle("GET /api/v1/me", a.requireAuth(http.HandlerFunc(a.handleMe)))
 
 	// Content is addressed by (library, path) via ?path= - the path is the
