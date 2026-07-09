@@ -205,12 +205,15 @@ func (a *API) authenticate(next http.Handler, allowQueryToken bool) http.Handler
 		}
 		// Session OR api key - both authenticate; pairing tokens are excluded, so
 		// a QR/pairing secret can never be used as a durable credential here.
-		u, err := a.auth.ResolveTokenKinds(r.Context(), token, auth.KindSession, auth.KindAPI)
+		u, kind, err := a.auth.ResolveTokenKinds(r.Context(), token, auth.KindSession, auth.KindAPI)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
 		}
+		// Carry the matched kind so credential-minting handlers can bar an api
+		// key (denyAPIKey) - a leaked key must not spawn a durable credential.
 		ctx := context.WithValue(r.Context(), userKey, u)
+		ctx = context.WithValue(ctx, tokenKindKey, kind)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

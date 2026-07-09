@@ -194,6 +194,9 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 // UNLINKED (no parent auth code): single-use and 10-minute, since the user is
 // present and can mint another with a tap.
 func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
+	if denyAPIKey(w, r) {
+		return
+	}
 	u := userFrom(r.Context())
 	token, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindPairing, "", pairingTTL)
 	if err != nil {
@@ -237,6 +240,9 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // Clearing a password is admin-only (PATCH /admin/users); self-service rejects an
 // empty password so a user can't lock themselves out. Refused for demo accounts.
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
+	if denyAPIKey(w, r) {
+		return
+	}
 	full := a.gateSelfService(w, r)
 	if full == nil {
 		return
@@ -273,6 +279,9 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 // Rate-limited and refused for demo accounts so a throwaway session can't mint a
 // durable login.
 func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
+	if denyAPIKey(w, r) {
+		return
+	}
 	full := a.gateSelfService(w, r)
 	if full == nil {
 		return
@@ -297,6 +306,25 @@ func (a *API) handleDeleteRecovery(w http.ResponseWriter, r *http.Request) {
 
 // maxAPIKeyLabelLen caps the user-facing label of a personal API key.
 const maxAPIKeyLabelLen = 100
+
+// denyAPIKey refuses a request that authenticated with a personal API key
+// (auth.KindAPI) on a route that would mint a FRESH durable credential - another
+// API key, a recovery code, a pairing token, or a first password. It writes 403
+// and returns true when the caller is an api key, so the handler must return;
+// a session (or any non-api credential) passes through.
+//
+// Containment invariant: revoking a leaked API key must cut off everything it
+// could reach, so a key can never spawn a credential that survives its own
+// revocation (mirrors GitHub's "a token cannot create tokens"). A key still acts
+// as its owner everywhere else, including listing/revoking keys and clearing a
+// recovery code - those only reduce access, never extend it.
+func denyAPIKey(w http.ResponseWriter, r *http.Request) bool {
+	if tokenKindFrom(r.Context()) == auth.KindAPI {
+		writeError(w, http.StatusForbidden, "not available when authenticating with an API key")
+		return true
+	}
+	return false
+}
 
 // gateSelfService applies the guards shared by the self-service account
 // endpoints: the per-IP account rate limit and the demo-account refusal. On
@@ -327,6 +355,9 @@ func (a *API) gateSelfService(w http.ResponseWriter, r *http.Request) *auth.User
 // admin's key passes requireAdmin) and never expires - revocation is its
 // lifecycle. Rate-limited and refused for demo accounts, like recovery/password.
 func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
+	if denyAPIKey(w, r) {
+		return
+	}
 	full := a.gateSelfService(w, r)
 	if full == nil {
 		return

@@ -220,8 +220,14 @@ future metadata site can attach enrichment without reshaping the schema.
   `requireAdmin`; media `?token=` accepts it too) but is never valid for pairing
   `/auth/exchange`; a pairing token is never accepted as a bearer credential.
   Secrets are stored SHA-256-only and shown once; create/list/revoke go through
-  `gateSelfService` (shared `accountLimiter` + demo refusal). Surfaced by the
-  `api_keys` capability.
+  `gateSelfService` (shared `accountLimiter` + demo refusal). **Containment**: a key
+  authenticates as its owner but cannot mint a *fresh durable credential* -
+  `ResolveTokenKinds` returns the matched kind and `denyAPIKey` refuses an api-key
+  caller (403) on `POST /auth/{tokens,recovery,pair,password}`, so revoking a leaked
+  key cuts off everything it could reach (it cannot spawn another key/recovery
+  code/pairing token/password that outlives its own revocation - GitHub's "a token
+  cannot create tokens"). It may still list/revoke keys and clear a recovery code
+  (those only reduce access). Surfaced by the `api_keys` capability.
 - **Web player at `/web`** (`web.go`, served from `cfg.WebDir`): a separate Expo
   Router project (`~/dev/audiosilo/audiosilo-frontend`) exported as a static site. It is
   **not vendored** in this repo or the binary - the server serves it at runtime

@@ -223,6 +223,48 @@ func TestAPIKeyListScopedAndMetadataOnly(t *testing.T) {
 	}
 }
 
+// TestAPIKeyCannotMintDurableCredentials pins the containment invariant: a key
+// authenticates as its owner, but it may NOT mint a fresh durable credential
+// (another API key, a recovery code, a pairing token) nor set a password - each
+// is 403 - so revoking a leaked key cuts off everything it could reach. A
+// session is allowed on the same routes, and the key may still list/revoke keys
+// (that only reduces access).
+func TestAPIKeyCannotMintDurableCredentials(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	id, key := e.mintAPIKey(t, adminTok, "leaked")
+
+	// Denied for the api key: every route that spawns a durable credential.
+	denied := []struct{ method, path, body string }{
+		{"POST", "/api/v1/auth/tokens", `{"label":"second"}`},              // mint another key
+		{"POST", "/api/v1/auth/recovery", ``},                              // mint a recovery code
+		{"POST", "/api/v1/auth/pair", ``},                                  // mint a pairing token
+		{"POST", "/api/v1/auth/password", `{"password":"hunter2hunter2"}`}, // set a password
+	}
+	for _, tc := range denied {
+		if resp, b := e.do(t, tc.method, tc.path, key, tc.body); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("api key %s %s = %d %s, want 403", tc.method, tc.path, resp.StatusCode, b)
+		}
+	}
+
+	// Allowed for a session: the guard is scoped to api keys, not the routes.
+	if resp, b := e.do(t, "POST", "/api/v1/auth/pair", adminTok, ``); resp.StatusCode != http.StatusOK {
+		t.Fatalf("session pair = %d %s, want 200", resp.StatusCode, b)
+	}
+	if resp, b := e.do(t, "POST", "/api/v1/auth/recovery", adminTok, ``); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("session recovery = %d %s, want 201", resp.StatusCode, b)
+	}
+
+	// Still allowed for the api key: management that only reduces access.
+	if resp, _ := e.do(t, "GET", "/api/v1/auth/tokens", key, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("api key list = %d, want 200", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "DELETE", "/api/v1/auth/tokens/"+strconv.FormatInt(id, 10), key, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("api key self-revoke = %d, want 204", resp.StatusCode)
+	}
+}
+
 // TestServerInfoAdvertisesAPIKeys: the capability flag is advertised so clients
 // can gate the API-keys UI on it.
 func TestServerInfoAdvertisesAPIKeys(t *testing.T) {
