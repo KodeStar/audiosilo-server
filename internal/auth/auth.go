@@ -303,8 +303,16 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	return &u, codeID, nil
 }
 
-// inPlaceholders returns "?,?,..." with n placeholders for a SQL IN clause.
+// inPlaceholders returns "?,?,..." with n placeholders for a SQL IN clause. The
+// 1- and 2-kind cases (the only ones the per-request auth path hits) return a
+// constant string so lookupToken adds no allocation to that hot path.
 func inPlaceholders(n int) string {
+	switch n {
+	case 1:
+		return "?"
+	case 2:
+		return "?,?"
+	}
 	if n <= 0 {
 		return ""
 	}

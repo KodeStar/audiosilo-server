@@ -237,10 +237,10 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 // Clearing a password is admin-only (PATCH /admin/users); self-service rejects an
 // empty password so a user can't lock themselves out. Refused for demo accounts.
 func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
-	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
+	full := a.gateSelfService(w, r)
+	if full == nil {
 		return
 	}
-	u := userFrom(r.Context())
 	var req struct {
 		Password        string `json:"password"`
 		CurrentPassword string `json:"current_password"`
@@ -253,22 +253,13 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "password is required")
 		return
 	}
-	full, err := a.auth.GetUser(r.Context(), u.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load account")
-		return
-	}
-	if full.IsDemo {
-		writeError(w, http.StatusForbidden, "not available for demo accounts")
-		return
-	}
 	if full.HasPassword {
-		if err := a.auth.CheckPassword(r.Context(), u.ID, req.CurrentPassword); err != nil {
+		if err := a.auth.CheckPassword(r.Context(), full.ID, req.CurrentPassword); err != nil {
 			writeError(w, http.StatusUnauthorized, "current password is incorrect")
 			return
 		}
 	}
-	if err := a.auth.SetPassword(r.Context(), u.ID, req.Password); err != nil {
+	if err := a.auth.SetPassword(r.Context(), full.ID, req.Password); err != nil {
 		a.writeUserError(w, err, "could not update password")
 		return
 	}
@@ -282,20 +273,11 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 // Rate-limited and refused for demo accounts so a throwaway session can't mint a
 // durable login.
 func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
-	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
+	full := a.gateSelfService(w, r)
+	if full == nil {
 		return
 	}
-	u := userFrom(r.Context())
-	full, err := a.auth.GetUser(r.Context(), u.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load account")
-		return
-	}
-	if full.IsDemo {
-		writeError(w, http.StatusForbidden, "not available for demo accounts")
-		return
-	}
-	code, err := a.auth.GenerateRecoveryCode(r.Context(), u.ID)
+	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate recovery code")
 		return
@@ -320,7 +302,8 @@ const maxAPIKeyLabelLen = 100
 // endpoints: the per-IP account rate limit and the demo-account refusal. On
 // success it returns the caller's freshly loaded account; otherwise it has
 // already written the 429/403/500 response and returns nil, so the handler must
-// return. Same guard style as handleSetPassword/handleGenerateRecovery.
+// return. Shared by handleSetPassword, handleGenerateRecovery and the API-key
+// endpoints so the rate-limit + demo-refusal guard lives in one place.
 func (a *API) gateSelfService(w http.ResponseWriter, r *http.Request) *auth.User {
 	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
 		return nil
