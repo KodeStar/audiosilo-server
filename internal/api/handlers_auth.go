@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/web"
@@ -32,6 +34,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"transcode":  a.ffmpeg != "",              // on-the-fly MP3 transcoding via ffmpeg
 			"upload":     false,                       // Phase B
 			"websocket":  false,                       // Phase C
+			"api_keys":   true,                        // user-minted personal access tokens (POST /auth/tokens)
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
@@ -305,6 +308,108 @@ func (a *API) handleDeleteRecovery(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	if err := a.auth.ClearRecoveryCode(r.Context(), u.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not clear recovery code")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// maxAPIKeyLabelLen caps the user-facing label of a personal API key.
+const maxAPIKeyLabelLen = 100
+
+// gateSelfService applies the guards shared by the self-service account
+// endpoints: the per-IP account rate limit and the demo-account refusal. On
+// success it returns the caller's freshly loaded account; otherwise it has
+// already written the 429/403/500 response and returns nil, so the handler must
+// return. Same guard style as handleSetPassword/handleGenerateRecovery.
+func (a *API) gateSelfService(w http.ResponseWriter, r *http.Request) *auth.User {
+	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
+		return nil
+	}
+	u := userFrom(r.Context())
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return nil
+	}
+	if full.IsDemo {
+		writeError(w, http.StatusForbidden, "not available for demo accounts")
+		return nil
+	}
+	return full
+}
+
+// handleCreateAPIToken mints a personal API key ("API key") for the signed-in
+// user and returns the plaintext secret exactly once, alongside the stored key's
+// metadata. The key acts as its owner on any bearer-authenticated route (an
+// admin's key passes requireAdmin) and never expires - revocation is its
+// lifecycle. Rate-limited and refused for demo accounts, like recovery/password.
+func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
+	full := a.gateSelfService(w, r)
+	if full == nil {
+		return
+	}
+	var req struct {
+		Label string `json:"label"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	label := strings.TrimSpace(req.Label)
+	if label == "" {
+		writeError(w, http.StatusBadRequest, "label is required")
+		return
+	}
+	if utf8.RuneCountInString(label) > maxAPIKeyLabelLen {
+		writeError(w, http.StatusBadRequest, "label is too long")
+		return
+	}
+	secret, meta, err := a.auth.IssueAPIToken(r.Context(), full.ID, label)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create API key")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": secret, "api_key": meta})
+}
+
+// handleListAPITokens returns the signed-in user's live API keys (metadata
+// only - never a secret or hash), newest first.
+func (a *API) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
+	full := a.gateSelfService(w, r)
+	if full == nil {
+		return
+	}
+	keys, err := a.auth.ListAPITokens(r.Context(), full.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list API keys")
+		return
+	}
+	if keys == nil {
+		keys = []auth.APIToken{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"api_keys": keys})
+}
+
+// handleRevokeAPIToken revokes one of the signed-in user's API keys by id. It is
+// owner-scoped and api-kind-only: a missing id, another user's key, or a non-api
+// token id all yield 404 (the key can never be another user's, and a session/
+// pairing token can't be revoked through this path).
+func (a *API) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	full := a.gateSelfService(w, r)
+	if full == nil {
+		return
+	}
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid API key id")
+		return
+	}
+	if err := a.auth.RevokeTokenByID(r.Context(), full.ID, id); err != nil {
+		if errors.Is(err, auth.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "API key not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "could not revoke API key")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

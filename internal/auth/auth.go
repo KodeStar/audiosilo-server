@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -21,6 +22,12 @@ const (
 const (
 	KindSession = "session"
 	KindPairing = "pairing"
+	// KindAPI is a user-minted, non-expiring personal access token ("API key")
+	// for headless integrations (dashboards, cron). It authenticates exactly like
+	// a session token - anywhere requireAuth accepts a session it accepts an api
+	// key, acting as its owner - but it is never valid for pairing exchange, and
+	// its lifecycle is mint/list/revoke rather than sign-in/sign-out.
+	KindAPI = "api"
 )
 
 // Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
@@ -223,26 +230,36 @@ func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName
 	if err != nil {
 		return "", err
 	}
-	if err := s.insertToken(ctx, userID, hash, kind, deviceName, s.expiresAt(ttl), nil); err != nil {
+	if _, err := s.insertToken(ctx, userID, hash, kind, deviceName, s.expiresAt(ttl), nil); err != nil {
 		return "", err
 	}
 	return secret, nil
 }
 
-// insertToken writes one tokens row - the single place the column list lives.
-// expires and authCodeID are nil for "no expiry" / "unlinked".
-func (s *Service) insertToken(ctx context.Context, userID int64, hash, kind, deviceName string, expires, authCodeID any) error {
-	_, err := s.db.ExecContext(ctx,
+// insertToken writes one tokens row and returns the write Result (for callers
+// that need the new row's id) - the single place the column list lives. expires
+// and authCodeID are nil for "no expiry" / "unlinked".
+func (s *Service) insertToken(ctx context.Context, userID int64, hash, kind, deviceName string, expires, authCodeID any) (sql.Result, error) {
+	return s.db.ExecContext(ctx,
 		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id)
 		 VALUES(?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID)
-	return err
 }
 
-// ResolveToken validates a presented token secret and returns its user, also
-// bumping last_seen. Revoked/expired tokens return ErrInvalidToken.
+// ResolveToken validates a presented token secret of exactly the given kind and
+// returns its user, also bumping last_seen. Revoked/expired tokens return
+// ErrInvalidToken.
 func (s *Service) ResolveToken(ctx context.Context, secret, kind string) (*User, error) {
+	return s.ResolveTokenKinds(ctx, secret, kind)
+}
+
+// ResolveTokenKinds is ResolveToken generalized over several accepted kinds: it
+// validates a presented secret whose kind is one of kinds, bumps last_seen and
+// returns the user. Middleware uses it to accept a session OR an api key on the
+// same route (an api key acts as its owner), while never accepting a pairing
+// token there. At least one kind must be supplied.
+func (s *Service) ResolveTokenKinds(ctx context.Context, secret string, kinds ...string) (*User, error) {
 	hash := hashSecret(secret)
-	u, _, err := s.lookupToken(ctx, hash, kind)
+	u, _, err := s.lookupToken(ctx, hash, kinds...)
 	if err != nil {
 		return nil, err
 	}
@@ -250,22 +267,29 @@ func (s *Service) ResolveToken(ctx context.Context, secret, kind string) (*User,
 	return u, nil
 }
 
-// lookupToken resolves a token hash of the given kind to its (partial) user and
-// parent auth-code link, applying the shared validity checks: unknown, revoked
-// and expired tokens and disabled users all return ErrInvalidToken. The single
-// definition of "is this token valid", shared by ResolveToken (every
-// authenticated request) and ConsumePairingToken (exchange).
-func (s *Service) lookupToken(ctx context.Context, hash, kind string) (*User, sql.NullInt64, error) {
+// lookupToken resolves a token hash whose kind is one of the accepted kinds to
+// its (partial) user and parent auth-code link, applying the shared validity
+// checks: unknown, revoked and expired tokens and disabled users all return
+// ErrInvalidToken. The single definition of "is this token valid", shared by
+// ResolveToken/ResolveTokenKinds (every authenticated request) and
+// ConsumePairingToken (exchange). token_hash is globally unique, so the kind
+// filter only rejects a real token presented where its kind is not accepted.
+func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, sql.NullInt64, error) {
 	var (
 		u       User
 		expires sql.NullString
 		revoked bool
 		codeID  sql.NullInt64
 	)
+	args := make([]any, 0, len(kinds)+1)
+	args = append(args, hash)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT u.id, u.username, u.role, u.disabled, t.expires_at, t.revoked, t.auth_code_id
 		   FROM tokens t JOIN users u ON u.id = t.user_id
-		  WHERE t.token_hash = ? AND t.kind = ?`, hash, kind).
+		  WHERE t.token_hash = ? AND t.kind IN (`+inPlaceholders(len(kinds))+`)`, args...).
 		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &expires, &revoked, &codeID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, codeID, ErrInvalidToken
@@ -279,11 +303,110 @@ func (s *Service) lookupToken(ctx context.Context, hash, kind string) (*User, sq
 	return &u, codeID, nil
 }
 
+// inPlaceholders returns "?,?,..." with n placeholders for a SQL IN clause.
+func inPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return "?" + strings.Repeat(",?", n-1)
+}
+
 // RevokeToken revokes a token by its secret.
 func (s *Service) RevokeToken(ctx context.Context, secret string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE tokens SET revoked = 1 WHERE token_hash = ?`, hashSecret(secret))
 	return err
+}
+
+// APIToken describes a user-minted API key for display. The plaintext secret is
+// never included - only its SHA-256 hash is stored, by design - so this carries
+// the key's metadata only. LastSeen is nil until the key has authenticated a
+// request (rendered as JSON null).
+type APIToken struct {
+	ID        int64   `json:"id"`
+	Label     string  `json:"label"`
+	CreatedAt string  `json:"created_at"`
+	LastSeen  *string `json:"last_seen"`
+}
+
+// keyMetaColumns is the column list backing APIToken (device_name is the key's
+// user-facing label). Shared by IssueAPIToken's read-back and ListAPITokens so
+// the shape stays in one place.
+const keyMetaColumns = `id, device_name, created_at, last_seen`
+
+func scanAPIToken(row interface{ Scan(...any) error }) (APIToken, error) {
+	var (
+		t        APIToken
+		lastSeen sql.NullString
+	)
+	if err := row.Scan(&t.ID, &t.Label, &t.CreatedAt, &lastSeen); err != nil {
+		return t, err
+	}
+	if lastSeen.Valid {
+		t.LastSeen = &lastSeen.String
+	}
+	return t, nil
+}
+
+// IssueAPIToken mints a personal API key (kind=api, no expiry) for a user and
+// returns the plaintext secret (shown once) plus the stored row's metadata for
+// the create response. The secret is stored only as a hash. label is carried in
+// device_name; callers trim/validate it before calling.
+func (s *Service) IssueAPIToken(ctx context.Context, userID int64, label string) (string, APIToken, error) {
+	secret, hash, err := generateToken()
+	if err != nil {
+		return "", APIToken{}, err
+	}
+	res, err := s.insertToken(ctx, userID, hash, KindAPI, label, nil, nil)
+	if err != nil {
+		return "", APIToken{}, err
+	}
+	id, _ := res.LastInsertId()
+	meta, err := scanAPIToken(s.db.QueryRowContext(ctx,
+		`SELECT `+keyMetaColumns+` FROM tokens WHERE id = ?`, id))
+	if err != nil {
+		return "", APIToken{}, err
+	}
+	return secret, meta, nil
+}
+
+// ListAPITokens returns a user's live (non-revoked) API keys, newest first, as
+// metadata only (never a secret or hash).
+func (s *Service) ListAPITokens(ctx context.Context, userID int64) ([]APIToken, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+keyMetaColumns+` FROM tokens
+		  WHERE user_id = ? AND kind = ? AND revoked = 0
+		  ORDER BY created_at DESC, id DESC`, userID, KindAPI)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []APIToken
+	for rows.Next() {
+		t, err := scanAPIToken(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// RevokeTokenByID revokes a user's own API key by id. It is scoped to the owner
+// and to kind=api, so it never touches another user's token nor a session/
+// pairing token: an id matching no live api key of this user returns ErrNotFound
+// (the transport maps it to 404). Backs DELETE /auth/tokens/{id}.
+func (s *Service) RevokeTokenByID(ctx context.Context, userID, id int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE tokens SET revoked = 1
+		  WHERE id = ? AND user_id = ? AND kind = ? AND revoked = 0`, id, userID, KindAPI)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // sqlExecer is satisfied by both *store.DB and *sql.Tx, so the auth_codes helpers
@@ -603,7 +726,7 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 	if rc.Kind == CodeRecovery {
 		expires = s.expiresAt(recoveryPairingTTL)
 	}
-	if err := s.insertToken(ctx, rc.User.ID, hash, KindPairing, "", expires, rc.CodeID); err != nil {
+	if _, err := s.insertToken(ctx, rc.User.ID, hash, KindPairing, "", expires, rc.CodeID); err != nil {
 		return "", err
 	}
 	return secret, nil

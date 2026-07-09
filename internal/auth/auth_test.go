@@ -764,3 +764,104 @@ func mustOneInviteID(t *testing.T, s *Service, ctx context.Context, userID int64
 	}
 	return codes[0].ID
 }
+
+// TestAPITokenLifecycle covers minting, resolving, listing and revoking a
+// personal API key at the auth layer: an api key resolves as kind=api (and not
+// as a session), lists as metadata only, and stops resolving once revoked.
+func TestAPITokenLifecycle(t *testing.T) {
+	s, ctx := newTestService(t)
+	user, err := s.CreateUser(ctx, "user", "", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secret, meta, err := s.IssueAPIToken(ctx, user.ID, "cron job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secret == "" || meta.ID == 0 || meta.Label != "cron job" || meta.CreatedAt == "" {
+		t.Fatalf("unexpected mint meta: %+v", meta)
+	}
+	if meta.LastSeen != nil {
+		t.Fatalf("a freshly minted key should have last_seen=null, got %q", *meta.LastSeen)
+	}
+
+	// Resolves as an api-kind credential (allowed)...
+	u, err := s.ResolveTokenKinds(ctx, secret, KindAPI)
+	if err != nil || u.ID != user.ID {
+		t.Fatalf("resolve api key = %v, %v", u, err)
+	}
+	// ...and via the session+api set the middleware uses.
+	if _, err := s.ResolveTokenKinds(ctx, secret, KindSession, KindAPI); err != nil {
+		t.Fatalf("api key rejected by session+api resolver: %v", err)
+	}
+	// Denied: it is NOT a session token, so a session-only resolve rejects it.
+	if _, err := s.ResolveToken(ctx, secret, KindSession); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("api key resolved as a session token: %v", err)
+	}
+	// Denied: and it is NOT a pairing token (exchange must never accept it).
+	if _, err := s.ResolveToken(ctx, secret, KindPairing); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("api key resolved as a pairing token: %v", err)
+	}
+
+	keys, err := s.ListAPITokens(ctx, user.ID)
+	if err != nil || len(keys) != 1 || keys[0].ID != meta.ID || keys[0].Label != "cron job" {
+		t.Fatalf("list api keys = %+v, %v", keys, err)
+	}
+
+	// Revoke by id (owner-scoped) → the secret stops resolving and drops off the list.
+	if err := s.RevokeTokenByID(ctx, user.ID, meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveTokenKinds(ctx, secret, KindAPI); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("revoked api key still resolves: %v", err)
+	}
+	if keys, _ := s.ListAPITokens(ctx, user.ID); len(keys) != 0 {
+		t.Fatalf("revoked key still listed: %+v", keys)
+	}
+}
+
+// TestRevokeTokenByIDScoping pins the owner+kind scoping of RevokeTokenByID: a
+// missing id, another user's key, or a session-token id all return ErrNotFound
+// (never touching a token they should not).
+func TestRevokeTokenByIDScoping(t *testing.T) {
+	s, ctx := newTestService(t)
+	owner, err := s.CreateUser(ctx, "owner", "", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateUser(ctx, "other", "", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, meta, err := s.IssueAPIToken(ctx, owner.ID, "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Denied: a missing id.
+	if err := s.RevokeTokenByID(ctx, owner.ID, 999999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing id = %v, want ErrNotFound", err)
+	}
+	// Denied: another user cannot revoke the owner's key.
+	if err := s.RevokeTokenByID(ctx, other.ID, meta.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-user revoke = %v, want ErrNotFound", err)
+	}
+	// Denied: a session-token id is not revocable through the api-only path.
+	if _, err := s.IssueToken(ctx, owner.ID, KindSession, "device", 0); err != nil {
+		t.Fatal(err)
+	}
+	var sessID int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM tokens WHERE user_id = ? AND kind = ?`, owner.ID, KindSession).Scan(&sessID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RevokeTokenByID(ctx, owner.ID, sessID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoking a session id via the api path = %v, want ErrNotFound", err)
+	}
+
+	// Allowed: the owner revokes their own key.
+	if err := s.RevokeTokenByID(ctx, owner.ID, meta.ID); err != nil {
+		t.Fatalf("owner revoke: %v", err)
+	}
+}
