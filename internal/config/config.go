@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -102,6 +103,16 @@ func (d DemoConfig) IdleTTLDuration() time.Duration {
 	return 24 * time.Hour
 }
 
+// MetadataConfig configures the community metadata lookup (Phase 1.5): when
+// enabled, the server resolves a book's asin/isbn against the metadata API
+// (metaserve, meta.audiosilo.app) and exposes a composed enrichment envelope at
+// GET /libraries/{id}/meta. Disabling it stops all outbound calls with one key,
+// and the `metadata` capability flag then reports false so clients hide the UI.
+type MetadataConfig struct {
+	Enabled bool   `yaml:"enabled"`  // activate the meta lookup (default true)
+	BaseURL string `yaml:"base_url"` // metaserve base URL; site at / and API at /api/v1
+}
+
 // Config is the full server configuration.
 type Config struct {
 	// DataDir is where the database, config and generated certs live. It is not
@@ -114,17 +125,22 @@ type Config struct {
 	// on it, so it must never change for the life of the install.
 	ServerID string `yaml:"server_id"`
 
-	Bind           string        `yaml:"bind"`       // host:port to listen on
-	PublicURL      string        `yaml:"public_url"` // externally reachable base URL, used in QR payloads
-	TLS            TLSConfig     `yaml:"tls"`
-	TrustedProxies []string      `yaml:"trusted_proxies"`  // CIDRs whose X-Forwarded-For is trusted
-	CORSOrigins    []string      `yaml:"cors_origins"`     // allowed web origins ("*" to disable check)
-	MaxUploadBytes int64         `yaml:"max_upload_bytes"` // reserved for Phase B uploads; not yet enforced (JSON bodies use a fixed 1 MiB cap)
-	WebDir         string        `yaml:"web_dir"`          // directory of the prebuilt web player served at /web; empty disables it
-	AppLinks       AppLinkConfig `yaml:"app_links"`        // optional native deep-link association (well-known files)
-	Libraries      []Library     `yaml:"libraries"`
-	Demo           DemoConfig    `yaml:"demo"` // public demo mode (throwaway accounts)
+	Bind           string         `yaml:"bind"`       // host:port to listen on
+	PublicURL      string         `yaml:"public_url"` // externally reachable base URL, used in QR payloads
+	TLS            TLSConfig      `yaml:"tls"`
+	TrustedProxies []string       `yaml:"trusted_proxies"`  // CIDRs whose X-Forwarded-For is trusted
+	CORSOrigins    []string       `yaml:"cors_origins"`     // allowed web origins ("*" to disable check)
+	MaxUploadBytes int64          `yaml:"max_upload_bytes"` // reserved for Phase B uploads; not yet enforced (JSON bodies use a fixed 1 MiB cap)
+	WebDir         string         `yaml:"web_dir"`          // directory of the prebuilt web player served at /web; empty disables it
+	AppLinks       AppLinkConfig  `yaml:"app_links"`        // optional native deep-link association (well-known files)
+	Libraries      []Library      `yaml:"libraries"`
+	Demo           DemoConfig     `yaml:"demo"`     // public demo mode (throwaway accounts)
+	Metadata       MetadataConfig `yaml:"metadata"` // community metadata lookup (Phase 1.5)
 }
+
+// DefaultMetadataBaseURL is the community metadata API used when metadata lookup
+// is enabled and no base_url is configured.
+const DefaultMetadataBaseURL = "https://meta.audiosilo.app"
 
 // ConfigFileName is the config file stored inside the data directory.
 const ConfigFileName = "config.yaml"
@@ -140,6 +156,7 @@ func Default(dataDir string) *Config {
 		CORSOrigins:    nil,
 		MaxUploadBytes: 2 << 30, // 2 GiB
 		Libraries:      nil,
+		Metadata:       MetadataConfig{Enabled: true, BaseURL: DefaultMetadataBaseURL},
 	}
 }
 
@@ -230,6 +247,14 @@ func applyEnv(c *Config) {
 	if v := os.Getenv("AUDIOSILO_DEMO_IDLE_TTL"); v != "" {
 		c.Demo.IdleTTL = v
 	}
+	if v := os.Getenv("AUDIOSILO_METADATA_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Metadata.Enabled = b
+		}
+	}
+	if v := os.Getenv("AUDIOSILO_METADATA_BASE_URL"); v != "" {
+		c.Metadata.BaseURL = v
+	}
 }
 
 func splitList(v string) []string {
@@ -292,6 +317,18 @@ func (c *Config) Validate() error {
 			if d <= 0 {
 				return fmt.Errorf("demo.idle_ttl must be positive, got %q", c.Demo.IdleTTL)
 			}
+		}
+	}
+	if c.Metadata.Enabled {
+		if c.Metadata.BaseURL == "" {
+			return errors.New("metadata lookup requires metadata.base_url")
+		}
+		u, err := url.Parse(c.Metadata.BaseURL)
+		if err != nil {
+			return fmt.Errorf("invalid metadata.base_url %q: %w", c.Metadata.BaseURL, err)
+		}
+		if u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("metadata.base_url must be an absolute http(s) URL, got %q", c.Metadata.BaseURL)
 		}
 	}
 	return nil

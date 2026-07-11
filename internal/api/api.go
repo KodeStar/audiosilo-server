@@ -13,6 +13,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -35,7 +36,11 @@ type API struct {
 	cat     *catalog.Catalog
 	scanner *library.Scanner
 	ffmpeg  string // path to ffmpeg for on-the-fly transcoding; "" disables it
-	log     *slog.Logger
+	// meta resolves book asin/isbn against the community metadata API (Phase 1.5).
+	// nil when metadata lookup is disabled/unconfigured; the handler and the
+	// `metadata` capability flag both gate on it being non-nil.
+	meta *meta.Service
+	log  *slog.Logger
 
 	// baseCtx is the server lifecycle context; background work detached from a
 	// request (e.g. backgroundScan) derives from it so it's cancelled on shutdown
@@ -74,12 +79,20 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	if log == nil {
 		log = slog.Default()
 	}
+	// Construct the metadata lookup service from config; nil when disabled or
+	// unconfigured so the feature (endpoint + capability) is off. The config is
+	// validated upstream (base_url is an absolute http(s) URL when enabled).
+	var metaSvc *meta.Service
+	if cfg.Metadata.Enabled && cfg.Metadata.BaseURL != "" {
+		metaSvc = meta.NewService(cfg.Metadata.BaseURL, nil)
+	}
 	return &API{
 		cfg:            cfg,
 		auth:           authSvc,
 		cat:            cat,
 		scanner:        scanner,
 		ffmpeg:         ffmpeg,
+		meta:           metaSvc,
 		log:            log,
 		baseCtx:        context.Background(),
 		timeoutDur:     requestTimeout,
@@ -150,6 +163,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/books", a.requireAuth(http.HandlerFunc(a.handleListBooks)))
 	mux.Handle("GET /api/v1/libraries/{id}/item", a.requireAuth(http.HandlerFunc(a.handleItem)))
 	mux.Handle("GET /api/v1/libraries/{id}/chapters", a.requireAuth(http.HandlerFunc(a.handleChapters)))
+	mux.Handle("GET /api/v1/libraries/{id}/meta", a.requireAuth(http.HandlerFunc(a.handleMeta)))
 	// Media GETs accept the session token as a ?token= query param (browser
 	// <img>/<audio> can't set headers); other routes do not (see requireMediaAuth).
 	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireMediaAuth(http.HandlerFunc(a.handleCover)))

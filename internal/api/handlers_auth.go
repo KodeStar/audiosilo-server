@@ -35,6 +35,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"upload":     false,                       // Phase B
 			"websocket":  false,                       // Phase C
 			"api_keys":   true,                        // user-minted personal access tokens (POST /auth/tokens)
+			"metadata":   a.meta != nil,               // community metadata lookup (GET /libraries/{id}/meta)
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
