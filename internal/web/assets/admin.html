@@ -83,6 +83,16 @@
           <h3 data-i18n="admin.overview.currentlyListening">Currently listening</h3>
           <div id="listening"></div>
         </div>
+        <div class="card" id="settings-card">
+          <h3 data-i18n="admin.settings.metadataTitle">Community metadata lookup</h3>
+          <label class="switch-row" for="meta-toggle">
+            <input type="checkbox" id="meta-toggle">
+            <span data-i18n="admin.settings.metadataToggle">Enable metadata lookup</span>
+          </label>
+          <p class="muted" data-i18n="admin.settings.metadataDesc">Looks up book details from the community metadata service for books with an ASIN or ISBN; players show the extra details section only while this is on.</p>
+          <p class="muted hidden" id="meta-unavailable" data-i18n="admin.settings.metadataUnavailable">No metadata service is configured. Set metadata.base_url to an absolute http(s) URL in the server config to enable this.</p>
+          <div class="inline"><span class="muted" data-i18n="admin.settings.metadataSource">Source:</span> <span id="meta-base-url" class="code"></span></div>
+        </div>
       </section>
 
       <!-- Libraries -->

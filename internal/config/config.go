@@ -113,6 +113,21 @@ type MetadataConfig struct {
 	BaseURL string `yaml:"base_url"` // metaserve base URL; site at / and API at /api/v1
 }
 
+// ValidBaseURL reports whether BaseURL is a usable absolute http(s) URL. The
+// metadata service is constructed whenever this holds (regardless of Enabled),
+// so the admin runtime toggle can flip the feature on without a restart; an
+// empty or non-http(s) base_url means the feature is unavailable.
+func (m MetadataConfig) ValidBaseURL() bool {
+	if m.BaseURL == "" {
+		return false
+	}
+	u, err := url.Parse(m.BaseURL)
+	if err != nil {
+		return false
+	}
+	return u.Host != "" && (u.Scheme == "http" || u.Scheme == "https")
+}
+
 // Config is the full server configuration.
 type Config struct {
 	// DataDir is where the database, config and generated certs live. It is not
@@ -323,11 +338,7 @@ func (c *Config) Validate() error {
 		if c.Metadata.BaseURL == "" {
 			return errors.New("metadata lookup requires metadata.base_url")
 		}
-		u, err := url.Parse(c.Metadata.BaseURL)
-		if err != nil {
-			return fmt.Errorf("invalid metadata.base_url %q: %w", c.Metadata.BaseURL, err)
-		}
-		if u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		if !c.Metadata.ValidBaseURL() {
 			return fmt.Errorf("metadata.base_url must be an absolute http(s) URL, got %q", c.Metadata.BaseURL)
 		}
 	}

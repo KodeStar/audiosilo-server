@@ -20,7 +20,7 @@ import (
 //   - upstream unreachable/error: 502.
 //   - match: 200 {"matched": true, ...} (see internal/meta.Enrichment).
 func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
-	if a.meta == nil {
+	if !a.metadataOn() {
 		writeError(w, http.StatusNotFound, "metadata lookup not enabled")
 		return
 	}

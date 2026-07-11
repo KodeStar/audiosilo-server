@@ -7,6 +7,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -37,10 +39,18 @@ type API struct {
 	scanner *library.Scanner
 	ffmpeg  string // path to ffmpeg for on-the-fly transcoding; "" disables it
 	// meta resolves book asin/isbn against the community metadata API (Phase 1.5).
-	// nil when metadata lookup is disabled/unconfigured; the handler and the
-	// `metadata` capability flag both gate on it being non-nil.
-	meta *meta.Service
-	log  *slog.Logger
+	// It is constructed whenever metadata.base_url is a valid absolute http(s) URL
+	// (regardless of metadata.enabled), so the runtime admin toggle can flip the
+	// feature on without a restart; nil only when base_url is empty/invalid, in
+	// which case the feature is unavailable and cannot be enabled. metaEnabled is
+	// the runtime on/off flag (seeded from metadata.enabled): the handler and the
+	// `metadata` capability flag gate on meta != nil AND metaEnabled (metadataOn).
+	meta        *meta.Service
+	metaEnabled atomic.Bool
+	// settingsMu serializes runtime config mutations that also persist config.yaml
+	// (admin settings PATCH); config fields are otherwise set once at startup.
+	settingsMu sync.Mutex
+	log        *slog.Logger
 
 	// baseCtx is the server lifecycle context; background work detached from a
 	// request (e.g. backgroundScan) derives from it so it's cancelled on shutdown
@@ -79,14 +89,15 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	if log == nil {
 		log = slog.Default()
 	}
-	// Construct the metadata lookup service from config; nil when disabled or
-	// unconfigured so the feature (endpoint + capability) is off. The config is
-	// validated upstream (base_url is an absolute http(s) URL when enabled).
+	// Construct the metadata lookup service whenever base_url is a valid absolute
+	// http(s) URL - independent of metadata.enabled - so the admin runtime toggle
+	// can turn it on without a restart. nil only when base_url is empty/invalid, in
+	// which case the feature is permanently unavailable until the config gains one.
 	var metaSvc *meta.Service
-	if cfg.Metadata.Enabled && cfg.Metadata.BaseURL != "" {
+	if cfg.Metadata.ValidBaseURL() {
 		metaSvc = meta.NewService(cfg.Metadata.BaseURL, nil)
 	}
-	return &API{
+	a := &API{
 		cfg:            cfg,
 		auth:           authSvc,
 		cat:            cat,
@@ -103,6 +114,10 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		ipLimiter:      newIPRateLimiter(20, 40),       // ~20 req/s, burst 40, per IP
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 	}
+	// Seed the runtime flag from config; the feature is on only when a service was
+	// built too (metadataOn), so an enabled flag with no base_url stays off.
+	a.metaEnabled.Store(cfg.Metadata.Enabled)
+	return a
 }
 
 // maxConcurrentTranscodes caps simultaneous ffmpeg transcodes across all clients.
@@ -190,6 +205,8 @@ func (a *API) Handler() http.Handler {
 
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
+	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))
+	mux.Handle("PATCH /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleUpdateSettings)))
 	mux.Handle("GET /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleListUsers)))
 	mux.Handle("POST /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleCreateUser)))
 	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetUserDetail)))
