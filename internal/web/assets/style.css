@@ -224,6 +224,12 @@ tr.clickable:hover td { background: var(--surface-alt); }
 .listen-row.done { opacity: 0.55; }
 .empty { color: var(--muted); padding: 18px 0; font-size: 14px; }
 
+/* ---- Settings toggle ---- */
+.switch-row { display: flex; align-items: center; gap: 10px; font-size: 15px; margin-bottom: 4px; cursor: pointer; }
+.switch-row input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+.switch-row input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.5; }
+.switch-row input[type="checkbox"]:disabled + span { color: var(--text-muted); }
+
 /* ---- Drawer (user detail) ---- */
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 40; display: none; }
 .scrim.show { display: block; }

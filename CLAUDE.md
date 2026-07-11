@@ -251,8 +251,18 @@ future metadata site can attach enrichment without reshaping the schema.
   (work + matched recording + series rails, each carrying its own `web_url`).
   Config is `metadata.{enabled,base_url}` (env `AUDIOSILO_METADATA_ENABLED` /
   `AUDIOSILO_METADATA_BASE_URL`; `base_url` must be an absolute http(s) URL when
-  enabled) - one key disables ALL outbound calls. `meta.Service` (constructed in
-  `api.New` only when configured; `a.meta == nil` = off) owns the compose logic
+  enabled) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
+  is constructed in `api.New` whenever `base_url` is valid (`MetadataConfig.ValidBaseURL`),
+  regardless of `enabled`, and an atomic flag (`API.metaEnabled`, seeded from
+  `metadata.enabled`) gates it - so an admin can flip it on/off without a restart.
+  The handler and the `metadata` capability both gate on `metadataOn()`
+  (`a.meta != nil && metaEnabled`); `a.meta == nil` (empty/invalid `base_url`) is
+  permanently unavailable and can't be enabled. The admin console's **Overview >
+  Community metadata lookup** card and `GET`/`PATCH /admin/settings`
+  (`handlers_settings.go`, transport-only) read/flip the flag, persisting
+  `metadata.enabled` to `config.yaml` via `cfg.Save()` (serialized by
+  `API.settingsMu`); the PATCH refuses (400) an attempt to enable when the service
+  is unavailable. `meta.Service` owns the compose logic
   (lookup -> works/{id} -> pick the recording by `recording_id`, first as
   fallback -> up to 3 series rails) behind a bounded in-memory TTL cache (24h
   positive / 1h not-found / 2min transport-error, ~2048-entry cap) so a hot path
@@ -397,8 +407,9 @@ future metadata site can attach enrichment without reshaping the schema.
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`); flip them on as
 phases land. `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
-`metadata` reflects whether the Phase 1.5 metadata lookup is configured
-(`metadata.enabled && metadata.base_url != ""`).
+`metadata` reflects whether the Phase 1.5 metadata lookup is live
+(`metadataOn()`: a valid `metadata.base_url` AND the runtime enabled flag, which
+the admin can toggle at `PATCH /admin/settings`).
 
 ## API surface
 
@@ -408,3 +419,6 @@ and the static UI (`/`, `/connect`, `/admin`, `/web/...`). Everything else needs
 session bearer token; `/admin/*` additionally requires the admin role. The
 metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
 the other `?path=` content endpoints; 404 when metadata is disabled).
+Runtime-toggleable settings are `GET`/`PATCH /admin/settings` (admin only): a
+feature-keyed envelope (`{"metadata":{"enabled","base_url","available"}}`) whose
+`PATCH {"metadata":{"enabled":bool}}` flips the metadata lookup and persists it.

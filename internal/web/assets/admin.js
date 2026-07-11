@@ -97,7 +97,7 @@ function showSection(name) {
     b.classList.toggle("active", b.dataset.section === name));
   SECTIONS.forEach((s) => el("sec-" + s).classList.toggle("active", s === name));
   if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
-  if (name === "overview") loadStats();
+  if (name === "overview") { loadStats(); loadSettings(); }
 }
 
 // ---- Dashboard ----
@@ -144,6 +144,32 @@ function statCard(n, k) {
   c.append(div("n", String(n)), div("k", k));
   return c;
 }
+
+// ---- Settings (community metadata lookup) ----
+async function loadSettings() {
+  let s;
+  try { s = await api("GET", "/admin/settings"); }
+  catch (err) { toast(err.message, "error"); return; }
+  const m = s.metadata || {};
+  const toggle = el("meta-toggle");
+  toggle.checked = !!m.enabled;
+  toggle.disabled = !m.available;
+  el("meta-base-url").textContent = m.base_url || asI18n.t("admin.settings.metadataNoUrl");
+  el("meta-unavailable").classList.toggle("hidden", !!m.available);
+}
+
+el("meta-toggle").addEventListener("change", async (e) => {
+  const enabled = e.target.checked;
+  try {
+    const s = await api("PATCH", "/admin/settings", { metadata: { enabled } });
+    const on = !!(s.metadata && s.metadata.enabled);
+    e.target.checked = on;
+    toast(on ? asI18n.t("admin.settings.metadataOn") : asI18n.t("admin.settings.metadataOff"));
+  } catch (err) {
+    e.target.checked = !enabled; // revert to the pre-toggle state on failure
+    toast(err.message, "error");
+  }
+});
 
 function listenRow(r) {
   const pct = r.duration > 0 ? Math.min(100, Math.round((r.position / r.duration) * 100)) : (r.finished ? 100 : 0);
