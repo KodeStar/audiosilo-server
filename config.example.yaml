@@ -71,3 +71,13 @@ demo:
   library: ""          # name of a library above to grant demo users [AUDIOSILO_DEMO_LIBRARY]
   # max_users: 200     # cap on live demo users; omit for the safe default of 200, explicit 0 = unlimited (opt-in risk) [AUDIOSILO_DEMO_MAX_USERS]
   idle_ttl: "24h"      # reap demo users idle longer than this [AUDIOSILO_DEMO_IDLE_TTL]
+
+# Community metadata lookup (Phase 1.5). When enabled, the server resolves a
+# book's ASIN/ISBN against the community metadata API and exposes a composed
+# enrichment envelope at GET /libraries/{id}/meta (author/narrator, description,
+# series rail); results are cached in memory. Disabling it stops all outbound
+# calls with one key, and the `metadata` capability then reports false so clients
+# hide the UI. base_url must be an absolute http(s) URL when enabled.
+metadata:
+  enabled: true                          # [AUDIOSILO_METADATA_ENABLED]
+  base_url: "https://meta.audiosilo.app" # metaserve base URL [AUDIOSILO_METADATA_BASE_URL]

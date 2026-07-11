@@ -103,6 +103,7 @@ internal/catalog/     libraries, access grants, books, FTS search, listening sta
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
@@ -242,6 +243,24 @@ future metadata site can attach enrichment without reshaping the schema.
   react-native-web's runtime styles). Admin/connect pages keep the stricter
   site-wide CSP. Compatibility is by construction (the image pins a matching web
   build); native apps negotiate via `GET /server` capability flags.
+- **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
+  /api/v1/libraries/{id}/meta?path=` (authed, scope-checked via `authorizedPath`
+  + `bookForPath`, exactly like `item`) resolves the book's `asin`/`isbn`
+  (backfilled via `book_enrichment`) against the community metadata API
+  (`metaserve`, meta.audiosilo.app) and returns a composed enrichment envelope
+  (work + matched recording + series rails, each carrying its own `web_url`).
+  Config is `metadata.{enabled,base_url}` (env `AUDIOSILO_METADATA_ENABLED` /
+  `AUDIOSILO_METADATA_BASE_URL`; `base_url` must be an absolute http(s) URL when
+  enabled) - one key disables ALL outbound calls. `meta.Service` (constructed in
+  `api.New` only when configured; `a.meta == nil` = off) owns the compose logic
+  (lookup -> works/{id} -> pick the recording by `recording_id`, first as
+  fallback -> up to 3 series rails) behind a bounded in-memory TTL cache (24h
+  positive / 1h not-found / 2min transport-error, ~2048-entry cap) so a hot path
+  or a down upstream isn't hammered; the api handler (`handlers_meta.go`) is
+  transport-only. Degradation: disabled -> 404 (and the `metadata` capability is
+  false, so clients hide the UI); no asin/isbn or no upstream match -> `200
+  {"matched": false}`; upstream unreachable -> 502. Out of scope for now: no cover
+  remote-fallback, no persisting meta into the DB, no tag-based ASIN extraction.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
@@ -375,13 +394,17 @@ future metadata site can attach enrichment without reshaping the schema.
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`, `api_keys`); flip them on as phases land.
-`transcode` already reflects whether ffmpeg is configured; `api_keys` is true
-(user-minted personal access tokens are supported).
+`upload`, `transcode`, `websocket`, `api_keys`, `metadata`); flip them on as
+phases land. `transcode` already reflects whether ffmpeg is configured;
+`api_keys` is true (user-minted personal access tokens are supported);
+`metadata` reflects whether the Phase 1.5 metadata lookup is configured
+(`metadata.enabled && metadata.base_url != ""`).
 
 ## API surface
 
 See `internal/api/api.go` for the full route table. Public: `/server`,
 `/auth/redeem`, `/auth/exchange`, `/auth/login`, the well-known association files,
 and the static UI (`/`, `/connect`, `/admin`, `/web/...`). Everything else needs a
-session bearer token; `/admin/*` additionally requires the admin role.
+session bearer token; `/admin/*` additionally requires the admin role. The
+metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
+the other `?path=` content endpoints; 404 when metadata is disabled).
