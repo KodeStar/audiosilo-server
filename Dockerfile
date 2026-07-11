@@ -36,7 +36,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
 FROM ${WEB_IMAGE} AS web
 
 # --- final image ---------------------------------------------------------------
-FROM alpine:3.20
+# Track the current stable Alpine (3.20 went EOL in April 2026).
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates ffmpeg su-exec
 COPY --from=build /out/audiosilo /usr/local/bin/audiosilo
 COPY --from=web   /web           /app/web
