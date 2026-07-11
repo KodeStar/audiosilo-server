@@ -236,6 +236,141 @@ func TestEnrichSeriesFailureNonFatal(t *testing.T) {
 	}
 }
 
+// TestEnrichPartialSeriesShortCached: a transient series-rail failure must not
+// be cached positive for the full 24h - the partial envelope is held only for
+// the short errorTTL, so "more in this series" reappears within minutes of the
+// blip clearing rather than a day later.
+func TestEnrichPartialSeriesShortCached(t *testing.T) {
+	var seriesFail atomic.Bool
+	seriesFail.Store(true)
+	var lookupHits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
+		lookupHits.Add(1)
+		_, _ = w.Write([]byte(martianLookup))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(martianWork))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		if seriesFail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(marsSeries))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	clk := &clock{t: time.Unix(1_700_000_000, 0)}
+	svc := NewService(srv.URL, clk.now)
+
+	// First call: the series endpoint is down, the envelope is usable but the
+	// rail is missing.
+	env, err := svc.Enrich(context.Background(), "B00FLIJJSY", "")
+	if err != nil {
+		t.Fatalf("partial Enrich should still succeed: %v", err)
+	}
+	if len(env.Series) != 0 {
+		t.Fatalf("expected the failed rail to be missing, got %+v", env.Series)
+	}
+	// The partial result IS cached (briefly): an immediate retry is a hit.
+	if _, err := svc.Enrich(context.Background(), "B00FLIJJSY", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := lookupHits.Load(); got != 1 {
+		t.Fatalf("partial result should be short-cached, expected 1 lookup, got %d", got)
+	}
+
+	// Past the SHORT (error) TTL - far inside the 24h positive TTL - the blip
+	// has cleared and a re-fetch restores the full rails.
+	seriesFail.Store(false)
+	clk.advance(errorTTL + time.Second)
+	env, err = svc.Enrich(context.Background(), "B00FLIJJSY", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lookupHits.Load(); got != 2 {
+		t.Fatalf("expected a re-fetch past the short partial TTL, got %d lookups", got)
+	}
+	if len(env.Series) != 1 || len(env.Series[0].Works) != 2 {
+		t.Fatalf("expected the full series rail after recovery, got %+v", env.Series)
+	}
+}
+
+// TestEnrichSeriesAttemptsBounded: the series fan-out is bounded by ATTEMPTS,
+// not successes - a work carrying more series refs than maxSeriesRails with a
+// failing series endpoint issues exactly maxSeriesRails series requests, never
+// one per ref.
+func TestEnrichSeriesAttemptsBounded(t *testing.T) {
+	manySeriesWork := `{
+	  "id":"odd","title":"Odd","subtitle":"",
+	  "authors":[{"id":"a","name":"A"}],
+	  "language":"en","first_published":"","description":"",
+	  "series":[
+	    {"id":"s1","name":"S1","position":"1"},
+	    {"id":"s2","name":"S2","position":"1"},
+	    {"id":"s3","name":"S3","position":"1"},
+	    {"id":"s4","name":"S4","position":"1"},
+	    {"id":"s5","name":"S5","position":"1"},
+	    {"id":"s6","name":"S6","position":"1"}
+	  ],
+	  "recordings":[]
+	}`
+	var seriesHits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"work":{"id":"odd","title":"Odd","authors":[],"cover_url":null},"recording_id":""}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(manySeriesWork))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		seriesHits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+
+	if _, err := svc.Enrich(context.Background(), "B0ODD", ""); err != nil {
+		t.Fatalf("series failures are non-fatal: %v", err)
+	}
+	if got := seriesHits.Load(); got != maxSeriesRails {
+		t.Fatalf("series attempts = %d, want exactly %d (bounded by attempts, not successes)", got, maxSeriesRails)
+	}
+}
+
+// TestEnrichComposeDeadlineCached: the compose fan-out has its own deadline, and
+// hitting it while the CALLER is still live is a genuine upstream-degradation
+// signal - the failure must be cached (for errorTTL) so a slow-but-alive
+// upstream is not re-hammered on every cold book.
+func TestEnrichComposeDeadlineCached(t *testing.T) {
+	var lookupHits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, r *http.Request) {
+		lookupHits.Add(1)
+		// Block past the (shrunk) compose budget; released when the client's
+		// derived deadline cancels the request.
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+	svc.composeBudget = 50 * time.Millisecond // test-scoped; production default is composeTimeout
+
+	if _, err := svc.Enrich(context.Background(), "B00FLIJJSY", ""); err == nil {
+		t.Fatal("expected the compose deadline to surface as an error")
+	}
+	// The parent context was live, so the deadline failure WAS cached: a second
+	// call within errorTTL never reaches upstream.
+	if _, err := svc.Enrich(context.Background(), "B00FLIJJSY", ""); err == nil {
+		t.Fatal("expected the cached deadline error")
+	}
+	if got := lookupHits.Load(); got != 1 {
+		t.Fatalf("deadline failure should be cached, expected 1 lookup, got %d", got)
+	}
+}
+
 // clock is a test-controllable time source.
 type clock struct {
 	mu sync.Mutex

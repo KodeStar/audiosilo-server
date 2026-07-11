@@ -14,7 +14,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -28,17 +27,18 @@ var ErrNotFound = errors.New("meta: not found")
 // per-request timeout budget.
 const clientTimeout = 5 * time.Second
 
-// Client is a thin read-only HTTP client for the metaserve JSON API. It GETs and
+// client is a thin read-only HTTP client for the metaserve JSON API. It GETs and
 // decodes the small set of endpoints the enrichment composition needs.
-type Client struct {
+type client struct {
 	baseURL string // no trailing slash; API is served under <baseURL>/api/v1
 	http    *http.Client
 }
 
-// NewClient builds a Client for the given metaserve base URL.
-func NewClient(baseURL string) *Client {
-	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
+// newClient builds a client for the given metaserve base URL. baseURL is
+// expected already trimmed of a trailing slash (NewService does the trim).
+func newClient(baseURL string) *client {
+	return &client{
+		baseURL: baseURL,
 		http:    &http.Client{Timeout: clientTimeout},
 	}
 }
@@ -46,7 +46,7 @@ func NewClient(baseURL string) *Client {
 // getJSON fetches path (relative to the API root) and decodes the JSON body into
 // out. A 404 becomes ErrNotFound; any other non-2xx (or transport failure) is a
 // plain error the caller treats as an upstream outage.
-func (c *Client) getJSON(ctx context.Context, path string, out any) error {
+func (c *client) getJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return err
@@ -71,9 +71,9 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	return nil
 }
 
-// Lookup resolves an asin (preferred) or isbn to a work id + recording id via
+// lookup resolves an asin (preferred) or isbn to a work id + recording id via
 // GET /api/v1/lookup. Returns ErrNotFound when there is no match.
-func (c *Client) Lookup(ctx context.Context, asin, isbn string) (*upstreamLookup, error) {
+func (c *client) lookup(ctx context.Context, asin, isbn string) (*upstreamLookup, error) {
 	q := url.Values{}
 	switch {
 	case asin != "":
@@ -90,8 +90,8 @@ func (c *Client) Lookup(ctx context.Context, asin, isbn string) (*upstreamLookup
 	return &out, nil
 }
 
-// Work fetches the full work document via GET /api/v1/works/{id}.
-func (c *Client) Work(ctx context.Context, id string) (*upstreamWorkDetail, error) {
+// work fetches the full work document via GET /api/v1/works/{id}.
+func (c *client) work(ctx context.Context, id string) (*upstreamWorkDetail, error) {
 	var out upstreamWorkDetail
 	if err := c.getJSON(ctx, "/api/v1/works/"+url.PathEscape(id), &out); err != nil {
 		return nil, err
@@ -99,8 +99,8 @@ func (c *Client) Work(ctx context.Context, id string) (*upstreamWorkDetail, erro
 	return &out, nil
 }
 
-// Series fetches an ordered series rail via GET /api/v1/series/{id}.
-func (c *Client) Series(ctx context.Context, id string) (*upstreamSeriesDetail, error) {
+// series fetches an ordered series rail via GET /api/v1/series/{id}.
+func (c *client) series(ctx context.Context, id string) (*upstreamSeriesDetail, error) {
 	var out upstreamSeriesDetail
 	if err := c.getJSON(ctx, "/api/v1/series/"+url.PathEscape(id), &out); err != nil {
 		return nil, err
@@ -125,9 +125,7 @@ type upstreamWorkCard struct {
 	ID       string              `json:"id"`
 	Title    string              `json:"title"`
 	Authors  []upstreamPersonRef `json:"authors"`
-	Series   *upstreamSeriesRef  `json:"series"`
 	CoverURL *string             `json:"cover_url"`
-	AddedAt  *string             `json:"added_at"`
 }
 
 type upstreamLookup struct {
