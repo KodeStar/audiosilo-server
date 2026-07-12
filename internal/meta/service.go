@@ -31,6 +31,31 @@ type MetaPersonRef struct {
 	Name string `json:"name"`
 }
 
+// MetaPosition is a spoiler position on a work's own (edition-independent)
+// timeline. Chapter is the logical work chapter; 0 = front matter / prior-book.
+type MetaPosition struct {
+	Chapter int `json:"chapter"`
+}
+
+// MetaCharacter is one community-authored, spoiler-tagged character entry
+// (the CC BY-SA layer). Reveal is where it is first disclosed in the work.
+type MetaCharacter struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Aliases     []string     `json:"aliases,omitempty"`
+	Role        string       `json:"role,omitempty"`
+	Reveal      MetaPosition `json:"reveal"`
+	Description string       `json:"description,omitempty"`
+}
+
+// MetaRecap is one position-keyed "story so far" recap. Through is the position
+// it is safe to show at (the listener has finished that chapter).
+type MetaRecap struct {
+	Through MetaPosition `json:"through"`
+	Scope   string       `json:"scope,omitempty"`
+	Text    string       `json:"text"`
+}
+
 // MetaWork is the abstract book in an enrichment envelope.
 type MetaWork struct {
 	ID             string          `json:"id"`
@@ -40,6 +65,8 @@ type MetaWork struct {
 	Language       string          `json:"language"`
 	FirstPublished string          `json:"first_published,omitempty"`
 	Description    string          `json:"description,omitempty"`
+	Characters     []MetaCharacter `json:"characters,omitempty"`
+	Recaps         []MetaRecap     `json:"recaps,omitempty"`
 }
 
 // MetaRecording is the specific narration/production matched by the lookup.
@@ -220,6 +247,8 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 			Language:       detail.Language,
 			FirstPublished: detail.FirstPublished,
 			Description:    detail.Description,
+			Characters:     toCharacters(detail.Characters),
+			Recaps:         toRecaps(detail.Recaps),
 		},
 		Recording: pickRecording(detail.Recordings, lookup.RecordingID),
 		Series:    rails,
@@ -311,6 +340,43 @@ func toPersonRefs(in []upstreamPersonRef) []MetaPersonRef {
 	out := make([]MetaPersonRef, 0, len(in))
 	for _, p := range in {
 		out = append(out, MetaPersonRef(p))
+	}
+	return out
+}
+
+// toCharacters maps the upstream character sidecar to the outward envelope,
+// preserving upstream order. Returns nil (omitted) when there are none.
+func toCharacters(in []upstreamCharacter) []MetaCharacter {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]MetaCharacter, 0, len(in))
+	for _, c := range in {
+		out = append(out, MetaCharacter{
+			ID:          c.ID,
+			Name:        c.Name,
+			Aliases:     c.Aliases,
+			Role:        c.Role,
+			Reveal:      MetaPosition(c.Reveal),
+			Description: c.Description,
+		})
+	}
+	return out
+}
+
+// toRecaps maps the upstream recap sidecar to the outward envelope, preserving
+// upstream (position) order. Returns nil (omitted) when there are none.
+func toRecaps(in []upstreamRecap) []MetaRecap {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]MetaRecap, 0, len(in))
+	for _, r := range in {
+		out = append(out, MetaRecap{
+			Through: MetaPosition(r.Through),
+			Scope:   r.Scope,
+			Text:    r.Text,
+		})
 	}
 	return out
 }

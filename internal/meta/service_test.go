@@ -64,6 +64,14 @@ const martianWork = `{
   "recordings":[
     {"id":"rec1","narrators":[{"id":"nobody","name":"Nobody"}],"abridged":false,"runtime_min":600,"release_date":"2012-01-01","publisher":"Other","cover_url":"https://c/rec1.jpg","chapter_count":10},
     {"id":"rec2","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/rec2.jpg","chapter_count":12}
+  ],
+  "characters":[
+    {"id":"mark-watney","name":"Mark Watney","aliases":["Watney"],"role":"protagonist","reveal":{"chapter":1},"description":"An astronaut-botanist stranded alone on Mars."},
+    {"id":"mission-control","name":"Venkat Kapoor","role":"supporting","reveal":{"chapter":6},"description":"A NASA director coordinating the rescue."}
+  ],
+  "recaps":[
+    {"through":{"chapter":3},"scope":"book","text":"Watney is stranded and takes stock."},
+    {"through":{"chapter":8},"scope":"book","text":"NASA realizes he is alive."}
   ]
 }`
 
@@ -104,6 +112,30 @@ func TestEnrichComposition(t *testing.T) {
 	}
 	if len(env.Work.Authors) != 1 || env.Work.Authors[0].Name != "Andy Weir" {
 		t.Fatalf("authors wrong: %+v", env.Work.Authors)
+	}
+	// Characters flow through in upstream order, with reveal position + aliases.
+	if len(env.Work.Characters) != 2 {
+		t.Fatalf("expected 2 characters, got %d: %+v", len(env.Work.Characters), env.Work.Characters)
+	}
+	c0 := env.Work.Characters[0]
+	if c0.ID != "mark-watney" || c0.Name != "Mark Watney" || c0.Role != "protagonist" || c0.Reveal.Chapter != 1 {
+		t.Fatalf("character[0] wrong: %+v", c0)
+	}
+	if len(c0.Aliases) != 1 || c0.Aliases[0] != "Watney" || c0.Description == "" {
+		t.Fatalf("character[0] aliases/desc wrong: %+v", c0)
+	}
+	if env.Work.Characters[1].Reveal.Chapter != 6 {
+		t.Fatalf("character[1] reveal wrong: %+v", env.Work.Characters[1])
+	}
+	// Recaps flow through in upstream (position) order with scope + through.
+	if len(env.Work.Recaps) != 2 {
+		t.Fatalf("expected 2 recaps, got %d: %+v", len(env.Work.Recaps), env.Work.Recaps)
+	}
+	if env.Work.Recaps[0].Through.Chapter != 3 || env.Work.Recaps[0].Scope != "book" || env.Work.Recaps[0].Text == "" {
+		t.Fatalf("recap[0] wrong: %+v", env.Work.Recaps[0])
+	}
+	if env.Work.Recaps[1].Through.Chapter != 8 {
+		t.Fatalf("recap[1] wrong: %+v", env.Work.Recaps[1])
 	}
 	// Recording is chosen by lookup's recording_id (rec2), not the first (rec1).
 	if env.Recording == nil || env.Recording.ID != "rec2" || env.Recording.Publisher != "Podium Audio" {

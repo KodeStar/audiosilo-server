@@ -249,6 +249,11 @@ future metadata site can attach enrichment without reshaping the schema.
   (backfilled via `book_enrichment`) against the community metadata API
   (`metaserve`, meta.audiosilo.app) and returns a composed enrichment envelope
   (work + matched recording + series rails, each carrying its own `web_url`).
+  The `work` also carries the community **characters** and **recaps** (the CC
+  BY-SA expressive layer: spoiler-tagged, position-keyed - `reveal`/`through`
+  are logical work-chapter positions) when metaserve has them; both are
+  additive/`omitempty`, mirrored on `upstreamWorkDetail` and `MetaWork` and
+  passed through by `toCharacters`/`toRecaps`.
   Config is `metadata.{enabled,base_url}` (env `AUDIOSILO_METADATA_ENABLED` /
   `AUDIOSILO_METADATA_BASE_URL`; `base_url` must be an absolute http(s) URL when
   enabled) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
