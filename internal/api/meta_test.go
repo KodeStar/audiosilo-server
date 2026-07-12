@@ -32,7 +32,7 @@ func (m *mockMetaserve) handler() http.Handler {
 		_, _ = w.Write([]byte(`{"work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null},"recording_id":"rec1"}`))
 	})
 	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}]}`))
+		_, _ = w.Write([]byte(`{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}]}`))
 	})
 	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"mars","name":"Mars","authors":[{"id":"andy-weir","name":"Andy Weir"}],"works":[{"position":"1","work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}},{"position":"2","work":{"id":"artemis","title":"Artemis","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}}]}`))
@@ -76,7 +76,7 @@ func TestMetaMatch(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("meta match = %d %s, want 200", resp.StatusCode, body)
 	}
-	for _, want := range []string{`"matched":true`, `"the-martian"`, `"R. C. Bray"`, `"Podium Audio"`, `/work?id=the-martian`, `"artemis"`} {
+	for _, want := range []string{`"matched":true`, `"the-martian"`, `"R. C. Bray"`, `"Podium Audio"`, `/work?id=the-martian`, `"artemis"`, `"mark-watney"`, `"characters"`, `"recaps"`, `"reveal":{"chapter":1}`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("meta envelope missing %q: %s", want, body)
 		}

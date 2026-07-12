@@ -143,6 +143,25 @@ type upstreamRecording struct {
 	CoverURL    string              `json:"cover_url"`
 }
 
+type upstreamPosition struct {
+	Chapter int `json:"chapter"`
+}
+
+type upstreamCharacter struct {
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Aliases     []string         `json:"aliases"`
+	Role        string           `json:"role"`
+	Reveal      upstreamPosition `json:"reveal"`
+	Description string           `json:"description"`
+}
+
+type upstreamRecap struct {
+	Through upstreamPosition `json:"through"`
+	Scope   string           `json:"scope"`
+	Text    string           `json:"text"`
+}
+
 type upstreamWorkDetail struct {
 	ID             string              `json:"id"`
 	Title          string              `json:"title"`
@@ -153,6 +172,8 @@ type upstreamWorkDetail struct {
 	Description    string              `json:"description"`
 	Series         []upstreamSeriesRef `json:"series"`
 	Recordings     []upstreamRecording `json:"recordings"`
+	Characters     []upstreamCharacter `json:"characters"`
+	Recaps         []upstreamRecap     `json:"recaps"`
 }
 
 type upstreamSeriesEntry struct {
