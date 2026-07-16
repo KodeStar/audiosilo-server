@@ -174,8 +174,13 @@ func TestScannerFolderBookExpandsEmbeddedChapters(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	cat := catalog.New(db, time.Now)
 	// A single chaptered m4b living in its own book folder - the common
-	// "books in their own folders" layout.
-	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "folderbook"))
+	// "books in their own folders" layout. The tree is built at runtime (the
+	// apostrophes in the real-world title are prohibited inside a Go module
+	// zip, so a committed fixture with this path would make the whole module
+	// unfetchable); building it here keeps apostrophe paths exercised.
+	root := t.TempDir()
+	copyChapteredM4B(t, filepath.Join(root,
+		"A. F. Kay", "Divine Apostasy", "AF01 - Shade's First Rule", "Shade's First Rule.m4b"))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
 		Name: "FolderBooks", Root: root,
 	})
@@ -408,6 +413,22 @@ func newScanEnv(t *testing.T) (*catalog.Catalog, *Scanner, context.Context) {
 }
 
 // copyFixtureM4B writes a copy of a fixture audiobook to dst (creating parents).
+// copyChapteredM4B copies the 3-chapter m4b fixture (Prologue / Chapter One /
+// Chapter Two embedded chapter marks) to dst, creating parent directories.
+func copyChapteredM4B(t *testing.T, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "chaptered.m4b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func copyFixtureM4B(t *testing.T, dst string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(testdataRoot(t), "Will Wight", "Cradle", "01 - Unsouled.m4b"))
