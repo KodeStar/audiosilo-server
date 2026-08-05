@@ -57,6 +57,69 @@ func TestBest(t *testing.T) {
 	}
 }
 
+// TestBestSequenceConflict pins the real-world false positive behind a wrong
+// "already on server": digit-numbered series entries ("Unintended Cultivator:
+// Volume 9" vs the indexed "… Volume 2") both reduce to the bare series tokens, so
+// they tied on full token overlap and a not-yet-imported volume matched an indexed
+// sibling. When BOTH titles are bare "series + number", a sequence conflict must
+// disqualify - but ONLY then: titles with real residual words keep matching on
+// words even when the derived numbers disagree, because sub-series/part numbering
+// makes those numbers unreliable (a first symmetric-penalty fix broke exactly
+// that, marking whole libraries "to import" - the cases below are from it).
+func TestBestSequenceConflict(t *testing.T) {
+	books := []Book{
+		0: {Author: "Eric Dontigney", Series: "Unintended Cultivator", Title: "Unintended Cultivator, Volume 2"},
+		1: {Author: "Eric Dontigney", Series: "Unintended Cultivator", Title: "Unintended Cultivator: Volume 3"},
+		2: {Author: "Eric Dontigney", Series: "Unintended Cultivator", Title: "Unintended Cultivator, Volume Eight"},
+		3: {Author: "J.R. Mathews", Series: "Portal to Nova Roma", Title: "Portal to Nova Roma (Unabridged)"},
+		// Real regression shapes: the title number is sub-series/part numbering that
+		// disagrees with the Audible series sequence, or the SeriesIndex is junk.
+		4: {Author: "Yrsillar", Series: "Destiny Cycle", Title: "Threads of Destiny: Volume 5"},
+		5: {Author: "Lindsay Buroker", Series: "The Emperor's Edge", Title: "Forged in Blood: Part 1"},
+		// "1PL04 - …" folder shortcode parses to SeriesIndex 1; the explicit
+		// "Volume 4" in the bare title must outrank it.
+		6: {Author: "Robert Blaise", Series: "1% Lifesteal", Title: "1% Lifesteal, Volume 4", SeriesIndex: 1},
+		// Untrustworthy-number shapes the veto must NOT act on: a junk index on a
+		// numberless bare title, an incidental "(2015)" year, a digit-named series
+		// whose spelling difference keeps it from being stripped.
+		7: {Author: "A. N. Author", Series: "Some Series", Title: "Some Series (Unabridged)", SeriesIndex: 3},
+		8: {Author: "Some Author", Series: "Series Name", Title: "Series Name (2015): Volume 3", SeriesIndex: 3},
+		9: {Author: "Asato Asato", Series: "Eighty-Six", Title: "86: Volume 9", SeriesIndex: 9},
+	}
+	q := func(title, author, series string, seq float64) Query {
+		return Query{Title: title, Author: author, Series: series, Sequence: seq, HasSequence: true}
+	}
+	cases := []struct {
+		name string
+		q    Query
+		want int // -1 = expect no match
+	}{
+		{"not-yet-imported volume must not match a sibling", q("Unintended Cultivator: Volume 9", "Eric Dontigney", "Unintended Cultivator", 9), -1},
+		{"digit volume still matches itself", q("Unintended Cultivator: Volume 3", "Eric Dontigney", "Unintended Cultivator", 3), 1},
+		{"word-number volume still matches (no derivable sequence)", q("Unintended Cultivator, Volume Eight", "Eric Dontigney", "Unintended Cultivator", 8), 2},
+		{"series-titled book 1 still matches (no derivable sequence)", q("Portal to Nova Roma", "J.R. Mathews", "Portal to Nova Roma", 1), 3},
+		{"sub-series volume number outranked by title words", q("Threads of Destiny: Volume 5", "Yrsillar", "Destiny Cycle", 8), 4},
+		{"part number outranked by title words", q("Forged in Blood: Part 1", "Lindsay Buroker", "The Emperor's Edge", 6), 5},
+		{"junk SeriesIndex outranked by explicit bare-title volume", q("1% Lifesteal, Volume 4", "Robert Blaise", "1% Lifesteal", 4), 6},
+		{"junk SeriesIndex still blocks a genuinely different bare volume", q("1% Lifesteal, Volume 9", "Robert Blaise", "1% Lifesteal", 9), -1},
+		{"junk SeriesIndex on a numberless bare title never vetoes", q("Some Series", "A. N. Author", "Some Series", 1), 7},
+		{"incidental year is not a volume number", q("Series Name: Volume 3", "Some Author", "Series Name", 3), 8},
+		{"digit-named series is not a volume number", q("86: Volume 9", "Asato Asato", "Eighty-Six", 9), 9},
+	}
+	for _, tc := range cases {
+		got, ok := Best(books, tc.q)
+		if tc.want == -1 {
+			if ok {
+				t.Errorf("%s: expected no match, got idx %d (%q)", tc.name, got, books[got].Title)
+			}
+			continue
+		}
+		if !ok || got != tc.want {
+			t.Errorf("%s: got idx %d ok=%v, want %d", tc.name, got, ok, tc.want)
+		}
+	}
+}
+
 func TestCleanTitle(t *testing.T) {
 	cases := []struct{ title, series, want string }{
 		{"Diary of a Wimpy Kid: The Ugly Truth (Book 5)", "Diary of a Wimpy Kid", "The Ugly Truth"},

@@ -249,6 +249,37 @@ func TestApplyTagsTitleAlbumPrecedence(t *testing.T) {
 	}
 }
 
+// TestBookTitle pins the album/title tag choice. Album is still preferred (the
+// audiobook title commonly lives there while title carries a track name), EXCEPT
+// when the title tag extends the album with a real subtitle - the Audible tagging
+// shape where album holds the SERIES ("Portal to Nova Roma (Unabridged)") and only
+// the title tag carries the actual book title ("Portal to Nova Roma: Paris
+// (Unabridged)"). Preferring album there indexed the book under its series name,
+// which broke the manager's already-on-server matching for that book.
+func TestBookTitle(t *testing.T) {
+	cases := []struct{ name, album, title, want string }{
+		{"album wins by default", "Album Name", "Track Name", "Album Name"},
+		{"series-in-album yields to subtitled title", "Portal to Nova Roma (Unabridged)", "Portal to Nova Roma: Paris (Unabridged)", "Portal to Nova Roma: Paris (Unabridged)"},
+		{"identical pair keeps album", "Book Title", "Book Title", "Book Title"},
+		{"part tail is a track name, keep album", "Book Title", "Book Title - Part 2", "Book Title"},
+		{"bare number tail is a track name, keep album", "Book Title", "Book Title 03", "Book Title"},
+		{"disc tail is a track name, keep album", "Book Title", "Book Title CD1", "Book Title"},
+		{"chapter tail is a track name, keep album", "Book Title", "Book Title - Chapter 12", "Book Title"},
+		{"volume tail is book identity, prefer title", "Unintended Cultivator", "Unintended Cultivator: Volume 9", "Unintended Cultivator: Volume 9"},
+		{"numbered chapter-name tail is a track name, keep album", "Book Title", "Book Title 03 - Some Chapter Name", "Book Title"},
+		{"chapter N + name tail is a track name, keep album", "A Game of Thrones", "A Game of Thrones - Chapter 1 - Bran", "A Game of Thrones"},
+		{"mid-word prefix is not an extension, keep album", "Dark", "Darker Days", "Dark"},
+		{"empty album falls back to title", "", "Only Title", "Only Title"},
+		{"empty title falls back to album", "Only Album", "", "Only Album"},
+		{"edition suffix alone keeps album", "Book Title", "Book Title (Unabridged)", "Book Title"},
+	}
+	for _, tc := range cases {
+		if got := bookTitle(tc.album, tc.title); got != tc.want {
+			t.Errorf("%s: bookTitle(%q, %q) = %q, want %q", tc.name, tc.album, tc.title, got, tc.want)
+		}
+	}
+}
+
 func TestIsGenericTitle(t *testing.T) {
 	generic := []string{
 		"", "Track 01", "track 1", "Chapter 12", "Part 3", "Disc 2",

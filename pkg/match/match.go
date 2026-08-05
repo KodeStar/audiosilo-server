@@ -11,6 +11,9 @@
 // same-author candidate on the overlap of its significant title tokens (with the
 // series name and "(Book N)" fluff stripped), boosted when the series and the
 // sequence agree - deriving the sequence from the title when it isn't a column.
+// When both titles are nothing but "series + number", the number is the whole
+// identity: a conflicting sequence disqualifies the candidate outright (titles
+// with real words are exempt - sub-series numbering makes derived numbers noisy).
 // Tuned against a real 1080-book / 720-book pairing (~4% → ~88% matched, no false
 // positives in audit).
 package match
@@ -43,7 +46,8 @@ type Query struct {
 
 // threshold is the minimum score Best accepts. A same-series title-subset scores
 // 1.5; a same-series strong token overlap or an author + full-title subset scores
-// 1.0; weaker overlaps fall below.
+// 1.0; weaker overlaps fall below. A same-series candidate whose bare title
+// conflicts with the query on sequence never scores at all (skipped outright).
 const threshold = 1.0
 
 // Best returns the index of the best-matching book and whether it cleared the
@@ -61,6 +65,13 @@ func Best(books []Book, q Query) (int, bool) {
 		qToks = titleTokens(q.TitleShort, q.Series)
 	}
 	qSeq, qHasSeq := querySeq(q)
+	qBare := bareTitle(q.Title, q.Series)
+	// The number a bare query title is compared on: its own explicit marker when
+	// present (like-for-like with the candidate side), else the sequence column.
+	qBareSeq, qBareSeqOK := bareSeq(q.Title, q.Series)
+	if !qBareSeqOK {
+		qBareSeq, qBareSeqOK = qSeq, qHasSeq
+	}
 
 	best, bestScore := -1, 0.0
 	for i := range books {
@@ -69,6 +80,23 @@ func Best(books []Book, q Query) (int, bool) {
 			continue
 		}
 		sameSeries := qSeries != "" && NormalizeSeries(b.Series) == qSeries
+		// When BOTH titles reduce to the bare series name ("Series: Volume N"),
+		// their full token overlap is the series matching itself, not title
+		// evidence - the volume number is the only identity left. An explicit
+		// marker number that disagrees means a sibling, not this book;
+		// disqualify it so a not-yet-imported volume can't "match" an indexed
+		// one. Titles with real residual words are exempt: sub-series/part
+		// numbering makes derived numbers unreliable there ("Threads of
+		// Destiny: Volume 5" is Destiny Cycle #8), and matching words outrank a
+		// noisy number. Only bareSeq is trusted to veto - SeriesIndex can carry
+		// junk parsed from a folder shortcode ("1PL02 - …" yields 1) and
+		// SeqFromTitle grabs incidental numbers (a "(2015)" year), either of
+		// which would veto true matches.
+		if sameSeries && qBare && qBareSeqOK && bareTitle(b.Title, b.Series) {
+			if bSeq, ok := bareSeq(b.Title, b.Series); ok && !seqEqual(bSeq, qBareSeq) {
+				continue
+			}
+		}
 		score := tokenScore(qToks, titleTokens(b.Title, b.Series))
 		if sameSeries {
 			score += 0.5 // series agreement is a strong confirmation
@@ -104,14 +132,7 @@ var fluffWords = regexp.MustCompile(`(?i)\b(?:series|unabridged|abridged|audiobo
 // Wimpy Kid" → "The Ugly Truth". Useful both to name a file and (tokenized) to
 // match. Falls back to the original (minus parentheticals) if cleaning empties it.
 func CleanTitle(title, series string) string {
-	t := title
-	if s := strings.TrimSpace(series); s != "" {
-		t = removeFold(t, s)
-	}
-	t = dropGenreSubtitle(t)
-	t = matchNoise.ReplaceAllString(t, " ")
-	t = fluffWords.ReplaceAllString(t, " ")
-	t = tidyTitle(t)
+	t := residualTitle(title, series)
 	if t == "" {
 		t = tidyTitle(matchNoise.ReplaceAllString(title, " "))
 	}
@@ -119,6 +140,55 @@ func CleanTitle(title, series string) string {
 		t = strings.TrimSpace(title)
 	}
 	return t
+}
+
+// residualTitle is the title with the series name and numbering/edition fluff
+// removed and NO fallback - empty when the title carries nothing of its own
+// ("Unintended Cultivator: Volume 9" with that series is pure series + number).
+func residualTitle(title, series string) string {
+	t := title
+	if s := strings.TrimSpace(series); s != "" {
+		t = removeFold(t, s)
+	}
+	t = dropGenreSubtitle(t)
+	t = matchNoise.ReplaceAllString(t, " ")
+	t = fluffWords.ReplaceAllString(t, " ")
+	return tidyTitle(t)
+}
+
+// bareTitle reports whether a title reduces to nothing beyond its series name and
+// numbering - the shape whose CleanTitle fallback reintroduces the series words,
+// making token overlap between two such titles meaningless as title evidence.
+func bareTitle(title, series string) bool {
+	return len(tokenize(residualTitle(title, series))) == 0
+}
+
+// markerSeq matches an explicit sequence marker ("Volume 9", "Book 3", "(Book 5)" -
+// the marker half of matchNoise) and captures its number.
+var markerSeq = regexp.MustCompile(`(?i)\b(?:book|bk|vol|volume|part|pt|episode|ep|#)\s*\.?\s*(\d+(?:\.\d+)?)\b`)
+
+// bareSeq derives the volume number of a bare "series + number" title from its
+// explicit marker ("… Volume 9") or, failing that, from a residual that is nothing
+// but the number ("Series Name 3"). Unlike SeqFromTitle it never grabs an
+// incidental number (a "(2015)" year, a digit-named series like "86"), and unlike
+// the SeriesIndex column it can't carry junk parsed from a folder shortcode -
+// which makes it the only number trustworthy enough to disqualify a match on.
+func bareSeq(title, series string) (float64, bool) {
+	t := title
+	if s := strings.TrimSpace(series); s != "" {
+		t = removeFold(t, s)
+	}
+	if m := markerSeq.FindStringSubmatch(t); m != nil {
+		if v, err := strconv.ParseFloat(m[1], 64); err == nil {
+			return v, true
+		}
+	}
+	if s := tidyTitle(t); isAllDigits(s) {
+		if v, err := strconv.ParseFloat(s, 64); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
 }
 
 // SeqFromTitle extracts a series sequence from a title by stripping the series name
@@ -254,11 +324,17 @@ var titleStopwords = map[string]bool{
 }
 
 // titleTokens reduces a title to its set of significant lowercase word tokens after
-// CleanTitle has removed the series name and fluff. Stopwords, single characters,
-// and pure numbers are dropped so the distinctive book words drive the match.
+// CleanTitle has removed the series name and fluff.
 func titleTokens(title, series string) map[string]struct{} {
+	return tokenize(CleanTitle(title, series))
+}
+
+// tokenize splits a cleaned title into its significant lowercase word tokens.
+// Stopwords, single characters, and pure numbers are dropped so the distinctive
+// book words drive the match.
+func tokenize(s string) map[string]struct{} {
 	out := map[string]struct{}{}
-	for _, w := range strings.FieldsFunc(strings.ToLower(CleanTitle(title, series)), notAlnum) {
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), notAlnum) {
 		if len(w) < 2 || titleStopwords[w] || isAllDigits(w) {
 			continue
 		}

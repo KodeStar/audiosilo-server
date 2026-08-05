@@ -6,6 +6,7 @@ package metadata
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -90,7 +91,7 @@ func Extract(path, ffprobePath string) (*Metadata, error) {
 }
 
 func applyTags(m *Metadata, md tag.Metadata) {
-	if title := firstNonEmpty(md.Album(), md.Title()); title != "" { // audiobook title commonly in album
+	if title := bookTitle(md.Album(), md.Title()); title != "" {
 		m.Title = title
 	}
 	if a := firstNonEmpty(md.AlbumArtist(), md.Artist()); a != "" {
@@ -111,6 +112,56 @@ func applyTags(m *Metadata, md tag.Metadata) {
 		m.HasCover = true
 	}
 }
+
+// bookTitle picks the book title from an album/title tag pair. The album tag
+// usually holds the audiobook's title (the title tag often carries a chapter or
+// track name), but Audible-style files put the SERIES in album and the real title
+// in the title tag ("Portal to Nova Roma (Unabridged)" vs "Portal to Nova Roma:
+// Paris (Unabridged)") - preferring album there indexes the book under its series
+// name and the real title is lost. Prefer the title tag when it extends the album
+// at a word boundary with a tail that carries book identity (a subtitle, or a
+// "Volume N" that names a different book); a tail that is a track marker ("Album -
+// Part 2", "Album 03") or leads with one ("Album 03 - Some Chapter Name", the
+// per-file naming of CD/chapter rips whose first file would retitle the whole
+// book) keeps the album, since that is a track name.
+func bookTitle(album, title string) string {
+	a, t := strings.TrimSpace(album), strings.TrimSpace(title)
+	if a == "" || t == "" {
+		return firstNonEmpty(a, t)
+	}
+	ca, ct := canonTag(a), canonTag(t)
+	if len(ct) > len(ca) && strings.HasPrefix(ct, ca) && !isAlnumByte(ct[len(ca)]) {
+		if tail := strings.Trim(ct[len(ca):], " -:,;|."); tail != "" && !IsGenericTitle(tail) && !trackMarkerLead(tail) {
+			return t
+		}
+	}
+	return a
+}
+
+// trackMarkerLead reports whether a tail STARTS with a track ordinal ("03 - Some
+// Chapter", "Chapter 1 - Bran", "CD2 The Escape"): its first one or two tokens
+// alone form a generic track label. "Volume"/"Book" markers are deliberately not
+// track labels - a "Volume N" tail names a different book, not a file of this one.
+func trackMarkerLead(tail string) bool {
+	f := strings.Fields(tail)
+	if len(f) == 0 {
+		return false
+	}
+	return IsGenericTitle(f[0]) || (len(f) > 1 && IsGenericTitle(f[0]+" "+f[1]))
+}
+
+func isAlnumByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+
+// canonTag lowercases a tag and strips bracketed groups ("(Unabridged)") so an
+// edition suffix doesn't hide an album-is-prefix-of-title relationship.
+func canonTag(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(bracketed.ReplaceAllString(s, " ")), " "))
+}
+
+// bracketed strips parenthetical/bracketed groups for canonTag.
+var bracketed = regexp.MustCompile(`[\(\[][^\)\]]*[\)\]]`)
 
 func rawString(raw map[string]interface{}, keys ...string) string {
 	for _, k := range keys {
