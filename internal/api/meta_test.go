@@ -20,6 +20,7 @@ func escape(s string) string { return url.QueryEscape(s) }
 // mockMetaserve is a minimal metaserve stand-in for the /meta handler tests.
 type mockMetaserve struct {
 	lookupCode int // non-zero overrides the lookup response status
+	workCode   int // non-zero overrides the works/{id} response status
 }
 
 func (m *mockMetaserve) handler() http.Handler {
@@ -31,8 +32,18 @@ func (m *mockMetaserve) handler() http.Handler {
 		}
 		_, _ = w.Write([]byte(`{"work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null},"recording_id":"rec1"}`))
 	})
-	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}]}`))
+	// Only "the-martian" exists upstream; any other id 404s, so the work-id
+	// handler's unknown-work path is exercised with a real upstream 404.
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if m.workCode != 0 {
+			w.WriteHeader(m.workCode)
+			return
+		}
+		if r.PathValue("id") != "the-martian" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}],"recap_summary":{"in_short":"Left behind on Mars.","ending":"Rescued by the Hermes crew."}}`))
 	})
 	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"mars","name":"Mars","authors":[{"id":"andy-weir","name":"Andy Weir"}],"works":[{"position":"1","work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}},{"position":"2","work":{"id":"artemis","title":"Artemis","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}}]}`))
@@ -44,7 +55,14 @@ func (m *mockMetaserve) handler() http.Handler {
 // metaserve (torn down with the test). enabled=false disables the feature.
 func newMetaEnv(t *testing.T, enabled bool, lookupCode int) *testEnv {
 	t.Helper()
-	mock := httptest.NewServer((&mockMetaserve{lookupCode: lookupCode}).handler())
+	return newMetaEnvMock(t, enabled, &mockMetaserve{lookupCode: lookupCode})
+}
+
+// newMetaEnvMock is newMetaEnv with a fully configured mock (so a test can fail
+// the works endpoint, not just the lookup).
+func newMetaEnvMock(t *testing.T, enabled bool, m *mockMetaserve) *testEnv {
+	t.Helper()
+	mock := httptest.NewServer(m.handler())
 	t.Cleanup(mock.Close)
 	return newTestEnvWith(t, func(c *config.Config) {
 		c.Metadata.Enabled = enabled
@@ -76,7 +94,7 @@ func TestMetaMatch(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("meta match = %d %s, want 200", resp.StatusCode, body)
 	}
-	for _, want := range []string{`"matched":true`, `"the-martian"`, `"R. C. Bray"`, `"Podium Audio"`, `/work?id=the-martian`, `"artemis"`, `"mark-watney"`, `"characters"`, `"recaps"`, `"reveal":{"chapter":1}`} {
+	for _, want := range []string{`"matched":true`, `"the-martian"`, `"R. C. Bray"`, `"Podium Audio"`, `/work?id=the-martian`, `"artemis"`, `"mark-watney"`, `"characters"`, `"recaps"`, `"reveal":{"chapter":1}`, `"recap_summary"`, `"in_short":"Left behind on Mars."`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("meta envelope missing %q: %s", want, body)
 		}
@@ -177,5 +195,128 @@ func TestMetaScopeSecurity(t *testing.T) {
 	out := libPath + "/meta?path=" + escape("Other Author/Secret")
 	if resp, body := e.do(t, "GET", out, token, ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("out-of-scope meta = %d %s, want 403", resp.StatusCode, body)
+	}
+}
+
+// ---- GET /meta/work (work-id addressed community lookup) --------------------
+
+const metaWorkPath = "/api/v1/meta/work?id="
+
+// TestMetaWorkAuth is the required allowed+denied pair for the new route: it
+// carries no library scope (global read-only community data), so authentication
+// itself is the gate - a signed-in user gets the work, an unauthenticated
+// caller is refused before any upstream call.
+func TestMetaWorkAuth(t *testing.T) {
+	e := newMetaEnv(t, true, 0)
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	// Allowed: a signed-in user gets the full work document.
+	resp, body := e.do(t, "GET", metaWorkPath+escape("the-martian"), adminTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("meta work = %d %s, want 200", resp.StatusCode, body)
+	}
+	for _, want := range []string{`"work"`, `"the-martian"`, `"Andy Weir"`, `"mark-watney"`, `"recaps"`, `"recap_summary"`, `"in_short":"Left behind on Mars."`, `"ending":"Rescued by the Hermes crew."`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("meta work payload missing %q: %s", want, body)
+		}
+	}
+
+	// Denied: no bearer token at all.
+	if resp, body := e.do(t, "GET", metaWorkPath+escape("the-martian"), "", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated meta work = %d %s, want 401", resp.StatusCode, body)
+	}
+	// Denied: a bogus bearer token.
+	if resp, body := e.do(t, "GET", metaWorkPath+escape("the-martian"), "not-a-real-token", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bad-token meta work = %d %s, want 401", resp.StatusCode, body)
+	}
+}
+
+// TestMetaWorkScopedUserAllowed: the route is deliberately NOT library-scoped -
+// a share-scoped non-admin may read any community work (it discloses nothing
+// about this server's content), matching how the data is public upstream.
+func TestMetaWorkScopedUserAllowed(t *testing.T) {
+	e := newMetaEnv(t, true, 0)
+	kid, err := e.auth.CreateUser(context.Background(), "kid", "kid-password", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _ := e.auth.IssueToken(context.Background(), kid.ID, auth.KindSession, "t", 0)
+
+	resp, body := e.do(t, "GET", metaWorkPath+escape("the-martian"), token, "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"the-martian"`) {
+		t.Fatalf("scoped-user meta work = %d %s, want 200", resp.StatusCode, body)
+	}
+}
+
+func TestMetaWorkMissingID(t *testing.T) {
+	e := newMetaEnv(t, true, 0)
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	for _, q := range []string{"", escape("   ")} {
+		resp, body := e.do(t, "GET", metaWorkPath+q, adminTok, "")
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("meta work id=%q = %d %s, want 400", q, resp.StatusCode, body)
+		}
+	}
+}
+
+// TestMetaWorkMalformedID: the work id is the first externally-chosen value that
+// becomes a cache key AND a log field, so the handler bounds its shape before
+// the service ever sees it. An oversized id (Go accepts a ~1MB request line)
+// would otherwise burn a cache entry and an outbound upstream GET each; a
+// control character would reach the log line verbatim.
+func TestMetaWorkMalformedID(t *testing.T) {
+	e := newMetaEnv(t, true, 0)
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	for name, id := range map[string]string{
+		"oversized": strings.Repeat("a", 201),
+		"huge":      strings.Repeat("a", 100_000),
+		"newline":   "the-martian\nfake log line",
+		"nul":       "the-\x00martian",
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, body := e.do(t, "GET", metaWorkPath+escape(id), adminTok, "")
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "invalid id") {
+				t.Fatalf("malformed id = %d %s, want 400 invalid id", resp.StatusCode, body)
+			}
+		})
+	}
+
+	// The bound is generous: an id at the limit is still accepted (it reaches
+	// upstream and 404s there, rather than being rejected as malformed).
+	atLimit := strings.Repeat("a", 200)
+	if resp, body := e.do(t, "GET", metaWorkPath+escape(atLimit), adminTok, ""); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("id at the length limit = %d %s, want 404 (accepted, unknown upstream)", resp.StatusCode, body)
+	}
+}
+
+func TestMetaWorkUnknownID(t *testing.T) {
+	e := newMetaEnv(t, true, 0)
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	resp, body := e.do(t, "GET", metaWorkPath+escape("no-such-work"), adminTok, "")
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"error"`) {
+		t.Fatalf("unknown work = %d %s, want 404 {error}", resp.StatusCode, body)
+	}
+}
+
+func TestMetaWorkUpstreamDown(t *testing.T) {
+	e := newMetaEnvMock(t, true, &mockMetaserve{workCode: http.StatusInternalServerError})
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	resp, body := e.do(t, "GET", metaWorkPath+escape("the-martian"), adminTok, "")
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("upstream-down meta work = %d %s, want 502", resp.StatusCode, body)
+	}
+}
+
+func TestMetaWorkDisabled(t *testing.T) {
+	e := newMetaEnv(t, false, 0)
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	resp, body := e.do(t, "GET", metaWorkPath+escape("the-martian"), adminTok, "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("disabled meta work = %d %s, want 404", resp.StatusCode, body)
 	}
 }
