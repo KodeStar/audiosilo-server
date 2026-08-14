@@ -179,6 +179,10 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/item", a.requireAuth(http.HandlerFunc(a.handleItem)))
 	mux.Handle("GET /api/v1/libraries/{id}/chapters", a.requireAuth(http.HandlerFunc(a.handleChapters)))
 	mux.Handle("GET /api/v1/libraries/{id}/meta", a.requireAuth(http.HandlerFunc(a.handleMeta)))
+	// Community work lookup by metadata-site work id - global, read-only data
+	// (no library, nothing to scope), so plain auth. The id is a query param
+	// because work-id slugs are not path-segment safe.
+	mux.Handle("GET /api/v1/meta/work", a.requireAuth(http.HandlerFunc(a.handleMetaWork)))
 	// Media GETs accept the session token as a ?token= query param (browser
 	// <img>/<audio> can't set headers); other routes do not (see requireMediaAuth).
 	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireMediaAuth(http.HandlerFunc(a.handleCover)))

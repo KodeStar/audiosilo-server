@@ -162,18 +162,28 @@ type upstreamRecap struct {
 	Text    string           `json:"text"`
 }
 
+// upstreamRecapSummary is metaserve's per-work whole-book refresher: a short
+// "in short" paragraph plus a plain statement of how the book ends. Both fields
+// are optional upstream, and the object itself is omitted for works that have no
+// summary sidecar (so a nil pointer is the normal case).
+type upstreamRecapSummary struct {
+	InShort string `json:"in_short"`
+	Ending  string `json:"ending"`
+}
+
 type upstreamWorkDetail struct {
-	ID             string              `json:"id"`
-	Title          string              `json:"title"`
-	Subtitle       string              `json:"subtitle"`
-	Authors        []upstreamPersonRef `json:"authors"`
-	Language       string              `json:"language"`
-	FirstPublished string              `json:"first_published"`
-	Description    string              `json:"description"`
-	Series         []upstreamSeriesRef `json:"series"`
-	Recordings     []upstreamRecording `json:"recordings"`
-	Characters     []upstreamCharacter `json:"characters"`
-	Recaps         []upstreamRecap     `json:"recaps"`
+	ID             string                `json:"id"`
+	Title          string                `json:"title"`
+	Subtitle       string                `json:"subtitle"`
+	Authors        []upstreamPersonRef   `json:"authors"`
+	Language       string                `json:"language"`
+	FirstPublished string                `json:"first_published"`
+	Description    string                `json:"description"`
+	Series         []upstreamSeriesRef   `json:"series"`
+	Recordings     []upstreamRecording   `json:"recordings"`
+	Characters     []upstreamCharacter   `json:"characters"`
+	Recaps         []upstreamRecap       `json:"recaps"`
+	RecapSummary   *upstreamRecapSummary `json:"recap_summary"`
 }
 
 type upstreamSeriesEntry struct {

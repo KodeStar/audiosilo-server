@@ -25,6 +25,16 @@ const maxSeriesRails = 3
 // on every cold book).
 const composeTimeout = 15 * time.Second
 
+// maxConcurrentWorkFetches bounds how many uncached work-id lookups may be in
+// flight upstream at once (cache hits never touch it). Unlike an enrichment -
+// keyed by a book this server actually holds - a work id is picked freely by any
+// signed-in caller, so each distinct id is one outbound GET to the SHARED
+// community metadata service. This is the amplification bound: a burst of
+// distinct ids queues here rather than fanning straight out to metaserve. Not
+// configurable; it is a courtesy limit on a shared third party, matching the
+// api package's transcodeSem precedent.
+const maxConcurrentWorkFetches = 4
+
 // MetaPersonRef is the {id,name} shape for an author or narrator.
 type MetaPersonRef struct {
 	ID   string `json:"id"`
@@ -56,17 +66,30 @@ type MetaRecap struct {
 	Text    string       `json:"text"`
 }
 
-// MetaWork is the abstract book in an enrichment envelope.
+// MetaRecapSummary is the per-work whole-book refresher: a one-paragraph "in
+// short" catch-up and a plain statement of how the book ends. It is the
+// catch-up payload for a PREVIOUS book in a series - Ending is a full spoiler
+// for that work by construction, so a client must only reveal it deliberately.
+// Omitted entirely when the work has no summary sidecar.
+type MetaRecapSummary struct {
+	InShort string `json:"in_short,omitempty"`
+	Ending  string `json:"ending,omitempty"`
+}
+
+// MetaWork is the abstract book in an enrichment envelope. It is also the
+// standalone payload of Service.Work (a work-id-addressed lookup for a sibling
+// book in a series).
 type MetaWork struct {
-	ID             string          `json:"id"`
-	Title          string          `json:"title"`
-	Subtitle       string          `json:"subtitle,omitempty"`
-	Authors        []MetaPersonRef `json:"authors"`
-	Language       string          `json:"language"`
-	FirstPublished string          `json:"first_published,omitempty"`
-	Description    string          `json:"description,omitempty"`
-	Characters     []MetaCharacter `json:"characters,omitempty"`
-	Recaps         []MetaRecap     `json:"recaps,omitempty"`
+	ID             string            `json:"id"`
+	Title          string            `json:"title"`
+	Subtitle       string            `json:"subtitle,omitempty"`
+	Authors        []MetaPersonRef   `json:"authors"`
+	Language       string            `json:"language"`
+	FirstPublished string            `json:"first_published,omitempty"`
+	Description    string            `json:"description,omitempty"`
+	Characters     []MetaCharacter   `json:"characters,omitempty"`
+	Recaps         []MetaRecap       `json:"recaps,omitempty"`
+	RecapSummary   *MetaRecapSummary `json:"recap_summary,omitempty"`
 }
 
 // MetaRecording is the specific narration/production matched by the lookup.
@@ -119,6 +142,9 @@ type Service struct {
 	// composeBudget bounds one full compose fan-out. Defaults to composeTimeout;
 	// a field only so tests can shrink it.
 	composeBudget time.Duration
+	// workSem bounds concurrent uncached work-id fetches upstream (see
+	// maxConcurrentWorkFetches).
+	workSem chan struct{}
 }
 
 // NewService builds a Service for the given metaserve base URL. now may be nil
@@ -133,6 +159,7 @@ func NewService(baseURL string, now func() time.Time) *Service {
 		baseURL:       base,
 		cache:         newCache(now),
 		composeBudget: composeTimeout,
+		workSem:       make(chan struct{}, maxConcurrentWorkFetches),
 	}
 }
 
@@ -150,15 +177,10 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	if key == "" {
 		return nil, ErrNotFound
 	}
-	if e, ok := s.cache.get(key); ok {
-		switch {
-		case e.err != nil:
-			return nil, e.err
-		case e.result == nil:
-			return nil, ErrNotFound
-		default:
-			return e.result, nil
-		}
+	// A hit resolves to the memoised outcome directly: err is nil for a positive
+	// result, ErrNotFound for a cached "no match", or the cached transport error.
+	if result, hit, err := s.cache.getEnrichment(key); hit {
+		return result, err
 	}
 
 	// Run the whole fan-out under its own deadline (see composeTimeout): a
@@ -170,7 +192,7 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	result, complete, err := s.compose(cctx, asin, isbn)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		s.cache.putResult(key, nil, notFoundTTL)
+		s.cache.putMiss(key, notFoundTTL)
 		return nil, ErrNotFound
 	case err != nil:
 		// Only cache failures the UPSTREAM caused. When the caller's own context
@@ -193,23 +215,24 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 		// caused by the CALLER's cancellation mid-fan-out - cache nothing at
 		// all, same reasoning as the error branch above.
 		if ctx.Err() == nil {
-			s.cache.putResult(key, result, errorTTL)
+			s.cache.putEnrichment(key, result, errorTTL)
 		}
 		return result, nil
 	default:
-		s.cache.putResult(key, result, positiveTTL)
+		s.cache.putEnrichment(key, result, positiveTTL)
 		return result, nil
 	}
 }
 
-// cacheKey is "a:"+asin when an asin is present (asin is preferred for the
-// lookup), else "i:"+isbn, else "" (nothing to look up).
+// cacheKey mints the cache key for an enrichment lookup: the asin key space when
+// an asin is present (asin is preferred for the lookup), else the isbn one, else
+// "" (nothing to look up).
 func cacheKey(asin, isbn string) string {
 	switch {
 	case asin != "":
-		return "a:" + asin
+		return nsASIN.key(asin)
 	case isbn != "":
-		return "i:" + isbn
+		return nsISBN.key(isbn)
 	default:
 		return ""
 	}
@@ -238,23 +261,109 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 
 	rails, complete := s.seriesRails(ctx, detail)
 	env := &Enrichment{
-		Matched: true,
-		Work: &MetaWork{
-			ID:             detail.ID,
-			Title:          detail.Title,
-			Subtitle:       detail.Subtitle,
-			Authors:        toPersonRefs(detail.Authors),
-			Language:       detail.Language,
-			FirstPublished: detail.FirstPublished,
-			Description:    detail.Description,
-			Characters:     toCharacters(detail.Characters),
-			Recaps:         toRecaps(detail.Recaps),
-		},
+		Matched:   true,
+		Work:      toWork(detail),
 		Recording: pickRecording(detail.Recordings, lookup.RecordingID),
 		Series:    rails,
 		WebURL:    s.workURL(detail.ID),
 	}
 	return env, complete, nil
+}
+
+// Work fetches a single work document by its metadata-site work id. It is the
+// "catch me up on the previous book" path: the series rails in an Enrichment
+// carry sibling work ids but no characters/recaps, so a client resolves one of
+// those ids here to get the full expressive layer (characters, position-keyed
+// recaps and the whole-book recap_summary) for that other book.
+//
+// It returns ErrNotFound when the work id is unknown upstream, and a non-nil,
+// non-ErrNotFound error when the upstream is unreachable. Results (including
+// "not found" and transport errors) are cached under a "w:" key space with the
+// same TTL policy as Enrich, so a hot rail or a down upstream is not re-hit.
+// Unlike Enrich this is a single upstream GET, already bounded by the client's
+// per-request timeout, so it needs no extra fan-out deadline - but because the
+// id is caller-chosen (not derived from a book this server holds) the uncached
+// fetches are additionally bounded by maxConcurrentWorkFetches, and the work key
+// space has its own cache quota (maxWorkEntries) so a flood of ids cannot evict
+// the enrichment cache.
+//
+// The returned *MetaWork is shared with the cache and other callers - treat it
+// as immutable; never modify it (or anything it points to) after the call.
+func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
+	id = strings.TrimSpace(id)
+	// The handler already 400s a blank id; this is the service-level backstop, so
+	// a future caller can't turn one into a bare works/ GET upstream.
+	if id == "" {
+		return nil, ErrNotFound
+	}
+	key := nsWork.key(id)
+	// Same resolution as Enrich: a hit carries nil, ErrNotFound or the cached
+	// transport error.
+	if work, hit, err := s.cache.getWork(key); hit {
+		return work, err
+	}
+
+	// Bound the outbound amplification: only uncached fetches queue here, and a
+	// caller that goes away while queued never issues its GET at all.
+	select {
+	case s.workSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	// Released on return (the remaining work is a map write); deferred so a panic
+	// can never leak a slot.
+	defer func() { <-s.workSem }()
+
+	detail, err := s.client.work(ctx, id)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		s.cache.putMiss(key, notFoundTTL)
+		return nil, ErrNotFound
+	case err != nil:
+		// Same discrimination as Enrich: only cache failures the UPSTREAM
+		// caused. A failure from the CALLER's own cancelled context (players
+		// abort in-flight fetches on navigation) must not poison this work with
+		// 502s for the whole error TTL while upstream is healthy.
+		if ctx.Err() == nil {
+			s.cache.putError(key, err)
+		}
+		return nil, err
+	}
+	// A 200 that decodes to a zero-valued work is NOT a work. getJSON decodes
+	// leniently, so any wrong-shaped 200 (upstream serving a different route for
+	// this id - metaserve has a literal `works/latest` collection route that
+	// outranks `works/{id}` in Go's ServeMux and returns `{"works":[...]}` - or a
+	// proxy/error page with a JSON content type) lands here as an empty detail
+	// with a nil error. Without this guard it would be cached POSITIVE for 24h and
+	// served as a 200 carrying a blank work, breaking the client contract that any
+	// failure reads as "unavailable" (it would render an empty card instead). Treat
+	// it as the not-found it effectively is, mirroring compose's lookup.Work == nil
+	// guard.
+	if detail == nil || detail.ID == "" {
+		s.cache.putMiss(key, notFoundTTL)
+		return nil, ErrNotFound
+	}
+	work := toWork(detail)
+	s.cache.putWork(key, work, positiveTTL)
+	return work, nil
+}
+
+// toWork maps an upstream work document to the outward MetaWork shape. Shared
+// by the enrichment composition and the work-id lookup so both expose exactly
+// the same fields.
+func toWork(detail *upstreamWorkDetail) *MetaWork {
+	return &MetaWork{
+		ID:             detail.ID,
+		Title:          detail.Title,
+		Subtitle:       detail.Subtitle,
+		Authors:        toPersonRefs(detail.Authors),
+		Language:       detail.Language,
+		FirstPublished: detail.FirstPublished,
+		Description:    detail.Description,
+		Characters:     toCharacters(detail.Characters),
+		Recaps:         toRecaps(detail.Recaps),
+		RecapSummary:   toRecapSummary(detail.RecapSummary),
+	}
 }
 
 // pickRecording returns the recording matching recordingID, falling back to the
@@ -379,6 +488,16 @@ func toRecaps(in []upstreamRecap) []MetaRecap {
 		})
 	}
 	return out
+}
+
+// toRecapSummary maps the upstream whole-book summary to the outward envelope.
+// Returns nil (omitted) when upstream has none, or when it is present but
+// entirely empty - an all-blank object would render as an empty catch-up card.
+func toRecapSummary(in *upstreamRecapSummary) *MetaRecapSummary {
+	if in == nil || (in.InShort == "" && in.Ending == "") {
+		return nil
+	}
+	return &MetaRecapSummary{InShort: in.InShort, Ending: in.Ending}
 }
 
 func deref(s *string) string {

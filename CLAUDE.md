@@ -251,9 +251,34 @@ future metadata site can attach enrichment without reshaping the schema.
   (work + matched recording + series rails, each carrying its own `web_url`).
   The `work` also carries the community **characters** and **recaps** (the CC
   BY-SA expressive layer: spoiler-tagged, position-keyed - `reveal`/`through`
-  are logical work-chapter positions) when metaserve has them; both are
-  additive/`omitempty`, mirrored on `upstreamWorkDetail` and `MetaWork` and
-  passed through by `toCharacters`/`toRecaps`.
+  are logical work-chapter positions) when metaserve has them, plus a
+  whole-book `recap_summary` (`{in_short, ending}` - `ending` is a full spoiler
+  by construction); all three are additive/`omitempty`, mirrored on
+  `upstreamWorkDetail` and `MetaWork` and passed through by
+  `toCharacters`/`toRecaps`/`toRecapSummary` (which drops an all-blank summary).
+  **Work-id lookup**: `GET /api/v1/meta/work?id=<work id>` (authed, *not*
+  library-scoped - global read-only community data with no path to authorize;
+  the id is a query param because work-id slugs are not path-segment safe, and
+  `internal/meta` URL-escapes it upstream) returns `{"work": {...}}` with the
+  same `MetaWork` shape. It is the "catch me up on the previous book" path: a
+  series rail carries sibling work ids but no characters/recaps, so a client
+  resolves one of those ids here. `Service.Work` wraps the single
+  `works/{id}` GET and caches under a `"w:"` key space in the SAME bounded
+  cache, with Enrich's TTL policy (24h / 1h not-found / 2min error) and the
+  same "never cache a caller-cancelled failure" rule. Because the work id is the
+  one **caller-chosen** value that becomes a cache key, an outbound GET and a log
+  field, it is bounded on three axes: the handler rejects an id over
+  `maxWorkIDLen` (200 bytes) or carrying control characters (400 `invalid id`,
+  `validWorkID` - transport-level hygiene, not a slug grammar); the `"w:"` key
+  space has its own cache quota (`maxWorkEntries`) so an id flood can only evict
+  other work entries, never the enrichment cache; and uncached upstream fetches
+  go through a small semaphore (`maxConcurrentWorkFetches`, the transcodeSem
+  pattern) as an amplification bound on the shared community service. A
+  wrong-shaped upstream 200 (an id colliding with a literal metaserve route
+  decodes leniently to an empty work) is treated as `ErrNotFound`, never cached
+  or served as a positive blank work. Degradation: metadata off
+  -> 404; missing/blank `id` -> 400; malformed `id` -> 400; unknown work id ->
+  404; upstream error -> 502.
   Config is `metadata.{enabled,base_url}` (env `AUDIOSILO_METADATA_ENABLED` /
   `AUDIOSILO_METADATA_BASE_URL`; `base_url` must be an absolute http(s) URL when
   enabled) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
@@ -423,7 +448,9 @@ See `internal/api/api.go` for the full route table. Public: `/server`,
 and the static UI (`/`, `/connect`, `/admin`, `/web/...`). Everything else needs a
 session bearer token; `/admin/*` additionally requires the admin role. The
 metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
-the other `?path=` content endpoints; 404 when metadata is disabled).
+the other `?path=` content endpoints; 404 when metadata is disabled), plus
+`GET /meta/work?id=<work id>` (authed, no library scope - global community data;
+404 when metadata is disabled or the work id is unknown).
 Runtime-toggleable settings are `GET`/`PATCH /admin/settings` (admin only): a
 feature-keyed envelope (`{"metadata":{"enabled","base_url","available"}}`) whose
 `PATCH {"metadata":{"enabled":bool}}` flips the metadata lookup and persists it.
