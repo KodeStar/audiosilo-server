@@ -15,8 +15,9 @@ import (
 //
 // Admin-only: it is a whole-library dump, not a scoped view, so it is not gated
 // on share path rules - requireAdmin is the gate. The envelope is composed in
-// internal/catalog (export.go); this handler is transport-only and streams it
-// straight to the response with an encoder rather than buffering a string.
+// internal/catalog (export.go); this handler is transport-only and writes it
+// straight to the response with an encoder rather than buffering a string of
+// its own.
 //
 // The file carries bibliographic facts only - no paths, sizes, codecs or anything
 // else describing the filesystem - because it is meant to leave the server.

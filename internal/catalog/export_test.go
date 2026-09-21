@@ -39,8 +39,14 @@ func TestSplitNames(t *testing.T) {
 		// Mixed joiners, and the comma rule applied per chunk.
 		{"Jane Doe; John Roe, Ann Poe", []string{"Jane Doe", "John Roe", "Ann Poe"}},
 		{"Jane Doe; Alexandre Dumas, pere", []string{"Jane Doe", "Alexandre Dumas, pere"}},
-		// Trailing/duplicated separators collapse rather than yielding blanks.
+		// Trailing/duplicated/stacked separators collapse rather than yielding
+		// blanks or a name beginning with a stranded joiner.
 		{"A & B;", []string{"A", "B"}},
+		{"Jane Doe; and John Roe", []string{"Jane Doe", "John Roe"}},
+		// A half-empty "Last, First" tag: the dangling comma is trimmed off both
+		// ends rather than exported as part of the name.
+		{", Jane Doe", []string{"Jane Doe"}},
+		{"Jane Doe,", []string{"Jane Doe"}},
 	}
 	for _, tc := range cases {
 		if got := splitNames(tc.in); !reflect.DeepEqual(got, tc.want) {
@@ -202,6 +208,54 @@ func TestExportLibraryBooks(t *testing.T) {
 	}
 }
 
+// TestExportLibraryBooksMergesDuplicateCopies pins what the collapsed entry
+// carries. Copies are indexed independently, so the copy that sorts first can be
+// the sparsely-tagged rip; the kept entry must still carry every fact the library
+// holds for that book, not just the ones the first-sorting row happened to have.
+func TestExportLibraryBooksMergesDuplicateCopies(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/main"})
+
+	// Indexed first (so it sorts first on the (title, id) keyset): an old rip with
+	// nothing but the title, author and asin.
+	if _, err := c.UpsertBook(ctx, &Book{
+		LibraryID: lib.ID, RelPath: "Rips/Die Trying.mp3",
+		Title: "Die Trying", Author: "Lee Child", ASIN: "B0TESTASIN",
+		Format: "mp3", Size: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Indexed second: the fully-tagged copy of the same book (same asin).
+	if _, err := c.UpsertBook(ctx, &Book{
+		LibraryID: lib.ID, RelPath: "Lee Child/Die Trying", IsFolder: true,
+		Title: "Die Trying", Author: "Lee Child", Narrator: "Dick Hill",
+		Series: "Jack Reacher", SeriesIndex: 2, Duration: 36720,
+		ASIN: "B0TESTASIN", ISBN: "9780515123333", Format: "m4b", Size: 100,
+		Chapters: []metadata.Chapter{
+			{Index: 0, Title: "One", End: 18360},
+			{Index: 1, Title: "Two", End: 36720, BookOffset: 18360},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exp.Books) != 1 {
+		t.Fatalf("books = %d, want 1 (the copies collapse): %+v", len(exp.Books), exp.Books)
+	}
+	want := ExportBook{
+		Title: "Die Trying", Authors: []string{"Lee Child"}, Narrators: []string{"Dick Hill"},
+		Series: "Jack Reacher", SeriesPosition: "2", ASIN: "B0TESTASIN",
+		ISBN: "9780515123333", RuntimeMin: 612, Chapters: 2,
+	}
+	if !reflect.DeepEqual(exp.Books[0], want) {
+		t.Errorf("collapsed entry = %#v, want %#v", exp.Books[0], want)
+	}
+}
+
 // TestExportLibraryBooksLeaksNoFilesystem is the guard that matters most: the
 // file leaves the server, so no path, size, codec or format may appear in it.
 func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
@@ -222,15 +276,52 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Values that exist on the indexed row but must never reach the file. (Note
-	// "format" as a JSON key is the envelope's own format marker, so the filesystem
-	// fields are checked as quoted keys.)
+	// Values that exist on the indexed row but must never reach the file.
 	for _, leak := range []string{"secret-root", "Secret Folder", "book.m4b", "rel_path",
-		"aac", "12345", "deadbeef", "cover", "content_hash", `"size"`, `"codec"`, `"is_folder"`} {
+		"aac", "12345", "deadbeef", "cover", "content_hash"} {
 		if strings.Contains(string(raw), leak) {
 			t.Errorf("export leaks %q: %s", leak, raw)
 		}
 	}
+
+	// The teeth: assert on the MARSHALLED key sets, not on the Go structs, and as
+	// an allowlist rather than a denylist - so a field added to ExportBook (or to
+	// the envelope) fails here even when it has a name the substring scan above
+	// cannot see, such as "format" (the envelope's own marker) or "files".
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	assertKeys := func(what string, obj map[string]json.RawMessage, allowed ...string) {
+		t.Helper()
+		ok := map[string]bool{}
+		for _, k := range allowed {
+			ok[k] = true
+		}
+		for k := range obj {
+			if !ok[k] {
+				t.Errorf("export %s carries unexpected field %q: %s", what, k, raw)
+			}
+		}
+	}
+	assertKeys("envelope", doc,
+		"format", "version", "source", "server_version", "library", "exported_at", "books")
+
+	var libObj map[string]json.RawMessage
+	if err := json.Unmarshal(doc["library"], &libObj); err != nil {
+		t.Fatal(err)
+	}
+	assertKeys("library", libObj, "id", "name") // never "root"
+
+	var books []map[string]json.RawMessage
+	if err := json.Unmarshal(doc["books"], &books); err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("books = %d, want 1: %s", len(books), raw)
+	}
+	assertKeys("book", books[0], "title", "subtitle", "authors", "narrators",
+		"series", "series_position", "asin", "isbn", "runtime_min", "chapters")
 }
 
 // TestExportLibraryBooksPagesEveryBook checks the keyset paging loop drains a

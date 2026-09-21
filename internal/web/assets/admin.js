@@ -14,8 +14,12 @@ const el = (id) => document.getElementById(id);
 const loginView = el("login-view");
 const app = el("app");
 
-// api wraps fetch with auth + JSON handling. On 401 it forces re-login.
-async function api(method, path, body) {
+// apiFetch wraps fetch with the API prefix and auth, and owns what a failed
+// admin call means: on 401 it forces re-login, and any other error status is
+// raised as the server's {error} envelope (falling back to the status text).
+// It hands back the raw Response, so a caller that wants the bytes rather than
+// the JSON - the library export download - shares that one contract.
+async function apiFetch(method, path, body) {
   const opts = { method, headers: {} };
   if (token) opts.headers["Authorization"] = "Bearer " + token;
   if (body !== undefined) {
@@ -27,10 +31,21 @@ async function api(method, path, body) {
     logout();
     throw new Error(asI18n.t("admin.toast.sessionExpired"));
   }
-  const text = await resp.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!resp.ok) throw new Error(data.error || resp.statusText);
-  return data;
+  if (!resp.ok) {
+    let msg = resp.statusText;
+    try {
+      const data = await resp.json();
+      if (data && data.error) msg = data.error;
+    } catch { /* a non-JSON error body: keep the status text */ }
+    throw new Error(msg);
+  }
+  return resp;
+}
+
+// api is apiFetch plus JSON decoding - what almost every call wants.
+async function api(method, path, body) {
+  const text = await (await apiFetch(method, path, body)).text();
+  return text ? JSON.parse(text) : {};
 }
 
 // ---- Toast ----
@@ -293,21 +308,7 @@ function exportBtn(l) {
 }
 
 async function downloadLibraryExport(id) {
-  const headers = {};
-  if (token) headers["Authorization"] = "Bearer " + token;
-  const resp = await fetch(`/api/v1/admin/libraries/${id}/export`, { headers });
-  if (resp.status === 401) {
-    logout();
-    throw new Error(asI18n.t("admin.toast.sessionExpired"));
-  }
-  if (!resp.ok) {
-    let msg = resp.statusText;
-    try {
-      const data = await resp.json();
-      if (data && data.error) msg = data.error;
-    } catch { /* a non-JSON error body: keep the status text */ }
-    throw new Error(msg);
-  }
+  const resp = await apiFetch("GET", `/admin/libraries/${id}/export`);
   const name = filenameFromDisposition(resp.headers.get("Content-Disposition")) || `audiosilo-library-${id}.json`;
   const url = URL.createObjectURL(await resp.blob());
   const a = document.createElement("a");
@@ -321,10 +322,10 @@ async function downloadLibraryExport(id) {
 }
 
 // filenameFromDisposition reads the server's quoted attachment filename so the
-// saved file keeps the name (and date) the server chose.
+// saved file keeps the name (and date) the server chose. The header is always
+// quoted (handlers_export.go uses strconv.Quote), so one shape is enough.
 function filenameFromDisposition(header) {
-  if (!header) return "";
-  const m = /filename="([^"]*)"/i.exec(header) || /filename=([^;]+)/i.exec(header);
+  const m = header && /filename="([^"]*)"/i.exec(header);
   return m ? m[1].trim() : "";
 }
 

@@ -148,9 +148,11 @@ func TestI18nAssets(t *testing.T) {
 
 	// Every language block must define the SAME keys: a string added to `en` only
 	// silently falls back to the key name in the other five locales.
+	// Split yields the text before the first block plus one piece per block, so
+	// blocks[i+1] is the body of names[i].
 	blocks := langBlockRE.Split(string(dict), -1)
 	names := langBlockRE.FindAllStringSubmatch(string(dict), -1)
-	if len(names) == 0 || len(blocks) != len(names)+1 {
+	if len(names) < 2 {
 		t.Fatalf("could not split i18n-dict.js into language blocks (found %d)", len(names))
 	}
 	keysFor := func(block string) map[string]bool {
@@ -160,20 +162,20 @@ func TestI18nAssets(t *testing.T) {
 		}
 		return out
 	}
-	base := keysFor(blocks[1]) // the first block is the reference (en)
+	ref, base := names[0][1], keysFor(blocks[1]) // the first block is the reference (en)
 	if len(base) == 0 {
-		t.Fatal("the first i18n language block defines no keys")
+		t.Fatalf("the %q i18n language block defines no keys", ref)
 	}
-	for i, m := range names {
-		got := keysFor(blocks[i+1])
+	for i := 1; i < len(names); i++ {
+		lang, got := names[i][1], keysFor(blocks[i+1])
 		for k := range base {
 			if !got[k] {
-				t.Errorf("i18n-dict.js: %q is missing key %q", m[1], k)
+				t.Errorf("i18n-dict.js: %q is missing key %q", lang, k)
 			}
 		}
 		for k := range got {
 			if !base[k] {
-				t.Errorf("i18n-dict.js: %q has key %q that %q lacks", m[1], k, names[0][1])
+				t.Errorf("i18n-dict.js: %q has key %q that %q lacks", lang, k, ref)
 			}
 		}
 	}

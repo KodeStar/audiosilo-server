@@ -367,8 +367,12 @@ future metadata site can attach enrichment without reshaping the schema.
   codec, format or anything else about the filesystem - a regression test asserts
   that. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
   `ListBooks`, never OFFSET; copies of the same book within the library collapse on
-  `exposedDedupKey`); the handler is transport-only and streams it with a
-  `json.Encoder`. The single `author`/`narrator` string is split into a list only
+  `exposedDedupKey`, the kept entry taking each fact from whichever copy has it -
+  `mergeExportBook`, since the copy that sorts first may be the untagged rip); the
+  handler is transport-only and writes it with a `json.Encoder`. The leak guard
+  asserts on the MARSHALLED key sets as an allowlist, so a field added to
+  `ExportBook` fails the test even when its name (`format`, `files`) is invisible
+  to a substring scan. The single `author`/`narrator` string is split into a list only
   where it clearly holds several names (`;`, ` & `, ` and `, and a comma **only**
   when every part still has two words, so "Alexandre Dumas, pere" stays whole).
   Advertised by the additive `export` capability.

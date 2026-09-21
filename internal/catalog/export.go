@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -53,13 +54,11 @@ type ExportLibrary struct {
 }
 
 // ExportBook is one book as the importer sees it: bibliographic facts only.
-// Every field but the title is optional and omitted when unknown.
+// Every field but the title is optional and omitted when unknown. (The importer
+// also accepts a `subtitle`, which the index has no column for; the envelope is
+// additive, so that field appears here the day the index grows one.)
 type ExportBook struct {
-	Title string `json:"title"`
-	// Subtitle is part of the importer's accepted shape. The index has no
-	// subtitle column yet, so it is currently always empty (and omitted); it is
-	// kept here so the Go struct mirrors the agreed envelope one-for-one.
-	Subtitle       string   `json:"subtitle,omitempty"`
+	Title          string   `json:"title"`
 	Authors        []string `json:"authors,omitempty"`
 	Narrators      []string `json:"narrators,omitempty"`
 	Series         string   `json:"series,omitempty"`
@@ -73,10 +72,7 @@ type ExportBook struct {
 // Filename is the file name to offer the download as:
 // audiosilo-<library-slug>-<YYYY-MM-DD>.json.
 func (e *LibraryExport) Filename() string {
-	date := e.ExportedAt
-	if len(date) >= len("2006-01-02") {
-		date = date[:len("2006-01-02")]
-	}
+	date, _, _ := strings.Cut(e.ExportedAt, "T") // RFC3339: the date is what precedes the T
 	slug := slugify(e.Library.Name)
 	if slug == "" {
 		slug = "library"
@@ -105,10 +101,16 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 		Books:         []ExportBook{},
 	}
 
+	counts, err := c.chapterCounts(ctx, libraryID)
+	if err != nil {
+		return nil, err
+	}
+
 	// seen collapses copies of the same book within the library (the same grouping
-	// key search/"recently added" de-duplicate on). A blank key means the metadata
-	// is too weak to merge on, so those books are always kept.
-	seen := map[string]bool{}
+	// key search/"recently added" de-duplicate on), mapping the key to the entry
+	// already emitted for it. A blank key means the metadata is too weak to merge
+	// on, so those books are always kept.
+	seen := map[string]int{}
 	cursor := ""
 	for {
 		page, err := c.ListBooks(ctx, ListOptions{
@@ -120,19 +122,17 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 		if err != nil {
 			return nil, err
 		}
-		counts, err := c.chapterCounts(ctx, page.Books)
-		if err != nil {
-			return nil, err
-		}
 		for i := range page.Books {
 			b := &page.Books[i]
+			eb := exportBook(b, counts[b.ID])
 			if key := exposedDedupKey(*b); key != "" {
-				if seen[key] {
+				if at, ok := seen[key]; ok {
+					mergeExportBook(&out.Books[at], eb)
 					continue
 				}
-				seen[key] = true
+				seen[key] = len(out.Books)
 			}
-			out.Books = append(out.Books, exportBook(b, counts[b.ID]))
+			out.Books = append(out.Books, eb)
 		}
 		if page.NextCursor == "" || page.NextCursor == cursor {
 			// An unchanged cursor would loop forever; stop rather than spin.
@@ -159,26 +159,56 @@ func exportBook(b *Book, chapters int) ExportBook {
 	}
 }
 
-// chapterCounts returns the number of indexed chapters per book id for one page
-// of books - one grouped query instead of loading every book's chapter rows.
-func (c *Catalog) chapterCounts(ctx context.Context, books []Book) (map[int64]int, error) {
-	if len(books) == 0 {
-		return nil, nil
+// mergeExportBook folds another copy of an already-exported book into the entry
+// kept for it, filling only the facts that entry lacks. Copies are indexed
+// independently, so the one that happens to sort first can be the sparsely-tagged
+// rip (same asin, but no narrator/series tags) while the fully-tagged copy sorts
+// later; taking each fact from whichever copy has it keeps the export as complete
+// as the library is, without ever overwriting a fact already recorded.
+func mergeExportBook(dst *ExportBook, src ExportBook) {
+	if dst.Title == "" {
+		dst.Title = src.Title
 	}
-	placeholders := make([]string, len(books))
-	args := make([]any, len(books))
-	for i := range books {
-		placeholders[i] = "?"
-		args[i] = books[i].ID
+	if len(dst.Authors) == 0 {
+		dst.Authors = src.Authors
 	}
+	if len(dst.Narrators) == 0 {
+		dst.Narrators = src.Narrators
+	}
+	if dst.Series == "" {
+		dst.Series = src.Series
+	}
+	if dst.SeriesPosition == "" {
+		dst.SeriesPosition = src.SeriesPosition
+	}
+	if dst.ASIN == "" {
+		dst.ASIN = src.ASIN
+	}
+	if dst.ISBN == "" {
+		dst.ISBN = src.ISBN
+	}
+	if dst.RuntimeMin == 0 {
+		dst.RuntimeMin = src.RuntimeMin
+	}
+	if dst.Chapters == 0 {
+		dst.Chapters = src.Chapters
+	}
+}
+
+// chapterCounts returns the number of indexed chapters per book id for a whole
+// library - one grouped query instead of loading every book's chapter rows (and
+// instead of one query per export page; the export already holds every book of
+// the library in memory, so a count per book id is strictly cheaper than that).
+func (c *Catalog) chapterCounts(ctx context.Context, libraryID int64) (map[int64]int, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT book_id, COUNT(*) FROM chapters WHERE book_id IN (`+
-			strings.Join(placeholders, ",")+`) GROUP BY book_id`, args...)
+		`SELECT c.book_id, COUNT(*) FROM chapters c
+		 JOIN books b ON b.id = c.book_id
+		 WHERE b.library_id = ? GROUP BY c.book_id`, libraryID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make(map[int64]int, len(books))
+	out := map[int64]int{}
 	for rows.Next() {
 		var id int64
 		var n int
@@ -209,10 +239,11 @@ func formatSeriesPosition(idx float64) string {
 	return strconv.FormatFloat(idx, 'f', -1, 64)
 }
 
-// nameSeparators are the joiners that unambiguously separate two contributors in
-// the single Author/Narrator string the index stores. A comma is NOT here: it is
-// ambiguous ("Alexandre Dumas, pere") and handled separately by splitOnCommas.
-var nameSeparators = []string{";", " & ", " and "}
+// nameSeparatorRE matches the joiners that unambiguously separate two
+// contributors in the single Author/Narrator string the index stores. A comma is
+// NOT here: it is ambiguous ("Alexandre Dumas, pere") and is handled separately
+// by splitOnCommas.
+var nameSeparatorRE = regexp.MustCompile(`;|\s+&\s+|\s+and\s+`)
 
 // splitNames turns the catalogue's single Author (or Narrator) string into a list
 // of names, splitting ONLY where the string clearly holds several. Tag data is
@@ -221,50 +252,40 @@ var nameSeparators = []string{";", " & ", " and "}
 // still looks like a full name (at least two words), which keeps suffixed names
 // such as "Alexandre Dumas, pere" whole. Returns nil for a blank string.
 func splitNames(s string) []string {
-	parts := cleanNameParts([]string{s})
-	for _, sep := range nameSeparators {
-		var next []string
-		for _, p := range parts {
-			next = append(next, strings.Split(p, sep)...)
-		}
-		parts = cleanNameParts(next)
-	}
 	var out []string
-	for _, p := range parts {
-		out = append(out, splitOnCommas(p)...)
+	for _, chunk := range cleanNameParts(nameSeparatorRE.Split(s, -1)) {
+		out = append(out, splitOnCommas(chunk)...)
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return out // nil when the string named nobody
 }
 
-// splitOnCommas splits one already-separated chunk on commas, but only when every
+// splitOnCommas splits one already-cleaned chunk on commas, but only when every
 // piece has at least two words - otherwise the comma is part of a single name
 // ("Dumas, pere"; "Doe, John") and the chunk is returned whole.
 func splitOnCommas(p string) []string {
 	pieces := cleanNameParts(strings.Split(p, ","))
 	if len(pieces) < 2 {
-		return cleanNameParts([]string{p})
+		return []string{p}
 	}
 	for _, piece := range pieces {
 		if len(strings.Fields(piece)) < 2 {
-			return cleanNameParts([]string{p})
+			return []string{p}
 		}
 	}
 	return pieces
 }
 
-// cleanNameParts trims whitespace and dangling separator punctuation from each
-// part and drops the empties (an "A, B, and C" split leaves a trailing comma).
+// cleanNameParts trims whitespace and dangling separator punctuation from BOTH
+// ends of each part and drops the empties. Trailing: an "A, B, and C" split
+// leaves a trailing comma. Leading: a half-empty "Last, First" tag arrives as
+// ", Jane Doe", and splitOnCommas keeps such a chunk whole, so an untrimmed
+// leading comma would otherwise be exported as part of the name.
 func cleanNameParts(parts []string) []string {
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimFunc(p, func(r rune) bool {
-			return unicode.IsSpace(r) || r == ';' || r == '&'
+			return unicode.IsSpace(r) || r == ';' || r == '&' || r == ','
 		})
-		p = strings.TrimRight(p, ", ")
-		p = strings.TrimSpace(p)
 		if p != "" {
 			out = append(out, p)
 		}
@@ -275,17 +296,8 @@ func cleanNameParts(parts []string) []string {
 // slugify reduces a library name to a filename-safe slug: lowercase ASCII words
 // joined by hyphens, with everything else dropped.
 func slugify(s string) string {
-	var b strings.Builder
-	dash := false
-	for _, r := range s {
-		switch {
-		case r < unicode.MaxASCII && (unicode.IsLetter(r) || unicode.IsDigit(r)):
-			b.WriteRune(unicode.ToLower(r))
-			dash = false
-		case !dash && b.Len() > 0:
-			b.WriteByte('-')
-			dash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	words := strings.FieldsFunc(s, func(r rune) bool {
+		return r >= unicode.MaxASCII || !(unicode.IsLetter(r) || unicode.IsDigit(r))
+	})
+	return strings.ToLower(strings.Join(words, "-"))
 }
