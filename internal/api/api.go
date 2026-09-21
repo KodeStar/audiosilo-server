@@ -228,6 +228,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleSetFolderOverride)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/folder-override", a.requireAdmin(http.HandlerFunc(a.handleDeleteFolderOverride)))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/enrichment", a.requireAdmin(http.HandlerFunc(a.handleSetEnrichment)))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/export", a.requireAdmin(http.HandlerFunc(a.handleExportLibrary)))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanLibrary)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanStatus)))
 

@@ -357,6 +357,21 @@ future metadata site can attach enrichment without reshaping the schema.
   progress/bookmarks). `PUT/DELETE /admin/libraries/{id}/folder-override?path=`
   sets/clears it and rescans; the admin console's per-library **Detection** browser
   drives it. `GET /fs` annotates each entry's effective `override`.
+- **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
+  `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
+  as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
+  "version":1,…}` envelope the community metadata site imports on its Watching page
+  so a user can mark which entries of a series they own. **The file leaves the
+  server**, so it carries bibliographic facts only (title, authors, narrators,
+  series + position, asin/isbn, runtime_min, chapters) and **never** a path, size,
+  codec, format or anything else about the filesystem - a regression test asserts
+  that. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
+  `ListBooks`, never OFFSET; copies of the same book within the library collapse on
+  `exposedDedupKey`); the handler is transport-only and streams it with a
+  `json.Encoder`. The single `author`/`narrator` string is split into a list only
+  where it clearly holds several names (`;`, ` & `, ` and `, and a comma **only**
+  when every part still has two words, so "Alexandre Dumas, pere" stays whole).
+  Advertised by the additive `export` capability.
 - **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/default_view and
   triggers a background rescan; `DELETE /admin/libraries/{id}` removes the library
   + its index (files on disk untouched). Both are surfaced in the admin console.
@@ -434,8 +449,8 @@ future metadata site can attach enrichment without reshaping the schema.
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`, `api_keys`, `metadata`); flip them on as
-phases land. `transcode` already reflects whether ffmpeg is configured;
+`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `export`); flip them
+on as phases land. `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` AND the runtime enabled flag, which
@@ -451,6 +466,8 @@ metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
 the other `?path=` content endpoints; 404 when metadata is disabled), plus
 `GET /meta/work?id=<work id>` (authed, no library scope - global community data;
 404 when metadata is disabled or the work id is unknown).
+The library export is `GET /admin/libraries/{id}/export` (admin only; returns a
+JSON attachment, not the usual envelope - see Library export above).
 Runtime-toggleable settings are `GET`/`PATCH /admin/settings` (admin only): a
 feature-keyed envelope (`{"metadata":{"enabled","base_url","available"}}`) whose
 `PATCH {"metadata":{"enabled":bool}}` flips the metadata lookup and persists it.

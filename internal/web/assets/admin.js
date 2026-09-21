@@ -215,7 +215,7 @@ async function loadLibraries() {
     tr.append(
       td(l.name),
       td(l.root, "code"),
-      actionTd(...reorderBtns(i, librariesCache.length), detectBtn(l), scanBtn(l.id), deleteLibBtn(l)),
+      actionTd(...reorderBtns(i, librariesCache.length), detectBtn(l), exportBtn(l), scanBtn(l.id), deleteLibBtn(l)),
     );
     rows.appendChild(tr);
   });
@@ -266,6 +266,66 @@ function deleteLibBtn(l) {
     try { await api("DELETE", `/admin/libraries/${l.id}`); toast(asI18n.t("admin.toast.libraryDeleted")); await loadLibraries(); }
     catch (err) { toast(err.message, "error"); }
   });
+}
+
+// Download the library's book list as a JSON file the community metadata site
+// (meta.audiosilo.app) can import. The console authenticates with a bearer token
+// held in localStorage, so this cannot be a plain <a href> download - the request
+// has to carry the Authorization header. We therefore fetch it and hand the body
+// to the browser as a blob object URL. This stays within the strict CSP: an
+// object URL the page itself creates is not a fetched resource, and a download
+// triggered by a.download is not a resource load either.
+function exportBtn(l) {
+  const b = button(asI18n.t("admin.libraries.export"), "secondary small", async () => {
+    b.disabled = true;
+    b.textContent = asI18n.t("admin.libraries.exporting");
+    try {
+      await downloadLibraryExport(l.id);
+      toast(asI18n.t("admin.toast.libraryExported"));
+    } catch (err) {
+      toast(err.message || asI18n.t("admin.toast.libraryExportFailed"), "error");
+    } finally {
+      b.disabled = false;
+      b.textContent = asI18n.t("admin.libraries.export");
+    }
+  });
+  return b;
+}
+
+async function downloadLibraryExport(id) {
+  const headers = {};
+  if (token) headers["Authorization"] = "Bearer " + token;
+  const resp = await fetch(`/api/v1/admin/libraries/${id}/export`, { headers });
+  if (resp.status === 401) {
+    logout();
+    throw new Error(asI18n.t("admin.toast.sessionExpired"));
+  }
+  if (!resp.ok) {
+    let msg = resp.statusText;
+    try {
+      const data = await resp.json();
+      if (data && data.error) msg = data.error;
+    } catch { /* a non-JSON error body: keep the status text */ }
+    throw new Error(msg);
+  }
+  const name = filenameFromDisposition(resp.headers.get("Content-Disposition")) || `audiosilo-library-${id}.json`;
+  const url = URL.createObjectURL(await resp.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoking synchronously can cancel the save in some browsers; do it after.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// filenameFromDisposition reads the server's quoted attachment filename so the
+// saved file keeps the name (and date) the server chose.
+function filenameFromDisposition(header) {
+  if (!header) return "";
+  const m = /filename="([^"]*)"/i.exec(header) || /filename=([^;]+)/i.exec(header);
+  return m ? m[1].trim() : "";
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
