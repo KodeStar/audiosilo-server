@@ -14,8 +14,12 @@ const el = (id) => document.getElementById(id);
 const loginView = el("login-view");
 const app = el("app");
 
-// api wraps fetch with auth + JSON handling. On 401 it forces re-login.
-async function api(method, path, body) {
+// apiFetch wraps fetch with the API prefix and auth, and owns what a failed
+// admin call means: on 401 it forces re-login, and any other error status is
+// raised as the server's {error} envelope (falling back to the status text).
+// It hands back the raw Response, so a caller that wants the bytes rather than
+// the JSON - the library export download - shares that one contract.
+async function apiFetch(method, path, body) {
   const opts = { method, headers: {} };
   if (token) opts.headers["Authorization"] = "Bearer " + token;
   if (body !== undefined) {
@@ -27,10 +31,21 @@ async function api(method, path, body) {
     logout();
     throw new Error(asI18n.t("admin.toast.sessionExpired"));
   }
-  const text = await resp.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!resp.ok) throw new Error(data.error || resp.statusText);
-  return data;
+  if (!resp.ok) {
+    let msg = resp.statusText;
+    try {
+      const data = await resp.json();
+      if (data && data.error) msg = data.error;
+    } catch { /* a non-JSON error body: keep the status text */ }
+    throw new Error(msg);
+  }
+  return resp;
+}
+
+// api is apiFetch plus JSON decoding - what almost every call wants.
+async function api(method, path, body) {
+  const text = await (await apiFetch(method, path, body)).text();
+  return text ? JSON.parse(text) : {};
 }
 
 // ---- Toast ----
@@ -215,7 +230,7 @@ async function loadLibraries() {
     tr.append(
       td(l.name),
       td(l.root, "code"),
-      actionTd(...reorderBtns(i, librariesCache.length), detectBtn(l), scanBtn(l.id), deleteLibBtn(l)),
+      actionTd(...reorderBtns(i, librariesCache.length), detectBtn(l), exportBtn(l), scanBtn(l.id), deleteLibBtn(l)),
     );
     rows.appendChild(tr);
   });
@@ -266,6 +281,52 @@ function deleteLibBtn(l) {
     try { await api("DELETE", `/admin/libraries/${l.id}`); toast(asI18n.t("admin.toast.libraryDeleted")); await loadLibraries(); }
     catch (err) { toast(err.message, "error"); }
   });
+}
+
+// Download the library's book list as a JSON file the community metadata site
+// (meta.audiosilo.app) can import. The console authenticates with a bearer token
+// held in localStorage, so this cannot be a plain <a href> download - the request
+// has to carry the Authorization header. We therefore fetch it and hand the body
+// to the browser as a blob object URL. This stays within the strict CSP: an
+// object URL the page itself creates is not a fetched resource, and a download
+// triggered by a.download is not a resource load either.
+function exportBtn(l) {
+  const b = button(asI18n.t("admin.libraries.export"), "secondary small", async () => {
+    b.disabled = true;
+    b.textContent = asI18n.t("admin.libraries.exporting");
+    try {
+      await downloadLibraryExport(l.id);
+      toast(asI18n.t("admin.toast.libraryExported"));
+    } catch (err) {
+      toast(err.message || asI18n.t("admin.toast.libraryExportFailed"), "error");
+    } finally {
+      b.disabled = false;
+      b.textContent = asI18n.t("admin.libraries.export");
+    }
+  });
+  return b;
+}
+
+async function downloadLibraryExport(id) {
+  const resp = await apiFetch("GET", `/admin/libraries/${id}/export`);
+  const name = filenameFromDisposition(resp.headers.get("Content-Disposition")) || `audiosilo-library-${id}.json`;
+  const url = URL.createObjectURL(await resp.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoking synchronously can cancel the save in some browsers; do it after.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// filenameFromDisposition reads the server's quoted attachment filename so the
+// saved file keeps the name (and date) the server chose. The header is always
+// quoted (handlers_export.go uses strconv.Quote), so one shape is enough.
+function filenameFromDisposition(header) {
+  const m = header && /filename="([^"]*)"/i.exec(header);
+  return m ? m[1].trim() : "";
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -8,8 +8,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+)
+
+// langBlockRE matches the opening of one language block in i18n-dict.js
+// (`  en: {`); dictKeyRE matches a translation key inside a block.
+var (
+	langBlockRE = regexp.MustCompile(`(?m)^  ([a-z]{2}): \{$`)
+	dictKeyRE   = regexp.MustCompile(`"([^"]+)":`)
 )
 
 // writeFile is a tiny helper that creates name (with parents) under dir.
@@ -135,6 +143,40 @@ func TestI18nAssets(t *testing.T) {
 	for _, lang := range []string{"en", "es", "fr", "de", "pt", "it"} {
 		if !strings.Contains(string(dict), lang+": {") {
 			t.Errorf("i18n-dict.js is missing the %q language block", lang)
+		}
+	}
+
+	// Every language block must define the SAME keys: a string added to `en` only
+	// silently falls back to the key name in the other five locales.
+	// Split yields the text before the first block plus one piece per block, so
+	// blocks[i+1] is the body of names[i].
+	blocks := langBlockRE.Split(string(dict), -1)
+	names := langBlockRE.FindAllStringSubmatch(string(dict), -1)
+	if len(names) < 2 {
+		t.Fatalf("could not split i18n-dict.js into language blocks (found %d)", len(names))
+	}
+	keysFor := func(block string) map[string]bool {
+		out := map[string]bool{}
+		for _, m := range dictKeyRE.FindAllStringSubmatch(block, -1) {
+			out[m[1]] = true
+		}
+		return out
+	}
+	ref, base := names[0][1], keysFor(blocks[1]) // the first block is the reference (en)
+	if len(base) == 0 {
+		t.Fatalf("the %q i18n language block defines no keys", ref)
+	}
+	for i := 1; i < len(names); i++ {
+		lang, got := names[i][1], keysFor(blocks[i+1])
+		for k := range base {
+			if !got[k] {
+				t.Errorf("i18n-dict.js: %q is missing key %q", lang, k)
+			}
+		}
+		for k := range got {
+			if !base[k] {
+				t.Errorf("i18n-dict.js: %q has key %q that %q lacks", lang, k, ref)
+			}
 		}
 	}
 
