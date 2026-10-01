@@ -115,10 +115,16 @@ type upstreamPersonRef struct {
 	Name string `json:"name"`
 }
 
+// upstreamSeriesRef is one of a work's series memberships. OrderingOf is set
+// (artifact schema_version 7) only when the series is a VARIANT reading order -
+// a chronological or recommended listing - of another series, and names that
+// primary. A pre-v7 metaserve never sends it, which is what keeps the rail
+// grouping in seriesRails exactly today's behaviour against an older upstream.
 type upstreamSeriesRef struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Position string `json:"position"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Position   string `json:"position"`
+	OrderingOf string `json:"ordering_of,omitempty"`
 }
 
 type upstreamWorkCard struct {
@@ -191,9 +197,26 @@ type upstreamSeriesEntry struct {
 	Work     *upstreamWorkCard `json:"work"`
 }
 
+// upstreamSeriesOrdering is one member of an ordering FAMILY (a primary series
+// plus every variant whose ordering_of names it). Ordering is the reading order
+// that series states (publication / chronological / recommended), omitted when
+// unstated.
+type upstreamSeriesOrdering struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Ordering string `json:"ordering,omitempty"`
+}
+
+// upstreamSeriesDetail is GET series/{id}. Ordering, OrderingOf and Orderings
+// arrive with artifact schema_version 7 and are absent before it. Orderings is
+// the whole family - primary first, then the variants by id - served
+// identically on every member, and omitted when the series has no variant.
 type upstreamSeriesDetail struct {
-	ID      string                `json:"id"`
-	Name    string                `json:"name"`
-	Authors []upstreamPersonRef   `json:"authors"`
-	Works   []upstreamSeriesEntry `json:"works"`
+	ID         string                   `json:"id"`
+	Name       string                   `json:"name"`
+	Ordering   string                   `json:"ordering,omitempty"`
+	OrderingOf string                   `json:"ordering_of,omitempty"`
+	Authors    []upstreamPersonRef      `json:"authors"`
+	Works      []upstreamSeriesEntry    `json:"works"`
+	Orderings  []upstreamSeriesOrdering `json:"orderings,omitempty"`
 }

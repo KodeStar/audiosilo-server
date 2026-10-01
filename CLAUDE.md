@@ -294,13 +294,26 @@ future metadata site can attach enrichment without reshaping the schema.
   `API.settingsMu`); the PATCH refuses (400) an attempt to enable when the service
   is unavailable. `meta.Service` owns the compose logic
   (lookup -> works/{id} -> pick the recording by `recording_id`, first as
-  fallback -> up to 3 series rails) behind a bounded in-memory TTL cache (24h
+  fallback -> up to 3 series rails, one per ordering family) behind a bounded in-memory TTL cache (24h
   positive / 1h not-found / 2min transport-error, ~2048-entry cap) so a hot path
   or a down upstream isn't hammered; the api handler (`handlers_meta.go`) is
   transport-only. Degradation: disabled -> 404 (and the `metadata` capability is
   false, so clients hide the UI); no asin/isbn or no upstream match -> `200
   {"matched": false}`; upstream unreachable -> 502. Out of scope for now: no cover
   remote-fallback, no persisting meta into the DB, no tag-based ASIN extraction.
+  **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
+  each family (key `ordering_of || id`) into ONE rail whose top-level view is the
+  MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
+  a shipped player that ignores the new fields never sees a chronological order's
+  earlier books as "previous". The other orders ride along as additive
+  `orderings` (at most `maxOrderingAlternates` = 2 per family, failures make the
+  envelope partial), and `maxSeriesRails` counts FAMILIES. Every main view is
+  fetched before any alternate, so under `composeTimeout` a slow upstream costs
+  alternates, never rails (`TestEnrichMainsBeforeAlternates`). A pre-v7 upstream
+  yields byte-identical rails (`TestEnrichPreV7RailsUnchanged`), except that a
+  work listed at two positions of one series is now one rail rather than two
+  (`TestEnrichRepeatedMembershipIsOneRail`). Server-side because shipped players
+  lag.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
