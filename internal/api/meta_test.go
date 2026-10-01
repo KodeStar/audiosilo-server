@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -318,5 +319,61 @@ func TestMetaWorkDisabled(t *testing.T) {
 	resp, body := e.do(t, "GET", metaWorkPath+escape("the-martian"), adminTok, "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("disabled meta work = %d %s, want 404", resp.StatusCode, body)
+	}
+}
+
+// TestMetaSeriesOrderingEnvelope pins the WIRE shape of a rail for a work in an
+// ordering family (a primary series plus its chronological variant), end to end
+// through the handler: ONE rail whose top-level view is the primary, so a
+// shipped player that ignores `orderings` renders the publication order alone,
+// and the variant as an additive alternate carrying the work's position in it.
+func TestMetaSeriesOrderingEnvelope(t *testing.T) {
+	const family = `[{"id":"narnia","name":"Narnia","ordering":"publication"},{"id":"narnia-chrono","name":"Narnia (Chronological)","ordering":"chronological"}]`
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"work":{"id":"lww","title":"LWW","authors":[],"cover_url":null},"recording_id":""}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"lww","title":"LWW","authors":[],"language":"en","series":[{"id":"narnia","name":"Narnia","position":"1"},{"id":"narnia-chrono","name":"Narnia (Chronological)","position":"2","ordering_of":"narnia"}],"recordings":[]}`))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		switch r.PathValue("id") {
+		case "narnia":
+			_, _ = w.Write([]byte(`{"id":"narnia","name":"Narnia","ordering":"publication","authors":[],"works":[{"position":"1","work":{"id":"lww","title":"LWW","authors":[],"cover_url":null}},{"position":"6","work":{"id":"mn","title":"MN","authors":[],"cover_url":"https://c/mn.jpg"}}],"orderings":` + family + `}`))
+		case "narnia-chrono":
+			_, _ = w.Write([]byte(`{"id":"narnia-chrono","name":"Narnia (Chronological)","ordering":"chronological","ordering_of":"narnia","authors":[],"works":[{"position":"1","work":{"id":"mn","title":"MN","authors":[],"cover_url":"https://c/mn.jpg"}},{"position":"2","work":{"id":"lww","title":"LWW","authors":[],"cover_url":null}}],"orderings":` + family + `}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	mock := httptest.NewServer(mux)
+	t.Cleanup(mock.Close)
+	e := newTestEnvWith(t, func(c *config.Config) {
+		c.Metadata.Enabled = true
+		c.Metadata.BaseURL = mock.URL
+	})
+	libID := seedBook(t, e, "C. S. Lewis/LWW", "B0LWW")
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	path := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path=" + escape("C. S. Lewis/LWW")
+	resp, body := e.do(t, "GET", path, adminTok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("meta = %d %s, want 200", resp.StatusCode, body)
+	}
+	var env struct {
+		Series json.RawMessage `json:"series"`
+	}
+	if err := json.Unmarshal([]byte(body), &env); err != nil {
+		t.Fatalf("decode envelope: %v: %s", err, body)
+	}
+	want := `[{"id":"narnia","name":"Narnia","position":"1","works":[` +
+		`{"id":"lww","title":"LWW","position":"1","authors":[],"web_url":"BASE/work?id=lww"},` +
+		`{"id":"mn","title":"MN","position":"6","authors":[],"cover_url":"https://c/mn.jpg","web_url":"BASE/work?id=mn"}],` +
+		`"ordering":"publication",` +
+		`"orderings":[{"id":"narnia-chrono","name":"Narnia (Chronological)","ordering":"chronological","ordering_of":"narnia","position":"2","works":[` +
+		`{"id":"mn","title":"MN","position":"1","authors":[],"cover_url":"https://c/mn.jpg","web_url":"BASE/work?id=mn"},` +
+		`{"id":"lww","title":"LWW","position":"2","authors":[],"web_url":"BASE/work?id=lww"}]}]}]`
+	if got := strings.ReplaceAll(string(env.Series), mock.URL, "BASE"); got != want {
+		t.Fatalf("series envelope:\n got %s\nwant %s", got, want)
 	}
 }

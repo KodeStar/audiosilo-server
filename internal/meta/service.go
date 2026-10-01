@@ -13,10 +13,21 @@ import (
 // per lookup regardless of odd data. It bounds ATTEMPTS, not successes, so
 // hostile upstream data (a work carrying dozens of series refs) with a failing
 // series endpoint can never issue more than this many series requests.
+//
+// It counts ordering FAMILIES, not series: a primary series and its variant
+// reading orders collapse into one rail (see seriesRails), so a work in
+// "Narnia" and "Narnia (Chronological)" spends one slot, not two.
 const maxSeriesRails = 3
 
+// maxOrderingAlternates caps how many OTHER reading orders of one family are
+// fetched as alternates of its rail. Like maxSeriesRails it bounds attempts, so
+// one enrichment issues at most maxSeriesRails * (1 + maxOrderingAlternates)
+// series GETs however large a family upstream claims to be. The measured
+// families hold two or three orderings, so two alternates cover every one.
+const maxOrderingAlternates = 2
+
 // composeTimeout bounds one full compose fan-out (lookup + work + up to
-// maxSeriesRails series calls). Each call already has the client's 5s timeout,
+// maxSeriesRails rails, each one series call plus up to maxOrderingAlternates). Each call already has the client's 5s timeout,
 // but sequentially those could sum to ~25s against the API's 30s request budget;
 // this keeps the whole composition comfortably under it. When THIS deadline
 // fires while the caller is still live, the parent ctx.Err() stays nil, so the
@@ -115,11 +126,42 @@ type MetaSeriesWork struct {
 }
 
 // MetaSeries is a full ordered series rail, including the current work.
+//
+// One rail is one ordering FAMILY: a primary series plus the variant reading
+// orders (chronological, recommended) that name it. The top-level
+// ID/Name/Position/Works are always the family's MAIN view - the primary when
+// the work sits in it, else the variant that holds it - so a shipped player that
+// predates orderings reads exactly one rail per family in the primary order and
+// cannot be spoiled by a second rail listing the same books in another order.
+// Ordering, OrderingOf and Orderings are additive: a client keys the family as
+// `ordering_of || id` and offers Orderings as alternate views of the same rail.
 type MetaSeries struct {
 	ID       string           `json:"id"`
 	Name     string           `json:"name"`
 	Position string           `json:"position"` // the current work's position in this series
 	Works    []MetaSeriesWork `json:"works"`
+	// Ordering is the reading order the main view states
+	// (publication/chronological/recommended), omitted when unstated.
+	Ordering string `json:"ordering,omitempty"`
+	// OrderingOf is set only when the main view is itself a VARIANT (a work
+	// placed by no other order of its family): the primary series' id.
+	OrderingOf string `json:"ordering_of,omitempty"`
+	// Orderings are the family's OTHER reading orders, in metaserve's family
+	// order (primary first, then variants by id), the main view excluded.
+	Orderings []MetaSeriesOrdering `json:"orderings,omitempty"`
+}
+
+// MetaSeriesOrdering is one alternate reading order of a rail's family. Position
+// is the current work's position in THIS order, and is empty when the order does
+// not place the work at all (a chronological list can omit a book the
+// publication order holds, and vice versa). Works are built exactly as a rail's.
+type MetaSeriesOrdering struct {
+	ID         string           `json:"id"`
+	Name       string           `json:"name"`
+	Ordering   string           `json:"ordering,omitempty"`
+	OrderingOf string           `json:"ordering_of,omitempty"`
+	Position   string           `json:"position,omitempty"`
+	Works      []MetaSeriesWork `json:"works"`
 }
 
 // Enrichment is the composed envelope returned on a match. Matched is always true
@@ -393,51 +435,145 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 	}
 }
 
-// seriesRails fetches each series the work belongs to (capped) and builds the
-// full ordered rail for each. A per-series fetch failure is non-fatal: that rail
-// is skipped so the rest of the enrichment (progressive enhancement) still
-// returns - but it is reported via complete=false so the caller caches the
-// partial envelope only briefly instead of hiding the rail for the whole
-// positive TTL. The work's own position in the series comes from the work
-// detail.
+// seriesRails builds one rail per ordering FAMILY the work belongs to (capped
+// at maxSeriesRails families). A family is keyed by a ref's ordering_of, or by
+// its own id when that is empty, so a pre-v7 metaserve - which sends no
+// ordering fields - makes every ref its own family and every rail exactly what
+// it was before orderings existed. The family's MAIN view is its first ref in
+// the work's series[] order: metaserve lists memberships primary-first, so that
+// is the primary whenever the work is in it, else the variant that holds it (a
+// variant-only work keeps its variant, the only order that places it).
+//
+// A per-series fetch failure is non-fatal: a failed main view skips the rail,
+// and a failed alternate ships the rail without that alternate, so the rest of
+// the enrichment (progressive enhancement) still returns - but either is
+// reported via complete=false so the caller caches the partial envelope only
+// briefly instead of hiding a rail or an order for the whole positive TTL.
 func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (rails []MetaSeries, complete bool) {
+	// The work's own position in each series it belongs to, by series id. An
+	// alternate's position is read from here: the work detail is the one place
+	// that states where THIS work sits, and a series the work is absent from
+	// has no entry, which is exactly the empty position the envelope promises.
+	positions := make(map[string]string, len(detail.Series))
+	for _, ref := range detail.Series {
+		if _, seen := positions[ref.ID]; !seen {
+			positions[ref.ID] = ref.Position
+		}
+	}
+
 	// Bound ATTEMPTS up front, not successes: with a failing series endpoint and
 	// odd/hostile data (dozens of series refs on one work), a success-counted
-	// loop would issue one 5s-timeout GET per ref.
-	refs := detail.Series
-	if len(refs) > maxSeriesRails {
-		refs = refs[:maxSeriesRails]
+	// loop would issue one 5s-timeout GET per ref. The cap counts families, so
+	// grouping happens first.
+	mains := familyMains(detail.Series)
+	if len(mains) > maxSeriesRails {
+		mains = mains[:maxSeriesRails]
 	}
 	complete = true
 	var out []MetaSeries
-	for _, ref := range refs {
+	for _, ref := range mains {
 		sd, err := s.client.series(ctx, ref.ID)
 		if err != nil || sd == nil {
 			complete = false
 			continue
 		}
-		works := make([]MetaSeriesWork, 0, len(sd.Works))
-		for _, entry := range sd.Works {
-			if entry.Work == nil {
-				continue
-			}
-			works = append(works, MetaSeriesWork{
-				ID:       entry.Work.ID,
-				Title:    entry.Work.Title,
-				Position: entry.Position,
-				Authors:  toPersonRefs(entry.Work.Authors),
-				CoverURL: deref(entry.Work.CoverURL),
-				WebURL:   s.workURL(entry.Work.ID),
-			})
-		}
-		out = append(out, MetaSeries{
+		rail := MetaSeries{
 			ID:       ref.ID,
 			Name:     ref.Name,
 			Position: ref.Position,
-			Works:    works,
-		})
+			Works:    s.railWorks(sd),
+			Ordering: sd.Ordering,
+			// The ref's ordering_of, not the detail's: it is what grouped this
+			// family, so a client's `ordering_of || id` key agrees with the
+			// server's collapse.
+			OrderingOf: ref.OrderingOf,
+		}
+		alts, ok := s.orderingAlternates(ctx, ref.ID, sd.Orderings, positions)
+		if !ok {
+			complete = false
+		}
+		rail.Orderings = alts
+		out = append(out, rail)
 	}
 	return out, complete
+}
+
+// familyMains returns the MAIN ref of each ordering family in refs, in order of
+// first appearance: the first ref whose family key (ordering_of, else id) has
+// not been seen yet.
+func familyMains(refs []upstreamSeriesRef) []upstreamSeriesRef {
+	seen := make(map[string]bool, len(refs))
+	var mains []upstreamSeriesRef
+	for _, ref := range refs {
+		key := ref.OrderingOf
+		if key == "" {
+			key = ref.ID
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		mains = append(mains, ref)
+	}
+	return mains
+}
+
+// orderingAlternates fetches the family's other reading orders - every member
+// of the main view's `orderings` except the main view itself, in metaserve's
+// family order, bounded to maxOrderingAlternates attempts. The family is read
+// from the main view's detail rather than from the work's own refs because a
+// work need not sit in every order of its family, and an order that omits it is
+// still a view the reader may want. ok is false when an alternate's fetch
+// failed; that alternate is left out and the others still ship.
+func (s *Service) orderingAlternates(ctx context.Context, mainID string, family []upstreamSeriesOrdering, positions map[string]string) (alts []MetaSeriesOrdering, ok bool) {
+	ok = true
+	attempts := 0
+	for _, member := range family {
+		if member.ID == "" || member.ID == mainID {
+			continue
+		}
+		if attempts == maxOrderingAlternates {
+			break
+		}
+		attempts++
+		sd, err := s.client.series(ctx, member.ID)
+		if err != nil || sd == nil {
+			ok = false
+			continue
+		}
+		alts = append(alts, MetaSeriesOrdering{
+			ID:       member.ID,
+			Name:     member.Name,
+			Ordering: member.Ordering,
+			// The family listing states no ordering_of; the alternate's own
+			// detail does, and it is set on every variant (empty on the primary).
+			OrderingOf: sd.OrderingOf,
+			Position:   positions[member.ID],
+			Works:      s.railWorks(sd),
+		})
+	}
+	return alts, ok
+}
+
+// railWorks builds the ordered work entries of one series view, each carrying
+// its own web_url. Shared by a rail's main view and its alternates so both
+// expose exactly the same MetaSeriesWork shape.
+func (s *Service) railWorks(sd *upstreamSeriesDetail) []MetaSeriesWork {
+	works := make([]MetaSeriesWork, 0, len(sd.Works))
+	for _, entry := range sd.Works {
+		if entry.Work == nil {
+			continue
+		}
+		works = append(works, MetaSeriesWork{
+			ID:       entry.Work.ID,
+			Title:    entry.Work.Title,
+			Position: entry.Position,
+			Authors:  toPersonRefs(entry.Work.Authors),
+			CoverURL: deref(entry.Work.CoverURL),
+			WebURL:   s.workURL(entry.Work.ID),
+		})
+	}
+	return works
 }
 
 // workURL builds the metadata site URL for a work id.
