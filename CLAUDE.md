@@ -301,28 +301,15 @@ future metadata site can attach enrichment without reshaping the schema.
   false, so clients hide the UI); no asin/isbn or no upstream match -> `200
   {"matched": false}`; upstream unreachable -> 502. Out of scope for now: no cover
   remote-fallback, no persisting meta into the DB, no tag-based ASIN extraction.
-  **Reading-order families** (metaserve artifact schema_version 7): a series can
-  be a VARIANT reading order (chronological/recommended) of a primary, named by
-  `ordering_of` on the work's series ref, and a series detail lists its whole
-  family as `orderings` (primary first). `seriesRails` collapses each FAMILY
-  (key `ordering_of`, else the ref's own id) into ONE rail: its top-level
-  `id`/`name`/`position`/`works` is the MAIN view - the family's first ref in
-  `series[]` order, i.e. the primary whenever the work is in it (metaserve lists
-  memberships primary-first), else the variant that holds it - so a shipped
-  player that ignores the new fields sees one rail per family in the primary
-  order and is never shown a chronological order's earlier books as
-  "previous" (the Narnia spoiler). Additive `omitempty` fields: `ordering` and
-  `ordering_of` of the main view, plus `orderings` - the family's OTHER orders as
-  `MetaSeriesOrdering{id,name,ordering,ordering_of,position,works}`, in
-  metaserve's family order, `position` being the work's place in that order
-  (read from the work's own refs; omitted when the order does not place it).
-  `maxSeriesRails` (3) counts FAMILIES, and `maxOrderingAlternates` (2) bounds the
-  alternate fetches per family by ATTEMPTS, so one enrichment issues at most
-  3 x (1 + 2) series GETs. A failed alternate drops only that alternate and marks
-  the envelope partial (short `errorTTL` cache), exactly like a failed rail. A
-  pre-v7 metaserve sends no ordering fields, so every ref is its own family and
-  the rails are byte-identical to before (`TestEnrichPreV7RailsUnchanged`); the
-  handler-level shape is pinned by `TestMetaSeriesOrderingEnvelope`.
+  **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
+  each family (key `ordering_of || id`) into ONE rail whose top-level view is the
+  MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
+  a shipped player that ignores the new fields never sees a chronological order's
+  earlier books as "previous". The other orders ride along as additive
+  `orderings` (at most `maxOrderingAlternates` = 2 per family, failures make the
+  envelope partial), and `maxSeriesRails` counts FAMILIES. A pre-v7 upstream
+  yields byte-identical rails (`TestEnrichPreV7RailsUnchanged`). Server-side
+  because shipped players lag.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the

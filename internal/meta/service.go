@@ -27,9 +27,10 @@ const maxSeriesRails = 3
 const maxOrderingAlternates = 2
 
 // composeTimeout bounds one full compose fan-out (lookup + work + up to
-// maxSeriesRails rails, each one series call plus up to maxOrderingAlternates). Each call already has the client's 5s timeout,
-// but sequentially those could sum to ~25s against the API's 30s request budget;
-// this keeps the whole composition comfortably under it. When THIS deadline
+// maxSeriesRails rails, each one series call plus up to maxOrderingAlternates).
+// Each call already has the client's 5s timeout, but sequentially those could
+// sum past the API's 30s request budget; this keeps the whole composition
+// comfortably under it. When THIS deadline
 // fires while the caller is still live, the parent ctx.Err() stays nil, so the
 // failure IS cached as a transport error for errorTTL - exactly the protective
 // behavior we want against a degraded-but-alive upstream (it is not re-hammered
@@ -439,10 +440,10 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 // at maxSeriesRails families). A family is keyed by a ref's ordering_of, or by
 // its own id when that is empty, so a pre-v7 metaserve - which sends no
 // ordering fields - makes every ref its own family and every rail exactly what
-// it was before orderings existed. The family's MAIN view is its first ref in
-// the work's series[] order: metaserve lists memberships primary-first, so that
-// is the primary whenever the work is in it, else the variant that holds it (a
-// variant-only work keeps its variant, the only order that places it).
+// it was before orderings existed. The family's MAIN view is chosen by
+// familyMains: the primary whenever the work is in it, else the variant that
+// holds it (a variant-only work keeps its variant, the only order that places
+// it).
 //
 // A per-series fetch failure is non-fatal: a failed main view skips the rail,
 // and a failed alternate ships the rail without that alternate, so the rest of
@@ -498,22 +499,31 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (
 	return out, complete
 }
 
-// familyMains returns the MAIN ref of each ordering family in refs, in order of
-// first appearance: the first ref whose family key (ordering_of, else id) has
-// not been seen yet.
+// familyMains returns the MAIN ref of each ordering family in refs, families
+// in order of first appearance. Within a family the main view is the first ref
+// whose ordering_of is empty - the primary - else the family's first ref (a
+// variant-only work keeps its variant). The rule reads ordering_of rather than
+// trusting metaserve to list memberships primary-first: a variant leading the
+// rail would hand a shipped player the chronological order's earlier books as
+// "previous" (the reading-order spoiler), and nothing here could see it happen.
+// audiosilo-sidecars' readingSeries chooses by the same rule.
 func familyMains(refs []upstreamSeriesRef) []upstreamSeriesRef {
-	seen := make(map[string]bool, len(refs))
+	index := make(map[string]int, len(refs)) // family key -> slot in mains
 	var mains []upstreamSeriesRef
 	for _, ref := range refs {
 		key := ref.OrderingOf
 		if key == "" {
 			key = ref.ID
 		}
-		if seen[key] {
+		i, seen := index[key]
+		if !seen {
+			index[key] = len(mains)
+			mains = append(mains, ref)
 			continue
 		}
-		seen[key] = true
-		mains = append(mains, ref)
+		if ref.OrderingOf == "" && mains[i].OrderingOf != "" {
+			mains[i] = ref
+		}
 	}
 	return mains
 }

@@ -4,11 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -22,119 +19,73 @@ import (
 
 const narniaLookup = `{"work":{"id":"lww","title":"The Lion, the Witch and the Wardrobe","authors":[],"cover_url":null},"recording_id":""}`
 
-const lwwWork = `{
-  "id":"lww","title":"The Lion, the Witch and the Wardrobe","authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],
-  "language":"en",
-  "series":[
-    {"id":"narnia","name":"The Chronicles of Narnia","position":"1"},
-    {"id":"narnia-chronological","name":"The Chronicles of Narnia (Chronological)","position":"2","ordering_of":"narnia"}
-  ],
-  "recordings":[]
-}`
+const (
+	lewis       = `[{"id":"c-s-lewis","name":"C. S. Lewis"}]`
+	lwwTitle    = "The Lion, the Witch and the Wardrobe"
+	mnTitle     = "The Magician's Nephew"
+	novellaName = "A Narnia Novella"
+	narniaName  = "The Chronicles of Narnia"
+	chronoName  = "The Chronicles of Narnia (Chronological)"
+)
 
-const novellaWork = `{
-  "id":"novella","title":"A Narnia Novella","authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],
-  "language":"en",
-  "series":[
-    {"id":"narnia-chronological","name":"The Chronicles of Narnia (Chronological)","position":"2.5","ordering_of":"narnia"}
-  ],
-  "recordings":[]
-}`
-
-const narniaFamily = `[
-    {"id":"narnia","name":"The Chronicles of Narnia","ordering":"publication"},
-    {"id":"narnia-chronological","name":"The Chronicles of Narnia (Chronological)","ordering":"chronological"}
-  ]`
-
-const narniaSeries = `{
-  "id":"narnia","name":"The Chronicles of Narnia","language":"en","ordering":"publication",
-  "authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],
-  "works":[
-    {"position":"1","work":{"id":"lww","title":"The Lion, the Witch and the Wardrobe","authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],"cover_url":null}},
-    {"position":"6","work":{"id":"mn","title":"The Magician's Nephew","authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],"cover_url":null}}
-  ],
-  "works_total":2,"limit":0,"offset":0,
-  "orderings":` + narniaFamily + `
-}`
-
-const narniaChronoSeries = `{
-  "id":"narnia-chronological","name":"The Chronicles of Narnia (Chronological)","language":"en",
-  "ordering":"chronological","ordering_of":"narnia",
-  "authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],
-  "works":[
-    {"position":"1","work":{"id":"mn","title":"The Magician's Nephew","authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],"cover_url":null}},
-    {"position":"2","work":{"id":"lww","title":"The Lion, the Witch and the Wardrobe","authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],"cover_url":null}},
-    {"position":"2.5","work":{"id":"novella","title":"A Narnia Novella","authors":[{"id":"c-s-lewis","name":"C. S. Lewis"}],"cover_url":null}}
-  ],
-  "works_total":3,"limit":0,"offset":0,
-  "orderings":` + narniaFamily + `
-}`
-
-// familyMock serves one work document and a set of series bodies, counting the
-// series requests per id. A series id in failing answers 500 while fail is set.
-type familyMock struct {
-	work    string
-	series  map[string]string
-	failing map[string]bool
-	fail    atomic.Bool
-	lookups atomic.Int32
-	mu      sync.Mutex
-	hits    map[string]int
+// lewisEntry is one series member: a C. S. Lewis work card at position.
+func lewisEntry(position, id, title string) string {
+	return `{"position":"` + position + `","work":{"id":"` + id + `","title":"` + title + `","authors":` + lewis + `,"cover_url":null}}`
 }
 
-func newFamilyMock(work string) *familyMock {
-	return &familyMock{
-		work:   work,
-		series: map[string]string{"narnia": narniaSeries, "narnia-chronological": narniaChronoSeries},
-		hits:   map[string]int{},
+// workDoc is a works/{id} body by C. S. Lewis holding the given series refs.
+func workDoc(id, title string, refs ...string) string {
+	return `{"id":"` + id + `","title":"` + title + `","authors":` + lewis + `,"language":"en","series":[` +
+		strings.Join(refs, ",") + `],"recordings":[]}`
+}
+
+// seriesDoc is a series/{id} body; header holds any fields between the name and
+// the authors (each with its trailing comma), and an empty orderings is omitted.
+func seriesDoc(id, name, header, works, orderings string) string {
+	doc := `{"id":"` + id + `","name":"` + name + `",` + header + `"authors":` + lewis + `,"works":` + works
+	if orderings != "" {
+		doc += `,"orderings":` + orderings
+	}
+	return doc + `}`
+}
+
+var (
+	narniaRef    = `{"id":"narnia","name":"` + narniaName + `","position":"1"}`
+	narniaWorks  = `[` + lewisEntry("1", "lww", lwwTitle) + `,` + lewisEntry("6", "mn", mnTitle) + `]`
+	chronoWorks  = `[` + lewisEntry("1", "mn", mnTitle) + `,` + lewisEntry("2", "lww", lwwTitle) + `,` + lewisEntry("2.5", "novella", novellaName) + `]`
+	narniaFamily = `[{"id":"narnia","name":"` + narniaName + `","ordering":"publication"},` +
+		`{"id":"narnia-chronological","name":"` + chronoName + `","ordering":"chronological"}]`
+
+	// The schema_version 7 shapes: the variant's refs carry ordering_of and
+	// every series states its ordering and lists its family.
+	lwwWork            = workDoc("lww", lwwTitle, narniaRef, chronoRef("2"))
+	novellaWork        = workDoc("novella", novellaName, chronoRef("2.5"))
+	narniaSeries       = seriesDoc("narnia", narniaName, `"language":"en","ordering":"publication",`, narniaWorks, narniaFamily)
+	narniaChronoSeries = seriesDoc("narnia-chronological", chronoName,
+		`"language":"en","ordering":"chronological","ordering_of":"narnia",`, chronoWorks, narniaFamily)
+
+	// The pre-v7 shapes: the same membership with NO ordering field anywhere,
+	// what a metaserve serving an older artifact sends.
+	lwwWorkPreV7      = workDoc("lww", lwwTitle, narniaRef, `{"id":"narnia-chronological","name":"`+chronoName+`","position":"2"}`)
+	narniaSeriesPreV7 = seriesDoc("narnia", narniaName, "", narniaWorks, "")
+	chronoSeriesPreV7 = seriesDoc("narnia-chronological", chronoName, "", chronoWorks, "")
+)
+
+// chronoRef is the work's membership of the chronological variant at position.
+func chronoRef(position string) string {
+	return `{"id":"narnia-chronological","name":"` + chronoName + `","position":"` + position + `","ordering_of":"narnia"}`
+}
+
+// narniaMock serves work as the work document and the two v7 Narnia series.
+func narniaMock(work string) *mockMeta {
+	return &mockMeta{
+		lookupJSON: narniaLookup,
+		workJSON:   work,
+		seriesJSON: map[string]string{"narnia": narniaSeries, "narnia-chronological": narniaChronoSeries},
 	}
 }
 
-func (m *familyMock) handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
-		m.lookups.Add(1)
-		_, _ = w.Write([]byte(narniaLookup))
-	})
-	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(m.work))
-	})
-	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		m.mu.Lock()
-		m.hits[id]++
-		m.mu.Unlock()
-		if m.fail.Load() && m.failing[id] {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		body, ok := m.series[id]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		_, _ = w.Write([]byte(body))
-	})
-	return mux
-}
-
-func (m *familyMock) totalHits() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	n := 0
-	for _, c := range m.hits {
-		n += c
-	}
-	return n
-}
-
-func (m *familyMock) hitsFor(id string) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.hits[id]
-}
-
-func enrichWith(t *testing.T, m *familyMock, now func() time.Time) (*Service, *Enrichment, string) {
+func enrichWith(t *testing.T, m *mockMeta, now func() time.Time) (*Service, *Enrichment, string) {
 	t.Helper()
 	srv := httptest.NewServer(m.handler())
 	t.Cleanup(srv.Close)
@@ -161,7 +112,7 @@ func railIDs(works []MetaSeriesWork) string {
 // books as "previous"), with the variant attached as an alternate carrying the
 // work's position in it.
 func TestEnrichOrderingFamilyCollapses(t *testing.T) {
-	m := newFamilyMock(lwwWork)
+	m := narniaMock(lwwWork)
 	_, env, _ := enrichWith(t, m, nil)
 
 	if len(env.Series) != 1 {
@@ -190,8 +141,31 @@ func TestEnrichOrderingFamilyCollapses(t *testing.T) {
 	}
 	// The primary is fetched once (not again as an alternate of itself), the
 	// variant once as the alternate.
-	if m.hitsFor("narnia") != 1 || m.hitsFor("narnia-chronological") != 1 {
-		t.Fatalf("series fetches = %v, want one each", m.hits)
+	if m.seriesHitsFor("narnia") != 1 || m.seriesHitsFor("narnia-chronological") != 1 {
+		t.Fatalf("series fetches = %v, want one each", m.seriesHits.Load())
+	}
+}
+
+// TestEnrichPrimaryIsMainWhateverTheRefOrder: the main view is chosen by
+// ordering_of, not by series[] order, so a work whose variant ref is listed
+// BEFORE its primary still gets the primary as its rail - nothing relies on
+// metaserve listing memberships primary-first.
+func TestEnrichPrimaryIsMainWhateverTheRefOrder(t *testing.T) {
+	m := narniaMock(workDoc("lww", lwwTitle, chronoRef("2"), narniaRef))
+	_, env, _ := enrichWith(t, m, nil)
+
+	if len(env.Series) != 1 {
+		t.Fatalf("a family must collapse to one rail, got %+v", env.Series)
+	}
+	rail := env.Series[0]
+	if rail.ID != "narnia" || rail.Position != "1" || rail.Ordering != "publication" || rail.OrderingOf != "" {
+		t.Fatalf("main view must be the primary even when listed second: %+v", rail)
+	}
+	if got := railIDs(rail.Works); got != "1:lww 6:mn" {
+		t.Fatalf("main view works = %q, want the publication order", got)
+	}
+	if len(rail.Orderings) != 1 || rail.Orderings[0].ID != "narnia-chronological" || rail.Orderings[0].Position != "2" {
+		t.Fatalf("expected the chronological alternate at position 2: %+v", rail.Orderings)
 	}
 }
 
@@ -199,7 +173,7 @@ func TestEnrichOrderingFamilyCollapses(t *testing.T) {
 // the variant as its rail's main view (the only order that places it), with the
 // primary as an alternate whose position is EMPTY - the work is not in it.
 func TestEnrichVariantOnlyWorkKeepsItsVariant(t *testing.T) {
-	m := newFamilyMock(novellaWork)
+	m := narniaMock(novellaWork)
 	_, env, _ := enrichWith(t, m, nil)
 
 	if len(env.Series) != 1 {
@@ -236,17 +210,17 @@ func TestEnrichVariantOnlyWorkKeepsItsVariant(t *testing.T) {
 // alternate), and the fourth family is never fetched at all.
 func TestEnrichOrderingCapCountsFamilies(t *testing.T) {
 	var refs []string
-	m := &familyMock{series: map[string]string{}, hits: map[string]int{}}
+	m := &mockMeta{lookupJSON: narniaLookup, seriesJSON: map[string]string{}}
 	for i := 1; i <= 4; i++ {
 		p, v := fmt.Sprintf("p%d", i), fmt.Sprintf("p%d-chrono", i)
 		refs = append(refs,
 			fmt.Sprintf(`{"id":%q,"name":%q,"position":"1"}`, p, p),
 			fmt.Sprintf(`{"id":%q,"name":%q,"position":"1","ordering_of":%q}`, v, v, p))
 		family := fmt.Sprintf(`[{"id":%q,"name":%q},{"id":%q,"name":%q,"ordering":"chronological"}]`, p, p, v, v)
-		m.series[p] = fmt.Sprintf(`{"id":%q,"name":%q,"authors":[],"works":[],"orderings":%s}`, p, p, family)
-		m.series[v] = fmt.Sprintf(`{"id":%q,"name":%q,"ordering_of":%q,"authors":[],"works":[],"orderings":%s}`, v, v, p, family)
+		m.seriesJSON[p] = fmt.Sprintf(`{"id":%q,"name":%q,"authors":[],"works":[],"orderings":%s}`, p, p, family)
+		m.seriesJSON[v] = fmt.Sprintf(`{"id":%q,"name":%q,"ordering_of":%q,"authors":[],"works":[],"orderings":%s}`, v, v, p, family)
 	}
-	m.work = `{"id":"lww","title":"T","authors":[],"language":"en","series":[` + strings.Join(refs, ",") + `],"recordings":[]}`
+	m.workJSON = `{"id":"lww","title":"T","authors":[],"language":"en","series":[` + strings.Join(refs, ",") + `],"recordings":[]}`
 	_, env, _ := enrichWith(t, m, nil)
 
 	if len(env.Series) != maxSeriesRails {
@@ -257,8 +231,8 @@ func TestEnrichOrderingCapCountsFamilies(t *testing.T) {
 			t.Fatalf("rail %d = %+v, want %s with its variant", i, rail, want)
 		}
 	}
-	if m.hitsFor("p4") != 0 || m.hitsFor("p4-chrono") != 0 {
-		t.Fatalf("the family past the cap must not be fetched: %v", m.hits)
+	if m.seriesHitsFor("p4") != 0 || m.seriesHitsFor("p4-chrono") != 0 {
+		t.Fatalf("the family past the cap must not be fetched: %v", m.seriesHits.Load())
 	}
 }
 
@@ -267,16 +241,16 @@ func TestEnrichOrderingCapCountsFamilies(t *testing.T) {
 // failing alternate endpoint cannot widen the fan-out.
 func TestEnrichOrderingAlternatesBounded(t *testing.T) {
 	family := `[{"id":"narnia","name":"N"},{"id":"v1","name":"V1"},{"id":"v2","name":"V2"},{"id":"v3","name":"V3"},{"id":"v4","name":"V4"}]`
-	m := newFamilyMock(`{"id":"lww","title":"T","authors":[],"language":"en","series":[{"id":"narnia","name":"N","position":"1"}],"recordings":[]}`)
-	m.series = map[string]string{"narnia": `{"id":"narnia","name":"N","authors":[],"works":[],"orderings":` + family + `}`}
+	m := narniaMock(`{"id":"lww","title":"T","authors":[],"language":"en","series":[{"id":"narnia","name":"N","position":"1"}],"recordings":[]}`)
+	m.seriesJSON = map[string]string{"narnia": `{"id":"narnia","name":"N","authors":[],"works":[],"orderings":` + family + `}`}
 	// v1..v4 are not served: every alternate fetch 404s.
 	_, env, _ := enrichWith(t, m, nil)
 
-	if got, want := m.totalHits(), 1+maxOrderingAlternates; got != want {
-		t.Fatalf("series GETs = %d, want %d: %v", got, want, m.hits)
+	if got, want := int(m.seriesHits.Load()), 1+maxOrderingAlternates; got != want {
+		t.Fatalf("series GETs = %d, want %d: %v", got, want, m.seriesHits.Load())
 	}
-	if m.hitsFor("v3") != 0 || m.hitsFor("v4") != 0 {
-		t.Fatalf("alternates past the cap must not be fetched: %v", m.hits)
+	if m.seriesHitsFor("v3") != 0 || m.seriesHitsFor("v4") != 0 {
+		t.Fatalf("alternates past the cap must not be fetched: %v", m.seriesHits.Load())
 	}
 	if len(env.Series) != 1 || len(env.Series[0].Orderings) != 0 {
 		t.Fatalf("failed alternates are dropped, the rail still ships: %+v", env.Series)
@@ -287,9 +261,9 @@ func TestEnrichOrderingAlternatesBounded(t *testing.T) {
 // fail the enrichment or drop the rail, but it marks the envelope partial, so it
 // is cached only for errorTTL and the alternate reappears soon after the blip.
 func TestEnrichOrderingAlternateFailureShortCached(t *testing.T) {
-	m := newFamilyMock(lwwWork)
-	m.failing = map[string]bool{"narnia-chronological": true}
-	m.fail.Store(true)
+	m := narniaMock(lwwWork)
+	m.seriesFailing = map[string]bool{"narnia-chronological": true}
+	m.failSeries.Store(true)
 	clk := &clock{t: time.Unix(1_700_000_000, 0)}
 	svc, env, _ := enrichWith(t, m, clk.now)
 
@@ -303,11 +277,11 @@ func TestEnrichOrderingAlternateFailureShortCached(t *testing.T) {
 	if _, err := svc.Enrich(context.Background(), "B0NARNIA", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.lookups.Load(); got != 1 {
+	if got := m.lookupHits.Load(); got != 1 {
 		t.Fatalf("partial envelope should be cached briefly, lookups = %d", got)
 	}
 	// Past errorTTL (far inside the positive TTL) the alternate is restored.
-	m.fail.Store(false)
+	m.failSeries.Store(false)
 	clk.advance(errorTTL + time.Second)
 	env, err := svc.Enrich(context.Background(), "B0NARNIA", "")
 	if err != nil {
@@ -316,7 +290,7 @@ func TestEnrichOrderingAlternateFailureShortCached(t *testing.T) {
 	if len(env.Series) != 1 || len(env.Series[0].Orderings) != 1 {
 		t.Fatalf("expected the alternate after recovery: %+v", env.Series)
 	}
-	if got := m.lookups.Load(); got != 2 {
+	if got := m.lookupHits.Load(); got != 2 {
 		t.Fatalf("expected a re-fetch past errorTTL, lookups = %d", got)
 	}
 }
@@ -327,19 +301,8 @@ func TestEnrichOrderingAlternateFailureShortCached(t *testing.T) {
 // series stay two rails and nothing new appears in the envelope - exactly what
 // the server produced before orderings existed.
 func TestEnrichPreV7RailsUnchanged(t *testing.T) {
-	strip := func(s string) string {
-		s = strings.ReplaceAll(s, `"ordering":"chronological","ordering_of":"narnia",`, "")
-		s = strings.ReplaceAll(s, `,"ordering_of":"narnia"`, "")
-		s = strings.ReplaceAll(s, `"ordering":"publication",`, "")
-		s = strings.ReplaceAll(s, `,
-  "orderings":`+narniaFamily, "")
-		if strings.Contains(s, "ordering") {
-			t.Fatalf("fixture still carries an ordering field: %s", s)
-		}
-		return s
-	}
-	m := newFamilyMock(strip(lwwWork))
-	m.series = map[string]string{"narnia": strip(narniaSeries), "narnia-chronological": strip(narniaChronoSeries)}
+	m := narniaMock(lwwWorkPreV7)
+	m.seriesJSON = map[string]string{"narnia": narniaSeriesPreV7, "narnia-chronological": chronoSeriesPreV7}
 	_, env, base := enrichWith(t, m, nil)
 
 	got, err := json.Marshal(env.Series)

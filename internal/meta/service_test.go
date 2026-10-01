@@ -14,15 +14,29 @@ import (
 
 // mockMeta is a configurable metaserve stand-in. Each endpoint counts its hits
 // so tests can assert caching, and lookup/work/series responses are overridable.
+// Series hits are also counted per id, and a series id in seriesFailing answers
+// 500 while failSeries is set.
 type mockMeta struct {
-	lookupJSON string
-	lookupCode int
-	workJSON   string
-	workCode   int
-	seriesJSON map[string]string // series id -> body
-	lookupHits atomic.Int32
-	workHits   atomic.Int32
-	seriesHits atomic.Int32
+	lookupJSON    string
+	lookupCode    int
+	workJSON      string
+	workCode      int
+	seriesJSON    map[string]string // series id -> body
+	seriesFailing map[string]bool
+	failSeries    atomic.Bool
+	lookupHits    atomic.Int32
+	workHits      atomic.Int32
+	seriesHits    atomic.Int32
+
+	mu         sync.Mutex
+	seriesByID map[string]int
+}
+
+// seriesHitsFor reports how many series requests named id.
+func (m *mockMeta) seriesHitsFor(id string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.seriesByID[id]
 }
 
 func (m *mockMeta) handler() http.Handler {
@@ -45,7 +59,18 @@ func (m *mockMeta) handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, r *http.Request) {
 		m.seriesHits.Add(1)
-		body, ok := m.seriesJSON[r.PathValue("id")]
+		id := r.PathValue("id")
+		m.mu.Lock()
+		if m.seriesByID == nil {
+			m.seriesByID = map[string]int{}
+		}
+		m.seriesByID[id]++
+		m.mu.Unlock()
+		if m.failSeries.Load() && m.seriesFailing[id] {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		body, ok := m.seriesJSON[id]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return
