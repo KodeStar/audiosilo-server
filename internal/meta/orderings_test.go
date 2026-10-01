@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -320,5 +323,105 @@ func TestEnrichPreV7RailsUnchanged(t *testing.T) {
 		`]`
 	if g := strings.ReplaceAll(string(got), base, "BASE"); g != want {
 		t.Fatalf("pre-v7 rails changed:\n got %s\nwant %s", g, want)
+	}
+}
+
+// TestEnrichMainsBeforeAlternates: the fan-out is sequential under ONE compose
+// budget, so every rail's main view is fetched before any alternate. A
+// slow-but-alive upstream whose alternates hang until the deadline then costs
+// only the alternates: both rails still ship, Enrich does not fail, and the
+// envelope is partial, so it is held only for errorTTL rather than a day.
+func TestEnrichMainsBeforeAlternates(t *testing.T) {
+	family := func(p string) string {
+		return fmt.Sprintf(`[{"id":%q,"name":%q},{"id":"%s-chrono","name":"C","ordering":"chronological"}]`, p, p, p)
+	}
+	var mu sync.Mutex
+	var order []string
+	var lookups atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
+		lookups.Add(1)
+		_, _ = w.Write([]byte(narniaLookup))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"lww","title":"T","authors":[],"language":"en","series":[` +
+			`{"id":"p1","name":"p1","position":"1"},{"id":"p2","name":"p2","position":"1"}],"recordings":[]}`))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		mu.Lock()
+		order = append(order, id)
+		mu.Unlock()
+		if strings.HasSuffix(id, "-chrono") {
+			<-r.Context().Done() // an alternate that never answers inside the budget
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"id":%q,"name":%q,"authors":[],"works":[],"orderings":%s}`, id, id, family(id))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	clk := &clock{t: time.Unix(1_700_000_000, 0)}
+	svc := NewService(srv.URL, clk.now)
+	svc.composeBudget = 300 * time.Millisecond
+
+	env, err := svc.Enrich(context.Background(), "B0NARNIA", "")
+	if err != nil {
+		t.Fatalf("a deadline among the alternates must not fail the enrichment: %v", err)
+	}
+	if len(env.Series) != 2 || env.Series[0].ID != "p1" || env.Series[1].ID != "p2" {
+		t.Fatalf("both main rails must ship ahead of any alternate: %+v", env.Series)
+	}
+	for _, rail := range env.Series {
+		if len(rail.Orderings) != 0 {
+			t.Fatalf("the hung alternates must be left out: %+v", rail)
+		}
+	}
+	mu.Lock()
+	if len(order) < 3 || order[0] != "p1" || order[1] != "p2" {
+		t.Fatalf("series fetch order = %v, want both mains first", order)
+	}
+	mu.Unlock()
+	// Partial, so short-cached: a hit now, a re-compose past errorTTL.
+	if _, err := svc.Enrich(context.Background(), "B0NARNIA", ""); err != nil || lookups.Load() != 1 {
+		t.Fatalf("partial envelope should be cached briefly: err=%v lookups=%d", err, lookups.Load())
+	}
+	clk.advance(errorTTL + time.Second)
+	if _, err := svc.Enrich(context.Background(), "B0NARNIA", ""); err != nil || lookups.Load() != 2 {
+		t.Fatalf("partial envelope must expire at errorTTL: err=%v lookups=%d", err, lookups.Load())
+	}
+}
+
+// TestEnrichRepeatedFamilyMemberFetchedOnce: a family listing naming one member
+// twice yields one alternate and one fetch, so a repeat cannot spend the
+// alternate budget or ship a duplicate view.
+func TestEnrichRepeatedFamilyMemberFetchedOnce(t *testing.T) {
+	m := narniaMock(lwwWork)
+	repeated := `[{"id":"narnia","name":"N"},{"id":"narnia-chronological","name":"C"},{"id":"narnia-chronological","name":"C"}]`
+	m.seriesJSON["narnia"] = seriesDoc("narnia", narniaName, `"ordering":"publication",`, narniaWorks, repeated)
+	_, env, _ := enrichWith(t, m, nil)
+
+	if len(env.Series) != 1 || len(env.Series[0].Orderings) != 1 {
+		t.Fatalf("a repeated member must be one alternate: %+v", env.Series)
+	}
+	if got := m.seriesHitsFor("narnia-chronological"); got != 1 {
+		t.Fatalf("repeated member fetched %d times, want 1", got)
+	}
+}
+
+// TestEnrichRepeatedMembershipIsOneRail: a work listed at two positions of one
+// series (series_works has no uniqueness on the pair, and the data holds such
+// works) is ONE rail at its first position - the family key is the series id.
+// Before orderings this produced two rails of the same series, which is the one
+// pre-v7 shape whose output deliberately changes.
+func TestEnrichRepeatedMembershipIsOneRail(t *testing.T) {
+	m := narniaMock(workDoc("lww", lwwTitle, narniaRef, `{"id":"narnia","name":"`+narniaName+`","position":"3"}`))
+	m.seriesJSON = map[string]string{"narnia": narniaSeriesPreV7}
+	_, env, _ := enrichWith(t, m, nil)
+
+	if len(env.Series) != 1 || env.Series[0].ID != "narnia" || env.Series[0].Position != "1" {
+		t.Fatalf("a repeated membership must be one rail at the first position: %+v", env.Series)
+	}
+	if got := m.seriesHitsFor("narnia"); got != 1 {
+		t.Fatalf("series fetched %d times, want 1", got)
 	}
 }

@@ -307,9 +307,13 @@ future metadata site can attach enrichment without reshaping the schema.
   a shipped player that ignores the new fields never sees a chronological order's
   earlier books as "previous". The other orders ride along as additive
   `orderings` (at most `maxOrderingAlternates` = 2 per family, failures make the
-  envelope partial), and `maxSeriesRails` counts FAMILIES. A pre-v7 upstream
-  yields byte-identical rails (`TestEnrichPreV7RailsUnchanged`). Server-side
-  because shipped players lag.
+  envelope partial), and `maxSeriesRails` counts FAMILIES. Every main view is
+  fetched before any alternate, so under `composeTimeout` a slow upstream costs
+  alternates, never rails (`TestEnrichMainsBeforeAlternates`). A pre-v7 upstream
+  yields byte-identical rails (`TestEnrichPreV7RailsUnchanged`), except that a
+  work listed at two positions of one series is now one rail rather than two
+  (`TestEnrichRepeatedMembershipIsOneRail`). Server-side because shipped players
+  lag.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the

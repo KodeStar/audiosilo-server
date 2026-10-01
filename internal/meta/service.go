@@ -27,7 +27,9 @@ const maxSeriesRails = 3
 const maxOrderingAlternates = 2
 
 // composeTimeout bounds one full compose fan-out (lookup + work + up to
-// maxSeriesRails rails, each one series call plus up to maxOrderingAlternates).
+// maxSeriesRails rails, each one series call plus up to maxOrderingAlternates;
+// every main view is fetched before any alternate, so the optional views never
+// starve a rail of the budget).
 // Each call already has the client's 5s timeout, but sequentially those could
 // sum past the API's 30s request budget; this keeps the whole composition
 // comfortably under it. When THIS deadline
@@ -439,8 +441,10 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 // seriesRails builds one rail per ordering FAMILY the work belongs to (capped
 // at maxSeriesRails families). A family is keyed by a ref's ordering_of, or by
 // its own id when that is empty, so a pre-v7 metaserve - which sends no
-// ordering fields - makes every ref its own family and every rail exactly what
-// it was before orderings existed. The family's MAIN view is chosen by
+// ordering fields - makes every series its own family and every rail exactly
+// what it was before orderings existed. The one exception is a work listed at
+// two positions of ONE series (series_works does not forbid it): that used to
+// be two rails of the same series and is now one, at the first position. The family's MAIN view is chosen by
 // familyMains: the primary whenever the work is in it, else the variant that
 // holds it (a variant-only work keeps its variant, the only order that places
 // it).
@@ -472,13 +476,19 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (
 	}
 	complete = true
 	var out []MetaSeries
+	// Every MAIN view is fetched before any alternate. The fan-out is sequential
+	// under one composeTimeout budget, so interleaving rail 1's alternates ahead
+	// of rail 2's main would let a slow-but-alive upstream spend the budget on
+	// optional views and drop whole rails - the thing a shipped player renders.
+	// Alternates go last; a deadline that fires among them costs only alternates.
+	families := make([][]upstreamSeriesOrdering, 0, len(mains))
 	for _, ref := range mains {
 		sd, err := s.client.series(ctx, ref.ID)
 		if err != nil || sd == nil {
 			complete = false
 			continue
 		}
-		rail := MetaSeries{
+		out = append(out, MetaSeries{
 			ID:       ref.ID,
 			Name:     ref.Name,
 			Position: ref.Position,
@@ -488,13 +498,15 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (
 			// family, so a client's `ordering_of || id` key agrees with the
 			// server's collapse.
 			OrderingOf: ref.OrderingOf,
-		}
-		alts, ok := s.orderingAlternates(ctx, ref.ID, sd.Orderings, positions)
+		})
+		families = append(families, sd.Orderings)
+	}
+	for i := range out {
+		alts, ok := s.orderingAlternates(ctx, out[i].ID, families[i], positions)
 		if !ok {
 			complete = false
 		}
-		rail.Orderings = alts
-		out = append(out, rail)
+		out[i].Orderings = alts
 	}
 	return out, complete
 }
@@ -538,13 +550,17 @@ func familyMains(refs []upstreamSeriesRef) []upstreamSeriesRef {
 func (s *Service) orderingAlternates(ctx context.Context, mainID string, family []upstreamSeriesOrdering, positions map[string]string) (alts []MetaSeriesOrdering, ok bool) {
 	ok = true
 	attempts := 0
+	// A member listed twice is one view: fetching it again would spend an
+	// attempt on a duplicate alternate (and ship it twice).
+	seen := map[string]bool{mainID: true}
 	for _, member := range family {
-		if member.ID == "" || member.ID == mainID {
+		if member.ID == "" || seen[member.ID] {
 			continue
 		}
 		if attempts == maxOrderingAlternates {
 			break
 		}
+		seen[member.ID] = true
 		attempts++
 		sd, err := s.client.series(ctx, member.ID)
 		if err != nil || sd == nil {
