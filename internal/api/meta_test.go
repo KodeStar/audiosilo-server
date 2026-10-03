@@ -44,7 +44,18 @@ func (m *mockMetaserve) handler() http.Handler {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte(`{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}],"recap_summary":{"in_short":"Left behind on Mars.","ending":"Rescued by the Hermes crew."}}`))
+		_, _ = w.Write([]byte(`{"id":"the-martian","title":"The Martian","subtitle":"","authors":[{"id":"andy-weir","name":"Andy Weir"}],"language":"en","first_published":"2011","description":"Stranded.","series":[{"id":"mars","name":"Mars","position":"1"}],"recordings":[{"id":"rec1","narrators":[{"id":"r-c-bray","name":"R. C. Bray"}],"abridged":false,"runtime_min":634,"asin":[{"region":"us","asin":"B00B5HZGUG"},{"region":"uk","asin":"B00B5HZGUG"}],"isbn":["9780553418026"],"release_date":"2013-03-22","publisher":"Podium Audio","cover_url":"https://c/1.jpg","chapter_count":12}],"characters":[{"id":"mark-watney","name":"Mark Watney","role":"protagonist","reveal":{"chapter":1},"description":"Stranded astronaut."}],"recaps":[{"through":{"chapter":3},"scope":"book","text":"Watney takes stock."}],"recap_summary":{"in_short":"Left behind on Mars.","ending":"Rescued by the Hermes crew."}}`))
+	})
+	// Search knows one work; a "down" query is an outage, "nothing" no hits.
+	mux.HandleFunc("GET /api/v1/works/search", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("q") {
+		case "down":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "nothing":
+			_, _ = w.Write([]byte(`{"results":[]}`))
+		default:
+			_, _ = w.Write([]byte(`{"results":[{"kind":"work","id":"the-martian","title":"The Martian","cover_url":"https://c/w.jpg"}]}`))
+		}
 	})
 	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"mars","name":"Mars","authors":[{"id":"andy-weir","name":"Andy Weir"}],"works":[{"position":"1","work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}},{"position":"2","work":{"id":"artemis","title":"Artemis","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}}]}`))

@@ -72,3 +72,23 @@ func TestHealthzPublicOK(t *testing.T) {
 		}
 	}
 }
+
+// TestTimeoutMiddlewareBoundsUploads: only reads of a streaming path are exempt;
+// an upload to one (the admin's PUT .../cover) is still cut off at the deadline,
+// so a slow client can't hold it open.
+func TestTimeoutMiddlewareBoundsUploads(t *testing.T) {
+	a := &API{timeoutDur: 50 * time.Millisecond}
+	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/libraries/1/cover", strings.NewReader("img"))
+	rec := httptest.NewRecorder()
+	a.timeout(slow).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("slow cover upload = %d, want 503", rec.Code)
+	}
+}

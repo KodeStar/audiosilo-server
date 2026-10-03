@@ -31,27 +31,35 @@ type Library struct {
 
 // Book is an indexed audiobook (single file or a folder of files).
 type Book struct {
-	ID          int64              `json:"id"`
-	LibraryID   int64              `json:"library_id"`
-	RelPath     string             `json:"rel_path"`
-	IsFolder    bool               `json:"is_folder"`
-	Title       string             `json:"title"`
-	Author      string             `json:"author"`
-	Series      string             `json:"series"`
-	SeriesIndex float64            `json:"series_index"`
-	Narrator    string             `json:"narrator"`
-	Duration    float64            `json:"duration"`
-	ASIN        string             `json:"asin,omitempty"`
-	ISBN        string             `json:"isbn,omitempty"`
-	CoverPath   string             `json:"-"`
-	Format      string             `json:"format"`
-	Codec       string             `json:"codec,omitempty"` // audio codec (ffprobe); "" when unknown
-	Size        int64              `json:"size"`
-	MTime       int64              `json:"-"`
-	AddedAt     string             `json:"added_at,omitempty"` // RFC3339; filesystem birth time (scanner)
-	ContentHash string             `json:"-"`
-	Files       []BookFile         `json:"files,omitempty"`
-	Chapters    []metadata.Chapter `json:"chapters,omitempty"`
+	ID          int64   `json:"id"`
+	LibraryID   int64   `json:"library_id"`
+	RelPath     string  `json:"rel_path"`
+	IsFolder    bool    `json:"is_folder"`
+	Title       string  `json:"title"`
+	Author      string  `json:"author"`
+	Series      string  `json:"series"`
+	SeriesIndex float64 `json:"series_index"`
+	Narrator    string  `json:"narrator"`
+	Duration    float64 `json:"duration"`
+	ASIN        string  `json:"asin,omitempty"`
+	ISBN        string  `json:"isbn,omitempty"`
+	CoverPath   string  `json:"-"`
+	Format      string  `json:"format"`
+	Codec       string  `json:"codec,omitempty"` // audio codec (ffprobe); "" when unknown
+	Size        int64   `json:"size"`
+	MTime       int64   `json:"-"`
+	AddedAt     string  `json:"added_at,omitempty"` // RFC3339; filesystem birth time (scanner)
+	ContentHash string  `json:"-"`
+	// Published (YYYY[-MM[-DD]]) and Description come only from an edit or a
+	// community match today. They are admin-console fields for now (not on the
+	// player wire), so they are kept out of this envelope.
+	Published   string `json:"-"`
+	Description string `json:"-"`
+	// HasCover reports cover art (a sibling image or embedded art); nil until a
+	// scan has checked. Set by the scanner; read by the admin catalog.
+	HasCover *bool              `json:"-"`
+	Files    []BookFile         `json:"files,omitempty"`
+	Chapters []metadata.Chapter `json:"chapters,omitempty"`
 
 	// DirectPlayable, when set, reports whether the audio codec plays natively in
 	// browsers (so the client knows when to request ?transcode=1). Computed by the
@@ -89,7 +97,10 @@ type BookFile struct {
 	Seq      int     `json:"seq"`
 	Duration float64 `json:"duration"`
 	Format   string  `json:"format"`
-	Size     int64   `json:"size"`
+	// Codec is this part's audio codec (ffprobe); admin-console only, since the
+	// player reads the book-level codec.
+	Codec string `json:"-"`
+	Size  int64  `json:"size"`
 }
 
 // Catalog provides indexed reads/writes over the store.

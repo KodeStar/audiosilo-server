@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -212,11 +213,21 @@ func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]Listening
 
 // MoveDurableState migrates a user-state from an old path to a new one within a
 // library, used by the scanner when it detects a file move. It is a no-op if
-// nothing references the old path.
+// nothing references the old path (or the two paths are the same).
 func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath, newPath string) error {
-	// Wrap the updates in one transaction so a "move" either fully applies
-	// or fully rolls back, rather than leaving durable user state half-migrated
-	// across tables if a statement fails midway.
+	if oldPath == newPath {
+		return nil
+	}
+	// Two transactions, each all or nothing: the book's own state first, then the
+	// per-user state. They are separate so that a collision in a per-user table (a
+	// plain UPDATE that fails when the destination already holds a row for the same
+	// user) can't also strand the admin's edits and cover at a path the scan is about
+	// to prune.
+	if err := c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
+		return moveBookState(ctx, tx, libraryID, oldPath, newPath)
+	}); err != nil {
+		return err
+	}
 	return c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
 		// One fully-constant UPDATE per durable-state table, iterated. The statements
 		// are spelled out rather than built as `"UPDATE "+table+...` on purpose: that
@@ -228,17 +239,61 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 			`UPDATE notes SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			`UPDATE listening_history SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			`UPDATE favourites SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-			// book_enrichment is keyed on the book path too, so a move must carry the
-			// attached ASIN/ISBN to the new path or the moved book silently loses it.
-			`UPDATE book_enrichment SET path = ? WHERE library_id = ? AND path = ?`,
 		}
 		for _, stmt := range stmts {
 			if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {
-				return err
+				return fmt.Errorf("move listening state: %w", err)
 			}
 		}
 		return nil
 	})
+}
+
+// moveBookState carries the book's own path-keyed state (enrichment, an admin's
+// metadata edits, a custom cover) from oldPath to newPath.
+func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string) error {
+	// book_enrichment is keyed on the book path too, so a move must carry the
+	// attached ASIN/ISBN to the new path or the moved book silently loses it.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE OR REPLACE book_enrichment SET path = ? WHERE library_id = ? AND path = ?`,
+		newPath, libraryID, oldPath); err != nil {
+		return err
+	}
+	// An admin's edits and custom cover belong to the book and follow it as ONE set.
+	// When the moved book has any of them, whatever the new path already carries in
+	// those tables (stale rows from an earlier book there) is dropped first, in every
+	// table, so nothing stale can merge into the moved book's set. A moved book with
+	// none keeps the path's own rows, as any book appearing at that path would.
+	var hasEdits bool
+	if err := tx.QueryRowContext(ctx, `SELECT
+		    EXISTS(SELECT 1 FROM book_overrides WHERE library_id = ?1 AND path = ?2)
+		 OR EXISTS(SELECT 1 FROM chapter_overrides WHERE library_id = ?1 AND path = ?2)
+		 OR EXISTS(SELECT 1 FROM book_covers WHERE library_id = ?1 AND path = ?2)`,
+		libraryID, oldPath).Scan(&hasEdits); err != nil {
+		return err
+	}
+	if !hasEdits {
+		return nil
+	}
+	for _, stmt := range []string{
+		`DELETE FROM book_overrides WHERE library_id = ? AND path = ?`,
+		`DELETE FROM chapter_overrides WHERE library_id = ? AND path = ?`,
+		`DELETE FROM book_covers WHERE library_id = ? AND path = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, libraryID, newPath); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range []string{
+		`UPDATE book_overrides SET path = ? WHERE library_id = ? AND path = ?`,
+		`UPDATE chapter_overrides SET path = ? WHERE library_id = ? AND path = ?`,
+		`UPDATE book_covers SET path = ? WHERE library_id = ? AND path = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AddBookmark stores a bookmark and returns it with its ID.

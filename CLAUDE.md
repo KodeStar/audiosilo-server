@@ -107,7 +107,7 @@ internal/catalog/     libraries, access grants, books, FTS search, listening sta
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; match search for the admin console (match.go)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
@@ -148,11 +148,18 @@ library_id, rel_path)`, plus `folder_overrides` (`library_id, path, mode`) which
 pins a folder's book/collection classification, and `book_enrichment`
 (`library_id, path, asin, isbn`) which attaches metadata to a book (set by the
 manager when it matches an external source) - both durable, path-keyed, no FK to
-the index. Sharing: `shares` (named), `share_paths` (`library_id`, `path`;
-`""` = whole library), `user_share_access`.
+the index. The admin console's metadata edits are likewise durable and path-keyed
+(`0016`): `book_overrides` (`library_id, path, field, value, source, updated_by`),
+`chapter_overrides` (keyed by the chapter's book-relative file + start in ms, not its
+index, so a shifted chapter list can't move a rename; the API still sends indexes) and
+`book_covers` (custom cover blobs). Sharing:
+`shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
+`user_share_access`.
 
 Book identity carries `author`/`series`/`title` plus optional `asin`/`isbn` so a
-future metadata site can attach enrichment without reshaping the schema.
+future metadata site can attach enrichment without reshaping the schema. The
+`books` metadata columns are the effective values (scan, then enrichment, then
+admin overrides; see Metadata overrides below).
 
 ## Conventions
 
@@ -403,6 +410,60 @@ future metadata site can attach enrichment without reshaping the schema.
   progress/bookmarks). `PUT/DELETE /admin/libraries/{id}/folder-override?path=`
   sets/clears it and rescans; the admin console's per-library **Folder detection** dialog
   drives it. `GET /fs` annotates each entry's effective `override`.
+- **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
+  edits never touch files. A `books` row holds the **effective** values - what the scan
+  found (kept in `books.scanned`, JSON field -> value, stamped with the upsert's
+  `indexed_at`: a snapshot whose stamp isn't the row's was left by an older server, so
+  `loadLayers` reads the scan's values off the row instead), then `book_enrichment`
+  (asin/isbn), then `book_overrides`. `bookLayers.resolve` is the ONE statement of that
+  precedence (and of each field's source); `refreshEffective` writes its values to the
+  row (plus chapter titles from `chapters.scanned_title` + `chapter_overrides`, and FTS)
+  and the book page shows it as provenance, so the two can't disagree. `UpsertBook` runs
+  `refreshEffective` in the scan's own transaction, which is what makes an edit a lock (a
+  rescan rewrites the scanned values and re-applies the edit before anything can read
+  the row) and why there is no separate post-scan enrichment pass any more.
+  `SetEnrichment` and `EditBook`/`EditBooks` call it too. Players, search, `/fs` and
+  export read the row, so they see edits with no join; the player's book JSON shape is
+  unchanged (`published`, `description`, `has_cover`, per-file codec are admin-only,
+  `json:"-"`). Validation: `normalizeOverride`; sources: a scanned value is `path` when
+  it equals what `DeriveFromPath` yields, else `tag`; an override is `edited` or
+  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
+  override + `refreshEffective` (restores the scanned value; no reindex, no disk).
+  `MoveDurableState` carries overrides and custom covers as one set: when the moved book
+  has any, the new path's own rows in all three tables are dropped first; it moves
+  them (with enrichment) in a transaction of their own, so a per-user collision can't
+  strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
+  back) with its own first part (`reclassified`).
+  `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
+  NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
+  with a tag read (`media.EmbeddedCover`, no ffprobe).
+- **Admin catalog API** (`api/handlers_catalog.go`, admin-only, transport-only):
+  `GET /admin/books` (keyset over the named orderings in `catalog.adminSorts`, sorted and
+  paged on ids before the per-row columns are computed; the cursor names its ordering;
+  filters in `catalog.BookFilter`, unparseable ones 400; `media.DirectPlayableSQL` is
+  `DirectPlayable` in SQL) + `/admin/books/facets` (each dimension counted without its
+  own filter, the unfiltered yes/no ones in one pass);
+  `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
+  `GET /admin/authors|narrators` (whole field values + `merge_suggestions` from
+  `personKey`, keyed by `match.Fold`, which keeps every script's letters) and
+  `/admin/series`; `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
+  page: per-field provenance, chapters, files, listeners, shares, folder override);
+  `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve
+  `works/search` + `lookup` concurrently, up to 6 works expanded and scored, uncached,
+  bounded by `workSem` via `fetchWork`; with no query it searches the book's own facts,
+  its title through `match.CleanTitle` since metaserve's search requires every word;
+  identifiers normalized for the exact lookup; metadata off -> 404 `metadata_off`);
+  `PUT`/`DELETE /admin/libraries/{id}/cover?path=` (custom cover in the DB;
+  `catalog.SetCover` enforces 5 MiB, sniffed JPEG/PNG/WebP and an indexed book), which
+  `GET /libraries/{id}/cover` serves first (by the requested path, then by the book a
+  part path resolves to; only while a book is indexed there), behind the caller's
+  scope, validated by an ETag from its `updated_at` (not Last-Modified, which the
+  sidecar fallback would answer with a stale 304 after a delete) so a matching
+  `If-None-Match` is a 304 without reading the image; sidecar and embedded art keep
+  `max-age=86400`. Only GET/HEAD of streaming-shaped
+  paths skip the request timeout, so the cover upload stays bounded.
+  Error codes `book_not_found`, `invalid_override` (+ `field`), `too_large`,
+  `unsupported_image`. The internal book id appears only inside the opaque cursor.
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",

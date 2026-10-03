@@ -755,3 +755,145 @@ func TestBrowseFSHidesNonAudio(t *testing.T) {
 		t.Fatal("directories should remain navigable in browse")
 	}
 }
+
+// TestScannerKeepsOverridesAndRecordsSources: a real scan's values carry where they
+// came from, an admin's edit survives a rescan that re-indexes the (changed) file,
+// and a book indexed before the cover flag existed gets it backfilled cheaply.
+func TestScannerKeepsOverridesAndRecordsSources(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+	root := t.TempDir()
+	audio := filepath.Join(root, "Will Wight", "Cradle", "01 - Unsouled", "audio.m4b")
+	copyFixtureM4B(t, audio)
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "C", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	const p = "Will Wight/Cradle/01 - Unsouled"
+	d, err := cat.AdminBookDetail(ctx, lib.ID, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture's tags agree with its path (title, author), so every value reads
+	// as the path's; the series and position come only from the path.
+	for field, src := range map[string]string{
+		catalog.FieldTitle: catalog.SourcePath, catalog.FieldAuthor: catalog.SourcePath,
+		catalog.FieldSeries: catalog.SourcePath, catalog.FieldSeriesIndex: catalog.SourcePath,
+	} {
+		if got := d.Fields[field]; got.Source != src {
+			t.Errorf("%s = %+v, want source %q", field, got, src)
+		}
+	}
+	if d.Book.HasCover {
+		t.Error("the fixture has no cover art")
+	}
+
+	if err := cat.EditBook(ctx, lib.ID, p, catalog.BookEdit{Set: map[string]string{catalog.FieldTitle: "Unsouled (Edited)"}}); err != nil {
+		t.Fatal(err)
+	}
+	// The file changes on disk, so the rescan re-indexes it from its tags.
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(audio, later, later); err != nil {
+		t.Fatal(err)
+	}
+	res, err := scanner.Scan(ctx, *lib)
+	if err != nil || res.Indexed != 1 {
+		t.Fatalf("rescan: indexed=%d err=%v (the changed file should be re-indexed)", res.Indexed, err)
+	}
+	if b, _ := cat.GetBookByPath(ctx, lib.ID, p); b.Title != "Unsouled (Edited)" {
+		t.Fatalf("the edit did not survive the rescan: %q", b.Title)
+	}
+
+	// A row indexed before migration 0016 has no cover flag; an unchanged rescan
+	// fills it without re-indexing the book.
+	if _, err := db.ExecContext(ctx, `UPDATE books SET has_cover = NULL WHERE rel_path = ?`, p); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := scanner.Scan(ctx, *lib); err != nil || res.Indexed != 0 {
+		t.Fatalf("unchanged rescan: indexed=%d err=%v", res.Indexed, err)
+	}
+	var hasCover *bool
+	if err := db.QueryRowContext(ctx, `SELECT has_cover FROM books WHERE rel_path = ?`, p).Scan(&hasCover); err != nil {
+		t.Fatal(err)
+	}
+	if hasCover == nil || *hasCover {
+		t.Fatalf("has_cover after backfill = %v, want false", hasCover)
+	}
+
+	// A file that can't be read during the backfill (a flaky mount) stays unknown
+	// rather than being recorded as having no cover.
+	if os.Getuid() == 0 {
+		t.Skip("root reads unreadable files")
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE books SET has_cover = NULL WHERE rel_path = ?`, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(audio, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(audio, 0o644) })
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	hasCover = nil
+	if err := db.QueryRowContext(ctx, `SELECT has_cover FROM books WHERE rel_path = ?`, p).Scan(&hasCover); err != nil {
+		t.Fatal(err)
+	}
+	if hasCover != nil {
+		t.Fatalf("has_cover after an unreadable backfill = %v, want unknown (NULL)", *hasCover)
+	}
+}
+
+// TestReclassifyingAFolderIsNotAMove: turning a folder book into a collection
+// leaves its first part at a nested path with the folder's fingerprint, but that
+// part is a different book. The folder book's edits must not be carried onto it
+// (locked there for good); they stay at the folder path and apply again when the
+// folder is a book once more.
+func TestReclassifyingAFolderIsNotAMove(t *testing.T) {
+	cat, scanner, ctx := newScanEnv(t)
+	root := t.TempDir()
+	const folder = "Author/Box Set"
+	copyFixtureM4B(t, filepath.Join(root, "Author", "Box Set", "01 - One.m4b"))
+	copyChapteredM4B(t, filepath.Join(root, "Author", "Box Set", "02 - Two.m4b"))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	scan := func() {
+		t.Helper()
+		if _, err := scanner.Scan(ctx, *lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scan()
+	if err := cat.EditBook(ctx, lib.ID, folder, catalog.BookEdit{Set: map[string]string{catalog.FieldTitle: "The Box Set"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cat.SetFolderOverride(ctx, lib.ID, folder, catalog.OverrideCollection); err != nil {
+		t.Fatal(err)
+	}
+	scan()
+	part, err := cat.GetBookByPath(ctx, lib.ID, folder+"/01 - One.m4b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if part.Title == "The Box Set" {
+		t.Fatal("the folder book's title override was carried onto its first part")
+	}
+
+	if err := cat.DeleteFolderOverride(ctx, lib.ID, folder); err != nil {
+		t.Fatal(err)
+	}
+	scan()
+	book, err := cat.GetBookByPath(ctx, lib.ID, folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.Title != "The Box Set" {
+		t.Fatalf("the folder book's edit didn't come back with the folder: %q", book.Title)
+	}
+}

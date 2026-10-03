@@ -774,3 +774,18 @@ func Normalize(s string) string {
 	}
 	return b.String()
 }
+
+// Fold is Normalize for every script: it lowercases and keeps each Unicode letter
+// and digit, dropping only spacing and punctuation. Normalize keeps ASCII alone, so
+// two different Cyrillic or CJK names (or a name and its accented twin) can reduce
+// to the same residue - a shared "1" or "jr" - or to nothing; Fold keeps them apart
+// for an equality test, while "J.R.R." and "J. R. R." still fold alike.
+func Fold(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}

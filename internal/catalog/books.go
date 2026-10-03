@@ -12,30 +12,49 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
-// UpsertBook inserts or updates a book keyed by (library_id, rel_path), then
-// replaces its files and chapters and refreshes the FTS row. It returns the
-// book ID.
+// UpsertBook inserts or updates a book keyed by (library_id, rel_path) with the
+// values the scan found, replaces its files and chapters, then layers enrichment and
+// metadata overrides on top and refreshes the FTS row (refreshEffective) - all in one
+// transaction, so an edited field is never visible with its scanned value. It
+// returns the book ID.
 func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
+	// The snapshot carries this upsert's indexed_at, which is how loadLayers tells
+	// it from one an older server left stale (see scannedStampKey).
+	indexedAt := c.ts()
+	scanned, err := scannedJSON(b, indexedAt)
+	if err != nil {
+		return 0, err
+	}
+	// has_cover holds whenever there is a sibling cover; the scanner reports
+	// embedded art. Unknown (nil) stays NULL until a scan checks.
+	hasCover := b.HasCover
+	if b.CoverPath != "" {
+		yes := true
+		hasCover = &yes
+	}
 	var id int64
-	err := c.db.WithTx(ctx, "UpsertBook", func(tx *sql.Tx) error {
+	err = c.db.WithTx(ctx, "UpsertBook", func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx,
 			`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
 			     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
-			     mtime, content_hash, indexed_at, added_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
 			     narrator=excluded.narrator, duration=excluded.duration, asin=excluded.asin,
 			     isbn=excluded.isbn, cover_path=excluded.cover_path, format=excluded.format,
 			     codec=excluded.codec, size=excluded.size, mtime=excluded.mtime,
-			     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at
+			     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at,
+			     published=excluded.published, description=excluded.description,
+			     has_cover=excluded.has_cover, scanned=excluded.scanned
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
 			b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
 			b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
-			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, c.ts(), b.AddedAt).Scan(&id); err != nil {
+			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
+			b.Published, b.Description, hasCover, scanned).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -45,8 +64,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 		}
 		for _, f := range b.Files {
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO book_files(book_id, rel_path, seq, duration, format, size)
-				 VALUES(?,?,?,?,?,?)`, id, f.RelPath, f.Seq, f.Duration, f.Format, f.Size); err != nil {
+				`INSERT INTO book_files(book_id, rel_path, seq, duration, format, codec, size)
+				 VALUES(?,?,?,?,?,?,?)`, id, f.RelPath, f.Seq, f.Duration, f.Format, f.Codec, f.Size); err != nil {
 				return err
 			}
 		}
@@ -56,23 +75,13 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 		}
 		for _, ch := range b.Chapters {
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO chapters(book_id, idx, title, file_index, file_path, start, "end", book_offset)
-				 VALUES(?,?,?,?,?,?,?,?)`,
-				id, ch.Index, ch.Title, ch.FileIndex, ch.FilePath, ch.Start, ch.End, ch.BookOffset); err != nil {
+				`INSERT INTO chapters(book_id, idx, title, scanned_title, file_index, file_path, start, "end", book_offset)
+				 VALUES(?,?,?,?,?,?,?,?,?)`,
+				id, ch.Index, ch.Title, ch.Title, ch.FileIndex, ch.FilePath, ch.Start, ch.End, ch.BookOffset); err != nil {
 				return err
 			}
 		}
-
-		// Refresh FTS: delete-then-insert keyed by rowid = book id.
-		if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO books_fts(rowid, title, author, series, narrator) VALUES(?,?,?,?,?)`,
-			id, b.Title, b.Author, b.Series, b.Narrator); err != nil {
-			return err
-		}
-		return nil
+		return refreshEffective(ctx, tx, id)
 	})
 	if err != nil {
 		return 0, err
@@ -121,13 +130,16 @@ type Signature struct {
 	Duration    float64
 	Codec       string
 	ContentHash string
+	CoverPath   string
+	HasCover    *bool // nil = never checked (indexed before migration 0016)
 }
 
 // Signatures returns the stored mtime/size for every book in a library, keyed
 // by rel_path. The scanner uses it to skip re-extracting unchanged books.
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, mtime, size, duration, codec, content_hash FROM books WHERE library_id = ?`, libraryID)
+		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover
+		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -136,12 +148,32 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	for rows.Next() {
 		var rel string
 		var sig Signature
-		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash); err != nil {
+		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
+			&sig.CoverPath, &sig.HasCover); err != nil {
 			return nil, err
 		}
 		out[rel] = sig
 	}
 	return out, rows.Err()
+}
+
+// SetHasCover records whether books have cover art, by path, in one transaction
+// (the scanner's backfill for rows indexed before the column existed). A sibling
+// cover image still counts, whatever the flag says.
+func (c *Catalog) SetHasCover(ctx context.Context, libraryID int64, flags map[string]bool) error {
+	if len(flags) == 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "SetHasCover", func(tx *sql.Tx) error {
+		for relPath, has := range flags {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET has_cover = (? OR cover_path <> '') WHERE library_id = ? AND rel_path = ?`,
+				has, libraryID, relPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // DeleteBooksNotIn removes books in a library whose rel_path is not in keep.
@@ -180,14 +212,20 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
-	added_at, content_hash`
+	added_at, content_hash, published, description, has_cover`
+
+// bookDest returns the scan destinations for bookCols, in order, so every query
+// selecting bookCols (plain or prefixed) scans it the same way.
+func bookDest(b *Book) []any {
+	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
+		&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
+		&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
+		&b.Published, &b.Description, &b.HasCover}
+}
 
 func scanBook(row interface{ Scan(...any) error }) (*Book, error) {
 	var b Book
-	err := row.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
-		&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
-		&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash)
-	if err != nil {
+	if err := row.Scan(bookDest(&b)...); err != nil {
 		return nil, err
 	}
 	return &b, nil
@@ -196,12 +234,7 @@ func scanBook(row interface{ Scan(...any) error }) (*Book, error) {
 // GetBookByPath returns a book by its library + relative path, including files
 // and chapters. Used by the resolve endpoint to map a browsed path to a book.
 func (c *Catalog) GetBookByPath(ctx context.Context, libraryID int64, relPath string) (*Book, error) {
-	var id int64
-	err := c.db.QueryRowContext(ctx,
-		`SELECT id FROM books WHERE library_id = ? AND rel_path = ?`, libraryID, relPath).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
+	id, err := bookIDByPath(ctx, c.db, libraryID, relPath)
 	if err != nil {
 		return nil, err
 	}
@@ -229,14 +262,14 @@ func (c *Catalog) GetBook(ctx context.Context, id int64) (*Book, error) {
 
 func (c *Catalog) loadFiles(ctx context.Context, b *Book) error {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, seq, duration, format, size FROM book_files WHERE book_id = ? ORDER BY seq`, b.ID)
+		`SELECT rel_path, seq, duration, format, codec, size FROM book_files WHERE book_id = ? ORDER BY seq`, b.ID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var f BookFile
-		if err := rows.Scan(&f.RelPath, &f.Seq, &f.Duration, &f.Format, &f.Size); err != nil {
+		if err := rows.Scan(&f.RelPath, &f.Seq, &f.Duration, &f.Format, &f.Codec, &f.Size); err != nil {
 			return err
 		}
 		b.Files = append(b.Files, f)
