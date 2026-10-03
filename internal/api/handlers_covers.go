@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 )
 
@@ -188,20 +189,22 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string) (
 			return src, err
 		}
 	}
-	sidecar, audio := bookArtPaths(lib, book)
-	switch {
-	case sidecar != "":
-		return fileArt("s", sidecar, func() ([]byte, error) {
-			f, err := os.Open(sidecar)
-			if err != nil {
-				return nil, err
-			}
-			defer f.Close()
-			return media.ReadLimited(f, maxSidecarBytes)
-		}), nil
-	case audio != "":
-		return fileArt("e", audio, func() ([]byte, error) {
-			data, _, _ := media.EmbeddedCover(audio)
+	sidecar, audio := bookArtFiles(book)
+	if sidecar != "" {
+		if abs, err := library.SafeJoin(lib.Root, sidecar); err == nil {
+			return fileArt("s", abs, func() ([]byte, error) {
+				f, err := os.Open(abs)
+				if err != nil {
+					return nil, err
+				}
+				defer f.Close()
+				return media.ReadLimited(f, maxSidecarBytes)
+			}), nil
+		}
+	}
+	if abs, err := library.SafeJoin(lib.Root, audio); err == nil {
+		return fileArt("e", abs, func() ([]byte, error) {
+			data, _, _ := media.EmbeddedCover(abs)
 			return data, nil
 		}), nil
 	}

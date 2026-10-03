@@ -205,7 +205,24 @@ func HasFFmpeg(ffmpegPath string) bool {
 	return err == nil
 }
 
-// EmbeddedCover returns embedded cover art from absPath, if present.
+// coverImageTypes are the types cover art is served as (what
+// http.DetectContentType names them).
+var coverImageTypes = map[string]bool{
+	"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true, "image/bmp": true,
+}
+
+// coverMIME is the Content-Type embedded art is served with: what its bytes are,
+// never what the tag claims, because the cover endpoint serves it from this
+// origin. A tag declaring text/html (or bytes that are no image at all) would
+// otherwise turn a crafted audio file into a page served by the server. ok is
+// false for anything that isn't an image.
+func coverMIME(data []byte) (string, bool) {
+	mime := http.DetectContentType(data)
+	return mime, coverImageTypes[mime]
+}
+
+// EmbeddedCover returns embedded cover art from absPath, if present, with its
+// sniffed image type (see coverMIME); art that isn't an image is no art.
 func EmbeddedCover(absPath string) (data []byte, mime string, ok bool) {
 	f, err := os.Open(absPath)
 	if err != nil {
@@ -220,9 +237,8 @@ func EmbeddedCover(absPath string) (data []byte, mime string, ok bool) {
 	if pic == nil || len(pic.Data) == 0 {
 		return nil, "", false
 	}
-	mime = pic.MIMEType
-	if mime == "" {
-		mime = "image/jpeg"
+	if mime, ok = coverMIME(pic.Data); !ok {
+		return nil, "", false
 	}
 	return pic.Data, mime, true
 }

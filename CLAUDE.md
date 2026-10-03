@@ -464,6 +464,15 @@ admin overrides; see Metadata overrides below).
   paths skip the request timeout, so the cover upload stays bounded.
   Error codes `book_not_found`, `invalid_override` (+ `field`), `too_large`,
   `unsupported_image`. The internal book id appears only inside the opaque cursor.
+  `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
+  covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
+  thumbnails as `data:` URLs in request order (`""` = no art), resolved like
+  `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing).
+  One request per page of covers instead of one per cover (the per-IP limiter
+  allows a burst of 40), no token in any URL, ~20 KB a cover instead of full art.
+  `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
+  (decompression bombs), `media.ThumbCache` is a byte-bounded LRU keyed by the art's
+  version (custom `updated_at`, file size + mtime), and `thumbSem` bounds decodes.
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
