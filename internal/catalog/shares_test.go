@@ -319,7 +319,12 @@ func TestGrantWholeLibraryFollowsTheMarkNotTheName(t *testing.T) {
 	}
 
 	kids, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/b"})
-	_ = c.GrantWholeLibrary(ctx, sam, kids.ID) // may fail on the name; must not leak
+	if err := c.GrantWholeLibrary(ctx, sam, kids.ID); err != nil {
+		t.Fatalf("granting a library that took a renamed library's old name: %v", err)
+	}
+	if sc, _ := c.UserScope(ctx, sam, kids.ID, false); !sc.AllowAll {
+		t.Fatalf("sam didn't get the new library: %+v", sc)
+	}
 	if sc, _ := c.UserScope(ctx, maya, kids.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
 		t.Fatalf("maya reached the new library through the old grant share: %+v", sc)
 	}

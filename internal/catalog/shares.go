@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path"
 	"path/filepath"
 	"strings"
@@ -494,7 +495,15 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	name := "Library: " + lib.Name
 	share, err := c.wholeLibraryShare(ctx, libraryID, name)
 	if errors.Is(err, ErrNotFound) {
-		share, err = c.CreateShare(ctx, Share{Name: name, Description: "Whole library", ReadOnly: false})
+		share, err = c.CreateShare(ctx, Share{Name: name, Description: "Whole library"})
+		if errors.Is(err, ErrNameTaken) {
+			// Another library's grant already has this name (that library was
+			// renamed and this one took its old name). The name is internal -
+			// clients show the library's own - so tell them apart by id.
+			share, err = c.CreateShare(ctx, Share{
+				Name: fmt.Sprintf("%s (%d)", name, libraryID), Description: "Whole library",
+			})
+		}
 	}
 	if err != nil {
 		return err

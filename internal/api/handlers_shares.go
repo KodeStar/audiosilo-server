@@ -200,7 +200,13 @@ func (a *API) handleGrantWholeLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.cat.GrantWholeLibrary(r.Context(), req.UserID, req.LibraryID); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not grant library")
+		if errors.Is(err, catalog.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "library not found")
+			return
+		}
+		// ErrNameTaken (its "Library: <name>" share is another library's grant)
+		// -> 409 name_taken; anything else is logged and a 500.
+		a.writeCatalogError(w, err, "grant library failed", "could not grant library", "library", req.LibraryID)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
