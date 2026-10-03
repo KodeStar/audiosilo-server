@@ -150,7 +150,9 @@ pins a folder's book/collection classification, and `book_enrichment`
 manager when it matches an external source) - both durable, path-keyed, no FK to
 the index. The admin console's metadata edits are likewise durable and path-keyed
 (`0016`): `book_overrides` (`library_id, path, field, value, source, updated_by`),
-`chapter_overrides` (by chapter index) and `book_covers` (custom cover blobs). Sharing:
+`chapter_overrides` (keyed by the chapter's book-relative file + start in ms, not its
+index, so a shifted chapter list can't move a rename; the API still sends indexes) and
+`book_covers` (custom cover blobs). Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
 

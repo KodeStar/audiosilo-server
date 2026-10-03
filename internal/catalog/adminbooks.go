@@ -57,11 +57,11 @@ const (
 	// A single-file book has no book_files rows; it is one file.
 	fileCountExpr = `MAX(1, (SELECT COUNT(*) FROM book_files bf WHERE bf.book_id = b.id))`
 	matchedExpr   = `(b.asin <> '' OR b.isbn <> '')`
-	// A chapter override counts only while the book has that chapter: one on an
-	// index a rescan dropped is dormant (it reapplies if the chapter comes back) and
+	// A chapter override counts only while the book has that chapter: one whose
+	// chapter a rescan dropped is dormant (it reapplies if the chapter comes back) and
 	// shows nowhere on the book page, so it can't mark the book edited.
 	editedExpr = `(EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path)
-		OR EXISTS(SELECT 1 FROM chapter_overrides co JOIN chapters ch ON ch.book_id = b.id AND ch.idx = co.idx
+		OR EXISTS(SELECT 1 FROM chapter_overrides co JOIN chapters ON chapters.book_id = b.id AND ` + chapterOverrideMatch + `
 		           WHERE co.library_id = b.library_id AND co.path = b.rel_path))`
 	// "Has chapters" means real navigation: more than the one chapter every
 	// single-part book gets.

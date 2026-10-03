@@ -95,10 +95,10 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 	if d.Chapters, err = queryRows(ctx, c.db, func(rows *sql.Rows, ch *AdminChapter) error {
 		return rows.Scan(&ch.Index, &ch.Title, &ch.ScannedTitle, &ch.Edited, &ch.FilePath,
 			&ch.Start, &ch.End, &ch.BookOffset)
-	}, `SELECT ch.idx, ch.title, ch.scanned_title, co.idx IS NOT NULL, ch.file_path, ch.start, ch."end", ch.book_offset
-	      FROM chapters ch
-	      LEFT JOIN chapter_overrides co ON co.library_id = ? AND co.path = ? AND co.idx = ch.idx
-	     WHERE ch.book_id = ? ORDER BY ch.idx`, libraryID, relPath, bookID); err != nil {
+	}, `SELECT chapters.idx, chapters.title, chapters.scanned_title,
+	           EXISTS(SELECT 1 FROM chapter_overrides co WHERE co.library_id = ? AND co.path = ? AND `+chapterOverrideMatch+`),
+	           chapters.file_path, chapters.start, chapters."end", chapters.book_offset
+	      FROM chapters WHERE chapters.book_id = ? ORDER BY chapters.idx`, libraryID, relPath, bookID); err != nil {
 		return nil, err
 	}
 	files := &Book{ID: bookID}

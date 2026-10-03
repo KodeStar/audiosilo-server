@@ -20,29 +20,37 @@ CREATE TABLE book_overrides (
     PRIMARY KEY (library_id, path, field)
 );
 
--- Chapter-title overrides, by chapter index within the book. An index the book no
--- longer has after a rescan is kept (and reapplies if the chapter comes back).
+-- Chapter-title overrides, keyed by the chapter's identity within the book: the
+-- audio file it plays from (relative to the book, so a moved book keeps them; ""
+-- for a single-file book) and its start in that file (milliseconds), not its
+-- position, so a rescan that adds or drops chapters elsewhere (a missing intro
+-- part turning up) leaves each rename on its own chapter. A chapter that no longer
+-- exists (its file re-encoded with new marks) keeps its row dormant: it reapplies
+-- if the chapter comes back and is never moved onto a different one.
 CREATE TABLE chapter_overrides (
     library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
     path       TEXT NOT NULL,
-    idx        INTEGER NOT NULL,
+    file       TEXT NOT NULL,             -- chapters.file_path relative to path
+    start_ms   INTEGER NOT NULL,          -- round(chapters.start * 1000)
     title      TEXT NOT NULL,
     updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (library_id, path, idx)
+    PRIMARY KEY (library_id, path, file, start_ms)
 );
 
 -- A custom cover uploaded in the console. Stored in the database rather than the
 -- library folder (files stay untouched) or a loose data-dir file, so it is
 -- path-keyed durable state that moves with MoveDurableState and is part of any
 -- database backup. Small by construction (the upload is capped).
+-- The blob is the last column, so reading mime/updated_at (a conditional request
+-- answered with a 304) never reads past it.
 CREATE TABLE book_covers (
     library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
     path       TEXT NOT NULL,
     mime       TEXT NOT NULL,
-    data       BLOB NOT NULL,
     updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     updated_at TEXT NOT NULL,
+    data       BLOB NOT NULL,
     PRIMARY KEY (library_id, path)
 );
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -556,7 +557,7 @@ func stageStale(t *testing.T, c *Catalog, ctx context.Context, libID int64, path
 	t.Helper()
 	for _, q := range []string{
 		`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?, ?, 'author', 'Stale Author', 'edited', 't')`,
-		`INSERT INTO chapter_overrides(library_id, path, idx, title, updated_at) VALUES(?, ?, 0, 'Stale Chapter', 't')`,
+		`INSERT INTO chapter_overrides(library_id, path, file, start_ms, title, updated_at) VALUES(?, ?, 'a.m4b', 0, 'Stale Chapter', 't')`,
 		`INSERT INTO book_covers(library_id, path, mime, data, updated_at) VALUES(?, ?, 'image/png', x'00', 't')`,
 	} {
 		if _, err := c.db.ExecContext(ctx, q, libID, path); err != nil {
@@ -791,5 +792,64 @@ func TestDormantChapterOverrideIsNotAnEdit(t *testing.T) {
 	}
 	if !edited() || mustBook(t, c, ctx, lib.ID, p).Chapters[1].Title != "Renamed" {
 		t.Fatal("the override should reapply, and count, once the chapter is back")
+	}
+}
+
+// TestChapterRenameFollowsTheChapter: a chapter rename is keyed on the chapter's
+// file and start, so a rescan that inserts a chapter before it (a missing intro
+// part turning up) keeps the rename on the same chapter, and a chapter that is
+// gone (the file re-encoded with new marks) leaves the rename dormant rather than
+// moving it onto whatever now sits at that position.
+func TestChapterRenameFollowsTheChapter(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "Author/Book"
+	upsert := func(chs ...metadata.Chapter) {
+		t.Helper()
+		b := scannedBook(lib.ID, p)
+		for i := range chs {
+			chs[i].Index = i
+		}
+		b.Chapters = chs
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	titles := func() []string {
+		t.Helper()
+		var out []string
+		for _, ch := range mustBook(t, c, ctx, lib.ID, p).Chapters {
+			out = append(out, ch.Title)
+		}
+		return out
+	}
+	one := metadata.Chapter{Title: "Opening", FilePath: p + "/a.m4b", End: 1800}
+	two := metadata.Chapter{Title: "Track 2", FilePath: p + "/a.m4b", Start: 1800, End: 3600}
+	upsert(one, two)
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSet: map[int]string{1: "The Storm"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	intro := metadata.Chapter{Title: "Intro", FilePath: p + "/00 intro.m4b", End: 60}
+	upsert(intro, one, two)
+	if got := titles(); !reflect.DeepEqual(got, []string{"Intro", "Opening", "The Storm"}) {
+		t.Fatalf("after a chapter was inserted before it: %v", got)
+	}
+
+	// Re-encoded: the renamed chapter's mark moved. Nothing is renamed, the book is
+	// not counted as edited, and the rename comes back with the chapter.
+	moved := two
+	moved.Start = 1700
+	upsert(intro, one, moved)
+	if got := titles(); !reflect.DeepEqual(got, []string{"Intro", "Opening", "Track 2"}) {
+		t.Fatalf("a vanished chapter's rename landed elsewhere: %v", got)
+	}
+	yes := true
+	if page, _ := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Edited: &yes}}); len(page.Books) != 0 {
+		t.Fatalf("a dormant chapter rename marked the book edited: %+v", page.Books)
+	}
+	upsert(intro, one, two)
+	if got := titles(); got[2] != "The Storm" {
+		t.Fatalf("the rename did not come back with its chapter: %v", got)
 	}
 }

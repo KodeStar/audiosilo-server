@@ -237,6 +237,33 @@ type FieldValue struct {
 	EditedAt string `json:"edited_at,omitempty"`
 }
 
+// chapterOverrideMatch pairs a chapter_overrides row `co` with the chapters row
+// `chapters` it renames: the same file (relative to the book, so a moved book keeps
+// its renames) and the same start to the millisecond, never the same position, so a
+// chapter list that shifts can't move a rename onto another chapter.
+const chapterOverrideMatch = `co.file = (CASE WHEN chapters.file_path = co.path THEN ''
+		ELSE substr(chapters.file_path, length(co.path) + 2) END)
+	AND co.start_ms = CAST(ROUND(chapters.start * 1000) AS INTEGER)`
+
+// chapterIdentity is what a chapter override is keyed on: the chapter at index idx
+// of the book at bookPath, by its book-relative file and start. ok is false when the
+// book has no such chapter.
+func chapterIdentity(ctx context.Context, tx *sql.Tx, bookID int64, bookPath string, idx int) (file string, startMS int64, ok bool, err error) {
+	err = tx.QueryRowContext(ctx,
+		`SELECT file_path, CAST(ROUND(start * 1000) AS INTEGER) FROM chapters WHERE book_id = ? AND idx = ?`,
+		bookID, idx).Scan(&file, &startMS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, err
+	}
+	if file == bookPath {
+		return "", startMS, true, nil
+	}
+	return strings.TrimPrefix(file, bookPath+"/"), startMS, true, nil
+}
+
 // storedOverride is one book_overrides row.
 type storedOverride struct {
 	Value     string
@@ -425,21 +452,13 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 		`UPDATE chapters SET title = scanned_title WHERE book_id = ? AND title <> scanned_title`, bookID); err != nil {
 		return err
 	}
-	type chapterTitle struct {
-		idx   int
-		title string
-	}
-	chTitles, err := queryRows(ctx, tx, func(rows *sql.Rows, c *chapterTitle) error {
-		return rows.Scan(&c.idx, &c.title)
-	}, `SELECT idx, title FROM chapter_overrides WHERE library_id = ? AND path = ?`, l.libID, l.path)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE chapters SET title = (SELECT co.title FROM chapter_overrides co
+		     WHERE co.library_id = ?1 AND co.path = ?2 AND `+chapterOverrideMatch+`)
+		 WHERE book_id = ?3 AND EXISTS(SELECT 1 FROM chapter_overrides co
+		     WHERE co.library_id = ?1 AND co.path = ?2 AND `+chapterOverrideMatch+`)`,
+		l.libID, l.path, bookID); err != nil {
 		return err
-	}
-	for _, c := range chTitles {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE chapters SET title = ? WHERE book_id = ? AND idx = ?`, c.title, bookID, c.idx); err != nil {
-			return err
-		}
 	}
 
 	// Refresh FTS: delete-then-insert keyed by rowid = book id, from the effective
@@ -594,28 +613,33 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		}
 	}
 	for idx, title := range edit.ChapterSet {
-		var exists bool
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM chapters WHERE book_id = ? AND idx = ?)`, bookID, idx).
-			Scan(&exists); err != nil {
+		file, startMS, ok, err := chapterIdentity(ctx, tx, bookID, path, idx)
+		if err != nil {
 			return err
 		}
-		if !exists {
+		if !ok {
 			return invalid("chapters", fmt.Sprintf("the book has no chapter %d", idx))
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO chapter_overrides(library_id, path, idx, title, updated_by, updated_at)
-			 VALUES(?,?,?,?,?,?)
-			 ON CONFLICT(library_id, path, idx) DO UPDATE SET
+			`INSERT INTO chapter_overrides(library_id, path, file, start_ms, title, updated_by, updated_at)
+			 VALUES(?,?,?,?,?,?,?)
+			 ON CONFLICT(library_id, path, file, start_ms) DO UPDATE SET
 			     title = excluded.title, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
-			ref.LibraryID, path, idx, title, editor, now); err != nil {
+			ref.LibraryID, path, file, startMS, title, editor, now); err != nil {
 			return err
 		}
 	}
 	for _, idx := range edit.ChapterRevert {
+		file, startMS, ok, err := chapterIdentity(ctx, tx, bookID, path, idx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue // nothing at that index to revert
+		}
 		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM chapter_overrides WHERE library_id = ? AND path = ? AND idx = ?`,
-			ref.LibraryID, path, idx); err != nil {
+			`DELETE FROM chapter_overrides WHERE library_id = ? AND path = ? AND file = ? AND start_ms = ?`,
+			ref.LibraryID, path, file, startMS); err != nil {
 			return err
 		}
 	}
