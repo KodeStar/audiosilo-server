@@ -274,7 +274,7 @@ function LibrariesCard({
   lang: string;
 }) {
   const { t } = useTranslation();
-  const max = Math.max(1, ...(libraries ?? []).map((l) => l.book_count));
+  const max = (libraries ?? []).reduce((m, l) => Math.max(m, l.book_count), 1);
   return (
     <section className="rounded-xl border bg-card" aria-labelledby="libraries-heading">
       <div className="flex items-center justify-between gap-3 border-b px-5 py-4">

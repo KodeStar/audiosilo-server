@@ -9,7 +9,9 @@ export interface MockRequest {
   body: unknown;
 }
 
-export type MockReply = { status?: number; body?: unknown } | 'network-error';
+export type MockReply =
+  | { status?: number; body?: unknown; raw?: BodyInit; headers?: Record<string, string> }
+  | 'network-error';
 export type MockRoute = MockReply | ((req: MockRequest) => MockReply);
 
 /**
@@ -37,6 +39,7 @@ export function mockFetch(routes: Record<string, MockRoute>) {
     const reply = typeof route === 'function' ? route(req) : route;
     if (reply === 'network-error') throw new TypeError('Failed to fetch');
     const status = reply.status ?? 200;
+    if (reply.raw !== undefined) return new Response(reply.raw, { status, headers: reply.headers });
     const text = reply.body === undefined ? '' : JSON.stringify(reply.body);
     return new Response(status === 204 ? null : text, { status });
   });

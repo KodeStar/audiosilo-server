@@ -94,13 +94,37 @@ export const api = {
   scanLibrary: (id: number) => request<{ status: string }>('POST', `/admin/libraries/${id}/scan`),
 };
 
+/** Encodes bytes as a data: URL (the CSP allows `img-src data:` but not `blob:`). */
+export function toDataUrl(bytes: Uint8Array, type: string): string {
+  let bin = '';
+  const CHUNK = 0x8000; // String.fromCharCode has an argument-count ceiling
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return `data:${type || 'application/octet-stream'};base64,${btoa(bin)}`;
+}
+
 /**
- * A book's cover image URL. <img> can't send headers, so media GETs carry the
- * session token as ?token= (the server accepts it only on media routes).
+ * A book's cover as a data: URL, or null when the book has no art (404).
+ *
+ * The cover is fetched with the Authorization header rather than an <img> with
+ * `?token=`: the media routes accept a query-string token for the player, but
+ * this is a full-privilege admin session, and a URL can leak into proxy access
+ * logs, history and "copy image address". A blob: URL would be cheaper, but the
+ * console's CSP allows only `img-src 'self' data:`.
  */
-export function coverUrl(libraryId: number, path: string): string {
-  const q = new URLSearchParams({ path });
+export async function fetchCover(libraryId: number, path: string): Promise<string | null> {
   const token = getToken();
-  if (token) q.set('token', token);
-  return `${API}/libraries/${libraryId}/cover?${q.toString()}`;
+  const res = await fetch(
+    `${API}/libraries/${libraryId}/cover?${new URLSearchParams({ path }).toString()}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  );
+  if (res.status === 404) return null;
+  if (res.status === 401) {
+    clearToken();
+    onUnauthorized();
+  }
+  if (!res.ok) throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
+  const type = res.headers.get('Content-Type') ?? '';
+  return toDataUrl(new Uint8Array(await res.arrayBuffer()), type);
 }

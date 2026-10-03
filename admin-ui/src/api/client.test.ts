@@ -1,4 +1,4 @@
-import { ApiError, api, coverUrl, setUnauthorizedHandler } from './client';
+import { ApiError, api, fetchCover, setUnauthorizedHandler, toDataUrl } from './client';
 import { getToken, setToken } from './token';
 import { mockFetch } from '@/test/fetch-mock';
 import { admin, stats } from '@/test/fixtures';
@@ -82,11 +82,39 @@ describe('api client', () => {
     expect(onUnauthorized).not.toHaveBeenCalled();
   });
 
-  it('puts the token and path in cover URLs', () => {
-    setToken('tok 2');
-    const u = new URL(coverUrl(3, 'Andy Weir/Project Hail Mary'), 'http://x');
+  it('fetches covers with the session header, never a token in the URL', async () => {
+    setToken('admin-secret');
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff]), {
+          status: 200,
+          headers: { 'Content-Type': 'image/jpeg' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchFn);
+    const url = await fetchCover(3, 'Andy Weir/Project Hail Mary');
+    expect(url).toBe('data:image/jpeg;base64,/9j/');
+    const [target, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    const u = new URL(target, 'http://x');
     expect(u.pathname).toBe('/api/v1/libraries/3/cover');
     expect(u.searchParams.get('path')).toBe('Andy Weir/Project Hail Mary');
-    expect(u.searchParams.get('token')).toBe('tok 2');
+    expect(u.searchParams.has('token')).toBe(false);
+    expect(target).not.toContain('admin-secret');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer admin-secret');
+  });
+
+  it('reports a book without art as null', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 404 })),
+    );
+    await expect(fetchCover(1, 'x')).resolves.toBeNull();
+  });
+
+  it('encodes large covers without blowing the argument limit', () => {
+    const big = new Uint8Array(200_000).fill(65); // "A" * 200k
+    const url = toDataUrl(big, 'image/png');
+    expect(url.startsWith('data:image/png;base64,QUFB')).toBe(true);
+    expect(atob(url.split(',')[1])).toHaveLength(200_000);
   });
 });

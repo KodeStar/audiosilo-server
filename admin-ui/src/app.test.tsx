@@ -13,6 +13,9 @@ function signedInRoutes(over: Record<string, MockRoute> = {}): Record<string, Mo
     'GET /me': { body: admin },
     'GET /admin/stats': { body: stats() },
     'GET /admin/settings': { body: settings },
+    // No cover art by default: the hatched "missing" cover.
+    'GET /libraries/1/cover': { status: 404 },
+    'GET /libraries/2/cover': { status: 404 },
     ...over,
   };
 }
@@ -142,6 +145,24 @@ describe('overview', () => {
     expect(screen.getByText('Fiction')).toBeInTheDocument();
     const server = screen.getByRole('region', { name: 'Server' });
     expect(await within(server).findByText('v0.9.2')).toBeInTheDocument();
+  });
+
+  it('renders covers from data: URLs fetched with the header, never a token in a URL', async () => {
+    const calls = mockFetch(
+      signedInRoutes({
+        'GET /libraries/1/cover': {
+          raw: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+          headers: { 'Content-Type': 'image/png' },
+        },
+      }),
+    );
+    renderApp();
+    const img = await screen.findByAltText('Project Hail Mary'); // the <img>, not the loading skeleton
+    expect(img.getAttribute('src')).toBe('data:image/png;base64,iVBORw==');
+    const cover = calls.find((c) => c.path === '/libraries/1/cover');
+    expect(cover?.headers.Authorization).toBe('Bearer stored');
+    expect(calls.every((c) => !c.query.has('token'))).toBe(true);
+    expect(document.body.innerHTML).not.toContain('token=');
   });
 
   it('welcomes a server with no libraries', async () => {

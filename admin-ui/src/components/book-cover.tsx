@@ -1,12 +1,13 @@
-import { useState } from 'react';
 import { ImageOff } from 'lucide-react';
-import { coverUrl } from '@/api/client';
+import { useCover } from '@/api/hooks';
 import { cn } from '@/lib/utils';
 
 /**
- * A book's real cover art (square, the only element with a shadow). When the
- * book has no art the server 404s and this falls back to the hatched "missing"
- * cover. The procedural generated covers arrive with the Library (Phase 2b).
+ * A book's real cover art (square, the only element with a shadow). It is
+ * fetched with the session header (never a token in the URL, see fetchCover),
+ * shows a skeleton while loading, and falls back to the hatched "missing" cover
+ * when the book has no art. Procedural generated covers arrive with the Library
+ * (Phase 2b).
  */
 export function BookCover({
   libraryId,
@@ -19,8 +20,11 @@ export function BookCover({
   title: string;
   className?: string;
 }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) {
+  const cover = useCover(libraryId, path);
+  if (cover.isPending) {
+    return <div className={cn('cover skel', className)} role="img" aria-label={title} />;
+  }
+  if (!cover.data) {
     return (
       <div className={cn('cover', className)} data-missing="" role="img" aria-label={title}>
         <ImageOff className="size-[30%] max-w-6" aria-hidden="true" />
@@ -29,13 +33,7 @@ export function BookCover({
   }
   return (
     <div className={cn('cover', className)}>
-      <img
-        src={coverUrl(libraryId, path)}
-        alt={title}
-        loading="lazy"
-        decoding="async"
-        onError={() => setFailed(true)}
-      />
+      <img src={cover.data} alt={title} decoding="async" />
     </div>
   );
 }

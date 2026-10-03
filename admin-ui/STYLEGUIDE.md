@@ -621,9 +621,11 @@ The policy is the server's `web.contentSecurityPolicy` and does not change for t
   `ChartStyle` (put chart colours in `globals.css`), `<style>` JSX and `dangerouslySetInnerHTML`.
   ESLint enforces all of these (`eslint.config.js`), and `src/app.test.tsx` asserts no `<style>`
   element exists while the palette, a menu and a toast are open.
-- **Assets are files, never `data:` URIs** (`build.assetsInlineLimit: 0`; no `?inline` CSS). Fonts
+- **Build assets are files, never `data:` URIs** (`build.assetsInlineLimit: 0`; no `?inline` CSS). Fonts
   are self-hosted with fontsource; Google Fonts is a cross-origin request the CSP blocks.
-- **Images:** covers come from `GET /api/v1/libraries/{id}/cover?path=&token=` (same origin).
-  `img-src` also allows `data:`, but prefer files.
+- **Images:** covers are fetched from `GET /api/v1/libraries/{id}/cover?path=` with the
+  `Authorization` header and rendered as `data:` URLs (`fetchCover` / `useCover`). Never put the
+  session token in an image URL (`?token=`): this is a full-privilege admin credential and URLs
+  leak into proxy logs and history. `img-src` allows `'self' data:` but **not** `blob:`.
 - The Vite dev server (`npm run dev`) is not under this CSP, so a violation can hide in dev:
   check the production build (`npm run build`, then the Go server) before calling UI work done.
