@@ -5,22 +5,23 @@ import { useTranslation } from 'react-i18next';
 import { Dialog } from '@base-ui/react/dialog';
 import {
   CornerDownLeft,
+  DatabaseZap,
   ExternalLink,
-  History,
+  Globe,
   Home,
   Languages,
   LogOut,
   RefreshCw,
   Search,
+  UserPlus,
   type LucideIcon,
 } from 'lucide-react';
-import { api } from '@/api/client';
-import { keys, useServerInfo, useStats } from '@/api/hooks';
-import { toast } from '@/lib/toast';
+import { useServerInfo, useStats } from '@/api/hooks';
+import { rescanLibrary } from '@/features/libraries/rescan';
 import { LANGUAGES, setLanguage, type Language } from '@/i18n';
 import { useSession } from '@/lib/session';
 import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
-import { CLASSIC_CONSOLE_URL, DESTINATIONS } from './destinations';
+import { DESTINATIONS } from './destinations';
 import { usePalette } from './palette-context';
 import { paletteFilter } from './palette-filter';
 
@@ -67,12 +68,32 @@ function PaletteBody({ close }: { close: () => void }) {
   const server = useServerInfo();
   const stats = useStats();
 
-  const go = (to: string, params?: Record<string, string | undefined>) => {
+  const go = (
+    to: string,
+    params?: Record<string, string | undefined>,
+    search?: Record<string, unknown>,
+  ) => {
     close();
-    void navigate({ to, params });
+    void navigate({ to, params, search });
   };
 
   const actions: Entry[] = [
+    {
+      id: 'invite',
+      title: t('palette.action.invite'),
+      subtitle: t('palette.action.inviteSub'),
+      icon: UserPlus,
+      keywords: ['person', 'user', 'pair', 'qr'],
+      run: () => go('/people/{-$section}', { section: undefined }, { invite: true }),
+    },
+    {
+      id: 'add-library',
+      title: t('palette.action.addLibrary'),
+      subtitle: t('palette.action.addLibrarySub'),
+      icon: DatabaseZap,
+      keywords: ['folder', 'library', 'new'],
+      run: () => go('/library/{-$section}', { section: 'libraries' }, { add: true }),
+    },
     ...(stats.data?.libraries ?? []).map<Entry>((lib) => ({
       id: `rescan-${lib.id}`,
       title: t('palette.action.rescan', { name: lib.name }),
@@ -81,24 +102,7 @@ function PaletteBody({ close }: { close: () => void }) {
       keywords: ['scan', lib.name],
       run: () => {
         close();
-        // A plain call, not a mutation callback: the palette unmounts on close,
-        // and the toast must still appear when the request settles.
-        api.scanLibrary(lib.id).then(
-          () => {
-            void queryClient.invalidateQueries({ queryKey: keys.stats });
-            toast.add({
-              title: t('palette.toast.rescanning', { name: lib.name }),
-              description: t('palette.toast.rescanningSub'),
-              type: 'info',
-            });
-          },
-          (err: Error) =>
-            toast.add({
-              title: t('palette.toast.rescanFailed', { name: lib.name }),
-              description: err.message,
-              type: 'error',
-            }),
-        );
+        rescanLibrary(queryClient, lib);
       },
     })),
     ...(server.data?.capabilities.web_player
@@ -112,13 +116,6 @@ function PaletteBody({ close }: { close: () => void }) {
           },
         ]
       : []),
-    {
-      id: 'classic',
-      title: t('shell.account.classic'),
-      subtitle: t('palette.action.classicSub'),
-      icon: History,
-      run: () => window.location.assign(CLASSIC_CONSOLE_URL),
-    },
     {
       id: 'sign-out',
       title: t('shell.account.signOut'),
@@ -160,6 +157,14 @@ function PaletteBody({ close }: { close: () => void }) {
   );
 
   const settings: Entry[] = [
+    {
+      id: 'metadata',
+      title: t('settings.metadata.title'),
+      subtitle: t('shell.section.server.settings'),
+      icon: Globe,
+      keywords: ['meta', 'community', 'lookup', 'asin'],
+      run: () => go('/server/{-$section}', { section: undefined }),
+    },
     ...THEME_OPTIONS.map<Entry>(({ pref, icon }) => ({
       id: `theme-${pref}`,
       title: t(`palette.theme.${pref}`),

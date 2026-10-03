@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,9 @@ type Share struct {
 	// it when one exists.
 	ReadOnly bool       `json:"read_only"`
 	Paths    []PathRule `json:"paths,omitempty"`
+	// WholeLibraryID is set on the shares GrantWholeLibrary makes: the library
+	// they grant whole. Clients list those as library access, not named shares.
+	WholeLibraryID *int64 `json:"whole_library_id,omitempty"`
 }
 
 // PathRule grants a path (and everything under it) within a library.
@@ -227,7 +231,7 @@ func (c *Catalog) UserScopes(ctx context.Context, userID int64, isAdmin bool) ([
 // ordered by name. Used by the admin console to show what a user can access.
 func (c *Catalog) UserShares(ctx context.Context, userID int64) ([]Share, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT s.id, s.name, s.description, s.read_only
+		`SELECT s.id, s.name, s.description, s.read_only, s.whole_library_id
 		   FROM shares s
 		   JOIN user_share_access usa ON usa.share_id = s.id
 		  WHERE usa.user_id = ? ORDER BY s.name`, userID)
@@ -312,7 +316,7 @@ func (c *Catalog) CreateShare(ctx context.Context, s Share) (*Share, error) {
 
 func scanShare(row interface{ Scan(...any) error }) (*Share, error) {
 	var s Share
-	if err := row.Scan(&s.ID, &s.Name, &s.Description, &s.ReadOnly); err != nil {
+	if err := row.Scan(&s.ID, &s.Name, &s.Description, &s.ReadOnly, &s.WholeLibraryID); err != nil {
 		return nil, err
 	}
 	return &s, nil
@@ -321,7 +325,7 @@ func scanShare(row interface{ Scan(...any) error }) (*Share, error) {
 // GetShare returns a share including its path rules.
 func (c *Catalog) GetShare(ctx context.Context, id int64) (*Share, error) {
 	row := c.db.QueryRowContext(ctx,
-		`SELECT id, name, description, read_only FROM shares WHERE id = ?`, id)
+		`SELECT id, name, description, read_only, whole_library_id FROM shares WHERE id = ?`, id)
 	s, err := scanShare(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -338,7 +342,7 @@ func (c *Catalog) GetShare(ctx context.Context, id int64) (*Share, error) {
 // ListShares returns all shares (with their paths).
 func (c *Catalog) ListShares(ctx context.Context) ([]Share, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT id, name, description, read_only FROM shares ORDER BY name`)
+		`SELECT id, name, description, read_only, whole_library_id FROM shares ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -360,6 +364,26 @@ func (c *Catalog) ListShares(ctx context.Context) ([]Share, error) {
 		}
 	}
 	return out, nil
+}
+
+// ShareMembers maps each share id to the ids of the users it is granted to (the
+// console's "People with this share"). Shares granted to nobody are absent.
+func (c *Catalog) ShareMembers(ctx context.Context) (map[int64][]int64, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT share_id, user_id FROM user_share_access ORDER BY share_id, user_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64][]int64{}
+	for rows.Next() {
+		var shareID, userID int64
+		if err := rows.Scan(&shareID, &userID); err != nil {
+			return nil, err
+		}
+		out[shareID] = append(out[shareID], userID)
+	}
+	return out, rows.Err()
 }
 
 // ShareUpdate is a partial share patch. Each field is a pointer so an omitted
@@ -469,9 +493,17 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 		return err
 	}
 	name := "Library: " + lib.Name
-	share, err := c.shareByName(ctx, name)
+	share, err := c.wholeLibraryShare(ctx, libraryID, name)
 	if errors.Is(err, ErrNotFound) {
-		share, err = c.CreateShare(ctx, Share{Name: name, Description: "Whole library", ReadOnly: false})
+		share, err = c.CreateShare(ctx, Share{Name: name, Description: "Whole library"})
+		if errors.Is(err, ErrNameTaken) {
+			// Another library's grant already has this name (that library was
+			// renamed and this one took its old name). The name is internal -
+			// clients show the library's own - so tell them apart by id.
+			share, err = c.CreateShare(ctx, Share{
+				Name: fmt.Sprintf("%s (%d)", name, libraryID), Description: "Whole library",
+			})
+		}
 	}
 	if err != nil {
 		return err
@@ -484,7 +516,35 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 	if err := c.AddSharePath(ctx, share.ID, PathRule{LibraryID: libraryID, Path: ""}); err != nil {
 		return err
 	}
+	// Mark it as this library's grant (idempotent; also heals a share made
+	// before the column existed that the migration couldn't match).
+	if _, err := c.db.ExecContext(ctx,
+		`UPDATE shares SET whole_library_id = ? WHERE id = ?`, libraryID, share.ID); err != nil {
+		return err
+	}
 	return c.GrantShare(ctx, userID, share.ID)
+}
+
+// wholeLibraryShare finds the share that grants libraryID whole: the one marked
+// with it (which survives a library rename), else an unmarked share named after
+// it (made before whole_library_id existed). A same-named share marked for
+// another library is never reused - adding this library's rule to it would hand
+// this library to everyone holding that one.
+func (c *Catalog) wholeLibraryShare(ctx context.Context, libraryID int64, name string) (*Share, error) {
+	var id int64
+	err := c.db.QueryRowContext(ctx,
+		`SELECT id FROM shares WHERE whole_library_id = ? ORDER BY id LIMIT 1`, libraryID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = c.db.QueryRowContext(ctx,
+			`SELECT id FROM shares WHERE name = ? AND whole_library_id IS NULL`, name).Scan(&id)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c.GetShare(ctx, id)
 }
 
 func (c *Catalog) shareByName(ctx context.Context, name string) (*Share, error) {

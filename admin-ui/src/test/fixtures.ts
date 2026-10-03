@@ -1,4 +1,14 @@
-import type { AdminSettings, AdminStats, ServerInfo, User } from '@/api/types';
+import type {
+  AdminLibrary,
+  AdminSettings,
+  AdminShare,
+  AdminStats,
+  Invite,
+  InviteCreated,
+  ServerInfo,
+  User,
+  UserDetail,
+} from '@/api/types';
 
 export const serverInfo: ServerInfo = {
   name: 'AudioSilo',
@@ -73,4 +83,97 @@ export function stats(over: Partial<AdminStats> = {}): AdminStats {
 
 export const settings: AdminSettings = {
   metadata: { enabled: true, base_url: 'https://meta.audiosilo.app', available: true },
+};
+
+/** No scan running. */
+export const idle = { running: false, total: 0, done: 0, indexed: 0 };
+
+export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
+  const base: AdminLibrary[] = [
+    {
+      id: 1,
+      name: 'Fiction',
+      root: '/mnt/tank/fiction',
+      default_view: '',
+      sort_order: 0,
+      book_count: 2400,
+      available: true,
+      scan: idle,
+    },
+    {
+      id: 2,
+      name: 'Kids',
+      root: '/mnt/nas/kids',
+      default_view: '',
+      sort_order: 1,
+      book_count: 849,
+      available: true,
+      scan: idle,
+    },
+  ];
+  return base.map((l, i) => ({ ...l, ...over[i] }));
+}
+
+export const sam: User = {
+  id: 2,
+  username: 'sam',
+  role: 'user',
+  disabled: false,
+  has_password: false,
+  has_recovery: false,
+  is_demo: false,
+  last_seen_at: new Date(Date.now() - 3600_000).toISOString(),
+};
+
+export const users: User[] = [admin, sam];
+
+export const kidsShare: AdminShare = {
+  id: 7,
+  name: 'Cosy mysteries',
+  description: '',
+  read_only: false,
+  paths: [{ library_id: 1, path: 'Agatha Christie' }],
+  member_ids: [2],
+};
+
+export const fictionGrant: AdminShare = {
+  id: 8,
+  name: 'Library: Fiction',
+  description: 'Whole library',
+  read_only: false,
+  paths: [{ library_id: 1, path: '' }],
+  whole_library_id: 1,
+  member_ids: [],
+};
+
+export function invite(over: Partial<Invite> = {}): Invite {
+  return {
+    id: 31,
+    label: 'invite',
+    max_uses: 5,
+    uses: 1,
+    expires_at: new Date(Date.now() + 2 * 86400_000).toISOString(),
+    redeemed_at: new Date(Date.now() - 3600_000).toISOString(),
+    created_at: new Date(Date.now() - 5 * 86400_000).toISOString(),
+    user_id: 2,
+    username: 'sam',
+    ...over,
+  };
+}
+
+export function samDetail(over: Partial<UserDetail> = {}): UserDetail {
+  return {
+    user: sam,
+    accessible_libraries: [],
+    shares: [kidsShare],
+    auth_codes: [invite()],
+    ...over,
+  };
+}
+
+export const created: InviteCreated = {
+  auth_code: 'ABCD-1234',
+  invite_url: 'https://books.example/connect#code=ABCD-1234',
+  max_uses: 5,
+  expires_at: new Date(Date.now() + 7 * 86400_000 + 60_000).toISOString(),
 };

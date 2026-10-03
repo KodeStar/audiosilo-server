@@ -27,7 +27,6 @@ AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that 
 scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
 
 scripts/build-admin.sh               # the admin console's gate + build (Node 24): npm ci, check, build into internal/web/adminui/dist
-AUDIOSILO_ADMIN_NEXT=1 ./bin/audiosilo   # serve the redesigned console at /admin (classic at /admin/classic)
 ```
 
 Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
@@ -112,10 +111,11 @@ internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
-internal/web/         baked-in classic admin/connect/setup UI (vanilla HTML/CSS/JS, no build step);
-                      also serves the web player at /web from web_dir (not vendored here)
-internal/web/adminui/ embeds + serves the redesigned admin console (admin-ui/ build output in dist/, gitignored)
-admin-ui/             the redesigned admin console: React 19 + Vite + TS, shadcn/ui on Base UI, Tailwind v4 (own README + STYLEGUIDE.md)
+internal/web/         baked-in connect/setup pages (vanilla HTML/CSS/JS, no build step), mounts the
+                      admin console at /admin and the web player at /web from web_dir (not vendored here)
+internal/web/adminui/ embeds the admin console (admin-ui/ build output in dist/, gitignored)
+internal/web/spa/     the one SPA file handler the console and the player share (caching, MIME, deep links)
+admin-ui/             the admin console: React 19 + Vite + TS, shadcn/ui on Base UI, Tailwind v4 (own README + STYLEGUIDE.md)
 testdata/library/     tiny generated M4B fixtures used by tests
 Dockerfile            multi-stage build: builds admin-ui (node stage), bakes a pinned web build into /app/web
 scripts/build-admin.sh  build the admin console locally (npm ci + check + build) before go build
@@ -210,10 +210,11 @@ future metadata site can attach enrichment without reshaping the schema.
   transaction, supersedes the user's other *still-redeemable* invites
   (`supersedeActiveInvites` - not expired, not used-up) so there's exactly one active
   invite each; spent/expired ones stay as history. `POST /admin/authcodes/{id}/rotate`
-  (`RotateAuthCode`) regenerates an invite's secret in place (the admin "Resend"),
+  (`RotateAuthCode`) regenerates an invite's secret in place (the console's "Rotate"),
   **preserving** its `max_uses` and renewing its expiry for the original window (never
   silently downgrading to defaults) and **revoking the invite's outstanding pairing
-  tokens** (a QR already on screen dies with the old secret); `redeemed_at` records
+  tokens** (a QR already on screen dies with the old secret) and, like a mint, retiring
+  the user's other still-redeemable invites; `redeemed_at` records
   acceptance (first successful exchange) but the console buckets invites by whether
   they are still redeemable, not by `redeemed_at`. **Self-
   service password**: `POST /auth/password` reuses `SetPassword`; setting a first
@@ -251,21 +252,30 @@ future metadata site can attach enrichment without reshaping the schema.
   react-native-web's runtime styles). Admin/connect pages keep the stricter
   site-wide CSP. Compatibility is by construction (the image pins a matching web
   build); native apps negotiate via `GET /server` capability flags.
-- **Admin console redesign (`admin-ui/` + `internal/web/adminui`)**: the console is being
-  rebuilt as a React SPA in the Shelf design (workspace `ADMIN-CONSOLE-PLAN.md` holds the
-  phases; `admin-ui/STYLEGUIDE.md` the design). Vite builds into `internal/web/adminui/dist`,
-  embedded with `//go:embed all:dist` (only `dist/.gitkeep` is committed; a build without it
-  serves a 503 "console not built" page). `adminui.Handler` serves `/admin/assets/*`
-  immutable, other top-level files no-cache, and everything else as `index.html` (no-cache)
-  for client routing, all with the site-wide strict CSP and explicit MIME types.
+- **Admin console (`admin-ui/` + `internal/web/adminui`)**: a React SPA in the Shelf design
+  (workspace `ADMIN-CONSOLE-PLAN.md` holds the phases still to come; `admin-ui/STYLEGUIDE.md` the
+  design). It replaced the classic vanilla-JS console at the Phase 1b cutover (no switch, no
+  `/admin/classic`). Vite builds into `internal/web/adminui/dist`, embedded with
+  `//go:embed all:dist` (only `dist/.gitkeep` is committed; a build without it serves a 503
+  "console not built" page). Serving goes through **`internal/web/spa`**, the one SPA handler
+  the console and the web player share: files under the asset dirs are immutable and 404 when
+  missing, other files and HTML revalidate, a missing top-level file with an extension 404s,
+  anything else boots `index.html` for client routing; MIME types are pinned process-wide.
   **The CSP does not change for it**: no inline script/style anywhere (`theme-init.js` is
   external, Base UI runs under `CSPProvider disableStyleElements`, banned libraries are
-  ESLint-enforced, `admin-ui/scripts/check-csp.mjs` fails the build and
-  `TestEmbeddedBuild` checks the embedded `index.html`). Until the cutover it sits behind
-  `AUDIOSILO_ADMIN_NEXT` (env-only `config.AdminNext`, never persisted): on, `/admin` is the
-  new console and the classic one moves to `/admin/classic`; off, nothing changes. It shares
-  the classic console's token (`localStorage["audiosilo_token"]`) and language key, so
-  switching between them never asks to sign in twice.
+  ESLint-enforced, `admin-ui/scripts/check-csp.mjs` fails the build and `TestEmbeddedBuild`
+  checks the embedded `index.html`). It keeps the classic console's token key
+  (`localStorage["audiosilo_token"]`), so an admin stays signed in across the upgrade. A 403 from
+  an `/admin` endpoint makes the console re-check `/me` and sign a demoted admin out.
+  Admin-only endpoints that exist for it: `GET /admin/libraries` adds `book_count` and
+  `available` (root reachable: `Scanner.RootAvailable`, a 2 s-bounded, 15 s-cached, one-at-a-time
+  probe per root so a hung NFS mount can't stall the page, plus "empty while books are indexed"
+  and "last scan stopped at the guard"); scan status adds `unavailable`, and `API.startScan`
+  marks a queued scan running before the request returns (`Scanner.MarkRunning`) so the first
+  poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
+  code); `GET /admin/fs/dirs?path=` is the add-library folder picker (`library.ListDirs`:
+  absolute paths, folder names only, no dot-folders, 1,000-entry cap); `GET /admin/shares` adds
+  `member_ids` (`catalog.ShareMembers`).
 - **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
   /api/v1/libraries/{id}/meta?path=` (authed, scope-checked via `authorizedPath`
   + `bookForPath`, exactly like `item`) resolves the book's `asin`/`isbn`
@@ -310,8 +320,8 @@ future metadata site can attach enrichment without reshaping the schema.
   `metadata.enabled`) gates it - so an admin can flip it on/off without a restart.
   The handler and the `metadata` capability both gate on `metadataOn()`
   (`a.meta != nil && metaEnabled`); `a.meta == nil` (empty/invalid `base_url`) is
-  permanently unavailable and can't be enabled. The admin console's **Overview >
-  Community metadata lookup** card and `GET`/`PATCH /admin/settings`
+  permanently unavailable and can't be enabled. The admin console's **Server >
+  Settings > Community metadata** card and `GET`/`PATCH /admin/settings`
   (`handlers_settings.go`, transport-only) read/flip the flag, persisting
   `metadata.enabled` to `config.yaml` via `cfg.Save()` (serialized by
   `API.settingsMu`); the PATCH refuses (400) an attempt to enable when the service
@@ -391,7 +401,7 @@ future metadata site can attach enrichment without reshaping the schema.
   `collection` = one book per file, `book` = force folder-is-one-book. Overrides
   are durable, path-keyed config (no FK to the rebuildable index, like
   progress/bookmarks). `PUT/DELETE /admin/libraries/{id}/folder-override?path=`
-  sets/clears it and rescans; the admin console's per-library **Detection** browser
+  sets/clears it and rescans; the admin console's per-library **Folder detection** dialog
   drives it. `GET /fs` annotates each entry's effective `override`.
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
@@ -461,15 +471,11 @@ future metadata site can attach enrichment without reshaping the schema.
 - **Phase A (done)**: auth/QR, admin, 3 views, scanner, FTS search, pagination,
   Range streaming, per-user listening state.
 - **Phase A.1 (done)**: baked-in web UI (`internal/web`) - public connect page
-  (auth-code box → QR + links) and an admin console (login, users, libraries,
-  access grants, auth codes, rescan, folder-detection overrides, delete). Static client over the
-  JSON API; the API enforces the admin role, so the HTML itself is unprivileged.
-  The console takes its design cues from the Expo player (pink `#db2777` accent,
-  self-hosted Roboto in `assets/fonts/`, dark-mode-first, logo + wordmark): a
-  sidebar-section layout (Overview/Stats, Libraries, Users, Shares) with forms in
-  modals and a per-user detail drawer (role/password/disable, access, invite-code
-  status). All styling lives in `assets/style.css` and all behaviour in external
-  JS - no inline `<style>`/`style=`/`<script>`, so the strict same-origin CSP holds.
+  (auth-code box → QR + links) and a vanilla-JS admin console, replaced by the
+  `admin-ui` React console at the admin redesign's Phase 1b cutover (see "Admin
+  console" above). The connect and setup pages are still vanilla: all styling in
+  `assets/style.css`, all behaviour in external JS - no inline `<style>`/`style=`/
+  `<script>`, so the strict same-origin CSP holds.
 - **Phase A.3 (done)**: **copy-invite** links (fragment-carried auth code →
   auto-redeem connect screen), app-or-web QR (HTTPS `web_url` for Universal/App
   Links + `audiosilo://` custom scheme), and the **web player** served at `/web`
@@ -477,8 +483,8 @@ future metadata site can attach enrichment without reshaping the schema.
   Docker image (pinned, not vendored in this repo); updates ship as a new image.
 - **Phase A.2 (done)**: path identity + **filesystem-based shares** (named sets of
   path rules; filtered-tree browse; whole-library sugar), durable state re-keyed to
-  the path, and cheap **move-tracking**. Admin console has a **Shares** section with
-  a filesystem path picker.
+  the path, and cheap **move-tracking**. The admin console manages shares under
+  People > Shares, with a library path picker.
 - **Phase B**: `POST /uploads` → parse + placement suggestion; AAX→M4B conversion
   (user-supplied activation bytes, never stored).
 - **Phase C**: `?transcode=` on the stream endpoint (ffmpeg pipe to MP3) - **done**

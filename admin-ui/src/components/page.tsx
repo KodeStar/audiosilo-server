@@ -8,3 +8,15 @@ export function Page({ children, className }: { children: React.ReactNode; class
     </div>
   );
 }
+
+/** What a screen shows while its code loads: the page frame with a placeholder. */
+export function PageSkeleton() {
+  return (
+    <Page>
+      <div className="flex flex-col gap-4" role="status" aria-busy="true">
+        <span className="skel h-9 w-56" />
+        <span className="skel h-[180px] rounded-xl" />
+      </div>
+    </Page>
+  );
+}

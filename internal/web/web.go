@@ -1,10 +1,11 @@
-// Package web serves the small, dependency-free admin/connect UI that ships baked
-// into the server binary, plus (optionally) the web player at /web.
+// Package web serves the browser UI baked into the server: the small,
+// dependency-free connect and setup pages, the admin console at /admin (package
+// adminui), and optionally the web player at /web.
 //
-// The admin/connect pages are plain HTML/CSS/JS (no build step) embedded in the
-// binary; they talk to the JSON API and are static, so the real authorization
-// always happens at the API. The web player is a separate project (the
-// audiosilo-frontend Expo export) and is NOT vendored here: it is served at
+// The connect/setup pages are plain HTML/CSS/JS (no build step) embedded in the
+// binary; like the console they talk to the JSON API and are static, so the real
+// authorization always happens at the API. The web player is a separate project
+// (the audiosilo-frontend Expo export) and is NOT vendored here: it is served at
 // runtime from a directory (config web_dir / AUDIOSILO_WEB_DIR) that the Docker
 // image bakes in. When web_dir is unset or empty, /web is simply not mounted.
 package web
@@ -20,15 +21,16 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/web/adminui"
+	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
 //go:embed assets
 var assetsFS embed.FS
 
-// contentSecurityPolicy locks the admin/connect UI down to same-origin resources.
+// contentSecurityPolicy locks the admin console and connect/setup pages down to
+// same-origin resources.
 // data: is allowed for images so the QR pairing PNG (a data URI) renders.
 // manifest-src and worker-src ('self') let the admin console install as a PWA:
 // fetch its web manifest and register its same-origin service worker (/sw.js).
@@ -36,8 +38,8 @@ const contentSecurityPolicy = "default-src 'self'; img-src 'self' data:; " +
 	"style-src 'self'; script-src 'self'; connect-src 'self'; " +
 	"manifest-src 'self'; worker-src 'self'; base-uri 'none'; frame-ancestors 'none'"
 
-// ContentSecurityPolicy is the strict same-origin CSP applied to the baked-in
-// admin/connect pages. Exported so the api package can apply the identical policy
+// ContentSecurityPolicy is the strict same-origin CSP applied to the admin console
+// and the baked-in connect pages. Exported so the api package can apply the identical policy
 // to the first-run setup page it serves (the setup flow lives in api because it
 // creates the admin account).
 const ContentSecurityPolicy = contentSecurityPolicy
@@ -56,18 +58,13 @@ func Asset(name string) ([]byte, error) {
 //
 //	GET /                 connect page (public)
 //	GET /connect[/]       connect page (the copy-invite link target)
-//	GET /admin            admin console (static; API enforces the admin role)
-//	GET /admin/classic    the classic console, only while adminNext is on
-//	GET /assets/...       static CSS/JS
+//	GET /admin[/...]      admin console (package adminui; the API enforces the admin role)
+//	GET /assets/...       static CSS/JS of the connect and setup pages
 //	GET /web/...          web player, served from webDir (only if non-empty)
 //
 // API routes registered on the same mux take precedence because ServeMux prefers
 // more specific patterns.
-//
-// adminNext (env AUDIOSILO_ADMIN_NEXT) mounts the redesigned console (package
-// adminui) at /admin and moves the classic one to /admin/classic, so both can be
-// used side by side during the redesign. Off, /admin is the classic console.
-func Register(mux *http.ServeMux, webDir string, adminNext bool) error {
+func Register(mux *http.ServeMux, webDir string) error {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		return err
@@ -81,15 +78,10 @@ func Register(mux *http.ServeMux, webDir string, adminNext bool) error {
 	})
 	// The admin console's PWA service worker and web manifest are served from the
 	// site root: a service worker can only control pages at or below its own URL,
-	// so /sw.js (scope "/") is what lets it control /admin. The manifest gets an
-	// explicit content type because Go's mime table doesn't know ".webmanifest".
-	mux.HandleFunc("GET /sw.js", rootAsset(sub, "sw.js", "text/javascript; charset=utf-8", true))
-	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(sub, "manifest.webmanifest", "application/manifest+json", false))
-	var admin http.Handler = page(sub, "admin.html")
-	if adminNext {
-		mux.Handle("GET /admin/classic", admin)
-		admin = adminui.Handler(adminui.FS(), contentSecurityPolicy)
-	}
+	// so /sw.js (scope "/") is what lets it control /admin.
+	mux.HandleFunc("GET /sw.js", rootAsset(sub, "sw.js", true))
+	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(sub, "manifest.webmanifest", false))
+	admin := adminui.Handler(adminui.FS(), contentSecurityPolicy)
 	mux.Handle("GET /admin", admin)
 	mux.Handle("GET /admin/", admin)
 	mux.HandleFunc("GET /connect", page(sub, "index.html"))
@@ -103,8 +95,13 @@ func Register(mux *http.ServeMux, webDir string, adminNext bool) error {
 		page(sub, "index.html")(w, r)
 	})
 
-	if fsys, ok := playerFS(webDir); ok && isFile(fsys, "index.html") {
-		mux.Handle("GET /web/", playerHandler(fsys))
+	if fsys, ok := playerFS(webDir); ok && spa.IsFile(fsys, "index.html") {
+		mux.Handle("GET /web/", spa.Handler(spa.Config{
+			FS:          fsys,
+			Prefix:      "/web",
+			AssetDirs:   []string{"_expo", "assets"},
+			DocumentCSP: htmlCSP,
+		}))
 	}
 	return nil
 }
@@ -128,22 +125,21 @@ func playerFS(webDir string) (fs.FS, bool) {
 // flag and to mount /web.
 func HasPlayer(webDir string) bool {
 	fsys, ok := playerFS(webDir)
-	return ok && isFile(fsys, "index.html")
+	return ok && spa.IsFile(fsys, "index.html")
 }
 
 // rootAsset serves one embedded asset from the site root (not under /assets/),
-// with an explicit content type and the strict same-origin CSP. Used for the PWA
-// service worker and web manifest, which must live at the root for the worker's
-// scope to cover /admin. noCache disables HTTP caching (so an updated worker is
-// picked up promptly).
-func rootAsset(fsys fs.FS, name, contentType string, noCache bool) http.HandlerFunc {
+// with the strict same-origin CSP. Used for the PWA service worker and web
+// manifest, which must live at the root for the worker's scope to cover /admin.
+// noCache disables HTTP caching (so an updated worker is picked up promptly).
+func rootAsset(fsys fs.FS, name string, noCache bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := fs.ReadFile(fsys, name)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Type", spa.ContentType(name))
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if noCache {
@@ -176,87 +172,6 @@ func noSniff(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(w, r)
 	})
-}
-
-// playerHandler serves the web player from fsys (an os.DirFS over web_dir) with an
-// SPA fallback: a request that resolves to no file but looks like a navigation
-// serves index.html so client-side routing (and deep links like
-// /web/connect?token=) work. Missing static assets still 404.
-func playerHandler(fsys fs.FS) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		rel := strings.TrimPrefix(r.URL.Path, "/web/")
-		name, ok := resolvePlayerFile(fsys, rel)
-		if !ok {
-			if isAsset(rel) {
-				http.NotFound(w, r)
-				return
-			}
-			name = "index.html" // client-routed deep link: boot the SPA
-		}
-		data, err := fs.ReadFile(fsys, name)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if strings.HasSuffix(name, ".html") {
-			// HTML carries the scoped CSP, with a hash of its own inline scripts so
-			// the player boots without 'unsafe-inline' for scripts. Computed from the
-			// served bytes so it stays correct after an image-rebuilt player swap.
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Content-Security-Policy", htmlCSP(data))
-			w.Header().Set("Cache-Control", "no-cache")
-		} else if strings.HasPrefix(rel, "_expo/") || strings.HasPrefix(rel, "assets/") {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		}
-		http.ServeContent(w, r, name, modTime(fsys, name), bytes.NewReader(data))
-	}
-}
-
-func modTime(fsys fs.FS, name string) time.Time {
-	if info, err := fs.Stat(fsys, name); err == nil {
-		return info.ModTime()
-	}
-	return time.Time{}
-}
-
-// resolvePlayerFile maps a request path to a file, trying the exact path, then
-// "<path>.html", then "<path>/index.html" (Expo emits per-route HTML).
-func resolvePlayerFile(fsys fs.FS, p string) (string, bool) {
-	p = strings.Trim(p, "/")
-	if p == "" {
-		p = "index.html"
-	}
-	for _, cand := range []string{p, p + ".html", p + "/index.html"} {
-		if isFile(fsys, cand) {
-			return cand, true
-		}
-	}
-	return "", false
-}
-
-func isFile(fsys fs.FS, name string) bool {
-	if !fs.ValidPath(name) {
-		return false
-	}
-	info, err := fs.Stat(fsys, name)
-	return err == nil && !info.IsDir()
-}
-
-// isAsset reports whether a path should 404 rather than SPA-fallback when missing
-// (fingerprinted bundles, media, anything with a non-HTML extension).
-func isAsset(p string) bool {
-	if strings.HasPrefix(p, "_expo/") || strings.HasPrefix(p, "assets/") {
-		return true
-	}
-	base := p
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		base = p[i+1:]
-	}
-	if dot := strings.LastIndexByte(base, '.'); dot >= 0 {
-		return !strings.EqualFold(base[dot:], ".html")
-	}
-	return false
 }
 
 var inlineScriptRE = regexp.MustCompile(`(?is)<script([^>]*)>(.*?)</script>`)

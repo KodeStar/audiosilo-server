@@ -1,8 +1,8 @@
-// Tiny i18n engine for the baked-in admin/connect UI. No build step, no deps.
+// Tiny i18n engine for the baked-in connect page. No build step, no deps.
 //
 // The dictionary is a plain object on `window.asI18nDict` (see i18n-dict.js), loaded
 // synchronously BEFORE this script and before the page script - so `asI18n.t()` is
-// ready when admin.js/connect.js render dynamic content, with no fetch race or flash.
+// ready when connect.js renders dynamic content, with no fetch race or flash.
 // English is the base + fallback; other languages may be partial.
 //
 // Static markup is tagged with data-i18n / data-i18n-placeholder / data-i18n-alt /

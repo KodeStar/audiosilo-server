@@ -3,22 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { getToken, setToken } from '@/api/token';
 import { setUnauthorizedHandler } from '@/api/client';
 import { toast } from '@/lib/toast';
-import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { admin, member, serverInfo, settings, stats } from '@/test/fixtures';
+import { mockFetch } from '@/test/fetch-mock';
+import { admin, member, stats } from '@/test/fixtures';
+import { signedInRoutes } from '@/test/routes';
 import { renderApp } from '@/test/render-app';
-
-function signedInRoutes(over: Record<string, MockRoute> = {}): Record<string, MockRoute> {
-  return {
-    'GET /server': { body: serverInfo },
-    'GET /me': { body: admin },
-    'GET /admin/stats': { body: stats() },
-    'GET /admin/settings': { body: settings },
-    // No cover art by default: the hatched "missing" cover.
-    'GET /libraries/1/cover': { status: 404 },
-    'GET /libraries/2/cover': { status: 404 },
-    ...over,
-  };
-}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -285,6 +273,23 @@ describe('CSP at runtime', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Account menu' }));
     await screen.findByRole('menu');
+    expect(document.querySelectorAll('style')).toHaveLength(0);
+  });
+});
+
+describe('CSP at runtime, 1b screens', () => {
+  it('renders no <style> elements with the sortable list and a dialog open', async () => {
+    setToken('stored');
+    mockFetch(
+      signedInRoutes({
+        'GET /libraries/1/books': { body: { books: [] } },
+        'GET /libraries/2/books': { body: { books: [] } },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Add library' }));
+    await screen.findByRole('dialog', { name: 'Add a library' });
     expect(document.querySelectorAll('style')).toHaveLength(0);
   });
 });

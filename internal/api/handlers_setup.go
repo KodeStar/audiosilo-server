@@ -110,7 +110,7 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "setup: create library failed", "could not create library", "name", req.LibraryName)
 		return
 	}
-	go a.backgroundScan(*lib)
+	a.startScan(*lib)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"user":    adminUser,

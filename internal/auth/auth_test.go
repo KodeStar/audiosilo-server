@@ -532,7 +532,8 @@ func TestRotateAuthCode(t *testing.T) {
 	oldTok := pairThrough(t, s, ctx, old)
 	id := mustOneInviteID(t, s, ctx, u.ID)
 
-	fresh, err := s.RotateAuthCode(ctx, id)
+	minted, err := s.RotateAuthCode(ctx, id)
+	fresh := minted.Code
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
@@ -613,7 +614,8 @@ func TestCreateInviteSupersedesActive(t *testing.T) {
 	// A still-redeemable invite is active and must be superseded by a new mint.
 	active, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
 	activeTok := pairThrough(t, s, ctx, active)
-	fresh, err := s.CreateInvite(ctx, u.ID, "invite", 5, 0)
+	minted, err := s.CreateInvite(ctx, u.ID, "invite", 5, 0)
+	fresh := minted.Code
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -864,5 +866,60 @@ func TestRevokeTokenByIDScoping(t *testing.T) {
 	// Allowed: the owner revokes their own key.
 	if err := s.RevokeTokenByID(ctx, owner.ID, meta.ID); err != nil {
 		t.Fatalf("owner revoke: %v", err)
+	}
+}
+
+// ListInvites spans every account, newest first, and never lists recovery codes.
+func TestListInvites(t *testing.T) {
+	s, ctx := newTestService(t)
+	sam, _ := s.CreateUser(ctx, "sam", "", RoleUser)
+	maya, _ := s.CreateUser(ctx, "maya", "", RoleUser)
+	if _, err := s.CreateInvite(ctx, sam.ID, "invite", 5, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateInvite(ctx, maya.ID, "invite", 1, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GenerateRecoveryCode(ctx, sam.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListInvites(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListInvites = %d codes, want the 2 invites (no recovery code)", len(got))
+	}
+	if got[0].Username != "maya" || got[0].UserID != maya.ID || got[0].MaxUses != 1 || got[0].ExpiresAt == "" {
+		t.Errorf("newest invite = %+v, want maya's 1-use expiring invite", got[0])
+	}
+	if got[1].Username != "sam" || got[1].MaxUses != 5 {
+		t.Errorf("older invite = %+v, want sam's", got[1])
+	}
+}
+
+// Rotating an old invite revives it as the user's one active invite: any other
+// still-redeemable invite is retired, so two links never work at once.
+func TestRotateKeepsOneActiveInvite(t *testing.T) {
+	s, ctx, now := newTestServiceWithClock(t)
+	u, _ := s.CreateUser(ctx, "sam", "", RoleUser)
+	if _, err := s.CreateInvite(ctx, u.ID, "invite", 5, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(48 * time.Hour) // the first invite expires
+	if _, err := s.CreateInvite(ctx, u.ID, "invite", 5, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	codes, _ := s.ListAuthCodes(ctx, u.ID)
+	if len(codes) != 2 {
+		t.Fatalf("setup: %d invites, want the expired one plus the active one", len(codes))
+	}
+	expired := codes[1].ID // newest first
+	if _, err := s.RotateAuthCode(ctx, expired); err != nil {
+		t.Fatal(err)
+	}
+	codes, _ = s.ListAuthCodes(ctx, u.ID)
+	if len(codes) != 1 || codes[0].ID != expired {
+		t.Fatalf("after rotating the expired invite: %+v, want only it", codes)
 	}
 }

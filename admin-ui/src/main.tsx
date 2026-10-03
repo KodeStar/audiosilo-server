@@ -12,8 +12,8 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
-// Installable PWA: the root-scoped service worker (/sw.js) the classic console
-// registers too. Needs a secure context; failure is harmless.
+// Installable PWA: the root-scoped service worker (/sw.js) the server ships.
+// Needs a secure context; failure is harmless.
 if ('serviceWorker' in navigator && window.isSecureContext) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {});

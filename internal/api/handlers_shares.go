@@ -7,13 +7,33 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
+// adminShare is a share as the console lists it: the share plus the ids of the
+// users it is granted to.
+type adminShare struct {
+	catalog.Share
+	MemberIDs []int64 `json:"member_ids"`
+}
+
 func (a *API) handleListShares(w http.ResponseWriter, r *http.Request) {
 	shares, err := a.cat.ListShares(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list shares")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"shares": shares})
+	members, err := a.cat.ShareMembers(r.Context())
+	if err != nil {
+		a.log.Warn("list share members failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not list shares")
+		return
+	}
+	out := make([]adminShare, len(shares))
+	for i, s := range shares {
+		out[i] = adminShare{Share: s, MemberIDs: members[s.ID]}
+		if out[i].MemberIDs == nil {
+			out[i].MemberIDs = []int64{}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"shares": out})
 }
 
 func (a *API) handleGetShare(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +200,13 @@ func (a *API) handleGrantWholeLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.cat.GrantWholeLibrary(r.Context(), req.UserID, req.LibraryID); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not grant library")
+		if errors.Is(err, catalog.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "library not found")
+			return
+		}
+		// ErrNameTaken (its "Library: <name>" share is another library's grant)
+		// -> 409 name_taken; anything else is logged and a 500.
+		a.writeCatalogError(w, err, "grant library failed", "could not grant library", "library", req.LibraryID)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

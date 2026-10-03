@@ -1,6 +1,5 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { CLASSIC_CONSOLE_URL } from '@/components/shell/destinations';
 import {
   ArrowRight,
   BookOpen,
@@ -11,10 +10,12 @@ import {
   TriangleAlert,
   Users,
 } from 'lucide-react';
-import { useServerInfo, useSettings, useStats } from '@/api/hooks';
+import { useOfflineLibraries, useServerInfo, useSettings, useStats } from '@/api/hooks';
 import type { AdminSettings, LibraryStat, ListeningRow, ServerInfo } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
+import { ProgressBar } from '@/components/progress-bar';
 import { Monogram } from '@/components/monogram';
+import { OfflineNotice } from '@/features/libraries/offline-notice';
 import { Page } from '@/components/page';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -83,6 +84,8 @@ export function OverviewPage() {
           </p>
         </div>
       </div>
+
+      <OfflineLibraries />
 
       <section aria-labelledby="live-heading">
         <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-2">
@@ -175,6 +178,34 @@ export function OverviewPage() {
   );
 }
 
+/** A safety notice per library whose folder can't be read (STYLEGUIDE.md "Safety stops"). */
+function OfflineLibraries() {
+  const { t } = useTranslation();
+  const offline = useOfflineLibraries();
+  if (offline.length === 0) return null;
+  return (
+    <div className="mb-8 flex flex-col gap-3">
+      {offline.map((l) => (
+        <OfflineNotice
+          key={l.id}
+          library={l}
+          // With no books there was nothing to keep: the notice's own title fits.
+          title={l.book_count ? t('home.offline.title', { name: l.name }) : undefined}
+          actions={
+            <Link
+              to="/library/{-$section}"
+              params={{ section: 'libraries' }}
+              className={buttonVariants({ variant: 'outline', size: 'sm' })}
+            >
+              {t('home.offline.action')}
+            </Link>
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
 function StatTile({
   icon: Icon,
   label,
@@ -221,16 +252,10 @@ function LiveCard({ row, lang }: { row: ListeningRow; lang: string }) {
         {row.author ? (
           <div className="truncate text-[12.5px] text-muted-foreground">{row.author}</div>
         ) : null}
-        <div
-          className="progress-track"
-          role="progressbar"
-          aria-label={t('home.progressAria', { title: row.title || row.path })}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(frac * 100)}
-        >
-          <i style={{ width: `${frac * 100}%` }} />
-        </div>
+        <ProgressBar
+          fraction={frac}
+          label={t('home.progressAria', { title: row.title || row.path })}
+        />
         <div className="flex justify-between gap-2 text-[11.5px] text-subtle-foreground tabular-nums">
           <span>{formatPercent(frac, lang)}</span>
           <span>{formatRelative(row.updated_at, lang)}</span>
@@ -414,11 +439,15 @@ function FirstRun() {
               </li>
             ))}
           </ol>
-          {/* Adding a library moves into this console in Phase 1b. */}
-          <a href={CLASSIC_CONSOLE_URL} className={buttonVariants({ size: 'lg' })}>
+          <Link
+            to="/library/{-$section}"
+            params={{ section: 'libraries' }}
+            search={{ add: true }}
+            className={buttonVariants({ size: 'lg' })}
+          >
             <Plus aria-hidden="true" />
             {t('home.firstRun.cta')}
-          </a>
+          </Link>
         </div>
       </div>
     </Page>

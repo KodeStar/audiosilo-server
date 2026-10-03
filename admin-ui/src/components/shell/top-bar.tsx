@@ -2,7 +2,7 @@ import { Link, useRouterState } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Popover } from '@base-ui/react/popover';
 import { Bell, Search } from 'lucide-react';
-import { useServerInfo } from '@/api/hooks';
+import { useOfflineLibraries, useServerInfo } from '@/api/hooks';
 import { LogoTile } from '@/components/logo';
 import { formatVersion } from '@/lib/format';
 import { buttonVariants } from '@/components/ui/button';
@@ -84,16 +84,30 @@ export function TopBar() {
   );
 }
 
-/** The server's address plus a one-line health readout under the mark. */
+/**
+ * The server's address plus a one-line health readout under the mark: online
+ * with its version, a library whose folder is unreachable, or the server down.
+ */
 function ServerIdentity() {
   const { t } = useTranslation();
   const server = useServerInfo();
-  const tone = server.isError ? 'bad' : server.isPending ? 'off' : undefined;
+  const offline = useOfflineLibraries();
+  const tone = server.isError
+    ? 'bad'
+    : server.isPending
+      ? 'off'
+      : offline.length
+        ? 'warn'
+        : undefined;
   const line = server.isError
     ? t('shell.health.unreachable')
-    : server.data
-      ? t('shell.health.online', { version: formatVersion(server.data.version) })
-      : t('shell.health.checking');
+    : !server.data
+      ? t('shell.health.checking')
+      : offline.length === 1
+        ? t('shell.health.libraryOffline', { name: offline[0].name })
+        : offline.length > 1
+          ? t('shell.health.librariesOffline', { count: offline.length })
+          : t('shell.health.online', { version: formatVersion(server.data.version) });
   return (
     <span className="hidden min-w-0 flex-col gap-[3px] md:flex">
       <span className="max-w-[220px] truncate font-display text-base leading-none font-bold tracking-[-0.02em]">

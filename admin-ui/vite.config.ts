@@ -23,8 +23,9 @@ const keepGitkeep: Plugin = {
 };
 
 // Dev loop: run the Go server on :8080 (AUDIOSILO_TLS_MODE=off), then `npm run dev`
-// and open http://localhost:5173/admin/. API calls and the classic console's
-// shared files are proxied to Go. The dev server isn't under the production CSP.
+// and open http://localhost:5173/admin/. API calls and the server's own files
+// (favicon, icons, manifest, service worker) are proxied to Go. The dev server
+// isn't under the production CSP.
 const goServer = process.env.AUDIOSILO_DEV_SERVER ?? 'http://127.0.0.1:8080';
 
 export default defineConfig({
@@ -41,8 +42,8 @@ export default defineConfig({
     // Never inline assets as data: URIs into JS/CSS; every font and image is a
     // same-origin file (the CSP has no font-src data:).
     assetsInlineLimit: 0,
-    // One ~250 KB gzip bundle, loaded once per admin and cached immutably; route
-    // splitting can come when the Library screens land (Phase 2b).
+    // The shell + Overview are one ~250 KB gzip entry chunk, cached immutably; each
+    // other screen is a lazy chunk (src/features/section-page.tsx).
     chunkSizeWarningLimit: 1024,
   },
   server: {
@@ -52,7 +53,6 @@ export default defineConfig({
       '/manifest.webmanifest': goServer,
       '/sw.js': goServer,
       '/web': goServer,
-      '/admin/classic': goServer,
     },
   },
   test: {

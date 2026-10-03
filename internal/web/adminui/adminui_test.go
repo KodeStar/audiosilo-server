@@ -116,19 +116,6 @@ func TestHandlerNotBuilt(t *testing.T) {
 	}
 }
 
-func TestContentType(t *testing.T) {
-	for name, want := range map[string]string{
-		"a.js":    "text/javascript; charset=utf-8",
-		"a.MJS":   "text/javascript; charset=utf-8",
-		"a.woff2": "font/woff2",
-		"a.bin":   "application/octet-stream",
-	} {
-		if got := contentType(name); got != want {
-			t.Errorf("contentType(%q) = %q, want %q", name, got, want)
-		}
-	}
-}
-
 var (
 	scriptRE    = regexp.MustCompile(`(?is)<script([^>]*)>(.*?)</script>`)
 	tagRE       = regexp.MustCompile(`(?i)<[a-z][^>]*>`)

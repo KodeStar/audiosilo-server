@@ -48,6 +48,26 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// Machine-readable error codes, added beside "error" for failures a person can
+// act on, so a client branches on the code rather than on the English message
+// (which stays free to change). Additive: clients that predate them read only
+// "error".
+const (
+	codeUsernameTaken      = "username_taken"
+	codeNameTaken          = "name_taken"
+	codeLastAdmin          = "last_admin"
+	codeAdminNeedsPassword = "admin_needs_password"
+	codePasswordTooShort   = "password_too_short"
+	codeCannotDeleteSelf   = "cannot_delete_self"
+	codeFolderUnreadable   = "folder_unreadable"
+	codePathNotAbsolute    = "path_not_absolute"
+)
+
+// writeErrorCode writes the error envelope with a machine-readable code.
+func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
+}
+
 // writeCatalogError maps a catalog/library error to an HTTP response. The
 // cross-cutting domain sentinels that don't need a handler-specific message get
 // a clean, leak-free 4xx; anything else is treated as an unexpected internal
@@ -60,7 +80,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg string, logKV ...any) {
 	switch {
 	case errors.Is(err, catalog.ErrNameTaken):
-		writeError(w, http.StatusConflict, "name already taken")
+		writeErrorCode(w, http.StatusConflict, codeNameTaken, "name already taken")
 	case errors.Is(err, catalog.ErrInvalidCursor):
 		writeError(w, http.StatusBadRequest, "invalid cursor")
 	case errors.Is(err, catalog.ErrInvalidOverrideMode):

@@ -426,6 +426,15 @@
     place-items: center;
   }
 
+  /* Invite card: always deep ink (in both themes) with pink and plum glows, so
+     it reads as something to hand over, not a settings panel. */
+  .invite-card {
+    background:
+      radial-gradient(85% 95% at 100% 0%, rgb(219 39 119 / 0.5), transparent 62%),
+      radial-gradient(70% 85% at 0% 100%, rgb(124 58 237 / 0.38), transparent 62%), #121c36;
+    box-shadow: var(--shadow-overlay);
+  }
+
   .progress-track {
     height: 6px;
     border-radius: 99px;
