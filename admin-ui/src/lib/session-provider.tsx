@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ApiError, api, setUnauthorizedHandler } from '@/api/client';
+import { ApiError, api, setForbiddenHandler, setUnauthorizedHandler } from '@/api/client';
 import { clearToken, getToken, setToken } from '@/api/token';
 import { SessionContext, type Session, type SessionState, type SignedOutReason } from './session';
 
@@ -23,6 +23,29 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // A 401 anywhere means the token is gone (expired, revoked, user disabled).
   useEffect(() => {
     setUnauthorizedHandler(() => dropSession('expired'));
+  }, [dropSession]);
+
+  // A 403 from an admin endpoint usually means another admin demoted this
+  // account mid-session: re-check who is signed in (once at a time) and, if it
+  // is no longer an admin, sign out with that reason instead of leaving every
+  // screen showing "forbidden".
+  useEffect(() => {
+    let checking = false;
+    setForbiddenHandler(() => {
+      if (checking) return;
+      checking = true;
+      api
+        .me()
+        .then((user) => {
+          if (user.role !== 'admin') dropSession('notAdmin');
+        })
+        .catch(() => {
+          // a 401 is handled above; anything else leaves the session alone
+        })
+        .finally(() => {
+          checking = false;
+        });
+    });
   }, [dropSession]);
 
   // Validate a stored token once on load (and on "Try again").

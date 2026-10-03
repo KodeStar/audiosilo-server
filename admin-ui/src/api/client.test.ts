@@ -1,4 +1,11 @@
-import { ApiError, api, fetchCover, setUnauthorizedHandler, toDataUrl } from './client';
+import {
+  ApiError,
+  api,
+  fetchCover,
+  setForbiddenHandler,
+  setUnauthorizedHandler,
+  toDataUrl,
+} from './client';
 import { getToken, setToken } from './token';
 import { mockFetch } from '@/test/fetch-mock';
 import { admin, stats } from '@/test/fixtures';
@@ -7,6 +14,31 @@ describe('api client', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     setUnauthorizedHandler(() => {});
+    setForbiddenHandler(() => {});
+  });
+
+  it('asks who is signed in after a 403 from an admin endpoint, keeping the session', async () => {
+    setToken('tok-1');
+    const forbidden = vi.fn();
+    setForbiddenHandler(forbidden);
+    mockFetch({
+      'GET /admin/users': { status: 403, body: { error: 'forbidden' } },
+      'GET /libraries/1/fs': { status: 403, body: { error: 'forbidden' } },
+    });
+    await expect(api.users()).rejects.toMatchObject({ status: 403 });
+    expect(forbidden).toHaveBeenCalledTimes(1);
+    expect(getToken()).toBe('tok-1');
+    // A 403 outside /admin is a plain scope refusal, not a demotion.
+    await expect(api.browse(1, '')).rejects.toMatchObject({ status: 403 });
+    expect(forbidden).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends paths as a query parameter, never in the URL path', async () => {
+    setToken('tok-1');
+    const calls = mockFetch({ 'PUT /admin/libraries/1/folder-override': { body: {} } });
+    await api.setFolderOverride(1, 'A & B/Book #1', 'book');
+    expect(calls[0].path).toBe('/admin/libraries/1/folder-override');
+    expect(calls[0].query.get('path')).toBe('A & B/Book #1');
   });
 
   it('sends the bearer token and decodes JSON', async () => {

@@ -4,12 +4,6 @@ import { Activity, HeartPulse, LibraryBig, Server, Users, type LucideIcon } from
 // section 2). Home is the mark, not a destination. Labels are i18n keys:
 // `shell.dest.<key>` and `shell.section.<key>.<section>`.
 
-/**
- * The classic console, mounted beside this one while AUDIOSILO_ADMIN_NEXT is on.
- * Every link to it goes away at the cutover (Phase 1b).
- */
-export const CLASSIC_CONSOLE_URL = '/admin/classic';
-
 export type DestinationKey = 'library' | 'people' | 'activity' | 'health' | 'server';
 
 export interface Destination {
@@ -18,8 +12,11 @@ export interface Destination {
   route: `/${DestinationKey}/{-$section}`;
   icon: LucideIcon;
   sections: readonly string[];
-  /** The redesign phase that builds this destination's screens (shown while it's pending). */
-  phase: string;
+  /**
+   * Sections a later redesign phase builds, with that phase (shown on their
+   * "coming in this redesign" placeholder). The rest have screens.
+   */
+  pending: Readonly<Partial<Record<string, string>>>;
 }
 
 export const DESTINATIONS: readonly Destination[] = [
@@ -28,35 +25,35 @@ export const DESTINATIONS: readonly Destination[] = [
     route: '/library/{-$section}',
     icon: LibraryBig,
     sections: ['books', 'authors', 'series', 'narrators', 'folders', 'libraries'],
-    phase: '2b',
+    pending: { books: '2b', authors: '2b', series: '2b', narrators: '2b', folders: '2b' },
   },
   {
     key: 'people',
     route: '/people/{-$section}',
     icon: Users,
     sections: ['people', 'invites', 'shares', 'devices'],
-    phase: '1b',
+    pending: { devices: '4c' },
   },
   {
     key: 'activity',
     route: '/activity/{-$section}',
     icon: Activity,
     sections: ['overview', 'live', 'sessions', 'year'],
-    phase: '4c',
+    pending: { overview: '4c', live: '4c', sessions: '4c', year: '4c' },
   },
   {
     key: 'health',
     route: '/health/{-$section}',
     icon: HeartPulse,
     sections: ['issues', 'jobs', 'system'],
-    phase: '3',
+    pending: { issues: '3', jobs: '3', system: '5a' },
   },
   {
     key: 'server',
     route: '/server/{-$section}',
     icon: Server,
     sections: ['settings', 'logs', 'audit', 'about'],
-    phase: '5a',
+    pending: { logs: '5a', audit: '5b', about: '5a' },
   },
 ];
 

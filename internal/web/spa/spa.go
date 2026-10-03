@@ -120,12 +120,20 @@ func resolve(fsys fs.FS, p string) (string, bool) {
 	return "", false
 }
 
-// isAsset reports whether a missing path should 404 rather than boot the SPA.
-func (c Config) isAsset(rel string) bool {
+// inAssetDir reports whether rel is fingerprinted build output.
+func (c Config) inAssetDir(rel string) bool {
 	for _, dir := range c.AssetDirs {
 		if strings.HasPrefix(rel, dir+"/") {
 			return true
 		}
+	}
+	return false
+}
+
+// isAsset reports whether a missing path should 404 rather than boot the SPA.
+func (c Config) isAsset(rel string) bool {
+	if c.inAssetDir(rel) {
+		return true
 	}
 	if strings.Contains(rel, "/") {
 		return false
@@ -149,6 +157,7 @@ func (c Config) serve(w http.ResponseWriter, r *http.Request, name, rel string) 
 
 	h := w.Header()
 	h.Set("Content-Type", ContentType(name))
+	h.Set("Cache-Control", "no-cache")
 	var content io.ReadSeeker
 	if strings.HasSuffix(name, ".html") {
 		// The document's bytes feed its CSP (the player hashes inline scripts).
@@ -158,17 +167,13 @@ func (c Config) serve(w http.ResponseWriter, r *http.Request, name, rel string) 
 			return
 		}
 		h.Set("Content-Security-Policy", c.DocumentCSP(data))
-		h.Set("Cache-Control", "no-cache")
 		content = bytes.NewReader(data)
 	} else {
 		if c.FileCSP != "" {
 			h.Set("Content-Security-Policy", c.FileCSP)
 		}
-		h.Set("Cache-Control", "no-cache")
-		for _, dir := range c.AssetDirs {
-			if strings.HasPrefix(rel, dir+"/") {
-				h.Set("Cache-Control", immutable)
-			}
+		if c.inAssetDir(rel) {
+			h.Set("Cache-Control", immutable)
 		}
 		// embed.FS and os.DirFS files both seek, so ServeContent streams them;
 		// anything else is read once.

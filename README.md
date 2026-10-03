@@ -46,14 +46,13 @@ planned separately.
   share one shape; each chapter carries the `file_path` to play.
 - **Per-user listening state** - progress, bookmarks, notes, history, playback
   speed, with last-write-wins reconciliation (the basis for realtime sync).
-- **Baked-in web UI** - a public connect page at `/` (and `/connect`) and an admin
-  console at `/admin` (users, libraries incl. edit/delete + folder-detection
-  overrides, **shares** with a
-  filesystem path picker, auth codes + copy-invite, rescans). Vanilla HTML/CSS/JS,
-  no build step, served from the same binary. A **redesigned admin console**
-  (`admin-ui/`, React + Vite, embedded at build time) is being built in stages;
-  preview it with `AUDIOSILO_ADMIN_NEXT=1` (the classic console then moves to
-  `/admin/classic`).
+- **Baked-in web UI** - a public connect page at `/` (and `/connect`) and the
+  admin console at `/admin` (`admin-ui/`: React + Vite, embedded at build time):
+  libraries (add with a server folder picker, edit, reorder, rescan with live
+  progress, folder-detection overrides, export, delete, a "folder unavailable"
+  safety state), people (invites with a QR code, access, passwords, roles),
+  **shares** with a library path picker, and the community-metadata setting. The
+  console is being extended in stages (`ADMIN-CONSOLE-PLAN.md` in the workspace).
 
 Planned next: upload + placement suggestions and AAX→M4B conversion (Phase B);
 on-the-fly transcoding and WebSocket realtime sync (Phase C); server federation

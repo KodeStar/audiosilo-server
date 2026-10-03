@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -147,7 +146,7 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if caller := userFrom(r.Context()); caller != nil && caller.ID == id {
-		writeError(w, http.StatusBadRequest, "you cannot delete your own account - disable it instead")
+		writeErrorCode(w, http.StatusBadRequest, codeCannotDeleteSelf, "you cannot delete your own account - disable it instead")
 		return
 	}
 	if err := a.auth.DeleteUser(r.Context(), id); err != nil {
@@ -167,11 +166,13 @@ func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string
 	case errors.Is(err, auth.ErrNotFound):
 		writeError(w, http.StatusNotFound, "user not found")
 	case errors.Is(err, auth.ErrUsernameTaken):
-		writeError(w, http.StatusConflict, "username already taken")
+		writeErrorCode(w, http.StatusConflict, codeUsernameTaken, "username already taken")
 	case errors.Is(err, auth.ErrLastAdmin):
-		writeError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, auth.ErrAdminNeedsPassword), errors.Is(err, auth.ErrPasswordTooShort):
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorCode(w, http.StatusConflict, codeLastAdmin, err.Error())
+	case errors.Is(err, auth.ErrAdminNeedsPassword):
+		writeErrorCode(w, http.StatusBadRequest, codeAdminNeedsPassword, err.Error())
+	case errors.Is(err, auth.ErrPasswordTooShort):
+		writeErrorCode(w, http.StatusBadRequest, codePasswordTooShort, err.Error())
 	default:
 		a.log.Warn(genericMsg, "err", err)
 		writeError(w, http.StatusInternalServerError, genericMsg)
@@ -230,15 +231,12 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 	maxUses, ttl := resolveAuthCodeLifetime(req.MaxUses, req.TTLDays)
 	// One active invite per user: minting atomically supersedes the user's other
 	// still-redeemable invites (used-up/expired ones stay as history).
-	code, err := a.auth.CreateInvite(r.Context(), id, req.Label, maxUses, ttl)
+	minted, err := a.auth.CreateInvite(r.Context(), id, req.Label, maxUses, ttl)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create auth code")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"auth_code":  code,
-		"invite_url": a.inviteURL(r, code),
-	})
+	writeJSON(w, http.StatusCreated, a.mintedInvite(r, minted))
 }
 
 // resolveAuthCodeLifetime applies the invite-friendly defaults when a field is
@@ -272,7 +270,7 @@ func (a *API) handleRotateAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid auth code id")
 		return
 	}
-	code, err := a.auth.RotateAuthCode(r.Context(), id)
+	minted, err := a.auth.RotateAuthCode(r.Context(), id)
 	if errors.Is(err, auth.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "invite not found")
 		return
@@ -281,10 +279,22 @@ func (a *API) handleRotateAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not rotate auth code")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"auth_code":  code,
-		"invite_url": a.inviteURL(r, code),
-	})
+	writeJSON(w, http.StatusOK, a.mintedInvite(r, minted))
+}
+
+// mintedInvite is the create/rotate response: the code and its invite link
+// (returned this once) plus the lifetime the invite was given, so the console
+// shows the server's numbers rather than re-deriving them.
+func (a *API) mintedInvite(r *http.Request, m auth.Minted) map[string]any {
+	out := map[string]any{
+		"auth_code":  m.Code,
+		"invite_url": a.inviteURL(r, m.Code),
+		"max_uses":   m.MaxUses,
+	}
+	if m.ExpiresAt != "" {
+		out["expires_at"] = m.ExpiresAt
+	}
+	return out
 }
 
 // handleAdminClearRecovery revokes a user's durable recovery code. Recovery codes
@@ -305,13 +315,14 @@ func (a *API) handleAdminClearRecovery(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminLibrary is a library as the admin console lists it: the stored fields
-// plus its indexed book count and whether its root folder is reachable right now
-// (false for a missing, unreadable or unresponsive root, or an empty one with
-// books still indexed - see library.Scanner.RootAvailable).
+// plus its indexed book count, whether its root folder is reachable right now
+// (see library.Scanner.RootAvailable) and its scan progress, so one poll of the
+// list shows every library's state.
 type adminLibrary struct {
 	catalog.Library
-	BookCount int  `json:"book_count"`
-	Available bool `json:"available"`
+	BookCount int                  `json:"book_count"`
+	Available bool                 `json:"available"`
+	Scan      library.ScanProgress `json:"scan"`
 }
 
 func (a *API) handleAdminListLibraries(w http.ResponseWriter, r *http.Request) {
@@ -324,9 +335,8 @@ func (a *API) handleAdminListLibraries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"libraries": libs})
 }
 
-// adminLibraries lists every library with its book count and root availability.
-// Roots are probed in parallel, so a dead network share costs the whole list at
-// most one probe timeout, not one per library.
+// adminLibraries lists every library with its book count, root availability
+// and scan progress.
 func (a *API) adminLibraries(ctx context.Context) ([]adminLibrary, error) {
 	libs, err := a.cat.ListLibraries(ctx)
 	if err != nil {
@@ -336,17 +346,16 @@ func (a *API) adminLibraries(ctx context.Context) ([]adminLibrary, error) {
 	if err != nil {
 		return nil, err
 	}
+	available := a.scanner.RootsAvailable(libs, counts)
 	out := make([]adminLibrary, len(libs))
-	var wg sync.WaitGroup
 	for i, l := range libs {
-		out[i] = adminLibrary{Library: l, BookCount: counts[l.ID]}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			out[i].Available = a.scanner.RootAvailable(l, out[i].BookCount)
-		}()
+		out[i] = adminLibrary{
+			Library:   l,
+			BookCount: counts[l.ID],
+			Available: available[l.ID],
+			Scan:      a.scanner.Progress(l.ID),
+		}
 	}
-	wg.Wait()
 	return out, nil
 }
 
@@ -372,11 +381,11 @@ func (a *API) handleListDirs(w http.ResponseWriter, r *http.Request) {
 	listing, err := library.ListDirs(r.URL.Query().Get("path"), maxDirListing)
 	switch {
 	case errors.Is(err, library.ErrNotAbsolute):
-		writeError(w, http.StatusBadRequest, "path must be absolute")
+		writeErrorCode(w, http.StatusBadRequest, codePathNotAbsolute, "path must be absolute")
 	case err != nil:
 		// Missing, not a folder, or not readable by the server: the same answer,
 		// and the OS error (which can name the path) stays out of the body.
-		writeError(w, http.StatusNotFound, "folder not found or not readable")
+		writeErrorCode(w, http.StatusNotFound, codeFolderUnreadable, "folder not found or not readable")
 	default:
 		writeJSON(w, http.StatusOK, listing)
 	}
@@ -398,7 +407,7 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Kick off an initial scan in the background; browsing works immediately.
-	go a.backgroundScan(*created)
+	a.startScan(*created)
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -425,7 +434,7 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
 		return
 	}
-	go a.backgroundScan(*updated)
+	a.startScan(*updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -492,7 +501,7 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "set folder override failed", "could not set folder override", "library", id, "path", path)
 		return
 	}
-	go a.backgroundScan(*lib)
+	a.startScan(*lib)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "override set", "path": path, "mode": req.Mode})
 }
 
@@ -571,7 +580,7 @@ func (a *API) handleDeleteFolderOverride(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "could not clear override")
 		return
 	}
-	go a.backgroundScan(*lib)
+	a.startScan(*lib)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "override cleared", "path": path})
 }
 
@@ -606,7 +615,7 @@ func (a *API) handleScanLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load library")
 		return
 	}
-	go a.backgroundScan(*lib)
+	a.startScan(*lib)
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "scan started"})
 }
 
@@ -621,13 +630,6 @@ func (a *API) handleScanStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.scanner.Progress(id))
 }
 
-// backgroundScan runs a library scan detached from the request lifecycle but
-// bound to the server lifecycle (a.baseCtx), so shutdown cancels an in-flight scan
-// instead of leaving it running detached.
-func (a *API) backgroundScan(lib catalog.Library) {
-	ctx, cancel := context.WithTimeout(a.baseCtx, time.Hour)
-	defer cancel()
-	if _, err := a.scanner.Scan(ctx, lib); err != nil {
-		a.log.Warn("background scan failed", "library", lib.Name, "err", err)
-	}
-}
+// startScan queues a background scan of lib, bound to the server's lifetime and
+// already reported as running when the request returns.
+func (a *API) startScan(lib catalog.Library) { a.scanner.ScanInBackground(a.baseCtx, lib) }

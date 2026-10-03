@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Menu } from '@base-ui/react/menu';
-import { ExternalLink, History, Languages, LogOut, Moon, Sun } from 'lucide-react';
+import { ExternalLink, Languages, LogOut, Moon, Sun } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
 import {
   DropdownMenu,
@@ -22,7 +22,6 @@ import type { ThemePref } from '@/lib/theme';
 import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
 import { Monogram } from '@/components/monogram';
 import { buttonVariants } from '@/components/ui/button';
-import { CLASSIC_CONSOLE_URL } from './destinations';
 
 function ThemeRadioItems() {
   const { t } = useTranslation();
@@ -111,10 +110,6 @@ export function UserMenu() {
             {t('shell.account.webPlayer')}
           </Menu.LinkItem>
         ) : null}
-        <Menu.LinkItem href={CLASSIC_CONSOLE_URL} className={linkItemClass}>
-          <History aria-hidden="true" />
-          {t('shell.account.classic')}
-        </Menu.LinkItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => void signOut()}>
           <LogOut aria-hidden="true" />

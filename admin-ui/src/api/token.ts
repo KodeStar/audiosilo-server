@@ -1,9 +1,8 @@
 import { readStorage, removeStorage, writeStorage } from '@/lib/storage';
 
-// The admin session token. It shares the key the classic console used, so moving
-// between the two consoles (behind AUDIOSILO_ADMIN_NEXT) never asks to sign in
-// twice. It stays in localStorage rather than a cookie because the server's API
-// is bearer-token only.
+// The admin session token. It keeps the key the classic console used, so an
+// admin signed in before the redesign shipped stays signed in. It stays in
+// localStorage rather than a cookie because the server's API is bearer-token only.
 
 const TOKEN_KEY = 'audiosilo_token';
 

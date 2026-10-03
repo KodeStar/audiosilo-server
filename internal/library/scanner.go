@@ -69,6 +69,28 @@ func (s *Scanner) Progress(libID int64) ScanProgress {
 	return s.progress[libID]
 }
 
+// ScanInBackground starts a scan of lib detached from the caller: bound to ctx
+// (the server's lifetime, so shutdown cancels it), capped at an hour, and logged
+// if it fails. The library reads as running before this returns, so a status
+// poll made right after the request that queued it sees the scan (a small
+// library could otherwise finish between the two requests and never be seen
+// running). A scan coalesced into one already running leaves that scan's
+// progress alone; it clears the mark when it finishes.
+func (s *Scanner) ScanInBackground(ctx context.Context, lib catalog.Library) {
+	s.mu.Lock()
+	if !s.scanning[lib.ID] {
+		s.progress[lib.ID] = ScanProgress{Running: true}
+	}
+	s.mu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(ctx, time.Hour)
+		defer cancel()
+		if _, err := s.Scan(ctx, lib); err != nil {
+			s.log.Warn("background scan failed", "library", lib.Name, "err", err)
+		}
+	}()
+}
+
 func (s *Scanner) setProgress(libID int64, p ScanProgress) {
 	s.mu.Lock()
 	s.progress[libID] = p

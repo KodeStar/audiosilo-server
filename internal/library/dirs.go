@@ -56,25 +56,27 @@ func ListDirs(dir string, limit int) (*DirListing, error) {
 	if parent := filepath.Dir(dir); parent != dir {
 		out.Parent = parent
 	}
+	type dirName struct{ name, key string } // key: the lowercased sort key, computed once
+	var names []dirName
 	for _, e := range entries {
 		if isHidden(e.Name()) {
 			continue
 		}
-		full := filepath.Join(dir, e.Name())
 		isDir := e.IsDir()
 		if e.Type()&os.ModeSymlink != 0 {
-			info, err := os.Stat(full) // follows the link
+			info, err := os.Stat(filepath.Join(dir, e.Name())) // follows the link
 			isDir = err == nil && info.IsDir()
 		}
 		if isDir {
-			out.Dirs = append(out.Dirs, DirEntry{Name: e.Name(), Path: full})
+			names = append(names, dirName{e.Name(), strings.ToLower(e.Name())})
 		}
 	}
-	sort.Slice(out.Dirs, func(i, j int) bool {
-		return strings.ToLower(out.Dirs[i].Name) < strings.ToLower(out.Dirs[j].Name)
-	})
-	if limit > 0 && len(out.Dirs) > limit {
-		out.Dirs, out.Truncated = out.Dirs[:limit], true
+	sort.Slice(names, func(i, j int) bool { return names[i].key < names[j].key })
+	if limit > 0 && len(names) > limit {
+		names, out.Truncated = names[:limit], true
+	}
+	for _, n := range names {
+		out.Dirs = append(out.Dirs, DirEntry{Name: n.name, Path: filepath.Join(dir, n.name)})
 	}
 	return out, nil
 }

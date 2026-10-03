@@ -1,4 +1,5 @@
 import {
+  formatDateTime,
   formatLongDate,
   formatNumber,
   formatPercent,
@@ -25,6 +26,13 @@ describe('format', () => {
     expect(formatRelative('2026-10-03T11:59:40Z', 'en', now)).toBe('now');
     expect(formatRelative('2026-10-02T12:00:00Z', 'en', now)).toBe('yesterday');
     expect(formatRelative('not a date', 'en', now)).toBe('');
+  });
+
+  it('formats a record time absolutely', () => {
+    expect(formatDateTime(new Date(2026, 9, 10, 19, 52).toISOString(), 'en')).toBe(
+      'Oct 10, 7:52 PM',
+    );
+    expect(formatDateTime('nope', 'en')).toBe('');
   });
 
   it('formats the long date', () => {

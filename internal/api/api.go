@@ -53,7 +53,7 @@ type API struct {
 	log        *slog.Logger
 
 	// baseCtx is the server lifecycle context; background work detached from a
-	// request (e.g. backgroundScan) derives from it so it's cancelled on shutdown
+	// request (e.g. startScan) derives from it so it's cancelled on shutdown
 	// instead of running detached. Defaults to context.Background(); the app wires
 	// the real one via SetBaseContext.
 	baseCtx context.Context

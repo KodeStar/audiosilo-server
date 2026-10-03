@@ -36,6 +36,18 @@ export function formatRelative(iso: string, lang: string, now: number = Date.now
   return rtf.format(0, 'second');
 }
 
+/** A moment as a record ("Oct 10, 7:52 PM"): absolute, unlike recency. "" if unparsable. */
+export function formatDateTime(iso: string, lang: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  return new Intl.DateTimeFormat(lang, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(t);
+}
+
 /** Today's date as the Overview eyebrow: "Saturday 3 October". */
 export function formatLongDate(date: Date, lang: string): string {
   return new Intl.DateTimeFormat(lang, { weekday: 'long', day: 'numeric', month: 'long' }).format(

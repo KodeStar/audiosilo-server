@@ -475,20 +475,33 @@ func (s *Service) CreateAuthCode(ctx context.Context, userID int64, label string
 // supersedes the user's currently-active (still-redeemable) invites so there is
 // exactly one active invite per user. Spent (used-up) and expired invites are
 // left untouched as history. The code is returned once.
-func (s *Service) CreateInvite(ctx context.Context, userID int64, label string, maxUses int, ttl time.Duration) (string, error) {
+func (s *Service) CreateInvite(ctx context.Context, userID int64, label string, maxUses int, ttl time.Duration) (Minted, error) {
 	code, hash, err := generateAuthCode()
 	if err != nil {
-		return "", err
+		return Minted{}, err
 	}
+	expires := s.expiresAt(ttl)
 	if err := s.db.WithTx(ctx, "CreateInvite", func(tx *sql.Tx) error {
 		if err := supersedeActiveInvites(ctx, tx, userID, s.ts()); err != nil {
 			return err
 		}
-		return insertAuthCode(ctx, tx, hash, userID, label, maxUses, s.expiresAt(ttl), s.ts(), CodeInvite)
+		return insertAuthCode(ctx, tx, hash, userID, label, maxUses, expires, s.ts(), CodeInvite)
 	}); err != nil {
-		return "", err
+		return Minted{}, err
 	}
-	return code, nil
+	m := Minted{Code: code, MaxUses: maxUses}
+	if e, ok := expires.(string); ok {
+		m.ExpiresAt = e
+	}
+	return m, nil
+}
+
+// Minted is an invite as minted or rotated: the code, returned this once and
+// never stored in the clear, and the lifetime it was given.
+type Minted struct {
+	Code      string
+	MaxUses   int    // 0 = unlimited
+	ExpiresAt string // RFC3339 UTC; "" = never
 }
 
 // supersedeActiveInvites deletes a user's still-redeemable invites - those not
@@ -514,20 +527,23 @@ func supersedeActiveInvites(ctx context.Context, ex sqlExecer, userID int64, now
 // transaction - the row survives rotation, so the delete cascade never fires -
 // which disconnects any QR still on screen from the old secret. Only invite-kind
 // codes rotate (recovery codes are user-owned); a missing or non-invite id
-// returns ErrNotFound. This backs the admin "Resend".
-func (s *Service) RotateAuthCode(ctx context.Context, id int64) (string, error) {
+// returns ErrNotFound. The user's other still-redeemable invites are retired,
+// keeping one active invite per user. This backs the admin "Rotate".
+func (s *Service) RotateAuthCode(ctx context.Context, id int64) (Minted, error) {
 	code, hash, err := generateAuthCode()
 	if err != nil {
-		return "", err
+		return Minted{}, err
 	}
+	m := Minted{Code: code}
 	if err := s.db.WithTx(ctx, "RotateAuthCode", func(tx *sql.Tx) error {
 		var (
 			createdAt string
 			expires   sql.NullString
 		)
+		var userID int64
 		err := tx.QueryRowContext(ctx,
-			`SELECT created_at, expires_at FROM auth_codes WHERE id = ? AND kind = ?`,
-			id, CodeInvite).Scan(&createdAt, &expires)
+			`SELECT created_at, expires_at, max_uses, user_id FROM auth_codes WHERE id = ? AND kind = ?`,
+			id, CodeInvite).Scan(&createdAt, &expires, &m.MaxUses, &userID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -541,7 +557,8 @@ func (s *Service) RotateAuthCode(ctx context.Context, id int64) (string, error) 
 		if expires.Valid && expires.String != "" {
 			if c, e1 := time.Parse(time.RFC3339, createdAt); e1 == nil {
 				if x, e2 := time.Parse(time.RFC3339, expires.String); e2 == nil && x.After(c) {
-					newExpires = s.now().Add(x.Sub(c)).UTC().Format(time.RFC3339)
+					m.ExpiresAt = s.now().Add(x.Sub(c)).UTC().Format(time.RFC3339)
+					newExpires = m.ExpiresAt
 				}
 			}
 		}
@@ -552,12 +569,23 @@ func (s *Service) RotateAuthCode(ctx context.Context, id int64) (string, error) 
 			hash, s.ts(), newExpires, id, CodeInvite); err != nil {
 			return err
 		}
+		// A rotated invite is the user's one active invite again (rotating an
+		// expired or used-up one revives it), so retire any other that is still
+		// redeemable - the same rule CreateInvite keeps.
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM auth_codes
+			  WHERE user_id = ? AND kind = ? AND id != ?
+			    AND (max_uses = 0 OR uses < max_uses)
+			    AND (expires_at IS NULL OR expires_at > ?)`,
+			userID, CodeInvite, id, s.ts()); err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1 WHERE auth_code_id = ?`, id)
 		return err
 	}); err != nil {
-		return "", err
+		return Minted{}, err
 	}
-	return code, nil
+	return m, nil
 }
 
 // GenerateRecoveryCode mints a durable, reusable recovery code the user holds to

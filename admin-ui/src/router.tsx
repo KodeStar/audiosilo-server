@@ -1,13 +1,20 @@
-import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  lazyRouteComponent,
+} from '@tanstack/react-router';
+import { PageSkeleton } from '@/components/page';
 import { DESTINATIONS } from '@/components/shell/destinations';
-import { ComingSoon } from '@/features/coming-soon/coming-soon';
 import { NotFound } from '@/features/not-found';
 import { OverviewPage } from '@/features/overview/overview-page';
+import { USER_TABS, type UserTab } from '@/features/people/people-model';
+import { SectionPage } from '@/features/section-page';
 import { Root } from '@/root';
 
 // Code-based TanStack Router routes under the /admin basepath. TanStack Router
-// over React Router: typed params and search params (later phases keep list
-// filters and tabs in the URL, per the style guide), and it shares conventions
+// over React Router: typed params and search params (list filters, tabs and the
+// selected item live in the URL, per the style guide), and it shares conventions
 // with TanStack Query/Table. Code-based routes avoid the file-route codegen step.
 
 const rootRoute = createRootRoute({ component: Root, notFoundComponent: NotFound });
@@ -18,17 +25,47 @@ const homeRoute = createRoute({
   component: OverviewPage,
 });
 
-// One placeholder route per destination until its phase builds real screens;
-// later phases replace a destination's entry with its own routes.
+/** Search params a destination's sections read. */
+export interface SectionSearch {
+  /** Libraries: open the Add library dialog (the first-run call to action). */
+  add?: true;
+  /** People: open the invite dialog (the palette's "Invite someone"). */
+  invite?: true;
+  /** Shares: the selected share. */
+  share?: number;
+}
+
+function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
+  const out: SectionSearch = {};
+  const flag = (v: unknown) => v === true || v === 1 || v === '1';
+  if (flag(s.add)) out.add = true;
+  if (flag(s.invite)) out.invite = true;
+  const share = Number(s.share);
+  if (Number.isInteger(share) && share > 0) out.share = share;
+  return out;
+}
+
+// One route per destination; SectionPage picks the section's screen, or its
+// "coming in this redesign" placeholder.
 const destinationRoutes = DESTINATIONS.map((d) =>
   createRoute({
     getParentRoute: () => rootRoute,
     path: d.route,
-    component: () => <ComingSoon destination={d} />,
+    validateSearch: validateSectionSearch,
+    component: () => <SectionPage destination={d} />,
   }),
 );
 
-const routeTree = rootRoute.addChildren([homeRoute, ...destinationRoutes]);
+const userRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/people/user/$userId',
+  validateSearch: (s: Record<string, unknown>): { tab?: UserTab } =>
+    USER_TABS.includes(s.tab as UserTab) && s.tab !== USER_TABS[0] ? { tab: s.tab as UserTab } : {},
+  component: lazyRouteComponent(() => import('@/features/people/user-page'), 'UserPage'),
+  pendingComponent: PageSkeleton,
+});
+
+const routeTree = rootRoute.addChildren([homeRoute, userRoute, ...destinationRoutes]);
 
 export function createAppRouter(
   opts: { history?: Parameters<typeof createRouter>[0]['history'] } = {},

@@ -10,8 +10,8 @@ import pt from './locales/pt.json';
 
 // Flat dotted keys (`home.greeting.morning`), one JSON file per language.
 // English is the base and the fallback; every other file must carry the same
-// key set (i18n.test.ts enforces it). The language choice shares the classic
-// console's storage key so it carries across.
+// key set (i18n.test.ts enforces it). The language choice shares the connect
+// page's storage key, so a choice made on either carries across.
 
 export const LANGUAGES = {
   en: 'English',

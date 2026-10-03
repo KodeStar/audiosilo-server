@@ -17,7 +17,9 @@ import (
 // makes its caller wait longer than rootProbeTimeout: the probe runs in its own
 // goroutine, at most one per root at a time, and its answer is cached for
 // rootProbeTTL. A probe that hasn't answered in time counts as unavailable ("not
-// responding"); if it later finishes, its answer serves the next check.
+// responding") - at once for every later check while it stays stuck, so a dead
+// mount costs one timeout, not one per request; if it ever finishes, its answer
+// serves the next check.
 
 const (
 	rootProbeTimeout = 2 * time.Second
@@ -30,10 +32,14 @@ type rootState struct {
 	empty    bool // it lists no entries at all (an unmounted mount point)
 }
 
+// A probe's state and at are written before done closes, and read only after
+// it has (the channel close orders them), so they need no lock; p.mu guards
+// the map and started.
 type rootProbe struct {
-	done  chan struct{} // closed when the probe finished
-	state rootState
-	at    time.Time // when it finished
+	done    chan struct{} // closed when the probe finished
+	started time.Time
+	state   rootState
+	at      time.Time // when it finished
 }
 
 type rootProber struct {
@@ -75,24 +81,26 @@ func (p *rootProber) check(root string) (rootState, bool) {
 	pr := p.probes[root]
 	stale := pr != nil && pr.finished() && time.Since(pr.at) > rootProbeTTL
 	if pr == nil || stale {
-		pr = &rootProbe{done: make(chan struct{})}
+		pr = &rootProbe{done: make(chan struct{}), started: time.Now()}
 		p.probes[root] = pr
 		go func() {
-			st := p.stat(root)
-			p.mu.Lock()
-			pr.state, pr.at = st, time.Now()
-			p.mu.Unlock()
+			pr.state, pr.at = p.stat(root), time.Now()
 			close(pr.done)
 		}()
 	}
+	wait := rootProbeTimeout - time.Since(pr.started)
 	p.mu.Unlock()
 
+	if pr.finished() {
+		return pr.state, true
+	}
+	if wait <= 0 {
+		return rootState{}, false // already stuck past the timeout: don't wait again
+	}
 	select {
 	case <-pr.done:
-		p.mu.Lock()
-		defer p.mu.Unlock()
 		return pr.state, true
-	case <-time.After(rootProbeTimeout):
+	case <-time.After(wait):
 		return rootState{}, false
 	}
 }
@@ -115,6 +123,27 @@ func (pr *rootProbe) finished() bool {
 	default:
 		return false
 	}
+}
+
+// RootsAvailable runs RootAvailable for every library in parallel, so a dead
+// network share costs the whole list at most one probe timeout. indexed maps a
+// library id to its indexed book count.
+func (s *Scanner) RootsAvailable(libs []catalog.Library, indexed map[int64]int) map[int64]bool {
+	out := make(map[int64]bool, len(libs))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, l := range libs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok := s.RootAvailable(l, indexed[l.ID])
+			mu.Lock()
+			out[l.ID] = ok
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // RootAvailable reports whether lib's root can be read right now. It is false

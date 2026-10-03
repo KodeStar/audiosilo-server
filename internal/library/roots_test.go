@@ -53,6 +53,7 @@ func TestRootProberNeverBlocksTheCaller(t *testing.T) {
 	}
 	p.forget("/mnt/nas") // an in-flight probe is kept, not restarted
 	close(release)
+	<-p.probes["/mnt/nas"].done // the mount answers
 	st, answered := p.check("/mnt/nas")
 	if !answered || !st.readable {
 		t.Fatalf("after the mount answered: %+v answered=%v", st, answered)
@@ -107,5 +108,63 @@ func TestRootAvailable(t *testing.T) {
 	}
 	if scanner.Progress(lib.ID).Unavailable || !scanner.RootAvailable(*lib, 2) {
 		t.Error("a successful rescan didn't clear the unavailable state")
+	}
+}
+
+// ScanInBackground reports the scan running before it returns, and the scan
+// clears that when it finishes.
+func TestScanInBackground(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	cat := catalog.New(db, time.Now)
+	root, _ := filepath.Abs(testdataRoot(t))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	scanner := NewScanner(cat, "", slog.Default())
+
+	scanner.ScanInBackground(ctx, *lib)
+	if !scanner.Progress(lib.ID).Running {
+		t.Fatal("a queued scan doesn't read as running")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for scanner.Progress(lib.ID).Running {
+		if time.Now().After(deadline) {
+			t.Fatal("the background scan never finished")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if p := scanner.Progress(lib.ID); p.Indexed == 0 {
+		t.Fatalf("after the scan: %+v, want books indexed", p)
+	}
+}
+
+// RootsAvailable probes in parallel: two dead roots cost one timeout, not two.
+func TestRootsAvailableInParallel(t *testing.T) {
+	s := &Scanner{progress: map[int64]ScanProgress{}, roots: newRootProber()}
+	release := make(chan struct{})
+	defer close(release)
+	s.roots.stat = func(root string) rootState {
+		if root == "/ok" {
+			return rootState{readable: true}
+		}
+		<-release
+		return rootState{}
+	}
+	libs := []catalog.Library{{ID: 1, Root: "/ok"}, {ID: 2, Root: "/dead-a"}, {ID: 3, Root: "/dead-b"}}
+	start := time.Now()
+	got := s.RootsAvailable(libs, map[int64]int{1: 3})
+	if took := time.Since(start); took > rootProbeTimeout+time.Second {
+		t.Fatalf("took %v, want about one probe timeout", took)
+	}
+	if !got[1] || got[2] || got[3] {
+		t.Fatalf("availability = %v, want only library 1", got)
+	}
+	// A root still stuck past the timeout answers at once on the next check.
+	start = time.Now()
+	if _, answered := s.roots.check("/dead-a"); answered || time.Since(start) > 100*time.Millisecond {
+		t.Fatalf("a stuck probe made the next check wait (answered=%v, %v)", answered, time.Since(start))
 	}
 }

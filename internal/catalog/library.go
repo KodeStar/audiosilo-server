@@ -96,6 +96,11 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 	if _, err := c.DeleteBooksNotIn(ctx, id, nil); err != nil {
 		return err
 	}
+	// The library's whole-library grant shares grant nothing once it's gone
+	// (their rule cascades away); drop them rather than leave empty shares.
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM shares WHERE whole_library_id = ?`, id); err != nil {
+		return err
+	}
 	_, err := c.db.ExecContext(ctx, `DELETE FROM libraries WHERE id = ?`, id)
 	return err
 }

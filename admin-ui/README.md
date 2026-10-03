@@ -9,10 +9,8 @@ the API enforces the admin role, so nothing here is privileged.
 is **not committed**: CI, the Dockerfile and GoReleaser build it. A Go build without it compiles
 and serves a "console not built" page at `/admin`.
 
-During the redesign the new console is behind a switch: `AUDIOSILO_ADMIN_NEXT=1` serves it at
-`/admin` and moves the classic console to `/admin/classic`. Without the switch `/admin` is the
-classic console. (The switch and the classic console go away at the cutover, Phase 1b of
-`ADMIN-CONSOLE-PLAN.md` in the workspace.)
+It replaced the classic vanilla-JS console at the Phase 1b cutover (`ADMIN-CONSOLE-PLAN.md` in
+the workspace tracks the phases still to come).
 
 ## Commands (Node 24, see `.nvmrc`)
 
@@ -28,8 +26,8 @@ From the repo root, `scripts/build-admin.sh` runs `ci` + `check` + `build`.
 ## Dev loop
 
 ```sh
-# terminal 1: the server, plain HTTP, with the new console switched on
-AUDIOSILO_TLS_MODE=off AUDIOSILO_ADMIN_NEXT=1 go run ./cmd/audiosilo --data ./data
+# terminal 1: the server, plain HTTP
+AUDIOSILO_TLS_MODE=off go run ./cmd/audiosilo --data ./data
 # terminal 2: hot-reloading console
 npm --prefix admin-ui run dev   # open http://localhost:5173/admin/
 ```
@@ -42,7 +40,9 @@ under the production CSP, so check CSP-sensitive changes against a real build se
 ```
 src/api/          hand-mirrored wire types, fetch client (bearer + 401 handling), TanStack Query hooks
 src/components/   shell (top bar, sub bar, tab bar, ⌘K palette), shadcn/ui primitives (ui/), shared bits
-src/features/     one folder per screen (overview, auth, coming-soon, ...)
+src/features/     one folder per screen (overview, libraries, people, shares, settings, ...); each
+                  feature's pure logic sits in a *-model.ts with its own test, and section-page.tsx
+                  lazy-loads each screen as its own chunk
 src/i18n/         i18next setup + locales/<lang>.json (en is the base; i18n.test.ts keeps them in step)
 src/lib/          session, theme, toast, formatting - logic kept out of components so it's testable
 src/styles/       globals.css: the Shelf tokens and the few signature classes
@@ -53,6 +53,15 @@ scripts/          check-csp.mjs (fails the build on inline script/style)
 Routing is TanStack Router (code-based routes in `src/router.tsx`, `basepath: '/admin'`), chosen
 over React Router for typed params and search params (later screens keep filters in the URL) and
 to share conventions with TanStack Query and Table.
+
+Forms use react-hook-form, with zod schemas where a field has rules; schema messages are i18n
+keys (`fieldMessage` in `src/lib/errors.ts` translates them, and passes server errors through).
+Dialogs compose `DialogContent` + `DialogBody` + `DialogFooter` (`src/components/ui/dialog.tsx`);
+a form wraps body and footer in `<form className="contents">`. Library reordering uses dnd-kit
+(pointer and keyboard); QR codes are drawn as SVG paths with uqr, in the browser.
+
+`@hookform/resolvers` is held at 5.2.x: 5.9 declares an optional `effect` peer that npm 11 fails
+to resolve (ERESOLVE) on a fresh `npm install`.
 
 ## Adding shadcn/ui components
 

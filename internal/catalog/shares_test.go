@@ -262,3 +262,35 @@ func TestShareMembers(t *testing.T) {
 		t.Errorf("a share granted to nobody has members: %v", got[empty.ID])
 	}
 }
+
+// Deleting a library drops its whole-library grant shares (they grant nothing
+// once it's gone) but leaves the admin's own shares alone.
+func TestDeleteLibraryDropsItsGrantShares(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp"})
+	uid := seedUser(t, c, ctx)
+	if err := c.GrantWholeLibrary(ctx, uid, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	own, _ := c.CreateShare(ctx, Share{Name: "Favourites", Paths: []PathRule{{LibraryID: lib.ID, Path: ""}}})
+	shares, _ := c.ListShares(ctx)
+	var marked bool
+	for _, s := range shares {
+		if s.WholeLibraryID != nil && *s.WholeLibraryID == lib.ID && s.ID != own.ID {
+			marked = true
+		}
+		if s.ID == own.ID && s.WholeLibraryID != nil {
+			t.Error("an admin's own share is marked as a library grant")
+		}
+	}
+	if !marked {
+		t.Fatal("the grant share isn't marked with its library")
+	}
+	if err := c.DeleteLibrary(ctx, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	shares, _ = c.ListShares(ctx)
+	if len(shares) != 1 || shares[0].ID != own.ID {
+		t.Fatalf("after deleting the library: %+v, want only Favourites", shares)
+	}
+}
