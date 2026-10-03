@@ -1,4 +1,5 @@
-# Gates every pull request and push to main on build + vet + race tests + lint.
+# Gates every pull request and push to main on build + vet + race tests + lint,
+# plus the admin console's own gate (admin-ui: typecheck, lint, prettier, vitest).
 # The image build (image.yml) stays separate and only runs on tags.
 name: ci
 
@@ -20,6 +21,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # The admin console (admin-ui/) is checked and built BEFORE the Go steps, so
+      # the embed tests (internal/web/adminui) run against a real build instead of
+      # skipping. Its build output is embedded, never committed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: admin-ui/.nvmrc
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+
+      - name: Admin console (install, check, build)
+        run: scripts/build-admin.sh
 
       # ffprobe powers the duration/embedded-chapter scanner tests; without it
       # those tests t.Skip (the suite still passes), so install it to keep them live.

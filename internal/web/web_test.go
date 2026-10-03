@@ -106,7 +106,7 @@ func TestHTMLCSPScriptSrcExcludesUnsafeInline(t *testing.T) {
 // would silently break under script-src 'self', which carries no hash for them).
 func TestI18nAssets(t *testing.T) {
 	mux := http.NewServeMux()
-	if err := Register(mux, ""); err != nil {
+	if err := Register(mux, "", false); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	ts := httptest.NewServer(mux)
@@ -211,7 +211,7 @@ func TestI18nAssets(t *testing.T) {
 // + worker-src 'self').
 func TestAdminPWA(t *testing.T) {
 	mux := http.NewServeMux()
-	if err := Register(mux, ""); err != nil {
+	if err := Register(mux, "", false); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	ts := httptest.NewServer(mux)
@@ -278,7 +278,7 @@ func TestAdminPWA(t *testing.T) {
 // web_dir is empty.
 func TestPlayerServing(t *testing.T) {
 	mux := http.NewServeMux()
-	if err := Register(mux, fakePlayer(t)); err != nil {
+	if err := Register(mux, fakePlayer(t), false); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	ts := httptest.NewServer(mux)
@@ -321,12 +321,64 @@ func TestPlayerServing(t *testing.T) {
 
 	// With no web_dir, /web is not mounted (falls through to 404).
 	mux2 := http.NewServeMux()
-	if err := Register(mux2, ""); err != nil {
+	if err := Register(mux2, "", false); err != nil {
 		t.Fatalf("Register(empty): %v", err)
 	}
 	ts2 := httptest.NewServer(mux2)
 	defer ts2.Close()
 	if resp, _ := ts2.Client().Get(ts2.URL + "/web/"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("/web/ with no web_dir = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestAdminNextSwitch covers the redesign switch (AUDIOSILO_ADMIN_NEXT): off,
+// /admin is the classic console; on, /admin is the new console (adminui, or its
+// "not built" page in a source build) and the classic one moves to
+// /admin/classic. Both keep the strict CSP.
+func TestAdminNextSwitch(t *testing.T) {
+	const classicMarker = `id="login-view"`
+	fetch := func(t *testing.T, mux *http.ServeMux, path string) (int, string, string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec.Code, rec.Body.String(), rec.Header().Get("Content-Security-Policy")
+	}
+
+	off := http.NewServeMux()
+	if err := Register(off, "", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/admin", "/admin/", "/admin/users"} {
+		code, body, csp := fetch(t, off, p)
+		if code != http.StatusOK || !strings.Contains(body, classicMarker) {
+			t.Errorf("switch off: GET %s = %d, want the classic console", p, code)
+		}
+		if csp != contentSecurityPolicy {
+			t.Errorf("switch off: GET %s CSP = %q", p, csp)
+		}
+	}
+
+	on := http.NewServeMux()
+	if err := Register(on, "", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/admin", "/admin/", "/admin/library/authors"} {
+		code, body, csp := fetch(t, on, p)
+		if strings.Contains(body, classicMarker) {
+			t.Errorf("switch on: GET %s served the classic console", p)
+		}
+		if code != http.StatusOK && code != http.StatusServiceUnavailable {
+			t.Errorf("switch on: GET %s = %d, want the new console or its not-built page", p, code)
+		}
+		if csp != contentSecurityPolicy {
+			t.Errorf("switch on: GET %s CSP = %q, want the strict policy", p, csp)
+		}
+	}
+	code, body, csp := fetch(t, on, "/admin/classic")
+	if code != http.StatusOK || !strings.Contains(body, classicMarker) {
+		t.Errorf("switch on: GET /admin/classic = %d, want the classic console", code)
+	}
+	if csp != contentSecurityPolicy {
+		t.Errorf("switch on: GET /admin/classic CSP = %q", csp)
 	}
 }

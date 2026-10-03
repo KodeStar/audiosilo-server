@@ -2,6 +2,10 @@ module github.com/kodestar/audiosilo-server
 
 go 1.25.3
 
+// Keep Go tooling (./... in build/vet/test/lint) out of the admin console's
+// npm dependencies: some packages ship Go source (e.g. flatted/golang).
+ignore ./admin-ui/node_modules
+
 require (
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e

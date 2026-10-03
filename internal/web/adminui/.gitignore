@@ -1,0 +1,5 @@
+# The admin console build (admin-ui/, `npm --prefix admin-ui run build`) lands
+# here and is embedded into the binary. Only the placeholder is committed, so a
+# source build without Node still compiles (and serves a "not built" page).
+dist/*
+!dist/.gitkeep
