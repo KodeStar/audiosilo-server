@@ -41,11 +41,14 @@ const API = '/api/v1';
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
-  constructor(status: number, message: string, code?: string) {
+  /** The field a refused book edit names (code "invalid_override"). */
+  readonly field?: string;
+  constructor(status: number, message: string, code?: string, field?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.field = field;
   }
 }
 
@@ -115,7 +118,12 @@ async function apiError(res: Response): Promise<ApiError> {
     typeof env?.error === 'string' && env.error
       ? env.error
       : res.statusText || `HTTP ${res.status}`;
-  return new ApiError(res.status, msg, typeof env?.code === 'string' ? env.code : undefined);
+  return new ApiError(
+    res.status,
+    msg,
+    typeof env?.code === 'string' ? env.code : undefined,
+    typeof env?.field === 'string' ? env.field : undefined,
+  );
 }
 
 /** A JSON API call (an empty body decodes to undefined). */

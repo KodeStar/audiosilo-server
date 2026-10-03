@@ -278,6 +278,8 @@ export interface ErrorEnvelope {
   error: string;
   /** For failures a person can fix (respond.go codeUsernameTaken etc.). */
   code?: string;
+  /** With code "invalid_override": the book field the edit was refused for. */
+  field?: string;
 }
 
 // ---- Admin catalog (Phase 2a API, consumed by the Library and Book screens) ----
