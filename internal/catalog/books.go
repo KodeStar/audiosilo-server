@@ -18,7 +18,10 @@ import (
 // transaction, so an edited field is never visible with its scanned value. It
 // returns the book ID.
 func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
-	scanned, err := scannedJSON(b)
+	// The snapshot carries this upsert's indexed_at, which is how loadLayers tells
+	// it from one an older server left stale (see scannedStampKey).
+	indexedAt := c.ts()
+	scanned, err := scannedJSON(b, indexedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -50,7 +53,7 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			 RETURNING id`,
 			b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
 			b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
-			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, c.ts(), b.AddedAt,
+			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
 			b.Published, b.Description, hasCover, scanned).Scan(&id); err != nil {
 			return err
 		}

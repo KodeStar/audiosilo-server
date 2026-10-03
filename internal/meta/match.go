@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -24,12 +25,14 @@ const maxMatchCandidates = 6
 // MatchQuery describes the book being matched. Text is what to search for and
 // ASIN/ISBN an identifier to look up directly; when all three are empty the book's
 // own facts are used (its title and author as the text, its ASIN/ISBN). Title,
-// Author and Duration also score the candidates.
+// Author and Duration also score the candidates; Series lets the book's title be
+// read without its series name and edition fluff (match.CleanTitle).
 type MatchQuery struct {
 	Text     string
 	ASIN     string
 	ISBN     string
 	Title    string
+	Series   string
 	Author   string
 	Duration float64 // seconds; 0 when unknown
 	BookASIN string
@@ -82,10 +85,13 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	ctx, cancel := context.WithTimeout(ctx, s.composeBudget)
 	defer cancel()
 
-	text, asin, isbn := strings.TrimSpace(q.Text), strings.TrimSpace(q.ASIN), strings.TrimSpace(q.ISBN)
+	text, asin, isbn := strings.TrimSpace(q.Text), normalizeASIN(q.ASIN), normalizeISBN(q.ISBN)
 	if text == "" && asin == "" && isbn == "" {
-		text = strings.TrimSpace(q.Title + " " + q.Author)
-		asin, isbn = q.BookASIN, q.BookISBN
+		// The book's own facts. metaserve's search requires every word, so the title
+		// goes in without what tags add and a community record lacks: the series
+		// name and "(Unabridged)" or ", Book 1" fluff.
+		text = strings.TrimSpace(match.CleanTitle(q.Title, q.Series) + " " + q.Author)
+		asin, isbn = normalizeASIN(q.BookASIN), normalizeISBN(q.BookISBN)
 	}
 
 	// The identifier lookup and the text search are independent; run them together.
@@ -126,15 +132,6 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 			}
 		}
 	}
-	// One failed leg (the lookup or the search) still leaves the other's hits worth
-	// showing; only when neither produced any is a failure an outage.
-	if len(hits) == 0 {
-		for _, err := range []error{lookupErr, findErr} {
-			if err != nil && !errors.Is(err, ErrNotFound) {
-				return nil, err
-			}
-		}
-	}
 	if len(hits) > maxMatchCandidates {
 		hits = hits[:maxMatchCandidates]
 	}
@@ -163,21 +160,37 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	wg.Wait()
 
 	cands := make([]MatchCandidate, 0, len(hits))
-	var firstErr error
+	var expandErr error
 	for i, c := range out {
 		switch {
 		case c != nil:
 			cands = append(cands, *c)
-		case !errors.Is(errs[i], ErrNotFound) && firstErr == nil:
-			firstErr = errs[i]
+		case !errors.Is(errs[i], ErrNotFound) && expandErr == nil:
+			expandErr = errs[i]
 		}
 	}
-	// Some candidates are better than none; an all-failed fan-out is an outage.
-	if len(cands) == 0 && firstErr != nil {
-		return nil, firstErr
+	// Some candidates are better than none: one failed leg (the lookup or the
+	// search) still leaves the other's worth showing. With none, any failure on the
+	// way - either leg, or expanding a hit - is an outage, not "no match": the leg
+	// that failed may well have found the book.
+	if len(cands) == 0 {
+		for _, err := range []error{expandErr, lookupErr, findErr} {
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				return nil, err
+			}
+		}
 	}
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].Score > cands[j].Score })
 	return cands, nil
+}
+
+// normalizeASIN and normalizeISBN put an identifier in the form metaserve's exact
+// lookup holds: an ASIN upper-cased, an ISBN without the hyphens and spaces it is
+// usually printed with.
+func normalizeASIN(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+
+func normalizeISBN(s string) string {
+	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(s)))
 }
 
 func (s *Service) toCandidate(d *upstreamWorkDetail, cover string) *MatchCandidate {
@@ -227,13 +240,20 @@ func scoreCandidate(q MatchQuery, c *MatchCandidate) int {
 	var got, total float64
 	if q.Title != "" {
 		total += weightTitle
-		got += weightTitle * titleSimilarity(q.Title, c.Title, c.Subtitle)
+		// The book's title as tagged, or without its series name and edition fluff,
+		// whichever fits the work better. Only the book's side is cleaned, so a
+		// community work's own "(Dramatized Adaptation)" still tells it apart.
+		sim := titleSimilarity(q.Title, c.Title, c.Subtitle)
+		if clean := match.CleanTitle(q.Title, q.Series); clean != q.Title {
+			sim = math.Max(sim, titleSimilarity(clean, c.Title, c.Subtitle))
+		}
+		got += weightTitle * sim
 	}
 	if q.Author != "" && len(c.Authors) > 0 {
 		total += weightAuthor
 		best := 0.0
 		for _, a := range c.Authors {
-			best = math.Max(best, tokenSimilarity(q.Author, a.Name))
+			best = math.Max(best, authorSimilarity(q.Author, a.Name))
 		}
 		got += weightAuthor * best
 	}
@@ -250,18 +270,40 @@ func scoreCandidate(q MatchQuery, c *MatchCandidate) int {
 }
 
 // titleSimilarity compares a book title with a work's title (and title plus
-// subtitle, since files often carry both): 1 when the normalized forms agree, else
-// the word overlap.
+// subtitle, since files often carry both): 1 when the folded forms agree, else the
+// word overlap. Folding keeps every script's letters (match.Fold): an ASCII-only
+// form would equate two different Cyrillic titles sharing a "1".
 func titleSimilarity(title, workTitle, subtitle string) float64 {
 	full := workTitle
 	if subtitle != "" {
 		full += " " + subtitle
 	}
-	n := match.Normalize(title)
-	if n != "" && (n == match.Normalize(workTitle) || n == match.Normalize(full)) {
+	n := match.Fold(title)
+	if n != "" && (n == match.Fold(workTitle) || n == match.Fold(full)) {
 		return 1
 	}
 	return math.Max(tokenSimilarity(title, workTitle), tokenSimilarity(title, full))
+}
+
+// authorSimilarity compares the book's author credit with one of the work's
+// authors: 1 when the two fold alike ("JRR Tolkien" / "J. R. R. Tolkien") or when
+// every word of a multi-word name is in the credit (a co-written book credited
+// "Brandon Sanderson, Mary Robinette Kowal" names both), else the word overlap.
+func authorSimilarity(credit, name string) float64 {
+	if f := match.Fold(name); f != "" && f == match.Fold(credit) {
+		return 1
+	}
+	if nw := words(name); len(nw) > 1 {
+		cw := words(credit)
+		all := true
+		for w := range nw {
+			all = all && cw[w]
+		}
+		if all {
+			return 1
+		}
+	}
+	return tokenSimilarity(credit, name)
 }
 
 // tokenSimilarity is the Jaccard overlap of two strings' lowercase words.
@@ -279,10 +321,12 @@ func tokenSimilarity(a, b string) float64 {
 	return float64(inter) / float64(len(ta)+len(tb)-inter)
 }
 
+// words is a string's set of lowercase words: runs of letters and digits, in any
+// script.
 func words(s string) map[string]bool {
 	out := map[string]bool{}
 	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return !('a' <= r && r <= 'z' || '0' <= r && r <= '9' || r > 127)
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	}) {
 		out[w] = true
 	}

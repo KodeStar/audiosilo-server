@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -389,7 +391,7 @@ func TestLegacyRowProvenance(t *testing.T) {
 	// What migration 0016 writes for a pre-existing row.
 	if _, err := c.db.ExecContext(ctx, `UPDATE books SET scanned = json_object(
 		'title', title, 'author', author, 'narrator', narrator, 'series', series,
-		'series_index', CAST(series_index AS TEXT)) WHERE id = ?`, b.ID); err != nil {
+		'series_index', CAST(series_index AS TEXT), '@indexed_at', indexed_at) WHERE id = ?`, b.ID); err != nil {
 		t.Fatal(err)
 	}
 	d, err := c.AdminBookDetail(ctx, lib.ID, p)
@@ -515,5 +517,279 @@ func TestCoverStore(t *testing.T) {
 	}
 	if _, err := c.Cover(ctx, lib.ID, "A/B"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("after delete = %v", err)
+	}
+}
+
+// TestCustomCoverNeedsAnIndexedBook: a custom cover is durable state, so it outlives
+// its book being pruned and returns with it, but it is served only while a book is
+// indexed at the path.
+func TestCustomCoverNeedsAnIndexedBook(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "A/B")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetCover(ctx, lib.ID, "A/B", pngBytes, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DeleteBooksNotIn(ctx, lib.ID, map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, get := range map[string]func(context.Context, int64, string) (*CustomCover, error){
+		"CoverInfo": c.CoverInfo, "Cover": c.Cover,
+	} {
+		if _, err := get(ctx, lib.ID, "A/B"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s of a pruned book = %v, want ErrNotFound", name, err)
+		}
+	}
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "A/B")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Cover(ctx, lib.ID, "A/B"); err != nil {
+		t.Fatalf("the cover should come back with its book: %v", err)
+	}
+}
+
+// stageStale leaves at path what an earlier, since-pruned book there would have:
+// a field override, a chapter title and a custom cover.
+func stageStale(t *testing.T, c *Catalog, ctx context.Context, libID int64, path string) {
+	t.Helper()
+	for _, q := range []string{
+		`INSERT INTO book_overrides(library_id, path, field, value, source, updated_at) VALUES(?, ?, 'author', 'Stale Author', 'edited', 't')`,
+		`INSERT INTO chapter_overrides(library_id, path, idx, title, updated_at) VALUES(?, ?, 0, 'Stale Chapter', 't')`,
+		`INSERT INTO book_covers(library_id, path, mime, data, updated_at) VALUES(?, ?, 'image/png', x'00', 't')`,
+	} {
+		if _, err := c.db.ExecContext(ctx, q, libID, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestMoveDropsStaleStateForAnEditedBook: when the moved book has any admin state
+// (here only a chapter rename), whatever an earlier book left at the new path is
+// dropped in every table - a field override, a chapter title, a custom cover - so
+// none of it merges into the moved book. A moved book with no state keeps the
+// path's own rows, as any book appearing there would; a self-move is a no-op.
+func TestMoveDropsStaleStateForAnEditedBook(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "old/Book")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "old/Book", BookEdit{ChapterSet: map[int]string{1: "Moved chapter"}}); err != nil {
+		t.Fatal(err)
+	}
+	stageStale(t, c, ctx, lib.ID, "new/Book")
+	if err := c.MoveDurableState(ctx, lib.ID, "old/Book", "new/Book"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "new/Book")); err != nil {
+		t.Fatal(err)
+	}
+	b := mustBook(t, c, ctx, lib.ID, "new/Book")
+	if b.Author != "Tag Author" || b.Chapters[0].Title != "Opening" || b.Chapters[1].Title != "Moved chapter" {
+		t.Fatalf("stale state merged into the moved book: author %q, chapters %q / %q",
+			b.Author, b.Chapters[0].Title, b.Chapters[1].Title)
+	}
+	if _, err := c.Cover(ctx, lib.ID, "new/Book"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a stale custom cover survived the move: %v", err)
+	}
+
+	// Moving a path onto itself keeps its edits.
+	if err := c.MoveDurableState(ctx, lib.ID, "new/Book", "new/Book"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "new/Book")); err != nil {
+		t.Fatal(err)
+	}
+	if b := mustBook(t, c, ctx, lib.ID, "new/Book"); b.Chapters[1].Title != "Moved chapter" {
+		t.Fatalf("a self-move dropped the book's edits: %q", b.Chapters[1].Title)
+	}
+
+	// A book with no state of its own takes the path's (path is the identity).
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "plain/Book")); err != nil {
+		t.Fatal(err)
+	}
+	stageStale(t, c, ctx, lib.ID, "other/Book")
+	if err := c.MoveDurableState(ctx, lib.ID, "plain/Book", "other/Book"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "other/Book")); err != nil {
+		t.Fatal(err)
+	}
+	if b := mustBook(t, c, ctx, lib.ID, "other/Book"); b.Author != "Stale Author" {
+		t.Fatalf("a book with no edits should keep the path's own state: author %q", b.Author)
+	}
+}
+
+// TestMoveCarriesEditsPastAListenerCollision: a per-user row already at the new
+// path (a stale progress row of the same user) still fails that part of the move,
+// but it no longer strands the book's own edits and cover with it.
+func TestMoveCarriesEditsPastAListenerCollision(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	uid := seedUser(t, c, ctx)
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "old/Book")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "old/Book", BookEdit{Set: map[string]string{FieldTitle: "Kept"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetCover(ctx, lib.ID, "old/Book", pngBytes, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"old/Book", "new/Book"} {
+		if _, err := c.SaveProgress(ctx, uid, Progress{Ref: Ref{LibraryID: lib.ID, Path: p}, Position: 7}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.MoveDurableState(ctx, lib.ID, "old/Book", "new/Book"); err == nil {
+		t.Fatal("the per-user collision should still be reported")
+	}
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "new/Book")); err != nil {
+		t.Fatal(err)
+	}
+	if b := mustBook(t, c, ctx, lib.ID, "new/Book"); b.Title != "Kept" {
+		t.Fatalf("the edit was stranded at the old path: title %q", b.Title)
+	}
+	if _, err := c.Cover(ctx, lib.ID, "new/Book"); err != nil {
+		t.Fatalf("the custom cover was stranded at the old path: %v", err)
+	}
+}
+
+// TestRowsFromAnOlderServerKeepTheirValues: a server that predates the scanned
+// snapshot (an older release run against this database) writes what its scan found
+// to the row itself and leaves `scanned` blank (a book it indexed) or stale (a book
+// it re-indexed), and its chapters without scanned_title. Layering the durable
+// tables back on must neither blank those values nor roll them back.
+func TestRowsFromAnOlderServerKeepTheirValues(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	exec := func(q string, args ...any) int64 {
+		t.Helper()
+		res, err := c.db.ExecContext(ctx, q, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+
+	// A book the older server indexed: no snapshot at all.
+	id := exec(`INSERT INTO books(library_id, rel_path, is_folder, title, author, series, indexed_at)
+		VALUES(?, 'Old/Book', 1, 'Real Title', 'Real Author', 'Real Series', '2026-01-01T00:00:00Z')`, lib.ID)
+	exec(`INSERT INTO chapters(book_id, idx, title) VALUES(?, 0, 'Chapter One')`, id)
+	exec(`INSERT INTO books_fts(rowid, title, author, series, narrator) VALUES(?, 'Real Title', 'Real Author', 'Real Series', '')`, id)
+	if err := c.SetEnrichment(ctx, lib.ID, "Old/Book", "B000000001", ""); err != nil {
+		t.Fatal(err)
+	}
+	b := mustBook(t, c, ctx, lib.ID, "Old/Book")
+	if b.Title != "Real Title" || b.Author != "Real Author" || b.Chapters[0].Title != "Chapter One" || b.ASIN != "B000000001" {
+		t.Fatalf("an older server's row lost its values: %+v", b)
+	}
+	if got := searchTitles(t, c, ctx, lib.ID, "real"); len(got) != 1 {
+		t.Fatalf("search lost the book: %v", got)
+	}
+	// What it recorded is a real snapshot: an edit reverts to it.
+	if err := c.EditBook(ctx, lib.ID, "Old/Book", BookEdit{Set: map[string]string{FieldTitle: "Edited"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "Old/Book", BookEdit{Revert: []string{FieldTitle}}); err != nil {
+		t.Fatal(err)
+	}
+	if b := mustBook(t, c, ctx, lib.ID, "Old/Book"); b.Title != "Real Title" {
+		t.Fatalf("revert restored %q, want the older server's scanned title", b.Title)
+	}
+
+	// A book the older server re-indexed after this one had: the snapshot is from
+	// the earlier scan.
+	const p = "A/Book"
+	id, err := c.UpsertBook(ctx, scannedBook(lib.ID, p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE books SET title = 'Retagged', indexed_at = '2027-01-01T00:00:00Z' WHERE id = ?`, id)
+	exec(`DELETE FROM chapters WHERE book_id = ?`, id)
+	exec(`INSERT INTO chapters(book_id, idx, title) VALUES(?, 0, 'Retagged chapter')`, id)
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{Set: map[string]string{FieldDescription: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if b := mustBook(t, c, ctx, lib.ID, p); b.Title != "Retagged" || b.Chapters[0].Title != "Retagged chapter" {
+		t.Fatalf("an unrelated edit rolled the re-indexed row back: title %q, chapter %q", b.Title, b.Chapters[0].Title)
+	}
+}
+
+// TestNonFiniteSeriesIndexIsNoPosition: a series-part tag of "inf" parses as an
+// infinite position, which no JSON reply can carry; the upsert records no position
+// instead, so the admin list, book page and series aggregate still answer.
+func TestNonFiniteSeriesIndexIsNoPosition(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	b := scannedBook(lib.ID, "A/Book")
+	b.SeriesIndex = math.Inf(1)
+	if _, err := c.UpsertBook(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustBook(t, c, ctx, lib.ID, "A/Book").SeriesIndex; got != 0 {
+		t.Fatalf("series_index = %v, want 0 (no position)", got)
+	}
+	d, err := c.AdminBookDetail(ctx, lib.ID, "A/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := c.ListAdminBooks(ctx, AdminListOptions{Sort: "series"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	series, err := c.Series(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]any{"book page": d, "list": page, "series": series} {
+		if _, err := json.Marshal(v); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// TestDormantChapterOverrideIsNotAnEdit: an override on a chapter index the book no
+// longer has (a rescan found fewer chapters) is kept, to reapply if the chapter
+// returns, but it shows nowhere on the book page, so it must not mark the book
+// edited; it counts again once the chapter is back.
+func TestDormantChapterOverrideIsNotAnEdit(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	const p = "A/Book"
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, p, BookEdit{ChapterSet: map[int]string{1: "Renamed"}}); err != nil {
+		t.Fatal(err)
+	}
+	edited := func() bool {
+		t.Helper()
+		yes := true
+		page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Edited: &yes}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(page.Books) == 1
+	}
+	if !edited() {
+		t.Fatal("a chapter rename should mark the book edited")
+	}
+	one := scannedBook(lib.ID, p)
+	one.Chapters = one.Chapters[:1]
+	if _, err := c.UpsertBook(ctx, one); err != nil {
+		t.Fatal(err)
+	}
+	if edited() {
+		t.Fatal("an override on a chapter the book no longer has marked it edited")
+	}
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, p)); err != nil {
+		t.Fatal(err)
+	}
+	if !edited() || mustBook(t, c, ctx, lib.ID, p).Chapters[1].Title != "Renamed" {
+		t.Fatal("the override should reapply, and count, once the chapter is back")
 	}
 }

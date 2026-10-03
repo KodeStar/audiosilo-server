@@ -847,15 +847,26 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 			continue
 		}
 		for oldPath, ofp := range oldFP {
-			if ofp == fp {
-				if err := s.cat.MoveDurableState(ctx, lib.ID, oldPath, nb.RelPath); err != nil {
-					s.log.Warn("move state failed", "from", oldPath, "to", nb.RelPath, "err", err)
-				} else {
-					s.log.Info("detected move", "library", lib.Name, "from", oldPath, "to", nb.RelPath)
-				}
-				delete(oldFP, oldPath)
-				break
+			if ofp != fp || reclassified(oldPath, sigs[oldPath], nb) {
+				continue
 			}
+			if err := s.cat.MoveDurableState(ctx, lib.ID, oldPath, nb.RelPath); err != nil {
+				s.log.Warn("move state failed", "from", oldPath, "to", nb.RelPath, "err", err)
+			} else {
+				s.log.Info("detected move", "library", lib.Name, "from", oldPath, "to", nb.RelPath)
+			}
+			delete(oldFP, oldPath)
+			break
 		}
 	}
+}
+
+// reclassified reports whether a vanished path and a new path with the same
+// fingerprint are one folder seen two ways rather than a moved book. Turning a
+// folder book into a collection (or back) leaves a book at a path nested in the
+// other, fingerprinted by the folder's first part, but it is a different book: only
+// an equal size (a single-part folder) makes the two the same.
+func reclassified(oldPath string, old catalog.Signature, nb *catalog.Book) bool {
+	nested := strings.HasPrefix(nb.RelPath, oldPath+"/") || strings.HasPrefix(oldPath, nb.RelPath+"/")
+	return nested && old.Size != nb.Size
 }

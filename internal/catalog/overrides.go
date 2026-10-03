@@ -123,7 +123,7 @@ func normalizeOverride(field, value string) (string, error) {
 		if err != nil || math.IsNaN(f) || f < 0 || f > maxSeriesIndex {
 			return "", invalid(field, "must be a number from 0 to 100000")
 		}
-		return formatSeriesIndex(f), nil
+		return formatSeriesPosition(f), nil
 	case FieldPublished:
 		if v == "" {
 			return "", nil
@@ -166,24 +166,17 @@ func validDatePrefix(v string) bool {
 	return err == nil
 }
 
-// formatSeriesIndex renders a series position the way the console edits it: ""
-// for none (0), otherwise the shortest exact decimal ("2", "2.5").
-func formatSeriesIndex(f float64) string {
-	if f == 0 {
-		return ""
-	}
-	return strconv.FormatFloat(f, 'f', -1, 64)
-}
-
 // bookFields is the overridable slice of a book, keyed by field name, with every
 // value in its wire form (series_index included) so one map serves every field.
+// A series index is rendered by formatSeriesPosition ("" for none, and for a
+// non-finite value a tag can carry, which is no position either).
 type bookFields map[string]string
 
 // fieldsOf reads a book's overridable fields.
 func fieldsOf(b *Book) bookFields {
 	return bookFields{
 		FieldTitle: b.Title, FieldAuthor: b.Author, FieldNarrator: b.Narrator,
-		FieldSeries: b.Series, FieldSeriesIndex: formatSeriesIndex(b.SeriesIndex),
+		FieldSeries: b.Series, FieldSeriesIndex: formatSeriesPosition(b.SeriesIndex),
 		FieldPublished: b.Published, FieldDescription: b.Description,
 		FieldASIN: b.ASIN, FieldISBN: b.ISBN,
 	}
@@ -194,29 +187,42 @@ func parseSeriesIndex(s string) float64 {
 	return v
 }
 
+// scannedStampKey is the `scanned` key holding the indexed_at of the upsert that
+// wrote the snapshot (no field is named like it). A snapshot whose stamp is not the
+// row's indexed_at was not written with the row's values: the row was indexed by a
+// server that predates the column (an older release run against this database),
+// which writes the scanned values to the row itself and leaves `scanned` blank or
+// stale. loadLayers then takes the snapshot from the row, as migration 0016 did.
+const scannedStampKey = "@indexed_at"
+
 // scannedJSON encodes what the scan found for b (its fields before anything is
-// layered on top) for the `scanned` column: field -> value, blanks left out.
-func scannedJSON(b *Book) (string, error) {
+// layered on top) for the `scanned` column: field -> value, blanks left out, plus
+// the upsert's indexedAt stamp.
+func scannedJSON(b *Book, indexedAt string) (string, error) {
 	vals := fieldsOf(b)
 	maps.DeleteFunc(vals, func(_, v string) bool { return v == "" })
+	vals[scannedStampKey] = indexedAt
 	raw, err := json.Marshal(vals)
 	return string(raw), err
 }
 
-func parseScanned(raw string) (bookFields, error) {
+// parseScanned decodes a `scanned` value into its fields and its stamp.
+func parseScanned(raw string) (bookFields, string, error) {
 	out := bookFields{}
 	if raw == "" {
-		return out, nil
+		return out, "", nil
 	}
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("decode scanned fields: %w", err)
+		return nil, "", fmt.Errorf("decode scanned fields: %w", err)
 	}
+	stamp := out[scannedStampKey]
+	delete(out, scannedStampKey)
 	// Rows backfilled by migration 0016 cast series_index with SQL ("2.0", "0.0");
 	// normalize so a revert writes the same form a scan would.
 	if si, ok := out[FieldSeriesIndex]; ok {
-		out[FieldSeriesIndex] = formatSeriesIndex(parseSeriesIndex(si))
+		out[FieldSeriesIndex] = formatSeriesPosition(parseSeriesIndex(si))
 	}
-	return out, nil
+	return out, stamp, nil
 }
 
 // FieldValue is one overridable field as the console shows it: the effective
@@ -298,20 +304,37 @@ type bookLayers struct {
 	scanned    bookFields
 	enrichment bookFields // asin/isbn only, blanks left out
 	overrides  map[string]storedOverride
+	// fromRow is set when the stored snapshot wasn't this row's (see
+	// scannedStampKey), so scanned was read off the row; it holds the row's
+	// indexed_at, for refreshEffective to stamp the snapshot it then records.
+	fromRow string
 }
 
 func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, error) {
 	l := &bookLayers{enrichment: bookFields{}}
-	var raw string
+	var raw, indexedAt string
+	var row Book
 	if err := q.QueryRowContext(ctx,
-		`SELECT library_id, rel_path, is_folder, scanned FROM books WHERE id = ?`, bookID).
-		Scan(&l.libID, &l.path, &l.isFolder, &raw); err != nil {
+		`SELECT library_id, rel_path, is_folder, scanned, indexed_at,
+		        title, author, narrator, series, series_index
+		   FROM books WHERE id = ?`, bookID).
+		Scan(&l.libID, &l.path, &l.isFolder, &raw, &indexedAt,
+			&row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex); err != nil {
 		return nil, err
 	}
-	var err error
-	if l.scanned, err = parseScanned(raw); err != nil {
+	scanned, stamp, err := parseScanned(raw)
+	if err != nil {
 		return nil, err
 	}
+	if raw == "" || stamp != indexedAt {
+		// Written by a server that predates the snapshot: the row holds what that
+		// scan found (it applies no overrides; asin/isbn only ever come from
+		// enrichment, so they stay out, as in migration 0016).
+		scanned = fieldsOf(&row)
+		maps.DeleteFunc(scanned, func(_, v string) bool { return v == "" })
+		l.fromRow = indexedAt
+	}
+	l.scanned = scanned
 	var asin, isbn string
 	err = q.QueryRowContext(ctx,
 		`SELECT asin, isbn FROM book_enrichment WHERE library_id = ? AND path = ?`, l.libID, l.path).
@@ -338,7 +361,7 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 	derived := metadata.DeriveFromPath(l.path, l.isFolder)
 	fromPath := bookFields{
 		FieldTitle: derived.Title, FieldAuthor: derived.Author, FieldSeries: derived.Series,
-		FieldSeriesIndex: formatSeriesIndex(derived.SeriesIndex),
+		FieldSeriesIndex: formatSeriesPosition(derived.SeriesIndex),
 	}
 	out := make(map[string]FieldValue, len(OverrideFields))
 	for _, field := range OverrideFields {
@@ -369,6 +392,23 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	l, err := loadLayers(ctx, tx, bookID)
 	if err != nil {
 		return err
+	}
+	if l.fromRow != "" {
+		// Record the snapshot read off the row, and likewise the chapter titles: the
+		// older server that indexed the row also wrote its chapters, with titles as
+		// scanned and no scanned_title, so the reset below would blank them.
+		snap := maps.Clone(l.scanned)
+		snap[scannedStampKey] = l.fromRow
+		raw, err := json.Marshal(snap)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE books SET scanned = ? WHERE id = ?`, string(raw), bookID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE chapters SET scanned_title = title WHERE book_id = ?`, bookID); err != nil {
+			return err
+		}
 	}
 	fields := l.resolve()
 	v := func(field string) string { return fields[field].Value }

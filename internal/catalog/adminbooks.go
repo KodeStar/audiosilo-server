@@ -57,8 +57,12 @@ const (
 	// A single-file book has no book_files rows; it is one file.
 	fileCountExpr = `MAX(1, (SELECT COUNT(*) FROM book_files bf WHERE bf.book_id = b.id))`
 	matchedExpr   = `(b.asin <> '' OR b.isbn <> '')`
-	editedExpr    = `(EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path)
-		OR EXISTS(SELECT 1 FROM chapter_overrides co WHERE co.library_id = b.library_id AND co.path = b.rel_path))`
+	// A chapter override counts only while the book has that chapter: one on an
+	// index a rescan dropped is dormant (it reapplies if the chapter comes back) and
+	// shows nowhere on the book page, so it can't mark the book edited.
+	editedExpr = `(EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path)
+		OR EXISTS(SELECT 1 FROM chapter_overrides co JOIN chapters ch ON ch.book_id = b.id AND ch.idx = co.idx
+		           WHERE co.library_id = b.library_id AND co.path = b.rel_path))`
 	// "Has chapters" means real navigation: more than the one chapter every
 	// single-part book gets.
 	hasChaptersExpr = `(` + chapterCountExpr + ` > 1)`
@@ -189,21 +193,44 @@ type sortKey struct {
 	expr string              // ORDER BY / keyset expression
 	num  bool                // numeric (cursor values decode as numbers)
 	val  func(AdminBook) any // the row's value, for the next cursor
+	desc *sortKey            // stands in for this key in a descending order, if set
 }
 
 func textKey(col string, val func(AdminBook) string) sortKey {
 	return sortKey{expr: col + " COLLATE NOCASE", val: func(b AdminBook) any { return val(b) }}
 }
 
-// blankLast sorts rows with an empty col after the rest (in ascending order), so a
-// series sort doesn't open on every book that has no series.
+// blankLast sorts rows with an empty col after the rest, in either direction, so a
+// series sort doesn't open on every book that has no series. A descending order
+// flips every key, so there it keys on the opposite test ("not blank"), which
+// keeps the whole ordering one direction for the keyset comparison.
 func blankLast(col string, val func(AdminBook) string) sortKey {
-	return sortKey{expr: "(" + col + " = '')", num: true, val: func(b AdminBook) any {
-		if val(b) == "" {
-			return 1
+	is := func(blank bool) func(AdminBook) any {
+		return func(b AdminBook) any {
+			if (val(b) == "") == blank {
+				return 1
+			}
+			return 0
 		}
-		return 0
-	}}
+	}
+	desc := sortKey{expr: "(" + col + " <> '')", num: true, val: is(false)}
+	return sortKey{expr: "(" + col + " = '')", num: true, val: is(true), desc: &desc}
+}
+
+// directed returns the keys of an ordering for its direction: in a descending
+// order a key with a stand-in is replaced by it.
+func directed(keys []sortKey, desc bool) []sortKey {
+	if !desc {
+		return keys
+	}
+	out := make([]sortKey, len(keys))
+	for i, k := range keys {
+		if k.desc != nil {
+			k = *k.desc
+		}
+		out[i] = k
+	}
+	return out
 }
 
 var (
@@ -263,6 +290,7 @@ func (c *Catalog) ListAdminBooks(ctx context.Context, opt AdminListOptions) (*Ad
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSort, opt.Sort)
 	}
+	keys = directed(keys, opt.Desc)
 	if opt.Limit <= 0 || opt.Limit > 200 {
 		opt.Limit = 60
 	}
@@ -547,15 +575,16 @@ func lessFold(a, b string) bool {
 
 // personKey reduces a name to a comparison key: "Surname, Given" is turned round
 // (only when the part before the comma is one word, so "Alexandre Dumas, pere"
-// stays whole), then case, spacing and punctuation are dropped (match.Normalize),
-// which also equates "J.R.R." with "J. R. R.". "" when nothing alphanumeric is left.
+// stays whole), then case, spacing and punctuation are dropped (match.Fold, which
+// keeps the letters of every script), which also equates "J.R.R." with "J. R. R.".
+// "" when no letter or digit is left.
 func personKey(name string) string {
 	if before, after, ok := strings.Cut(name, ","); ok && !strings.Contains(after, ",") {
 		if b, a := strings.TrimSpace(before), strings.TrimSpace(after); a != "" && !strings.ContainsAny(b, " \t") {
 			name = a + " " + b
 		}
 	}
-	return match.Normalize(name)
+	return match.Fold(name)
 }
 
 // mergeSuggestions groups people whose names share a personKey. The suggested

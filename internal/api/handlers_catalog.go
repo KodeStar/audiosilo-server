@@ -320,8 +320,8 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	mq := meta.MatchQuery{
 		Text: strings.TrimSpace(query.Get("q")), ASIN: strings.TrimSpace(query.Get("asin")),
-		ISBN: strings.TrimSpace(query.Get("isbn")), Title: book.Title, Author: book.Author,
-		Duration: book.Duration, BookASIN: book.ASIN, BookISBN: book.ISBN,
+		ISBN: strings.TrimSpace(query.Get("isbn")), Title: book.Title, Series: book.Series,
+		Author: book.Author, Duration: book.Duration, BookASIN: book.ASIN, BookISBN: book.ISBN,
 	}
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {
 		writeError(w, http.StatusBadRequest, "query too long")

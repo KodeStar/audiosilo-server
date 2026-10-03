@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -368,5 +372,70 @@ func TestCustomCoverAPI(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "GET", cover, adminTok, ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("after delete the book's own (absent) art = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestCustomCoverFollowsTheBook: a custom cover is the book's whichever path the
+// cover is asked for by (a part resolves to its folder book, as /item does), and
+// only while the book is there. A sidecar image is served with a bounded lifetime,
+// so a custom cover set later shows within a day rather than by heuristic.
+func TestCustomCoverFollowsTheBook(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	ctx := context.Background()
+	root := t.TempDir()
+	fixtures, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	for _, rel := range []string{
+		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b",
+		"Brandon Sanderson/Mistborn/01 - The Final Empire.m4b", // keeps the library non-empty once Cradle goes
+	} {
+		data, err := os.ReadFile(filepath.Join(fixtures, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jpeg := "\xff\xd8\xff\xe0\x00\x10JFIF\x00" + strings.Repeat("\x00", 16)
+	if err := os.WriteFile(filepath.Join(root, "Will Wight", "Cradle", "cover.jpg"), []byte(jpeg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	scanner := library.NewScanner(e.cat, "", slog.Default())
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	id := strconv.FormatInt(lib.ID, 10)
+	cover := func(p string) string { return "/api/v1/libraries/" + id + "/cover?path=" + escape(p) }
+
+	if resp, body := e.do(t, "GET", cover("Will Wight/Cradle"), adminTok, ""); resp.StatusCode != 200 || body != jpeg ||
+		resp.Header.Get("Cache-Control") != "private, max-age=86400" {
+		t.Fatalf("sidecar cover = %d %v", resp.StatusCode, resp.Header)
+	}
+
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("\x00", 32)
+	if resp, body := e.do(t, "PUT", "/api/v1/admin/libraries/"+id+"/cover?path="+escape("Will Wight/Cradle"), adminTok, png); resp.StatusCode != 200 {
+		t.Fatalf("upload = %d %s", resp.StatusCode, body)
+	}
+	for _, p := range []string{"Will Wight/Cradle", "Will Wight/Cradle/01 - Unsouled.m4b"} {
+		if resp, body := e.do(t, "GET", cover(p), adminTok, ""); resp.StatusCode != 200 || body != png {
+			t.Errorf("cover by %q = %d %s, want the custom cover", p, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
+
+	// Gone from disk and pruned: no cover at all, custom or not.
+	if err := os.RemoveAll(filepath.Join(root, "Will Wight")); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := scanner.Scan(ctx, *lib); err != nil || res.Removed != 1 {
+		t.Fatalf("rescan: %+v %v", res, err)
+	}
+	if resp, _ := e.do(t, "GET", cover("Will Wight/Cradle"), adminTok, ""); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("cover of a pruned book = %d, want 404", resp.StatusCode)
 	}
 }

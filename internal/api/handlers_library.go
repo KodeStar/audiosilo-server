@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -284,7 +285,7 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 // purpose: once the cover is removed, a client revalidating with If-Modified-Since
 // would get a 304 from the book's own (older) sibling cover file and keep showing
 // the removed image; an If-None-Match never matches that fallback. served is false
-// when the path has no custom cover.
+// when the path has no custom cover (or no book is indexed there).
 func (a *API) serveCustomCover(w http.ResponseWriter, r *http.Request, libID int64, path string) (served bool, err error) {
 	info, err := a.cat.CoverInfo(r.Context(), libID, path)
 	if errors.Is(err, catalog.ErrNotFound) {
@@ -313,6 +314,16 @@ func (a *API) serveCustomCover(w http.ResponseWriter, r *http.Request, libID int
 	// ETag for conditional and Range requests.
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(cv.Data))
 	return true, nil
+}
+
+// answerCustomCover answers r from the custom cover at path if there is one, and
+// reports whether the request was answered (the cover served, or an error written).
+func (a *API) answerCustomCover(w http.ResponseWriter, r *http.Request, libID int64, path string) bool {
+	served, err := a.serveCustomCover(w, r, libID, path)
+	if err != nil {
+		a.writeCatalogError(w, err, "load custom cover failed", "could not load cover", "library", libID, "path", path)
+	}
+	return served || err != nil
 }
 
 // coverETag is a custom cover's validator, derived from when it was stored.
@@ -377,10 +388,7 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	if served, err := a.serveCustomCover(w, r, lib.ID, path); served || err != nil {
-		if err != nil {
-			a.writeCatalogError(w, err, "load custom cover failed", "could not load cover", "library", lib.ID, "path", path)
-		}
+	if a.answerCustomCover(w, r, lib.ID, path) {
 		return
 	}
 	book, err := a.bookForPath(r.Context(), lib, path)
@@ -392,8 +400,22 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "load cover failed", "could not load cover", "library", lib.ID, "path", path)
 		return
 	}
+	// The lookup above was by the requested path. A part path resolves to its folder
+	// book, and bookForPath may have just indexed the book (a custom cover is served
+	// only for an indexed one): either way the book's own path can carry a custom
+	// cover, ahead of its own art.
+	if a.answerCustomCover(w, r, lib.ID, book.RelPath) {
+		return
+	}
 	if book.CoverPath != "" {
 		if abs, err := library.SafeJoin(lib.Root, book.CoverPath); err == nil {
+			if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
+				// The same lifetime as embedded art below. Without one a browser keeps
+				// a sidecar image fresh by heuristic (a tenth of the file's age), so a
+				// custom cover uploaded later would go unseen for weeks, not a day. Set
+				// only for a file that is there, so a 404 is never cached.
+				w.Header().Set("Cache-Control", "private, max-age=86400")
+			}
 			media.ServeFile(w, r, abs, false)
 			return
 		}

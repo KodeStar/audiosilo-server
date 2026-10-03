@@ -56,16 +56,35 @@ ALTER TABLE books ADD COLUMN description TEXT NOT NULL DEFAULT '';
 ALTER TABLE books ADD COLUMN has_cover INTEGER;
 UPDATE books SET has_cover = 1 WHERE cover_path <> '';
 
+-- A series-part tag of "inf" parses as an infinite position, which no JSON reply
+-- can carry; it is no position, as the export already treats it.
+UPDATE books SET series_index = 0 WHERE series_index IN (9e999, -9e999);
+
 -- What the scan found, before enrichment and overrides were layered on: a JSON
--- object of field -> value (a blank and a missing field read the same). It is what a revert restores, what the
--- console shows beside an edited value, and (against the path) where a value came
--- from. Existing rows are backfilled from their current values: no overrides exist
--- yet, and asin/isbn only ever come from enrichment, so they are left out.
+-- object of field -> value (a blank and a missing field read the same), stamped
+-- with the indexed_at of the upsert that wrote it ('@indexed_at'; see
+-- catalog.scannedStampKey). It is what a revert restores, what the console shows
+-- beside an edited value, and (against the path) where a value came from. Existing
+-- rows are backfilled from their current values: no overrides exist yet, and
+-- asin/isbn only ever come from enrichment, so they are left out.
 ALTER TABLE books ADD COLUMN scanned TEXT NOT NULL DEFAULT '';
 UPDATE books SET scanned = json_object(
     'title', title, 'author', author, 'narrator', narrator, 'series', series,
-    'series_index', CAST(series_index AS TEXT)
+    'series_index', CAST(series_index AS TEXT), '@indexed_at', indexed_at
 );
+
+-- The scanner used to re-apply book_enrichment at the end of every scan; now the
+-- upsert does, but only for a book it re-indexes. A row an earlier scan left
+-- without its ASIN/ISBN (one stopped between re-indexing a book and that final
+-- pass) is put right here, once, by the same rule: a non-blank enrichment field
+-- wins.
+UPDATE books SET
+    asin = COALESCE((SELECT NULLIF(e.asin, '') FROM book_enrichment e
+                      WHERE e.library_id = books.library_id AND e.path = books.rel_path), asin),
+    isbn = COALESCE((SELECT NULLIF(e.isbn, '') FROM book_enrichment e
+                      WHERE e.library_id = books.library_id AND e.path = books.rel_path), isbn)
+ WHERE EXISTS(SELECT 1 FROM book_enrichment e
+               WHERE e.library_id = books.library_id AND e.path = books.rel_path);
 
 ALTER TABLE chapters ADD COLUMN scanned_title TEXT NOT NULL DEFAULT '';
 UPDATE chapters SET scanned_title = title;

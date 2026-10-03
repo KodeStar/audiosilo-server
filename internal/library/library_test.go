@@ -849,3 +849,51 @@ func TestScannerKeepsOverridesAndRecordsSources(t *testing.T) {
 		t.Fatalf("has_cover after an unreadable backfill = %v, want unknown (NULL)", *hasCover)
 	}
 }
+
+// TestReclassifyingAFolderIsNotAMove: turning a folder book into a collection
+// leaves its first part at a nested path with the folder's fingerprint, but that
+// part is a different book. The folder book's edits must not be carried onto it
+// (locked there for good); they stay at the folder path and apply again when the
+// folder is a book once more.
+func TestReclassifyingAFolderIsNotAMove(t *testing.T) {
+	cat, scanner, ctx := newScanEnv(t)
+	root := t.TempDir()
+	const folder = "Author/Box Set"
+	copyFixtureM4B(t, filepath.Join(root, "Author", "Box Set", "01 - One.m4b"))
+	copyChapteredM4B(t, filepath.Join(root, "Author", "Box Set", "02 - Two.m4b"))
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	scan := func() {
+		t.Helper()
+		if _, err := scanner.Scan(ctx, *lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scan()
+	if err := cat.EditBook(ctx, lib.ID, folder, catalog.BookEdit{Set: map[string]string{catalog.FieldTitle: "The Box Set"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cat.SetFolderOverride(ctx, lib.ID, folder, catalog.OverrideCollection); err != nil {
+		t.Fatal(err)
+	}
+	scan()
+	part, err := cat.GetBookByPath(ctx, lib.ID, folder+"/01 - One.m4b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if part.Title == "The Box Set" {
+		t.Fatal("the folder book's title override was carried onto its first part")
+	}
+
+	if err := cat.DeleteFolderOverride(ctx, lib.ID, folder); err != nil {
+		t.Fatal(err)
+	}
+	scan()
+	book, err := cat.GetBookByPath(ctx, lib.ID, folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.Title != "The Box Set" {
+		t.Fatalf("the folder book's edit didn't come back with the folder: %q", book.Title)
+	}
+}

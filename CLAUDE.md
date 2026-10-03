@@ -410,7 +410,9 @@ admin overrides; see Metadata overrides below).
   drives it. `GET /fs` annotates each entry's effective `override`.
 - **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
   edits never touch files. A `books` row holds the **effective** values - what the scan
-  found (kept in `books.scanned`, JSON field -> value), then `book_enrichment`
+  found (kept in `books.scanned`, JSON field -> value, stamped with the upsert's
+  `indexed_at`: a snapshot whose stamp isn't the row's was left by an older server, so
+  `loadLayers` reads the scan's values off the row instead), then `book_enrichment`
   (asin/isbn), then `book_overrides`. `bookLayers.resolve` is the ONE statement of that
   precedence (and of each field's source); `refreshEffective` writes its values to the
   row (plus chapter titles from `chapters.scanned_title` + `chapter_overrides`, and FTS)
@@ -425,7 +427,11 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
-  `MoveDurableState` carries overrides and custom covers (`UPDATE OR REPLACE`).
+  `MoveDurableState` carries overrides and custom covers as one set: when the moved book
+  has any, the new path's own rows in all three tables are dropped first; it moves
+  them (with enrichment) in a transaction of their own, so a per-user collision can't
+  strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
+  back) with its own first part (`reclassified`).
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
   with a tag read (`media.EmbeddedCover`, no ffprobe).
@@ -437,17 +443,22 @@ admin overrides; see Metadata overrides below).
   own filter, the unfiltered yes/no ones in one pass);
   `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
   `GET /admin/authors|narrators` (whole field values + `merge_suggestions` from
-  `personKey`) and `/admin/series`; `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
+  `personKey`, keyed by `match.Fold`, which keeps every script's letters) and
+  `/admin/series`; `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
   page: per-field provenance, chapters, files, listeners, shares, folder override);
   `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve
   `works/search` + `lookup` concurrently, up to 6 works expanded and scored, uncached,
-  bounded by `workSem` via `fetchWork`; with no query it searches the book's own facts;
-  metadata off -> 404 `metadata_off`); `PUT`/`DELETE /admin/libraries/{id}/cover?path=`
-  (custom cover in the DB; `catalog.SetCover` enforces 5 MiB, sniffed JPEG/PNG/WebP and
-  an indexed book), which `GET /libraries/{id}/cover` serves first, behind the caller's
+  bounded by `workSem` via `fetchWork`; with no query it searches the book's own facts,
+  its title through `match.CleanTitle` since metaserve's search requires every word;
+  identifiers normalized for the exact lookup; metadata off -> 404 `metadata_off`);
+  `PUT`/`DELETE /admin/libraries/{id}/cover?path=` (custom cover in the DB;
+  `catalog.SetCover` enforces 5 MiB, sniffed JPEG/PNG/WebP and an indexed book), which
+  `GET /libraries/{id}/cover` serves first (by the requested path, then by the book a
+  part path resolves to; only while a book is indexed there), behind the caller's
   scope, validated by an ETag from its `updated_at` (not Last-Modified, which the
   sidecar fallback would answer with a stale 304 after a delete) so a matching
-  `If-None-Match` is a 304 without reading the image. Only GET/HEAD of streaming-shaped
+  `If-None-Match` is a 304 without reading the image; sidecar and embedded art keep
+  `max-age=86400`. Only GET/HEAD of streaming-shaped
   paths skip the request timeout, so the cover upload stays bounded.
   Error codes `book_not_found`, `invalid_override` (+ `field`), `too_large`,
   `unsupported_image`. The internal book id appears only inside the opaque cursor.

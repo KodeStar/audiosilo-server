@@ -25,6 +25,14 @@ func TestScoreCandidate(t *testing.T) {
 		"wrong book":       {MatchQuery{Title: "Artemis", Author: "Andy Weir", Duration: 540 * 60}, martian, 30},
 		"subtitle":         {MatchQuery{Title: "Dune Messiah"}, &MatchCandidate{Title: "Dune", Subtitle: "Messiah"}, 100},
 		"nothing to judge": {MatchQuery{}, martian, 0},
+		// The book's tags carry fluff the community record doesn't.
+		"unabridged":   {MatchQuery{Title: "The Martian (Unabridged)", Author: "Andy Weir", Duration: 634 * 60}, martian, 100},
+		"series, book": {MatchQuery{Title: "Mistborn: The Final Empire (Book 1)", Series: "Mistborn", Author: "Brandon Sanderson"}, &MatchCandidate{Title: "The Final Empire", Authors: []MetaPersonRef{{Name: "Brandon Sanderson"}}}, 100},
+		"co-written":   {MatchQuery{Title: "The Martian", Author: "Andy Weir, Mary Robinette Kowal"}, martian, 100},
+		"initials":     {MatchQuery{Title: "The Hobbit", Author: "JRR Tolkien"}, &MatchCandidate{Title: "The Hobbit", Authors: []MetaPersonRef{{Name: "J. R. R. Tolkien"}}}, 100},
+		// Different Cyrillic titles share only "и", "том" and "1" (3 of 7 words):
+		// never the whole-title match an ASCII-only comparison would call it.
+		"other script": {MatchQuery{Title: "Война и мир. Том 1"}, &MatchCandidate{Title: "Мастер и Маргарита. Том 1"}, 43},
 	} {
 		if got := scoreCandidate(tc.q, tc.c); got != tc.want {
 			t.Errorf("%s: score = %d, want %d", name, got, tc.want)
@@ -109,5 +117,87 @@ func TestCandidatesOneLegFails(t *testing.T) {
 	}
 	if _, err := s.Candidates(context.Background(), MatchQuery{ASIN: "B002V1OF70"}); err == nil {
 		t.Fatal("with only the lookup asked and it down, the error must surface")
+	}
+}
+
+// matchServer is a metaserve stub for one Candidates call: it records the search
+// text and lookup identifiers it was sent, answers search and lookup with the given
+// codes (200 serves one hit, "dune"), and serves works/{id} with workCode.
+type matchServer struct {
+	searchCode, lookupCode, workCode int
+	gotQ, gotASIN, gotISBN           string
+}
+
+func (m *matchServer) service(t *testing.T) *Service {
+	t.Helper()
+	answer := func(w http.ResponseWriter, code int, body string) {
+		if code != http.StatusOK {
+			w.WriteHeader(code)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/works/search", func(w http.ResponseWriter, r *http.Request) {
+		m.gotQ = r.URL.Query().Get("q")
+		answer(w, m.searchCode, `{"results":[{"id":"dune"}]}`)
+	})
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, r *http.Request) {
+		m.gotASIN, m.gotISBN = r.URL.Query().Get("asin"), r.URL.Query().Get("isbn")
+		answer(w, m.lookupCode, `{"work":{"id":"dune","title":"Dune"},"recording_id":"r1"}`)
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		answer(w, m.workCode, `{"id":"dune","title":"Dune","authors":[{"id":"fh","name":"Frank Herbert"}],"recordings":[]}`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return NewService(srv.URL, nil)
+}
+
+// TestCandidatesSearchesTheCleanTitle: with no query the book's own title is
+// searched without its series name and edition fluff, since metaserve's search
+// requires every word and the community record has none of "(Unabridged)".
+func TestCandidatesSearchesTheCleanTitle(t *testing.T) {
+	m := &matchServer{searchCode: 200, lookupCode: 200, workCode: 200}
+	if _, err := m.service(t).Candidates(context.Background(), MatchQuery{
+		Title: "Dune: Dune Chronicles, Book 1 (Unabridged)", Series: "Dune Chronicles", Author: "Frank Herbert",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if m.gotQ != "Dune Frank Herbert" {
+		t.Fatalf("searched %q, want %q", m.gotQ, "Dune Frank Herbert")
+	}
+}
+
+// TestCandidatesNormalizesIdentifiers: an ASIN or ISBN as an admin pastes it
+// (lowercase, or hyphenated as printed) is looked up in the form metaserve holds.
+func TestCandidatesNormalizesIdentifiers(t *testing.T) {
+	m := &matchServer{searchCode: 200, lookupCode: 200, workCode: 200}
+	s := m.service(t)
+	if _, err := s.Candidates(context.Background(), MatchQuery{ASIN: " b002v1of70 "}); err != nil || m.gotASIN != "B002V1OF70" {
+		t.Fatalf("asin looked up as %q (%v)", m.gotASIN, err)
+	}
+	if _, err := s.Candidates(context.Background(), MatchQuery{ISBN: "978-1-4272-0143-0"}); err != nil || m.gotISBN != "9781427201430" {
+		t.Fatalf("isbn looked up as %q (%v)", m.gotISBN, err)
+	}
+}
+
+// TestCandidatesReportsALegOutage: one leg down while the other's hits all turn out
+// gone (404 on expansion) leaves nothing to show, so it is the outage that is
+// reported, never "no match" - the leg that failed may well have had the book.
+func TestCandidatesReportsALegOutage(t *testing.T) {
+	q := MatchQuery{Text: "dune", ASIN: "B002V1OF70"}
+	for name, m := range map[string]*matchServer{
+		"search down": {searchCode: 500, lookupCode: 200, workCode: 404},
+		"lookup down": {searchCode: 200, lookupCode: 500, workCode: 404},
+	} {
+		if cands, err := m.service(t).Candidates(context.Background(), q); err == nil {
+			t.Errorf("%s: %d candidates and no error, want the outage", name, len(cands))
+		}
+	}
+	// Both legs fine and every hit gone is a clean "no match".
+	m := &matchServer{searchCode: 200, lookupCode: 200, workCode: 404}
+	if cands, err := m.service(t).Candidates(context.Background(), q); err != nil || len(cands) != 0 {
+		t.Fatalf("all hits gone = %v %v, want an empty answer", cands, err)
 	}
 }

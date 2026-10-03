@@ -138,11 +138,22 @@ func TestListAdminBooksKeyset(t *testing.T) {
 			}
 		}
 	}
-	// Series order: by series then position, books with no series last.
+	// Series order: by series then position, books with no series last - in either
+	// direction (a descending sort reverses the series, not where the blanks go).
 	got := listAll(t, c, ctx, AdminListOptions{Sort: "series", Limit: 2})
 	want := []string{"Sanderson/Mistborn/1", "Sanderson/Mistborn/2", "Sanderson/Mistborn/4"}
 	if !reflect.DeepEqual(got[:3], want) {
 		t.Fatalf("series order = %v", got)
+	}
+	got = listAll(t, c, ctx, AdminListOptions{Sort: "series", Desc: true, Limit: 2})
+	want = []string{"Sanderson/Mistborn/4", "Sanderson/Mistborn/2", "Sanderson/Mistborn/1"}
+	if !reflect.DeepEqual(got[:3], want) {
+		t.Fatalf("descending series order = %v (books with no series must stay last)", got)
+	}
+	got = listAll(t, c, ctx, AdminListOptions{Sort: "narrator", Desc: true, Limit: 2})
+	// Z to A: Scott Brick (Dune's edit), then Imelda Staunton, then the 4 unnarrated.
+	if !reflect.DeepEqual(got[:2], []string{"Herbert/Dune", "Donaldson/Gruffalo"}) {
+		t.Fatalf("descending narrator order = %v (the narrated books come first)", got)
 	}
 }
 
@@ -232,8 +243,20 @@ func TestPersonKey(t *testing.T) {
 	if personKey("Alexandre Dumas, pere") == personKey("pere Alexandre Dumas") {
 		t.Error("a multi-word name before the comma must not be turned round")
 	}
-	if personKey("村上春樹") != "" {
-		t.Error("a name with nothing ASCII-alphanumeric has no key (never grouped)")
+	// Every script's letters count: spellings of one non-Latin name group, but two
+	// different ones never collide on an ASCII residue ("jr") or on nothing.
+	for _, tc := range []struct{ a, b string }{{"村上 春樹", "村上春樹"}, {"Лев Толстой", "Толстой, Лев"}} {
+		if personKey(tc.a) == "" || personKey(tc.a) != personKey(tc.b) {
+			t.Errorf("%q and %q should share a key (%q vs %q)", tc.a, tc.b, personKey(tc.a), personKey(tc.b))
+		}
+	}
+	for _, tc := range []struct{ a, b string }{{"Иван Петров Jr.", "Сергей Иванов Jr."}, {"村上春樹", "東野圭吾"}, {"Michael Ball", "Michael Ballé"}} {
+		if personKey(tc.a) == personKey(tc.b) {
+			t.Errorf("%q and %q are different people but share the key %q", tc.a, tc.b, personKey(tc.a))
+		}
+	}
+	if personKey("...") != "" {
+		t.Error("a name with no letter or digit has no key (never grouped)")
 	}
 }
 

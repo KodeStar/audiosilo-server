@@ -53,13 +53,19 @@ type CustomCover struct {
 	UpdatedAt string // RFC3339Nano
 }
 
+// A custom cover is durable path-keyed state, so it outlives its book being pruned
+// (and returns with it), but it is served only while a book is indexed at the path:
+// a vanished book has no cover, custom or not.
+const coverIndexedJoin = ` FROM book_covers cv
+	JOIN books b ON b.library_id = cv.library_id AND b.rel_path = cv.path
+	WHERE cv.library_id = ? AND cv.path = ?`
+
 // CoverInfo returns a book path's custom cover without its image bytes, so a
 // conditional request can be answered without reading the blob. ErrNotFound when
-// the path has none.
+// the path has none, or no book is indexed there.
 func (c *Catalog) CoverInfo(ctx context.Context, libraryID int64, path string) (*CustomCover, error) {
 	var cv CustomCover
-	err := c.db.QueryRowContext(ctx,
-		`SELECT mime, updated_at FROM book_covers WHERE library_id = ? AND path = ?`,
+	err := c.db.QueryRowContext(ctx, `SELECT cv.mime, cv.updated_at`+coverIndexedJoin,
 		libraryID, CleanRelPath(path)).Scan(&cv.MIME, &cv.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -70,11 +76,11 @@ func (c *Catalog) CoverInfo(ctx context.Context, libraryID int64, path string) (
 	return &cv, nil
 }
 
-// Cover returns a book path's custom cover with its image, or ErrNotFound.
+// Cover returns a book path's custom cover with its image, or ErrNotFound (as
+// CoverInfo).
 func (c *Catalog) Cover(ctx context.Context, libraryID int64, path string) (*CustomCover, error) {
 	var cv CustomCover
-	err := c.db.QueryRowContext(ctx,
-		`SELECT data, mime, updated_at FROM book_covers WHERE library_id = ? AND path = ?`,
+	err := c.db.QueryRowContext(ctx, `SELECT cv.data, cv.mime, cv.updated_at`+coverIndexedJoin,
 		libraryID, CleanRelPath(path)).Scan(&cv.Data, &cv.MIME, &cv.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
