@@ -1,5 +1,12 @@
-import { clearToken, getToken } from './session';
-import type { AdminSettings, AdminStats, LoginResponse, ServerInfo, User } from './types';
+import { clearToken, getToken } from './token';
+import type {
+  AdminSettings,
+  AdminStats,
+  ErrorEnvelope,
+  LoginResponse,
+  ServerInfo,
+  User,
+} from './types';
 
 const API = '/api/v1';
 
@@ -47,9 +54,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     }
   }
   if (!res.ok) {
+    const envelope = data as Partial<ErrorEnvelope> | undefined;
     const msg =
-      data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
-        ? data.error
+      typeof envelope?.error === 'string' && envelope.error
+        ? envelope.error
         : res.statusText || `HTTP ${res.status}`;
     throw new ApiError(res.status, msg);
   }

@@ -1,5 +1,5 @@
 import { ApiError, api, coverUrl, setUnauthorizedHandler } from './client';
-import { getToken, setToken } from './session';
+import { getToken, setToken } from './token';
 import { mockFetch } from '@/test/fetch-mock';
 import { admin, stats } from '@/test/fixtures';
 

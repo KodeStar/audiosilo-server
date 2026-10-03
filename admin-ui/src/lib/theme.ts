@@ -1,19 +1,16 @@
+import { readStorage, writeStorage } from './storage';
+
 // Theme preference (light / dark / system). public/theme-init.js applies the
-// stored preference before first paint; this module owns changing it at runtime
-// and following the OS while the preference is "system".
+// stored preference before first paint (same storage key); this module owns
+// changing it at runtime and following the OS while the preference is "system".
 
 export type ThemePref = 'light' | 'dark' | 'system';
 
-export const THEME_KEY = 'audiosilo.admin.theme';
+const THEME_KEY = 'audiosilo.admin.theme';
 
 export function readThemePref(): ThemePref {
-  try {
-    const v = localStorage.getItem(THEME_KEY);
-    if (v === 'light' || v === 'dark' || v === 'system') return v;
-  } catch {
-    // storage unavailable: fall through to the default
-  }
-  return 'system';
+  const v = readStorage(THEME_KEY);
+  return v === 'light' || v === 'dark' ? v : 'system';
 }
 
 function systemDark(): boolean {
@@ -27,26 +24,20 @@ export function resolveTheme(pref: ThemePref): 'light' | 'dark' {
   return pref;
 }
 
-export function applyTheme(pref: ThemePref) {
+function applyTheme(pref: ThemePref) {
   document.documentElement.setAttribute('data-theme', resolveTheme(pref));
 }
 
 export function setThemePref(pref: ThemePref) {
-  try {
-    localStorage.setItem(THEME_KEY, pref);
-  } catch {
-    // storage unavailable: the choice lasts for this page only
-  }
+  writeStorage(THEME_KEY, pref);
   applyTheme(pref);
 }
 
-/** Re-applies the theme when the OS scheme changes while the preference is "system". */
-export function followSystemTheme(getPref: () => ThemePref): () => void {
+/** Re-applies the system theme whenever the OS scheme changes. Returns the unsubscribe. */
+export function followSystemTheme(): () => void {
   if (typeof window.matchMedia !== 'function') return () => {};
   const mq = matchMedia('(prefers-color-scheme: dark)');
-  const onChange = () => {
-    if (getPref() === 'system') applyTheme('system');
-  };
+  const onChange = () => applyTheme('system');
   mq.addEventListener('change', onChange);
   return () => mq.removeEventListener('change', onChange);
 }

@@ -26,8 +26,7 @@ go build -o bin/audiosilo ./cmd/audiosilo
 AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that dir
 scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
 
-npm --prefix admin-ui ci && npm --prefix admin-ui run check   # the admin console's gate (Node 24)
-scripts/build-admin.sh               # ci + check + build the console into internal/web/adminui/dist
+scripts/build-admin.sh               # the admin console's gate + build (Node 24): npm ci, check, build into internal/web/adminui/dist
 AUDIOSILO_ADMIN_NEXT=1 ./bin/audiosilo   # serve the redesigned console at /admin (classic at /admin/classic)
 ```
 
@@ -61,8 +60,8 @@ via `Options.OnURL` (so the audiosilo-manager desktop app, which runs the server
 in-process, can open a browser).
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
-&& golangci-lint run`**, plus **`npm --prefix admin-ui run check`** (typecheck + eslint +
-prettier + vitest) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+&& golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
+typecheck + eslint + prettier + vitest, then the build) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
 gates all of them on every PR/push, building the console first so the embed tests in
 `internal/web/adminui` run against a real build (locally they skip without one). A few scanner tests need `ffmpeg` (ffprobe);
 without it they `t.Skip` (CI installs it). The linter is adopted at a **green

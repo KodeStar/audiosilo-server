@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
+import { CLASSIC_CONSOLE_URL } from '@/components/shell/destinations';
 import {
   ArrowRight,
   BookOpen,
@@ -14,6 +15,7 @@ import { useServerInfo, useSettings, useStats } from '@/api/hooks';
 import type { AdminSettings, LibraryStat, ListeningRow, ServerInfo } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Monogram } from '@/components/monogram';
+import { Page } from '@/components/page';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
   formatVersion,
@@ -94,7 +96,7 @@ export function OverviewPage() {
           </h2>
         </div>
         {!split ? (
-          <div className="grid gap-4 min-[721px]:grid-cols-2 min-[1181px]:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {[0, 1].map((i) => (
               <div key={i} className="skel h-[92px] rounded-xl" />
             ))}
@@ -104,7 +106,7 @@ export function OverviewPage() {
             {t('home.live.empty')}
           </div>
         ) : (
-          <div className="grid gap-4 min-[721px]:grid-cols-2 min-[1181px]:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {split.live.map((r) => (
               <LiveCard key={`${r.user_id}:${r.library_id}:${r.path}`} row={r} lang={lang} />
             ))}
@@ -112,7 +114,7 @@ export function OverviewPage() {
         )}
       </section>
 
-      <div className="mt-4 grid grid-cols-2 gap-2.5 min-[721px]:gap-4 min-[1181px]:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-2.5 md:gap-4 xl:grid-cols-4">
         <StatTile
           icon={BookOpen}
           label={t('home.stat.books')}
@@ -139,7 +141,7 @@ export function OverviewPage() {
         />
       </div>
 
-      <div className="mt-10 grid items-start gap-6 min-[1181px]:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mt-10 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section aria-labelledby="recent-heading" className="min-w-0">
           <h2 id="recent-heading" className="h2 mb-3.5">
             {t('home.recent.title')}
@@ -173,14 +175,6 @@ export function OverviewPage() {
   );
 }
 
-function Page({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mx-auto max-w-[1440px] px-4 pt-5 pb-[120px] min-[721px]:px-6 min-[721px]:pt-7">
-      {children}
-    </div>
-  );
-}
-
 function StatTile({
   icon: Icon,
   label,
@@ -193,7 +187,7 @@ function StatTile({
   lang: string;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 rounded-xl border bg-card p-3.5 min-[721px]:px-5 min-[721px]:py-[18px]">
+    <div className="flex flex-col gap-1.5 rounded-xl border bg-card p-3.5 md:px-5 md:py-[18px]">
       <div className="flex items-center gap-1.5 text-[12.5px] font-[550] text-muted-foreground">
         <Icon className="size-[15px]" aria-hidden="true" />
         {label}
@@ -201,7 +195,7 @@ function StatTile({
       {value === undefined ? (
         <span className="skel h-[30px] w-20" />
       ) : (
-        <div className="stat-value max-[720px]:text-2xl">{formatNumber(value, lang)}</div>
+        <div className="stat-value max-md:text-2xl">{formatNumber(value, lang)}</div>
       )}
     </div>
   );
@@ -394,7 +388,7 @@ function FirstRun() {
   return (
     <Page>
       <div className="overflow-hidden rounded-xl border bg-card">
-        <div className="px-6 py-10 min-[721px]:px-11 min-[721px]:py-12">
+        <div className="px-6 py-10 md:px-11 md:py-12">
           <div className="eyebrow">{t('home.firstRun.eyebrow')}</div>
           <h1 className="display mt-2.5 mb-3">{t('home.firstRun.title')}</h1>
           <p className="max-w-[460px] text-[15px] text-muted-foreground">
@@ -421,7 +415,7 @@ function FirstRun() {
             ))}
           </ol>
           {/* Adding a library moves into this console in Phase 1b. */}
-          <a href="/admin/classic" className={buttonVariants({ size: 'lg' })}>
+          <a href={CLASSIC_CONSOLE_URL} className={buttonVariants({ size: 'lg' })}>
             <Plus aria-hidden="true" />
             {t('home.firstRun.cta')}
           </a>

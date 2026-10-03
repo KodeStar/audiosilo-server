@@ -21,6 +21,8 @@ import { useCurrentUser, useSession } from '@/lib/session';
 import { resolveTheme, type ThemePref } from '@/lib/theme';
 import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
 import { Monogram } from '@/components/monogram';
+import { buttonVariants } from '@/components/ui/button';
+import { CLASSIC_CONSOLE_URL } from './destinations';
 
 function ThemeRadioItems() {
   const { t } = useTranslation();
@@ -47,7 +49,7 @@ export function ThemeMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="grid size-9 place-items-center rounded-md text-muted-foreground transition-colors duration-(--dur-1) hover:bg-accent hover:text-foreground"
+        className={buttonVariants({ variant: 'ghost-muted', size: 'icon' })}
         aria-label={t('shell.theme.aria', { theme: t(`shell.theme.${pref}`) })}
       >
         <Icon className="size-[18px]" aria-hidden="true" />
@@ -71,7 +73,7 @@ export function UserMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="grid size-9 place-items-center rounded-md hover:bg-accent"
+        className={buttonVariants({ variant: 'ghost', size: 'icon' })}
         aria-label={t('shell.account.aria')}
       >
         <Monogram name={user.username} size={26} />
@@ -109,7 +111,7 @@ export function UserMenu() {
             {t('shell.account.webPlayer')}
           </Menu.LinkItem>
         ) : null}
-        <Menu.LinkItem href="/admin/classic" className={linkItemClass}>
+        <Menu.LinkItem href={CLASSIC_CONSOLE_URL} className={linkItemClass}>
           <History aria-hidden="true" />
           {t('shell.account.classic')}
         </Menu.LinkItem>

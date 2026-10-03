@@ -8,7 +8,7 @@ import {
   XIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { toastManager } from '@/lib/toast';
+import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 // Shelf toast (STYLEGUIDE.md section 8): Base UI Toast, never sonner (it injects
@@ -73,10 +73,10 @@ function ToastList() {
 
 export function Toaster({ children }: { children: React.ReactNode }) {
   return (
-    <ToastPrimitive.Provider toastManager={toastManager}>
+    <ToastPrimitive.Provider toastManager={toast}>
       {children}
       <ToastPrimitive.Portal>
-        <ToastPrimitive.Viewport className="pointer-events-none fixed right-4 bottom-[84px] left-4 z-[100] mx-auto outline-none min-[721px]:right-5 min-[721px]:bottom-5 min-[721px]:left-auto min-[721px]:w-[380px] [&>*]:pointer-events-auto">
+        <ToastPrimitive.Viewport className="pointer-events-none fixed right-4 bottom-[84px] left-4 z-[100] mx-auto outline-none md:right-5 md:bottom-5 md:left-auto md:w-[380px] [&>*]:pointer-events-auto">
           <ToastList />
         </ToastPrimitive.Viewport>
       </ToastPrimitive.Portal>

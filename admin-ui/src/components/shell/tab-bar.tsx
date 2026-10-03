@@ -9,7 +9,7 @@ export function TabBar() {
   const current = destinationFor(pathname);
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-45 flex border-t border-topbar-border bg-topbar px-1.5 pt-1.5 pb-[calc(6px+env(safe-area-inset-bottom))] backdrop-blur-[16px] backdrop-saturate-[1.6] min-[721px]:hidden"
+      className="fixed inset-x-0 bottom-0 z-45 flex border-t border-topbar-border bg-topbar px-1.5 pt-1.5 pb-[calc(6px+env(safe-area-inset-bottom))] backdrop-blur-[16px] backdrop-saturate-[1.6] md:hidden"
       aria-label={t('shell.primaryNav')}
     >
       {DESTINATIONS.map((d) => {

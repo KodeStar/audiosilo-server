@@ -1,5 +1,6 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
+import { readStorage, writeStorage } from '@/lib/storage';
 import de from './locales/de.json';
 import en from './locales/en.json';
 import es from './locales/es.json';
@@ -31,13 +32,9 @@ function isLanguage(v: string): v is Language {
   return Object.hasOwn(LANGUAGES, v);
 }
 
-export function detectLanguage(): Language {
-  try {
-    const saved = localStorage.getItem(LANG_KEY);
-    if (saved && isLanguage(saved)) return saved;
-  } catch {
-    // storage unavailable: fall through to the browser languages
-  }
+function detectLanguage(): Language {
+  const saved = readStorage(LANG_KEY);
+  if (saved && isLanguage(saved)) return saved;
   for (const l of navigator.languages ?? [navigator.language]) {
     const code = (l ?? '').slice(0, 2).toLowerCase();
     if (isLanguage(code)) return code;
@@ -46,11 +43,7 @@ export function detectLanguage(): Language {
 }
 
 export function setLanguage(lang: Language) {
-  try {
-    localStorage.setItem(LANG_KEY, lang);
-  } catch {
-    // the choice lasts for this page only
-  }
+  writeStorage(LANG_KEY, lang);
   void i18n.changeLanguage(lang);
 }
 

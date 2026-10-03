@@ -29,8 +29,7 @@ before:
     # The admin console (admin-ui/ -> internal/web/adminui/dist, embedded). Needs
     # Node 24 (release.yml sets it up). Without it the binary serves a "console
     # not built" page at /admin, so it must run before every release build.
-    - npm --prefix admin-ui ci
-    - npm --prefix admin-ui run build
+    - ./scripts/build-admin.sh --build-only
 
 builds:
   - id: audiosilo

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from './client';
 
 // Query keys live here so invalidation and the hooks can't drift apart.
@@ -18,13 +18,5 @@ export function useStats() {
 }
 
 export function useSettings() {
-  return useQuery({ queryKey: keys.settings, queryFn: api.settings });
-}
-
-export function useScanLibrary() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: number) => api.scanLibrary(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.stats }),
-  });
+  return useQuery({ queryKey: keys.settings, queryFn: api.settings, staleTime: 5 * 60_000 });
 }

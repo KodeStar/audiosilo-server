@@ -64,8 +64,8 @@ goreleaser check
 goreleaser build --snapshot --clean --skip=before --single-target
 ```
 
-`--skip=before` also skips the admin console build (`npm --prefix admin-ui ci &&
-npm --prefix admin-ui run build`, a before-hook); run `scripts/build-admin.sh`
+`--skip=before` also skips the admin console build (`scripts/build-admin.sh
+--build-only`, a before-hook); run `scripts/build-admin.sh`
 first if the snapshot should include the console rather than its "not built" page.
 
 ## 3 - end-to-end smoke test

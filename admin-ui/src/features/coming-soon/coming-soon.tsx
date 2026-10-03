@@ -1,7 +1,8 @@
 import { useParams } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { History } from 'lucide-react';
-import type { Destination } from '@/components/shell/destinations';
+import { CLASSIC_CONSOLE_URL, type Destination } from '@/components/shell/destinations';
+import { Page } from '@/components/page';
 import { buttonVariants } from '@/components/ui/button';
 import { NotFound } from '@/features/not-found';
 
@@ -18,7 +19,7 @@ export function ComingSoon({ destination }: { destination: Destination }) {
   const Icon = destination.icon;
 
   return (
-    <div className="mx-auto max-w-[1440px] px-4 pt-5 pb-[120px] min-[721px]:px-6 min-[721px]:pt-7">
+    <Page>
       <div className="flex flex-col items-center gap-2.5 rounded-xl border bg-card px-6 py-14 text-center">
         <span className="mb-2 grid size-12 place-items-center rounded-[14px] bg-brand-soft text-brand-ink">
           <Icon className="size-6" aria-hidden="true" />
@@ -32,13 +33,13 @@ export function ComingSoon({ destination }: { destination: Destination }) {
           {t('soon.phase', { phase: destination.phase })}
         </p>
         <a
-          href="/admin/classic"
+          href={CLASSIC_CONSOLE_URL}
           className={buttonVariants({ variant: 'outline', className: 'mt-3' })}
         >
           <History aria-hidden="true" />
           {t('shell.account.classic')}
         </a>
       </div>
-    </div>
+    </Page>
   );
 }

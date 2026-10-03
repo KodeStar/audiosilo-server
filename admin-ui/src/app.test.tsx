@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { getToken, setToken } from '@/api/session';
+import { getToken, setToken } from '@/api/token';
 import { setUnauthorizedHandler } from '@/api/client';
 import { toast } from '@/lib/toast';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';

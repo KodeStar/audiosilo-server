@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { Popover } from '@base-ui/react/popover';
 import { Bell, Search } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
-import { Logo } from '@/components/logo';
+import { LogoTile } from '@/components/logo';
 import { formatVersion } from '@/lib/format';
+import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { DESTINATIONS, destinationFor } from './destinations';
 import { ThemeMenu, UserMenu } from './menus';
@@ -18,24 +19,22 @@ export function TopBar() {
   const { t } = useTranslation();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const current = destinationFor(pathname);
-  const { open } = usePalette();
+  const { setOpen } = usePalette();
 
   return (
     <header className="sticky top-0 z-40 border-b border-topbar-border bg-topbar backdrop-blur-[16px] backdrop-saturate-[1.6]">
-      <div className="mx-auto grid h-14 max-w-[1440px] grid-cols-[auto_1fr_auto] items-center gap-2.5 px-4 min-[721px]:h-16 min-[721px]:gap-5 min-[721px]:px-6">
+      <div className="mx-auto grid h-14 max-w-[1440px] grid-cols-[auto_1fr_auto] items-center gap-2.5 px-4 md:h-16 md:gap-5 md:px-6">
         <Link
           to="/"
           className="flex items-center gap-2.5 rounded-[12px] py-1.5 pr-2 pl-1 hover:bg-accent"
           aria-label={t('shell.home')}
         >
-          <span className="grid size-[30px] place-items-center rounded-[9px] bg-primary text-brand">
-            <Logo size={20} />
-          </span>
+          <LogoTile />
           <ServerIdentity />
         </Link>
 
         <div className="flex min-w-0 items-center justify-center gap-[18px]">
-          <nav className="hidden gap-0.5 min-[721px]:flex" aria-label={t('shell.primaryNav')}>
+          <nav className="hidden gap-0.5 md:flex" aria-label={t('shell.primaryNav')}>
             {DESTINATIONS.map((d) => {
               const active = current?.key === d.key;
               return (
@@ -45,24 +44,22 @@ export function TopBar() {
                   params={{ section: undefined }}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'flex h-9 items-center gap-[7px] rounded-md px-2.5 font-[550] whitespace-nowrap text-muted-foreground transition-colors duration-(--dur-1) hover:bg-accent hover:text-foreground min-[1181px]:px-3',
+                    'flex h-9 items-center gap-[7px] rounded-md px-2.5 font-[550] whitespace-nowrap text-muted-foreground transition-colors duration-(--dur-1) hover:bg-accent hover:text-foreground xl:px-3',
                     active &&
                       'bg-card text-foreground shadow-[inset_0_0_0_1px_var(--border)] [&>svg]:text-brand',
                   )}
                 >
                   <d.icon className="size-[17px]" aria-hidden="true" />
                   {/* Icon-only below 1180px; the label stays for screen readers. */}
-                  <span className="sr-only min-[1181px]:not-sr-only">
-                    {t(`shell.dest.${d.key}`)}
-                  </span>
+                  <span className="sr-only xl:not-sr-only">{t(`shell.dest.${d.key}`)}</span>
                 </Link>
               );
             })}
           </nav>
           <button
             type="button"
-            onClick={open}
-            className="flex h-[38px] min-w-0 flex-1 items-center gap-[9px] rounded-[12px] border bg-card pr-2.5 pl-3 text-left text-muted-foreground transition-colors duration-(--dur-1) hover:border-border-strong min-[721px]:max-w-[380px] min-[721px]:min-w-[180px]"
+            onClick={() => setOpen(true)}
+            className="flex h-[38px] min-w-0 flex-1 items-center gap-[9px] rounded-[12px] border bg-card pr-2.5 pl-3 text-left text-muted-foreground transition-colors duration-(--dur-1) hover:border-border-strong md:max-w-[380px] md:min-w-[180px]"
             aria-label={t('shell.search.aria')}
             aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'}
           >
@@ -70,13 +67,13 @@ export function TopBar() {
             <span className="min-w-0 flex-1 truncate text-[13.5px]">
               {t('shell.search.placeholder')}
             </span>
-            <span className="kbd hidden min-[721px]:inline-block">{isMac ? '⌘K' : 'Ctrl K'}</span>
+            <span className="kbd hidden md:inline-block">{isMac ? '⌘K' : 'Ctrl K'}</span>
           </button>
         </div>
 
         <div className="flex items-center gap-1.5">
           <NotificationsBell />
-          <span className="hidden min-[721px]:inline-flex">
+          <span className="hidden md:inline-flex">
             <ThemeMenu />
           </span>
           <UserMenu />
@@ -98,7 +95,7 @@ function ServerIdentity() {
       ? t('shell.health.online', { version: formatVersion(server.data.version) })
       : t('shell.health.checking');
   return (
-    <span className="hidden min-w-0 flex-col gap-[3px] min-[721px]:flex">
+    <span className="hidden min-w-0 flex-col gap-[3px] md:flex">
       <span className="max-w-[220px] truncate font-display text-base leading-none font-bold tracking-[-0.02em]">
         {window.location.host}
       </span>
@@ -116,7 +113,7 @@ function NotificationsBell() {
   return (
     <Popover.Root>
       <Popover.Trigger
-        className="grid size-9 place-items-center rounded-md text-muted-foreground transition-colors duration-(--dur-1) hover:bg-accent hover:text-foreground"
+        className={buttonVariants({ variant: 'ghost-muted', size: 'icon' })}
         aria-label={t('shell.notifications.title')}
       >
         <Bell className="size-[18px]" aria-hidden="true" />

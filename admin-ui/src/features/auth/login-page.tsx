@@ -2,8 +2,8 @@ import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, LoaderCircle } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
-import { clearToken, setToken } from '@/api/session';
-import { Logo } from '@/components/logo';
+import { clearToken, setToken } from '@/api/token';
+import { LogoTile } from '@/components/logo';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -52,9 +52,7 @@ export function LoginPage({ reason }: { reason: SignedOutReason }) {
     <main className="grid min-h-dvh place-items-center px-4 py-10">
       <div className="w-full max-w-[400px]">
         <div className="mb-6 flex items-center gap-2.5">
-          <span className="grid size-[30px] place-items-center rounded-[9px] bg-primary text-brand">
-            <Logo size={20} />
-          </span>
+          <LogoTile />
           <span className="font-display text-base font-bold tracking-[-0.02em]">AudioSilo</span>
         </div>
         <div className="rounded-xl border bg-card p-6 sm:p-8">

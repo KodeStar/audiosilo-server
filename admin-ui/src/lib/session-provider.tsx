@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApiError, api, setUnauthorizedHandler } from '@/api/client';
-import { clearToken, getToken, setToken } from '@/api/session';
+import { clearToken, getToken, setToken } from '@/api/token';
 import { SessionContext, type Session, type SessionState, type SignedOutReason } from './session';
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {

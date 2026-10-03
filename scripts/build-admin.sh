@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
 #
 # Builds the admin console (admin-ui/, React + Vite) into
-# internal/web/adminui/dist, which `go build` then embeds. CI, the Dockerfile and
-# GoReleaser run the same steps; use this locally before `go build` to get the
-# real console instead of the "console not built" page.
+# internal/web/adminui/dist, which `go build` then embeds. This is the one build
+# recipe: server CI, GoReleaser, the manager's workflows and the docs screenshot
+# pipeline all call it (only the Dockerfile inlines it, for layer caching).
 #
 # Usage:
-#   scripts/build-admin.sh          # npm ci + check + build
-#   SKIP_CHECK=1 scripts/build-admin.sh   # build only (faster)
+#   scripts/build-admin.sh              # npm ci + check + build
+#   scripts/build-admin.sh --build-only # npm ci + build (release/consumer pipelines)
 #
-# Needs Node 24 (admin-ui/.nvmrc).
+# Needs Node 24 (admin-ui/.nvmrc). The build itself fails on any CSP violation.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT/admin-ui"
+cd "$(dirname "$0")/../admin-ui"
 
-npm ci
-if [ "${SKIP_CHECK:-0}" != "1" ]; then
+npm ci --no-audit --no-fund
+if [ "${1:-}" != "--build-only" ]; then
   npm run check
 fi
 npm run build
-echo "Admin console built into internal/web/adminui/dist. Now: go build ./cmd/audiosilo"

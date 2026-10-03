@@ -96,7 +96,7 @@ func TestHandlerHead(t *testing.T) {
 
 func TestHandlerNotBuilt(t *testing.T) {
 	empty := fstest.MapFS{".gitkeep": {Data: nil}}
-	if Built(empty) {
+	if built(empty) {
 		t.Fatal("Built reported a build for an empty dist")
 	}
 	for _, p := range []string{"/admin", "/admin/assets/index-abc.js"} {
@@ -104,7 +104,7 @@ func TestHandlerNotBuilt(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("GET %s = %d, want 503", p, rec.Code)
 		}
-		if !strings.Contains(rec.Body.String(), "npm --prefix admin-ui ci") {
+		if !strings.Contains(rec.Body.String(), "scripts/build-admin.sh") {
 			t.Errorf("GET %s: the not-built page should say how to build the console", p)
 		}
 		if rec.Header().Get("Content-Security-Policy") != testCSP {
@@ -123,8 +123,8 @@ func TestContentType(t *testing.T) {
 		"a.woff2": "font/woff2",
 		"a.bin":   "application/octet-stream",
 	} {
-		if got := ContentType(name); got != want {
-			t.Errorf("ContentType(%q) = %q, want %q", name, got, want)
+		if got := contentType(name); got != want {
+			t.Errorf("contentType(%q) = %q, want %q", name, got, want)
 		}
 	}
 }
@@ -175,7 +175,7 @@ func TestCSPViolationsDetector(t *testing.T) {
 // needs nothing the CSP blocks, and every /admin/ file it references exists.
 func TestEmbeddedBuild(t *testing.T) {
 	fsys := FS()
-	if !Built(fsys) {
+	if !built(fsys) {
 		t.Skip("admin console not built (run npm --prefix admin-ui run build)")
 	}
 	data, err := fs.ReadFile(fsys, "index.html")

@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Command, useCommandState } from 'cmdk';
 import { useTranslation } from 'react-i18next';
@@ -13,12 +14,13 @@ import {
   Search,
   type LucideIcon,
 } from 'lucide-react';
-import { useScanLibrary, useServerInfo, useStats } from '@/api/hooks';
+import { api } from '@/api/client';
+import { keys, useServerInfo, useStats } from '@/api/hooks';
 import { toast } from '@/lib/toast';
 import { LANGUAGES, setLanguage, type Language } from '@/i18n';
 import { useSession } from '@/lib/session';
 import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
-import { DESTINATIONS } from './destinations';
+import { CLASSIC_CONSOLE_URL, DESTINATIONS } from './destinations';
 import { usePalette } from './palette-context';
 import { paletteFilter } from './palette-filter';
 
@@ -26,7 +28,7 @@ import { paletteFilter } from './palette-filter';
 // listbox semantics, filtering and keyboard model; Base UI's Dialog supplies the
 // modal. Never render cmdk's own <Command.Dialog>: it is Radix-based and injects
 // a <style> element, which the CSP blocks (eslint forbids it, and
-// csp-runtime.test.tsx asserts the open palette leaves no <style> behind).
+// app.test.tsx asserts the open palette leaves no <style> behind).
 // Phase 1a covers navigation, settings and actions; book/people search is 2b.
 
 interface Entry {
@@ -42,14 +44,29 @@ interface Entry {
 export function CommandPalette() {
   const { t } = useTranslation();
   const { isOpen, setOpen } = usePalette();
+  return (
+    <Dialog.Root open={isOpen} onOpenChange={setOpen}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-80 bg-overlay data-closed:animate-out data-closed:fade-out-0 data-open:animate-in data-open:fade-in-0" />
+        <Dialog.Popup className="fixed top-2.5 left-1/2 z-95 w-[calc(100vw-20px)] max-w-[720px] -translate-x-1/2 overflow-hidden rounded-2xl border bg-popover text-popover-foreground shadow-overlay outline-none data-closed:animate-out data-closed:fade-out-0 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[.96] md:top-[9px]">
+          <Dialog.Title className="sr-only">{t('palette.title')}</Dialog.Title>
+          {/* The popup unmounts when closed, so the body's queries only run while it's open. */}
+          <PaletteBody close={() => setOpen(false)} />
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function PaletteBody({ close }: { close: () => void }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { signOut } = useSession();
   const { setPref } = useTheme();
   const server = useServerInfo();
   const stats = useStats();
-  const scan = useScanLibrary();
 
-  const close = () => setOpen(false);
   const go = (to: string, params?: Record<string, string | undefined>) => {
     close();
     void navigate({ to, params });
@@ -64,20 +81,24 @@ export function CommandPalette() {
       keywords: ['scan', lib.name],
       run: () => {
         close();
-        scan.mutate(lib.id, {
-          onSuccess: () =>
+        // A plain call, not a mutation callback: the palette unmounts on close,
+        // and the toast must still appear when the request settles.
+        api.scanLibrary(lib.id).then(
+          () => {
+            void queryClient.invalidateQueries({ queryKey: keys.stats });
             toast.add({
               title: t('palette.toast.rescanning', { name: lib.name }),
               description: t('palette.toast.rescanningSub'),
               type: 'info',
-            }),
-          onError: (err) =>
+            });
+          },
+          (err: Error) =>
             toast.add({
               title: t('palette.toast.rescanFailed', { name: lib.name }),
               description: err.message,
               type: 'error',
             }),
-        });
+        );
       },
     })),
     ...(server.data?.capabilities.web_player
@@ -96,7 +117,7 @@ export function CommandPalette() {
       title: t('shell.account.classic'),
       subtitle: t('palette.action.classicSub'),
       icon: History,
-      run: () => window.location.assign('/admin/classic'),
+      run: () => window.location.assign(CLASSIC_CONSOLE_URL),
     },
     {
       id: 'sign-out',
@@ -164,37 +185,29 @@ export function CommandPalette() {
   ];
 
   return (
-    <Dialog.Root open={isOpen} onOpenChange={setOpen}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-80 bg-overlay data-closed:animate-out data-closed:fade-out-0 data-open:animate-in data-open:fade-in-0" />
-        <Dialog.Popup className="fixed top-2.5 left-1/2 z-95 w-[calc(100vw-20px)] max-w-[720px] -translate-x-1/2 overflow-hidden rounded-2xl border bg-popover text-popover-foreground shadow-overlay outline-none data-closed:animate-out data-closed:fade-out-0 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[.96] min-[721px]:top-[9px]">
-          <Dialog.Title className="sr-only">{t('palette.title')}</Dialog.Title>
-          <Command label={t('palette.title')} loop filter={paletteFilter} className="flex flex-col">
-            <div className="flex h-[60px] items-center gap-3 border-b px-[18px]">
-              <Search className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <Command.Input
-                autoFocus
-                placeholder={t('palette.placeholder')}
-                className="min-w-0 flex-1 border-0 bg-transparent text-[17px] outline-none placeholder:text-subtle-foreground focus-visible:outline-none"
-              />
-              <span className="kbd hidden min-[721px]:inline-block">esc</span>
-            </div>
-            <Command.List className="max-h-[min(460px,60vh)] overflow-auto px-2 pt-1.5 pb-2.5 **:[[cmdk-group-heading]]:px-2.5 **:[[cmdk-group-heading]]:pt-3 **:[[cmdk-group-heading]]:pb-1.5 **:[[cmdk-group-heading]]:text-[11.5px] **:[[cmdk-group-heading]]:font-[650] **:[[cmdk-group-heading]]:tracking-[0.05em] **:[[cmdk-group-heading]]:text-subtle-foreground **:[[cmdk-group-heading]]:uppercase">
-              <Command.Empty className="flex flex-col items-center gap-2 px-5 py-10 text-center">
-                <EmptyState />
-              </Command.Empty>
-              <PaletteGroup heading={t('palette.group.actions')} entries={actions} />
-              <PaletteGroup heading={t('palette.group.goTo')} entries={pages} />
-              <SearchOnly>
-                <PaletteGroup heading={t('palette.group.sections')} entries={sections} />
-              </SearchOnly>
-              <PaletteGroup heading={t('palette.group.settings')} entries={settings} />
-            </Command.List>
-            <Footer />
-          </Command>
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Command label={t('palette.title')} loop filter={paletteFilter} className="flex flex-col">
+      <div className="flex h-[60px] items-center gap-3 border-b px-[18px]">
+        <Search className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <Command.Input
+          autoFocus
+          placeholder={t('palette.placeholder')}
+          className="min-w-0 flex-1 border-0 bg-transparent text-[17px] outline-none placeholder:text-subtle-foreground focus-visible:outline-none"
+        />
+        <span className="kbd hidden md:inline-block">esc</span>
+      </div>
+      <Command.List className="max-h-[min(460px,60vh)] overflow-auto px-2 pt-1.5 pb-2.5 **:[[cmdk-group-heading]]:px-2.5 **:[[cmdk-group-heading]]:pt-3 **:[[cmdk-group-heading]]:pb-1.5 **:[[cmdk-group-heading]]:text-[11.5px] **:[[cmdk-group-heading]]:font-[650] **:[[cmdk-group-heading]]:tracking-[0.05em] **:[[cmdk-group-heading]]:text-subtle-foreground **:[[cmdk-group-heading]]:uppercase">
+        <Command.Empty className="flex flex-col items-center gap-2 px-5 py-10 text-center">
+          <EmptyState />
+        </Command.Empty>
+        <PaletteGroup heading={t('palette.group.actions')} entries={actions} />
+        <PaletteGroup heading={t('palette.group.goTo')} entries={pages} />
+        <SearchOnly>
+          <PaletteGroup heading={t('palette.group.sections')} entries={sections} />
+        </SearchOnly>
+        <PaletteGroup heading={t('palette.group.settings')} entries={settings} />
+      </Command.List>
+      <Footer />
+    </Command>
   );
 }
 
@@ -211,6 +224,7 @@ function PaletteGroup({ heading, entries }: { heading: string; entries: Entry[] 
         <Command.Item
           key={e.id}
           value={e.id}
+          // Title first: paletteFilter treats keywords[0] as the title for ranking.
           keywords={[e.title, e.subtitle, ...(e.keywords ?? [])]}
           onSelect={e.run}
           className="group flex min-h-12 cursor-pointer items-center gap-3 rounded-[12px] px-2.5 py-2 data-[selected=true]:bg-accent"
@@ -266,7 +280,7 @@ function Footer() {
   const { t } = useTranslation();
   const count = useCommandState((s) => s.filtered.count);
   return (
-    <div className="hidden gap-4 border-t bg-muted px-4 py-2.5 text-xs text-muted-foreground min-[721px]:flex">
+    <div className="hidden gap-4 border-t bg-muted px-4 py-2.5 text-xs text-muted-foreground md:flex">
       <span>
         <span className="kbd">↑</span> <span className="kbd">↓</span> {t('palette.hint.move')}
       </span>

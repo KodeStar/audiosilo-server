@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { followSystemTheme, readThemePref, setThemePref, type ThemePref } from './theme';
 import { ThemeContext, type ThemeState } from './theme-context';
 
+/** One owner for the theme preference, so every menu and the palette agree. */
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [pref, setPrefState] = useState<ThemePref>(readThemePref);
-  const prefRef = useRef(pref);
-  prefRef.current = pref;
 
-  useEffect(() => followSystemTheme(() => prefRef.current), []);
+  // Track OS changes only while the preference is "system".
+  useEffect(() => (pref === 'system' ? followSystemTheme() : undefined), [pref]);
 
   const value = useMemo<ThemeState>(
     () => ({

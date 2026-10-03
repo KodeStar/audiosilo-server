@@ -183,6 +183,13 @@
   --shadow-overlay: 0 30px 80px -10px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.04);
 }
 
+/* Shelf breakpoints (STYLEGUIDE.md section 2): phones below 721px get the bottom
+   tab bar; the top-bar destinations show labels from 1181px. Used as md:/xl:. */
+@theme {
+  --breakpoint-md: 45.0625rem; /* 721px */
+  --breakpoint-xl: 73.8125rem; /* 1181px */
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

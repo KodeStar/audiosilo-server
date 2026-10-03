@@ -14,10 +14,7 @@ function isEditable(el: Element | null): boolean {
 /** The signed-in console: top bar, the routed page, mobile tab bar, ⌘K palette. */
 export function AppShell() {
   const [isOpen, setOpen] = useState(false);
-  const palette = useMemo<PaletteControls>(
-    () => ({ isOpen, setOpen, open: () => setOpen(true) }),
-    [isOpen],
-  );
+  const palette = useMemo<PaletteControls>(() => ({ isOpen, setOpen }), [isOpen]);
 
   // ⌘K / Ctrl+K toggles the palette anywhere; "/" opens it when not typing.
   useEffect(() => {

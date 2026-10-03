@@ -10,3 +10,12 @@ export function Logo({ size = 20 }: { size?: number }) {
     </svg>
   );
 }
+
+/** The mark on its ink tile: the top bar's home button and the sign-in header. */
+export function LogoTile() {
+  return (
+    <span className="grid size-[30px] place-items-center rounded-[9px] bg-primary text-brand">
+      <Logo size={20} />
+    </span>
+  );
+}

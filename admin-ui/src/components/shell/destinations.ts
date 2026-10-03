@@ -4,6 +4,12 @@ import { Activity, HeartPulse, LibraryBig, Server, Users, type LucideIcon } from
 // section 2). Home is the mark, not a destination. Labels are i18n keys:
 // `shell.dest.<key>` and `shell.section.<key>.<section>`.
 
+/**
+ * The classic console, mounted beside this one while AUDIOSILO_ADMIN_NEXT is on.
+ * Every link to it goes away at the cutover (Phase 1b).
+ */
+export const CLASSIC_CONSOLE_URL = '/admin/classic';
+
 export type DestinationKey = 'library' | 'people' | 'activity' | 'health' | 'server';
 
 export interface Destination {

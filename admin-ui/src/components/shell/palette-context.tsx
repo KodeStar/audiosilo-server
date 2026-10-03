@@ -2,7 +2,6 @@ import { createContext, useContext } from 'react';
 
 export interface PaletteControls {
   isOpen: boolean;
-  open: () => void;
   setOpen: (open: boolean) => void;
 }
 

@@ -32,11 +32,7 @@ jobs:
           cache-dependency-path: admin-ui/package-lock.json
 
       - name: Admin console (install, check, build)
-        working-directory: admin-ui
-        run: |
-          npm ci
-          npm run check
-          npm run build
+        run: scripts/build-admin.sh
 
       # ffprobe powers the duration/embedded-chapter scanner tests; without it
       # those tests t.Skip (the suite still passes), so install it to keep them live.

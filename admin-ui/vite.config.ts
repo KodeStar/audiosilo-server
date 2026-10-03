@@ -4,6 +4,8 @@ import { fileURLToPath, URL } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+// @ts-expect-error - plain .mjs build script without type declarations
+import { cspCheck } from './scripts/check-csp.mjs';
 
 // The Go server embeds this directory (internal/web/adminui, //go:embed all:dist).
 // Only its .gitkeep is committed; the build output is gitignored and produced by
@@ -27,7 +29,7 @@ const goServer = process.env.AUDIOSILO_DEV_SERVER ?? 'http://127.0.0.1:8080';
 
 export default defineConfig({
   base: '/admin/',
-  plugins: [react(), tailwindcss(), keepGitkeep],
+  plugins: [react(), tailwindcss(), keepGitkeep, cspCheck()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

@@ -1,12 +1,11 @@
 // Fails the build if the emitted console HTML would break the server's CSP
 // (`script-src 'self'; style-src 'self'`, no nonce): any inline <script> (one
 // without src), any <style> element, any style="" attribute, or an inline event
-// handler. Run by `npm run build` after `vite build`; the logic is unit-tested in
+// handler. Wired into vite.config.ts as a plugin; the logic is unit-tested in
 // src/test/check-csp.test.ts. The Go side has a matching test over the embedded
 // index.html (internal/web/adminui).
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 /** Returns a human-readable description of each CSP violation in `html`. */
 export function findInlineViolations(html) {
@@ -24,27 +23,31 @@ export function findInlineViolations(html) {
   return problems;
 }
 
-function main() {
-  const dist = fileURLToPath(new URL('../../internal/web/adminui/dist', import.meta.url));
-  const htmlFiles = readdirSync(dist).filter((f) => f.endsWith('.html'));
-  if (!htmlFiles.includes('index.html')) {
-    console.error(`check-csp: no index.html in ${dist}; did vite build run?`);
-    process.exit(1);
-  }
-  let failed = false;
-  for (const f of htmlFiles) {
-    for (const p of findInlineViolations(readFileSync(join(dist, f), 'utf8'))) {
-      console.error(`check-csp: ${f}: ${p}`);
-      failed = true;
-    }
-  }
-  if (failed) {
-    console.error(
-      'check-csp: the console must not need inline script/style (see STYLEGUIDE.md, CSP).',
-    );
-    process.exit(1);
-  }
-  console.log(`check-csp: ${htmlFiles.length} HTML file(s) clean`);
+/**
+ * Vite plugin: after the bundle is written, fail the build if any emitted HTML
+ * file needs inline script/style. Runs on every `vite build`, so it can't be
+ * skipped by building without the npm script.
+ */
+export function cspCheck() {
+  let outDir = '';
+  return {
+    name: 'csp-check',
+    apply: 'build',
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
+    closeBundle() {
+      const htmlFiles = readdirSync(outDir).filter((f) => f.endsWith('.html'));
+      if (!htmlFiles.includes('index.html'))
+        throw new Error(`csp-check: no index.html in ${outDir}`);
+      const problems = htmlFiles.flatMap((f) =>
+        findInlineViolations(readFileSync(join(outDir, f), 'utf8')).map((p) => `${f}: ${p}`),
+      );
+      if (problems.length) {
+        throw new Error(
+          `csp-check: the console must not need inline script/style (STYLEGUIDE.md section 13):\n${problems.join('\n')}`,
+        );
+      }
+    },
+  };
 }
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();

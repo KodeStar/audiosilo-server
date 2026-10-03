@@ -22,7 +22,7 @@ COPY admin-ui/package.json admin-ui/package-lock.json ./
 RUN npm ci
 COPY admin-ui/ ./
 # vite.config.ts writes to ../internal/web/adminui/dist (embedded by the Go build).
-RUN mkdir -p ../internal/web/adminui/dist && npm run build
+RUN npm run build
 
 # --- build the Go server -------------------------------------------------------
 # Pinned to the build host's platform: the binary is CGO-free, so multi-arch legs

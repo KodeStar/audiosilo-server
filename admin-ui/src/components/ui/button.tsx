@@ -17,6 +17,9 @@ const buttonVariants = cva(
         secondary:
           'bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklab,var(--secondary)_85%,var(--foreground))]',
         ghost: 'text-foreground hover:bg-accent aria-expanded:bg-accent',
+        // Top-bar icon buttons: muted until hovered or open.
+        'ghost-muted':
+          'text-muted-foreground hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground',
         destructive:
           'bg-destructive text-white hover:bg-[color-mix(in_oklab,var(--destructive)_88%,black)]',
         'destructive-outline':

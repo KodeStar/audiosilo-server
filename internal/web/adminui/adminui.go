@@ -17,8 +17,8 @@
 package adminui
 
 import (
-	"bytes"
 	"embed"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -40,38 +40,39 @@ func FS() fs.FS {
 	return sub
 }
 
-// Built reports whether fsys holds a console build (an index.html).
-func Built(fsys fs.FS) bool {
+// built reports whether fsys holds a console build (an index.html), like
+// web.HasPlayer does for the player.
+func built(fsys fs.FS) bool {
 	info, err := fs.Stat(fsys, "index.html")
 	return err == nil && !info.IsDir()
 }
 
-// contentTypes pins the MIME type of everything the build emits. Go's mime
-// table falls back to the OS registry, which on some Windows hosts maps .js to
-// text/plain - and a module script served as text/plain doesn't run.
-var contentTypes = map[string]string{
-	".html":  "text/html; charset=utf-8",
-	".js":    "text/javascript; charset=utf-8",
-	".mjs":   "text/javascript; charset=utf-8",
-	".css":   "text/css; charset=utf-8",
-	".json":  "application/json",
-	".svg":   "image/svg+xml",
-	".png":   "image/png",
-	".webp":  "image/webp",
-	".ico":   "image/x-icon",
-	".woff":  "font/woff",
-	".woff2": "font/woff2",
-	".txt":   "text/plain; charset=utf-8",
-	".map":   "application/json",
+// Go's mime table falls back to the OS registry, which on some Windows hosts maps
+// .js to text/plain - and a module script served as text/plain never runs. Pin
+// the types this server's static files use. mime is process-wide, so this also
+// covers the classic /assets/ files and the web player (internal/web imports
+// this package).
+func init() {
+	for ext, typ := range map[string]string{
+		".js":          "text/javascript; charset=utf-8",
+		".mjs":         "text/javascript; charset=utf-8",
+		".css":         "text/css; charset=utf-8",
+		".html":        "text/html; charset=utf-8",
+		".json":        "application/json",
+		".svg":         "image/svg+xml",
+		".woff":        "font/woff",
+		".woff2":       "font/woff2",
+		".webmanifest": "application/manifest+json",
+	} {
+		if err := mime.AddExtensionType(ext, typ); err != nil {
+			panic(err) // only fails on a malformed literal above
+		}
+	}
 }
 
-// ContentType returns the Content-Type to serve name with.
-func ContentType(name string) string {
-	ext := strings.ToLower(path.Ext(name))
-	if ct, ok := contentTypes[ext]; ok {
-		return ct
-	}
-	if ct := mime.TypeByExtension(ext); ct != "" {
+// contentType returns the Content-Type to serve name with.
+func contentType(name string) string {
+	if ct := mime.TypeByExtension(path.Ext(name)); ct != "" {
 		return ct
 	}
 	return "application/octet-stream"
@@ -80,11 +81,11 @@ func ContentType(name string) string {
 // Handler serves the console in fsys under /admin with the given CSP. When fsys
 // holds no build it serves the "not built" page for every request.
 func Handler(fsys fs.FS, csp string) http.Handler {
-	built := Built(fsys)
+	ok := built(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if !built {
+		if !ok {
 			notBuilt(w)
 			return
 		}
@@ -111,16 +112,22 @@ func serveFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name, cacheCo
 		http.NotFound(w, r)
 		return
 	}
-	data, err := fs.ReadFile(fsys, name)
+	f, err := fsys.Open(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", ContentType(name))
+	defer func() { _ = f.Close() }()       // read-only embedded file
+	content, isSeeker := f.(io.ReadSeeker) // embed.FS files are; avoids copying the file per request
+	if info, statErr := f.Stat(); statErr != nil || info.IsDir() || !isSeeker {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", contentType(name))
 	w.Header().Set("Cache-Control", cacheControl)
 	// Embedded files carry no modification time; ServeContent then omits
 	// Last-Modified and still handles Range and HEAD.
-	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
+	http.ServeContent(w, r, name, time.Time{}, content)
 }
 
 // notBuiltPage is what a source build without the console serves at /admin. It
@@ -132,7 +139,7 @@ const notBuiltPage = `<!doctype html>
 <body>
 <h1>The admin console isn't built</h1>
 <p>This server was compiled without the admin console. Build it, then rebuild the server:</p>
-<pre>npm --prefix admin-ui ci &amp;&amp; npm --prefix admin-ui run build
+<pre>scripts/build-admin.sh
 go build ./cmd/audiosilo</pre>
 <p>Release binaries and the Docker image include it. Until then the classic console is at <a href="/admin/classic">/admin/classic</a>.</p>
 </body>

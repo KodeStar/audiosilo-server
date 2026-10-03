@@ -85,15 +85,13 @@ func Register(mux *http.ServeMux, webDir string, adminNext bool) error {
 	// explicit content type because Go's mime table doesn't know ".webmanifest".
 	mux.HandleFunc("GET /sw.js", rootAsset(sub, "sw.js", "text/javascript; charset=utf-8", true))
 	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(sub, "manifest.webmanifest", "application/manifest+json", false))
+	var admin http.Handler = page(sub, "admin.html")
 	if adminNext {
-		next := adminui.Handler(adminui.FS(), contentSecurityPolicy)
-		mux.Handle("GET /admin", next)
-		mux.Handle("GET /admin/", next)
-		mux.HandleFunc("GET /admin/classic", page(sub, "admin.html"))
-	} else {
-		mux.HandleFunc("GET /admin", page(sub, "admin.html"))
-		mux.HandleFunc("GET /admin/", page(sub, "admin.html"))
+		mux.Handle("GET /admin/classic", admin)
+		admin = adminui.Handler(adminui.FS(), contentSecurityPolicy)
 	}
+	mux.Handle("GET /admin", admin)
+	mux.Handle("GET /admin/", admin)
 	mux.HandleFunc("GET /connect", page(sub, "index.html"))
 	mux.HandleFunc("GET /connect/", page(sub, "index.html"))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {

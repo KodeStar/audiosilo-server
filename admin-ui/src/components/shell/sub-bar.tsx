@@ -17,8 +17,8 @@ export function SubBar() {
 
   return (
     <div className="border-t border-topbar-border">
-      <div className="mx-auto flex h-[46px] max-w-[1440px] items-center gap-4 px-4 min-[721px]:h-12 min-[721px]:px-6">
-        <h1 className="hidden text-[15px] font-bold tracking-[-0.01em] whitespace-nowrap min-[721px]:block">
+      <div className="mx-auto flex h-[46px] max-w-[1440px] items-center gap-4 px-4 md:h-12 md:px-6">
+        <h1 className="hidden text-[15px] font-bold tracking-[-0.01em] whitespace-nowrap md:block">
           {t(`shell.dest.${dest.key}`)}
         </h1>
         <nav

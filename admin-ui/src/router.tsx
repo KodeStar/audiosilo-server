@@ -18,40 +18,17 @@ const homeRoute = createRoute({
   component: OverviewPage,
 });
 
-const libraryRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/library/{-$section}',
-  component: () => <ComingSoon destination={DESTINATIONS[0]} />,
-});
-const peopleRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/people/{-$section}',
-  component: () => <ComingSoon destination={DESTINATIONS[1]} />,
-});
-const activityRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/activity/{-$section}',
-  component: () => <ComingSoon destination={DESTINATIONS[2]} />,
-});
-const healthRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/health/{-$section}',
-  component: () => <ComingSoon destination={DESTINATIONS[3]} />,
-});
-const serverRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/server/{-$section}',
-  component: () => <ComingSoon destination={DESTINATIONS[4]} />,
-});
+// One placeholder route per destination until its phase builds real screens;
+// later phases replace a destination's entry with its own routes.
+const destinationRoutes = DESTINATIONS.map((d) =>
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: d.route,
+    component: () => <ComingSoon destination={d} />,
+  }),
+);
 
-const routeTree = rootRoute.addChildren([
-  homeRoute,
-  libraryRoute,
-  peopleRoute,
-  activityRoute,
-  healthRoute,
-  serverRoute,
-]);
+const routeTree = rootRoute.addChildren([homeRoute, ...destinationRoutes]);
 
 export function createAppRouter(
   opts: { history?: Parameters<typeof createRouter>[0]['history'] } = {},
