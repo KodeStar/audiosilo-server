@@ -21,9 +21,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       pref,
       resolved,
       setPref: (p) => {
-        setThemePref(p);
+        setResolved(setThemePref(p));
         setPrefState(p);
-        setResolved(resolveTheme(p));
       },
     }),
     [pref, resolved],

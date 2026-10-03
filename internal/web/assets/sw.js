@@ -64,9 +64,13 @@ self.addEventListener("fetch", (e) => {
       e.respondWith(
         fetch(req)
           .then((res) => {
-            if (res && res.ok) {
+            // Only an HTML page is a shell: a navigation straight to a hashed
+            // asset or theme-init.js must not overwrite it. waitUntil keeps the
+            // worker alive until the write lands (respondWith settles first).
+            const type = (res && res.headers.get("Content-Type")) || "";
+            if (res && res.ok && type.startsWith("text/html")) {
               const copy = res.clone();
-              caches.open(VERSION).then((c) => c.put(shell, copy));
+              e.waitUntil(caches.open(VERSION).then((c) => c.put(shell, copy)));
             }
             return res;
           })
@@ -83,7 +87,7 @@ self.addEventListener("fetch", (e) => {
         .then((res) => {
           if (res && res.ok) {
             const copy = res.clone();
-            caches.open(VERSION).then((c) => c.put(req, copy));
+            e.waitUntil(caches.open(VERSION).then((c) => c.put(req, copy)));
           }
           return res;
         })

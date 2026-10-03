@@ -24,13 +24,17 @@ export function resolveTheme(pref: ThemePref): 'light' | 'dark' {
   return pref;
 }
 
-function applyTheme(pref: ThemePref) {
-  document.documentElement.setAttribute('data-theme', resolveTheme(pref));
+/** Applies `pref` to <html data-theme> and returns what it resolved to. */
+function applyTheme(pref: ThemePref): 'light' | 'dark' {
+  const resolved = resolveTheme(pref);
+  document.documentElement.setAttribute('data-theme', resolved);
+  return resolved;
 }
 
-export function setThemePref(pref: ThemePref) {
+/** Stores and applies `pref`; returns the theme now on screen. */
+export function setThemePref(pref: ThemePref): 'light' | 'dark' {
   writeStorage(THEME_KEY, pref);
-  applyTheme(pref);
+  return applyTheme(pref);
 }
 
 /**
@@ -40,10 +44,7 @@ export function setThemePref(pref: ThemePref) {
 export function followSystemTheme(onResolved: (theme: 'light' | 'dark') => void): () => void {
   if (typeof window.matchMedia !== 'function') return () => {};
   const mq = matchMedia('(prefers-color-scheme: dark)');
-  const onChange = () => {
-    applyTheme('system');
-    onResolved(resolveTheme('system'));
-  };
+  const onChange = () => onResolved(applyTheme('system'));
   mq.addEventListener('change', onChange);
   return () => mq.removeEventListener('change', onChange);
 }
