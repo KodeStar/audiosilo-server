@@ -1,6 +1,7 @@
 import {
   ApiError,
   api,
+  bookQuery,
   fetchCover,
   setForbiddenHandler,
   setUnauthorizedHandler,
@@ -154,5 +155,44 @@ describe('api client', () => {
     const url = toDataUrl(big, 'image/png');
     expect(url.startsWith('data:image/png;base64,QUFB')).toBe(true);
     expect(atob(url.split(',')[1])).toHaveLength(200_000);
+  });
+
+  it('builds catalog queries: unset values dropped, repeatable values repeated', () => {
+    expect(bookQuery({})).toBe('');
+    expect(
+      bookQuery({ q: 'way of', format: ['m4b', 'mp3'], matched: false, author: '', limit: 60 }),
+    ).toBe('?q=way+of&format=m4b&format=mp3&matched=false&limit=60');
+  });
+
+  it('sends the match search with the path and only the given terms', async () => {
+    const calls = mockFetch({ 'GET /admin/libraries/1/book/match': { body: { candidates: [] } } });
+    await api.matchBook(1, 'A/B & C', { asin: 'B003P2WO5E' });
+    expect(Object.fromEntries(calls[0].query)).toEqual({ path: 'A/B & C', asin: 'B003P2WO5E' });
+  });
+
+  it('uploads a cover as the raw image with its type, not JSON', async () => {
+    mockFetch({ 'PUT /admin/libraries/1/cover': { body: { status: 'cover set' } } });
+    const image = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: 'image/jpeg' });
+    await api.setCover(1, 'A/B', image);
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toBe('/api/v1/admin/libraries/1/cover?path=A%2FB');
+    expect(init?.body).toBe(image);
+    expect((init?.headers as Record<string, string>)['Content-Type']).toBe('image/jpeg');
+  });
+
+  it('carries the field a refused book edit names', async () => {
+    mockFetch({
+      'PATCH /admin/libraries/1/book': {
+        status: 400,
+        body: {
+          error: 'asin: must be 10 letters or digits',
+          code: 'invalid_override',
+          field: 'asin',
+        },
+      },
+    });
+    const err = await api.editBook(1, 'A/B', { set: { asin: 'x' } }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 400, code: 'invalid_override', field: 'asin' });
   });
 });

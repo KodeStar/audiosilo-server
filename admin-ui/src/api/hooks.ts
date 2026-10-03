@@ -205,8 +205,12 @@ export function useDirs(path: string) {
   return useQuery({ queryKey: keys.dirs(path), queryFn: () => api.dirs(path), retry: false });
 }
 
-export function useUsers() {
-  return useQuery({ queryKey: keys.users, queryFn: () => api.users().then((r) => r.users ?? []) });
+export function useUsers(enabled = true) {
+  return useQuery({
+    queryKey: keys.users,
+    queryFn: () => api.users().then((r) => r.users ?? []),
+    enabled,
+  });
 }
 
 export function useUser(id: number) {
@@ -220,10 +224,11 @@ export function useInvites() {
   });
 }
 
-export function useShares() {
+export function useShares(enabled = true) {
   return useQuery({
     queryKey: keys.shares,
     queryFn: () => api.shares().then((r) => r.shares ?? []),
+    enabled,
   });
 }
 

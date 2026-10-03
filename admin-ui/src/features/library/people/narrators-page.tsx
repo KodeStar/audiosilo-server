@@ -1,6 +1,6 @@
-import { Page } from '@/components/page';
+import { PeopleScreen } from './people-screen';
 
-/** Placeholder until this screen is built (Phase 2b). */
+/** Library > Narrators: everyone credited as a narrator, most hours first. */
 export function NarratorsPage() {
-  return <Page>NarratorsPage</Page>;
+  return <PeopleScreen field="narrator" />;
 }

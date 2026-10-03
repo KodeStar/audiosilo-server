@@ -8,6 +8,13 @@ import type { AdminLibrary, FolderMode, FsEntry } from '@/api/types';
 import { FolderBrowser } from '@/components/folder-browser';
 import { Dialog, DialogBody, DialogContent } from '@/components/ui/dialog';
 import { NativeSelect } from '@/components/ui/native-select';
+import {
+  CHOICE_TITLE,
+  FOLDER_CHOICES,
+  choiceOf,
+  modeOf,
+  type FolderChoice,
+} from '@/features/library/folders/folder-modes';
 import { errorMessage, toastError } from '@/lib/errors';
 import { libraryCrumbs } from '@/lib/paths';
 import { toast } from '@/lib/toast';
@@ -86,14 +93,16 @@ function DetectionBrowser({ library }: { library: AdminLibrary }) {
         const entry = folders.find((e) => e.path === row.path)!;
         return (
           <NativeSelect
-            className="w-[170px]"
+            className="w-[190px]"
             aria-label={t('detect.modeAria', { name: row.name })}
-            value={entry.override ?? ''}
-            onChange={(e) => void setMode(entry, (e.target.value || null) as FolderMode | null)}
+            value={choiceOf(entry.override)}
+            onChange={(e) => void setMode(entry, modeOf(e.target.value as FolderChoice))}
           >
-            <option value="">{t('detect.auto')}</option>
-            <option value="book">{t('detect.oneBook')}</option>
-            <option value="collection">{t('detect.separate')}</option>
+            {FOLDER_CHOICES.map((c) => (
+              <option key={c} value={c}>
+                {t(CHOICE_TITLE[c])}
+              </option>
+            ))}
           </NativeSelect>
         );
       }}

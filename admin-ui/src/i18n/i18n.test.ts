@@ -1,5 +1,15 @@
 import { DESTINATIONS } from '@/components/shell/destinations';
-import { LANGUAGES, resources } from '.';
+import { LANGUAGES } from '.';
+
+// Every locale file, as the console would load it (non-English ones are lazy chunks).
+const resources = Object.fromEntries(
+  Object.entries(
+    import.meta.glob<Record<string, string>>('./locales/*.json', {
+      eager: true,
+      import: 'default',
+    }),
+  ).map(([file, dict]) => [file.replace(/^.*\/(\w+)\.json$/, '$1'), dict]),
+) as Record<string, Record<string, string>>;
 
 // Every language must carry every English key (the DoD: others may lag in
 // quality, never go missing), with the same {{placeholders}}. The only extra
@@ -9,7 +19,7 @@ const en: Record<string, string> = resources.en;
 const placeholders = (s: string) => [...s.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort();
 
 describe.each(Object.keys(LANGUAGES))('locale %s', (lang) => {
-  const dict: Record<string, string> = resources[lang as keyof typeof resources];
+  const dict: Record<string, string> = resources[lang];
 
   it('has every English key, non-empty', () => {
     const missing = Object.keys(en).filter((k) => !dict[k]?.trim());

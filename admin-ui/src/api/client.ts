@@ -220,7 +220,13 @@ export const api = {
   /** Revokes the stored session, or `token` when given (never touching storage). */
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),
-  stats: () => request<AdminStats>('GET', '/admin/stats'),
+  /** Lists come back as null when empty (a fresh server: nobody has listened yet). */
+  stats: () =>
+    request<AdminStats>('GET', '/admin/stats').then((s) => ({
+      ...s,
+      libraries: s.libraries ?? [],
+      listening: s.listening ?? [],
+    })),
   settings: () => request<AdminSettings>('GET', '/admin/settings'),
   scanLibrary: (id: number) => request<{ status: string }>('POST', `/admin/libraries/${id}/scan`),
   updateSettings: (patch: { metadata: { enabled: boolean } }) =>

@@ -1,17 +1,16 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { readStorage, writeStorage } from '@/lib/storage';
-import de from './locales/de.json';
 import en from './locales/en.json';
-import es from './locales/es.json';
-import fr from './locales/fr.json';
-import it from './locales/it.json';
-import pt from './locales/pt.json';
 
 // Flat dotted keys (`home.greeting.morning`), one JSON file per language.
 // English is the base and the fallback; every other file must carry the same
 // key set (i18n.test.ts enforces it). The language choice shares the connect
 // page's storage key, so a choice made on either carries across.
+//
+// Only English ships in the entry chunk; another language is its own chunk,
+// loaded when chosen (or detected), so the first paint doesn't carry five
+// languages nobody reads. main.tsx waits for `i18nReady` before rendering.
 
 export const LANGUAGES = {
   en: 'English',
@@ -24,19 +23,16 @@ export const LANGUAGES = {
 
 export type Language = keyof typeof LANGUAGES;
 
-export const resources = { en, es, fr, de, pt, it } as const;
+const loaders = import.meta.glob<Record<string, string>>(
+  ['./locales/*.json', '!./locales/en.json'],
+  { import: 'default' },
+);
 
-// TEMPORARY (Phase 2b, parallel screen work): <lang>.<area>.json fragments are
-// merged into each language so several screens can add strings without editing
-// the same file. They are folded into <lang>.json, and this loader removed,
-// before the phase's PR.
-const fragments = import.meta.glob<Record<string, string>>('./locales/*.*.json', {
-  eager: true,
-  import: 'default',
-});
-for (const [file, dict] of Object.entries(fragments)) {
-  const lang = file.split('/').pop()!.split('.')[0] as keyof typeof resources;
-  Object.assign(resources[lang], dict);
+/** Loads a language's strings into i18next (English is always there). */
+async function loadLanguage(lang: Language): Promise<void> {
+  if (i18n.hasResourceBundle(lang, 'translation')) return;
+  const load = loaders[`./locales/${lang}.json`];
+  if (load) i18n.addResourceBundle(lang, 'translation', await load());
 }
 
 const LANG_KEY = 'audiosilo.lang';
@@ -57,20 +53,30 @@ function detectLanguage(): Language {
 
 export function setLanguage(lang: Language) {
   writeStorage(LANG_KEY, lang);
-  void i18n.changeLanguage(lang);
+  void loadLanguage(lang).then(() => i18n.changeLanguage(lang));
 }
 
+const initial = detectLanguage();
+
 void i18n.use(initReactI18next).init({
-  resources: Object.fromEntries(
-    Object.entries(resources).map(([lng, translation]) => [lng, { translation }]),
-  ),
-  lng: detectLanguage(),
+  resources: { en: { translation: en } },
+  // English until the detected language has loaded (i18nReady), so the first
+  // render never shows keys.
+  lng: 'en',
   fallbackLng: 'en',
   keySeparator: false,
   nsSeparator: false,
   interpolation: { escapeValue: false }, // React escapes
   returnNull: false,
 });
+
+/**
+ * Settles once the detected language's strings are loaded and active (at once
+ * for English). A failed chunk load leaves the console in English.
+ */
+export const i18nReady: Promise<unknown> = loadLanguage(initial)
+  .then(() => i18n.changeLanguage(initial))
+  .catch(() => undefined);
 
 i18n.on('languageChanged', (lng) => {
   document.documentElement.lang = lng;

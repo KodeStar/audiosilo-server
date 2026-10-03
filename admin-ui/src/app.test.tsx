@@ -170,6 +170,22 @@ describe('overview', () => {
     ).toBeInTheDocument();
   });
 
+  // A fresh server, where nobody has listened yet, sends its lists as null.
+  it('renders when the server sends empty lists as null', async () => {
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/stats': {
+          body: { ...stats(), listening: null, libraries: null } as unknown as ReturnType<
+            typeof stats
+          >,
+        },
+      }),
+    );
+    renderApp();
+    expect(await screen.findByText('Nobody is listening right now.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
+  });
+
   it('shows an error with a retry when stats fail', async () => {
     mockFetch(
       signedInRoutes({
@@ -222,7 +238,9 @@ describe('command palette', () => {
     renderApp();
     await screen.findByRole('heading', { level: 1, name: /chris\.$/ });
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
-    const input = await screen.findByPlaceholderText('Search pages, settings, or type a command');
+    const input = await screen.findByPlaceholderText(
+      'Search books, people, settings, or type a command',
+    );
     expect(screen.getByRole('option', { name: /Rescan Fiction/ })).toBeInTheDocument();
     const user = userEvent.setup();
     await user.type(input, 'dark theme');

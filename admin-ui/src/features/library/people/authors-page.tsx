@@ -1,6 +1,6 @@
-import { Page } from '@/components/page';
+import { PeopleScreen } from './people-screen';
 
-/** Placeholder until this screen is built (Phase 2b). */
+/** Library > Authors: everyone credited as an author, most books first. */
 export function AuthorsPage() {
-  return <Page>AuthorsPage</Page>;
+  return <PeopleScreen field="author" />;
 }

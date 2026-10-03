@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
+import { useState } from 'react';
 import { Command, useCommandState } from 'cmdk';
 import { useTranslation } from 'react-i18next';
 import { Dialog } from '@base-ui/react/dialog';
@@ -24,23 +25,31 @@ import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
 import { DESTINATIONS } from './destinations';
 import { usePalette } from './palette-context';
 import { paletteFilter } from './palette-filter';
+import { usePaletteSearch } from './palette-search';
 
 // The ⌘K palette (STYLEGUIDE.md "Command palette"). cmdk supplies the combobox +
 // listbox semantics, filtering and keyboard model; Base UI's Dialog supplies the
 // modal. Never render cmdk's own <Command.Dialog>: it is Radix-based and injects
 // a <style> element, which the CSP blocks (eslint forbids it, and
 // app.test.tsx asserts the open palette leaves no <style> behind).
-// Phase 1a covers navigation, settings and actions; book/people search is 2b.
+// Typing searches books (server full text), people, authors, series, narrators
+// and shares too (palette-search.tsx).
 
-interface Entry {
+export interface PaletteEntry {
   id: string;
   title: string;
   subtitle: string;
-  icon: LucideIcon;
+  /** The 36px leading tile: an icon, or a visual of its own (a cover, a monogram). */
+  icon?: LucideIcon;
+  visual?: React.ReactNode;
   /** Extra words cmdk matches on but doesn't show. */
   keywords?: string[];
+  /** Shown whatever cmdk's filter says (entries a search already filtered). */
+  forceMount?: boolean;
   run: () => void;
 }
+
+type Entry = PaletteEntry;
 
 export function CommandPalette() {
   const { t } = useTranslation();
@@ -67,6 +76,7 @@ function PaletteBody({ close }: { close: () => void }) {
   const { setPref } = useTheme();
   const server = useServerInfo();
   const stats = useStats();
+  const [search, setSearch] = useState('');
 
   const go = (
     to: string,
@@ -76,6 +86,7 @@ function PaletteBody({ close }: { close: () => void }) {
     close();
     void navigate({ to, params, search });
   };
+  const found = usePaletteSearch(search, go);
 
   const actions: Entry[] = [
     {
@@ -195,23 +206,38 @@ function PaletteBody({ close }: { close: () => void }) {
         <Search className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <Command.Input
           autoFocus
+          value={search}
+          onValueChange={setSearch}
           placeholder={t('palette.placeholder')}
           className="min-w-0 flex-1 border-0 bg-transparent text-[17px] outline-none placeholder:text-subtle-foreground focus-visible:outline-none"
         />
         <span className="kbd hidden md:inline-block">esc</span>
       </div>
       <Command.List className="max-h-[min(460px,60vh)] overflow-auto px-2 pt-1.5 pb-2.5 **:[[cmdk-group-heading]]:px-2.5 **:[[cmdk-group-heading]]:pt-3 **:[[cmdk-group-heading]]:pb-1.5 **:[[cmdk-group-heading]]:text-[11.5px] **:[[cmdk-group-heading]]:font-[650] **:[[cmdk-group-heading]]:tracking-[0.05em] **:[[cmdk-group-heading]]:text-subtle-foreground **:[[cmdk-group-heading]]:uppercase">
-        <Command.Empty className="flex flex-col items-center gap-2 px-5 py-10 text-center">
-          <EmptyState />
-        </Command.Empty>
+        {/* cmdk counts only the entries its filter passed; content results are
+            force-mounted, so "nothing matches" is only true without them. */}
+        {found.count === 0 ? (
+          <Command.Empty className="flex flex-col items-center gap-2 px-5 py-10 text-center">
+            <EmptyState />
+          </Command.Empty>
+        ) : null}
         <PaletteGroup heading={t('palette.group.actions')} entries={actions} />
+        {found.searchingBooks ? (
+          <Command.Loading className="px-2.5 py-2 text-[12.5px] text-muted-foreground">
+            {t('palette.searching')}
+          </Command.Loading>
+        ) : null}
+        {found.groups.map((g) => (
+          <PaletteGroup key={g.heading} heading={g.heading} entries={g.entries} />
+        ))}
         <PaletteGroup heading={t('palette.group.goTo')} entries={pages} />
         <SearchOnly>
           <PaletteGroup heading={t('palette.group.sections')} entries={sections} />
         </SearchOnly>
         <PaletteGroup heading={t('palette.group.settings')} entries={settings} />
+        <PaletteGroup heading={t('palette.group.search')} entries={found.fallback} />
       </Command.List>
-      <Footer />
+      <Footer extra={found.count} />
     </Command>
   );
 }
@@ -224,19 +250,25 @@ function SearchOnly({ children }: { children: React.ReactNode }) {
 function PaletteGroup({ heading, entries }: { heading: string; entries: Entry[] }) {
   if (entries.length === 0) return null;
   return (
-    <Command.Group heading={heading}>
+    // cmdk hides a group none of whose items pass its filter; a group of
+    // force-mounted (already filtered) entries must stay.
+    <Command.Group heading={heading} forceMount={entries.some((e) => e.forceMount)}>
       {entries.map((e) => (
         <Command.Item
           key={e.id}
           value={e.id}
           // Title first: paletteFilter treats keywords[0] as the title for ranking.
           keywords={[e.title, e.subtitle, ...(e.keywords ?? [])]}
+          forceMount={e.forceMount}
           onSelect={e.run}
           className="group flex min-h-12 cursor-pointer items-center gap-3 rounded-[12px] px-2.5 py-2 data-[selected=true]:bg-accent"
         >
-          <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-            <e.icon className="size-[17px]" aria-hidden="true" />
-          </span>
+          {e.visual ??
+            (e.icon ? (
+              <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                <e.icon className="size-[17px]" aria-hidden="true" />
+              </span>
+            ) : null)}
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate text-sm font-semibold">
               <Highlight text={e.title} />
@@ -281,9 +313,10 @@ function EmptyState() {
   );
 }
 
-function Footer() {
+/** `extra`: force-mounted results, which cmdk's count leaves out. */
+function Footer({ extra }: { extra: number }) {
   const { t } = useTranslation();
-  const count = useCommandState((s) => s.filtered.count);
+  const count = useCommandState((s) => s.filtered.count) + extra;
   return (
     <div className="hidden gap-4 border-t bg-muted px-4 py-2.5 text-xs text-muted-foreground md:flex">
       <span>
