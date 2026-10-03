@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Split } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useBrowse } from '@/api/hooks';
+import { keys, noteScanStarted, useBrowse } from '@/api/hooks';
 import type { AdminLibrary, FolderMode, FsEntry } from '@/api/types';
 import { FolderBrowser } from '@/components/folder-browser';
 import { Dialog, DialogBody, DialogContent } from '@/components/ui/dialog';
@@ -52,7 +52,7 @@ function DetectionBrowser({ library }: { library: AdminLibrary }) {
     try {
       await api.setFolderOverride(library.id, entry.path, mode);
       void qc.invalidateQueries({ queryKey: keys.browse(library.id, path) });
-      void qc.invalidateQueries({ queryKey: keys.libraries }); // the rescan it started
+      noteScanStarted(qc, library.id); // the rescan it started
       toast.add({
         title: t('detect.toast.saved', { name: entry.name }),
         description: t('detect.toast.savedBody', { library: library.name }),

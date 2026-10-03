@@ -33,6 +33,12 @@ describe('api client', () => {
     expect(forbidden).toHaveBeenCalledTimes(1);
   });
 
+  it('treats a successful non-JSON body (a proxy page) as no data, not a failure', async () => {
+    setToken('tok-1');
+    mockFetch({ 'DELETE /admin/libraries/1': { raw: '<html>ok</html>' } });
+    await expect(api.deleteLibrary(1)).resolves.toBeUndefined();
+  });
+
   it('sends paths as a query parameter, never in the URL path', async () => {
     setToken('tok-1');
     const calls = mockFetch({ 'PUT /admin/libraries/1/folder-override': { body: {} } });

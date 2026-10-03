@@ -12,7 +12,7 @@ export interface MockRequest {
 export type MockReply =
   | { status?: number; body?: unknown; raw?: BodyInit; headers?: Record<string, string> }
   | 'network-error';
-export type MockRoute = MockReply | ((req: MockRequest) => MockReply);
+export type MockRoute = MockReply | ((req: MockRequest) => MockReply | Promise<MockReply>);
 
 /**
  * Stubs global fetch with a route table keyed "METHOD /path". Unmatched calls
@@ -36,7 +36,8 @@ export function mockFetch(routes: Record<string, MockRoute>) {
       console.error(`unmocked fetch: ${req.method} ${req.path}`);
       return new Response(JSON.stringify({ error: 'not mocked' }), { status: 404 });
     }
-    const reply = typeof route === 'function' ? route(req) : route;
+    // A route may answer later (a Promise), to test replies arriving out of order.
+    const reply = await (typeof route === 'function' ? route(req) : route);
     if (reply === 'network-error') throw new TypeError('Failed to fetch');
     const status = reply.status ?? 200;
     if (reply.raw !== undefined) return new Response(reply.raw, { status, headers: reply.headers });

@@ -492,7 +492,7 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 		return err
 	}
 	name := "Library: " + lib.Name
-	share, err := c.shareByName(ctx, name)
+	share, err := c.wholeLibraryShare(ctx, libraryID, name)
 	if errors.Is(err, ErrNotFound) {
 		share, err = c.CreateShare(ctx, Share{Name: name, Description: "Whole library", ReadOnly: false})
 	}
@@ -514,6 +514,28 @@ func (c *Catalog) GrantWholeLibrary(ctx context.Context, userID, libraryID int64
 		return err
 	}
 	return c.GrantShare(ctx, userID, share.ID)
+}
+
+// wholeLibraryShare finds the share that grants libraryID whole: the one marked
+// with it (which survives a library rename), else an unmarked share named after
+// it (made before whole_library_id existed). A same-named share marked for
+// another library is never reused - adding this library's rule to it would hand
+// this library to everyone holding that one.
+func (c *Catalog) wholeLibraryShare(ctx context.Context, libraryID int64, name string) (*Share, error) {
+	var id int64
+	err := c.db.QueryRowContext(ctx,
+		`SELECT id FROM shares WHERE whole_library_id = ? ORDER BY id LIMIT 1`, libraryID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = c.db.QueryRowContext(ctx,
+			`SELECT id FROM shares WHERE name = ? AND whole_library_id IS NULL`, name).Scan(&id)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c.GetShare(ctx, id)
 }
 
 func (c *Catalog) shareByName(ctx context.Context, name string) (*Share, error) {

@@ -106,7 +106,11 @@ async function request<T>(
   explicitToken?: string,
 ): Promise<T> {
   const text = await (await send(path, { method, body, explicitToken })).text();
-  return (text ? JSON.parse(text) : undefined) as T;
+  try {
+    return (text ? JSON.parse(text) : undefined) as T;
+  } catch {
+    return undefined as T; // a 2xx with a non-JSON body (a proxy page): nothing to decode
+  }
 }
 
 /** What a 401 or 403 on the stored session means for the app (see the setters). */

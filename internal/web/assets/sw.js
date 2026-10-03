@@ -72,7 +72,26 @@ self.addEventListener("fetch", (e) => {
     return; // other navigations pass straight through to the network
   }
 
-  // Static assets: stale-while-revalidate.
+  // The console's unhashed files (theme-init.js) change in place with a release
+  // and are served no-cache: network-first, the cache only when offline. Running
+  // a stale copy once after an upgrade would pair old code with a new page.
+  if (url.pathname.startsWith("/admin/") && !url.pathname.startsWith("/admin/assets/")) {
+    e.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            e.waitUntil(caches.open(VERSION).then((c) => c.put(req, copy)));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req)),
+    );
+    return;
+  }
+
+  // Everything else static (hashed console assets, icons, the manifest):
+  // stale-while-revalidate.
   e.respondWith(
     caches.match(req).then((cached) => {
       const net = fetch(req)

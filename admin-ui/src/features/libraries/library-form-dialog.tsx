@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Database, FolderSearch } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateLibraries, useDirs, useLibraries } from '@/api/hooks';
+import { invalidateLibraries, noteScanStarted, useDirs, useLibraries } from '@/api/hooks';
 import type { AdminLibrary } from '@/api/types';
 import { FolderBrowser } from '@/components/folder-browser';
 import { Button } from '@/components/ui/button';
@@ -74,8 +74,9 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
     const lib = { name: v.name, root: v.folder };
     try {
       // Either way the server starts a scan, which the refetched list shows.
-      await (library ? api.updateLibrary(library.id, lib) : api.createLibrary(lib));
+      const saved = await (library ? api.updateLibrary(library.id, lib) : api.createLibrary(lib));
       invalidateLibraries(qc);
+      noteScanStarted(qc, saved.id);
       toast.add({
         title: t(library ? 'libraries.toast.saved' : 'libraries.toast.added', { name: v.name }),
         description: t(library ? 'libraries.toast.savedBody' : 'libraries.toast.addedBody'),
@@ -175,11 +176,13 @@ function ServerFolderPicker({
   const [path, setPath] = useState(start);
   const dirs = useDirs(path);
   const libraries = useLibraries();
-  // Re-root at "/" when the typed folder can't be listed, so the picker never dead-ends.
+  // Re-root at "/" when the typed folder (where the picker opened) can't be
+  // listed, so it never dead-ends. A folder opened from the list that can't be
+  // read keeps its error on screen, with the breadcrumb to step back.
   const failed = dirs.isError;
   useEffect(() => {
-    if (failed && path !== '') setPath('');
-  }, [failed, path]);
+    if (failed && path !== '' && path === start) setPath('');
+  }, [failed, path, start]);
 
   const inUse = new Map(
     (libraries.data ?? []).filter((l) => l.id !== editingId).map((l) => [l.root, l.name]),

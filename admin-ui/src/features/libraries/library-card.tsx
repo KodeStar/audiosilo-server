@@ -121,15 +121,17 @@ export function LibraryCard({
             <h2 id={`library-${l.id}-name`} className="h2 [overflow-wrap:anywhere]">
               {l.name}
             </h2>
-            {!l.available ? (
-              <Badge variant="destructive">
-                <Unplug aria-hidden="true" />
-                {t('libraries.status.unavailable')}
-              </Badge>
-            ) : running ? (
+            {/* A running scan wins: a Retry's scan is the newer news than the
+                availability probe, which the server caches for a few seconds. */}
+            {running ? (
               <Badge variant="brand">
                 <RefreshCw className="animate-spin" aria-hidden="true" />
                 {t('libraries.status.scanning')}
+              </Badge>
+            ) : !l.available ? (
+              <Badge variant="destructive">
+                <Unplug aria-hidden="true" />
+                {t('libraries.status.unavailable')}
               </Badge>
             ) : (
               <span className="inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground">

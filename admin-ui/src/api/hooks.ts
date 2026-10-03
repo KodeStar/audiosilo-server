@@ -80,14 +80,35 @@ export function useOfflineLibraries() {
   return (useLibraries().data ?? []).filter((l) => !l.available);
 }
 
+/** Scans this console started, by library id, with when (see noteScanStarted). */
+const startedScans = new Map<number, number>();
+
+/** How long a started scan is still reported as finished (after that it's old news). */
+const STARTED_SCAN_TTL_MS = 2 * 60_000;
+
 /**
- * Calls `onFinish` when a library's scan ends (running → not running between two
- * polls of the list), after refetching what a scan changes: the overview's
+ * Records that this console started a scan of a library, then refetches the
+ * list. The server reports the scan running before answering, but a small
+ * library can finish before the list is fetched again, so useScanFinished
+ * reports a started scan even if no poll ever saw it running.
+ */
+export function noteScanStarted(qc: QueryClient, libraryId: number) {
+  startedScans.set(libraryId, Date.now());
+  // A poll already in flight carries the state from before the scan: drop it.
+  void qc.cancelQueries({ queryKey: keys.libraries });
+  void qc.invalidateQueries({ queryKey: keys.libraries });
+}
+
+/**
+ * Calls `onFinish` when a library's scan ends (seen running, or started here,
+ * and now not running), after refetching what a scan changes: the overview's
  * counts and that library's newest books.
  */
 export function useScanFinished(onFinish: (library: AdminLibrary) => void) {
   const qc = useQueryClient();
-  const libraries = useLibraries().data;
+  // dataUpdatedAt, not just data: a refetch that changed nothing keeps the same
+  // data object, and a scan started here may have been over by then.
+  const { data: libraries, dataUpdatedAt } = useLibraries();
   const finished = useRef(onFinish);
   useEffect(() => {
     finished.current = onFinish;
@@ -96,14 +117,18 @@ export function useScanFinished(onFinish: (library: AdminLibrary) => void) {
   useEffect(() => {
     if (!libraries) return;
     for (const l of libraries) {
-      if (running.current.has(l.id) && !l.scan.running) {
+      const started = startedScans.get(l.id);
+      const startedHere = started !== undefined && Date.now() - started < STARTED_SCAN_TTL_MS;
+      if (l.scan.running) continue;
+      if (started !== undefined) startedScans.delete(l.id);
+      if (running.current.has(l.id) || startedHere) {
         void qc.invalidateQueries({ queryKey: keys.stats });
         void qc.invalidateQueries({ queryKey: keys.recentBooks(l.id) });
         finished.current(l);
       }
     }
     running.current = new Set(libraries.filter((l) => l.scan.running).map((l) => l.id));
-  }, [libraries, qc]);
+  }, [libraries, dataUpdatedAt, qc]);
 }
 
 export function useRecentBooks(libraryId: number, limit: number) {

@@ -210,10 +210,11 @@ future metadata site can attach enrichment without reshaping the schema.
   transaction, supersedes the user's other *still-redeemable* invites
   (`supersedeActiveInvites` - not expired, not used-up) so there's exactly one active
   invite each; spent/expired ones stay as history. `POST /admin/authcodes/{id}/rotate`
-  (`RotateAuthCode`) regenerates an invite's secret in place (the admin "Resend"),
+  (`RotateAuthCode`) regenerates an invite's secret in place (the console's "Rotate"),
   **preserving** its `max_uses` and renewing its expiry for the original window (never
   silently downgrading to defaults) and **revoking the invite's outstanding pairing
-  tokens** (a QR already on screen dies with the old secret); `redeemed_at` records
+  tokens** (a QR already on screen dies with the old secret) and, like a mint, retiring
+  the user's other still-redeemable invites; `redeemed_at` records
   acceptance (first successful exchange) but the console buckets invites by whether
   they are still redeemable, not by `redeemed_at`. **Self-
   service password**: `POST /auth/password` reuses `SetPassword`; setting a first

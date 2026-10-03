@@ -294,3 +294,55 @@ func TestDeleteLibraryDropsItsGrantShares(t *testing.T) {
 		t.Fatalf("after deleting the library: %+v, want only Favourites", shares)
 	}
 }
+
+// A library renamed and its old name reused by a new library: granting the new
+// one must not reuse the first library's grant share (that would hand the new
+// library to everyone who has the old one), and re-granting a renamed library
+// reuses its own marked share rather than minting a duplicate.
+func TestGrantWholeLibraryFollowsTheMarkNotTheName(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	fiction, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/a"})
+	maya := seedUserNamed(t, c, ctx, "maya")
+	sam := seedUserNamed(t, c, ctx, "sam")
+	if err := c.GrantWholeLibrary(ctx, maya, fiction.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpdateLibrary(ctx, fiction.ID, Library{Name: "Novels", Root: "/tmp/a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.GrantWholeLibrary(ctx, sam, fiction.ID); err != nil {
+		t.Fatal(err)
+	}
+	shares, _ := c.ListShares(ctx)
+	if len(shares) != 1 {
+		t.Fatalf("re-granting a renamed library made %d shares, want 1: %+v", len(shares), shares)
+	}
+
+	kids, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/b"})
+	_ = c.GrantWholeLibrary(ctx, sam, kids.ID) // may fail on the name; must not leak
+	if sc, _ := c.UserScope(ctx, maya, kids.ID, false); sc.AllowAll || len(sc.Paths) != 0 {
+		t.Fatalf("maya reached the new library through the old grant share: %+v", sc)
+	}
+}
+
+// Deleting a library keeps a grant share that also holds another library's
+// rules: its members still have that library.
+func TestDeleteLibraryKeepsAGrantShareWithOtherRules(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	main, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/a"})
+	kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/b"})
+	uid := seedUser(t, c, ctx)
+	if err := c.GrantWholeLibrary(ctx, uid, kids.ID); err != nil {
+		t.Fatal(err)
+	}
+	shares, _ := c.ListShares(ctx)
+	if err := c.AddSharePath(ctx, shares[0].ID, PathRule{LibraryID: main.ID, Path: "Gruffalo"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteLibrary(ctx, kids.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sc, _ := c.UserScope(ctx, uid, main.ID, false); len(sc.Paths) != 1 {
+		t.Fatalf("deleting Kids took away the Main folder too: %+v", sc)
+	}
+}

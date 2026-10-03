@@ -281,3 +281,105 @@ describe('libraries', () => {
     expect(await screen.findByRole('heading', { name: 'No libraries yet' })).toBeInTheDocument();
   });
 });
+
+describe('libraries, review regressions', () => {
+  it('keeps the newest order when two reorders answer out of order', async () => {
+    let order = libraries([{}, {}]).concat({
+      ...libraries()[0],
+      id: 3,
+      name: 'Audio drama',
+      sort_order: 2,
+    });
+    const answers: ((ids: number[]) => void)[] = [];
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries': () => ({ body: { libraries: order } }),
+        'GET /libraries/3/books': { body: { books: [] } },
+        'GET /libraries/3/cover': { status: 404 },
+        'PUT /admin/libraries/order': (req) =>
+          new Promise((resolve) =>
+            answers.push(() => {
+              const ids = (req.body as { ids: number[] }).ids;
+              order = ids.map((id) => order.find((l) => l.id === id)!);
+              resolve({ body: { libraries: order } });
+            }),
+          ),
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Move Fiction down' }));
+    await user.click(await screen.findByRole('button', { name: 'Move Fiction down' }));
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(2));
+    const list = screen.getByRole('list', { name: 'Libraries, in the order players show them' });
+    const names = () =>
+      within(list)
+        .getAllByRole('listitem')
+        .map((li) => li.getAttribute('aria-labelledby'));
+    const newest = names();
+    // The second move answers first, then the first (older) one.
+    answers[1]([]);
+    answers[0]([]);
+    await waitFor(() => expect(names()).toEqual(newest));
+    expect(newest[2]).toBe('library-1-name'); // Fiction ended up last
+  });
+
+  it('shows Scanning, not Unavailable, while a retry scans a folder that just came back', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/libraries': {
+          body: {
+            libraries: libraries([
+              {},
+              { available: false, scan: { running: true, total: 0, done: 0, indexed: 0 } },
+            ]),
+          },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const kids = await screen.findByRole('listitem', { name: 'Kids' });
+    expect(within(kids).getAllByText('Scanning').length).toBeGreaterThan(0);
+    expect(within(kids).queryByText('Folder unavailable')).not.toBeInTheDocument();
+  });
+
+  it('reports a scan that finished before the list was fetched again', async () => {
+    mockFetch(
+      routes({
+        'POST /admin/libraries/1/scan': { status: 202, body: { status: 'scan started' } },
+        // A tiny library: the scan is already over when the list comes back.
+      }),
+    );
+    renderApp('/library/libraries');
+    const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
+    await userEvent.setup().click(within(fiction).getByRole('button', { name: 'Rescan' }));
+    expect(await screen.findByText('Finished scanning Fiction')).toBeInTheDocument();
+  });
+
+  it("keeps a folder's error on screen instead of jumping back to the root", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/fs/dirs': (req) => {
+          const path = req.query.get('path');
+          if (path === '/mnt/locked') {
+            return {
+              status: 404,
+              body: { error: 'folder not found or not readable', code: 'folder_unreadable' },
+            };
+          }
+          return { body: { path: '/', dirs: [{ name: 'locked', path: '/mnt/locked' }] } };
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Add library' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a library' });
+    await user.click(within(dialog).getByRole('button', { name: 'Browse' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'locked' }));
+    expect(await within(dialog).findByText(/can't read it/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('locked', { selector: '[aria-current="location"]' }),
+    ).toBeInTheDocument();
+  });
+});

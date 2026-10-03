@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -101,14 +102,22 @@ function SortableLibraries({ libraries }: { libraries: AdminLibrary[] }) {
   const nameOf = (id: string | number) => libraries.find((l) => l.id === Number(id))?.name ?? '';
   const positionOf = (id: string | number) => libraries.findIndex((l) => l.id === Number(id)) + 1;
 
+  // Only the newest reorder's answer may settle the list: two quick moves can
+  // answer out of order, and the older answer would undo the newer move.
+  const latest = useRef(0);
   const move = (from: number, to: number) => {
     if (to < 0 || to >= libraries.length || from === to) return;
     const next = arrayMove(libraries, from, to);
-    // Show the new order at once; the server's answer (or a refetch) settles it.
+    const seq = ++latest.current;
+    // Show the new order at once (dropping a poll in flight, which carries the old
+    // order); the server's answer (or a refetch) settles it.
+    void qc.cancelQueries({ queryKey: keys.libraries });
     qc.setQueryData(keys.libraries, next);
     api.reorderLibraries(next.map((l) => l.id)).then(
       // The answer is the whole list, freshly probed: no refetch needed.
-      (res) => qc.setQueryData(keys.libraries, res.libraries),
+      (res) => {
+        if (seq === latest.current) qc.setQueryData(keys.libraries, res.libraries);
+      },
       (err: unknown) => {
         void qc.invalidateQueries({ queryKey: keys.libraries });
         toastError(t('libraries.toast.reorderFailed'), err);

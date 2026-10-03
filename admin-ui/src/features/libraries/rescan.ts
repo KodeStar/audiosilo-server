@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import i18n from 'i18next';
 import { api } from '@/api/client';
-import { keys } from '@/api/hooks';
+import { noteScanStarted } from '@/api/hooks';
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 
@@ -16,7 +16,7 @@ export function rescanLibrary(qc: QueryClient, library: { id: number; name: stri
   const t = i18n.t;
   api.scanLibrary(library.id).then(
     () => {
-      void qc.invalidateQueries({ queryKey: keys.libraries });
+      noteScanStarted(qc, library.id);
       toast.add({
         title: t('palette.toast.rescanning', { name: library.name }),
         description: t('palette.toast.rescanningSub'),
