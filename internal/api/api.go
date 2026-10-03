@@ -218,9 +218,11 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteUser)))
 	mux.Handle("POST /api/v1/admin/users/{id}/authcode", a.requireAdmin(http.HandlerFunc(a.handleCreateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/users/{id}/recovery", a.requireAdmin(http.HandlerFunc(a.handleAdminClearRecovery)))
+	mux.Handle("GET /api/v1/admin/invites", a.requireAdmin(http.HandlerFunc(a.handleListInvites)))
 	mux.Handle("POST /api/v1/admin/authcodes/{id}/rotate", a.requireAdmin(http.HandlerFunc(a.handleRotateAuthCode)))
 	mux.Handle("DELETE /api/v1/admin/authcodes/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeAuthCode)))
 	mux.Handle("GET /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleAdminListLibraries)))
+	mux.Handle("GET /api/v1/admin/fs/dirs", a.requireAdmin(http.HandlerFunc(a.handleListDirs)))
 	mux.Handle("POST /api/v1/admin/libraries", a.requireAdmin(http.HandlerFunc(a.handleCreateLibrary)))
 	mux.Handle("PUT /api/v1/admin/libraries/order", a.requireAdmin(http.HandlerFunc(a.handleReorderLibraries)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateLibrary)))
@@ -247,7 +249,7 @@ func (a *API) Handler() http.Handler {
 	// Baked-in web UI: the public connect page and the admin console. API routes
 	// above are more specific, so ServeMux still prefers them over the "/"
 	// catch-all the web package registers.
-	if err := web.Register(mux, a.cfg.WebDir, a.cfg.AdminNext); err != nil {
+	if err := web.Register(mux, a.cfg.WebDir); err != nil {
 		a.log.Error("failed to register web UI", "err", err)
 	}
 

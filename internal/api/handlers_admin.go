@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -303,13 +304,82 @@ func (a *API) handleAdminClearRecovery(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// adminLibrary is a library as the admin console lists it: the stored fields
+// plus its indexed book count and whether its root folder is reachable right now
+// (false for a missing, unreadable or unresponsive root, or an empty one with
+// books still indexed - see library.Scanner.RootAvailable).
+type adminLibrary struct {
+	catalog.Library
+	BookCount int  `json:"book_count"`
+	Available bool `json:"available"`
+}
+
 func (a *API) handleAdminListLibraries(w http.ResponseWriter, r *http.Request) {
-	libs, err := a.cat.ListLibraries(r.Context())
+	libs, err := a.adminLibraries(r.Context())
 	if err != nil {
+		a.log.Warn("list libraries failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"libraries": libs})
+}
+
+// adminLibraries lists every library with its book count and root availability.
+// Roots are probed in parallel, so a dead network share costs the whole list at
+// most one probe timeout, not one per library.
+func (a *API) adminLibraries(ctx context.Context) ([]adminLibrary, error) {
+	libs, err := a.cat.ListLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := a.cat.CountBooksByLibrary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]adminLibrary, len(libs))
+	var wg sync.WaitGroup
+	for i, l := range libs {
+		out[i] = adminLibrary{Library: l, BookCount: counts[l.ID]}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i].Available = a.scanner.RootAvailable(l, out[i].BookCount)
+		}()
+	}
+	wg.Wait()
+	return out, nil
+}
+
+// handleListInvites lists every account's invite codes (metadata only: the codes
+// themselves are never stored) for the console's Invites page.
+func (a *API) handleListInvites(w http.ResponseWriter, r *http.Request) {
+	invites, err := a.auth.ListInvites(r.Context())
+	if err != nil {
+		a.log.Warn("list invites failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not list invites")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invites": invites})
+}
+
+// maxDirListing caps one folder-picker listing.
+const maxDirListing = 1000
+
+// handleListDirs is the add-library folder picker: the subfolders of an absolute
+// server path (the filesystem root when ?path= is empty). Folder names only; see
+// library.ListDirs for the bounds.
+func (a *API) handleListDirs(w http.ResponseWriter, r *http.Request) {
+	listing, err := library.ListDirs(r.URL.Query().Get("path"), maxDirListing)
+	switch {
+	case errors.Is(err, library.ErrNotAbsolute):
+		writeError(w, http.StatusBadRequest, "path must be absolute")
+	case err != nil:
+		// Missing, not a folder, or not readable by the server: the same answer,
+		// and the OS error (which can name the path) stays out of the body.
+		writeError(w, http.StatusNotFound, "folder not found or not readable")
+	default:
+		writeJSON(w, http.StatusOK, listing)
+	}
 }
 
 func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
@@ -374,7 +444,7 @@ func (a *API) handleReorderLibraries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not reorder libraries")
 		return
 	}
-	libs, err := a.cat.ListLibraries(r.Context())
+	libs, err := a.adminLibraries(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
 		return

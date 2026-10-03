@@ -866,3 +866,32 @@ func TestRevokeTokenByIDScoping(t *testing.T) {
 		t.Fatalf("owner revoke: %v", err)
 	}
 }
+
+// ListInvites spans every account, newest first, and never lists recovery codes.
+func TestListInvites(t *testing.T) {
+	s, ctx := newTestService(t)
+	sam, _ := s.CreateUser(ctx, "sam", "", RoleUser)
+	maya, _ := s.CreateUser(ctx, "maya", "", RoleUser)
+	if _, err := s.CreateInvite(ctx, sam.ID, "invite", 5, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateInvite(ctx, maya.ID, "invite", 1, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GenerateRecoveryCode(ctx, sam.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListInvites(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListInvites = %d codes, want the 2 invites (no recovery code)", len(got))
+	}
+	if got[0].Username != "maya" || got[0].UserID != maya.ID || got[0].MaxUses != 1 || got[0].ExpiresAt == "" {
+		t.Errorf("newest invite = %+v, want maya's 1-use expiring invite", got[0])
+	}
+	if got[1].Username != "sam" || got[1].MaxUses != 5 {
+		t.Errorf("older invite = %+v, want sam's", got[1])
+	}
+}

@@ -239,3 +239,26 @@ func seedUserNamed(t *testing.T, c *Catalog, ctx context.Context, name string) i
 	id, _ := res.LastInsertId()
 	return id
 }
+
+func TestShareMembers(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	kids, _ := c.CreateShare(ctx, Share{Name: "Kids"})
+	empty, _ := c.CreateShare(ctx, Share{Name: "Nobody"})
+	sam := seedUserNamed(t, c, ctx, "sam")
+	maya := seedUserNamed(t, c, ctx, "maya")
+	for _, uid := range []int64{maya, sam} {
+		if err := c.GrantShare(ctx, uid, kids.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := c.ShareMembers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := got[kids.ID]; len(m) != 2 || m[0] != sam || m[1] != maya {
+		t.Errorf("Kids members = %v, want [%d %d]", m, sam, maya)
+	}
+	if _, ok := got[empty.ID]; ok {
+		t.Errorf("a share granted to nobody has members: %v", got[empty.ID])
+	}
+}

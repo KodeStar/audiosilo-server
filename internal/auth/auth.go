@@ -617,19 +617,58 @@ func (s *Service) ListAuthCodes(ctx context.Context, userID int64) ([]AuthCode, 
 	defer rows.Close()
 	var out []AuthCode
 	for rows.Next() {
-		var (
-			c        AuthCode
-			expires  sql.NullString
-			redeemed sql.NullString
-		)
-		if err := rows.Scan(&c.ID, &c.Label, &c.MaxUses, &c.Uses, &expires, &redeemed, &c.CreatedAt); err != nil {
+		var c AuthCode
+		if err := scanAuthCode(rows, &c); err != nil {
 			return nil, err
 		}
-		c.ExpiresAt = expires.String
-		c.RedeemedAt = redeemed.String
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// Invite is an invite code with the account it pairs, for the console's list of
+// every invite. Like AuthCode it never carries the code itself.
+type Invite struct {
+	AuthCode
+	UserID   int64  `json:"user_id"`
+	Username string `json:"username"`
+}
+
+// ListInvites returns every account's invite codes, newest first (recovery
+// codes excluded, as in ListAuthCodes).
+func (s *Service) ListInvites(ctx context.Context) ([]Invite, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT a.id, a.label, a.max_uses, a.uses, a.expires_at, a.redeemed_at, a.created_at,
+		        u.id, u.username
+		   FROM auth_codes a JOIN users u ON u.id = a.user_id
+		  WHERE a.kind = ?
+		  ORDER BY a.created_at DESC, a.id DESC`, CodeInvite)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Invite{}
+	for rows.Next() {
+		var inv Invite
+		if err := scanAuthCode(rows, &inv.AuthCode, &inv.UserID, &inv.Username); err != nil {
+			return nil, err
+		}
+		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
+// scanAuthCode reads the auth_codes columns ListAuthCodes selects, then any
+// extra columns into extra.
+func scanAuthCode(rows *sql.Rows, c *AuthCode, extra ...any) error {
+	var expires, redeemed sql.NullString
+	dest := append([]any{&c.ID, &c.Label, &c.MaxUses, &c.Uses, &expires, &redeemed, &c.CreatedAt}, extra...)
+	if err := rows.Scan(dest...); err != nil {
+		return err
+	}
+	c.ExpiresAt = expires.String
+	c.RedeemedAt = redeemed.String
+	return nil
 }
 
 // RevokeAuthCode deletes an issued auth code by id, immediately invalidating it.

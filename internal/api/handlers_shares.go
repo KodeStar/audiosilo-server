@@ -7,13 +7,33 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
+// adminShare is a share as the console lists it: the share plus the ids of the
+// users it is granted to.
+type adminShare struct {
+	catalog.Share
+	MemberIDs []int64 `json:"member_ids"`
+}
+
 func (a *API) handleListShares(w http.ResponseWriter, r *http.Request) {
 	shares, err := a.cat.ListShares(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list shares")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"shares": shares})
+	members, err := a.cat.ShareMembers(r.Context())
+	if err != nil {
+		a.log.Warn("list share members failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "could not list shares")
+		return
+	}
+	out := make([]adminShare, len(shares))
+	for i, s := range shares {
+		out[i] = adminShare{Share: s, MemberIDs: members[s.ID]}
+		if out[i].MemberIDs == nil {
+			out[i].MemberIDs = []int64{}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"shares": out})
 }
 
 func (a *API) handleGetShare(w http.ResponseWriter, r *http.Request) {

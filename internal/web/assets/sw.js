@@ -7,22 +7,16 @@
 // (which ships its own SW) are never intercepted, and admin navigations are
 // network-first so the console always reflects live server state.
 //
-// It serves both consoles during the redesign: every online admin navigation
-// refreshes the cached shell, so "/admin" holds whichever console the server
-// mounts there right now (the classic one, or the new admin-ui build when
-// AUDIOSILO_ADMIN_NEXT is on; flipping the switch doesn't change this file, so
-// the worker isn't reinstalled), and "/admin/classic" keeps its own copy. The
-// new console's hashed /admin/assets/* files
-// aren't listed (their names change every build); the stale-while-revalidate
-// branch below caches them on first use, so it works offline after one online
-// visit. Bump VERSION whenever the shell changes shape so old caches are dropped.
-const VERSION = "audiosilo-admin-v2";
+// Every online admin navigation refreshes the cached shell ("/admin", the
+// console's index.html), so it always matches the server's current build. The
+// console's hashed /admin/assets/* files aren't listed (their names change every
+// build); the stale-while-revalidate branch below caches them on first use, so
+// the console works offline after one online visit. Bump VERSION whenever the
+// shell list changes shape so old caches are dropped.
+const VERSION = "audiosilo-admin-v3";
 const SHELL = [
   "/admin",
-  "/assets/style.css",
-  "/assets/admin.js",
-  "/assets/i18n.js",
-  "/assets/i18n-dict.js",
+  "/admin/theme-init.js",
   "/assets/favicon.svg",
   "/assets/icon-192.png",
   "/assets/icon-512.png",
@@ -56,11 +50,9 @@ self.addEventListener("fetch", (e) => {
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/web/")) return;
 
   // Admin navigations: network-first, refreshing the cached shell on success and
-  // falling back to it offline. Every route under /admin serves the same page,
-  // except the classic console at /admin/classic, which is cached separately.
+  // falling back to it offline. Every route under /admin serves the same page.
   if (req.mode === "navigate") {
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-      const shell = url.pathname === "/admin/classic" ? "/admin/classic" : "/admin";
       e.respondWith(
         fetch(req)
           .then((res) => {
@@ -70,11 +62,11 @@ self.addEventListener("fetch", (e) => {
             const type = (res && res.headers.get("Content-Type")) || "";
             if (res && res.ok && type.startsWith("text/html")) {
               const copy = res.clone();
-              e.waitUntil(caches.open(VERSION).then((c) => c.put(shell, copy)));
+              e.waitUntil(caches.open(VERSION).then((c) => c.put("/admin", copy)));
             }
             return res;
           })
-          .catch(() => caches.match(shell).then((hit) => hit || caches.match("/admin"))),
+          .catch(() => caches.match("/admin")),
       );
     }
     return; // other navigations pass straight through to the network

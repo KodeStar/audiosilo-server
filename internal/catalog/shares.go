@@ -362,6 +362,26 @@ func (c *Catalog) ListShares(ctx context.Context) ([]Share, error) {
 	return out, nil
 }
 
+// ShareMembers maps each share id to the ids of the users it is granted to (the
+// console's "People with this share"). Shares granted to nobody are absent.
+func (c *Catalog) ShareMembers(ctx context.Context) (map[int64][]int64, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT share_id, user_id FROM user_share_access ORDER BY share_id, user_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64][]int64{}
+	for rows.Next() {
+		var shareID, userID int64
+		if err := rows.Scan(&shareID, &userID); err != nil {
+			return nil, err
+		}
+		out[shareID] = append(out[shareID], userID)
+	}
+	return out, rows.Err()
+}
+
 // ShareUpdate is a partial share patch. Each field is a pointer so an omitted
 // field is left unchanged (a PATCH that sends only {"name":...} must not wipe
 // the description or read_only flag).

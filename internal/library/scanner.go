@@ -30,6 +30,8 @@ type Scanner struct {
 	mu       sync.Mutex
 	scanning map[int64]bool         // library IDs currently scanning
 	progress map[int64]ScanProgress // latest progress per library (for the admin UI)
+
+	roots *rootProber // bounded, cached checks that a library root is reachable
 }
 
 // ScanProgress reports how far a (possibly running) library scan has gotten, so
@@ -39,6 +41,9 @@ type ScanProgress struct {
 	Total   int  `json:"total"`
 	Done    int  `json:"done"`
 	Indexed int  `json:"indexed"`
+	// Unavailable is set when the last finished scan stopped at the
+	// unavailable-root guard (ErrLibraryUnavailable): nothing was pruned.
+	Unavailable bool `json:"unavailable,omitempty"`
 }
 
 // NewScanner returns a Scanner. ffprobePath may be "" to skip ffprobe.
@@ -52,6 +57,7 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		log:         log,
 		scanning:    map[int64]bool{},
 		progress:    map[int64]ScanProgress{},
+		roots:       newRootProber(),
 	}
 }
 
@@ -113,7 +119,7 @@ func primaryPath(b *catalog.Book) string {
 // Scan indexes a single library. It is safe to call concurrently for different
 // libraries; concurrent calls for the same library are coalesced (the second
 // returns immediately).
-func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, error) {
+func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult, err error) {
 	s.mu.Lock()
 	if s.scanning[lib.ID] {
 		s.mu.Unlock()
@@ -127,8 +133,11 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (*ScanResult, e
 		delete(s.scanning, lib.ID)
 		p := s.progress[lib.ID]
 		p.Running = false
+		p.Unavailable = errors.Is(err, ErrLibraryUnavailable)
 		s.progress[lib.ID] = p
 		s.mu.Unlock()
+		// The scan just looked at the root; let the next availability check look again.
+		s.roots.forget(lib.Root)
 	}()
 
 	start := time.Now()
