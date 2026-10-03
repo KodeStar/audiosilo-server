@@ -33,11 +33,17 @@ export function setThemePref(pref: ThemePref) {
   applyTheme(pref);
 }
 
-/** Re-applies the system theme whenever the OS scheme changes. Returns the unsubscribe. */
-export function followSystemTheme(): () => void {
+/**
+ * Re-applies the system theme whenever the OS scheme changes, reporting the new
+ * resolved theme. Returns the unsubscribe.
+ */
+export function followSystemTheme(onResolved: (theme: 'light' | 'dark') => void): () => void {
   if (typeof window.matchMedia !== 'function') return () => {};
   const mq = matchMedia('(prefers-color-scheme: dark)');
-  const onChange = () => applyTheme('system');
+  const onChange = () => {
+    applyTheme('system');
+    onResolved(resolveTheme('system'));
+  };
   mq.addEventListener('change', onChange);
   return () => mq.removeEventListener('change', onChange);
 }

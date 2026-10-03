@@ -62,6 +62,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         dropSession(null);
       },
       retry: () => {
+        // The token can be gone by now (signed out in another tab); the check
+        // effect skips without one, which would leave "checking" up for good.
+        if (!getToken()) {
+          dropSession('expired');
+          return;
+        }
         setState({ status: 'checking' });
         setAttempt((n) => n + 1);
       },

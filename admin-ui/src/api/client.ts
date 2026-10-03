@@ -30,9 +30,21 @@ export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorized = fn;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+const LOGIN_PATH = '/auth/login';
+
+/**
+ * One API call. `explicitToken` authenticates with a token that is not the
+ * stored session (signing a non-admin straight back out) and leaves the stored
+ * session alone on a 401.
+ */
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  explicitToken?: string,
+): Promise<T> {
   const headers: Record<string, string> = {};
-  const token = getToken();
+  const token = explicitToken ?? getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(API + path, {
@@ -40,7 +52,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (res.status === 401 && token) {
+  // Any 401 but a failed sign-in ends the session, including one sent with no
+  // token at all: another tab (or the classic console) signed out and cleared it.
+  if (res.status === 401 && path !== LOGIN_PATH && explicitToken === undefined) {
     clearToken();
     onUnauthorized();
   }
@@ -67,12 +81,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   serverInfo: () => request<ServerInfo>('GET', '/server'),
   login: (username: string, password: string) =>
-    request<LoginResponse>('POST', '/auth/login', {
+    request<LoginResponse>('POST', LOGIN_PATH, {
       username,
       password,
       device_name: 'admin-web',
     }),
-  logout: () => request<void>('POST', '/auth/logout'),
+  /** Revokes the stored session, or `token` when given (never touching storage). */
+  logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),
   stats: () => request<AdminStats>('GET', '/admin/stats'),
   settings: () => request<AdminSettings>('GET', '/admin/settings'),

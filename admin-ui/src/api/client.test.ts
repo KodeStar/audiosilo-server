@@ -52,6 +52,28 @@ describe('api client', () => {
     expect(onUnauthorized).toHaveBeenCalledOnce();
   });
 
+  it('drops the session on a 401 after another tab cleared the token', async () => {
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    const calls = mockFetch({
+      'GET /admin/stats': { status: 401, body: { error: 'unauthorized' } },
+    });
+    await expect(api.stats()).rejects.toMatchObject({ status: 401 });
+    expect(calls[0].headers.Authorization).toBeUndefined();
+    expect(onUnauthorized).toHaveBeenCalledOnce();
+  });
+
+  it('signs an explicit token out without touching the stored session', async () => {
+    setToken('stored');
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    const calls = mockFetch({ 'POST /auth/logout': { status: 401, body: { error: 'x' } } });
+    await expect(api.logout('other')).rejects.toMatchObject({ status: 401 });
+    expect(calls[0].headers.Authorization).toBe('Bearer other');
+    expect(getToken()).toBe('stored');
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
   it('does not treat a failed sign-in as an expired session', async () => {
     const onUnauthorized = vi.fn();
     setUnauthorizedHandler(onUnauthorized);

@@ -103,6 +103,16 @@ describe('sign-in gate', () => {
     expect(await screen.findByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
   });
 
+  it('retrying after the token vanished (signed out elsewhere) shows sign-in, not a stuck spinner', async () => {
+    setToken('stored');
+    mockFetch(signedInRoutes({ 'GET /me': 'network-error' }));
+    renderApp();
+    await screen.findByRole('heading', { name: "Can't reach the server" });
+    localStorage.removeItem('audiosilo_token'); // another tab signed out
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your session ended');
+  });
+
   it('signs out', async () => {
     setToken('stored');
     const calls = mockFetch({ ...signedInRoutes(), 'POST /auth/logout': { status: 204 } });
@@ -255,5 +265,29 @@ describe('CSP at runtime', () => {
     await user.click(await screen.findByRole('button', { name: 'Account menu' }));
     await screen.findByRole('menu');
     expect(document.querySelectorAll('style')).toHaveLength(0);
+  });
+});
+
+describe('theme', () => {
+  it('updates the top-bar theme icon when the OS scheme flips under "system"', async () => {
+    let dark = false;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      get matches() {
+        return query.includes('dark') && dark;
+      },
+      media: query,
+      addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+      removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+    }));
+    setToken('stored');
+    mockFetch(signedInRoutes());
+    renderApp();
+    const button = await screen.findByRole('button', { name: 'Theme: Match system' });
+    expect(button.querySelector('.lucide-sun')).not.toBeNull();
+    dark = true;
+    act(() => listeners.forEach((fn) => fn()));
+    await waitFor(() => expect(button.querySelector('.lucide-moon')).not.toBeNull());
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
   });
 });

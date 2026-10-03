@@ -7,9 +7,12 @@
 // (which ships its own SW) are never intercepted, and admin navigations are
 // network-first so the console always reflects live server state.
 //
-// It serves both consoles during the redesign: "/admin" caches whichever one the
-// server mounts there (the classic console, or the new admin-ui build when
-// AUDIOSILO_ADMIN_NEXT is on). The new console's hashed /admin/assets/* files
+// It serves both consoles during the redesign: every online admin navigation
+// refreshes the cached shell, so "/admin" holds whichever console the server
+// mounts there right now (the classic one, or the new admin-ui build when
+// AUDIOSILO_ADMIN_NEXT is on; flipping the switch doesn't change this file, so
+// the worker isn't reinstalled), and "/admin/classic" keeps its own copy. The
+// new console's hashed /admin/assets/* files
 // aren't listed (their names change every build); the stale-while-revalidate
 // branch below caches them on first use, so it works offline after one online
 // visit. Bump VERSION whenever the shell changes shape so old caches are dropped.
@@ -52,10 +55,23 @@ self.addEventListener("fetch", (e) => {
   // Leave the API and the web player (its own SW) alone.
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/web/")) return;
 
-  // Admin navigations: network-first, fall back to the cached shell offline.
+  // Admin navigations: network-first, refreshing the cached shell on success and
+  // falling back to it offline. Every route under /admin serves the same page,
+  // except the classic console at /admin/classic, which is cached separately.
   if (req.mode === "navigate") {
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-      e.respondWith(fetch(req).catch(() => caches.match("/admin")));
+      const shell = url.pathname === "/admin/classic" ? "/admin/classic" : "/admin";
+      e.respondWith(
+        fetch(req)
+          .then((res) => {
+            if (res && res.ok) {
+              const copy = res.clone();
+              caches.open(VERSION).then((c) => c.put(shell, copy));
+            }
+            return res;
+          })
+          .catch(() => caches.match(shell).then((hit) => hit || caches.match("/admin"))),
+      );
     }
     return; // other navigations pass straight through to the network
   }

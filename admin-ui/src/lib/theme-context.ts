@@ -10,6 +10,8 @@ export const THEME_OPTIONS: readonly { pref: ThemePref; icon: LucideIcon }[] = [
 
 export interface ThemeState {
   pref: ThemePref;
+  /** What is on screen: `pref`, or the OS scheme (tracked live) while it is "system". */
+  resolved: 'light' | 'dark';
   setPref: (p: ThemePref) => void;
 }
 

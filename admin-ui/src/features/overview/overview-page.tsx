@@ -224,7 +224,7 @@ function LiveCard({ row, lang }: { row: ListeningRow; lang: string }) {
         <div
           className="progress-track"
           role="progressbar"
-          aria-label={t('home.progressAria', { title: row.title })}
+          aria-label={t('home.progressAria', { title: row.title || row.path })}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(frac * 100)}

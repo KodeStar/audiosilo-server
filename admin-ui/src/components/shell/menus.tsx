@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { LANGUAGES, setLanguage, type Language } from '@/i18n';
 import { useCurrentUser, useSession } from '@/lib/session';
-import { resolveTheme, type ThemePref } from '@/lib/theme';
+import type { ThemePref } from '@/lib/theme';
 import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
 import { Monogram } from '@/components/monogram';
 import { buttonVariants } from '@/components/ui/button';
@@ -44,8 +44,8 @@ function ThemeRadioItems() {
 
 export function ThemeMenu() {
   const { t } = useTranslation();
-  const { pref } = useTheme();
-  const Icon = resolveTheme(pref) === 'dark' ? Moon : Sun;
+  const { pref, resolved } = useTheme();
+  const Icon = resolved === 'dark' ? Moon : Sun;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger

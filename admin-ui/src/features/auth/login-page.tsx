@@ -2,7 +2,6 @@ import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, LoaderCircle } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
-import { clearToken, setToken } from '@/api/token';
 import { LogoTile } from '@/components/logo';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,9 +30,7 @@ export function LoginPage({ reason }: { reason: SignedOutReason }) {
       const res = await api.login(username, password);
       if (res.user.role !== 'admin') {
         // Don't leave a session behind for an account that can't use the console.
-        setToken(res.token);
-        await api.logout().catch(() => {});
-        clearToken();
+        await api.logout(res.token).catch(() => {});
         setError(t('login.notAdmin'));
         return;
       }
