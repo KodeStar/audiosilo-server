@@ -467,12 +467,16 @@ admin overrides; see Metadata overrides below).
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
   covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
   thumbnails as `data:` URLs in request order (`""` = no art), resolved like
-  `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing).
+  `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
+  one `catalog.CoverSources` query per library for the whole batch.
   One request per page of covers instead of one per cover (the per-IP limiter
   allows a burst of 40), no token in any URL, ~20 KB a cover instead of full art.
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
   (decompression bombs), `media.ThumbCache` is a byte-bounded LRU keyed by the art's
-  version (custom `updated_at`, file size + mtime), and `thumbSem` bounds decodes.
+  version (custom `updated_at`, file size + mtime) holding finished data: URLs, and
+  `thumbSem` bounds decodes (reads are bounded per request, outside it). Admin book rows
+  carry `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
+  also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",

@@ -199,7 +199,7 @@ func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]Listening
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ListeningRow
+	out := []ListeningRow{} // an empty list, never null: a fresh server has no listening yet
 	for rows.Next() {
 		var r ListeningRow
 		if err := rows.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path,

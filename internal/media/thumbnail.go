@@ -53,10 +53,15 @@ func Thumbnail(src []byte, size int) ([]byte, error) {
 	}
 	w, h := fitWithin(cfg.Width, cfg.Height, size)
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	draw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	op := draw.Src
+	if o, ok := img.(interface{ Opaque() bool }); !ok || !o.Opaque() {
+		// Only art that may be transparent needs the white card under it.
+		draw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+		op = draw.Over
+	}
 	// BiLinear (the kernel, not ApproxBiLinear) widens its support with the scale
 	// factor, so a large downscale averages its source pixels instead of aliasing.
-	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), op, nil)
 	var out bytes.Buffer
 	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: thumbnailQuality}); err != nil {
 		return nil, err

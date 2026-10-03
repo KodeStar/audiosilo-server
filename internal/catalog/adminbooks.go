@@ -43,7 +43,10 @@ type AdminBook struct {
 	FileCount      int     `json:"file_count"`
 	ASIN           string  `json:"asin"`
 	ISBN           string  `json:"isbn"`
-	Edited         bool    `json:"edited"`
+	// Matched is the matched= filter's rule (an ASIN or ISBN), so the console never
+	// restates it.
+	Matched bool `json:"matched"`
+	Edited  bool `json:"edited"`
 }
 
 // Per-row expressions over `books b`, shared by the select list, the filters and
@@ -74,14 +77,14 @@ var directPlayableExpr = media.DirectPlayableSQL("b.codec")
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.author,
 	b.narrator, b.series, b.series_index, b.published, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
-	b.asin, b.isbn, ` + editedExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr
+	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr
 
 // adminBookDest returns the scan destinations for adminBookCols, in order.
 func adminBookDest(b *AdminBook) []any {
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
 		&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Duration, &b.Format, &b.Codec,
 		&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
-		&b.ASIN, &b.ISBN, &b.Edited, &b.HasCover, &b.DirectPlayable}
+		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.HasCover, &b.DirectPlayable}
 }
 
 // BookFilter narrows the admin book list (and its facet counts). Zero values

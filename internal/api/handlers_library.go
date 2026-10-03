@@ -326,18 +326,6 @@ func (a *API) answerCustomCover(w http.ResponseWriter, r *http.Request, libID in
 	return served || err != nil
 }
 
-// bookArtFiles returns the library-relative files a book's own art (not a custom
-// cover) is read from: its sidecar image when the scanner recorded one, and the
-// audio file whose embedded art is the fallback (used when there is no sidecar,
-// or its path doesn't resolve inside the root). Callers SafeJoin each before use.
-func bookArtFiles(book *catalog.Book) (sidecar, audio string) {
-	audio = book.RelPath
-	if book.IsFolder && len(book.Files) > 0 {
-		audio = book.Files[0].RelPath
-	}
-	return book.CoverPath, audio
-}
-
 // coverETag is a custom cover's validator, derived from when it was stored.
 func coverETag(updatedAt string) string {
 	modified, _ := time.Parse(time.RFC3339Nano, updatedAt)
@@ -419,9 +407,9 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	if a.answerCustomCover(w, r, lib.ID, book.RelPath) {
 		return
 	}
-	sidecar, audio := bookArtFiles(book)
-	if sidecar != "" {
-		if abs, err := library.SafeJoin(lib.Root, sidecar); err == nil {
+	art := book.ArtFiles()
+	if art.CoverPath != "" {
+		if abs, err := library.SafeJoin(lib.Root, art.CoverPath); err == nil {
 			if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
 				// The same lifetime as embedded art below. Without one a browser keeps
 				// a sidecar image fresh by heuristic (a tenth of the file's age), so a
@@ -433,7 +421,7 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	abs, err := library.SafeJoin(lib.Root, audio)
+	abs, err := library.SafeJoin(lib.Root, art.AudioPath)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "no cover")
 		return

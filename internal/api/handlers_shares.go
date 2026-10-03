@@ -126,12 +126,34 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid share id")
 		return
 	}
-	var req sharePathReq
-	if err := decodeJSON(r, &req, 0); err != nil || req.LibraryID == 0 {
-		writeError(w, http.StatusBadRequest, "library_id is required")
+	// One rule ({library_id, path}) or several ({"rules": [...]}, a selection of
+	// books added at once, in one transaction).
+	var req struct {
+		sharePathReq
+		Rules []sharePathReq `json:"rules"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := a.cat.AddSharePath(r.Context(), id, catalog.PathRule{LibraryID: req.LibraryID, Path: req.Path}); err != nil {
+	rules := req.Rules
+	if len(rules) == 0 {
+		rules = []sharePathReq{req.sharePathReq}
+	}
+	if len(rules) > maxBulkBooks {
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many paths in one request (at most 1000)")
+		return
+	}
+	add := make([]catalog.PathRule, len(rules))
+	for i, rule := range rules {
+		if rule.LibraryID == 0 {
+			writeError(w, http.StatusBadRequest, "library_id is required")
+			return
+		}
+		add[i] = catalog.PathRule{LibraryID: rule.LibraryID, Path: rule.Path}
+	}
+	if err := a.cat.AddSharePaths(r.Context(), id, add); err != nil {
+		a.log.Warn("add share paths failed", "err", err, "share", id, "rules", len(add))
 		writeError(w, http.StatusInternalServerError, "could not add path")
 		return
 	}
