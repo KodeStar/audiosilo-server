@@ -133,6 +133,11 @@ type Config struct {
 	// DataDir is where the database, config and generated certs live. It is not
 	// serialized; it is supplied on the command line / environment.
 	DataDir string `yaml:"-"`
+	// AdminNext serves the redesigned admin console (admin-ui/, embedded via
+	// internal/web/adminui) at /admin instead of the classic one, which moves to
+	// /admin/classic. Env-only (AUDIOSILO_ADMIN_NEXT) and never persisted: it is a
+	// temporary switch for the redesign that goes away at the cutover.
+	AdminNext bool `yaml:"-"`
 
 	// ServerID is a stable, per-install identity minted once (see launcher
 	// bootstrap) and persisted here in config.yaml so it survives a database
@@ -269,6 +274,11 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("AUDIOSILO_METADATA_BASE_URL"); v != "" {
 		c.Metadata.BaseURL = v
+	}
+	if v := os.Getenv("AUDIOSILO_ADMIN_NEXT"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.AdminNext = b
+		}
 	}
 }
 

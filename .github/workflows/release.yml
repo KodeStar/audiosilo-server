@@ -35,6 +35,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The GoReleaser before-hook builds the admin console (admin-ui/) to embed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: admin-ui/.nvmrc
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+
       # GHCR refs must be lowercase; the owner login can be mixed-case.
       - name: Resolve owner (lowercase)
         id: owner

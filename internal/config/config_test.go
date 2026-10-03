@@ -157,9 +157,14 @@ func TestApplyEnvOverrides(t *testing.T) {
 	t.Setenv("AUDIOSILO_TRUSTED_PROXIES", "10.0.0.0/8")
 	t.Setenv("AUDIOSILO_DEMO_ENABLED", "true")
 	t.Setenv("AUDIOSILO_DEMO_MAX_USERS", "42")
+	t.Setenv("AUDIOSILO_ADMIN_NEXT", "1")
 
 	c := Default(t.TempDir())
 	applyEnv(c)
+
+	if !c.AdminNext {
+		t.Fatal("admin next override not applied")
+	}
 
 	if !c.Demo.Enabled {
 		t.Fatal("demo enabled override not applied")

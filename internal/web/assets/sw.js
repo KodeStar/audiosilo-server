@@ -6,7 +6,14 @@
 // It deliberately stays out of the way: the JSON API and the web player at /web
 // (which ships its own SW) are never intercepted, and admin navigations are
 // network-first so the console always reflects live server state.
-const VERSION = "audiosilo-admin-v1";
+//
+// It serves both consoles during the redesign: "/admin" caches whichever one the
+// server mounts there (the classic console, or the new admin-ui build when
+// AUDIOSILO_ADMIN_NEXT is on). The new console's hashed /admin/assets/* files
+// aren't listed (their names change every build); the stale-while-revalidate
+// branch below caches them on first use, so it works offline after one online
+// visit. Bump VERSION whenever the shell changes shape so old caches are dropped.
+const VERSION = "audiosilo-admin-v2";
 const SHELL = [
   "/admin",
   "/assets/style.css",
