@@ -517,5 +517,14 @@
   "user.account.nowMember": "{{name}} é agora membro",
   "libraries.unreadable.title": "O AudioSilo não consegue ler esta pasta",
   "libraries.unreadable.body": "Verifique se {{root}} existe e se o servidor a consegue ler, e tente novamente. Se for uma unidade de rede, monte-a primeiro.",
-  "invite.expires": "Expira a {{time}}"
+  "invite.expires": "Expira a {{time}}",
+  "provenance.tag": "Tag do ficheiro",
+  "provenance.path": "Caminho",
+  "provenance.edited": "Editado",
+  "provenance.community": "Comunidade",
+  "provenance.unsaved": "Não guardado",
+  "provenance.tagHint": "Lido das tags do ficheiro de áudio",
+  "provenance.pathHint": "Deduzido dos nomes da pasta e do ficheiro",
+  "provenance.editedHint": "A sua edição. Bloqueada: as novas análises mantêm-na",
+  "provenance.communityHint": "Aceite a partir dos metadados da comunidade"
 }

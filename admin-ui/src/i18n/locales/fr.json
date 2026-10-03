@@ -517,5 +517,14 @@
   "user.account.nowMember": "{{name}} a maintenant le rôle de membre",
   "libraries.unreadable.title": "AudioSilo ne peut pas lire ce dossier",
   "libraries.unreadable.body": "Vérifiez que {{root}} existe et que le serveur peut le lire, puis réessayez. S'il s'agit d'un lecteur réseau, montez-le d'abord.",
-  "invite.expires": "Expire le {{time}}"
+  "invite.expires": "Expire le {{time}}",
+  "provenance.tag": "Tag du fichier",
+  "provenance.path": "Chemin",
+  "provenance.edited": "Modifié",
+  "provenance.community": "Communauté",
+  "provenance.unsaved": "Non enregistré",
+  "provenance.tagHint": "Lu dans les tags du fichier audio",
+  "provenance.pathHint": "Déduit des noms de dossier et de fichier",
+  "provenance.editedHint": "Votre modification. Verrouillée : les nouvelles analyses la conservent",
+  "provenance.communityHint": "Accepté depuis les métadonnées communautaires"
 }

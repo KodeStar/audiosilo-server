@@ -517,5 +517,14 @@
   "user.account.nowMember": "{{name}} ora è membro",
   "libraries.unreadable.title": "AudioSilo non riesce a leggere questa cartella",
   "libraries.unreadable.body": "Verifica che {{root}} esista e che il server possa leggerla, poi riprova. Se è un'unità di rete, montala prima.",
-  "invite.expires": "Scade il {{time}}"
+  "invite.expires": "Scade il {{time}}",
+  "provenance.tag": "Tag del file",
+  "provenance.path": "Percorso",
+  "provenance.edited": "Modificato",
+  "provenance.community": "Community",
+  "provenance.unsaved": "Non salvato",
+  "provenance.tagHint": "Letto dai tag del file audio",
+  "provenance.pathHint": "Ricavato dai nomi di cartella e file",
+  "provenance.editedHint": "La tua modifica. Bloccata: le nuove scansioni la mantengono",
+  "provenance.communityHint": "Accettato dai metadati della community"
 }

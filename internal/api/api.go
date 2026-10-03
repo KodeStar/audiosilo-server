@@ -15,6 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
@@ -81,6 +82,11 @@ type API struct {
 	// (or any demo visitor) opening many ?transcode=1 streams could exhaust CPU on a
 	// small self-hosted box. A full channel returns 503 rather than forking more.
 	transcodeSem chan struct{}
+
+	// thumbs caches the admin console's cover thumbnails; thumbSem bounds how many
+	// are decoded at once across requests (see handlers_covers.go).
+	thumbs   *media.ThumbCache
+	thumbSem chan struct{}
 }
 
 // New constructs an API. ffmpeg is the path to an ffmpeg binary used for
@@ -113,6 +119,8 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		accountLimiter: newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
 		ipLimiter:      newIPRateLimiter(20, 40),       // ~20 req/s, burst 40, per IP
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
+		thumbs:         media.NewThumbCache(thumbCacheBytes),
+		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 	}
 	// Seed the runtime flag from config; the feature is on only when a service was
 	// built too (metadataOn), so an enabled flag with no base_url stays off.
@@ -239,6 +247,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/books", a.requireAdmin(http.HandlerFunc(a.handleAdminListBooks)))
 	mux.Handle("GET /api/v1/admin/books/facets", a.requireAdmin(http.HandlerFunc(a.handleAdminBookFacets)))
 	mux.Handle("POST /api/v1/admin/books/bulk", a.requireAdmin(http.HandlerFunc(a.handleAdminBulkEdit)))
+	mux.Handle("POST /api/v1/admin/covers", a.requireAdmin(http.HandlerFunc(a.handleAdminCovers)))
 	mux.Handle("GET /api/v1/admin/authors", a.requireAdmin(a.handleAdminPeople(catalog.PeopleAuthors, "authors")))
 	mux.Handle("GET /api/v1/admin/narrators", a.requireAdmin(a.handleAdminPeople(catalog.PeopleNarrators, "narrators")))
 	mux.Handle("GET /api/v1/admin/series", a.requireAdmin(http.HandlerFunc(a.handleAdminSeries)))

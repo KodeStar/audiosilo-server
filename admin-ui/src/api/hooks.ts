@@ -1,7 +1,14 @@
 import { useEffect, useRef } from 'react';
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { api, fetchCover } from './client';
-import type { AdminLibrary } from './types';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query';
+import { api, fetchCover, type BookFilter, type BookListParams } from './client';
+import { loadThumb, type ThumbSize } from './cover-batch';
+import type { AdminBookDetail, AdminLibrary, BookRef } from './types';
 
 // Query keys live here so invalidation and the hooks can't drift apart.
 export const keys = {
@@ -9,6 +16,8 @@ export const keys = {
   stats: ['admin', 'stats'] as const,
   settings: ['admin', 'settings'] as const,
   cover: (libraryId: number, path: string) => ['cover', libraryId, path] as const,
+  thumb: (libraryId: number, path: string, size: ThumbSize) =>
+    ['thumb', libraryId, path, size] as const,
   libraries: ['admin', 'libraries'] as const,
   recentBooks: (libraryId: number) => ['books', 'recent', libraryId] as const,
   browse: (libraryId: number, path: string) => ['fs', libraryId, path] as const,
@@ -17,6 +26,17 @@ export const keys = {
   user: (id: number) => ['admin', 'user', id] as const,
   invites: ['admin', 'invites'] as const,
   shares: ['admin', 'shares'] as const,
+  /** Every admin book list and facet count (a prefix: invalidate after any edit). */
+  books: ['admin', 'books'] as const,
+  bookList: (params: BookListParams) => ['admin', 'books', 'list', params] as const,
+  bookFacets: (filter: BookFilter) => ['admin', 'books', 'facets', filter] as const,
+  authors: (libraryId?: number) => ['admin', 'books', 'authors', libraryId ?? 0] as const,
+  narrators: (libraryId?: number) => ['admin', 'books', 'narrators', libraryId ?? 0] as const,
+  series: (libraryId?: number) => ['admin', 'books', 'series', libraryId ?? 0] as const,
+  book: (libraryId: number, path: string) => ['admin', 'book', libraryId, path] as const,
+  match: (libraryId: number, path: string, by: Record<string, string>) =>
+    ['admin', 'book', libraryId, path, 'match', by] as const,
+  bookMeta: (libraryId: number, path: string) => ['meta', libraryId, path] as const,
 };
 
 /**
@@ -49,15 +69,45 @@ export function useSettings() {
   return useQuery({ queryKey: keys.settings, queryFn: api.settings, staleTime: 5 * 60_000 });
 }
 
-/** A cover as a data: URL (null = the book has no art). Covers rarely change: cache for an hour. */
-export function useCover(libraryId: number, path: string) {
+/**
+ * A cover as a data: URL (null = the book has no art). `size` asks for a batched
+ * thumbnail (grids, shelves, rows); `'full'` fetches the art itself (the book
+ * hero). Covers rarely change: cache for an hour, and invalidateCover after an
+ * upload.
+ */
+export function useCover(libraryId: number, path: string, size: ThumbSize | 'full' = 320) {
   return useQuery({
-    queryKey: keys.cover(libraryId, path),
-    queryFn: () => fetchCover(libraryId, path),
+    queryKey: size === 'full' ? keys.cover(libraryId, path) : keys.thumb(libraryId, path, size),
+    queryFn: () =>
+      size === 'full'
+        ? fetchCover(libraryId, path)
+        : loadThumb({ library_id: libraryId, path }, size),
     staleTime: 60 * 60_000,
     gcTime: 60 * 60_000,
     retry: false,
   });
+}
+
+/** Refetches a book's cover everywhere it shows (full art and every thumbnail size). */
+export function invalidateCover(qc: QueryClient, libraryId: number, path: string) {
+  void qc.invalidateQueries({ queryKey: keys.cover(libraryId, path) });
+  void qc.invalidateQueries({ queryKey: ['thumb', libraryId, path] });
+}
+
+/**
+ * Refetches what a metadata edit touches: every book list, facet count and
+ * aggregate, the edited books' pages, and the overview (titles in "listening").
+ */
+export function invalidateBooks(qc: QueryClient, edited: BookRef[] = []) {
+  void qc.invalidateQueries({ queryKey: keys.books });
+  void qc.invalidateQueries({ queryKey: keys.stats });
+  for (const b of edited) void qc.invalidateQueries({ queryKey: keys.book(b.library_id, b.path) });
+}
+
+/** Writes an edit's answer (the updated book page) into the cache, then refetches the lists. */
+export function settleBookEdit(qc: QueryClient, detail: AdminBookDetail) {
+  qc.setQueryData(keys.book(detail.book.library_id, detail.book.path), detail);
+  invalidateBooks(qc);
 }
 
 /**
@@ -174,5 +224,107 @@ export function useShares() {
   return useQuery({
     queryKey: keys.shares,
     queryFn: () => api.shares().then((r) => r.shares ?? []),
+  });
+}
+
+/**
+ * The admin book list, a keyset page at a time (`fetchNextPage` for more). The
+ * previous result stays on screen while a new filter loads, so the grid doesn't
+ * flash empty on every keystroke.
+ */
+export function useAdminBooks(params: Omit<BookListParams, 'cursor'>, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: keys.bookList(params),
+    queryFn: ({ pageParam }) => api.adminBooks({ ...params, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor || undefined,
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+}
+
+/** One page of the admin book list (a shelf, a palette search): no paging. */
+export function useAdminBookPage(params: BookListParams, enabled = true) {
+  return useQuery({
+    queryKey: keys.bookList(params),
+    queryFn: () => api.adminBooks(params),
+    enabled,
+  });
+}
+
+export function useBookFacets(filter: BookFilter) {
+  return useQuery({
+    queryKey: keys.bookFacets(filter),
+    queryFn: () => api.bookFacets(filter),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useAuthors(libraryId?: number, enabled = true) {
+  return useQuery({
+    queryKey: keys.authors(libraryId),
+    queryFn: () => api.authors(libraryId),
+    enabled,
+  });
+}
+
+export function useNarrators(libraryId?: number, enabled = true) {
+  return useQuery({
+    queryKey: keys.narrators(libraryId),
+    queryFn: () => api.narrators(libraryId),
+    enabled,
+  });
+}
+
+export function useSeries(libraryId?: number, enabled = true) {
+  return useQuery({
+    queryKey: keys.series(libraryId),
+    queryFn: () => api.series(libraryId).then((r) => r.series ?? []),
+    enabled,
+  });
+}
+
+/** The book page: fields with provenance, chapters, files, listeners, shares. */
+export function useAdminBook(libraryId: number, path: string) {
+  return useQuery({
+    queryKey: keys.book(libraryId, path),
+    queryFn: () => api.adminBook(libraryId, path),
+  });
+}
+
+/**
+ * Community works a book might be. Searched only when asked (the match dialog is
+ * open); a failed search is not retried (metaserve down answers 502).
+ */
+export function useMatchCandidates(
+  libraryId: number,
+  path: string,
+  by: { q?: string; asin?: string; isbn?: string },
+  enabled: boolean,
+) {
+  const clean = Object.fromEntries(Object.entries(by).filter(([, v]) => v)) as Record<
+    string,
+    string
+  >;
+  return useQuery({
+    queryKey: keys.match(libraryId, path, clean),
+    queryFn: () => api.matchBook(libraryId, path, clean).then((r) => r.candidates ?? []),
+    enabled,
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * A book's community metadata (its series rails). The server caches it for a day;
+ * here it is kept for the session.
+ */
+export function useBookMeta(libraryId: number, path: string, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.bookMeta(libraryId, path),
+    queryFn: () => api.bookMeta(libraryId, path),
+    enabled,
+    retry: false,
+    staleTime: 60 * 60_000,
   });
 }

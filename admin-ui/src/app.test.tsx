@@ -138,17 +138,22 @@ describe('overview', () => {
   it('renders covers from data: URLs fetched with the header, never a token in a URL', async () => {
     const calls = mockFetch(
       signedInRoutes({
-        'GET /libraries/1/cover': {
-          raw: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
-          headers: { 'Content-Type': 'image/png' },
-        },
+        'POST /admin/covers': (req) => ({
+          body: {
+            covers: (req.body as { books: { library_id: number; path: string }[] }).books.map(
+              (b) => ({ ...b, data: 'data:image/jpeg;base64,/9j/' }),
+            ),
+          },
+        }),
       }),
     );
     renderApp();
     const img = await screen.findByAltText('Project Hail Mary'); // the <img>, not the loading skeleton
-    expect(img.getAttribute('src')).toBe('data:image/png;base64,iVBORw==');
-    const cover = calls.find((c) => c.path === '/libraries/1/cover');
-    expect(cover?.headers.Authorization).toBe('Bearer stored');
+    expect(img.getAttribute('src')).toBe('data:image/jpeg;base64,/9j/');
+    // Covers come in batches (one per section as it mounts), with the session header.
+    const batches = calls.filter((c) => c.path === '/admin/covers');
+    expect(batches.length).toBeGreaterThan(0);
+    expect(batches.every((c) => c.headers.Authorization === 'Bearer stored')).toBe(true);
     expect(calls.every((c) => !c.query.has('token'))).toBe(true);
     expect(document.body.innerHTML).not.toContain('token=');
   });
@@ -182,11 +187,11 @@ describe('navigation', () => {
 
   it('deep-links a destination section to its placeholder', async () => {
     mockFetch(signedInRoutes());
-    renderApp('/library/authors');
+    renderApp('/activity/live');
     expect(
-      await screen.findByRole('heading', { name: 'Authors is on its way' }),
+      await screen.findByRole('heading', { name: 'Live now is on its way' }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Authors' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Live now' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('404s an unknown section', async () => {

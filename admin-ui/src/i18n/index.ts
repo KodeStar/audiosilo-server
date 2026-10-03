@@ -26,6 +26,19 @@ export type Language = keyof typeof LANGUAGES;
 
 export const resources = { en, es, fr, de, pt, it } as const;
 
+// TEMPORARY (Phase 2b, parallel screen work): <lang>.<area>.json fragments are
+// merged into each language so several screens can add strings without editing
+// the same file. They are folded into <lang>.json, and this loader removed,
+// before the phase's PR.
+const fragments = import.meta.glob<Record<string, string>>('./locales/*.*.json', {
+  eager: true,
+  import: 'default',
+});
+for (const [file, dict] of Object.entries(fragments)) {
+  const lang = file.split('/').pop()!.split('.')[0] as keyof typeof resources;
+  Object.assign(resources[lang], dict);
+}
+
 const LANG_KEY = 'audiosilo.lang';
 
 function isLanguage(v: string): v is Language {

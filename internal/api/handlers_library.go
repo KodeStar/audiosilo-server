@@ -326,6 +326,27 @@ func (a *API) answerCustomCover(w http.ResponseWriter, r *http.Request, libID in
 	return served || err != nil
 }
 
+// bookArtPaths returns where a book's own art (not a custom cover) is read from:
+// its sidecar image when the scanner recorded one, else the art embedded in its
+// first audio file. A path that doesn't resolve inside the library root is "".
+// A recorded sidecar wins even when it has since vanished (the cover is then
+// missing, not silently swapped for embedded art).
+func bookArtPaths(lib *catalog.Library, book *catalog.Book) (sidecar, audio string) {
+	if book.CoverPath != "" {
+		if abs, err := library.SafeJoin(lib.Root, book.CoverPath); err == nil {
+			return abs, ""
+		}
+	}
+	primary := book.RelPath
+	if book.IsFolder && len(book.Files) > 0 {
+		primary = book.Files[0].RelPath
+	}
+	if abs, err := library.SafeJoin(lib.Root, primary); err == nil {
+		audio = abs
+	}
+	return "", audio
+}
+
 // coverETag is a custom cover's validator, derived from when it was stored.
 func coverETag(updatedAt string) string {
 	modified, _ := time.Parse(time.RFC3339Nano, updatedAt)
@@ -407,29 +428,23 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	if a.answerCustomCover(w, r, lib.ID, book.RelPath) {
 		return
 	}
-	if book.CoverPath != "" {
-		if abs, err := library.SafeJoin(lib.Root, book.CoverPath); err == nil {
-			if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
-				// The same lifetime as embedded art below. Without one a browser keeps
-				// a sidecar image fresh by heuristic (a tenth of the file's age), so a
-				// custom cover uploaded later would go unseen for weeks, not a day. Set
-				// only for a file that is there, so a 404 is never cached.
-				w.Header().Set("Cache-Control", "private, max-age=86400")
-			}
-			media.ServeFile(w, r, abs, false)
-			return
+	sidecar, audio := bookArtPaths(lib, book)
+	if sidecar != "" {
+		if fi, err := os.Stat(sidecar); err == nil && fi.Mode().IsRegular() {
+			// The same lifetime as embedded art below. Without one a browser keeps
+			// a sidecar image fresh by heuristic (a tenth of the file's age), so a
+			// custom cover uploaded later would go unseen for weeks, not a day. Set
+			// only for a file that is there, so a 404 is never cached.
+			w.Header().Set("Cache-Control", "private, max-age=86400")
 		}
+		media.ServeFile(w, r, sidecar, false)
+		return
 	}
-	primary := book.RelPath
-	if book.IsFolder && len(book.Files) > 0 {
-		primary = book.Files[0].RelPath
-	}
-	abs, err := library.SafeJoin(lib.Root, primary)
-	if err != nil {
+	if audio == "" {
 		writeError(w, http.StatusNotFound, "no cover")
 		return
 	}
-	data, mime, ok := media.EmbeddedCover(abs)
+	data, mime, ok := media.EmbeddedCover(audio)
 	if !ok {
 		writeError(w, http.StatusNotFound, "no cover")
 		return

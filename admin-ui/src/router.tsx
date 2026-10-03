@@ -6,10 +6,12 @@ import {
 } from '@tanstack/react-router';
 import { PageSkeleton } from '@/components/page';
 import { DESTINATIONS } from '@/components/shell/destinations';
+import { validateLibrarySearch, type LibrarySearch } from '@/features/library/library-search';
 import { NotFound } from '@/features/not-found';
 import { OverviewPage } from '@/features/overview/overview-page';
 import { USER_TABS, type UserTab } from '@/features/people/people-model';
 import { SectionPage } from '@/features/section-page';
+import { parseBookSearch, type BookSearch } from '@/lib/book-route';
 import { Root } from '@/root';
 
 // Code-based TanStack Router routes under the /admin basepath. TanStack Router
@@ -26,7 +28,7 @@ const homeRoute = createRoute({
 });
 
 /** Search params a destination's sections read. */
-export interface SectionSearch {
+export interface SectionSearch extends LibrarySearch {
   /** Libraries: open the Add library dialog (the first-run call to action). */
   add?: true;
   /** People: open the invite dialog (the palette's "Invite someone"). */
@@ -36,7 +38,7 @@ export interface SectionSearch {
 }
 
 function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
-  const out: SectionSearch = {};
+  const out: SectionSearch = validateLibrarySearch(s);
   const flag = (v: unknown) => v === true || v === 1 || v === '1';
   if (flag(s.add)) out.add = true;
   if (flag(s.invite)) out.invite = true;
@@ -65,7 +67,18 @@ const userRoute = createRoute({
   pendingComponent: PageSkeleton,
 });
 
-const routeTree = rootRoute.addChildren([homeRoute, userRoute, ...destinationRoutes]);
+// A book's page, addressed by its identity (?library=&path=), never an internal id.
+// Search params that don't name a book render the page's not-found state.
+const bookRouteDef = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/library/book',
+  validateSearch: (s: Record<string, unknown>): BookSearch =>
+    parseBookSearch(s) ?? { library: 0, path: '' },
+  component: lazyRouteComponent(() => import('@/features/book/book-page'), 'BookPage'),
+  pendingComponent: PageSkeleton,
+});
+
+const routeTree = rootRoute.addChildren([homeRoute, userRoute, bookRouteDef, ...destinationRoutes]);
 
 export function createAppRouter(
   opts: { history?: Parameters<typeof createRouter>[0]['history'] } = {},

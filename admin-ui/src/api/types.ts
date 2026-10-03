@@ -279,3 +279,336 @@ export interface ErrorEnvelope {
   /** For failures a person can fix (respond.go codeUsernameTaken etc.). */
   code?: string;
 }
+
+// ---- Admin catalog (Phase 2a API, consumed by the Library and Book screens) ----
+
+/** One row of GET /admin/books (catalog.AdminBook, internal/catalog/adminbooks.go). */
+export interface AdminBook {
+  library_id: number;
+  library_name: string;
+  path: string;
+  is_folder: boolean;
+  title: string;
+  author: string;
+  narrator: string;
+  series: string;
+  series_index: number;
+  published: string;
+  /** Seconds. */
+  duration: number;
+  format: string;
+  codec: string;
+  direct_playable: boolean;
+  size: number;
+  added_at: string;
+  has_cover: boolean;
+  custom_cover: boolean;
+  chapter_count: number;
+  file_count: number;
+  asin: string;
+  isbn: string;
+  edited: boolean;
+}
+
+/** GET /admin/books (catalog.AdminPage). */
+export interface AdminBookPage {
+  books: AdminBook[];
+  next_cursor?: string;
+}
+
+/** The orderings GET /admin/books accepts (catalog.adminSorts). */
+export type AdminBookSort =
+  'title' | 'author' | 'series' | 'narrator' | 'added' | 'duration' | 'size';
+
+/** catalog.FacetCount. */
+export interface FacetCount {
+  value: string;
+  count: number;
+}
+
+/** catalog.BoolFacet: books for which a yes/no property holds, and doesn't. */
+export interface BoolFacet {
+  yes: number;
+  no: number;
+}
+
+/** GET /admin/books/facets (catalog.BookFacets): each dimension counted without its own filter. */
+export interface BookFacets {
+  total: number;
+  libraries: { library_id: number; count: number }[];
+  formats: FacetCount[];
+  codecs: FacetCount[];
+  direct_playable: BoolFacet;
+  has_cover: BoolFacet;
+  has_chapters: BoolFacet;
+  matched: BoolFacet;
+  edited: BoolFacet;
+}
+
+/** catalog.PersonCount: one author or narrator (a whole field value). */
+export interface PersonCount {
+  name: string;
+  books: number;
+  /** Seconds, summed over their books. */
+  duration: number;
+}
+
+/** catalog.MergeSuggestion: spellings that look like one person. */
+export interface MergeSuggestion {
+  names: string[];
+  suggested: string;
+  books: number;
+}
+
+/** GET /admin/authors (handlers_catalog.go handleAdminPeople). */
+export interface AuthorsResponse {
+  authors: PersonCount[];
+  merge_suggestions: MergeSuggestion[];
+  /** Books with no author. */
+  unknown: number;
+}
+
+/** GET /admin/narrators (handlers_catalog.go handleAdminPeople). */
+export interface NarratorsResponse {
+  narrators: PersonCount[];
+  merge_suggestions: MergeSuggestion[];
+  unknown: number;
+}
+
+/** catalog.SeriesCount (GET /admin/series). */
+export interface SeriesCount {
+  name: string;
+  /** The most common author among its books. */
+  author: string;
+  books: number;
+  duration: number;
+  /** Distinct non-zero positions held, ascending. */
+  positions: number[];
+}
+
+/** The overridable book fields (catalog.OverrideFields), in display order. */
+export const OVERRIDE_FIELDS = [
+  'title',
+  'author',
+  'narrator',
+  'series',
+  'series_index',
+  'published',
+  'description',
+  'asin',
+  'isbn',
+] as const;
+export type OverrideField = (typeof OVERRIDE_FIELDS)[number];
+
+/** Where a field's value came from (catalog.Source*), in the legend's order. */
+export const FIELD_SOURCES = ['tag', 'path', 'edited', 'community'] as const;
+/** A field's source; "" = no value. */
+export type FieldSource = (typeof FIELD_SOURCES)[number] | '';
+
+/** catalog.FieldValue: one overridable field on the book page. */
+export interface FieldValue {
+  value: string;
+  source: FieldSource;
+  /** What the scan found: the value a revert restores. */
+  scanned: string;
+  locked: boolean;
+  edited_by?: string;
+  edited_at?: string;
+}
+
+/** catalog.AdminChapter. Times are seconds. */
+export interface AdminChapter {
+  index: number;
+  title: string;
+  scanned_title: string;
+  edited: boolean;
+  file_path: string;
+  start: number;
+  end: number;
+  book_offset: number;
+}
+
+/** catalog.AdminFile: one audio file of a book (bitrate in bits per second, 0 = unknown). */
+export interface AdminFile {
+  path: string;
+  seq: number;
+  duration: number;
+  format: string;
+  codec: string;
+  size: number;
+  bitrate: number;
+}
+
+/** catalog.Listener: one user's progress on the book. */
+export interface Listener {
+  user_id: number;
+  username: string;
+  position: number;
+  duration: number;
+  finished: boolean;
+  updated_at: string;
+}
+
+/** catalog.BookShare: a share that includes the book, by the rule that includes it. */
+export interface BookShare {
+  share_id: number;
+  name: string;
+  /** The granting rule ("" = whole library). */
+  path: string;
+  whole_library_id?: number;
+}
+
+/** GET/PATCH /admin/libraries/{id}/book (catalog.AdminBookDetail). */
+export interface AdminBookDetail {
+  book: AdminBook;
+  description: string;
+  fields: Record<OverrideField, FieldValue>;
+  chapters: AdminChapter[];
+  files: AdminFile[];
+  listeners: Listener[];
+  shares: BookShare[];
+  /** The folder whose detection decides the book's shape, and its override ("" = automatic). */
+  folder: { path: string; override: FolderMode | '' };
+  indexed_at: string;
+}
+
+/** The body of PATCH /admin/libraries/{id}/book (handlers_catalog.go editRequest). */
+export interface BookEditRequest {
+  set?: Partial<Record<OverrideField, string>>;
+  revert?: OverrideField[];
+  /** "community" when the values were accepted from a match; default "edited". */
+  source?: 'edited' | 'community';
+  chapters?: { set?: Record<number, string>; revert?: number[] };
+}
+
+/** catalog.Ref: a book by its identity. */
+export interface BookRef {
+  library_id: number;
+  path: string;
+}
+
+/** meta.MetaPersonRef. */
+export interface MetaPersonRef {
+  id: string;
+  name: string;
+}
+
+/** meta.MatchRecording: one narration/edition of a candidate work. */
+export interface MatchRecording {
+  id: string;
+  narrators: MetaPersonRef[];
+  abridged?: boolean;
+  runtime_min?: number;
+  release_date?: string;
+  publisher?: string;
+  asins: string[];
+  isbns: string[];
+  cover_url?: string;
+}
+
+/** meta.MatchCandidate (GET /admin/libraries/{id}/book/match). */
+export interface MatchCandidate {
+  work_id: string;
+  title: string;
+  subtitle?: string;
+  authors: MetaPersonRef[];
+  language?: string;
+  first_published?: string;
+  description?: string;
+  series: { name: string; position: string }[];
+  cover_url?: string;
+  web_url: string;
+  recordings: MatchRecording[];
+  /** The recording an ASIN/ISBN lookup resolved to. */
+  recording_id?: string;
+  /** 0-100: how well the work fits the book (100 = identifier hit). */
+  score: number;
+}
+
+/** One entry of POST /admin/covers (handlers_covers.go coverThumb), in request order. */
+export interface CoverThumb {
+  library_id: number;
+  path: string;
+  /** A data: URL of a JPEG thumbnail, or "" when the book has no art. */
+  data: string;
+}
+
+/** meta.MetaPosition. */
+export interface MetaPosition {
+  chapter: number;
+}
+
+/** meta.MetaWork (only in the meta envelope here; the console reads its series rails). */
+export interface MetaWork {
+  id: string;
+  title: string;
+  subtitle?: string;
+  authors: MetaPersonRef[];
+  language: string;
+  first_published?: string;
+  description?: string;
+  characters?: {
+    id: string;
+    name: string;
+    aliases?: string[];
+    role?: string;
+    reveal: MetaPosition;
+    description?: string;
+  }[];
+  recaps?: { through: MetaPosition; scope?: string; text: string }[];
+  recap_summary?: { in_short?: string; ending?: string };
+}
+
+/** meta.MetaRecording. */
+export interface MetaRecording {
+  id: string;
+  narrators: MetaPersonRef[];
+  abridged?: boolean;
+  runtime_min?: number;
+  release_date?: string;
+  publisher?: string;
+  cover_url?: string;
+}
+
+/** meta.MetaSeriesWork: one entry of a series rail. */
+export interface MetaSeriesWork {
+  id: string;
+  title: string;
+  position: string;
+  authors: MetaPersonRef[];
+  cover_url?: string;
+  web_url: string;
+}
+
+/** meta.MetaSeriesOrdering: an alternate reading order of a rail's family. */
+export interface MetaSeriesOrdering {
+  id: string;
+  name: string;
+  ordering?: string;
+  ordering_of?: string;
+  position?: string;
+  works: MetaSeriesWork[];
+}
+
+/** meta.MetaSeries: a full ordered series rail (the family's main view). */
+export interface MetaSeries {
+  id: string;
+  name: string;
+  position: string;
+  works: MetaSeriesWork[];
+  ordering?: string;
+  ordering_of?: string;
+  orderings?: MetaSeriesOrdering[];
+}
+
+/**
+ * GET /libraries/{id}/meta?path= (handlers_meta.go): {"matched": false}, or the
+ * composed meta.Enrichment.
+ */
+export interface BookMeta {
+  matched: boolean;
+  work?: MetaWork;
+  recording?: MetaRecording;
+  series?: MetaSeries[];
+  web_url?: string;
+}

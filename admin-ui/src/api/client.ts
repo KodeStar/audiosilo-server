@@ -1,5 +1,17 @@
 import { clearToken, getToken } from './token';
 import type {
+  AdminBookDetail,
+  AdminBookPage,
+  AdminBookSort,
+  AuthorsResponse,
+  BookEditRequest,
+  BookFacets,
+  BookMeta,
+  BookRef,
+  CoverThumb,
+  MatchCandidate,
+  NarratorsResponse,
+  SeriesCount,
   AdminLibrary,
   AdminSettings,
   AdminShare,
@@ -64,20 +76,28 @@ const LOGIN_PATH = '/auth/login';
  * the session, and a failure raised as ApiError from the {"error"} envelope.
  * `explicitToken` authenticates with a token that is not the stored session
  * (signing a non-admin straight back out) and leaves the stored session alone.
- * `allow` lists statuses the caller handles itself (a cover's 404).
+ * `allow` lists statuses the caller handles itself (a cover's 404). `raw` sends a
+ * file as the body as is (a cover upload) instead of JSON.
  */
 async function send(
   path: string,
-  init: { method?: string; body?: unknown; explicitToken?: string; allow?: number[] } = {},
+  init: {
+    method?: string;
+    body?: unknown;
+    raw?: Blob;
+    explicitToken?: string;
+    allow?: number[];
+  } = {},
 ): Promise<Response> {
   const headers: Record<string, string> = {};
   const token = init.explicitToken ?? getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (init.raw) headers['Content-Type'] = init.raw.type || 'application/octet-stream';
+  else if (init.body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(API + path, {
     method: init.method ?? 'GET',
     headers,
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    body: init.raw ?? (init.body === undefined ? undefined : JSON.stringify(init.body)),
   });
   if (init.explicitToken === undefined) checkSession(res.status, path);
   if (!res.ok && !init.allow?.includes(res.status)) throw await apiError(res);
@@ -126,6 +146,60 @@ function checkSession(status: number, path: string) {
 
 /** The path query every content endpoint takes (path is the identity, never an id). */
 const pathQuery = (path: string) => `?${new URLSearchParams({ path }).toString()}`;
+
+/**
+ * The filters GET /admin/books and /admin/books/facets share
+ * (handlers_catalog.go bookFilterFromQuery). Unset = no filter.
+ */
+export interface BookFilter {
+  /** Full text over title, author, series and narrator. */
+  q?: string;
+  library_id?: number;
+  /** Exact effective values (an author tile, a series card). */
+  author?: string;
+  series?: string;
+  narrator?: string;
+  format?: string[];
+  codec?: string[];
+  direct_playable?: boolean;
+  has_cover?: boolean;
+  has_chapters?: boolean;
+  matched?: boolean;
+  edited?: boolean;
+  /** Seconds. */
+  min_duration?: number;
+  max_duration?: number;
+  /** YYYY-MM-DD or RFC 3339; after is inclusive, before exclusive. */
+  added_after?: string;
+  added_before?: string;
+}
+
+/** One page request of GET /admin/books. */
+export interface BookListParams extends BookFilter {
+  sort?: AdminBookSort;
+  order?: 'asc' | 'desc';
+  cursor?: string;
+  /** 1-200; the server defaults to 60. */
+  limit?: number;
+}
+
+/**
+ * Parameters as a query string ("" when empty), unset values left out and arrays
+ * repeated (?format=mp3&format=m4b), the way the server parses them.
+ */
+export function bookQuery(params: object): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params) as [string, unknown][]) {
+    if (v === undefined || v === '' || v === null) continue;
+    if (Array.isArray(v)) for (const item of v) q.append(k, String(item));
+    else q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+/** A ?library_id= query for the aggregates ("" = every library). */
+const libraryQuery = (libraryId?: number) => (libraryId ? `?library_id=${libraryId}` : '');
 
 export const api = {
   serverInfo: () => request<ServerInfo>('GET', '/server'),
@@ -203,6 +277,51 @@ export const api = {
     request<void>('DELETE', '/admin/share-access', { user_id: userId, share_id: shareId }),
   grantLibrary: (userId: number, libraryId: number) =>
     request<void>('POST', '/admin/library-access', { user_id: userId, library_id: libraryId }),
+
+  // The admin catalog (Library and Book screens).
+  adminBooks: (params: BookListParams) =>
+    request<AdminBookPage>('GET', `/admin/books${bookQuery(params)}`),
+  bookFacets: (filter: BookFilter) =>
+    request<BookFacets>('GET', `/admin/books/facets${bookQuery(filter)}`),
+  /** One field edit over many books, all or nothing (at most 1000). */
+  bulkEdit: (books: BookRef[], edit: Omit<BookEditRequest, 'chapters'>) =>
+    request<{ updated: number }>('POST', '/admin/books/bulk', { books, ...edit }),
+  authors: (libraryId?: number) =>
+    request<AuthorsResponse>('GET', `/admin/authors${libraryQuery(libraryId)}`),
+  narrators: (libraryId?: number) =>
+    request<NarratorsResponse>('GET', `/admin/narrators${libraryQuery(libraryId)}`),
+  series: (libraryId?: number) =>
+    request<{ series: SeriesCount[] }>('GET', `/admin/series${libraryQuery(libraryId)}`),
+  adminBook: (libraryId: number, path: string) =>
+    request<AdminBookDetail>('GET', `/admin/libraries/${libraryId}/book${pathQuery(path)}`),
+  /** Sets or reverts overrides; answers with the updated book page. */
+  editBook: (libraryId: number, path: string, edit: BookEditRequest) =>
+    request<AdminBookDetail>('PATCH', `/admin/libraries/${libraryId}/book${pathQuery(path)}`, edit),
+  /** Community works the book might be: by its own facts, or by `q` / an ASIN / an ISBN. */
+  matchBook: (
+    libraryId: number,
+    path: string,
+    by: { q?: string; asin?: string; isbn?: string } = {},
+  ) =>
+    request<{ candidates: MatchCandidate[] }>(
+      'GET',
+      `/admin/libraries/${libraryId}/book/match${bookQuery({ path, ...by })}`,
+    ),
+  /** The book's community metadata (series rails for the Series gaps). */
+  bookMeta: (libraryId: number, path: string) =>
+    request<BookMeta>('GET', `/libraries/${libraryId}/meta${pathQuery(path)}`),
+  /** Cover thumbnails as data: URLs, in request order (at most 60). */
+  coverThumbs: (books: BookRef[], size: 160 | 320 | 640 = 320) =>
+    request<{ covers: CoverThumb[] }>('POST', '/admin/covers', { books, size }),
+  /** Uploads a custom cover (JPEG, PNG or WebP, at most 5 MiB); the book folder is untouched. */
+  setCover: async (libraryId: number, path: string, image: Blob) => {
+    await send(`/admin/libraries/${libraryId}/cover${pathQuery(path)}`, {
+      method: 'PUT',
+      raw: image,
+    });
+  },
+  deleteCover: (libraryId: number, path: string) =>
+    request<void>('DELETE', `/admin/libraries/${libraryId}/cover${pathQuery(path)}`),
 };
 
 /**

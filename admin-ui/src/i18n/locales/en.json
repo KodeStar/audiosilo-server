@@ -497,5 +497,14 @@
   "user.account.nowMember": "{{name}} is now a member",
   "libraries.unreadable.title": "AudioSilo can't read this folder",
   "libraries.unreadable.body": "Check that {{root}} exists and that the server can read it, then retry. If it's a network share, mount it first.",
-  "invite.expires": "Expires {{time}}"
+  "invite.expires": "Expires {{time}}",
+  "provenance.tag": "File tag",
+  "provenance.path": "Path",
+  "provenance.edited": "Edited",
+  "provenance.community": "Community",
+  "provenance.unsaved": "Unsaved",
+  "provenance.tagHint": "Read from the audio file's tags",
+  "provenance.pathHint": "Derived from the folder and file names",
+  "provenance.editedHint": "Your edit. Locked, so rescans keep it",
+  "provenance.communityHint": "Accepted from community metadata"
 }

@@ -497,5 +497,14 @@
   "user.account.nowMember": "{{name}} ist jetzt Mitglied",
   "libraries.unreadable.title": "AudioSilo kann diesen Ordner nicht lesen",
   "libraries.unreadable.body": "Prüfe, ob {{root}} existiert und der Server ihn lesen kann, und versuche es dann erneut. Ist es ein Netzlaufwerk, binde es zuerst ein.",
-  "invite.expires": "Läuft ab am {{time}}"
+  "invite.expires": "Läuft ab am {{time}}",
+  "provenance.tag": "Datei-Tag",
+  "provenance.path": "Pfad",
+  "provenance.edited": "Bearbeitet",
+  "provenance.community": "Community",
+  "provenance.unsaved": "Nicht gespeichert",
+  "provenance.tagHint": "Aus den Tags der Audiodatei gelesen",
+  "provenance.pathHint": "Aus Ordner- und Dateinamen abgeleitet",
+  "provenance.editedHint": "Ihre Änderung. Gesperrt, neue Scans behalten sie",
+  "provenance.communityHint": "Aus Community-Metadaten übernommen"
 }

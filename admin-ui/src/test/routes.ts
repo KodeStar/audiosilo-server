@@ -1,3 +1,4 @@
+import type { BookRef } from '@/api/types';
 import type { MockRoute } from './fetch-mock';
 import { admin, libraries, serverInfo, settings, stats } from './fixtures';
 
@@ -12,9 +13,14 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     'GET /admin/stats': { body: stats() },
     'GET /admin/settings': { body: settings },
     'GET /admin/libraries': { body: { libraries: libraries() } },
-    // No cover art by default: the hatched "missing" cover.
+    // No cover art by default: every book gets its generated cover.
     'GET /libraries/1/cover': { status: 404 },
     'GET /libraries/2/cover': { status: 404 },
+    'POST /admin/covers': (req) => ({
+      body: {
+        covers: (req.body as { books: BookRef[] }).books.map((b) => ({ ...b, data: '' })),
+      },
+    }),
     ...over,
   };
 }

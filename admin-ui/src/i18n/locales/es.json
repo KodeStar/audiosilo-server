@@ -517,5 +517,14 @@
   "user.account.nowMember": "{{name}} ahora es miembro",
   "libraries.unreadable.title": "AudioSilo no puede leer esta carpeta",
   "libraries.unreadable.body": "Comprueba que {{root}} existe y que el servidor puede leerla, y vuelve a intentarlo. Si es una unidad de red, móntala primero.",
-  "invite.expires": "Caduca el {{time}}"
+  "invite.expires": "Caduca el {{time}}",
+  "provenance.tag": "Etiqueta del archivo",
+  "provenance.path": "Ruta",
+  "provenance.edited": "Editado",
+  "provenance.community": "Comunidad",
+  "provenance.unsaved": "Sin guardar",
+  "provenance.tagHint": "Leído de las etiquetas del archivo de audio",
+  "provenance.pathHint": "Deducido de los nombres de carpeta y archivo",
+  "provenance.editedHint": "Tu edición. Bloqueada: los reescaneos la conservan",
+  "provenance.communityHint": "Aceptado de los metadatos de la comunidad"
 }
