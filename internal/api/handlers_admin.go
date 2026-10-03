@@ -508,8 +508,8 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 // handleSetEnrichment attaches path-keyed metadata (ASIN/ISBN) to a book. The
 // manager calls this after matching an external source (e.g. an Audible library) to
 // an indexed book, so a book scanned without an ASIN gains one - making future
-// matches exact. The enrichment is durable and survives a re-scan
-// (catalog.ApplyEnrichments); no file on disk is modified, so the network API stays
+// matches exact. The enrichment is durable and survives a re-scan (UpsertBook
+// re-applies it); no file on disk is modified, so the network API stays
 // non-destructive.
 func (a *API) handleSetEnrichment(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")

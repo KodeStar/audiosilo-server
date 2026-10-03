@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -99,6 +100,18 @@ func (c *client) work(ctx context.Context, id string) (*upstreamWorkDetail, erro
 	return &out, nil
 }
 
+// searchWorks runs a ranked full-text work search via GET /api/v1/works/search.
+func (c *client) searchWorks(ctx context.Context, q string, limit int) (*upstreamSearch, error) {
+	v := url.Values{}
+	v.Set("q", q)
+	v.Set("limit", strconv.Itoa(limit))
+	var out upstreamSearch
+	if err := c.getJSON(ctx, "/api/v1/works/search?"+v.Encode(), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // series fetches an ordered series rail via GET /api/v1/series/{id}.
 func (c *client) series(ctx context.Context, id string) (*upstreamSeriesDetail, error) {
 	var out upstreamSeriesDetail
@@ -147,6 +160,23 @@ type upstreamRecording struct {
 	ReleaseDate string              `json:"release_date"`
 	Publisher   string              `json:"publisher"`
 	CoverURL    string              `json:"cover_url"`
+	ASIN        []upstreamASIN      `json:"asin"`
+	ISBN        []string            `json:"isbn"`
+}
+
+// upstreamASIN is one of a recording's ASINs; Audible ASINs are per marketplace.
+type upstreamASIN struct {
+	Region string `json:"region"`
+	ASIN   string `json:"asin"`
+}
+
+// upstreamSearch is GET works/search: ranked work hits (the card fields are not
+// needed here; each hit's full document is fetched by id).
+type upstreamSearch struct {
+	Results []struct {
+		ID       string  `json:"id"`
+		CoverURL *string `json:"cover_url"`
+	} `json:"results"`
 }
 
 type upstreamPosition struct {

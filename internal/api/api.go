@@ -234,6 +234,20 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanLibrary)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanStatus)))
 
+	// Admin catalog: the console's Library and Book screens. Metadata edits are
+	// path-keyed overrides in the database; no file on disk is ever modified.
+	mux.Handle("GET /api/v1/admin/books", a.requireAdmin(http.HandlerFunc(a.handleAdminListBooks)))
+	mux.Handle("GET /api/v1/admin/books/facets", a.requireAdmin(http.HandlerFunc(a.handleAdminBookFacets)))
+	mux.Handle("POST /api/v1/admin/books/bulk", a.requireAdmin(http.HandlerFunc(a.handleAdminBulkEdit)))
+	mux.Handle("GET /api/v1/admin/authors", a.requireAdmin(a.handleAdminPeople(catalog.PeopleAuthors, "authors")))
+	mux.Handle("GET /api/v1/admin/narrators", a.requireAdmin(a.handleAdminPeople(catalog.PeopleNarrators, "narrators")))
+	mux.Handle("GET /api/v1/admin/series", a.requireAdmin(http.HandlerFunc(a.handleAdminSeries)))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminBook)))
+	mux.Handle("PATCH /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminEditBook)))
+	mux.Handle("GET /api/v1/admin/libraries/{id}/book/match", a.requireAdmin(http.HandlerFunc(a.handleAdminMatch)))
+	mux.Handle("PUT /api/v1/admin/libraries/{id}/cover", a.requireAdmin(http.HandlerFunc(a.handleAdminSetCover)))
+	mux.Handle("DELETE /api/v1/admin/libraries/{id}/cover", a.requireAdmin(http.HandlerFunc(a.handleAdminDeleteCover)))
+
 	// Filesystem-based shares: named sets of path rules, granted to users.
 	mux.Handle("GET /api/v1/admin/shares", a.requireAdmin(http.HandlerFunc(a.handleListShares)))
 	mux.Handle("POST /api/v1/admin/shares", a.requireAdmin(http.HandlerFunc(a.handleCreateShare)))

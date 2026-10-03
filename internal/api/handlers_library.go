@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -273,6 +276,51 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// serveCustomCover answers a cover request from a custom cover uploaded in the
+// admin console, if the path has one. A custom cover can be replaced at any time,
+// so it is revalidated (no-cache + ETag) rather than cached for a day, and a
+// still-fresh conditional request is answered from the cover's timestamp alone,
+// without reading the image. The validator is an ETag, not Last-Modified, on
+// purpose: once the cover is removed, a client revalidating with If-Modified-Since
+// would get a 304 from the book's own (older) sibling cover file and keep showing
+// the removed image; an If-None-Match never matches that fallback. served is false
+// when the path has no custom cover.
+func (a *API) serveCustomCover(w http.ResponseWriter, r *http.Request, libID int64, path string) (served bool, err error) {
+	info, err := a.cat.CoverInfo(r.Context(), libID, path)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if inm := r.Header.Get("If-None-Match"); inm != "" && strings.Contains(inm, coverETag(info.UpdatedAt)) {
+		w.Header().Set("Cache-Control", "private, no-cache")
+		w.Header().Set("ETag", coverETag(info.UpdatedAt))
+		w.WriteHeader(http.StatusNotModified)
+		return true, nil
+	}
+	cv, err := a.cat.Cover(r.Context(), libID, path)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return false, nil // removed since the check above: fall back to the book's art
+	}
+	if err != nil {
+		return false, err
+	}
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", coverETag(cv.UpdatedAt))
+	w.Header().Set("Content-Type", cv.MIME)
+	// A zero modtime: no Last-Modified (see above); ServeContent still honours the
+	// ETag for conditional and Range requests.
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(cv.Data))
+	return true, nil
+}
+
+// coverETag is a custom cover's validator, derived from when it was stored.
+func coverETag(updatedAt string) string {
+	modified, _ := time.Parse(time.RFC3339Nano, updatedAt)
+	return `"cover-` + strconv.FormatInt(modified.UnixNano(), 36) + `"`
+}
+
 // handleStream serves an audio file by path. By default it streams the file with
 // Range support (?download=1 forces a download). With ?transcode=1 it re-encodes
 // to MP3 via ffmpeg for codecs browsers can't decode; ?t=<seconds> starts that
@@ -320,12 +368,19 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	media.ServeFile(w, r, abs, r.URL.Query().Get("download") == "1")
 }
 
-// handleCover serves a book's cover for a path: a sibling cover file if indexed,
-// otherwise embedded art from the book's primary audio file.
+// handleCover serves a book's cover for a path: a custom cover uploaded in the
+// admin console, else a sibling cover file if indexed, else embedded art from the
+// book's primary audio file.
 func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	lib, path, status, msg := a.authorizedPath(r)
 	if status != 0 {
 		writeError(w, status, msg)
+		return
+	}
+	if served, err := a.serveCustomCover(w, r, lib.ID, path); served || err != nil {
+		if err != nil {
+			a.writeCatalogError(w, err, "load custom cover failed", "could not load cover", "library", lib.ID, "path", path)
+		}
 		return
 	}
 	book, err := a.bookForPath(r.Context(), lib, path)

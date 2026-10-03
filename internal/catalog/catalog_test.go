@@ -324,12 +324,9 @@ func TestMoveDurableState(t *testing.T) {
 	if len(favs) != 1 || favs[0].Path != "new/Book.m4b" {
 		t.Fatalf("favourite should have moved to the new path: %+v", favs)
 	}
-	// Path-keyed enrichment follows the move: re-indexing the book at the new path
-	// (without an ASIN) and re-applying must restore the ASIN attached pre-move.
+	// Path-keyed enrichment follows the move: indexing the book at the new path
+	// (without an ASIN) must carry the ASIN attached pre-move.
 	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "new/Book.m4b", Title: "Book", AddedAt: "2020-01-01"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.ApplyEnrichments(ctx, lib.ID); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := c.GetBookByPath(ctx, lib.ID, "new/Book.m4b"); b == nil || b.ASIN != "B0ASIN" {

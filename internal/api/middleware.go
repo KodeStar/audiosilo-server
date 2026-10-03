@@ -39,7 +39,9 @@ func isStreamingPath(p string) bool {
 func (a *API) timeout(next http.Handler) http.Handler {
 	timed := http.TimeoutHandler(next, a.timeoutDur, `{"error":"request timed out"}`)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isStreamingPath(r.URL.Path) {
+		// Only reads stream: an upload to a streaming-shaped path (an admin's PUT
+		// .../cover) stays bounded, or a slow client could hold it open forever.
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && isStreamingPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

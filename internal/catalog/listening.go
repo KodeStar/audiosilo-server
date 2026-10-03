@@ -230,7 +230,20 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 			`UPDATE favourites SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			// book_enrichment is keyed on the book path too, so a move must carry the
 			// attached ASIN/ISBN to the new path or the moved book silently loses it.
-			`UPDATE book_enrichment SET path = ? WHERE library_id = ? AND path = ?`,
+			`UPDATE OR REPLACE book_enrichment SET path = ? WHERE library_id = ? AND path = ?`,
+			// An admin's metadata edits and custom cover belong to the book, so they
+			// follow it too. Should the new path already carry its own (stale rows from
+			// an earlier book there), the moved book's set replaces them whole: the
+			// DELETEs drop the destination's rows first (only when the moved book has
+			// some), so a stale override of a field the moved book never edited can't
+			// survive and merge in. OR REPLACE then only guards the single-row covers.
+			`DELETE FROM book_overrides WHERE path = ?1 AND library_id = ?2
+			   AND EXISTS(SELECT 1 FROM book_overrides WHERE library_id = ?2 AND path = ?3)`,
+			`DELETE FROM chapter_overrides WHERE path = ?1 AND library_id = ?2
+			   AND EXISTS(SELECT 1 FROM chapter_overrides WHERE library_id = ?2 AND path = ?3)`,
+			`UPDATE OR REPLACE book_overrides SET path = ? WHERE library_id = ? AND path = ?`,
+			`UPDATE OR REPLACE chapter_overrides SET path = ? WHERE library_id = ? AND path = ?`,
+			`UPDATE OR REPLACE book_covers SET path = ? WHERE library_id = ? AND path = ?`,
 		}
 		for _, stmt := range stmts {
 			if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {

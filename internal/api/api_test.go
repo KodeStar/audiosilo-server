@@ -732,20 +732,14 @@ func TestEnrichmentEndpoint(t *testing.T) {
 		t.Fatalf("blank enrichment = %d, want 400", resp.StatusCode)
 	}
 
-	// Durability: a rebuild re-indexes the book without an ASIN; ApplyEnrichments
-	// (which the scanner runs) must restore it.
+	// Durability: a rebuild re-indexes the book from a scan that found no ASIN; the
+	// upsert itself re-applies the stored enrichment.
 	rebuilt := &catalog.Book{LibraryID: lib.ID, RelPath: "Author/Book", Title: "Book", Author: "Author", AddedAt: "2020-01-01"}
 	if _, err := e.cat.UpsertBook(ctx, rebuilt); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book"); b.ASIN != "" {
-		t.Fatalf("expected ASIN cleared by rebuild, got %q", b.ASIN)
-	}
-	if err := e.cat.ApplyEnrichments(ctx, lib.ID); err != nil {
-		t.Fatal(err)
-	}
 	if b, _ := e.cat.GetBookByPath(ctx, lib.ID, "Author/Book"); b.ASIN != "B0ABC123" {
-		t.Fatalf("enrichment not restored after rebuild: %q", b.ASIN)
+		t.Fatalf("enrichment not kept across a rebuild: %q", b.ASIN)
 	}
 }
 

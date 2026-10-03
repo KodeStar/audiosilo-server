@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
@@ -201,6 +202,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 
 	res := &ScanResult{}
 	keep := make(map[string]bool, len(books))
+	coverBackfill := map[string]bool{}
 	lastLog := time.Now()
 	for i, b := range books {
 		if err := ctx.Err(); err != nil {
@@ -220,6 +222,14 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// disabled, or a prior probe already stored both duration and codec
 			// (so books indexed before the codec column get it backfilled).
 			if old.ContentHash != "" {
+				// Rows indexed before migration 0016 have no cover flag; fill it with a
+				// tag read (no ffprobe) rather than re-indexing the book.
+				// A file that can't be opened right now (a flaky mount) is left unknown
+				// for the next scan rather than recorded as having no cover.
+				primary := filepath.Join(lib.Root, filepath.FromSlash(primaryPath(b)))
+				if old.HasCover == nil && readable(primary) {
+					_, _, coverBackfill[b.RelPath] = media.EmbeddedCover(primary)
+				}
 				continue
 			}
 			// The fingerprint never landed (a one-off read error). Without one a
@@ -241,6 +251,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		res.Indexed++
 	}
 	s.setProgress(lib.ID, ScanProgress{Running: true, Total: len(books), Done: len(books), Indexed: res.Indexed})
+	if err := s.cat.SetHasCover(ctx, lib.ID, coverBackfill); err != nil {
+		s.log.Warn("record cover flags failed", "library", lib.Name, "err", err)
+	}
 
 	// Only prune when discovery saw the whole tree. If a subtree was unreadable
 	// (partialDiscovery), its books are missing from `keep` through a mount/permission
@@ -255,12 +268,6 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			return res, err
 		}
 		res.Removed = removed
-	}
-	// Re-apply path-keyed enrichment (e.g. ASINs attached by the manager) onto the
-	// freshly-indexed books - it lives outside the rebuildable index, so a scan must
-	// restore it.
-	if err := s.cat.ApplyEnrichments(ctx, lib.ID); err != nil {
-		s.log.Warn("apply enrichments failed", "library", lib.Name, "err", err)
 	}
 	res.Elapsed = time.Since(start)
 	s.log.Info("library scanned", "library", lib.Name,
@@ -281,8 +288,12 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	md, _ := metadata.Extract(abs, s.ffprobePath)
 	if md != nil {
 		b.Title = chooseTitle(md.Title, b.Title)
-		b.Author = firstNonEmpty(md.Author, b.Author)
-		b.Series = firstNonEmpty(md.Series, b.Series)
+		if strings.TrimSpace(md.Author) != "" {
+			b.Author = md.Author
+		}
+		if strings.TrimSpace(md.Series) != "" {
+			b.Series = md.Series
+		}
 		if md.SeriesIndex != 0 {
 			b.SeriesIndex = md.SeriesIndex
 		}
@@ -323,6 +334,9 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	} else {
 		b.CoverPath = findCover(lib.Root, filepath.Dir(bookAbs), false)
 	}
+	// Embedded art; UpsertBook adds a sibling cover (CoverPath) to the flag itself.
+	hasCover := md != nil && md.HasCover
+	b.HasCover = &hasCover
 }
 
 // chooseTitle prefers a meaningful embedded title, falling back to the
@@ -474,6 +488,9 @@ func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
 			idx++
 		}
 		f.Duration = dur
+		if md != nil {
+			f.Codec = md.Codec
+		}
 		cum += dur
 	}
 	b.Duration = cum
@@ -721,15 +738,11 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 	}
 
 	s.enrich(lib, book)
+	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
+	// scanned values in the same transaction.
 	id, err := s.cat.UpsertBook(ctx, book)
 	if err != nil {
 		return nil, err
-	}
-	// Restore any path-keyed enrichment (e.g. an ASIN) onto this just-indexed book.
-	// Scope it to the one book we resolved - IndexPath is a hot per-request path, so
-	// re-sweeping the whole library here would be O(enriched books) per lookup.
-	if err := s.cat.ApplyEnrichment(ctx, lib.ID, book.RelPath); err != nil {
-		s.log.Warn("apply enrichment failed", "library", lib.Name, "path", book.RelPath, "err", err)
 	}
 	return s.cat.GetBook(ctx, id)
 }
@@ -751,17 +764,18 @@ func pickBook(candidates []*catalog.Book, want string) *catalog.Book {
 	return nil
 }
 
-func ext(name string) string {
-	return strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+// readable reports whether the file at absPath can be opened for reading.
+func readable(absPath string) bool {
+	f, err := os.Open(absPath)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
 }
 
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
+func ext(name string) string {
+	return strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
 }
 
 const fingerprintChunk = 64 * 1024 // bytes hashed from the head and tail

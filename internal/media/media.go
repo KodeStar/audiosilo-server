@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -35,6 +36,18 @@ func DirectPlayable(codec string) bool {
 		return true
 	}
 	return browserCodecs[strings.ToLower(codec)]
+}
+
+// DirectPlayableSQL is DirectPlayable as an SQL condition over the codec column
+// col, for callers that filter on it in a query (the admin catalog). The codec
+// names are this package's constants, inlined as literals.
+func DirectPlayableSQL(col string) string {
+	codecs := make([]string, 0, len(browserCodecs))
+	for c := range browserCodecs {
+		codecs = append(codecs, "'"+c+"'")
+	}
+	sort.Strings(codecs)
+	return "(" + col + " = '' OR lower(" + col + ") IN (" + strings.Join(codecs, ",") + "))"
 }
 
 // sniffAudioType inspects the leading bytes of f to identify the audio container

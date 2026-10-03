@@ -66,10 +66,7 @@ const dedupJoins = `
 func scanCandidate(rows *sql.Rows, rankIdx int) (candidate, error) {
 	var c candidate
 	b := &c.book
-	if err := rows.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
-		&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
-		&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
-		&c.sortOrder, &c.libName, &c.fileCount); err != nil {
+	if err := rows.Scan(append(bookDest(b), &c.sortOrder, &c.libName, &c.fileCount)...); err != nil {
 		return candidate{}, err
 	}
 	c.rankIdx = rankIdx

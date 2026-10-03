@@ -348,18 +348,7 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		return work, err
 	}
 
-	// Bound the outbound amplification: only uncached fetches queue here, and a
-	// caller that goes away while queued never issues its GET at all.
-	select {
-	case s.workSem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	// Released on return (the remaining work is a map write); deferred so a panic
-	// can never leak a slot.
-	defer func() { <-s.workSem }()
-
-	detail, err := s.client.work(ctx, id)
+	detail, err := s.fetchWork(ctx, id)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		s.cache.putMiss(key, notFoundTTL)
@@ -374,6 +363,26 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		}
 		return nil, err
 	}
+	work := toWork(detail)
+	s.cache.putWork(key, work, positiveTTL)
+	return work, nil
+}
+
+// fetchWork is one uncached works/{id} GET, bounded by workSem (only uncached
+// fetches queue there, and a caller that goes away while queued never issues its
+// GET at all). ErrNotFound for an unknown id - and for a wrong-shaped 200, see below.
+func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail, error) {
+	select {
+	case s.workSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	// Deferred so a panic can never leak a slot.
+	defer func() { <-s.workSem }()
+	detail, err := s.client.work(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	// A 200 that decodes to a zero-valued work is NOT a work. getJSON decodes
 	// leniently, so any wrong-shaped 200 (upstream serving a different route for
 	// this id - metaserve has a literal `works/latest` collection route that
@@ -385,12 +394,9 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 	// it as the not-found it effectively is, mirroring compose's lookup.Work == nil
 	// guard.
 	if detail == nil || detail.ID == "" {
-		s.cache.putMiss(key, notFoundTTL)
 		return nil, ErrNotFound
 	}
-	work := toWork(detail)
-	s.cache.putWork(key, work, positiveTTL)
-	return work, nil
+	return detail, nil
 }
 
 // toWork maps an upstream work document to the outward MetaWork shape. Shared

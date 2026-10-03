@@ -61,6 +61,11 @@ const (
 	codeCannotDeleteSelf   = "cannot_delete_self"
 	codeFolderUnreadable   = "folder_unreadable"
 	codePathNotAbsolute    = "path_not_absolute"
+	codeInvalidOverride    = "invalid_override" // + "field": the field it names
+	codeBookNotFound       = "book_not_found"
+	codeMetadataOff        = "metadata_off"
+	codeUnsupportedImage   = "unsupported_image"
+	codeTooLarge           = "too_large"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
@@ -78,7 +83,18 @@ func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
 // it. Handlers that need a bespoke not-found message (library/share/book) still
 // check catalog.ErrNotFound / library.ErrNotIndexable themselves first.
 func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg string, logKV ...any) {
+	var oe *catalog.OverrideError
 	switch {
+	case errors.As(err, &oe):
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": oe.Error(), "code": codeInvalidOverride, "field": oe.Field,
+		})
+	case errors.Is(err, catalog.ErrUnknownSort):
+		writeError(w, http.StatusBadRequest, "unknown sort")
+	case errors.Is(err, catalog.ErrUnsupportedImage):
+		writeErrorCode(w, http.StatusUnsupportedMediaType, codeUnsupportedImage, "the cover must be a JPEG, PNG or WebP image")
+	case errors.Is(err, catalog.ErrCoverTooLarge):
+		writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "the image is larger than 5 MB")
 	case errors.Is(err, catalog.ErrNameTaken):
 		writeErrorCode(w, http.StatusConflict, codeNameTaken, "name already taken")
 	case errors.Is(err, catalog.ErrInvalidCursor):
