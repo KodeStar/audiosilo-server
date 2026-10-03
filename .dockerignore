@@ -4,3 +4,5 @@ data/
 *.md
 .github/
 internal/web/player/
+admin-ui/node_modules/
+internal/web/adminui/dist/

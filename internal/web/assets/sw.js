@@ -6,7 +6,17 @@
 // It deliberately stays out of the way: the JSON API and the web player at /web
 // (which ships its own SW) are never intercepted, and admin navigations are
 // network-first so the console always reflects live server state.
-const VERSION = "audiosilo-admin-v1";
+//
+// It serves both consoles during the redesign: every online admin navigation
+// refreshes the cached shell, so "/admin" holds whichever console the server
+// mounts there right now (the classic one, or the new admin-ui build when
+// AUDIOSILO_ADMIN_NEXT is on; flipping the switch doesn't change this file, so
+// the worker isn't reinstalled), and "/admin/classic" keeps its own copy. The
+// new console's hashed /admin/assets/* files
+// aren't listed (their names change every build); the stale-while-revalidate
+// branch below caches them on first use, so it works offline after one online
+// visit. Bump VERSION whenever the shell changes shape so old caches are dropped.
+const VERSION = "audiosilo-admin-v2";
 const SHELL = [
   "/admin",
   "/assets/style.css",
@@ -45,10 +55,27 @@ self.addEventListener("fetch", (e) => {
   // Leave the API and the web player (its own SW) alone.
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/web/")) return;
 
-  // Admin navigations: network-first, fall back to the cached shell offline.
+  // Admin navigations: network-first, refreshing the cached shell on success and
+  // falling back to it offline. Every route under /admin serves the same page,
+  // except the classic console at /admin/classic, which is cached separately.
   if (req.mode === "navigate") {
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-      e.respondWith(fetch(req).catch(() => caches.match("/admin")));
+      const shell = url.pathname === "/admin/classic" ? "/admin/classic" : "/admin";
+      e.respondWith(
+        fetch(req)
+          .then((res) => {
+            // Only an HTML page is a shell: a navigation straight to a hashed
+            // asset or theme-init.js must not overwrite it. waitUntil keeps the
+            // worker alive until the write lands (respondWith settles first).
+            const type = (res && res.headers.get("Content-Type")) || "";
+            if (res && res.ok && type.startsWith("text/html")) {
+              const copy = res.clone();
+              e.waitUntil(caches.open(VERSION).then((c) => c.put(shell, copy)));
+            }
+            return res;
+          })
+          .catch(() => caches.match(shell).then((hit) => hit || caches.match("/admin"))),
+      );
     }
     return; // other navigations pass straight through to the network
   }
@@ -60,7 +87,7 @@ self.addEventListener("fetch", (e) => {
         .then((res) => {
           if (res && res.ok) {
             const copy = res.clone();
-            caches.open(VERSION).then((c) => c.put(req, copy));
+            e.waitUntil(caches.open(VERSION).then((c) => c.put(req, copy)));
           }
           return res;
         })

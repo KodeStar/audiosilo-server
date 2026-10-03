@@ -21,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/web/adminui"
 )
 
 //go:embed assets
@@ -55,12 +57,17 @@ func Asset(name string) ([]byte, error) {
 //	GET /                 connect page (public)
 //	GET /connect[/]       connect page (the copy-invite link target)
 //	GET /admin            admin console (static; API enforces the admin role)
+//	GET /admin/classic    the classic console, only while adminNext is on
 //	GET /assets/...       static CSS/JS
 //	GET /web/...          web player, served from webDir (only if non-empty)
 //
 // API routes registered on the same mux take precedence because ServeMux prefers
 // more specific patterns.
-func Register(mux *http.ServeMux, webDir string) error {
+//
+// adminNext (env AUDIOSILO_ADMIN_NEXT) mounts the redesigned console (package
+// adminui) at /admin and moves the classic one to /admin/classic, so both can be
+// used side by side during the redesign. Off, /admin is the classic console.
+func Register(mux *http.ServeMux, webDir string, adminNext bool) error {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		return err
@@ -78,8 +85,13 @@ func Register(mux *http.ServeMux, webDir string) error {
 	// explicit content type because Go's mime table doesn't know ".webmanifest".
 	mux.HandleFunc("GET /sw.js", rootAsset(sub, "sw.js", "text/javascript; charset=utf-8", true))
 	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(sub, "manifest.webmanifest", "application/manifest+json", false))
-	mux.HandleFunc("GET /admin", page(sub, "admin.html"))
-	mux.HandleFunc("GET /admin/", page(sub, "admin.html"))
+	var admin http.Handler = page(sub, "admin.html")
+	if adminNext {
+		mux.Handle("GET /admin/classic", admin)
+		admin = adminui.Handler(adminui.FS(), contentSecurityPolicy)
+	}
+	mux.Handle("GET /admin", admin)
+	mux.Handle("GET /admin/", admin)
 	mux.HandleFunc("GET /connect", page(sub, "index.html"))
 	mux.HandleFunc("GET /connect/", page(sub, "index.html"))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,475 @@
+/*
+ * Shelf design tokens (see ../../STYLEGUIDE.md, section 3) + the few signature
+ * classes that are clearer as CSS than as utility soup. Everything here is an
+ * external stylesheet, so it satisfies the console's `style-src 'self'` CSP.
+ * Never add a <style> element or a style="" attribute in HTML; component styles
+ * set through React's `style` prop are fine (CSSOM writes are allowed).
+ */
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@fontsource-variable/bricolage-grotesque';
+@import '@fontsource-variable/figtree';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/600.css';
+
+/* theme-init.js always resolves the theme to an explicit data-theme, so `dark:`
+   utilities follow the system preference too. */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+:root {
+  color-scheme: light;
+  --radius: 14px;
+
+  --background: #f5f7fa;
+  --foreground: #121c36;
+  --card: #ffffff;
+  --card-foreground: #121c36;
+  --popover: #ffffff;
+  --popover-foreground: #121c36;
+  --primary: #15203d;
+  --primary-foreground: #f5f7fa;
+  --secondary: #eaedf3;
+  --secondary-foreground: #18244a;
+  --muted: #eef1f5;
+  --muted-foreground: #5b6680;
+  --subtle-foreground: #8590a6;
+  --accent: #e8ecf3;
+  --accent-foreground: #121c36;
+  --destructive: #c42b3c;
+  --destructive-soft: #fde8ea;
+  --border: #e0e5ed;
+  --border-strong: #cdd4df;
+  --input: #d4dae4;
+  --ring: #db2777;
+
+  --brand: #db2777;
+  --brand-foreground: #ffffff;
+  --brand-soft: #fce7f1;
+  --brand-ink: #a3195a;
+
+  --success: #0d7f5a;
+  --success-soft: #e1f5ec;
+  --warning: #a86206;
+  --warning-soft: #fdf1dc;
+  --info: #2c56c9;
+  --info-soft: #e6edfd;
+
+  --prov-tag: #4b5e86;
+  --prov-tag-soft: #e9eef8;
+  --prov-path: #0f7b74;
+  --prov-path-soft: #e0f3f1;
+  --prov-edit: #b81c63;
+  --prov-edit-soft: #fce7f1;
+  --prov-community: #6a3fd4;
+  --prov-community-soft: #efe9fd;
+
+  --chart-1: #db2777;
+  --chart-2: #3b5bdb;
+  --chart-3: #0d9488;
+  --chart-4: #d97706;
+  --chart-5: #7c3aed;
+  --seq-0: #f3f4f8;
+  --seq-1: #fbd5e6;
+  --seq-2: #f5a3c7;
+  --seq-3: #e8649f;
+  --seq-4: #cc2b78;
+  --seq-5: #8f1550;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #121c36;
+  --sidebar-primary: #15203d;
+  --sidebar-primary-foreground: #f5f7fa;
+  --sidebar-accent: #eef1f5;
+  --sidebar-accent-foreground: #121c36;
+  --sidebar-border: #e0e5ed;
+  --sidebar-ring: #db2777;
+
+  --topbar: rgb(245 247 250 / 0.82);
+  --topbar-border: #e3e7ee;
+  --overlay: rgb(14 20 38 / 0.38);
+  --shadow-cover:
+    0 1px 1px rgb(18 28 54 / 0.1), 0 4px 8px -2px rgb(18 28 54 / 0.14),
+    0 16px 28px -10px rgb(18 28 54 / 0.3);
+  --shadow-cover-hover:
+    0 2px 2px rgb(18 28 54 / 0.1), 0 10px 18px -6px rgb(18 28 54 / 0.2),
+    0 28px 44px -14px rgb(18 28 54 / 0.38);
+  --shadow-overlay: 0 24px 64px -16px rgb(14 22 48 / 0.3), 0 2px 6px rgb(14 22 48 / 0.08);
+
+  --font-display:
+    'Bricolage Grotesque Variable', 'Figtree Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Figtree Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+}
+
+/* Dark: deep ink where covers glow. theme-init.js (loaded in <head> before the
+   first paint) always resolves the stored preference - including "system" - to an
+   explicit data-theme, so a prefers-color-scheme duplicate of this block isn't
+   needed: the console can't render without JS anyway. */
+[data-theme='dark'] {
+  color-scheme: dark;
+  --background: #0a0f1e;
+  --foreground: #e7ebf4;
+  --card: #10172b;
+  --card-foreground: #e7ebf4;
+  --popover: #131b31;
+  --popover-foreground: #e7ebf4;
+  --primary: #eef1f8;
+  --primary-foreground: #0a0f1e;
+  --secondary: #1a2340;
+  --secondary-foreground: #dfe5f2;
+  --muted: #151d34;
+  --muted-foreground: #8f9ab3;
+  --subtle-foreground: #66718b;
+  --accent: #1a2340;
+  --accent-foreground: #e7ebf4;
+  --brand: #ec4f95;
+  --brand-soft: #3a1530;
+  --brand-ink: #f78bbb;
+  --destructive: #f0606e;
+  --destructive-soft: #3a1720;
+  --success: #3cc994;
+  --success-soft: #0f2e26;
+  --warning: #f0b04d;
+  --warning-soft: #33260f;
+  --info: #7d9bf2;
+  --info-soft: #17234a;
+  --border: #1d2640;
+  --border-strong: #2a3555;
+  --input: #283252;
+  --ring: #ec4f95;
+  --prov-tag: #9fb0d6;
+  --prov-tag-soft: #1a2440;
+  --prov-path: #5cd0c5;
+  --prov-path-soft: #0f2c2d;
+  --prov-edit: #f78bbb;
+  --prov-edit-soft: #3a1530;
+  --prov-community: #b59cff;
+  --prov-community-soft: #251b45;
+  --chart-1: #e4458b;
+  --chart-2: #6680ec;
+  --chart-3: #17a093;
+  --chart-4: #cc7f16;
+  --chart-5: #8f72f2;
+  --seq-0: #151d34;
+  --seq-1: #3a1a37;
+  --seq-2: #6b1f4f;
+  --seq-3: #a12a6a;
+  --seq-4: #d9418a;
+  --seq-5: #f58bbb;
+  --sidebar: #10172b;
+  --sidebar-foreground: #e7ebf4;
+  --sidebar-primary: #eef1f8;
+  --sidebar-primary-foreground: #0a0f1e;
+  --sidebar-accent: #1a2340;
+  --sidebar-accent-foreground: #e7ebf4;
+  --sidebar-border: #1d2640;
+  --sidebar-ring: #ec4f95;
+  --topbar: rgb(10 15 30 / 0.78);
+  --topbar-border: #182038;
+  --overlay: rgb(3 6 14 / 0.62);
+  /* --glow is set per cover to its accent colour: covers glow on deep ink */
+  --shadow-cover:
+    0 1px 1px rgb(0 0 0 / 0.4), 0 8px 16px -4px rgb(0 0 0 / 0.55),
+    0 18px 40px -12px var(--glow, rgb(236 79 149 / 0.18));
+  --shadow-cover-hover:
+    0 2px 2px rgb(0 0 0 / 0.4), 0 14px 24px -6px rgb(0 0 0 / 0.6),
+    0 26px 60px -12px var(--glow, rgb(236 79 149 / 0.32));
+  --shadow-overlay: 0 30px 80px -10px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.04);
+}
+
+/* Shelf breakpoints (STYLEGUIDE.md section 2): phones below 721px get the bottom
+   tab bar; the top-bar destinations show labels from 1181px. Used as md:/xl:. */
+@theme {
+  --breakpoint-md: 45.0625rem; /* 721px */
+  --breakpoint-xl: 73.8125rem; /* 1181px */
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-ink: var(--brand-ink);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-prov-tag: var(--prov-tag);
+  --color-prov-tag-soft: var(--prov-tag-soft);
+  --color-prov-path: var(--prov-path);
+  --color-prov-path-soft: var(--prov-path-soft);
+  --color-prov-edit: var(--prov-edit);
+  --color-prov-edit-soft: var(--prov-edit-soft);
+  --color-prov-community: var(--prov-community);
+  --color-prov-community-soft: var(--prov-community-soft);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-seq-0: var(--seq-0);
+  --color-seq-1: var(--seq-1);
+  --color-seq-2: var(--seq-2);
+  --color-seq-3: var(--seq-3);
+  --color-seq-4: var(--seq-4);
+  --color-seq-5: var(--seq-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-topbar: var(--topbar);
+  --color-topbar-border: var(--topbar-border);
+  --color-overlay: var(--overlay);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --radius-sm: calc(var(--radius) - 6px); /* 8px */
+  --radius-md: calc(var(--radius) - 4px); /* 10px: buttons, inputs */
+  --radius-lg: var(--radius); /* 14px: menus, toasts */
+  --radius-xl: calc(var(--radius) + 2px); /* 16px: cards */
+  --radius-2xl: calc(var(--radius) + 6px); /* 20px: dialogs, palette */
+  --shadow-cover: var(--shadow-cover);
+  --shadow-cover-hover: var(--shadow-cover-hover);
+  --shadow-overlay: var(--shadow-overlay);
+  --ease-out: var(--ease-out);
+  --ease-spring: var(--ease-spring);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-padding-top: 120px;
+  }
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--brand) 25%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Base UI renders this rule in an inline <style> unless CSPProvider has
+   disableStyleElements set (it does), so it must live here instead. */
+.base-ui-disable-scrollbar {
+  scrollbar-width: none;
+}
+.base-ui-disable-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@layer components {
+  .display {
+    font-family: var(--font-display);
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+  }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+  .h2 {
+    font-size: 19px;
+    font-weight: 680;
+    letter-spacing: -0.02em;
+  }
+  .h3 {
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+  .stat-value {
+    font-family: var(--font-display);
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 18px;
+    min-width: 20px;
+    padding: 0 5px;
+    text-align: center;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--muted);
+    color: var(--muted-foreground);
+    display: inline-block;
+  }
+  .hscroll {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .hscroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Status dot: always next to a word (status is never colour alone). */
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--success);
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .dot[data-tone='warn'] {
+    background: var(--warning);
+  }
+  .dot[data-tone='bad'] {
+    background: var(--destructive);
+  }
+  .dot[data-tone='off'] {
+    background: var(--subtle-foreground);
+  }
+  .dot[data-tone='live'] {
+    animation: pulse 2s infinite;
+  }
+
+  /* Skeleton shimmer (off with reduced motion, below). */
+  .skel {
+    background: linear-gradient(
+      90deg,
+      var(--muted) 25%,
+      color-mix(in oklab, var(--muted) 50%, var(--card)) 50%,
+      var(--muted) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s infinite linear;
+    border-radius: 8px;
+  }
+
+  /* Cover: square, 5px radius, the only thing (with overlays) that casts a shadow. */
+  .cover {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    width: 100%;
+    border-radius: 5px;
+    overflow: hidden;
+    container-type: inline-size;
+    background: var(--muted);
+    box-shadow: var(--shadow-cover);
+  }
+  .cover > img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .cover[data-missing] {
+    background: repeating-linear-gradient(
+      135deg,
+      var(--muted) 0 10px,
+      color-mix(in oklab, var(--muted) 70%, var(--background)) 10px 20px
+    );
+    box-shadow: inset 0 0 0 1.5px var(--border-strong);
+    color: var(--muted-foreground);
+    display: grid;
+    place-items: center;
+  }
+
+  .progress-track {
+    height: 6px;
+    border-radius: 99px;
+    background: color-mix(in oklab, var(--muted-foreground) 18%, transparent);
+    overflow: hidden;
+  }
+  .progress-track > i {
+    display: block;
+    height: 100%;
+    background: var(--brand);
+    border-radius: 99px;
+    transition: width 600ms var(--ease-out);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .display {
+    font-size: 27px;
+  }
+}

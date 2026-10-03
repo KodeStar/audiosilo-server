@@ -50,7 +50,10 @@ planned separately.
   console at `/admin` (users, libraries incl. edit/delete + folder-detection
   overrides, **shares** with a
   filesystem path picker, auth codes + copy-invite, rescans). Vanilla HTML/CSS/JS,
-  no build step, served from the same binary.
+  no build step, served from the same binary. A **redesigned admin console**
+  (`admin-ui/`, React + Vite, embedded at build time) is being built in stages;
+  preview it with `AUDIOSILO_ADMIN_NEXT=1` (the classic console then moves to
+  `/admin/classic`).
 
 Planned next: upload + placement suggestions and AAX→M4B conversion (Phase B);
 on-the-fly transcoding and WebSocket realtime sync (Phase C); server federation
@@ -58,7 +61,8 @@ on-the-fly transcoding and WebSocket realtime sync (Phase C); server federation
 
 ## Requirements
 
-- Go 1.25+ (to build from source), or Docker (to run the published image).
+- Go 1.25+ and Node 24 (to build from source; Node builds the admin console), or
+  Docker (to run the published image).
 - **ffmpeg/ffprobe** (optional but recommended) - used for durations, chapters,
   and (later) transcoding/AAX. Without it the server still runs; durations and
   chapters are simply unavailable. (The Docker image includes ffmpeg.)
@@ -66,7 +70,8 @@ on-the-fly transcoding and WebSocket realtime sync (Phase C); server federation
 ## Quick start
 
 ```sh
-# Build
+# Build (the admin console first: it is embedded, never committed)
+scripts/build-admin.sh
 go build -o bin/audiosilo ./cmd/audiosilo
 
 # First run: prints the admin password + auth code exactly once. Save them.

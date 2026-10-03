@@ -13,6 +13,17 @@
 # unmounted), comment out the web stage and the COPY --from=web line.
 ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
 
+# --- build the admin console (admin-ui/) -----------------------------------------
+# A static Vite build embedded into the binary (internal/web/adminui). Built on
+# the build host's platform: the output is plain JS/CSS, identical for every arch.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS admin
+WORKDIR /src/admin-ui
+COPY admin-ui/package.json admin-ui/package-lock.json ./
+RUN npm ci
+COPY admin-ui/ ./
+# vite.config.ts writes to ../internal/web/adminui/dist (embedded by the Go build).
+RUN npm run build
+
 # --- build the Go server -------------------------------------------------------
 # Pinned to the build host's platform: the binary is CGO-free, so multi-arch legs
 # cross-compile natively via GOOS/GOARCH instead of running the whole Go toolchain
@@ -28,6 +39,7 @@ ARG TARGETOS TARGETARCH
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=admin /src/internal/web/adminui/dist ./internal/web/adminui/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
     -ldflags="-s -w -X github.com/kodestar/audiosilo-server/internal/api.Version=${VERSION}" \
     -o /out/audiosilo ./cmd/audiosilo

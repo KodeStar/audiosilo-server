@@ -25,6 +25,9 @@ go build -o bin/audiosilo ./cmd/audiosilo
 
 AUDIOSILO_WEB_DIR=… ./bin/audiosilo  # serve the web player at /web from that dir
 scripts/build-web.sh                 # dev helper: build the frontend export locally (prints the env to set)
+
+scripts/build-admin.sh               # the admin console's gate + build (Node 24): npm ci, check, build into internal/web/adminui/dist
+AUDIOSILO_ADMIN_NEXT=1 ./bin/audiosilo   # serve the redesigned console at /admin (classic at /admin/classic)
 ```
 
 Flags: `--data` (config/db/certs dir), `--ffprobe` (`""` disables ffprobe),
@@ -57,8 +60,10 @@ via `Options.OnURL` (so the audiosilo-manager desktop app, which runs the server
 in-process, can open a browser).
 
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
-&& golangci-lint run`** - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-gates all four on every PR/push. A few scanner tests need `ffmpeg` (ffprobe);
+&& golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
+typecheck + eslint + prettier + vitest, then the build) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+gates all of them on every PR/push, building the console first so the embed tests in
+`internal/web/adminui` run against a real build (locally they skip without one). A few scanner tests need `ffmpeg` (ffprobe);
 without it they `t.Skip` (CI installs it). The linter is adopted at a **green
 baseline** - its suppressions in `.golangci.yml` are documented and intentional;
 fix new findings rather than widening the excludes.
@@ -107,10 +112,13 @@ internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
-internal/web/         baked-in admin/connect UI (vanilla HTML/CSS/JS, no build step);
+internal/web/         baked-in classic admin/connect/setup UI (vanilla HTML/CSS/JS, no build step);
                       also serves the web player at /web from web_dir (not vendored here)
+internal/web/adminui/ embeds + serves the redesigned admin console (admin-ui/ build output in dist/, gitignored)
+admin-ui/             the redesigned admin console: React 19 + Vite + TS, shadcn/ui on Base UI, Tailwind v4 (own README + STYLEGUIDE.md)
 testdata/library/     tiny generated M4B fixtures used by tests
-Dockerfile            multi-stage build that bakes a pinned web build into /app/web
+Dockerfile            multi-stage build: builds admin-ui (node stage), bakes a pinned web build into /app/web
+scripts/build-admin.sh  build the admin console locally (npm ci + check + build) before go build
 scripts/build-web.sh  dev helper: build the frontend export locally for AUDIOSILO_WEB_DIR
 ```
 
@@ -243,6 +251,21 @@ future metadata site can attach enrichment without reshaping the schema.
   react-native-web's runtime styles). Admin/connect pages keep the stricter
   site-wide CSP. Compatibility is by construction (the image pins a matching web
   build); native apps negotiate via `GET /server` capability flags.
+- **Admin console redesign (`admin-ui/` + `internal/web/adminui`)**: the console is being
+  rebuilt as a React SPA in the Shelf design (workspace `ADMIN-CONSOLE-PLAN.md` holds the
+  phases; `admin-ui/STYLEGUIDE.md` the design). Vite builds into `internal/web/adminui/dist`,
+  embedded with `//go:embed all:dist` (only `dist/.gitkeep` is committed; a build without it
+  serves a 503 "console not built" page). `adminui.Handler` serves `/admin/assets/*`
+  immutable, other top-level files no-cache, and everything else as `index.html` (no-cache)
+  for client routing, all with the site-wide strict CSP and explicit MIME types.
+  **The CSP does not change for it**: no inline script/style anywhere (`theme-init.js` is
+  external, Base UI runs under `CSPProvider disableStyleElements`, banned libraries are
+  ESLint-enforced, `admin-ui/scripts/check-csp.mjs` fails the build and
+  `TestEmbeddedBuild` checks the embedded `index.html`). Until the cutover it sits behind
+  `AUDIOSILO_ADMIN_NEXT` (env-only `config.AdminNext`, never persisted): on, `/admin` is the
+  new console and the classic one moves to `/admin/classic`; off, nothing changes. It shares
+  the classic console's token (`localStorage["audiosilo_token"]`) and language key, so
+  switching between them never asks to sign in twice.
 - **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
   /api/v1/libraries/{id}/meta?path=` (authed, scope-checked via `authorizedPath`
   + `bookForPath`, exactly like `item`) resolves the book's `asin`/`isbn`

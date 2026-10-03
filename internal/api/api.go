@@ -247,7 +247,7 @@ func (a *API) Handler() http.Handler {
 	// Baked-in web UI: the public connect page and the admin console. API routes
 	// above are more specific, so ServeMux still prefers them over the "/"
 	// catch-all the web package registers.
-	if err := web.Register(mux, a.cfg.WebDir); err != nil {
+	if err := web.Register(mux, a.cfg.WebDir, a.cfg.AdminNext); err != nil {
 		a.log.Error("failed to register web UI", "err", err)
 	}
 
