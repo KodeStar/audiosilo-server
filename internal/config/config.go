@@ -140,6 +140,14 @@ type Config struct {
 	// on it, so it must never change for the life of the install.
 	ServerID string `yaml:"server_id"`
 
+	// Name is the server's display name: GET /server's name, invites and the admin
+	// console. Empty means "AudioSilo" (DisplayName).
+	Name string `yaml:"name"`
+	// UpdateCheck lets the server ask GitHub Releases once a day whether a newer
+	// version exists (internal/updates). On by default; the admin console's
+	// Settings > General switch turns it off.
+	UpdateCheck bool `yaml:"update_check"`
+
 	Bind           string         `yaml:"bind"`       // host:port to listen on
 	PublicURL      string         `yaml:"public_url"` // externally reachable base URL, used in QR payloads
 	TLS            TLSConfig      `yaml:"tls"`
@@ -151,6 +159,27 @@ type Config struct {
 	Libraries      []Library      `yaml:"libraries"`
 	Demo           DemoConfig     `yaml:"demo"`     // public demo mode (throwaway accounts)
 	Metadata       MetadataConfig `yaml:"metadata"` // community metadata lookup (Phase 1.5)
+
+	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
+	// to that variable's name; file is the config as config.yaml had it, before the
+	// environment. Save writes the file's values for those keys, so a value the
+	// environment supplies never ends up in config.yaml. pinned holds the keys an
+	// embedding launcher overrides (Pin). All three are set while loading and only
+	// read afterwards, so copies share them.
+	fromEnv map[string]string
+	file    *Config
+	pinned  map[string]bool
+}
+
+// DefaultServerName is the display name of a server whose name isn't set.
+const DefaultServerName = "AudioSilo"
+
+// DisplayName is the server's name, or DefaultServerName when none is set.
+func (c *Config) DisplayName() string {
+	if c.Name != "" {
+		return c.Name
+	}
+	return DefaultServerName
 }
 
 // DefaultMetadataBaseURL is the community metadata API used when metadata lookup
@@ -172,6 +201,7 @@ func Default(dataDir string) *Config {
 		MaxUploadBytes: 2 << 30, // 2 GiB
 		Libraries:      nil,
 		Metadata:       MetadataConfig{Enabled: true, BaseURL: DefaultMetadataBaseURL},
+		UpdateCheck:    true,
 	}
 }
 
@@ -196,6 +226,7 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 		return nil, false, fmt.Errorf("read config: %w", readErr)
 	}
 
+	cfg.file = cfg.Clone()
 	applyEnv(cfg)
 	if cfg.TLS.CacheDir == "" {
 		cfg.TLS.CacheDir = filepath.Join(dataDir, "certs")
@@ -206,70 +237,78 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 	return cfg, firstRun, nil
 }
 
-// Save writes the config to disk with restrictive permissions.
+// Save writes the config to disk with restrictive permissions. A field an
+// AUDIOSILO_* variable set keeps config.yaml's own value: the environment wins at
+// every load anyway, and writing it into the file would make it outlive the
+// variable.
 func (c *Config) Save() error {
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		return err
 	}
-	out, err := yaml.Marshal(c)
+	on := c
+	if len(c.fromEnv) > 0 && c.file != nil {
+		on = c.Clone()
+		for key := range c.fromEnv {
+			copyField(on, c.file, key)
+		}
+	}
+	out, err := yaml.Marshal(on)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(Path(c.DataDir), out, 0o600)
 }
 
-// applyEnv overrides selected fields from AUDIOSILO_* environment variables.
+// applyEnv overrides fields from AUDIOSILO_* environment variables (see fields)
+// and records which, so Save leaves them out of config.yaml and the admin console
+// can show them as set by the environment. A value that doesn't parse is ignored.
 func applyEnv(c *Config) {
-	if v := os.Getenv("AUDIOSILO_BIND"); v != "" {
-		c.Bind = v
-	}
-	if v := os.Getenv("AUDIOSILO_PUBLIC_URL"); v != "" {
-		c.PublicURL = v
-	}
-	if v := os.Getenv("AUDIOSILO_WEB_DIR"); v != "" {
-		c.WebDir = v
-	}
-	if v := os.Getenv("AUDIOSILO_TLS_MODE"); v != "" {
-		c.TLS.Mode = TLSMode(v)
-	}
-	if v := os.Getenv("AUDIOSILO_TLS_HOSTS"); v != "" {
-		c.TLS.Hosts = splitList(v)
-	}
-	if v := os.Getenv("AUDIOSILO_TRUSTED_PROXIES"); v != "" {
-		c.TrustedProxies = splitList(v)
-	}
-	if v := os.Getenv("AUDIOSILO_CORS_ORIGINS"); v != "" {
-		c.CORSOrigins = splitList(v)
-	}
-	if v := os.Getenv("AUDIOSILO_MAX_UPLOAD_BYTES"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			c.MaxUploadBytes = n
+	for _, f := range fields {
+		if f.env == "" {
+			continue
 		}
-	}
-	if v := os.Getenv("AUDIOSILO_DEMO_ENABLED"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			c.Demo.Enabled = b
+		v := os.Getenv(f.env)
+		if v == "" || !setFromEnv(f.ptr(c), v) {
+			continue
 		}
-	}
-	if v := os.Getenv("AUDIOSILO_DEMO_LIBRARY"); v != "" {
-		c.Demo.Library = v
-	}
-	if v := os.Getenv("AUDIOSILO_DEMO_MAX_USERS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.Demo.MaxUsers = &n
+		if c.fromEnv == nil {
+			c.fromEnv = map[string]string{}
 		}
+		c.fromEnv[f.key] = f.env
 	}
-	if v := os.Getenv("AUDIOSILO_DEMO_IDLE_TTL"); v != "" {
-		c.Demo.IdleTTL = v
-	}
-	if v := os.Getenv("AUDIOSILO_METADATA_ENABLED"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			c.Metadata.Enabled = b
+}
+
+// setFromEnv parses v into the field ptr points at, reporting whether it did.
+func setFromEnv(ptr any, v string) bool {
+	switch p := ptr.(type) {
+	case *string:
+		*p = v
+	case *TLSMode:
+		*p = TLSMode(v)
+	case *[]string:
+		*p = splitList(v)
+	case *bool:
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return false
 		}
+		*p = b
+	case *int64:
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return false
+		}
+		*p = n
+	case **int:
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return false
+		}
+		*p = &n
+	default:
+		return false
 	}
-	if v := os.Getenv("AUDIOSILO_METADATA_BASE_URL"); v != "" {
-		c.Metadata.BaseURL = v
-	}
+	return true
 }
 
 func splitList(v string) []string {
@@ -283,25 +322,37 @@ func splitList(v string) []string {
 	return out
 }
 
+// FieldError is a validation error about one field, named by its key in
+// config.yaml ("tls.hosts"). Its message is the wrapped error's.
+type FieldError struct {
+	Key string
+	Err error
+}
+
+func (e *FieldError) Error() string { return e.Err.Error() }
+func (e *FieldError) Unwrap() error { return e.Err }
+
+func fieldErr(key string, err error) error { return &FieldError{Key: key, Err: err} }
+
 // Validate checks that the config is internally consistent.
 func (c *Config) Validate() error {
 	if c.DataDir == "" {
 		return errors.New("data dir is required")
 	}
 	if _, _, err := net.SplitHostPort(c.Bind); err != nil {
-		return fmt.Errorf("invalid bind address %q: %w", c.Bind, err)
+		return fieldErr("bind", fmt.Errorf("invalid bind address %q: %w", c.Bind, err))
 	}
 	switch c.TLS.Mode {
 	case TLSOff, TLSSelfSigned, TLSAutocert:
 	default:
-		return fmt.Errorf("invalid tls mode %q", c.TLS.Mode)
+		return fieldErr("tls.mode", fmt.Errorf("invalid tls mode %q", c.TLS.Mode))
 	}
 	if c.TLS.Mode == TLSAutocert && len(c.TLS.Hosts) == 0 {
-		return errors.New("tls mode autocert requires tls.hosts")
+		return fieldErr("tls.hosts", errors.New("tls mode autocert requires tls.hosts"))
 	}
 	for _, p := range c.TrustedProxies {
 		if _, _, err := net.ParseCIDR(p); err != nil {
-			return fmt.Errorf("invalid trusted proxy CIDR %q: %w", p, err)
+			return fieldErr("trusted_proxies", fmt.Errorf("invalid trusted proxy CIDR %q: %w", p, err))
 		}
 	}
 	seen := map[string]bool{}
@@ -319,27 +370,27 @@ func (c *Config) Validate() error {
 	}
 	if c.Demo.Enabled {
 		if c.Demo.Library == "" {
-			return errors.New("demo mode requires demo.library")
+			return fieldErr("demo.library", errors.New("demo mode requires demo.library"))
 		}
 		if c.Demo.IdleTTL != "" {
 			d, err := time.ParseDuration(c.Demo.IdleTTL)
 			if err != nil {
-				return fmt.Errorf("invalid demo.idle_ttl %q: %w", c.Demo.IdleTTL, err)
+				return fieldErr("demo.idle_ttl", fmt.Errorf("invalid demo.idle_ttl %q: %w", c.Demo.IdleTTL, err))
 			}
 			// A non-positive TTL is silently replaced by the 24h fallback at
 			// runtime (IdleTTLDuration), so reject it here instead of letting
 			// the operator's value be discarded without a signal.
 			if d <= 0 {
-				return fmt.Errorf("demo.idle_ttl must be positive, got %q", c.Demo.IdleTTL)
+				return fieldErr("demo.idle_ttl", fmt.Errorf("demo.idle_ttl must be positive, got %q", c.Demo.IdleTTL))
 			}
 		}
 	}
 	if c.Metadata.Enabled {
 		if c.Metadata.BaseURL == "" {
-			return errors.New("metadata lookup requires metadata.base_url")
+			return fieldErr("metadata.base_url", errors.New("metadata lookup requires metadata.base_url"))
 		}
 		if !c.Metadata.ValidBaseURL() {
-			return fmt.Errorf("metadata.base_url must be an absolute http(s) URL, got %q", c.Metadata.BaseURL)
+			return fieldErr("metadata.base_url", fmt.Errorf("metadata.base_url must be an absolute http(s) URL, got %q", c.Metadata.BaseURL))
 		}
 	}
 	return nil

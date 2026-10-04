@@ -299,3 +299,27 @@ func writeExec(path string, r io.Reader) error {
 	}
 	return os.Rename(tmpName, path)
 }
+
+// Version runs `<path> -version` and returns the version it names: the word
+// after "version" on its first line ("6.1.1-3ubuntu5" from "ffmpeg version
+// 6.1.1-3ubuntu5 Copyright ..."), or "" if the line doesn't say.
+func Version(ctx context.Context, path string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, path, "-version").Output()
+	if err != nil {
+		return "", err
+	}
+	return parseVersion(string(out)), nil
+}
+
+func parseVersion(out string) string {
+	line, _, _ := strings.Cut(out, "\n")
+	f := strings.Fields(line)
+	for i := 0; i+1 < len(f); i++ {
+		if f[i] == "version" {
+			return f[i+1]
+		}
+	}
+	return ""
+}

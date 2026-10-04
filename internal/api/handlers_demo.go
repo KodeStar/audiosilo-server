@@ -14,15 +14,15 @@ import (
 // public but gated on demo mode, per-IP rate limited, and capped to bound abuse;
 // idle demo accounts are reaped in the background (auth.ReapIdleDemoUsers).
 func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.Demo.Enabled {
+	if !a.boot.Demo.Enabled {
 		writeError(w, http.StatusNotFound, "demo mode is not enabled")
 		return
 	}
 	// Resolve the demo library first so a misconfigured demo.library fails fast
 	// without consuming the caller's per-IP budget.
-	lib, err := a.cat.GetLibraryByName(r.Context(), a.cfg.Demo.Library)
+	lib, err := a.cat.GetLibraryByName(r.Context(), a.config().Demo.Library)
 	if err != nil {
-		a.log.Error("demo: configured library not found", "library", a.cfg.Demo.Library, "err", err)
+		a.log.Error("demo: configured library not found", "library", a.config().Demo.Library, "err", err)
 		writeError(w, http.StatusInternalServerError, "demo library is not available")
 		return
 	}
@@ -52,7 +52,7 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 
 	// Cap live demo accounts so abuse can't grow the database unbounded. An unset
 	// demo.max_users falls back to a safe default; an explicit 0 means unlimited.
-	if limit := a.cfg.Demo.EffectiveMaxUsers(); limit > 0 {
+	if limit := a.config().Demo.EffectiveMaxUsers(); limit > 0 {
 		n, err := a.auth.CountDemoUsers(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "could not check demo capacity")
@@ -96,7 +96,7 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		"token":     session,
 		"user":      u,
 		"pairing":   payload,
-		"server_id": a.cfg.ServerID,
+		"server_id": a.boot.ServerID,
 	})
 }
 

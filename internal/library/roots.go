@@ -30,6 +30,10 @@ const (
 type rootState struct {
 	readable bool // a directory the server can list
 	empty    bool // it lists no entries at all (an unmounted mount point)
+	// The filesystem holding the root (when the root is readable and the OS
+	// answered): its size and the bytes free to the server.
+	diskTotal, diskFree uint64
+	hasDisk             bool
 }
 
 // A probe's state and at are written before done closes, and read only after
@@ -65,14 +69,17 @@ func statRoot(root string) rootState {
 		return rootState{}
 	}
 	names, err := f.Readdirnames(1)
+	var st rootState
 	switch {
 	case len(names) > 0:
-		return rootState{readable: true}
+		st = rootState{readable: true}
 	case errors.Is(err, io.EOF):
-		return rootState{readable: true, empty: true}
+		st = rootState{readable: true, empty: true}
 	default: // no permission, a dead mount
 		return rootState{}
 	}
+	st.diskTotal, st.diskFree, st.hasDisk = diskSpace(root)
+	return st
 }
 
 // check returns the root's state and whether a probe answered in time.
@@ -123,6 +130,23 @@ func (pr *rootProbe) finished() bool {
 	default:
 		return false
 	}
+}
+
+// Disk is the space on the filesystem holding a library's root.
+type Disk struct {
+	Total uint64 `json:"total"`
+	Free  uint64 `json:"free"` // free to the server (not counting space reserved for root)
+}
+
+// RootDisk reports the space on the filesystem holding lib's root, from the
+// same bounded, cached probe as RootAvailable; ok is false when the root
+// doesn't answer or the OS doesn't say.
+func (s *Scanner) RootDisk(lib catalog.Library) (Disk, bool) {
+	st, answered := s.roots.check(lib.Root)
+	if !answered || !st.hasDisk {
+		return Disk{}, false
+	}
+	return Disk{Total: st.diskTotal, Free: st.diskFree}, true
 }
 
 // RootsAvailable runs RootAvailable for every library in parallel, so a dead

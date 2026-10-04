@@ -24,25 +24,25 @@ const pairingTTL = 10 * time.Minute
 // layer can build on it.
 func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":      "AudioSilo",
-		"server_id": a.cfg.ServerID, // stable per-install identity; clients key per-server state on it
+		"name":      a.config().DisplayName(),
+		"server_id": a.boot.ServerID, // stable per-install identity; clients key per-server state on it
 		"version":   Version,
 		"api":       "v1",
 		"capabilities": map[string]bool{
-			"admin_ui":   true,                        // baked-in admin console at /admin
-			"web_player": web.HasPlayer(a.cfg.WebDir), // web player served at /web (when web_dir is populated)
-			"transcode":  a.ffmpeg != "",              // on-the-fly MP3 transcoding via ffmpeg
-			"upload":     false,                       // Phase B
-			"websocket":  false,                       // Phase C
-			"api_keys":   true,                        // user-minted personal access tokens (POST /auth/tokens)
-			"export":     true,                        // admin library export (GET /admin/libraries/{id}/export)
-			"metadata":   a.metadataOn(),              // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
+			"admin_ui":   true,                         // baked-in admin console at /admin
+			"web_player": web.HasPlayer(a.boot.WebDir), // web player served at /web (when web_dir is populated)
+			"transcode":  a.ffmpeg != "",               // on-the-fly MP3 transcoding via ffmpeg
+			"upload":     false,                        // Phase B
+			"websocket":  false,                        // Phase C
+			"api_keys":   true,                         // user-minted personal access tokens (POST /auth/tokens)
+			"export":     true,                         // admin library export (GET /admin/libraries/{id}/export)
+			"metadata":   a.metadataOn(),               // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
 		},
 		"demo": map[string]bool{
-			"enabled": a.cfg.Demo.Enabled, // clients show a "Try the demo" affordance
+			"enabled": a.boot.Demo.Enabled, // clients show a "Try the demo" affordance
 		},
 	})
 }
@@ -152,7 +152,7 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":     session,
 		"user":      full,
-		"server_id": a.cfg.ServerID, // so the client keys its per-server state at pairing time
+		"server_id": a.boot.ServerID, // so the client keys its per-server state at pairing time
 	})
 }
 
@@ -188,7 +188,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": full, "server_id": a.cfg.ServerID})
+	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": full, "server_id": a.boot.ServerID})
 }
 
 // handlePair issues a fresh pairing QR for the already-authenticated user, e.g.

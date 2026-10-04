@@ -60,7 +60,7 @@ func (a *API) secureHeaders(next http.Handler) http.Handler {
 		// (autocert). Never for selfsigned: pinning HSTS would make the
 		// unavoidable certificate warning impossible to bypass and lock users
 		// out. With mode off (behind a reverse proxy) the proxy owns HSTS.
-		if a.cfg.TLS.Mode == config.TLSAutocert {
+		if a.boot.TLS.Mode == config.TLSAutocert {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)
@@ -71,17 +71,9 @@ func (a *API) secureHeaders(next http.Handler) http.Handler {
 // cross-origin browser requests are simply not granted CORS headers (the API
 // still works for native apps and same-origin web clients).
 func (a *API) cors(next http.Handler) http.Handler {
-	allowed := map[string]bool{}
-	wildcard := false
-	for _, o := range a.cfg.CORSOrigins {
-		if o == "*" {
-			wildcard = true
-		}
-		allowed[o] = true
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && (wildcard || allowed[origin]) {
+		if origin != "" && a.config().allowsOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -100,15 +92,9 @@ func (a *API) cors(next http.Handler) http.Handler {
 // X-Forwarded-For header is honored only when the direct peer is a configured
 // trusted proxy, preventing clients from spoofing their IP.
 func (a *API) realIP(next http.Handler) http.Handler {
-	var nets []*net.IPNet
-	for _, c := range a.cfg.TrustedProxies {
-		if _, n, err := net.ParseCIDR(c); err == nil {
-			nets = append(nets, n)
-		}
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := peerIP(r.RemoteAddr)
-		if isTrusted(ip, nets) {
+		if isTrusted(ip, a.config().proxies) {
 			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 				parts := strings.Split(xff, ",")
 				if c := strings.TrimSpace(parts[len(parts)-1]); c != "" {

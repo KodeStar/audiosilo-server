@@ -1,6 +1,14 @@
 import type { BookRef } from '@/api/types';
 import type { MockRoute } from './fetch-mock';
-import { admin, issuesSummary, libraries, serverInfo, settings, stats } from './fixtures';
+import {
+  admin,
+  issuesSummary,
+  libraries,
+  serverInfo,
+  settings,
+  stats,
+  updateStatus,
+} from './fixtures';
 
 /**
  * The calls every signed-in screen makes (session, server info, the shell's
@@ -12,6 +20,8 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     'GET /me': { body: admin },
     'GET /admin/stats': { body: stats() },
     'GET /admin/settings': { body: settings },
+    // The Overview's server card: up to date.
+    'GET /admin/update': { body: updateStatus() },
     'GET /admin/libraries': { body: { libraries: libraries() } },
     // The overview's "needs attention" card.
     'GET /admin/issues': { body: issuesSummary() },

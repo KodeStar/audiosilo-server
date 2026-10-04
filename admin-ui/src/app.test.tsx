@@ -4,7 +4,7 @@ import { getToken, setToken } from '@/api/token';
 import { setUnauthorizedHandler } from '@/api/client';
 import { toast } from '@/lib/toast';
 import { mockFetch } from '@/test/fetch-mock';
-import { admin, liveSession, member, stats } from '@/test/fixtures';
+import { admin, liveSession, member, stats, systemStatus } from '@/test/fixtures';
 import { signedInRoutes } from '@/test/routes';
 import { renderApp } from '@/test/render-app';
 
@@ -189,9 +189,11 @@ describe('navigation', () => {
 
   it('deep-links a destination section to its placeholder', async () => {
     mockFetch(signedInRoutes());
-    renderApp('/server/logs');
-    expect(await screen.findByRole('heading', { name: 'Logs is on its way' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page');
+    renderApp('/server/audit');
+    expect(
+      await screen.findByRole('heading', { name: 'Audit log is on its way' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Audit log' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('404s an unknown section', async () => {
@@ -246,6 +248,18 @@ describe('command palette', () => {
     expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/libraries/1/scan')).toBe(
       true,
     );
+  });
+
+  it('opens a settings topic by what it holds', async () => {
+    mockFetch(signedInRoutes({ 'GET /admin/system': { body: systemStatus() } }));
+    const { router } = renderApp();
+    await screen.findByRole('heading', { level: 1, name: /chris\.$/ });
+    fireEvent.keyDown(window, { key: '/' });
+    const user = userEvent.setup();
+    await user.type(await screen.findByRole('combobox'), 'certificate');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(router.state.location.search).toEqual({ topic: 'network' }));
+    expect(router.state.location.pathname).toBe('/server');
   });
 
   it("navigates to a section that's only offered while searching", async () => {

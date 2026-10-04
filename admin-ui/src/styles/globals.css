@@ -374,6 +374,47 @@
     display: none;
   }
 
+  /* Server > Logs: a deep-ink console panel in both themes (Shelf prototype .log). */
+  .log {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.7;
+    background: #0b1122;
+    color: #c9d2e6;
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    overflow: auto;
+    height: min(560px, 62vh);
+    overflow-wrap: anywhere;
+  }
+  [data-theme='dark'] .log {
+    background: #060a16;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .log .ts {
+    color: #7f8aa5;
+    margin-right: 10px;
+  }
+  .log .lv {
+    display: inline-block;
+    width: 46px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .log .lv[data-level='info'] {
+    color: #7d9bf2;
+  }
+  .log .lv[data-level='warn'] {
+    color: #f0b04d;
+  }
+  .log .lv[data-level='error'] {
+    color: #f0606e;
+  }
+  .log .lv[data-level='debug'],
+  .log .attr {
+    color: #8f9ab3;
+  }
+
   /* Status dot: always next to a word (status is never colour alone). */
   .dot {
     width: 7px;

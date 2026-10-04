@@ -1,116 +1,503 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { Info, TriangleAlert } from 'lucide-react';
-import { api } from '@/api/client';
-import { keys, useSettings } from '@/api/hooks';
+import {
+  ArrowRight,
+  Globe,
+  Info,
+  MonitorSmartphone,
+  Repeat2,
+  RotateCcw,
+  Settings2,
+  ShieldCheck,
+  Ticket,
+  TriangleAlert,
+  type LucideIcon,
+} from 'lucide-react';
+import { useLibraries, useSettings, useSystem } from '@/api/hooks';
 import type { AdminSettings } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
-import { Card, CardHeader } from '@/components/ui/card';
-import { Switch } from '@/components/ui/switch';
-import { toastError } from '@/lib/errors';
 import { SettingRow } from '@/components/setting-row';
+import { Badge } from '@/components/ui/badge';
+import { buttonVariants } from '@/components/ui/button';
+import { Card, CardHeader } from '@/components/ui/card';
+import { formatDate, formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
+import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
+import { certificateLook, SETTINGS_PAGES, type SettingsPage } from './settings-model';
+
+const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
+  general: Settings2,
+  network: ShieldCheck,
+  players: MonitorSmartphone,
+  metadata: Globe,
+  transcoding: Repeat2,
+  demo: Ticket,
+};
 
 /**
- * Server > Settings. Today it holds the one setting the server can change at
- * runtime, the community metadata lookup; the rest of config.yaml moves here in
- * Phase 5a, each setting in exactly one place.
+ * Server > Settings: config.yaml as a page, one topic at a time (`?topic=`),
+ * each setting in exactly one place. A setting the environment or the desktop
+ * app sets is shown locked, one read only at start says so, and a saved one
+ * still waiting for a restart is listed at the top.
  */
 export function SettingsPage() {
   const { t } = useTranslation();
+  const { topic = 'general' } = useSearch({ strict: false }) as { topic?: SettingsPage };
   const settings = useSettings();
+
   return (
     <Page>
       <PageHead title={t('settings.title')} description={t('settings.description')} />
-      <div className="flex max-w-[760px] flex-col gap-5">
-        {settings.isError ? (
-          <QueryError
-            title={t('settings.error')}
-            error={settings.error}
-            onRetry={() => void settings.refetch()}
-          />
-        ) : !settings.data ? (
-          <div
-            className="skel h-[180px] rounded-xl"
-            role="status"
-            aria-label={t('common.loading')}
-          />
-        ) : (
-          <MetadataCard settings={settings.data} />
-        )}
-        <Notice tone="info" icon={Info}>
-          {t('settings.moreSoon')}
-        </Notice>
+      <div className="grid gap-6 md:grid-cols-[210px_minmax(0,1fr)]">
+        <nav
+          aria-label={t('settings.topics')}
+          className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-col md:overflow-visible md:p-0"
+        >
+          {SETTINGS_PAGES.map((p) => {
+            const Icon = PAGE_ICONS[p];
+            return (
+              <Link
+                key={p}
+                to="/server/{-$section}"
+                params={{ section: undefined }}
+                search={p === 'general' ? {} : { topic: p }}
+                aria-current={p === topic ? 'page' : undefined}
+                className="flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-[13.5px] font-semibold whitespace-nowrap text-muted-foreground transition-colors duration-(--dur-1) hover:bg-accent hover:text-foreground aria-[current=page]:bg-card aria-[current=page]:text-foreground aria-[current=page]:shadow-[inset_0_0_0_1px_var(--border)]"
+              >
+                <Icon className="size-4" aria-hidden="true" />
+                {t(`settings.topic.${p}`)}
+              </Link>
+            );
+          })}
+        </nav>
+        <div className="flex max-w-[820px] min-w-0 flex-col gap-5">
+          <h2 className="h2">{t(`settings.topic.${topic}`)}</h2>
+          {settings.isError ? (
+            <QueryError
+              title={t('settings.error')}
+              error={settings.error}
+              onRetry={() => void settings.refetch()}
+            />
+          ) : !settings.data ? (
+            <div
+              className="skel h-[220px] rounded-xl"
+              role="status"
+              aria-label={t('common.loading')}
+            />
+          ) : (
+            <>
+              <RestartNotice settings={settings.data} />
+              <Topic topic={topic} settings={settings.data} />
+            </>
+          )}
+        </div>
       </div>
     </Page>
   );
 }
 
-function MetadataCard({ settings }: { settings: AdminSettings }) {
+function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettings }) {
+  switch (topic) {
+    case 'network':
+      return <NetworkTopic settings={settings} />;
+    case 'players':
+      return <PlayersTopic settings={settings} />;
+    case 'metadata':
+      return <MetadataTopic settings={settings} />;
+    case 'transcoding':
+      return <TranscodingTopic />;
+    case 'demo':
+      return <DemoTopic settings={settings} />;
+    default:
+      return <GeneralTopic settings={settings} />;
+  }
+}
+
+/** Saved settings the running server doesn't use yet. */
+function RestartNotice({ settings }: { settings: AdminSettings }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
-  const m = settings.metadata;
-
-  const toggle = async (enabled: boolean) => {
-    const before = qc.getQueryData<AdminSettings>(keys.settings);
-    qc.setQueryData<AdminSettings>(keys.settings, { metadata: { ...m, enabled } });
-    try {
-      const saved = await api.updateSettings({ metadata: { enabled } });
-      qc.setQueryData(keys.settings, saved);
-      // The `metadata` capability follows the switch.
-      void qc.invalidateQueries({ queryKey: keys.server });
-      toast.add({
-        title: saved.metadata.enabled ? t('settings.metadata.on') : t('settings.metadata.off'),
-        description: saved.metadata.enabled ? undefined : t('settings.metadata.offBody'),
-        type: 'success',
-      });
-    } catch (err) {
-      qc.setQueryData(keys.settings, before);
-      toastError(t('settings.metadata.failed'), err);
-    }
-  };
-
+  if (settings.restart_pending.length === 0) return null;
   return (
-    <Card aria-labelledby="metadata-title">
+    <Notice tone="warn" icon={RotateCcw} title={t('settings.restart.title')} role="status">
+      {t('settings.restart.body', {
+        list: settings.restart_pending.map((id) => t(`settings.${id}`)).join(', '),
+      })}
+    </Notice>
+  );
+}
+
+function GeneralTopic({ settings }: { settings: AdminSettings }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <SettingsForm
+        settings={settings}
+        section="general"
+        title={t('settings.general.card')}
+        fields={[
+          { name: 'name', kind: 'text', placeholder: 'AudioSilo' },
+          {
+            name: 'public_url',
+            kind: 'text',
+            mono: true,
+            placeholder: 'https://books.example.com',
+          },
+        ]}
+      />
+      <Card aria-labelledby="updates-title">
+        <CardHeader
+          titleId="updates-title"
+          title={t('settings.updates.title')}
+          action={
+            <Link
+              to="/server/{-$section}"
+              params={{ section: 'about' }}
+              className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
+            >
+              {t('settings.updates.about')}
+              <ArrowRight aria-hidden="true" />
+            </Link>
+          }
+        />
+        <div className="px-5">
+          <SettingRow
+            title={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                {t('settings.general.update_check')}
+                <SettingBadges settings={settings} id="general.update_check" />
+              </span>
+            }
+            htmlFor="update-switch"
+            description={t('settings.general.update_checkBody')}
+            descriptionId="update-switch-desc"
+          >
+            <InstantSwitch
+              settings={settings}
+              id="update-switch"
+              checked={settings.general.update_check}
+              disabled={Boolean(settings.locked['general.update_check'])}
+              describedBy="update-switch-desc"
+              patch={(on) => ({ general: { update_check: on } })}
+              failedTitle={t('settings.updates.failed')}
+              onSaved={(_, on) =>
+                toast.add({
+                  title: on ? t('settings.updates.on') : t('settings.updates.off'),
+                  description: on ? undefined : t('settings.updates.offBody'),
+                  type: 'success',
+                })
+              }
+            />
+          </SettingRow>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function NetworkTopic({ settings }: { settings: AdminSettings }) {
+  const { t } = useTranslation();
+  const modes = ['off', 'selfsigned', 'autocert'] as const;
+  return (
+    <>
+      <SettingsForm
+        settings={settings}
+        section="network"
+        title={t('settings.network.https')}
+        description={t('settings.network.httpsBody')}
+        confirmRestart
+        fields={[
+          {
+            name: 'tls_mode',
+            kind: 'radio',
+            options: modes.map((m) => ({
+              value: m,
+              title: t(`settings.network.mode.${m}`),
+              description: t(`settings.network.mode.${m}Body`),
+            })),
+          },
+          { name: 'tls_hosts', kind: 'list', placeholder: 'books.example.com' },
+        ]}
+        visible={(name, draft) => name !== 'tls_hosts' || draft.tls_mode === 'autocert'}
+      >
+        <CertificateRow />
+      </SettingsForm>
+      <SettingsForm
+        settings={settings}
+        section="network"
+        title={t('settings.network.card')}
+        confirmRestart
+        fields={[
+          { name: 'bind', kind: 'text', mono: true, placeholder: '0.0.0.0:8080' },
+          { name: 'trusted_proxies', kind: 'list', placeholder: '10.0.0.2/32' },
+          { name: 'cors_origins', kind: 'list', placeholder: 'http://localhost:8081' },
+        ]}
+      />
+    </>
+  );
+}
+
+/** The served certificate's state, from the system status. */
+function CertificateRow() {
+  const { t, i18n } = useTranslation();
+  const system = useSystem();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const tls = system.data?.tls;
+  let value: React.ReactNode = <span className="skel inline-block h-5 w-40" />;
+  if (system.isError)
+    value = <span className="text-muted-foreground">{t('settings.unknown')}</span>;
+  else if (tls) {
+    const look = certificateLook(tls, Date.now());
+    value = look ? (
+      <Badge variant={look.tone}>
+        {t(look.key, { days: formatNumber(look.days ?? 0, lang), count: look.days ?? 0 })}
+      </Badge>
+    ) : (
+      <span className="text-muted-foreground">{t('settings.network.cert.none')}</span>
+    );
+  }
+  const first = tls?.certificates[0];
+  return (
+    <SettingRow
+      title={t('settings.network.cert.title')}
+      description={
+        first?.issued
+          ? t('settings.network.cert.detail', {
+              issuer: first.issuer || t('settings.unknown'),
+              date: formatDate(first.not_after, lang),
+            })
+          : undefined
+      }
+    >
+      {value}
+    </SettingRow>
+  );
+}
+
+function PlayersTopic({ settings }: { settings: AdminSettings }) {
+  const { t } = useTranslation();
+  const p = settings.players;
+  return (
+    <>
+      <Card aria-labelledby="player-title">
+        <CardHeader titleId="player-title" title={t('settings.players.card')} />
+        <div className="divide-y px-5">
+          <SettingRow
+            title={t('settings.players.web_player')}
+            description={t(`settings.players.source.${p.web_player || 'none'}Body`)}
+          >
+            <span className="inline-flex items-center gap-1.5 font-semibold">
+              <span className="dot" data-tone={p.web_player ? 'ok' : 'off'} aria-hidden="true" />
+              {t(`settings.players.source.${p.web_player || 'none'}`)}
+            </span>
+          </SettingRow>
+          {p.web_dir ? (
+            <SettingRow
+              title={
+                <span className="inline-flex flex-wrap items-center gap-2">
+                  {t('settings.players.web_dir')}
+                  <SettingBadges settings={settings} id="players.web_dir" />
+                </span>
+              }
+              description={t('settings.players.web_dirBody')}
+            >
+              <span className="font-mono text-[12.5px] [overflow-wrap:anywhere]">{p.web_dir}</span>
+            </SettingRow>
+          ) : null}
+        </div>
+      </Card>
+      <SettingsForm
+        settings={settings}
+        section="players"
+        title={t('settings.players.links')}
+        description={t('settings.players.linksBody')}
+        fields={[
+          { name: 'apple_app_ids', kind: 'list', placeholder: 'ABCDE12345.app.audiosilo' },
+          { name: 'android_package', kind: 'text', mono: true, placeholder: 'app.audiosilo' },
+          { name: 'android_sha256', kind: 'list', placeholder: 'AB:CD:…' },
+        ]}
+      />
+    </>
+  );
+}
+
+function MetadataTopic({ settings }: { settings: AdminSettings }) {
+  const { t } = useTranslation();
+  const m = settings.metadata;
+  return (
+    <>
+      <Card aria-labelledby="metadata-title">
+        <CardHeader
+          titleId="metadata-title"
+          title={t('settings.metadata.title')}
+          description={t('settings.metadata.description')}
+        />
+        <div className="divide-y px-5">
+          <SettingRow
+            title={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                {t('settings.metadata.toggle')}
+                <SettingBadges settings={settings} id="metadata.enabled" />
+              </span>
+            }
+            htmlFor="metadata-switch"
+            description={t('settings.metadata.toggleBody')}
+            descriptionId="metadata-switch-desc"
+          >
+            <InstantSwitch
+              settings={settings}
+              id="metadata-switch"
+              checked={m.enabled && m.available}
+              disabled={!m.available || Boolean(settings.locked['metadata.enabled'])}
+              describedBy="metadata-switch-desc"
+              patch={(on) => ({ metadata: { enabled: on } })}
+              failedTitle={t('settings.metadata.failed')}
+              onSaved={(saved) =>
+                toast.add({
+                  title: saved.metadata.enabled
+                    ? t('settings.metadata.on')
+                    : t('settings.metadata.off'),
+                  description: saved.metadata.enabled ? undefined : t('settings.metadata.offBody'),
+                  type: 'success',
+                })
+              }
+            />
+          </SettingRow>
+          {m.enabled && m.available ? <MetadataStatusRow /> : null}
+        </div>
+        {!m.available ? (
+          <Notice
+            tone="warn"
+            icon={TriangleAlert}
+            title={t('settings.metadata.unavailable')}
+            className="mx-5 mb-5"
+          >
+            {t('settings.metadata.unavailableBody')}
+          </Notice>
+        ) : null}
+      </Card>
+      <SettingsForm
+        settings={settings}
+        section="metadata"
+        title={t('settings.metadata.addressCard')}
+        fields={[
+          { name: 'base_url', kind: 'text', mono: true, placeholder: 'https://meta.audiosilo.app' },
+        ]}
+      />
+    </>
+  );
+}
+
+function MetadataStatusRow() {
+  const { t, i18n } = useTranslation();
+  const system = useSystem();
+  const h = system.data?.metadata.health;
+  return (
+    <SettingRow title={t('settings.metadata.status')}>
+      {!h ? (
+        <span className="skel inline-block h-5 w-36" />
+      ) : h.reachable ? (
+        <span className="inline-flex items-center gap-1.5 font-semibold text-success">
+          <span className="dot" data-tone="ok" aria-hidden="true" />
+          {t('settings.metadata.responding', {
+            ms: formatNumber(h.latency_ms, i18n.resolvedLanguage ?? 'en'),
+          })}
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5 font-semibold text-destructive">
+          <span className="dot" data-tone="bad" aria-hidden="true" />
+          {t('settings.metadata.notResponding')}
+        </span>
+      )}
+    </SettingRow>
+  );
+}
+
+function TranscodingTopic() {
+  const { t } = useTranslation();
+  const system = useSystem();
+  return (
+    <Card aria-labelledby="transcoding-title">
       <CardHeader
-        titleId="metadata-title"
-        title={t('settings.metadata.title')}
-        description={t('settings.metadata.description')}
+        titleId="transcoding-title"
+        title={t('settings.transcoding.card')}
+        description={t('settings.transcoding.cardBody')}
       />
       <div className="divide-y px-5">
-        <SettingRow
-          title={t('settings.metadata.toggle')}
-          htmlFor="metadata-switch"
-          description={t('settings.metadata.toggleBody')}
-          descriptionId="metadata-switch-desc"
-        >
-          <Switch
-            id="metadata-switch"
-            checked={m.enabled && m.available}
-            disabled={!m.available}
-            onCheckedChange={(v) => void toggle(v)}
-            aria-describedby="metadata-switch-desc"
-          />
-        </SettingRow>
-        <SettingRow title={t('settings.metadata.address')}>
-          <span className="font-mono text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
-            {m.base_url || t('settings.metadata.notConfigured')}
-          </span>
-        </SettingRow>
+        {system.isError ? (
+          <div className="py-4">
+            <QueryError
+              title={t('system.error')}
+              error={system.error}
+              onRetry={() => void system.refetch()}
+            />
+          </div>
+        ) : !system.data ? (
+          <div className="py-4">
+            <span className="skel block h-16" role="status" aria-label={t('common.loading')} />
+          </div>
+        ) : (
+          system.data.tools.map((tool) => (
+            <SettingRow
+              key={tool.name}
+              title={tool.name}
+              description={
+                tool.path ? (
+                  <span className="font-mono [overflow-wrap:anywhere]">{tool.path}</span>
+                ) : (
+                  t(`settings.transcoding.missing.${tool.name}`)
+                )
+              }
+            >
+              {tool.path ? (
+                <Badge variant="success">
+                  {tool.version || t('settings.transcoding.found')}
+                  {tool.source === 'downloaded' ? ` · ${t('settings.transcoding.downloaded')}` : ''}
+                </Badge>
+              ) : (
+                <Badge variant="warning">{t('settings.transcoding.off')}</Badge>
+              )}
+            </SettingRow>
+          ))
+        )}
       </div>
-      {!m.available ? (
-        <Notice
-          tone="warn"
-          icon={TriangleAlert}
-          title={t('settings.metadata.unavailable')}
-          className="mx-5 mb-5"
-        >
-          {t('settings.metadata.unavailableBody')}
-        </Notice>
-      ) : null}
+      <Notice tone="info" icon={Info} className="mx-5 mb-5">
+        {t('settings.transcoding.how')}
+      </Notice>
     </Card>
+  );
+}
+
+function DemoTopic({ settings }: { settings: AdminSettings }) {
+  const { t, i18n } = useTranslation();
+  const libraries = useLibraries();
+  const names = (libraries.data ?? []).map((l) => l.name);
+  const current = settings.demo.library;
+  const options = [
+    { value: '', label: t('settings.demo.noLibrary') },
+    ...[...new Set(current ? [current, ...names] : names)].map((n) => ({ value: n, label: n })),
+  ];
+  return (
+    <SettingsForm
+      settings={settings}
+      section="demo"
+      title={t('settings.demo.card')}
+      description={t('settings.demo.cardBody')}
+      fields={[
+        { name: 'enabled', kind: 'switch' },
+        { name: 'library', kind: 'select', options },
+        {
+          name: 'max_users',
+          kind: 'number',
+          placeholder: t('settings.demo.maxDefault', {
+            n: formatNumber(settings.demo.max_users_default, i18n.resolvedLanguage ?? 'en'),
+          }),
+        },
+        { name: 'idle_ttl', kind: 'text', mono: true, placeholder: '24h' },
+      ]}
+    />
   );
 }

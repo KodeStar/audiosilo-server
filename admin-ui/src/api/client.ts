@@ -32,6 +32,10 @@ import type {
   AdminLibrary,
   AdminSettings,
   AdminShare,
+  LogPage,
+  SettingsPatch,
+  SystemStatus,
+  UpdateStatus,
   AdminStats,
   BookPage,
   DirListing,
@@ -231,6 +235,18 @@ export function bookQuery(params: object): string {
   return s ? `?${s}` : '';
 }
 
+/** GET /admin/logs filters (handlers_system.go handleLogs). */
+export interface LogQuery {
+  /** At least this level. */
+  level?: 'info' | 'warn' | 'error';
+  /** Lines containing this (any case). */
+  q?: string;
+  /** Only lines after this seq (the live tail's cursor). */
+  after?: number;
+  /** At most this many, the newest (<= 1000). */
+  limit?: number;
+}
+
 /** What GET .../book/match searches by ({} = the book's own facts). */
 export type MatchBy = { q?: string; asin?: string; isbn?: string };
 
@@ -260,8 +276,13 @@ export const api = {
     request<{ status: string; job: Job }>('POST', `/admin/libraries/${id}/scan`),
   /** Queues a scan of every library; the queue runs them one at a time. */
   scanAll: () => request<{ jobs: Job[] }>('POST', '/admin/scan'),
-  updateSettings: (patch: { metadata: { enabled: boolean } }) =>
+  updateSettings: (patch: SettingsPatch) =>
     request<AdminSettings>('PATCH', '/admin/settings', patch),
+  system: () => request<SystemStatus>('GET', '/admin/system'),
+  updateStatus: () => request<UpdateStatus>('GET', '/admin/update'),
+  checkForUpdate: () => request<UpdateStatus>('POST', '/admin/update/check'),
+  /** The newest log lines; `after` (a previous page's last_seq) asks only for newer ones. */
+  logs: (q: LogQuery = {}) => request<LogPage>('GET', `/admin/logs${bookQuery(q)}`),
 
   libraries: () => request<{ libraries: AdminLibrary[] }>('GET', '/admin/libraries'),
   createLibrary: (lib: LibraryRequest & { name: string; root: string }) =>

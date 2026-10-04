@@ -108,7 +108,9 @@ internal/library/     filesystem view (fsview.go) + background scanner (scanner.
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; match search for the admin console (match.go)
-internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local
+internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
+internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
+internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
 internal/web/         baked-in connect/setup pages (vanilla HTML/CSS/JS, no build step), mounts the
@@ -331,16 +333,11 @@ admin overrides; see Metadata overrides below).
   `AUDIOSILO_METADATA_BASE_URL`; `base_url` must be an absolute http(s) URL when
   enabled) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
   is constructed in `api.New` whenever `base_url` is valid (`MetadataConfig.ValidBaseURL`),
-  regardless of `enabled`, and an atomic flag (`API.metaEnabled`, seeded from
-  `metadata.enabled`) gates it - so an admin can flip it on/off without a restart.
-  The handler and the `metadata` capability both gate on `metadataOn()`
-  (`a.meta != nil && metaEnabled`); `a.meta == nil` (empty/invalid `base_url`) is
-  permanently unavailable and can't be enabled. The admin console's **Server >
-  Settings > Community metadata** card and `GET`/`PATCH /admin/settings`
-  (`handlers_settings.go`, transport-only) read/flip the flag, persisting
-  `metadata.enabled` to `config.yaml` via `cfg.Save()` (serialized by
-  `API.settingsMu`); the PATCH refuses (400) an attempt to enable when the service
-  is unavailable. `meta.Service` owns the compose logic
+  regardless of `enabled`, and the live config's `metadata.enabled` gates it - so an admin
+  can flip it on/off without a restart (Server settings, below). The handler and the
+  `metadata` capability both gate on `metadataOn()` (`a.meta != nil && enabled`);
+  `a.meta == nil` (empty/invalid `base_url` at start) can't be enabled (400
+  `metadata_unavailable`); a new `base_url` waits for a restart. `meta.Service` owns the compose logic
   (lookup -> works/{id} -> pick the recording by `recording_id`, first as
   fallback -> up to 3 series rails, one per ordering family) behind a bounded in-memory TTL cache (24h
   positive / 1h not-found / 2min transport-error, ~2048-entry cap) so a hot path
@@ -582,6 +579,33 @@ admin overrides; see Metadata overrides below).
   or one person, and nothing else: the year calendar and a person's listening year). Book-page
   listeners carry `started_at`/`finished_at`. Sessions and roll-ups move
   with the book (`MoveDurableState`).
+- **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
+  is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
+  `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
+  (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
+  environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
+  config.yaml's own value for them (`file`), so an env value never lands in the file. Launcher overrides (the
+  desktop manager's bind/TLS/public URL) are `Pin`ned and locked as `"launcher"`. `WithSettings` returns a
+  validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting
+  id, mapped by `writeCatalogError` to `invalid_setting`/`unknown_setting`/`setting_read_only`/
+  `setting_locked` + `field`). The API never mutates a config: `API.boot` is the config the server started
+  with (restart-only settings read it: bind, TLS, web_dir, metadata.base_url, demo on/off + idle_ttl) and
+  `API.live` (`liveConfig`, read via `a.config()`) is swapped whole by a save, carrying the parsed trusted
+  proxies and CORS origins, so name, public URL, CORS, proxies, app links, metadata on/off and the demo
+  library/cap apply on the next request. `restart_pending` lists restart settings whose saved value differs
+  from `boot`. New keys: `name` (`DisplayName`: GET /server `name`, pairing `server_name`; default
+  "AudioSilo") and `update_check` (default true, `AUDIOSILO_UPDATE_CHECK`). `GET /admin/system`
+  (`handlers_system.go`): tools + versions (`toolfetch.Version`, cached), metadata health (`meta.Service.Ping`:
+  metaserve `/healthz`, cached a minute, **only while metadata is on**), TLS certificates read from their
+  files (`server.Certificates`; never generates or requests one), database size + schema
+  (`catalog.DatabaseInfo`), each root's availability + disk space (`Scanner.RootDisk`: statfs inside the
+  same bounded root probe, so a dead mount can't hang it), web player source, update status. The update check
+  (`internal/updates`, started by the launcher): GitHub's latest release, a minute after start then daily,
+  conditional on the ETag, `User-Agent: AudioSilo/<version>`, nothing else sent, never while off;
+  `GET /admin/update`, `POST /admin/update/check` (409 `update_check_off`; within a minute it answers with
+  the last result). Logs: the launcher wraps its logger in `logring.Handler` (Info and up into a 2,000-line
+  ring; attributes whose key has a secret word (token, password, code, key, secret, cookie, authorization)
+  are redacted); `GET /admin/logs?level=&q=&after=&limit=` (`after` = the live tail's cursor). All admin-only.
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
@@ -680,8 +704,8 @@ admin overrides; see Metadata overrides below).
 on as phases land. `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
-(`metadataOn()`: a valid `metadata.base_url` AND the runtime enabled flag, which
-the admin can toggle at `PATCH /admin/settings`).
+(`metadataOn()`: a valid `metadata.base_url` at start AND the live
+`metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`).
 
 ## API surface
 
@@ -695,6 +719,8 @@ the other `?path=` content endpoints; 404 when metadata is disabled), plus
 404 when metadata is disabled or the work id is unknown).
 The library export is `GET /admin/libraries/{id}/export` (admin only; returns a
 JSON attachment, not the usual envelope - see Library export above).
-Runtime-toggleable settings are `GET`/`PATCH /admin/settings` (admin only): a
-feature-keyed envelope (`{"metadata":{"enabled","base_url","available"}}`) whose
-`PATCH {"metadata":{"enabled":bool}}` flips the metadata lookup and persists it.
+Server settings are `GET`/`PATCH /admin/settings` (admin only): a section-keyed
+envelope (`general`, `network`, `players`, `metadata`, `demo`, plus `locked`,
+`restart_settings`, `restart_pending`) whose PATCH takes the same shape with only
+the settings to change (`{"metadata":{"enabled":false}}` still flips the lookup);
+see "Server settings" above.

@@ -19,6 +19,7 @@ import {
   useServerInfo,
   useSettings,
   useStats,
+  useUpdateStatus,
 } from '@/api/hooks';
 import type {
   AdminSettings,
@@ -409,8 +410,26 @@ function ServerCard() {
   const { t } = useTranslation();
   const server = useServerInfo();
   const settings = useSettings();
+  const update = useUpdateStatus();
+  const latest = update.data?.update_available ? update.data.latest : null;
   const rows: [string, React.ReactNode][] = [
-    [t('home.server.version'), server.data && formatVersion(server.data.version)],
+    [
+      t('home.server.version'),
+      server.data && (
+        <span className="inline-flex flex-wrap items-center gap-x-2">
+          {formatVersion(server.data.version)}
+          {latest ? (
+            <Link
+              to="/server/{-$section}"
+              params={{ section: 'about' }}
+              className="font-semibold text-brand-ink hover:underline"
+            >
+              {t('home.server.update', { version: formatVersion(latest.version) })}
+            </Link>
+          ) : null}
+        </span>
+      ),
+    ],
     [
       t('home.server.address'),
       <span className="font-mono text-[12.5px]">{window.location.host}</span>,

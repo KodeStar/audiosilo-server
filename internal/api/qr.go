@@ -54,8 +54,8 @@ func (a *API) inviteURL(r *http.Request, code string) string {
 // baseURL determines the externally reachable base URL: configured PublicURL
 // wins; otherwise it is derived from the request.
 func (a *API) baseURL(r *http.Request) string {
-	if a.cfg.PublicURL != "" {
-		return strings.TrimRight(a.cfg.PublicURL, "/")
+	if u := a.config().PublicURL; u != "" {
+		return strings.TrimRight(u, "/")
 	}
 	scheme := "http"
 	if r.TLS != nil {
@@ -85,7 +85,7 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 		return nil, err
 	}
 	return &PairingPayload{
-		ServerName:   "AudioSilo",
+		ServerName:   a.config().DisplayName(),
 		BaseURL:      base,
 		PairingToken: token,
 		URI:          appURI,

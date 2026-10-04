@@ -71,7 +71,7 @@ func TestIsTrusted(t *testing.T) {
 }
 
 func TestSecureHeaders(t *testing.T) {
-	a := &API{cfg: &config.Config{TLS: config.TLSConfig{Mode: config.TLSOff}}}
+	a := apiWithConfig(&config.Config{TLS: config.TLSConfig{Mode: config.TLSOff}})
 	h := a.secureHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -98,7 +98,7 @@ func TestSecureHeaders(t *testing.T) {
 // pinning HSTS behind a self-signed cert would lock users out (review finding S6).
 func TestSecureHeadersHSTS(t *testing.T) {
 	serve := func(mode config.TLSMode) string {
-		a := &API{cfg: &config.Config{TLS: config.TLSConfig{Mode: mode}}}
+		a := apiWithConfig(&config.Config{TLS: config.TLSConfig{Mode: mode}})
 		rec := httptest.NewRecorder()
 		a.secureHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
 			ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -113,7 +113,7 @@ func TestSecureHeadersHSTS(t *testing.T) {
 }
 
 func TestCORSAllowList(t *testing.T) {
-	a := &API{cfg: &config.Config{CORSOrigins: []string{"https://app.example.com"}}}
+	a := apiWithConfig(&config.Config{CORSOrigins: []string{"https://app.example.com"}})
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	h := a.cors(next)
 
@@ -144,7 +144,7 @@ func TestCORSAllowList(t *testing.T) {
 }
 
 func TestCORSWildcard(t *testing.T) {
-	a := &API{cfg: &config.Config{CORSOrigins: []string{"*"}}}
+	a := apiWithConfig(&config.Config{CORSOrigins: []string{"*"}})
 	h := a.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -159,7 +159,7 @@ func TestCORSWildcard(t *testing.T) {
 // trusted proxy, and take the right-most (closest-proxy, spoof-resistant) value.
 // This guards the rate limiter against IP spoofing (review finding S8).
 func TestRealIPTrust(t *testing.T) {
-	a := &API{cfg: &config.Config{TrustedProxies: []string{"10.0.0.0/8"}}}
+	a := apiWithConfig(&config.Config{TrustedProxies: []string{"10.0.0.0/8"}})
 	var captured string
 	h := a.realIP(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		captured = clientIP(r)
@@ -182,4 +182,11 @@ func TestRealIPTrust(t *testing.T) {
 	if captured != "203.0.113.9" {
 		t.Fatalf("untrusted XFF must be ignored: clientIP = %q, want 203.0.113.9", captured)
 	}
+}
+
+// apiWithConfig is a bare API (no services) running with c, for middleware tests.
+func apiWithConfig(c *config.Config) *API {
+	a := &API{boot: c}
+	a.live.Store(newLiveConfig(c))
+	return a
 }
