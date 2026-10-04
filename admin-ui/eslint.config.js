@@ -1,4 +1,5 @@
 import js from '@eslint/js';
+import { defineConfig } from 'eslint/config';
 import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
@@ -47,18 +48,17 @@ const cspRestrictedSyntax = [
   },
 ];
 
-export default tseslint.config(
+export default defineConfig(
   {
     ignores: ['dist', 'node_modules', 'coverage'],
   },
   {
     files: ['**/*.{ts,tsx}'],
-    extends: [
-      js.configs.recommended,
-      ...tseslint.configs.recommended,
-      reactHooks.configs['recommended-latest'],
-      reactRefresh.configs.vite,
-    ],
+    extends: [js.configs.recommended, tseslint.configs.recommended, reactRefresh.configs.vite],
+    // The classic hooks rules only. eslint-plugin-react-hooks 7's `recommended` adds the
+    // React Compiler rules (purity, refs, set-state-in-effect, ...); adopting them is a
+    // separate change.
+    plugins: { 'react-hooks': reactHooks },
     languageOptions: {
       ecmaVersion: 2022,
       globals: {
@@ -66,6 +66,8 @@ export default tseslint.config(
       },
     },
     rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
       'no-restricted-imports': ['error', cspRestrictedImports],
       'no-restricted-syntax': ['error', ...cspRestrictedSyntax],
     },

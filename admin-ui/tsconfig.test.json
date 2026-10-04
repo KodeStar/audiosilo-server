@@ -1,0 +1,12 @@
+{
+  // The tests and their helpers: the app's settings plus the vitest globals, jest-dom
+  // matchers and Node (a few tests read files from disk). Kept apart from
+  // tsconfig.app.json so browser code can't reach Node APIs and still typecheck.
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"]
+  },
+  "include": ["src/vite-env.d.ts", "src/**/*.test.ts", "src/**/*.test.tsx", "src/test"],
+  "exclude": []
+}

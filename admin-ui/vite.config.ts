@@ -42,8 +42,9 @@ export default defineConfig({
     // Never inline assets as data: URIs into JS/CSS; every font and image is a
     // same-origin file (the CSP has no font-src data:).
     assetsInlineLimit: 0,
-    // The shell + Overview are one ~250 KB gzip entry chunk, cached immutably; each
-    // other screen is a lazy chunk (src/features/section-page.tsx).
+    // The shell + Overview load up front (~280 KB gzip: the entry chunk plus the shared
+    // chunks it preloads), cached immutably; each other screen is a lazy chunk
+    // (src/features/section-page.tsx).
     chunkSizeWarningLimit: 1024,
   },
   server: {
