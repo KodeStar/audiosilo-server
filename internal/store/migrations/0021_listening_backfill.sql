@@ -42,8 +42,8 @@ firsts AS (
 ),
 counted AS (
     SELECT sp.*,
-           MAX(0, MIN(ROUND(unixepoch(sp.e, 'subsec') - unixepoch(sp.s, 'subsec'), 3),
-                      ABS(sp.to_pos - sp.from_pos) * 2)) AS listened
+           MIN(ROUND(unixepoch(sp.e, 'subsec') - unixepoch(sp.s, 'subsec'), 3),
+               ABS(sp.to_pos - sp.from_pos) * 2) AS listened
       FROM spans sp LEFT JOIN firsts f ON f.user_id = sp.user_id
      WHERE sp.s IS NOT NULL AND sp.e IS NOT NULL AND sp.e > sp.s
        AND sp.e < COALESCE(f.first, '9999')
@@ -72,8 +72,10 @@ SELECT user_id, library_id, rel_path, MIN(s) AS started_at, MAX(e) AS last_at,
  GROUP BY user_id, library_id, rel_path, sitting
 HAVING SUM(listened) > 0;
 
-UPDATE listening_sessions SET id = -id;
-UPDATE listening_sessions SET id = (SELECT COUNT(*) FROM temp.backfill_sessions) - id;
+-- One pass: past the highest id plus the backfill, nothing can collide (the gap
+-- left below is harmless).
+UPDATE listening_sessions
+   SET id = id + (SELECT MAX(id) FROM listening_sessions) + (SELECT COUNT(*) FROM temp.backfill_sessions);
 
 INSERT INTO listening_sessions(id, user_id, library_id, rel_path, started_at, last_at,
                                start_pos, end_pos, duration, speed, listened, backfilled)
@@ -90,23 +92,26 @@ UPDATE sqlite_sequence SET seq = (SELECT COALESCE(MAX(id), 0) FROM listening_ses
 
 DROP TABLE temp.backfill_sessions;
 
-INSERT INTO listening_daily(day, user_id, library_id, rel_path, listened, sessions, estimated)
-SELECT day, user_id, library_id, rel_path, estimate, 0, 1
-  FROM (
+WITH recorded AS (
+    SELECT user_id, library_id, rel_path, SUM(listened) AS listened, MIN(started_at) AS first
+      FROM listening_sessions GROUP BY user_id, library_id, rel_path
+),
+rolled AS (
+    SELECT user_id, library_id, rel_path, SUM(listened) AS listened
+      FROM listening_daily GROUP BY user_id, library_id, rel_path
+),
+books AS (
     SELECT p.user_id, p.library_id, p.rel_path,
-           p.position
-             / (CASE WHEN p.playback_speed BETWEEN 0.25 AND 4 THEN p.playback_speed ELSE 1 END)
-           - COALESCE((SELECT SUM(s.listened) FROM listening_sessions s
-                        WHERE s.user_id = p.user_id AND s.library_id = p.library_id AND s.rel_path = p.rel_path), 0)
-           - COALESCE((SELECT SUM(d.listened) FROM listening_daily d
-                        WHERE d.user_id = p.user_id AND d.library_id = p.library_id AND d.rel_path = p.rel_path), 0)
-             AS estimate,
-           date(MIN(COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', p.updated_at), '9999'),
-                    COALESCE((SELECT MIN(s.started_at) FROM listening_sessions s
-                               WHERE s.user_id = p.user_id AND s.library_id = p.library_id
-                                 AND s.rel_path = p.rel_path), '9999'))) AS day
+           p.position / CASE WHEN p.playback_speed BETWEEN 0.25 AND 4 THEN p.playback_speed ELSE 1 END
+             - COALESCE(r.listened, 0) - COALESCE(d.listened, 0) AS estimate,
+           date(COALESCE(r.first, p.updated_at)) AS day
       FROM progress p
       JOIN users u ON u.id = p.user_id AND u.is_demo = 0
+      LEFT JOIN recorded r ON r.user_id = p.user_id AND r.library_id = p.library_id AND r.rel_path = p.rel_path
+      LEFT JOIN rolled d ON d.user_id = p.user_id AND d.library_id = p.library_id AND d.rel_path = p.rel_path
      WHERE p.started_at IS NULL
-  )
+)
+INSERT INTO listening_daily(day, user_id, library_id, rel_path, listened, sessions, estimated)
+SELECT day, user_id, library_id, rel_path, estimate, 0, 1
+  FROM books
  WHERE estimate >= 300 AND day IS NOT NULL;

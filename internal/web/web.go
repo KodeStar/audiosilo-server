@@ -65,32 +65,33 @@ func Asset(name string) ([]byte, error) {
 // API routes registered on the same mux take precedence because ServeMux prefers
 // more specific patterns.
 func Register(mux *http.ServeMux, webDir string) error {
+	static := staticMux{mux}
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		return err
 	}
 	// One cache of ETags and gzip forms for every embedded page and asset below.
 	files := spa.NewFiles()
-	mux.Handle("GET /assets/", noSniff(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	static.Handle("GET /assets/", noSniff(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		files.ServeFS(w, r, sub, strings.TrimPrefix(r.URL.Path, "/assets/"))
 	})))
 	// Browsers request /favicon.ico at the site root by default; point it at the
 	// embedded SVG mark (the HTML pages also link it explicitly via <link rel=icon>).
-	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+	static.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/assets/favicon.svg", http.StatusMovedPermanently)
 	})
 	// The admin console's PWA service worker and web manifest are served from the
 	// site root: a service worker can only control pages at or below its own URL,
 	// so /sw.js (scope "/") is what lets it control /admin.
-	mux.HandleFunc("GET /sw.js", rootAsset(files, sub, "sw.js", true))
-	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(files, sub, "manifest.webmanifest", false))
+	static.HandleFunc("GET /sw.js", rootAsset(files, sub, "sw.js", true))
+	static.HandleFunc("GET /manifest.webmanifest", rootAsset(files, sub, "manifest.webmanifest", false))
 	admin := adminui.Handler(adminui.FS(), contentSecurityPolicy)
-	mux.Handle("GET /admin", admin)
-	mux.Handle("GET /admin/", admin)
+	static.Handle("GET /admin", admin)
+	static.Handle("GET /admin/", admin)
 	connect := page(files, sub, "index.html")
-	mux.HandleFunc("GET /connect", connect)
-	mux.HandleFunc("GET /connect/", connect)
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	static.HandleFunc("GET /connect", connect)
+	static.HandleFunc("GET /connect/", connect)
+	static.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		// "/" is the catch-all; only the exact root serves the connect page.
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -100,7 +101,7 @@ func Register(mux *http.ServeMux, webDir string) error {
 	})
 
 	if fsys, ok := playerFS(webDir); ok && spa.IsFile(fsys, "index.html") {
-		mux.Handle("GET /web/", spa.Handler(spa.Config{
+		static.Handle("GET /web/", spa.Handler(spa.Config{
 			FS:          fsys,
 			Prefix:      "/web",
 			AssetDirs:   []string{"_expo", "assets"},
@@ -217,4 +218,21 @@ func sortedKeys(m map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// staticMux registers the handlers of static files (every route Register adds:
+// pages and assets served from memory or web_dir) marked as such, so the API's
+// per-IP rate limit can leave them out (IsStatic).
+type staticMux struct{ mux *http.ServeMux }
+
+func (m staticMux) Handle(pattern string, h http.Handler) { m.mux.Handle(pattern, staticHandler{h}) }
+
+func (m staticMux) HandleFunc(pattern string, h http.HandlerFunc) { m.Handle(pattern, h) }
+
+type staticHandler struct{ http.Handler }
+
+// IsStatic reports whether h is one of Register's static-file handlers.
+func IsStatic(h http.Handler) bool {
+	_, ok := h.(staticHandler)
+	return ok
 }

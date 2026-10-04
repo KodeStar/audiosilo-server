@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import { invalidatePeople, useDevices, useLibraries, useUser } from '@/api/hooks';
-import type { Device, User, UserDetail } from '@/api/types';
+import type { User, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
 import { SettingRow } from '@/components/setting-row';
@@ -40,7 +40,14 @@ import { InviteDialog } from './invite-dialog';
 import { InviteTable } from './invites-page';
 import { PasswordDialog } from './password-dialog';
 import { ListeningTab } from './user-listening';
-import { ruleLabel, shareLabel, sortInvites, wholeLibraryOf, type UserTab } from './people-model';
+import {
+  ruleLabel,
+  shareLabel,
+  signedIn,
+  sortInvites,
+  wholeLibraryOf,
+  type UserTab,
+} from './people-model';
 
 /**
  * One person: their listening (year, progress, sessions), what they can listen to,
@@ -210,11 +217,6 @@ function DevicesTab({
       ) : null}
     </div>
   );
-}
-
-/** A person's signed-in devices (sessions), without their API keys. */
-function signedIn(devices: readonly Device[]): Device[] {
-  return devices.filter((d) => d.kind === 'session');
 }
 
 function AccessTab({ detail }: { detail: UserDetail }) {

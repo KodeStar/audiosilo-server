@@ -156,7 +156,11 @@ export function useServerEvents() {
   });
 }
 
-/** Server > Events: the whole feed (90 days), newest first, a page at a time, maybe one kind. */
+/**
+ * Server > Events: the whole feed (90 days), newest first, a page at a time,
+ * maybe one kind. No polling (it would refetch every page loaded); it refreshes
+ * on focus, and the bell keeps checking for new events.
+ */
 export function useServerEventList(kind: ServerEventKind | undefined) {
   return useInfiniteQuery({
     queryKey: keys.eventList(kind),
@@ -164,7 +168,6 @@ export function useServerEventList(kind: ServerEventKind | undefined) {
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => last.next_before || undefined,
     placeholderData: keepPreviousData,
-    refetchInterval: 60_000,
   });
 }
 

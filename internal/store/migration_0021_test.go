@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -17,33 +15,7 @@ import (
 // account's, get none.
 func TestMigration0021Backfill(t *testing.T) {
 	ctx := context.Background()
-	dsn := filepath.Join(t.TempDir(), "pre-0021.db")
-	raw, err := sql.Open("sqlite", dsnPragmas(dsn))
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec := func(q string, args ...any) {
-		t.Helper()
-		if _, err := raw.ExecContext(ctx, q, args...); err != nil {
-			t.Fatalf("%s: %v", strings.SplitN(q, "\n", 2)[0], err)
-		}
-	}
-	exec(`CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`)
-	entries, err := migrationsFS.ReadDir("migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries { // sorted by name
-		if e.Name() >= "0021" {
-			break
-		}
-		body, err := migrationsFS.ReadFile("migrations/" + e.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		exec(string(body))
-		exec(`INSERT INTO schema_migrations(name, applied_at) VALUES(?, 't')`, e.Name())
-	}
+	dsn, exec, closeRaw := openBefore(t, "0021")
 	exec(`INSERT INTO users(id, username, password_hash, created_at, updated_at) VALUES(1, 'ann', '', 't', 't')`)
 	exec(`INSERT INTO users(id, username, password_hash, created_at, updated_at, is_demo) VALUES(2, 'demo_x', '', 't', 't', 1)`)
 	exec(`INSERT INTO libraries(id, name, root, created_at) VALUES(1, 'L', '/l', 't')`)
@@ -66,10 +38,9 @@ func TestMigration0021Backfill(t *testing.T) {
 	progress(1, "B", 5000, 36000, false, 1, "2026-09-03T10:00:00Z", "2026-09-03T09:00:00Z") // first saved since 0018
 	progress(1, "D", 7200, 7200, true, 2, "2026-05-01T20:00:00Z", nil)                      // played to the end at 2x, no spans: 3600
 	progress(1, "E", 0, 7200, true, 1, "2026-05-01T20:00:00Z", nil)                         // marked finished, never played: nothing
+	progress(1, "F", 900, 7200, false, 1, "not a time", nil)                                // no session, no readable date: nothing
 	progress(2, "C", 9000, 9000, true, 1, "2026-05-01T20:00:00Z", nil)                      // a demo account
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	closeRaw()
 
 	db, err := Open(ctx, dsn)
 	if err != nil {
@@ -83,7 +54,7 @@ func TestMigration0021Backfill(t *testing.T) {
 	want := []string{
 		"1 2026-07-01T10:00:00.000Z 2026-07-01T11:00:00.000Z 0 3300 3300 backfilled 0",
 		"2 2026-07-02T09:00:00.000Z 2026-07-02T09:20:00.000Z 3300 4500 1200 backfilled 0",
-		"3 2026-09-01T10:00:00.000Z 2026-09-01T10:10:00.000Z 0 0 600 recorded 5",
+		"4 2026-09-01T10:00:00.000Z 2026-09-01T10:10:00.000Z 0 0 600 recorded 5", // moved past the old highest id plus the backfill
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("sessions:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -96,8 +67,8 @@ func TestMigration0021Backfill(t *testing.T) {
 	}
 	var next int64
 	_ = db.writer.QueryRowContext(ctx, `SELECT MAX(id) FROM listening_sessions`).Scan(&next)
-	if next != 4 {
-		t.Fatalf("next session id = %d, want 4", next)
+	if next != 5 {
+		t.Fatalf("next session id = %d, want 5", next)
 	}
 
 	got = lines(t, db, `SELECT printf('%s %s %g %d %d', rel_path, day, listened, sessions, estimated)

@@ -238,7 +238,7 @@ func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName
 }
 
 // signInKeyPattern bounds a browser's sign-in key: a random id the client made
-// (the admin console sends a UUID), never anything a person typed.
+// (the admin console sends 32 random hex digits), never anything a person typed.
 var signInKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
 
 // IssueSession issues a session for a password sign-in. signInKey is the random
@@ -251,7 +251,7 @@ func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, si
 	if signInKeyPattern.MatchString(signInKey) {
 		keyHash = hashSecret(signInKey)
 		err = s.db.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM tokens WHERE user_id = ? AND sign_in_key = ?)`, userID, keyHash).
+			`SELECT EXISTS(SELECT 1 FROM tokens WHERE user_id = ? AND sign_in_key = ? AND sign_in_key <> '')`, userID, keyHash).
 			Scan(&knownBrowser)
 		if err != nil {
 			return "", false, err

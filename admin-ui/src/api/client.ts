@@ -75,7 +75,7 @@ export class ApiError extends Error {
   readonly code?: string;
   /** The field a refused book edit names (code "invalid_override"). */
   readonly field?: string;
-  /** Why a destination field was refused (code "invalid_target"), and the limit a length refers to. */
+  /** Which rule a refused field broke (e.g. invalid_target's notify.Reason*), and a length's limit. */
   readonly reason?: string;
   readonly max?: number;
   constructor(

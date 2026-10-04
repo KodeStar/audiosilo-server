@@ -1069,7 +1069,7 @@ export interface ErrorEnvelope {
   code?: string;
   /** With code "invalid_override": the book field the edit was refused for. */
   field?: string;
-  /** With code "invalid_target": why (notify.Reason*), and a length's limit. */
+  /** Which rule a refused field broke (invalid_target: notify.Reason*), and a length's limit. */
   reason?: string;
   max?: number;
 }

@@ -192,10 +192,7 @@ func (rep *fileRep) load(name string, content io.ReadSeeker) error {
 // nil when that doesn't make it smaller.
 func gzipped(data []byte) []byte {
 	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
-	if err != nil {
-		return nil // only for an invalid level
-	}
+	zw := gzip.NewWriter(&buf)
 	if _, err := zw.Write(data); err != nil || zw.Close() != nil || buf.Len() >= len(data) {
 		return nil
 	}

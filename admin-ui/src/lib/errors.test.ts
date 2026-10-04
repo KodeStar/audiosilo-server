@@ -26,4 +26,15 @@ describe('errorMessage', () => {
     expect(errorMessage(new ApiError(429, 'too many requests'), t)).toMatch(/Too many/);
     expect(errorMessage(new TypeError('Failed to fetch'), t)).toMatch(/didn't answer/);
   });
+  it('words a refused field by its reason, else as the server said it', () => {
+    const t = i18n.getFixedT('en');
+    const refused = (reason: string | undefined, max?: number) =>
+      new ApiError(400, 'the server says no', 'invalid_target', 'name', { reason, max });
+    expect(errorMessage(refused('name_too_long', 64), t)).toBe(
+      'A name can be at most 64 characters.',
+    );
+    expect(errorMessage(refused('url_ntfy'), t)).toMatch(/^Enter the topic's address/);
+    expect(errorMessage(refused('something_new'), t)).toBe('the server says no');
+    expect(errorMessage(refused(undefined), t)).toBe('the server says no');
+  });
 });

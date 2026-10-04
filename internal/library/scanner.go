@@ -659,9 +659,9 @@ func partTitle(relPath string) string {
 // ctx (a Stop, the scan's time limit, shutdown): on a large network share it can
 // take minutes.
 //
-// A root that is itself a symlink (a NAS mount linked into place) is resolved
-// first and the walk starts at its target: filepath.WalkDir Lstat's its root, so
-// such a root was one non-directory entry and indexed nothing. Links below the
+// The root is resolved first and the walk starts at its target: filepath.WalkDir
+// Lstat's its root, so a root that is itself a symlink (a NAS mount linked into
+// place) was one non-directory entry and indexed nothing. Links below the
 // root are still not followed. Rel paths are taken against the folder walked and
 // folders are named under lib.Root, so both are the same whether or not the root
 // is a link. (Not os.DirFS: it refuses folder names that aren't valid UTF-8,
@@ -670,10 +670,8 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 	dirs := map[string]bool{}
 	rootClean := filepath.Clean(lib.Root)
 	walkRoot := lib.Root
-	if fi, lerr := os.Lstat(lib.Root); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
-		if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
-			walkRoot = resolved
-		}
+	if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
+		walkRoot = resolved
 	}
 	err = filepath.WalkDir(walkRoot, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -698,7 +696,7 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 			// their audio isn't indexed into books unreachable via the fs browse view
 			// (which also hides them). Never skip the library root itself, even when
 			// its own name begins with a dot.
-			if p != walkRoot && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))) {
+			if rel != "" && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))) {
 				return fs.SkipDir
 			}
 			return nil

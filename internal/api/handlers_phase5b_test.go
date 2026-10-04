@@ -283,17 +283,20 @@ func TestNotificationTargetsNeverEchoCredentials(t *testing.T) {
 		t.Fatalf("clear secret = %d %s", resp.StatusCode, body)
 	}
 	// Each refusal names the field and a reason the console words; a length says its limit.
-	for _, bad := range []struct{ body, field, reason string }{
-		{`{"kind":"discord","name":"d","url":"https://evil.example/api/webhooks/1/x","events":[]}`, "url", "url_discord"},
-		{`{"kind":"webhook","name":"","url":"https://a.example","events":[]}`, "name", "name_required"},
-		{`{"kind":"webhook","name":"x","url":"https://a.example","events":["everything"]}`, "events", "event_unknown"},
-		{`{"kind":"sms","name":"x","url":"https://a.example","events":[]}`, "kind", "kind_unknown"},
-		{`{"kind":"webhook","name":"` + strings.Repeat("n", 65) + `","url":"https://a.example","events":[]}`, "name", "name_too_long"},
+	for _, bad := range []struct {
+		body, field, reason string
+		max                 int
+	}{
+		{`{"kind":"discord","name":"d","url":"https://evil.example/api/webhooks/1/x","events":[]}`, "url", "url_discord", 0},
+		{`{"kind":"webhook","name":"","url":"https://a.example","events":[]}`, "name", "name_required", 0},
+		{`{"kind":"webhook","name":"x","url":"https://a.example","events":["everything"]}`, "events", "event_unknown", 0},
+		{`{"kind":"sms","name":"x","url":"https://a.example","events":[]}`, "kind", "kind_unknown", 0},
+		{`{"kind":"webhook","name":"` + strings.Repeat("n", 65) + `","url":"https://a.example","events":[]}`, "name", "name_too_long", 64},
 	} {
 		if resp, body := e.do(t, "POST", "/api/v1/admin/notifications", adminTok, bad.body); resp.StatusCode != 400 ||
 			!strings.Contains(body, `"code":"invalid_target"`) || !strings.Contains(body, `"field":"`+bad.field+`"`) ||
 			!strings.Contains(body, `"reason":"`+bad.reason+`"`) ||
-			strings.HasSuffix(bad.reason, "_too_long") != strings.Contains(body, `"max":64`) {
+			(bad.max > 0) != strings.Contains(body, `"max":`+strconv.Itoa(bad.max)) {
 			t.Errorf("%s = %d %s", bad.body, resp.StatusCode, body)
 		}
 	}
@@ -436,9 +439,10 @@ func TestSignInFromAKnownBrowserIsNotANewDevice(t *testing.T) {
 	_ = json.Unmarshal([]byte(body), &list)
 	revoked := false
 	for _, d := range list.Devices {
-		if d.Name == "admin-web" && !revoked {
+		if d.Name == "admin-web" {
 			resp, _ := e.do(t, "DELETE", "/api/v1/admin/devices/"+strconv.FormatInt(d.ID, 10), adminTok, "")
 			revoked = resp.StatusCode == http.StatusNoContent
+			break
 		}
 	}
 	if !revoked {

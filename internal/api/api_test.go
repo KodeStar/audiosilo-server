@@ -1295,9 +1295,9 @@ func TestDemoCannotSelfRecover(t *testing.T) {
 	}
 }
 
-// The per-IP limit counts the API and writes, not static files: a cold console
-// page loads more chunks than the burst, and none of them may be refused or use
-// up the budget its API calls need. The API itself is still limited.
+// The per-IP limit leaves out the static files the web package serves: a cold
+// console page loads more chunks than the burst, and none of them may be refused
+// or use up the budget its API calls need. Everything else is still limited.
 func TestRateLimitSkipsStaticFiles(t *testing.T) {
 	e := newTestEnv(t)
 	h := e.api.Handler()
@@ -1316,14 +1316,18 @@ func TestRateLimitSkipsStaticFiles(t *testing.T) {
 	if code := get("/api/v1/server"); code == http.StatusTooManyRequests {
 		t.Fatal("static requests used up the API's budget")
 	}
-	limited := false
-	for range 200 {
-		if get("/api/v1/server") == http.StatusTooManyRequests {
-			limited = true
-			break
+	// Anything not a static file is limited, outside /api/ too (the health check
+	// and the setup page read the database).
+	for _, path := range []string{"/api/v1/server", "/healthz", "/setup"} {
+		limited := false
+		for range 200 {
+			if get(path) == http.StatusTooManyRequests {
+				limited = true
+				break
+			}
 		}
-	}
-	if !limited {
-		t.Fatal("the API is no longer rate limited")
+		if !limited {
+			t.Fatalf("%s is no longer rate limited", path)
+		}
 	}
 }
