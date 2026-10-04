@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/kodestar/audiosilo-server/internal/backup"
 )
 
 // field is one config.yaml key that an AUDIOSILO_* variable or the admin
@@ -80,6 +83,15 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.Demo.MaxUsers }, fix: fixMaxUsers},
 	{key: "demo.idle_ttl", env: "AUDIOSILO_DEMO_IDLE_TTL", setting: "demo.idle_ttl", restart: true,
 		ptr: func(c *Config) any { return &c.Demo.IdleTTL }, fix: fixIdleTTL},
+
+	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
+		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
+	{key: "backups.keep", env: "AUDIOSILO_BACKUP_KEEP", setting: "backups.keep",
+		ptr: func(c *Config) any { return &c.Backups.Keep }},
+	// The folder is never set from the console: a backup holds every account's
+	// password hash, and the schedule's retention deletes files in it.
+	{key: "backups.dir", env: "AUDIOSILO_BACKUP_DIR", setting: "backups.dir", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Backups.Dir }},
 }
 
 func fieldByKey(key string) *field {
@@ -207,6 +219,30 @@ func (c *Config) RestartPending(running *Config) []string {
 	return out
 }
 
+// SettingChange is one setting a save changed, from what to what (the audit log).
+type SettingChange struct {
+	Setting string `json:"setting"`
+	From    any    `json:"from"`
+	To      any    `json:"to"`
+}
+
+// ChangedSettings lists the console settings whose value differs between cur and
+// next, in id order. No setting holds a secret, so the values can be recorded.
+func ChangedSettings(cur, next *Config) []SettingChange {
+	out := []SettingChange{}
+	for i := range fields {
+		f := &fields[i]
+		if f.setting == "" {
+			continue
+		}
+		if from, to := f.value(cur), f.value(next); !reflect.DeepEqual(from, to) {
+			out = append(out, SettingChange{Setting: f.setting, From: from, To: to})
+		}
+	}
+	slices.SortFunc(out, func(a, b SettingChange) int { return strings.Compare(a.Setting, b.Setting) })
+	return out
+}
+
 // Effective returns c with each restart setting as running has it: the config
 // the server actually works with until it restarts with c.
 func (c *Config) Effective(running *Config) *Config {
@@ -293,7 +329,13 @@ func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage, check
 			return nil, &SettingError{Setting: id, Reason: ReasonLocked}
 		}
 		section, name, _ := strings.Cut(id, ".")
-		if err := json.Unmarshal(patch[section][name], f.ptr(next)); err != nil {
+		raw := patch[section][name]
+		// JSON null leaves a value as it is, which would save "nothing" as a success:
+		// only a setting that can be unset (a pointer, like demo.max_users) takes it.
+		if string(bytes.TrimSpace(raw)) == "null" && reflect.ValueOf(f.ptr(next)).Elem().Kind() != reflect.Pointer {
+			return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: errors.New("enter a value")}
+		}
+		if err := json.Unmarshal(raw, f.ptr(next)); err != nil {
 			return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: errors.New("wrong type of value")}
 		}
 		changed = append(changed, f)
@@ -519,6 +561,16 @@ func fixMaxUsers(c *Config) error {
 	if n := c.Demo.MaxUsers; n != nil && (*n < 0 || *n > MaxDemoUsers) {
 		return fmt.Errorf("must be from 0 (no limit) to %d", MaxDemoUsers)
 	}
+	return nil
+}
+
+// fixBackupSchedule stores the schedule in its canonical form ("daily:03:00").
+func fixBackupSchedule(c *Config) error {
+	sch, err := backup.ParseSchedule(c.Backups.Schedule)
+	if err != nil {
+		return err
+	}
+	c.Backups.Schedule = sch.String()
 	return nil
 }
 

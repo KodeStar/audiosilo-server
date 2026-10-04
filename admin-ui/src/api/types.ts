@@ -412,6 +412,14 @@ export interface AdminSettings {
     /** "" = 24h. */
     idle_ttl: string;
   };
+  backups: {
+    /** "" (off), "daily:HH:MM" or "weekly:DAY:HH:MM" in server time (backup.ParseSchedule). */
+    schedule: string;
+    /** How many scheduled backups are kept (1-365); manual ones stay until deleted. */
+    keep: number;
+    /** Read-only here: config.yaml or AUDIOSILO_BACKUP_DIR. "" = <data>/backups. */
+    dir: string;
+  };
   /** Setting id -> why the console can't change it: an AUDIOSILO_* variable, or "launcher". */
   locked: Record<string, string>;
   /** Setting ids read only at start. */
@@ -421,7 +429,7 @@ export interface AdminSettings {
 }
 
 /** The sections of AdminSettings that hold settings. */
-export type SettingsSection = 'general' | 'network' | 'players' | 'metadata' | 'demo';
+export type SettingsSection = 'general' | 'network' | 'players' | 'metadata' | 'demo' | 'backups';
 
 /** A PATCH body: only the settings to change, by section. */
 export type SettingsPatch = {
@@ -505,6 +513,169 @@ export interface SystemStatus {
   }[];
   web_player: AdminSettings['players']['web_player'];
   update: UpdateStatus;
+  /** Absent from a server before Phase 5b. */
+  backups?: BackupStatus | null;
+}
+
+/** backup.Backup (internal/backup). */
+export interface Backup {
+  /** The file's name in the backups folder: also its id in the API. */
+  name: string;
+  size: number;
+  created_at: string;
+  kind: 'scheduled' | 'manual' | 'before-restore';
+}
+
+/** backup.Result: how the newest backup attempt went. */
+export interface BackupResult {
+  at: string;
+  ok: boolean;
+  trigger: 'scheduled' | 'manual';
+  name?: string;
+  /** "permission_denied", "disk_full" or "failed" ("" when ok). */
+  error?: string;
+}
+
+/** backup.Status (GET /admin/backups' status, /admin/system's backups). */
+export interface BackupStatus {
+  dir: string;
+  running: boolean;
+  /** The newest attempt since the server started (null before one). */
+  last: BackupResult | null;
+  /** The newest backup in the folder, whenever it was made (not a copy made before a restore). */
+  latest: Backup | null;
+  /** The next scheduled backup; null while the schedule is off. */
+  next: string | null;
+}
+
+/** backup.PendingRestore: a restore waiting for the next start. */
+export interface PendingRestore {
+  name: string;
+  requested_at: string;
+  requested_by: string;
+  schema: string;
+}
+
+/** backup.RestoreResult: how the last restore went (written at start). */
+export interface RestoreResult {
+  name: string;
+  applied_at: string;
+  requested_by: string;
+  ok: boolean;
+  /** Why it wasn't applied: "missing", "unusable", "newer" or "failed". */
+  error?: string;
+  /** The copy kept of the database the restore replaced. */
+  safety_copy?: string;
+}
+
+/** GET /api/v1/admin/backups (handlers_backups.go backupsEnvelope). */
+export interface BackupsEnvelope {
+  backups: Backup[];
+  status: BackupStatus;
+  restore: { pending: PendingRestore | null; last: RestoreResult | null };
+}
+
+/** Event kinds a destination can be sent (notify.Kinds, in the server's order). */
+export type ServerEventKind =
+  | 'book_added'
+  | 'scan_failed'
+  | 'library_unavailable'
+  | 'new_device'
+  | 'invite_redeemed'
+  | 'update_available'
+  | 'backup_failed';
+
+export type NotifyTargetKind = 'webhook' | 'ntfy' | 'discord';
+
+/**
+ * A notification destination (handlers_notify.go notifyTarget). Its address and
+ * secret never come back: `address` is redacted, `has_secret` says one is set.
+ */
+export interface NotifyTarget {
+  id: number;
+  kind: NotifyTargetKind;
+  name: string;
+  address: string;
+  has_secret: boolean;
+  enabled: boolean;
+  events: ServerEventKind[];
+  created_at: string;
+  updated_at: string;
+  last_at: string | null;
+  last_ok: boolean | null;
+  /** "timeout", "unreachable", "http_<status>" or "failed" ("" after a success). */
+  last_error: string;
+}
+
+/** GET /api/v1/admin/notifications. */
+export interface NotifyTargetsEnvelope {
+  targets: NotifyTarget[];
+  events: ServerEventKind[];
+  kinds: NotifyTargetKind[];
+}
+
+/**
+ * POST /admin/notifications (all but secret/enabled required) and PATCH
+ * /admin/notifications/{id} (only what changes; no kind; secret "" clears it).
+ */
+export interface NotifyTargetInput {
+  kind?: NotifyTargetKind;
+  name?: string;
+  url?: string;
+  secret?: string;
+  enabled?: boolean;
+  events?: ServerEventKind[];
+}
+
+/** POST /admin/notifications/{id}/test. */
+export interface NotifyTestResult {
+  ok: boolean;
+  error: string;
+  target: NotifyTarget;
+}
+
+/** catalog.ServerEvent: one entry of the bell's feed. */
+export interface ServerEvent {
+  id: number;
+  at: string;
+  kind: ServerEventKind;
+  /** The event's facts: library, count, titles, user, device, app, version, url, error... */
+  data: Record<string, unknown>;
+}
+
+/** GET /api/v1/admin/events. */
+export interface ServerEventPage {
+  events: ServerEvent[];
+  /** The next page's `before` (0 at the end). */
+  next_before: number;
+}
+
+/** catalog.AuditEvent: one admin action. */
+export interface AuditEvent {
+  id: number;
+  at: string;
+  /** null for the server itself. */
+  actor_id: number | null;
+  actor_name: string;
+  via: 'session' | 'api' | 'system';
+  /** "<area>.<verb>", like "user.update". */
+  action: string;
+  target: string;
+  details: Record<string, unknown>;
+}
+
+/** GET /api/v1/admin/audit. */
+export interface AuditPage {
+  events: AuditEvent[];
+  next_before: number;
+}
+
+/** The audit log's filters (all optional). */
+export interface AuditFilter {
+  actor_id?: number;
+  /** An action's first part: user, invite, library, book, share, settings, backup, notify, device, progress, issue. */
+  area?: string;
+  q?: string;
 }
 
 /** logring.Entry (internal/logring). */

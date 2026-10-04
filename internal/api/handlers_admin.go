@@ -44,6 +44,7 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not create user")
 		return
 	}
+	a.audit(r, "user.create", u.Username, map[string]any{"role": u.Role, "password": req.Password != ""})
 	writeJSON(w, http.StatusCreated, u)
 }
 
@@ -126,6 +127,18 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load user")
 		return
 	}
+	// The password itself never: only that it changed (or was cleared).
+	details := map[string]any{}
+	if req.Role != nil {
+		details["role"] = u.Role
+	}
+	if req.Disabled != nil {
+		details["disabled"] = u.Disabled
+	}
+	if req.Password != nil {
+		details["password"] = map[bool]string{true: "set", false: "cleared"}[*req.Password != ""]
+	}
+	a.audit(r, "user.update", u.Username, details)
 	writeJSON(w, http.StatusOK, u)
 }
 
@@ -144,10 +157,16 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, codeCannotDeleteSelf, "you cannot delete your own account - disable it instead")
 		return
 	}
+	target, err := a.auth.GetUser(r.Context(), id)
+	if err != nil {
+		a.writeUserError(w, err, "could not delete user")
+		return
+	}
 	if err := a.auth.DeleteUser(r.Context(), id); err != nil {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
+	a.audit(r, "user.delete", target.Username, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -181,10 +200,12 @@ func (a *API) handleRevokeAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid auth code id")
 		return
 	}
+	owner := a.codeOwner(r, id)
 	if err := a.auth.RevokeAuthCode(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not revoke auth code")
 		return
 	}
+	a.audit(r, "invite.revoke", owner, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -231,6 +252,7 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create auth code")
 		return
 	}
+	a.audit(r, "invite.create", a.userName(r, id), inviteDetails(minted))
 	writeJSON(w, http.StatusCreated, a.mintedInvite(r, minted))
 }
 
@@ -274,6 +296,7 @@ func (a *API) handleRotateAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not rotate auth code")
 		return
 	}
+	a.audit(r, "invite.rotate", a.codeOwner(r, id), inviteDetails(minted))
 	writeJSON(w, http.StatusOK, a.mintedInvite(r, minted))
 }
 
@@ -306,6 +329,7 @@ func (a *API) handleAdminClearRecovery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not clear recovery code")
 		return
 	}
+	a.audit(r, "user.recovery_clear", a.userName(r, id), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -410,6 +434,23 @@ type libraryRequest struct {
 	IgnorePatterns *[]string `json:"ignore_patterns"`
 }
 
+// changes are the fields an edit sent, for the audit log.
+func (req libraryRequest) changes() map[string]any {
+	d := map[string]any{}
+	for k, v := range map[string]string{"name": req.Name, "root": req.Root, "default_view": req.DefaultView} {
+		if v != "" {
+			d[k] = v
+		}
+	}
+	if req.ScanSchedule != nil {
+		d["scan_schedule"] = *req.ScanSchedule
+	}
+	if req.IgnorePatterns != nil {
+		d["ignore_patterns"] = len(*req.IgnorePatterns)
+	}
+	return d
+}
+
 // patch is the request as a validated edit (library.ValidatePatch's errors).
 func (req libraryRequest) patch() (catalog.LibraryPatch, error) {
 	p := catalog.LibraryPatch{Name: req.Name, Root: req.Root, DefaultView: req.DefaultView,
@@ -439,6 +480,7 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "create library failed", "could not create library", "name", lib.Name)
 		return
 	}
+	a.audit(r, "library.create", created.Name, map[string]any{"root": created.Root})
 	// Kick off an initial scan in the background; browsing works immediately.
 	a.startScan(r, *created, library.TriggerManual)
 	writeJSON(w, http.StatusCreated, created)
@@ -472,6 +514,7 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
 		return
 	}
+	a.audit(r, "library.update", updated.Name, req.changes())
 	resp := struct {
 		*catalog.Library
 		Job *library.Job `json:"job,omitempty"`
@@ -498,6 +541,7 @@ func (a *API) handleReorderLibraries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not reorder libraries")
 		return
 	}
+	a.audit(r, "library.reorder", "", nil)
 	libs, err := a.adminLibraries(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
@@ -546,6 +590,7 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "set folder override failed", "could not set folder override", "library", id, "path", path)
 		return
 	}
+	a.audit(r, "library.folder_override", lib.Name+": "+path, map[string]any{"mode": req.Mode})
 	a.startScan(r, *lib, library.TriggerChange)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "override set", "path": path, "mode": req.Mode})
 }
@@ -596,6 +641,7 @@ func (a *API) handleSetEnrichment(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "set enrichment failed", "could not set enrichment", "library", id, "path", path)
 		return
 	}
+	a.audit(r, "book.enrichment", lib.Name+": "+path, map[string]any{"asin": req.ASIN, "isbn": req.ISBN})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "enrichment set", "path": path})
 }
 
@@ -625,6 +671,7 @@ func (a *API) handleDeleteFolderOverride(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "could not clear override")
 		return
 	}
+	a.audit(r, "library.folder_override", lib.Name+": "+path, map[string]any{"mode": "auto"})
 	a.startScan(r, *lib, library.TriggerChange)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "override cleared", "path": path})
 }
@@ -637,12 +684,14 @@ func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid library id")
 		return
 	}
+	name := a.libraryName(r, id) // read before it's gone
 	if err := a.cat.DeleteLibrary(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete library")
 		return
 	}
 	// Its scans have nothing left to index into; don't let them hold the queue.
 	a.scanner.CancelLibrary(id)
+	a.audit(r, "library.delete", name, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

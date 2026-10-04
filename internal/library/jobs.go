@@ -285,12 +285,31 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 	if err != nil && status != catalog.RunCancelled && status != catalog.RunInterrupted {
 		s.log.Warn("scan failed", "library", lib.Name, "err", err)
 	}
-	log := append(res.Log, closingEvent(status, err, res))
+	closing := closingEvent(status, err, res)
+	log := append(res.Log, closing)
 	if runID != 0 {
 		if err := s.cat.FinishScanRun(db, runID, status, res.ScanCounts, log); err != nil {
 			s.log.Warn("record scan result failed", "library", lib.Name, "err", err)
 		}
 	}
+	if s.OnRunFinished != nil {
+		r := RunReport{Library: *lib, RunID: runID, Status: status, Counts: res.ScanCounts, AddedTitles: res.AddedTitles}
+		if status == catalog.RunFailed || status == catalog.RunUnavailable {
+			r.Detail = closing.Detail
+		}
+		s.OnRunFinished(db, r)
+	}
+}
+
+// RunReport is how a scan job ended, for Scanner.OnRunFinished.
+type RunReport struct {
+	Library     catalog.Library
+	RunID       int64 // its scan_runs row (0 if it couldn't be recorded)
+	Status      string
+	Counts      catalog.ScanCounts
+	AddedTitles []string
+	// Detail is the cause of a failed or unavailable scan, as its log has it.
+	Detail string
 }
 
 // runStatus is how a scan ended, for its scan_runs row.

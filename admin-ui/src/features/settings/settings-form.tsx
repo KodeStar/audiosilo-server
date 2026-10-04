@@ -17,6 +17,7 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { errorMessage, toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
+import { ScheduleInput } from './schedule-input';
 import { useSaveSettings } from './use-save-settings';
 import { describedBy } from '@/lib/a11y';
 import { cn } from '@/lib/utils';
@@ -62,6 +63,8 @@ export type FieldSpec =
   | { name: string; kind: 'text' | 'number'; placeholder?: string; mono?: boolean }
   | { name: string; kind: 'list'; placeholder?: string }
   | { name: string; kind: 'switch' }
+  /** A backup schedule: how often, which day, what time (backups-model). */
+  | { name: string; kind: 'schedule' }
   | { name: string; kind: 'select'; options: { value: string; label: string }[] }
   | { name: string; kind: 'radio'; options: RadioCardOption<string>[] };
 
@@ -289,6 +292,18 @@ function FieldRow({
           disabled={locked}
           onCheckedChange={(v) => onChange(v)}
           aria-describedby={ariaDescribedBy}
+        />
+      );
+      break;
+    case 'schedule':
+      control = (
+        <ScheduleInput
+          id={id}
+          value={value as string}
+          onChange={onChange}
+          disabled={locked}
+          describedBy={ariaDescribedBy}
+          invalid={Boolean(error)}
         />
       );
       break;

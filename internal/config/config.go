@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/kodestar/audiosilo-server/internal/backup"
 )
 
 // TLSMode selects how the server terminates TLS.
@@ -64,6 +66,26 @@ type TLSConfig struct {
 	CertFile string   `yaml:"cert_file"` // selfsigned/manual: optional persisted cert
 	KeyFile  string   `yaml:"key_file"`  // selfsigned/manual: optional persisted key
 }
+
+// BackupConfig controls the database backups (internal/backup).
+type BackupConfig struct {
+	// Schedule is "" (off), "daily:HH:MM" or "weekly:DAY:HH:MM" in the server's
+	// time zone (backup.ParseSchedule).
+	Schedule string `yaml:"schedule"`
+	// Keep is how many scheduled backups to keep (manual ones stay until deleted).
+	Keep int `yaml:"keep"`
+	// Dir is the backups folder; empty means <data>/backups. Only config.yaml or
+	// AUDIOSILO_BACKUP_DIR set it, never the console.
+	Dir string `yaml:"dir"`
+}
+
+// Backup defaults: a daily backup at 03:00, the newest week kept.
+const (
+	DefaultBackupSchedule = "daily:03:00"
+	DefaultBackupKeep     = 7
+	// MaxBackupKeep bounds backups.keep.
+	MaxBackupKeep = 365
+)
 
 // DemoConfig configures public demo mode: when enabled, an unauthenticated
 // visitor can mint a throwaway account via POST /api/v1/demo/session (granted the
@@ -159,6 +181,7 @@ type Config struct {
 	Libraries      []Library      `yaml:"libraries"`
 	Demo           DemoConfig     `yaml:"demo"`     // public demo mode (throwaway accounts)
 	Metadata       MetadataConfig `yaml:"metadata"` // community metadata lookup (Phase 1.5)
+	Backups        BackupConfig   `yaml:"backups"`  // database backups (internal/backup)
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
@@ -205,6 +228,7 @@ func Default(dataDir string) *Config {
 		Libraries:      nil,
 		Metadata:       MetadataConfig{Enabled: true, BaseURL: DefaultMetadataBaseURL},
 		UpdateCheck:    true,
+		Backups:        BackupConfig{Schedule: DefaultBackupSchedule, Keep: DefaultBackupKeep},
 	}
 }
 
@@ -313,6 +337,12 @@ func setFromEnv(ptr any, v string) bool {
 			return false
 		}
 		*p = b
+	case *int:
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return false
+		}
+		*p = n
 	case *int64:
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
@@ -404,6 +434,15 @@ func (c *Config) Validate() error {
 				return fieldErr("demo.idle_ttl", fmt.Errorf("demo.idle_ttl must be positive, got %q", c.Demo.IdleTTL))
 			}
 		}
+	}
+	if _, err := backup.ParseSchedule(c.Backups.Schedule); err != nil {
+		return fieldErr("backups.schedule", fmt.Errorf("invalid backups.schedule %q: %w", c.Backups.Schedule, err))
+	}
+	if c.Backups.Keep < 1 || c.Backups.Keep > MaxBackupKeep {
+		return fieldErr("backups.keep", fmt.Errorf("backups.keep must be from 1 to %d", MaxBackupKeep))
+	}
+	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {
+		return fieldErr("backups.dir", fmt.Errorf("backups.dir must be an absolute path, got %q", d))
 	}
 	if c.Metadata.Enabled {
 		if c.Metadata.BaseURL == "" {

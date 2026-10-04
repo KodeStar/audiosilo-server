@@ -190,3 +190,26 @@ func TestExpiredCallerRecordsNothing(t *testing.T) {
 		t.Fatalf("the next Check must ask at once: %v %+v", err, c.Status())
 	}
 }
+
+func TestOnAvailable(t *testing.T) {
+	gh := &fakeGitHub{}
+	srv := gh.serve(t)
+	var heard []string
+	c := New("v1.15.0", srv.URL, true, nil)
+	c.OnAvailable = func(r Release) { heard = append(heard, r.Version) }
+	_ = c.Check(context.Background())
+	if len(heard) != 1 || heard[0] != "v1.16.0" {
+		t.Fatalf("heard = %v", heard)
+	}
+
+	// Up to date: nothing to hear.
+	gh2 := &fakeGitHub{}
+	srv2 := gh2.serve(t)
+	quiet := New("v1.16.0", srv2.URL, true, nil)
+	quiet.OnAvailable = func(Release) { t.Fatal("heard about the running version") }
+	_ = quiet.Check(context.Background())
+	// A failed check says nothing either.
+	gh2.status.Store(http.StatusInternalServerError)
+	quiet.now = func() time.Time { return time.Now().Add(2 * time.Minute) }
+	_ = quiet.Check(context.Background())
+}

@@ -53,7 +53,7 @@ Sub bar (48px, per destination):      Title  [segmented control of sections]    
 
 - Settings uses an in-page topic list (`?topic=`; a column of links beside the topic, a scrolling row
   on phones) for its topics: General, Network & HTTPS, Players & app links, Community metadata,
-  Transcoding, Demo mode (Phase 5b adds Backups and Notifications). Logs, Audit log and About are
+  Transcoding, Demo mode, Backups, Notifications. Logs, Audit log and About are
   records, not settings, so they live only in the sub bar. **Each setting lives in exactly one
   place.** A setting the environment or the desktop app sets is shown locked with what sets it; one
   read only at start says "Restart to apply"; each card saves only its changed fields.

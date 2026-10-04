@@ -34,6 +34,10 @@ type Scanner struct {
 	jobs     jobQueue               // guarded by mu
 
 	roots *rootProber // bounded, cached checks that a library root is reachable
+
+	// OnRunFinished, when set before Start, hears how each scan job ended (the
+	// notifications). ctx outlives the server's, like the run's own record.
+	OnRunFinished func(ctx context.Context, r RunReport)
 }
 
 // ScanProgress reports how far a (possibly running) library scan has gotten, so
@@ -102,7 +106,12 @@ type ScanResult struct {
 	catalog.ScanCounts
 	Partial bool
 	Log     []catalog.RunEvent
+	// AddedTitles are the first few added books' titles (for a notification).
+	AddedTitles []string
 }
+
+// maxAddedTitles bounds ScanResult.AddedTitles.
+const maxAddedTitles = 5
 
 // ErrLibraryUnavailable means the library root could not be read, or it
 // returned no audio files while the index still has books - a strong signal
@@ -294,6 +303,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			res.Updated++
 		case !movedTo[b.RelPath]:
 			res.Added++
+			if len(res.AddedTitles) < maxAddedTitles {
+				res.AddedTitles = append(res.AddedTitles, b.Title)
+			}
 		}
 	}
 	report(len(books))

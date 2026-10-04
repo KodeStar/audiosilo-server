@@ -28,6 +28,8 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     // Who is listening (Overview, People) and everyone's devices (People): nobody, by default.
     'GET /admin/sessions/live': { body: { sessions: [] } },
     'GET /admin/devices': { body: { devices: [] } },
+    // The bell's feed: nothing has happened, by default.
+    'GET /admin/events': { body: { events: [], next_before: 0 } },
     // What the palette searches while typing: nothing, unless a test says so.
     'GET /admin/books': { body: { books: [] } },
     'GET /admin/authors': { body: { authors: [], merge_suggestions: [], unknown: 0 } },

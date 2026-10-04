@@ -23,6 +23,11 @@ const BY_CODE: Record<string, string> = {
   book_not_found: 'errors.bookNotFound',
   no_access: 'errors.noAccess',
   current_device: 'errors.currentDevice',
+  backup_running: 'errors.backupRunning',
+  backup_not_found: 'errors.backupNotFound',
+  invalid_backup: 'errors.invalidBackup',
+  backup_too_new: 'errors.backupTooNew',
+  too_many_targets: 'errors.tooManyTargets',
 };
 
 /** A failure as one sentence for a toast or a field. */

@@ -136,6 +136,60 @@ describe('systemRows', () => {
   });
 });
 
+describe('systemRows backups', () => {
+  const latest = {
+    name: 'audiosilo-20261004-030000Z-scheduled.db',
+    size: 1,
+    created_at: '2026-10-04T03:00:00Z',
+    kind: 'scheduled' as const,
+  };
+  const base = {
+    dir: '/data/backups',
+    running: false,
+    last: null,
+    latest,
+    next: '2026-10-05T03:00:00Z',
+  };
+
+  it('sits after the database, and is left out by a server without backups', () => {
+    const ids = systemRows(systemStatus({ backups: base }), NOW).map((r) => r.id);
+    expect(ids.indexOf('backups')).toBe(ids.indexOf('database') + 1);
+    expect(systemRows(systemStatus(), NOW).some((r) => r.id === 'backups')).toBe(false);
+  });
+
+  it('reads the newest backup, a failure, and no schedule', () => {
+    expect(row(systemRows(systemStatus({ backups: base }), NOW), 'backups')).toMatchObject({
+      status: 'ok',
+      detail: {
+        key: 'system.detail.backupLatestNext',
+        values: { at: latest.created_at, next: base.next },
+      },
+      value: '/data/backups',
+    });
+    const failed = {
+      ...base,
+      last: { at: 'x', ok: false, trigger: 'scheduled' as const, error: 'disk_full' },
+    };
+    expect(row(systemRows(systemStatus({ backups: failed }), NOW), 'backups')).toMatchObject({
+      status: 'bad',
+      statusKey: 'system.status.failed',
+      detail: { key: 'backups.failure.disk_full' },
+    });
+    expect(
+      row(
+        systemRows(systemStatus({ backups: { ...base, latest: null, next: null } }), NOW),
+        'backups',
+      ),
+    ).toMatchObject({ status: 'warn', detail: { key: 'system.detail.backupOff' } });
+    expect(
+      row(systemRows(systemStatus({ backups: { ...base, next: null } }), NOW), 'backups'),
+    ).toMatchObject({
+      status: 'off',
+      detail: { key: 'system.detail.backupLatest' },
+    });
+  });
+});
+
 describe('systemRows wording', () => {
   it("says a development build isn't compared, and where the player comes from", () => {
     const rows = systemRows(

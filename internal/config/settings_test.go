@@ -323,3 +323,40 @@ func TestPinnedSaveKeepsFile(t *testing.T) {
 		t.Fatalf("a console save must keep the file's pinned values: %+v", got)
 	}
 }
+
+func TestChangedSettings(t *testing.T) {
+	cur := Default(t.TempDir())
+	next := cur.Clone()
+	next.Name = "Den"
+	next.Backups.Keep = 14
+	next.CORSOrigins = []string{"http://localhost:8081"}
+	got := ChangedSettings(cur, next)
+	want := []SettingChange{
+		{Setting: "backups.keep", From: 7, To: 14},
+		{Setting: "general.name", From: "", To: "Den"},
+		{Setting: "network.cors_origins", From: []string{}, To: []string{"http://localhost:8081"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("changes = %#v", got)
+	}
+	if got := ChangedSettings(cur, cur.Clone()); len(got) != 0 {
+		t.Fatalf("no change listed %#v", got)
+	}
+}
+
+// An emptied field arrives as null: refused for a setting that can't be unset,
+// taken (the default) by one that can.
+func TestNullOnlyForUnsettable(t *testing.T) {
+	c := Default(t.TempDir())
+	_, err := c.WithSettings(map[string]map[string]json.RawMessage{"backups": {"keep": json.RawMessage(`null`)}}, Checks{})
+	var se *SettingError
+	if !errors.As(err, &se) || se.Setting != "backups.keep" || se.Reason != ReasonInvalid {
+		t.Fatalf("null keep: err = %v", err)
+	}
+	n := 5
+	c.Demo.MaxUsers = &n
+	next, err := c.WithSettings(map[string]map[string]json.RawMessage{"demo": {"max_users": json.RawMessage(`null`)}}, Checks{})
+	if err != nil || next.Demo.MaxUsers != nil {
+		t.Fatalf("null max_users: %v, %v", next, err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
 type ctxKey int
@@ -83,6 +85,12 @@ const (
 	codeUnknownSetting     = "unknown_setting"   // + "field"
 	codeSettingReadOnly    = "setting_read_only" // + "field"
 	codeUpdateCheckOff     = "update_check_off"
+	codeBackupRunning      = "backup_running"
+	codeBackupNotFound     = "backup_not_found"
+	codeInvalidBackup      = "invalid_backup"
+	codeBackupTooNew       = "backup_too_new"
+	codeInvalidTarget      = "invalid_target" // + "field": the destination field it names
+	codeTooManyTargets     = "too_many_targets"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
@@ -102,7 +110,15 @@ func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
 func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg string, logKV ...any) {
 	var oe *catalog.OverrideError
 	var se *config.SettingError
+	var te *notify.FieldError
 	switch {
+	case errors.As(err, &te):
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": te.Error(), "code": codeInvalidTarget, "field": te.Field,
+		})
+	case errors.Is(err, catalog.ErrTooManyTargets):
+		writeErrorCode(w, http.StatusConflict, codeTooManyTargets,
+			fmt.Sprintf("a server can have at most %d destinations", catalog.MaxNotifyTargets))
 	case errors.As(err, &se):
 		status, code := http.StatusBadRequest, codeInvalidSetting
 		switch se.Reason {

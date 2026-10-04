@@ -1,7 +1,6 @@
 import { Suspense, lazy } from 'react';
 import { useParams } from '@tanstack/react-router';
 import type { Destination, DestinationKey } from '@/components/shell/destinations';
-import { ComingSoon } from '@/features/coming-soon/coming-soon';
 import { NotFound } from '@/features/not-found';
 import { PageSkeleton } from '@/components/page';
 
@@ -62,6 +61,9 @@ const SystemPage = lazy(() =>
 const LogsPage = lazy(() =>
   import('@/features/logs/logs-page').then((m) => ({ default: m.LogsPage })),
 );
+const AuditPage = lazy(() =>
+  import('@/features/audit/audit-page').then((m) => ({ default: m.AuditPage })),
+);
 const AboutPage = lazy(() =>
   import('@/features/about/about-page').then((m) => ({ default: m.AboutPage })),
 );
@@ -69,8 +71,9 @@ const SettingsPage = lazy(() =>
   import('@/features/settings/settings-page').then((m) => ({ default: m.SettingsPage })),
 );
 
-/** The screens built so far, by destination and section. */
-const PAGES: Partial<Record<DestinationKey, Record<string, React.ComponentType>>> = {
+/** Every section's screen, by destination. */
+// eslint-disable-next-line react-refresh/only-export-components -- exported for the test that every section has a screen
+export const PAGES: Record<DestinationKey, Record<string, React.ComponentType>> = {
   library: {
     books: BooksPage,
     authors: AuthorsPage,
@@ -82,21 +85,18 @@ const PAGES: Partial<Record<DestinationKey, Record<string, React.ComponentType>>
   people: { people: PeoplePage, invites: InvitesPage, shares: SharesPage, devices: DevicesPage },
   activity: { overview: ActivityPage, live: LivePage, sessions: SessionsPage, year: YearPage },
   health: { issues: IssuesPage, jobs: JobsPage, system: SystemPage },
-  server: { settings: SettingsPage, logs: LogsPage, about: AboutPage },
+  server: { settings: SettingsPage, logs: LogsPage, audit: AuditPage, about: AboutPage },
 };
 
-/** A destination's routed section: its screen, its placeholder, or a 404. */
+/** A destination's routed section: its screen, or a 404. */
 export function SectionPage({ destination }: { destination: Destination }) {
   const { section } = useParams({ strict: false }) as { section?: string };
-  const active = section ?? destination.sections[0];
-  if (!destination.sections.includes(active)) return <NotFound />;
-  const Page = PAGES[destination.key]?.[active];
-  if (Page) {
-    return (
-      <Suspense fallback={<PageSkeleton />}>
-        <Page />
-      </Suspense>
-    );
-  }
-  return <ComingSoon destination={destination} section={active} />;
+  // Every listed section has a screen (section-page.test.ts), so a missing one is a 404.
+  const Page = PAGES[destination.key][section ?? destination.sections[0]];
+  if (!Page) return <NotFound />;
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <Page />
+    </Suspense>
+  );
 }

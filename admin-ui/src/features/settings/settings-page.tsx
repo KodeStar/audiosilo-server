@@ -1,7 +1,9 @@
 import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import {
+  Archive,
   ArrowRight,
+  BellRing,
   Globe,
   Info,
   MonitorSmartphone,
@@ -27,6 +29,8 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { formatDate, formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { BackupsTopic } from './backups-topic';
+import { NotificationsTopic } from './notifications-topic';
 import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
 import {
   certificateLook,
@@ -43,6 +47,8 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   metadata: Globe,
   transcoding: Repeat2,
   demo: Ticket,
+  backups: Archive,
+  notifications: BellRing,
 };
 
 /**
@@ -72,6 +78,8 @@ export function SettingsPage() {
                 to="/server/{-$section}"
                 params={{ section: undefined }}
                 search={p === 'general' ? {} : { topic: p }}
+                // Exact, so General's empty search isn't read as a subset of every topic's.
+                activeOptions={{ exact: true }}
                 aria-current={p === topic ? 'page' : undefined}
                 className="flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-[13.5px] font-semibold whitespace-nowrap text-muted-foreground transition-colors duration-(--dur-1) hover:bg-accent hover:text-foreground aria-[current=page]:bg-card aria-[current=page]:text-foreground aria-[current=page]:shadow-[inset_0_0_0_1px_var(--border)]"
               >
@@ -119,6 +127,10 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
       return <TranscodingTopic />;
     case 'demo':
       return <DemoTopic settings={settings} />;
+    case 'backups':
+      return <BackupsTopic settings={settings} />;
+    case 'notifications':
+      return <NotificationsTopic />;
     default:
       return <GeneralTopic settings={settings} />;
   }

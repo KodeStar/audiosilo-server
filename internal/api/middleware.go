@@ -24,11 +24,19 @@ const requestTimeout = 30 * time.Second
 
 // isStreamingPath reports whether a request path serves a long-lived or large
 // body that must NOT be bounded by requestTimeout: audio streaming/transcoding
-// (cover/stream) and the web player's static asset mount.
+// (cover/stream), a backup's download and the web player's static asset mount.
 func isStreamingPath(p string) bool {
 	return strings.HasSuffix(p, "/stream") ||
 		strings.HasSuffix(p, "/cover") ||
+		isBackupDownload(p) ||
 		p == "/web" || strings.HasPrefix(p, "/web/")
+}
+
+// isBackupDownload reports whether p is GET /admin/backups/{name} (a backup's
+// download), not the restore beside it, which stays bounded.
+func isBackupDownload(p string) bool {
+	name, ok := strings.CutPrefix(p, "/api/v1/admin/backups/")
+	return ok && name != "" && !strings.Contains(name, "/")
 }
 
 // timeout wraps non-streaming handlers in http.TimeoutHandler, which cancels the

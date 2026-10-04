@@ -4,6 +4,14 @@ import type {
   AdminBookDetail,
   AdminBookPage,
   AdminBookSort,
+  AuditFilter,
+  AuditPage,
+  BackupsEnvelope,
+  NotifyTarget,
+  NotifyTargetInput,
+  NotifyTargetsEnvelope,
+  NotifyTestResult,
+  ServerEventPage,
   AuthorsResponse,
   BookEditRequest,
   BookFacets,
@@ -284,6 +292,35 @@ export const api = {
   /** The newest log lines; `after` (a previous page's last_seq) asks only for newer ones. */
   logs: (q: LogQuery = {}) => request<LogPage>('GET', `/admin/logs${bookQuery(q)}`),
 
+  // Backups: the database in the backups folder; a restore applies at the next start.
+  backups: () => request<BackupsEnvelope>('GET', '/admin/backups'),
+  /** Starts a backup (202; 409 backup_running while one is made); answers with the list. */
+  createBackup: () => request<BackupsEnvelope>('POST', '/admin/backups'),
+  deleteBackup: (name: string) =>
+    request<void>('DELETE', `/admin/backups/${encodeURIComponent(name)}`),
+  /** Marks a backup to be restored at the next start (400 invalid_backup / backup_too_new). */
+  restoreBackup: (name: string) =>
+    request<BackupsEnvelope>('POST', `/admin/backups/${encodeURIComponent(name)}/restore`),
+  cancelRestore: () => request<void>('DELETE', '/admin/restore'),
+
+  // Notifications and the event feed.
+  notifyTargets: () => request<NotifyTargetsEnvelope>('GET', '/admin/notifications'),
+  createNotifyTarget: (t: NotifyTargetInput) =>
+    request<NotifyTarget>('POST', '/admin/notifications', t),
+  /** Only the fields sent change; an absent url or secret is kept, secret "" clears it. */
+  updateNotifyTarget: (id: number, t: NotifyTargetInput) =>
+    request<NotifyTarget>('PATCH', `/admin/notifications/${id}`, t),
+  deleteNotifyTarget: (id: number) => request<void>('DELETE', `/admin/notifications/${id}`),
+  testNotifyTarget: (id: number) =>
+    request<NotifyTestResult>('POST', `/admin/notifications/${id}/test`),
+  /** The bell's feed, newest first; `before` is the previous page's next_before. */
+  serverEvents: (opts: { before?: number; limit?: number } = {}) =>
+    request<ServerEventPage>('GET', `/admin/events${bookQuery(opts)}`),
+
+  /** The audit log, newest first; `before` is the previous page's next_before. */
+  audit: (opts: AuditFilter & { before?: number; limit?: number } = {}) =>
+    request<AuditPage>('GET', `/admin/audit${bookQuery(opts)}`),
+
   libraries: () => request<{ libraries: AdminLibrary[] }>('GET', '/admin/libraries'),
   createLibrary: (lib: LibraryRequest & { name: string; root: string }) =>
     request<Library>('POST', '/admin/libraries', lib),
@@ -455,16 +492,28 @@ export const api = {
 
 /**
  * Downloads a library's book list (GET /admin/libraries/{id}/export) as the file
- * the server names. It can't be a plain link: the request needs the
- * Authorization header, so the body is fetched and handed to the browser as an
- * object URL (a download, not a resource load, so the CSP doesn't apply).
- * Returns the file name.
+ * the server names. Returns the file name.
  */
-export async function downloadLibraryExport(id: number): Promise<string> {
-  const res = await send(`/admin/libraries/${id}/export`);
+export function downloadLibraryExport(id: number): Promise<string> {
+  return download(`/admin/libraries/${id}/export`, `audiosilo-library-${id}.json`);
+}
+
+/** Downloads a backup (GET /admin/backups/{name}). Returns the file name. */
+export function downloadBackup(name: string): Promise<string> {
+  return download(`/admin/backups/${encodeURIComponent(name)}`, name);
+}
+
+/**
+ * Saves what an API path answers as the file the server names (fallback: `fallback`).
+ * It can't be a plain link: the request needs the Authorization header, so the body
+ * is fetched and handed to the browser as an object URL (a download, not a resource
+ * load, so the CSP doesn't apply).
+ */
+async function download(path: string, fallback: string): Promise<string> {
+  const res = await send(path);
   const name =
     /filename="([^"]*)"/i.exec(res.headers.get('Content-Disposition') ?? '')?.[1]?.trim() ||
-    `audiosilo-library-${id}.json`;
+    fallback;
   const url = URL.createObjectURL(await res.blob());
   const a = document.createElement('a');
   a.href = url;

@@ -73,6 +73,7 @@ func (a *API) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "create share failed", "could not create share", "name", s.Name)
 		return
 	}
+	a.audit(r, "share.create", created.Name, map[string]any{"paths": len(s.Paths)})
 	full, _ := a.cat.GetShare(r.Context(), created.ID)
 	writeJSON(w, http.StatusCreated, full)
 }
@@ -99,6 +100,7 @@ func (a *API) handleUpdateShare(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "update share failed", "could not update share", "share", id)
 		return
 	}
+	a.audit(r, "share.update", updated.Name, nil)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -108,10 +110,12 @@ func (a *API) handleDeleteShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid share id")
 		return
 	}
+	name := a.shareName(r, id)
 	if err := a.cat.DeleteShare(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete share")
 		return
 	}
+	a.audit(r, "share.delete", name, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -159,6 +163,7 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not add path")
 		return
 	}
+	a.audit(r, "share.add_paths", a.shareName(r, id), map[string]any{"paths": sharePaths(a, r, add)})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -177,6 +182,8 @@ func (a *API) handleRemoveSharePath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not remove path")
 		return
 	}
+	a.audit(r, "share.remove_paths", a.shareName(r, id),
+		map[string]any{"paths": sharePaths(a, r, []catalog.PathRule{{LibraryID: req.LibraryID, Path: req.Path}})})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -193,6 +200,7 @@ func (a *API) handleGrantShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not grant share")
 		return
 	}
+	a.audit(r, "share.grant", a.userName(r, req.UserID), map[string]any{"share": a.shareName(r, req.ShareID)})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -209,6 +217,7 @@ func (a *API) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not revoke share")
 		return
 	}
+	a.audit(r, "share.revoke", a.userName(r, req.UserID), map[string]any{"share": a.shareName(r, req.ShareID)})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -233,5 +242,6 @@ func (a *API) handleGrantWholeLibrary(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "grant library failed", "could not grant library", "library", req.LibraryID)
 		return
 	}
+	a.audit(r, "share.grant", a.userName(r, req.UserID), map[string]any{"library": a.libraryName(r, req.LibraryID)})
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -75,6 +75,10 @@ type Checker struct {
 	now     func() time.Time
 	wake    chan struct{}
 
+	// OnAvailable, when set before Run, hears about a newer release after each
+	// check that finds one (the notifications announce each version once).
+	OnAvailable func(Release)
+
 	mu       sync.Mutex
 	enabled  bool
 	latest   *Release
@@ -205,7 +209,15 @@ func (c *Checker) check(ctx context.Context) {
 	rel, newTag, code, err := c.fetch(ctx, etag)
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.record(ctx, rel, newTag, code, err)
+	c.mu.Unlock()
+	if st := c.Status(); err == nil && st.Available && c.OnAvailable != nil {
+		c.OnAvailable(*st.Latest)
+	}
+}
+
+// record keeps a request's outcome. mu held.
+func (c *Checker) record(ctx context.Context, rel *Release, newTag, code string, err error) {
 	c.inFlight = false
 	// The caller went away (cancelled or past its deadline): nothing was learned,
 	// and fetch gives such a failure no code, so recording it would read as a

@@ -110,6 +110,7 @@ func (a *API) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusConflict, codeCurrentDevice, "this is the device you are using; sign out instead")
 		return
 	}
+	owner, name, kind, _ := a.auth.DeviceLabel(r.Context(), id)
 	err := a.auth.RevokeDevice(r.Context(), id)
 	if errors.Is(err, auth.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "device not found")
@@ -120,6 +121,7 @@ func (a *API) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not sign the device out")
 		return
 	}
+	a.audit(r, "device.revoke", owner, map[string]any{"device": name, "kind": kind})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -254,6 +256,17 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "edit progress failed", "could not save progress", "library", lib.ID, "path", p)
 		return
 	}
+	details := map[string]any{"book": lib.Name + ": " + p}
+	if body.Finished != nil {
+		details["finished"] = *body.Finished
+	}
+	if body.Position != nil {
+		details["position"] = *body.Position
+	}
+	if body.StartedAt.Set || body.FinishedAt.Set {
+		details["dates"] = true
+	}
+	a.audit(r, "progress.edit", user.Username, details)
 	writeJSON(w, http.StatusOK, map[string]any{"progress": saved})
 }
 

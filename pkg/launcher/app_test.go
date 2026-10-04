@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -301,5 +302,31 @@ func TestDemoReaperSweepsThenExits(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("demoReaper did not exit after ctx cancel")
+	}
+}
+
+// A restore applied at start is in the audit log of the database it put in place,
+// as the server's own act; a refused one too, with why.
+func TestRecordRestore(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	cat := catalog.New(db, time.Now)
+	recordRestore(ctx, cat, &backup.RestoreResult{Name: "audiosilo-a.db", RequestedBy: "chris", OK: true, SafetyCopy: "audiosilo-b.db"}, slog.Default())
+	recordRestore(ctx, cat, &backup.RestoreResult{Name: "audiosilo-c.db", RequestedBy: "chris", Error: "newer"}, slog.Default())
+	events, _, err := cat.ListAudit(ctx, catalog.AuditFilter{})
+	if err != nil || len(events) != 2 {
+		t.Fatalf("audit = %+v, %v", events, err)
+	}
+	failed, applied := events[0], events[1]
+	if applied.Action != "backup.restore_applied" || applied.Via != catalog.ViaSystem || applied.ActorID != nil ||
+		applied.Details["safety_copy"] != "audiosilo-b.db" || applied.Details["requested_by"] != "chris" {
+		t.Fatalf("applied = %+v", applied)
+	}
+	if failed.Action != "backup.restore_failed" || failed.Details["error"] != "newer" {
+		t.Fatalf("failed = %+v", failed)
 	}
 }

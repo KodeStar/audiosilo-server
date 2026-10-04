@@ -12,11 +12,6 @@ export interface Destination {
   route: `/${DestinationKey}/{-$section}`;
   icon: LucideIcon;
   sections: readonly string[];
-  /**
-   * Sections a later redesign phase builds, with that phase (shown on their
-   * "coming in this redesign" placeholder). The rest have screens.
-   */
-  pending: Readonly<Partial<Record<string, string>>>;
 }
 
 export const DESTINATIONS: readonly Destination[] = [
@@ -25,35 +20,30 @@ export const DESTINATIONS: readonly Destination[] = [
     route: '/library/{-$section}',
     icon: LibraryBig,
     sections: ['books', 'authors', 'series', 'narrators', 'folders', 'libraries'],
-    pending: {},
   },
   {
     key: 'people',
     route: '/people/{-$section}',
     icon: Users,
     sections: ['people', 'invites', 'shares', 'devices'],
-    pending: {},
   },
   {
     key: 'activity',
     route: '/activity/{-$section}',
     icon: Activity,
     sections: ['overview', 'live', 'sessions', 'year'],
-    pending: {},
   },
   {
     key: 'health',
     route: '/health/{-$section}',
     icon: HeartPulse,
     sections: ['issues', 'jobs', 'system'],
-    pending: {},
   },
   {
     key: 'server',
     route: '/server/{-$section}',
     icon: Server,
     sections: ['settings', 'logs', 'audit', 'about'],
-    pending: { audit: '5b' },
   },
 ];
 

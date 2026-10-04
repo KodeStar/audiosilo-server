@@ -846,10 +846,18 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 // many more devices may pair with it. A disabled user is rejected before any
 // use is consumed.
 func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User, error) {
+	u, _, err := s.ConsumePairing(ctx, secret)
+	return u, err
+}
+
+// ConsumePairing is ConsumePairingToken that also says which kind of code the
+// token came from (CodeInvite or CodeRecovery; "" for an unlinked token), so the
+// server can report an invite being used.
+func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, string, error) {
 	hash := hashSecret(secret)
 	u, row, err := s.lookupToken(ctx, hash, KindPairing)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	codeID := row.codeID
 	now := s.ts()
@@ -857,12 +865,12 @@ func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE tokens SET revoked = 1, last_seen = ? WHERE token_hash = ? AND revoked = 0`, now, hash)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			return nil, ErrInvalidToken
+			return nil, "", ErrInvalidToken
 		}
-		return u, nil
+		return u, "", nil
 	}
 	// Both stamps are RFC3339 UTC, so the lexical expires_at comparison is
 	// chronological (same convention as supersedeActiveInvites).
@@ -871,7 +879,7 @@ func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User
 		   WHERE id = ? AND (max_uses = 0 OR uses < max_uses)
 		     AND (expires_at IS NULL OR expires_at > ?)`, now, codeID.Int64, now)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		// Read-only classification so the transport can tell the user why: the
@@ -884,20 +892,24 @@ func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User
 			`SELECT max_uses, uses, expires_at FROM auth_codes WHERE id = ?`, codeID.Int64).
 			Scan(&maxUses, &uses, &cexp)
 		if errors.Is(cerr, sql.ErrNoRows) {
-			return nil, ErrInvalidToken
+			return nil, "", ErrInvalidToken
 		}
 		if cerr != nil {
-			return nil, cerr
+			return nil, "", cerr
 		}
 		if serr := s.codeState(maxUses, uses, cexp); serr != nil {
-			return nil, serr
+			return nil, "", serr
 		}
 		// Unreachable unless the SQL and Go liveness checks disagree; report the
 		// claim failure as exhaustion rather than inventing a new state.
-		return nil, ErrCodeExhausted
+		return nil, "", ErrCodeExhausted
 	}
 	_, _ = s.db.ExecContext(ctx, `UPDATE tokens SET last_seen = ? WHERE token_hash = ?`, now, hash)
-	return u, nil
+	var kind string
+	if err := s.db.QueryRowContext(ctx, `SELECT kind FROM auth_codes WHERE id = ?`, codeID.Int64).Scan(&kind); err != nil {
+		kind = "" // the pairing stands; only the report loses its kind
+	}
+	return u, kind, nil
 }
 
 // userColumns selects the user fields plus a derived last-activity timestamp
@@ -1117,4 +1129,18 @@ func (s *Service) CheckPassword(ctx context.Context, id int64, password string) 
 		return ErrInvalidCreds
 	}
 	return nil
+}
+
+// AuthCodeUser returns the account an auth code belongs to (ErrNotFound when the
+// code is gone), for the audit log's "whose invite".
+func (s *Service) AuthCodeUser(ctx context.Context, id int64) (*User, error) {
+	var userID int64
+	err := s.db.QueryRowContext(ctx, `SELECT user_id FROM auth_codes WHERE id = ?`, id).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetUser(ctx, userID)
 }

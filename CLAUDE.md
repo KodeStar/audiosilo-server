@@ -111,6 +111,8 @@ internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
+internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
+internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
 internal/web/         baked-in connect/setup pages (vanilla HTML/CSS/JS, no build step), mounts the
@@ -162,7 +164,8 @@ on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` /
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
 retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
 `client_platform` / `last_ip` (the app and newest address behind each token) and
-`progress.started_at` / `finished_at`. Sharing:
+`progress.started_at` / `finished_at`. Phase 5b (`0019`) adds `audit_events` (the admin audit log), `notification_targets`
+(where notifications go) and `server_events` (the console's bell); backups are files, not rows. Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
 
@@ -557,7 +560,7 @@ admin overrides; see Metadata overrides below).
   succeeds). `catalog.StreamMarks` (in memory) remembers `?transcode=1` streams per token for 10 min
   so the session is marked transcoded. Session times are fixed-width millisecond UTC strings
   (`sessionTime`) so they compare as text; hours are taken with `hourOf` (not `time.Date`, which
-  loops on a daylight-saving fall-back). Retention: `pkg/launcher.sessionRetention` runs
+  loops on a daylight-saving fall-back). Retention: `pkg/launcher.retention` runs
   `PruneSessions` at startup and daily, rolling sessions older than `SessionRetention` (400 days) into
   `listening_daily` per local day, listener and book, and blanks `last_ip` on signed-out or expired tokens
   (`auth.ForgetRevokedAddresses`). `SaveProgress` stamps `progress.started_at` on insert and
@@ -606,6 +609,49 @@ admin overrides; see Metadata overrides below).
   the last result). Logs: the launcher wraps its logger in `logring.Handler` (Info and up into a 2,000-line
   ring; attributes whose key has a secret word (token, password, code, key, secret, cookie, authorization)
   are redacted); `GET /admin/logs?level=&q=&after=&limit=` (`after` = the live tail's cursor). All admin-only.
+- **Backups, audit log, notifications (admin redesign Phase 5b)**: **Backups** (`internal/backup`) are the
+  whole database written with `VACUUM INTO` (`store.DB.VacuumInto`, on a short-lived connection of its own:
+  the reader pool's query_only refuses it and the one writer would stall writes) into the backups folder
+  (`backups.dir`, config.yaml/env only, default `<data>/backups`) as `audiosilo-<UTC time>-<kind>.db`
+  (`scheduled|manual|before-restore`), written under a hidden temporary name, owner-only (0600: it holds
+  password and token hashes), then renamed. Settings `backups.schedule` (`""`, `daily:HH:MM`,
+  `weekly:DAY:HH:MM`, server time; default `daily:03:00`) and `backups.keep` (scheduled ones kept, default 7;
+  manual and before-restore copies stay until deleted). Only names matching `backup.validName` are listed,
+  served, deleted or restored, and a symlink is never followed. **A restore never swaps a live database**:
+  `RequestRestore` checks the file quickly (`store.Inspect` without `full`: read-only open, an AudioSilo
+  schema whose every applied migration this server knows, else `ErrNewerDatabase`; `quick_check` reads every
+  page, so it runs only at start) and writes `<data>/restore.json`; the launcher's
+  `backup.ApplyPendingRestore` runs before `store.Open`, checks again in full, copies the current database into the
+  folder as `before-restore` (or, if it can't be read, renames its files aside in the data folder), swaps
+  the backup in (removing the old -wal/-shm), writes `<data>/restore-result.json` and always removes the
+  marker (a refused restore is reported once, not retried at every start); `recordRestore` logs it in the
+  restored database's audit log as the server's own act. **Audit log** (`catalog/audit.go`,
+  `api/handlers_audit.go`): `audit_events` (0019; actor id + name copied, no FK; `via` session/api/system;
+  no IP), written by `API.audit` after an admin change succeeds (best effort), kept 365 days / 100k rows
+  (`PruneAudit`, daily in `launcher.retention`); scans and job cancels are not audited (Jobs history has
+  them), backup downloads are. Never a secret in details: a password change reads `set`/`cleared`, a
+  destination's address and secret only as `address_changed`/`secret_changed`. **Notifications**
+  (`internal/notify`): `notification_targets` (kind webhook/ntfy/discord, name, url + secret write-only:
+  the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
+  `dedup_key` announces an update once per version). `notify.Service.Emit` records the event and queues one
+  delivery per enabled subscribed destination (4 workers, queue 256, drop + log when full); a delivery is
+  retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
+  worker), never follows a redirect, and records only a short reason
+  (`timeout`, `unreachable`, `http_<status>`, `failed`), never the URL or the answer. Webhooks POST JSON
+  with `X-AudioSilo-Event` and, with a secret, `X-AudioSilo-Timestamp` + `X-AudioSilo-Signature: sha256=`
+  HMAC of `<timestamp>.<body>` (`notify.Sign`); ntfy is a JSON publish to the server root (Bearer token
+  optional); Discord is one embed with `allowed_mentions` empty. Triggers: `Scanner.OnRunFinished`
+  (`book_added` with up to 5 titles from `ScanResult.AddedTitles`, `scan_failed` (its `detail` is shown in the
+  bell but never sent out: `internalData`), `library_unavailable`
+  only when the previous run wasn't), login/exchange (`new_device`, not demo accounts; `invite_redeemed`
+  via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`.
+  Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
+  console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
+  `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),
+  `POST /admin/backups/{name}/restore`, `DELETE /admin/restore`, `GET`/`POST /admin/notifications`,
+  `PATCH`/`DELETE /admin/notifications/{id}`, `POST /admin/notifications/{id}/test`, `GET /admin/events`,
+  `GET /admin/audit`. Codes `backup_running`, `backup_not_found`, `invalid_backup`, `backup_too_new`,
+  `invalid_target` (+ `field`), `too_many_targets`.
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
@@ -720,7 +766,7 @@ the other `?path=` content endpoints; 404 when metadata is disabled), plus
 The library export is `GET /admin/libraries/{id}/export` (admin only; returns a
 JSON attachment, not the usual envelope - see Library export above).
 Server settings are `GET`/`PATCH /admin/settings` (admin only): a section-keyed
-envelope (`general`, `network`, `players`, `metadata`, `demo`, plus `locked`,
+envelope (`general`, `network`, `players`, `metadata`, `demo`, `backups`, plus `locked`,
 `restart_settings`, `restart_pending`) whose PATCH takes the same shape with only
 the settings to change (`{"metadata":{"enabled":false}}` still flips the lookup);
 see "Server settings" above.

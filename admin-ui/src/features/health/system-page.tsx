@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import {
+  Archive,
   Cpu,
   Database,
   Globe,
@@ -19,7 +20,7 @@ import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
 import { buttonVariants } from '@/components/ui/button';
-import { formatBytes, formatNumber } from '@/lib/format';
+import { formatBytes, formatDateTime, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { systemRows, type SystemRow } from './system-model';
 
@@ -29,6 +30,7 @@ const ICONS: Record<SystemRow['kind'], LucideIcon> = {
   metadata: Globe,
   tls: ShieldCheck,
   database: Database,
+  backups: Archive,
   library: HardDrive,
   player: MonitorSmartphone,
   update: Package,
@@ -76,11 +78,13 @@ function SystemList({ sys }: { sys: SystemStatus }) {
     Object.fromEntries(
       Object.entries(v).map(([k, x]) => [
         k,
-        typeof x !== 'number' || k === 'count'
-          ? x
-          : k === 'free' || k === 'total'
-            ? formatBytes(x, lang)
-            : formatNumber(x, lang),
+        k === 'at' || k === 'next'
+          ? formatDateTime(String(x), lang)
+          : typeof x !== 'number' || k === 'count'
+            ? x
+            : k === 'free' || k === 'total'
+              ? formatBytes(x, lang)
+              : formatNumber(x, lang),
       ]),
     );
 

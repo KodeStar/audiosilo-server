@@ -5,6 +5,8 @@ import { Command, useCommandState } from 'cmdk';
 import { useTranslation } from 'react-i18next';
 import { Dialog } from '@base-ui/react/dialog';
 import {
+  Archive,
+  BellRing,
   CalendarClock,
   CornerDownLeft,
   DatabaseZap,
@@ -209,6 +211,8 @@ function PaletteBody({ close }: { close: () => void }) {
     topic('metadata', Globe, ['meta', 'community', 'lookup', 'asin']),
     topic('transcoding', Repeat2, ['ffmpeg', 'ffprobe', 'transcode']),
     topic('demo', Ticket, ['demo', 'guest', 'try']),
+    topic('backups', Archive, ['backup', 'restore', 'database', 'export', 'download']),
+    topic('notifications', BellRing, ['alert', 'webhook', 'ntfy', 'discord', 'notify', 'push']),
     {
       id: 'scan-settings',
       title: t('palette.setting.scanSettings'),

@@ -1,5 +1,7 @@
 import type { SystemStatus } from '@/api/types';
 import { certificateLook } from '@/features/settings/settings-model';
+import { backupHealth } from '@/features/settings/backups-model';
+import { backupFailureKey } from '@/lib/server-events';
 
 // Health > System: everything the server depends on as one list of rows, each
 // with a status. Pure, so the rules (what counts as a problem) are tested
@@ -11,11 +13,23 @@ type Text = { key: string; values?: Record<string, string | number> };
 
 export interface SystemRow {
   /** Stable key, also the icon choice. */
-  kind: 'ffmpeg' | 'ffprobe' | 'metadata' | 'tls' | 'database' | 'library' | 'player' | 'update';
+  kind:
+    | 'ffmpeg'
+    | 'ffprobe'
+    | 'metadata'
+    | 'tls'
+    | 'database'
+    | 'backups'
+    | 'library'
+    | 'player'
+    | 'update';
   id: string;
   /** i18n key + values of the row's title (a library's name is passed through). */
   title: Text;
-  /** i18n key + values of the one-line detail (`free`/`total` are bytes, formatted by the page). */
+  /**
+   * i18n key + values of the one-line detail (`free`/`total` are bytes and `at`/`next`
+   * ISO times, formatted by the page).
+   */
   detail: Text;
   /** A short mono value on the right (a version, a path), or "". */
   value: string;
@@ -110,6 +124,58 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
       status: 'ok',
     }),
   );
+
+  const b = sys.backups;
+  if (b) {
+    const base = {
+      kind: 'backups',
+      id: 'backups',
+      title: { key: 'system.row.backups' },
+      value: b.dir,
+    } as const;
+    const at = b.latest?.created_at ?? '';
+    switch (backupHealth(b)) {
+      case 'failed':
+        rows.push(
+          row({
+            ...base,
+            detail: { key: backupFailureKey(b.last?.error) },
+            status: 'bad',
+            statusKey: 'system.status.failed',
+          }),
+        );
+        break;
+      case 'off':
+        rows.push(
+          row({
+            ...base,
+            detail: b.latest
+              ? { key: 'system.detail.backupLatest', values: { at } }
+              : { key: 'system.detail.backupOff' },
+            status: b.latest ? 'off' : 'warn',
+            statusKey: 'system.status.off',
+          }),
+        );
+        break;
+      case 'ok':
+        rows.push(
+          row({
+            ...base,
+            detail: { key: 'system.detail.backupLatestNext', values: { at, next: b.next ?? '' } },
+            status: 'ok',
+          }),
+        );
+        break;
+      case 'none':
+        rows.push(
+          row({
+            ...base,
+            detail: { key: 'system.detail.backupNone', values: { next: b.next ?? '' } },
+            status: 'ok',
+          }),
+        );
+    }
+  }
 
   for (const lib of sys.libraries) {
     const low = !!lib.disk && lib.disk.total > 0 && lib.disk.free / lib.disk.total < LOW_DISK;

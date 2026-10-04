@@ -187,11 +187,11 @@ describe('overview', () => {
 describe('navigation', () => {
   beforeEach(() => setToken('stored'));
 
-  it('deep-links a destination section to its placeholder', async () => {
-    mockFetch(signedInRoutes());
+  it('deep-links a destination section', async () => {
+    mockFetch(signedInRoutes({ 'GET /admin/audit': { body: { events: [], next_before: 0 } } }));
     renderApp('/server/audit');
     expect(
-      await screen.findByRole('heading', { name: 'Audit log is on its way' }),
+      await screen.findByRole('heading', { name: 'Nothing recorded yet' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Audit log' })).toHaveAttribute('aria-current', 'page');
   });

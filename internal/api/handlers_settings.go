@@ -94,5 +94,11 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if a.rt.Updates != nil && next.UpdateCheck != cur.UpdateCheck {
 		a.rt.Updates.SetEnabled(next.UpdateCheck)
 	}
+	if a.rt.Backups != nil && next.Backups != cur.Backups {
+		a.rt.Backups.SetSettings(next.Backups.Schedule, next.Backups.Keep)
+	}
+	if changes := config.ChangedSettings(cur, next); len(changes) > 0 {
+		a.audit(r, "settings.update", "", map[string]any{"changes": changes})
+	}
 	writeJSON(w, http.StatusOK, a.settingsEnvelope())
 }

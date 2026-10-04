@@ -11,6 +11,8 @@ export const SETTINGS_PAGES = [
   'metadata',
   'transcoding',
   'demo',
+  'backups',
+  'notifications',
 ] as const;
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 

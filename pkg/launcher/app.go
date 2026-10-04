@@ -22,10 +22,12 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/api"
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/toolfetch"
@@ -112,7 +114,14 @@ func Run(ctx context.Context, opts Options) error {
 	// a database rebuild; clients key their per-server state on it.
 	mintedServerID := ensureServerID(cfg)
 
-	db, err := store.Open(ctx, filepath.Join(abs, "audiosilo.db"), store.WithLogger(log))
+	// A restore an admin asked for replaces the database before anything opens it.
+	dbPath := filepath.Join(abs, "audiosilo.db")
+	restored, err := backup.ApplyPendingRestore(ctx, abs, cfg.Backups.Dir, dbPath, log)
+	if err != nil {
+		return err
+	}
+
+	db, err := store.Open(ctx, dbPath, store.WithLogger(log))
 	if err != nil {
 		return err
 	}
@@ -120,9 +129,18 @@ func Run(ctx context.Context, opts Options) error {
 
 	authSvc := auth.New(db, time.Now)
 	cat := catalog.New(db, time.Now)
+	if restored != nil {
+		recordRestore(ctx, cat, restored, log)
+	}
+
+	// Notifications: the event feed and its deliveries. Messages name the server as
+	// the API's live settings have it (a is set before Run starts sending).
+	var a *api.API
+	ntf := notify.New(cat, api.Version, func() notify.Server { return a.NotifyIdentity() }, log)
 
 	ffmpeg, ffprobe := resolveTools(ctx, abs, opts, log)
 	scanner := library.NewScanner(cat, ffprobe, log)
+	scanner.OnRunFinished = ntf.ScanFinished
 
 	// Persist a default config the first time (when none existed yet), or when we
 	// just minted a server_id for an install that predates it.
@@ -171,15 +189,23 @@ func Run(ctx context.Context, opts Options) error {
 		go demoReaper(ctx, authSvc, cfg.Demo.IdleTTLDuration(), log)
 	}
 
-	go sessionRetention(ctx, cat, authSvc, log)
+	go retention(ctx, cat, authSvc, log)
 
 	// The update check (Settings > General): once a day while on, never while off.
 	upd := updates.New(api.Version, "", cfg.UpdateCheck, log)
+	upd.OnAvailable = func(r updates.Release) { ntf.UpdateFound(ctx, r.Version, r.Name, r.URL) }
 	go upd.Run(ctx)
 
-	a := api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
+	// Backups (Settings > Backups): on their schedule, and when an admin asks.
+	backups := backup.New(db, abs, cfg.Backups.Dir, log)
+	backups.SetSettings(cfg.Backups.Schedule, cfg.Backups.Keep)
+	backups.OnFailure = func(r backup.Result) { ntf.BackupFailed(ctx, r.Trigger, r.Error) }
+	go backups.Run(ctx)
+
+	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
-	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd})
+	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
+	ntf.Run(ctx)
 	if setupToken != "" {
 		a.EnableSetup(setupToken)
 		setupBanner(cfg, setupToken)
@@ -428,12 +454,33 @@ func demoReaper(ctx context.Context, authSvc *auth.Service, idleTTL time.Duratio
 	}
 }
 
-// sessionRetention rolls listening sessions older than catalog.SessionRetention
-// up into per-day totals (dropping their device, app and time of day) and blanks
-// the address of signed-out devices, once at startup and then daily, until ctx is
-// cancelled.
-func sessionRetention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, log *slog.Logger) {
+// recordRestore puts a restore applied (or refused) at this start in the audit log
+// of the database the server now runs on.
+func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreResult, log *slog.Logger) {
+	action, details := "backup.restore_applied", map[string]any{"requested_by": r.RequestedBy}
+	if r.OK {
+		details["safety_copy"] = r.SafetyCopy
+	} else {
+		action, details["error"] = "backup.restore_failed", r.Error
+	}
+	if err := cat.RecordAudit(ctx, catalog.AuditEvent{Via: catalog.ViaSystem, Action: action, Target: r.Name, Details: details}); err != nil {
+		log.Warn("recording the restore in the audit log failed", "err", err)
+	}
+}
+
+// retention, once at startup and then daily until ctx is cancelled: rolls
+// listening sessions older than catalog.SessionRetention up into per-day totals
+// (dropping their device, app and time of day), blanks the address of signed-out
+// devices, and drops audit events and feed events past their retention.
+func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, log *slog.Logger) {
 	prune := func() {
+		now := time.Now()
+		if _, err := cat.PruneAudit(ctx, now.Add(-catalog.AuditRetention)); err != nil && ctx.Err() == nil {
+			log.Warn("audit log retention failed", "err", err)
+		}
+		if _, err := cat.PruneServerEvents(ctx, now.Add(-catalog.ServerEventRetention)); err != nil && ctx.Err() == nil {
+			log.Warn("event feed retention failed", "err", err)
+		}
 		if err := authSvc.ForgetRevokedAddresses(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("forgetting signed-out device addresses failed", "err", err)
 		}

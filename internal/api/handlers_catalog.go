@@ -249,6 +249,34 @@ func (e editRequest) toEdit(userID int64) catalog.BookEdit {
 	return edit
 }
 
+// details are the edit for the audit log: the values set (a long one cut short),
+// the fields reverted, where they came from, and how many chapter titles changed.
+func (e editRequest) details() map[string]any {
+	d := map[string]any{}
+	if len(e.Set) > 0 {
+		set := make(map[string]string, len(e.Set))
+		for k, v := range e.Set {
+			if r := []rune(v); len(r) > 120 {
+				v = string(r[:119]) + "…"
+			}
+			set[k] = v
+		}
+		d["set"] = set
+	}
+	if len(e.Revert) > 0 {
+		d["revert"] = e.Revert
+	}
+	if e.Source != "" {
+		d["source"] = e.Source
+	}
+	if e.Chapters != nil {
+		if n := len(e.Chapters.Set) + len(e.Chapters.Revert); n > 0 {
+			d["chapters"] = n
+		}
+	}
+	return d
+}
+
 func (e editRequest) empty() bool {
 	return len(e.Set) == 0 && len(e.Revert) == 0 &&
 		(e.Chapters == nil || (len(e.Chapters.Set) == 0 && len(e.Chapters.Revert) == 0))
@@ -275,6 +303,7 @@ func (a *API) handleAdminEditBook(w http.ResponseWriter, r *http.Request) {
 		a.writeBookError(w, err, "edit book failed", "could not save the edit", "library", lib.ID, "path", p)
 		return
 	}
+	a.audit(r, "book.edit", lib.Name+": "+p, req.details())
 	a.writeBookDetail(w, r, lib.ID, p)
 }
 
@@ -308,6 +337,9 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 	for _, b := range req.Books {
 		distinct[catalog.Ref{LibraryID: b.LibraryID, Path: catalog.CleanRelPath(b.Path)}] = true
 	}
+	details := req.details()
+	details["books"] = len(distinct)
+	a.audit(r, "book.bulk_edit", "", details)
 	writeJSON(w, http.StatusOK, map[string]int{"updated": len(distinct)})
 }
 
@@ -378,6 +410,7 @@ func (a *API) handleAdminSetCover(w http.ResponseWriter, r *http.Request) {
 		a.writeBookError(w, err, "set cover failed", "could not save the cover", "library", lib.ID, "path", p)
 		return
 	}
+	a.audit(r, "book.cover_set", lib.Name+": "+p, map[string]any{"bytes": len(data)})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cover set", "path": p})
 }
 
@@ -393,5 +426,6 @@ func (a *API) handleAdminDeleteCover(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "delete cover failed", "could not remove the cover", "library", lib.ID, "path", p)
 		return
 	}
+	a.audit(r, "book.cover_remove", lib.Name+": "+p, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cover removed", "path": p})
 }
