@@ -612,16 +612,29 @@ func lessFold(a, b string) bool {
 // keeps the letters of every script), which also equates "J.R.R." with "J. R. R.".
 // "" when no letter or digit is left.
 func personKey(name string) string {
-	if before, after, ok := strings.Cut(name, ","); ok && !strings.Contains(after, ",") {
-		if b, a := strings.TrimSpace(before), strings.TrimSpace(after); a != "" && !strings.ContainsAny(b, " \t") {
-			name = a + " " + b
-		}
+	if given, surname, ok := reversedName(name); ok {
+		name = given + " " + surname
 	}
 	return match.Fold(name)
 }
 
+// reversedName reports whether name is written "Surname, Given" (one word before
+// a single comma, so "Alexandre Dumas, pere" is not), with its two parts.
+func reversedName(name string) (given, surname string, ok bool) {
+	before, after, found := strings.Cut(name, ",")
+	if !found || strings.Contains(after, ",") {
+		return "", "", false
+	}
+	b, a := strings.TrimSpace(before), strings.TrimSpace(after)
+	if a == "" || strings.ContainsAny(b, " \t") {
+		return "", "", false
+	}
+	return a, b, true
+}
+
 // mergeSuggestions groups people whose names share a personKey. The suggested
-// spelling is the one with the most books (ties: alphabetical).
+// spelling is the one with the most books; on a tie the natural "Given Surname"
+// form beats "Surname, Given", then alphabetical.
 func mergeSuggestions(people []PersonCount) []MergeSuggestion {
 	groups := map[string][]PersonCount{}
 	var order []string
@@ -646,7 +659,7 @@ func mergeSuggestions(people []PersonCount) []MergeSuggestion {
 		for _, p := range g {
 			s.Names = append(s.Names, p.Name)
 			s.Books += p.Books
-			if p.Books > best.Books || (p.Books == best.Books && lessFold(p.Name, best.Name)) {
+			if betterSpelling(p, best) {
 				best = p
 			}
 		}
@@ -654,6 +667,20 @@ func mergeSuggestions(people []PersonCount) []MergeSuggestion {
 		out = append(out, s)
 	}
 	return out
+}
+
+// betterSpelling reports whether p should be suggested over best (see
+// mergeSuggestions).
+func betterSpelling(p, best PersonCount) bool {
+	if p.Books != best.Books {
+		return p.Books > best.Books
+	}
+	_, _, pRev := reversedName(p.Name)
+	_, _, bestRev := reversedName(best.Name)
+	if pRev != bestRev {
+		return !pRev
+	}
+	return lessFold(p.Name, best.Name)
 }
 
 // SeriesCount is one series and the books the server holds in it.

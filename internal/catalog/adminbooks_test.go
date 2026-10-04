@@ -309,3 +309,21 @@ func TestDirectPlayableSQLAgreesWithGo(t *testing.T) {
 		}
 	}
 }
+
+// On a tie the suggested spelling is the natural "Given Surname" one, never the
+// reversed "Surname, Given" (which merely sorts first); more books still wins.
+func TestMergeSuggestionPrefersNaturalOrder(t *testing.T) {
+	for name, tc := range map[string]struct {
+		people []PersonCount
+		want   string
+	}{
+		"tie":        {[]PersonCount{{Name: "Carroll, Lewis", Books: 1}, {Name: "Lewis Carroll", Books: 1}}, "Lewis Carroll"},
+		"more books": {[]PersonCount{{Name: "Carroll, Lewis", Books: 3}, {Name: "Lewis Carroll", Books: 1}}, "Carroll, Lewis"},
+		"plain tie":  {[]PersonCount{{Name: "J. R. R. Tolkien", Books: 1}, {Name: "J.R.R. Tolkien", Books: 1}}, "J. R. R. Tolkien"},
+	} {
+		got := mergeSuggestions(tc.people)
+		if len(got) != 1 || got[0].Suggested != tc.want {
+			t.Errorf("%s: suggestions = %+v, want %q suggested", name, got, tc.want)
+		}
+	}
+}
