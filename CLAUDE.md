@@ -483,6 +483,9 @@ admin overrides; see Metadata overrides below).
   one `catalog.CoverSources` query per library for the whole batch.
   One request per page of covers instead of one per cover (the per-IP limiter
   allows a burst of 40), no token in any URL, ~20 KB a cover instead of full art.
+  (The limiter counts every request except the static files `web.Register`
+  mounts, `web.IsStatic` via `mux.Handler`: a cold console page is forty-odd
+  chunks.)
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
   (decompression bombs), `media.ThumbCache` is a byte-bounded LRU keyed by the art's
   version (custom `updated_at`, file size + mtime) holding finished data: URLs, and
@@ -565,9 +568,15 @@ admin overrides; see Metadata overrides below).
   so the session is marked transcoded. Session times are fixed-width millisecond UTC strings
   (`sessionTime`) so they compare as text; hours are taken with `hourOf` (not `time.Date`, which
   loops on a daylight-saving fall-back). Retention: `pkg/launcher.retention` runs
-  `PruneSessions` at startup and daily, rolling sessions older than `SessionRetention` (400 days) into
+  `PruneSessions` at startup and daily, rolling sessions older than the live
+  `activity.session_days` setting (Settings > General `general.session_days`, env
+  `AUDIOSILO_SESSION_DAYS`, 30-3650, default 400; `API.SessionRetention`, read at each run) into
   `listening_daily` per local day, listener and book, and blanks `last_ip` on signed-out or expired tokens
-  (`auth.ForgetRevokedAddresses`). `SaveProgress` stamps `progress.started_at` on insert and
+  (`auth.ForgetRevokedAddresses`). Migration 0021 backfilled listening from before sessions were
+  recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
+  device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
+  (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
+  how much). `SaveProgress` stamps `progress.started_at` on insert and
   `finished_at` when `finished` turns on (cleared when it turns off), both from the save's own
   `updated_at`; both are admin-only (not on the player's progress JSON). Endpoints
   (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP), `GET
@@ -653,9 +662,14 @@ admin overrides; see Metadata overrides below).
   console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
   `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),
   `POST /admin/backups/{name}/restore`, `DELETE /admin/restore`, `GET`/`POST /admin/notifications`,
-  `PATCH`/`DELETE /admin/notifications/{id}`, `POST /admin/notifications/{id}/test`, `GET /admin/events`,
+  `PATCH`/`DELETE /admin/notifications/{id}`, `POST /admin/notifications/{id}/test`,
+  `GET /admin/events?before=&limit=&kind=` (`kind` one of `notify.Kinds`, else 400),
   `GET /admin/audit`. Codes `backup_running`, `backup_not_found`, `invalid_backup`, `backup_too_new`,
-  `invalid_target` (+ `field`), `too_many_targets`.
+  `invalid_target` (+ `field`, `reason` = a `notify.Reason*` constant the console words, never renamed,
+  and `max` for a `*_too_long`), `too_many_targets`. A password sign-in's `new_device` is skipped when
+  the browser's `device_id` (`auth.IssueSession`, hashed in `tokens.sign_in_key`, migration 0020) matches
+  an earlier session of that person; an admin's `RevokeDevice`, a new password or disabling the account
+  forgets it.
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",

@@ -47,6 +47,10 @@ counted AS (
       FROM spans sp LEFT JOIN firsts f ON f.user_id = sp.user_id
      WHERE sp.s IS NOT NULL AND sp.e IS NOT NULL AND sp.e > sp.s
        AND sp.e < COALESCE(f.first, '9999')
+       -- A span that never moved is left out before spans are joined: kept, it
+       -- would stretch a sitting (its last_at, and so the hours its listening is
+       -- spread over) or join two sittings into one.
+       AND sp.to_pos <> sp.from_pos
 ),
 marked AS (
     SELECT *, CASE WHEN unixepoch(s, 'subsec') - unixepoch(LAG(e) OVER w, 'subsec') <= 600 THEN 0 ELSE 1 END AS starts

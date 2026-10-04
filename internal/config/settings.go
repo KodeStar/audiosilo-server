@@ -368,7 +368,7 @@ func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage, check
 	// stops the server from starting once the variable is removed (demo mode on in
 	// the file, its library only in AUDIOSILO_DEMO_LIBRARY). A file that already
 	// leans on the environment doesn't block unrelated changes.
-	if err := next.asSaved().Validate(); err != nil && c.asSaved().Validate() == nil {
+	if err := next.asSaved().Validate(); err != nil && len(changed) > 0 && c.asSaved().Validate() == nil {
 		id := changed[0].setting
 		var fe *FieldError
 		if errors.As(err, &fe) && c.fromEnv[fe.Key] != "" {

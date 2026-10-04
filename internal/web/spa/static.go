@@ -29,8 +29,21 @@ import (
 // it changed without changing size or mtime, the same blind spot Last-Modified
 // has.
 type Files struct {
-	mu sync.Mutex
-	m  map[string]*fileRep
+	mu   sync.Mutex
+	m    map[string]*fileRep
+	docs map[string]*docRep
+}
+
+// docRep is an HTML document's bytes and the CSP they make (the player's hashes
+// its inline scripts), kept per file version like fileRep, so a deep link or a
+// revalidation doesn't read and hash the document again.
+type docRep struct {
+	size int64
+	mod  time.Time
+	once sync.Once
+	err  error
+	data []byte
+	csp  string
 }
 
 // fileRep is what Files keeps about one file.
@@ -65,7 +78,36 @@ var compressibleExts = map[string]bool{
 func compressible(name string) bool { return compressibleExts[strings.ToLower(path.Ext(name))] }
 
 // NewFiles returns an empty Files.
-func NewFiles() *Files { return &Files{m: map[string]*fileRep{}} }
+func NewFiles() *Files { return &Files{m: map[string]*fileRep{}, docs: map[string]*docRep{}} }
+
+// Document returns the HTML document name's bytes (info its stat, content its
+// bytes from the start) and csp(bytes), worked out once per version of the file.
+func (f *Files) Document(name string, info fs.FileInfo, content io.Reader, csp func([]byte) string) ([]byte, string, error) {
+	f.mu.Lock()
+	d := f.docs[name]
+	if d == nil || d.size != info.Size() || !d.mod.Equal(info.ModTime()) {
+		if len(f.docs) >= maxFiles {
+			clear(f.docs)
+		}
+		d = &docRep{size: info.Size(), mod: info.ModTime()}
+		f.docs[name] = d
+	}
+	f.mu.Unlock()
+	d.once.Do(func() {
+		if d.data, d.err = io.ReadAll(content); d.err == nil {
+			d.csp = csp(d.data)
+		}
+	})
+	if d.err != nil {
+		f.mu.Lock()
+		if f.docs[name] == d {
+			delete(f.docs, name) // not kept: the next request tries again
+		}
+		f.mu.Unlock()
+		return nil, "", d.err
+	}
+	return d.data, d.csp, nil
+}
 
 // ServeFS serves the regular file name from fsys (404 when there is none). The
 // caller sets any headers besides the representation's own first.

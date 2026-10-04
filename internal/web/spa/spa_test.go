@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 const fileCSP = "default-src 'self'"
@@ -321,5 +322,37 @@ func TestAcceptsGzip(t *testing.T) {
 		if got := acceptsGzip(header); got != want {
 			t.Errorf("acceptsGzip(%q) = %v, want %v", header, got, want)
 		}
+	}
+}
+
+// A document's CSP (and its bytes) are worked out once per version of the file:
+// deep links and revalidations don't read and hash it again, and a replaced
+// document is.
+func TestDocumentCSPOncePerVersion(t *testing.T) {
+	fsys := fstest.MapFS{"index.html": {Data: []byte("<p>one</p>"), ModTime: time.Unix(1, 0)}}
+	calls := 0
+	h := Handler(Config{FS: fsys, Prefix: "/x", DocumentCSP: func(b []byte) string {
+		calls++
+		return "csp " + string(b)
+	}})
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+	for _, p := range []string{"/x/", "/x/a/deep/link", "/x/another"} {
+		if got := get(p).Header().Get("Content-Security-Policy"); got != "csp <p>one</p>" {
+			t.Fatalf("GET %s CSP = %q", p, got)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("CSP worked out %d times for one version, want 1", calls)
+	}
+	fsys["index.html"] = &fstest.MapFile{Data: []byte("<p>two!</p>"), ModTime: time.Unix(2, 0)}
+	if rec := get("/x/"); rec.Header().Get("Content-Security-Policy") != "csp <p>two!</p>" || rec.Body.String() != "<p>two!</p>" {
+		t.Fatalf("a replaced document = %q %q", rec.Header().Get("Content-Security-Policy"), rec.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("CSP worked out %d times for two versions, want 2", calls)
 	}
 }

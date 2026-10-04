@@ -23,7 +23,6 @@ package spa
 
 import (
 	"bytes"
-	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -156,13 +155,14 @@ func (c Config) serve(w http.ResponseWriter, r *http.Request, files *Files, name
 	h.Set("Content-Type", ContentType(name))
 	h.Set("Cache-Control", "no-cache")
 	if strings.HasSuffix(name, ".html") {
-		// The document's bytes feed its CSP (the player hashes inline scripts).
-		data, err := io.ReadAll(content)
+		// The document's bytes feed its CSP (the player hashes inline scripts);
+		// both are kept per version of the file.
+		data, csp, err := files.Document(name, info, content, c.DocumentCSP)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		h.Set("Content-Security-Policy", c.DocumentCSP(data))
+		h.Set("Content-Security-Policy", csp)
 		content = bytes.NewReader(data)
 	} else {
 		if c.FileCSP != "" {
