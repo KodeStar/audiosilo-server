@@ -7,12 +7,15 @@ export function EmptyState({
   title,
   body,
   action,
+  tone,
   className,
 }: {
   icon: LucideIcon;
   title: React.ReactNode;
   body?: React.ReactNode;
   action?: React.ReactNode;
+  /** `success` for an "all clear" (a green tile), else muted. */
+  tone?: 'success';
   className?: string;
 }) {
   return (
@@ -23,7 +26,10 @@ export function EmptyState({
       )}
     >
       <span
-        className="mb-1 grid size-12 place-items-center rounded-[14px] bg-muted text-muted-foreground"
+        className={cn(
+          'mb-1 grid size-12 place-items-center rounded-[14px]',
+          tone === 'success' ? 'bg-success-soft text-success' : 'bg-muted text-muted-foreground',
+        )}
         aria-hidden="true"
       >
         <Icon className="size-6" />

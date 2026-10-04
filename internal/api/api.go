@@ -53,9 +53,9 @@ type API struct {
 	settingsMu sync.Mutex
 	log        *slog.Logger
 
-	// baseCtx is the server lifecycle context; background work detached from a
-	// request (e.g. startScan) derives from it so it's cancelled on shutdown
-	// instead of running detached. Defaults to context.Background(); the app wires
+	// baseCtx is the server lifecycle context; work detached from a request (a
+	// book's re-read, which may outlast the request timeout) derives from it so it's
+	// cancelled on shutdown instead of running on. Defaults to context.Background(); the app wires
 	// the real one via SetBaseContext.
 	baseCtx context.Context
 
@@ -241,6 +241,16 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/libraries/{id}/export", a.requireAdmin(http.HandlerFunc(a.handleExportLibrary)))
 	mux.Handle("POST /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanLibrary)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/scan", a.requireAdmin(http.HandlerFunc(a.handleScanStatus)))
+	mux.Handle("POST /api/v1/admin/scan", a.requireAdmin(http.HandlerFunc(a.handleScanAll)))
+	mux.Handle("POST /api/v1/admin/libraries/{id}/book/rescan", a.requireAdmin(http.HandlerFunc(a.handleRescanBook)))
+	mux.Handle("GET /api/v1/admin/issues", a.requireAdmin(http.HandlerFunc(a.handleIssues)))
+	mux.Handle("GET /api/v1/admin/issues/duplicates", a.requireAdmin(http.HandlerFunc(a.handleDuplicates)))
+	mux.Handle("POST /api/v1/admin/issues/ignore", a.requireAdmin(http.HandlerFunc(a.handleIgnoreIssue)))
+	mux.Handle("DELETE /api/v1/admin/issues/ignore", a.requireAdmin(http.HandlerFunc(a.handleUnignoreIssue)))
+	mux.Handle("GET /api/v1/admin/jobs", a.requireAdmin(http.HandlerFunc(a.handleJobs)))
+	mux.Handle("DELETE /api/v1/admin/jobs/{id}", a.requireAdmin(http.HandlerFunc(a.handleCancelJob)))
+	mux.Handle("GET /api/v1/admin/scan-runs", a.requireAdmin(http.HandlerFunc(a.handleScanRuns)))
+	mux.Handle("GET /api/v1/admin/scan-runs/{id}", a.requireAdmin(http.HandlerFunc(a.handleScanRun)))
 
 	// Admin catalog: the console's Library and Book screens. Metadata edits are
 	// path-keyed overrides in the database; no file on disk is ever modified.

@@ -77,50 +77,25 @@ func scanCandidate(rows *sql.Rows, rankIdx int) (candidate, error) {
 // limit winners in source order (a group sits at its earliest member's position),
 // each annotated with DedupKey, MultiFile and OtherLocations.
 func dedupBooks(cands []candidate, limit int) []Book {
-	parent := make([]int, len(cands))
-	for i := range parent {
-		parent[i] = i
-	}
-	find := func(x int) int {
-		for parent[x] != x {
-			parent[x] = parent[parent[x]] // path-halving
-			x = parent[x]
-		}
-		return x
-	}
-	union := func(a, b int) {
-		if ra, rb := find(a), find(b); ra != rb {
-			parent[ra] = rb
-		}
-	}
+	set := newDisjointSet(len(cands))
 	// Union any two candidates that share an identity signal.
 	firstWith := map[string]int{}
 	for i := range cands {
 		for _, s := range identitySignals(cands[i].book) {
 			if j, ok := firstWith[s]; ok {
-				union(i, j)
+				set.union(i, j)
 			} else {
 				firstWith[s] = i
 			}
 		}
 	}
 
-	groupOrder := []int{} // roots, in first-occurrence order
-	members := map[int][]int{}
-	for i := range cands {
-		r := find(i)
-		if _, ok := members[r]; !ok {
-			groupOrder = append(groupOrder, r)
-		}
-		members[r] = append(members[r], i)
-	}
-
-	out := make([]Book, 0, len(groupOrder))
-	for _, r := range groupOrder {
+	groups := set.groups()
+	out := make([]Book, 0, len(groups))
+	for _, ms := range groups {
 		if limit > 0 && len(out) >= limit {
 			break
 		}
-		ms := members[r]
 		win := ms[0]
 		for _, m := range ms[1:] {
 			if cands[m].betterThan(cands[win]) {
@@ -181,17 +156,71 @@ func otherLocations(cands []candidate, members []int, win int) []BookLocation {
 	return out
 }
 
+// disjointSet is a union-find over the indexes 0..n-1: what groups copies of one
+// book (here and in the Health page's duplicates).
+type disjointSet []int
+
+func newDisjointSet(n int) disjointSet {
+	d := make(disjointSet, n)
+	for i := range d {
+		d[i] = i
+	}
+	return d
+}
+
+func (d disjointSet) find(x int) int {
+	for d[x] != x {
+		d[x] = d[d[x]] // path-halving
+		x = d[x]
+	}
+	return x
+}
+
+func (d disjointSet) union(a, b int) {
+	if ra, rb := d.find(a), d.find(b); ra != rb {
+		d[ra] = rb
+	}
+}
+
+// groups returns the members of every set, each set at its first member's
+// position and its members in index order.
+func (d disjointSet) groups() [][]int {
+	at := map[int]int{} // root -> index in out
+	var out [][]int
+	for i := range d {
+		r := d.find(i)
+		k, ok := at[r]
+		if !ok {
+			k = len(out)
+			at[r] = k
+			out = append(out, nil)
+		}
+		out[k] = append(out[k], i)
+	}
+	return out
+}
+
+// betterQuality compares two copies of a book by what makes one worth more:
+// format tier, then single file over multipart, then bitrate. decided is false
+// when they tie on all three.
+func betterQuality(a Book, aFiles int, b Book, bFiles int) (better, decided bool) {
+	if x, y := formatTier(a.Format), formatTier(b.Format); x != y {
+		return x > y, true
+	}
+	if x, y := aFiles <= 1, bFiles <= 1; x != y {
+		return x, true // single-file beats multipart
+	}
+	if x, y := bitrate(a), bitrate(b); x != y {
+		return x > y, true
+	}
+	return false, false
+}
+
 // betterThan reports whether c is a better copy to surface than o. Compared in
 // order: format tier, single vs multipart, bitrate, library order, source rank.
 func (c candidate) betterThan(o candidate) bool {
-	if a, b := formatTier(c.book.Format), formatTier(o.book.Format); a != b {
-		return a > b
-	}
-	if a, b := c.fileCount <= 1, o.fileCount <= 1; a != b {
-		return a // single-file beats multipart
-	}
-	if a, b := bitrate(c.book), bitrate(o.book); a != b {
-		return a > b
+	if better, ok := betterQuality(c.book, c.fileCount, o.book, o.fileCount); ok {
+		return better
 	}
 	if c.sortOrder != o.sortOrder {
 		return c.sortOrder < o.sortOrder

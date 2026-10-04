@@ -35,6 +35,12 @@ const InvitesPage = lazy(() =>
 const SharesPage = lazy(() =>
   import('@/features/shares/shares-page').then((m) => ({ default: m.SharesPage })),
 );
+const IssuesPage = lazy(() =>
+  import('@/features/health/issues-page').then((m) => ({ default: m.IssuesPage })),
+);
+const JobsPage = lazy(() =>
+  import('@/features/health/jobs-page').then((m) => ({ default: m.JobsPage })),
+);
 const SettingsPage = lazy(() =>
   import('@/features/settings/settings-page').then((m) => ({ default: m.SettingsPage })),
 );
@@ -50,6 +56,7 @@ const PAGES: Partial<Record<DestinationKey, Record<string, React.ComponentType>>
     libraries: LibrariesPage,
   },
   people: { people: PeoplePage, invites: InvitesPage, shares: SharesPage },
+  health: { issues: IssuesPage, jobs: JobsPage },
   server: { settings: SettingsPage },
 };
 

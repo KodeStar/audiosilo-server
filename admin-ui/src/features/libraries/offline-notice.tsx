@@ -13,12 +13,15 @@ export function OfflineNotice({
   library: l,
   title,
   actions,
+  listeners,
   className,
 }: {
   library: AdminLibrary;
   /** Overrides the default headline (the overview names the library). */
   title?: string;
   actions?: React.ReactNode;
+  /** How many people's progress is kept with it, said when known (Health). */
+  listeners?: number;
   className?: string;
 }) {
   const { t, i18n } = useTranslation();
@@ -48,6 +51,15 @@ export function OfflineNotice({
         count: l.book_count,
         formatted: formatNumber(l.book_count, i18n.resolvedLanguage ?? 'en'),
       })}
+      {listeners ? (
+        <>
+          {' '}
+          {t('health.offline.listeners', {
+            count: listeners,
+            formatted: formatNumber(listeners, i18n.resolvedLanguage ?? 'en'),
+          })}
+        </>
+      ) : null}
     </Notice>
   );
 }

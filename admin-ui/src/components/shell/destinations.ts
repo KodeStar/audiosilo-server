@@ -46,7 +46,7 @@ export const DESTINATIONS: readonly Destination[] = [
     route: '/health/{-$section}',
     icon: HeartPulse,
     sections: ['issues', 'jobs', 'system'],
-    pending: { issues: '3', jobs: '3', system: '5a' },
+    pending: { system: '5a' },
   },
   {
     key: 'server',

@@ -27,6 +27,11 @@ type Library struct {
 	// SortOrder is the library's display order (lower first). It also breaks ties
 	// when de-duplicating identical copies of a book across libraries.
 	SortOrder int `json:"sort_order"`
+	// ScanSchedule ("" = none) and IgnorePatterns are admin settings (see
+	// library.ParseSchedule and library.ParseIgnore), kept off the player wire; the
+	// admin library list carries them.
+	ScanSchedule   string   `json:"-"`
+	IgnorePatterns []string `json:"-"`
 }
 
 // Book is an indexed audiobook (single file or a folder of files).
@@ -57,9 +62,17 @@ type Book struct {
 	Description string `json:"-"`
 	// HasCover reports cover art (a sibling image or embedded art); nil until a
 	// scan has checked. Set by the scanner; read by the admin catalog.
-	HasCover *bool              `json:"-"`
-	Files    []BookFile         `json:"files,omitempty"`
-	Chapters []metadata.Chapter `json:"chapters,omitempty"`
+	HasCover *bool `json:"-"`
+	// ScanError is what went wrong reading the book's files when it was last indexed
+	// (a code; "" = nothing), in which file (library-relative) and the tool's
+	// message. SuspectParts is how many separate books its parts look like (0 = one;
+	// nil = not checked). Set by the scanner; read by the Health page.
+	ScanError       string             `json:"-"`
+	ScanErrorFile   string             `json:"-"`
+	ScanErrorDetail string             `json:"-"`
+	SuspectParts    *int               `json:"-"`
+	Files           []BookFile         `json:"files,omitempty"`
+	Chapters        []metadata.Chapter `json:"chapters,omitempty"`
 
 	// DirectPlayable, when set, reports whether the audio codec plays natively in
 	// browsers (so the client knows when to request ?transcode=1). Computed by the

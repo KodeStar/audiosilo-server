@@ -1,6 +1,6 @@
 import type { BookRef } from '@/api/types';
 import type { MockRoute } from './fetch-mock';
-import { admin, libraries, serverInfo, settings, stats } from './fixtures';
+import { admin, issuesSummary, libraries, serverInfo, settings, stats } from './fixtures';
 
 /**
  * The calls every signed-in screen makes (session, server info, the shell's
@@ -13,6 +13,8 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     'GET /admin/stats': { body: stats() },
     'GET /admin/settings': { body: settings },
     'GET /admin/libraries': { body: { libraries: libraries() } },
+    // The overview's "needs attention" card.
+    'GET /admin/issues': { body: issuesSummary() },
     // What the palette searches while typing: nothing, unless a test says so.
     'GET /admin/books': { body: { books: [] } },
     'GET /admin/authors': { body: { authors: [], merge_suggestions: [], unknown: 0 } },

@@ -47,7 +47,7 @@ func testdataRoot(t *testing.T) string {
 }
 
 func TestBrowseFSInstant(t *testing.T) {
-	listing, err := BrowseFS(testdataRoot(t), "", 0, 100, nil)
+	listing, err := BrowseFS(testdataRoot(t), "", 0, 100, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +80,8 @@ func TestScannerIndexesFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Indexed != 2 {
-		t.Fatalf("expected 2 indexed books (one per folder), got %d", res.Indexed)
+	if res.Added != 2 || res.Books != 2 {
+		t.Fatalf("expected 2 added books (one per folder), got %+v", res.ScanCounts)
 	}
 
 	page, _ := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID, Sort: "author"})
@@ -104,8 +104,8 @@ func TestScannerIndexesFixtures(t *testing.T) {
 
 	// A second scan with no changes should index nothing (incremental skip).
 	res2, _ := scanner.Scan(ctx, *lib)
-	if res2.Indexed != 0 {
-		t.Fatalf("expected incremental no-op, indexed %d", res2.Indexed)
+	if res2.Added+res2.Updated != 0 {
+		t.Fatalf("expected incremental no-op, got %+v", res2.ScanCounts)
 	}
 
 	// FTS search works over scanned data (the Cradle book's title comes from its
@@ -704,8 +704,8 @@ func TestScannerBackfillsMissingCodec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Indexed != 1 {
-		t.Fatalf("codec-less book should be re-probed, indexed=%d", res.Indexed)
+	if res.Updated != 1 {
+		t.Fatalf("codec-less book should be re-probed, got %+v", res.ScanCounts)
 	}
 	if b2, _ := cat.GetBookByPath(ctx, lib.ID, "Book Folder"); b2.Codec == "" {
 		t.Fatal("codec was not backfilled on rescan")
@@ -726,7 +726,7 @@ func TestBrowseFSHidesNonAudio(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	listing, err := BrowseFS(root, "Book", 0, 100, nil)
+	listing, err := BrowseFS(root, "Book", 0, 100, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,7 +744,7 @@ func TestBrowseFSHidesNonAudio(t *testing.T) {
 	}
 
 	// Directories remain navigable.
-	top, _ := BrowseFS(root, "", 0, 100, nil)
+	top, _ := BrowseFS(root, "", 0, 100, nil, nil)
 	hasDir := false
 	for _, e := range top.Entries {
 		if e.IsDir && e.Name == "Subdir" {
@@ -803,8 +803,8 @@ func TestScannerKeepsOverridesAndRecordsSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := scanner.Scan(ctx, *lib)
-	if err != nil || res.Indexed != 1 {
-		t.Fatalf("rescan: indexed=%d err=%v (the changed file should be re-indexed)", res.Indexed, err)
+	if err != nil || res.Updated != 1 {
+		t.Fatalf("rescan: %+v err=%v (the changed file should be re-indexed)", res.ScanCounts, err)
 	}
 	if b, _ := cat.GetBookByPath(ctx, lib.ID, p); b.Title != "Unsouled (Edited)" {
 		t.Fatalf("the edit did not survive the rescan: %q", b.Title)
@@ -815,8 +815,8 @@ func TestScannerKeepsOverridesAndRecordsSources(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE books SET has_cover = NULL WHERE rel_path = ?`, p); err != nil {
 		t.Fatal(err)
 	}
-	if res, err := scanner.Scan(ctx, *lib); err != nil || res.Indexed != 0 {
-		t.Fatalf("unchanged rescan: indexed=%d err=%v", res.Indexed, err)
+	if res, err := scanner.Scan(ctx, *lib); err != nil || res.Added+res.Updated != 0 {
+		t.Fatalf("unchanged rescan: %+v err=%v", res.ScanCounts, err)
 	}
 	var hasCover *bool
 	if err := db.QueryRowContext(ctx, `SELECT has_cover FROM books WHERE rel_path = ?`, p).Scan(&hasCover); err != nil {

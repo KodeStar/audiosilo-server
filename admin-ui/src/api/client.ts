@@ -9,7 +9,15 @@ import type {
   BookMeta,
   BookRef,
   CoverThumb,
+  DuplicateGroup,
+  IssueKind,
+  IssuesSummary,
+  Job,
+  JobsState,
+  LibraryRequest,
   MatchCandidate,
+  ScanRun,
+  ScanRunPage,
   NarratorsResponse,
   PeopleResponse,
   PersonField,
@@ -180,6 +188,9 @@ export interface BookFilter {
   /** YYYY-MM-DD or RFC 3339; after is inclusive, before exclusive. */
   added_after?: string;
   added_before?: string;
+  /** One Health issue's books (not duplicate), without the ignored ones, or only those. */
+  issue?: Exclude<IssueKind, 'duplicate'>;
+  issue_ignored?: boolean;
 }
 
 /** One page request of GET /admin/books. */
@@ -230,15 +241,20 @@ export const api = {
   me: () => request<User>('GET', '/me'),
   stats: () => request<AdminStats>('GET', '/admin/stats'),
   settings: () => request<AdminSettings>('GET', '/admin/settings'),
-  scanLibrary: (id: number) => request<{ status: string }>('POST', `/admin/libraries/${id}/scan`),
+  /** Queues a scan (coalesced with one already waiting); answers with the job. */
+  scanLibrary: (id: number) =>
+    request<{ status: string; job: Job }>('POST', `/admin/libraries/${id}/scan`),
+  /** Queues a scan of every library; the queue runs them one at a time. */
+  scanAll: () => request<{ jobs: Job[] }>('POST', '/admin/scan'),
   updateSettings: (patch: { metadata: { enabled: boolean } }) =>
     request<AdminSettings>('PATCH', '/admin/settings', patch),
 
   libraries: () => request<{ libraries: AdminLibrary[] }>('GET', '/admin/libraries'),
-  createLibrary: (lib: { name: string; root: string }) =>
+  createLibrary: (lib: LibraryRequest & { name: string; root: string }) =>
     request<Library>('POST', '/admin/libraries', lib),
-  updateLibrary: (id: number, lib: { name: string; root: string }) =>
-    request<Library>('PATCH', `/admin/libraries/${id}`, lib),
+  /** Fields left out are kept; a new root or new ignore rules queue a rescan (`job`). */
+  updateLibrary: (id: number, lib: LibraryRequest) =>
+    request<Library & { job?: Job }>('PATCH', `/admin/libraries/${id}`, lib),
   deleteLibrary: (id: number) => request<void>('DELETE', `/admin/libraries/${id}`),
   reorderLibraries: (ids: number[]) =>
     request<{ libraries: AdminLibrary[] }>('PUT', '/admin/libraries/order', { ids }),
@@ -349,6 +365,25 @@ export const api = {
   },
   deleteCover: (libraryId: number, path: string) =>
     request<void>('DELETE', `/admin/libraries/${libraryId}/cover${pathQuery(path)}`),
+  /** Reads one book's files again now; answers with its page (404 not_indexable if it's gone). */
+  rescanBook: (libraryId: number, path: string) =>
+    request<AdminBookDetail>('POST', `/admin/libraries/${libraryId}/book/rescan${pathQuery(path)}`),
+
+  // Health and Jobs.
+  issues: () => request<IssuesSummary>('GET', '/admin/issues'),
+  duplicates: (opts: { library_id?: number; ignored?: boolean } = {}) =>
+    request<{ groups: DuplicateGroup[] }>('GET', `/admin/issues/duplicates${bookQuery(opts)}`),
+  /** Stops showing these books under a category (at most BULK_LIMIT). */
+  ignoreIssue: (kind: IssueKind, books: BookRef[]) =>
+    request<void>('POST', '/admin/issues/ignore', { kind, books }),
+  unignoreIssue: (kind: IssueKind, books: BookRef[]) =>
+    request<void>('DELETE', '/admin/issues/ignore', { kind, books }),
+  jobs: () => request<JobsState>('GET', '/admin/jobs'),
+  /** Drops a queued scan or stops the running one (it stops before removing anything). */
+  cancelJob: (id: number) => request<void>('DELETE', `/admin/jobs/${id}`),
+  scanRuns: (opts: { library_id?: number; before?: number; limit?: number } = {}) =>
+    request<ScanRunPage>('GET', `/admin/scan-runs${bookQuery(opts)}`),
+  scanRun: (id: number) => request<ScanRun>('GET', `/admin/scan-runs/${id}`),
 };
 
 /**

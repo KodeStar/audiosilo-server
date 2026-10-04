@@ -234,3 +234,17 @@ export function coverFileProblem(file: { size: number; type: string }): string |
   if (file.size > MAX_COVER_BYTES) return 'book.cover.tooLarge';
   return undefined;
 }
+
+/** "M4B · AAC · 4 files": a book's format, codec and (for several) file count. */
+export function audioLine(
+  b: { format: string; codec: string; file_count: number },
+  t: (key: string, values: { count: number }) => string,
+): string {
+  return [
+    b.format.toUpperCase(),
+    b.codec.toUpperCase(),
+    b.file_count > 1 ? t('book.hero.files', { count: b.file_count }) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}

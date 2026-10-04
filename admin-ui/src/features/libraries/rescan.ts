@@ -26,3 +26,19 @@ export function rescanLibrary(qc: QueryClient, library: { id: number; name: stri
     (err: unknown) => toastError(t('palette.toast.rescanFailed', { name: library.name }), err),
   );
 }
+
+/** Queues a scan of every library (Health's "Check again", the palette); one at a time. */
+export function rescanAll(qc: QueryClient, libraries: { id: number }[]) {
+  const t = i18n.t;
+  api.scanAll().then(
+    () => {
+      for (const l of libraries) noteScanStarted(qc, l.id);
+      toast.add({
+        title: t('health.toast.checking', { count: libraries.length }),
+        description: t('health.toast.checkingBody'),
+        type: 'info',
+      });
+    },
+    (err: unknown) => toastError(t('health.toast.checkFailed'), err),
+  );
+}

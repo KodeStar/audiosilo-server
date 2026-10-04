@@ -51,6 +51,13 @@ type AdminBook struct {
 	// value), so a bulk change can be undone field by field: a field without one is
 	// reverted to what the scan found, one with one is set back.
 	EditedFields fieldList `json:"edited_fields"`
+	// What the Health page says about the book: a read problem on its last indexing
+	// (a code, the library-relative file and the tool's message) and how many books
+	// its parts look like (see books.suspect_parts).
+	ScanError       string `json:"scan_error,omitempty"`
+	ScanErrorFile   string `json:"scan_error_file,omitempty"`
+	ScanErrorDetail string `json:"scan_error_detail,omitempty"`
+	SuspectParts    int    `json:"suspect_parts,omitempty"`
 }
 
 // fieldList scans a comma-separated SQL list (group_concat) into field names,
@@ -107,14 +114,16 @@ var directPlayableExpr = media.DirectPlayableSQL("b.codec")
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.author,
 	b.narrator, b.series, b.series_index, b.published, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
-	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr
+	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
+	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0)`
 
 // adminBookDest returns the scan destinations for adminBookCols, in order.
 func adminBookDest(b *AdminBook) []any {
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
 		&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Duration, &b.Format, &b.Codec,
 		&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
-		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable}
+		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
+		&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts}
 }
 
 // BookFilter narrows the admin book list (and its facet counts). Zero values
@@ -136,6 +145,11 @@ type BookFilter struct {
 	MaxDuration    float64
 	AddedAfter     string // inclusive lower bound on added_at (RFC3339 or a YYYY-MM-DD prefix)
 	AddedBefore    string // exclusive upper bound
+	// Issue limits the list to one book issue kind (not duplicate; see
+	// issuePredicates), leaving out the books an admin ignored for it, or, with
+	// IssueIgnored, listing only those.
+	Issue        string
+	IssueIgnored bool
 }
 
 // Facet dimensions: the filters a facet count is computed without, so the console
@@ -217,6 +231,14 @@ func (f BookFilter) where(skip string) (string, []any) {
 	}
 	if f.AddedBefore != "" {
 		add("b.added_at < ?", f.AddedBefore)
+	}
+	if pred, ok := issuePredicates[f.Issue]; ok {
+		add(pred)
+		if f.IssueIgnored {
+			add(ignoredExpr, f.Issue)
+		} else {
+			add("NOT "+ignoredExpr, f.Issue)
+		}
 	}
 	return strings.Join(conds, " AND "), args
 }

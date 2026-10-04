@@ -152,7 +152,11 @@ the index. The admin console's metadata edits are likewise durable and path-keye
 (`0016`): `book_overrides` (`library_id, path, field, value, source, updated_by`),
 `chapter_overrides` (keyed by the chapter's book-relative file + start in ms, not its
 index, so a shifted chapter list can't move a rename; the API still sends indexes) and
-`book_covers` (custom cover blobs). Sharing:
+`book_covers` (custom cover blobs). Phase 3 (`0017`) adds `scan_runs` (the job queue's scan
+history, per library, bounded), `issue_ignores` (`library_id, path, kind`: an admin's "ignore this"
+on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` / `ignore_patterns`
+(per-library settings, off the player wire) and, on `books`, `scan_error` / `scan_error_file` /
+`scan_error_detail` (the last indexing's read problem) and `suspect_parts`. Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
 
@@ -277,9 +281,9 @@ admin overrides; see Metadata overrides below).
   Admin-only endpoints that exist for it: `GET /admin/libraries` adds `book_count` and
   `available` (root reachable: `Scanner.RootAvailable`, a 2 s-bounded, 15 s-cached, one-at-a-time
   probe per root so a hung NFS mount can't stall the page, plus "empty while books are indexed"
-  and "last scan stopped at the guard"); scan status adds `unavailable`, and `API.startScan`
-  marks a queued scan running before the request returns (`Scanner.MarkRunning`) so the first
-  poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
+  and "last scan stopped at the guard"); scan status adds `unavailable` and `queued`, and
+  `API.startScan` queues the scan in the job queue (see "Job queue" below), which marks the
+  library queued before the request returns so the first poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
   code); `GET /admin/fs/dirs?path=` is the add-library folder picker (`library.ListDirs`:
   absolute paths, folder names only, no dot-folders, 1,000-entry cap); `GET /admin/shares` adds
   `member_ids` (`catalog.ShareMembers`).
@@ -477,6 +481,60 @@ admin overrides; see Metadata overrides below).
   `thumbSem` bounds decodes (reads are bounded per request, outside it). Admin book rows
   carry `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
+- **Job queue, scan history, schedules, ignore rules (admin redesign Phase 3, `library/jobs.go`,
+  `schedule.go`, `ignore.go`, `problems.go`)**: every scan (startup, schedule, admin rescan, a
+  library or folder-setting change) goes through `Scanner.Enqueue`; `Scanner.Start` runs ONE
+  worker (scans never compete for the disk or the single DB writer) and the scheduler. Coalescing:
+  a library already waiting returns the waiting job; one running gets one follow-up for a manual or
+  change trigger (the running scan may have read the old setting) but not for a schedule or
+  startup. Each run is a `scan_runs` row (`catalog/scanruns.go`: trigger, who, status
+  `running|ok|partial|unavailable|failed|cancelled|interrupted`, counts (a move counts once, as
+  moved), a log of at most 300 `RunEvent`s (problems take at most half, so the moves and removed
+  paths after them keep room; past the cap events are only counted); 100 kept per library; rows
+  left `running` by a stopped server become `interrupted` at startup). `Cancel` drops a queued job
+  or cancels the running scan's context: discovery and the per-book loop stop on it, and a scan
+  stops before its prune, never inside it (the prune, `DeleteBooksNotIn`, is one transaction run
+  to completion once begun). Requested scans are capped at an hour (`jobContext`); the startup
+  scan, a library's full index, isn't. A root that doesn't answer the bounded root probe stops at
+  the unavailable guard instead of holding the one worker. Deleting a library cancels its scans
+  (`CancelLibrary`). **Prune semantics are unchanged**: a vanished
+  book is deleted from the index (no ghost rows) and its path lands in the run log; durable state
+  is path-keyed, so progress comes back if the files do. Schedules (`ParseSchedule`): `""`,
+  `every:{1,3,6,12,24}h` after the newest run started, `daily:HH:MM` in the server's zone; the
+  newest run of any trigger counts, so a server that was off runs a missed daily scan on return;
+  a due slot dropped without a run of its own (cancelled while queued, or folded into a scan of
+  the library already running) counts as a start too (`jobQueue.skipped`), so it isn't re-queued.
+  Ignore rules (`NormalizeIgnore`/`ParseIgnore`) live in the DB because the server never writes to
+  the library: gitignore-lite (no `/` = a name at any depth, a `/` before the end, a leading one
+  included, = anchored to the root, trailing `/` = folders only, case-insensitive, `#` comments,
+  <= 100 patterns of <= 200 bytes); the scan, `BrowseFS` and `IndexPath` all honour them, and rules
+  that skip every indexed book prune it rather than tripping the unavailable guard.
+  `metadata.Extract` reports `OpenErr`/`ProbeErr`
+  (ffprobe runs with `-v error` so its message survives, path prefix stripped); `noteProblem`
+  records the first read problem per book (`unreadable|empty_file|probe_failed`), and a scan
+  re-reads an otherwise unchanged book once the file its problem names opens or probes again
+  (`problemCleared`: a fixed permission changes neither mtime nor size). A folder book
+  whose parts are all >= 1 h with >= 2 distinct titles (tag, else file name) gets
+  `suspect_parts`; rows from before 0017 are checked once with a tag read. `PATCH
+  /admin/libraries/{id}` rescans only when the root or ignore rules change.
+- **Health issues (`catalog/issues.go`, `api/handlers_health.go`)**: computed from the index on
+  request; each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
+  `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
+  (checked rows only), `no_chapters` (<= 1 chapter, > 2 h), `unmatched` (left out of the summary
+  while metadata is off), `transcode`, `suspect` (not a folder with a `book` override, the
+  category's own fix), `scan_error`. `duplicate` is groups within one
+  library (`DuplicateGroups`: same fingerprint AND size, same ASIN/ISBN, or `metaKey` with a
+  length within 1 min / 2%, an unknown length matching only another unknown one; copies across
+  libraries are deliberate); a group is hidden while every member is ignored, so a new copy
+  brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
+  libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
+  groups, or with `?ignored=true` only the ignored ones), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
+  /admin/libraries/{id}/book/rescan?path=` (`IndexPath` now, on a context detached from the
+  request timeout so a slow re-read is still saved; 404 `not_indexable`), `GET
+  /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
+  (queue every library: `Scanner.EnqueueAll`, also the startup scans), `GET /admin/scan-runs`
+  (`?library_id=&before=&limit=`, `next_before`) and `GET /admin/scan-runs/{id}` (with the log).
+  Codes `invalid_schedule`, `invalid_pattern`, `not_indexable`.
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
@@ -496,8 +554,9 @@ admin overrides; see Metadata overrides below).
   where it clearly holds several names (`;`, ` & `, ` and `, and a comma **only**
   when every part still has two words, so "Alexandre Dumas, pere" stays whole).
   Advertised by the additive `export` capability.
-- **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/default_view and
-  triggers a background rescan; `DELETE /admin/libraries/{id}` removes the library
+- **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
+  settings (`scan_schedule`, `ignore_patterns`) and queues a rescan when the root or ignore rules
+  change; `DELETE /admin/libraries/{id}` removes the library
   + its index (files on disk untouched). Both are surfaced in the admin console.
 - **User/account admin**: `PATCH /admin/users/{id}` edits role/password/disabled
   in place (`auth.SetRole`/`SetPassword`/`SetDisabled`); `DELETE /admin/users/{id}`

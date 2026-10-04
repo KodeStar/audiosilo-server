@@ -111,10 +111,11 @@ func TestRootAvailable(t *testing.T) {
 	}
 }
 
-// ScanInBackground reports the scan running before it returns, and the scan
-// clears that when it finishes.
-func TestScanInBackground(t *testing.T) {
-	ctx := context.Background()
+// A queued scan reads as queued before Enqueue returns, the queue runs it, and the
+// run is recorded with what it found.
+func TestEnqueueRunsAndRecords(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	db, err := store.Open(ctx, ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -125,19 +126,42 @@ func TestScanInBackground(t *testing.T) {
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
 	scanner := NewScanner(cat, "", slog.Default())
 
-	scanner.ScanInBackground(ctx, *lib)
-	if !scanner.Progress(lib.ID).Running {
-		t.Fatal("a queued scan doesn't read as running")
+	job := scanner.Enqueue(*lib, TriggerManual, nil)
+	if p := scanner.Progress(lib.ID); !p.Queued {
+		t.Fatalf("a queued scan doesn't read as queued: %+v", p)
 	}
+	if again := scanner.Enqueue(*lib, TriggerManual, nil); again.ID != job.ID {
+		t.Fatalf("a second ask while queued made job %d, want the queued %d", again.ID, job.ID)
+	}
+	scanner.Start(ctx)
+	waitIdle(t, scanner, lib.ID)
+	runs, err := cat.ListScanRuns(ctx, lib.ID, 0, 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %+v (err %v), want one", runs, err)
+	}
+	if r := runs[0]; r.Status != catalog.RunOK || r.Added == 0 || r.Trigger != TriggerManual || r.FinishedAt == nil {
+		t.Fatalf("run = %+v, want a finished ok manual run that added books", r)
+	}
+	full, err := cat.GetScanRun(ctx, runs[0].ID)
+	if err != nil || len(full.Log) == 0 || full.Log[0].Kind != "started" || full.Log[len(full.Log)-1].Kind != "finished" {
+		t.Fatalf("log = %+v (err %v), want started ... finished", full.Log, err)
+	}
+}
+
+// waitIdle waits until a library's scan is neither queued nor running.
+func waitIdle(t *testing.T, s *Scanner, libID int64) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for scanner.Progress(lib.ID).Running {
+	for {
+		running, queued := s.Jobs()
+		p := s.Progress(libID)
+		if running == nil && len(queued) == 0 && !p.Running && !p.Queued {
+			return
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("the background scan never finished")
+			t.Fatalf("the queue never went idle: %+v", p)
 		}
 		time.Sleep(20 * time.Millisecond)
-	}
-	if p := scanner.Progress(lib.ID); p.Indexed == 0 {
-		t.Fatalf("after the scan: %+v, want books indexed", p)
 	}
 }
 

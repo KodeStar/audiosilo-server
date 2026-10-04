@@ -3,7 +3,9 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +44,7 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobePath,
-		"-v", "quiet",
+		"-v", "error", // errors only, on stderr: what the Health page shows for a file ffprobe can't read
 		"-print_format", "json",
 		"-show_format",
 		"-show_chapters",
@@ -52,7 +54,7 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return nil, probeError(err)
 	}
 	var parsed ffprobeOutput
 	if err := json.Unmarshal(out, &parsed); err != nil {
@@ -71,6 +73,41 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 		})
 	}
 	return res, nil
+}
+
+// maxProbeMessage bounds the ffprobe message kept for the Health page.
+const maxProbeMessage = 300
+
+// probeError turns a failed ffprobe run into an error carrying its own words:
+// every distinct line it wrote to stderr, joined, since the specific cause ("[mov,
+// mp4 @ 0x..] moov atom not found") usually comes before the generic last line
+// ("x.m4b: Invalid data found when processing input"). Falls back to the exit
+// status.
+func probeError(err error) error {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return err
+	}
+	var parts []string
+	for _, l := range strings.Split(string(exit.Stderr), "\n") {
+		l = strings.TrimSpace(l)
+		// ffprobe prefixes the input path ("/srv/books/x.m4b: Invalid data..."); the
+		// Health page shows the file separately.
+		if i := strings.LastIndex(l, ": "); i >= 0 && strings.ContainsAny(l[:i], "/\\") {
+			l = l[i+2:]
+		}
+		if l != "" && !slices.Contains(parts, l) {
+			parts = append(parts, l)
+		}
+	}
+	msg := strings.Join(parts, "; ")
+	if msg == "" {
+		return err
+	}
+	if len(msg) > maxProbeMessage {
+		msg = strings.ToValidUTF8(msg[:maxProbeMessage], "")
+	}
+	return errors.New(msg)
 }
 
 func normalizeTags(in map[string]string) map[string]string {

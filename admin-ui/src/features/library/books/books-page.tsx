@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { BookOpen, Plus, SearchX } from 'lucide-react';
+import { BookOpen, Pencil, Plus, SearchX, Share2 } from 'lucide-react';
 import { useAdminBooks, useBookFacets, useLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
@@ -10,6 +10,7 @@ import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { counted } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { BulkAction, BulkBar } from '@/components/bulk-bar';
 import { AddToShareDialog } from '../add-to-share-dialog';
 import { LibraryFilter } from '../library-filter';
 import { useUpdateSearch } from '../library-param';
@@ -17,7 +18,6 @@ import type { LibrarySearch } from '../library-search';
 import { BookGrid, GridSkeleton } from './book-grid';
 import { bookFilter, isBrowsing, listParams, withoutFilters } from './books-model';
 import { ActiveChips, BooksToolbar } from './books-toolbar';
-import { BulkBar } from './bulk-bar';
 import { BulkEditDialog } from './bulk-edit-dialog';
 import { FilterSheet } from './filter-sheet';
 import { Shelves } from './shelves';
@@ -135,12 +135,14 @@ export function BooksPage() {
           {content}
         </div>
       )}
-      <BulkBar
-        count={selection.size}
-        onEdit={() => setDialog('edit')}
-        onShare={() => setDialog('share')}
-        onClear={clear}
-      />
+      <BulkBar count={selection.size} label={t('books.bulk.label')} onClear={clear}>
+        <BulkAction icon={Pencil} label={t('books.bulk.edit')} onClick={() => setDialog('edit')} />
+        <BulkAction
+          icon={Share2}
+          label={t('books.bulk.share')}
+          onClick={() => setDialog('share')}
+        />
+      </BulkBar>
       <FilterSheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}

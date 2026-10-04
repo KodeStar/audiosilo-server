@@ -11,6 +11,7 @@ import { NotFound } from '@/features/not-found';
 import { OverviewPage } from '@/features/overview/overview-page';
 import { USER_TABS, type UserTab } from '@/features/people/people-model';
 import { SectionPage } from '@/features/section-page';
+import { ISSUE_KINDS, type IssueKind } from '@/api/types';
 import { parseBookSearch, type BookSearch } from '@/lib/book-route';
 import { Root } from '@/root';
 
@@ -35,6 +36,9 @@ export interface SectionSearch extends LibrarySearch {
   invite?: true;
   /** Shares: the selected share. */
   share?: number;
+  /** Health > Issues: the open category, and whether it lists the ignored books. */
+  issue?: IssueKind;
+  ignored?: true;
 }
 
 function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
@@ -44,6 +48,8 @@ function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
   if (flag(s.invite)) out.invite = true;
   const share = Number(s.share);
   if (Number.isInteger(share) && share > 0) out.share = share;
+  if (ISSUE_KINDS.includes(s.issue as IssueKind)) out.issue = s.issue as IssueKind;
+  if (flag(s.ignored)) out.ignored = true;
   return out;
 }
 
