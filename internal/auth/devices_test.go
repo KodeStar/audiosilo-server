@@ -176,3 +176,75 @@ func TestResolveRequestHeaderlessDoesNotRevertApp(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveRequestSkipsUnchangedTouch: requests within a minute of the last
+// write, reporting nothing new, don't write the token row; a new app, a new
+// address or a minute passing does. Validity is still checked on every request.
+func TestResolveRequestSkipsUnchangedTouch(t *testing.T) {
+	s, ctx, now := newTestServiceWithClock(t)
+	*now = now.Truncate(time.Second) // last_seen is stored to the second
+	u, _ := s.CreateUser(ctx, "sam", "", RoleUser)
+	tok, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	app := ClientInfo{App: "AudioSilo", Version: "1.4.2", Platform: "ios"}
+	row := func() (lastSeen string, client ClientInfo, ip string) {
+		t.Helper()
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COALESCE(last_seen, ''), client_app, client_version, client_platform, last_ip FROM tokens WHERE kind = 'session'`).
+			Scan(&lastSeen, &client.App, &client.Version, &client.Platform, &ip); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	resolve := func(p Presence) {
+		t.Helper()
+		if _, _, err := s.ResolveRequest(ctx, tok, p, KindSession); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamp := func() string { return now.UTC().Format(time.RFC3339) }
+
+	resolve(Presence{IP: "192.0.2.1", Client: app}) // the first request writes
+	first := stamp()
+	if seen, _, _ := row(); seen != first {
+		t.Fatalf("first request: last_seen %q, want %q", seen, first)
+	}
+	// Within the minute, the same app and address (or none): no write.
+	*now = now.Add(30 * time.Second)
+	resolve(Presence{IP: "192.0.2.1", Client: app})
+	resolve(Presence{})
+	if seen, _, _ := row(); seen != first {
+		t.Fatalf("an unchanged request within a minute wrote last_seen %q", seen)
+	}
+	// A new build is written at once.
+	newer := ClientInfo{App: "AudioSilo", Version: "1.5.0", Platform: "ios"}
+	resolve(Presence{IP: "192.0.2.1", Client: newer})
+	if seen, client, _ := row(); seen != stamp() || client != newer {
+		t.Fatalf("a changed client header: last_seen %q, client %+v", seen, client)
+	}
+	// So is a new address.
+	*now = now.Add(10 * time.Second)
+	resolve(Presence{IP: "192.0.2.2"})
+	if seen, client, ip := row(); seen != stamp() || ip != "192.0.2.2" || client != newer {
+		t.Fatalf("a changed address: last_seen %q, ip %q, client %+v", seen, ip, client)
+	}
+	// A minute after the last write, an unchanged request writes again.
+	written := stamp()
+	*now = now.Add(59 * time.Second)
+	resolve(Presence{IP: "192.0.2.2"})
+	if seen, _, _ := row(); seen != written {
+		t.Fatalf("59 s later: last_seen %q, want %q", seen, written)
+	}
+	*now = now.Add(time.Second)
+	resolve(Presence{IP: "192.0.2.2"})
+	if seen, _, _ := row(); seen != stamp() {
+		t.Fatalf("a minute later: last_seen %q, want %q", seen, stamp())
+	}
+	// Denied: skipping the write never skips the check. A token revoked a moment
+	// after it was seen is refused at once.
+	if err := s.RevokeToken(ctx, tok); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, tok, Presence{IP: "192.0.2.2"}, KindSession); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("revoked token within the minute = %v, want ErrInvalidToken", err)
+	}
+}

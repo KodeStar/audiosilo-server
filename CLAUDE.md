@@ -694,8 +694,9 @@ admin overrides; see Metadata overrides below).
   pairing. `GET /admin/users/{id}` returns a user + accessible libraries + granted
   shares + issued auth codes (metadata only; codes are unretrievable by design);
   `DELETE /admin/authcodes/{id}` revokes a code. A user's **last activity** is
-  derived from `MAX(tokens.last_seen)` (bumped on every authenticated request in
-  `ResolveRequest`) - there is no `last_login` column; don't add one.
+  derived from `MAX(tokens.last_seen)` (bumped by authenticated requests in
+  `ResolveRequest`, at most once a minute per token unless the request's address or
+  app changed: `touchInterval`) - there is no `last_login` column; don't add one.
 - **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
   counts (`catalog.CountBooksByLibrary`) and a cross-user "currently listening"
   feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path);
