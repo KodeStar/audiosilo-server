@@ -298,7 +298,6 @@ func TestPlayerServing(t *testing.T) {
 		want int
 	}{
 		{"/web/", http.StatusOK},
-		{"/web", http.StatusMovedPermanently},               // subtree redirect
 		{"/web/connect", http.StatusOK},                     // per-route HTML
 		{"/web/library/1/deep/client/route", http.StatusOK}, // dynamic route → SPA fallback
 		{"/web/_expo/missing.js", http.StatusNotFound},
@@ -316,8 +315,20 @@ func TestPlayerServing(t *testing.T) {
 		}
 	}
 
+	// /web is ServeMux's subtree redirect to /web/. The status is the standard
+	// library's (301 before Go 1.26, 307 since), so assert the redirect and its
+	// target rather than the exact code.
+	resp, err := c.Get(ts.URL + "/web")
+	if err != nil {
+		t.Fatalf("GET /web: %v", err)
+	}
+	resp.Body.Close()
+	if loc := resp.Header.Get("Location"); resp.StatusCode/100 != 3 || loc != "/web/" {
+		t.Errorf("GET /web = %d to %q, want a redirect to /web/", resp.StatusCode, loc)
+	}
+
 	// The player index carries the scoped CSP (with a hash), not the strict one.
-	resp, err := c.Get(ts.URL + "/web/")
+	resp, err = c.Get(ts.URL + "/web/")
 	if err != nil {
 		t.Fatalf("GET /web/: %v", err)
 	}

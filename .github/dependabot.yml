@@ -39,9 +39,9 @@ updates:
           - minor
           - patch
 
-  # The Dockerfile's base images (node:24-alpine, golang:1.25-alpine,
-  # alpine:3.24). The baked-in web player comes in through the WEB_IMAGE build
-  # arg, which dependabot does not follow - that pin moves with a release.
+  # The Dockerfile's base images (node, golang and alpine). The baked-in web
+  # player comes in through the WEB_IMAGE build arg, which dependabot does not
+  # follow - that pin moves with a release.
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -59,9 +59,10 @@ updates:
     # would match no tag); extend the list before Node 31 ships.
     #
     # golang: the image's MINOR is the Go language version, which has to move
-    # together with go.mod's `go` directive (CI's setup-go reads it) - a bump
-    # done by hand in one change, never an image-only pull request that builds
-    # on a Go the rest of the repository does not use.
+    # together with go.mod's `go` and `toolchain` directives (CI's setup-go
+    # installs the `toolchain` version) - a bump done by hand in one change,
+    # never an image-only pull request that builds on a Go the rest of the
+    # repository does not use.
     ignore:
       - dependency-name: node
         versions: ["~> 25.0", "~> 27.0", "~> 29.0"]

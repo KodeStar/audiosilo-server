@@ -60,7 +60,7 @@ on-the-fly transcoding and WebSocket realtime sync (Phase C); server federation
 
 ## Requirements
 
-- Go 1.25+ and Node 24 (to build from source; Node builds the admin console), or
+- Go 1.26+ and Node 24 (to build from source; Node builds the admin console), or
   Docker (to run the published image).
 - **ffmpeg/ffprobe** (optional but recommended) - used for durations, chapters,
   and (later) transcoding/AAX. Without it the server still runs; durations and

@@ -19,7 +19,7 @@ Module path: `github.com/kodestar/audiosilo-server`.
 go build ./...                 # build everything
 go vet ./...                   # static checks
 go test -race ./...            # unit + integration tests (in-memory SQLite + testdata fixtures)
-golangci-lint run              # lint (v2 required for Go 1.25; config .golangci.yml)
+golangci-lint run              # lint (v2 required since Go 1.25; config .golangci.yml)
 go build -o bin/audiosilo ./cmd/audiosilo
 ./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
 
