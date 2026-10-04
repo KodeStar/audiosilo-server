@@ -221,6 +221,7 @@ func applyOverrides(cfg *config.Config, opts Options) {
 		for i, l := range opts.Libraries {
 			cfg.Libraries[i] = config.Library{Name: l.Name, Root: l.Root}
 		}
+		cfg.Pin("libraries")
 	}
 }
 

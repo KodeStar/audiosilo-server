@@ -1626,11 +1626,15 @@
   "logs.panel": "Server-Protokoll",
   "logs.empty": "Noch nichts protokolliert.",
   "logs.emptyFiltered": "Keine Zeilen passen.",
-  "logs.gap": "Ältere Zeilen werden nicht mehr aufbewahrt.",
+  "logs.gap": "Ältere Zeilen werden nicht angezeigt.",
   "logs.lvl.debug": "debug",
   "logs.lvl.info": "info",
   "logs.lvl.warn": "warn",
   "logs.lvl.error": "error",
   "logs.note": "Der Server hält seine neuesten Zeilen seit dem Start im Speicher. Das vollständige Protokoll liegt dort, wohin seine Ausgabe geht (docker logs oder das Terminal). Passwörter, Tokens und Einladungscodes werden hier nie angezeigt.",
-  "home.server.update": "{{version}} verfügbar"
+  "home.server.update": "{{version}} verfügbar",
+  "system.detail.player.embedded": "In diesen Server eingebaut.",
+  "system.detail.player.dir": "Wird aus dem Player-Ordner bereitgestellt.",
+  "system.detail.player.none": "Nicht verfügbar. Die Apps funktionieren trotzdem.",
+  "system.detail.devBuild": "Eine Entwicklerversion, daher nicht mit Releases verglichen."
 }

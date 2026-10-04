@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
@@ -124,6 +125,10 @@ func TestCORSAllowList(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
 		t.Fatalf("allowed origin ACAO = %q", got)
+	}
+	// PATCH is allowed (settings, book edits): a cross-origin client's preflight passes.
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "PATCH") {
+		t.Fatalf("Allow-Methods = %q, want PATCH in it", got)
 	}
 
 	// A non-listed origin gets no CORS grant.

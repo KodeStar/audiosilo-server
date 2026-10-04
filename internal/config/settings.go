@@ -62,6 +62,8 @@ var fields = []field{
 	{key: "app_links.android_sha256", setting: "players.android_sha256",
 		ptr: func(c *Config) any { return &c.AppLinks.AndroidSHA256 }, fix: fixFingerprints},
 
+	{key: "libraries", ptr: func(c *Config) any { return &c.Libraries }}, // launcher-pinned only
+
 	{key: "max_upload_bytes", env: "AUDIOSILO_MAX_UPLOAD_BYTES",
 		ptr: func(c *Config) any { return &c.MaxUploadBytes }},
 

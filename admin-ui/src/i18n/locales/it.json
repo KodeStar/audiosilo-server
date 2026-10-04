@@ -1735,7 +1735,7 @@
   "logs.panel": "Log del server",
   "logs.empty": "Ancora nulla registrato.",
   "logs.emptyFiltered": "Nessuna riga corrisponde.",
-  "logs.gap": "Le righe più vecchie non vengono più conservate.",
+  "logs.gap": "Le righe più vecchie non sono mostrate.",
   "logs.lvl.debug": "debug",
   "logs.lvl.info": "info",
   "logs.lvl.warn": "warn",
@@ -1747,5 +1747,9 @@
   "system.offline.title_many": "{{count}} cartelle delle librerie non sono raggiungibili",
   "about.uptime.minute_many": "{{count}} minuti",
   "about.uptime.hour_many": "{{count}} ore",
-  "about.uptime.day_many": "{{count}} giorni"
+  "about.uptime.day_many": "{{count}} giorni",
+  "system.detail.player.embedded": "Integrato in questo server.",
+  "system.detail.player.dir": "Servito dalla cartella del player.",
+  "system.detail.player.none": "Non disponibile. Le app funzionano comunque.",
+  "system.detail.devBuild": "Una versione di sviluppo, quindi non viene confrontata con le release."
 }

@@ -1735,7 +1735,7 @@
   "logs.panel": "Journal du serveur",
   "logs.empty": "Rien n'a encore été journalisé.",
   "logs.emptyFiltered": "Aucune ligne ne correspond.",
-  "logs.gap": "Les lignes plus anciennes ne sont plus conservées.",
+  "logs.gap": "Les lignes plus anciennes ne sont pas affichées.",
   "logs.lvl.debug": "debug",
   "logs.lvl.info": "info",
   "logs.lvl.warn": "warn",
@@ -1747,5 +1747,9 @@
   "system.offline.title_many": "{{count}} dossiers de bibliothèque sont inaccessibles",
   "about.uptime.minute_many": "{{count}} minutes",
   "about.uptime.hour_many": "{{count}} heures",
-  "about.uptime.day_many": "{{count}} jours"
+  "about.uptime.day_many": "{{count}} jours",
+  "system.detail.player.embedded": "Intégré à ce serveur.",
+  "system.detail.player.dir": "Servi depuis le dossier du lecteur.",
+  "system.detail.player.none": "Indisponible. Les applications fonctionnent toujours.",
+  "system.detail.devBuild": "Une version de développement, donc non comparée aux versions publiées."
 }

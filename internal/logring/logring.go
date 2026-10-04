@@ -103,7 +103,12 @@ func (r *Ring) Query(q Query) Result {
 	oldest := r.seq - uint64(n) + 1 // the Seq of the entry at r.start
 	skip := 0
 	switch {
-	case n == 0 || q.After >= r.seq:
+	case q.After > r.seq:
+		// A cursor from before a restart (this ring starts over at 1): answer as
+		// a first page, so a live tail picks the new process up instead of
+		// waiting for its seq to pass the old one.
+		res.Truncated = true
+	case n == 0 || q.After == r.seq:
 		skip = n
 	case q.After >= oldest:
 		skip = int(q.After - oldest + 1)
@@ -194,8 +199,9 @@ func (h *Handler) Enabled(ctx context.Context, l slog.Level) bool {
 func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	if r.Level >= h.level {
 		e := Entry{Time: r.Time, Level: levelName(r.Level), level: r.Level, Message: cut(r.Message, maxMessage)}
-		e.Attrs = make([]Attr, len(h.attrs), min(len(h.attrs)+r.NumAttrs(), maxAttrs+1))
-		copy(e.Attrs, h.attrs)
+		base := h.attrs[:min(len(h.attrs), maxAttrs)]
+		e.Attrs = make([]Attr, len(base), min(len(base)+r.NumAttrs(), maxAttrs+1))
+		copy(e.Attrs, base)
 		r.Attrs(func(a slog.Attr) bool {
 			e.Attrs = flatten(e.Attrs, h.group, a)
 			return len(e.Attrs) < maxAttrs
@@ -254,7 +260,7 @@ func flatten(out []Attr, prefix string, a slog.Attr) []Attr {
 	}
 	key := prefix + a.Key
 	val := "[redacted]"
-	if !secretKey(a.Key) {
+	if !secretKey(key) { // the dotted key, so a group named "token" redacts its members
 		val = cut(valueString(v), maxValue)
 	}
 	return append(out, Attr{Key: key, Value: val})

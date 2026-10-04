@@ -136,6 +136,20 @@ describe('systemRows', () => {
   });
 });
 
+describe('systemRows wording', () => {
+  it("says a development build isn't compared, and where the player comes from", () => {
+    const rows = systemRows(
+      systemStatus({
+        web_player: 'embedded',
+        update: updateStatus({ current: 'dev', comparable: false }),
+      }),
+      NOW,
+    );
+    expect(row(rows, 'update').detail.key).toBe('system.detail.devBuild');
+    expect(row(rows, 'player').detail.key).toBe('system.detail.player.embedded');
+  });
+});
+
 describe('helpers', () => {
   it('reads the schema number', () => {
     expect(schemaNumber('0018_sessions.sql')).toBe(18);

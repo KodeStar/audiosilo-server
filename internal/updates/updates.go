@@ -207,7 +207,11 @@ func (c *Checker) check(ctx context.Context) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.inFlight = false
-	if errors.Is(err, context.Canceled) {
+	// The caller went away (cancelled or past its deadline): nothing was learned,
+	// and fetch gives such a failure no code, so recording it would read as a
+	// successful check. Ask the caller's context, not the error: the client's own
+	// timeout also reads as DeadlineExceeded, and that one is "unreachable".
+	if err != nil && ctx.Err() != nil {
 		return
 	}
 	c.checked = c.now()

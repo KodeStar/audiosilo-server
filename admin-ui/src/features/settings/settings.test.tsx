@@ -243,6 +243,51 @@ describe('settings', () => {
     expect(screen.getByText(/Not found, so books in formats/)).toBeInTheDocument();
   });
 
+  it('sends a number field that is not a number as typed, for the server to refuse', async () => {
+    const calls = mockFetch(
+      routes({
+        'PATCH /admin/settings': {
+          status: 400,
+          body: { error: 'wrong type of value', code: 'invalid_setting', field: 'demo.max_users' },
+        },
+      }),
+    );
+    renderApp('/server?topic=demo');
+    const user = userEvent.setup();
+    await user.type(
+      await screen.findByRole('textbox', { name: 'Most guests at once' }),
+      '50 users',
+    );
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('wrong type of value');
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+      demo: { max_users: '50 users' },
+    });
+  });
+
+  it('never saves an edit to a field hidden since', async () => {
+    const base = settingsWith();
+    const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));
+    renderApp('/server?topic=network');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('radio', { name: /Let's Encrypt/ }));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Certificate names' }),
+      'books.example.com',
+    );
+    await user.click(screen.getByRole('radio', { name: /^Off/ }));
+    const card = screen.getByRole('radio', { name: /^Off/ }).closest('section') as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: 'Save changes' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save changes' }),
+    );
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+        network: { tls_mode: 'off' },
+      }),
+    );
+  });
+
   it('offers the libraries for the demo and the default guest cap', async () => {
     mockFetch(routes());
     renderApp('/server?topic=demo');

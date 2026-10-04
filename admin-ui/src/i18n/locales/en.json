@@ -1626,11 +1626,15 @@
   "logs.panel": "Server log",
   "logs.empty": "Nothing logged yet.",
   "logs.emptyFiltered": "No lines match.",
-  "logs.gap": "Older lines are no longer kept.",
+  "logs.gap": "Older lines aren't shown.",
   "logs.lvl.debug": "debug",
   "logs.lvl.info": "info",
   "logs.lvl.warn": "warn",
   "logs.lvl.error": "error",
   "logs.note": "The server keeps its newest lines in memory, since it started. The full log is wherever its output goes (docker logs, or the terminal). Passwords, tokens and invite codes are never shown here.",
-  "home.server.update": "{{version}} available"
+  "home.server.update": "{{version}} available",
+  "system.detail.player.embedded": "Built into this server.",
+  "system.detail.player.dir": "Served from the player folder.",
+  "system.detail.player.none": "Not available. The apps still work.",
+  "system.detail.devBuild": "A development build, so it isn't compared with releases."
 }

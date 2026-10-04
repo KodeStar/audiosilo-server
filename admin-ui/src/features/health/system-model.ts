@@ -137,7 +137,7 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
       kind: 'player',
       id: 'player',
       title: { key: 'system.row.player' },
-      detail: { key: `settings.players.source.${sys.web_player || 'none'}Body` },
+      detail: { key: `system.detail.player.${sys.web_player || 'none'}` },
       status: sys.web_player ? 'ok' : 'off',
     }),
   );
@@ -155,7 +155,11 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
           ? { key: `about.error.${u.error}` }
           : available
             ? { key: 'system.detail.updateAvailable', values: { version: available.version } }
-            : { key: u.checked_at ? 'system.detail.upToDate' : 'system.detail.notChecked' },
+            : !u.checked_at
+              ? { key: 'system.detail.notChecked' }
+              : u.comparable
+                ? { key: 'system.detail.upToDate' }
+                : { key: 'system.detail.devBuild' },
       value: u.current,
       ...(!u.enabled
         ? { status: 'off' }

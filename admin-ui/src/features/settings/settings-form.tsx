@@ -79,7 +79,11 @@ function toWire(spec: FieldSpec, value: DraftValue): unknown {
   if (spec.kind === 'list') return textToList(value as string);
   if (spec.kind === 'number') {
     const s = (value as string).trim();
-    return s === '' ? null : Number(s);
+    if (s === '') return null;
+    // Not a number: send the text, so the server refuses it on the field
+    // (Number() would give NaN, which JSON sends as null: "use the default").
+    const n = Number(s);
+    return Number.isFinite(n) ? n : s;
   }
   return value;
 }
@@ -148,7 +152,9 @@ export function SettingsForm<S extends SettingsSection>({
   // Every shown field set elsewhere (the environment, the desktop app): nothing to save here.
   const shown = fields.filter((f) => !visible || visible(f.name, draft));
   const editable = shown.some((f) => !lockOf(settings, `${section}.${f.name}` as SettingId));
-  const wire = Object.fromEntries(fields.map((f) => [f.name, toWire(f, draft[f.name])]));
+  // Only the shown fields: an edit to one hidden since (TLS hosts after leaving
+  // Let's Encrypt) isn't saved behind the admin's back.
+  const wire = Object.fromEntries(shown.map((f) => [f.name, toWire(f, draft[f.name])]));
   const patch = sectionPatch(section, settings[section], wire as Partial<AdminSettings[S]>);
 
   const commit = async (p: SettingsPatch) => {

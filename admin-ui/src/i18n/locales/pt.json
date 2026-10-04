@@ -1735,7 +1735,7 @@
   "logs.panel": "Registo do servidor",
   "logs.empty": "Ainda nada registado.",
   "logs.emptyFiltered": "Nenhuma linha corresponde.",
-  "logs.gap": "As linhas mais antigas já não são guardadas.",
+  "logs.gap": "As linhas mais antigas não são mostradas.",
   "logs.lvl.debug": "debug",
   "logs.lvl.info": "info",
   "logs.lvl.warn": "warn",
@@ -1747,5 +1747,9 @@
   "system.offline.title_many": "{{count}} pastas de biblioteca não estão acessíveis",
   "about.uptime.minute_many": "{{count}} minutos",
   "about.uptime.hour_many": "{{count}} horas",
-  "about.uptime.day_many": "{{count}} dias"
+  "about.uptime.day_many": "{{count}} dias",
+  "system.detail.player.embedded": "Integrado neste servidor.",
+  "system.detail.player.dir": "Servido a partir da pasta do leitor.",
+  "system.detail.player.none": "Indisponível. As aplicações continuam a funcionar.",
+  "system.detail.devBuild": "Uma versão de desenvolvimento, por isso não é comparada com as versões publicadas."
 }

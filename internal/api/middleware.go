@@ -76,7 +76,7 @@ func (a *API) cors(next http.Handler) http.Handler {
 		if origin != "" && a.config().allowsOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+auth.ClientHeader)
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}

@@ -26,6 +26,13 @@ describe('appendPage', () => {
     expect(tail).toMatchObject({ lastSeq: 9, gap: false });
   });
 
+  it('starts over when the server restarted (its seqs went back)', () => {
+    const before = appendPage(EMPTY_TAIL, page([40, 41, 42], 42), true);
+    const after = appendPage(before, page([1, 2], 2, true), false);
+    expect(after.lines.map((l) => l.seq)).toEqual([1, 2]);
+    expect(after).toMatchObject({ lastSeq: 2, gap: true });
+  });
+
   it('keeps the newest lines and remembers a gap', () => {
     const many = Array.from({ length: MAX_LINES + 5 }, (_, i) => i + 1);
     const tail = appendPage(EMPTY_TAIL, page(many, many.length, true), true);

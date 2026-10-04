@@ -29,7 +29,10 @@ const newest = (lines: LogEntry[]) =>
  * A poll that brought nothing new returns the same tail, so nothing re-renders.
  */
 export function appendPage(tail: Tail, page: LogPage, first: boolean): Tail {
-  if (first) return { lines: newest(page.entries), lastSeq: page.last_seq, gap: page.truncated };
+  // The server restarted (its seqs start over): what it sends is a fresh first page.
+  if (first || page.last_seq < tail.lastSeq) {
+    return { lines: newest(page.entries), lastSeq: page.last_seq, gap: page.truncated };
+  }
   const known = tail.lines.at(-1)?.seq ?? 0;
   const fresh = page.entries.filter((e) => e.seq > known);
   const lastSeq = Math.max(tail.lastSeq, page.last_seq);

@@ -270,8 +270,8 @@ func (a *API) handleLogs(w http.ResponseWriter, r *http.Request) {
 		after = n
 	}
 	search := q.Get("q")
-	if len(search) > 200 {
-		search = search[:200]
+	if r := []rune(search); len(r) > 200 {
+		search = string(r[:200])
 	}
 	res := logring.Result{Entries: []logring.Entry{}}
 	if a.rt.Logs != nil {

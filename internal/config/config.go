@@ -169,6 +169,9 @@ type Config struct {
 	fromEnv map[string]string
 	file    *Config
 	pinned  map[string]bool
+	// onDisk: config.yaml exists. The first Save (creating it) records pinned
+	// values in it; later saves keep the file's own values for them, as for env.
+	onDisk bool
 }
 
 // DefaultServerName is the display name of a server whose name isn't set.
@@ -216,6 +219,7 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 	raw, readErr := os.ReadFile(Path(dataDir))
 	switch {
 	case readErr == nil:
+		cfg.onDisk = true
 		if err = yaml.Unmarshal(raw, cfg); err != nil {
 			return nil, false, fmt.Errorf("parse config: %w", err)
 		}
@@ -240,23 +244,39 @@ func Load(dataDir string) (cfg *Config, firstRun bool, err error) {
 // Save writes the config to disk with restrictive permissions. A field an
 // AUDIOSILO_* variable set keeps config.yaml's own value: the environment wins at
 // every load anyway, and writing it into the file would make it outlive the
-// variable.
+// variable. A field an embedding launcher pins likewise keeps the file's value,
+// except on the save that creates config.yaml, which records it.
 func (c *Config) Save() error {
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		return err
 	}
 	on := c
-	if len(c.fromEnv) > 0 && c.file != nil {
+	if c.file != nil {
 		on = c.Clone()
 		for key := range c.fromEnv {
 			copyField(on, c.file, key)
+		}
+		if c.onDisk {
+			for key := range c.pinned {
+				copyField(on, c.file, key)
+			}
 		}
 	}
 	out, err := yaml.Marshal(on)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(Path(c.DataDir), out, 0o600)
+	if err := os.WriteFile(Path(c.DataDir), out, 0o600); err != nil {
+		return err
+	}
+	if !c.onDisk && c.file != nil {
+		// The file now holds the pinned values: later saves keep them.
+		for key := range c.pinned {
+			copyField(c.file, c, key)
+		}
+		c.onDisk = true
+	}
+	return nil
 }
 
 // applyEnv overrides fields from AUDIOSILO_* environment variables (see fields)

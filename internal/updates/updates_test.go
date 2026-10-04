@@ -171,3 +171,22 @@ func TestVersionOrder(t *testing.T) {
 		}
 	}
 }
+
+// A request whose caller's deadline passed learned nothing: it must not read
+// as a successful check (and so block "Check now" for a minute).
+func TestExpiredCallerRecordsNothing(t *testing.T) {
+	gh := &fakeGitHub{}
+	srv := gh.serve(t)
+	c := New("v1.15.0", srv.URL, true, nil)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if err := c.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := c.Status(); st.CheckedAt != nil || st.Error != "" {
+		t.Fatalf("an expired caller recorded a check: %+v", st)
+	}
+	if err := c.Check(context.Background()); err != nil || c.Status().Latest == nil {
+		t.Fatalf("the next Check must ask at once: %v %+v", err, c.Status())
+	}
+}

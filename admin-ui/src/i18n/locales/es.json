@@ -1735,7 +1735,7 @@
   "logs.panel": "Registro del servidor",
   "logs.empty": "Aún no se ha registrado nada.",
   "logs.emptyFiltered": "No coincide ninguna línea.",
-  "logs.gap": "Las líneas más antiguas ya no se conservan.",
+  "logs.gap": "Las líneas más antiguas no se muestran.",
   "logs.lvl.debug": "debug",
   "logs.lvl.info": "info",
   "logs.lvl.warn": "warn",
@@ -1747,5 +1747,9 @@
   "system.offline.title_many": "{{count}} carpetas de biblioteca no están accesibles",
   "about.uptime.minute_many": "{{count}} minutos",
   "about.uptime.hour_many": "{{count}} horas",
-  "about.uptime.day_many": "{{count}} días"
+  "about.uptime.day_many": "{{count}} días",
+  "system.detail.player.embedded": "Integrado en este servidor.",
+  "system.detail.player.dir": "Servido desde la carpeta del reproductor.",
+  "system.detail.player.none": "No disponible. Las apps siguen funcionando.",
+  "system.detail.devBuild": "Una versión de desarrollo, así que no se compara con las publicadas."
 }
