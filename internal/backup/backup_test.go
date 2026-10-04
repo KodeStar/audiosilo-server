@@ -295,6 +295,59 @@ func TestScheduleCatchesUpAfterRestart(t *testing.T) {
 	}
 }
 
+// The scheduler's minute ticks don't list the backups folder (a NAS round trip
+// each): it is read once, and the schedule then counts from this process's own
+// attempts.
+func TestScheduleTicksDontListTheFolder(t *testing.T) {
+	e := newEnv(t)
+	lists := 0
+	e.svc.readDir = func(dir string) ([]os.DirEntry, error) {
+		lists++
+		return os.ReadDir(dir)
+	}
+	e.clock = time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)
+	e.svc.anchor = e.clock
+	e.svc.SetSettings("daily:03:00", 7)
+	for range 90 {
+		if e.svc.due() {
+			t.Fatalf("due at %v, before its time", e.clock)
+		}
+		e.tick(time.Minute)
+	}
+	if lists != 1 {
+		t.Fatalf("90 ticks listed the folder %d times, want once", lists)
+	}
+
+	e.clock = time.Date(2026, 10, 4, 3, 0, 30, 0, time.UTC)
+	if !e.svc.due() {
+		t.Fatal("not due at its time")
+	}
+	b, err := e.svc.Create(context.Background(), KindScheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Delete(b.Name); err != nil {
+		t.Fatal(err)
+	}
+	before := lists // the backup's pruning lists the folder
+	for range 120 {
+		e.tick(time.Minute)
+		if e.svc.due() {
+			t.Fatalf("due again at %v", e.clock)
+		}
+	}
+	// The next day's slot is counted from the backup just made.
+	e.clock = time.Date(2026, 10, 5, 3, 0, 0, 0, time.UTC)
+	if !e.svc.due() {
+		t.Fatal("the next slot isn't due")
+	}
+	// Once: the delete may have removed the newest scheduled backup, so the next
+	// tick lists the folder again; the ticks after it don't.
+	if lists != before+1 {
+		t.Fatalf("ticks after a backup and a delete listed the folder %d times, want once", lists-before)
+	}
+}
+
 // Start reads as running as soon as it returns, so the request's answer says so.
 func TestStartRunsAtOnce(t *testing.T) {
 	e := newEnv(t)

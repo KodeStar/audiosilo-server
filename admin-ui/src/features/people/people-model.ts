@@ -130,12 +130,16 @@ export function currentBook(
   return row ? { ...row, live: false } : undefined;
 }
 
+/** The signed-in devices (sessions) among a list, without the API keys. */
+export function signedIn(devices: readonly Device[]): Device[] {
+  return devices.filter((d) => d.kind === 'session');
+}
+
 /** Each person's paired devices (sessions, not API keys), by user id; undefined while loading. */
 export function groupDevices(devices: readonly Device[] | undefined) {
   if (!devices) return undefined;
   const out = new Map<number, Device[]>();
-  for (const d of devices) {
-    if (d.kind !== 'session') continue;
+  for (const d of signedIn(devices)) {
     const list = out.get(d.user_id);
     if (list) list.push(d);
     else out.set(d.user_id, [d]);

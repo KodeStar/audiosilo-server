@@ -301,3 +301,56 @@ func TestActivityBoundaryHourCountedOnce(t *testing.T) {
 			got, a.Totals.Listened, a.Previous.Listened)
 	}
 }
+
+// Listening from before sessions were recorded (migration 0021): a session
+// backfilled from the players' spans counts as listening and in the day-by-day,
+// but never as a device or a playback mode; an estimated day counts in the totals
+// and the tops, and is reported as such, but has no day of its own.
+func TestActivityBackfilledAndEstimated(t *testing.T) {
+	f := newSessionFixture(t)
+	start := time.Date(2026, 1, 5, 10, 0, 0, 0, time.UTC)
+	if _, err := f.c.db.ExecContext(f.ctx,
+		`INSERT INTO listening_sessions(user_id, library_id, rel_path, started_at, last_at, listened, backfilled)
+		 VALUES(?, ?, ?, ?, ?, 1800, 1)`,
+		f.user, f.lib, f.book.Path, formatSessionTime(start), formatSessionTime(start.Add(30*time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.db.ExecContext(f.ctx,
+		`INSERT INTO listening_daily(day, user_id, library_id, rel_path, listened, sessions, estimated)
+		 VALUES('2026-01-03', ?, ?, ?, 7200, 0, 1)`, f.user, f.lib, f.book.Path); err != nil {
+		t.Fatal(err)
+	}
+	label, from, to, err := ParseActivityRange("2026", f.clock, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := f.c.ActivityFor(f.ctx, label, from, to, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Totals.Listened != 9000 || a.Estimated != 7200 || a.Totals.Sessions != 1 ||
+		len(a.TopBooks) != 1 || a.TopBooks[0].Listened != 9000 || len(a.TopUsers) != 1 || a.TopUsers[0].Listened != 9000 {
+		t.Fatalf("totals %+v, estimated %v, top books %+v, top users %+v", a.Totals, a.Estimated, a.TopBooks, a.TopUsers)
+	}
+	if a.Days[2].Listened != 0 || a.Days[4].Listened != 1800 {
+		t.Fatalf("an estimate has no day; the backfilled session has its own: %+v %+v", a.Days[2], a.Days[4])
+	}
+	if a.HourWeekday[0][10] != 1800 {
+		t.Fatalf("the backfilled session's hour = %v, want 1800 on Monday 10:00", a.HourWeekday[0][10])
+	}
+	if len(a.Clients) != 0 || len(a.Playback) != 0 {
+		t.Fatalf("a backfilled session counted as a device or a playback mode: %+v %+v", a.Clients, a.Playback)
+	}
+
+	days, err := f.c.ListeningDaysFor(f.ctx, label, from, to, time.UTC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum float64
+	for _, d := range days.Days {
+		sum += d.Listened
+	}
+	if sum != 1800 {
+		t.Fatalf("the calendar = %v s, want only the backfilled session's 1800", sum)
+	}
+}

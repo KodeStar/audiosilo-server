@@ -9,6 +9,7 @@ import { Monogram } from '@/components/monogram';
 import { Notice } from '@/components/notice';
 import { Ring } from '@/components/ring';
 import { StatTile } from '@/components/stat-tile';
+import { EstimatedNote } from './estimated-note';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
@@ -95,6 +96,8 @@ function ActivityView({ a }: { a: Activity }) {
   // The chart stacks the top four listeners, who are always among the top people.
   const names = new Map(a.top_users.map((u) => [u.user_id, u.username]));
   const listened = a.totals.listened > 0 || a.totals.sessions > 0;
+  // What sessions recorded: estimates have no session and no day of their own.
+  const recorded = Math.max(0, a.totals.listened - a.estimated);
   const rate = finishRate(a.funnel);
   const spark = a.days.slice(-30).map((d) => d.listened);
 
@@ -115,7 +118,7 @@ function ActivityView({ a }: { a: Activity }) {
           foot={
             a.totals.sessions
               ? t('activity.tile.average', {
-                  time: formatDuration(a.totals.listened / a.totals.sessions, lang),
+                  time: formatDuration(recorded / a.totals.sessions, lang),
                 })
               : undefined
           }
@@ -141,6 +144,7 @@ function ActivityView({ a }: { a: Activity }) {
         />
       </div>
 
+      <EstimatedNote a={a} />
       {listened ? (
         <>
           <Card aria-labelledby="hours-title">
@@ -153,7 +157,7 @@ function ActivityView({ a }: { a: Activity }) {
               }
               action={
                 <span className="text-muted-foreground tabular-nums">
-                  {t('activity.hours.total', { hours: formatHours(a.totals.listened, lang) })}
+                  {t('activity.hours.total', { hours: formatHours(recorded, lang) })}
                 </span>
               }
             />

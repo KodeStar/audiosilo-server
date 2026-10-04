@@ -19,6 +19,7 @@ import type {
   AuditFilter,
   BookRef,
   PersonField,
+  ServerEventKind,
   SessionFilter,
 } from './types';
 
@@ -33,6 +34,8 @@ export const keys = {
   backups: ['admin', 'backups'] as const,
   notifyTargets: ['admin', 'notifications'] as const,
   events: ['admin', 'events'] as const,
+  eventList: (kind: ServerEventKind | undefined) =>
+    ['admin', 'events', 'list', kind ?? ''] as const,
   audit: (filter: AuditFilter) => ['admin', 'audit', filter] as const,
   thumb: (libraryId: number, path: string, size: ThumbSize) =>
     ['thumb', libraryId, path, size] as const,
@@ -150,6 +153,21 @@ export function useServerEvents() {
     queryFn: () => api.serverEvents({ limit: 20 }),
     staleTime: 30_000,
     refetchInterval: 60_000,
+  });
+}
+
+/**
+ * Server > Events: the whole feed (90 days), newest first, a page at a time,
+ * maybe one kind. No polling (it would refetch every page loaded); it refreshes
+ * on focus, and the bell keeps checking for new events.
+ */
+export function useServerEventList(kind: ServerEventKind | undefined) {
+  return useInfiniteQuery({
+    queryKey: keys.eventList(kind),
+    queryFn: ({ pageParam }) => api.serverEvents({ kind, before: pageParam, limit: 50 }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.next_before || undefined,
+    placeholderData: keepPreviousData,
   });
 }
 

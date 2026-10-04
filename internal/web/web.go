@@ -65,38 +65,45 @@ func Asset(name string) ([]byte, error) {
 // API routes registered on the same mux take precedence because ServeMux prefers
 // more specific patterns.
 func Register(mux *http.ServeMux, webDir string) error {
+	static := staticMux{mux}
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
 		return err
 	}
-	assets := http.StripPrefix("/assets/", http.FileServerFS(sub))
-	mux.Handle("GET /assets/", noSniff(assets))
+	// One cache of ETags and gzip forms for every embedded page and asset below.
+	files := spa.NewFiles()
+	static.Handle("GET /assets/", noSniff(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		files.ServeFS(w, r, sub, strings.TrimPrefix(r.URL.Path, "/assets/"))
+	})))
 	// Browsers request /favicon.ico at the site root by default; point it at the
 	// embedded SVG mark (the HTML pages also link it explicitly via <link rel=icon>).
-	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+	static.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/assets/favicon.svg", http.StatusMovedPermanently)
 	})
 	// The admin console's PWA service worker and web manifest are served from the
 	// site root: a service worker can only control pages at or below its own URL,
 	// so /sw.js (scope "/") is what lets it control /admin.
-	mux.HandleFunc("GET /sw.js", rootAsset(sub, "sw.js", true))
-	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(sub, "manifest.webmanifest", false))
+	static.HandleFunc("GET /sw.js", rootAsset(files, sub, "sw.js", true))
+	static.HandleFunc("GET /manifest.webmanifest", rootAsset(files, sub, "manifest.webmanifest", false))
 	admin := adminui.Handler(adminui.FS(), contentSecurityPolicy)
-	mux.Handle("GET /admin", admin)
-	mux.Handle("GET /admin/", admin)
-	mux.HandleFunc("GET /connect", page(sub, "index.html"))
-	mux.HandleFunc("GET /connect/", page(sub, "index.html"))
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	static.Handle("GET /admin", admin)
+	static.Handle("GET /admin/", admin)
+	connect := page(files, sub, "index.html")
+	static.HandleFunc("GET /connect", connect)
+	static.HandleFunc("GET /connect/", connect)
+	// The catch-all is a static file only at "/": the 404s it answers elsewhere are
+	// counted like any other request.
+	mux.Handle("GET /", staticHandler{onlyRoot: true, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// "/" is the catch-all; only the exact root serves the connect page.
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		page(sub, "index.html")(w, r)
-	})
+		connect(w, r)
+	})})
 
 	if fsys, ok := playerFS(webDir); ok && spa.IsFile(fsys, "index.html") {
-		mux.Handle("GET /web/", spa.Handler(spa.Config{
+		static.Handle("GET /web/", spa.Handler(spa.Config{
 			FS:          fsys,
 			Prefix:      "/web",
 			AssetDirs:   []string{"_expo", "assets"},
@@ -144,34 +151,24 @@ func PlayerSource(webDir string) string {
 // with the strict same-origin CSP. Used for the PWA service worker and web
 // manifest, which must live at the root for the worker's scope to cover /admin.
 // noCache disables HTTP caching (so an updated worker is picked up promptly).
-func rootAsset(fsys fs.FS, name string, noCache bool) http.HandlerFunc {
+func rootAsset(files *spa.Files, fsys fs.FS, name string, noCache bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := fs.ReadFile(fsys, name)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
 		w.Header().Set("Content-Type", spa.ContentType(name))
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if noCache {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
-		_, _ = w.Write(data)
+		files.ServeFS(w, r, fsys, name)
 	}
 }
 
 // page returns a handler that serves a single HTML file with a strict CSP.
-func page(fsys fs.FS, name string) http.HandlerFunc {
+func page(files *spa.Files, fsys fs.FS, name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := fs.ReadFile(fsys, name)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
-		_, _ = w.Write(data)
+		files.ServeFS(w, r, fsys, name)
 	}
 }
 
@@ -223,4 +220,27 @@ func sortedKeys(m map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// staticMux registers the handlers of static files (every route Register adds:
+// pages and assets served from memory or web_dir) marked as such, so the API's
+// per-IP rate limit can leave them out (IsStatic).
+type staticMux struct{ mux *http.ServeMux }
+
+func (m staticMux) Handle(pattern string, h http.Handler) {
+	m.mux.Handle(pattern, staticHandler{Handler: h})
+}
+
+func (m staticMux) HandleFunc(pattern string, h http.HandlerFunc) { m.Handle(pattern, h) }
+
+type staticHandler struct {
+	http.Handler
+	onlyRoot bool // the "/" catch-all: static for "/" itself, not its 404s
+}
+
+// IsStatic reports whether h, the handler the mux picked for r, is one of
+// Register's static-file handlers for that request.
+func IsStatic(h http.Handler, r *http.Request) bool {
+	s, ok := h.(staticHandler)
+	return ok && (!s.onlyRoot || r.URL.Path == "/")
 }

@@ -67,8 +67,18 @@ describe('api client', () => {
       'POST /auth/login': { body: { token: 't', user: admin, server_id: 's' } },
     });
     await api.login('chris', 'pw');
-    expect(calls[0].body).toEqual({ username: 'chris', password: 'pw', device_name: 'admin-web' });
+    expect(calls[0].body).toEqual({
+      username: 'chris',
+      password: 'pw',
+      device_name: 'admin-web',
+      device_id: expect.stringMatching(/^[0-9a-f]{32}$/) as string,
+    });
     expect(calls[0].headers.Authorization).toBeUndefined();
+    // The same browser id every time, so signing in again isn't a new device.
+    await api.login('chris', 'pw');
+    expect(calls[1].body).toMatchObject({
+      device_id: (calls[0].body as { device_id: string }).device_id,
+    });
   });
 
   it('raises the server error envelope as ApiError', async () => {

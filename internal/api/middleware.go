@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/web"
+
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
@@ -143,10 +145,16 @@ func clientIP(r *http.Request) string {
 	return peerIP(r.RemoteAddr)
 }
 
-// rateLimit enforces the per-IP token-bucket request rate.
-func (a *API) rateLimit(next http.Handler) http.Handler {
+// rateLimit enforces the per-IP token-bucket request rate on every route but the
+// static files the web package registers (the admin console, the web player, the
+// connect page; web.IsStatic), which mux would hand the request to. Those are
+// served from memory or, for a player in web_dir, through spa.Files' per-version
+// cache (a stat per request), and one cold console page is forty-odd chunk
+// requests, more than the whole burst: counting them turned a first visit's own
+// scripts and API calls into 429s.
+func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.ipLimiter.Allow(clientIP(r)) {
+		if h, _ := mux.Handler(r); !web.IsStatic(h, r) && !a.ipLimiter.Allow(clientIP(r)) {
 			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}

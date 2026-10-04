@@ -1294,3 +1294,42 @@ func TestDemoCannotSelfRecover(t *testing.T) {
 		t.Fatalf("demo set-password = %d, want 403", resp.StatusCode)
 	}
 }
+
+// The per-IP limit leaves out the static files the web package serves: a cold
+// console page loads more chunks than the burst, and none of them may be refused
+// or use up the budget its API calls need. Everything else is still limited.
+func TestRateLimitSkipsStaticFiles(t *testing.T) {
+	e := newTestEnv(t)
+	h := e.api.Handler()
+	get := func(path string) int {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = "192.0.2.9:1234"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for i := range 200 {
+		for _, path := range []string{"/admin/assets/chunk.js", "/"} {
+			if code := get(path); code == http.StatusTooManyRequests {
+				t.Fatalf("static request %d (%s) was rate limited", i, path)
+			}
+		}
+	}
+	if code := get("/api/v1/server"); code == http.StatusTooManyRequests {
+		t.Fatal("static requests used up the API's budget")
+	}
+	// Anything not a static file is limited, outside /api/ too (the health check
+	// and the setup page read the database; an unknown path is the catch-all's 404).
+	for _, path := range []string{"/api/v1/server", "/healthz", "/setup", "/wp-login.php"} {
+		limited := false
+		for range 200 {
+			if get(path) == http.StatusTooManyRequests {
+				limited = true
+				break
+			}
+		}
+		if !limited {
+			t.Fatalf("%s is no longer rate limited", path)
+		}
+	}
+}

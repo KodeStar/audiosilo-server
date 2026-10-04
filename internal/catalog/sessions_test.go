@@ -190,7 +190,7 @@ func TestSessionsWithoutListeningAreHidden(t *testing.T) {
 	}
 	// Once it can no longer be continued, retention deletes it.
 	f.clock = f.clock.Add(resumeWindow + time.Minute)
-	if _, err := f.c.PruneSessions(f.ctx, f.clock.Add(-SessionRetention), time.UTC); err != nil {
+	if _, err := f.c.PruneSessions(f.ctx, f.clock.Add(-retention), time.UTC); err != nil {
 		t.Fatal(err)
 	}
 	var n int
@@ -323,7 +323,7 @@ func TestPruneSessionsRollsUpByLocalDay(t *testing.T) {
 	f.clock = time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	f.listen(t, 2, f.book, 0) // recent: stays raw
 
-	n, err := f.c.PruneSessions(f.ctx, f.clock.Add(-SessionRetention), time.UTC)
+	n, err := f.c.PruneSessions(f.ctx, f.clock.Add(-retention), time.UTC)
 	if err != nil || n != 1 {
 		t.Fatalf("pruned %d, err %v; want 1", n, err)
 	}
@@ -558,3 +558,6 @@ func TestEditProgressNeedsTheUsersAccess(t *testing.T) {
 		t.Fatalf("existing row after access was taken away: %+v %v", got, err)
 	}
 }
+
+// retention is the default raw-session retention (config.DefaultSessionDays).
+const retention = 400 * 24 * time.Hour

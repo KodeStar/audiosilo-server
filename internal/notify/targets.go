@@ -29,16 +29,46 @@ const (
 )
 
 // FieldError is a refused destination field: which one and why, in words a form
-// can show under it.
+// can show under it, and as a Reason code the console words in its own language
+// (Max is the limit a *_too_long reason refers to).
 type FieldError struct {
-	Field string
-	Err   error
+	Field  string
+	Reason string
+	Max    int
+	Err    error
 }
 
 func (e *FieldError) Error() string { return e.Err.Error() }
 func (e *FieldError) Unwrap() error { return e.Err }
 
-func fieldErr(field, msg string) error { return &FieldError{Field: field, Err: errors.New(msg)} }
+// Refusal reasons (FieldError.Reason). The admin console words each one, so they
+// are part of the wire: add new ones, never rename.
+const (
+	ReasonKindUnknown   = "kind_unknown"
+	ReasonKindFixed     = "kind_fixed"
+	ReasonNameRequired  = "name_required"
+	ReasonNameTooLong   = "name_too_long"
+	ReasonNameControl   = "name_control"
+	ReasonURLRequired   = "url_required"
+	ReasonURLTooLong    = "url_too_long"
+	ReasonURLInvalid    = "url_invalid"
+	ReasonURLDiscord    = "url_discord"
+	ReasonURLNtfy       = "url_ntfy"
+	ReasonSecretTooLong = "secret_too_long"
+	ReasonSecretControl = "secret_control"
+	ReasonSecretDiscord = "secret_discord"
+	ReasonSecretAgain   = "secret_again"
+	ReasonEventUnknown  = "event_unknown"
+)
+
+// Refuse is a FieldError for field with reason, worded as msg.
+func Refuse(field, reason, msg string) error {
+	return &FieldError{Field: field, Reason: reason, Err: errors.New(msg)}
+}
+
+func tooLong(field, reason string, max int, msg string) error {
+	return &FieldError{Field: field, Reason: reason, Max: max, Err: errors.New(msg)}
+}
 
 var (
 	ntfyTopicRE = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}$`)
@@ -52,34 +82,34 @@ var (
 func Clean(kind *string, name, rawURL, secret *string, events *[]string) error {
 	*kind = strings.TrimSpace(*kind)
 	if !slices.Contains(TargetKinds, *kind) {
-		return fieldErr("kind", "must be webhook, ntfy or discord")
+		return Refuse("kind", ReasonKindUnknown, "must be webhook, ntfy or discord")
 	}
 	*name = strings.TrimSpace(*name)
 	switch {
 	case *name == "":
-		return fieldErr("name", "give it a name")
+		return Refuse("name", ReasonNameRequired, "give it a name")
 	case utf8.RuneCountInString(*name) > maxNameLen:
-		return fieldErr("name", fmt.Sprintf("a name can be at most %d characters", maxNameLen))
+		return tooLong("name", ReasonNameTooLong, maxNameLen, fmt.Sprintf("a name can be at most %d characters", maxNameLen))
 	case strings.IndexFunc(*name, unicode.IsControl) >= 0:
-		return fieldErr("name", "a name can't contain line breaks or control characters")
+		return Refuse("name", ReasonNameControl, "a name can't contain line breaks or control characters")
 	}
 	*rawURL = strings.TrimSpace(*rawURL)
 	if err := checkURL(*kind, *rawURL); err != nil {
 		return err
 	}
 	if len(*secret) > maxSecretLen {
-		return fieldErr("secret", fmt.Sprintf("at most %d characters", maxSecretLen))
+		return tooLong("secret", ReasonSecretTooLong, maxSecretLen, fmt.Sprintf("at most %d characters", maxSecretLen))
 	}
 	if strings.IndexFunc(*secret, unicode.IsControl) >= 0 {
-		return fieldErr("secret", "can't contain line breaks or control characters")
+		return Refuse("secret", ReasonSecretControl, "can't contain line breaks or control characters")
 	}
 	if *kind == TargetDiscord && *secret != "" {
-		return fieldErr("secret", "a Discord webhook takes no secret: its address is the secret")
+		return Refuse("secret", ReasonSecretDiscord, "a Discord webhook takes no secret: its address is the secret")
 	}
 	clean := []string{}
 	for _, e := range *events {
 		if !slices.Contains(Kinds, e) {
-			return fieldErr("events", "unknown event "+e)
+			return Refuse("events", ReasonEventUnknown, "unknown event "+e)
 		}
 		if !slices.Contains(clean, e) {
 			clean = append(clean, e)
@@ -91,25 +121,25 @@ func Clean(kind *string, name, rawURL, secret *string, events *[]string) error {
 
 func checkURL(kind, raw string) error {
 	if raw == "" {
-		return fieldErr("url", "enter the address to send to")
+		return Refuse("url", ReasonURLRequired, "enter the address to send to")
 	}
 	if len(raw) > maxURLLen {
-		return fieldErr("url", "the address is too long")
+		return tooLong("url", ReasonURLTooLong, maxURLLen, "the address is too long")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Fragment != "" ||
 		strings.IndexFunc(raw, unicode.IsControl) >= 0 {
-		return fieldErr("url", "must be an address starting with https:// or http://")
+		return Refuse("url", ReasonURLInvalid, "must be an address starting with https:// or http://")
 	}
 	switch kind {
 	case TargetDiscord:
 		if u.Scheme != "https" || !slices.Contains(discordHosts, strings.ToLower(u.Hostname())) ||
 			!discordPathRE.MatchString(u.Path) || u.User != nil || u.Port() != "" {
-			return fieldErr("url", "must be a Discord webhook address (https://discord.com/api/webhooks/...)")
+			return Refuse("url", ReasonURLDiscord, "must be a Discord webhook address (https://discord.com/api/webhooks/...)")
 		}
 	case TargetNtfy:
 		if _, topic := ntfySplit(u); topic == "" || u.RawQuery != "" || u.User != nil {
-			return fieldErr("url", "must be the topic's address, like https://ntfy.sh/your-topic")
+			return Refuse("url", ReasonURLNtfy, "must be the topic's address, like https://ntfy.sh/your-topic")
 		}
 	}
 	return nil

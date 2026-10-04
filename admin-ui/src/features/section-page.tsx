@@ -61,6 +61,9 @@ const SystemPage = lazy(() =>
 const LogsPage = lazy(() =>
   import('@/features/logs/logs-page').then((m) => ({ default: m.LogsPage })),
 );
+const EventsPage = lazy(() =>
+  import('@/features/events/events-page').then((m) => ({ default: m.EventsPage })),
+);
 const AuditPage = lazy(() =>
   import('@/features/audit/audit-page').then((m) => ({ default: m.AuditPage })),
 );
@@ -85,7 +88,13 @@ export const PAGES: Record<DestinationKey, Record<string, React.ComponentType>> 
   people: { people: PeoplePage, invites: InvitesPage, shares: SharesPage, devices: DevicesPage },
   activity: { overview: ActivityPage, live: LivePage, sessions: SessionsPage, year: YearPage },
   health: { issues: IssuesPage, jobs: JobsPage, system: SystemPage },
-  server: { settings: SettingsPage, logs: LogsPage, audit: AuditPage, about: AboutPage },
+  server: {
+    settings: SettingsPage,
+    events: EventsPage,
+    logs: LogsPage,
+    audit: AuditPage,
+    about: AboutPage,
+  },
 };
 
 /** A destination's routed section: its screen, or a 404. */

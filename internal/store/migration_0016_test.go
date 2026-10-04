@@ -14,40 +14,12 @@ import (
 // and turns an infinite series position, which no JSON reply can carry, into none.
 func TestMigration0016Backfill(t *testing.T) {
 	ctx := context.Background()
-	dsn := filepath.Join(t.TempDir(), "pre-0016.db")
-	raw, err := sql.Open("sqlite", dsnPragmas(dsn))
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec := func(q string, args ...any) {
-		t.Helper()
-		if _, err := raw.ExecContext(ctx, q, args...); err != nil {
-			t.Fatalf("%s: %v", strings.SplitN(q, "\n", 2)[0], err)
-		}
-	}
-	exec(`CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`)
-	entries, err := migrationsFS.ReadDir("migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries { // sorted by name
-		if e.Name() >= "0016" {
-			break
-		}
-		body, err := migrationsFS.ReadFile("migrations/" + e.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		exec(string(body))
-		exec(`INSERT INTO schema_migrations(name, applied_at) VALUES(?, 't')`, e.Name())
-	}
+	dsn, exec, closeRaw := openBefore(t, "0016")
 	exec(`INSERT INTO libraries(id, name, root, created_at) VALUES(1, 'L', '/l', 't')`)
 	exec(`INSERT INTO books(library_id, rel_path, title, asin, indexed_at) VALUES(1, 'A/Enriched', 'Enriched', '', '2026-01-01T00:00:00Z')`)
 	exec(`INSERT INTO book_enrichment(library_id, path, asin, isbn, updated_at) VALUES(1, 'A/Enriched', 'B000000001', '', 't')`)
 	exec(`INSERT INTO books(library_id, rel_path, title, series_index, indexed_at) VALUES(1, 'A/Infinite', 'Infinite', 9e999, '2026-01-02T00:00:00Z')`)
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	closeRaw()
 
 	db, err := Open(ctx, dsn)
 	if err != nil {
@@ -71,5 +43,45 @@ func TestMigration0016Backfill(t *testing.T) {
 	}
 	if idx != 0 {
 		t.Errorf("series_index = %v, want 0 (no position)", idx)
+	}
+}
+
+// openBefore makes a database at dsn with every migration before `before` applied
+// (as an older server left it), for a test to fill before Open applies the rest.
+// exec runs a statement on it; call closeRaw before Open.
+func openBefore(t *testing.T, before string) (dsn string, exec func(q string, args ...any), closeRaw func()) {
+	t.Helper()
+	ctx := context.Background()
+	dsn = filepath.Join(t.TempDir(), "pre-"+before+".db")
+	raw, err := sql.Open("sqlite", dsnPragmas(dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec = func(q string, args ...any) {
+		t.Helper()
+		if _, err := raw.ExecContext(ctx, q, args...); err != nil {
+			t.Fatalf("%s: %v", strings.SplitN(q, "\n", 2)[0], err)
+		}
+	}
+	exec(`CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`)
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries { // sorted by name
+		if e.Name() >= before {
+			break
+		}
+		body, err := migrationsFS.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		exec(string(body))
+		exec(`INSERT INTO schema_migrations(name, applied_at) VALUES(?, 't')`, e.Name())
+	}
+	return dsn, exec, func() {
+		if err := raw.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -377,3 +377,89 @@ func TestAdminConsoleMounted(t *testing.T) {
 		t.Errorf("GET /assets/admin.js = %d, want 404", rec.Code)
 	}
 }
+
+// serve answers one request on mux with the given headers (name, value pairs).
+func serve(mux http.Handler, method, target string, headers ...string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, target, nil)
+	for i := 0; i+1 < len(headers); i += 2 {
+		r.Header.Set(headers[i], headers[i+1])
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	return rec
+}
+
+// TestStaticCompression checks the gzip and ETag layer on the server's own pages
+// and on the player: the player's per-document CSP is the same whether its index
+// goes out gzipped or not, the connect page and its assets compress and
+// revalidate, and an image is never compressed.
+func TestStaticCompression(t *testing.T) {
+	dir := fakePlayer(t)
+	// Big enough that gzip pays, with the inline script the CSP hashes.
+	writeFile(t, dir, "index.html", `<html><head><script type="module">console.log(1)</script></head><body>`+
+		strings.Repeat("<div>app</div>", 300)+`</body></html>`)
+	mux := http.NewServeMux()
+	if err := Register(mux, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	plain := serve(mux, http.MethodGet, "/web/")
+	gz := serve(mux, http.MethodGet, "/web/", "Accept-Encoding", "gzip")
+	if gz.Header().Get("Content-Encoding") != "gzip" || plain.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("player index: gzip %q, plain %q", gz.Header().Get("Content-Encoding"), plain.Header().Get("Content-Encoding"))
+	}
+	csp := plain.Header().Get("Content-Security-Policy")
+	if want := htmlCSP(plain.Body.Bytes()); csp != want || !strings.Contains(csp, "sha256-") {
+		t.Fatalf("player CSP = %q, want %q", csp, want)
+	}
+	if got := gz.Header().Get("Content-Security-Policy"); got != csp {
+		t.Errorf("the gzipped index's CSP = %q, want the identity one %q", got, csp)
+	}
+	if gz.Header().Get("Cache-Control") != "no-cache" || gz.Header().Get("Vary") != "Accept-Encoding" {
+		t.Errorf("player index headers: %v", gz.Header())
+	}
+	nm := serve(mux, http.MethodGet, "/web/", "Accept-Encoding", "gzip", "If-None-Match", gz.Header().Get("ETag"))
+	if nm.Code != http.StatusNotModified || nm.Header().Get("Content-Security-Policy") != csp {
+		t.Errorf("player index revalidation = %d, CSP %q", nm.Code, nm.Header().Get("Content-Security-Policy"))
+	}
+
+	for _, p := range []string{"/", "/connect", "/assets/style.css", "/assets/connect.js", "/sw.js", "/manifest.webmanifest"} {
+		rec := serve(mux, http.MethodGet, p, "Accept-Encoding", "gzip")
+		if rec.Code != 200 || rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("Vary") != "Accept-Encoding" {
+			t.Errorf("GET %s = %d, Content-Encoding %q, Vary %q", p, rec.Code, rec.Header().Get("Content-Encoding"), rec.Header().Get("Vary"))
+			continue
+		}
+		if csp := rec.Header().Get("Content-Security-Policy"); csp != contentSecurityPolicy {
+			t.Errorf("GET %s CSP = %q", p, csp)
+		}
+		etag := rec.Header().Get("ETag")
+		if rec := serve(mux, http.MethodGet, p, "Accept-Encoding", "gzip", "If-None-Match", etag); rec.Code != http.StatusNotModified {
+			t.Errorf("GET %s If-None-Match %s = %d, want 304", p, etag, rec.Code)
+		}
+		if rec := serve(mux, http.MethodHead, p, "Accept-Encoding", "gzip"); rec.Code != 200 || rec.Body.Len() != 0 {
+			t.Errorf("HEAD %s = %d with %d body bytes", p, rec.Code, rec.Body.Len())
+		}
+	}
+	if ct := serve(mux, http.MethodGet, "/sw.js", "Accept-Encoding", "gzip").Header().Get("Cache-Control"); ct != "no-cache" {
+		t.Errorf("/sw.js Cache-Control = %q", ct)
+	}
+
+	png := serve(mux, http.MethodGet, "/assets/icon-192.png", "Accept-Encoding", "gzip")
+	if png.Code != 200 || png.Header().Get("Content-Encoding") != "" || png.Header().Get("ETag") == "" ||
+		png.Header().Get("Content-Type") != "image/png" || png.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("png: %d %v", png.Code, png.Header())
+	}
+	// A directory under /assets/ is not listed.
+	if rec := serve(mux, http.MethodGet, "/assets/fonts/"); rec.Code != http.StatusNotFound {
+		t.Errorf("GET /assets/fonts/ = %d, want 404", rec.Code)
+	}
+
+	// The embedded console's bundle, when built.
+	if !spa.IsFile(adminui.FS(), "index.html") {
+		t.Skip("admin console not built")
+	}
+	admin := serve(mux, http.MethodGet, "/admin/", "Accept-Encoding", "gzip")
+	if admin.Header().Get("Content-Encoding") != "gzip" || admin.Header().Get("Content-Security-Policy") != contentSecurityPolicy {
+		t.Errorf("/admin/: %v", admin.Header())
+	}
+}

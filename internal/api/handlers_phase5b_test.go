@@ -275,21 +275,28 @@ func TestNotificationTargetsNeverEchoCredentials(t *testing.T) {
 		t.Fatalf("stored = %+v", stored)
 	}
 	if resp, body := e.do(t, "PATCH", "/api/v1/admin/notifications/"+id, adminTok, `{"kind":"ntfy"}`); resp.StatusCode != 400 ||
-		!strings.Contains(body, `"field":"kind"`) {
+		!strings.Contains(body, `"field":"kind"`) || !strings.Contains(body, `"reason":"kind_fixed"`) {
 		t.Fatalf("kind change = %d %s", resp.StatusCode, body)
 	}
 	if resp, body := e.do(t, "PATCH", "/api/v1/admin/notifications/"+id, adminTok, `{"secret":""}`); resp.StatusCode != 200 ||
 		!strings.Contains(body, `"has_secret":false`) {
 		t.Fatalf("clear secret = %d %s", resp.StatusCode, body)
 	}
-	for _, bad := range []struct{ body, field string }{
-		{`{"kind":"discord","name":"d","url":"https://evil.example/api/webhooks/1/x","events":[]}`, "url"},
-		{`{"kind":"webhook","name":"","url":"https://a.example","events":[]}`, "name"},
-		{`{"kind":"webhook","name":"x","url":"https://a.example","events":["everything"]}`, "events"},
-		{`{"kind":"sms","name":"x","url":"https://a.example","events":[]}`, "kind"},
+	// Each refusal names the field and a reason the console words; a length says its limit.
+	for _, bad := range []struct {
+		body, field, reason string
+		max                 int
+	}{
+		{`{"kind":"discord","name":"d","url":"https://evil.example/api/webhooks/1/x","events":[]}`, "url", "url_discord", 0},
+		{`{"kind":"webhook","name":"","url":"https://a.example","events":[]}`, "name", "name_required", 0},
+		{`{"kind":"webhook","name":"x","url":"https://a.example","events":["everything"]}`, "events", "event_unknown", 0},
+		{`{"kind":"sms","name":"x","url":"https://a.example","events":[]}`, "kind", "kind_unknown", 0},
+		{`{"kind":"webhook","name":"` + strings.Repeat("n", 65) + `","url":"https://a.example","events":[]}`, "name", "name_too_long", 64},
 	} {
 		if resp, body := e.do(t, "POST", "/api/v1/admin/notifications", adminTok, bad.body); resp.StatusCode != 400 ||
-			!strings.Contains(body, `"code":"invalid_target"`) || !strings.Contains(body, `"field":"`+bad.field+`"`) {
+			!strings.Contains(body, `"code":"invalid_target"`) || !strings.Contains(body, `"field":"`+bad.field+`"`) ||
+			!strings.Contains(body, `"reason":"`+bad.reason+`"`) ||
+			(bad.max > 0) != strings.Contains(body, `"max":`+strconv.Itoa(bad.max)) {
 			t.Errorf("%s = %d %s", bad.body, resp.StatusCode, body)
 		}
 	}
@@ -369,6 +376,81 @@ func TestSignInsReachTheFeed(t *testing.T) {
 	}
 	if strings.Contains(body, "127.0.0.1") {
 		t.Fatal("the feed carries an address")
+	}
+
+	// The feed filters by kind; an unknown kind is refused.
+	_, body = e.do(t, "GET", "/api/v1/admin/events?kind=new_device", adminTok, "")
+	if strings.Count(body, `"kind":"new_device"`) != 2 || strings.Contains(body, "invite_redeemed") {
+		t.Fatalf("new_device only = %s", body)
+	}
+	if resp, body := e.do(t, "GET", "/api/v1/admin/events?kind=nope", adminTok, ""); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown kind = %d %s", resp.StatusCode, body)
+	}
+}
+
+// A password sign-in from a browser the person signed in from before is not a new
+// device; one without a browser id always is, and so is a browser an admin signed
+// out (it may be someone else's who had the password).
+func TestSignInFromAKnownBrowserIsNotANewDevice(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	login := func(body string) string {
+		t.Helper()
+		resp, answer := e.do(t, "POST", "/api/v1/auth/login", "", body)
+		if resp.StatusCode != 200 {
+			t.Fatalf("login = %d %s", resp.StatusCode, answer)
+		}
+		var out struct {
+			Token string `json:"token"`
+		}
+		_ = json.Unmarshal([]byte(answer), &out)
+		return out.Token
+	}
+	newDevices := func() int {
+		t.Helper()
+		_, body := e.do(t, "GET", "/api/v1/admin/events?limit=50", adminTok, "")
+		return strings.Count(body, `"kind":"new_device"`)
+	}
+	const browser = `{"username":"member","password":"member-password","device_name":"admin-web","device_id":"0f9e8d7c-6b5a-4938-a2b1-c0d9e8f7a6b5"}`
+	tok := login(browser)
+	login(browser)
+	if n := newDevices(); n != 1 {
+		t.Fatalf("two sign-ins from one browser = %d new devices, want 1", n)
+	}
+	login(`{"username":"member","password":"member-password","device_name":"phone"}`)
+	login(`{"username":"member","password":"member-password","device_name":"phone"}`)
+	if n := newDevices(); n != 3 {
+		t.Fatalf("sign-ins without a browser id = %d new devices, want 3", n)
+	}
+
+	// An admin signs that browser's session out: its next sign-in is announced.
+	var me struct {
+		ID int64 `json:"id"`
+	}
+	_, body := e.do(t, "GET", "/api/v1/me", tok, "")
+	_ = json.Unmarshal([]byte(body), &me)
+	_, body = e.do(t, "GET", "/api/v1/admin/devices?user_id="+strconv.FormatInt(me.ID, 10), adminTok, "")
+	var list struct {
+		Devices []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"devices"`
+	}
+	_ = json.Unmarshal([]byte(body), &list)
+	revoked := false
+	for _, d := range list.Devices {
+		if d.Name == "admin-web" {
+			resp, _ := e.do(t, "DELETE", "/api/v1/admin/devices/"+strconv.FormatInt(d.ID, 10), adminTok, "")
+			revoked = resp.StatusCode == http.StatusNoContent
+			break
+		}
+	}
+	if !revoked {
+		t.Fatalf("no admin-web device to sign out in %s", body)
+	}
+	login(browser)
+	if n := newDevices(); n != 4 {
+		t.Fatalf("a signed-out browser coming back = %d new devices, want 4", n)
 	}
 }
 

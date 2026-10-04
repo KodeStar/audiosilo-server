@@ -316,7 +316,7 @@ func TestLastSeenTracksTokenActivity(t *testing.T) {
 }
 
 // pairThrough resolves a code and mints its linked pairing token - the redeem
-// step of the pairing flow - returning the token secret for ConsumePairingToken.
+// step of the pairing flow - returning the token secret for ConsumePairing.
 func pairThrough(t *testing.T, s *Service, ctx context.Context, code string) string {
 	t.Helper()
 	rc, err := s.ResolveAuthCode(ctx, code)
@@ -359,7 +359,7 @@ func TestResolveAuthCode(t *testing.T) {
 	}
 	// An exhausted code is refused at resolve, so a QR that could never
 	// exchange is never rendered.
-	if _, err := s.ConsumePairingToken(ctx, pairThrough(t, s, ctx, code)); err != nil {
+	if _, err := consumePairing(s, ctx, pairThrough(t, s, ctx, code)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ResolveAuthCode(ctx, code); err != ErrInvalidCode {
@@ -367,14 +367,14 @@ func TestResolveAuthCode(t *testing.T) {
 	}
 }
 
-// TestConsumePairingTokenClaimsUse: the invite use is claimed at exchange, not
+// TestConsumePairingClaimsUse: the invite use is claimed at exchange, not
 // at redeem, and a failed claim burns nothing (allowed + denied).
-func TestConsumePairingTokenClaimsUse(t *testing.T) {
+func TestConsumePairingClaimsUse(t *testing.T) {
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, _ := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
 	tok := pairThrough(t, s, ctx, code)
-	got, err := s.ConsumePairingToken(ctx, tok)
+	got, err := consumePairing(s, ctx, tok)
 	if err != nil || got.ID != u.ID {
 		t.Fatalf("consume: %v user=%+v", err, got)
 	}
@@ -384,7 +384,7 @@ func TestConsumePairingTokenClaimsUse(t *testing.T) {
 	}
 	// The invite is spent, so the same token cannot pair another device - and
 	// the refusal must not push uses past the cap.
-	if _, err := s.ConsumePairingToken(ctx, tok); !errors.Is(err, ErrCodeExhausted) {
+	if _, err := consumePairing(s, ctx, tok); !errors.Is(err, ErrCodeExhausted) {
 		t.Fatalf("expected ErrCodeExhausted on reuse, got %v", err)
 	}
 	if codes, _ := s.ListAuthCodes(ctx, u.ID); codes[0].Uses != 1 {
@@ -411,7 +411,7 @@ func TestPairingClaimConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := s.ConsumePairingToken(ctx, tok); err == nil {
+			if _, err := consumePairing(s, ctx, tok); err == nil {
 				atomic.AddInt64(&ok, 1)
 			}
 		}()
@@ -431,11 +431,11 @@ func TestUnlinkedPairingTokenSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.ConsumePairingToken(ctx, tok)
+	got, err := consumePairing(s, ctx, tok)
 	if err != nil || got.ID != u.ID {
 		t.Fatalf("consume: %v user=%+v", err, got)
 	}
-	if _, err := s.ConsumePairingToken(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, tok); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("expected ErrInvalidToken on second consume, got %v", err)
 	}
 }
@@ -449,7 +449,7 @@ func TestExchangeStampsRedeemedAt(t *testing.T) {
 	if codes, _ := s.ListAuthCodes(ctx, u.ID); codes[0].RedeemedAt != "" {
 		t.Fatalf("invite should stay pending until a device pairs, got %q", codes[0].RedeemedAt)
 	}
-	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
+	if _, err := consumePairing(s, ctx, tok); err != nil {
 		t.Fatal(err)
 	}
 	codes, _ := s.ListAuthCodes(ctx, u.ID)
@@ -458,7 +458,7 @@ func TestExchangeStampsRedeemedAt(t *testing.T) {
 		t.Fatal("redeemed_at should be set after the first exchange (accepted)")
 	}
 	// COALESCE keeps the first acceptance stamp across later exchanges.
-	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
+	if _, err := consumePairing(s, ctx, tok); err != nil {
 		t.Fatal(err)
 	}
 	if codes, _ := s.ListAuthCodes(ctx, u.ID); codes[0].RedeemedAt != first {
@@ -473,11 +473,11 @@ func TestExpiredInviteRefusesExchange(t *testing.T) {
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, time.Hour)
 	tok := pairThrough(t, s, ctx, code)
-	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
+	if _, err := consumePairing(s, ctx, tok); err != nil {
 		t.Fatal(err)
 	}
 	*now = now.Add(2 * time.Hour) // advance past the invite's expiry
-	if _, err := s.ConsumePairingToken(ctx, tok); !errors.Is(err, ErrCodeExpired) {
+	if _, err := consumePairing(s, ctx, tok); !errors.Is(err, ErrCodeExpired) {
 		t.Fatalf("expected ErrCodeExpired past invite expiry, got %v", err)
 	}
 	if codes, _ := s.ListAuthCodes(ctx, u.ID); codes[0].Uses != 1 {
@@ -498,14 +498,14 @@ func TestRecoveryPairingTokenTTL(t *testing.T) {
 	tok := pairThrough(t, s, ctx, code)
 	// Within the window it exchanges repeatedly (max_uses = 0, nothing to claim
 	// down); past the TTL it is refused.
-	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
+	if _, err := consumePairing(s, ctx, tok); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
+	if _, err := consumePairing(s, ctx, tok); err != nil {
 		t.Fatal(err)
 	}
 	*now = now.Add(recoveryPairingTTL + time.Minute)
-	if _, err := s.ConsumePairingToken(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, tok); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("expected ErrInvalidToken past TTL, got %v", err)
 	}
 }
@@ -520,7 +520,7 @@ func TestRevokeAuthCodeKillsLinkedTokens(t *testing.T) {
 	if err := s.RevokeAuthCode(ctx, mustOneInviteID(t, s, ctx, u.ID)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumePairingToken(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, tok); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("expected ErrInvalidToken after code revoke, got %v", err)
 	}
 }
@@ -545,7 +545,7 @@ func TestRotateAuthCode(t *testing.T) {
 	if _, err := s.ResolveAuthCode(ctx, old); err != ErrInvalidCode {
 		t.Fatalf("old code after rotate = %v, want ErrInvalidCode", err)
 	}
-	if _, err := s.ConsumePairingToken(ctx, oldTok); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, oldTok); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("old QR token after rotate = %v, want ErrInvalidToken", err)
 	}
 	if _, err := s.ResolveAuthCode(ctx, fresh); err != nil {
@@ -608,7 +608,7 @@ func TestCreateInviteSupersedesActive(t *testing.T) {
 	// A spent (used-up) invite is history and must survive a new mint. Spending
 	// now means a device exchanged, not that the link was opened.
 	spent, _ := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
-	if _, err := s.ConsumePairingToken(ctx, pairThrough(t, s, ctx, spent)); err != nil { // uses=1 >= max → used up
+	if _, err := consumePairing(s, ctx, pairThrough(t, s, ctx, spent)); err != nil { // uses=1 >= max → used up
 		t.Fatal(err)
 	}
 	// A still-redeemable invite is active and must be superseded by a new mint.
@@ -623,7 +623,7 @@ func TestCreateInviteSupersedesActive(t *testing.T) {
 		t.Fatalf("superseded active invite = %v, want ErrInvalidCode", err)
 	}
 	// The superseded invite's outstanding pairing token dies with it (cascade).
-	if _, err := s.ConsumePairingToken(ctx, activeTok); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, activeTok); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("superseded invite's QR token = %v, want ErrInvalidToken", err)
 	}
 	if _, err := s.ResolveAuthCode(ctx, fresh); err != nil {
@@ -656,7 +656,7 @@ func TestRecoveryRedeemReturnsOwner(t *testing.T) {
 	if rc.User.ID != alice.ID {
 		t.Fatalf("recovery resolved as user %d, want owner %d", rc.User.ID, alice.ID)
 	}
-	got, err := s.ConsumePairingToken(ctx, pairThrough(t, s, ctx, code))
+	got, err := consumePairing(s, ctx, pairThrough(t, s, ctx, code))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 	if _, err := s.ResolveAuthCode(ctx, recovery); err != ErrInvalidCode {
 		t.Fatalf("disabled recovery resolve = %v, want ErrInvalidCode", err)
 	}
-	if _, err := s.ConsumePairingToken(ctx, tok); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, tok); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("disabled exchange = %v, want ErrInvalidToken", err)
 	}
 	// The rejected attempts must not have consumed the invite's single use or
@@ -703,7 +703,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 	if err := s.SetDisabled(ctx, u.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumePairingToken(ctx, tok); err != nil {
+	if _, err := consumePairing(s, ctx, tok); err != nil {
 		t.Fatalf("exchange after re-enable: %v", err)
 	}
 	if _, err := s.ResolveAuthCode(ctx, recovery); err != nil {
@@ -731,7 +731,7 @@ func TestRecoveryCodeLifecycle(t *testing.T) {
 	// Durable & reusable: it pairs repeatedly (unlike a bounded invite) - each
 	// resolve mints a token and each token exchanges.
 	for i := 0; i < 3; i++ {
-		if _, err := s.ConsumePairingToken(ctx, pairThrough(t, s, ctx, code)); err != nil {
+		if _, err := consumePairing(s, ctx, pairThrough(t, s, ctx, code)); err != nil {
 			t.Fatalf("recovery pairing #%d: %v", i+1, err)
 		}
 	}
@@ -742,7 +742,7 @@ func TestRecoveryCodeLifecycle(t *testing.T) {
 	if _, err := s.ResolveAuthCode(ctx, code); err != ErrInvalidCode {
 		t.Fatalf("old recovery code after regen = %v, want ErrInvalidCode", err)
 	}
-	if _, err := s.ConsumePairingToken(ctx, oldTok); !errors.Is(err, ErrInvalidToken) {
+	if _, err := consumePairing(s, ctx, oldTok); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("old recovery QR token after regen = %v, want ErrInvalidToken", err)
 	}
 	if _, err := s.ResolveAuthCode(ctx, fresh); err != nil {
@@ -950,4 +950,10 @@ func TestConsumePairingKind(t *testing.T) {
 	if _, kind, err := s.ConsumePairing(ctx, "bogus"); err == nil || kind != "" {
 		t.Fatalf("bogus: kind %q, %v", kind, err)
 	}
+}
+
+// consumePairing is ConsumePairing without the code kind, which most tests don't need.
+func consumePairing(s *Service, ctx context.Context, secret string) (*User, error) {
+	u, _, err := s.ConsumePairing(ctx, secret)
+	return u, err
 }

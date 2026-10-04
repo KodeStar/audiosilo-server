@@ -166,6 +166,10 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username   string `json:"username"`
 		Password   string `json:"password"`
 		DeviceName string `json:"device_name"`
+		// DeviceID is an optional random id the client keeps for itself (the admin
+		// console sends one), so signing in again from the same browser isn't
+		// announced as a new device. Older clients send none.
+		DeviceID string `json:"device_id"`
 	}
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -178,7 +182,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.loginLimiter.Reset(ip)
-	session, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindSession, req.DeviceName, 0)
+	session, knownBrowser, err := a.auth.IssueSession(r.Context(), u.ID, req.DeviceName, req.DeviceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue session")
 		return
@@ -188,7 +192,9 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return
 	}
-	a.reportSignIn(r, full, req.DeviceName, false)
+	if !knownBrowser {
+		a.reportSignIn(r, full, req.DeviceName, false)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": full, "server_id": a.config().ServerID})
 }
 
@@ -433,7 +439,8 @@ func (a *API) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // reportSignIn tells the notifications about a new session (not a demo
-// account's: those come and go by the dozen). The app is what the request's
+// account's: those come and go by the dozen; nor a password sign-in from a browser
+// the person signed in from before, see auth.IssueSession). The app is what the request's
 // X-AudioSilo-Client header says, if anything.
 func (a *API) reportSignIn(r *http.Request, u *auth.User, device string, viaInvite bool) {
 	if u.IsDemo {

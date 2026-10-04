@@ -3,7 +3,10 @@ import { ApiError } from '@/api/client';
 import { toast } from './toast';
 
 // Failures a person can fix carry a machine-readable code from the server
-// (respond.go); those get localized copy that says how. Anything else is shown
+// (respond.go); those get localized copy that says how. A code that comes with a
+// reason (invalid_target: which rule a field broke) is worded per reason as
+// `errors.<code>.<reason>`, with the limit in `max`; a reason this console doesn't
+// know yet falls back to the server's own sentence. Anything else is shown
 // as the server's message, which is still specific (invalid_override among
 // them: the server's sentence names the field and the rule, and the book page
 // maps it onto the field itself).
@@ -33,6 +36,10 @@ const BY_CODE: Record<string, string> = {
 /** A failure as one sentence for a toast or a field. */
 export function errorMessage(err: unknown, t: TFunction = i18n.t): string {
   if (err instanceof ApiError) {
+    if (err.code && err.reason) {
+      const text = t(`errors.${err.code}.${err.reason}`, { max: err.max, defaultValue: '' });
+      if (text) return text;
+    }
     const key = err.code ? BY_CODE[err.code] : undefined;
     if (key) return t(key);
     if (err.status === 429) return t('auth.rateLimited');

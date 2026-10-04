@@ -113,6 +113,7 @@ export function liveSession(over: Partial<ListeningSession> = {}): ListeningSess
     codec: 'aac',
     transcoded: false,
     finished: false,
+    backfilled: false,
     state: 'playing',
     chapter: 'Chapter 12',
     ip: '192.168.1.24',
@@ -153,6 +154,7 @@ export function activity(over: Partial<Activity> = {}): Activity {
   grid[5][21] = 2 * H;
   return {
     range: '7d',
+    estimated: 0,
     from: '2026-09-27T12:00:00Z',
     to: '2026-10-04T12:00:00Z',
     timezone: 'BST',
@@ -226,7 +228,7 @@ export function activity(over: Partial<Activity> = {}): Activity {
 
 export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
   return {
-    general: { name: '', public_url: '', update_check: true },
+    general: { name: '', public_url: '', update_check: true, session_days: 400 },
     network: {
       bind: '0.0.0.0:8080',
       tls_mode: 'selfsigned',

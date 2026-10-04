@@ -35,11 +35,6 @@ const (
 	// sends its next save with the position advanced by about the time that
 	// passed, and that listening belongs to the same session (continuousPlayback).
 	resumeWindow = 12 * time.Hour
-	// SessionRetention is how long raw sessions (device, app, time of day,
-	// playback mode) are kept before PruneSessions sums them into listening_daily.
-	// Just over a year, so the Activity page's longest range (a year, or the
-	// current calendar year) always reads raw sessions.
-	SessionRetention = 400 * 24 * time.Hour
 )
 
 // sessionTime is the session timestamp format: UTC with milliseconds, fixed
@@ -208,7 +203,10 @@ type Session struct {
 	Codec      string  `json:"codec"`
 	Transcoded bool    `json:"transcoded"`
 	Finished   bool    `json:"finished"`
-	State      string  `json:"state"`
+	// Backfilled: made at the upgrade from the players' listening spans
+	// (migration 0021), so the device, app and playback mode are unknown.
+	Backfilled bool   `json:"backfilled"`
+	State      string `json:"state"`
 	// Chapter (the chapter at the position) and IP (the device's newest address)
 	// are filled for live sessions only.
 	Chapter string `json:"chapter,omitempty"`
@@ -218,7 +216,7 @@ type Session struct {
 const sessionColumns = `s.id, s.user_id, u.username, s.library_id, s.rel_path,
 	COALESCE(b.title, ''), COALESCE(b.author, ''), s.token_id, s.device_name,
 	s.client_app, s.client_version, s.client_platform, s.started_at, s.last_at,
-	s.start_pos, s.end_pos, s.duration, s.speed, s.listened, s.codec, s.transcoded, s.finished`
+	s.start_pos, s.end_pos, s.duration, s.speed, s.listened, s.codec, s.transcoded, s.finished, s.backfilled`
 
 // listenedSQL keeps a session out of every list and total until it has recorded
 // some listening: a single save (a player's "mark finished", another app syncing
@@ -235,7 +233,8 @@ func (c *Catalog) scanSession(rows *sql.Rows, s *Session, extra ...any) error {
 	var cl Client
 	dest := []any{&s.ID, &s.UserID, &s.Username, &s.LibraryID, &s.Path, &s.Title, &s.Author,
 		&s.DeviceID, &s.DeviceName, &cl.App, &cl.Version, &cl.Platform, &s.StartedAt, &s.LastAt,
-		&s.StartPos, &s.EndPos, &s.Duration, &s.Speed, &s.Listened, &s.Codec, &s.Transcoded, &s.Finished}
+		&s.StartPos, &s.EndPos, &s.Duration, &s.Speed, &s.Listened, &s.Codec, &s.Transcoded, &s.Finished,
+		&s.Backfilled}
 	if err := rows.Scan(append(dest, extra...)...); err != nil {
 		return err
 	}

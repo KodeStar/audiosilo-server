@@ -24,6 +24,11 @@ type Activity struct {
 	// UTCOffset is the server's offset from UTC at To, in minutes.
 	UTCOffset int            `json:"utc_offset"`
 	Totals    ActivityTotals `json:"totals"`
+	// Estimated is how much of Totals.Listened is an estimate (seconds): listening
+	// from before the server recorded sessions that the players' spans didn't
+	// cover (migration 0021). It is in the totals and the top lists, never in Days
+	// or HourWeekday.
+	Estimated float64 `json:"estimated"`
 	// Previous is the same length of time just before From, for the deltas.
 	Previous ActivityTotals `json:"previous"`
 	// Days has one entry per day of the period, oldest first, zeros included.
@@ -305,6 +310,7 @@ type listenAcc struct {
 	onlyUser int64 // only this user's listening (0 = everyone's)
 
 	listened  float64
+	estimated float64 // the part of listened that is estimated (listening_daily.estimated)
 	sessions  int
 	listeners map[int64]bool
 	books     map[Ref]*bookAcc
@@ -368,7 +374,7 @@ type listenRow struct {
 }
 
 // add credits secs of listening to a row on a local day (and, for a raw session,
-// an hour).
+// an hour). An estimate has no day ("") and stays out of the per-day listening.
 func (a *listenAcc) add(r listenRow, day string, hour *time.Time, secs float64) {
 	a.listened += secs
 	a.listeners[r.user] = true
@@ -382,10 +388,12 @@ func (a *listenAcc) add(r listenRow, day string, hour *time.Time, secs float64) 
 	if a.level < listenDays {
 		return
 	}
-	if a.days[day] == nil {
-		a.days[day] = map[int64]float64{}
+	if day != "" {
+		if a.days[day] == nil {
+			a.days[day] = map[int64]float64{}
+		}
+		a.days[day][r.user] += secs
 	}
-	a.days[day][r.user] += secs
 	if a.level < listenAll {
 		return
 	}
@@ -461,7 +469,7 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT s.user_id, s.library_id, s.rel_path, `+cols+`,
 		        s.started_at, s.last_at, s.listened, s.codec, s.transcoded,
-		        s.token_id, s.client_app, s.client_version, s.client_platform
+		        s.token_id, s.client_app, s.client_version, s.client_platform, s.backfilled
 		   FROM listening_sessions s `+joins+`
 		  WHERE s.started_at < ? AND s.last_at >= ? AND (? = 0 OR s.user_id = ?) AND `+listenedSQL,
 		formatSessionTime(a.to), formatSessionTime(a.from), a.onlyUser, a.onlyUser)
@@ -477,14 +485,21 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 			transcoded           bool
 			token                int64
 			client               Client
+			backfilled           bool
 		)
 		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar,
 			&startS, &lastS, &listened, &codec, &transcoded, &token, &client.App, &client.Version,
-			&client.Platform); err != nil {
+			&client.Platform, &backfilled); err != nil {
 			return err
 		}
-		a.addSession(r, parseSessionTime(startS), parseSessionTime(lastS), listened, playKey{transcoded, codec})
-		if a.level == listenAll {
+		// A session backfilled from the players' spans never recorded its device,
+		// app or playback mode: it counts as listening, not in those breakdowns.
+		mode := &playKey{transcoded, codec}
+		if backfilled {
+			mode = nil
+		}
+		a.addSession(r, parseSessionTime(startS), parseSessionTime(lastS), listened, mode)
+		if a.level == listenAll && !backfilled {
 			if a.clients[client] == nil {
 				a.clients[client] = map[int64]bool{}
 			}
@@ -496,8 +511,9 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 
 // addSession credits one raw session: its listening spread over the hours it
 // covers (only the part inside the period counts), the session itself if it
-// started in the period, its playback mode and its span for the peak.
-func (a *listenAcc) addSession(r listenRow, start, last time.Time, listened float64, mode playKey) {
+// started in the period, its playback mode (unless mode is nil: not recorded)
+// and its span for the peak.
+func (a *listenAcc) addSession(r listenRow, start, last time.Time, listened float64, mode *playKey) {
 	var inRange float64
 	spreadListening(start, last, listened, a.loc, func(hour time.Time, secs float64) {
 		if hour.Before(a.firstHour) || !hour.Before(a.endHour) {
@@ -513,11 +529,11 @@ func (a *listenAcc) addSession(r listenRow, start, last time.Time, listened floa
 	if a.level < listenAll {
 		return
 	}
-	if inRange > 0 || startedIn {
-		p := a.playback[mode]
+	if mode != nil && (inRange > 0 || startedIn) {
+		p := a.playback[*mode]
 		if p == nil {
 			p = &PlaybackShare{Transcoded: mode.transcoded, Codec: mode.codec}
-			a.playback[mode] = p
+			a.playback[*mode] = p
 		}
 		p.Listened += inRange
 		if startedIn {
@@ -536,7 +552,7 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 		cols, joins = listenRowBlanks, ""
 	}
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT d.user_id, d.library_id, d.rel_path, `+cols+`, d.day, d.listened, d.sessions
+		`SELECT d.user_id, d.library_id, d.rel_path, `+cols+`, d.day, d.listened, d.sessions, d.estimated
 		   FROM listening_daily d `+joins+`
 		  WHERE d.day >= ? AND d.day <= ? AND (? = 0 OR d.user_id = ?)`, a.firstDay, a.lastDay, a.onlyUser, a.onlyUser)
 	if err != nil {
@@ -545,14 +561,19 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 	defer rows.Close()
 	for rows.Next() {
 		var (
-			r        listenRow
-			day      string
-			listened float64
-			sessions int
+			r         listenRow
+			day       string
+			listened  float64
+			sessions  int
+			estimated bool
 		)
 		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar,
-			&day, &listened, &sessions); err != nil {
+			&day, &listened, &sessions, &estimated); err != nil {
 			return err
+		}
+		if estimated {
+			a.estimated += listened
+			day = "" // no day of its own: in the totals and tops, not the day-by-day
 		}
 		a.add(r, day, nil, listened)
 		a.countSession(r, sessions)
@@ -571,6 +592,7 @@ func (a *listenAcc) totals(finished map[int64]int) ActivityTotals {
 // result writes the accumulated listening into out.
 func (a *listenAcc) result(out *Activity, finished map[int64]int) {
 	out.Totals = a.totals(finished)
+	out.Estimated = a.estimated
 	out.HourWeekday = a.hw
 	out.Days = a.dayList()
 	out.TopBooks = []TopBook{}

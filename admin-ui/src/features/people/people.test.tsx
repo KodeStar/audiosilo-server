@@ -258,6 +258,28 @@ describe('a person', () => {
     );
   });
 
+  it('counts their devices, and lists their API keys apart', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/devices': {
+          body: {
+            devices: [
+              device(),
+              device({ id: 3, kind: 'api', name: 'Home Assistant', client: null }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/people/user/2?tab=devices');
+    // The count is devices only, as the person card's devices line counts them.
+    expect(await screen.findByRole('tab', { name: /^Devices\s*1$/ })).toBeInTheDocument();
+    expect(await screen.findByText("Sam's iPhone")).toBeInTheDocument();
+    const keys = screen.getByRole('region', { name: 'API key' });
+    expect(within(keys).getByText('Home Assistant')).toBeInTheDocument();
+    expect(within(keys).queryByText("Sam's iPhone")).not.toBeInTheDocument();
+  });
+
   it('404s an unknown person', async () => {
     mockFetch(
       routes({ 'GET /admin/users/99': { status: 404, body: { error: 'user not found' } } }),

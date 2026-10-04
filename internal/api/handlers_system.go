@@ -33,6 +33,10 @@ type Runtime struct {
 	Notify    *notify.Service  // the event feed's notifications (nil: none, which records nothing)
 }
 
+// SessionRetention is how long raw listening sessions are kept, as the live
+// settings have it (Settings > General), for the launcher's daily retention job.
+func (a *API) SessionRetention() time.Duration { return a.config().Activity.SessionRetention() }
+
 // SetRuntime sets what the launcher reports about the process. Call before Handler().
 func (a *API) SetRuntime(rt Runtime) {
 	if rt.StartedAt.IsZero() {

@@ -350,7 +350,7 @@ func (a *API) Handler() http.Handler {
 	// stuck DB connection fails fast with 503 instead of hanging forever.
 	var h http.Handler = mux
 	h = a.timeout(h)
-	h = a.rateLimit(h)
+	h = a.rateLimit(mux, h)
 	h = a.realIP(h)
 	h = a.cors(h)
 	h = a.secureHeaders(h)

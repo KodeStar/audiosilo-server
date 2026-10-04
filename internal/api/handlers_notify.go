@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/notify"
@@ -56,7 +57,7 @@ type targetBody struct {
 func (b targetBody) apply(t *catalog.NotifyTarget, creating bool) error {
 	if b.Kind != nil {
 		if !creating && *b.Kind != t.Kind {
-			return &notify.FieldError{Field: "kind", Err: errors.New("a destination's kind can't change; add a new one")}
+			return notify.Refuse("kind", notify.ReasonKindFixed, "a destination's kind can't change; add a new one")
 		}
 		t.Kind = *b.Kind
 	}
@@ -68,7 +69,7 @@ func (b targetBody) apply(t *catalog.NotifyTarget, creating bool) error {
 		// address it was given for: one moving to another server must come again (or
 		// be cleared), or it would be sent where it was never meant to go.
 		if !creating && b.Secret == nil && t.Secret != "" && !notify.SameOrigin(t.URL, *b.URL) {
-			return &notify.FieldError{Field: "secret", Err: errors.New("enter the secret again for the new address, or clear it")}
+			return notify.Refuse("secret", notify.ReasonSecretAgain, "enter the secret again for the new address, or clear it")
 		}
 		t.URL = *b.URL
 	}
@@ -211,14 +212,19 @@ func (a *API) writeTargetError(w http.ResponseWriter, err error, op string) {
 }
 
 // handleServerEvents lists the event feed, newest first (admin only): GET
-// /admin/events?before=&limit= (<= 100).
+// /admin/events?before=&limit= (<= 100)&kind= (one of notify.Kinds, else 400).
 func (a *API) handleServerEvents(w http.ResponseWriter, r *http.Request) {
 	before, ok := parseOptionalID(r.URL.Query().Get("before"))
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid before")
 		return
 	}
-	events, next, err := a.cat.ListServerEvents(r.Context(), before, queryInt(r, "limit", 20))
+	kind := r.URL.Query().Get("kind")
+	if kind != "" && !slices.Contains(notify.Kinds, kind) {
+		writeError(w, http.StatusBadRequest, "invalid kind")
+		return
+	}
+	events, next, err := a.cat.ListServerEvents(r.Context(), before, queryInt(r, "limit", 20), kind)
 	if err != nil {
 		a.writeCatalogError(w, err, "events: list", "could not load the notifications")
 		return

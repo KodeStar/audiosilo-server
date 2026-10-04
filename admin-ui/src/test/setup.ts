@@ -1,7 +1,11 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach } from 'vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import '@/i18n';
+
+// Each screen is a lazy chunk; its first import, with every core running a test
+// file (vitest 5's default pool), can take longer than findBy's 1 s default.
+configure({ asyncUtilTimeout: 3000 });
 
 // jsdom gaps the UI libraries touch: cmdk measures its list with ResizeObserver
 // and scrolls the active item into view; the theme code reads matchMedia; Base

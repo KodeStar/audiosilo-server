@@ -89,7 +89,7 @@ const (
 	codeBackupNotFound     = "backup_not_found"
 	codeInvalidBackup      = "invalid_backup"
 	codeBackupTooNew       = "backup_too_new"
-	codeInvalidTarget      = "invalid_target" // + "field": the destination field it names
+	codeInvalidTarget      = "invalid_target" // + "field", "reason" (notify.Reason*), "max" for a length
 	codeTooManyTargets     = "too_many_targets"
 )
 
@@ -113,9 +113,11 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 	var te *notify.FieldError
 	switch {
 	case errors.As(err, &te):
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": te.Error(), "code": codeInvalidTarget, "field": te.Field,
-		})
+		body := map[string]any{"error": te.Error(), "code": codeInvalidTarget, "field": te.Field, "reason": te.Reason}
+		if te.Max > 0 {
+			body["max"] = te.Max
+		}
+		writeJSON(w, http.StatusBadRequest, body)
 	case errors.Is(err, catalog.ErrTooManyTargets):
 		writeErrorCode(w, http.StatusConflict, codeTooManyTargets,
 			fmt.Sprintf("a server can have at most %d destinations", catalog.MaxNotifyTargets))

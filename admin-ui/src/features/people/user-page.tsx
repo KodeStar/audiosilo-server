@@ -40,7 +40,14 @@ import { InviteDialog } from './invite-dialog';
 import { InviteTable } from './invites-page';
 import { PasswordDialog } from './password-dialog';
 import { ListeningTab } from './user-listening';
-import { ruleLabel, shareLabel, sortInvites, wholeLibraryOf, type UserTab } from './people-model';
+import {
+  ruleLabel,
+  shareLabel,
+  signedIn,
+  sortInvites,
+  wholeLibraryOf,
+  type UserTab,
+} from './people-model';
 
 /**
  * One person: their listening (year, progress, sessions), what they can listen to,
@@ -126,7 +133,7 @@ function UserView({ detail }: { detail: UserDetail }) {
         <TabsList className="mb-6" aria-label={t('user.tabs')}>
           <TabsTab value="listening">{t('user.tab.listening')}</TabsTab>
           <TabsTab value="access">{t('user.tab.access')}</TabsTab>
-          <TabsTab value="devices" count={devices.data?.length}>
+          <TabsTab value="devices" count={devices.data && signedIn(devices.data).length}>
             {t('user.tab.devices')}
           </TabsTab>
           <TabsTab value="invites" count={codes.length}>
@@ -179,22 +186,37 @@ function DevicesTab({
     );
   }
   if (!devices.data) return <div className="skel h-24 rounded-xl" />;
-  if (devices.data.length === 0) {
-    return (
-      <EmptyState
-        icon={Smartphone}
-        title={t('user.devices.emptyTitle')}
-        body={t('user.devices.emptyBody', { name: user.username })}
-        action={
-          <Button onClick={onPair} disabled={user.disabled}>
-            <QrCode aria-hidden="true" />
-            {t('user.pairDevice')}
-          </Button>
-        }
-      />
-    );
-  }
-  return <DeviceList devices={devices.data} showPerson={false} />;
+  // Devices first, as the tab counts them and the person card lists them; the
+  // person's API keys follow under their own heading.
+  const sessions = signedIn(devices.data);
+  const keys = devices.data.filter((d) => d.kind === 'api');
+  return (
+    <div className="flex flex-col gap-5">
+      {sessions.length ? (
+        <DeviceList devices={sessions} showPerson={false} />
+      ) : (
+        <EmptyState
+          icon={Smartphone}
+          title={t('user.devices.emptyTitle')}
+          body={t('user.devices.emptyBody', { name: user.username })}
+          action={
+            <Button onClick={onPair} disabled={user.disabled}>
+              <QrCode aria-hidden="true" />
+              {t('user.pairDevice')}
+            </Button>
+          }
+        />
+      )}
+      {keys.length ? (
+        <section aria-labelledby="user-keys-title" className="flex flex-col gap-2.5">
+          <h2 id="user-keys-title" className="eyebrow">
+            {t('user.devices.keys', { count: keys.length })}
+          </h2>
+          <DeviceList devices={keys} showPerson={false} />
+        </section>
+      ) : null}
+    </div>
+  );
 }
 
 function AccessTab({ detail }: { detail: UserDetail }) {

@@ -203,7 +203,7 @@ func TestWebhookDelivery(t *testing.T) {
 	// The outcome is recorded on the destination.
 	waitRecorded(t, cat, 1)
 	// The event is in the feed either way.
-	events, _, err := cat.ListServerEvents(ctx, 0, 10)
+	events, _, err := cat.ListServerEvents(ctx, 0, 10, "")
 	if err != nil || len(events) != 1 || events[0].Kind != KindNewDevice {
 		t.Fatalf("feed = %+v, %v", events, err)
 	}
@@ -240,7 +240,7 @@ func TestNtfyAndDiscordBodies(t *testing.T) {
 		t.Fatalf("ntfy body = %v", got.body)
 	}
 
-	events, _, _ := cat.ListServerEvents(ctx, 0, 1)
+	events, _, _ := cat.ListServerEvents(ctx, 0, 1, "")
 	m := compose(events[0], s.server())
 	b, _ := json.Marshal(discordBody(m, s.server()))
 	var d map[string]any
@@ -305,7 +305,7 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 	s.UpdateFound(ctx, "v2.0.0", "Two", "https://github.com/KodeStar/audiosilo-server/releases/v2.0.0")
 	s.UpdateFound(ctx, "v2.0.0", "Two", "https://github.com/KodeStar/audiosilo-server/releases/v2.0.0")
 	s.UpdateFound(ctx, "v2.0.1", "Two.1", "https://github.com/KodeStar/audiosilo-server/releases/v2.0.1")
-	if events, _, _ := cat.ListServerEvents(ctx, 0, 10); len(events) != 2 {
+	if events, _, _ := cat.ListServerEvents(ctx, 0, 10, ""); len(events) != 2 {
 		t.Fatalf("update events = %d, want one per version", len(events))
 	}
 
@@ -324,7 +324,7 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 		s.ScanFinished(ctx, library.RunReport{Library: *lib, RunID: id, Status: status})
 	}
 	count := func() int {
-		events, _, _ := cat.ListServerEvents(ctx, 0, 50)
+		events, _, _ := cat.ListServerEvents(ctx, 0, 50, "")
 		n := 0
 		for _, e := range events {
 			if e.Kind == KindLibraryUnavailable {
@@ -362,7 +362,7 @@ func TestNilServiceIsSafe(t *testing.T) {
 func TestSignedInDeviceIsOneLine(t *testing.T) {
 	s, cat, ctx := newService(t)
 	s.SignedIn(ctx, "sam", "Phone\n@everyone\x00"+strings.Repeat("x", 200), "", true)
-	events, _, _ := cat.ListServerEvents(ctx, 0, 10)
+	events, _, _ := cat.ListServerEvents(ctx, 0, 10, "")
 	if len(events) != 2 || events[0].Kind != KindInviteRedeemed || events[1].Kind != KindNewDevice {
 		t.Fatalf("events = %+v", events)
 	}
@@ -400,7 +400,7 @@ func TestScanFailureDetailStaysHome(t *testing.T) {
 	if strings.Contains(string(got.raw), "/mnt/private") {
 		t.Fatalf("the detail left the server: %s", got.raw)
 	}
-	events, _, _ := cat.ListServerEvents(ctx, 0, 1)
+	events, _, _ := cat.ListServerEvents(ctx, 0, 1, "")
 	if events[0].Data["detail"] != "open /mnt/private/fiction: permission denied" {
 		t.Fatalf("the feed lost the detail: %v", events[0].Data)
 	}
