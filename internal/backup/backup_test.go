@@ -341,8 +341,10 @@ func TestScheduleTicksDontListTheFolder(t *testing.T) {
 	if !e.svc.due() {
 		t.Fatal("the next slot isn't due")
 	}
-	if lists != before {
-		t.Fatalf("ticks after a backup listed the folder %d times", lists-before)
+	// Once: the delete may have removed the newest scheduled backup, so the next
+	// tick lists the folder again; the ticks after it don't.
+	if lists != before+1 {
+		t.Fatalf("ticks after a backup and a delete listed the folder %d times, want once", lists-before)
 	}
 }
 

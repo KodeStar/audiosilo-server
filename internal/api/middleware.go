@@ -153,7 +153,7 @@ func clientIP(r *http.Request) string {
 // calls into 429s.
 func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h, _ := mux.Handler(r); !web.IsStatic(h) && !a.ipLimiter.Allow(clientIP(r)) {
+		if h, _ := mux.Handler(r); !web.IsStatic(h, r) && !a.ipLimiter.Allow(clientIP(r)) {
 			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}

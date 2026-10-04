@@ -233,6 +233,26 @@ func TestIssueSessionKnowsTheBrowser(t *testing.T) {
 	if !known(bob, key) {
 		t.Fatal("signing out ann's browser forgot bob's")
 	}
+	// A new password, or disabling the account, forgets every browser of that person.
+	if !known(ann, key) {
+		t.Fatal("setup: the browser should be known again")
+	}
+	if err := s.SetPassword(ctx, ann.ID, "another-long-password"); err != nil {
+		t.Fatal(err)
+	}
+	if known(ann, key) {
+		t.Fatal("a browser is still known after a new password")
+	}
+	if err := s.SetDisabled(ctx, bob.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDisabled(ctx, bob.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if known(bob, key) {
+		t.Fatal("a browser is still known after the account was disabled")
+	}
+
 	// The key is never stored as sent.
 	var n int
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE sign_in_key = ?`, key).Scan(&n)

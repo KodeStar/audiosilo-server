@@ -6,6 +6,7 @@
 -- already carries is not a new device. Empty: the client sent none (a player, a
 -- paired device, an API key), which is always announced. An admin signing a
 -- session out from People > Devices blanks its key on every session of that
--- person, so the same browser is announced again if it comes back.
+-- person, and a new password or a disabled account blanks all of theirs, so a
+-- browser is announced again if it comes back.
 ALTER TABLE tokens ADD COLUMN sign_in_key TEXT NOT NULL DEFAULT '';
 CREATE INDEX idx_tokens_sign_in_key ON tokens(user_id, sign_in_key) WHERE sign_in_key <> '';

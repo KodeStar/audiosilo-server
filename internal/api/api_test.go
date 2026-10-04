@@ -1309,16 +1309,18 @@ func TestRateLimitSkipsStaticFiles(t *testing.T) {
 		return rec.Code
 	}
 	for i := range 200 {
-		if code := get("/admin/assets/chunk.js"); code == http.StatusTooManyRequests {
-			t.Fatalf("static request %d was rate limited", i)
+		for _, path := range []string{"/admin/assets/chunk.js", "/"} {
+			if code := get(path); code == http.StatusTooManyRequests {
+				t.Fatalf("static request %d (%s) was rate limited", i, path)
+			}
 		}
 	}
 	if code := get("/api/v1/server"); code == http.StatusTooManyRequests {
 		t.Fatal("static requests used up the API's budget")
 	}
 	// Anything not a static file is limited, outside /api/ too (the health check
-	// and the setup page read the database).
-	for _, path := range []string{"/api/v1/server", "/healthz", "/setup"} {
+	// and the setup page read the database; an unknown path is the catch-all's 404).
+	for _, path := range []string{"/api/v1/server", "/healthz", "/setup", "/wp-login.php"} {
 		limited := false
 		for range 200 {
 			if get(path) == http.StatusTooManyRequests {

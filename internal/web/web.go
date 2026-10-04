@@ -91,14 +91,16 @@ func Register(mux *http.ServeMux, webDir string) error {
 	connect := page(files, sub, "index.html")
 	static.HandleFunc("GET /connect", connect)
 	static.HandleFunc("GET /connect/", connect)
-	static.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	// The catch-all is a static file only at "/": the 404s it answers elsewhere are
+	// counted like any other request.
+	mux.Handle("GET /", staticHandler{onlyRoot: true, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// "/" is the catch-all; only the exact root serves the connect page.
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
 		connect(w, r)
-	})
+	})})
 
 	if fsys, ok := playerFS(webDir); ok && spa.IsFile(fsys, "index.html") {
 		static.Handle("GET /web/", spa.Handler(spa.Config{
@@ -225,14 +227,20 @@ func sortedKeys(m map[string]struct{}) []string {
 // per-IP rate limit can leave them out (IsStatic).
 type staticMux struct{ mux *http.ServeMux }
 
-func (m staticMux) Handle(pattern string, h http.Handler) { m.mux.Handle(pattern, staticHandler{h}) }
+func (m staticMux) Handle(pattern string, h http.Handler) {
+	m.mux.Handle(pattern, staticHandler{Handler: h})
+}
 
 func (m staticMux) HandleFunc(pattern string, h http.HandlerFunc) { m.Handle(pattern, h) }
 
-type staticHandler struct{ http.Handler }
+type staticHandler struct {
+	http.Handler
+	onlyRoot bool // the "/" catch-all: static for "/" itself, not its 404s
+}
 
-// IsStatic reports whether h is one of Register's static-file handlers.
-func IsStatic(h http.Handler) bool {
-	_, ok := h.(staticHandler)
-	return ok
+// IsStatic reports whether h, the handler the mux picked for r, is one of
+// Register's static-file handlers for that request.
+func IsStatic(h http.Handler, r *http.Request) bool {
+	s, ok := h.(staticHandler)
+	return ok && (!s.onlyRoot || r.URL.Path == "/")
 }

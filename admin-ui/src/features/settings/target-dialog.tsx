@@ -18,9 +18,9 @@ import { Field, FormError } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { describedBy } from '@/lib/a11y';
+import { errorMessage } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { DEFAULT_EVENTS, TARGET_FORM, TARGET_KINDS, toggleEvent, withTarget } from './notify-model';
-import { errorMessage } from '@/lib/errors';
 
 interface Values {
   kind: NotifyTargetKind;

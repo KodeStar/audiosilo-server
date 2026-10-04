@@ -245,7 +245,8 @@ var signInKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
 // id the signing-in browser keeps for itself ("" or malformed: it sent none, and
 // the sign-in counts as a new device). knownBrowser reports whether an earlier
 // session of the same person came from that browser, revoked ones included (a
-// sign-out keeps the key; an admin's RevokeDevice forgets it).
+// sign-out keeps the key; an admin's RevokeDevice forgets it, and a new password
+// or disabling the account forgets them all: forgetBrowsers).
 func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, signInKey string) (secret string, knownBrowser bool, err error) {
 	keyHash := ""
 	if signInKeyPattern.MatchString(signInKey) {
@@ -1080,9 +1081,16 @@ func (s *Service) SetDisabled(ctx context.Context, id int64, disabled bool) erro
 			}
 		}
 	}
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?`, disabled, s.ts(), id)
-	return err
+	return s.db.WithTx(ctx, "SetDisabled", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?`, disabled, s.ts(), id); err != nil {
+			return err
+		}
+		if !disabled {
+			return nil
+		}
+		return forgetBrowsers(ctx, tx, id)
+	})
 }
 
 // DeleteUser permanently removes an account. Deleting the last enabled admin is
@@ -1158,8 +1166,22 @@ func (s *Service) SetPassword(ctx context.Context, id int64, password string) er
 			return ErrAdminNeedsPassword
 		}
 	}
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, s.ts(), id)
+	return s.db.WithTx(ctx, "SetPassword", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, s.ts(), id); err != nil {
+			return err
+		}
+		return forgetBrowsers(ctx, tx, id)
+	})
+}
+
+// forgetBrowsers forgets every browser the person signed in from (IssueSession),
+// so the next password sign-in from any of them is announced as a new device. A
+// new password or a disabled account is what follows a stolen one: whoever had it
+// must not come back unannounced from the browser they used.
+func forgetBrowsers(ctx context.Context, ex sqlExecer, userID int64) error {
+	_, err := ex.ExecContext(ctx,
+		`UPDATE tokens SET sign_in_key = '' WHERE user_id = ? AND sign_in_key <> ''`, userID)
 	return err
 }
 

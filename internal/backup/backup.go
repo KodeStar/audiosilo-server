@@ -514,7 +514,14 @@ func (s *Service) Delete(name string) error {
 			return err
 		}
 	}
-	return os.Remove(p)
+	if err := os.Remove(p); err != nil {
+		return err
+	}
+	// It may have been the newest scheduled one: the scheduler lists again.
+	s.mu.Lock()
+	s.newestKnown = false
+	s.mu.Unlock()
+	return nil
 }
 
 // PendingRestore is a restore waiting for the next start.
