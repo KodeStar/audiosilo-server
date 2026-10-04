@@ -281,6 +281,10 @@ admin overrides; see Metadata overrides below).
   the console and the web player share: files under the asset dirs are immutable and 404 when
   missing, other files and HTML revalidate, a missing top-level file with an extension 404s,
   anything else boots `index.html` for client routing; MIME types are pinned process-wide.
+  Every static file (console, player, connect/setup assets) carries a strong content-hash ETag
+  (a match is a 304, documents included) and text types go out gzipped to clients that accept it
+  (`spa.Files`: worked out once per file and kept, redone when a web_dir file's size or mtime
+  changes; never for a Range request; `Vary: Accept-Encoding`).
   **The CSP does not change for it**: no inline script/style anywhere (`theme-init.js` is
   external, Base UI runs under `CSPProvider disableStyleElements`, banned libraries are
   ESLint-enforced, `admin-ui/scripts/check-csp.mjs` fails the build and `TestEmbeddedBuild`
