@@ -1,38 +1,38 @@
-import type { ListeningRow } from '@/api/types';
-
-/**
- * How recently a progress update must have landed for the row to count as
- * "listening now". Players save progress every few seconds while playing, so a
- * pause longer than this reads as stopped. Phase 4a replaces this with real
- * sessions.
- */
-export const LIVE_WINDOW_MS = 10 * 60 * 1000;
+import type { ListeningRow, ListeningSession } from '@/api/types';
+import { liveSummary, sortLive } from '@/features/activity/live-model';
+import { refKey } from '@/lib/book-route';
 
 /** The recent-listening list on Overview shows at most this many rows. */
 export const RECENT_LIMIT = 8;
 
 export interface ListeningSplit {
-  live: ListeningRow[];
-  /** Distinct people among `live` (one person can have several books in progress). */
+  /** The server's live sessions (one per device), playing first. */
+  live: ListeningSession[];
+  /** Distinct people among `live` (one person can listen on two devices). */
   listeners: number;
+  /** The newest progress that isn't live right now. */
   recent: ListeningRow[];
   inProgress: number;
 }
 
+const key = (r: { user_id: number; library_id: number; path: string }) =>
+  `${r.user_id}\0${refKey(r)}`;
+
 /**
- * Splits the admin listening feed (newest first from the server, but sorted
- * here too so the UI never depends on it) into who is listening right now and
- * the recent history.
+ * Splits the Overview's listening into who is listening right now (the server's
+ * live sessions) and the recent history (the admin progress feed, newest first,
+ * without the books being listened to now).
  */
-export function splitListening(rows: readonly ListeningRow[], now: number): ListeningSplit {
+export function splitListening(
+  rows: readonly ListeningRow[],
+  live: readonly ListeningSession[],
+): ListeningSplit {
   const sorted = [...rows].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-  const isLive = (r: ListeningRow) =>
-    !r.finished && now - Date.parse(r.updated_at) <= LIVE_WINDOW_MS;
-  const live = sorted.filter(isLive);
+  const now = new Set(live.map(key));
   return {
-    live,
-    listeners: new Set(live.map((r) => r.user_id)).size,
-    recent: sorted.filter((r) => !isLive(r)).slice(0, RECENT_LIMIT),
+    live: sortLive(live),
+    listeners: liveSummary(live).listeners,
+    recent: sorted.filter((r) => !now.has(key(r))).slice(0, RECENT_LIMIT),
     inProgress: sorted.filter((r) => !r.finished).length,
   };
 }

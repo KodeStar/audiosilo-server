@@ -572,8 +572,15 @@ admin overrides; see Metadata overrides below).
   /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET
   /admin/users/{id}/progress`, `PATCH /admin/libraries/{id}/progress?path=&user_id=`
   (`catalog.EditProgress`: finished / position / dates, stamped with server time + version so it
-  beats stale device saves) and `GET /admin/stats?range=7d|30d|90d|1y|<year>` (adds `activity`,
-  `catalog.ActivityFor`, bucketed in server time; 400 `invalid_range`). Sessions and roll-ups move
+  beats stale device saves; it starts progress only on a book the *user* can see, by the user's own
+  scope, else 409 `no_access`, while existing rows stay editable after access is taken away; a
+  `YYYY-MM-DD` date is the start of that day for `started_at` and the end of it, or now if sooner, for
+  `finished_at`) and `GET /admin/stats?range=7d|30d|90d|1y|<year>|year` (`year` = the current year in
+  server time, labelled with it, so the browser's clock never picks the year; answers only `{"activity"}`,
+  `catalog.ActivityFor`, bucketed in server time, without the Overview's figures; 400 `invalid_range`),
+  plus `GET /admin/listening?range=&user_id=` (`catalog.ListeningDaysFor`: the same days, of everyone
+  or one person, and nothing else: the year calendar and a person's listening year). Book-page
+  listeners carry `started_at`/`finished_at`. Sessions and roll-ups move
   with the book (`MoveDurableState`).
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
@@ -618,7 +625,7 @@ admin overrides; see Metadata overrides below).
 - **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
   counts (`catalog.CountBooksByLibrary`) and a cross-user "currently listening"
   feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path);
-  with `?range=` it adds the Activity page's `activity` block (see Phase 4a above).
+  with `?range=` it answers the Activity page's `activity` block instead (see Phase 4a above).
 - **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
   ties) in `catalog.SaveProgress` - the realtime layer (Phase C) must reuse it so
   REST and WebSocket writes converge.

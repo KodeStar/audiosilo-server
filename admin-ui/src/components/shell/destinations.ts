@@ -32,14 +32,14 @@ export const DESTINATIONS: readonly Destination[] = [
     route: '/people/{-$section}',
     icon: Users,
     sections: ['people', 'invites', 'shares', 'devices'],
-    pending: { devices: '4c' },
+    pending: {},
   },
   {
     key: 'activity',
     route: '/activity/{-$section}',
     icon: Activity,
     sections: ['overview', 'live', 'sessions', 'year'],
-    pending: { overview: '4c', live: '4c', sessions: '4c', year: '4c' },
+    pending: {},
   },
   {
     key: 'health',

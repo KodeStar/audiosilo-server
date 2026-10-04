@@ -53,6 +53,10 @@ type Listener struct {
 	Duration  float64 `json:"duration"`
 	Finished  bool    `json:"finished"`
 	UpdatedAt string  `json:"updated_at"`
+	// StartedAt and FinishedAt are when the user started and finished the book
+	// (null when not known), as on GET /admin/users/{id}/progress.
+	StartedAt  *string `json:"started_at"`
+	FinishedAt *string `json:"finished_at"`
 }
 
 // BookShare is a share that includes the book, and the rule that includes it.
@@ -107,8 +111,10 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 	}
 	d.Files = adminFiles(d.Book, files.Files)
 	if d.Listeners, err = queryRows(ctx, c.db, func(rows *sql.Rows, l *Listener) error {
-		return rows.Scan(&l.UserID, &l.Username, &l.Position, &l.Duration, &l.Finished, &l.UpdatedAt)
-	}, `SELECT p.user_id, u.username, p.position, p.duration, p.finished, p.updated_at
+		return rows.Scan(&l.UserID, &l.Username, &l.Position, &l.Duration, &l.Finished, &l.UpdatedAt,
+			&l.StartedAt, &l.FinishedAt)
+	}, `SELECT p.user_id, u.username, p.position, p.duration, p.finished, p.updated_at,
+	           p.started_at, p.finished_at
 	      FROM progress p JOIN users u ON u.id = p.user_id
 	     WHERE p.library_id = ? AND p.rel_path = ?
 	     ORDER BY p.updated_at DESC`, libraryID, relPath); err != nil {

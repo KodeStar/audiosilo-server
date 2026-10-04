@@ -12,10 +12,25 @@ import {
   TriangleAlert,
   Users,
 } from 'lucide-react';
-import { useIssues, useOfflineLibraries, useServerInfo, useSettings, useStats } from '@/api/hooks';
-import type { AdminSettings, LibraryStat, ListeningRow, ServerInfo } from '@/api/types';
+import {
+  useIssues,
+  useLiveSessions,
+  useOfflineLibraries,
+  useServerInfo,
+  useSettings,
+  useStats,
+} from '@/api/hooks';
+import type {
+  AdminSettings,
+  LibraryStat,
+  ListeningRow,
+  ListeningSession,
+  ServerInfo,
+} from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
+import { SessionState } from '@/components/session-state';
+import { StatTile } from '@/components/stat-tile';
 import { Monogram } from '@/components/monogram';
 import { CATEGORY_LOOK } from '@/features/health/issues-model';
 import { OfflineNotice } from '@/features/libraries/offline-notice';
@@ -34,15 +49,16 @@ import { cn } from '@/lib/utils';
 import { greetingFor, splitListening } from './overview-model';
 
 /**
- * Home (the mark): a greeting, who is listening right now, catalog totals,
- * recent listening, books per library and a server card. Built on today's
- * GET /admin/stats, /admin/settings, /server and /admin/issues (the "needs
- * attention" card); the "what happened" card arrives with Phase 4.
+ * Home (the mark): a greeting, who is listening right now (the live sessions),
+ * catalog totals, recent listening, books per library and a server card. Built on
+ * GET /admin/stats, /admin/sessions/live, /admin/settings, /server and
+ * /admin/issues (the "needs attention" card).
  */
 export function OverviewPage() {
   const { t, i18n } = useTranslation();
   const user = useCurrentUser();
   const stats = useStats();
+  const live = useLiveSessions();
   const lang = i18n.resolvedLanguage ?? 'en';
   const now = new Date();
 
@@ -68,7 +84,12 @@ export function OverviewPage() {
 
   if (stats.data && stats.data.total_libraries === 0) return <FirstRun />;
 
-  const split = stats.data ? splitListening(stats.data.listening, now.getTime()) : null;
+  // A failed live list reads as nobody live rather than holding the page back.
+  const count = (n: number | undefined) => (n === undefined ? undefined : formatNumber(n, lang));
+  const split =
+    stats.data && (live.data || live.isError)
+      ? splitListening(stats.data.listening, live.data ?? [])
+      : null;
 
   return (
     <Page>
@@ -113,8 +134,8 @@ export function OverviewPage() {
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {split.live.map((r) => (
-              <LiveCard key={`${r.user_id}:${r.library_id}:${r.path}`} row={r} lang={lang} />
+            {split.live.map((s) => (
+              <LiveCard key={s.id} session={s} lang={lang} />
             ))}
           </div>
         )}
@@ -124,26 +145,22 @@ export function OverviewPage() {
         <StatTile
           icon={BookOpen}
           label={t('home.stat.books')}
-          value={stats.data?.total_books}
-          lang={lang}
+          value={count(stats.data?.total_books)}
         />
         <StatTile
           icon={LibraryBig}
           label={t('home.stat.libraries')}
-          value={stats.data?.total_libraries}
-          lang={lang}
+          value={count(stats.data?.total_libraries)}
         />
         <StatTile
           icon={Users}
           label={t('home.stat.people')}
-          value={stats.data?.total_users}
-          lang={lang}
+          value={count(stats.data?.total_users)}
         />
         <StatTile
           icon={Headphones}
           label={t('home.stat.inProgress')}
-          value={split?.inProgress}
-          lang={lang}
+          value={count(split?.inProgress)}
         />
       </div>
 
@@ -210,62 +227,33 @@ function OfflineLibraries() {
   );
 }
 
-function StatTile({
-  icon: Icon,
-  label,
-  value,
-  lang,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  value: number | undefined;
-  lang: string;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5 rounded-xl border bg-card p-3.5 md:px-5 md:py-[18px]">
-      <div className="flex items-center gap-1.5 text-[12.5px] font-[550] text-muted-foreground">
-        <Icon className="size-[15px]" aria-hidden="true" />
-        {label}
-      </div>
-      {value === undefined ? (
-        <span className="skel h-[30px] w-20" />
-      ) : (
-        <div className="stat-value max-md:text-2xl">{formatNumber(value, lang)}</div>
-      )}
-    </div>
-  );
-}
-
-function LiveCard({ row, lang }: { row: ListeningRow; lang: string }) {
+function LiveCard({ session: s, lang }: { session: ListeningSession; lang: string }) {
   const { t } = useTranslation();
-  const frac = progressFraction(row.position, row.duration);
+  const frac = progressFraction(s.position, s.duration);
+  const title = s.title || s.path;
   return (
-    <article className="flex items-center gap-3.5 rounded-xl border bg-card p-3.5">
-      <BookCover
-        libraryId={row.library_id}
-        path={row.path}
-        title={row.title}
-        className="w-16 shrink-0"
-      />
+    <Link
+      to="/activity/{-$section}"
+      params={{ section: 'live' }}
+      className="flex items-center gap-3.5 rounded-xl border bg-card p-3.5 transition-colors duration-(--dur-1) hover:border-border-strong"
+    >
+      <BookCover libraryId={s.library_id} path={s.path} title={title} className="w-16 shrink-0" />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex min-w-0 items-center gap-2">
-          <Monogram name={row.username} size={24} />
-          <b className="truncate">{row.username}</b>
+          <Monogram name={s.username} size={24} />
+          <b className="truncate">{s.username}</b>
         </div>
-        <div className="truncate font-semibold">{row.title || row.path}</div>
-        {row.author ? (
-          <div className="truncate text-[12.5px] text-muted-foreground">{row.author}</div>
-        ) : null}
-        <ProgressBar
-          fraction={frac}
-          label={t('home.progressAria', { title: row.title || row.path })}
-        />
+        <div className="truncate font-semibold">{title}</div>
+        <div className="truncate text-[12.5px] text-muted-foreground">
+          {s.chapter || s.author || s.device_name}
+        </div>
+        <ProgressBar fraction={frac} label={t('home.progressAria', { title })} />
         <div className="flex justify-between gap-2 text-[11.5px] text-subtle-foreground tabular-nums">
           <span>{formatPercent(frac, lang)}</span>
-          <span>{formatRelative(row.updated_at, lang)}</span>
+          <SessionState state={s.state} />
         </div>
       </div>
-    </article>
+    </Link>
   );
 }
 

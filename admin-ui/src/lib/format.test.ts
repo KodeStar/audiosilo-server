@@ -2,8 +2,11 @@ import {
   counted,
   formatBytes,
   formatClock,
+  formatDate,
   formatDateTime,
+  formatDay,
   formatDuration,
+  formatHours,
   formatLongDate,
   formatNumber,
   formatPercent,
@@ -79,6 +82,22 @@ describe('format', () => {
     const t = (key: string, opts: Record<string, unknown>) => `${key}:${String(opts.index)}`;
     expect(seriesIndexLabel(2, 'en', t)).toBe('books.tile.seriesIndex:2');
     expect(seriesIndexLabel(0, 'en', t)).toBe('');
+  });
+
+  it('formats listening in hours, one decimal under 10', () => {
+    expect(formatHours(0, 'en')).toBe('0h');
+    expect(formatHours(8640, 'en')).toBe('2.4h');
+    // Under an hour, minutes: a short period isn't all "0h".
+    expect(formatHours(1440, 'en')).toBe('24m');
+    expect(formatHours(30, 'en')).toBe('30s');
+    expect(formatHours(460_800, 'en')).toBe('128h');
+  });
+
+  it('reads a server day as a calendar date in any zone', () => {
+    expect(formatDay('2026-10-01', 'en', { month: 'short', day: 'numeric' })).toBe('Oct 1');
+    expect(formatDay('nonsense', 'en', { month: 'short' })).toBe('');
+    expect(formatDate('2026-10-04T10:00:00Z', 'en')).toBe('Oct 4, 2026');
+    expect(formatDate(null, 'en')).toBe('');
   });
 
   it('prefixes numeric versions only', () => {

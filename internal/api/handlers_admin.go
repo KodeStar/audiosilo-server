@@ -56,13 +56,8 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	u, err := a.auth.GetUser(r.Context(), id)
-	if errors.Is(err, auth.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "user not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load user")
+	u := a.lookupUser(w, r, id)
+	if u == nil {
 		return
 	}
 	isAdmin := u.Role == auth.RoleAdmin

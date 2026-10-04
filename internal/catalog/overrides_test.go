@@ -450,7 +450,9 @@ func TestBookDetailRelations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Listeners) != 1 || d.Listeners[0].Username != "u" || d.Listeners[0].Position != 60 {
+	// The listener carries their start date (SaveProgress stamps it), unfinished.
+	if len(d.Listeners) != 1 || d.Listeners[0].Username != "u" || d.Listeners[0].Position != 60 ||
+		d.Listeners[0].StartedAt == nil || d.Listeners[0].FinishedAt != nil {
 		t.Fatalf("listeners = %+v", d.Listeners)
 	}
 	if len(d.Shares) != 1 || d.Shares[0].Name != "Author" || d.Shares[0].Path != "Author" {

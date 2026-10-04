@@ -41,6 +41,21 @@ const IssuesPage = lazy(() =>
 const JobsPage = lazy(() =>
   import('@/features/health/jobs-page').then((m) => ({ default: m.JobsPage })),
 );
+const DevicesPage = lazy(() =>
+  import('@/features/people/devices-page').then((m) => ({ default: m.DevicesPage })),
+);
+const ActivityPage = lazy(() =>
+  import('@/features/activity/activity-page').then((m) => ({ default: m.ActivityPage })),
+);
+const LivePage = lazy(() =>
+  import('@/features/activity/live-page').then((m) => ({ default: m.LivePage })),
+);
+const SessionsPage = lazy(() =>
+  import('@/features/activity/sessions-page').then((m) => ({ default: m.SessionsPage })),
+);
+const YearPage = lazy(() =>
+  import('@/features/activity/year-page').then((m) => ({ default: m.YearPage })),
+);
 const SettingsPage = lazy(() =>
   import('@/features/settings/settings-page').then((m) => ({ default: m.SettingsPage })),
 );
@@ -55,7 +70,8 @@ const PAGES: Partial<Record<DestinationKey, Record<string, React.ComponentType>>
     folders: FoldersPage,
     libraries: LibrariesPage,
   },
-  people: { people: PeoplePage, invites: InvitesPage, shares: SharesPage },
+  people: { people: PeoplePage, invites: InvitesPage, shares: SharesPage, devices: DevicesPage },
+  activity: { overview: ActivityPage, live: LivePage, sessions: SessionsPage, year: YearPage },
   health: { issues: IssuesPage, jobs: JobsPage },
   server: { settings: SettingsPage },
 };

@@ -15,6 +15,9 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     'GET /admin/libraries': { body: { libraries: libraries() } },
     // The overview's "needs attention" card.
     'GET /admin/issues': { body: issuesSummary() },
+    // Who is listening (Overview, People) and everyone's devices (People): nobody, by default.
+    'GET /admin/sessions/live': { body: { sessions: [] } },
+    'GET /admin/devices': { body: { devices: [] } },
     // What the palette searches while typing: nothing, unless a test says so.
     'GET /admin/books': { body: { books: [] } },
     'GET /admin/authors': { body: { authors: [], merge_suggestions: [], unknown: 0 } },

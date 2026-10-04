@@ -18,6 +18,7 @@ import type {
   AdminLibrary,
   BookRef,
   PersonField,
+  SessionFilter,
 } from './types';
 
 // Query keys live here so invalidation and the hooks can't drift apart.
@@ -61,6 +62,20 @@ export const keys = {
   scanRuns: ['admin', 'scan-runs'] as const,
   scanRunList: (libraryId: number) => ['admin', 'scan-runs', 'list', libraryId] as const,
   scanRun: (id: number) => ['admin', 'scan-runs', id] as const,
+  /** Every Activity period and listening-days query (a prefix). */
+  activityAll: ['admin', 'activity'] as const,
+  activity: (range: string) => ['admin', 'activity', range] as const,
+  listeningDays: (range: string, userId: number) =>
+    ['admin', 'activity', 'days', range, userId] as const,
+  /** Live sessions and every session list (a prefix). */
+  sessions: ['admin', 'sessions'] as const,
+  liveSessions: ['admin', 'sessions', 'live'] as const,
+  sessionList: (filter: SessionFilter, limit: number) =>
+    ['admin', 'sessions', 'list', filter, limit] as const,
+  /** Everyone's devices and each person's (a prefix). */
+  devices: ['admin', 'devices'] as const,
+  userDevices: (userId: number) => ['admin', 'devices', userId] as const,
+  userProgress: (userId: number) => ['admin', 'user', userId, 'progress'] as const,
 };
 
 /**
@@ -515,4 +530,88 @@ export function useBookMeta(libraryId: number, path: string, enabled: boolean) {
     retry: false,
     staleTime: 60 * 60_000,
   });
+}
+
+/**
+ * Who is listening now, polled (players save every few seconds while they play):
+ * every 10 seconds where the live list is the point, less often where it's a badge.
+ */
+export function useLiveSessions(interval = 10_000) {
+  return useQuery({
+    queryKey: keys.liveSessions,
+    queryFn: () => api.liveSessions().then((r) => r.sessions),
+    refetchInterval: interval,
+  });
+}
+
+/**
+ * The Activity page for a period: computed by the server on request, so a period
+ * already seen stays fresh for a minute. With `keepPrevious`, the previous period
+ * stays on screen while the next loads (the period picker).
+ */
+export function useActivity(range: string, keepPrevious = false) {
+  return useQuery({
+    queryKey: keys.activity(range),
+    queryFn: () => api.activity(range),
+    staleTime: 60_000,
+    placeholderData: keepPrevious ? keepPreviousData : undefined,
+  });
+}
+
+/** Listening per day over a period, of everyone (no id) or one person: no other stats. */
+export function useListeningDays(range: string, userId = 0, enabled = true) {
+  return useQuery({
+    queryKey: keys.listeningDays(range, userId),
+    queryFn: () => api.listeningDays(range, userId || undefined),
+    staleTime: 60_000,
+    enabled,
+  });
+}
+
+/** Sessions newest first, `limit` at a time (`fetchNextPage` for older ones). */
+export function useSessions(filter: SessionFilter, limit = 50) {
+  return useInfiniteQuery({
+    queryKey: keys.sessionList(filter, limit),
+    queryFn: ({ pageParam }) => api.sessions({ ...filter, before: pageParam, limit }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.next_before ?? undefined,
+  });
+}
+
+/** Signed-in devices and API keys: one person's, or everyone's (no id). */
+export function useDevices(userId?: number) {
+  return useQuery({
+    queryKey: userId ? keys.userDevices(userId) : keys.devices,
+    queryFn: () => api.devices(userId).then((r) => r.devices),
+  });
+}
+
+/** Every book a person has progress on, with start and finish dates. */
+export function useUserProgress(userId: number) {
+  return useQuery({
+    queryKey: keys.userProgress(userId),
+    queryFn: () => api.userProgress(userId).then((r) => r.progress),
+  });
+}
+
+/**
+ * Refetches what a progress edit changes: the person's progress and page, the
+ * book's page (its listeners), the overview's listening feed and the Activity
+ * stats (finished counts, the funnel).
+ */
+export function invalidateProgress(qc: QueryClient, userId: number, ref: BookRef) {
+  for (const key of [
+    keys.userProgress(userId),
+    keys.book(ref.library_id, ref.path),
+    keys.stats,
+    keys.activityAll,
+  ]) {
+    void qc.invalidateQueries({ queryKey: key });
+  }
+}
+
+/** Refetches what signing a device out changes: the device lists and who is live. */
+export function invalidateDevices(qc: QueryClient) {
+  void qc.invalidateQueries({ queryKey: keys.devices });
+  void qc.invalidateQueries({ queryKey: keys.sessions });
 }

@@ -72,6 +72,299 @@ export interface AdminStats {
   listening: ListeningRow[];
 }
 
+// Sessions, devices and listening stats (admin redesign Phase 4a:
+// internal/catalog/{sessions,activity,progress_admin}.go, internal/auth/devices.go).
+
+/**
+ * The app behind a token or a session (auth.ClientInfo, catalog.Client), parsed
+ * from the X-AudioSilo-Client header. `app` is "" for a client that never named
+ * itself (released before the header).
+ */
+export interface ClientInfo {
+  app: string;
+  version: string;
+  platform: string;
+}
+
+/** A session's state from the age of its newest save (catalog.Session*). */
+export type SessionState = 'playing' | 'paused' | 'ended';
+
+/** catalog.Session: one stretch of listening on one device, derived from progress saves. */
+export interface ListeningSession {
+  id: number;
+  user_id: number;
+  username: string;
+  library_id: number;
+  path: string;
+  /** From the index; "" when the book isn't indexed (any more): the path names it. */
+  title: string;
+  author: string;
+  /** The token's id (GET /admin/devices); name and client are copied at the time. */
+  device_id: number;
+  device_name: string;
+  client: ClientInfo | null;
+  started_at: string;
+  last_at: string;
+  start_position: number;
+  position: number;
+  duration: number;
+  speed: number;
+  /** Wall-clock seconds of playback. */
+  listened: number;
+  codec: string;
+  transcoded: boolean;
+  finished: boolean;
+  state: SessionState;
+  /** Live sessions only: the chapter at the position and the device's newest address. */
+  chapter?: string;
+  ip?: string;
+}
+
+/** What a session list is narrowed to (GET /admin/sessions). */
+export interface SessionFilter {
+  user_id?: number;
+  library_id?: number;
+  path?: string;
+}
+
+/** GET /admin/sessions: newest first; `next_before` asks for the next page (null at the end). */
+export interface SessionPage {
+  sessions: ListeningSession[];
+  next_before: number | null;
+}
+
+/** auth.Device: a signed-in token (a paired phone, a browser) or a personal API key. */
+export interface Device {
+  id: number;
+  user_id: number;
+  username: string;
+  kind: 'session' | 'api';
+  /** The device name sent at sign-in (an API key's label). */
+  name: string;
+  /** null until the token makes a request naming its app. */
+  client: ClientInfo | null;
+  created_at: string;
+  last_seen: string | null;
+  /** The newest request's address ("" before any). */
+  last_ip: string;
+  /** The token making this request (the console itself): it can't be signed out here. */
+  current: boolean;
+}
+
+/** catalog.UserProgress: one of a person's books with its start and finish dates. */
+export interface UserProgress {
+  library_id: number;
+  path: string;
+  position: number;
+  duration: number;
+  finished: boolean;
+  playback_speed: number;
+  version: number;
+  device_id: string;
+  updated_at: string;
+  /** "" when the book isn't indexed (any more). */
+  title: string;
+  author: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/**
+ * PATCH /admin/libraries/{id}/progress?path=&user_id= (handleEditProgress). Absent
+ * fields stay; a null date clears it; a date is RFC 3339 or YYYY-MM-DD (the start of
+ * that day, server time).
+ */
+export interface ProgressEdit {
+  finished?: boolean;
+  position?: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+/** The Activity page's periods (catalog.ParseActivityRange); a year is also accepted. */
+export const ACTIVITY_RANGES = ['7d', '30d', '90d', '1y'] as const;
+export type ActivityRange = (typeof ACTIVITY_RANGES)[number];
+
+/** catalog.ActivityTotals. `listened` is wall-clock seconds; `finished` counts books finished. */
+export interface ActivityTotals {
+  listened: number;
+  sessions: number;
+  listeners: number;
+  books: number;
+  finished: number;
+}
+
+/** catalog.UserSeconds: one listener's share of a day. */
+export interface UserSeconds {
+  user_id: number;
+  listened: number;
+}
+
+/** catalog.ActivityDay: a day of the period (YYYY-MM-DD, server time), zeros included. */
+export interface ActivityDay {
+  date: string;
+  listened: number;
+  by_user: UserSeconds[];
+}
+
+/** catalog.TopBook */
+export interface TopBook {
+  library_id: number;
+  path: string;
+  title: string;
+  author: string;
+  listened: number;
+  listeners: number;
+}
+
+/** catalog.TopPerson: an author or narrator (the whole field value). */
+export interface TopPerson {
+  name: string;
+  listened: number;
+  books: number;
+}
+
+/** catalog.TopUser */
+export interface TopUser {
+  user_id: number;
+  username: string;
+  listened: number;
+  sessions: number;
+  books: number;
+  finished: number;
+}
+
+/** catalog.Funnel: people x books with a save in the period, by how far each got. */
+export interface Funnel {
+  started: number;
+  reached_25: number;
+  reached_50: number;
+  reached_75: number;
+  finished: number;
+}
+
+/** catalog.DropOff: a chapter where several people stopped the same book. */
+export interface DropOff {
+  library_id: number;
+  path: string;
+  title: string;
+  chapter_index: number;
+  chapter: string;
+  listeners: number;
+  /** The book has a read problem the Health page lists (often the reason). */
+  scan_error: boolean;
+}
+
+/** catalog.PlaybackShare: listening direct or transcoded, per codec ("" = unknown). */
+export interface PlaybackShare {
+  transcoded: boolean;
+  codec: string;
+  listened: number;
+  sessions: number;
+}
+
+/** catalog.Peak: the most sessions open at once (`at` null with none). */
+export interface PeakConcurrent {
+  streams: number;
+  at: string | null;
+}
+
+/** catalog.ClientCount: devices that listened with one app build (`app` "" = never named). */
+export interface ClientCount {
+  app: string;
+  version: string;
+  platform: string;
+  devices: number;
+}
+
+/** catalog.GrowthPoint: books indexed now that had appeared by `date`. */
+export interface GrowthPoint {
+  date: string;
+  books: number;
+}
+
+/** catalog.StorageLibrary */
+export interface StorageLibrary {
+  library_id: number;
+  name: string;
+  bytes: number;
+  books: number;
+}
+
+/** catalog.StorageGroup: a format's or codec's share (`key` "" = unknown). */
+export interface StorageGroup {
+  key: string;
+  bytes: number;
+  books: number;
+}
+
+/** catalog.Storage */
+export interface Storage {
+  bytes: number;
+  by_library: StorageLibrary[];
+  by_format: StorageGroup[];
+  by_codec: StorageGroup[];
+}
+
+/** catalog.Coverage: books with an ASIN/ISBN, with chapters (more than one), with a cover. */
+export interface Coverage {
+  books: number;
+  identified: number;
+  with_chapters: number;
+  with_cover: number;
+}
+
+/** catalog.InactiveUser: an enabled account with no activity for 60 days. */
+export interface InactiveUser {
+  user_id: number;
+  username: string;
+  last_seen_at: string | null;
+}
+
+/**
+ * catalog.ListeningDays (GET /admin/listening): a period's listening day by day,
+ * of everyone or one person, without the rest of the Activity page.
+ */
+export interface ListeningDays {
+  range: string;
+  from: string;
+  to: string;
+  timezone: string;
+  /** The server's offset from UTC, in minutes. */
+  utc_offset: number;
+  days: ActivityDay[];
+}
+
+/** catalog.Activity: the Activity page for one period, bucketed in server time. */
+export interface Activity {
+  /** "7d", "30d", "90d", "1y" or a year ("2025"). */
+  range: string;
+  from: string;
+  to: string;
+  /** The server's zone abbreviation, and its offset from UTC in minutes. */
+  timezone: string;
+  utc_offset: number;
+  totals: ActivityTotals;
+  /** The same length of time just before `from`, for the deltas. */
+  previous: ActivityTotals;
+  days: ActivityDay[];
+  /** Listened seconds by weekday (0 = Monday) and hour, from raw sessions only. */
+  hour_weekday: number[][];
+  top_books: TopBook[];
+  top_authors: TopPerson[];
+  top_narrators: TopPerson[];
+  top_users: TopUser[];
+  funnel: Funnel;
+  drop_offs: DropOff[];
+  playback: PlaybackShare[];
+  peak_concurrent: PeakConcurrent;
+  clients: ClientCount[];
+  growth: GrowthPoint[];
+  storage: Storage;
+  coverage: Coverage;
+  inactive_users: InactiveUser[];
+}
+
 /** GET/PATCH /api/v1/admin/settings (handlers_settings.go settingsEnvelope). */
 export interface AdminSettings {
   metadata: {
@@ -645,6 +938,8 @@ export interface Listener {
   duration: number;
   finished: boolean;
   updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 /** catalog.BookShare: a share that includes the book, by the rule that includes it. */

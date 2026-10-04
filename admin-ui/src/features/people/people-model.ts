@@ -1,10 +1,26 @@
-import type { AuthCode, Library, ListeningRow, PathRule, Share } from '@/api/types';
-import { LIVE_WINDOW_MS } from '@/features/overview/overview-model';
+import { sortLive } from '@/features/activity/live-model';
+import type {
+  AuthCode,
+  Device,
+  Library,
+  ListeningRow,
+  ListeningSession,
+  PathRule,
+  ProgressEdit,
+  Share,
+} from '@/api/types';
 
 // Pure logic behind the People screens, kept out of components so it's tested.
 
 /** A person page's tabs, in order; the first has no ?tab= in the URL. */
-export const USER_TABS = ['access', 'invites', 'sign-in', 'account'] as const;
+export const USER_TABS = [
+  'listening',
+  'access',
+  'devices',
+  'invites',
+  'sign-in',
+  'account',
+] as const;
 export type UserTab = (typeof USER_TABS)[number];
 
 /**
@@ -60,12 +76,69 @@ export function ruleLabel(rule: PathRule, libraries: readonly Pick<Library, 'id'
   return rule.path ? `${lib} › ${rule.path}` : lib;
 }
 
-/** What a person is in the middle of: their newest unfinished book, live or not. */
-export function currentBook(rows: readonly ListeningRow[], userId: number, now: number) {
-  const mine = rows
+/** A moment as the value of a date input (YYYY-MM-DD, the browser's day); "" for none. */
+export function dateInputValue(iso: string | null | undefined): string {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) return '';
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Why a start/finish date pair can't be saved (an i18n key), or undefined when it can. */
+export function datesProblem(started: string, finished: string, today: string) {
+  if (started > today || finished > today) return 'progress.dates.future';
+  if (started && finished && finished < started) return 'progress.dates.order';
+  return undefined;
+}
+
+/**
+ * The edit a dates form makes: only the dates that changed, each a YYYY-MM-DD day
+ * (the start of that day, server time) or null to clear it.
+ */
+export function datesEdit(
+  before: { started: string; finished: string },
+  after: { started: string; finished: string },
+): ProgressEdit {
+  const edit: ProgressEdit = {};
+  if (after.started !== before.started) edit.started_at = after.started || null;
+  if (after.finished !== before.finished) edit.finished_at = after.finished || null;
+  return edit;
+}
+
+/** A person card's book: what they are listening to now, else their newest unfinished book. */
+export interface CurrentBook {
+  library_id: number;
+  path: string;
+  title: string;
+  position: number;
+  duration: number;
+  /** A live session (playing or paused in the last ten minutes) on some device. */
+  live: boolean;
+}
+
+export function currentBook(
+  rows: readonly ListeningRow[],
+  live: readonly ListeningSession[],
+  userId: number,
+): CurrentBook | undefined {
+  const session = sortLive(live.filter((s) => s.user_id === userId))[0];
+  if (session) return { ...session, live: true };
+  const row = rows
     .filter((r) => r.user_id === userId && !r.finished)
-    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-  const row = mine[0];
-  if (!row) return undefined;
-  return { row, live: now - Date.parse(row.updated_at) <= LIVE_WINDOW_MS };
+    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0];
+  return row ? { ...row, live: false } : undefined;
+}
+
+/** Each person's paired devices (sessions, not API keys), by user id; undefined while loading. */
+export function groupDevices(devices: readonly Device[] | undefined) {
+  if (!devices) return undefined;
+  const out = new Map<number, Device[]>();
+  for (const d of devices) {
+    if (d.kind !== 'session') continue;
+    const list = out.get(d.user_id);
+    if (list) list.push(d);
+    else out.set(d.user_id, [d]);
+  }
+  return out;
 }

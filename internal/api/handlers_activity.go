@@ -123,17 +123,19 @@ func (a *API) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// userExists answers 404 for an unknown user id (500 when the lookup fails) and
-// reports whether the handler may go on.
-func (a *API) userExists(w http.ResponseWriter, r *http.Request, id int64) bool {
-	_, err := a.auth.GetUser(r.Context(), id)
+// lookupUser loads a user by id, answering 404 for an unknown one (500 when the
+// lookup fails); nil means the handler is done.
+func (a *API) lookupUser(w http.ResponseWriter, r *http.Request, id int64) *auth.User {
+	u, err := a.auth.GetUser(r.Context(), id)
 	switch {
 	case errors.Is(err, auth.ErrNotFound):
 		writeError(w, http.StatusNotFound, "user not found")
+		return nil
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "could not load user")
+		return nil
 	}
-	return err == nil
+	return u
 }
 
 // handleUserProgress lists one person's progress on every book, with start and
@@ -144,7 +146,7 @@ func (a *API) handleUserProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	if !a.userExists(w, r, id) {
+	if a.lookupUser(w, r, id) == nil {
 		return
 	}
 	items, err := a.cat.ListUserProgress(r.Context(), id)
@@ -156,9 +158,26 @@ func (a *API) handleUserProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // optionalTime decodes a date field that may be absent (leave it), null (clear
-// it), an RFC3339 time or a YYYY-MM-DD day (the start of that day, server time,
-// so "started today" and "finished today" both fit a book finished this morning).
-type optionalTime struct{ catalog.OptionalTime }
+// it), an RFC3339 time or a YYYY-MM-DD day (day is then set: the start of that
+// day, server time; endOfDay moves a finish date to the day's end).
+type optionalTime struct {
+	catalog.OptionalTime
+	day bool
+}
+
+// endOfDay moves a day-only finish date to the end of that day, or to now when
+// that is sooner: a book started at 3 pm and "finished today" was finished after
+// it started, not at midnight before it.
+func (o *optionalTime) endOfDay(now time.Time) {
+	if !o.day || o.Value == nil {
+		return
+	}
+	end := o.Value.AddDate(0, 0, 1).Add(-time.Second)
+	if end.After(now) {
+		end = now
+	}
+	o.Value = &end
+}
 
 func (o *optionalTime) UnmarshalJSON(b []byte) error {
 	o.Set = true
@@ -175,7 +194,7 @@ func (o *optionalTime) UnmarshalJSON(b []byte) error {
 		if derr != nil {
 			return err
 		}
-		t = day
+		t, o.day = day, true
 	}
 	o.Value = &t
 	return nil
@@ -195,7 +214,8 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user_id")
 		return
 	}
-	if !a.userExists(w, r, userID) {
+	user := a.lookupUser(w, r, userID)
+	if user == nil {
 		return
 	}
 	var body struct {
@@ -208,13 +228,27 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	body.FinishedAt.endOfDay(time.Now())
+	// The user's own scope, not the admin's: an edit may start progress only on a
+	// book the user can see (EditProgress applies it to new rows only).
+	scope, err := a.cat.UserScope(r.Context(), user.ID, lib.ID, user.Role == auth.RoleAdmin)
+	if err != nil {
+		a.log.Warn("user scope failed", "err", err, "user", userID)
+		writeError(w, http.StatusInternalServerError, "access check failed")
+		return
+	}
 	saved, err := a.cat.EditProgress(r.Context(), userID, catalog.Ref{LibraryID: lib.ID, Path: p}, catalog.ProgressEdit{
 		Finished: body.Finished, Position: body.Position,
 		StartedAt: body.StartedAt.OptionalTime, FinishedAt: body.FinishedAt.OptionalTime,
-	})
+	}, scope)
 	switch {
 	case errors.Is(err, catalog.ErrNotFound):
 		writeErrorCode(w, http.StatusNotFound, codeBookNotFound, "no progress or book at this path")
+		return
+	case errors.Is(err, catalog.ErrNoAccess):
+		// 409, not 403: the admin may make the call, the user's access is the conflict
+		// (and a 403 from /admin tells the console its session lost the admin role).
+		writeErrorCode(w, http.StatusConflict, codeNoAccess, "this person can't see this book; give them access first")
 		return
 	case err != nil:
 		a.writeCatalogError(w, err, "edit progress failed", "could not save progress", "library", lib.ID, "path", p)
@@ -223,12 +257,41 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"progress": saved})
 }
 
-// activityStats answers GET /admin/stats?range=: the Activity page for the
-// period (7d, 30d, 90d, 1y or a calendar year), in server time.
-func (a *API) activityStats(r *http.Request) (*catalog.Activity, error) {
+// handleActivityStats answers GET /admin/stats?range=: {"activity": ...}, the
+// Activity page for the period (7d, 30d, 90d, 1y or a calendar year) in server
+// time, without the Overview's figures (the console reads those from the plain
+// /admin/stats).
+func (a *API) handleActivityStats(w http.ResponseWriter, r *http.Request) {
 	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		var activity *catalog.Activity
+		if activity, err = a.cat.ActivityFor(r.Context(), label, from, to, time.Local); err == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"activity": activity})
+			return
+		}
 	}
-	return a.cat.ActivityFor(r.Context(), label, from, to, time.Local)
+	a.writeCatalogError(w, err, "activity stats failed", "could not load activity")
+}
+
+// handleListeningDays answers GET /admin/listening?range=&user_id=: listening per
+// day over the period, of everyone or one person (the year calendar, a person's
+// listening year), without computing the rest of the Activity page.
+func (a *API) handleListeningDays(w http.ResponseWriter, r *http.Request) {
+	userID, ok := parseOptionalID(r.URL.Query().Get("user_id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid user_id")
+		return
+	}
+	if userID != 0 && a.lookupUser(w, r, userID) == nil {
+		return
+	}
+	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
+	if err == nil {
+		var days *catalog.ListeningDays
+		if days, err = a.cat.ListeningDaysFor(r.Context(), label, from, to, time.Local, userID); err == nil {
+			writeJSON(w, http.StatusOK, days)
+			return
+		}
+	}
+	a.writeCatalogError(w, err, "listening days failed", "could not load listening")
 }

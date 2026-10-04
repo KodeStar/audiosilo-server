@@ -15,7 +15,7 @@ import {
   UserX,
 } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
-import { invalidatePeople, useLibraries, useUser } from '@/api/hooks';
+import { invalidatePeople, useDevices, useLibraries, useUser } from '@/api/hooks';
 import type { User, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { EmptyState } from '@/components/empty-state';
@@ -30,6 +30,7 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { NotFound } from '@/features/not-found';
+import { DeviceList } from './devices-page';
 import { toastError } from '@/lib/errors';
 import { formatRelative } from '@/lib/format';
 import { useCurrentUser } from '@/lib/session';
@@ -38,9 +39,13 @@ import { GiveAccessDialog } from './give-access-dialog';
 import { InviteDialog } from './invite-dialog';
 import { InviteTable } from './invites-page';
 import { PasswordDialog } from './password-dialog';
+import { ListeningTab } from './user-listening';
 import { ruleLabel, shareLabel, sortInvites, wholeLibraryOf, type UserTab } from './people-model';
 
-/** One person: what they can listen to, their invites, how they sign in, and their account. */
+/**
+ * One person: their listening (year, progress, sessions), what they can listen to,
+ * their devices and invites, how they sign in, and their account.
+ */
 export function UserPage() {
   const { t } = useTranslation();
   const { userId } = useParams({ from: '/people/user/$userId' });
@@ -80,7 +85,8 @@ function UserView({ detail }: { detail: UserDetail }) {
   const codes = detail.auth_codes ?? [];
   const search = useSearch({ from: '/people/user/$userId' });
   const navigate = useNavigate({ from: '/people/user/$userId' });
-  const tab: UserTab = search.tab ?? 'access';
+  const tab: UserTab = search.tab ?? 'listening';
+  const devices = useDevices(u.id);
   const [inviting, setInviting] = useState(false);
 
   const facts = [
@@ -114,19 +120,29 @@ function UserView({ detail }: { detail: UserDetail }) {
       <Tabs
         value={tab}
         onValueChange={(v) =>
-          void navigate({ search: v === 'access' ? {} : { tab: v as UserTab }, replace: true })
+          void navigate({ search: v === 'listening' ? {} : { tab: v as UserTab }, replace: true })
         }
       >
         <TabsList className="mb-6" aria-label={t('user.tabs')}>
+          <TabsTab value="listening">{t('user.tab.listening')}</TabsTab>
           <TabsTab value="access">{t('user.tab.access')}</TabsTab>
+          <TabsTab value="devices" count={devices.data?.length}>
+            {t('user.tab.devices')}
+          </TabsTab>
           <TabsTab value="invites" count={codes.length}>
             {t('user.tab.invites')}
           </TabsTab>
           <TabsTab value="sign-in">{t('user.tab.signIn')}</TabsTab>
           <TabsTab value="account">{t('user.tab.account')}</TabsTab>
         </TabsList>
+        <TabsPanel value="listening">
+          <ListeningTab user={u} />
+        </TabsPanel>
         <TabsPanel value="access">
           <AccessTab detail={detail} />
+        </TabsPanel>
+        <TabsPanel value="devices">
+          <DevicesTab user={u} devices={devices} onPair={() => setInviting(true)} />
         </TabsPanel>
         <TabsPanel value="invites">
           <InvitesTab user={u} detail={detail} onInvite={() => setInviting(true)} />
@@ -141,6 +157,44 @@ function UserView({ detail }: { detail: UserDetail }) {
       <InviteDialog open={inviting} onOpenChange={setInviting} user={u} codes={codes} />
     </Page>
   );
+}
+
+function DevicesTab({
+  user,
+  devices,
+  onPair,
+}: {
+  user: User;
+  devices: ReturnType<typeof useDevices>;
+  onPair: () => void;
+}) {
+  const { t } = useTranslation();
+  if (devices.isError) {
+    return (
+      <QueryError
+        title={t('devices.error')}
+        error={devices.error}
+        onRetry={() => void devices.refetch()}
+      />
+    );
+  }
+  if (!devices.data) return <div className="skel h-24 rounded-xl" />;
+  if (devices.data.length === 0) {
+    return (
+      <EmptyState
+        icon={Smartphone}
+        title={t('user.devices.emptyTitle')}
+        body={t('user.devices.emptyBody', { name: user.username })}
+        action={
+          <Button onClick={onPair} disabled={user.disabled}>
+            <QrCode aria-hidden="true" />
+            {t('user.pairDevice')}
+          </Button>
+        }
+      />
+    );
+  }
+  return <DeviceList devices={devices.data} showPerson={false} />;
 }
 
 function AccessTab({ detail }: { detail: UserDetail }) {

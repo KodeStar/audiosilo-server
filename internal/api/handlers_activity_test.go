@@ -184,6 +184,16 @@ func TestAdminEditProgress(t *testing.T) {
 	if resp, body := e.do(t, "PATCH", edit, e.console, `{"finished":true,"started_at":"`+today+`","finished_at":"`+today+`"}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("started and finished today = %d %s", resp.StatusCode, body)
 	}
+	// Started earlier today and finished today: a day-only finish is the end of that
+	// day (or now), never midnight before the start.
+	if _, err := e.cat.EditProgress(ctx, e.memberID, catalog.Ref{LibraryID: e.libID, Path: unsouled},
+		catalog.ProgressEdit{StartedAt: catalog.OptionalTime{Set: true, Value: ptrTime(time.Now().Add(-time.Minute))}},
+		catalog.Scope{AllowAll: true}); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "PATCH", edit, e.console, `{"finished":true,"finished_at":"`+today+`"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("finished the same day it was started = %d %s", resp.StatusCode, body)
+	}
 	resp, body = e.do(t, "GET", "/api/v1/admin/users/"+member+"/progress", e.console, "")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"finished_at":"`) {
 		t.Fatalf("user progress = %d %s", resp.StatusCode, body)
@@ -209,6 +219,47 @@ func TestAdminEditProgress(t *testing.T) {
 	}
 }
 
+// An admin's edit starts progress only on a book the person can see (409
+// no_access otherwise), and an admin's own scope doesn't count.
+func TestAdminEditProgressNeedsTheUsersAccess(t *testing.T) {
+	e := newActivityEnv(t)
+	ctx := context.Background()
+	lib, err := e.cat.GetLibrary(ctx, e.libID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.api.scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	// The Cradle folder holds two parts, so it is one book.
+	const cradle = "Will Wight/Cradle"
+	edit := "/api/v1/admin/libraries/" + strconv.FormatInt(e.libID, 10) + "/progress?path=" +
+		url.QueryEscape(cradle) + "&user_id=" + strconv.FormatInt(e.memberID, 10)
+
+	// Denied: the member has no access to the library.
+	resp, body := e.do(t, "PATCH", edit, e.console, `{"finished":true}`)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"no_access"`) {
+		t.Fatalf("edit without the user's access = %d %s, want 409 no_access", resp.StatusCode, body)
+	}
+	if rows, _ := e.cat.ListUserProgress(ctx, e.memberID); len(rows) != 0 {
+		t.Fatalf("a refused edit wrote progress: %+v", rows)
+	}
+
+	// Allowed once the member can see the book.
+	if err := e.cat.GrantWholeLibrary(ctx, e.memberID, e.libID); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "PATCH", edit, e.console, `{"finished":true}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit with the user's access = %d %s, want 200", resp.StatusCode, body)
+	}
+	// An admin target always has access.
+	self := "/api/v1/admin/libraries/" + strconv.FormatInt(e.libID, 10) + "/progress?path=" +
+		url.QueryEscape(cradle) + "&user_id=" + strconv.FormatInt(e.adminID, 10)
+	if resp, body := e.do(t, "PATCH", self, e.console, `{"finished":true}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit for an admin = %d %s, want 200", resp.StatusCode, body)
+	}
+}
+
 func TestAdminStatsRange(t *testing.T) {
 	e := newActivityEnv(t)
 	e.play(t, 10)
@@ -225,6 +276,9 @@ func TestAdminStatsRange(t *testing.T) {
 	if out.Activity == nil || out.Activity.Range != "7d" || len(out.Activity.Days) < 7 ||
 		out.Activity.Totals.Sessions != 1 || out.Activity.Totals.Listeners != 1 {
 		t.Fatalf("activity = %s", body)
+	}
+	if strings.Contains(body, `"total_books"`) || strings.Contains(body, `"listening"`) {
+		t.Fatalf("stats with a range carries the Overview's figures too: %s", body)
 	}
 	if resp, body := e.do(t, "GET", "/api/v1/admin/stats", e.console, ""); resp.StatusCode != http.StatusOK || strings.Contains(body, `"activity"`) {
 		t.Fatalf("stats without range = %d %s (no activity expected)", resp.StatusCode, body)
@@ -279,3 +333,47 @@ func TestAccountLimiterKeysOnClientIPAfterAuth(t *testing.T) {
 		t.Fatal("a different address must not share the first one's bucket")
 	}
 }
+
+func TestAdminListeningDays(t *testing.T) {
+	e := newActivityEnv(t)
+	e.play(t, 10)
+	e.play(t, 20)
+	admin := strconv.FormatInt(e.adminID, 10)
+
+	// Allowed: everyone's days, or one person's.
+	var out catalog.ListeningDays
+	resp, body := e.do(t, "GET", "/api/v1/admin/listening?range=7d", e.console, "")
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil || len(out.Days) < 7 || out.Range != "7d" {
+		t.Fatalf("listening days = %d %s", resp.StatusCode, body)
+	}
+	var sum float64
+	for _, d := range out.Days {
+		sum += d.Listened
+	}
+	if sum <= 0 {
+		t.Fatalf("the saves' listening is missing: %s", body)
+	}
+	resp, body = e.do(t, "GET", "/api/v1/admin/listening?range=7d&user_id="+strconv.FormatInt(e.memberID, 10), e.console, "")
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, `"user_id":`+admin) {
+		t.Fatalf("a member's days = %d %s (the admin's listening leaked in)", resp.StatusCode, body)
+	}
+	for _, c := range []struct {
+		path string
+		want int
+	}{
+		{"/api/v1/admin/listening?range=3w", http.StatusBadRequest},
+		{"/api/v1/admin/listening?range=7d&user_id=x", http.StatusBadRequest},
+		{"/api/v1/admin/listening?range=7d&user_id=9999", http.StatusNotFound},
+	} {
+		if resp, body := e.do(t, "GET", c.path, e.console, ""); resp.StatusCode != c.want {
+			t.Errorf("%s = %d %s, want %d", c.path, resp.StatusCode, body, c.want)
+		}
+	}
+
+	// Denied: a member can't read anyone's listening.
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/listening?range=7d", e.memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member listening days = %d, want 403", resp.StatusCode)
+	}
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }

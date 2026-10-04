@@ -4,7 +4,7 @@ import { getToken, setToken } from '@/api/token';
 import { setUnauthorizedHandler } from '@/api/client';
 import { toast } from '@/lib/toast';
 import { mockFetch } from '@/test/fetch-mock';
-import { admin, member, stats } from '@/test/fixtures';
+import { admin, liveSession, member, stats } from '@/test/fixtures';
 import { signedInRoutes } from '@/test/routes';
 import { renderApp } from '@/test/render-app';
 
@@ -121,7 +121,9 @@ describe('overview', () => {
   beforeEach(() => setToken('stored'));
 
   it('shows who is listening, totals, recent listening and the server card', async () => {
-    mockFetch(signedInRoutes());
+    mockFetch(
+      signedInRoutes({ 'GET /admin/sessions/live': { body: { sessions: [liveSession()] } } }),
+    );
     renderApp();
     const live = await screen.findByRole('region', { name: 'Listening now' });
     expect(await within(live).findByText('Project Hail Mary')).toBeInTheDocument();
@@ -187,11 +189,9 @@ describe('navigation', () => {
 
   it('deep-links a destination section to its placeholder', async () => {
     mockFetch(signedInRoutes());
-    renderApp('/activity/live');
-    expect(
-      await screen.findByRole('heading', { name: 'Live now is on its way' }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Live now' })).toHaveAttribute('aria-current', 'page');
+    renderApp('/server/logs');
+    expect(await screen.findByRole('heading', { name: 'Logs is on its way' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Logs' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('404s an unknown section', async () => {
