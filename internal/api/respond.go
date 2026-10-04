@@ -15,9 +15,13 @@ import (
 
 type ctxKey int
 
+// Every request-context key, in one block so no two can share a value (ipKey
+// once collided with the token-kind key, so clientIP returned "session" after
+// authentication).
 const (
 	userKey ctxKey = iota
-	tokenKindKey
+	credentialKey
+	ipKey
 )
 
 // userFrom returns the authenticated user from the request context.
@@ -26,12 +30,13 @@ func userFrom(ctx context.Context) *auth.User {
 	return u
 }
 
-// tokenKindFrom returns the kind of credential that authenticated the request
-// (auth.KindSession or auth.KindAPI), or "" if the request is unauthenticated.
-// Set by the authenticate middleware; read by denyAPIKey.
-func tokenKindFrom(ctx context.Context) string {
-	k, _ := ctx.Value(tokenKindKey).(string)
-	return k
+// credentialFrom returns the token that authenticated the request (its id is
+// what the admin console calls a device; its Kind, auth.KindSession or
+// auth.KindAPI, is what denyAPIKey checks), or the zero Credential when the
+// request is unauthenticated. Set by the authenticate middleware.
+func credentialFrom(ctx context.Context) auth.Credential {
+	c, _ := ctx.Value(credentialKey).(auth.Credential)
+	return c
 }
 
 // writeJSON writes v as JSON with the given status.
@@ -69,6 +74,8 @@ const (
 	codeInvalidSchedule    = "invalid_schedule"
 	codeInvalidPattern     = "invalid_pattern"
 	codeNotIndexable       = "not_indexable"
+	codeCurrentDevice      = "current_device"
+	codeInvalidRange       = "invalid_range"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
@@ -112,6 +119,10 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeError(w, http.StatusBadRequest, `mode must be "book" or "collection"`)
 	case errors.Is(err, library.ErrOutsideRoot):
 		writeError(w, http.StatusBadRequest, "invalid path")
+	case errors.Is(err, catalog.ErrInvalidProgressEdit):
+		writeError(w, http.StatusBadRequest, "those dates or that position don't fit this book")
+	case errors.Is(err, catalog.ErrInvalidRange):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidRange, "range must be 7d, 30d, 90d, 1y or a year")
 	default:
 		a.log.Warn(op, append([]any{"err", err}, logKV...)...)
 		writeError(w, http.StatusInternalServerError, genericMsg)

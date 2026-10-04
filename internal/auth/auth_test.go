@@ -789,14 +789,14 @@ func TestAPITokenLifecycle(t *testing.T) {
 	}
 
 	// Resolves as an api-kind credential (allowed), reporting kind=api...
-	u, kind, err := s.ResolveTokenKinds(ctx, secret, KindAPI)
-	if err != nil || u.ID != user.ID || kind != KindAPI {
-		t.Fatalf("resolve api key = %v, kind=%q, %v", u, kind, err)
+	u, cred, err := s.ResolveRequest(ctx, secret, Presence{}, KindAPI)
+	if err != nil || u.ID != user.ID || cred.Kind != KindAPI {
+		t.Fatalf("resolve api key = %v, kind=%q, %v", u, cred.Kind, err)
 	}
 	// ...and via the session+api set the middleware uses, still reporting api
 	// (so the transport can bar an api key from credential-minting routes).
-	if _, kind, err := s.ResolveTokenKinds(ctx, secret, KindSession, KindAPI); err != nil || kind != KindAPI {
-		t.Fatalf("session+api resolver: kind=%q, %v", kind, err)
+	if _, cred, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession, KindAPI); err != nil || cred.Kind != KindAPI {
+		t.Fatalf("session+api resolver: kind=%q, %v", cred.Kind, err)
 	}
 	// Denied: it is NOT a session token, so a session-only resolve rejects it.
 	if _, err := s.ResolveToken(ctx, secret, KindSession); !errors.Is(err, ErrInvalidToken) {
@@ -816,7 +816,7 @@ func TestAPITokenLifecycle(t *testing.T) {
 	if err := s.RevokeTokenByID(ctx, user.ID, meta.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ResolveTokenKinds(ctx, secret, KindAPI); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindAPI); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("revoked api key still resolves: %v", err)
 	}
 	if keys, _ := s.ListAPITokens(ctx, user.ID); len(keys) != 0 {

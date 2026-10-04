@@ -11,8 +11,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
-const ipKey ctxKey = 1
-
 // requestTimeout bounds how long a non-streaming request may run. Its purpose is
 // resilience, not latency policing: if the single writer connection is held by a
 // slow/stuck operation (e.g. a write stalled on a network volume), a request that
@@ -87,7 +85,7 @@ func (a *API) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+auth.ClientHeader)
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		if r.Method == http.MethodOptions {
@@ -207,15 +205,20 @@ func (a *API) authenticate(next http.Handler, allowQueryToken bool) http.Handler
 		}
 		// Session OR api key - both authenticate; pairing tokens are excluded, so
 		// a QR/pairing secret can never be used as a durable credential here.
-		u, kind, err := a.auth.ResolveTokenKinds(r.Context(), token, auth.KindSession, auth.KindAPI)
+		// The request's address and app (X-AudioSilo-Client) are recorded on the
+		// token, for the admin console's devices and sessions.
+		presence := auth.Presence{IP: clientIP(r)}
+		presence.Client, _ = auth.ParseClient(r.Header.Get(auth.ClientHeader))
+		u, cred, err := a.auth.ResolveRequest(r.Context(), token, presence, auth.KindSession, auth.KindAPI)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
 		}
-		// Carry the matched kind so credential-minting handlers can bar an api
-		// key (denyAPIKey) - a leaked key must not spawn a durable credential.
+		// The credential carries the matched kind, so credential-minting handlers
+		// can bar an api key (denyAPIKey) - a leaked key must not spawn a durable
+		// credential.
 		ctx := context.WithValue(r.Context(), userKey, u)
-		ctx = context.WithValue(ctx, tokenKindKey, kind)
+		ctx = context.WithValue(ctx, credentialKey, cred)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

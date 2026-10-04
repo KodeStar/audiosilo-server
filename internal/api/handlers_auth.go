@@ -321,7 +321,7 @@ const maxAPIKeyLabelLen = 100
 // as its owner everywhere else, including listing/revoking keys and clearing a
 // recovery code - those only reduce access, never extend it.
 func denyAPIKey(w http.ResponseWriter, r *http.Request) bool {
-	if tokenKindFrom(r.Context()) == auth.KindAPI {
+	if credentialFrom(r.Context()).Kind == auth.KindAPI {
 		writeError(w, http.StatusForbidden, "not available when authenticating with an API key")
 		return true
 	}

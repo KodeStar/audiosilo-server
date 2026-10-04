@@ -64,6 +64,9 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not save progress")
 		return
 	}
+	// The save is also the heartbeat of a listening session: what this device
+	// played just now, whether or not it won last-write-wins against the stored row.
+	a.recordHeartbeat(r, u.ID, in)
 	writeJSON(w, http.StatusOK, map[string]any{"progress": saved})
 }
 

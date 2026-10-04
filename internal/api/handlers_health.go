@@ -92,7 +92,7 @@ func (a *API) offlineLibraries(r *http.Request) ([]offlineLibrary, error) {
 // lists instead the groups an admin said are different books).
 func (a *API) handleDuplicates(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	libID, ok := parseLibraryID(q.Get("library_id"))
+	libID, ok := parseOptionalID(q.Get("library_id"))
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return
@@ -232,7 +232,7 @@ func (a *API) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 // without logs (?library_id=, ?before=<run id> for the next page, ?limit=).
 func (a *API) handleScanRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	libID, ok := parseLibraryID(q.Get("library_id"))
+	libID, ok := parseOptionalID(q.Get("library_id"))
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return
