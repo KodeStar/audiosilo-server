@@ -247,6 +247,43 @@ describe('notifications', () => {
     expect(url).toHaveAttribute('aria-invalid', 'true');
   });
 
+  it('says a secret must come again when the address moves to another server', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/notifications': {
+          body: targetsEnv([
+            target({
+              kind: 'webhook',
+              name: 'Hook',
+              address: 'https://hooks.example.com/in…',
+              has_secret: true,
+            }),
+          ]),
+        },
+      }),
+    );
+    renderApp('/server?topic=notifications');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Actions for Hook' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Hook' });
+    expect(
+      within(dialog).getByText('A secret is saved. Leave empty to keep it.'),
+    ).toBeInTheDocument();
+    const url = within(dialog).getByRole('textbox', { name: 'Webhook address' });
+    await user.type(url, 'https://hooks.example.com/other');
+    expect(
+      within(dialog).getByText('A secret is saved. Leave empty to keep it.'),
+    ).toBeInTheDocument();
+    await user.clear(url);
+    await user.type(url, 'https://elsewhere.example/in');
+    expect(
+      within(dialog).getByText(
+        'This address is on another server: enter the secret again, or remove it.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('ticks an event for a destination and says why a test failed', async () => {
     const calls = mockFetch(
       routes({

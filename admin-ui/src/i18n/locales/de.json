@@ -1947,5 +1947,6 @@
   "backups.weekday.sat": "Samstag",
   "backups.schedule.weekly.sat": "Jeden Samstag um {{time}}.",
   "backups.weekday.sun": "Sonntag",
-  "backups.schedule.weekly.sun": "Jeden Sonntag um {{time}}."
+  "backups.schedule.weekly.sun": "Jeden Sonntag um {{time}}.",
+  "notify.dialog.secretAgain": "Diese Adresse liegt auf einem anderen Server: Gib das Secret erneut ein oder entferne es."
 }

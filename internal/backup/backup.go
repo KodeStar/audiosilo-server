@@ -219,22 +219,27 @@ func (s *Service) StatusOf(list []Backup) Status {
 }
 
 // next is when the next scheduled backup is due (zero when off): its slot after
-// the newest scheduled backup in list, or after the last attempt, or after Run
-// started.
+// the newest scheduled backup in list (after Run started when there is none), or
+// after the last attempt when that is newer. Counting from the newest backup, not
+// from the start, is what makes a server that was off at its time catch up.
 func (s *Service) next(list []Backup) time.Time {
 	s.mu.Lock()
-	sch, from := s.schedule, s.anchor
-	if s.tried.After(from) {
-		from = s.tried
-	}
+	sch, anchor, tried := s.schedule, s.anchor, s.tried
 	s.mu.Unlock()
 	if sch.Off() {
 		return time.Time{}
 	}
+	var from time.Time
 	for _, b := range list {
 		if b.Kind == KindScheduled && b.CreatedAt.After(from) {
 			from = b.CreatedAt
 		}
+	}
+	if from.IsZero() {
+		from = anchor
+	}
+	if tried.After(from) {
+		from = tried
 	}
 	if from.IsZero() {
 		from = s.now()
@@ -249,31 +254,41 @@ func (s *Service) due() bool {
 }
 
 // Start makes a backup in the background; ErrBusy when one is being made already.
+// It reads as running from the moment Start returns, so a status read right after
+// (the request's answer) already shows it.
 func (s *Service) Start(ctx context.Context, trigger string) error {
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
+	if !s.begin(trigger) {
 		return ErrBusy
 	}
-	s.mu.Unlock()
-	go func() { _, _ = s.Create(context.WithoutCancel(ctx), trigger) }()
+	go func() { _, _ = s.make(context.WithoutCancel(ctx), trigger) }()
 	return nil
 }
 
 // Create makes a backup now (trigger is KindScheduled or KindManual) and, after a
 // scheduled one, removes scheduled backups past the newest `keep`.
 func (s *Service) Create(ctx context.Context, trigger string) (Backup, error) {
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
+	if !s.begin(trigger) {
 		return Backup{}, ErrBusy
+	}
+	return s.make(ctx, trigger)
+}
+
+// begin marks a backup as being made; false when one is already.
+func (s *Service) begin(trigger string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return false
 	}
 	s.running = true
 	if trigger == KindScheduled {
 		s.tried = s.now()
 	}
-	s.mu.Unlock()
+	return true
+}
 
+// make writes the backup begin marked, records the outcome and clears running.
+func (s *Service) make(ctx context.Context, trigger string) (Backup, error) {
 	b, err := s.write(ctx, trigger, s.db.VacuumInto)
 	res := Result{At: s.now(), OK: err == nil, Trigger: trigger, Name: b.Name}
 	if err != nil {
@@ -353,7 +368,8 @@ func (s *Service) removeTemp() {
 	}
 }
 
-// prune removes scheduled backups past the newest `keep`.
+// prune removes scheduled backups past the newest `keep`, never the one a restore
+// is waiting for (the next start would find it gone).
 func (s *Service) prune() {
 	s.mu.Lock()
 	keep := s.keep
@@ -362,12 +378,17 @@ func (s *Service) prune() {
 	if err != nil {
 		return
 	}
+	pending, err := s.PendingRestore()
+	if err != nil {
+		s.log.Warn("reading the waiting restore failed; old backups are kept", "err", err)
+		return
+	}
 	n := 0
 	for _, b := range list { // newest first
 		if b.Kind != KindScheduled {
 			continue
 		}
-		if n++; n > keep {
+		if n++; n > keep && (pending == nil || pending.Name != b.Name) {
 			if err := os.Remove(filepath.Join(s.dir, b.Name)); err != nil {
 				s.log.Warn("removing an old backup failed", "name", b.Name, "err", err)
 			}
@@ -525,16 +546,24 @@ func (s *Service) LastRestore() (*RestoreResult, error) {
 func ApplyPendingRestore(ctx context.Context, dataDir, dir, dbPath string, log *slog.Logger) (*RestoreResult, error) {
 	marker := filepath.Join(dataDir, markerFile)
 	pending, err := readJSONFile[PendingRestore](marker)
-	if err != nil || pending == nil {
-		return nil, err
+	if pending == nil && err == nil {
+		return nil, nil
 	}
-	s := New(nil, dataDir, dir, log)
-	res := &RestoreResult{Name: pending.Name, AppliedAt: time.Now().UTC(), RequestedBy: pending.RequestedBy}
-	if err := s.applyRestore(ctx, pending.Name, dbPath, res); err != nil {
-		log.Error("restoring a backup failed; the database was left as it was", "name", pending.Name, "err", err)
+	res := &RestoreResult{AppliedAt: time.Now().UTC()}
+	if err != nil {
+		// An unreadable marker is reported and dropped like any refused restore, not
+		// left to stop every start.
+		res.Error = "failed"
+		log.Error("the waiting restore can't be read; the database was left as it was", "err", err)
 	} else {
-		res.OK = true
-		log.Warn("restored the database from a backup", "name", pending.Name, "safety_copy", res.SafetyCopy)
+		res.Name, res.RequestedBy = pending.Name, pending.RequestedBy
+		s := New(nil, dataDir, dir, log)
+		if err := s.applyRestore(ctx, pending.Name, dbPath, res); err != nil {
+			log.Error("restoring a backup failed; the database was left as it was", "name", pending.Name, "err", err)
+		} else {
+			res.OK = true
+			log.Warn("restored the database from a backup", "name", pending.Name, "safety_copy", res.SafetyCopy)
+		}
 	}
 	if err := writeJSONFile(filepath.Join(dataDir, resultFile), res); err != nil {
 		log.Warn("recording the restore's outcome failed", "err", err)

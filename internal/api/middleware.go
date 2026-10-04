@@ -28,8 +28,15 @@ const requestTimeout = 30 * time.Second
 func isStreamingPath(p string) bool {
 	return strings.HasSuffix(p, "/stream") ||
 		strings.HasSuffix(p, "/cover") ||
-		strings.HasPrefix(p, "/api/v1/admin/backups/") ||
+		isBackupDownload(p) ||
 		p == "/web" || strings.HasPrefix(p, "/web/")
+}
+
+// isBackupDownload reports whether p is GET /admin/backups/{name} (a backup's
+// download), not the restore beside it, which stays bounded.
+func isBackupDownload(p string) bool {
+	name, ok := strings.CutPrefix(p, "/api/v1/admin/backups/")
+	return ok && name != "" && !strings.Contains(name, "/")
 }
 
 // timeout wraps non-streaming handlers in http.TimeoutHandler, which cancels the

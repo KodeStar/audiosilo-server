@@ -2067,5 +2067,6 @@
   "backups.weekday.sat": "Sábado",
   "backups.schedule.weekly.sat": "Todos os sábados às {{time}}.",
   "backups.weekday.sun": "Domingo",
-  "backups.schedule.weekly.sun": "Todos os domingos às {{time}}."
+  "backups.schedule.weekly.sun": "Todos os domingos às {{time}}.",
+  "notify.dialog.secretAgain": "Este endereço está noutro servidor: introduza novamente o segredo ou remova-o."
 }

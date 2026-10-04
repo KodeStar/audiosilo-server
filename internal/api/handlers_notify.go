@@ -64,6 +64,12 @@ func (b targetBody) apply(t *catalog.NotifyTarget, creating bool) error {
 		t.Name = *b.Name
 	}
 	if b.URL != nil {
+		// A saved secret (an ntfy access token, a webhook's signing key) belongs to the
+		// address it was given for: one moving to another server must come again (or
+		// be cleared), or it would be sent where it was never meant to go.
+		if !creating && b.Secret == nil && t.Secret != "" && !notify.SameOrigin(t.URL, *b.URL) {
+			return &notify.FieldError{Field: "secret", Err: errors.New("enter the secret again for the new address, or clear it")}
+		}
 		t.URL = *b.URL
 	}
 	if b.Secret != nil {

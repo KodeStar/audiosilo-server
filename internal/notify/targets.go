@@ -128,6 +128,21 @@ func ntfySplit(u *url.URL) (server, topic string) {
 	return base.String() + p[:i], p[i+1:]
 }
 
+// SameOrigin reports whether two addresses are on the same server (scheme, host
+// and port, ignoring case), so a destination's secret can follow a path change but
+// not a move to another server.
+func SameOrigin(a, b string) bool {
+	ua, err := url.Parse(strings.TrimSpace(a))
+	if err != nil {
+		return false
+	}
+	ub, err := url.Parse(strings.TrimSpace(b))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+}
+
 // Redact is how the console shows a destination's address: the host and the start
 // of the path, with the last path segment (a Discord token, an ntfy topic, a
 // webhook's own secret part) cut to its first four characters and the query and

@@ -252,6 +252,106 @@ func TestScheduleDue(t *testing.T) {
 	}
 }
 
+// After a restart (Run starting now), a slot missed while the server was off is
+// counted from the newest scheduled backup, not from the restart.
+func TestScheduleCatchesUpAfterRestart(t *testing.T) {
+	e := newEnv(t)
+	e.svc.SetSettings("daily:03:00", 7)
+	if _, err := e.svc.Create(context.Background(), KindScheduled); err != nil {
+		t.Fatal(err)
+	}
+	// The server was off over the next 03:00 and starts again at 09:00.
+	e.clock = time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	restarted := New(e.db, e.dataDir, "", nil)
+	restarted.now, restarted.loc = func() time.Time { return e.clock }, time.UTC
+	restarted.SetSettings("daily:03:00", 7)
+	restarted.anchor = e.clock
+	if !restarted.due() {
+		t.Fatalf("the missed backup isn't made; next = %v", restarted.Status().Next)
+	}
+	// A fresh server with no scheduled backup waits for its first slot.
+	empty := New(e.db, t.TempDir(), "", nil)
+	empty.now, empty.loc = func() time.Time { return e.clock }, time.UTC
+	empty.SetSettings("daily:03:00", 7)
+	empty.anchor = e.clock
+	if empty.due() {
+		t.Fatal("a fresh server backs up before its slot")
+	}
+}
+
+// Start reads as running as soon as it returns, so the request's answer says so.
+func TestStartRunsAtOnce(t *testing.T) {
+	e := newEnv(t)
+	if err := e.svc.Start(context.Background(), KindManual); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.mu.Lock()
+	running, last := e.svc.running, e.svc.last
+	e.svc.mu.Unlock()
+	if !running && last == nil {
+		t.Fatal("not running right after Start")
+	}
+	for range 200 {
+		if st := e.svc.Status(); !st.Running && st.Last != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the backup never finished")
+}
+
+// Retention never removes the backup a restore is waiting for.
+func TestPruneKeepsPendingRestore(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.svc.SetSettings("daily:03:00", 1)
+	first, err := e.svc.Create(ctx, KindScheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.RequestRestore(ctx, first.Name, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(24 * time.Hour)
+	if _, err := e.svc.Create(ctx, KindScheduled); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.svc.path(first.Name); err != nil {
+		t.Fatal("retention removed the backup a restore is waiting for")
+	}
+	// Once the restore is cancelled, the next prune lets it go.
+	if err := e.svc.CancelRestore(); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(24 * time.Hour)
+	if _, err := e.svc.Create(ctx, KindScheduled); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.svc.path(first.Name); !errors.Is(err, ErrNotFound) {
+		t.Fatal("an old backup outlived retention")
+	}
+}
+
+// An unreadable restore marker is reported once and dropped, not left to stop
+// every start.
+func TestUnreadableMarkerIsDropped(t *testing.T) {
+	e := newEnv(t)
+	marker := filepath.Join(e.dataDir, markerFile)
+	if err := os.WriteFile(marker, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ApplyPendingRestore(context.Background(), e.dataDir, "", e.dbPath, slog.Default())
+	if err != nil || res == nil || res.OK || res.Error != "failed" {
+		t.Fatalf("res = %+v, %v", res, err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the marker was left")
+	}
+	if last, _ := e.svc.LastRestore(); last == nil || last.OK {
+		t.Fatalf("outcome = %+v", last)
+	}
+}
+
 func TestRestoreRoundTrip(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()

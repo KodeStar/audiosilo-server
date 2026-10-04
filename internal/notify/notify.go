@@ -177,6 +177,9 @@ func (s *Service) Emit(ctx context.Context, e Event) {
 // Test sends a test message to t now, once, and records the outcome on it. It
 // returns the failure reason ("" when it arrived).
 func (s *Service) Test(ctx context.Context, t catalog.NotifyTarget) string {
+	if s == nil {
+		return "failed"
+	}
 	ev := catalog.ServerEvent{Kind: kindTest, At: time.Now().UTC().Format(time.RFC3339), Data: map[string]any{}}
 	reason := s.send(ctx, t, ev)
 	s.record(ctx, t.ID, reason)

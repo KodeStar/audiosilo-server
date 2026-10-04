@@ -95,6 +95,7 @@ function TargetForm({
   const { errors, isSubmitting } = form.formState;
   const kind = form.watch('kind');
   const clearSecret = form.watch('clearSecret');
+  const url = form.watch('url');
   const meta = TARGET_FORM[kind];
 
   const onSubmit = form.handleSubmit(async (v) => {
@@ -210,7 +211,9 @@ function TargetForm({
             error={secretErr}
             description={
               target?.has_secret
-                ? t('notify.dialog.secretKeep')
+                ? movesServer(target.address, url)
+                  ? t('notify.dialog.secretAgain')
+                  : t('notify.dialog.secretKeep')
                 : t(`notify.dialog.secretHint.${meta.secret}`)
             }
           >
@@ -275,4 +278,17 @@ function TargetForm({
       />
     </form>
   );
+}
+
+/**
+ * Whether a newly typed address is on another server than the saved one (its
+ * redacted form keeps the scheme and host): the server then wants the secret again.
+ */
+function movesServer(saved: string, typed: string): boolean {
+  if (!typed.trim()) return false;
+  try {
+    return new URL(typed.trim()).origin !== new URL(saved).origin;
+  } catch {
+    return false;
+  }
 }

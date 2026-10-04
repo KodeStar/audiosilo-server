@@ -616,7 +616,7 @@ admin overrides; see Metadata overrides below).
   (`scheduled|manual|before-restore`), written under a hidden temporary name, owner-only (0600: it holds
   password and token hashes), then renamed. Settings `backups.schedule` (`""`, `daily:HH:MM`,
   `weekly:DAY:HH:MM`, server time; default `daily:03:00`) and `backups.keep` (scheduled ones kept, default 7;
-  manual and before-restore copies stay until deleted). Only names matching `backup.ValidName` are listed,
+  manual and before-restore copies stay until deleted). Only names matching `backup.validName` are listed,
   served, deleted or restored, and a symlink is never followed. **A restore never swaps a live database**:
   `RequestRestore` checks the file (`store.Inspect`: read-only open, `quick_check`, every applied migration
   known to this server, else `ErrNewerDatabase`) and writes `<data>/restore.json`; the launcher's

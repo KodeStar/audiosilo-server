@@ -464,7 +464,44 @@ func TestBackupDownloadOutlivesRequestTimeout(t *testing.T) {
 	if !isStreamingPath("/api/v1/admin/backups/audiosilo-x.db") {
 		t.Fatal("backup downloads are bound by the request timeout")
 	}
-	if isStreamingPath("/api/v1/admin/backups") {
-		t.Fatal("the backup list escaped the request timeout")
+	for _, p := range []string{"/api/v1/admin/backups", "/api/v1/admin/backups/", "/api/v1/admin/backups/audiosilo-x.db/restore"} {
+		if isStreamingPath(p) {
+			t.Fatalf("%s escaped the request timeout", p)
+		}
+	}
+}
+
+// A saved secret stays with the server it was given for: moving the address to
+// another server needs it again (or cleared), a path change on the same one doesn't.
+func TestNotificationSecretStaysWithItsServer(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	resp, body := e.do(t, "POST", "/api/v1/admin/notifications", adminTok,
+		`{"kind":"ntfy","name":"Phone","url":"https://ntfy.example/alerts","secret":"tk_access","events":["scan_failed"]}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d %s", resp.StatusCode, body)
+	}
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	_ = json.Unmarshal([]byte(body), &created)
+	id := strconv.FormatInt(created.ID, 10)
+
+	// Denied: another server, secret not sent again.
+	if resp, body := e.do(t, "PATCH", "/api/v1/admin/notifications/"+id, adminTok, `{"url":"https://evil.example/alerts"}`); resp.StatusCode != 400 ||
+		!strings.Contains(body, `"field":"secret"`) {
+		t.Fatalf("move without secret = %d %s", resp.StatusCode, body)
+	}
+	if stored, _ := e.cat.GetNotifyTarget(context.Background(), created.ID); stored.URL != "https://ntfy.example/alerts" {
+		t.Fatalf("a refused change was saved: %+v", stored)
+	}
+	// Allowed: the same server under another topic, or another server with the secret cleared.
+	if resp, body := e.do(t, "PATCH", "/api/v1/admin/notifications/"+id, adminTok, `{"url":"https://NTFY.example/other"}`); resp.StatusCode != 200 ||
+		!strings.Contains(body, `"has_secret":true`) {
+		t.Fatalf("same server = %d %s", resp.StatusCode, body)
+	}
+	if resp, body := e.do(t, "PATCH", "/api/v1/admin/notifications/"+id, adminTok, `{"url":"https://other.example/alerts","secret":""}`); resp.StatusCode != 200 ||
+		!strings.Contains(body, `"has_secret":false`) {
+		t.Fatalf("move with secret cleared = %d %s", resp.StatusCode, body)
 	}
 }
