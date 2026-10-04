@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { AdminBookDetail, BookEditRequest, MatchCandidate } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
@@ -206,7 +207,9 @@ describe('book page', () => {
     const calls = mockFetch(
       routes(bookDetail(), { 'PUT /admin/libraries/1/cover': { body: { status: 'cover set' } } }),
     );
-    renderApp(URL);
+    const { queryClient } = renderApp(URL);
+    // A book list cached from the Library screen (it carries has_cover).
+    queryClient.setQueryData(keys.bookList({ sort: 'title' }), { pages: [], pageParams: [] });
     const user = userEvent.setup();
     await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
     const image = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'cover.jpg', {
@@ -222,6 +225,8 @@ describe('book page', () => {
       .mocked(fetch)
       .mock.calls.find(([, i]) => i?.method === 'PUT')?.[1] as RequestInit;
     expect(init.body).toBe(image);
+    // The lists and counts that say whether the book has a cover refresh too.
+    expect(queryClient.getQueryState(keys.bookList({ sort: 'title' }))?.isInvalidated).toBe(true);
   });
 
   it('refuses an oversized cover before uploading', async () => {
