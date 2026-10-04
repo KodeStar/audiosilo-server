@@ -16,7 +16,7 @@ ARG WEB_IMAGE=ghcr.io/kodestar/audiosilo-web:latest
 # --- build the admin console (admin-ui/) -----------------------------------------
 # A static Vite build embedded into the binary (internal/web/adminui). Built on
 # the build host's platform: the output is plain JS/CSS, identical for every arch.
-FROM --platform=$BUILDPLATFORM node:24-alpine AS admin
+FROM --platform=$BUILDPLATFORM node:26-alpine AS admin
 WORKDIR /src/admin-ui
 COPY admin-ui/package.json admin-ui/package-lock.json ./
 RUN npm ci
