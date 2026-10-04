@@ -13,7 +13,7 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { counted, formatHours, formatNumber } from '@/lib/format';
-import { busiestSlot, longestStreak, recentYears, weekdayName } from './activity-model';
+import { busiestSlot, longestStreak, recentYears, slotLabel, toHours } from './activity-model';
 import { YearCalendar } from './heatmaps';
 
 /** Activity > Year in listening: a calendar year told as a story, then day by day. */
@@ -60,7 +60,7 @@ export function YearPage() {
           error={activity.error}
           onRetry={() => void activity.refetch()}
         />
-      ) : !activity.data || activity.data.range !== String(year) ? (
+      ) : !activity.data ? (
         <div className="flex flex-col gap-4" role="status" aria-label={t('common.loading')}>
           <div className="skel h-[340px] rounded-xl" />
           <div className="skel h-[180px] rounded-xl" />
@@ -85,23 +85,14 @@ function YearStory({ a, year, current }: { a: Activity; year: number; current: b
   const top = a.top_books[0];
   const narrator = a.top_narrators[0];
   const slot = busiestSlot(a.hour_weekday);
-  const hours = a.totals.listened / 3600;
+  const hours = toHours(a.totals.listened);
+  const streak = longestStreak(a.days);
   const facts = [
     [formatNumber(a.totals.finished, lang), t('year.fact.finished', { count: a.totals.finished })],
     [formatNumber(a.totals.books, lang), t('year.fact.books', { count: a.totals.books })],
-    [
-      formatNumber(longestStreak(a.days), lang),
-      t('year.fact.streak', { count: longestStreak(a.days) }),
-    ],
-    ...(slot
-      ? [
-          [
-            `${weekdayName(slot.weekday, lang)} ${String(slot.hour).padStart(2, '0')}:00`,
-            t('year.fact.busiest'),
-          ],
-        ]
-      : []),
+    [formatNumber(streak, lang), t('year.fact.streak', { count: streak })],
   ];
+  if (slot) facts.push([slotLabel(slot.weekday, slot.hour, lang), t('year.fact.busiest')]);
   const name = server.data?.name || t('activity.when.server');
 
   return (
@@ -131,42 +122,42 @@ function YearStory({ a, year, current }: { a: Activity; year: number; current: b
           </h2>
           <div className="flex flex-wrap items-end gap-x-9 gap-y-6">
             {top ? (
-              <Link {...bookRoute(top.library_id, top.path)} className="w-[180px] shrink-0">
-                <BookCover
-                  libraryId={top.library_id}
-                  path={top.path}
-                  title={top.title || top.path}
-                  className="shadow-cover"
-                />
-              </Link>
-            ) : null}
-            {top ? (
-              <div className="flex max-w-[420px] min-w-[220px] flex-1 flex-col gap-2.5">
-                <span className="eyebrow">{t('year.bookOfYear')}</span>
-                <Link
-                  {...bookRoute(top.library_id, top.path)}
-                  className="font-display text-[28px] leading-none font-bold tracking-[-0.03em] hover:underline"
-                >
-                  {top.title || top.path}
+              <>
+                <Link {...bookRoute(top.library_id, top.path)} className="w-[180px] shrink-0">
+                  <BookCover
+                    libraryId={top.library_id}
+                    path={top.path}
+                    title={top.title || top.path}
+                    className="shadow-cover"
+                  />
                 </Link>
-                <span className="text-muted-foreground">
-                  {t('year.bookOfYearBody', {
-                    ...counted(top.listeners, lang),
-                    hours: formatHours(top.listened, lang),
-                  })}
-                  {narrator ? ` ${t('year.voice', { name: narrator.name })}` : ''}
-                </span>
-                <div className="flex -space-x-2">
-                  {a.top_users.slice(0, 5).map((u) => (
-                    <Monogram
-                      key={u.user_id}
-                      name={u.username}
-                      size={32}
-                      className="ring-2 ring-card"
-                    />
-                  ))}
+                <div className="flex max-w-[420px] min-w-[220px] flex-1 flex-col gap-2.5">
+                  <span className="eyebrow">{t('year.bookOfYear')}</span>
+                  <Link
+                    {...bookRoute(top.library_id, top.path)}
+                    className="font-display text-[28px] leading-none font-bold tracking-[-0.03em] hover:underline"
+                  >
+                    {top.title || top.path}
+                  </Link>
+                  <span className="text-muted-foreground">
+                    {t('year.bookOfYearBody', {
+                      ...counted(top.listeners, lang),
+                      hours: formatHours(top.listened, lang),
+                    })}
+                    {narrator ? ` ${t('year.voice', { name: narrator.name })}` : ''}
+                  </span>
+                  <div className="flex -space-x-2">
+                    {a.top_users.slice(0, 5).map((u) => (
+                      <Monogram
+                        key={u.user_id}
+                        name={u.username}
+                        size={32}
+                        className="ring-2 ring-card"
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
+              </>
             ) : null}
             <dl className="grid min-w-[260px] flex-1 grid-cols-2 gap-5">
               {facts.map(([value, label]) => (

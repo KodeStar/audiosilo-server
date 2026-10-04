@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActivityDay } from '@/api/types';
 import { formatDay, formatHours } from '@/lib/format';
@@ -7,6 +7,7 @@ import {
   busiestSlot,
   calendarGrid,
   seqLevel,
+  slotLabel,
   weekdayName,
   type CalendarCell,
 } from './activity-model';
@@ -32,53 +33,47 @@ function Scale() {
 }
 
 /** The period day by day, a column a week (Monday on top), with a readout of the hovered day. */
-export function YearCalendar({
-  days,
-  value,
-  label,
-}: {
-  days: ActivityDay[];
-  /** Seconds to plot for a day (everyone's by default). */
-  value?: (d: ActivityDay) => number;
-  label: string;
-}) {
+export function YearCalendar({ days, label }: { days: ActivityDay[]; label: string }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const { weeks, months } = calendarGrid(days, value);
   const [hover, setHover] = useState<CalendarCell | null>(null);
+  // The grid is built once per period: hovering only changes the readout under it.
+  const grid = useMemo(() => {
+    const { weeks, months } = calendarGrid(days);
+    const monthAt = new Map(months.map((m) => [m.week, m.date]));
+    return (
+      <div
+        className="grid min-w-[640px] grid-flow-col grid-rows-[14px_repeat(7,1fr)] gap-[3px]"
+        style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}
+        role="img"
+        aria-label={label}
+        onMouseLeave={() => setHover(null)}
+      >
+        {weeks.map((week, w) => (
+          <div key={w} className="contents">
+            <span className="overflow-visible text-[11px] leading-[14px] whitespace-nowrap text-muted-foreground">
+              {monthAt.has(w) ? formatDay(monthAt.get(w)!, lang, { month: 'short' }) : ''}
+            </span>
+            {Array.from({ length: 7 }, (_, d) => {
+              const c = week[d];
+              return c ? (
+                <i
+                  key={d}
+                  className={cn('aspect-square rounded-[3px]', SEQ[c.level])}
+                  onMouseEnter={() => setHover(c)}
+                />
+              ) : (
+                <i key={d} />
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  }, [days, label, lang]);
   return (
     <div className="flex flex-col gap-2.5">
-      <div className="hscroll">
-        <div
-          className="grid min-w-[640px] grid-flow-col grid-rows-[14px_repeat(7,1fr)] gap-[3px]"
-          style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}
-          role="img"
-          aria-label={label}
-          onMouseLeave={() => setHover(null)}
-        >
-          {weeks.map((week, w) => (
-            <div key={w} className="contents">
-              <span className="overflow-visible text-[11px] leading-[14px] whitespace-nowrap text-muted-foreground">
-                {months.find((m) => m.week === w)
-                  ? formatDay(months.find((m) => m.week === w)!.date, lang, { month: 'short' })
-                  : ''}
-              </span>
-              {Array.from({ length: 7 }, (_, d) => {
-                const c = week[d];
-                return c ? (
-                  <i
-                    key={d}
-                    className={cn('aspect-square rounded-[3px]', SEQ[c.level])}
-                    onMouseEnter={() => setHover(c)}
-                  />
-                ) : (
-                  <i key={d} />
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      </div>
+      <div className="hscroll">{grid}</div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
         <span className="text-muted-foreground" aria-live="polite">
           {hover
@@ -119,7 +114,7 @@ export function HourWeekdayHeat({ grid }: { grid: number[][] }) {
                 <i
                   key={h}
                   className={cn('aspect-[1.3] rounded-[3px]', SEQ[seqLevel(v, max)])}
-                  title={`${weekdayName(d, lang)} ${String(h).padStart(2, '0')}:00 · ${formatHours(v, lang)}`}
+                  title={`${slotLabel(d, h, lang)} · ${formatHours(v, lang)}`}
                 />
               ))}
             </div>
@@ -136,7 +131,7 @@ export function HourWeekdayHeat({ grid }: { grid: number[][] }) {
         <span className="text-muted-foreground">
           {busiest
             ? t('activity.when.busiest', {
-                slot: `${weekdayName(busiest.weekday, lang, 'long')} ${String(busiest.hour).padStart(2, '0')}:00`,
+                slot: slotLabel(busiest.weekday, busiest.hour, lang, 'long'),
               })
             : t('activity.when.none')}
         </span>

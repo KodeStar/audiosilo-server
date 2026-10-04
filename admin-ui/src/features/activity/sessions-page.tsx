@@ -41,7 +41,7 @@ export function SessionsPage() {
     path: search.library ? search.path : undefined,
   };
   const sessions = useSessions(filter);
-  const rows = sessions.data?.pages.flatMap((p) => p.sessions ?? []) ?? [];
+  const rows = sessions.data?.pages.flatMap((p) => p.sessions) ?? [];
   const setSearch = (next: SessionsSearch) =>
     void navigate({ to: '.', search: next, replace: true });
 

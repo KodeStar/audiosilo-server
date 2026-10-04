@@ -1,19 +1,14 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight, Headphones } from 'lucide-react';
-import { useActivity, useSessions, useUserProgress } from '@/api/hooks';
+import { useListeningDays, useSessions, useUserProgress } from '@/api/hooks';
 import type { User, UserProgress } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
 import { QueryError } from '@/components/query-error';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import {
-  finishedIn,
-  listenedOn,
-  longestStreak,
-  monthTotals,
-} from '@/features/activity/activity-model';
+import { finishedCount, longestStreak, monthTotals } from '@/features/activity/activity-model';
 import { MonthBars } from '@/features/activity/charts';
 import { SessionTable } from '@/features/activity/sessions-page';
 import { bookRoute } from '@/lib/book-route';
@@ -75,31 +70,26 @@ function ListeningYear({ user, progress }: { user: User; progress: UserProgress[
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const year = new Date().getFullYear();
-  const activity = useActivity(String(year));
-  const days = activity.data?.range === String(year) ? activity.data.days : undefined;
-  const listened = days?.reduce((s, d) => s + listenedOn(d, user.id), 0) ?? 0;
-  const facts = days
-    ? [
-        [formatHours(listened, lang), t('user.year.hours')],
-        [
-          formatNumber(finishedIn(progress, year).length, lang),
-          t('user.year.finished', { count: finishedIn(progress, year).length }),
-        ],
-        [
-          formatNumber(longestStreak(days, user.id), lang),
-          t('user.year.streak', { count: longestStreak(days, user.id) }),
-        ],
-      ]
-    : undefined;
+  // This person's days only: not the whole server's Activity page.
+  const listening = useListeningDays(String(year), user.id);
+  const days = listening.data;
+  const listened = days?.reduce((s, d) => s + d.listened, 0) ?? 0;
+  const finished = finishedCount(progress, year);
+  const streak = days ? longestStreak(days) : 0;
+  const facts = [
+    [formatHours(listened, lang), t('user.year.hours')],
+    [formatNumber(finished, lang), t('user.year.finished', { count: finished })],
+    [formatNumber(streak, lang), t('user.year.streak', { count: streak })],
+  ];
 
   return (
     <section className="year-hero rounded-xl border p-6" aria-labelledby="user-year-title">
       <h2 id="user-year-title" className="eyebrow">
         {t('user.year.title', { name: user.username, year })}
       </h2>
-      {activity.isError ? (
+      {listening.isError ? (
         <p className="mt-3 text-muted-foreground">{t('activity.error')}</p>
-      ) : !facts || !days ? (
+      ) : !days ? (
         <div className="skel mt-4 h-20" role="status" aria-label={t('common.loading')} />
       ) : (
         <div className="mt-4 flex flex-wrap items-end gap-x-10 gap-y-5">
@@ -121,7 +111,7 @@ function ListeningYear({ user, progress }: { user: User; progress: UserProgress[
           </dl>
           <div className="min-w-[220px] flex-1">
             {listened > 0 ? (
-              <MonthBars months={monthTotals(days, user.id)} year={year} />
+              <MonthBars months={monthTotals(days)} year={year} />
             ) : (
               <p className="text-muted-foreground">
                 {t('user.year.none', { name: user.username })}
@@ -226,8 +216,8 @@ function ProgressCard({
 
 function RecentSessions({ user }: { user: User }) {
   const { t } = useTranslation();
-  const sessions = useSessions({ user_id: user.id });
-  const rows = (sessions.data?.pages[0]?.sessions ?? []).slice(0, RECENT_SESSIONS);
+  const sessions = useSessions({ user_id: user.id }, RECENT_SESSIONS);
+  const rows = sessions.data?.pages[0]?.sessions ?? [];
   return (
     <section aria-labelledby="user-sessions-title" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">

@@ -17,11 +17,13 @@ import type {
   Job,
   JobsState,
   LibraryRequest,
+  ListeningDays,
   ListeningSession,
   MatchCandidate,
   ProgressEdit,
   ScanRun,
   ScanRunPage,
+  SessionFilter,
   SessionPage,
   NarratorsResponse,
   PeopleResponse,
@@ -93,7 +95,8 @@ const LOGIN_PATH = '/auth/login';
 /** How the console names itself to the server (X-AudioSilo-Client), so the People and Activity
  * screens can tell a console session from a player. It ships inside the server, so it sends no
  * version of its own. Always same-origin, so the header never costs a CORS preflight. */
-export const CLIENT_IDENTITY = 'AudioSilo Admin (web)';
+export const CLIENT_APP = 'AudioSilo Admin';
+export const CLIENT_IDENTITY = `${CLIENT_APP} (web)`;
 
 /**
  * Every API call goes through here: the bearer header, what a 401/403 means for
@@ -399,22 +402,19 @@ export const api = {
   // Activity: sessions, devices, progress edits and listening stats.
   /** The Activity page for a period ("7d", "30d", "90d", "1y" or a year), in server time. */
   activity: async (range: string): Promise<Activity> => {
-    const r = await request<AdminStats>('GET', `/admin/stats${bookQuery({ range })}`);
-    if (!r.activity) throw new ApiError(500, 'the server sent no activity');
+    const r = await request<{ activity?: Activity }>('GET', `/admin/stats${bookQuery({ range })}`);
+    // A server from before the Activity page ignores ?range=: say so, don't draw an empty page.
+    if (!r?.activity) throw new ApiError(500, 'the server sent no activity');
     return r.activity;
   },
+  /** Listening per day over a period, of everyone or one person (no other stats). */
+  listeningDays: (range: string, userId?: number) =>
+    request<ListeningDays>('GET', `/admin/listening${bookQuery({ range, user_id: userId })}`),
   /** Who is listening now: one session per device, with chapter and address. */
   liveSessions: () => request<{ sessions: ListeningSession[] }>('GET', '/admin/sessions/live'),
   /** Sessions newest first; `before` is the previous page's next_before (1-200 a page). */
-  sessions: (
-    opts: {
-      user_id?: number;
-      library_id?: number;
-      path?: string;
-      before?: number;
-      limit?: number;
-    } = {},
-  ) => request<SessionPage>('GET', `/admin/sessions${bookQuery(opts)}`),
+  sessions: (opts: SessionFilter & { before?: number; limit?: number } = {}) =>
+    request<SessionPage>('GET', `/admin/sessions${bookQuery(opts)}`),
   /** Signed-in devices and API keys, of one person or everyone. */
   devices: (userId?: number) =>
     request<{ devices: Device[] }>('GET', `/admin/devices${bookQuery({ user_id: userId })}`),

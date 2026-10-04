@@ -1,5 +1,6 @@
 import type { ListeningRow, ListeningSession } from '@/api/types';
-import { sortLive } from '@/features/activity/activity-model';
+import { liveSummary, sortLive } from '@/features/activity/live-model';
+import { refKey } from '@/lib/book-route';
 
 /** The recent-listening list on Overview shows at most this many rows. */
 export const RECENT_LIMIT = 8;
@@ -15,7 +16,7 @@ export interface ListeningSplit {
 }
 
 const key = (r: { user_id: number; library_id: number; path: string }) =>
-  `${r.user_id}\0${r.library_id}\0${r.path}`;
+  `${r.user_id}\0${refKey(r)}`;
 
 /**
  * Splits the Overview's listening into who is listening right now (the server's
@@ -30,7 +31,7 @@ export function splitListening(
   const now = new Set(live.map(key));
   return {
     live: sortLive(live),
-    listeners: new Set(live.map((s) => s.user_id)).size,
+    listeners: liveSummary(live).listeners,
     recent: sorted.filter((r) => !now.has(key(r))).slice(0, RECENT_LIMIT),
     inProgress: sorted.filter((r) => !r.finished).length,
   };

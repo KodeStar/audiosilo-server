@@ -70,8 +70,6 @@ export interface AdminStats {
   total_users: number;
   libraries: LibraryStat[];
   listening: ListeningRow[];
-  /** Only with ?range= (the Activity page). */
-  activity?: Activity;
 }
 
 // Sessions, devices and listening stats (admin redesign Phase 4a:
@@ -120,6 +118,13 @@ export interface ListeningSession {
   /** Live sessions only: the chapter at the position and the device's newest address. */
   chapter?: string;
   ip?: string;
+}
+
+/** What a session list is narrowed to (GET /admin/sessions). */
+export interface SessionFilter {
+  user_id?: number;
+  library_id?: number;
+  path?: string;
 }
 
 /** GET /admin/sessions: newest first; `next_before` asks for the next page (null at the end). */
@@ -314,6 +319,18 @@ export interface InactiveUser {
   user_id: number;
   username: string;
   last_seen_at: string | null;
+}
+
+/**
+ * catalog.ListeningDays (GET /admin/listening): a period's listening day by day,
+ * of everyone or one person, without the rest of the Activity page.
+ */
+export interface ListeningDays {
+  range: string;
+  from: string;
+  to: string;
+  timezone: string;
+  days: ActivityDay[];
 }
 
 /** catalog.Activity: the Activity page for one period, bucketed in server time. */
@@ -919,6 +936,8 @@ export interface Listener {
   duration: number;
   finished: boolean;
   updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 /** catalog.BookShare: a share that includes the book, by the rule that includes it. */

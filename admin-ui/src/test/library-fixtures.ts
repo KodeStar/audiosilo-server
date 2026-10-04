@@ -217,6 +217,8 @@ export function bookDetail(over: Partial<AdminBookDetail> = {}): AdminBookDetail
         duration: book.duration,
         finished: false,
         updated_at: '2026-10-03T09:00:00Z',
+        started_at: '2026-09-20T18:00:00Z',
+        finished_at: null,
       },
     ],
     shares: [{ share_id: 7, name: 'Cosy mysteries', path: 'Brandon Sanderson' }],

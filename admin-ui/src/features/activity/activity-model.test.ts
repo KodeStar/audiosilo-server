@@ -1,4 +1,4 @@
-import type { ActivityDay, ListeningSession, UserProgress } from '@/api/types';
+import type { ActivityDay, UserProgress } from '@/api/types';
 import {
   busiestSlot,
   calendarGrid,
@@ -7,17 +7,15 @@ import {
   clientParts,
   clientRows,
   compareVersions,
-  finishedIn,
+  finishedCount,
   finishRate,
   hoursBars,
-  liveSummary,
   longestStreak,
   monthTotals,
   niceTicks,
   playbackParts,
   recentYears,
   seqLevel,
-  sortLive,
   topListeners,
   weekdayName,
   weekdayOf,
@@ -115,14 +113,13 @@ describe('seqLevel', () => {
 
 describe('calendarGrid', () => {
   it('lays days out in Monday-first weeks with month labels', () => {
-    const { weeks, months, max } = calendarGrid(
+    const { weeks, months } = calendarGrid(
       days('2026-09-03', 40, (i) => (i === 5 ? { 1: 2 } : {})),
     );
     // 2026-09-03 is a Thursday: three blanks first.
     expect(weeks[0].slice(0, 3)).toEqual([null, null, null]);
     expect(weeks[0][3]?.date).toBe('2026-09-03');
     expect(weeks.every((w) => w.length <= 7)).toBe(true);
-    expect(max).toBe(2 * H);
     expect(weeks.flat().find((c) => c?.date === '2026-09-08')?.level).toBe(5);
     expect(months.map((m) => m.date)).toEqual(['2026-09-03', '2026-10-01']);
   });
@@ -161,21 +158,20 @@ describe('streaks and months', () => {
     i === 2 ? {} : { 1: 1, ...(i < 2 ? { 2: 1 } : {}) },
   );
 
-  it('finds the longest run of days with listening, for everyone or one person', () => {
+  it('finds the longest run of days with listening', () => {
     expect(longestStreak(period)).toBe(2);
-    expect(longestStreak(period, 2)).toBe(2);
-    expect(longestStreak(period, 9)).toBe(0);
+    expect(longestStreak(days('2026-01-01', 3))).toBe(0);
   });
 
   it('sums by calendar month', () => {
-    const m = monthTotals(period, 1);
-    expect(m[0]).toBe(2 * H); // Jan 30, 31
+    const m = monthTotals(period);
+    expect(m[0]).toBe(4 * H); // Jan 30, 31: two people each day
     expect(m[1]).toBe(2 * H); // Feb 2, 3 (Feb 1 had none)
     expect(m.slice(2).every((v) => v === 0)).toBe(true);
   });
 });
 
-describe('finishedIn', () => {
+describe('finishedCount', () => {
   const row = (path: string, finished_at: string | null, finished = true): UserProgress => ({
     library_id: 1,
     path,
@@ -192,7 +188,7 @@ describe('finishedIn', () => {
     finished_at,
   });
 
-  it('keeps the books finished that year, newest first', () => {
+  it('counts the books finished that year', () => {
     const rows = [
       row('a', '2026-02-01T10:00:00Z'),
       row('b', '2025-12-01T10:00:00Z'),
@@ -200,7 +196,7 @@ describe('finishedIn', () => {
       row('d', null),
       row('e', '2026-03-01T10:00:00Z', false),
     ];
-    expect(finishedIn(rows, 2026).map((r) => r.path)).toEqual(['c', 'a']);
+    expect(finishedCount(rows, 2026)).toBe(2);
   });
 });
 
@@ -261,26 +257,6 @@ describe('versions and clients', () => {
       app: 'Shelfie',
       platform: 'tv',
     });
-  });
-});
-
-describe('live sessions', () => {
-  const s = (
-    id: number,
-    user: number,
-    state: ListeningSession['state'],
-    last: string,
-    transcoded = false,
-  ) => ({ id, user_id: user, state, last_at: last, transcoded }) as ListeningSession;
-
-  it('lists playing first, newest first, and sums them up', () => {
-    const list = [
-      s(1, 1, 'paused', '2026-10-04T10:05:00Z'),
-      s(2, 2, 'playing', '2026-10-04T10:00:00Z', true),
-      s(3, 1, 'playing', '2026-10-04T10:04:00Z'),
-    ];
-    expect(sortLive(list).map((x) => x.id)).toEqual([3, 2, 1]);
-    expect(liveSummary(list)).toEqual({ playing: 2, paused: 1, transcoding: 1, listeners: 2 });
   });
 });
 

@@ -130,10 +130,9 @@ func (a *API) lookupUser(w http.ResponseWriter, r *http.Request, id int64) *auth
 	switch {
 	case errors.Is(err, auth.ErrNotFound):
 		writeError(w, http.StatusNotFound, "user not found")
+		return nil
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "could not load user")
-	}
-	if err != nil {
 		return nil
 	}
 	return u
@@ -240,12 +239,41 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"progress": saved})
 }
 
-// activityStats answers GET /admin/stats?range=: the Activity page for the
-// period (7d, 30d, 90d, 1y or a calendar year), in server time.
-func (a *API) activityStats(r *http.Request) (*catalog.Activity, error) {
+// handleActivityStats answers GET /admin/stats?range=: {"activity": ...}, the
+// Activity page for the period (7d, 30d, 90d, 1y or a calendar year) in server
+// time, without the Overview's figures (the console reads those from the plain
+// /admin/stats).
+func (a *API) handleActivityStats(w http.ResponseWriter, r *http.Request) {
 	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		var activity *catalog.Activity
+		if activity, err = a.cat.ActivityFor(r.Context(), label, from, to, time.Local); err == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"activity": activity})
+			return
+		}
 	}
-	return a.cat.ActivityFor(r.Context(), label, from, to, time.Local)
+	a.writeCatalogError(w, err, "activity stats failed", "could not load activity")
+}
+
+// handleListeningDays answers GET /admin/listening?range=&user_id=: listening per
+// day over the period, of everyone or one person (the year calendar, a person's
+// listening year), without computing the rest of the Activity page.
+func (a *API) handleListeningDays(w http.ResponseWriter, r *http.Request) {
+	userID, ok := parseOptionalID(r.URL.Query().Get("user_id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid user_id")
+		return
+	}
+	if userID != 0 && a.lookupUser(w, r, userID) == nil {
+		return
+	}
+	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
+	if err == nil {
+		var days *catalog.ListeningDays
+		if days, err = a.cat.ListeningDaysFor(r.Context(), label, from, to, time.Local, userID); err == nil {
+			writeJSON(w, http.StatusOK, days)
+			return
+		}
+	}
+	a.writeCatalogError(w, err, "listening days failed", "could not load listening")
 }

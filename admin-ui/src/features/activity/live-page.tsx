@@ -11,9 +11,10 @@ import { PageHead } from '@/components/page-head';
 import { PlaybackStatus } from '@/components/playback-status';
 import { ProgressBar } from '@/components/progress-bar';
 import { QueryError } from '@/components/query-error';
+import { SessionState } from '@/components/session-state';
 import { bookRoute } from '@/lib/book-route';
 import { formatClock, formatDuration, formatRelative, progressFraction } from '@/lib/format';
-import { liveSummary, sortLive } from './activity-model';
+import { liveSummary, sortLive } from './live-model';
 import { useClientName } from './use-client-name';
 
 /** Activity > Live now: every device playing or paused in the last ten minutes. */
@@ -82,16 +83,9 @@ function LiveSession({ s }: { s: ListeningSession }) {
     [t('live.device'), s.device_name || t('live.unnamed')],
     [t('live.app'), clientName(s.client)],
     [t('live.playback'), <PlaybackStatus direct={!s.transcoded} codec={s.codec} />],
-    ...(s.ip
-      ? [
-          [t('live.address'), <span className="font-mono">{s.ip}</span>] as [
-            string,
-            React.ReactNode,
-          ],
-        ]
-      : []),
-    [t('live.started'), formatRelative(s.started_at, lang)],
   ];
+  if (s.ip) rows.push([t('live.address'), <span className="font-mono">{s.ip}</span>]);
+  rows.push([t('live.started'), formatRelative(s.started_at, lang)]);
   return (
     <article className="flex flex-wrap items-start gap-x-5 gap-y-4 rounded-xl border bg-card p-4">
       <Link {...bookRoute(s.library_id, s.path)} className="w-[88px] shrink-0" aria-label={title}>
@@ -107,13 +101,8 @@ function LiveSession({ s }: { s: ListeningSession }) {
           >
             {s.username}
           </Link>
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <span
-              className="dot"
-              data-tone={s.state === 'playing' ? 'live' : 'off'}
-              aria-hidden="true"
-            />
-            {s.state === 'playing' ? t('live.playing') : t('live.pausedState')}
+          <span className="text-muted-foreground">
+            <SessionState state={s.state} />
           </span>
         </div>
         <Link

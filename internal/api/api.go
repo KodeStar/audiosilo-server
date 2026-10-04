@@ -260,6 +260,7 @@ func (a *API) Handler() http.Handler {
 	// Activity: listening sessions (derived from progress saves), devices (signed-in
 	// tokens) and an admin's edits of someone's progress. Stats are GET
 	// /admin/stats?range=.
+	mux.Handle("GET /api/v1/admin/listening", a.requireAdmin(http.HandlerFunc(a.handleListeningDays)))
 	mux.Handle("GET /api/v1/admin/sessions/live", a.requireAdmin(http.HandlerFunc(a.handleLiveSessions)))
 	mux.Handle("GET /api/v1/admin/sessions", a.requireAdmin(http.HandlerFunc(a.handleListSessions)))
 	mux.Handle("GET /api/v1/admin/devices", a.requireAdmin(http.HandlerFunc(a.handleListDevices)))

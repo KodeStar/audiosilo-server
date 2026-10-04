@@ -13,8 +13,8 @@ export interface ProgressTarget extends BookRef {
   title: string;
   finished: boolean;
   position: number;
-  started_at?: string | null;
-  finished_at?: string | null;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 /**

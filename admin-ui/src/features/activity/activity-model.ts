@@ -3,10 +3,10 @@ import type {
   ClientCount,
   ClientInfo,
   Funnel,
-  ListeningSession,
   PlaybackShare,
   UserProgress,
 } from '@/api/types';
+import { CLIENT_APP } from '@/api/client';
 import { formatDay } from '@/lib/format';
 
 // Pure logic behind the Activity screens (and the People pages' listening year),
@@ -34,6 +34,11 @@ export const weekdayOf = (day: string) => (dayDate(day).getUTCDay() + 6) % 7;
 export function weekdayName(weekday: number, lang: string, width: 'short' | 'long' = 'short') {
   // 2024-01-01 was a Monday.
   return formatDay(`2024-01-0${weekday + 1}`, lang, { weekday: width });
+}
+
+/** An hour of the week as "Sat 21:00" ("Saturday 21:00" when long). */
+export function slotLabel(weekday: number, hour: number, lang: string, width?: 'short' | 'long') {
+  return `${weekdayName(weekday, lang, width)} ${String(hour).padStart(2, '0')}:00`;
 }
 
 /** At most this many listeners get their own colour in the hours chart; the rest are "others". */
@@ -129,15 +134,12 @@ export interface CalendarCell {
  * The year heatmap: one column a week (Monday on top), blanks before the first day,
  * and where each month's label sits (the week holding its first day).
  */
-export function calendarGrid(
-  days: readonly ActivityDay[],
-  value: (d: ActivityDay) => number = (d) => d.listened,
-) {
-  const max = days.reduce((m, d) => Math.max(m, value(d)), 0);
+export function calendarGrid(days: readonly ActivityDay[]) {
+  const max = days.reduce((m, d) => Math.max(m, d.listened), 0);
   const lead = days.length ? weekdayOf(days[0].date) : 0;
   const cells: (CalendarCell | null)[] = [
     ...new Array<null>(lead).fill(null),
-    ...days.map((d) => ({ date: d.date, listened: value(d), level: seqLevel(value(d), max) })),
+    ...days.map((d) => ({ date: d.date, listened: d.listened, level: seqLevel(d.listened, max) })),
   ];
   const weeks: (CalendarCell | null)[][] = [];
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
@@ -153,7 +155,7 @@ export function calendarGrid(
   }
   // A month that only starts in the last two columns has no room for its label.
   while (months.length > 1 && months[months.length - 1].week > weeks.length - 3) months.pop();
-  return { weeks, months, max };
+  return { weeks, months };
 }
 
 /** The busiest hour of the week (weekday 0 = Monday), or null with no listening. */
@@ -172,33 +174,29 @@ export function finishRate(f: Funnel): number | null {
   return f.started > 0 ? f.finished / f.started : null;
 }
 
-/** One person's seconds on a day (everyone's without a user). */
-export const listenedOn = (d: ActivityDay, userId?: number) =>
-  userId === undefined ? d.listened : (d.by_user.find((u) => u.user_id === userId)?.listened ?? 0);
-
 /** The longest run of consecutive days with listening (the days are consecutive). */
-export function longestStreak(days: readonly ActivityDay[], userId?: number): number {
+export function longestStreak(days: readonly ActivityDay[]): number {
   let best = 0;
   let run = 0;
   for (const d of days) {
-    run = listenedOn(d, userId) > 0 ? run + 1 : 0;
+    run = d.listened > 0 ? run + 1 : 0;
     best = Math.max(best, run);
   }
   return best;
 }
 
 /** Seconds per calendar month (0 = January) over these days. */
-export function monthTotals(days: readonly ActivityDay[], userId?: number): number[] {
+export function monthTotals(days: readonly ActivityDay[]): number[] {
   const out = new Array<number>(12).fill(0);
-  for (const d of days) out[Number(d.date.slice(5, 7)) - 1] += listenedOn(d, userId);
+  for (const d of days) out[Number(d.date.slice(5, 7)) - 1] += d.listened;
   return out;
 }
 
-/** A person's progress rows finished within a year (by their finish date), newest first. */
-export function finishedIn(rows: readonly UserProgress[], year: number): UserProgress[] {
-  return rows
-    .filter((r) => r.finished && r.finished_at && new Date(r.finished_at).getFullYear() === year)
-    .sort((a, b) => Date.parse(b.finished_at!) - Date.parse(a.finished_at!));
+/** How many of a person's progress rows were finished within a year (by their finish date). */
+export function finishedCount(rows: readonly UserProgress[], year: number): number {
+  return rows.filter(
+    (r) => r.finished && r.finished_at && new Date(r.finished_at).getFullYear() === year,
+  ).length;
 }
 
 /** How a slice of the playback donut is drawn: direct play, or one codec's transcodes. */
@@ -281,15 +279,12 @@ export function clientRows(clients: readonly ClientCount[]): ClientRow[] {
     );
 }
 
-/** The name the console sends for itself (src/api/client.ts CLIENT_IDENTITY). */
-export const CONSOLE_APP = 'AudioSilo Admin';
-
 /** What kind of app a client is, for its icon and label. */
 export type ClientKind = 'unknown' | 'console' | 'phone' | 'web' | 'other';
 
 export function clientKind(client: Pick<ClientInfo, 'app' | 'platform'> | null): ClientKind {
   if (!client?.app) return 'unknown';
-  if (client.app === CONSOLE_APP) return 'console';
+  if (client.app === CLIENT_APP) return 'console';
   const p = client.platform.toLowerCase();
   if (p === 'ios' || p === 'android') return 'phone';
   if (p === 'web') return 'web';
@@ -311,25 +306,6 @@ export function clientParts(client: Pick<ClientInfo, 'app' | 'version' | 'platfo
   return {
     app: client.version ? `${client.app} ${client.version}` : client.app,
     platform: client.platform ? platformLabel(client.platform) : '',
-  };
-}
-
-/** Live sessions in the order the Live page shows them: playing first, then the newest save. */
-export function sortLive(sessions: readonly ListeningSession[]): ListeningSession[] {
-  const rank = (s: ListeningSession) => (s.state === 'playing' ? 0 : 1);
-  return [...sessions].sort(
-    (a, b) => rank(a) - rank(b) || Date.parse(b.last_at) - Date.parse(a.last_at),
-  );
-}
-
-/** A live list's headline numbers: streams, how many play direct, and distinct listeners. */
-export function liveSummary(sessions: readonly ListeningSession[]) {
-  const playing = sessions.filter((s) => s.state === 'playing');
-  return {
-    playing: playing.length,
-    paused: sessions.length - playing.length,
-    transcoding: playing.filter((s) => s.transcoded).length,
-    listeners: new Set(sessions.map((s) => s.user_id)).size,
   };
 }
 

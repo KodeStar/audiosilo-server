@@ -221,7 +221,7 @@ describe('api client', () => {
   it('reads the Activity period from the stats envelope, and fails if the server sends none', async () => {
     const calls = mockFetch({
       'GET /admin/stats': (req) => ({
-        body: req.query.get('range') === '7d' ? { ...stats(), activity: activity() } : stats(),
+        body: req.query.get('range') === '7d' ? { activity: activity() } : stats(),
       }),
     });
     await expect(api.activity('7d')).resolves.toMatchObject({

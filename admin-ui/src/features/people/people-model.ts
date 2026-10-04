@@ -1,5 +1,7 @@
+import { sortLive } from '@/features/activity/live-model';
 import type {
   AuthCode,
+  Device,
   Library,
   ListeningRow,
   ListeningSession,
@@ -120,16 +122,23 @@ export function currentBook(
   live: readonly ListeningSession[],
   userId: number,
 ): CurrentBook | undefined {
-  const session = live
-    .filter((s) => s.user_id === userId)
-    .sort(
-      (a, b) =>
-        Number(b.state === 'playing') - Number(a.state === 'playing') ||
-        Date.parse(b.last_at) - Date.parse(a.last_at),
-    )[0];
+  const session = sortLive(live.filter((s) => s.user_id === userId))[0];
   if (session) return { ...session, live: true };
   const row = rows
     .filter((r) => r.user_id === userId && !r.finished)
     .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0];
   return row ? { ...row, live: false } : undefined;
+}
+
+/** Each person's paired devices (sessions, not API keys), by user id; undefined while loading. */
+export function groupDevices(devices: readonly Device[] | undefined) {
+  if (!devices) return undefined;
+  const out = new Map<number, Device[]>();
+  for (const d of devices) {
+    if (d.kind !== 'session') continue;
+    const list = out.get(d.user_id);
+    if (list) list.push(d);
+    else out.set(d.user_id, [d]);
+  }
+  return out;
 }

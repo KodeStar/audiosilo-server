@@ -13,18 +13,27 @@ import { signedInRoutes } from '@/test/routes';
 function statsRoute(by: (range: string) => Activity = (range) => activity({ range })): MockRoute {
   return (req: MockRequest) => {
     const range = req.query.get('range');
-    return { body: range ? { ...stats(), activity: by(range) } : stats() };
+    return { body: range ? { activity: by(range) } : stats() };
   };
 }
 
 function routes(over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
     'GET /admin/stats': statsRoute(),
+    // The year calendar's days-only query.
+    'GET /admin/listening': (req) => ({
+      body: { ...activity({ range: req.query.get('range')! }), range: req.query.get('range') },
+    }),
     'GET /admin/users': { body: { users: [admin, sam] } },
     ...over,
   });
 }
 
+// The screens load as lazy chunks (the charts one is big): load them once up front so
+// the first test doesn't spend its waits on the import.
+beforeAll(async () => {
+  await Promise.all([import('./activity-page'), import('./year-page'), import('./live-page')]);
+});
 beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
@@ -33,8 +42,7 @@ describe('activity overview', () => {
     const calls = mockFetch(routes());
     renderApp('/activity');
     expect(await screen.findByRole('heading', { level: 1, name: 'Activity' })).toBeInTheDocument();
-    // The first Activity render loads the charts chunk: allow it time on a busy machine.
-    expect(await screen.findByText('9h', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText('9h')).toBeInTheDocument();
     expect(screen.getByText('2 people listened')).toBeInTheDocument();
     // 9h against 6h before: up 50%.
     expect(screen.getByText('50%')).toBeInTheDocument();
@@ -69,9 +77,10 @@ describe('activity overview', () => {
       within(apps).getByText('1 device runs an older build than others on its platform.'),
     ).toBeInTheDocument();
     expect(screen.getByText("1 person hasn't been active for 60 days")).toBeInTheDocument();
-    // The default period, plus the year for the calendar.
+    // The default period, and only the year's days for the calendar.
     const ranges = calls.filter((c) => c.path === '/admin/stats').map((c) => c.query.get('range'));
-    expect(ranges).toEqual(expect.arrayContaining(['30d', '1y']));
+    expect(ranges).toEqual(['30d']);
+    expect(calls.find((c) => c.path === '/admin/listening')?.query.get('range')).toBe('1y');
   });
 
   it('switches the period and keeps it in the URL', async () => {

@@ -199,6 +199,52 @@ const (
 	inactiveAfter = 60 * 24 * time.Hour
 )
 
+// dayList is every day of the period, oldest first, zeros included, with each
+// listener's share.
+func (a *listenAcc) dayList() []ActivityDay {
+	out := []ActivityDay{}
+	for d := a.from.In(a.loc); ; d = d.AddDate(0, 0, 1) {
+		day := d.Format(time.DateOnly)
+		if day > a.lastDay {
+			break
+		}
+		entry := ActivityDay{Date: day, ByUser: []UserSeconds{}}
+		for user, secs := range a.days[day] {
+			entry.Listened += secs
+			entry.ByUser = append(entry.ByUser, UserSeconds{UserID: user, Listened: secs})
+		}
+		slices.SortFunc(entry.ByUser, func(x, y UserSeconds) int { return cmp.Compare(x.UserID, y.UserID) })
+		out = append(out, entry)
+	}
+	return out
+}
+
+// ListeningDays is a period's listening day by day and nothing else: the year
+// calendar and a person's listening year, without the rest of the Activity page.
+type ListeningDays struct {
+	Range    string        `json:"range"`
+	From     string        `json:"from"`
+	To       string        `json:"to"`
+	Timezone string        `json:"timezone"`
+	Days     []ActivityDay `json:"days"`
+}
+
+// ListeningDaysFor is the listening per day in [from, to) (server time, loc), of
+// one user or of everyone (userID 0): the same days ActivityFor reports, without
+// the stats around them.
+func (c *Catalog) ListeningDaysFor(ctx context.Context, label string, from, to time.Time, loc *time.Location, userID int64) (*ListeningDays, error) {
+	acc := newListenAcc(from, to, loc, true)
+	acc.onlyUser = userID
+	if err := c.collectListening(ctx, acc); err != nil {
+		return nil, err
+	}
+	zone, _ := to.In(loc).Zone()
+	return &ListeningDays{
+		Range: label, From: from.UTC().Format(time.RFC3339), To: to.UTC().Format(time.RFC3339),
+		Timezone: zone, Days: acc.dayList(),
+	}, nil
+}
+
 // ActivityFor computes the Activity page for [from, to), labelled label. loc is
 // the server's zone, which days, hours and weekdays are counted in.
 func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
@@ -244,7 +290,8 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 type listenAcc struct {
 	from, to time.Time
 	loc      *time.Location
-	detail   bool // everything, or only the totals (the previous period)
+	detail   bool  // everything, or only the totals (the previous period)
+	onlyUser int64 // only this user's listening (0 = everyone's)
 
 	listened  float64
 	sessions  int
@@ -402,8 +449,8 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 		        s.started_at, s.last_at, s.listened, s.codec, s.transcoded,
 		        s.token_id, s.client_app, s.client_version, s.client_platform
 		   FROM listening_sessions s `+joins+`
-		  WHERE s.started_at < ? AND s.last_at >= ? AND `+listenedSQL,
-		formatSessionTime(a.to), formatSessionTime(a.from))
+		  WHERE s.started_at < ? AND s.last_at >= ? AND (? = 0 OR s.user_id = ?) AND `+listenedSQL,
+		formatSessionTime(a.to), formatSessionTime(a.from), a.onlyUser, a.onlyUser)
 	if err != nil {
 		return err
 	}
@@ -477,7 +524,7 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT d.user_id, d.library_id, d.rel_path, `+cols+`, d.day, d.listened, d.sessions
 		   FROM listening_daily d `+joins+`
-		  WHERE d.day >= ? AND d.day <= ?`, a.firstDay, a.lastDay)
+		  WHERE d.day >= ? AND d.day <= ? AND (? = 0 OR d.user_id = ?)`, a.firstDay, a.lastDay, a.onlyUser, a.onlyUser)
 	if err != nil {
 		return err
 	}
@@ -511,20 +558,7 @@ func (a *listenAcc) totals(finished map[int64]int) ActivityTotals {
 func (a *listenAcc) result(out *Activity, finished map[int64]int) {
 	out.Totals = a.totals(finished)
 	out.HourWeekday = a.hw
-	out.Days = []ActivityDay{}
-	for d := a.from.In(a.loc); ; d = d.AddDate(0, 0, 1) {
-		day := d.Format(time.DateOnly)
-		if day > a.lastDay {
-			break
-		}
-		entry := ActivityDay{Date: day, ByUser: []UserSeconds{}}
-		for user, secs := range a.days[day] {
-			entry.Listened += secs
-			entry.ByUser = append(entry.ByUser, UserSeconds{UserID: user, Listened: secs})
-		}
-		slices.SortFunc(entry.ByUser, func(x, y UserSeconds) int { return cmp.Compare(x.UserID, y.UserID) })
-		out.Days = append(out.Days, entry)
-	}
+	out.Days = a.dayList()
 	out.TopBooks = []TopBook{}
 	for ref, b := range a.books {
 		out.TopBooks = append(out.TopBooks, TopBook{LibraryID: ref.LibraryID, Path: ref.Path, Title: b.title,

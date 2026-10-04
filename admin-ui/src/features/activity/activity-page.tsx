@@ -1,12 +1,14 @@
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BarChart3, Clock, FileWarning } from 'lucide-react';
-import { useActivity, useServerInfo, useUsers } from '@/api/hooks';
+import { useActivity, useListeningDays, useServerInfo } from '@/api/hooks';
 import { ACTIVITY_RANGES, type Activity, type ActivityRange } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { EmptyState } from '@/components/empty-state';
 import { Monogram } from '@/components/monogram';
 import { Notice } from '@/components/notice';
+import { Ring } from '@/components/ring';
+import { StatTile } from '@/components/stat-tile';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
@@ -24,12 +26,19 @@ import {
   formatPercent,
   formatRelative,
 } from '@/lib/format';
-import { change, clientRows, finishRate, playbackParts, type PlaybackPart } from './activity-model';
-import { SERIES, playbackColor } from './chart-colors';
+import {
+  DAILY_BARS_MAX,
+  change,
+  clientRows,
+  finishRate,
+  playbackParts,
+  type PlaybackPart,
+} from './activity-model';
+import { OTHERS, SERIES, playbackColor } from './chart-colors';
 import { GrowthChart, HoursChart, PlaybackDonut } from './charts';
 import { useClientName } from './use-client-name';
 import { HourWeekdayHeat, YearCalendar } from './heatmaps';
-import { Ring, ShareBar, StatTile } from './parts';
+import { ShareBar } from './parts';
 
 /** Activity > Overview: listening over a period, completion, playback, apps and the collection. */
 export function ActivityPage() {
@@ -37,7 +46,8 @@ export function ActivityPage() {
   const search = useSearch({ strict: false }) as { range?: ActivityRange };
   const navigate = useNavigate();
   const range: ActivityRange = search.range ?? '30d';
-  const activity = useActivity(range);
+  // The previous period stays on screen while the next one loads.
+  const activity = useActivity(range, true);
   const setRange = (r: ActivityRange) =>
     void navigate({ to: '.', search: r === '30d' ? {} : { range: r }, replace: true });
 
@@ -73,18 +83,17 @@ export function ActivityPage() {
           <div className="skel h-[300px] rounded-xl" />
         </div>
       ) : (
-        <ActivityView a={activity.data} range={range} />
+        <ActivityView a={activity.data} />
       )}
     </Page>
   );
 }
 
-function ActivityView({ a, range }: { a: Activity; range: ActivityRange }) {
+function ActivityView({ a }: { a: Activity }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const users = useUsers();
-  const names = new Map((users.data ?? []).map((u) => [u.id, u.username]));
-  for (const u of a.top_users) names.set(u.user_id, u.username);
+  // The chart stacks the top four listeners, who are always among the top people.
+  const names = new Map(a.top_users.map((u) => [u.user_id, u.username]));
   const listened = a.totals.listened > 0 || a.totals.sessions > 0;
   const rate = finishRate(a.funnel);
   const spark = a.days.slice(-30).map((d) => d.listened);
@@ -138,7 +147,9 @@ function ActivityView({ a, range }: { a: Activity; range: ActivityRange }) {
             <CardHeader
               titleId="hours-title"
               title={
-                a.days.length > 92 ? t('activity.hours.titleWeek') : t('activity.hours.titleDay')
+                a.days.length > DAILY_BARS_MAX
+                  ? t('activity.hours.titleWeek')
+                  : t('activity.hours.titleDay')
               }
               action={
                 <span className="text-muted-foreground tabular-nums">
@@ -151,7 +162,7 @@ function ActivityView({ a, range }: { a: Activity; range: ActivityRange }) {
             </div>
           </Card>
           <div className="grid gap-4 xl:grid-cols-2">
-            <YearCard range={range} current={a} />
+            <YearCard current={a} />
             <WhenCard a={a} />
           </div>
           <div className="grid items-start gap-4 xl:grid-cols-2">
@@ -199,11 +210,12 @@ function ActivityView({ a, range }: { a: Activity; range: ActivityRange }) {
   );
 }
 
-/** The last year day by day: the 1y period, whatever the page shows (cached with it). */
-function YearCard({ range, current }: { range: ActivityRange; current: Activity }) {
+/** The last year day by day: the 1y period's own days, else the slim days-only query. */
+function YearCard({ current }: { current: Activity }) {
   const { t } = useTranslation();
-  const year = useActivity('1y');
-  const a = range === '1y' ? current : year.data;
+  const own = current.range === '1y' ? current.days : undefined;
+  const year = useListeningDays('1y', 0, !own);
+  const days = own ?? year.data;
   return (
     <Card aria-labelledby="year-title">
       <CardHeader
@@ -212,8 +224,8 @@ function YearCard({ range, current }: { range: ActivityRange; current: Activity 
         description={t('activity.year.description')}
       />
       <div className="p-5">
-        {a ? (
-          <YearCalendar days={a.days} label={t('activity.year.aria')} />
+        {days ? (
+          <YearCalendar days={days} label={t('activity.year.aria')} />
         ) : year.isError ? (
           <p className="text-muted-foreground">{t('activity.error')}</p>
         ) : (
@@ -551,12 +563,15 @@ function AppsCard({ a }: { a: Activity }) {
   );
 }
 
+/** A library's colour in the storage bar: the series in order, then grey. */
+const LIBRARY_COLORS = [...SERIES, 'var(--chart-5)'];
+
 function StorageCard({ a }: { a: Activity }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const s = a.storage;
   const libs = s.by_library.filter((l) => l.bytes > 0);
-  const color = (i: number) => [...SERIES, 'var(--chart-5)'][i] ?? 'var(--border-strong)';
+  const color = (i: number) => LIBRARY_COLORS[i] ?? OTHERS;
   const c = a.coverage;
   const rings = [
     ['identified', c.identified],
@@ -605,7 +620,7 @@ function StorageCard({ a }: { a: Activity }) {
             const f = c.books ? n / c.books : 0;
             return (
               <div key={key} className="flex flex-col items-center gap-1.5 text-center">
-                <Ring fraction={f} />
+                <Ring fraction={f} size={64} stroke={6} color="var(--chart-5)" />
                 <b className="tabular-nums">{formatPercent(f, lang)}</b>
                 <span className="text-[12px] text-muted-foreground">
                   {t(`activity.coverage.${key}`)}

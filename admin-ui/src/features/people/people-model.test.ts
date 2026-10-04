@@ -1,9 +1,10 @@
-import type { AuthCode, ListeningRow, ListeningSession, Share } from '@/api/types';
+import type { AuthCode, Device, ListeningRow, ListeningSession, Share } from '@/api/types';
 import {
   currentBook,
   dateInputValue,
   datesEdit,
   datesProblem,
+  groupDevices,
   inviteStatus,
   parseAccessChoice,
   ruleLabel,
@@ -171,5 +172,16 @@ describe('progress dates', () => {
       started_at: null,
       finished_at: '2026-09-21',
     });
+  });
+});
+
+describe('groupDevices', () => {
+  it("groups each person's paired devices, leaving API keys out", () => {
+    const d = (id: number, user_id: number, kind: 'session' | 'api' = 'session') =>
+      ({ id, user_id, kind }) as Device;
+    const by = groupDevices([d(1, 2), d(2, 2, 'api'), d(3, 3), d(4, 2)]);
+    expect(by?.get(2)?.map((x) => x.id)).toEqual([1, 4]);
+    expect(by?.get(3)).toHaveLength(1);
+    expect(groupDevices(undefined)).toBeUndefined();
   });
 });

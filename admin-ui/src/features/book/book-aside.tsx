@@ -87,6 +87,8 @@ function Listeners({ detail }: { detail: AdminBookDetail }) {
                     title: book.title || book.path,
                     finished: l.finished,
                     position: l.position,
+                    started_at: l.started_at,
+                    finished_at: l.finished_at,
                   }}
                 />
               </li>

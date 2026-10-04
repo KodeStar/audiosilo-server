@@ -267,6 +267,9 @@ func TestAdminStatsRange(t *testing.T) {
 		out.Activity.Totals.Sessions != 1 || out.Activity.Totals.Listeners != 1 {
 		t.Fatalf("activity = %s", body)
 	}
+	if strings.Contains(body, `"total_books"`) || strings.Contains(body, `"listening"`) {
+		t.Fatalf("stats with a range carries the Overview's figures too: %s", body)
+	}
 	if resp, body := e.do(t, "GET", "/api/v1/admin/stats", e.console, ""); resp.StatusCode != http.StatusOK || strings.Contains(body, `"activity"`) {
 		t.Fatalf("stats without range = %d %s (no activity expected)", resp.StatusCode, body)
 	}
@@ -318,5 +321,47 @@ func TestAccountLimiterKeysOnClientIPAfterAuth(t *testing.T) {
 	// Allowed: another address has its own bucket.
 	if got := from("192.0.2.2"); got == http.StatusTooManyRequests {
 		t.Fatal("a different address must not share the first one's bucket")
+	}
+}
+
+func TestAdminListeningDays(t *testing.T) {
+	e := newActivityEnv(t)
+	e.play(t, 10)
+	e.play(t, 20)
+	admin := strconv.FormatInt(e.adminID, 10)
+
+	// Allowed: everyone's days, or one person's.
+	var out catalog.ListeningDays
+	resp, body := e.do(t, "GET", "/api/v1/admin/listening?range=7d", e.console, "")
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil || len(out.Days) < 7 || out.Range != "7d" {
+		t.Fatalf("listening days = %d %s", resp.StatusCode, body)
+	}
+	var sum float64
+	for _, d := range out.Days {
+		sum += d.Listened
+	}
+	if sum <= 0 {
+		t.Fatalf("the saves' listening is missing: %s", body)
+	}
+	resp, body = e.do(t, "GET", "/api/v1/admin/listening?range=7d&user_id="+strconv.FormatInt(e.memberID, 10), e.console, "")
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, `"user_id":`+admin) {
+		t.Fatalf("a member's days = %d %s (the admin's listening leaked in)", resp.StatusCode, body)
+	}
+	for _, c := range []struct {
+		path string
+		want int
+	}{
+		{"/api/v1/admin/listening?range=3w", http.StatusBadRequest},
+		{"/api/v1/admin/listening?range=7d&user_id=x", http.StatusBadRequest},
+		{"/api/v1/admin/listening?range=7d&user_id=9999", http.StatusNotFound},
+	} {
+		if resp, body := e.do(t, "GET", c.path, e.console, ""); resp.StatusCode != c.want {
+			t.Errorf("%s = %d %s, want %d", c.path, resp.StatusCode, body, c.want)
+		}
+	}
+
+	// Denied: a member can't read anyone's listening.
+	if resp, _ := e.do(t, "GET", "/api/v1/admin/listening?range=7d", e.memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member listening days = %d, want 403", resp.StatusCode)
 	}
 }

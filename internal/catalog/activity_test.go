@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -111,6 +112,49 @@ func TestActivityFor(t *testing.T) {
 	}
 	if a.Timezone != "UTC" || a.UTCOffset != 0 || a.Range != "7d" {
 		t.Fatalf("labels = %q %d %q", a.Timezone, a.UTCOffset, a.Range)
+	}
+}
+
+// ListeningDaysFor reports the same days as ActivityFor, for everyone or one
+// person, including rolled-up days.
+func TestListeningDaysFor(t *testing.T) {
+	f := newSessionFixture(t) // clock: Thu 2026-10-01 09:00 UTC
+	bob := f.addUser(t, "bob", "2025-01-01T00:00:00Z", false)
+	at := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
+	f.addSession(t, f.user, 1, f.book, at, 30*time.Minute, 1800, "opus", false)
+	f.addSession(t, bob, 2, f.book, at, 20*time.Minute, 1200, "opus", false)
+	if _, err := f.c.db.ExecContext(f.ctx,
+		`INSERT INTO listening_daily(day, user_id, library_id, rel_path, listened, sessions) VALUES('2026-09-28', ?, ?, ?, 900, 2)`,
+		bob, f.lib, f.book.Path); err != nil {
+		t.Fatal(err)
+	}
+	from := f.clock.AddDate(0, 0, -7)
+	all, err := f.c.ListeningDaysFor(f.ctx, "7d", from, f.clock, time.UTC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := f.c.ActivityFor(f.ctx, "7d", from, f.clock, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(all.Days, full.Days) || all.Range != "7d" || all.Timezone != "UTC" {
+		t.Fatalf("days = %+v, want the Activity page's %+v", all.Days, full.Days)
+	}
+	one, err := f.c.ListeningDaysFor(f.ctx, "7d", from, f.clock, time.UTC, bob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum float64
+	for _, d := range one.Days {
+		sum += d.Listened
+		for _, u := range d.ByUser {
+			if u.UserID != bob {
+				t.Fatalf("someone else's listening on %s: %+v", d.Date, u)
+			}
+		}
+	}
+	if sum != 2100 || len(one.Days) != len(all.Days) {
+		t.Fatalf("bob's days sum to %v over %d days, want 2100 over %d", sum, len(one.Days), len(all.Days))
 	}
 }
 

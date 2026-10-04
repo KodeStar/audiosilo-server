@@ -58,24 +58,24 @@ export function DevicesPage() {
 export function DeviceList({ devices, showPerson }: { devices: Device[]; showPerson: boolean }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const qc = useQueryClient();
   const clientName = useClientName();
   const [revoking, setRevoking] = useState<Device>();
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
       <ul className="divide-y">
         {devices.map((d) => {
-          const api_ = d.kind === 'api';
-          const app = api_ ? t('devices.apiKey') : clientName(d.client);
+          const key = d.kind === 'api';
+          const name = d.name || t('live.unnamed');
+          const app = key ? t('devices.apiKey') : clientName(d.client);
           const seen = d.last_seen
             ? t('devices.seen', { time: formatRelative(d.last_seen, lang) })
             : t('devices.neverSeen');
           return (
             <li key={d.id} className="flex flex-wrap items-center gap-x-3.5 gap-y-2 px-[18px] py-3">
-              <ClientIcon client={d.client} apiKey={api_} />
+              <ClientIcon client={d.client} apiKey={key} />
               <div className="flex min-w-0 flex-1 basis-56 flex-col">
                 <span className="flex min-w-0 flex-wrap items-center gap-2">
-                  <b className="truncate font-semibold">{d.name || t('live.unnamed')}</b>
+                  <b className="truncate font-semibold">{name}</b>
                   {d.current ? <Badge variant="brand">{t('devices.current')}</Badge> : null}
                 </span>
                 <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
@@ -87,7 +87,7 @@ export function DeviceList({ devices, showPerson }: { devices: Device[]; showPer
                   className="text-[12px] text-subtle-foreground"
                   title={formatDateTime(d.created_at, lang)}
                 >
-                  {api_
+                  {key
                     ? t('devices.created', { time: formatRelative(d.created_at, lang) })
                     : t('devices.paired', { time: formatRelative(d.created_at, lang) })}
                 </span>
@@ -109,46 +109,47 @@ export function DeviceList({ devices, showPerson }: { devices: Device[]; showPer
                 title={d.current ? t('devices.currentHint') : undefined}
                 onClick={() => setRevoking(d)}
                 aria-label={t('devices.signOutAria', {
-                  name: d.name || t('live.unnamed'),
+                  name,
                   person: d.username,
                 })}
               >
                 <LogOut aria-hidden="true" />
-                {api_ ? t('devices.revoke') : t('devices.signOut')}
+                {key ? t('devices.revoke') : t('devices.signOut')}
               </Button>
             </li>
           );
         })}
       </ul>
-      {revoking ? (
-        <ConfirmDialog
-          open
-          onOpenChange={(open) => !open && setRevoking(undefined)}
-          icon={LogOut}
-          title={
-            revoking.kind === 'api'
-              ? t('devices.confirm.keyTitle', { name: revoking.name, person: revoking.username })
-              : t('devices.confirm.title', {
-                  name: revoking.name || t('live.unnamed'),
-                  person: revoking.username,
-                })
-          }
-          description={
-            revoking.kind === 'api'
-              ? t('devices.confirm.keyBody')
-              : t('devices.confirm.body', { person: revoking.username })
-          }
-          confirmLabel={revoking.kind === 'api' ? t('devices.revoke') : t('devices.signOut')}
-          onConfirm={async () => {
-            await api.revokeDevice(revoking.id);
-            invalidateDevices(qc);
-            toast.add({
-              title: t('devices.done', { name: revoking.name || t('live.unnamed') }),
-              type: 'success',
-            });
-          }}
-        />
-      ) : null}
+      {revoking ? <RevokeDialog device={revoking} onClose={() => setRevoking(undefined)} /> : null}
     </div>
+  );
+}
+
+/** Confirms signing a device out (or revoking an API key), naming it and its person. */
+function RevokeDialog({ device: d, onClose }: { device: Device; onClose: () => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const name = d.name || t('live.unnamed');
+  const key = d.kind === 'api';
+  return (
+    <ConfirmDialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      icon={LogOut}
+      title={
+        key
+          ? t('devices.confirm.keyTitle', { name, person: d.username })
+          : t('devices.confirm.title', { name, person: d.username })
+      }
+      description={
+        key ? t('devices.confirm.keyBody') : t('devices.confirm.body', { person: d.username })
+      }
+      confirmLabel={key ? t('devices.revoke') : t('devices.signOut')}
+      onConfirm={async () => {
+        await api.revokeDevice(d.id);
+        invalidateDevices(qc);
+        toast.add({ title: t('devices.done', { name }), type: 'success' });
+      }}
+    />
   );
 }

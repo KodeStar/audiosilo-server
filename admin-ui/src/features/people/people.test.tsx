@@ -14,7 +14,6 @@ import {
   member,
   sam,
   samDetail,
-  stats,
   users,
 } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
@@ -412,11 +411,20 @@ describe("a person's listening", () => {
       'GET /admin/users/2/progress': { body: { progress } },
       'GET /admin/sessions': { body: { sessions: [liveSession()], next_before: null } },
       'GET /admin/devices': { body: { devices: [device()] } },
-      'GET /admin/stats': (req) => ({
-        body: req.query.get('range')
-          ? { ...stats(), activity: activity({ range: req.query.get('range')! }) }
-          : stats(),
-      }),
+      // sam's own days this year (5h: the fixture's per-day share for user 2).
+      'GET /admin/listening': (req) => {
+        expect(req.query.get('user_id')).toBe('2');
+        return {
+          body: {
+            ...activity(),
+            days: activity().days.map((d) => ({
+              ...d,
+              listened: d.by_user.find((u) => u.user_id === 2)!.listened,
+              by_user: d.by_user.filter((u) => u.user_id === 2),
+            })),
+          },
+        };
+      },
       'PATCH /admin/libraries/1/progress': (req) => ({
         body: { progress: { ...progress[0], ...(req.body as object) } },
       }),

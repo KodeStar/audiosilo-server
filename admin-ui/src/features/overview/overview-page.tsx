@@ -29,6 +29,8 @@ import type {
 } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
+import { SessionState } from '@/components/session-state';
+import { StatTile } from '@/components/stat-tile';
 import { Monogram } from '@/components/monogram';
 import { CATEGORY_LOOK } from '@/features/health/issues-model';
 import { OfflineNotice } from '@/features/libraries/offline-notice';
@@ -83,9 +85,10 @@ export function OverviewPage() {
   if (stats.data && stats.data.total_libraries === 0) return <FirstRun />;
 
   // A failed live list reads as nobody live rather than holding the page back.
+  const count = (n: number | undefined) => (n === undefined ? undefined : formatNumber(n, lang));
   const split =
     stats.data && (live.data || live.isError)
-      ? splitListening(stats.data.listening ?? [], live.data ?? [])
+      ? splitListening(stats.data.listening, live.data ?? [])
       : null;
 
   return (
@@ -142,26 +145,22 @@ export function OverviewPage() {
         <StatTile
           icon={BookOpen}
           label={t('home.stat.books')}
-          value={stats.data?.total_books}
-          lang={lang}
+          value={count(stats.data?.total_books)}
         />
         <StatTile
           icon={LibraryBig}
           label={t('home.stat.libraries')}
-          value={stats.data?.total_libraries}
-          lang={lang}
+          value={count(stats.data?.total_libraries)}
         />
         <StatTile
           icon={Users}
           label={t('home.stat.people')}
-          value={stats.data?.total_users}
-          lang={lang}
+          value={count(stats.data?.total_users)}
         />
         <StatTile
           icon={Headphones}
           label={t('home.stat.inProgress')}
-          value={split?.inProgress}
-          lang={lang}
+          value={count(split?.inProgress)}
         />
       </div>
 
@@ -228,32 +227,6 @@ function OfflineLibraries() {
   );
 }
 
-function StatTile({
-  icon: Icon,
-  label,
-  value,
-  lang,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  value: number | undefined;
-  lang: string;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5 rounded-xl border bg-card p-3.5 md:px-5 md:py-[18px]">
-      <div className="flex items-center gap-1.5 text-[12.5px] font-[550] text-muted-foreground">
-        <Icon className="size-[15px]" aria-hidden="true" />
-        {label}
-      </div>
-      {value === undefined ? (
-        <span className="skel h-[30px] w-20" />
-      ) : (
-        <div className="stat-value max-md:text-2xl">{formatNumber(value, lang)}</div>
-      )}
-    </div>
-  );
-}
-
 function LiveCard({ session: s, lang }: { session: ListeningSession; lang: string }) {
   const { t } = useTranslation();
   const frac = progressFraction(s.position, s.duration);
@@ -277,14 +250,7 @@ function LiveCard({ session: s, lang }: { session: ListeningSession; lang: strin
         <ProgressBar fraction={frac} label={t('home.progressAria', { title })} />
         <div className="flex justify-between gap-2 text-[11.5px] text-subtle-foreground tabular-nums">
           <span>{formatPercent(frac, lang)}</span>
-          <span className="inline-flex items-center gap-1.5">
-            <span
-              className="dot"
-              data-tone={s.state === 'playing' ? 'live' : 'off'}
-              aria-hidden="true"
-            />
-            {s.state === 'playing' ? t('live.playing') : t('live.pausedState')}
-          </span>
+          <SessionState state={s.state} />
         </div>
       </div>
     </Link>

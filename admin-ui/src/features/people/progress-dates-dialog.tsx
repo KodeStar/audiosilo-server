@@ -1,11 +1,9 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CalendarDays } from 'lucide-react';
-import { useUserProgress } from '@/api/hooks';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { Field, FormError } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { refKey } from '@/lib/book-route';
 import { dateInputValue, datesEdit, datesProblem } from './people-model';
 import { useEditProgress, type ProgressTarget } from './use-edit-progress';
 
@@ -38,41 +36,11 @@ export function ProgressDatesDialog({
 
 function DatesForm({ target, onDone }: { target: ProgressTarget; onDone: () => void }) {
   const { t } = useTranslation();
-  // The row's current dates (the book page's listeners don't carry them).
-  const rows = useUserProgress(target.userId);
-  const row = rows.data?.find((r) => refKey(r) === refKey(target));
-  if (rows.isPending) {
-    return (
-      <DialogBody>
-        <div className="skel h-24" role="status" aria-label={t('common.loading')} />
-      </DialogBody>
-    );
-  }
-  return (
-    <DatesFields
-      target={target}
-      before={{
-        started: dateInputValue(row?.started_at ?? target.started_at),
-        finished: dateInputValue(row?.finished_at ?? target.finished_at),
-      }}
-      finished={row?.finished ?? target.finished}
-      onDone={onDone}
-    />
-  );
-}
-
-function DatesFields({
-  target,
-  before,
-  finished,
-  onDone,
-}: {
-  target: ProgressTarget;
-  before: { started: string; finished: string };
-  finished: boolean;
-  onDone: () => void;
-}) {
-  const { t } = useTranslation();
+  const before = {
+    started: dateInputValue(target.started_at),
+    finished: dateInputValue(target.finished_at),
+  };
+  const finished = target.finished;
   const edit = useEditProgress();
   const [started, setStarted] = useState(before.started);
   const [ended, setEnded] = useState(before.finished);

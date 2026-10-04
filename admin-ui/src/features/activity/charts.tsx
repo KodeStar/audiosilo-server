@@ -15,7 +15,7 @@ import {
 import type { ActivityDay, GrowthPoint } from '@/api/types';
 import { ChartContainer, ChartLegend, ChartTip } from '@/components/ui/chart';
 import { formatDay, formatHours, formatNumber, formatPercent } from '@/lib/format';
-import { hoursBars, niceTicks, topListeners, type PlaybackPart } from './activity-model';
+import { hoursBars, niceTicks, toHours, topListeners, type PlaybackPart } from './activity-model';
 import { OTHERS, SERIES, playbackColor } from './chart-colors';
 
 // The Activity charts (Recharts through ChartContainer; STYLEGUIDE.md "Charts":
@@ -233,7 +233,7 @@ export function MonthBars({ months, year }: { months: number[]; year: number }) 
   const lang = i18n.resolvedLanguage ?? 'en';
   const data = months.map((s, m) => ({
     month: `${year}-${String(m + 1).padStart(2, '0')}-01`,
-    hours: s / 3600,
+    hours: toHours(s),
   }));
   return (
     <ChartContainer label={t('user.year.monthsAria')} height={96}>
@@ -266,25 +266,5 @@ export function MonthBars({ months, year }: { months: number[]; year: number }) 
         />
       </BarChart>
     </ChartContainer>
-  );
-}
-
-/** A stat tile's sparkline (96 x 34: a 2px line, a 10% area, an end dot). Decorative. */
-export function Sparkline({ values, color }: { values: number[]; color: string }) {
-  const w = 96;
-  const h = 34;
-  if (values.length < 2) return null;
-  const max = Math.max(...values) || 1;
-  const pts = values.map(
-    (v, i) => [(i / (values.length - 1)) * (w - 4) + 2, h - 3 - (v / max) * (h - 6)] as const,
-  );
-  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
-  const [ex, ey] = pts[pts.length - 1];
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true" className="shrink-0">
-      <path d={`${line} L${ex} ${h} L2 ${h}Z`} fill={color} opacity={0.1} />
-      <path d={line} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
-      <circle cx={ex} cy={ey} r={2.5} fill={color} />
-    </svg>
   );
 }

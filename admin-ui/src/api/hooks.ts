@@ -18,6 +18,7 @@ import type {
   AdminLibrary,
   BookRef,
   PersonField,
+  SessionFilter,
 } from './types';
 
 // Query keys live here so invalidation and the hooks can't drift apart.
@@ -61,23 +62,21 @@ export const keys = {
   scanRuns: ['admin', 'scan-runs'] as const,
   scanRunList: (libraryId: number) => ['admin', 'scan-runs', 'list', libraryId] as const,
   scanRun: (id: number) => ['admin', 'scan-runs', id] as const,
+  /** Every Activity period and listening-days query (a prefix). */
+  activityAll: ['admin', 'activity'] as const,
   activity: (range: string) => ['admin', 'activity', range] as const,
+  listeningDays: (range: string, userId: number) =>
+    ['admin', 'activity', 'days', range, userId] as const,
   /** Live sessions and every session list (a prefix). */
   sessions: ['admin', 'sessions'] as const,
   liveSessions: ['admin', 'sessions', 'live'] as const,
-  sessionList: (filter: SessionFilter) => ['admin', 'sessions', 'list', filter] as const,
+  sessionList: (filter: SessionFilter, limit: number) =>
+    ['admin', 'sessions', 'list', filter, limit] as const,
   /** Everyone's devices and each person's (a prefix). */
   devices: ['admin', 'devices'] as const,
   userDevices: (userId: number) => ['admin', 'devices', userId] as const,
   userProgress: (userId: number) => ['admin', 'user', userId, 'progress'] as const,
 };
-
-/** What a session list is narrowed to (GET /admin/sessions). */
-export interface SessionFilter {
-  user_id?: number;
-  library_id?: number;
-  path?: string;
-}
 
 /**
  * Refetches everything a change to accounts, access or invites can touch: the
@@ -533,34 +532,47 @@ export function useBookMeta(libraryId: number, path: string, enabled: boolean) {
   });
 }
 
-/** Who is listening now. Polled: players save every few seconds while they play. */
-export function useLiveSessions() {
+/**
+ * Who is listening now, polled (players save every few seconds while they play):
+ * every 10 seconds where the live list is the point, less often where it's a badge.
+ */
+export function useLiveSessions(interval = 10_000) {
   return useQuery({
     queryKey: keys.liveSessions,
-    queryFn: () => api.liveSessions().then((r) => r.sessions ?? []),
-    refetchInterval: 10_000,
+    queryFn: () => api.liveSessions().then((r) => r.sessions),
+    refetchInterval: interval,
   });
 }
 
 /**
  * The Activity page for a period: computed by the server on request, so a period
- * already seen stays fresh for a minute and the previous one stays on screen
- * while the next loads.
+ * already seen stays fresh for a minute. With `keepPrevious`, the previous period
+ * stays on screen while the next loads (the period picker).
  */
-export function useActivity(range: string) {
+export function useActivity(range: string, keepPrevious = false) {
   return useQuery({
     queryKey: keys.activity(range),
     queryFn: () => api.activity(range),
     staleTime: 60_000,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPrevious ? keepPreviousData : undefined,
   });
 }
 
-/** Sessions newest first, a page at a time (`fetchNextPage` for older ones). */
-export function useSessions(filter: SessionFilter) {
+/** Listening per day over a period, of everyone (no id) or one person: no other stats. */
+export function useListeningDays(range: string, userId = 0, enabled = true) {
+  return useQuery({
+    queryKey: keys.listeningDays(range, userId),
+    queryFn: () => api.listeningDays(range, userId || undefined).then((r) => r.days),
+    staleTime: 60_000,
+    enabled,
+  });
+}
+
+/** Sessions newest first, `limit` at a time (`fetchNextPage` for older ones). */
+export function useSessions(filter: SessionFilter, limit = 50) {
   return useInfiniteQuery({
-    queryKey: keys.sessionList(filter),
-    queryFn: ({ pageParam }) => api.sessions({ ...filter, before: pageParam, limit: 50 }),
+    queryKey: keys.sessionList(filter, limit),
+    queryFn: ({ pageParam }) => api.sessions({ ...filter, before: pageParam, limit }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => last.next_before ?? undefined,
   });
@@ -570,16 +582,15 @@ export function useSessions(filter: SessionFilter) {
 export function useDevices(userId?: number) {
   return useQuery({
     queryKey: userId ? keys.userDevices(userId) : keys.devices,
-    queryFn: () => api.devices(userId).then((r) => r.devices ?? []),
+    queryFn: () => api.devices(userId).then((r) => r.devices),
   });
 }
 
 /** Every book a person has progress on, with start and finish dates. */
-export function useUserProgress(userId: number, enabled = true) {
+export function useUserProgress(userId: number) {
   return useQuery({
     queryKey: keys.userProgress(userId),
-    queryFn: () => api.userProgress(userId).then((r) => r.progress ?? []),
-    enabled,
+    queryFn: () => api.userProgress(userId).then((r) => r.progress),
   });
 }
 
@@ -593,7 +604,7 @@ export function invalidateProgress(qc: QueryClient, userId: number, ref: BookRef
     keys.userProgress(userId),
     keys.book(ref.library_id, ref.path),
     keys.stats,
-    ['admin', 'activity'],
+    keys.activityAll,
   ]) {
     void qc.invalidateQueries({ queryKey: key });
   }

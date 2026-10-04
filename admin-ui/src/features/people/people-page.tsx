@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { InviteDialog } from './invite-dialog';
-import { currentBook } from './people-model';
+import { currentBook, groupDevices } from './people-model';
 
 const MONTH_MS = 30 * 24 * 3600 * 1000;
 
@@ -26,8 +26,10 @@ export function PeoplePage() {
   const { t } = useTranslation();
   const users = useUsers();
   const stats = useStats();
-  const live = useLiveSessions();
+  // A badge here, not the live list: poll at the stats' pace.
+  const live = useLiveSessions(30_000);
   const devices = useDevices();
+  const devicesOf = groupDevices(devices.data);
   const [inviting, setInviting] = useSearchDialog('invite');
   const now = Date.now();
 
@@ -83,7 +85,7 @@ export function PeoplePage() {
                 user={u}
                 listening={stats.data?.listening ?? []}
                 live={live.data ?? []}
-                devices={devices.data?.filter((d) => d.user_id === u.id && d.kind === 'session')}
+                devices={devicesOf && (devicesOf.get(u.id) ?? [])}
                 now={now}
               />
             </li>
