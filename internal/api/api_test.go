@@ -1294,3 +1294,36 @@ func TestDemoCannotSelfRecover(t *testing.T) {
 		t.Fatalf("demo set-password = %d, want 403", resp.StatusCode)
 	}
 }
+
+// The per-IP limit counts the API and writes, not static files: a cold console
+// page loads more chunks than the burst, and none of them may be refused or use
+// up the budget its API calls need. The API itself is still limited.
+func TestRateLimitSkipsStaticFiles(t *testing.T) {
+	e := newTestEnv(t)
+	h := e.api.Handler()
+	get := func(path string) int {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = "192.0.2.9:1234"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for i := range 200 {
+		if code := get("/admin/assets/chunk.js"); code == http.StatusTooManyRequests {
+			t.Fatalf("static request %d was rate limited", i)
+		}
+	}
+	if code := get("/api/v1/server"); code == http.StatusTooManyRequests {
+		t.Fatal("static requests used up the API's budget")
+	}
+	limited := false
+	for range 200 {
+		if get("/api/v1/server") == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatal("the API is no longer rate limited")
+	}
+}

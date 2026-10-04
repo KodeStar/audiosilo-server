@@ -263,6 +263,10 @@ describe('listening from before sessions were recorded', () => {
     expect(
       await screen.findByText(/Includes about 5\W*h\w* estimated from before this server recorded/),
     ).toBeInTheDocument();
+    // 9 h listened, 5 h of it estimated, 12 sessions: the chart's total and the
+    // sessions' average are the 4 h the sessions recorded.
+    expect(screen.getByText(/^4\W*h\w* in total$/)).toBeInTheDocument();
+    expect(screen.getByText(/^20\W*m\w* on average$/)).toBeInTheDocument();
   });
 
   it('shows a session made from the app history as such', async () => {

@@ -143,10 +143,16 @@ func clientIP(r *http.Request) string {
 	return peerIP(r.RemoteAddr)
 }
 
-// rateLimit enforces the per-IP token-bucket request rate.
+// rateLimit enforces the per-IP token-bucket request rate on the API and on any
+// write. A GET or HEAD outside /api/ is a static file (the admin console, the web
+// player, the connect page), served from memory, and isn't counted: one cold
+// console page is forty-odd chunk requests, more than the whole burst, so
+// counting them turned a first visit's own scripts and API calls into 429s.
 func (a *API) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.ipLimiter.Allow(clientIP(r)) {
+		static := (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+			r.URL.Path != "/api" && !strings.HasPrefix(r.URL.Path, "/api/")
+		if !static && !a.ipLimiter.Allow(clientIP(r)) {
 			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
