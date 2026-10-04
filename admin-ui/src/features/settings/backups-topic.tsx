@@ -139,7 +139,11 @@ function RestoreNotices({ env }: { env: BackupsEnvelope }) {
           <Notice
             tone="bad"
             icon={TriangleAlert}
-            title={t('backups.restore.failedTitle', { name: last.name })}
+            title={
+              last.name
+                ? t('backups.restore.failedTitle', { name: last.name })
+                : t('backups.restore.failedTitleUnnamed')
+            }
           >
             {t(restoreFailureKey(last.error))}
           </Notice>

@@ -1949,5 +1949,6 @@
   "backups.weekday.sun": "Sonntag",
   "backups.schedule.weekly.sun": "Jeden Sonntag um {{time}}.",
   "notify.dialog.secretAgain": "Diese Adresse liegt auf einem anderen Server: Gib das Secret erneut ein oder entferne es.",
-  "backups.restore.point.revoked": "Seit der Sicherung abgemeldete Geräte und widerrufene API-Schlüssel funktionieren wieder: Melde sie danach erneut ab (Personen > Geräte)."
+  "backups.restore.point.revoked": "Seit der Sicherung abgemeldete Geräte und widerrufene API-Schlüssel funktionieren wieder: Melde sie danach erneut ab (Personen > Geräte).",
+  "backups.restore.failedTitleUnnamed": "Eine wartende Wiederherstellung wurde nicht angewendet"
 }

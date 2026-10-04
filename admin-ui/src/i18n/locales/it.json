@@ -2069,5 +2069,6 @@
   "backups.weekday.sun": "Domenica",
   "backups.schedule.weekly.sun": "Ogni domenica alle {{time}}.",
   "notify.dialog.secretAgain": "Questo indirizzo è su un altro server: inserisci di nuovo il segreto o rimuovilo.",
-  "backups.restore.point.revoked": "I dispositivi disconnessi e le chiavi API revocate dopo il backup tornano a funzionare: disconnettili di nuovo dopo (Persone > Dispositivi)."
+  "backups.restore.point.revoked": "I dispositivi disconnessi e le chiavi API revocate dopo il backup tornano a funzionare: disconnettili di nuovo dopo (Persone > Dispositivi).",
+  "backups.restore.failedTitleUnnamed": "Un ripristino in attesa non è stato applicato"
 }

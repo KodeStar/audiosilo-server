@@ -505,3 +505,15 @@ func TestNotificationSecretStaysWithItsServer(t *testing.T) {
 		t.Fatalf("move with secret cleared = %d %s", resp.StatusCode, body)
 	}
 }
+
+// A save that changes nothing isn't an admin change.
+func TestNoOpSettingsSaveIsNotAudited(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _ := opsTokens(t, e)
+	if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"backups":{"keep":7}}`); resp.StatusCode != 200 {
+		t.Fatalf("patch = %d %s", resp.StatusCode, body)
+	}
+	if events, _, _ := e.cat.ListAudit(context.Background(), catalog.AuditFilter{Area: "settings"}); len(events) != 0 {
+		t.Fatalf("audited %+v", events)
+	}
+}

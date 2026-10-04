@@ -1949,5 +1949,6 @@
   "backups.weekday.sun": "Sunday",
   "backups.schedule.weekly.sun": "Every Sunday at {{time}}.",
   "notify.dialog.secretAgain": "This address is on another server: enter the secret again, or remove it.",
-  "backups.restore.point.revoked": "Devices signed out and API keys revoked since the backup work again: sign them out again afterwards (People > Devices)."
+  "backups.restore.point.revoked": "Devices signed out and API keys revoked since the backup work again: sign them out again afterwards (People > Devices).",
+  "backups.restore.failedTitleUnnamed": "A waiting restore wasn't applied"
 }

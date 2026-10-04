@@ -440,3 +440,21 @@ func TestRetryFollowsTheDestination(t *testing.T) {
 		t.Fatalf("retried to the old address %d times, to a switched-off one %d times", len(old.got)-1, len(off.got)-1)
 	}
 }
+
+func TestSameOrigin(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{"https://a.example/x", "https://A.example/y", true},
+		{"https://a.example/x", "https://a.example:443/x", true},
+		{"http://a.example/x", "http://a.example:80/x", true},
+		{"https://a.example/x", "http://a.example/x", false},
+		{"https://a.example/x", "https://a.example:8443/x", false},
+		{"https://a.example/x", "https://b.example/x", false},
+	} {
+		if got := SameOrigin(c.a, c.b); got != c.same {
+			t.Errorf("SameOrigin(%q, %q) = %v", c.a, c.b, got)
+		}
+	}
+}

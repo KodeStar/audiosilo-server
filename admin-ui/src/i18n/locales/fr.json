@@ -2069,5 +2069,6 @@
   "backups.weekday.sun": "Dimanche",
   "backups.schedule.weekly.sun": "Chaque dimanche à {{time}}.",
   "notify.dialog.secretAgain": "Cette adresse est sur un autre serveur : saisissez de nouveau le secret ou supprimez-le.",
-  "backups.restore.point.revoked": "Les appareils déconnectés et les clés d'API révoquées depuis la sauvegarde fonctionnent de nouveau : déconnectez-les de nouveau ensuite (Personnes > Appareils)."
+  "backups.restore.point.revoked": "Les appareils déconnectés et les clés d'API révoquées depuis la sauvegarde fonctionnent de nouveau : déconnectez-les de nouveau ensuite (Personnes > Appareils).",
+  "backups.restore.failedTitleUnnamed": "Une restauration en attente n'a pas été appliquée"
 }

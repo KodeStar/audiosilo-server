@@ -2069,5 +2069,6 @@
   "backups.weekday.sun": "Domingo",
   "backups.schedule.weekly.sun": "Todos os domingos às {{time}}.",
   "notify.dialog.secretAgain": "Este endereço está noutro servidor: introduza novamente o segredo ou remova-o.",
-  "backups.restore.point.revoked": "Os dispositivos desligados e as chaves de API revogadas desde a cópia voltam a funcionar: termine-lhes a sessão novamente depois (Pessoas > Dispositivos)."
+  "backups.restore.point.revoked": "Os dispositivos desligados e as chaves de API revogadas desde a cópia voltam a funcionar: termine-lhes a sessão novamente depois (Pessoas > Dispositivos).",
+  "backups.restore.failedTitleUnnamed": "Uma restauração pendente não foi aplicada"
 }

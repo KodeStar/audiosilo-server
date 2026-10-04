@@ -140,7 +140,23 @@ func SameOrigin(a, b string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Hostname(), ub.Hostname()) &&
+		effectivePort(ua) == effectivePort(ub)
+}
+
+// effectivePort is a URL's port, its scheme's default when none is written (as a
+// browser's URL.origin reads it, so the console's warning and this rule agree).
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
 }
 
 // Redact is how the console shows a destination's address: the host and the start

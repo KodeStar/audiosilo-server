@@ -124,7 +124,8 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
   return out;
 }
 
+/** A schedule in words, without the sentence's full stop (it sits inside "from → to"). */
 function scheduleText(s: string, t: Translate): string {
   const d = describeSchedule(s);
-  return t(d.key, d.values);
+  return t(d.key, d.values).replace(/\.\s*$/, '');
 }
