@@ -407,8 +407,9 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	if a.answerCustomCover(w, r, lib.ID, book.RelPath) {
 		return
 	}
-	if book.CoverPath != "" {
-		if abs, err := library.SafeJoin(lib.Root, book.CoverPath); err == nil {
+	art := book.ArtFiles()
+	if art.CoverPath != "" {
+		if abs, err := library.SafeJoin(lib.Root, art.CoverPath); err == nil {
 			if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
 				// The same lifetime as embedded art below. Without one a browser keeps
 				// a sidecar image fresh by heuristic (a tenth of the file's age), so a
@@ -420,11 +421,7 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	primary := book.RelPath
-	if book.IsFolder && len(book.Files) > 0 {
-		primary = book.Files[0].RelPath
-	}
-	abs, err := library.SafeJoin(lib.Root, primary)
+	abs, err := library.SafeJoin(lib.Root, art.AudioPath)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "no cover")
 		return

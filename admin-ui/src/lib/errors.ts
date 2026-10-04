@@ -4,7 +4,9 @@ import { toast } from './toast';
 
 // Failures a person can fix carry a machine-readable code from the server
 // (respond.go); those get localized copy that says how. Anything else is shown
-// as the server's message, which is still specific.
+// as the server's message, which is still specific (invalid_override among
+// them: the server's sentence names the field and the rule, and the book page
+// maps it onto the field itself).
 const BY_CODE: Record<string, string> = {
   username_taken: 'errors.usernameTaken',
   name_taken: 'errors.nameTaken',
@@ -13,6 +15,12 @@ const BY_CODE: Record<string, string> = {
   password_too_short: 'errors.passwordTooShort',
   cannot_delete_self: 'errors.deleteSelf',
   folder_unreadable: 'errors.folderUnreadable',
+  // The console caps bulk edits and share additions at the server's limits, so
+  // the one too_large a person can hit is a cover upload.
+  too_large: 'book.cover.tooLarge',
+  unsupported_image: 'book.cover.unsupported',
+  metadata_off: 'book.match.off',
+  book_not_found: 'errors.bookNotFound',
 };
 
 /** A failure as one sentence for a toast or a field. */

@@ -442,6 +442,21 @@ func (c *Catalog) AddSharePath(ctx context.Context, shareID int64, rule PathRule
 	return err
 }
 
+// AddSharePaths adds several path rules to a share in one transaction (adding a
+// selection of books to a share): all or none.
+func (c *Catalog) AddSharePaths(ctx context.Context, shareID int64, rules []PathRule) error {
+	return c.db.WithTx(ctx, "AddSharePaths", func(tx *sql.Tx) error {
+		for _, rule := range rules {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT OR IGNORE INTO share_paths(share_id, library_id, path) VALUES(?,?,?)`,
+				shareID, rule.LibraryID, CleanRelPath(rule.Path)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // RemoveSharePath removes a path rule from a share.
 func (c *Catalog) RemoveSharePath(ctx context.Context, shareID int64, rule PathRule) error {
 	_, err := c.db.ExecContext(ctx,

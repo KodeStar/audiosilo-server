@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Outlet } from '@tanstack/react-router';
+import { useScanWatcher } from '@/api/hooks';
 import { CommandPalette } from './command-palette';
 import { PaletteContext, type PaletteControls } from './palette-context';
 import { TabBar } from './tab-bar';
@@ -11,8 +12,12 @@ function isEditable(el: Element | null): boolean {
   return /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
 }
 
-/** The signed-in console: top bar, the routed page, mobile tab bar, ⌘K palette. */
+/**
+ * The signed-in console: top bar, the routed page, mobile tab bar, ⌘K palette,
+ * and the one watcher that refreshes what a finished scan changed.
+ */
 export function AppShell() {
+  useScanWatcher();
   const [isOpen, setOpen] = useState(false);
   const palette = useMemo<PaletteControls>(() => ({ isOpen, setOpen }), [isOpen]);
 

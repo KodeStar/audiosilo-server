@@ -2,8 +2,10 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -113,9 +115,23 @@ func TestListAdminBooksRowShape(t *testing.T) {
 	got.id = 0
 	want := AdminBook{LibraryID: libA, LibraryName: "Fiction", Path: "Herbert/Dune", Title: "Dune", Author: "Frank Herbert",
 		Narrator: "Scott Brick", Duration: 9000, Format: "flac", Codec: "ac3", AddedAt: "2023-06-01T00:00:00Z",
-		HasCover: true, FileCount: 1, Edited: true}
-	if got != want {
+		HasCover: true, FileCount: 1, Edited: true, EditedFields: fieldList{FieldNarrator}}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("row = %+v\nwant  %+v", got, want)
+	}
+}
+
+// A row without overrides says so with an empty list, never null (the console
+// iterates it).
+func TestListAdminBooksEditedFieldsNeverNull(t *testing.T) {
+	c, ctx, libA, _ := seedAdminLibrary(t)
+	page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{LibraryID: libA, Edited: new(bool)}})
+	if err != nil || len(page.Books) == 0 {
+		t.Fatalf("%v %v", page, err)
+	}
+	raw, _ := json.Marshal(page.Books[0])
+	if !strings.Contains(string(raw), `"edited_fields":[]`) {
+		t.Fatalf("unedited row = %s", raw)
 	}
 }
 
@@ -290,6 +306,24 @@ func TestDirectPlayableSQLAgreesWithGo(t *testing.T) {
 	for _, b := range page.Books {
 		if want := media.DirectPlayable(b.Codec); b.DirectPlayable != want {
 			t.Errorf("codec %q: SQL says %v, media.DirectPlayable says %v", b.Codec, b.DirectPlayable, want)
+		}
+	}
+}
+
+// On a tie the suggested spelling is the natural "Given Surname" one, never the
+// reversed "Surname, Given" (which merely sorts first); more books still wins.
+func TestMergeSuggestionPrefersNaturalOrder(t *testing.T) {
+	for name, tc := range map[string]struct {
+		people []PersonCount
+		want   string
+	}{
+		"tie":        {[]PersonCount{{Name: "Carroll, Lewis", Books: 1}, {Name: "Lewis Carroll", Books: 1}}, "Lewis Carroll"},
+		"more books": {[]PersonCount{{Name: "Carroll, Lewis", Books: 3}, {Name: "Lewis Carroll", Books: 1}}, "Carroll, Lewis"},
+		"plain tie":  {[]PersonCount{{Name: "J. R. R. Tolkien", Books: 1}, {Name: "J.R.R. Tolkien", Books: 1}}, "J. R. R. Tolkien"},
+	} {
+		got := mergeSuggestions(tc.people)
+		if len(got) != 1 || got[0].Suggested != tc.want {
+			t.Errorf("%s: suggestions = %+v, want %q suggested", name, got, tc.want)
 		}
 	}
 }

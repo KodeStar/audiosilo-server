@@ -1,16 +1,17 @@
 import { useTranslation } from 'react-i18next';
 import { RotateCw, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { errorMessage } from '@/lib/errors';
 import { Notice } from './notice';
 
-/** A query that failed: what didn't load, the server's reason, and a retry. */
+/** A query that failed: what didn't load, why (errorMessage), and a retry. */
 export function QueryError({
   title,
   error,
   onRetry,
 }: {
   title: string;
-  error: Error;
+  error: unknown;
   onRetry: () => void;
 }) {
   const { t } = useTranslation();
@@ -27,7 +28,7 @@ export function QueryError({
         </Button>
       }
     >
-      {error.message}
+      {errorMessage(error, t)}
     </Notice>
   );
 }

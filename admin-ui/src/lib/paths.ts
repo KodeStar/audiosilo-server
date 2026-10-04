@@ -26,6 +26,28 @@ export function isAbsolutePath(p: string): boolean {
 /** The separator a server path uses: "\\" for a Windows path, "/" otherwise. */
 const separatorOf = (path: string) => (/^[A-Za-z]:/.test(path) ? '\\' : '/');
 
+/** The last segment of a library-relative path ("A/B" → "B"). */
+export const relBaseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+
+/** The folder a library-relative path sits in ("A/B" → "A", "A" → ""). */
+export function relParent(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i < 0 ? '' : path.slice(0, i);
+}
+
+/**
+ * A library-relative path as a full path on the server, in the root's own
+ * syntax ("C:\\Books" + "A/B" → "C:\\Books\\A\\B"). An empty `rel` is the root
+ * itself; without a root (libraries still loading) it is `rel` as is.
+ */
+export function joinLibraryPath(root: string | undefined, rel: string): string {
+  if (!root) return rel;
+  if (!rel) return root;
+  const sep = separatorOf(root);
+  const base = root.replace(/[\\/]+$/, '');
+  return `${base}${sep}${sep === '/' ? rel : rel.replaceAll('/', sep)}`;
+}
+
 /** The last folder name of an absolute server path ("" for a root). */
 export function absoluteBaseName(path: string): string {
   return path.split(separatorOf(path)).filter(Boolean).pop() ?? '';

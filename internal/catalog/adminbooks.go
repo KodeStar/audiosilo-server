@@ -43,7 +43,37 @@ type AdminBook struct {
 	FileCount      int     `json:"file_count"`
 	ASIN           string  `json:"asin"`
 	ISBN           string  `json:"isbn"`
-	Edited         bool    `json:"edited"`
+	// Matched is the matched= filter's rule (an ASIN or ISBN), so the console never
+	// restates it.
+	Matched bool `json:"matched"`
+	Edited  bool `json:"edited"`
+	// EditedFields are the fields with an override (an edit or an accepted community
+	// value), so a bulk change can be undone field by field: a field without one is
+	// reverted to what the scan found, one with one is set back.
+	EditedFields fieldList `json:"edited_fields"`
+}
+
+// fieldList scans a comma-separated SQL list (group_concat) into field names,
+// empty rather than null when there are none.
+type fieldList []string
+
+func (f *fieldList) Scan(src any) error {
+	*f = fieldList{}
+	var s string
+	switch v := src.(type) {
+	case nil:
+		return nil
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return fmt.Errorf("fieldList: unexpected %T", src)
+	}
+	if s != "" {
+		*f = strings.Split(s, ",")
+	}
+	return nil
 }
 
 // Per-row expressions over `books b`, shared by the select list, the filters and
@@ -63,6 +93,9 @@ const (
 	editedExpr = `(EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path)
 		OR EXISTS(SELECT 1 FROM chapter_overrides co JOIN chapters ON chapters.book_id = b.id AND ` + chapterOverrideMatch + `
 		           WHERE co.library_id = b.library_id AND co.path = b.rel_path))`
+	// The overridden fields, in field order (fieldList splits them).
+	editedFieldsExpr = `(SELECT group_concat(field, ',') FROM (SELECT o.field FROM book_overrides o
+		WHERE o.library_id = b.library_id AND o.path = b.rel_path ORDER BY o.field))`
 	// "Has chapters" means real navigation: more than the one chapter every
 	// single-part book gets.
 	hasChaptersExpr = `(` + chapterCountExpr + ` > 1)`
@@ -74,14 +107,14 @@ var directPlayableExpr = media.DirectPlayableSQL("b.codec")
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.author,
 	b.narrator, b.series, b.series_index, b.published, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
-	b.asin, b.isbn, ` + editedExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr
+	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr
 
 // adminBookDest returns the scan destinations for adminBookCols, in order.
 func adminBookDest(b *AdminBook) []any {
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
 		&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Duration, &b.Format, &b.Codec,
 		&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
-		&b.ASIN, &b.ISBN, &b.Edited, &b.HasCover, &b.DirectPlayable}
+		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable}
 }
 
 // BookFilter narrows the admin book list (and its facet counts). Zero values
@@ -579,16 +612,29 @@ func lessFold(a, b string) bool {
 // keeps the letters of every script), which also equates "J.R.R." with "J. R. R.".
 // "" when no letter or digit is left.
 func personKey(name string) string {
-	if before, after, ok := strings.Cut(name, ","); ok && !strings.Contains(after, ",") {
-		if b, a := strings.TrimSpace(before), strings.TrimSpace(after); a != "" && !strings.ContainsAny(b, " \t") {
-			name = a + " " + b
-		}
+	if given, surname, ok := reversedName(name); ok {
+		name = given + " " + surname
 	}
 	return match.Fold(name)
 }
 
+// reversedName reports whether name is written "Surname, Given" (one word before
+// a single comma, so "Alexandre Dumas, pere" is not), with its two parts.
+func reversedName(name string) (given, surname string, ok bool) {
+	before, after, found := strings.Cut(name, ",")
+	if !found || strings.Contains(after, ",") {
+		return "", "", false
+	}
+	b, a := strings.TrimSpace(before), strings.TrimSpace(after)
+	if a == "" || strings.ContainsAny(b, " \t") {
+		return "", "", false
+	}
+	return a, b, true
+}
+
 // mergeSuggestions groups people whose names share a personKey. The suggested
-// spelling is the one with the most books (ties: alphabetical).
+// spelling is the one with the most books; on a tie the natural "Given Surname"
+// form beats "Surname, Given", then alphabetical.
 func mergeSuggestions(people []PersonCount) []MergeSuggestion {
 	groups := map[string][]PersonCount{}
 	var order []string
@@ -613,7 +659,7 @@ func mergeSuggestions(people []PersonCount) []MergeSuggestion {
 		for _, p := range g {
 			s.Names = append(s.Names, p.Name)
 			s.Books += p.Books
-			if p.Books > best.Books || (p.Books == best.Books && lessFold(p.Name, best.Name)) {
+			if betterSpelling(p, best) {
 				best = p
 			}
 		}
@@ -621,6 +667,20 @@ func mergeSuggestions(people []PersonCount) []MergeSuggestion {
 		out = append(out, s)
 	}
 	return out
+}
+
+// betterSpelling reports whether p should be suggested over best (see
+// mergeSuggestions).
+func betterSpelling(p, best PersonCount) bool {
+	if p.Books != best.Books {
+		return p.Books > best.Books
+	}
+	_, _, pRev := reversedName(p.Name)
+	_, _, bestRev := reversedName(best.Name)
+	if pRev != bestRev {
+		return !pRev
+	}
+	return lessFold(p.Name, best.Name)
 }
 
 // SeriesCount is one series and the books the server holds in it.

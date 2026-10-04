@@ -19,6 +19,10 @@ const cspRestrictedImports = {
       name: 'echarts',
       message: 'ECharts injects styles; use Recharts via the shadcn chart (minus ChartStyle).',
     },
+    {
+      name: 'zod',
+      message: "Import z from '@/lib/zod': it sets jitless, or zod's eval probe trips the CSP.",
+    },
   ],
 };
 
@@ -65,6 +69,11 @@ export default tseslint.config(
       'no-restricted-imports': ['error', cspRestrictedImports],
       'no-restricted-syntax': ['error', ...cspRestrictedSyntax],
     },
+  },
+  {
+    // The one place zod is imported (and configured).
+    files: ['src/lib/zod.ts'],
+    rules: { 'no-restricted-imports': ['error', { patterns: cspRestrictedImports.patterns }] },
   },
   {
     files: ['**/*.test.{ts,tsx}', 'src/test/**/*.{ts,tsx}'],

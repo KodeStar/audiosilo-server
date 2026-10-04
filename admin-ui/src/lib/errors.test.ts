@@ -10,6 +10,12 @@ describe('errorMessage', () => {
     expect(errorMessage(new ApiError(409, 'reworded', 'last_admin'), t)).toMatch(
       /at least one admin/,
     );
+    expect(errorMessage(new ApiError(413, 'the image is larger than 5 MB', 'too_large'), t)).toBe(
+      'That image is larger than 5 MB. Pick a smaller one.',
+    );
+    expect(errorMessage(new ApiError(404, 'no book', 'book_not_found'), t)).toMatch(
+      /isn't in the library/,
+    );
   });
 
   it('passes other server messages through and explains network failures', () => {

@@ -1,5 +1,19 @@
 import { clearToken, getToken } from './token';
 import type {
+  AdminBookDetail,
+  AdminBookPage,
+  AdminBookSort,
+  AuthorsResponse,
+  BookEditRequest,
+  BookFacets,
+  BookMeta,
+  BookRef,
+  CoverThumb,
+  MatchCandidate,
+  NarratorsResponse,
+  PeopleResponse,
+  PersonField,
+  SeriesCount,
   AdminLibrary,
   AdminSettings,
   AdminShare,
@@ -29,11 +43,14 @@ const API = '/api/v1';
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
-  constructor(status: number, message: string, code?: string) {
+  /** The field a refused book edit names (code "invalid_override"). */
+  readonly field?: string;
+  constructor(status: number, message: string, code?: string, field?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.field = field;
   }
 }
 
@@ -64,23 +81,29 @@ const LOGIN_PATH = '/auth/login';
  * the session, and a failure raised as ApiError from the {"error"} envelope.
  * `explicitToken` authenticates with a token that is not the stored session
  * (signing a non-admin straight back out) and leaves the stored session alone.
- * `allow` lists statuses the caller handles itself (a cover's 404).
+ * `raw` sends a file as the body as is (a cover upload) instead of JSON.
  */
 async function send(
   path: string,
-  init: { method?: string; body?: unknown; explicitToken?: string; allow?: number[] } = {},
+  init: {
+    method?: string;
+    body?: unknown;
+    raw?: Blob;
+    explicitToken?: string;
+  } = {},
 ): Promise<Response> {
   const headers: Record<string, string> = {};
   const token = init.explicitToken ?? getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (init.raw) headers['Content-Type'] = init.raw.type || 'application/octet-stream';
+  else if (init.body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(API + path, {
     method: init.method ?? 'GET',
     headers,
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    body: init.raw ?? (init.body === undefined ? undefined : JSON.stringify(init.body)),
   });
   if (init.explicitToken === undefined) checkSession(res.status, path);
-  if (!res.ok && !init.allow?.includes(res.status)) throw await apiError(res);
+  if (!res.ok) throw await apiError(res);
   return res;
 }
 
@@ -95,7 +118,12 @@ async function apiError(res: Response): Promise<ApiError> {
     typeof env?.error === 'string' && env.error
       ? env.error
       : res.statusText || `HTTP ${res.status}`;
-  return new ApiError(res.status, msg, typeof env?.code === 'string' ? env.code : undefined);
+  return new ApiError(
+    res.status,
+    msg,
+    typeof env?.code === 'string' ? env.code : undefined,
+    typeof env?.field === 'string' ? env.field : undefined,
+  );
 }
 
 /** A JSON API call (an empty body decodes to undefined). */
@@ -126,6 +154,68 @@ function checkSession(status: number, path: string) {
 
 /** The path query every content endpoint takes (path is the identity, never an id). */
 const pathQuery = (path: string) => `?${new URLSearchParams({ path }).toString()}`;
+
+/**
+ * The filters GET /admin/books and /admin/books/facets share
+ * (handlers_catalog.go bookFilterFromQuery). Unset = no filter.
+ */
+export interface BookFilter {
+  /** Full text over title, author, series and narrator. */
+  q?: string;
+  library_id?: number;
+  /** Exact effective values (an author tile, a series card). */
+  author?: string;
+  series?: string;
+  narrator?: string;
+  format?: string[];
+  codec?: string[];
+  direct_playable?: boolean;
+  has_cover?: boolean;
+  has_chapters?: boolean;
+  matched?: boolean;
+  edited?: boolean;
+  /** Seconds. */
+  min_duration?: number;
+  max_duration?: number;
+  /** YYYY-MM-DD or RFC 3339; after is inclusive, before exclusive. */
+  added_after?: string;
+  added_before?: string;
+}
+
+/** One page request of GET /admin/books. */
+export interface BookListParams extends BookFilter {
+  sort?: AdminBookSort;
+  order?: 'asc' | 'desc';
+  cursor?: string;
+  /** 1-200; the server defaults to 60. */
+  limit?: number;
+}
+
+/**
+ * Parameters as a query string ("" when empty), unset values left out and arrays
+ * repeated (?format=mp3&format=m4b), the way the server parses them.
+ */
+export function bookQuery(params: object): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params) as [string, unknown][]) {
+    if (v === undefined || v === '' || v === null) continue;
+    if (Array.isArray(v)) for (const item of v) q.append(k, String(item));
+    else q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+/** What GET .../book/match searches by ({} = the book's own facts). */
+export type MatchBy = { q?: string; asin?: string; isbn?: string };
+
+/** The cover thumbnail sizes POST /admin/covers renders (handlers_covers.go). */
+export type ThumbSize = 160 | 320 | 640;
+
+/** The server's cap on one bulk edit (handlers_catalog.go), applied all or nothing. */
+export const BULK_LIMIT = 1000;
+/** The server's cap on the rules one POST /admin/shares/{id}/paths adds (handlers_shares.go). */
+export const SHARE_RULES_LIMIT = 1000;
 
 export const api = {
   serverInfo: () => request<ServerInfo>('GET', '/server'),
@@ -195,6 +285,9 @@ export const api = {
   deleteShare: (id: number) => request<void>('DELETE', `/admin/shares/${id}`),
   addSharePath: (id: number, rule: PathRule) =>
     request<void>('POST', `/admin/shares/${id}/paths`, rule),
+  /** Adds many rules in one transaction, all or nothing (1 to SHARE_RULES_LIMIT). */
+  addSharePaths: (id: number, rules: PathRule[]) =>
+    request<void>('POST', `/admin/shares/${id}/paths`, { rules }),
   removeSharePath: (id: number, rule: PathRule) =>
     request<void>('DELETE', `/admin/shares/${id}/paths`, rule),
   grantShare: (userId: number, shareId: number) =>
@@ -203,6 +296,59 @@ export const api = {
     request<void>('DELETE', '/admin/share-access', { user_id: userId, share_id: shareId }),
   grantLibrary: (userId: number, libraryId: number) =>
     request<void>('POST', '/admin/library-access', { user_id: userId, library_id: libraryId }),
+
+  // The admin catalog (Library and Book screens).
+  adminBooks: (params: BookListParams) =>
+    request<AdminBookPage>('GET', `/admin/books${bookQuery(params)}`),
+  bookFacets: (filter: BookFilter) =>
+    request<BookFacets>('GET', `/admin/books/facets${bookQuery(filter)}`),
+  /** One field edit over many books, all or nothing (at most BULK_LIMIT). */
+  bulkEdit: (books: BookRef[], edit: Omit<BookEditRequest, 'chapters'>) =>
+    request<{ updated: number }>('POST', '/admin/books/bulk', { books, ...edit }),
+  /** GET /admin/authors or /admin/narrators, as one shape. */
+  people: async (field: PersonField, libraryId?: number): Promise<PeopleResponse> => {
+    const query = bookQuery({ library_id: libraryId });
+    const r =
+      field === 'author'
+        ? await request<AuthorsResponse>('GET', `/admin/authors${query}`)
+        : await request<NarratorsResponse>('GET', `/admin/narrators${query}`);
+    return {
+      people: ('authors' in r ? r.authors : r.narrators) ?? [],
+      merge_suggestions: r.merge_suggestions ?? [],
+      unknown: r.unknown ?? 0,
+    };
+  },
+  series: (libraryId?: number) =>
+    request<{ series: SeriesCount[] }>(
+      'GET',
+      `/admin/series${bookQuery({ library_id: libraryId })}`,
+    ),
+  adminBook: (libraryId: number, path: string) =>
+    request<AdminBookDetail>('GET', `/admin/libraries/${libraryId}/book${pathQuery(path)}`),
+  /** Sets or reverts overrides; answers with the updated book page. */
+  editBook: (libraryId: number, path: string, edit: BookEditRequest) =>
+    request<AdminBookDetail>('PATCH', `/admin/libraries/${libraryId}/book${pathQuery(path)}`, edit),
+  /** Community works the book might be: by its own facts, or by `q` / an ASIN / an ISBN. */
+  matchBook: (libraryId: number, path: string, by: MatchBy = {}) =>
+    request<{ candidates: MatchCandidate[] }>(
+      'GET',
+      `/admin/libraries/${libraryId}/book/match${bookQuery({ path, ...by })}`,
+    ),
+  /** The book's community metadata (series rails for the Series gaps). */
+  bookMeta: (libraryId: number, path: string) =>
+    request<BookMeta>('GET', `/libraries/${libraryId}/meta${pathQuery(path)}`),
+  /** Cover thumbnails as data: URLs, in request order (at most 60). */
+  coverThumbs: (books: BookRef[], size: ThumbSize = 320) =>
+    request<{ covers: CoverThumb[] }>('POST', '/admin/covers', { books, size }),
+  /** Uploads a custom cover (JPEG, PNG or WebP, at most 5 MiB); the book folder is untouched. */
+  setCover: async (libraryId: number, path: string, image: Blob) => {
+    await send(`/admin/libraries/${libraryId}/cover${pathQuery(path)}`, {
+      method: 'PUT',
+      raw: image,
+    });
+  },
+  deleteCover: (libraryId: number, path: string) =>
+    request<void>('DELETE', `/admin/libraries/${libraryId}/cover${pathQuery(path)}`),
 };
 
 /**
@@ -227,30 +373,4 @@ export async function downloadLibraryExport(id: number): Promise<string> {
   // Revoking at once can cancel the save in some browsers.
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
   return name;
-}
-
-/** Encodes bytes as a data: URL (the CSP allows `img-src data:` but not `blob:`). */
-export function toDataUrl(bytes: Uint8Array, type: string): string {
-  let bin = '';
-  const CHUNK = 0x8000; // String.fromCharCode has an argument-count ceiling
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return `data:${type || 'application/octet-stream'};base64,${btoa(bin)}`;
-}
-
-/**
- * A book's cover as a data: URL, or null when the book has no art (404).
- *
- * The cover is fetched with the Authorization header rather than an <img> with
- * `?token=`: the media routes accept a query-string token for the player, but
- * this is a full-privilege admin session, and a URL can leak into proxy access
- * logs, history and "copy image address". A blob: URL would be cheaper, but the
- * console's CSP allows only `img-src 'self' data:`.
- */
-export async function fetchCover(libraryId: number, path: string): Promise<string | null> {
-  const res = await send(`/libraries/${libraryId}/cover${pathQuery(path)}`, { allow: [404] });
-  if (res.status === 404) return null;
-  const type = res.headers.get('Content-Type') ?? '';
-  return toDataUrl(new Uint8Array(await res.arrayBuffer()), type);
 }

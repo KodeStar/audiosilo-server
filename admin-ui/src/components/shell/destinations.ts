@@ -25,7 +25,7 @@ export const DESTINATIONS: readonly Destination[] = [
     route: '/library/{-$section}',
     icon: LibraryBig,
     sections: ['books', 'authors', 'series', 'narrators', 'folders', 'libraries'],
-    pending: { books: '2b', authors: '2b', series: '2b', narrators: '2b', folders: '2b' },
+    pending: {},
   },
   {
     key: 'people',

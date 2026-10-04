@@ -40,7 +40,7 @@ under the production CSP, so check CSP-sensitive changes against a real build se
 ```
 src/api/          hand-mirrored wire types, fetch client (bearer + 401 handling), TanStack Query hooks
 src/components/   shell (top bar, sub bar, tab bar, ⌘K palette), shadcn/ui primitives (ui/), shared bits
-src/features/     one folder per screen (overview, libraries, people, shares, settings, ...); each
+src/features/     one folder per screen (overview, library/*, book, libraries, people, ...); each
                   feature's pure logic sits in a *-model.ts with its own test, and section-page.tsx
                   lazy-loads each screen as its own chunk
 src/i18n/         i18next setup + locales/<lang>.json (en is the base; i18n.test.ts keeps them in step)
@@ -53,6 +53,15 @@ scripts/          check-csp.mjs (fails the build on inline script/style)
 Routing is TanStack Router (code-based routes in `src/router.tsx`, `basepath: '/admin'`), chosen
 over React Router for typed params and search params (later screens keep filters in the URL) and
 to share conventions with TanStack Query and Table.
+
+Covers come from `POST /api/v1/admin/covers`: `useCover(libraryId, path, size)` queues each
+cover and `src/api/cover-batch.ts` sends everything asked for in the same moment as one request
+of up to 60 thumbnails (data: URLs, the CSP allows no blob:), so a grid of hundreds of covers is a
+handful of requests (160px for rows, 320px for tiles, 640px for the book hero, whose blurred
+backdrop and tint use the 160px one). A thumbnail nobody shows any more by the time its batch goes
+out isn't asked for, and unused ones leave the cache after five minutes. A book without art gets a generated cover (`src/components/generated-cover.tsx`, React SVG, palette from
+`src/lib/cover-model.ts`). Book pages are addressed by identity, `/admin/library/book?library=&path=`
+(`src/lib/book-route.ts`), never by an internal id.
 
 Forms use react-hook-form, with zod schemas where a field has rules; schema messages are i18n
 keys (`fieldMessage` in `src/lib/errors.ts` translates them, and passes server errors through).

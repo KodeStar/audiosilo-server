@@ -7,6 +7,22 @@ import { PageSkeleton } from '@/components/page';
 
 // Each screen is its own chunk, loaded on first visit (with its form, drag and
 // drop and QR libraries), so the first paint only carries the shell and Overview.
+const BooksPage = lazy(() =>
+  import('@/features/library/books/books-page').then((m) => ({ default: m.BooksPage })),
+);
+const PeopleScreen = lazy(() =>
+  import('@/features/library/people/people-screen').then((m) => ({ default: m.PeopleScreen })),
+);
+/** Library > Authors: everyone credited as an author, most books first. */
+const AuthorsPage = () => <PeopleScreen field="author" />;
+/** Library > Narrators: everyone credited as a narrator, most hours first. */
+const NarratorsPage = () => <PeopleScreen field="narrator" />;
+const SeriesPage = lazy(() =>
+  import('@/features/library/series/series-page').then((m) => ({ default: m.SeriesPage })),
+);
+const FoldersPage = lazy(() =>
+  import('@/features/library/folders/folders-page').then((m) => ({ default: m.FoldersPage })),
+);
 const LibrariesPage = lazy(() =>
   import('@/features/libraries/libraries-page').then((m) => ({ default: m.LibrariesPage })),
 );
@@ -25,7 +41,14 @@ const SettingsPage = lazy(() =>
 
 /** The screens built so far, by destination and section. */
 const PAGES: Partial<Record<DestinationKey, Record<string, React.ComponentType>>> = {
-  library: { libraries: LibrariesPage },
+  library: {
+    books: BooksPage,
+    authors: AuthorsPage,
+    series: SeriesPage,
+    narrators: NarratorsPage,
+    folders: FoldersPage,
+    libraries: LibrariesPage,
+  },
   people: { people: PeoplePage, invites: InvitesPage, shares: SharesPage },
   server: { settings: SettingsPage },
 };

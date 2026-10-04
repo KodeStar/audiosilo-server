@@ -98,3 +98,59 @@ func (c *Catalog) DeleteCover(ctx context.Context, libraryID int64, path string)
 		`DELETE FROM book_covers WHERE library_id = ? AND path = ?`, libraryID, CleanRelPath(path))
 	return err
 }
+
+// CoverSource is where an indexed book's cover is read from, without reading it:
+// its custom cover's stamp, else its sidecar image, else the art embedded in its
+// first audio file (the order GET /libraries/{id}/cover serves them in). Paths
+// are library-relative.
+type CoverSource struct {
+	CustomAt  string // updated_at of the custom cover; "" = none
+	CoverPath string // the sidecar image the scanner recorded; "" = none
+	AudioPath string // the audio file whose embedded art is the fallback
+}
+
+// ArtFiles is the book's own art (no custom cover) as a CoverSource: its sidecar
+// image and the audio file embedded art is read from.
+func (b *Book) ArtFiles() CoverSource {
+	audio := b.RelPath
+	if b.IsFolder && len(b.Files) > 0 {
+		audio = b.Files[0].RelPath
+	}
+	return CoverSource{CoverPath: b.CoverPath, AudioPath: audio}
+}
+
+// CoverSources resolves the cover source of each book indexed at one of paths in
+// a library, in one query (a page of cover thumbnails). A path with no indexed
+// book is absent from the map. Paths match exactly, as stored.
+func (c *Catalog) CoverSources(ctx context.Context, libraryID int64, paths []string) (map[string]CoverSource, error) {
+	out := make(map[string]CoverSource, len(paths))
+	if len(paths) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(paths)+1)
+	args = append(args, libraryID)
+	for _, p := range paths {
+		args = append(args, p)
+	}
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT b.rel_path, COALESCE(cv.updated_at, ''), b.cover_path,
+		       CASE WHEN b.is_folder THEN COALESCE(
+		         (SELECT bf.rel_path FROM book_files bf WHERE bf.book_id = b.id ORDER BY bf.seq LIMIT 1),
+		         b.rel_path) ELSE b.rel_path END
+		  FROM books b
+		  LEFT JOIN book_covers cv ON cv.library_id = b.library_id AND cv.path = b.rel_path
+		 WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(paths))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		var src CoverSource
+		if err := rows.Scan(&path, &src.CustomAt, &src.CoverPath, &src.AudioPath); err != nil {
+			return nil, err
+		}
+		out[path] = src
+	}
+	return out, rows.Err()
+}

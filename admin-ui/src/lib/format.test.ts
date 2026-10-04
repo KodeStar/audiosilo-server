@@ -1,11 +1,16 @@
 import {
+  counted,
+  formatBytes,
+  formatClock,
   formatDateTime,
+  formatDuration,
   formatLongDate,
   formatNumber,
   formatPercent,
   formatRelative,
   formatVersion,
   progressFraction,
+  seriesIndexLabel,
 } from './format';
 
 describe('format', () => {
@@ -43,6 +48,37 @@ describe('format', () => {
     expect(progressFraction(30, 60)).toBe(0.5);
     expect(progressFraction(30, 0)).toBe(0);
     expect(progressFraction(90, 60)).toBe(1);
+  });
+
+  it('formats a length to the minute, seconds under a minute', () => {
+    expect(formatDuration(163800, 'en')).toBe('45h 30m');
+    expect(formatDuration(7200, 'en')).toBe('2h');
+    expect(formatDuration(2280, 'en')).toBe('38m');
+    expect(formatDuration(4530, 'en')).toBe('1h 16m');
+    expect(formatDuration(40, 'en')).toBe('40s');
+    expect(formatDuration(0, 'en')).toBe('');
+    expect(formatDuration(Number.NaN, 'en')).toBe('');
+  });
+
+  it('formats sizes in decimal units, one decimal under 10', () => {
+    expect(formatBytes(1_310_000_000, 'en')).toBe('1.3 GB');
+    expect(formatBytes(48_000_000, 'en')).toBe('48 MB');
+    expect(formatBytes(245_000_000, 'en')).toBe('245 MB');
+    expect(formatBytes(512, 'en')).toBe('512 byte');
+  });
+
+  it('formats a clock position', () => {
+    expect(formatClock(0)).toBe('0:00');
+    expect(formatClock(125)).toBe('2:05');
+    expect(formatClock(3725)).toBe('1:02:05');
+    expect(formatClock(1200, true)).toBe('0:20:00');
+  });
+
+  it('counts for plural keys and labels series positions', () => {
+    expect(counted(3249, 'en')).toEqual({ count: 3249, formatted: '3,249' });
+    const t = (key: string, opts: Record<string, unknown>) => `${key}:${String(opts.index)}`;
+    expect(seriesIndexLabel(2, 'en', t)).toBe('books.tile.seriesIndex:2');
+    expect(seriesIndexLabel(0, 'en', t)).toBe('');
   });
 
   it('prefixes numeric versions only', () => {

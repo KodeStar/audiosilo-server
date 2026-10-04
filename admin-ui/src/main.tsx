@@ -2,14 +2,17 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@/app';
 import { createQueryClient } from '@/lib/query-client';
-import '@/i18n';
+import { i18nReady } from '@/i18n';
 import { createAppRouter } from '@/router';
 import './styles/globals.css';
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App router={createAppRouter()} queryClient={createQueryClient()} />
-  </StrictMode>,
+// Render once the console's language is loaded (a separate chunk unless English).
+void i18nReady.then(() =>
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <App router={createAppRouter()} queryClient={createQueryClient()} />
+    </StrictMode>,
+  ),
 );
 
 // Installable PWA: the root-scoped service worker (/sw.js) the server ships.

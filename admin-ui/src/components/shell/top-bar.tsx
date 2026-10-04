@@ -23,7 +23,7 @@ export function TopBar() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-topbar-border bg-topbar backdrop-blur-[16px] backdrop-saturate-[1.6]">
-      <div className="mx-auto grid h-14 max-w-[1440px] grid-cols-[auto_1fr_auto] items-center gap-2.5 px-4 md:h-16 md:gap-5 md:px-6">
+      <div className="mx-auto grid h-(--topbar-h) max-w-[1440px] grid-cols-[auto_1fr_auto] items-center gap-2.5 px-4 md:gap-5 md:px-6">
         <Link
           to="/"
           className="flex items-center gap-2.5 rounded-[12px] py-1.5 pr-2 pl-1 hover:bg-accent"
