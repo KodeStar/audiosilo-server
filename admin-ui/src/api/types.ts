@@ -114,6 +114,8 @@ export interface ListeningSession {
   codec: string;
   transcoded: boolean;
   finished: boolean;
+  /** Made at the upgrade from the player's own listening history: no device, app or playback mode. */
+  backfilled: boolean;
   state: SessionState;
   /** Live sessions only: the chapter at the position and the device's newest address. */
   chapter?: string;
@@ -345,6 +347,8 @@ export interface Activity {
   timezone: string;
   utc_offset: number;
   totals: ActivityTotals;
+  /** Seconds of totals.listened that are estimates (in the totals and tops, never in days). */
+  estimated: number;
   /** The same length of time just before `from`, for the deltas. */
   previous: ActivityTotals;
   days: ActivityDay[];

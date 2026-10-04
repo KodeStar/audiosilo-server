@@ -15,6 +15,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { bookRoute } from '@/lib/book-route';
 import { counted, formatHours, formatNumber } from '@/lib/format';
 import { busiestSlot, longestStreak, recentYears, slotLabel, toHours } from './activity-model';
+import { EstimatedNote } from './estimated-note';
 import { YearCalendar } from './heatmaps';
 
 /** Activity > Year in listening: a calendar year told as a story, then day by day. */
@@ -102,6 +103,7 @@ function YearStory({ a, year, current }: { a: Activity; year: number; current: b
 
   return (
     <div className="flex flex-col gap-5">
+      <EstimatedNote a={a} />
       <section
         className="year-hero overflow-hidden rounded-xl border bg-card"
         aria-labelledby="year-headline"

@@ -251,3 +251,34 @@ describe('year in listening', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('listening from before sessions were recorded', () => {
+  it('says how much of the period is estimated, and only then', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/stats': statsRoute((range) => activity({ range, estimated: 5 * 3600 })),
+      }),
+    );
+    renderApp('/activity');
+    expect(
+      await screen.findByText(/Includes about 5\W*h\w* estimated from before this server recorded/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows a session made from the app history as such', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/sessions': {
+          body: {
+            sessions: [liveSession({ id: 3, backfilled: true, device_name: '', client: null })],
+            next_before: null,
+          },
+        },
+      }),
+    );
+    renderApp('/activity/sessions');
+    expect(await screen.findByText('Listening history')).toBeInTheDocument();
+    expect(screen.getByText('From the app, before sessions were recorded')).toBeInTheDocument();
+    expect(screen.queryByText('Unknown app')).not.toBeInTheDocument();
+  });
+});

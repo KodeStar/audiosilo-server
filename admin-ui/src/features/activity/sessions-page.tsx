@@ -218,15 +218,28 @@ export function SessionTable({
                 </td>
                 <td className="px-4 py-2.5 text-right tabular-nums max-md:hidden">{listened}</td>
                 <td className="px-4 py-2.5 max-lg:hidden">
-                  <span className="flex flex-col">
-                    <span className="truncate">{s.device_name || t('live.unnamed')}</span>
-                    <span className="truncate text-[12px] text-muted-foreground">
-                      {clientName(s.client)}
+                  {s.backfilled ? (
+                    <span className="flex flex-col">
+                      <span className="truncate">{t('sessions.history')}</span>
+                      <span className="truncate text-[12px] text-muted-foreground">
+                        {t('sessions.historyBody')}
+                      </span>
                     </span>
-                  </span>
+                  ) : (
+                    <span className="flex flex-col">
+                      <span className="truncate">{s.device_name || t('live.unnamed')}</span>
+                      <span className="truncate text-[12px] text-muted-foreground">
+                        {clientName(s.client)}
+                      </span>
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-2.5">
-                  <PlaybackStatus direct={!s.transcoded} />
+                  {s.backfilled ? (
+                    <span className="text-muted-foreground">-</span>
+                  ) : (
+                    <PlaybackStatus direct={!s.transcoded} />
+                  )}
                 </td>
               </tr>
             );

@@ -9,6 +9,7 @@ import { Monogram } from '@/components/monogram';
 import { Notice } from '@/components/notice';
 import { Ring } from '@/components/ring';
 import { StatTile } from '@/components/stat-tile';
+import { EstimatedNote } from './estimated-note';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
@@ -141,6 +142,7 @@ function ActivityView({ a }: { a: Activity }) {
         />
       </div>
 
+      <EstimatedNote a={a} />
       {listened ? (
         <>
           <Card aria-labelledby="hours-title">
