@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -60,12 +60,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
-      # golangci-lint-action@v8 installs golangci-lint v2 (required for Go 1.25)
+      # golangci-lint-action@v8 installs golangci-lint v2 (required since Go 1.25)
       # and manages its own cache; config is .golangci.yml.
       - uses: golangci/golangci-lint-action@v8
         with:

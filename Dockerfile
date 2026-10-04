@@ -28,7 +28,7 @@ RUN npm run build
 # Pinned to the build host's platform: the binary is CGO-free, so multi-arch legs
 # cross-compile natively via GOOS/GOARCH instead of running the whole Go toolchain
 # under QEMU emulation (which made the arm64 image build many times slower).
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
 # Release version stamped into the binary (reported by GET /server, the admin
 # console and the web player). image.yml passes the release tag; defaults to dev.

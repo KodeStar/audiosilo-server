@@ -1,4 +1,4 @@
-# golangci-lint v2 config (required for Go 1.25). Curated for a security-focused,
+# golangci-lint v2 config (required since Go 1.25). Curated for a security-focused,
 # internet-exposed server: high signal, low noise. Adopted at a baseline that is
 # green on today's code - intentional, documented suppressions only; no source
 # behaviour was changed to satisfy the linter. Run: `golangci-lint run`.
