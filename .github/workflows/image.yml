@@ -25,7 +25,7 @@ jobs:
 
       - uses: docker/setup-qemu-action@v3
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # GHCR image references must be lowercase; the owner login can be mixed-case.
       - name: Resolve owner (lowercase)
