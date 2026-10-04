@@ -1,5 +1,5 @@
-import type { ListeningRow } from '@/api/types';
-import { LIVE_WINDOW_MS, RECENT_LIMIT, greetingFor, splitListening } from './overview-model';
+import type { ListeningRow, ListeningSession } from '@/api/types';
+import { RECENT_LIMIT, greetingFor, splitListening } from './overview-model';
 
 const now = Date.parse('2026-10-03T20:00:00Z');
 
@@ -19,43 +19,56 @@ function row(over: Partial<ListeningRow>): ListeningRow {
   };
 }
 
+function session(over: Partial<ListeningSession>): ListeningSession {
+  return {
+    ...row({}),
+    id: 1,
+    device_id: 1,
+    device_name: 'iPhone',
+    client: null,
+    started_at: new Date(now - 600_000).toISOString(),
+    last_at: new Date(now).toISOString(),
+    start_position: 0,
+    speed: 1,
+    listened: 600,
+    codec: 'aac',
+    transcoded: false,
+    state: 'playing',
+    ...over,
+  } as ListeningSession;
+}
+
 describe('splitListening', () => {
-  it('treats recent unfinished progress as live', () => {
-    const live = row({ path: 'live', updated_at: new Date(now - 60_000).toISOString() });
-    const stale = row({
-      path: 'stale',
-      updated_at: new Date(now - LIVE_WINDOW_MS - 1000).toISOString(),
-    });
+  it('takes who is live from the sessions and leaves their books out of recent', () => {
+    const live = row({ path: 'live' });
+    const older = row({ path: 'older', updated_at: new Date(now - 3_600_000).toISOString() });
     const done = row({ path: 'done', finished: true });
-    const s = splitListening([stale, done, live], now);
-    expect(s.live.map((r) => r.path)).toEqual(['live']);
-    expect(s.recent.map((r) => r.path)).toEqual(['done', 'stale']);
+    const s = splitListening([older, done, live], [session({ path: 'live' })]);
+    expect(s.live.map((x) => x.path)).toEqual(['live']);
+    expect(s.recent.map((r) => r.path)).toEqual(['done', 'older']);
     expect(s.inProgress).toBe(2);
   });
 
-  it('counts people, not books, as listeners', () => {
-    const rows = [
-      row({ user_id: 1, path: 'a' }),
-      row({ user_id: 1, path: 'b' }),
-      row({ user_id: 2, path: 'c' }),
-    ];
-    const s = splitListening(rows, now);
-    expect(s.live).toHaveLength(3);
+  it('counts people, not devices, as listeners, playing first', () => {
+    const s = splitListening(
+      [],
+      [
+        session({ id: 1, user_id: 1, state: 'paused' }),
+        session({ id: 2, user_id: 1, path: 'b' }),
+        session({ id: 3, user_id: 2, path: 'c' }),
+      ],
+    );
+    expect(s.live.map((x) => x.id)).toEqual([2, 3, 1]);
     expect(s.listeners).toBe(2);
   });
 
   it('caps the recent list', () => {
-    const rows = Array.from({ length: RECENT_LIMIT + 5 }, (_, i) =>
-      row({
-        path: `p${i}`,
-        updated_at: new Date(now - LIVE_WINDOW_MS - (i + 1) * 1000).toISOString(),
-      }),
-    );
-    expect(splitListening(rows, now).recent).toHaveLength(RECENT_LIMIT);
+    const rows = Array.from({ length: RECENT_LIMIT + 5 }, (_, i) => row({ path: `p${i}` }));
+    expect(splitListening(rows, []).recent).toHaveLength(RECENT_LIMIT);
   });
 
   it('handles an empty feed', () => {
-    expect(splitListening([], now)).toEqual({ live: [], listeners: 0, recent: [], inProgress: 0 });
+    expect(splitListening([], [])).toEqual({ live: [], listeners: 0, recent: [], inProgress: 0 });
   });
 });
 

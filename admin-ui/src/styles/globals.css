@@ -829,6 +829,55 @@
     box-shadow: var(--shadow-overlay);
   }
 
+  /* Charts (Recharts via src/components/ui/chart.tsx; STYLEGUIDE.md "Charts"): one
+     y-axis, dashed recessive gridlines, muted tabular axis text, a --primary tooltip. */
+  .chart .recharts-cartesian-grid line {
+    stroke: var(--border);
+    stroke-dasharray: 3 4;
+  }
+  .chart .recharts-text {
+    fill: var(--muted-foreground);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chart .recharts-tooltip-cursor {
+    fill: color-mix(in oklab, var(--muted-foreground) 10%, transparent);
+    stroke: var(--border-strong);
+  }
+  .chart .recharts-surface:focus {
+    outline: none;
+  }
+  .chart .recharts-surface:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  .chart-tip {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 120px;
+    max-width: 260px;
+    padding: 7px 10px;
+    border-radius: 10px;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: var(--shadow-overlay);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  /* Year in listening: the story card, tinted from its corner with the brand. */
+  .year-hero {
+    background:
+      radial-gradient(
+        90% 120% at 100% 0%,
+        color-mix(in oklab, var(--brand) 14%, transparent),
+        transparent 60%
+      ),
+      var(--card);
+  }
+
   .progress-track {
     height: 6px;
     border-radius: 99px;

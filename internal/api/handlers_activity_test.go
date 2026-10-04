@@ -209,6 +209,47 @@ func TestAdminEditProgress(t *testing.T) {
 	}
 }
 
+// An admin's edit starts progress only on a book the person can see (409
+// no_access otherwise), and an admin's own scope doesn't count.
+func TestAdminEditProgressNeedsTheUsersAccess(t *testing.T) {
+	e := newActivityEnv(t)
+	ctx := context.Background()
+	lib, err := e.cat.GetLibrary(ctx, e.libID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.api.scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	// The Cradle folder holds two parts, so it is one book.
+	const cradle = "Will Wight/Cradle"
+	edit := "/api/v1/admin/libraries/" + strconv.FormatInt(e.libID, 10) + "/progress?path=" +
+		url.QueryEscape(cradle) + "&user_id=" + strconv.FormatInt(e.memberID, 10)
+
+	// Denied: the member has no access to the library.
+	resp, body := e.do(t, "PATCH", edit, e.console, `{"finished":true}`)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"no_access"`) {
+		t.Fatalf("edit without the user's access = %d %s, want 409 no_access", resp.StatusCode, body)
+	}
+	if rows, _ := e.cat.ListUserProgress(ctx, e.memberID); len(rows) != 0 {
+		t.Fatalf("a refused edit wrote progress: %+v", rows)
+	}
+
+	// Allowed once the member can see the book.
+	if err := e.cat.GrantWholeLibrary(ctx, e.memberID, e.libID); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "PATCH", edit, e.console, `{"finished":true}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit with the user's access = %d %s, want 200", resp.StatusCode, body)
+	}
+	// An admin target always has access.
+	self := "/api/v1/admin/libraries/" + strconv.FormatInt(e.libID, 10) + "/progress?path=" +
+		url.QueryEscape(cradle) + "&user_id=" + strconv.FormatInt(e.adminID, 10)
+	if resp, body := e.do(t, "PATCH", self, e.console, `{"finished":true}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit for an admin = %d %s, want 200", resp.StatusCode, body)
+	}
+}
+
 func TestAdminStatsRange(t *testing.T) {
 	e := newActivityEnv(t)
 	e.play(t, 10)

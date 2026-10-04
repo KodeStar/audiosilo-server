@@ -61,7 +61,23 @@ export const keys = {
   scanRuns: ['admin', 'scan-runs'] as const,
   scanRunList: (libraryId: number) => ['admin', 'scan-runs', 'list', libraryId] as const,
   scanRun: (id: number) => ['admin', 'scan-runs', id] as const,
+  activity: (range: string) => ['admin', 'activity', range] as const,
+  /** Live sessions and every session list (a prefix). */
+  sessions: ['admin', 'sessions'] as const,
+  liveSessions: ['admin', 'sessions', 'live'] as const,
+  sessionList: (filter: SessionFilter) => ['admin', 'sessions', 'list', filter] as const,
+  /** Everyone's devices and each person's (a prefix). */
+  devices: ['admin', 'devices'] as const,
+  userDevices: (userId: number) => ['admin', 'devices', userId] as const,
+  userProgress: (userId: number) => ['admin', 'user', userId, 'progress'] as const,
 };
+
+/** What a session list is narrowed to (GET /admin/sessions). */
+export interface SessionFilter {
+  user_id?: number;
+  library_id?: number;
+  path?: string;
+}
 
 /**
  * Refetches everything a change to accounts, access or invites can touch: the
@@ -515,4 +531,76 @@ export function useBookMeta(libraryId: number, path: string, enabled: boolean) {
     retry: false,
     staleTime: 60 * 60_000,
   });
+}
+
+/** Who is listening now. Polled: players save every few seconds while they play. */
+export function useLiveSessions() {
+  return useQuery({
+    queryKey: keys.liveSessions,
+    queryFn: () => api.liveSessions().then((r) => r.sessions ?? []),
+    refetchInterval: 10_000,
+  });
+}
+
+/**
+ * The Activity page for a period: computed by the server on request, so a period
+ * already seen stays fresh for a minute and the previous one stays on screen
+ * while the next loads.
+ */
+export function useActivity(range: string) {
+  return useQuery({
+    queryKey: keys.activity(range),
+    queryFn: () => api.activity(range),
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Sessions newest first, a page at a time (`fetchNextPage` for older ones). */
+export function useSessions(filter: SessionFilter) {
+  return useInfiniteQuery({
+    queryKey: keys.sessionList(filter),
+    queryFn: ({ pageParam }) => api.sessions({ ...filter, before: pageParam, limit: 50 }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.next_before ?? undefined,
+  });
+}
+
+/** Signed-in devices and API keys: one person's, or everyone's (no id). */
+export function useDevices(userId?: number) {
+  return useQuery({
+    queryKey: userId ? keys.userDevices(userId) : keys.devices,
+    queryFn: () => api.devices(userId).then((r) => r.devices ?? []),
+  });
+}
+
+/** Every book a person has progress on, with start and finish dates. */
+export function useUserProgress(userId: number, enabled = true) {
+  return useQuery({
+    queryKey: keys.userProgress(userId),
+    queryFn: () => api.userProgress(userId).then((r) => r.progress ?? []),
+    enabled,
+  });
+}
+
+/**
+ * Refetches what a progress edit changes: the person's progress and page, the
+ * book's page (its listeners), the overview's listening feed and the Activity
+ * stats (finished counts, the funnel).
+ */
+export function invalidateProgress(qc: QueryClient, userId: number, ref: BookRef) {
+  for (const key of [
+    keys.userProgress(userId),
+    keys.book(ref.library_id, ref.path),
+    keys.stats,
+    ['admin', 'activity'],
+  ]) {
+    void qc.invalidateQueries({ queryKey: key });
+  }
+}
+
+/** Refetches what signing a device out changes: the device lists and who is live. */
+export function invalidateDevices(qc: QueryClient) {
+  void qc.invalidateQueries({ queryKey: keys.devices });
+  void qc.invalidateQueries({ queryKey: keys.sessions });
 }

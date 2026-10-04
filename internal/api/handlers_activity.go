@@ -123,17 +123,20 @@ func (a *API) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// userExists answers 404 for an unknown user id (500 when the lookup fails) and
-// reports whether the handler may go on.
-func (a *API) userExists(w http.ResponseWriter, r *http.Request, id int64) bool {
-	_, err := a.auth.GetUser(r.Context(), id)
+// lookupUser loads a user by id, answering 404 for an unknown one (500 when the
+// lookup fails); nil means the handler is done.
+func (a *API) lookupUser(w http.ResponseWriter, r *http.Request, id int64) *auth.User {
+	u, err := a.auth.GetUser(r.Context(), id)
 	switch {
 	case errors.Is(err, auth.ErrNotFound):
 		writeError(w, http.StatusNotFound, "user not found")
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "could not load user")
 	}
-	return err == nil
+	if err != nil {
+		return nil
+	}
+	return u
 }
 
 // handleUserProgress lists one person's progress on every book, with start and
@@ -144,7 +147,7 @@ func (a *API) handleUserProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	if !a.userExists(w, r, id) {
+	if a.lookupUser(w, r, id) == nil {
 		return
 	}
 	items, err := a.cat.ListUserProgress(r.Context(), id)
@@ -195,7 +198,16 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user_id")
 		return
 	}
-	if !a.userExists(w, r, userID) {
+	user := a.lookupUser(w, r, userID)
+	if user == nil {
+		return
+	}
+	// The user's own scope, not the admin's: an edit may start progress only on a
+	// book the user can see (EditProgress applies it to new rows only).
+	scope, err := a.cat.UserScope(r.Context(), user.ID, lib.ID, user.Role == auth.RoleAdmin)
+	if err != nil {
+		a.log.Warn("user scope failed", "err", err, "user", userID)
+		writeError(w, http.StatusInternalServerError, "access check failed")
 		return
 	}
 	var body struct {
@@ -211,10 +223,15 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 	saved, err := a.cat.EditProgress(r.Context(), userID, catalog.Ref{LibraryID: lib.ID, Path: p}, catalog.ProgressEdit{
 		Finished: body.Finished, Position: body.Position,
 		StartedAt: body.StartedAt.OptionalTime, FinishedAt: body.FinishedAt.OptionalTime,
-	})
+	}, scope)
 	switch {
 	case errors.Is(err, catalog.ErrNotFound):
 		writeErrorCode(w, http.StatusNotFound, codeBookNotFound, "no progress or book at this path")
+		return
+	case errors.Is(err, catalog.ErrNoAccess):
+		// 409, not 403: the admin may make the call, the user's access is the conflict
+		// (and a 403 from /admin tells the console its session lost the admin role).
+		writeErrorCode(w, http.StatusConflict, codeNoAccess, "this person can't see this book; give them access first")
 		return
 	case err != nil:
 		a.writeCatalogError(w, err, "edit progress failed", "could not save progress", "library", lib.ID, "path", p)

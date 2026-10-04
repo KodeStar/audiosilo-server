@@ -69,6 +69,13 @@ Dialogs compose `DialogContent` + `DialogBody` + `DialogFooter` (`src/components
 a form wraps body and footer in `<form className="contents">`. Library reordering uses dnd-kit
 (pointer and keyboard); QR codes are drawn as SVG paths with uqr, in the browser.
 
+Charts (the Activity screens, a person's listening year) use Recharts through
+`src/components/ui/chart.tsx`, shadcn's chart minus `ChartStyle`: series colours are CSS
+variables passed as props (`fill="var(--chart-1)"`) and the chart CSS lives in `globals.css`
+(`.chart`), because shadcn injects a `<style>` the CSP blocks. Recharts only writes styles through
+the CSSOM. It loads as its own lazy chunk with the screens that draw charts. Heatmaps are hand-built
+grids on the `--seq-*` scale (`src/features/activity/heatmaps.tsx`).
+
 `@hookform/resolvers` is held at 5.2.x: 5.9 declares an optional `effect` peer that npm 11 fails
 to resolve (ERESOLVE) on a fresh `npm install`.
 

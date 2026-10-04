@@ -1,7 +1,7 @@
 import { ApiError, api, bookQuery, setForbiddenHandler, setUnauthorizedHandler } from './client';
 import { getToken, setToken } from './token';
 import { mockFetch } from '@/test/fetch-mock';
-import { admin, stats } from '@/test/fixtures';
+import { activity, admin, stats } from '@/test/fixtures';
 
 describe('api client', () => {
   afterEach(() => {
@@ -216,5 +216,41 @@ describe('api client', () => {
     const err = await api.editBook(1, 'A/B', { set: { asin: 'x' } }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err).toMatchObject({ status: 400, code: 'invalid_override', field: 'asin' });
+  });
+
+  it('reads the Activity period from the stats envelope, and fails if the server sends none', async () => {
+    const calls = mockFetch({
+      'GET /admin/stats': (req) => ({
+        body: req.query.get('range') === '7d' ? { ...stats(), activity: activity() } : stats(),
+      }),
+    });
+    await expect(api.activity('7d')).resolves.toMatchObject({
+      range: '7d',
+      totals: { sessions: 12 },
+    });
+    expect(calls[0].query.get('range')).toBe('7d');
+    // An older server ignores ?range=: say so instead of drawing an empty page.
+    await expect(api.activity('2025')).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('pages sessions and edits progress by identity, with the user as a parameter', async () => {
+    const calls = mockFetch({
+      'GET /admin/sessions': { body: { sessions: [], next_before: null } },
+      'PATCH /admin/libraries/1/progress': { body: { progress: {} } },
+      'GET /admin/devices': { body: { devices: [] } },
+    });
+    await api.sessions({ user_id: 2, library_id: 1, path: 'A & B/C', before: 9 });
+    expect(Object.fromEntries(calls[0].query)).toEqual({
+      user_id: '2',
+      library_id: '1',
+      path: 'A & B/C',
+      before: '9',
+    });
+    await api.editProgress(1, 'A & B/C', 2, { finished: true, started_at: null });
+    expect(calls[1].path).toBe('/admin/libraries/1/progress');
+    expect(Object.fromEntries(calls[1].query)).toEqual({ path: 'A & B/C', user_id: '2' });
+    expect(calls[1].body).toEqual({ finished: true, started_at: null });
+    await api.devices();
+    expect(calls[2].query.toString()).toBe('');
   });
 });

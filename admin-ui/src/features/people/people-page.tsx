@@ -1,8 +1,8 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { KeyRound, Smartphone, UserPlus, Users } from 'lucide-react';
-import { useStats, useUsers } from '@/api/hooks';
-import type { ListeningRow, User } from '@/api/types';
+import { useDevices, useLiveSessions, useStats, useUsers } from '@/api/hooks';
+import type { Device, ListeningRow, ListeningSession, User } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
 import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
@@ -26,6 +26,8 @@ export function PeoplePage() {
   const { t } = useTranslation();
   const users = useUsers();
   const stats = useStats();
+  const live = useLiveSessions();
+  const devices = useDevices();
   const [inviting, setInviting] = useSearchDialog('invite');
   const now = Date.now();
 
@@ -77,7 +79,13 @@ export function PeoplePage() {
         <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {list.map((u) => (
             <li key={u.id} className="min-w-0">
-              <PersonCard user={u} listening={stats.data?.listening ?? []} now={now} />
+              <PersonCard
+                user={u}
+                listening={stats.data?.listening ?? []}
+                live={live.data ?? []}
+                devices={devices.data?.filter((d) => d.user_id === u.id && d.kind === 'session')}
+                now={now}
+              />
             </li>
           ))}
         </ul>
@@ -90,16 +98,21 @@ export function PeoplePage() {
 function PersonCard({
   user: u,
   listening,
+  live,
+  devices,
   now,
 }: {
   user: User;
   listening: ListeningRow[];
+  live: ListeningSession[];
+  /** The person's signed-in devices (undefined while loading). */
+  devices: Device[] | undefined;
   now: number;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const current = currentBook(listening, u.id, now);
-  const frac = current ? progressFraction(current.row.position, current.row.duration) : 0;
+  const current = currentBook(listening, live, u.id);
+  const frac = current ? progressFraction(current.position, current.duration) : 0;
 
   const status = u.disabled
     ? t('people.card.disabled')
@@ -157,14 +170,14 @@ function PersonCard({
         {current ? (
           <>
             <BookCover
-              libraryId={current.row.library_id}
-              path={current.row.path}
-              title={current.row.title || current.row.path}
+              libraryId={current.library_id}
+              path={current.path}
+              title={current.title || current.path}
               className="w-[38px] shrink-0"
             />
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <span className="truncate text-[13px] font-semibold">
-                {current.row.title || current.row.path}
+                {current.title || current.path}
               </span>
               <ProgressBar fraction={frac} />
             </div>
@@ -176,6 +189,22 @@ function PersonCard({
           <span className="text-[12.5px] text-muted-foreground">{t('people.card.nothing')}</span>
         )}
       </div>
+      {devices ? (
+        <div className="flex min-w-0 items-center gap-1.5 border-t px-5 py-2.5 text-[12px] text-muted-foreground">
+          <Smartphone className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="truncate">
+            {devices.length
+              ? t('people.card.devices', {
+                  count: devices.length,
+                  names: devices
+                    .slice(0, 2)
+                    .map((d) => d.name || t('live.unnamed'))
+                    .join(', '),
+                })
+              : t('people.card.noDevices')}
+          </span>
+        </div>
+      ) : null}
     </Link>
   );
 }

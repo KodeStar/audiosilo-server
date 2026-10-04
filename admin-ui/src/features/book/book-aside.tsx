@@ -2,12 +2,13 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Headphones, LibraryBig, Plus, Share2, Sparkles } from 'lucide-react';
 import { useLibraries, useServerInfo } from '@/api/hooks';
-import type { AdminBookDetail, BookShare, Listener } from '@/api/types';
+import type { AdminBookDetail, BookShare } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { formatNumber, formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { ProgressMenu } from '@/features/people/progress-actions';
 
 /** The right-hand column: who's listening, community metadata, and who can see the book. */
 export function BookAside({
@@ -23,16 +24,19 @@ export function BookAside({
 }) {
   return (
     <aside className="flex min-w-0 flex-col gap-4">
-      <Listeners listeners={detail.listeners ?? []} />
+      <Listeners detail={detail} />
       <CommunityCard detail={detail} matchBlocked={matchBlocked} onMatch={onMatch} />
       <WhoCanSee detail={detail} onAddToShare={onAddToShare} />
     </aside>
   );
 }
 
-function Listeners({ listeners }: { listeners: Listener[] }) {
+/** Everyone with progress on the book, each with the progress actions (mark finished, dates, sessions). */
+function Listeners({ detail }: { detail: AdminBookDetail }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
+  const listeners = detail.listeners ?? [];
+  const book = detail.book;
   return (
     <Card aria-labelledby="listeners-title">
       <CardHeader
@@ -57,7 +61,7 @@ function Listeners({ listeners }: { listeners: Listener[] }) {
             return (
               <li key={l.user_id} className="flex items-center gap-3 px-[18px] py-3">
                 <AvatarRing name={l.username} size={38} progress={progress} />
-                <div className="flex min-w-0 flex-col">
+                <div className="flex min-w-0 flex-1 flex-col">
                   <Link
                     to="/people/user/$userId"
                     params={{ userId: String(l.user_id) }}
@@ -74,6 +78,17 @@ function Listeners({ listeners }: { listeners: Listener[] }) {
                         })}
                   </span>
                 </div>
+                <ProgressMenu
+                  target={{
+                    library_id: book.library_id,
+                    path: book.path,
+                    userId: l.user_id,
+                    username: l.username,
+                    title: book.title || book.path,
+                    finished: l.finished,
+                    position: l.position,
+                  }}
+                />
               </li>
             );
           })}

@@ -1,6 +1,9 @@
-import type { AuthCode, ListeningRow, Share } from '@/api/types';
+import type { AuthCode, ListeningRow, ListeningSession, Share } from '@/api/types';
 import {
   currentBook,
+  dateInputValue,
+  datesEdit,
+  datesProblem,
   inviteStatus,
   parseAccessChoice,
   ruleLabel,
@@ -114,15 +117,59 @@ describe('currentBook', () => {
     ...over,
   });
 
-  it("picks the person's newest unfinished book and says whether it's live", () => {
-    const rows = [
-      row({ path: 'old', updated_at: '2026-09-01T00:00:00Z' }),
-      row({ path: 'done', finished: true, updated_at: '2026-10-03T11:59:00Z' }),
-      row({ path: 'now' }),
-      row({ user_id: 3, path: 'someone else', updated_at: '2026-10-03T11:59:30Z' }),
+  const rows = [
+    row({ path: 'old', updated_at: '2026-09-01T00:00:00Z' }),
+    row({ path: 'done', finished: true, updated_at: '2026-10-03T11:59:00Z' }),
+    row({ path: 'newest' }),
+    row({ user_id: 3, path: 'someone else', updated_at: '2026-10-03T11:59:30Z' }),
+  ];
+
+  it("picks the person's newest unfinished book when nothing is live", () => {
+    expect(currentBook(rows, [], 2)).toMatchObject({ path: 'newest', live: false });
+    expect(currentBook(rows, [], 99)).toBeUndefined();
+  });
+
+  it('prefers what they are playing now', () => {
+    const live = (over: Partial<ListeningSession>) =>
+      ({
+        ...row({}),
+        state: 'playing',
+        last_at: '2026-10-03T11:59:00Z',
+        ...over,
+      }) as ListeningSession;
+    const sessions = [
+      live({ path: 'paused', state: 'paused', last_at: '2026-10-03T11:59:50Z' }),
+      live({ path: 'playing', position: 42 }),
+      live({ user_id: 3, path: 'not theirs' }),
     ];
-    expect(currentBook(rows, 2, now)).toEqual({ row: rows[2], live: true });
-    expect(currentBook([rows[0]], 2, now)?.live).toBe(false);
-    expect(currentBook(rows, 99, now)).toBeUndefined();
+    expect(currentBook(rows, sessions, 2)).toMatchObject({
+      path: 'playing',
+      position: 42,
+      live: true,
+    });
+  });
+});
+
+describe('progress dates', () => {
+  it('reads a moment as the browser day a date input shows', () => {
+    const d = new Date(2026, 8, 1, 9, 30);
+    expect(dateInputValue(d.toISOString())).toBe('2026-09-01');
+    expect(dateInputValue(null)).toBe('');
+  });
+
+  it('refuses future dates and a finish before the start', () => {
+    expect(datesProblem('2026-09-01', '2026-09-20', '2026-10-04')).toBeUndefined();
+    expect(datesProblem('2026-09-01', '', '2026-10-04')).toBeUndefined();
+    expect(datesProblem('2026-10-05', '', '2026-10-04')).toBe('progress.dates.future');
+    expect(datesProblem('2026-09-20', '2026-09-01', '2026-10-04')).toBe('progress.dates.order');
+  });
+
+  it('sends only the dates that changed, null to clear', () => {
+    const before = { started: '2026-09-01', finished: '2026-09-20' };
+    expect(datesEdit(before, before)).toEqual({});
+    expect(datesEdit(before, { started: '', finished: '2026-09-21' })).toEqual({
+      started_at: null,
+      finished_at: '2026-09-21',
+    });
   });
 });

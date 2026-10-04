@@ -21,6 +21,8 @@ const BY_CODE: Record<string, string> = {
   unsupported_image: 'book.cover.unsupported',
   metadata_off: 'book.match.off',
   book_not_found: 'errors.bookNotFound',
+  no_access: 'errors.noAccess',
+  current_device: 'errors.currentDevice',
 };
 
 /** A failure as one sentence for a toast or a field. */

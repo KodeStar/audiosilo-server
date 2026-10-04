@@ -54,6 +54,11 @@ func (c *Catalog) ListUserProgress(ctx context.Context, userID int64) ([]UserPro
 // future, a position outside the book).
 var ErrInvalidProgressEdit = errors.New("invalid progress edit")
 
+// ErrNoAccess is returned by EditProgress for an edit that would start progress
+// on a book the user can't see. Existing progress stays editable after access is
+// taken away, so stale rows can still be tidied.
+var ErrNoAccess = errors.New("the user has no access to this book")
+
 // OptionalTime is a date in an edit: Set says the edit names it, and a nil Value
 // clears it.
 type OptionalTime struct {
@@ -78,8 +83,9 @@ type ProgressEdit struct {
 // server's time and a higher version, so under last-write-wins it beats what a
 // device saved before it, while any device with the book loaded overrides it on
 // its next save, as it should. Returns ErrNotFound when the user has no progress
-// on the path and no book is indexed there.
-func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e ProgressEdit) (*UserProgress, error) {
+// on the path and no book is indexed there, and ErrNoAccess when the user has none
+// and `scope` (the user's own, not the admin's) doesn't allow the path.
+func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e ProgressEdit, scope Scope) (*UserProgress, error) {
 	now := c.now()
 	err := c.db.WithTx(ctx, "EditProgress", func(tx *sql.Tx) error {
 		var (
@@ -101,6 +107,9 @@ func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e Pro
 				return ErrNotFound
 			} else if err != nil {
 				return err
+			}
+			if !scope.Allows(ref.Path) {
+				return ErrNoAccess
 			}
 		} else if err != nil {
 			return err

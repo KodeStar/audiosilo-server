@@ -3,14 +3,18 @@ import userEvent from '@testing-library/user-event';
 import { getToken, setToken } from '@/api/token';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import {
+  activity,
   admin,
   created,
+  device,
   fictionGrant,
   invite,
   kidsShare,
+  liveSession,
   member,
   sam,
   samDetail,
+  stats,
   users,
 } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
@@ -33,12 +37,18 @@ beforeEach(() => setToken('stored'));
 
 describe('people', () => {
   it('shows everyone as a card with what they are listening to', async () => {
-    mockFetch(routes());
+    mockFetch(
+      routes({
+        'GET /admin/sessions/live': { body: { sessions: [liveSession()] } },
+        'GET /admin/devices': { body: { devices: [device()] } },
+      }),
+    );
     renderApp('/people');
     const card = await screen.findByRole('link', { name: /^sam/ });
-    // sam is mid-book in the stats fixture, updated a minute ago.
-    expect(within(card).getByText('Listening now')).toBeInTheDocument();
-    expect(within(card).getByText('Project Hail Mary')).toBeInTheDocument();
+    // sam has a live session on the book the stats fixture has in progress.
+    expect(await within(card).findByText('Listening now')).toBeInTheDocument();
+    expect(await within(card).findByText("Sam's iPhone")).toBeInTheDocument();
+    expect(within(card).getAllByText('Project Hail Mary').length).toBeGreaterThan(0);
     expect(within(card).getByText('Paired devices only')).toBeInTheDocument();
     const me = screen.getByRole('link', { name: /^chris/ });
     expect(within(me).getByText('Admin')).toBeInTheDocument();
@@ -142,7 +152,7 @@ describe('a person', () => {
         'POST /admin/library-access': { status: 204 },
       }),
     );
-    renderApp('/people/user/2');
+    renderApp('/people/user/2?tab=access');
     expect(await screen.findByRole('heading', { level: 1, name: 'sam' })).toBeInTheDocument();
     // The sub bar turns into a breadcrumb back to People.
     expect(screen.getByRole('link', { name: 'Back to People' })).toBeInTheDocument();
@@ -310,5 +320,190 @@ describe('invites', () => {
     mockFetch(routes({ 'GET /admin/invites': { body: { invites: [] } } }));
     renderApp('/people/invites');
     expect(await screen.findByRole('heading', { name: 'No invites yet' })).toBeInTheDocument();
+  });
+});
+
+describe('devices', () => {
+  it('lists every device and signs one out after confirming; the console itself is locked', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/devices': {
+          body: {
+            devices: [
+              device(),
+              device({
+                id: 1,
+                user_id: 1,
+                username: 'chris',
+                name: 'admin-web',
+                current: true,
+                client: { app: 'AudioSilo Admin', version: '', platform: 'web' },
+              }),
+              device({ id: 3, kind: 'api', name: 'Home Assistant', client: null }),
+            ],
+          },
+        },
+        'DELETE /admin/devices/7': { status: 204 },
+      }),
+    );
+    renderApp('/people/devices');
+    expect(await screen.findByText("Sam's iPhone")).toBeInTheDocument();
+    expect(screen.getByText(/AudioSilo 1.4.2 · iOS · last seen/)).toBeInTheDocument();
+    expect(screen.getByText(/Admin console/)).toBeInTheDocument();
+    expect(screen.getByText('This device')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign out admin-web (chris)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sign out Home Assistant (sam)' })).toHaveTextContent(
+      'Revoke',
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: "Sign out Sam's iPhone (sam)" }));
+    const dialog = await screen.findByRole('dialog', { name: "Sign out sam's Sam's iPhone?" });
+    await user.click(within(dialog).getByRole('button', { name: 'Sign out' }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'DELETE' && c.path === '/admin/devices/7')).toBe(true),
+    );
+  });
+
+  it('has an empty state', async () => {
+    mockFetch(routes());
+    renderApp('/people/devices');
+    expect(await screen.findByText('No devices yet')).toBeInTheDocument();
+  });
+});
+
+describe("a person's listening", () => {
+  const year = new Date().getFullYear();
+  const progress = [
+    {
+      library_id: 1,
+      path: 'Andy Weir/Project Hail Mary',
+      position: 3000,
+      duration: 6000,
+      finished: false,
+      playback_speed: 1,
+      version: 3,
+      device_id: 'iphone',
+      updated_at: new Date().toISOString(),
+      title: 'Project Hail Mary',
+      author: 'Andy Weir',
+      started_at: `${year}-01-05T10:00:00Z`,
+      finished_at: null,
+    },
+    {
+      library_id: 1,
+      path: 'Martha Wells/All Systems Red',
+      position: 100,
+      duration: 100,
+      finished: true,
+      playback_speed: 1,
+      version: 2,
+      device_id: 'iphone',
+      updated_at: `${year}-01-02T10:00:00Z`,
+      title: 'All Systems Red',
+      author: 'Martha Wells',
+      started_at: `${year}-01-01T10:00:00Z`,
+      finished_at: `${year}-01-02T10:00:00Z`,
+    },
+  ];
+
+  function listeningRoutes(over: Record<string, MockRoute> = {}) {
+    return routes({
+      'GET /admin/users/2/progress': { body: { progress } },
+      'GET /admin/sessions': { body: { sessions: [liveSession()], next_before: null } },
+      'GET /admin/devices': { body: { devices: [device()] } },
+      'GET /admin/stats': (req) => ({
+        body: req.query.get('range')
+          ? { ...stats(), activity: activity({ range: req.query.get('range')! }) }
+          : stats(),
+      }),
+      'PATCH /admin/libraries/1/progress': (req) => ({
+        body: { progress: { ...progress[0], ...(req.body as object) } },
+      }),
+      ...over,
+    });
+  }
+
+  it('shows their year, what they are in the middle of, what they finished and recent sessions', async () => {
+    mockFetch(listeningRoutes());
+    renderApp('/people/user/2');
+    expect(await screen.findByText(`sam's listening year · ${year}`)).toBeInTheDocument();
+    expect(await screen.findByText('5h')).toBeInTheDocument();
+    const inProgress = await screen.findByRole('region', { name: 'In progress' });
+    expect(within(inProgress).getByText('50% · saved now')).toBeInTheDocument();
+    const finished = screen.getByRole('region', { name: 'Finished' });
+    expect(within(finished).getByText(/Started .* · Finished/)).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Recent sessions' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Devices/ })).toHaveTextContent('1');
+  });
+
+  it('marks a book finished, with Undo putting the position back', async () => {
+    const calls = mockFetch(listeningRoutes());
+    renderApp('/people/user/2');
+    const user = userEvent.setup();
+    const inProgress = await screen.findByRole('region', { name: 'In progress' });
+    await user.click(
+      await within(inProgress).findByRole('button', {
+        name: 'Progress actions for sam on Project Hail Mary',
+      }),
+    );
+    await user.click(await screen.findByRole('menuitem', { name: 'Mark as finished' }));
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH');
+      expect(patch?.query.get('user_id')).toBe('2');
+      expect(patch?.query.get('path')).toBe('Andy Weir/Project Hail Mary');
+      expect(patch?.body).toEqual({ finished: true });
+    });
+    await user.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === 'PATCH').at(-1)?.body).toEqual({
+        finished: false,
+        position: 3000,
+      }),
+    );
+  });
+
+  it('edits the dates, sending only what changed', async () => {
+    const calls = mockFetch(listeningRoutes());
+    renderApp('/people/user/2');
+    const user = userEvent.setup();
+    const finished = await screen.findByRole('region', { name: 'Finished' });
+    await user.click(
+      await within(finished).findByRole('button', {
+        name: 'Progress actions for sam on All Systems Red',
+      }),
+    );
+    await user.click(await screen.findByRole('menuitem', { name: 'Edit dates…' }));
+    const dialog = await screen.findByRole('dialog');
+    const started = within(dialog).getByLabelText('Started on');
+    expect(started).toHaveValue(`${year}-01-01`);
+    await user.clear(started);
+    await user.click(within(dialog).getByRole('button', { name: 'Save dates' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ started_at: null }),
+    );
+  });
+
+  it("says when the person can't see the book", async () => {
+    mockFetch(
+      listeningRoutes({
+        'PATCH /admin/libraries/1/progress': {
+          status: 409,
+          body: { error: 'no access', code: 'no_access' },
+        },
+      }),
+    );
+    renderApp('/people/user/2');
+    const user = userEvent.setup();
+    const inProgress = await screen.findByRole('region', { name: 'In progress' });
+    await user.click(
+      await within(inProgress).findByRole('button', {
+        name: 'Progress actions for sam on Project Hail Mary',
+      }),
+    );
+    await user.click(await screen.findByRole('menuitem', { name: 'Mark as finished' }));
+    expect(
+      await screen.findByText("This person can't see that book. Give them access first."),
+    ).toBeInTheDocument();
   });
 });

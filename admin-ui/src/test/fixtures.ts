@@ -1,11 +1,14 @@
 import type {
+  Activity,
   AdminLibrary,
   AdminSettings,
   AdminShare,
   AdminStats,
   Invite,
   InviteCreated,
+  Device,
   IssuesSummary,
+  ListeningSession,
   JobsState,
   ScanProgress,
   ServerInfo,
@@ -80,6 +83,141 @@ export function stats(over: Partial<AdminStats> = {}): AdminStats {
         updated_at: new Date(now - 3 * 3600_000).toISOString(),
       },
     ],
+    ...over,
+  };
+}
+
+/** sam, live on an iPhone, halfway through Project Hail Mary (the stats fixture's row). */
+export function liveSession(over: Partial<ListeningSession> = {}): ListeningSession {
+  const now = Date.now();
+  return {
+    id: 41,
+    user_id: 2,
+    username: 'sam',
+    library_id: 1,
+    path: 'Andy Weir/Project Hail Mary',
+    title: 'Project Hail Mary',
+    author: 'Andy Weir',
+    device_id: 7,
+    device_name: "Sam's iPhone",
+    client: { app: 'AudioSilo', version: '1.4.2', platform: 'ios' },
+    started_at: new Date(now - 20 * 60_000).toISOString(),
+    last_at: new Date(now - 10_000).toISOString(),
+    start_position: 1800,
+    position: 3000,
+    duration: 6000,
+    speed: 1,
+    listened: 1200,
+    codec: 'aac',
+    transcoded: false,
+    finished: false,
+    state: 'playing',
+    chapter: 'Chapter 12',
+    ip: '192.168.1.24',
+    ...over,
+  };
+}
+
+/** sam's paired iPhone. */
+export function device(over: Partial<Device> = {}): Device {
+  return {
+    id: 7,
+    user_id: 2,
+    username: 'sam',
+    kind: 'session',
+    name: "Sam's iPhone",
+    client: { app: 'AudioSilo', version: '1.4.2', platform: 'ios' },
+    created_at: '2026-09-01T10:00:00Z',
+    last_seen: new Date(Date.now() - 10_000).toISOString(),
+    last_ip: '192.168.1.24',
+    current: false,
+    ...over,
+  };
+}
+
+/** A 7-day Activity period ending 2026-10-04: sam listened most, one transcode, an old app build. */
+export function activity(over: Partial<Activity> = {}): Activity {
+  const H = 3600;
+  const dates = [
+    '2026-09-28',
+    '2026-09-29',
+    '2026-09-30',
+    '2026-10-01',
+    '2026-10-02',
+    '2026-10-03',
+    '2026-10-04',
+  ];
+  const grid = Array.from({ length: 7 }, () => new Array<number>(24).fill(0));
+  grid[5][21] = 2 * H;
+  return {
+    range: '7d',
+    from: '2026-09-27T12:00:00Z',
+    to: '2026-10-04T12:00:00Z',
+    timezone: 'BST',
+    utc_offset: 60,
+    totals: { listened: 9 * H, sessions: 12, listeners: 2, books: 3, finished: 1 },
+    previous: { listened: 6 * H, sessions: 12, listeners: 2, books: 2, finished: 0 },
+    days: dates.map((date, i) => ({
+      date,
+      listened: i % 2 ? 2 * H : H / 2,
+      by_user: [
+        { user_id: 1, listened: i % 2 ? H : 0 },
+        { user_id: 2, listened: i % 2 ? H : H / 2 },
+      ],
+    })),
+    hour_weekday: grid,
+    top_books: [
+      {
+        library_id: 1,
+        path: 'Andy Weir/Project Hail Mary',
+        title: 'Project Hail Mary',
+        author: 'Andy Weir',
+        listened: 5 * H,
+        listeners: 2,
+      },
+    ],
+    top_authors: [{ name: 'Andy Weir', listened: 5 * H, books: 1 }],
+    top_narrators: [{ name: 'Ray Porter', listened: 5 * H, books: 1 }],
+    top_users: [
+      { user_id: 2, username: 'sam', listened: 5 * H, sessions: 8, books: 2, finished: 1 },
+      { user_id: 1, username: 'chris', listened: 4 * H, sessions: 4, books: 1, finished: 0 },
+    ],
+    funnel: { started: 4, reached_25: 3, reached_50: 2, reached_75: 2, finished: 1 },
+    drop_offs: [
+      {
+        library_id: 1,
+        path: 'Terry Pratchett/Guards! Guards!',
+        title: 'Guards! Guards!',
+        chapter_index: 6,
+        chapter: 'Part 7',
+        listeners: 3,
+        scan_error: true,
+      },
+    ],
+    playback: [
+      { transcoded: false, codec: 'aac', listened: 8 * H, sessions: 10 },
+      { transcoded: true, codec: 'opus', listened: H, sessions: 2 },
+    ],
+    peak_concurrent: { streams: 3, at: '2026-10-03T20:00:00Z' },
+    clients: [
+      { app: 'AudioSilo', version: '1.4.2', platform: 'ios', devices: 2 },
+      { app: 'AudioSilo', version: '1.3.0', platform: 'ios', devices: 1 },
+    ],
+    growth: [
+      { date: '2026-09-28', books: 3200 },
+      { date: '2026-10-04', books: 3249 },
+    ],
+    storage: {
+      bytes: 2.6e12,
+      by_library: [
+        { library_id: 1, name: 'Fiction', bytes: 2.2e12, books: 2400 },
+        { library_id: 2, name: 'Kids', bytes: 0.4e12, books: 849 },
+      ],
+      by_format: [{ key: 'm4b', bytes: 2.6e12, books: 3249 }],
+      by_codec: [{ key: 'aac', bytes: 2.6e12, books: 3249 }],
+    },
+    coverage: { books: 3249, identified: 3000, with_chapters: 3100, with_cover: 3200 },
+    inactive_users: [{ user_id: 5, username: 'priya', last_seen_at: '2026-07-01T10:00:00Z' }],
     ...over,
   };
 }

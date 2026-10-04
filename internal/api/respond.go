@@ -76,6 +76,7 @@ const (
 	codeNotIndexable       = "not_indexable"
 	codeCurrentDevice      = "current_device"
 	codeInvalidRange       = "invalid_range"
+	codeNoAccess           = "no_access"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.

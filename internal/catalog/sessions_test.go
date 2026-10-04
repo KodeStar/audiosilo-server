@@ -485,7 +485,8 @@ func TestSaveProgressStampsStartAndFinish(t *testing.T) {
 func TestEditProgress(t *testing.T) {
 	f := newSessionFixture(t)
 	yes, no := true, false
-	got, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &yes})
+	all := Scope{LibraryID: f.lib, AllowAll: true}
+	got, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &yes}, all)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,13 +498,13 @@ func TestEditProgress(t *testing.T) {
 	end := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	got, err = f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{
 		StartedAt: OptionalTime{Set: true, Value: &start}, FinishedAt: OptionalTime{Set: true, Value: &end},
-	})
+	}, all)
 	if err != nil || *got.StartedAt != "2026-09-01T12:00:00Z" || *got.FinishedAt != "2026-09-20T12:00:00Z" || got.Version != 2 {
 		t.Fatalf("set dates: %+v %v", got, err)
 	}
 
 	zero := 0.0
-	got, err = f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &no, Position: &zero})
+	got, err = f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &no, Position: &zero}, all)
 	if err != nil || got.Finished || got.FinishedAt != nil || got.Position != 0 {
 		t.Fatalf("mark unfinished: %+v %v", got, err)
 	}
@@ -516,12 +517,12 @@ func TestEditProgress(t *testing.T) {
 		{Finished: &yes, StartedAt: OptionalTime{Set: true, Value: &end}, FinishedAt: OptionalTime{Set: true, Value: &start}}, // finish before start
 	}
 	for i, e := range bad {
-		if _, err := f.c.EditProgress(f.ctx, f.user, f.book, e); !errors.Is(err, ErrInvalidProgressEdit) {
+		if _, err := f.c.EditProgress(f.ctx, f.user, f.book, e, all); !errors.Is(err, ErrInvalidProgressEdit) {
 			t.Errorf("bad edit %d: err = %v, want ErrInvalidProgressEdit", i, err)
 		}
 	}
 
-	if _, err := f.c.EditProgress(f.ctx, f.user, Ref{LibraryID: f.lib, Path: "Nowhere"}, ProgressEdit{Finished: &yes}); !errors.Is(err, ErrNotFound) {
+	if _, err := f.c.EditProgress(f.ctx, f.user, Ref{LibraryID: f.lib, Path: "Nowhere"}, ProgressEdit{Finished: &yes}, all); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("no row and no book: err = %v, want ErrNotFound", err)
 	}
 
@@ -531,5 +532,29 @@ func TestEditProgress(t *testing.T) {
 		UpdatedAt: f.clock.Add(-time.Hour).Format(time.RFC3339)})
 	if stale.Position != 0 {
 		t.Fatalf("a stale device save must not override the admin's edit, got position %v", stale.Position)
+	}
+}
+
+// An admin's edit can't start progress on a book the user can't see, but can
+// still change progress the user already has (access taken away since).
+func TestEditProgressNeedsTheUsersAccess(t *testing.T) {
+	f := newSessionFixture(t)
+	yes := true
+	elsewhere := Scope{LibraryID: f.lib, Paths: []string{"Other"}}
+	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &yes}, elsewhere); !errors.Is(err, ErrNoAccess) {
+		t.Fatalf("new row outside the user's scope: err = %v, want ErrNoAccess", err)
+	}
+	if rows, _ := f.c.ListUserProgress(f.ctx, f.user); len(rows) != 0 {
+		t.Fatalf("a refused edit wrote progress: %+v", rows)
+	}
+
+	within := Scope{LibraryID: f.lib, Paths: []string{f.book.Path}}
+	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &yes}, within); err != nil {
+		t.Fatalf("new row inside the user's scope: %v", err)
+	}
+	no := false
+	got, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &no}, elsewhere)
+	if err != nil || got.Finished {
+		t.Fatalf("existing row after access was taken away: %+v %v", got, err)
 	}
 }

@@ -11,7 +11,7 @@ import { NotFound } from '@/features/not-found';
 import { OverviewPage } from '@/features/overview/overview-page';
 import { USER_TABS, type UserTab } from '@/features/people/people-model';
 import { SectionPage } from '@/features/section-page';
-import { ISSUE_KINDS, type IssueKind } from '@/api/types';
+import { ACTIVITY_RANGES, ISSUE_KINDS, type ActivityRange, type IssueKind } from '@/api/types';
 import { parseBookSearch, type BookSearch } from '@/lib/book-route';
 import { Root } from '@/root';
 
@@ -39,6 +39,13 @@ export interface SectionSearch extends LibrarySearch {
   /** Health > Issues: the open category, and whether it lists the ignored books. */
   issue?: IssueKind;
   ignored?: true;
+  /** Activity > Overview: the period (absent = 30 days). */
+  range?: ActivityRange;
+  /** Activity > Sessions: one person's, and with `library`, one book's (`path`). */
+  person?: number;
+  path?: string;
+  /** Activity > Year in listening: the year (absent = this year). */
+  year?: number;
 }
 
 function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
@@ -50,6 +57,12 @@ function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
   if (Number.isInteger(share) && share > 0) out.share = share;
   if (ISSUE_KINDS.includes(s.issue as IssueKind)) out.issue = s.issue as IssueKind;
   if (flag(s.ignored)) out.ignored = true;
+  if (ACTIVITY_RANGES.includes(s.range as ActivityRange)) out.range = s.range as ActivityRange;
+  const person = Number(s.person);
+  if (Number.isInteger(person) && person > 0) out.person = person;
+  if (typeof s.path === 'string' && s.path) out.path = s.path;
+  const year = Number(s.year);
+  if (Number.isInteger(year) && year >= 2000 && year <= 9999) out.year = year;
   return out;
 }
 

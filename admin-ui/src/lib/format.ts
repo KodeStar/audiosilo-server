@@ -50,6 +50,15 @@ export function formatDuration(seconds: number, lang: string): string {
   return m ? `${unit(h, 'hour', lang)} ${unit(m, 'minute', lang)}` : unit(h, 'hour', lang);
 }
 
+/**
+ * Listening time in hours: "2.4h" (one decimal under 10), "128h", "0h" for none.
+ * Totals over periods read better in hours than as "127h 48m".
+ */
+export function formatHours(seconds: number, lang: string): string {
+  const h = Math.max(0, seconds) / 3600;
+  return unit(h < 10 ? Math.round(h * 10) / 10 : Math.round(h), 'hour', lang, 1);
+}
+
 /** "0.4s", "22s", "1m 52s", "1h 3m": how long a job took, to the second. */
 export function formatTook(seconds: number, lang: string): string {
   if (seconds < 9.95) return unit(Math.round(seconds * 10) / 10, 'second', lang, 1);
@@ -143,6 +152,30 @@ export function formatClockTime(iso: string, lang: string): string {
     clockFormats.set(lang, f);
   }
   return f.format(t);
+}
+
+const dayFormats = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * A server day (YYYY-MM-DD, already in the server's time) as a date, read as a
+ * calendar date so the browser's zone can't move it to the day before.
+ */
+export function formatDay(day: string, lang: string, opts: Intl.DateTimeFormatOptions): string {
+  const t = Date.parse(`${day.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(t)) return '';
+  const key = `${lang}|${JSON.stringify(opts)}`;
+  let f = dayFormats.get(key);
+  if (!f) dayFormats.set(key, (f = new Intl.DateTimeFormat(lang, { ...opts, timeZone: 'UTC' })));
+  return f.format(t);
+}
+
+/** A moment as its date ("Oct 4, 2026"), for start and finish dates. "" if unparsable or absent. */
+export function formatDate(iso: string | null | undefined, lang: string): string {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) return '';
+  return new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'short', year: 'numeric' }).format(
+    t,
+  );
 }
 
 /** Today's date as the Overview eyebrow: "Saturday 3 October". */
