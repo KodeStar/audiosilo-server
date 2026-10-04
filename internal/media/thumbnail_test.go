@@ -11,6 +11,8 @@ import (
 	"image/png"
 	"strings"
 	"testing"
+
+	"golang.org/x/image/bmp"
 )
 
 func encodePNG(t *testing.T, w, h int, c color.Color) []byte {
@@ -128,5 +130,25 @@ func TestFitWithin(t *testing.T) {
 		if w, h := fitWithin(c.w, c.h, c.size); w != c.ww || h != c.wh {
 			t.Errorf("fitWithin(%d,%d,%d) = %d,%d, want %d,%d", c.w, c.h, c.size, w, h, c.ww, c.wh)
 		}
+	}
+}
+
+// Every type coverMIME accepts as art must decode: a BMP cover (old ID3 tags)
+// would otherwise have has_cover set yet never a thumbnail.
+func TestThumbnailDecodesBMP(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 200))
+	var buf bytes.Buffer
+	if err := bmp.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := coverMIME(buf.Bytes()); !ok {
+		t.Fatal("coverMIME refused a BMP")
+	}
+	out, err := Thumbnail(buf.Bytes(), 160)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, h := decodedSize(t, out); w != 160 || h != 80 {
+		t.Fatalf("size = %dx%d, want 160x80", w, h)
 	}
 }

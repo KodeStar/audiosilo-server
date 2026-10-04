@@ -8,11 +8,13 @@ import (
 	"image/jpeg"
 	"io"
 
-	// Decoders for the cover formats image.Decode recognizes. GIF covers turn up in
-	// old ID3 tags; WebP is a custom-cover format.
+	// Decoders for the cover formats image.Decode recognizes: every type coverMIME
+	// accepts as art. GIF and BMP covers turn up in old ID3 tags; WebP is a
+	// custom-cover format.
 	_ "image/gif"
 	_ "image/png"
 
+	_ "golang.org/x/image/bmp"
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )

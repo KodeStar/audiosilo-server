@@ -37,6 +37,7 @@ export function adminBook(over: Partial<AdminBook> = {}): AdminBook {
     asin: 'B003P2WO5E',
     isbn: '',
     edited: false,
+    edited_fields: [],
     ...over,
   };
   // The server's rule (an ASIN or ISBN set), unless a test says otherwise.

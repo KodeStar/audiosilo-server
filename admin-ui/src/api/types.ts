@@ -312,6 +312,8 @@ export interface AdminBook {
   /** An ASIN or ISBN is set: the community metadata can match it (the `matched=` filter's rule). */
   matched: boolean;
   edited: boolean;
+  /** The fields with an override (an edit or an accepted community value). */
+  edited_fields: OverrideField[];
 }
 
 /** GET /admin/books (catalog.AdminPage). */

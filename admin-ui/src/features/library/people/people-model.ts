@@ -67,16 +67,18 @@ export function mergeSteps(books: AdminBook[], field: PersonField, suggested: st
 }
 
 /**
- * The requests that put each merged book back. A book with no edits before the
- * merge reverts the field (back to its file tag, unlocked); an edited book gets
- * its old spelling set again, one request per spelling.
+ * The requests that put each merged book back, from the books as they were before
+ * the merge. A book whose field had no override reverts it (back to what the scan
+ * found, unlocked); one whose field had an override gets its old spelling set
+ * again, one request per spelling. Edits to other fields don't matter.
  */
 export function undoSteps(books: AdminBook[], field: PersonField): BulkStep[] {
-  const steps: BulkStep[] = chunk(books.filter((b) => !b.edited).map(refOf), BULK_LIMIT).map(
+  const overridden = (b: AdminBook) => b.edited_fields.includes(field);
+  const steps: BulkStep[] = chunk(books.filter((b) => !overridden(b)).map(refOf), BULK_LIMIT).map(
     (refs) => ({ books: refs, edit: { revert: [field] } }),
   );
   const bySpelling = new Map<string, BookRef[]>();
-  for (const b of books.filter((x) => x.edited)) {
+  for (const b of books.filter(overridden)) {
     const refs = bySpelling.get(b[field]) ?? [];
     refs.push(refOf(b));
     bySpelling.set(b[field], refs);

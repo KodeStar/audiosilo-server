@@ -65,13 +65,15 @@ describe('authors', () => {
   });
 
   it('merges spellings, and undo puts each book back', async () => {
-    // Two pages of books tagged with the other spelling: one never edited, one
-    // with an edit already (which undo restores by setting the old spelling).
+    // Two pages of books tagged with the other spelling: one whose author came
+    // from the tags, one whose author was already edited (which undo restores by
+    // setting the old spelling).
     const fresh = adminBook({ path: 'Sanderson/Elantris', author: 'Sanderson, Brandon' });
     const edited = adminBook({
       path: 'Sanderson/Warbreaker',
       author: 'Sanderson, Brandon',
       edited: true,
+      edited_fields: ['author'],
     });
     const calls = mockFetch(
       routes({

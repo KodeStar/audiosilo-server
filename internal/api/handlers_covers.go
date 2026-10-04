@@ -153,6 +153,11 @@ func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path str
 	}
 	raw, err := art.load()
 	<-reads
+	if errors.Is(err, media.ErrImageTooLarge) {
+		// An oversized sidecar stays oversized: no art (cached), not a retry that
+		// re-reads it on every page.
+		raw, err = nil, nil
+	}
 	if err != nil {
 		a.log.Debug("read cover art failed", "err", err, "library", lib.ID, "path", path)
 		return ""

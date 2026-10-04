@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -141,7 +142,8 @@ func (a *API) handleAddSharePath(w http.ResponseWriter, r *http.Request) {
 		rules = []sharePathReq{req.sharePathReq}
 	}
 	if len(rules) > maxBulkBooks {
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many paths in one request (at most 1000)")
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("too many paths in one request (at most %d)", maxBulkBooks))
 		return
 	}
 	add := make([]catalog.PathRule, len(rules))

@@ -47,6 +47,33 @@ type AdminBook struct {
 	// restates it.
 	Matched bool `json:"matched"`
 	Edited  bool `json:"edited"`
+	// EditedFields are the fields with an override (an edit or an accepted community
+	// value), so a bulk change can be undone field by field: a field without one is
+	// reverted to what the scan found, one with one is set back.
+	EditedFields fieldList `json:"edited_fields"`
+}
+
+// fieldList scans a comma-separated SQL list (group_concat) into field names,
+// empty rather than null when there are none.
+type fieldList []string
+
+func (f *fieldList) Scan(src any) error {
+	*f = fieldList{}
+	var s string
+	switch v := src.(type) {
+	case nil:
+		return nil
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return fmt.Errorf("fieldList: unexpected %T", src)
+	}
+	if s != "" {
+		*f = strings.Split(s, ",")
+	}
+	return nil
 }
 
 // Per-row expressions over `books b`, shared by the select list, the filters and
@@ -66,6 +93,9 @@ const (
 	editedExpr = `(EXISTS(SELECT 1 FROM book_overrides o WHERE o.library_id = b.library_id AND o.path = b.rel_path)
 		OR EXISTS(SELECT 1 FROM chapter_overrides co JOIN chapters ON chapters.book_id = b.id AND ` + chapterOverrideMatch + `
 		           WHERE co.library_id = b.library_id AND co.path = b.rel_path))`
+	// The overridden fields, in field order (fieldList splits them).
+	editedFieldsExpr = `(SELECT group_concat(field, ',') FROM (SELECT o.field FROM book_overrides o
+		WHERE o.library_id = b.library_id AND o.path = b.rel_path ORDER BY o.field))`
 	// "Has chapters" means real navigation: more than the one chapter every
 	// single-part book gets.
 	hasChaptersExpr = `(` + chapterCountExpr + ` > 1)`
@@ -77,14 +107,14 @@ var directPlayableExpr = media.DirectPlayableSQL("b.codec")
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.author,
 	b.narrator, b.series, b.series_index, b.published, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
-	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr
+	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr
 
 // adminBookDest returns the scan destinations for adminBookCols, in order.
 func adminBookDest(b *AdminBook) []any {
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
 		&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Duration, &b.Format, &b.Codec,
 		&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
-		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.HasCover, &b.DirectPlayable}
+		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable}
 }
 
 // BookFilter narrows the admin book list (and its facet counts). Zero values

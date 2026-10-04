@@ -46,6 +46,8 @@ export const keys = {
   people: (field: PersonField, libraryId?: number) =>
     ['admin', 'books', 'people', field, libraryId ?? 0] as const,
   series: (libraryId?: number) => ['admin', 'books', 'series', libraryId ?? 0] as const,
+  /** Every book page of one library (a prefix: a scan changes them). */
+  bookPages: (libraryId: number) => ['admin', 'book', libraryId] as const,
   book: (libraryId: number, path: string) => ['admin', 'book', libraryId, path] as const,
   match: (libraryId: number, path: string, by: MatchBy) =>
     ['admin', 'book', libraryId, path, 'match', by] as const,
@@ -203,8 +205,8 @@ const scanListeners = new Set<ScanListener>();
 /**
  * Watches every library's scan, mounted once (the shell): when one ends (seen
  * running, or started here, and now not running) it refetches what a scan
- * changes (the overview's counts, that library's newest books and folder
- * listings, every admin book list and aggregate), then tells the screens that
+ * changes (the overview's counts, that library's newest books, folder
+ * listings and book pages, every admin book list and aggregate), then tells the screens that
  * asked (useScanFinished).
  */
 export function useScanWatcher() {
@@ -226,6 +228,7 @@ export function useScanWatcher() {
         keys.recentBooks(l.id),
         keys.books,
         keys.browseLibrary(l.id),
+        keys.bookPages(l.id),
       ]) {
         void qc.invalidateQueries({ queryKey: key });
       }

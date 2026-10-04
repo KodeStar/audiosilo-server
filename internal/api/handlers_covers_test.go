@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -228,5 +229,29 @@ func TestAdminCoversValidation(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest || (tc.code != "" && !strings.Contains(out, `"code":"`+tc.code+`"`)) {
 			t.Errorf("%s: %d %s, want 400 %s", name, resp.StatusCode, out, tc.code)
 		}
+	}
+}
+
+// A sidecar over maxSidecarBytes is no art, and that is remembered: it stays
+// oversized, so it must not be re-read on every page of covers.
+func TestAdminCoversOversizedSidecarCached(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, root := seedCovers(t, e)
+	sidecar := filepath.Join(root, "Sidecar", "cover.jpg")
+	if err := os.Truncate(sidecar, maxSidecarBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if got := postCovers(t, e, adminTok, coversBody(libID, 0, "Sidecar")); got[0].Data != "" {
+		t.Fatal("an oversized sidecar returned art")
+	}
+	fi, err := os.Stat(sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := strconv.FormatInt(libID, 10) + "\x00Sidecar\x00" + strconv.Itoa(defaultThumbSize) +
+		"\x00" + fmt.Sprintf("s%d-%d", fi.Size(), fi.ModTime().UnixNano())
+	if v, ok := e.api.thumbs.Get(key); !ok || v != "" {
+		t.Fatalf("oversized sidecar cache entry = %q, %v; want a cached no-art entry", v, ok)
 	}
 }

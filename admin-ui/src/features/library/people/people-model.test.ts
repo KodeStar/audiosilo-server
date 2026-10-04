@@ -53,8 +53,25 @@ describe('merge suggestions', () => {
 
 describe('bulk steps', () => {
   const fresh = adminBook({ path: 'a', author: 'Sanderson, Brandon' });
-  const editedA = adminBook({ path: 'b', author: 'Sanderson, Brandon', edited: true });
-  const editedB = adminBook({ path: 'c', author: 'B. Sanderson', edited: true });
+  const editedA = adminBook({
+    path: 'b',
+    author: 'Sanderson, Brandon',
+    edited: true,
+    edited_fields: ['author'],
+  });
+  const editedB = adminBook({
+    path: 'c',
+    author: 'B. Sanderson',
+    edited: true,
+    edited_fields: ['author', 'title'],
+  });
+  // Edited, but not the merged field: its author came from the tags.
+  const otherEdit = adminBook({
+    path: 'd',
+    author: 'Sanderson, Brandon',
+    edited: true,
+    edited_fields: ['title'],
+  });
 
   it('chunks at the bulk limit', () => {
     const refs = Array.from({ length: 2001 }, (_, i) => adminBook({ path: String(i) }));
@@ -73,9 +90,15 @@ describe('bulk steps', () => {
     ]);
   });
 
-  it('reverts unedited books and restores each old spelling on edited ones', () => {
-    expect(undoSteps([fresh, editedA, editedB], 'author')).toEqual([
-      { books: [{ library_id: 1, path: 'a' }], edit: { revert: ['author'] } },
+  it('reverts books whose field had no override and restores the old spelling on the rest', () => {
+    expect(undoSteps([fresh, editedA, editedB, otherEdit], 'author')).toEqual([
+      {
+        books: [
+          { library_id: 1, path: 'a' },
+          { library_id: 1, path: 'd' },
+        ],
+        edit: { revert: ['author'] },
+      },
       { books: [{ library_id: 1, path: 'b' }], edit: { set: { author: 'Sanderson, Brandon' } } },
       { books: [{ library_id: 1, path: 'c' }], edit: { set: { author: 'B. Sanderson' } } },
     ]);

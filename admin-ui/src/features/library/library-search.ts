@@ -77,7 +77,8 @@ export function validateLibrarySearch(s: Record<string, unknown>): LibrarySearch
     matched: oneOf(YES_NO, s.matched),
     edited: oneOf(YES_NO, s.edited),
     length: oneOf(LENGTHS, s.length),
-    added: oneOf(ADDED, s.added),
+    // A hand-written ?added=7 parses as a number; the app writes the string.
+    added: oneOf(ADDED, text(s.added)),
     folder: typeof s.folder === 'string' ? s.folder : undefined,
   };
   for (const k of Object.keys(out) as (keyof LibrarySearch)[]) {
