@@ -40,7 +40,7 @@ export function Duplicates({ ignored }: { ignored: boolean }) {
       <div className="skel h-[260px] rounded-xl" role="status" aria-label={t('common.loading')} />
     );
   }
-  const shown = ignored ? groups.data.filter((g) => g.ignored) : groups.data;
+  const shown = groups.data; // the server lists the open, or only the ignored, groups
   if (shown.length === 0) return <AllClear ignored={ignored} />;
   return (
     <div className="flex flex-col gap-4">

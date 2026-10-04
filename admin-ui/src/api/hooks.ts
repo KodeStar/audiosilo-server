@@ -215,6 +215,7 @@ export function noteScanStarted(qc: QueryClient, libraryId: number) {
   // A poll already in flight carries the state from before the scan: drop it.
   void qc.cancelQueries({ queryKey: keys.libraries });
   void qc.invalidateQueries({ queryKey: keys.libraries });
+  void qc.invalidateQueries({ queryKey: keys.jobs });
 }
 
 type ScanListener = (library: AdminLibrary) => void;
@@ -396,7 +397,7 @@ export function useIssues() {
   return useQuery({ queryKey: keys.issueSummary, queryFn: api.issues, staleTime: 30_000 });
 }
 
-/** Groups of copies of one book; with `ignored`, the ignored ones too (flagged). */
+/** Groups of copies of one book: the open ones, or with `ignored` the ignored ones. */
 export function useDuplicates(ignored: boolean) {
   return useQuery({
     queryKey: keys.duplicates(ignored),
@@ -405,8 +406,8 @@ export function useDuplicates(ignored: boolean) {
 }
 
 /**
- * Refetches what an ignore or un-ignore changes: the Health summary and
- * duplicates, and the issue-filtered book lists (nothing else lists by issue).
+ * Refetches what an ignore, an un-ignore or a re-read changes: the Health summary
+ * and duplicates, and the issue-filtered book lists (nothing else lists by issue).
  */
 export function invalidateIssues(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: keys.issues });
@@ -418,13 +419,19 @@ export function invalidateIssues(qc: QueryClient) {
 
 /**
  * Reads a book's files again now (POST .../book/rescan) and writes the fresh page
- * everywhere it shows, its cover, and the Health issues. Returns the page.
+ * everywhere it shows and its cover, then refetches the Health issues (a book the
+ * re-read fixed leaves its issue lists) unless `refreshIssues` is false (a batch
+ * refreshes once at the end). Returns the page.
  */
-export async function rescanBook(qc: QueryClient, ref: BookRef): Promise<AdminBookDetail> {
+export async function rescanBook(
+  qc: QueryClient,
+  ref: BookRef,
+  refreshIssues = true,
+): Promise<AdminBookDetail> {
   const fresh = await api.rescanBook(ref.library_id, ref.path);
   settleBookEdit(qc, fresh);
   invalidateCover(qc, ref.library_id, ref.path);
-  void qc.invalidateQueries({ queryKey: keys.issues });
+  if (refreshIssues) invalidateIssues(qc);
   return fresh;
 }
 

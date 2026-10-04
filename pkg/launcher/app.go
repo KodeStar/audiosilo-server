@@ -166,7 +166,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	a := api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
-	a.SetBaseContext(ctx) // bind detached background work (scans) to the server lifecycle
+	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	if setupToken != "" {
 		a.EnableSetup(setupToken)
 		setupBanner(cfg, setupToken)

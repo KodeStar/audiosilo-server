@@ -646,6 +646,8 @@ func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not delete library")
 		return
 	}
+	// Its scans have nothing left to index into; don't let them hold the queue.
+	a.scanner.CancelLibrary(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 

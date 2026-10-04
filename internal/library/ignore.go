@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // Ignore rules: per-library patterns naming files and folders the scanner skips
@@ -14,8 +16,9 @@ import (
 //
 // One pattern per line; blank lines and lines starting with # are skipped. A
 // pattern without a "/" matches a file or folder name at any depth ("*.sample.mp3",
-// "Extras"); a pattern with one is matched against the whole path from the library
-// root ("Podcasts/*", a leading "/" is optional). A trailing "/" limits it to
+// "Extras"); a pattern with one before its end is matched against the whole path
+// from the library root ("Podcasts/*", and "/Extras" for the root's Extras only; a
+// leading "/" is optional when there is another). A trailing "/" limits it to
 // folders. Matching uses path.Match wildcards (* ? [...]) and ignores case. An
 // ignored folder is skipped with everything under it.
 
@@ -30,7 +33,7 @@ var ErrInvalidIgnore = errors.New("invalid ignore pattern")
 
 type ignoreRule struct {
 	pattern  string // lower-cased, without the leading or trailing "/"
-	anchored bool   // contains a "/": matched against the whole relative path
+	anchored bool   // has a "/" before its end: matched against the whole relative path
 	dirOnly  bool
 }
 
@@ -62,7 +65,13 @@ func parseLine(l string) (r ignoreRule, skip bool, err error) {
 func NormalizeIgnore(lines []string) ([]string, error) {
 	out := []string{}
 	n := 0
+	// The list is stored one pattern per line, so an entry holding a line break is
+	// several patterns, each validated.
+	var split []string
 	for _, l := range lines {
+		split = append(split, strings.FieldsFunc(l, func(r rune) bool { return r == '\n' || r == '\r' })...)
+	}
+	for _, l := range split {
 		l = strings.TrimSpace(l)
 		if l == "" {
 			continue
@@ -94,11 +103,14 @@ func ParseIgnore(lines []string) *Ignore {
 }
 
 func parseRule(l string) ignoreRule {
-	r := ignoreRule{dirOnly: strings.HasSuffix(l, "/")}
-	p := strings.Trim(strings.ToLower(l), "/")
-	r.anchored = strings.Contains(p, "/")
-	r.pattern = p
-	return r
+	lower := strings.ToLower(l)
+	return ignoreRule{
+		pattern: strings.Trim(lower, "/"),
+		// Anchored by a "/" anywhere but at the end (which only means "folders"), so a
+		// leading one counts: "/Extras" is the root's Extras, not every Extras.
+		anchored: strings.Contains(strings.TrimRight(lower, "/"), "/"),
+		dirOnly:  strings.HasSuffix(l, "/"),
+	}
 }
 
 // Empty reports whether the list ignores nothing.
@@ -126,6 +138,21 @@ func (ig *Ignore) Match(rel string, isDir bool) bool {
 		}
 	}
 	return false
+}
+
+// ignoresAll reports whether the rules skip every indexed book (sigs, by path):
+// then a scan that discovers nothing has found what the rules say, not an
+// unmounted share.
+func ignoresAll(ig *Ignore, sigs map[string]catalog.Signature) bool {
+	if ig.Empty() {
+		return false
+	}
+	for p, sig := range sigs {
+		if !ig.Covers(p, sig.IsFolder) {
+			return false
+		}
+	}
+	return true
 }
 
 // Covers reports whether rel or any folder above it is ignored: what decides

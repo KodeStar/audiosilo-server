@@ -248,3 +248,57 @@ func TestLibraryScanSettings(t *testing.T) {
 		t.Fatalf("stored = %#v, want an empty list", l.IgnorePatterns)
 	}
 }
+
+// A folder an admin set to "one book" (the suspect category's own fix) leaves the
+// suspect count and list.
+func TestSuspectSettledByBookOverride(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	issueBooks(t, c, lib.ID)
+	if err := c.SetFolderOverride(ctx, lib.ID, "suspect", OverrideBook); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := c.IssueCounts(ctx, []string{IssueSuspect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Issue: IssueSuspect}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts[0].Count != 0 || len(page.Books) != 0 {
+		t.Fatalf("suspect after a book override: count %d, list %+v", counts[0].Count, page.Books)
+	}
+}
+
+// A copy of unknown length doesn't join an abridged and an unabridged edition,
+// and the ignored view lists only ignored groups.
+func TestDuplicateLengthsAndIgnoredView(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	uid := seedUser(t, c, ctx)
+	for _, b := range []*Book{
+		{LibraryID: lib.ID, RelPath: "full", Title: "Dune", Author: "Frank Herbert", Duration: 75000},
+		{LibraryID: lib.ID, RelPath: "unknown", Title: "Dune", Author: "Frank Herbert"},
+		{LibraryID: lib.ID, RelPath: "abridged", Title: "Dune", Author: "Frank Herbert", Duration: 20000},
+		{LibraryID: lib.ID, RelPath: "a1", Title: "Emma", Author: "Jane Austen", Duration: 1000},
+		{LibraryID: lib.ID, RelPath: "a2", Title: "Emma", Author: "Jane Austen", Duration: 1010},
+	} {
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	groups, _ := c.DuplicateGroups(ctx, 0, false)
+	if len(groups) != 1 || groups[0].Books[0].Title != "Emma" {
+		t.Fatalf("groups = %+v, want only Emma", groups)
+	}
+	if err := c.IgnoreIssue(ctx, IssueDuplicate, []Ref{{LibraryID: lib.ID, Path: "a1"}, {LibraryID: lib.ID, Path: "a2"}}, uid); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ := c.DuplicateGroups(ctx, 0, false); len(open) != 0 {
+		t.Fatalf("open groups = %+v", open)
+	}
+	if ign, _ := c.DuplicateGroups(ctx, 0, true); len(ign) != 1 || !ign[0].Ignored {
+		t.Fatalf("ignored groups = %+v", ign)
+	}
+}

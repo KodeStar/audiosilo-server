@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { DuplicateGroup } from '@/api/types';
+import type { AdminBook, DuplicateGroup } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { issuesSummary, libraries } from '@/test/fixtures';
 import { adminBook } from '@/test/library-fixtures';
@@ -22,6 +22,21 @@ const coverless = [
   adminBook({ path: 'A/One', title: 'Book One', has_cover: false }),
   adminBook({ path: 'A/Two', title: 'Book Two', has_cover: false }),
 ];
+
+/** A book page as POST .../book/rescan answers it. */
+function rescanned(book: AdminBook) {
+  return {
+    book,
+    fields: {},
+    chapters: [],
+    files: [],
+    listeners: [],
+    shares: [],
+    folder: { path: '', override: '' },
+    description: '',
+    indexed_at: '',
+  };
+}
 
 function routes(over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
@@ -144,6 +159,95 @@ describe('library health', () => {
     );
   });
 
+  it('drops a book the re-read fixed from its list', async () => {
+    let fixed = false;
+    mockFetch(
+      routes({
+        'GET /admin/books': (req) =>
+          req.query.get('issue') === 'scan_error' && !fixed
+            ? { body: { books: [broken] } }
+            : { body: { books: [] } },
+        'POST /admin/libraries/1/book/rescan': () => {
+          fixed = true;
+          return { body: rescanned({ ...broken, scan_error: undefined }) };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=scan_error');
+    await user.click(await screen.findByRole('button', { name: 'Read again' }));
+    expect(await screen.findByText('Guards! Guards! reads fine now')).toBeInTheDocument();
+    // The list is fetched again, not patched in place with a book it no longer holds.
+    expect(await screen.findByText('All clear')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Guards! Guards!' })).not.toBeInTheDocument();
+  });
+
+  it('reads a selection again a couple of books at a time', async () => {
+    const many = Array.from({ length: 5 }, (_, i) =>
+      adminBook({ ...broken, path: `Broken/${i}`, title: `Broken ${i}` }),
+    );
+    let inFlight = 0;
+    let most = 0;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/books': (req) =>
+          req.query.get('issue') === 'scan_error'
+            ? { body: { books: many } }
+            : { body: { books: [] } },
+        'POST /admin/libraries/1/book/rescan': async (req) => {
+          most = Math.max(most, ++inFlight);
+          await new Promise((r) => setTimeout(r, 20));
+          inFlight--;
+          const b = many.find((m) => m.path === req.query.get('path'))!;
+          return { body: rescanned({ ...b, scan_error: undefined }) };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=scan_error');
+    await screen.findByText('Broken 0');
+    await user.click(screen.getByRole('button', { name: 'Select all' }));
+    const bar = screen.getByRole('toolbar', { name: 'Actions for the selected books' });
+    await user.click(within(bar).getByRole('button', { name: 'Read again' }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === '/admin/libraries/1/book/rescan')).toHaveLength(5),
+    );
+    await waitFor(() => expect(inFlight).toBe(0));
+    expect(most).toBeLessThanOrEqual(2);
+  });
+
+  it('keeps the category it opened on its own once it is cleared', async () => {
+    let ignored = false;
+    const summary = () =>
+      issuesSummary({
+        categories: issuesSummary().categories.map((c) =>
+          c.kind === 'scan_error' ? { ...c, count: ignored ? 0 : 1, ignored: ignored ? 1 : 0 } : c,
+        ),
+      });
+    mockFetch(
+      routes({
+        'GET /admin/issues': () => ({ body: summary() }),
+        'GET /admin/books': (req) =>
+          req.query.get('issue') === 'scan_error' && !ignored
+            ? { body: { books: [broken] } }
+            : { body: { books: [] } },
+        'POST /admin/issues/ignore': () => {
+          ignored = true;
+          return { status: 204 };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health');
+    const row = (await screen.findByRole('link', { name: 'Guards! Guards!' })).closest('li')!;
+    await user.click(within(row).getByRole('button', { name: 'Ignore' }));
+    // It stays on the category just cleared, rather than jumping to the next one.
+    expect(await screen.findByText('All clear')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: "Files that couldn't be read" }),
+    ).toBeInTheDocument();
+  });
+
   it('compares duplicates side by side and stops suggesting ones that differ', async () => {
     const group: DuplicateGroup = {
       reason: 'same_book',
@@ -204,5 +308,40 @@ describe('library health', () => {
       .closest('div')!.parentElement!;
     await user.click(within(notice).getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(calls.some((c) => c.path === '/admin/libraries/2/scan')).toBe(true));
+  });
+
+  it('acts only on the selected books still listed', async () => {
+    let ignoredOne = false;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/books': (req) =>
+          req.query.get('issue') === 'no_cover' && !req.query.get('issue_ignored')
+            ? { body: { books: ignoredOne ? coverless.slice(1) : coverless } }
+            : { body: { books: [] } },
+        'POST /admin/issues/ignore': () => {
+          ignoredOne = true;
+          return { status: 204 };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=no_cover');
+    await screen.findByText('Book One');
+    await user.click(screen.getByRole('button', { name: 'Select all' }));
+    // Ignore Book One on its own row: it leaves the list but was selected.
+    const row = screen.getByRole('link', { name: 'Book One' }).closest('li')!;
+    await user.click(within(row).getByRole('button', { name: 'Ignore' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('link', { name: 'Book One' })).not.toBeInTheDocument(),
+    );
+    const bar = screen.getByRole('toolbar', { name: 'Actions for the selected books' });
+    expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+    await user.click(within(bar).getByRole('button', { name: 'Ignore' }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === '/admin/issues/ignore').at(-1)?.body).toEqual({
+        kind: 'no_cover',
+        books: [{ library_id: 1, path: 'A/Two' }],
+      }),
+    );
   });
 });

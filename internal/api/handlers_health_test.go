@@ -328,4 +328,8 @@ func TestRescanBook(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"code":"not_indexable"`) {
 		t.Fatalf("rescan of a missing book = %d %s", resp.StatusCode, body)
 	}
+	// Denied: a path out of the library never reaches the filesystem.
+	if resp, body := e.do(t, "POST", url+escape("../../etc"), adminTok, ""); resp.StatusCode < 400 || resp.StatusCode >= 500 {
+		t.Fatalf("rescan of a path outside the library = %d %s, want a 4xx", resp.StatusCode, body)
+	}
 }

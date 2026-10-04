@@ -60,6 +60,17 @@ func ParseSchedule(s string) (Schedule, error) {
 	return Schedule{}, bad
 }
 
+// String is the schedule's canonical stored form ("" when off).
+func (s Schedule) String() string {
+	switch {
+	case s.daily:
+		return fmt.Sprintf("daily:%02d:%02d", s.hour, s.mins)
+	case s.every > 0:
+		return fmt.Sprintf("every:%dh", int(s.every.Hours()))
+	}
+	return ""
+}
+
 // Off reports whether the schedule runs nothing.
 func (s Schedule) Off() bool { return s.every == 0 && !s.daily }
 
@@ -82,12 +93,15 @@ func (s Schedule) Next(from, now time.Time) time.Time {
 }
 
 // ValidatePatch checks a library edit's scan settings (ErrInvalidSchedule,
-// ErrInvalidIgnore) and stores the ignore rules in their normalized form.
+// ErrInvalidIgnore) and puts both in their stored form.
 func ValidatePatch(p *catalog.LibraryPatch) error {
 	if p.ScanSchedule != nil {
-		if _, err := ParseSchedule(*p.ScanSchedule); err != nil {
+		sch, err := ParseSchedule(*p.ScanSchedule)
+		if err != nil {
 			return err
 		}
+		canonical := sch.String() // " every:06h" is stored as "every:6h", which the console reads
+		p.ScanSchedule = &canonical
 	}
 	if p.IgnorePatterns != nil {
 		lines, err := NormalizeIgnore(*p.IgnorePatterns)

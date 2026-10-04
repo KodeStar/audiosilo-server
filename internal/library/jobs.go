@@ -3,6 +3,8 @@ package library
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,7 +30,7 @@ const (
 	TriggerChange   = "change"   // a library or folder setting changed
 )
 
-// scanTimeout caps one scan.
+// scanTimeout caps a requested scan (see jobContext).
 const scanTimeout = time.Hour
 
 // scheduleTick is how often the scheduler looks for due scans.
@@ -59,9 +61,16 @@ type jobQueue struct {
 	nextID  int64
 	wake    chan struct{} // signalled (non-blocking) when a job is queued
 	anchor  time.Time     // when the scheduler started: what a never-scanned schedule counts from
+	// skipped is when a library's due scheduled scan was last dropped without a run
+	// of its own: cancelled while it waited, or folded into a scan of the library
+	// already running. The schedule counts from it as from a scan start, so the next
+	// tick doesn't queue the same slot again.
+	skipped map[int64]time.Time
 }
 
-func newJobQueue() jobQueue { return jobQueue{wake: make(chan struct{}, 1)} }
+func newJobQueue() jobQueue {
+	return jobQueue{wake: make(chan struct{}, 1), skipped: map[int64]time.Time{}}
+}
 
 // queuedFor reports whether a job for the library waits.
 func (q *jobQueue) queuedFor(libID int64) bool {
@@ -103,6 +112,11 @@ func (s *Scanner) Enqueue(lib catalog.Library, trigger string, startedBy *int64)
 		}
 	}
 	if r := q.running; r != nil && r.LibraryID == lib.ID && (trigger == TriggerSchedule || trigger == TriggerStartup) {
+		if trigger == TriggerSchedule {
+			// The running scan stands in for this slot, though it may have started
+			// before the slot was due.
+			q.skipped[lib.ID] = time.Now()
+		}
 		return s.runningSnapshot()
 	}
 	q.nextID++
@@ -132,7 +146,9 @@ func (s *Scanner) Jobs() (*Job, []Job) {
 }
 
 // Cancel drops a queued job or stops the running one (the scan stops before it
-// prunes anything, and is recorded as cancelled). False when no such job exists.
+// prunes anything, and is recorded as cancelled; a prune already under way
+// finishes first). A dropped scheduled scan skips its slot. False when no such
+// job exists.
 func (s *Scanner) Cancel(id int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,6 +158,9 @@ func (s *Scanner) Cancel(id int64) bool {
 			continue
 		}
 		q.queued = append(q.queued[:i], q.queued[i+1:]...)
+		if j.Trigger == TriggerSchedule {
+			q.skipped[j.LibraryID] = time.Now()
+		}
 		return true
 	}
 	if r := q.running; r != nil && r.ID == id && r.cancel != nil {
@@ -149,6 +168,19 @@ func (s *Scanner) Cancel(id int64) bool {
 		return true
 	}
 	return false
+}
+
+// CancelLibrary drops a library's queued scans and stops its running one: what
+// deleting the library leaves them, since there is nothing left to index into.
+func (s *Scanner) CancelLibrary(libID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	q := &s.jobs
+	q.queued = slices.DeleteFunc(q.queued, func(j *Job) bool { return j.LibraryID == libID })
+	if r := q.running; r != nil && r.LibraryID == libID && r.cancel != nil {
+		r.cancel()
+	}
+	delete(q.skipped, libID)
 }
 
 // snapshot copies a job for a caller (without its cancel func).
@@ -194,7 +226,7 @@ func (s *Scanner) work(ctx context.Context) {
 		}
 		j := s.jobs.queued[0]
 		s.jobs.queued = s.jobs.queued[1:]
-		jctx, cancel := context.WithTimeout(ctx, scanTimeout)
+		jctx, cancel := jobContext(ctx, j.Trigger)
 		j.cancel, j.StartedAt = cancel, now()
 		s.jobs.running = j
 		// It reads as running from here (Scan resets the counters when it starts).
@@ -208,8 +240,22 @@ func (s *Scanner) work(ctx context.Context) {
 
 		s.mu.Lock()
 		s.jobs.running = nil
+		p = s.progress[j.LibraryID]
+		p.Running = false
+		s.progress[j.LibraryID] = p
 		s.mu.Unlock()
 	}
+}
+
+// jobContext bounds a job's scan: an hour (scanTimeout) for a scan someone or
+// something asked for, none for the startup scan, which is a library's full index
+// after a restart (its first, for one declared in config) and runs to the end, as
+// it always has. Either way it ends with ctx, and Cancel stops it.
+func jobContext(ctx context.Context, trigger string) (context.Context, context.CancelFunc) {
+	if trigger == TriggerStartup {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, scanTimeout)
 }
 
 // run scans a job's library (as it is now: renamed, re-rooted or deleted since it
@@ -292,6 +338,7 @@ func (s *Scanner) NextScans(ctx context.Context, libs []catalog.Library) (map[in
 	}
 	s.mu.Lock()
 	anchor := s.jobs.anchor
+	skipped := maps.Clone(s.jobs.skipped)
 	s.mu.Unlock()
 	if anchor.IsZero() {
 		anchor = time.Now()
@@ -305,6 +352,9 @@ func (s *Scanner) NextScans(ctx context.Context, libs []catalog.Library) (map[in
 		from := last[l.ID]
 		if from.IsZero() {
 			from = anchor
+		}
+		if sk := skipped[l.ID]; sk.After(from) {
+			from = sk // a dropped slot counts as scanned (see jobQueue.skipped)
 		}
 		out[l.ID] = sch.Next(from, time.Now())
 	}

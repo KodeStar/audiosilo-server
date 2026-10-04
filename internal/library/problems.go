@@ -42,6 +42,20 @@ func noteProblem(b *catalog.Book, file string, size int64, md *metadata.Metadata
 	b.ScanErrorFile = file
 }
 
+// problemCleared reports whether a book's recorded read problem has gone: the
+// file it names opens now (it was unreadable) or ffprobe reads it (it couldn't).
+// A fixed permission or a share that came back changes neither the file's mtime
+// nor its size, and a problem on a part other than the first leaves the book's
+// duration and codec looking complete, so without this a scan would skip the book
+// and the problem would stay listed. It reads only that one file.
+func problemCleared(lib catalog.Library, sig catalog.Signature, ffprobePath string) bool {
+	if sig.ScanErrorFile == "" || (sig.ScanError != problemUnreadable && sig.ScanError != problemProbe) {
+		return false
+	}
+	md, _ := metadata.Extract(filepath.Join(lib.Root, filepath.FromSlash(sig.ScanErrorFile)), ffprobePath)
+	return md.OpenErr == nil && (sig.ScanError == problemUnreadable || md.ProbeErr == nil)
+}
+
 // pathErrText is an OS error's own words without the absolute path it names
 // ("permission denied", not "open /srv/books/x.mp3: permission denied"): the
 // console shows the library-relative file beside it.
@@ -90,7 +104,9 @@ func titleKey(title string) string {
 	})
 	kept := words[:0]
 	for _, w := range words {
-		if partMarkers[w] || strings.IndexFunc(w, func(r rune) bool { return !unicode.IsDigit(r) }) < 0 {
+		// "Part1", "CD2" and bare numbers number the parts of one book.
+		stem := strings.TrimRightFunc(w, unicode.IsDigit)
+		if stem == "" || partMarkers[stem] {
 			continue
 		}
 		kept = append(kept, w)

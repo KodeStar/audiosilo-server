@@ -53,9 +53,9 @@ type API struct {
 	settingsMu sync.Mutex
 	log        *slog.Logger
 
-	// baseCtx is the server lifecycle context; background work detached from a
-	// request (e.g. startScan) derives from it so it's cancelled on shutdown
-	// instead of running detached. Defaults to context.Background(); the app wires
+	// baseCtx is the server lifecycle context; work detached from a request (a
+	// book's re-read, which may outlast the request timeout) derives from it so it's
+	// cancelled on shutdown instead of running on. Defaults to context.Background(); the app wires
 	// the real one via SetBaseContext.
 	baseCtx context.Context
 

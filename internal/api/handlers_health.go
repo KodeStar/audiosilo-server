@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"slices"
@@ -10,6 +11,9 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
+
+// rescanBookTimeout bounds one book's re-read (POST .../book/rescan).
+const rescanBookTimeout = 10 * time.Minute
 
 // The admin console's Health and Jobs screens (Phase 3). Transport only: the
 // issues are catalog queries (issues.go), the queue and schedules live in the
@@ -85,7 +89,7 @@ func (a *API) offlineLibraries(r *http.Request) ([]offlineLibrary, error) {
 
 // handleDuplicates serves GET /admin/issues/duplicates: groups of books that look
 // like the same book within a library (?library_id= narrows it; ?ignored=true
-// includes the groups an admin said are different books).
+// lists instead the groups an admin said are different books).
 func (a *API) handleDuplicates(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	libID, ok := parseLibraryID(q.Get("library_id"))
@@ -160,7 +164,12 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	if _, err := a.scanner.IndexPath(r.Context(), *lib, p); err != nil {
+	// The re-read probes every part, which on a slow share can outlast the request
+	// timeout; it still finishes and is saved then (the book's next look shows it),
+	// rather than being thrown away at its last write.
+	ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
+	defer cancel()
+	if _, err := a.scanner.IndexPath(ctx, *lib, p); err != nil {
 		if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
 			writeErrorCode(w, http.StatusNotFound, codeNotIndexable, "there is no book at that path any more")
 			return
@@ -204,7 +213,8 @@ func (a *API) handleJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCancelJob serves DELETE /admin/jobs/{id}: drop a queued scan or stop the
-// running one (it stops before pruning; nothing is removed).
+// running one (it stops before its prune, so nothing is removed; a prune already
+// under way finishes first).
 func (a *API) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {

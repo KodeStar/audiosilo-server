@@ -48,8 +48,10 @@ var issuePredicates = map[string]string{
 	IssueNoChapters: fmt.Sprintf(`(b.duration > %d AND NOT %s)`, longWithoutChapters, hasChaptersExpr),
 	IssueUnmatched:  `(NOT ` + matchedExpr + `)`,
 	IssueTranscode:  `(NOT ` + directPlayableExpr + `)`,
-	IssueSuspect:    `(COALESCE(b.suspect_parts, 0) >= 2)`,
-	IssueScanError:  `(b.scan_error <> '')`,
+	// A folder an admin set to "one book" (the category's own fix) is settled.
+	IssueSuspect: `(COALESCE(b.suspect_parts, 0) >= 2 AND NOT EXISTS(SELECT 1 FROM folder_overrides fo
+		WHERE fo.library_id = b.library_id AND fo.path = b.rel_path AND fo.mode = '` + OverrideBook + `'))`,
+	IssueScanError: `(b.scan_error <> '')`,
 }
 
 // ignoredExpr is "an admin ignored this book for the kind bound to its parameter".
@@ -183,13 +185,22 @@ type DuplicateMember struct {
 // maxDuplicateGroups bounds one duplicates answer (the count is not bounded).
 const maxDuplicateGroups = 500
 
-// dupRow is what duplicate detection reads per book.
+// dupRow is what duplicate detection reads per book. Only the fields the grouping
+// and the ranking need, since it is read for every book of the library.
 type dupRow struct {
-	book             Book // the identity and quality fields
-	id, libraryID    int64
-	title, path      string
-	files, listeners int
-	ignored          bool
+	id, libraryID                      int64
+	path, title, format                string
+	author, narrator, asin, isbn, hash string // identity: cleared once grouped
+	duration                           float64
+	size                               int64
+	files, listeners                   int
+	ignored                            bool
+}
+
+// quality is the row as the Book betterQuality and identitySignals read.
+func (r *dupRow) quality() Book {
+	return Book{Title: r.title, Author: r.author, Narrator: r.narrator, ASIN: r.asin, ISBN: r.isbn,
+		ContentHash: r.hash, Format: r.format, Duration: r.duration, Size: r.size}
 }
 
 // dupSet is one group of copies: indexes into the rows, best copy first.
@@ -200,10 +211,12 @@ type dupSet struct {
 }
 
 // sameLength reports whether two durations could be one recording (within a
-// minute or 2%, whichever is more). An unknown length (0, no ffprobe) matches.
+// minute or 2%, whichever is more). Unknown lengths (0, no ffprobe) match each
+// other but not a known one: a failed probe mustn't join an abridged edition to an
+// unabridged one through itself.
 func sameLength(a, b float64) bool {
 	if a <= 0 || b <= 0 {
-		return true
+		return a <= 0 && b <= 0
 	}
 	return math.Abs(a-b) <= math.Max(60, 0.02*math.Max(a, b))
 }
@@ -216,9 +229,8 @@ func sameLength(a, b float64) bool {
 // and players already show one, so they never group.
 func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow, []dupSet, error) {
 	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *dupRow) error {
-		b := &r.book
-		return rows.Scan(&r.id, &r.libraryID, &r.path, &r.title, &b.Author, &b.Narrator, &b.ASIN,
-			&b.ISBN, &b.ContentHash, &b.Format, &b.Duration, &b.Size, &r.files, &r.listeners, &r.ignored)
+		return rows.Scan(&r.id, &r.libraryID, &r.path, &r.title, &r.author, &r.narrator, &r.asin,
+			&r.isbn, &r.hash, &r.format, &r.duration, &r.size, &r.files, &r.listeners, &r.ignored)
 	}, `SELECT b.id, b.library_id, b.rel_path, b.title, b.author, b.narrator, b.asin, b.isbn,
 	           b.content_hash, b.format, b.duration, b.size, MAX(1, COALESCE(bf.n, 0)),
 	           COALESCE(p.n, 0), ii.path IS NOT NULL
@@ -237,16 +249,15 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 	byMeta := map[string][]int{}
 	for i := range rows {
 		r := &rows[i]
-		r.book.Title = r.title
 		lib := strconv.FormatInt(r.libraryID, 10) + ":"
-		for _, sig := range identitySignals(r.book) {
+		for _, sig := range identitySignals(r.quality()) {
 			files := strings.HasPrefix(sig, "h:")
 			switch {
 			case strings.HasPrefix(sig, "m:"):
 				byMeta[lib+sig] = append(byMeta[lib+sig], i)
 				continue
 			case files:
-				sig += ":" + strconv.FormatInt(r.book.Size, 10)
+				sig += ":" + strconv.FormatInt(r.size, 10)
 			}
 			if j, ok := exact[lib+sig]; ok {
 				set.union(i, j)
@@ -255,11 +266,12 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 				exact[lib+sig] = i
 			}
 		}
+		r.author, r.narrator, r.asin, r.isbn, r.hash = "", "", "", "", ""
 	}
 	for _, idx := range byMeta {
 		for x := range idx {
 			for _, y := range idx[x+1:] {
-				if sameLength(rows[idx[x]].book.Duration, rows[y].book.Duration) {
+				if sameLength(rows[idx[x]].duration, rows[y].duration) {
 					set.union(idx[x], y)
 				}
 			}
@@ -292,21 +304,22 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 // betterCopy reports whether a is the copy worth keeping over b: betterQuality,
 // then the one people listen to.
 func betterCopy(a, b dupRow) bool {
-	if better, ok := betterQuality(a.book, a.files, b.book, b.files); ok {
+	if better, ok := betterQuality(a.quality(), a.files, b.quality(), b.files); ok {
 		return better
 	}
 	return a.listeners > b.listeners
 }
 
 // DuplicateGroups returns the groups of copies (duplicateSets) with each copy's
-// admin row, at most maxDuplicateGroups. A group every member of which an admin
-// ignored is left out unless withIgnored; a new copy brings it back.
-func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, withIgnored bool) ([]DuplicateGroup, error) {
+// admin row, at most maxDuplicateGroups: the open ones, or with ignored only the
+// ones every member of which an admin ignored (a new copy brings a group back).
+func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, ignored bool) ([]DuplicateGroup, error) {
 	rows, sets, err := c.duplicateSets(ctx, libraryID)
 	if err != nil {
 		return nil, err
 	}
-	sets = slices.DeleteFunc(sets, func(s dupSet) bool { return s.ignored && !withIgnored })
+	// Filtered before the cap, so every ignored group can be reached to show again.
+	sets = slices.DeleteFunc(sets, func(s dupSet) bool { return s.ignored != ignored })
 	if len(sets) > maxDuplicateGroups {
 		sets = sets[:maxDuplicateGroups]
 	}

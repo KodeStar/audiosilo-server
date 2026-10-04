@@ -71,10 +71,17 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   if (books.length === 0) return <AllClear ignored={ignored} />;
 
   const allSelected = books.every(selection.isSelected);
+  // What the bar acts on: the selected books still listed (one ignored or fixed on
+  // its own row has left the list but stays selected).
+  const listed = new Set(books.map(refKey));
+  const selectedListed = selection.books.filter((b) => listed.has(refKey(b)));
+  const chosenBooks = () => {
+    selection.clear();
+    return selectedListed;
+  };
   /** Ignores (or shows again) the selection, and clears it. */
   const toggleIgnore = () => {
-    const chosen = selection.books;
-    selection.clear();
+    const chosen = chosenBooks();
     void (ignored ? actions.unignore(chosen) : actions.ignore(chosen));
   };
 
@@ -152,16 +159,16 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         {t(ignored ? 'health.footIgnored' : 'health.foot', counted(books.length, lang))}
       </p>
 
-      <BulkBar count={selection.size} label={t('health.bulk.label')} onClear={selection.clear}>
+      <BulkBar
+        count={selectedListed.length}
+        label={t('health.bulk.label')}
+        onClear={selection.clear}
+      >
         {fix === 'rescan' ? (
           <BulkAction
             icon={FIX_LOOK.rescan.icon}
             label={t(FIX_LOOK.rescan.label)}
-            onClick={() => {
-              const chosen = selection.books;
-              selection.clear();
-              for (const b of chosen) void actions.rescan(b);
-            }}
+            onClick={() => void actions.rescanMany(chosenBooks())}
           />
         ) : null}
         <BulkAction

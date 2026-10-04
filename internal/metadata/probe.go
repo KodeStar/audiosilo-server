@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -77,23 +78,31 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 // maxProbeMessage bounds the ffprobe message kept for the Health page.
 const maxProbeMessage = 300
 
-// probeError turns a failed ffprobe run into an error carrying its own message (the
-// last line it wrote to stderr, which names the problem: "moov atom not found"),
-// falling back to the exit status.
+// probeError turns a failed ffprobe run into an error carrying its own words:
+// every distinct line it wrote to stderr, joined, since the specific cause ("[mov,
+// mp4 @ 0x..] moov atom not found") usually comes before the generic last line
+// ("x.m4b: Invalid data found when processing input"). Falls back to the exit
+// status.
 func probeError(err error) error {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
 		return err
 	}
-	lines := strings.Split(strings.TrimSpace(string(exit.Stderr)), "\n")
-	msg := strings.TrimSpace(lines[len(lines)-1])
+	var parts []string
+	for _, l := range strings.Split(string(exit.Stderr), "\n") {
+		l = strings.TrimSpace(l)
+		// ffprobe prefixes the input path ("/srv/books/x.m4b: Invalid data..."); the
+		// Health page shows the file separately.
+		if i := strings.LastIndex(l, ": "); i >= 0 && strings.ContainsAny(l[:i], "/\\") {
+			l = l[i+2:]
+		}
+		if l != "" && !slices.Contains(parts, l) {
+			parts = append(parts, l)
+		}
+	}
+	msg := strings.Join(parts, "; ")
 	if msg == "" {
 		return err
-	}
-	// ffprobe prefixes the input path ("/srv/books/x.m4b: Invalid data..."); the
-	// Health page shows the file separately.
-	if i := strings.LastIndex(msg, ": "); i >= 0 && strings.ContainsAny(msg[:i], "/\\") {
-		msg = msg[i+2:]
 	}
 	if len(msg) > maxProbeMessage {
 		msg = strings.ToValidUTF8(msg[:maxProbeMessage], "")

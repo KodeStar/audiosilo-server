@@ -11,6 +11,9 @@ import { toast } from '@/lib/toast';
 import { chunk } from '@/lib/utils';
 import { FIXES } from './issues-model';
 
+/** How many book re-reads a bulk "Read again" keeps in flight. */
+const RESCAN_CONCURRENCY = 2;
+
 /**
  * What the Health page does to books: ignore them under a category (with Undo),
  * show them again, and each category's fix (open the book, its match dialog or
@@ -63,10 +66,10 @@ export function useIssueActions(kind: IssueKind) {
     }
   };
 
-  const rescan = async (b: AdminBook) => {
+  const rescan = async (b: AdminBook, refreshIssues = true) => {
     const title = b.title || b.path;
     try {
-      const fresh = await rescanBook(qc, b);
+      const fresh = await rescanBook(qc, b, refreshIssues);
       toast.add(
         fresh.book.scan_error
           ? {
@@ -80,6 +83,20 @@ export function useIssueActions(kind: IssueKind) {
     } catch (err) {
       toastError(t('health.toast.rescanFailed', { title }), err);
     }
+  };
+
+  /**
+   * Reads several books again, RESCAN_CONCURRENCY at a time: each is a synchronous
+   * re-read on the server (outside its scan queue), and firing them all at once
+   * would trip its per-client rate limit. The issues refresh once, at the end.
+   */
+  const rescanMany = async (books: AdminBook[]) => {
+    let next = 0;
+    const worker = async () => {
+      while (next < books.length) await rescan(books[next++], false);
+    };
+    await Promise.all(Array.from({ length: Math.min(RESCAN_CONCURRENCY, books.length) }, worker));
+    invalidateIssues(qc);
   };
 
   const fix = (b: AdminBook) => {
@@ -102,7 +119,7 @@ export function useIssueActions(kind: IssueKind) {
     }
   };
 
-  return { ignore, unignore, fix, rescan };
+  return { ignore, unignore, fix, rescan, rescanMany };
 }
 
 export type IssueActions = ReturnType<typeof useIssueActions>;

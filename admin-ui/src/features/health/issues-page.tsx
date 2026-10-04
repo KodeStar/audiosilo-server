@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -33,6 +34,13 @@ export function IssuesPage() {
   const navigate = useNavigate();
   const go = (next: { issue?: IssueKind; ignored?: true }) =>
     void navigate({ to: '.', search: next, replace: true });
+  // Without ?issue= the page opens the first category needing attention and keeps
+  // it open: clearing it shows "All clear" rather than jumping to the next one.
+  const [opened, setOpened] = useState<IssueKind>();
+  const firstKind = summary.data
+    ? pickCategory(summary.data.categories, undefined)?.kind
+    : undefined;
+  if (opened === undefined && firstKind !== undefined) setOpened(firstKind);
 
   const checking = (libraries.data ?? []).some(scanActive);
   const checkAgain = (
@@ -68,7 +76,7 @@ export function IssuesPage() {
 
   const data = summary.data;
   const total = data ? attentionTotal(data) : 0;
-  const cat = data ? pickCategory(data.categories, search.issue) : undefined;
+  const cat = data ? pickCategory(data.categories, search.issue ?? opened ?? firstKind) : undefined;
   const ignored = !!search.ignored;
 
   return (

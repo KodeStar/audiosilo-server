@@ -137,9 +137,13 @@ type Signature struct {
 	ContentHash string
 	CoverPath   string
 	HasCover    *bool // nil = never checked (indexed before migration 0016)
+	IsFolder    bool
 	// SuspectUnchecked: a folder book whose parts haven't been checked for holding
 	// several books (indexed before migration 0017; see books.suspect_parts).
 	SuspectUnchecked bool
+	// ScanError and ScanErrorFile are the read problem the last indexing recorded
+	// (books.scan_error), so a scan can look at that file again.
+	ScanError, ScanErrorFile string
 }
 
 // Signatures returns the stored mtime/size for every book in a library, keyed
@@ -147,7 +151,7 @@ type Signature struct {
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
-		        suspect_parts IS NULL
+		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -158,7 +162,8 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var rel string
 		var sig Signature
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
-			&sig.CoverPath, &sig.HasCover, &sig.SuspectUnchecked); err != nil {
+			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
+			&sig.ScanError, &sig.ScanErrorFile); err != nil {
 			return nil, err
 		}
 		out[rel] = sig
@@ -206,7 +211,8 @@ func (c *Catalog) SetSuspectParts(ctx context.Context, libraryID int64, parts ma
 
 // DeleteBooksNotIn removes books in a library whose rel_path is not in keep and
 // returns their paths. Used by the scanner to prune vanished files (the paths go
-// in the scan's log).
+// in the scan's log). The removal is one transaction: all of the books go, with
+// their search rows, or none do.
 func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep map[string]bool) ([]string, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT id, rel_path FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
@@ -230,13 +236,21 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for _, id := range stale {
-		if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, id); err != nil {
-			return nil, err
+	if len(stale) == 0 {
+		return nil, nil
+	}
+	if err := c.db.WithTx(ctx, "DeleteBooksNotIn", func(tx *sql.Tx) error {
+		for _, id := range stale {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, id); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
+				return err
+			}
 		}
-		if _, err := c.db.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
-			return nil, err
-		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return paths, nil
 }
