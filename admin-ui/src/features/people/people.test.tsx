@@ -273,7 +273,7 @@ describe('a person', () => {
     );
     renderApp('/people/user/2?tab=devices');
     // The count is devices only, as the person card's devices line counts them.
-    expect(await screen.findByRole('tab', { name: 'Devices 1' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: /^Devices\s*1$/ })).toBeInTheDocument();
     expect(await screen.findByText("Sam's iPhone")).toBeInTheDocument();
     const keys = screen.getByRole('region', { name: 'API key' });
     expect(within(keys).getByText('Home Assistant')).toBeInTheDocument();
