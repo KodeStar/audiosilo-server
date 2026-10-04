@@ -26,6 +26,13 @@ updates:
         update-types:
           - minor
           - patch
+    # @types/node describes the Node the console builds on, so its major follows
+    # admin-ui/.nvmrc (and the Dockerfile's node image) - moved by hand in the
+    # same change, never a major ahead of the runtime (minors still come grouped).
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
 
   # The workflows reference actions by major tag (actions/checkout@v4), so the
   # only update for them is the next major, which arrives on its own.
