@@ -192,3 +192,24 @@ func TestRootsAvailableInParallel(t *testing.T) {
 		t.Fatalf("a stuck probe made the next check wait (answered=%v, %v)", answered, time.Since(start))
 	}
 }
+
+// The root probe also reads the space on the root's filesystem, so Health >
+// System shows it without another (unbounded) filesystem call.
+func TestRootDisk(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+
+	d, ok := scanner.RootDisk(catalog.Library{ID: 1, Root: t.TempDir()})
+	if !ok || d.Total == 0 || d.Free > d.Total {
+		t.Fatalf("RootDisk = %+v, %v", d, ok)
+	}
+	if _, ok := scanner.RootDisk(catalog.Library{ID: 2, Root: filepath.Join(t.TempDir(), "gone")}); ok {
+		t.Fatal("a missing root has no disk to report")
+	}
+}

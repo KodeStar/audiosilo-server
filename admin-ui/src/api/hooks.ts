@@ -26,6 +26,9 @@ export const keys = {
   server: ['server'] as const,
   stats: ['admin', 'stats'] as const,
   settings: ['admin', 'settings'] as const,
+  system: ['admin', 'system'] as const,
+  update: ['admin', 'update'] as const,
+  logs: (level: string, q: string) => ['admin', 'logs', level, q] as const,
   thumb: (libraryId: number, path: string, size: ThumbSize) =>
     ['thumb', libraryId, path, size] as const,
   libraries: ['admin', 'libraries'] as const,
@@ -106,6 +109,24 @@ export function useStats() {
 
 export function useSettings() {
   return useQuery({ queryKey: keys.settings, queryFn: api.settings, staleTime: 5 * 60_000 });
+}
+
+/**
+ * What the server depends on (Health > System; Settings and About read parts).
+ * Health > System polls it (`poll`); elsewhere it's fresh for a minute.
+ */
+export function useSystem({ poll = false } = {}) {
+  return useQuery({
+    queryKey: keys.system,
+    queryFn: api.system,
+    staleTime: 60_000,
+    refetchInterval: poll ? 30_000 : false,
+  });
+}
+
+/** The update check's state (Overview's server card, About). */
+export function useUpdateStatus() {
+  return useQuery({ queryKey: keys.update, queryFn: api.updateStatus, staleTime: 10 * 60_000 });
 }
 
 /**

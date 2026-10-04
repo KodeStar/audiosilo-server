@@ -365,13 +365,164 @@ export interface Activity {
   inactive_users: InactiveUser[];
 }
 
-/** GET/PATCH /api/v1/admin/settings (handlers_settings.go settingsEnvelope). */
+/** The HTTPS modes (config.TLSMode). */
+export type TLSMode = 'off' | 'selfsigned' | 'autocert';
+
+/**
+ * GET/PATCH /api/v1/admin/settings (handlers_settings.go settingsEnvelope; each
+ * section's fields come from internal/config/settings.go). A setting's id is
+ * "<section>.<name>"; `locked`, `restart_settings` and `restart_pending` name ids.
+ */
 export interface AdminSettings {
+  general: {
+    /** "" = the default name, AudioSilo. */
+    name: string;
+    /** "" = derived from each request's host. */
+    public_url: string;
+    update_check: boolean;
+  };
+  network: {
+    bind: string;
+    tls_mode: TLSMode;
+    tls_hosts: string[];
+    trusted_proxies: string[];
+    cors_origins: string[];
+  };
+  players: {
+    /** Read-only here: changed in config.yaml or AUDIOSILO_WEB_DIR. */
+    web_dir: string;
+    /** Where /web is served from (read-only). */
+    web_player: '' | 'embedded' | 'dir';
+    apple_app_ids: string[];
+    android_package: string;
+    android_sha256: string[];
+  };
   metadata: {
     enabled: boolean;
     base_url: string;
+    /** The service exists (base_url was valid when the server started), so the switch can turn on. */
     available: boolean;
   };
+  demo: {
+    enabled: boolean;
+    library: string;
+    /** null = the default cap (max_users_default); 0 = no limit. */
+    max_users: number | null;
+    max_users_default: number;
+    /** "" = 24h. */
+    idle_ttl: string;
+  };
+  /** Setting id -> why the console can't change it: an AUDIOSILO_* variable, or "launcher". */
+  locked: Record<string, string>;
+  /** Setting ids read only at start. */
+  restart_settings: string[];
+  /** Restart settings saved with a value the running server doesn't use yet. */
+  restart_pending: string[];
+}
+
+/** The sections of AdminSettings that hold settings. */
+export type SettingsSection = 'general' | 'network' | 'players' | 'metadata' | 'demo';
+
+/** A PATCH body: only the settings to change, by section. */
+export type SettingsPatch = {
+  [S in SettingsSection]?: Partial<AdminSettings[S]>;
+};
+
+/** server.Certificate (internal/server/certinfo.go). */
+export interface Certificate {
+  /** The host it was issued for (autocert), or "". */
+  host: string;
+  /** false: autocert hasn't obtained one yet. */
+  issued: boolean;
+  subject: string;
+  issuer: string;
+  not_before: string;
+  not_after: string;
+  self_signed: boolean;
+  dns_names: string[];
+}
+
+/** api.Tool (handlers_system.go). */
+export interface SystemTool {
+  name: 'ffmpeg' | 'ffprobe';
+  /** "" when off or not found. */
+  path: string;
+  version: string;
+  source: '' | 'local' | 'downloaded';
+}
+
+/** meta.Health (internal/meta/health.go). */
+export interface MetadataHealth {
+  reachable: boolean;
+  latency_ms: number;
+  checked_at: string;
+  error?: string;
+}
+
+/** GET /api/v1/admin/update and the update block of /admin/system (handlers_system.go updateStatus). */
+export interface UpdateStatus {
+  enabled: boolean;
+  /** The running version ("dev" for a local build). */
+  current: string;
+  /** The newest release the last successful check found. */
+  latest: { version: string; name: string; url: string; published_at: string } | null;
+  update_available: boolean;
+  /** false: the running version isn't a release, so it can't be compared. */
+  comparable: boolean;
+  checked_at: string | null;
+  error: '' | 'rate_limited' | 'unreachable' | 'bad_response';
+  install: 'docker' | 'binary' | 'source';
+}
+
+/** GET /api/v1/admin/system (handlers_system.go handleSystem). */
+export interface SystemStatus {
+  name: string;
+  server_id: string;
+  version: string;
+  go_version: string;
+  os: string;
+  arch: string;
+  install: UpdateStatus['install'];
+  started_at: string;
+  data_dir: string;
+  database: { bytes: number; schema: string };
+  tools: SystemTool[];
+  metadata: {
+    enabled: boolean;
+    available: boolean;
+    base_url: string;
+    /** null while the lookup is off: nothing is asked. */
+    health: MetadataHealth | null;
+  };
+  tls: { mode: TLSMode; hosts: string[]; certificates: Certificate[]; error?: string };
+  libraries: {
+    id: number;
+    name: string;
+    root: string;
+    available: boolean;
+    /** null when the root doesn't answer. */
+    disk: { total: number; free: number } | null;
+  }[];
+  web_player: AdminSettings['players']['web_player'];
+  update: UpdateStatus;
+}
+
+/** logring.Entry (internal/logring). */
+export interface LogEntry {
+  seq: number;
+  time: string;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  attrs: { key: string; value: string }[];
+}
+
+/** GET /api/v1/admin/logs. */
+export interface LogPage {
+  entries: LogEntry[];
+  /** The newest line's seq: the next poll's `after`. */
+  last_seq: number;
+  /** Matching lines were left out (past the limit, or dropped before the cursor). */
+  truncated: boolean;
 }
 
 /** catalog.Library (internal/catalog/model.go). */

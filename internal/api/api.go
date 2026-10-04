@@ -34,7 +34,11 @@ const webDemoPath = "/web/demo"
 
 // API holds handler dependencies.
 type API struct {
-	cfg     *config.Config
+	// boot is the config the server started with; live (read through config())
+	// is the one it works with now, swapped whole by a settings save
+	// (handlers_settings.go). Neither is ever mutated in place.
+	boot    *config.Config
+	live    atomic.Pointer[liveConfig]
 	auth    *auth.Service
 	cat     *catalog.Catalog
 	scanner *library.Scanner
@@ -43,15 +47,21 @@ type API struct {
 	// It is constructed whenever metadata.base_url is a valid absolute http(s) URL
 	// (regardless of metadata.enabled), so the runtime admin toggle can flip the
 	// feature on without a restart; nil only when base_url is empty/invalid, in
-	// which case the feature is unavailable and cannot be enabled. metaEnabled is
-	// the runtime on/off flag (seeded from metadata.enabled): the handler and the
-	// `metadata` capability flag gate on meta != nil AND metaEnabled (metadataOn).
-	meta        *meta.Service
-	metaEnabled atomic.Bool
-	// settingsMu serializes runtime config mutations that also persist config.yaml
-	// (admin settings PATCH); config fields are otherwise set once at startup.
+	// which case the feature is unavailable and cannot be enabled. The live
+	// config's metadata.enabled is the on/off switch: the handler and the
+	// `metadata` capability flag gate on meta != nil AND it (metadataOn).
+	meta *meta.Service
+	// settingsMu serializes settings saves (read, change, write config.yaml, swap).
 	settingsMu sync.Mutex
 	log        *slog.Logger
+
+	// rt is what the launcher reports about the running process (SetRuntime):
+	// tool paths, start time, the log ring and the update checker.
+	rt           Runtime
+	toolVersions toolVersions
+	// playerSource is where /web is served from ("embedded", "dir", ""), fixed
+	// for the life of the process like the mount itself.
+	playerSource string
 
 	// baseCtx is the server lifecycle context; work detached from a request (a
 	// book's re-read, which may outlast the request timeout) derives from it so it's
@@ -108,7 +118,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		metaSvc = meta.NewService(cfg.Metadata.BaseURL, nil)
 	}
 	a := &API{
-		cfg:            cfg,
+		boot:           cfg,
 		auth:           authSvc,
 		cat:            cat,
 		scanner:        scanner,
@@ -127,9 +137,9 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		streams:        catalog.NewStreamMarks(),
 	}
-	// Seed the runtime flag from config; the feature is on only when a service was
-	// built too (metadataOn), so an enabled flag with no base_url stays off.
-	a.metaEnabled.Store(cfg.Metadata.Enabled)
+	a.live.Store(newLiveConfig(cfg, cfg))
+	a.playerSource = web.PlayerSource(cfg.WebDir)
+	a.rt.StartedAt = time.Now()
 	return a
 }
 
@@ -224,6 +234,10 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
 	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))
 	mux.Handle("PATCH /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleUpdateSettings)))
+	mux.Handle("GET /api/v1/admin/system", a.requireAdmin(http.HandlerFunc(a.handleSystem)))
+	mux.Handle("GET /api/v1/admin/update", a.requireAdmin(http.HandlerFunc(a.handleUpdateStatus)))
+	mux.Handle("POST /api/v1/admin/update/check", a.requireAdmin(http.HandlerFunc(a.handleUpdateCheck)))
+	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(http.HandlerFunc(a.handleLogs)))
 	mux.Handle("GET /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleListUsers)))
 	mux.Handle("POST /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleCreateUser)))
 	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetUserDetail)))
@@ -298,7 +312,7 @@ func (a *API) Handler() http.Handler {
 	// Baked-in web UI: the public connect page and the admin console. API routes
 	// above are more specific, so ServeMux still prefers them over the "/"
 	// catch-all the web package registers.
-	if err := web.Register(mux, a.cfg.WebDir); err != nil {
+	if err := web.Register(mux, a.config().WebDir); err != nil {
 		a.log.Error("failed to register web UI", "err", err)
 	}
 
@@ -306,7 +320,7 @@ func (a *API) Handler() http.Handler {
 	// visitor to demo.audiosilo.app lands straight on the instant-demo flow - no
 	// reverse-proxy rewrite required. `/{$}` matches only "/" and outranks the web
 	// package's "/" catch-all, leaving /connect, /admin and the rest untouched.
-	if a.cfg.Demo.Enabled && web.HasPlayer(a.cfg.WebDir) {
+	if a.config().Demo.Enabled && a.playerSource != "" {
 		mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, webDemoPath, http.StatusFound)
 		})

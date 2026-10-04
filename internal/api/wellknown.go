@@ -15,7 +15,7 @@ var appLinkPaths = []string{"/web/connect*", "/connect*"}
 
 // handleAppleAppSiteAssociation serves /.well-known/apple-app-site-association.
 func (a *API) handleAppleAppSiteAssociation(w http.ResponseWriter, r *http.Request) {
-	ids := a.cfg.AppLinks.AppleAppIDs
+	ids := a.config().AppLinks.AppleAppIDs
 	if len(ids) == 0 {
 		http.NotFound(w, r)
 		return
@@ -37,7 +37,7 @@ func (a *API) handleAppleAppSiteAssociation(w http.ResponseWriter, r *http.Reque
 
 // handleAssetLinks serves /.well-known/assetlinks.json for Android App Links.
 func (a *API) handleAssetLinks(w http.ResponseWriter, r *http.Request) {
-	al := a.cfg.AppLinks
+	al := a.config().AppLinks
 	if al.AndroidPackage == "" || len(al.AndroidSHA256) == 0 {
 		http.NotFound(w, r)
 		return

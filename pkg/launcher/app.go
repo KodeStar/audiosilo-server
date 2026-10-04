@@ -25,9 +25,11 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/logring"
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/toolfetch"
+	"github.com/kodestar/audiosilo-server/internal/updates"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -78,6 +80,10 @@ func Run(ctx context.Context, opts Options) error {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	}
+	// Keep the newest lines for the admin console's Server > Logs; every line still
+	// goes where it went before.
+	logs := logring.NewRing(logRingSize)
+	log = slog.New(logring.NewHandler(log.Handler(), logs, slog.LevelInfo))
 
 	abs, err := filepath.Abs(opts.DataDir)
 	if err != nil {
@@ -167,8 +173,13 @@ func Run(ctx context.Context, opts Options) error {
 
 	go sessionRetention(ctx, cat, authSvc, log)
 
+	// The update check (Settings > General): once a day while on, never while off.
+	upd := updates.New(api.Version, "", cfg.UpdateCheck, log)
+	go upd.Run(ctx)
+
 	a := api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
+	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd})
 	if setupToken != "" {
 		a.EnableSetup(setupToken)
 		setupBanner(cfg, setupToken)
@@ -184,24 +195,33 @@ func Run(ctx context.Context, opts Options) error {
 	return server.Run(ctx, cfg, a.Handler(), log)
 }
 
+// logRingSize is how many log lines the admin console's log viewer keeps.
+const logRingSize = 2000
+
 // applyOverrides layers the (optional) Options overrides on top of the loaded
 // config. Empty/zero fields are left untouched, so a caller that sets none (the
 // headless command) gets the file's configuration verbatim.
 func applyOverrides(cfg *config.Config, opts Options) {
+	// Each override is pinned, so the admin console shows it as managed by the
+	// launcher instead of offering a change the next start would undo.
 	if opts.Bind != "" {
 		cfg.Bind = opts.Bind
+		cfg.Pin("bind")
 	}
 	if opts.TLSMode != "" {
 		cfg.TLS.Mode = config.TLSMode(opts.TLSMode)
+		cfg.Pin("tls.mode")
 	}
 	if opts.PublicURL != "" {
 		cfg.PublicURL = opts.PublicURL
+		cfg.Pin("public_url")
 	}
 	if opts.Libraries != nil {
 		cfg.Libraries = make([]config.Library, len(opts.Libraries))
 		for i, l := range opts.Libraries {
 			cfg.Libraries[i] = config.Library{Name: l.Name, Root: l.Root}
 		}
+		cfg.Pin("libraries")
 	}
 }
 
@@ -269,7 +289,7 @@ func resolveTools(ctx context.Context, dataDir string, opts Options, log *slog.L
 	needProbe := opts.FFprobePath != "" && ffprobe == ""
 	if needMpeg || needProbe {
 		// One download yields both tools; take whichever ones we were missing.
-		dlMpeg, dlProbe := toolfetch.Ensure(ctx, filepath.Join(dataDir, "tools"), log)
+		dlMpeg, dlProbe := toolfetch.Ensure(ctx, toolfetch.Dir(dataDir), log)
 		if needMpeg {
 			ffmpeg = dlMpeg
 		}

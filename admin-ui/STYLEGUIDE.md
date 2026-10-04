@@ -51,9 +51,12 @@ Sub bar (48px, per destination):      Title  [segmented control of sections]    
 | Health          | Issues · Jobs · System                                                                                            | `/admin/health/{section}`   |
 | Server          | Settings · Logs · Audit log · About                                                                               | `/admin/server/{section}`   |
 
-- Settings uses an in-page section list (shadcn `Sidebar` styled with `--sidebar-*`) for the 9 setting
-  sections, grouped _Server_ and _Maintenance_. Logs, Audit log and About are records, not settings,
-  so they live only in the sub bar. **Each setting lives in exactly one place.**
+- Settings uses an in-page topic list (`?topic=`; a column of links beside the topic, a scrolling row
+  on phones) for its topics: General, Network & HTTPS, Players & app links, Community metadata,
+  Transcoding, Demo mode (Phase 5b adds Backups and Notifications). Logs, Audit log and About are
+  records, not settings, so they live only in the sub bar. **Each setting lives in exactly one
+  place.** A setting the environment or the desktop app sets is shown locked with what sets it; one
+  read only at start says "Restart to apply"; each card saves only its changed fields.
 - Mobile (<720px): the five destinations move to a bottom tab bar; the sub bar becomes a horizontally
   scrolling segmented control; the omnisearch stays in the top bar.
 - Detail pages (`#book`, `#user`) replace the segmented control with a breadcrumb + back button.

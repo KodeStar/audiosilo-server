@@ -2,6 +2,8 @@ import type {
   Activity,
   AdminLibrary,
   AdminSettings,
+  SystemStatus,
+  UpdateStatus,
   AdminShare,
   AdminStats,
   Invite,
@@ -222,9 +224,113 @@ export function activity(over: Partial<Activity> = {}): Activity {
   };
 }
 
-export const settings: AdminSettings = {
-  metadata: { enabled: true, base_url: 'https://meta.audiosilo.app', available: true },
-};
+export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
+  return {
+    general: { name: '', public_url: '', update_check: true },
+    network: {
+      bind: '0.0.0.0:8080',
+      tls_mode: 'selfsigned',
+      tls_hosts: [],
+      trusted_proxies: [],
+      cors_origins: [],
+    },
+    players: {
+      web_dir: '/app/web',
+      web_player: 'dir',
+      apple_app_ids: [],
+      android_package: '',
+      android_sha256: [],
+    },
+    metadata: { enabled: true, base_url: 'https://meta.audiosilo.app', available: true },
+    demo: { enabled: false, library: '', max_users: null, max_users_default: 200, idle_ttl: '' },
+    locked: { 'players.web_dir': 'AUDIOSILO_WEB_DIR' },
+    restart_settings: [
+      'network.bind',
+      'network.tls_mode',
+      'network.tls_hosts',
+      'players.web_dir',
+      'metadata.base_url',
+      'demo.enabled',
+      'demo.idle_ttl',
+    ],
+    restart_pending: [],
+    ...over,
+  };
+}
+
+export const settings: AdminSettings = settingsWith();
+
+export function updateStatus(over: Partial<UpdateStatus> = {}): UpdateStatus {
+  return {
+    enabled: true,
+    current: 'v1.15.0',
+    latest: {
+      version: 'v1.15.0',
+      name: 'v1.15.0',
+      url: 'https://github.com/KodeStar/audiosilo-server/releases/tag/v1.15.0',
+      published_at: '2026-09-20T10:00:00Z',
+    },
+    update_available: false,
+    comparable: true,
+    checked_at: '2026-10-04T09:00:00Z',
+    error: '',
+    install: 'docker',
+    ...over,
+  };
+}
+
+export function systemStatus(over: Partial<SystemStatus> = {}): SystemStatus {
+  return {
+    name: 'Hearthside',
+    server_id: 'srv-1',
+    version: 'v1.15.0',
+    go_version: 'go1.25.3',
+    os: 'linux',
+    arch: 'amd64',
+    install: 'docker',
+    started_at: '2026-10-01T09:00:00Z',
+    data_dir: '/data',
+    database: { bytes: 182_000_000, schema: '0018_sessions.sql' },
+    tools: [
+      { name: 'ffmpeg', path: '/usr/bin/ffmpeg', version: '6.1.1', source: 'local' },
+      { name: 'ffprobe', path: '/usr/bin/ffprobe', version: '6.1.1', source: 'local' },
+    ],
+    metadata: {
+      enabled: true,
+      available: true,
+      base_url: 'https://meta.audiosilo.app',
+      health: { reachable: true, latency_ms: 84, checked_at: '2026-10-04T09:00:00Z' },
+    },
+    tls: {
+      mode: 'selfsigned',
+      hosts: [],
+      certificates: [
+        {
+          host: '',
+          issued: true,
+          subject: 'AudioSilo',
+          issuer: 'AudioSilo',
+          not_before: '2026-01-01T00:00:00Z',
+          not_after: '2036-01-01T00:00:00Z',
+          self_signed: true,
+          dns_names: ['localhost'],
+        },
+      ],
+    },
+    libraries: [
+      {
+        id: 1,
+        name: 'Fiction',
+        root: '/mnt/tank/fiction',
+        available: true,
+        disk: { total: 8e12, free: 5.4e12 },
+      },
+    ],
+    web_player: 'dir',
+    update: updateStatus(),
+    ...over,
+  };
+}
 
 /** No scan running. */
 export const idle: ScanProgress = {

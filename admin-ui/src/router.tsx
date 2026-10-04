@@ -11,6 +11,7 @@ import { NotFound } from '@/features/not-found';
 import { OverviewPage } from '@/features/overview/overview-page';
 import { USER_TABS, type UserTab } from '@/features/people/people-model';
 import { SectionPage } from '@/features/section-page';
+import { SETTINGS_PAGES, type SettingsPage } from '@/features/settings/settings-model';
 import { ACTIVITY_RANGES, ISSUE_KINDS, type ActivityRange, type IssueKind } from '@/api/types';
 import { parseBookSearch, type BookSearch } from '@/lib/book-route';
 import { Root } from '@/root';
@@ -46,6 +47,8 @@ export interface SectionSearch extends LibrarySearch {
   path?: string;
   /** Activity > Year in listening: the year (absent = this year). */
   year?: number;
+  /** Server > Settings: the settings topic (absent = General). */
+  topic?: SettingsPage;
 }
 
 function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
@@ -63,6 +66,9 @@ function validateSectionSearch(s: Record<string, unknown>): SectionSearch {
   if (typeof s.path === 'string' && s.path) out.path = s.path;
   const year = Number(s.year);
   if (Number.isInteger(year) && year >= 2000 && year <= 9999) out.year = year;
+  if (SETTINGS_PAGES.includes(s.topic as SettingsPage) && s.topic !== SETTINGS_PAGES[0]) {
+    out.topic = s.topic as SettingsPage;
+  }
   return out;
 }
 

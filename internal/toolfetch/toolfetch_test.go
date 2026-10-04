@@ -104,3 +104,17 @@ func TestExtractZip(t *testing.T) {
 		t.Error("extractZip wrote a non-tool file")
 	}
 }
+
+func TestParseVersion(t *testing.T) {
+	cases := map[string]string{
+		"ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers\nbuilt with gcc": "6.1.1-3ubuntu5",
+		"ffprobe version n7.0 Copyright": "n7.0",
+		"something else entirely":        "",
+		"":                               "",
+	}
+	for in, want := range cases {
+		if got := parseVersion(in); got != want {
+			t.Errorf("parseVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

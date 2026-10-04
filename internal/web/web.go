@@ -128,6 +128,18 @@ func HasPlayer(webDir string) bool {
 	return ok && spa.IsFile(fsys, "index.html")
 }
 
+// PlayerSource says where the web player comes from: "embedded" (baked into
+// this build), "dir" (served from webDir), or "" (none, so /web isn't mounted).
+func PlayerSource(webDir string) string {
+	if !HasPlayer(webDir) {
+		return ""
+	}
+	if _, ok := embeddedPlayer(); ok {
+		return "embedded"
+	}
+	return "dir"
+}
+
 // rootAsset serves one embedded asset from the site root (not under /assets/),
 // with the strict same-origin CSP. Used for the PWA service worker and web
 // manifest, which must live at the root for the worker's scope to cover /admin.

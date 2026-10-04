@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -604,5 +605,16 @@ func TestDeleteBooksNotIn(t *testing.T) {
 	page, _ := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID})
 	if len(page.Books) != 1 || page.Books[0].RelPath != "keep.m4b" {
 		t.Fatalf("unexpected remaining books: %+v", page.Books)
+	}
+}
+
+func TestDatabaseInfo(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	info, err := c.DatabaseInfo(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Bytes <= 0 || !strings.HasPrefix(info.Schema, "00") || !strings.HasSuffix(info.Schema, ".sql") {
+		t.Fatalf("DatabaseInfo = %+v", info)
 	}
 }

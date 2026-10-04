@@ -10,6 +10,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
@@ -77,6 +78,11 @@ const (
 	codeCurrentDevice      = "current_device"
 	codeInvalidRange       = "invalid_range"
 	codeNoAccess           = "no_access"
+	codeInvalidSetting     = "invalid_setting"   // + "field": the setting it names
+	codeSettingLocked      = "setting_locked"    // + "field": set by the environment or the launcher
+	codeUnknownSetting     = "unknown_setting"   // + "field"
+	codeSettingReadOnly    = "setting_read_only" // + "field"
+	codeUpdateCheckOff     = "update_check_off"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
@@ -95,7 +101,19 @@ func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
 // check catalog.ErrNotFound / library.ErrNotIndexable themselves first.
 func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg string, logKV ...any) {
 	var oe *catalog.OverrideError
+	var se *config.SettingError
 	switch {
+	case errors.As(err, &se):
+		status, code := http.StatusBadRequest, codeInvalidSetting
+		switch se.Reason {
+		case config.ReasonLocked:
+			status, code = http.StatusConflict, codeSettingLocked
+		case config.ReasonUnknown:
+			code = codeUnknownSetting
+		case config.ReasonReadOnly:
+			code = codeSettingReadOnly
+		}
+		writeJSON(w, status, map[string]string{"error": se.Error(), "code": code, "field": se.Setting})
 	case errors.As(err, &oe):
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": oe.Error(), "code": codeInvalidOverride, "field": oe.Field,

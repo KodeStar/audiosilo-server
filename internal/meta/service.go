@@ -190,6 +190,8 @@ type Service struct {
 	// workSem bounds concurrent uncached work-id fetches upstream (see
 	// maxConcurrentWorkFetches).
 	workSem chan struct{}
+	// health caches Ping's answer.
+	health healthCache
 }
 
 // NewService builds a Service for the given metaserve base URL. now may be nil

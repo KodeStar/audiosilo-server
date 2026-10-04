@@ -13,6 +13,11 @@ import {
   Home,
   Languages,
   LogOut,
+  MonitorSmartphone,
+  Repeat2,
+  Settings2,
+  ShieldCheck,
+  Ticket,
   RefreshCw,
   Search,
   UserPlus,
@@ -20,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useServerInfo, useStats } from '@/api/hooks';
 import { rescanAll, rescanLibrary } from '@/features/libraries/rescan';
+import type { SettingsPage } from '@/features/settings/settings-model';
 import { LANGUAGES, setLanguage, type Language } from '@/i18n';
 import { useSession } from '@/lib/session';
 import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
@@ -186,15 +192,23 @@ function PaletteBody({ close }: { close: () => void }) {
     })),
   );
 
+  // Each Settings topic, findable by what it holds.
+  const topic = (p: SettingsPage, icon: LucideIcon, keywords: string[]): PaletteEntry => ({
+    id: `settings-${p}`,
+    title: p === 'metadata' ? t('settings.metadata.title') : t(`settings.topic.${p}`),
+    subtitle: t('shell.section.server.settings'),
+    icon,
+    keywords,
+    run: () =>
+      go('/server/{-$section}', { section: undefined }, p === 'general' ? {} : { topic: p }),
+  });
   const settings: PaletteEntry[] = [
-    {
-      id: 'metadata',
-      title: t('settings.metadata.title'),
-      subtitle: t('shell.section.server.settings'),
-      icon: Globe,
-      keywords: ['meta', 'community', 'lookup', 'asin'],
-      run: () => go('/server/{-$section}', { section: undefined }),
-    },
+    topic('general', Settings2, ['name', 'address', 'public', 'url', 'update', 'github']),
+    topic('network', ShieldCheck, ['https', 'tls', 'certificate', 'port', 'proxy', 'cors', 'bind']),
+    topic('players', MonitorSmartphone, ['web player', 'app links', 'ios', 'android']),
+    topic('metadata', Globe, ['meta', 'community', 'lookup', 'asin']),
+    topic('transcoding', Repeat2, ['ffmpeg', 'ffprobe', 'transcode']),
+    topic('demo', Ticket, ['demo', 'guest', 'try']),
     {
       id: 'scan-settings',
       title: t('palette.setting.scanSettings'),

@@ -1,10 +1,23 @@
 # AudioSilo server configuration.
 #
 # This file is written to <data-dir>/config.yaml on first run with secure
-# defaults. Edit it and restart, or override selected values with environment
-# variables (shown in brackets). Command-line flags are: --data (data dir),
-# --ffprobe / --ffmpeg (tool paths; "" disables each), and --setup (first-run web
-# setup wizard): `audiosilo --data ./data`.
+# defaults. Edit it and restart, change most of it in the admin console (Server >
+# Settings, which saves here), or override selected values with environment
+# variables (shown in brackets). A value an environment variable sets wins at
+# every start, shows as locked in the console, and is never written into this
+# file. Command-line flags are: --data (data dir), --ffprobe / --ffmpeg (tool
+# paths; "" disables each), and --setup (first-run web setup wizard):
+# `audiosilo --data ./data`.
+
+# The server's display name: shown in the apps when someone connects, on invites
+# and in the admin console. Empty = "AudioSilo".
+name: ""
+
+# Ask GitHub Releases once a day whether a newer AudioSilo exists (shown in the
+# admin console's Server > About). Sends nothing but the request itself (this
+# server's address and a User-Agent naming its version). false = never ask.
+#                                                     [AUDIOSILO_UPDATE_CHECK]
+update_check: true
 
 # Address to listen on.                              [AUDIOSILO_BIND]
 bind: "0.0.0.0:8080"
