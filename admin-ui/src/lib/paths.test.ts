@@ -1,4 +1,12 @@
-import { absoluteBaseName, absoluteCrumbs, isAbsolutePath, libraryCrumbs } from './paths';
+import {
+  absoluteBaseName,
+  absoluteCrumbs,
+  isAbsolutePath,
+  joinLibraryPath,
+  libraryCrumbs,
+  relBaseName,
+  relParent,
+} from './paths';
 
 describe('paths', () => {
   it('builds library crumbs from the root down', () => {
@@ -34,5 +42,21 @@ describe('paths', () => {
     expect(absoluteBaseName('/mnt/tank/drama')).toBe('drama');
     expect(absoluteBaseName('C:\\Books\\Drama')).toBe('Drama');
     expect(absoluteBaseName('/')).toBe('');
+  });
+
+  it("joins a library root and a relative path in the root's syntax", () => {
+    expect(joinLibraryPath('/mnt/tank/fiction', 'A/B')).toBe('/mnt/tank/fiction/A/B');
+    expect(joinLibraryPath('/mnt/tank/fiction/', 'A')).toBe('/mnt/tank/fiction/A');
+    expect(joinLibraryPath('/', 'A')).toBe('/A');
+    expect(joinLibraryPath('C:\\Books\\', 'A/B')).toBe('C:\\Books\\A\\B');
+    expect(joinLibraryPath('/mnt/x', '')).toBe('/mnt/x');
+    expect(joinLibraryPath(undefined, 'A/B')).toBe('A/B');
+  });
+
+  it("names a relative path's last segment and its parent", () => {
+    expect(relBaseName('A/B/C')).toBe('C');
+    expect(relBaseName('A')).toBe('A');
+    expect(relParent('A/B/C')).toBe('A/B');
+    expect(relParent('A')).toBe('');
   });
 });

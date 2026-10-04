@@ -1,9 +1,11 @@
 import { useTranslation } from 'react-i18next';
 import { useAdminBookPage, useBookFacets } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
-import { formatNumber } from '@/lib/format';
+import { refKey } from '@/lib/book-route';
+import { counted } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { BookTile } from '../book-tile';
-import { SHELF_SIZE, curatingShelf, daysAgo, selectionKey } from './books-model';
+import { SHELF_SIZE, curatingShelf, daysAgo } from './books-model';
 import type { Selection } from './use-selection';
 
 /**
@@ -39,11 +41,10 @@ export function Shelves({
     noCover.data?.books ?? [],
     metadataOn ? (unmatched.data?.books ?? []) : [],
   );
-  const curateLoading = noCover.isPending || (metadataOn && unmatched.isPending);
   const thisWeek = week.data?.total ?? 0;
 
   const tile = (b: AdminBook, note?: string) => (
-    <li key={selectionKey(b)} className="min-w-0">
+    <li key={refKey(b)} className="min-w-0">
       <BookTile
         book={b}
         metadataOn={metadataOn}
@@ -57,56 +58,77 @@ export function Shelves({
 
   return (
     <>
-      {recent.isPending || recent.data?.books?.length ? (
-        <section aria-labelledby="shelf-recent" className="mb-8">
-          <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
-            <h2 id="shelf-recent" className="h2">
-              {t('books.recent.title')}
-            </h2>
-            {thisWeek ? (
-              <span className="text-[13px] text-muted-foreground tabular-nums">
-                {t('books.recent.thisWeek', {
-                  count: thisWeek,
-                  formatted: formatNumber(thisWeek, lang),
-                })}
-              </span>
-            ) : null}
-          </div>
-          {recent.isPending ? (
-            <ShelfSkeleton />
-          ) : (
-            <ul className="shelf-row">{recent.data?.books?.map((b) => tile(b))}</ul>
-          )}
-        </section>
-      ) : null}
-      {curateLoading || curate.length ? (
-        <section aria-labelledby="shelf-curate" className="mb-8">
-          <div className="mb-3.5 flex flex-col gap-0.5">
-            <h2 id="shelf-curate" className="h2">
-              {t('books.curate.title')}
-            </h2>
-            <span className="text-[13px] text-muted-foreground">{t('books.curate.body')}</span>
-          </div>
-          {curateLoading ? (
-            <ShelfSkeleton />
-          ) : (
-            <ul className="shelf-row">
-              {curate.map(({ book, issue }) => tile(book, t(`books.issue.${issue}`)))}
-            </ul>
-          )}
-        </section>
-      ) : null}
+      <Shelf
+        id="shelf-recent"
+        title={t('books.recent.title')}
+        aside={thisWeek ? t('books.recent.thisWeek', counted(thisWeek, lang)) : undefined}
+        loading={recent.isPending}
+      >
+        {recent.data?.books?.map((b) => tile(b))}
+      </Shelf>
+      <Shelf
+        id="shelf-curate"
+        title={t('books.curate.title')}
+        description={t('books.curate.body')}
+        loading={noCover.isPending || (metadataOn && unmatched.isPending)}
+      >
+        {curate.map(({ book, issue }) => tile(book, t(`books.issue.${issue}`)))}
+      </Shelf>
     </>
   );
 }
 
-function ShelfSkeleton() {
+/**
+ * One shelf: a heading (with a muted line under it, or a count beside it) over a
+ * row of tiles, a skeleton row while `loading`, and nothing at all once loaded
+ * empty.
+ */
+function Shelf({
+  id,
+  title,
+  description,
+  aside,
+  loading,
+  children,
+}: {
+  id: string;
+  title: string;
+  description?: string;
+  aside?: string;
+  loading: boolean;
+  children: React.ReactNode[] | undefined;
+}) {
   const { t } = useTranslation();
+  if (!loading && !children?.length) return null;
   return (
-    <div className="shelf-row" role="status" aria-label={t('common.loading')}>
-      {Array.from({ length: 6 }, (_, i) => (
-        <span key={i} className="cover skel block" aria-hidden="true" />
-      ))}
-    </div>
+    <section aria-labelledby={id} className="mb-8">
+      <div
+        className={cn(
+          'mb-3.5 flex',
+          description
+            ? 'flex-col gap-0.5'
+            : 'flex-wrap items-baseline justify-between gap-x-3 gap-y-2',
+        )}
+      >
+        <h2 id={id} className="h2">
+          {title}
+        </h2>
+        {description ? (
+          <span className="text-[13px] text-muted-foreground">{description}</span>
+        ) : null}
+        {aside ? (
+          <span className="text-[13px] text-muted-foreground tabular-nums">{aside}</span>
+        ) : null}
+      </div>
+      {loading ? (
+        <div className="shelf-row" role="status" aria-label={t('common.loading')}>
+          {Array.from({ length: 6 }, (_, i) => (
+            <span key={i} className="cover skel block" aria-hidden="true" />
+          ))}
+        </div>
+      ) : (
+        <ul className="shelf-row">{children}</ul>
+      )}
+    </section>
   );
 }

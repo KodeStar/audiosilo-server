@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Undo2 } from 'lucide-react';
@@ -11,6 +11,7 @@ import {
   type FieldValue,
   type OverrideField,
 } from '@/api/types';
+import { InlineEdit } from '@/components/inline-edit';
 import { ProvenanceMarker, UnsavedMarker } from '@/components/provenance';
 import { Card, CardHeader } from '@/components/ui/card';
 import { toastError } from '@/lib/errors';
@@ -172,14 +173,19 @@ function FieldRow({
         {label}
       </span>
       {editing ? (
-        <FieldEditor
+        <InlineEdit
           id={id}
-          label={label}
           initial={shown}
-          long={long}
-          mono={mono}
-          invalid={!!error}
+          multiline={long}
           onDone={finish}
+          aria-label={label}
+          aria-invalid={!!error || undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+          className={cn(
+            'px-3 text-sm',
+            long ? 'py-2 leading-[1.55]' : 'h-[38px]',
+            mono && 'font-mono',
+          )}
         />
       ) : (
         <button
@@ -231,70 +237,5 @@ function FieldRow({
         </p>
       ) : null}
     </div>
-  );
-}
-
-const editorClass =
-  'w-full min-w-0 rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_20%,transparent)] aria-invalid:border-destructive';
-
-/**
- * The value being edited: Enter commits (Ctrl/Cmd+Enter in the description,
- * where Enter is a new line), Escape cancels, leaving the field commits.
- */
-function FieldEditor({
-  id,
-  label,
-  initial,
-  long,
-  mono,
-  invalid,
-  onDone,
-}: {
-  id: string;
-  label: string;
-  initial: string;
-  long: boolean;
-  mono: boolean;
-  invalid: boolean;
-  /** raw undefined = cancelled; keyboard = Enter/Escape (focus returns to the value). */
-  onDone: (raw: string | undefined, keyboard: boolean) => void;
-}) {
-  const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
-  // Enter or Escape ends the edit before the blur that unmounting can fire.
-  const ended = useRef(false);
-  // Before paint, so a key pressed in the first frame isn't overwritten by select().
-  useLayoutEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
-  }, []);
-  const end = (raw: string | undefined, keyboard: boolean) => {
-    if (ended.current) return;
-    ended.current = true;
-    onDone(raw, keyboard);
-  };
-  const props = {
-    ref,
-    id,
-    defaultValue: initial,
-    'aria-label': label,
-    'aria-invalid': invalid || undefined,
-    'aria-describedby': invalid ? `${id}-error` : undefined,
-    onBlur: (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-      end(e.currentTarget.value, false),
-    onKeyDown: (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        end(undefined, true);
-      } else if (e.key === 'Enter' && (!long || e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        end(e.currentTarget.value, true);
-      }
-    },
-  };
-  return long ? (
-    <textarea {...props} rows={5} className={cn(editorClass, 'py-2 leading-[1.55]')} />
-  ) : (
-    <input {...props} className={cn(editorClass, 'h-[38px]', mono && 'font-mono')} />
   );
 }

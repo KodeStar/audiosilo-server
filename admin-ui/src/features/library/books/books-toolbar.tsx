@@ -1,25 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LayoutGrid, List, Search, SlidersHorizontal, X } from 'lucide-react';
-import type { AdminBookSort, AdminLibrary } from '@/api/types';
+import { ADMIN_BOOK_SORTS, type AdminBookSort, type AdminLibrary } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { useDebounced } from '@/lib/use-debounced';
 import { cn } from '@/lib/utils';
-import type { LibrarySearch } from '../library-search';
-import {
-  SORT_OPTIONS,
-  activeFilters,
-  sheetFilterCount,
-  withoutFilter,
-  withoutFilters,
-} from './books-model';
+import type { LibrarySearch, Update } from '../library-search';
+import { activeFilters, sheetFilterCount, withoutFilter, withoutFilters } from './books-model';
 import { chipClass } from './chip-class';
 import { chipLabel } from './filter-labels';
-
-type Update = (fn: (prev: LibrarySearch) => LibrarySearch) => void;
 
 /** How long the search box waits for typing to pause before it filters. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -44,7 +37,8 @@ export function BooksToolbar({
   const sort = search.sort ?? 'title';
 
   return (
-    <div className="sticky top-[104px] z-10 -mx-1 mb-3 flex flex-wrap items-center justify-between gap-2.5 bg-background px-1 py-2.5 md:top-[114px]">
+    // Sticks under the sticky header: both its rows, and their hairlines.
+    <div className="sticky top-[calc(var(--topbar-h)+var(--subbar-h)+2px)] z-10 -mx-1 mb-3 flex flex-wrap items-center justify-between gap-2.5 bg-background px-1 py-2.5">
       <h2 className="h2 max-md:sr-only" aria-live="polite">
         {heading}
       </h2>
@@ -75,7 +69,7 @@ export function BooksToolbar({
             }));
           }}
         >
-          {SORT_OPTIONS.map((s) => (
+          {ADMIN_BOOK_SORTS.map((s) => (
             <option key={s} value={s}>
               {t(`books.sort.${s}`)}
             </option>
@@ -120,6 +114,7 @@ export function BooksToolbar({
 function SearchBox({ value, onChange }: { value: string; onChange: (q: string) => void }) {
   const { t } = useTranslation();
   const [text, setText] = useState(value);
+  const settled = useDebounced(text.trim(), SEARCH_DEBOUNCE_MS);
   // The last value this box sent (or was given), to tell outside changes apart.
   const sent = useRef(value);
   const latest = useRef(onChange);
@@ -133,14 +128,13 @@ function SearchBox({ value, onChange }: { value: string; onChange: (q: string) =
     setText(value);
   }, [value]);
 
+  // Only once typing has paused (the debounced value caught up with the box), so
+  // a change from outside isn't answered with the stale text from before it.
   useEffect(() => {
-    if (text.trim() === sent.current.trim()) return;
-    const id = setTimeout(() => {
-      sent.current = text.trim();
-      latest.current(text.trim());
-    }, SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [text]);
+    if (settled !== text.trim() || settled === sent.current.trim()) return;
+    sent.current = settled;
+    latest.current(settled);
+  }, [settled, text]);
 
   return (
     <label className="relative flex min-w-[180px] flex-[0_1_300px] items-center">

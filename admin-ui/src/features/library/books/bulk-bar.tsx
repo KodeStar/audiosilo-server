@@ -1,11 +1,8 @@
 import { useTranslation } from 'react-i18next';
 import { Pencil, Share2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { formatNumber } from '@/lib/format';
-
-/** Ghost buttons on the ink bar: light text, a faint light hover. */
-const onInk =
-  'text-primary-foreground hover:bg-[color-mix(in_oklab,var(--primary-foreground)_12%,transparent)]';
+import { onInk } from '@/components/ui/on-ink';
+import { counted } from '@/lib/format';
 
 /**
  * The floating bulk action bar (STYLEGUIDE.md "Bulk action bar"): "N selected",
@@ -25,11 +22,10 @@ export function BulkBar({
 }) {
   const { t, i18n } = useTranslation();
   if (!count) return null;
-  const formatted = formatNumber(count, i18n.resolvedLanguage ?? 'en');
   return (
     <div className="float-bar" role="toolbar" aria-label={t('books.bulk.label')}>
       <span className="mr-2 font-bold whitespace-nowrap tabular-nums" aria-live="polite">
-        {t('books.bulk.selected', { count, formatted })}
+        {t('books.bulk.selected', counted(count, i18n.resolvedLanguage ?? 'en'))}
       </span>
       <Button variant="ghost" size="sm" className={onInk} onClick={onEdit}>
         <Pencil aria-hidden="true" />

@@ -1,12 +1,12 @@
 import { useCover } from '@/api/hooks';
-import type { ThumbSize } from '@/api/cover-batch';
+import type { ThumbSize } from '@/api/client';
 import { cn } from '@/lib/utils';
 import { GeneratedCover } from './generated-cover';
 
 /**
- * A book's cover (square, the only element with a shadow). Real art is fetched
- * with the session header, never a token in the URL: grids, shelves and rows ask
- * for a batched thumbnail (`size`, default 320px), the book hero for the full art.
+ * A book's cover (square, the only element with a shadow). Real art comes as a
+ * batched thumbnail fetched with the session header, never a token in the URL
+ * (`size`: 160 for rows, 320 for tiles, the default, 640 for the book hero).
  * A skeleton holds the slot while it loads; a book without art (or whose art
  * failed to load) gets its procedural cover.
  */
@@ -22,7 +22,7 @@ export function BookCover({
   path: string;
   title: string;
   author?: string;
-  size?: ThumbSize | 'full';
+  size?: ThumbSize;
   className?: string;
 }) {
   const cover = useCover(libraryId, path, size);

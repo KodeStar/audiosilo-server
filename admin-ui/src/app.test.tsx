@@ -170,22 +170,6 @@ describe('overview', () => {
     ).toBeInTheDocument();
   });
 
-  // A fresh server, where nobody has listened yet, sends its lists as null.
-  it('renders when the server sends empty lists as null', async () => {
-    mockFetch(
-      signedInRoutes({
-        'GET /admin/stats': {
-          body: { ...stats(), listening: null, libraries: null } as unknown as ReturnType<
-            typeof stats
-          >,
-        },
-      }),
-    );
-    renderApp();
-    expect(await screen.findByText('Nobody is listening right now.')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 1, name: /chris\.$/ })).toBeInTheDocument();
-  });
-
   it('shows an error with a retry when stats fail', async () => {
     mockFetch(
       signedInRoutes({

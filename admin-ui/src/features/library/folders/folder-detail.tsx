@@ -4,7 +4,7 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, FileAudio, FolderOpen, FolderX } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateBooks, noteScanStarted, useBrowse } from '@/api/hooks';
+import { keys, noteScanStarted, useBrowse } from '@/api/hooks';
 import type { AdminLibrary, FsEntry } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Notice } from '@/components/notice';
@@ -13,35 +13,12 @@ import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { bookRoute } from '@/lib/book-route';
-import { errorMessage, toastError } from '@/lib/errors';
-import { formatNumber } from '@/lib/format';
+import { toastError } from '@/lib/errors';
+import { counted, formatBytes, formatDuration } from '@/lib/format';
+import { joinLibraryPath, relBaseName, relParent } from '@/lib/paths';
 import { toast } from '@/lib/toast';
-import { CHOICE_TITLE, FOLDER_CHOICES, choiceOf, modeOf, type FolderChoice } from './folder-modes';
-import {
-  audioFilesOf,
-  baseName,
-  entryIn,
-  formatBytes,
-  formatDuration,
-  fullPath,
-  parentOf,
-} from './folders-model';
-
-// What each choice means, then (for a folder with audio) what it means here.
-const CHOICE_BODY: Record<FolderChoice, string> = {
-  auto: 'folders.mode.autoBody',
-  book: 'folders.mode.bookBody',
-  collection: 'folders.mode.collectionBody',
-};
-const CHOICE_HERE: Partial<Record<FolderChoice, string>> = {
-  auto: 'folders.mode.autoHere',
-  collection: 'folders.mode.collectionHere',
-};
-const CHOICE_TOAST: Record<FolderChoice, string> = {
-  auto: 'folders.toast.auto',
-  book: 'folders.toast.book',
-  collection: 'folders.toast.collection',
-};
+import { FOLDER_CHOICES, choiceOf, modeOf, type FolderChoice } from './folder-modes';
+import { audioFilesOf, entryIn } from './folders-model';
 
 /**
  * The selected folder: what it is, how AudioSilo reads it (each choice saved
@@ -51,10 +28,10 @@ const CHOICE_TOAST: Record<FolderChoice, string> = {
  */
 export function FolderDetail({ library, path }: { library: AdminLibrary; path: string }) {
   const { t } = useTranslation();
-  const parent = useBrowse(library.id, parentOf(path));
+  const parent = useBrowse(library.id, relParent(path));
   const own = useBrowse(library.id, path);
   const entry = entryIn(parent.data, path);
-  const name = entry?.name ?? baseName(path);
+  const name = entry?.name ?? relBaseName(path);
 
   if (parent.data && !entry) {
     return (
@@ -73,7 +50,7 @@ export function FolderDetail({ library, path }: { library: AdminLibrary; path: s
     return (
       <QueryError
         title={t('folders.detail.error', { name })}
-        error={new Error(errorMessage(failed.error, t))}
+        error={failed.error}
         onRetry={() => void failed.refetch()}
       />
     );
@@ -104,18 +81,19 @@ function Detail({
   // The choice being saved: shown at once, dropped when the request settles.
   const [saving, setSaving] = useState<FolderChoice>();
   const count = files.length;
-  const counted = { count, formatted: formatNumber(count, lang) };
+  const fileCount = counted(count, lang);
 
   const choose = async (choice: FolderChoice) => {
     if (choice === choiceOf(entry.override)) return;
     setSaving(choice);
     try {
       await api.setFolderOverride(library.id, entry.path, modeOf(choice));
-      noteScanStarted(qc, library.id); // the rescan it started
-      await qc.invalidateQueries({ queryKey: ['fs', library.id] });
-      invalidateBooks(qc);
+      // The override shows at once; the books it makes are refetched once the
+      // rescan it started ends (the scan watcher).
+      noteScanStarted(qc, library.id);
+      await qc.invalidateQueries({ queryKey: keys.browseLibrary(library.id) });
       toast.add({
-        title: t(CHOICE_TOAST[choice], counted),
+        title: t(`folders.toast.${choice}`, fileCount),
         description: t('folders.toast.body', { library: library.name }),
         type: 'success',
       });
@@ -153,7 +131,7 @@ function Detail({
               {entry.name}
             </h2>
             <p className="rounded-md bg-muted px-3 py-2 font-mono text-[12.5px] leading-relaxed [overflow-wrap:anywhere]">
-              {fullPath(library.root, entry.path)}
+              {joinLibraryPath(library.root, entry.path)}
             </p>
           </div>
           {entry.is_book ? (
@@ -175,10 +153,11 @@ function Detail({
             className="grid gap-2.5 xl:grid-cols-3"
             options={FOLDER_CHOICES.map((c) => ({
               value: c,
-              title: t(CHOICE_TITLE[c]),
+              title: t(`folders.mode.${c}`),
+              // What the choice means, then (for a folder with audio) what it means here.
               description: [
-                t(CHOICE_BODY[c]),
-                count && CHOICE_HERE[c] && t(CHOICE_HERE[c], counted),
+                t(`folders.mode.${c}Body`),
+                count && c !== 'book' && t(`folders.mode.${c}Here`, fileCount),
               ]
                 .filter(Boolean)
                 .join(' '),
@@ -197,7 +176,7 @@ function Detail({
             title={t('folders.files.title')}
             action={
               <span className="text-muted-foreground tabular-nums">
-                {t('folders.files.summary', { ...counted, size: formatBytes(size, lang) })}
+                {t('folders.files.summary', { ...fileCount, size: formatBytes(size, lang) })}
                 {duration ? ` · ${formatDuration(duration, lang)}` : null}
               </span>
             }

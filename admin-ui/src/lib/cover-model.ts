@@ -69,8 +69,3 @@ export function coverModel(title: string, author: string): CoverModel {
   const set = PALETTES[layout];
   return { layout, palette: set[(h >>> 4) % set.length], rand: seededRandom(h) };
 }
-
-/** The colour a generated cover glows and tints the book hero with. */
-export function coverTint(title: string, author: string): string {
-  return coverModel(title, author).palette[1];
-}

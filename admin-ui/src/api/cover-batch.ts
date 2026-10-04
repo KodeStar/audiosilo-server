@@ -1,4 +1,6 @@
-import { api } from './client';
+import { refKey } from '@/lib/book-route';
+import { chunk } from '@/lib/utils';
+import { api, type ThumbSize } from './client';
 import type { BookRef } from './types';
 
 // Cover thumbnails are requested one per <BookCover> but fetched in batches:
@@ -7,8 +9,6 @@ import type { BookRef } from './types';
 // hundreds of covers would otherwise be hundreds of requests, which the server's
 // per-IP limiter (burst 40) refuses, and each would be full-size art for a
 // 158px tile.
-
-export type ThumbSize = 160 | 320 | 640;
 
 /** The server's per-request cap (handlers_covers.go maxCoverBatch). */
 export const MAX_COVER_BATCH = 60;
@@ -20,21 +20,41 @@ interface Waiter {
   reject: (err: unknown) => void;
 }
 
-const keyOf = (ref: BookRef) => `${ref.library_id}\u0000${ref.path}`;
+interface Entry {
+  ref: BookRef;
+  waiters: Set<Waiter>;
+}
 
 /** Pending requests per size, by book; several waiters can share one book. */
-const pending = new Map<ThumbSize, Map<string, { ref: BookRef; waiters: Waiter[] }>>();
+const pending = new Map<ThumbSize, Map<string, Entry>>();
 let timer: ReturnType<typeof setTimeout> | undefined;
 
-/** A book's cover thumbnail as a data: URL, or null when it has no art. */
-export function loadThumb(ref: BookRef, size: ThumbSize): Promise<string | null> {
+/**
+ * A book's cover thumbnail as a data: URL, or null when it has no art. An
+ * aborted `signal` (the cover scrolled away before the batch went out) drops
+ * this request, and a book nobody waits for any more isn't sent.
+ */
+export function loadThumb(
+  ref: BookRef,
+  size: ThumbSize,
+  signal?: AbortSignal,
+): Promise<string | null> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
     let bySize = pending.get(size);
     if (!bySize) pending.set(size, (bySize = new Map()));
-    const key = keyOf(ref);
-    const entry = bySize.get(key) ?? { ref, waiters: [] };
-    entry.waiters.push({ resolve, reject });
+    const key = refKey(ref);
+    const entry = bySize.get(key) ?? { ref, waiters: new Set<Waiter>() };
     bySize.set(key, entry);
+    const waiter: Waiter = { resolve, reject };
+    entry.waiters.add(waiter);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        if (entry.waiters.delete(waiter)) reject(signal.reason);
+      },
+      { once: true },
+    );
     timer ??= setTimeout(flush, COLLECT_MS);
   });
 }
@@ -44,22 +64,20 @@ function flush() {
   const batches = [...pending];
   pending.clear();
   for (const [size, bySize] of batches) {
-    const entries = [...bySize.values()];
-    for (let i = 0; i < entries.length; i += MAX_COVER_BATCH) {
-      void send(entries.slice(i, i + MAX_COVER_BATCH), size);
-    }
+    const wanted = [...bySize.values()].filter((e) => e.waiters.size > 0);
+    for (const entries of chunk(wanted, MAX_COVER_BATCH)) void send(entries, size);
   }
 }
 
-async function send(entries: { ref: BookRef; waiters: Waiter[] }[], size: ThumbSize) {
+async function send(entries: Entry[], size: ThumbSize) {
   try {
     const { covers } = await api.coverThumbs(
       entries.map((e) => e.ref),
       size,
     );
-    const byKey = new Map((covers ?? []).map((c) => [keyOf(c), c.data || null]));
+    const byKey = new Map((covers ?? []).map((c) => [refKey(c), c.data || null]));
     for (const e of entries) {
-      const data = byKey.get(keyOf(e.ref)) ?? null;
+      const data = byKey.get(refKey(e.ref)) ?? null;
       for (const w of e.waiters) w.resolve(data);
     }
   } catch (err) {

@@ -166,8 +166,8 @@ describe('narrators', () => {
     const cards = within(list).getAllByRole('link');
     expect(cards.map((c) => c.textContent)).toEqual([
       'Michael Kramer & Kate Reading2 books · 91h narrated',
-      'Mel Hudson1 book · 17h narrated',
-      'Kevin R. Free1 book · 3h narrated',
+      'Mel Hudson1 book · 16h 40m narrated',
+      'Kevin R. Free1 book · 3h 18m narrated',
     ]);
     expect(screen.getByText('1 book has no narrator')).toBeInTheDocument();
     // No suggestions here: no merge notice.

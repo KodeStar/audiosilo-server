@@ -7,15 +7,13 @@ import {
   type MatchRecording,
   type OverrideField,
 } from '@/api/types';
-import { checkField } from './book-model';
+import type { MatchBy } from '@/api/client';
+import { ISBN, checkField } from './book-model';
 
 // The match dialog's logic (STYLEGUIDE.md "Match with community"): what the
 // search box asks for, which recording of a work is meant, what each field
 // would become, which fields are ticked by default (never the admin's own
 // edits), and how a recording's length compares with the files.
-
-/** What GET .../book/match searches by ({} = the book's own facts). */
-export type MatchBy = { q?: string; asin?: string; isbn?: string };
 
 /** An ASIN (10 alphanumerics from B0) or an ISBN-10/13 is looked up exactly; anything else is words. */
 export function parseMatchQuery(input: string): MatchBy {
@@ -23,7 +21,7 @@ export function parseMatchQuery(input: string): MatchBy {
   if (!text) return {};
   const compact = text.replace(/[- ]/g, '').toUpperCase();
   if (/^B0[A-Z0-9]{8}$/.test(compact)) return { asin: compact };
-  if (/^(\d{9}[\dX]|\d{13})$/.test(compact)) return { isbn: compact };
+  if (ISBN.test(compact)) return { isbn: compact };
   return { q: text };
 }
 

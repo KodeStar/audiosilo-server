@@ -3,18 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { FolderOpen, Lock, Move } from 'lucide-react';
 import { useLibraries } from '@/api/hooks';
 import type { AdminBookDetail } from '@/api/types';
+import { PlaybackStatus } from '@/components/playback-status';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
-import { formatNumber } from '@/lib/format';
-import {
-  detectionKey,
-  fileName,
-  formatLength,
-  formatSize,
-  fullPath,
-  sortFiles,
-} from './book-model';
+import { formatBytes, formatDuration, formatNumber } from '@/lib/format';
+import { joinLibraryPath } from '@/lib/paths';
+import { detectionKey, fileName, sortFiles } from './book-model';
 
 /** Rows shown before "and N more files". */
 const MAX_ROWS = 6;
@@ -26,17 +21,6 @@ export function FilesCard({ detail }: { detail: AdminBookDetail }) {
   const b = detail.book;
   const files = sortFiles(detail.files ?? []);
   const rows = files.slice(0, MAX_ROWS);
-  const playback = b.direct_playable ? (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-      <span className="dot" aria-hidden="true" />
-      {t('book.files.direct')}
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-warning">
-      <span className="dot" data-tone="warn" aria-hidden="true" />
-      {t('book.files.transcode')}
-    </span>
-  );
   const kbps = (bitrate: number) =>
     bitrate > 0 ? t('book.files.kbps', { n: formatNumber(Math.round(bitrate / 1000), lang) }) : '';
 
@@ -47,7 +31,7 @@ export function FilesCard({ detail }: { detail: AdminBookDetail }) {
         title={t('book.files.title')}
         action={
           <span className="text-muted-foreground tabular-nums">
-            {formatNumber(files.length, lang)} · {formatSize(b.size, lang)}
+            {formatNumber(files.length, lang)} · {formatBytes(b.size, lang)}
           </span>
         }
       />
@@ -77,8 +61,8 @@ export function FilesCard({ detail }: { detail: AdminBookDetail }) {
                     {[
                       f.codec.toUpperCase(),
                       kbps(f.bitrate),
-                      formatSize(f.size, lang),
-                      formatLength(f.duration, t),
+                      formatBytes(f.size, lang),
+                      formatDuration(f.duration, lang),
                     ]
                       .filter(Boolean)
                       .join(' · ')}
@@ -91,12 +75,14 @@ export function FilesCard({ detail }: { detail: AdminBookDetail }) {
                   {kbps(f.bitrate)}
                 </td>
                 <td className="hidden px-3 py-2.5 text-right tabular-nums md:table-cell">
-                  {formatSize(f.size, lang)}
+                  {formatBytes(f.size, lang)}
                 </td>
                 <td className="hidden px-3 py-2.5 text-right tabular-nums md:table-cell">
-                  {formatLength(f.duration, t)}
+                  {formatDuration(f.duration, lang)}
                 </td>
-                <td className="md:px-5 md:py-2.5">{playback}</td>
+                <td className="md:px-5 md:py-2.5">
+                  <PlaybackStatus direct={b.direct_playable} />
+                </td>
               </tr>
             ))}
             {files.length > MAX_ROWS ? (
@@ -138,7 +124,7 @@ export function DiskSection({ detail }: { detail: AdminBookDetail }) {
         <div className="flex flex-col gap-1.5">
           <span className="text-[13px] font-semibold">{t('book.disk.location')}</span>
           <code className="rounded-[10px] bg-muted px-3 py-2 font-mono text-[12.5px] leading-[1.6] [overflow-wrap:anywhere]">
-            {fullPath(library?.root, b.path)}
+            {joinLibraryPath(library?.root, b.path)}
           </code>
           <span className="text-[12.5px] text-muted-foreground">{t('book.disk.identity')}</span>
         </div>

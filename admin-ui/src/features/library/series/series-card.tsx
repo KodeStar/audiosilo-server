@@ -6,9 +6,10 @@ import type { AdminBook, SeriesCount } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
-import { bookRoute } from '@/lib/book-route';
+import { bookRoute, refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
-import { formatNumber } from '@/lib/format';
+import { counted, formatNumber } from '@/lib/format';
+import { useMediaQuery } from '@/lib/use-media-query';
 import {
   formatPositions,
   metaCandidate,
@@ -71,7 +72,7 @@ export function SeriesCard({
             {known ? (
               <Summary status={known} fmt={fmt} />
             ) : (
-              t('series.books', { count: s.books, formatted: fmt(s.books) })
+              t('series.books', counted(s.books, lang))
             )}
           </span>
           {unmatched ? (
@@ -97,7 +98,7 @@ export function SeriesCard({
       {books.length === 0 && !complete ? (
         <div className="skel h-[200px] rounded-lg" role="status" aria-label={t('common.loading')} />
       ) : (
-        <Shelf name={s.name} books={books} status={known} fmt={fmt} />
+        <Shelf name={s.name} books={books} status={known} fmt={fmt} fan={seen} />
       )}
     </section>
   );
@@ -127,14 +128,19 @@ function Shelf({
   books,
   status,
   fmt,
+  fan,
 }: {
   name: string;
   books: AdminBook[];
   status?: SeriesStatus;
   fmt: (n: number) => string;
+  /** The card has come into view: its fan of covers may load. */
+  fan: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // The fan only fits beside the spines on wide screens; elsewhere its covers aren't fetched.
+  const wide = useMediaQuery('(min-width: 1024px)');
   const spines = spineRow(books, status?.missing ?? []);
   return (
     // Room above for the hover lift and below for the shelf's shadow, inside the scroller.
@@ -166,7 +172,7 @@ function Shelf({
               ? t('series.spine', { index: fmt(b.series_index), title: b.title })
               : b.title;
           return (
-            <li key={`${b.library_id}:${b.path}`} className="flex h-full items-end">
+            <li key={refKey(b)} className="flex h-full items-end">
               <button
                 type="button"
                 className="spine"
@@ -190,26 +196,28 @@ function Shelf({
             </li>
           );
         })}
-        <li aria-hidden="true" className="ml-auto hidden self-center pr-3 pl-10 lg:flex">
-          {books.slice(0, 4).map((b, i) => (
-            <div
-              key={`${b.library_id}:${b.path}`}
-              className="w-24"
-              style={{
-                marginLeft: i ? -40 : 0,
-                transform: `rotate(${(i - 1.5) * 5}deg) translateY(${Math.abs(i - 1.5) * 4}px)`,
-              }}
-            >
-              <BookCover
-                libraryId={b.library_id}
-                path={b.path}
-                title={b.title}
-                author={b.author}
-                size={160}
-              />
-            </div>
-          ))}
-        </li>
+        {fan && wide ? (
+          <li aria-hidden="true" className="ml-auto flex self-center pr-3 pl-10">
+            {books.slice(0, 4).map((b, i) => (
+              <div
+                key={refKey(b)}
+                className="w-24"
+                style={{
+                  marginLeft: i ? -40 : 0,
+                  transform: `rotate(${(i - 1.5) * 5}deg) translateY(${Math.abs(i - 1.5) * 4}px)`,
+                }}
+              >
+                <BookCover
+                  libraryId={b.library_id}
+                  path={b.path}
+                  title={b.title}
+                  author={b.author}
+                  size={160}
+                />
+              </div>
+            ))}
+          </li>
+        ) : null}
       </ul>
     </div>
   );

@@ -3,59 +3,61 @@ import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Share2 } from 'lucide-react';
-import { api } from '@/api/client';
-import { keys, useShares } from '@/api/hooks';
-import type { AdminBook } from '@/api/types';
+import { SHARE_RULES_LIMIT, api } from '@/api/client';
+import { invalidateBookPages, keys, useShares } from '@/api/hooks';
+import type { BookRef } from '@/api/types';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
 import { RadioCards } from '@/components/ui/radio-cards';
+import { refOf } from '@/lib/book-route';
 import { errorMessage } from '@/lib/errors';
-import { formatNumber } from '@/lib/format';
+import { counted } from '@/lib/format';
 import { toast } from '@/lib/toast';
-
-/** Path rules added at once (one request each), so a large selection doesn't flood the server. */
-const CONCURRENCY = 4;
+import { chunk } from '@/lib/utils';
 
 /**
- * Adds the selected books to a named share: each book's path becomes one of the
- * share's rules, so everyone with the share sees it at once. Whole-library
- * grants aren't offered (they already hold every book of their library).
+ * Adds books to a named share (the Books selection, or the book page's one
+ * book): each book's path becomes one of the share's rules, so everyone with
+ * the share sees it at once. Whole-library grants aren't offered (they already
+ * hold every book of their library), and shares in `alreadyIn` (by id) show,
+ * disabled, as already holding the book.
  */
 export function AddToShareDialog({
   open,
   onOpenChange,
   books,
+  alreadyIn,
   onDone,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  books: AdminBook[];
-  onDone: () => void;
+  /** The books, with their titles when known (one book's title names the dialog). */
+  books: (BookRef & { title?: string })[];
+  alreadyIn?: ReadonlySet<number>;
+  onDone?: () => void;
 }) {
   const { t, i18n } = useTranslation();
-  const count = books.length;
+  const one = books.length === 1 ? books[0].title : undefined;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         icon={Share2}
         title={
-          count === 1
-            ? t('books.share.titleOne', { title: books[0]?.title })
-            : t('books.share.title', {
-                count,
-                formatted: formatNumber(count, i18n.resolvedLanguage ?? 'en'),
-              })
+          one
+            ? t('books.share.titleOne', { title: one })
+            : t('books.share.title', counted(books.length, i18n.resolvedLanguage ?? 'en'))
         }
         description={t('books.share.description')}
       >
         {open ? (
           <AddToShareForm
             books={books}
+            alreadyIn={alreadyIn}
             onClose={() => onOpenChange(false)}
             onDone={() => {
               onOpenChange(false);
-              onDone();
+              onDone?.();
             }}
           />
         ) : null}
@@ -66,10 +68,12 @@ export function AddToShareDialog({
 
 function AddToShareForm({
   books,
+  alreadyIn,
   onClose,
   onDone,
 }: {
-  books: AdminBook[];
+  books: BookRef[];
+  alreadyIn?: ReadonlySet<number>;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -78,10 +82,11 @@ function AddToShareForm({
   const qc = useQueryClient();
   const shares = useShares();
   const named = (shares.data ?? []).filter((s) => s.whole_library_id === undefined);
+  const open = named.filter((s) => !alreadyIn?.has(s.id));
   const [picked, setPicked] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const share = named.find((s) => String(s.id) === picked) ?? named[0];
+  const share = open.find((s) => String(s.id) === picked) ?? open[0];
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,19 +94,13 @@ function AddToShareForm({
     setBusy(true);
     setError('');
     try {
-      for (let i = 0; i < books.length; i += CONCURRENCY) {
-        await Promise.all(
-          books
-            .slice(i, i + CONCURRENCY)
-            .map((b) => api.addSharePath(share.id, { library_id: b.library_id, path: b.path })),
-        );
+      // One request per SHARE_RULES_LIMIT books, each all or nothing.
+      for (const rules of chunk(books.map(refOf), SHARE_RULES_LIMIT)) {
+        await api.addSharePaths(share.id, rules);
       }
       toast.add({
         title: t('books.share.done', { name: share.name }),
-        description: t('books.share.doneBody', {
-          count: books.length,
-          formatted: formatNumber(books.length, lang),
-        }),
+        description: t('books.share.doneBody', counted(books.length, lang)),
         type: 'success',
       });
       onDone();
@@ -111,8 +110,7 @@ function AddToShareForm({
     } finally {
       // Rules added before a failure are kept: the share and book pages refetch either way.
       void qc.invalidateQueries({ queryKey: keys.shares });
-      for (const b of books)
-        void qc.invalidateQueries({ queryKey: keys.book(b.library_id, b.path) });
+      invalidateBookPages(qc, books);
     }
   };
 
@@ -157,10 +155,13 @@ function AddToShareForm({
             options={named.map((s) => ({
               value: String(s.id),
               title: s.name,
-              description: [
-                t('books.share.members', { count: s.member_ids.length }),
-                t('books.share.rules', { count: s.paths?.length ?? 0 }),
-              ].join(' · '),
+              description: alreadyIn?.has(s.id)
+                ? t('books.share.already')
+                : [
+                    t('books.share.members', { count: s.member_ids.length }),
+                    t('books.share.rules', { count: s.paths?.length ?? 0 }),
+                  ].join(' · '),
+              disabled: alreadyIn?.has(s.id),
             }))}
           />
         )}

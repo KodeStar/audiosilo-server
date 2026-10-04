@@ -1,32 +1,21 @@
 import type { BookFilter, BookListParams } from '@/api/client';
-import type { AdminBook, AdminBookSort, BookRef, FacetCount } from '@/api/types';
+import type { AdminBook, AdminBookSort, FacetCount } from '@/api/types';
+import { refKey } from '@/lib/book-route';
+import { compact } from '@/lib/utils';
 import type { Length, LibrarySearch, YesNo } from '../library-search';
 
 // Library > Books, as pure functions: the URL's search params (LibrarySearch)
-// as the API's filter and page request, the active-filter chips, the
-// selection key, the shelves' and tiles' issue flags, and the grid geometry
-// the virtualizer needs. The components stay thin.
+// as the API's filter and page request, the active-filter chips, the shelves'
+// and tiles' issue flags, and the grid geometry the virtualizer needs. The
+// components stay thin.
 
 const HOUR = 3600;
 const DAY_MS = 24 * 3600 * 1000;
 
 /** How many books one keyset page asks for (the server caps it at 200). */
 export const PAGE_SIZE = 60;
-/** The server's cap on one bulk edit (handlers_catalog.go), applied all or nothing. */
-export const BULK_LIMIT = 1000;
 /** How many books a shelf shows. */
 export const SHELF_SIZE = 12;
-
-/** The sort menu's orderings, in its order. */
-export const SORT_OPTIONS: readonly AdminBookSort[] = [
-  'title',
-  'author',
-  'series',
-  'narrator',
-  'added',
-  'duration',
-  'size',
-];
 
 /** Newest, longest and largest read best first; names alphabetically. */
 export function defaultOrder(sort: AdminBookSort): 'asc' | 'desc' {
@@ -48,15 +37,6 @@ export const LENGTH_RANGES: Record<Length, Pick<BookFilter, 'min_duration' | 'ma
  */
 export function daysAgo(days: number, now: number): string {
   return new Date(now - days * DAY_MS).toISOString().slice(0, 10);
-}
-
-/** An object without its unset values, so equal filters make equal query keys. */
-function compact<T extends object>(o: T): T {
-  return Object.fromEntries(
-    Object.entries(o).filter(
-      ([, v]) => v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0),
-    ),
-  ) as T;
 }
 
 const yes = (v: YesNo | undefined) => (v === undefined ? undefined : v === 'yes');
@@ -171,14 +151,6 @@ export function facetOptions(counts: FacetCount[] | undefined, selected?: string
   return list;
 }
 
-/** Search params merged with a patch, dropping what the patch unsets. */
-export function patchSearch<S extends LibrarySearch>(prev: S, patch: Partial<LibrarySearch>): S {
-  return compact({ ...prev, ...patch });
-}
-
-/** A book's key in the selection (library + path is its identity, never an id). */
-export const selectionKey = (b: BookRef) => `${b.library_id}\0${b.path}`;
-
 export type BulkField = 'author' | 'narrator' | 'series';
 export const BULK_FIELDS: readonly BulkField[] = ['author', 'narrator', 'series'];
 
@@ -208,9 +180,6 @@ export function bulkSet(
 /** Something about a book worth an admin's attention, as a tile's flag. */
 export type TileFlag = 'cover' | 'match' | 'transcode' | 'edited';
 
-/** Whether a book carries an identifier the community metadata can match on. */
-export const isMatched = (b: Pick<AdminBook, 'asin' | 'isbn'>) => !!(b.asin || b.isbn);
-
 /**
  * A tile's flags, most actionable first, at most two: no cover, not matched
  * (only while community metadata is on), transcodes, edited.
@@ -218,7 +187,7 @@ export const isMatched = (b: Pick<AdminBook, 'asin' | 'isbn'>) => !!(b.asin || b
 export function tileFlags(b: AdminBook, metadataOn: boolean): TileFlag[] {
   const flags: TileFlag[] = [];
   if (!b.has_cover) flags.push('cover');
-  if (metadataOn && !isMatched(b)) flags.push('match');
+  if (metadataOn && !b.matched) flags.push('match');
   if (!b.direct_playable) flags.push('transcode');
   if (b.edited) flags.push('edited');
   return flags.slice(0, 2);
@@ -243,7 +212,7 @@ export function curatingShelf(
   const out: CurateItem[] = [];
   const add = (books: AdminBook[], issue: CurateItem['issue']) => {
     for (const book of books) {
-      const k = selectionKey(book);
+      const k = refKey(book);
       if (out.length >= max || seen.has(k)) continue;
       seen.add(k);
       out.push({ book, issue });
@@ -279,13 +248,6 @@ export function gridLayout(width: number, phone: boolean): GridLayout {
   return { columns, columnGap, rowGap, rowHeight: Math.round(column + TILE_META) };
 }
 
-/** Books cut into grid rows of `columns`. */
-export function toRows<T>(items: T[], columns: number): T[][] {
-  const rows: T[][] = [];
-  for (let i = 0; i < items.length; i += columns) rows.push(items.slice(i, i + columns));
-  return rows;
-}
-
 /**
  * Whether the list should fetch its next page: the last rendered row is within
  * `ahead` rows of the end, there is a next page, and none is loading.
@@ -298,18 +260,6 @@ export function shouldLoadMore(
   ahead = 2,
 ): boolean {
   return hasMore && !loading && lastIndex !== undefined && lastIndex >= count - 1 - ahead;
-}
-
-/** A length as "27h 18m" ("45m" under an hour), in the language's units. "" when unknown. */
-export function formatDuration(seconds: number, lang: string): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '';
-  const total = Math.round(seconds / 60);
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-  const unit = (n: number, u: 'hour' | 'minute') =>
-    new Intl.NumberFormat(lang, { style: 'unit', unit: u, unitDisplay: 'narrow' }).format(n);
-  if (!h) return unit(m, 'minute');
-  return m ? `${unit(h, 'hour')} ${unit(m, 'minute')}` : unit(h, 'hour');
 }
 
 /** A format as a chip shows it: "m4b" reads "M4B". */

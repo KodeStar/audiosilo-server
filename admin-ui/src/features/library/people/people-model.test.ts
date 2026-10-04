@@ -1,7 +1,5 @@
 import { adminBook, authors } from '@/test/library-fixtures';
 import {
-  chunk,
-  durationParts,
   filterPeople,
   mergeSteps,
   otherSpellingBooks,
@@ -37,13 +35,6 @@ describe('ordering and filtering', () => {
     expect(filterPeople(people, '')).toBe(people);
     expect(filterPeople(people, 'Austen')).toEqual([]);
   });
-
-  it('reads a duration as hours, or minutes under an hour', () => {
-    expect(durationParts(327600)).toEqual({ unit: 'hours', value: 91 });
-    expect(durationParts(5400)).toEqual({ unit: 'hours', value: 2 });
-    expect(durationParts(1500)).toEqual({ unit: 'minutes', value: 25 });
-    expect(durationParts(0)).toEqual({ unit: 'minutes', value: 0 });
-  });
 });
 
 describe('merge suggestions', () => {
@@ -66,8 +57,6 @@ describe('bulk steps', () => {
   const editedB = adminBook({ path: 'c', author: 'B. Sanderson', edited: true });
 
   it('chunks at the bulk limit', () => {
-    expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
-    expect(chunk([])).toEqual([]);
     const refs = Array.from({ length: 2001 }, (_, i) => adminBook({ path: String(i) }));
     expect(mergeSteps(refs, 'author', 'X').map((st) => st.books.length)).toEqual([1000, 1000, 1]);
   });

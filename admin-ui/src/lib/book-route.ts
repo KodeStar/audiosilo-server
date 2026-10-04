@@ -22,3 +22,6 @@ export const refOf = (b: { library_id: number; path: string }): BookRef => ({
   library_id: b.library_id,
   path: b.path,
 });
+
+/** A book's identity as one string, for Map keys and React keys (library + path, never an id). */
+export const refKey = (b: BookRef) => `${b.library_id}\0${b.path}`;

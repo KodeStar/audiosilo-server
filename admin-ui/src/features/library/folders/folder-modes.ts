@@ -7,14 +7,8 @@ import type { FolderMode } from '@/api/types';
 
 export type FolderChoice = FolderMode | 'auto';
 
+/** In display order. Each is named by `folders.mode.<choice>` (a radio card's title, a select's option). */
 export const FOLDER_CHOICES: readonly FolderChoice[] = ['auto', 'book', 'collection'];
-
-/** Each choice's name: a radio card's title, a select's option. */
-export const CHOICE_TITLE: Record<FolderChoice, string> = {
-  auto: 'folders.mode.auto',
-  book: 'folders.mode.book',
-  collection: 'folders.mode.collection',
-};
 
 /** A folder's current choice from its listing entry's `override`. */
 export const choiceOf = (override?: FolderMode | ''): FolderChoice => override || 'auto';

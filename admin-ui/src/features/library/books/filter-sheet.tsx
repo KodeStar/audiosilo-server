@@ -4,13 +4,18 @@ import { Check } from 'lucide-react';
 import type { AdminLibrary, BookFacets, BoolFacet } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Sheet } from '@/components/ui/sheet';
-import { formatNumber } from '@/lib/format';
+import { counted, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { ADDED, LENGTHS, type LibrarySearch, type YesNo } from '../library-search';
+import {
+  ADDED,
+  LENGTHS,
+  PLAYBACK,
+  YES_NO,
+  type LibrarySearch,
+  type Update,
+} from '../library-search';
 import { facetOptions, formatLabel, toggleValue, withoutFilters } from './books-model';
 import { chipClass } from './chip-class';
-
-type Update = (fn: (prev: LibrarySearch) => LibrarySearch) => void;
 
 interface Option {
   value: string;
@@ -56,7 +61,7 @@ export function FilterSheet({
     toggle: () => update((prev) => ({ ...prev, [key]: toggleValue(prev[key], value) })),
   });
   const yesNo = (key: 'cover' | 'matched' | 'chapters' | 'edited', counts?: BoolFacet) =>
-    (['yes', 'no'] as const).map((v: YesNo): Option => ({
+    YES_NO.map((v): Option => ({
       value: v,
       label: t(`books.value.${key}.${v}`),
       count: counts?.[v],
@@ -97,7 +102,7 @@ export function FilterSheet({
     {
       key: 'playback',
       title: t('books.facet.playback'),
-      options: (['direct', 'transcode'] as const).map((v) => ({
+      options: PLAYBACK.map((v) => ({
         value: v,
         label: t(`books.value.playback.${v}`),
         count: facets?.direct_playable[v === 'direct' ? 'yes' : 'no'],
@@ -152,7 +157,7 @@ export function FilterSheet({
             {t('books.sheet.clear')}
           </Button>
           <Button onClick={() => onOpenChange(false)}>
-            {t('books.sheet.show', { count: total, formatted: formatNumber(total, lang) })}
+            {t('books.sheet.show', counted(total, lang))}
           </Button>
         </>
       }

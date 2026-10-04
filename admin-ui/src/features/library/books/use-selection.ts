@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { AdminBook } from '@/api/types';
-import { selectionKey } from './books-model';
+import { refKey } from '@/lib/book-route';
 
 /**
  * The books picked for a bulk action, keyed by identity (library + path). The
@@ -13,7 +13,7 @@ export function useSelection() {
   const toggle = useCallback((b: AdminBook) => {
     setSelected((prev) => {
       const next = new Map(prev);
-      const k = selectionKey(b);
+      const k = refKey(b);
       if (next.has(k)) next.delete(k);
       else next.set(k, b);
       return next;
@@ -25,15 +25,15 @@ export function useSelection() {
     setSelected((prev) => {
       const next = new Map(prev);
       for (const b of books) {
-        if (on) next.set(selectionKey(b), b);
-        else next.delete(selectionKey(b));
+        if (on) next.set(refKey(b), b);
+        else next.delete(refKey(b));
       }
       return next;
     });
   }, []);
 
   const clear = useCallback(() => setSelected(new Map()), []);
-  const isSelected = useCallback((b: AdminBook) => selected.has(selectionKey(b)), [selected]);
+  const isSelected = useCallback((b: AdminBook) => selected.has(refKey(b)), [selected]);
   const books = useMemo(() => [...selected.values()], [selected]);
 
   return { size: selected.size, books, toggle, setMany, clear, isSelected };

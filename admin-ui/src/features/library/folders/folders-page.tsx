@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate, useSearch } from '@tanstack/react-router';
+import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import {
   Database,
@@ -11,7 +11,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useLibraries, useScanFinished } from '@/api/hooks';
+import { keys, useLibraries } from '@/api/hooks';
 import type { AdminLibrary } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Notice } from '@/components/notice';
@@ -20,63 +20,39 @@ import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { NativeSelect } from '@/components/ui/native-select';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { rescanLibrary } from '@/features/libraries/rescan';
-import { errorMessage } from '@/lib/errors';
+import { LibraryFilter } from '../library-filter';
+import { useUpdateSearch } from '../library-param';
+import type { LibrarySearch } from '../library-search';
 import { FolderDetail } from './folder-detail';
 import { FolderTree } from './folder-tree';
 import { treeRows, visibleListings, withAncestors, type ListingState } from './folders-model';
-
-/** Up to this many libraries pick from a segmented control; more from a select. */
-const SEGMENTED_MAX = 4;
 
 /**
  * Library > Folders: a library's folders as a tree, and for the selected one
  * how AudioSilo reads it (a folder that holds audio is one book) with the
  * override that corrects it. `?library=` and `?folder=` deep-link the
- * selection; the book page links here with both.
+ * selection; the book page links here with both. A finished rescan (which can
+ * change which folders are books) refetches the listings (the scan watcher).
  */
 export function FoldersPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const libraries = useLibraries();
-  const search = useSearch({ strict: false }) as { library?: number; folder?: string };
-  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as LibrarySearch;
+  const update = useUpdateSearch();
   const all = libraries.data ?? [];
   const library = all.find((l) => l.id === search.library) ?? all[0];
+  const go = (next: Pick<LibrarySearch, 'library' | 'folder'>) =>
+    update((prev) => ({ ...prev, ...next }));
 
-  // A finished rescan can change which folders are books.
-  useScanFinished((l) => void qc.invalidateQueries({ queryKey: ['fs', l.id] }));
-
-  const go = (next: { library?: number; folder?: string }) =>
-    void navigate({ to: '.', search: (prev) => ({ ...prev, ...next }), replace: true });
-
-  const picker =
-    all.length > 1 && library ? (
-      all.length <= SEGMENTED_MAX ? (
-        <SegmentedControl
-          label={t('folders.libraryPicker')}
-          value={library.id}
-          onChange={(id) => go({ library: id, folder: undefined })}
-          options={all.map((l) => ({ value: l.id, label: l.name }))}
-          className="hscroll max-w-full"
-        />
-      ) : (
-        <NativeSelect
-          aria-label={t('folders.libraryPicker')}
-          className="w-[220px]"
-          value={library.id}
-          onChange={(e) => go({ library: Number(e.target.value), folder: undefined })}
-        >
-          {all.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name}
-            </option>
-          ))}
-        </NativeSelect>
-      )
-    ) : null;
+  const picker = library ? (
+    <LibraryFilter
+      allowAll={false}
+      value={library.id}
+      onChange={(id) => go({ library: id, folder: undefined })}
+    />
+  ) : null;
 
   return (
     <Page>
@@ -180,7 +156,7 @@ function FolderExplorer({
     return (
       <QueryError
         title={t('folders.error', { library: library.name })}
-        error={new Error(errorMessage(root.error, t))}
+        error={root.error}
         onRetry={() => void root.refetch()}
       />
     );

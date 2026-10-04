@@ -8,9 +8,9 @@ import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { formatNumber } from '@/lib/format';
-import { LibraryFilter } from '../people/library-filter';
-import { useLibraryBookCount, useLibraryParam } from '../people/library-param';
+import { counted } from '@/lib/format';
+import { LibraryFilter } from '../library-filter';
+import { useLibraryBookCount, useLibraryParam } from '../library-param';
 import { SeriesCard } from './series-card';
 import { CARD_STEP, groupSeriesPages } from './series-model';
 
@@ -49,13 +49,12 @@ export function SeriesPage() {
   }, [needMore, isFetchingNextPage, booksFailed, fetchNextPage]);
 
   const rest = list.length - shown.length;
-  const counted = (n: number) => ({ count: n, formatted: formatNumber(n, lang) });
 
   return (
     <Page>
       <PageHead
         title={t('series.title')}
-        description={list.length ? t('series.description', counted(list.length)) : undefined}
+        description={list.length ? t('series.description', counted(list.length, lang)) : undefined}
         action={<LibraryFilter />}
       />
       {series.isError ? (
@@ -129,7 +128,7 @@ export function SeriesPage() {
           {rest > 0 ? (
             <div className="mt-4 flex justify-center">
               <Button variant="outline" onClick={() => setLimit((n) => n + CARD_STEP)}>
-                {t('series.showMore', counted(Math.min(rest, CARD_STEP)))}
+                {t('series.showMore', counted(Math.min(rest, CARD_STEP), lang))}
               </Button>
             </div>
           ) : null}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useCover } from '@/api/hooks';
-import { coverModel, coverTint } from '@/lib/cover-model';
+import { coverModel } from '@/lib/cover-model';
 import { tintFromPalette, tintFromPixels, type HeroTint } from './tint-model';
 
 const SAMPLE = 24;
@@ -31,7 +31,8 @@ export function useHeroTint(
   title: string,
   author: string,
 ): HeroTint | undefined {
-  const cover = useCover(libraryId, path, 'full');
+  // The backdrop's thumbnail (it is blurred anyway): shared, and plenty to sample.
+  const cover = useCover(libraryId, path, 160);
   const art = cover.data;
   const [sampled, setSampled] = useState<{ url: string; tint?: HeroTint }>();
 
@@ -49,6 +50,6 @@ export function useHeroTint(
   }, [art]);
 
   if (cover.isPending) return undefined;
-  if (!art) return tintFromPalette(coverTint(title, author), coverModel(title, author).palette);
+  if (!art) return tintFromPalette(coverModel(title, author).palette);
   return sampled?.url === art ? sampled.tint : undefined;
 }

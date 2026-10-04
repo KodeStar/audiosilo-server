@@ -9,7 +9,6 @@ import { FolderBrowser } from '@/components/folder-browser';
 import { Dialog, DialogBody, DialogContent } from '@/components/ui/dialog';
 import { NativeSelect } from '@/components/ui/native-select';
 import {
-  CHOICE_TITLE,
   FOLDER_CHOICES,
   choiceOf,
   modeOf,
@@ -100,7 +99,7 @@ function DetectionBrowser({ library }: { library: AdminLibrary }) {
           >
             {FOLDER_CHOICES.map((c) => (
               <option key={c} value={c}>
-                {t(CHOICE_TITLE[c])}
+                {t(`folders.mode.${c}`)}
               </option>
             ))}
           </NativeSelect>

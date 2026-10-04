@@ -1,10 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import { Loader2, Merge } from 'lucide-react';
-import type { MergeSuggestion, PersonCount } from '@/api/types';
+import type { MergeSuggestion, PersonCount, PersonField } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Button } from '@/components/ui/button';
-import { formatNumber } from '@/lib/format';
-import { otherSpellingBooks, otherSpellings, type PersonField } from './people-model';
+import { counted } from '@/lib/format';
+import { otherSpellingBooks, otherSpellings } from './people-model';
 import { useMerge } from './use-merge';
 
 /**
@@ -53,7 +53,7 @@ export function MergeSuggestions({
               </Button>
             }
           >
-            {t('people-merge.body', { count: books, formatted: formatNumber(books, lang) })}
+            {t('people-merge.body', counted(books, lang))}
           </Notice>
         );
       })}

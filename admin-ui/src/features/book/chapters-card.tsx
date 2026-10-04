@@ -1,17 +1,19 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronUp, Info, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
 import { settleBookEdit } from '@/api/hooks';
 import type { AdminBookDetail, AdminChapter, BookEditRequest } from '@/api/types';
+import { InlineEdit } from '@/components/inline-edit';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { toastError } from '@/lib/errors';
+import { formatClock, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { chapterProblem, fileStrip, formatClock, formatLength, ribbonSegments } from './book-model';
+import { chapterProblem, fileStrip, ribbonSegments } from './book-model';
 
 /** Rows shown before "Show all". */
 const FIRST_ROWS = 10;
@@ -22,7 +24,8 @@ const FIRST_ROWS = 10;
  * title is renamed in place and saved at once as an override.
  */
 export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const b = detail.book;
   const chapters = detail.chapters ?? [];
@@ -85,7 +88,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
         description={t('book.chapters.summary', {
           chapters: t('book.chapters.count', { count: chapters.length }),
           files: t('book.chapters.files', { count: files.length }),
-          length: formatLength(b.duration, t),
+          length: formatDuration(b.duration, lang),
         })}
       />
       <div className="flex flex-col gap-3.5 p-5">
@@ -94,7 +97,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
             <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             {problem === 'none'
               ? t('book.chapters.none')
-              : t('book.chapters.single', { length: formatLength(b.duration, t) })}
+              : t('book.chapters.single', { length: formatDuration(b.duration, lang) })}
           </p>
         ) : null}
         {chapters.length > 1 ? (
@@ -212,7 +215,7 @@ function ChapterRow({
   onRename: (title: string) => void;
   onRevert: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const row = useRef<HTMLLIElement>(null);
   // A segment clicked in the ribbon brings its row into view.
   useEffect(() => {
@@ -230,7 +233,12 @@ function ChapterRow({
     >
       <span className="text-[12px] text-subtle-foreground tabular-nums">{n}</span>
       {editing ? (
-        <ChapterInput title={c.title} onCancel={onCancel} onSave={onRename} />
+        <InlineEdit
+          initial={c.title}
+          aria-label={t('book.chapters.titleLabel')}
+          onDone={(title) => (title === undefined ? onCancel() : onRename(title))}
+          className="h-[30px] px-2.5 text-[13.5px]"
+        />
       ) : (
         <span className="flex min-w-0 items-center gap-1.5">
           <button
@@ -261,61 +269,8 @@ function ChapterRow({
         {formatClock(c.book_offset, withHours)}
       </span>
       <span className="hidden text-right text-[12px] text-subtle-foreground tabular-nums md:block">
-        <ChapterLength seconds={c.end - c.start} />
+        {formatDuration(c.end - c.start, i18n.resolvedLanguage ?? 'en')}
       </span>
     </li>
-  );
-}
-
-function ChapterLength({ seconds }: { seconds: number }) {
-  const { t } = useTranslation();
-  return <>{formatLength(seconds, t)}</>;
-}
-
-/** Renaming in place: Enter or leaving saves, Escape cancels. */
-function ChapterInput({
-  title,
-  onSave,
-  onCancel,
-}: {
-  title: string;
-  onSave: (title: string) => void;
-  onCancel: () => void;
-}) {
-  const { t } = useTranslation();
-  const ref = useRef<HTMLInputElement>(null);
-  const ended = useRef(false);
-  // Before paint, so a key pressed in the first frame isn't overwritten by select().
-  useLayoutEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
-  }, []);
-  const end = (fn: () => void) => {
-    if (ended.current) return;
-    ended.current = true;
-    fn();
-  };
-  return (
-    <input
-      ref={ref}
-      defaultValue={title}
-      aria-label={t('book.chapters.titleLabel')}
-      className="h-[30px] w-full min-w-0 rounded-md border border-input bg-card px-2.5 text-[13.5px] outline-none focus-visible:border-ring focus-visible:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_20%,transparent)]"
-      onBlur={(e) => {
-        const v = e.currentTarget.value;
-        end(() => onSave(v));
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          const v = e.currentTarget.value;
-          end(() => onSave(v));
-        } else if (e.key === 'Escape') {
-          e.preventDefault();
-          e.stopPropagation();
-          end(onCancel);
-        }
-      }}
-    />
   );
 }

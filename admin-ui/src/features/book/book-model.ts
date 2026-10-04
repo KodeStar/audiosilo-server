@@ -12,7 +12,7 @@ import {
 // The book page's logic, kept out of the components so it is unit-tested: field
 // validation (the server's normalizeOverride rules, so a value is refused here
 // with a message under the field before a save is tried), the unsaved edits and
-// their diff, time and size formatting, and the chapter ribbon's segment math.
+// their diff, and the chapter ribbon's segment math.
 
 /** Unsaved edits: what the admin typed per field, before normalizing. */
 export type Drafts = Partial<Record<OverrideField, string>>;
@@ -35,7 +35,8 @@ const CONTROL_IN_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
 const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const PUBLISHED = /^\d{4}(-\d{2}(-\d{2})?)?$/;
 const ASIN = /^[A-Z0-9]{10}$/;
-const ISBN = /^(\d{9}[\dX]|\d{13})$/;
+/** An ISBN-10 or ISBN-13, upper case, without hyphens or spaces. */
+export const ISBN = /^(\d{9}[\dX]|\d{13})$/;
 
 const runes = (s: string) => [...s].length;
 
@@ -154,49 +155,6 @@ export function undoRevertRequest(field: OverrideField, before: FieldValue): Boo
   };
 }
 
-// ---- time and size ----
-
-/** "1:02:05" (or "2:05" under an hour unless `withHours`). */
-export function formatClock(seconds: number, withHours = seconds >= 3600): string {
-  const s = Math.max(0, Math.round(seconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = String(s % 60).padStart(2, '0');
-  return withHours || h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
-}
-
-/** A translate function (i18next's `t`, or a stub in tests). */
-type Translate = (key: string, opts: Record<string, unknown>) => string;
-
-/** "45h 30m", "2h", "38m", "40s". */
-export function formatLength(seconds: number, t: Translate): string {
-  const s = Math.max(0, Math.round(seconds));
-  if (s < 60) return t('book.len.s', { s });
-  const total = Math.round(s / 60);
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-  if (h && m) return t('book.len.hm', { h, m });
-  return h ? t('book.len.h', { h }) : t('book.len.m', { m });
-}
-
-const SIZE_UNITS = ['byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const;
-
-/** "1.3 GB" (decimal units, one decimal under 10). */
-export function formatSize(bytes: number, lang: string): string {
-  let v = Math.max(0, bytes);
-  let i = 0;
-  while (v >= 1000 && i < SIZE_UNITS.length - 1) {
-    v /= 1000;
-    i++;
-  }
-  return new Intl.NumberFormat(lang, {
-    style: 'unit',
-    unit: SIZE_UNITS[i],
-    unitDisplay: 'short',
-    maximumFractionDigits: v < 10 && i > 0 ? 1 : 0,
-  }).format(v);
-}
-
 // ---- files and chapters ----
 
 /** A file's name as shown under its book: the part after the book's folder. */
@@ -256,17 +214,6 @@ export function chapterProblem(
 }
 
 // ---- the rest of the page ----
-
-/** What the hero's eyebrow says: the series and position, if any. */
-export function seriesLine(series: string, index: number): { series: string; n?: string } | null {
-  if (!series) return null;
-  return index > 0 ? { series, n: String(index) } : { series };
-}
-
-/** The book's full path on the server, for Copy path. */
-export function fullPath(root: string | undefined, path: string): string {
-  return root ? `${root.replace(/\/+$/, '')}/${path}` : path;
-}
 
 /** The i18n key for a folder's detection. */
 export function detectionKey(override: FolderMode | ''): string {

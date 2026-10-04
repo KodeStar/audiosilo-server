@@ -1,20 +1,15 @@
 import type { FsEntry, FsListing } from '@/api/types';
+import { relParent } from '@/lib/paths';
 
 // Library > Folders, the logic: shaping lazily loaded listings into the rows of
 // one accessible tree, which folders to open for a deep link, a folder's audio
 // files, and the tree's keyboard model. Paths are library-relative and
 // slash-separated ("" = the library root).
 
-/** The folder a path sits in ("A/B" → "A", "A" → ""). */
-export function parentOf(path: string): string {
-  const i = path.lastIndexOf('/');
-  return i < 0 ? '' : path.slice(0, i);
-}
-
 /** The folders to open so `path` shows in the tree, outermost first ("A/B/C" → ["A", "A/B"]). */
 export function ancestorsOf(path: string): string[] {
   const out: string[] = [];
-  for (let p = parentOf(path); p; p = parentOf(p)) out.unshift(p);
+  for (let p = relParent(path); p; p = relParent(p)) out.unshift(p);
   return out;
 }
 
@@ -122,7 +117,7 @@ export function treeKeyAction(rows: TreeRow[], focused: string, key: string): Tr
       return folders[i + 1]?.level === row.level + 1 ? focus(folders[i + 1]) : null;
     case 'ArrowLeft': {
       if (row.expanded) return { type: 'collapse', path: row.entry.path };
-      const parent = parentOf(row.entry.path);
+      const parent = relParent(row.entry.path);
       return parent ? { type: 'focus', path: parent } : null;
     }
     case 'Enter':
@@ -146,42 +141,4 @@ export function audioFilesOf(listing: FsListing) {
     ? files.reduce((n, f) => n + (f.duration ?? 0), 0)
     : undefined;
   return { files, size, duration };
-}
-
-/** A folder's full path on the server: the library root, then the library-relative path. */
-export function fullPath(root: string, path: string): string {
-  const base = root.replace(/[\\/]+$/, '');
-  return path ? `${base}/${path}` : root;
-}
-
-/** The last segment of a library-relative path. */
-export const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
-
-const BYTE_UNITS = ['kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const;
-
-/** 1,310,000,000 → "1.3 GB": decimal units, from kB up (an audio file is never a few bytes). */
-export function formatBytes(bytes: number, lang: string): string {
-  let n = Math.max(0, bytes) / 1000;
-  let u = 0;
-  while (n >= 1000 && u < BYTE_UNITS.length - 1) {
-    n /= 1000;
-    u++;
-  }
-  return new Intl.NumberFormat(lang, {
-    style: 'unit',
-    unit: BYTE_UNITS[u],
-    unitDisplay: 'short',
-    maximumFractionDigits: n >= 100 ? 0 : 1,
-  }).format(n);
-}
-
-/** 4,530 s → "1h 15m"; under an hour, minutes; under a minute, seconds. */
-export function formatDuration(seconds: number, lang: string): string {
-  const unit = (n: number, u: 'hour' | 'minute' | 'second') =>
-    new Intl.NumberFormat(lang, { style: 'unit', unit: u, unitDisplay: 'narrow' }).format(n);
-  const s = Math.round(Math.max(0, seconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h) return m ? `${unit(h, 'hour')} ${unit(m, 'minute')}` : unit(h, 'hour');
-  return m ? unit(m, 'minute') : unit(s, 'second');
 }

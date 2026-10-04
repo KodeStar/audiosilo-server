@@ -13,7 +13,7 @@ import {
   Search,
   Sparkles,
 } from 'lucide-react';
-import { ApiError, api } from '@/api/client';
+import { ApiError, api, type MatchBy } from '@/api/client';
 import { settleBookEdit, useMatchCandidates } from '@/api/hooks';
 import type { AdminBookDetail, MatchCandidate, MatchRecording, OverrideField } from '@/api/types';
 import { GeneratedCover } from '@/components/generated-cover';
@@ -30,9 +30,9 @@ import {
 } from '@/components/ui/dialog';
 import { NativeSelect } from '@/components/ui/native-select';
 import { errorMessage, toastError } from '@/lib/errors';
+import { formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { formatLength } from './book-model';
 import {
   acceptRequest,
   compareRows,
@@ -42,7 +42,6 @@ import {
   parseMatchQuery,
   scoreTone,
   type CompareRow,
-  type MatchBy,
 } from './match-model';
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 3)}...` : s);
@@ -51,8 +50,7 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 3)}...`
  * Match with community metadata (STYLEGUIDE.md "Match with community"): find
  * the work (by the book's own facts, words, or an ASIN / ISBN), then compare
  * field by field and accept the ticked ones. The admin's own edits start
- * unticked. Mount it fresh for each opening (a `key`), so it starts at the
- * search.
+ * unticked. Each opening starts afresh, at the search.
  */
 export function MatchDialog({
   open,
@@ -64,16 +62,60 @@ export function MatchDialog({
   detail: AdminBookDetail;
 }) {
   const { t } = useTranslation();
+  const [step, setStep] = useState<Step>('search');
+  // Back to the search on opening (the step names the dialog, so it lives out here).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setStep('search');
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        size="lg"
+        tone="community"
+        icon={Sparkles}
+        title={step === 'search' ? t('book.match.title') : t('book.match.compareTitle')}
+        description={
+          step === 'search' ? t('book.match.description') : t('book.match.compareDescription')
+        }
+      >
+        {open ? (
+          <MatchBody
+            detail={detail}
+            step={step}
+            onStep={setStep}
+            onDone={() => onOpenChange(false)}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type Step = 'search' | 'compare';
+
+function MatchBody({
+  detail,
+  step,
+  onStep: setStep,
+  onDone,
+}: {
+  detail: AdminBookDetail;
+  step: Step;
+  onStep: (step: Step) => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const b = detail.book;
-  const [step, setStep] = useState<'search' | 'compare'>('search');
   const [query, setQuery] = useState([b.title, b.author].filter(Boolean).join(' '));
   const [by, setBy] = useState<MatchBy>({});
   const [pickId, setPickId] = useState<string>();
   const [recId, setRecId] = useState<string>();
   const [ticks, setTicks] = useState<Set<OverrideField>>(new Set());
   const [busy, setBusy] = useState(false);
-  const search = useMatchCandidates(b.library_id, b.path, by, open);
+  const search = useMatchCandidates(b.library_id, b.path, by, true);
   const candidates = search.data ?? [];
   const picked = candidates.find((c) => c.work_id === pickId) ?? candidates[0];
   const recordingOf = (c: MatchCandidate, id = recId) =>
@@ -103,124 +145,111 @@ export function MatchDialog({
           : t('book.match.acceptedBody'),
         type: 'success',
       });
-      onOpenChange(false);
+      onDone();
     } catch (err) {
       setBusy(false);
       toastError(t('book.match.acceptFailed'), err);
     }
   };
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        size="lg"
-        tone="community"
-        icon={Sparkles}
-        title={step === 'search' ? t('book.match.title') : t('book.match.compareTitle')}
-        description={
-          step === 'search' ? t('book.match.description') : t('book.match.compareDescription')
-        }
-      >
-        {step === 'search' ? (
-          <>
-            <DialogBody className="flex flex-col gap-3.5">
-              <form
-                role="search"
-                className="flex flex-wrap items-center gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  setBy(parseMatchQuery(query));
-                  setPickId(undefined);
-                  setRecId(undefined);
-                }}
-              >
-                <label className="flex h-[38px] min-w-0 flex-1 basis-64 items-center gap-2 rounded-md border border-input bg-card px-3 focus-within:border-ring focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_20%,transparent)]">
-                  <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    aria-label={t('book.match.searchLabel')}
-                    className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none"
-                  />
-                  <span className="hidden text-[12px] whitespace-nowrap text-subtle-foreground md:inline">
-                    {t('book.match.idHint')}
-                  </span>
-                </label>
-                <Button type="submit" variant="outline">
-                  {t('book.match.search')}
-                </Button>
-              </form>
-              <Candidates
-                search={search}
-                candidates={candidates}
-                picked={picked}
-                bookSeconds={b.duration}
-                recordingOf={recordingOf}
-                onPick={(id) => {
-                  setPickId(id);
-                  setRecId(undefined);
-                }}
-              />
-            </DialogBody>
-            <DialogFooter>
-              <DialogClose render={<Button type="button" variant="ghost" />}>
-                {t('common.cancel')}
-              </DialogClose>
-              <Button onClick={compare} disabled={!picked}>
-                {t('book.match.compareFields')}
-                <ArrowRight aria-hidden="true" />
-              </Button>
-            </DialogFooter>
-          </>
-        ) : picked ? (
-          <>
-            <DialogBody className="flex flex-col gap-4">
-              <CompareHeader
-                candidate={picked}
-                recording={rec}
-                bookSeconds={b.duration}
-                onRecording={pickRecording}
-              />
-              <CompareTable
-                rows={rows}
-                ticks={ticks}
-                onToggle={(f, on) => {
-                  const next = new Set(ticks);
-                  if (on) next.add(f);
-                  else next.delete(f);
-                  setTicks(next);
-                }}
-              />
-            </DialogBody>
-            <DialogFooter>
-              <Button variant="ghost" className="mr-auto" onClick={() => setStep('search')}>
-                <ChevronLeft aria-hidden="true" />
-                {t('book.match.back')}
-              </Button>
-              <DialogClose render={<Button type="button" variant="ghost" />}>
-                {t('common.cancel')}
-              </DialogClose>
-              <Button onClick={() => void accept()} disabled={busy || ticks.size === 0}>
-                {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-                {t('book.match.accept', { count: ticks.size })}
-              </Button>
-            </DialogFooter>
-          </>
-        ) : null}
-      </DialogContent>
-    </Dialog>
-  );
+  return step === 'search' ? (
+    <>
+      <DialogBody className="flex flex-col gap-3.5">
+        <form
+          role="search"
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setBy(parseMatchQuery(query));
+            setPickId(undefined);
+            setRecId(undefined);
+          }}
+        >
+          <label className="flex h-[38px] min-w-0 flex-1 basis-64 items-center gap-2 rounded-md border border-input bg-card px-3 focus-within:border-ring focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_20%,transparent)]">
+            <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label={t('book.match.searchLabel')}
+              className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none"
+            />
+            <span className="hidden text-[12px] whitespace-nowrap text-subtle-foreground md:inline">
+              {t('book.match.idHint')}
+            </span>
+          </label>
+          <Button type="submit" variant="outline">
+            {t('book.match.search')}
+          </Button>
+        </form>
+        <Candidates
+          search={search}
+          candidates={candidates}
+          picked={picked}
+          bookSeconds={b.duration}
+          recordingOf={recordingOf}
+          onPick={(id) => {
+            setPickId(id);
+            setRecId(undefined);
+          }}
+        />
+      </DialogBody>
+      <DialogFooter>
+        <DialogClose render={<Button type="button" variant="ghost" />}>
+          {t('common.cancel')}
+        </DialogClose>
+        <Button onClick={compare} disabled={!picked}>
+          {t('book.match.compareFields')}
+          <ArrowRight aria-hidden="true" />
+        </Button>
+      </DialogFooter>
+    </>
+  ) : picked ? (
+    <>
+      <DialogBody className="flex flex-col gap-4">
+        <CompareHeader
+          candidate={picked}
+          recording={rec}
+          bookSeconds={b.duration}
+          onRecording={pickRecording}
+        />
+        <CompareTable
+          rows={rows}
+          ticks={ticks}
+          onToggle={(f, on) => {
+            const next = new Set(ticks);
+            if (on) next.add(f);
+            else next.delete(f);
+            setTicks(next);
+          }}
+        />
+      </DialogBody>
+      <DialogFooter>
+        <Button variant="ghost" className="mr-auto" onClick={() => setStep('search')}>
+          <ChevronLeft aria-hidden="true" />
+          {t('book.match.back')}
+        </Button>
+        <DialogClose render={<Button type="button" variant="ghost" />}>
+          {t('common.cancel')}
+        </DialogClose>
+        <Button onClick={() => void accept()} disabled={busy || ticks.size === 0}>
+          {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+          {t('book.match.accept', { count: ticks.size })}
+        </Button>
+      </DialogFooter>
+    </>
+  ) : null;
 }
 
 function recordingLine(
   rec: MatchRecording | undefined,
   t: (key: string, opts?: Record<string, unknown>) => string,
+  lang: string,
 ): string {
   if (!rec) return '';
   const narrators = (rec.narrators ?? []).map((n) => n.name).join(', ');
   return [
     narrators ? t('book.match.readBy', { narrators }) : '',
-    rec.runtime_min ? formatLength(rec.runtime_min * 60, t) : '',
+    rec.runtime_min ? formatDuration(rec.runtime_min * 60, lang) : '',
     rec.publisher ?? '',
     rec.abridged ? t('book.match.abridged') : '',
   ]
@@ -243,7 +272,8 @@ function Candidates({
   recordingOf: (c: MatchCandidate) => MatchRecording | undefined;
   onPick: (workId: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   if (search.isPending) {
     return (
       <div className="flex flex-col gap-2" role="status" aria-label={t('book.match.searching')}>
@@ -255,10 +285,10 @@ function Candidates({
   }
   if (search.isError) {
     const err = search.error;
+    // Turned off is for Server settings, not a retry; a 502 is metaserve itself down.
     const off = err instanceof ApiError && err.code === 'metadata_off';
-    const message = off
-      ? t('book.match.off')
-      : err instanceof ApiError && err.status === 502
+    const message =
+      err instanceof ApiError && err.status === 502
         ? t('book.match.unreachable')
         : errorMessage(err, t);
     return (
@@ -314,7 +344,7 @@ function Candidates({
                 ) : null}
               </b>
               <span className="text-[12.5px] text-muted-foreground">
-                {[authors, recordingLine(rec, t)].filter(Boolean).join(' · ')}
+                {[authors, recordingLine(rec, t, lang)].filter(Boolean).join(' · ')}
               </span>
               {rec?.asins?.[0] || rec?.isbns?.[0] ? (
                 <span className="font-mono text-[12px] text-subtle-foreground">
@@ -330,7 +360,9 @@ function Candidates({
                 <span className="text-[11.5px] text-subtle-foreground">
                   {length.kind === 'match'
                     ? t('book.match.lengthMatches')
-                    : t(`book.match.${length.kind}`, { length: formatLength(length.seconds, t) })}
+                    : t(`book.match.${length.kind}`, {
+                        length: formatDuration(length.seconds, lang),
+                      })}
                 </span>
               ) : null}
             </span>
@@ -352,7 +384,8 @@ function CompareHeader({
   bookSeconds: number;
   onRecording: (id: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   const authors = (c.authors ?? []).map((a) => a.name).join(', ');
   const recs = c.recordings ?? [];
   const length = lengthComparison(recording?.runtime_min, bookSeconds);
@@ -373,19 +406,21 @@ function CompareHeader({
             >
               {recs.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {recordingLine(r, t) || r.id}
+                  {recordingLine(r, t, lang) || r.id}
                 </option>
               ))}
             </NativeSelect>
           </label>
         ) : (
-          <span className="text-[12.5px] text-muted-foreground">{recordingLine(recording, t)}</span>
+          <span className="text-[12.5px] text-muted-foreground">
+            {recordingLine(recording, t, lang)}
+          </span>
         )}
         {length ? (
           <span className="text-[12px] text-subtle-foreground">
             {length.kind === 'match'
               ? t('book.match.lengthMatches')
-              : t(`book.match.${length.kind}`, { length: formatLength(length.seconds, t) })}
+              : t(`book.match.${length.kind}`, { length: formatDuration(length.seconds, lang) })}
           </span>
         ) : null}
       </div>

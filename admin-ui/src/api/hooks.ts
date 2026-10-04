@@ -4,22 +4,33 @@ import {
   useInfiniteQuery,
   useQuery,
   useQueryClient,
+  type InfiniteData,
   type QueryClient,
 } from '@tanstack/react-query';
-import { api, fetchCover, type BookFilter, type BookListParams } from './client';
-import { loadThumb, type ThumbSize } from './cover-batch';
-import type { AdminBookDetail, AdminLibrary, BookRef } from './types';
+import { refKey } from '@/lib/book-route';
+import { compact } from '@/lib/utils';
+import { api, type BookFilter, type BookListParams, type MatchBy, type ThumbSize } from './client';
+import { loadThumb } from './cover-batch';
+import type {
+  AdminBook,
+  AdminBookDetail,
+  AdminBookPage,
+  AdminLibrary,
+  BookRef,
+  PersonField,
+} from './types';
 
 // Query keys live here so invalidation and the hooks can't drift apart.
 export const keys = {
   server: ['server'] as const,
   stats: ['admin', 'stats'] as const,
   settings: ['admin', 'settings'] as const,
-  cover: (libraryId: number, path: string) => ['cover', libraryId, path] as const,
   thumb: (libraryId: number, path: string, size: ThumbSize) =>
     ['thumb', libraryId, path, size] as const,
   libraries: ['admin', 'libraries'] as const,
   recentBooks: (libraryId: number) => ['books', 'recent', libraryId] as const,
+  /** Every listing of one library's folders (a prefix: a scan changes them). */
+  browseLibrary: (libraryId: number) => ['fs', libraryId] as const,
   browse: (libraryId: number, path: string) => ['fs', libraryId, path] as const,
   dirs: (path: string) => ['admin', 'dirs', path] as const,
   users: ['admin', 'users'] as const,
@@ -28,13 +39,15 @@ export const keys = {
   shares: ['admin', 'shares'] as const,
   /** Every admin book list and facet count (a prefix: invalidate after any edit). */
   books: ['admin', 'books'] as const,
+  /** Every loaded book list (a prefix). */
+  bookLists: ['admin', 'books', 'list'] as const,
   bookList: (params: BookListParams) => ['admin', 'books', 'list', params] as const,
   bookFacets: (filter: BookFilter) => ['admin', 'books', 'facets', filter] as const,
-  authors: (libraryId?: number) => ['admin', 'books', 'authors', libraryId ?? 0] as const,
-  narrators: (libraryId?: number) => ['admin', 'books', 'narrators', libraryId ?? 0] as const,
+  people: (field: PersonField, libraryId?: number) =>
+    ['admin', 'books', 'people', field, libraryId ?? 0] as const,
   series: (libraryId?: number) => ['admin', 'books', 'series', libraryId ?? 0] as const,
   book: (libraryId: number, path: string) => ['admin', 'book', libraryId, path] as const,
-  match: (libraryId: number, path: string, by: Record<string, string>) =>
+  match: (libraryId: number, path: string, by: MatchBy) =>
     ['admin', 'book', libraryId, path, 'match', by] as const,
   bookMeta: (libraryId: number, path: string) => ['meta', libraryId, path] as const,
 };
@@ -70,28 +83,40 @@ export function useSettings() {
 }
 
 /**
- * A cover as a data: URL (null = the book has no art). `size` asks for a batched
- * thumbnail (grids, shelves, rows); `'full'` fetches the art itself (the book
- * hero). Covers rarely change: cache for an hour, and invalidateCover after an
- * upload.
+ * A cover thumbnail as a data: URL (null = the book has no art), batched with
+ * every other cover asked for in the same moment (cover-batch.ts). Covers rarely
+ * change: fresh for an hour (invalidateCover after an upload), but dropped five
+ * minutes after the last cover using it unmounts, so scrolling a long grid
+ * doesn't hold every data: URL in memory.
  */
-export function useCover(libraryId: number, path: string, size: ThumbSize | 'full' = 320) {
+export function useCover(libraryId: number, path: string, size: ThumbSize = 320) {
   return useQuery({
-    queryKey: size === 'full' ? keys.cover(libraryId, path) : keys.thumb(libraryId, path, size),
-    queryFn: () =>
-      size === 'full'
-        ? fetchCover(libraryId, path)
-        : loadThumb({ library_id: libraryId, path }, size),
+    queryKey: keys.thumb(libraryId, path, size),
+    queryFn: ({ signal }) => loadThumb({ library_id: libraryId, path }, size, signal),
     staleTime: 60 * 60_000,
-    gcTime: 60 * 60_000,
+    gcTime: 5 * 60_000,
     retry: false,
   });
 }
 
-/** Refetches a book's cover everywhere it shows (full art and every thumbnail size). */
+/** Refetches a book's cover everywhere it shows (every thumbnail size). */
 export function invalidateCover(qc: QueryClient, libraryId: number, path: string) {
-  void qc.invalidateQueries({ queryKey: keys.cover(libraryId, path) });
   void qc.invalidateQueries({ queryKey: ['thumb', libraryId, path] });
+}
+
+/** Whether a query key is one of these books' pages (or a match search on one). */
+function bookPageOf(refs: BookRef[]) {
+  const wanted = new Set(refs.map(refKey));
+  return ([scope, kind, libraryId, path]: readonly unknown[]) =>
+    scope === 'admin' &&
+    kind === 'book' &&
+    wanted.has(refKey({ library_id: libraryId as number, path: path as string }));
+}
+
+/** Refetches the pages of these books (what shares include them, say). */
+export function invalidateBookPages(qc: QueryClient, refs: BookRef[]) {
+  const isPage = bookPageOf(refs);
+  void qc.invalidateQueries({ predicate: (q) => isPage(q.queryKey) });
 }
 
 /**
@@ -99,15 +124,38 @@ export function invalidateCover(qc: QueryClient, libraryId: number, path: string
  * aggregate, the edited books' pages, and the overview (titles in "listening").
  */
 export function invalidateBooks(qc: QueryClient, edited: BookRef[] = []) {
-  void qc.invalidateQueries({ queryKey: keys.books });
-  void qc.invalidateQueries({ queryKey: keys.stats });
-  for (const b of edited) void qc.invalidateQueries({ queryKey: keys.book(b.library_id, b.path) });
+  const isPage = bookPageOf(edited);
+  void qc.invalidateQueries({
+    predicate: ({ queryKey }) => {
+      const [scope, kind] = queryKey;
+      return (scope === 'admin' && (kind === 'books' || kind === 'stats')) || isPage(queryKey);
+    },
+  });
 }
 
-/** Writes an edit's answer (the updated book page) into the cache, then refetches the lists. */
+/**
+ * Writes an edit's answer (the updated book page) into the cache: the book page,
+ * and the edited row in place in every loaded list (so a long scrolled list
+ * doesn't refetch page by page), then refetches what counts books (facets, the
+ * people and series aggregates, the overview).
+ */
 export function settleBookEdit(qc: QueryClient, detail: AdminBookDetail) {
-  qc.setQueryData(keys.book(detail.book.library_id, detail.book.path), detail);
-  invalidateBooks(qc);
+  const book = detail.book;
+  qc.setQueryData(keys.book(book.library_id, book.path), detail);
+  const key = refKey(book);
+  const patch = (page: AdminBookPage): AdminBookPage =>
+    page.books?.some((b) => refKey(b) === key)
+      ? { ...page, books: page.books.map((b): AdminBook => (refKey(b) === key ? book : b)) }
+      : page;
+  qc.setQueriesData<AdminBookPage | InfiniteData<AdminBookPage>>(
+    { queryKey: keys.bookLists },
+    (data) =>
+      data && 'pages' in data ? { ...data, pages: data.pages.map(patch) } : data && patch(data),
+  );
+  void qc.invalidateQueries({
+    predicate: ({ queryKey: [scope, kind, sub] }) =>
+      scope === 'admin' && (kind === 'stats' || (kind === 'books' && sub !== 'list')),
+  });
 }
 
 /**
@@ -139,7 +187,7 @@ const STARTED_SCAN_TTL_MS = 2 * 60_000;
 /**
  * Records that this console started a scan of a library, then refetches the
  * list. The server reports the scan running before answering, but a small
- * library can finish before the list is fetched again, so useScanFinished
+ * library can finish before the list is fetched again, so the scan watcher
  * reports a started scan even if no poll ever saw it running.
  */
 export function noteScanStarted(qc: QueryClient, libraryId: number) {
@@ -149,36 +197,57 @@ export function noteScanStarted(qc: QueryClient, libraryId: number) {
   void qc.invalidateQueries({ queryKey: keys.libraries });
 }
 
+type ScanListener = (library: AdminLibrary) => void;
+const scanListeners = new Set<ScanListener>();
+
 /**
- * Calls `onFinish` when a library's scan ends (seen running, or started here,
- * and now not running), after refetching what a scan changes: the overview's
- * counts and that library's newest books.
+ * Watches every library's scan, mounted once (the shell): when one ends (seen
+ * running, or started here, and now not running) it refetches what a scan
+ * changes (the overview's counts, that library's newest books and folder
+ * listings, every admin book list and aggregate), then tells the screens that
+ * asked (useScanFinished).
  */
-export function useScanFinished(onFinish: (library: AdminLibrary) => void) {
+export function useScanWatcher() {
   const qc = useQueryClient();
   // dataUpdatedAt, not just data: a refetch that changed nothing keeps the same
   // data object, and a scan started here may have been over by then.
   const { data: libraries, dataUpdatedAt } = useLibraries();
-  const finished = useRef(onFinish);
-  useEffect(() => {
-    finished.current = onFinish;
-  });
   const running = useRef(new Set<number>());
   useEffect(() => {
     if (!libraries) return;
     for (const l of libraries) {
+      if (l.scan.running) continue;
       const started = startedScans.get(l.id);
       const startedHere = started !== undefined && Date.now() - started < STARTED_SCAN_TTL_MS;
-      if (l.scan.running) continue;
       if (started !== undefined) startedScans.delete(l.id);
-      if (running.current.has(l.id) || startedHere) {
-        void qc.invalidateQueries({ queryKey: keys.stats });
-        void qc.invalidateQueries({ queryKey: keys.recentBooks(l.id) });
-        finished.current(l);
+      if (!running.current.has(l.id) && !startedHere) continue;
+      for (const key of [
+        keys.stats,
+        keys.recentBooks(l.id),
+        keys.books,
+        keys.browseLibrary(l.id),
+      ]) {
+        void qc.invalidateQueries({ queryKey: key });
       }
+      for (const fn of scanListeners) fn(l);
     }
     running.current = new Set(libraries.filter((l) => l.scan.running).map((l) => l.id));
   }, [libraries, dataUpdatedAt, qc]);
+}
+
+/** Calls `onFinish` when a library's scan ends, while mounted (the scan watcher has refetched by then). */
+export function useScanFinished(onFinish: ScanListener) {
+  const latest = useRef(onFinish);
+  useEffect(() => {
+    latest.current = onFinish;
+  });
+  useEffect(() => {
+    const fn: ScanListener = (l) => latest.current(l);
+    scanListeners.add(fn);
+    return () => {
+      scanListeners.delete(fn);
+    };
+  }, []);
 }
 
 export function useRecentBooks(libraryId: number, limit: number) {
@@ -205,11 +274,15 @@ export function useDirs(path: string) {
   return useQuery({ queryKey: keys.dirs(path), queryFn: () => api.dirs(path), retry: false });
 }
 
-export function useUsers(enabled = true) {
+/** How long the palette's aggregates stay fresh: it reopens often, and a search needn't refetch them. */
+export const PALETTE_STALE_MS = 5 * 60_000;
+
+export function useUsers(enabled = true, staleTime?: number) {
   return useQuery({
     queryKey: keys.users,
     queryFn: () => api.users().then((r) => r.users ?? []),
     enabled,
+    staleTime,
   });
 }
 
@@ -224,11 +297,12 @@ export function useInvites() {
   });
 }
 
-export function useShares(enabled = true) {
+export function useShares(enabled = true, staleTime?: number) {
   return useQuery({
     queryKey: keys.shares,
     queryFn: () => api.shares().then((r) => r.shares ?? []),
     enabled,
+    staleTime,
   });
 }
 
@@ -265,27 +339,27 @@ export function useBookFacets(filter: BookFilter) {
   });
 }
 
-export function useAuthors(libraryId?: number, enabled = true) {
+/** The authors or narrators of one library (or all), with merge suggestions. */
+export function usePeople(
+  field: PersonField,
+  libraryId?: number,
+  enabled = true,
+  staleTime?: number,
+) {
   return useQuery({
-    queryKey: keys.authors(libraryId),
-    queryFn: () => api.authors(libraryId),
+    queryKey: keys.people(field, libraryId),
+    queryFn: () => api.people(field, libraryId),
     enabled,
+    staleTime,
   });
 }
 
-export function useNarrators(libraryId?: number, enabled = true) {
-  return useQuery({
-    queryKey: keys.narrators(libraryId),
-    queryFn: () => api.narrators(libraryId),
-    enabled,
-  });
-}
-
-export function useSeries(libraryId?: number, enabled = true) {
+export function useSeries(libraryId?: number, enabled = true, staleTime?: number) {
   return useQuery({
     queryKey: keys.series(libraryId),
     queryFn: () => api.series(libraryId).then((r) => r.series ?? []),
     enabled,
+    staleTime,
   });
 }
 
@@ -301,16 +375,9 @@ export function useAdminBook(libraryId: number, path: string) {
  * Community works a book might be. Searched only when asked (the match dialog is
  * open); a failed search is not retried (metaserve down answers 502).
  */
-export function useMatchCandidates(
-  libraryId: number,
-  path: string,
-  by: { q?: string; asin?: string; isbn?: string },
-  enabled: boolean,
-) {
-  const clean = Object.fromEntries(Object.entries(by).filter(([, v]) => v)) as Record<
-    string,
-    string
-  >;
+export function useMatchCandidates(libraryId: number, path: string, by: MatchBy, enabled: boolean) {
+  // The key and the request share one cleaning, so equal searches share a cache entry.
+  const clean = compact(by);
   return useQuery({
     queryKey: keys.match(libraryId, path, clean),
     queryFn: () => api.matchBook(libraryId, path, clean).then((r) => r.candidates ?? []),

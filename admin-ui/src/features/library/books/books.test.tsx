@@ -22,7 +22,7 @@ function bookRoutes(list: AdminBook[] = books, over: Record<string, MockRoute> =
         return { body: { books: list.filter((b) => !b.has_cover) } };
       }
       if (req.query.get('matched') === 'false' && req.query.get('limit') === '12') {
-        return { body: { books: list.filter((b) => !b.asin && !b.isbn) } };
+        return { body: { books: list.filter((b) => !b.matched) } };
       }
       return { body: { books: list } };
     },
@@ -363,10 +363,10 @@ describe('books: selection and bulk actions', () => {
     expect(within(cards).getByText('1 person · 1 folder')).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Add to share' }));
     expect(await screen.findByText('Added to Cosy mysteries')).toBeInTheDocument();
-    expect(calls.find((c) => c.path === '/admin/shares/7/paths')?.body).toEqual({
-      library_id: 1,
-      path: 'Martha Wells/All Systems Red',
-    });
+    // One request for the whole selection.
+    expect(calls.filter((c) => c.path === '/admin/shares/7/paths').map((c) => c.body)).toEqual([
+      { rules: [{ library_id: 1, path: 'Martha Wells/All Systems Red' }] },
+    ]);
     await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull());
   });
 

@@ -57,8 +57,9 @@ to share conventions with TanStack Query and Table.
 Covers come from `POST /api/v1/admin/covers`: `useCover(libraryId, path, size)` queues each
 cover and `src/api/cover-batch.ts` sends everything asked for in the same moment as one request
 of up to 60 thumbnails (data: URLs, the CSP allows no blob:), so a grid of hundreds of covers is a
-handful of requests. Only the book page's hero fetches the full art (`size="full"`). A book
-without art gets a generated cover (`src/components/generated-cover.tsx`, React SVG, palette from
+handful of requests (160px for rows, 320px for tiles, 640px for the book hero, whose blurred
+backdrop and tint use the 160px one). A thumbnail nobody shows any more by the time its batch goes
+out isn't asked for, and unused ones leave the cache after five minutes. A book without art gets a generated cover (`src/components/generated-cover.tsx`, React SVG, palette from
 `src/lib/cover-model.ts`). Book pages are addressed by identity, `/admin/library/book?library=&path=`
 (`src/lib/book-route.ts`), never by an internal id.
 

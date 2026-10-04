@@ -4,10 +4,6 @@ import {
   ancestorsOf,
   audioFilesOf,
   entryIn,
-  formatBytes,
-  formatDuration,
-  fullPath,
-  parentOf,
   treeKeyAction,
   treeRows,
   visibleListings,
@@ -62,9 +58,7 @@ const paths = (rows: TreeRow[]) =>
   rows.map((r) => (r.kind === 'folder' ? r.entry.path : `${r.kind}:${r.parent}`));
 
 describe('paths', () => {
-  it('finds parents and ancestors', () => {
-    expect(parentOf('A/B/C')).toBe('A/B');
-    expect(parentOf('A')).toBe('');
+  it('finds ancestors', () => {
     expect(ancestorsOf('A/B/C')).toEqual(['A', 'A/B']);
     expect(ancestorsOf('A')).toEqual([]);
   });
@@ -78,12 +72,6 @@ describe('paths', () => {
   it('loads only the listings that show', () => {
     // A/B is open but A is closed: B's listing isn't visible.
     expect(visibleListings(new Set(['S', 'A/B']))).toEqual(['', 'S']);
-  });
-
-  it('joins the library root and a relative path', () => {
-    expect(fullPath('/mnt/tank/fiction', 'A/B')).toBe('/mnt/tank/fiction/A/B');
-    expect(fullPath('/mnt/tank/fiction/', 'A')).toBe('/mnt/tank/fiction/A');
-    expect(fullPath('/mnt/x', '')).toBe('/mnt/x');
   });
 });
 
@@ -195,20 +183,5 @@ describe('a folder', () => {
     expect(choiceOf('collection')).toBe('collection');
     expect(modeOf('auto')).toBeNull();
     expect(modeOf('book')).toBe('book');
-  });
-});
-
-describe('formatting', () => {
-  it('formats sizes in decimal units', () => {
-    expect(formatBytes(512, 'en')).toBe('0.5 kB');
-    expect(formatBytes(1_310_000_000, 'en')).toBe('1.3 GB');
-    expect(formatBytes(245_000_000, 'en')).toBe('245 MB');
-  });
-
-  it('formats lengths as hours and minutes', () => {
-    expect(formatDuration(4530, 'en')).toBe('1h 15m');
-    expect(formatDuration(3600, 'en')).toBe('1h');
-    expect(formatDuration(600, 'en')).toBe('10m');
-    expect(formatDuration(42, 'en')).toBe('42s');
   });
 });

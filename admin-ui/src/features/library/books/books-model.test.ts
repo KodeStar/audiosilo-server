@@ -1,6 +1,5 @@
 import { adminBook } from '@/test/library-fixtures';
 import {
-  BULK_LIMIT,
   activeFilters,
   bookFilter,
   bulkSet,
@@ -9,16 +8,12 @@ import {
   daysAgo,
   defaultOrder,
   facetOptions,
-  formatDuration,
   gridLayout,
   isBrowsing,
   listParams,
-  patchSearch,
-  selectionKey,
   sheetFilterCount,
   shouldLoadMore,
   tileFlags,
-  toRows,
   toggleValue,
   withoutFilter,
   withoutFilters,
@@ -178,12 +173,6 @@ describe('active filters', () => {
     expect(toggleValue(['m4b'], 'mp3')).toEqual(['m4b', 'mp3']);
     expect(toggleValue(['m4b'], 'm4b')).toBe(undefined);
   });
-
-  it('patches search params, dropping what is unset', () => {
-    expect(patchSearch({ q: 'x', library: 1 }, { library: undefined, format: [] })).toEqual({
-      q: 'x',
-    });
-  });
 });
 
 describe('facetOptions', () => {
@@ -197,11 +186,6 @@ describe('facetOptions', () => {
 });
 
 describe('selection and bulk edits', () => {
-  it('keys a book by library and path', () => {
-    expect(selectionKey({ library_id: 2, path: 'a/b' })).toBe('2\0a/b');
-    expect(selectionKey({ library_id: 1, path: '2\0a/b' })).not.toBe('2\0a/b');
-  });
-
   it('finds a shared value, or how many differ', () => {
     const a = adminBook({ path: 'a' });
     const b = adminBook({ path: 'b', narrator: 'Someone else' });
@@ -214,10 +198,6 @@ describe('selection and bulk edits', () => {
     expect(bulkSet({ author: ' Ursula K. Le Guin ', narrator: '  ', series: '' })).toEqual({
       author: 'Ursula K. Le Guin',
     });
-  });
-
-  it('caps a bulk edit at the server limit', () => {
-    expect(BULK_LIMIT).toBe(1000);
   });
 });
 
@@ -236,8 +216,9 @@ describe('tileFlags', () => {
     expect(tileFlags(adminBook(), true)).toEqual([]);
   });
 
-  it('counts an ISBN as matched', () => {
-    expect(tileFlags(adminBook({ asin: '', isbn: '9780765326355' }), true)).toEqual([]);
+  it("goes by the server's matched flag", () => {
+    expect(tileFlags(adminBook({ asin: '', matched: true }), true)).toEqual([]);
+    expect(tileFlags(adminBook({ matched: false }), true)).toEqual(['match']);
   });
 });
 
@@ -276,10 +257,6 @@ describe('gridLayout', () => {
     expect(gridLayout(0, false).columns).toBeGreaterThan(1);
     expect(gridLayout(0, true).columns).toBe(2);
   });
-
-  it('cuts books into rows', () => {
-    expect(toRows([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
-  });
 });
 
 describe('shouldLoadMore', () => {
@@ -289,14 +266,5 @@ describe('shouldLoadMore', () => {
     expect(shouldLoadMore(9, 10, false, false)).toBe(false);
     expect(shouldLoadMore(9, 10, true, true)).toBe(false);
     expect(shouldLoadMore(undefined, 10, true, false)).toBe(false);
-  });
-});
-
-describe('formatDuration', () => {
-  it('reads hours and minutes', () => {
-    expect(formatDuration(163800, 'en')).toBe('45h 30m');
-    expect(formatDuration(2700, 'en')).toBe('45m');
-    expect(formatDuration(7200, 'en')).toBe('2h');
-    expect(formatDuration(0, 'en')).toBe('');
   });
 });

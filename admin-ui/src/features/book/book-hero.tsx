@@ -18,7 +18,7 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { ApiError, api } from '@/api/client';
+import { api } from '@/api/client';
 import { invalidateCover, keys, useLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
@@ -33,17 +33,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { copyText } from '@/lib/clipboard';
 import { toastError } from '@/lib/errors';
-import { formatRelative } from '@/lib/format';
+import { formatBytes, formatDuration, formatRelative } from '@/lib/format';
+import { joinLibraryPath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import {
-  COVER_TYPES,
-  coverFileProblem,
-  formatLength,
-  formatSize,
-  fullPath,
-  seriesLine,
-} from './book-model';
+import { COVER_TYPES, coverFileProblem } from './book-model';
+import { HERO_GRID } from './layout';
 import { useHeroTint } from './use-hero-tint';
 
 /**
@@ -70,8 +65,12 @@ export function BookHero({
   const caps = server.data?.capabilities;
   const library = useLibraries().data?.find((l) => l.id === b.library_id);
   const tint = useHeroTint(b.library_id, b.path, b.title, b.author);
-  const series = seriesLine(b.series, b.series_index);
-  const identified = !!(detail.fields.asin.value || detail.fields.isbn.value);
+  // The eyebrow: the series and position, else the library.
+  const eyebrow = !b.series
+    ? b.library_name
+    : b.series_index > 0
+      ? t('book.hero.seriesBook', { series: b.series, n: String(b.series_index) })
+      : b.series;
 
   const style = tint
     ? ({ '--tint1': tint.tint1, '--tint2': tint.tint2, '--glow': tint.glow } as React.CSSProperties)
@@ -83,7 +82,7 @@ export function BookHero({
       ? { icon: TriangleAlert, label: t('book.hero.noTranscode'), tone: 'text-warning' }
       : { icon: Repeat, label: t('book.hero.transcode'), tone: 'text-warning' };
   const facts: { icon: LucideIcon; label: string; tone?: string }[] = [
-    { icon: Clock, label: formatLength(b.duration, t) },
+    { icon: Clock, label: formatDuration(b.duration, lang) },
     {
       icon: FileAudio,
       label: [
@@ -94,41 +93,36 @@ export function BookHero({
         .filter(Boolean)
         .join(' · '),
     },
-    { icon: HardDrive, label: formatSize(b.size, lang) },
+    { icon: HardDrive, label: formatBytes(b.size, lang) },
     playback,
     { icon: CalendarPlus, label: t('book.hero.added', { time: formatRelative(b.added_at, lang) }) },
-  ];
+  ].filter((f) => f.label);
 
   return (
     <section className="hero" aria-labelledby="book-title" style={style}>
+      {/* Blurred to a wash: the smallest thumbnail does (and is the one the tint samples). */}
       <div className="hero-backdrop" aria-hidden="true">
         <BookCover
           libraryId={b.library_id}
           path={b.path}
           title={b.title}
           author={b.author}
-          size="full"
+          size={160}
         />
       </div>
-      <div className="mx-auto grid max-w-[1440px] items-end gap-5 px-4 pt-5 pb-7 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6 md:px-6 md:pt-7 md:pb-9 lg:grid-cols-[300px_minmax(0,1fr)] lg:gap-11">
+      <div className={HERO_GRID}>
         <div className="hero-cover w-[min(240px,66vw)] md:w-auto">
           <BookCover
             libraryId={b.library_id}
             path={b.path}
             title={b.title}
             author={b.author}
-            size="full"
+            size={640}
           />
         </div>
         <div className="flex min-w-0 flex-col">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="eyebrow">
-              {series
-                ? series.n
-                  ? t('book.hero.seriesBook', { series: series.series, n: series.n })
-                  : series.series
-                : b.library_name}
-            </span>
+            <span className="eyebrow">{eyebrow}</span>
             {library && !library.available ? (
               <Badge variant="destructive">
                 <Unplug aria-hidden="true" />
@@ -155,7 +149,7 @@ export function BookHero({
             {caps?.metadata ? (
               <Button onClick={onMatch} disabled={matchBlocked}>
                 <Sparkles aria-hidden="true" />
-                {identified ? t('book.hero.compare') : t('book.hero.match')}
+                {b.matched ? t('book.hero.compare') : t('book.hero.match')}
               </Button>
             ) : null}
             <CoverMenu detail={detail} />
@@ -215,11 +209,7 @@ function CoverMenu({ detail }: { detail: AdminBookDetail }) {
         type: 'success',
       });
     } catch (err) {
-      const code = err instanceof ApiError ? err.code : undefined;
-      if (code === 'too_large' || code === 'unsupported_image') {
-        const key = code === 'too_large' ? 'book.cover.tooLarge' : 'book.cover.unsupported';
-        toast.add({ title: t('book.cover.failed'), description: t(key), type: 'error' });
-      } else toastError(t('book.cover.failed'), err);
+      toastError(t('book.cover.failed'), err);
     }
   };
 
@@ -288,7 +278,7 @@ function MoreMenu({
 }) {
   const { t } = useTranslation();
   const copy = async () => {
-    const ok = await copyText(fullPath(root, detail.book.path));
+    const ok = await copyText(joinLibraryPath(root, detail.book.path));
     toast.add(
       ok
         ? { title: t('book.more.copied'), type: 'success' }

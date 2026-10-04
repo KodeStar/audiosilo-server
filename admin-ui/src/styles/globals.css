@@ -105,6 +105,18 @@
   --dur-1: 120ms;
   --dur-2: 200ms;
   --dur-3: 320ms;
+
+  /* The sticky header's two rows (top-bar.tsx, sub-bar.tsx), each under a 1px
+     hairline; anything sticking below them (the Books toolbar) offsets by both. */
+  --topbar-h: 56px;
+  --subbar-h: 46px;
+}
+
+@media (min-width: 721px) {
+  :root {
+    --topbar-h: 64px;
+    --subbar-h: 48px;
+  }
 }
 
 /* Dark: deep ink where covers glow. theme-init.js (loaded in <head> before the
@@ -414,20 +426,8 @@
     object-fit: cover;
     display: block;
   }
-  .cover[data-missing] {
-    background: repeating-linear-gradient(
-      135deg,
-      var(--muted) 0 10px,
-      color-mix(in oklab, var(--muted) 70%, var(--background)) 10px 20px
-    );
-    box-shadow: inset 0 0 0 1.5px var(--border-strong);
-    color: var(--muted-foreground);
-    display: grid;
-    place-items: center;
-  }
-
-  /* Spine crease + gloss over real and generated art (not skeletons or the hatch). */
-  .cover:not(.skel):not([data-missing])::before {
+  /* Spine crease + gloss over real and generated art (not skeletons). */
+  .cover:not(.skel)::before {
     content: '';
     position: absolute;
     inset: 0;

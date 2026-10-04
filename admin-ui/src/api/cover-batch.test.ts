@@ -72,4 +72,21 @@ describe('loadThumb', () => {
     ]);
     expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected']);
   });
+
+  it('drops an aborted request, and sends no book nobody waits for', async () => {
+    const calls = mockFetch({ 'POST /admin/covers': coversRoute() });
+    const gone = new AbortController();
+    const both = new AbortController();
+    const dropped = loadThumb({ library_id: 1, path: 'gone' }, 320, gone.signal);
+    const shared = loadThumb({ library_id: 1, path: 'a' }, 320, both.signal);
+    const kept = loadThumb({ library_id: 1, path: 'a' }, 320);
+    gone.abort();
+    both.abort();
+    await expect(dropped).rejects.toBeDefined();
+    await expect(shared).rejects.toBeDefined();
+    // Another waiter still wants "a": it is sent, "gone" isn't.
+    expect(await kept).toBe('data:image/jpeg;base64,a');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toEqual({ books: [{ library_id: 1, path: 'a' }], size: 320 });
+  });
 });

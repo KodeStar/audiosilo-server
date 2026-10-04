@@ -10,13 +10,15 @@ import { Page } from '@/components/page';
 import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
-import { AddToShareDialog } from './add-to-share-dialog';
+import { AddToShareDialog } from '@/features/library/add-to-share-dialog';
+import { refKey } from '@/lib/book-route';
 import { BookAside } from './book-aside';
 import { BookHero } from './book-hero';
 import { commitDraft, draftErrors, type Drafts } from './book-model';
 import { ChaptersCard } from './chapters-card';
 import { DetailsCard } from './details-card';
 import { DiskSection, FilesCard } from './files-card';
+import { HERO_GRID, PAGE_GRID } from './layout';
 import { MatchDialog } from './match-dialog';
 import { SaveBar, SaveDiffDialog } from './save-changes';
 
@@ -25,7 +27,7 @@ export function BookPage() {
   const { library, path } = useSearch({ from: '/library/book' });
   if (!library || !path) return <BookNotFound />;
   // A fresh page (drafts and all) per book.
-  return <BookLoader key={`${library}\n${path}`} libraryId={library} path={path} />;
+  return <BookLoader key={refKey({ library_id: library, path })} libraryId={library} path={path} />;
 }
 
 function BookLoader({ libraryId, path }: { libraryId: number; path: string }) {
@@ -75,7 +77,7 @@ function BookSkeleton() {
   return (
     <div role="status" aria-label={t('common.loading')}>
       <div className="border-b">
-        <div className="mx-auto grid max-w-[1440px] items-end gap-5 px-4 pt-5 pb-7 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6 md:px-6 md:pt-7 md:pb-9 lg:grid-cols-[300px_minmax(0,1fr)] lg:gap-11">
+        <div className={HERO_GRID}>
           <div className="skel aspect-square w-[min(240px,66vw)] rounded-[7px] md:w-auto" />
           <div className="flex flex-col gap-3">
             <span className="skel h-3 w-40" />
@@ -86,7 +88,7 @@ function BookSkeleton() {
         </div>
       </div>
       <Page className="pt-6 md:pt-7">
-        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className={PAGE_GRID}>
           <div className="flex flex-col gap-5">
             <span className="skel h-[420px] rounded-xl" />
             <span className="skel h-[220px] rounded-xl" />
@@ -108,8 +110,6 @@ function BookView({ detail }: { detail: AdminBookDetail }) {
   const [refused, setRefused] = useState<Partial<Record<OverrideField, string>>>({});
   const [reviewing, setReviewing] = useState(false);
   const [matching, setMatching] = useState(false);
-  // Each opening mounts the match dialog afresh, back at the search.
-  const [matchKey, setMatchKey] = useState(0);
   const [sharing, setSharing] = useState(false);
   const count = Object.keys(drafts).length;
   const dirty = count > 0;
@@ -126,10 +126,12 @@ function BookView({ detail }: { detail: AdminBookDetail }) {
       return next;
     });
   };
-  const openMatch = () => {
-    setMatchKey((k) => k + 1);
-    setMatching(true);
+  /** Back to the saved book: no drafts, no refusals. */
+  const reset = () => {
+    setDrafts({});
+    setRefused({});
   };
+  const openMatch = () => setMatching(true);
 
   return (
     <>
@@ -140,7 +142,7 @@ function BookView({ detail }: { detail: AdminBookDetail }) {
         onAddToShare={() => setSharing(true)}
       />
       <Page className="pt-6 md:pt-7">
-        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className={PAGE_GRID}>
           <div className="flex min-w-0 flex-col gap-5">
             <DetailsCard detail={detail} drafts={drafts} errors={errors} onCommit={commit} />
             <ChaptersCard detail={detail} />
@@ -159,10 +161,7 @@ function BookView({ detail }: { detail: AdminBookDetail }) {
         <SaveBar
           count={count}
           invalid={Object.keys(local).length}
-          onDiscard={() => {
-            setDrafts({});
-            setRefused({});
-          }}
+          onDiscard={reset}
           onReview={() => setReviewing(true)}
         />
       ) : null}
@@ -171,14 +170,16 @@ function BookView({ detail }: { detail: AdminBookDetail }) {
         onOpenChange={setReviewing}
         detail={detail}
         drafts={drafts}
-        onSaved={() => {
-          setDrafts({});
-          setRefused({});
-        }}
+        onSaved={reset}
         onRefused={(field, message) => setRefused((r) => ({ ...r, [field]: message }))}
       />
-      <MatchDialog key={matchKey} open={matching} onOpenChange={setMatching} detail={detail} />
-      <AddToShareDialog open={sharing} onOpenChange={setSharing} detail={detail} />
+      <MatchDialog open={matching} onOpenChange={setMatching} detail={detail} />
+      <AddToShareDialog
+        open={sharing}
+        onOpenChange={setSharing}
+        books={[detail.book]}
+        alreadyIn={new Set((detail.shares ?? []).map((s) => s.share_id))}
+      />
       <LeaveGuard dirty={dirty} count={count} />
     </>
   );

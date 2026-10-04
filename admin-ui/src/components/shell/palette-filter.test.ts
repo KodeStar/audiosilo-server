@@ -1,32 +1,50 @@
-import { paletteFilter, topMatches } from './palette-filter';
+import { paletteScore, rankEntries, topMatches } from './palette-filter';
 
-describe('paletteFilter', () => {
-  const rescan = ['Rescan Fiction', 'Look for new, changed and moved books now', 'scan', 'Fiction'];
-  const narrators = ['Narrators', 'Library › Narrators'];
+describe('paletteScore', () => {
+  const rescan = ['Look for new, changed and moved books now', 'scan', 'Fiction'];
+  const narrators = ['Library › Narrators'];
 
-  it('shows everything for an empty search', () => {
-    expect(paletteFilter('x', '  ', rescan)).toBe(1);
+  it('matches everything for an empty search', () => {
+    expect(paletteScore('  ', 'Rescan Fiction', rescan)).toBe(1);
   });
 
   it('needs every word as a substring, not scattered letters', () => {
-    expect(paletteFilter('x', 'narrators', rescan)).toBe(0);
-    expect(paletteFilter('x', 'narrators', narrators)).toBeGreaterThan(0);
+    expect(paletteScore('narrators', 'Rescan Fiction', rescan)).toBe(0);
+    expect(paletteScore('narrators', 'Narrators', narrators)).toBeGreaterThan(0);
     expect(
-      paletteFilter('x', 'dark theme', ['Use the dark theme', 'Appearance', 'theme']),
+      paletteScore('dark theme', 'Use the dark theme', ['Appearance', 'theme']),
     ).toBeGreaterThan(0);
   });
 
+  it('ignores case and accents', () => {
+    expect(paletteScore('BRONTE', 'Charlotte Brontë')).toBeGreaterThan(0);
+  });
+
   it('ranks title prefixes above other matches', () => {
-    expect(paletteFilter('x', 'narr', narrators)).toBeGreaterThan(
-      paletteFilter('x', 'scan', rescan),
+    expect(paletteScore('narr', 'Narrators', narrators)).toBeGreaterThan(
+      paletteScore('scan', 'Rescan Fiction', rescan),
     );
   });
 });
 
-it('ranks a fallback entry below every real match', () => {
-  const fallback = paletteFilter('fallback:books', 'dark', ['Search all books for “dark”']);
-  expect(fallback).toBeGreaterThan(0);
-  expect(fallback).toBeLessThan(paletteFilter('x', 'dark', ['Use the dark theme']));
+describe('rankEntries', () => {
+  const entries = [
+    { title: 'Rescan Fiction', subtitle: 'Look for new books', keywords: ['scan'] },
+    { title: 'Scan settings', subtitle: 'Server' },
+    { title: 'Narrators', subtitle: 'Library › Narrators' },
+  ];
+
+  it('keeps the matches, best first, ties in order', () => {
+    expect(rankEntries(entries, 'scan').map((e) => e.title)).toEqual([
+      'Scan settings',
+      'Rescan Fiction',
+    ]);
+    expect(rankEntries(entries, 'library').map((e) => e.title)).toEqual(['Narrators']);
+  });
+
+  it('keeps everything, in order, for a blank search', () => {
+    expect(rankEntries(entries, '')).toEqual(entries);
+  });
 });
 
 describe('topMatches', () => {

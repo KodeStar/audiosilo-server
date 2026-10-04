@@ -1,20 +1,30 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { useWindowVirtualizer } from '@tanstack/react-virtual';
+import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AdminBook } from '@/api/types';
+import { refKey } from '@/lib/book-route';
+import { chunk } from '@/lib/utils';
 import { BookTile } from '../book-tile';
-import { gridLayout, selectionKey, shouldLoadMore, toRows } from './books-model';
-import { useDocumentTop, useIsPhone, useWidth } from './use-layout';
+import { gridLayout } from './books-model';
+import { useIsPhone, useWidth, useWindowRows } from './use-layout';
 import type { Selection } from './use-selection';
 
-/** Before the first measurement (and in jsdom): a desktop-sized window. */
-const INITIAL_RECT = { width: 1024, height: 900 };
+/** What the grid and the table views take (BooksPage renders one or the other). */
+export interface BookViewProps {
+  books: AdminBook[];
+  selection: Selection;
+  metadataOn: boolean;
+  /** When the page opened: "added" times are relative to it. */
+  now: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}
 
 /**
- * The cover grid, virtualized by rows against the window scroll (the page
- * scrolls, not an inner box). The column count follows the container's width
- * with the same rule as .shelf-grid, and each row's height is the cover plus its
- * text, so nothing has to be measured. Nearing the end loads the next page.
+ * The cover grid, virtualized by rows against the window scroll. The column
+ * count follows the container's width with the same rule as .shelf-grid, and
+ * each row's height is the cover plus its text, so nothing has to be measured.
+ * Nearing the end loads the next page.
  */
 export function BookGrid({
   books,
@@ -23,39 +33,23 @@ export function BookGrid({
   hasMore,
   loadingMore,
   onLoadMore,
-}: {
-  books: AdminBook[];
-  selection: Selection;
-  metadataOn: boolean;
-  hasMore: boolean;
-  loadingMore: boolean;
-  onLoadMore: () => void;
-}) {
+}: BookViewProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
   const width = useWidth(ref);
   const phone = useIsPhone();
-  const top = useDocumentTop(ref);
   const layout = gridLayout(width, phone);
-  const rows = useMemo(() => toRows(books, layout.columns), [books, layout.columns]);
-
-  const virtualizer = useWindowVirtualizer({
+  const rows = useMemo(() => chunk(books, layout.columns), [books, layout.columns]);
+  const { virtualizer, items, margin } = useWindowRows({
+    ref,
     count: rows.length,
-    estimateSize: () => layout.rowHeight,
+    rowHeight: layout.rowHeight,
     gap: layout.rowGap,
     overscan: 3,
-    scrollMargin: top,
-    initialRect: INITIAL_RECT,
-    useFlushSync: false,
+    hasMore,
+    loadingMore,
+    onLoadMore,
   });
-  // Sizes come from the estimate; a new width (or phone layout) means new rows.
-  useEffect(() => virtualizer.measure(), [virtualizer, layout.rowHeight]);
-
-  const items = virtualizer.getVirtualItems();
-  const last = items.at(-1)?.index;
-  useEffect(() => {
-    if (shouldLoadMore(last, rows.length, hasMore, loadingMore)) onLoadMore();
-  }, [last, rows.length, hasMore, loadingMore, onLoadMore]);
 
   const selecting = selection.size > 0;
   return (
@@ -73,14 +67,14 @@ export function BookGrid({
             role="presentation"
             className="absolute inset-x-0 top-0 grid"
             style={{
-              transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
+              transform: `translateY(${item.start - margin}px)`,
               height: item.size,
               gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
               columnGap: layout.columnGap,
             }}
           >
             {rows[item.index]?.map((b) => (
-              <div key={selectionKey(b)} role="listitem" className="min-w-0">
+              <div key={refKey(b)} role="listitem" className="min-w-0">
                 <BookTile
                   book={b}
                   metadataOn={metadataOn}

@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookUser, Mic, Search } from 'lucide-react';
-import { useAuthors, useNarrators } from '@/api/hooks';
-import type { PersonCount } from '@/api/types';
+import { usePeople } from '@/api/hooks';
+import type { PersonCount, PersonField } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Monogram } from '@/components/monogram';
 import { Page } from '@/components/page';
@@ -11,18 +11,11 @@ import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatNumber } from '@/lib/format';
-import { LibraryFilter } from './library-filter';
-import { useLibraryBookCount, useLibraryParam } from './library-param';
+import { counted, formatDuration } from '@/lib/format';
+import { LibraryFilter } from '../library-filter';
+import { useLibraryBookCount, useLibraryParam } from '../library-param';
 import { MergeSuggestions } from './merge-suggestions';
-import {
-  PAGE_STEP,
-  durationParts,
-  filterPeople,
-  sortByBooks,
-  sortByDuration,
-  type PersonField,
-} from './people-model';
+import { PAGE_STEP, filterPeople, sortByBooks, sortByDuration } from './people-model';
 
 /**
  * Library > Authors and Library > Narrators: one person per whole field value,
@@ -35,35 +28,33 @@ export function PeopleScreen({ field }: { field: PersonField }) {
   const lang = i18n.resolvedLanguage ?? 'en';
   const ns = field === 'author' ? 'authors' : 'narrators';
   const [library] = useLibraryParam();
-  const authors = useAuthors(library, field === 'author');
-  const narrators = useNarrators(library, field === 'narrator');
-  const query = field === 'author' ? authors : narrators;
+  const query = usePeople(field, library);
   const bookCount = useLibraryBookCount(library);
   const [q, setQ] = useState('');
   const [limit, setLimit] = useState(PAGE_STEP);
 
-  const data = useMemo(() => {
-    const raw = field === 'author' ? authors.data : narrators.data;
-    if (!raw) return undefined;
-    const people = ('authors' in raw ? raw.authors : raw.narrators) ?? [];
-    return {
-      people: field === 'author' ? sortByBooks(people) : sortByDuration(people),
-      suggestions: raw.merge_suggestions ?? [],
-      unknown: raw.unknown,
-    };
-  }, [field, authors.data, narrators.data]);
+  const raw = query.data;
+  const data = useMemo(
+    () =>
+      raw && {
+        ...raw,
+        people: field === 'author' ? sortByBooks(raw.people) : sortByDuration(raw.people),
+      },
+    [field, raw],
+  );
 
   const matching = data ? filterPeople(data.people, q) : [];
   const shown = matching.slice(0, limit);
   const rest = matching.length - shown.length;
-  const counted = (n: number) => ({ count: n, formatted: formatNumber(n, lang) });
 
   return (
     <Page>
       <PageHead
         title={t(`${ns}.title`)}
         description={
-          data?.people.length ? t(`${ns}.description`, counted(data.people.length)) : undefined
+          data?.people.length
+            ? t(`${ns}.description`, counted(data.people.length, lang))
+            : undefined
         }
         action={<LibraryFilter />}
       />
@@ -96,7 +87,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
         <>
           <MergeSuggestions
             field={field}
-            suggestions={data.suggestions}
+            suggestions={data.merge_suggestions}
             people={data.people}
             libraryId={library}
           />
@@ -120,7 +111,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
             </div>
             {data.unknown > 0 ? (
               <p className="text-[12.5px] text-muted-foreground tabular-nums">
-                {t(`${ns}.unknown`, counted(data.unknown))}
+                {t(`${ns}.unknown`, counted(data.unknown, lang))}
               </p>
             ) : null}
           </div>
@@ -147,7 +138,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
           {rest > 0 ? (
             <div className="mt-8 flex justify-center">
               <Button variant="outline" onClick={() => setLimit((n) => n + PAGE_STEP)}>
-                {t('credits.showMore', counted(Math.min(rest, PAGE_STEP)))}
+                {t('credits.showMore', counted(Math.min(rest, PAGE_STEP), lang))}
               </Button>
             </div>
           ) : null}
@@ -157,13 +148,13 @@ export function PeopleScreen({ field }: { field: PersonField }) {
   );
 }
 
-/** "12 books · 85h" (narrators: "· 85h narrated"). */
+/** "12 books · 85h 10m" (narrators: "· 85h 10m narrated"). */
 function useStats(p: PersonCount, narrated: boolean) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const d = durationParts(p.duration);
-  const books = t('credits.books', { count: p.books, formatted: formatNumber(p.books, lang) });
-  const time = t(`credits.${d.unit}`, { value: formatNumber(d.value, lang) });
+  const books = t('credits.books', counted(p.books, lang));
+  const time = formatDuration(p.duration, lang);
+  if (!time) return books;
   return t(narrated ? 'credits.statsNarrated' : 'credits.stats', { books, time });
 }
 

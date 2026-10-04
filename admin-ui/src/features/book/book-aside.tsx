@@ -96,7 +96,7 @@ function CommunityCard({
   const server = useServerInfo();
   const asin = detail.fields.asin.value;
   const isbn = detail.fields.isbn.value;
-  const matched = !!(asin || isbn);
+  const matched = detail.book.matched;
 
   if (server.data && !server.data.capabilities.metadata) {
     return (

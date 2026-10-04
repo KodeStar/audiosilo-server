@@ -309,6 +309,8 @@ export interface AdminBook {
   file_count: number;
   asin: string;
   isbn: string;
+  /** An ASIN or ISBN is set: the community metadata can match it (the `matched=` filter's rule). */
+  matched: boolean;
   edited: boolean;
 }
 
@@ -318,9 +320,17 @@ export interface AdminBookPage {
   next_cursor?: string;
 }
 
-/** The orderings GET /admin/books accepts (catalog.adminSorts). */
-export type AdminBookSort =
-  'title' | 'author' | 'series' | 'narrator' | 'added' | 'duration' | 'size';
+/** The orderings GET /admin/books accepts (catalog.adminSorts), in the sort menu's order. */
+export const ADMIN_BOOK_SORTS = [
+  'title',
+  'author',
+  'series',
+  'narrator',
+  'added',
+  'duration',
+  'size',
+] as const;
+export type AdminBookSort = (typeof ADMIN_BOOK_SORTS)[number];
 
 /** catalog.FacetCount. */
 export interface FacetCount {
@@ -373,6 +383,16 @@ export interface AuthorsResponse {
 /** GET /admin/narrators (handlers_catalog.go handleAdminPeople). */
 export interface NarratorsResponse {
   narrators: PersonCount[];
+  merge_suggestions: MergeSuggestion[];
+  unknown: number;
+}
+
+/** The two people aggregates (a whole field value is one person). */
+export type PersonField = 'author' | 'narrator';
+
+/** Either people aggregate as the console reads it (api.people; not a wire shape). */
+export interface PeopleResponse {
+  people: PersonCount[];
   merge_suggestions: MergeSuggestion[];
   unknown: number;
 }

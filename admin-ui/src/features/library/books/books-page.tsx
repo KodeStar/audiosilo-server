@@ -1,21 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useSearch } from '@tanstack/react-router';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, Plus, SearchX } from 'lucide-react';
 import { useAdminBooks, useBookFacets, useLibraries, useServerInfo } from '@/api/hooks';
-import type { AdminBook, AdminLibrary, BookFacets } from '@/api/types';
+import type { AdminBook } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
 import { Page } from '@/components/page';
 import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { SegmentedControl } from '@/components/ui/segmented-control';
-import { formatNumber } from '@/lib/format';
+import { counted } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { AddToShareDialog } from '../add-to-share-dialog';
+import { LibraryFilter } from '../library-filter';
+import { useUpdateSearch } from '../library-param';
 import type { LibrarySearch } from '../library-search';
-import { AddToShareDialog } from './add-to-share-dialog';
 import { BookGrid, GridSkeleton } from './book-grid';
-import { bookFilter, isBrowsing, listParams, patchSearch, withoutFilters } from './books-model';
-import { BooksTable } from './books-table';
+import { bookFilter, isBrowsing, listParams, withoutFilters } from './books-model';
 import { ActiveChips, BooksToolbar } from './books-toolbar';
 import { BulkBar } from './bulk-bar';
 import { BulkEditDialog } from './bulk-edit-dialog';
@@ -24,6 +24,9 @@ import { Shelves } from './shelves';
 import { useSelection } from './use-selection';
 
 const NO_BOOKS: AdminBook[] = [];
+
+// The cover grid is the default view: the table (and TanStack Table) loads on first use.
+const BooksTable = lazy(() => import('./books-table').then((m) => ({ default: m.BooksTable })));
 
 /**
  * Library > Books: every book by its cover. Browsing (no search or filter)
@@ -35,16 +38,7 @@ export function BooksPage() {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const search = useSearch({ strict: false }) as LibrarySearch;
-  const navigate = useNavigate();
-  const update = useCallback(
-    (fn: (prev: LibrarySearch) => LibrarySearch) =>
-      void navigate({
-        to: '.',
-        search: (prev: LibrarySearch) => patchSearch(fn(prev), {}),
-        replace: true,
-      }),
-    [navigate],
-  );
+  const update = useUpdateSearch();
 
   // "Added in the last 7 days" counts from when the page opened, so the query key holds still.
   const [now] = useState(() => Date.now());
@@ -82,7 +76,7 @@ export function BooksPage() {
   const heading = browsing
     ? t('books.all')
     : total !== undefined
-      ? t('books.count', { count: total, formatted: formatNumber(total, lang) })
+      ? t('books.count', counted(total, lang))
       : t('books.all');
 
   let content: React.ReactNode;
@@ -108,14 +102,17 @@ export function BooksPage() {
   } else {
     const View = search.view === 'table' ? BooksTable : BookGrid;
     content = (
-      <View
-        books={books}
-        selection={selection}
-        metadataOn={metadataOn}
-        hasMore={!!list.hasNextPage}
-        loadingMore={list.isFetchingNextPage}
-        onLoadMore={loadMore}
-      />
+      <Suspense fallback={<GridSkeleton />}>
+        <View
+          books={books}
+          selection={selection}
+          metadataOn={metadataOn}
+          now={now}
+          hasMore={!!list.hasNextPage}
+          loadingMore={list.isFetchingNextPage}
+          onLoadMore={loadMore}
+        />
+      </Suspense>
     );
   }
 
@@ -126,14 +123,7 @@ export function BooksPage() {
         <EmptyLibrary hasLibraries={libs.length > 0} />
       ) : (
         <div className={cn(selection.size > 0 && 'selecting')}>
-          {libs.length > 1 ? (
-            <LibraryFilter
-              libraries={libs}
-              facets={facets.data}
-              value={search.library ?? 0}
-              onChange={(id) => update((prev) => ({ ...prev, library: id || undefined }))}
-            />
-          ) : null}
+          <LibraryFilter counts={facets.data?.libraries} className="mb-6" />
           {browsing ? <Shelves selection={selection} metadataOn={metadataOn} now={now} /> : null}
           <BooksToolbar
             heading={heading}
@@ -173,65 +163,6 @@ export function BooksPage() {
         onDone={clear}
       />
     </Page>
-  );
-}
-
-/**
- * All libraries, or one: counts from the facets (which ignore the library
- * filter, so every segment keeps its own count); an unreachable library reads
- * "offline" instead.
- */
-function LibraryFilter({
-  libraries,
-  facets,
-  value,
-  onChange,
-}: {
-  libraries: AdminLibrary[];
-  facets: BookFacets | undefined;
-  value: number;
-  onChange: (id: number) => void;
-}) {
-  const { t, i18n } = useTranslation();
-  const lang = i18n.resolvedLanguage ?? 'en';
-  const countOf = (id: number) => facets?.libraries.find((c) => c.library_id === id)?.count ?? 0;
-  const all = facets?.libraries.reduce((n, c) => n + c.count, 0);
-  const label = (name: string, aside: string | undefined) => (
-    <>
-      {name}
-      {aside !== undefined ? (
-        <span className="ml-1.5 text-subtle-foreground tabular-nums">{aside}</span>
-      ) : null}
-    </>
-  );
-  return (
-    <div className="hscroll mb-6 max-w-full">
-      <SegmentedControl
-        label={t('books.libraryFilter')}
-        value={value}
-        onChange={onChange}
-        options={[
-          {
-            value: 0,
-            label: label(
-              t('books.allLibraries'),
-              all !== undefined ? formatNumber(all, lang) : undefined,
-            ),
-          },
-          ...libraries.map((l) => ({
-            value: l.id,
-            label: label(
-              l.name,
-              !l.available
-                ? t('books.offline')
-                : facets
-                  ? formatNumber(countOf(l.id), lang)
-                  : undefined,
-            ),
-          })),
-        ]}
-      />
-    </div>
   );
 }
 

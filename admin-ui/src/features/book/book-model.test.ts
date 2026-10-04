@@ -10,19 +10,10 @@ import {
   draftErrors,
   fileName,
   fileStrip,
-  formatClock,
-  formatLength,
-  formatSize,
-  fullPath,
   ribbonSegments,
   saveRequest,
-  seriesLine,
   undoRevertRequest,
 } from './book-model';
-
-// A stand-in for i18next's t: the key and its values, so assertions read plainly.
-const t = (key: string, opts: Record<string, unknown>) =>
-  `${key.split('.').pop()}:${Object.values(opts).join(',')}`;
 
 describe('checkField', () => {
   it('trims, and refuses an empty title', () => {
@@ -107,28 +98,6 @@ describe('drafts', () => {
   });
 });
 
-describe('formatting', () => {
-  it('formats clock times, with hours for long books', () => {
-    expect(formatClock(0)).toBe('0:00');
-    expect(formatClock(125)).toBe('2:05');
-    expect(formatClock(3725)).toBe('1:02:05');
-    expect(formatClock(1200, true)).toBe('0:20:00');
-  });
-
-  it('formats lengths through the translations', () => {
-    expect(formatLength(163800, t)).toBe('hm:45,30');
-    expect(formatLength(7200, t)).toBe('h:2');
-    expect(formatLength(2280, t)).toBe('m:38');
-    expect(formatLength(40, t)).toBe('s:40');
-  });
-
-  it('formats sizes in decimal units', () => {
-    expect(formatSize(1_310_000_000, 'en')).toBe('1.3 GB');
-    expect(formatSize(48_000_000, 'en')).toBe('48 MB');
-    expect(formatSize(512, 'en')).toBe('512 byte');
-  });
-});
-
 const chapter = (index: number, file: string, start: number, end: number): AdminChapter => ({
   index,
   title: `Chapter ${index + 1}`,
@@ -185,17 +154,6 @@ describe('chapter ribbon', () => {
 });
 
 describe('the rest of the page', () => {
-  it('names the series and its position', () => {
-    expect(seriesLine('Stormlight', 1)).toEqual({ series: 'Stormlight', n: '1' });
-    expect(seriesLine('Stormlight', 0)).toEqual({ series: 'Stormlight' });
-    expect(seriesLine('', 3)).toBeNull();
-  });
-
-  it('joins the library root and the path', () => {
-    expect(fullPath('/mnt/tank/fiction/', 'A/B')).toBe('/mnt/tank/fiction/A/B');
-    expect(fullPath(undefined, 'A/B')).toBe('A/B');
-  });
-
   it('names folder detection', () => {
     expect(detectionKey('')).toBe('book.disk.automatic');
     expect(detectionKey('book')).toBe('book.disk.pinnedBook');

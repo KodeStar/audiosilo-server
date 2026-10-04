@@ -7,6 +7,7 @@ import { settleBookEdit } from '@/api/hooks';
 import { OVERRIDE_FIELDS, type AdminBookDetail, type OverrideField } from '@/api/types';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Button } from '@/components/ui/button';
+import { onInk } from '@/components/ui/on-ink';
 import {
   Dialog,
   DialogBody,
@@ -44,12 +45,7 @@ export function SaveBar({
           <span className="opacity-75"> · {t('book.save.needsFix', { count: invalid })}</span>
         ) : null}
       </span>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="text-inherit hover:bg-[color-mix(in_oklab,var(--primary-foreground)_12%,transparent)]"
-        onClick={onDiscard}
-      >
+      <Button variant="ghost" size="sm" className={onInk} onClick={onDiscard}>
         {t('book.save.discard')}
       </Button>
       <Button variant="brand" size="sm" onClick={onReview} disabled={invalid > 0}>

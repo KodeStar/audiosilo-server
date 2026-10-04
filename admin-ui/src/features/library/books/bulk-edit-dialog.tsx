@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Pencil, TriangleAlert } from 'lucide-react';
-import { api } from '@/api/client';
+import { BULK_LIMIT, api } from '@/api/client';
 import { invalidateBooks } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
@@ -11,18 +11,11 @@ import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/component
 import { FormError } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { refOf } from '@/lib/book-route';
+import { refKey, refOf } from '@/lib/book-route';
 import { errorMessage } from '@/lib/errors';
-import { formatNumber } from '@/lib/format';
+import { counted, formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import {
-  BULK_FIELDS,
-  BULK_LIMIT,
-  bulkSet,
-  commonValue,
-  selectionKey,
-  type BulkField,
-} from './books-model';
+import { BULK_FIELDS, bulkSet, commonValue, type BulkField } from './books-model';
 
 /** How many covers the dialog fans out before "+N". */
 const FAN = 8;
@@ -44,13 +37,11 @@ export function BulkEditDialog({
   onDone: () => void;
 }) {
   const { t, i18n } = useTranslation();
-  const count = books.length;
-  const formatted = formatNumber(count, i18n.resolvedLanguage ?? 'en');
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         icon={Pencil}
-        title={t('books.edit.title', { count, formatted })}
+        title={t('books.edit.title', counted(books.length, i18n.resolvedLanguage ?? 'en'))}
         description={t('books.edit.description')}
       >
         {open ? (
@@ -78,7 +69,6 @@ function BulkEditForm({ books, onDone }: { books: AdminBook[]; onDone: () => voi
   const changes = Object.keys(set).length;
   const tooMany = books.length > BULK_LIMIT;
   const count = books.length;
-  const formatted = formatNumber(count, lang);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,10 +80,7 @@ function BulkEditForm({ books, onDone }: { books: AdminBook[]; onDone: () => voi
       const res = await api.bulkEdit(refs, { set });
       invalidateBooks(qc, refs);
       toast.add({
-        title: t('books.edit.done', {
-          count: res.updated,
-          formatted: formatNumber(res.updated, lang),
-        }),
+        title: t('books.edit.done', counted(res.updated, lang)),
         description: t('books.edit.doneBody'),
         type: 'success',
       });
@@ -116,7 +103,7 @@ function BulkEditForm({ books, onDone }: { books: AdminBook[]; onDone: () => voi
         <div className="flex items-center" aria-hidden="true">
           {books.slice(0, FAN).map((b, i) => (
             <span
-              key={selectionKey(b)}
+              key={refKey(b)}
               className="w-11 shrink-0"
               style={{
                 marginLeft: i ? -12 : 0,
@@ -165,7 +152,7 @@ function BulkEditForm({ books, onDone }: { books: AdminBook[]; onDone: () => voi
       <DialogFormFooter
         busy={busy}
         disabled={!changes || tooMany}
-        submitLabel={t('books.edit.apply', { count, formatted })}
+        submitLabel={t('books.edit.apply', counted(count, lang))}
       />
     </form>
   );

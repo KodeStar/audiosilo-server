@@ -1,29 +1,22 @@
+import { BULK_LIMIT } from '@/api/client';
 import type {
   AdminBook,
   BookEditRequest,
   BookRef,
   MergeSuggestion,
   PersonCount,
+  PersonField,
 } from '@/api/types';
 import { refOf } from '@/lib/book-route';
+import { chunk, fold } from '@/lib/utils';
 
 // The Authors and Narrators screens' pure parts: ordering and filtering the
-// people aggregate, the "N books · 12h" figures, and the bulk edits a merge (and
-// its undo) send. A person is a whole field value ("Michael Kramer & Kate
-// Reading" is one narrator), so a merge rewrites the field, never part of it.
-
-export type PersonField = 'author' | 'narrator';
-
-/** POST /admin/books/bulk takes at most this many books per request. */
-export const BULK_LIMIT = 1000;
+// people aggregate, and the bulk edits a merge (and its undo) send. A person is
+// a whole field value ("Michael Kramer & Kate Reading" is one narrator), so a
+// merge rewrites the field, never part of it.
 
 /** How many tiles render at first, and how many more each "Show more" adds. */
 export const PAGE_STEP = 120;
-
-/** Lower case without diacritics, so "Bronte" finds "Brontë". */
-export function fold(s: string): string {
-  return s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
-}
 
 /** The people whose name contains `q` (case and accent insensitive). */
 export function filterPeople(people: PersonCount[], q: string): PersonCount[] {
@@ -43,14 +36,6 @@ export function sortByDuration(people: PersonCount[]): PersonCount[] {
   return [...people].sort((a, b) => b.duration - a.duration || byName(a, b));
 }
 
-/** A total listening time as whole hours, or minutes when under an hour. */
-export function durationParts(seconds: number): { unit: 'hours' | 'minutes'; value: number } {
-  const s = Math.max(0, seconds || 0);
-  return s >= 3600
-    ? { unit: 'hours', value: Math.round(s / 3600) }
-    : { unit: 'minutes', value: Math.round(s / 60) };
-}
-
 /** The spellings a merge rewrites: every name but the suggested one. */
 export function otherSpellings(s: MergeSuggestion): string[] {
   return s.names.filter((n) => n !== s.suggested);
@@ -67,13 +52,6 @@ export function otherSpellingBooks(s: MergeSuggestion, people: PersonCount[]): n
   return n || s.books;
 }
 
-/** `xs` in runs of at most `size`. */
-export function chunk<T>(xs: T[], size = BULK_LIMIT): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
-  return out;
-}
-
 /** One POST /admin/books/bulk request. */
 export interface BulkStep {
   books: BookRef[];
@@ -82,7 +60,7 @@ export interface BulkStep {
 
 /** The requests that set `field` to `suggested` on every book. */
 export function mergeSteps(books: AdminBook[], field: PersonField, suggested: string): BulkStep[] {
-  return chunk(books.map(refOf)).map((refs) => ({
+  return chunk(books.map(refOf), BULK_LIMIT).map((refs) => ({
     books: refs,
     edit: { set: { [field]: suggested } },
   }));
@@ -94,10 +72,9 @@ export function mergeSteps(books: AdminBook[], field: PersonField, suggested: st
  * its old spelling set again, one request per spelling.
  */
 export function undoSteps(books: AdminBook[], field: PersonField): BulkStep[] {
-  const steps: BulkStep[] = chunk(books.filter((b) => !b.edited).map(refOf)).map((refs) => ({
-    books: refs,
-    edit: { revert: [field] },
-  }));
+  const steps: BulkStep[] = chunk(books.filter((b) => !b.edited).map(refOf), BULK_LIMIT).map(
+    (refs) => ({ books: refs, edit: { revert: [field] } }),
+  );
   const bySpelling = new Map<string, BookRef[]>();
   for (const b of books.filter((x) => x.edited)) {
     const refs = bySpelling.get(b[field]) ?? [];
@@ -105,7 +82,7 @@ export function undoSteps(books: AdminBook[], field: PersonField): BulkStep[] {
     bySpelling.set(b[field], refs);
   }
   for (const [spelling, refs] of bySpelling) {
-    for (const part of chunk(refs)) {
+    for (const part of chunk(refs, BULK_LIMIT)) {
       steps.push({ books: part, edit: { set: { [field]: spelling } } });
     }
   }

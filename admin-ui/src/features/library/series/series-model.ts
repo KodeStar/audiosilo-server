@@ -151,9 +151,9 @@ export function groupSeriesPages(
   return { bySeries, done };
 }
 
-/** The book whose community metadata names the series: the first with an ASIN or ISBN. */
+/** The book whose community metadata names the series: the first one matched. */
 export function metaCandidate(owned: AdminBook[]): AdminBook | undefined {
-  return owned.find((b) => b.asin || b.isbn);
+  return owned.find((b) => b.matched);
 }
 
 /** A spine's height as a share of the shelf (80-95%), varied but stable per title. */

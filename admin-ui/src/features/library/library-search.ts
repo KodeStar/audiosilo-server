@@ -1,4 +1,4 @@
-import type { AdminBookSort } from '@/api/types';
+import { ADMIN_BOOK_SORTS, type AdminBookSort } from '@/api/types';
 
 // The Library destination's search params (every view deep-links, STYLEGUIDE.md
 // section 2): the Books list's search, sort, view and facet filters, the exact
@@ -6,15 +6,6 @@ import type { AdminBookSort } from '@/api/types';
 // the Folders tree's selection. Validated here; router.tsx merges them into the
 // destination routes' search.
 
-export const SORTS: readonly AdminBookSort[] = [
-  'title',
-  'author',
-  'series',
-  'narrator',
-  'added',
-  'duration',
-  'size',
-];
 export const LENGTHS = ['short', 'medium', 'long', 'epic'] as const;
 export const ADDED = ['7', '30', '365'] as const;
 export const YES_NO = ['yes', 'no'] as const;
@@ -52,6 +43,9 @@ export interface LibrarySearch {
   folder?: string;
 }
 
+/** Changes the Library search params from the previous ones (useUpdateSearch writes them). */
+export type Update = (fn: (prev: LibrarySearch) => LibrarySearch) => void;
+
 const oneOf = <T extends string>(allowed: readonly T[], v: unknown): T | undefined =>
   allowed.includes(v as T) ? (v as T) : undefined;
 
@@ -68,7 +62,7 @@ export function validateLibrarySearch(s: Record<string, unknown>): LibrarySearch
   const library = Number(s.library);
   const out: LibrarySearch = {
     q: text(s.q),
-    sort: oneOf(SORTS, s.sort),
+    sort: oneOf(ADMIN_BOOK_SORTS, s.sort),
     order: oneOf(['asc', 'desc'] as const, s.order),
     view: s.view === 'table' ? 'table' : undefined,
     library: Number.isInteger(library) && library > 0 ? library : undefined,

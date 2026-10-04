@@ -1,28 +1,31 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { createColumnHelper, tableFeatures, useTable } from '@tanstack/react-table';
-import { useWindowVirtualizer } from '@tanstack/react-virtual';
+import {
+  FlexRender,
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+  type Row,
+} from '@tanstack/react-table';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import type { AdminBook } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
+import { PlaybackStatus } from '@/components/playback-status';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { bookRoute } from '@/lib/book-route';
-import { formatNumber, formatRelative } from '@/lib/format';
+import { bookRoute, refKey } from '@/lib/book-route';
+import { formatDuration, formatRelative, seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { LoadingMore } from './book-grid';
-import { formatDuration, isMatched, selectionKey, shouldLoadMore } from './books-model';
-import { useDocumentTop, useIsPhone } from './use-layout';
-import type { Selection } from './use-selection';
+import { LoadingMore, type BookViewProps } from './book-grid';
+import { useIsPhone, useWindowRows } from './use-layout';
 
 const features = tableFeatures({});
 const column = createColumnHelper<typeof features, AdminBook>();
 
 /** Row heights: a 36px cover plus padding; the phone's stacked row adds a subtitle. */
 const ROW_HEIGHT = { desktop: 57, phone: 69 };
-const INITIAL_RECT = { width: 1024, height: 900 };
 
 /**
  * Per-column cell classes. On a phone the table stacks (STYLEGUIDE.md "Table"):
@@ -61,10 +64,7 @@ function bookColumns(t: TFunction, lang: string, metadataOn: boolean, now: numbe
           <>
             {b.series}
             {b.series_index > 0 ? (
-              <span className="tabular-nums">
-                {' '}
-                {t('books.tile.seriesIndex', { index: formatNumber(b.series_index, lang) })}
-              </span>
+              <span className="tabular-nums"> {seriesIndexLabel(b.series_index, lang, t)}</span>
             ) : null}
           </>
         ) : null,
@@ -87,18 +87,7 @@ function bookColumns(t: TFunction, lang: string, metadataOn: boolean, now: numbe
     column.accessor('direct_playable', {
       id: 'playback',
       header: () => t('books.col.playback'),
-      cell: (c) =>
-        c.getValue() ? (
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-            <span className="dot" aria-hidden="true" />
-            {t('books.table.direct')}
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-warning">
-            <span className="dot" data-tone="warn" aria-hidden="true" />
-            {t('books.table.transcode')}
-          </span>
-        ),
+      cell: (c) => <PlaybackStatus direct={c.getValue()} />,
     }),
     ...(metadataOn
       ? [
@@ -106,7 +95,7 @@ function bookColumns(t: TFunction, lang: string, metadataOn: boolean, now: numbe
             id: 'metadata',
             header: () => t('books.col.metadata'),
             cell: ({ row: { original: b } }) =>
-              isMatched(b) ? (
+              b.matched ? (
                 <ProvenanceMarker source="community" short />
               ) : (
                 <Badge variant="outline">{t('books.table.unmatched')}</Badge>
@@ -122,6 +111,8 @@ function bookColumns(t: TFunction, lang: string, metadataOn: boolean, now: numbe
   ]);
 }
 
+type Columns = ReturnType<typeof bookColumns>;
+
 /**
  * The table view: TanStack Table for the columns, rows virtualized against the
  * window scroll (spacer rows above and below keep it a real <table>). The header
@@ -132,45 +123,31 @@ export function BooksTable({
   books,
   selection,
   metadataOn,
+  now,
   hasMore,
   loadingMore,
   onLoadMore,
-}: {
-  books: AdminBook[];
-  selection: Selection;
-  metadataOn: boolean;
-  hasMore: boolean;
-  loadingMore: boolean;
-  onLoadMore: () => void;
-}) {
+}: BookViewProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const navigate = useNavigate();
   const ref = useRef<HTMLDivElement>(null);
-  const top = useDocumentTop(ref);
   const phone = useIsPhone();
   const rowHeight = phone ? ROW_HEIGHT.phone : ROW_HEIGHT.desktop;
-  const now = useMemo(() => Date.now(), []);
   const columns = useMemo(() => bookColumns(t, lang, metadataOn, now), [t, lang, metadataOn, now]);
-  const table = useTable({ features, columns, data: books, getRowId: (b) => selectionKey(b) });
+  const table = useTable({ features, columns, data: books, getRowId: refKey });
   const rows = table.getRowModel().rows;
-
-  const virtualizer = useWindowVirtualizer({
+  const { virtualizer, items, margin } = useWindowRows({
+    ref,
     count: rows.length,
-    estimateSize: () => rowHeight,
+    rowHeight,
     overscan: 8,
-    scrollMargin: top,
-    initialRect: INITIAL_RECT,
-    useFlushSync: false,
+    ahead: 10,
+    hasMore,
+    loadingMore,
+    onLoadMore,
   });
-  useEffect(() => virtualizer.measure(), [virtualizer, rowHeight]);
-  const items = virtualizer.getVirtualItems();
-  const last = items.at(-1)?.index;
-  useEffect(() => {
-    if (shouldLoadMore(last, rows.length, hasMore, loadingMore, 10)) onLoadMore();
-  }, [last, rows.length, hasMore, loadingMore, onLoadMore]);
 
-  const margin = virtualizer.options.scrollMargin;
   const padTop = items.length ? items[0].start - margin : 0;
   const padBottom = items.length ? virtualizer.getTotalSize() - (items.at(-1)!.end - margin) : 0;
   const colCount = columns.length;
@@ -178,8 +155,10 @@ export function BooksTable({
   const selecting = selection.size > 0;
   const allOn = books.length > 0 && books.every(selection.isSelected);
   const someOn = !allOn && books.some(selection.isSelected);
-  const open = (b: AdminBook) =>
-    selecting ? selection.toggle(b) : void navigate(bookRoute(b.library_id, b.path));
+  const open = useCallback(
+    (b: AdminBook) => void navigate(bookRoute(b.library_id, b.path)),
+    [navigate],
+  );
 
   return (
     <>
@@ -208,7 +187,7 @@ export function BooksTable({
                         aria-label={t('books.table.selectAll')}
                       />
                     ) : (
-                      <table.FlexRender header={header} />
+                      <FlexRender header={header} />
                     )}
                   </th>
                 ))}
@@ -223,41 +202,18 @@ export function BooksTable({
             ) : null}
             {items.map((item) => {
               const row = rows[item.index];
-              if (!row) return null;
-              const b = row.original;
-              const on = selection.isSelected(b);
-              return (
-                <tr
+              return row ? (
+                <BookRow
                   key={row.id}
-                  data-selected={on || undefined}
-                  onClick={() => open(b)}
-                  className="cursor-pointer border-b transition-colors duration-(--dur-1) last:border-b-0 hover:bg-muted/70 data-selected:bg-[color-mix(in_oklab,var(--brand)_7%,transparent)] max-md:grid max-md:grid-cols-[auto_minmax(0,1fr)_auto] max-md:items-center max-md:gap-x-3 max-md:px-3.5"
-                  style={{ height: rowHeight }}
-                >
-                  {row.getAllCells().map((cell) => {
-                    const id = cell.column.id;
-                    return (
-                      <td
-                        key={cell.id}
-                        className={cn('px-3 align-middle max-md:p-0', CELL[id])}
-                        onClick={id === 'select' ? (e) => e.stopPropagation() : undefined}
-                      >
-                        {id === 'select' ? (
-                          <Checkbox
-                            checked={on}
-                            onCheckedChange={() => selection.toggle(b)}
-                            aria-label={t('books.tile.select', { title: b.title })}
-                          />
-                        ) : id === 'title' ? (
-                          <TitleCell book={b} selecting={selecting} onToggle={selection.toggle} />
-                        ) : (
-                          <table.FlexRender cell={cell} />
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
+                  row={row}
+                  columns={columns}
+                  height={rowHeight}
+                  selected={selection.isSelected(row.original)}
+                  selecting={selecting}
+                  onToggle={selection.toggle}
+                  onOpen={open}
+                />
+              ) : null;
             })}
             {padBottom > 0 ? (
               <tr aria-hidden="true">
@@ -271,6 +227,62 @@ export function BooksTable({
     </>
   );
 }
+
+/**
+ * One book's row. Memoized (its handlers are stable), so selecting a book or
+ * scrolling re-renders only the rows that changed; `columns` is a prop so a new
+ * language or "now" still re-renders every row.
+ */
+const BookRow = memo(function BookRow({
+  row,
+  height,
+  selected,
+  selecting,
+  onToggle,
+  onOpen,
+}: {
+  row: Row<typeof features, AdminBook>;
+  columns: Columns;
+  height: number;
+  selected: boolean;
+  selecting: boolean;
+  onToggle: (b: AdminBook) => void;
+  onOpen: (b: AdminBook) => void;
+}) {
+  const { t } = useTranslation();
+  const b = row.original;
+  return (
+    <tr
+      data-selected={selected || undefined}
+      onClick={() => (selecting ? onToggle(b) : onOpen(b))}
+      className="cursor-pointer border-b transition-colors duration-(--dur-1) last:border-b-0 hover:bg-muted/70 data-selected:bg-[color-mix(in_oklab,var(--brand)_7%,transparent)] max-md:grid max-md:grid-cols-[auto_minmax(0,1fr)_auto] max-md:items-center max-md:gap-x-3 max-md:px-3.5"
+      style={{ height }}
+    >
+      {row.getAllCells().map((cell) => {
+        const id = cell.column.id;
+        return (
+          <td
+            key={cell.id}
+            className={cn('px-3 align-middle max-md:p-0', CELL[id])}
+            onClick={id === 'select' ? (e) => e.stopPropagation() : undefined}
+          >
+            {id === 'select' ? (
+              <Checkbox
+                checked={selected}
+                onCheckedChange={() => onToggle(b)}
+                aria-label={t('books.tile.select', { title: b.title })}
+              />
+            ) : id === 'title' ? (
+              <TitleCell book={b} selecting={selecting} onToggle={onToggle} />
+            ) : (
+              <FlexRender cell={cell} />
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+});
 
 /** The cover and the title (a link, for the keyboard); on a phone, author and length under it. */
 function TitleCell({

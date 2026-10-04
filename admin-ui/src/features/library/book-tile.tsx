@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Globe, ImageOff, Lock, Repeat, type LucideIcon } from 'lucide-react';
@@ -5,7 +6,7 @@ import type { AdminBook } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { bookRoute } from '@/lib/book-route';
-import { formatNumber } from '@/lib/format';
+import { seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { tileFlags, type TileFlag } from './books/books-model';
 
@@ -22,9 +23,10 @@ const FLAG_ICONS: Record<TileFlag, LucideIcon> = {
  * `onToggle` a checkbox shows top-left on hover and focus (always, while an
  * ancestor has .selecting). The tile opens the book page, or, while a
  * selection is active (`selecting`), toggles the book in it. `note` replaces
- * the subtitle (and the flags) with one issue in the warning colour.
+ * the subtitle (and the flags) with one issue in the warning colour. Memoized:
+ * a grid re-renders only the tiles whose props changed (pass a stable `onToggle`).
  */
-export function BookTile({
+export const BookTile = memo(function BookTile({
   book,
   metadataOn = false,
   selected = false,
@@ -44,10 +46,7 @@ export function BookTile({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const flags = note ? [] : tileFlags(book, metadataOn);
-  const index =
-    book.series && book.series_index > 0
-      ? t('books.tile.seriesIndex', { index: formatNumber(book.series_index, lang) })
-      : '';
+  const index = book.series ? seriesIndexLabel(book.series_index, lang, t) : '';
 
   const flagLabel = (f: TileFlag) =>
     f === 'transcode'
@@ -127,4 +126,4 @@ export function BookTile({
       </Link>
     </div>
   );
-}
+});

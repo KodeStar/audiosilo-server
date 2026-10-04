@@ -30,7 +30,7 @@ describe('tintFromPixels', () => {
 
 describe('tintFromPalette', () => {
   it('uses the accent and the background', () => {
-    expect(tintFromPalette('#1f3a8a', ['#14532d', '#1f3a8a', '#e14b4b', '#0f1a33'])).toEqual({
+    expect(tintFromPalette(['#14532d', '#1f3a8a', '#e14b4b', '#0f1a33'])).toEqual({
       tint1: '#1f3a8a',
       tint2: '#14532d',
       glow: '#1f3a8a66',
@@ -38,8 +38,6 @@ describe('tintFromPalette', () => {
   });
 
   it('uses the highlight instead of a near-white background', () => {
-    expect(tintFromPalette('#d99a06', ['#fbfbfc', '#d99a06', '#111827', '#111827']).tint2).toBe(
-      '#111827',
-    );
+    expect(tintFromPalette(['#fbfbfc', '#d99a06', '#111827', '#111827']).tint2).toBe('#111827');
   });
 });

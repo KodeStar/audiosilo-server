@@ -66,10 +66,10 @@ function lightness(color: string): number {
 }
 
 /**
- * A generated cover's tint: its accent (`coverTint`) and its background, or its
- * highlight when the background is near white (a white wash reads as no tint).
+ * A generated cover's tint: its accent and its background, or its highlight
+ * when the background is near white (a white wash reads as no tint).
  */
-export function tintFromPalette(accent: string, palette: CoverPalette): HeroTint {
-  const [bg, , highlight] = palette;
+export function tintFromPalette(palette: CoverPalette): HeroTint {
+  const [bg, accent, highlight] = palette;
   return { tint1: accent, tint2: lightness(bg) > 0.92 ? highlight : bg, glow: `${accent}66` };
 }

@@ -10,12 +10,13 @@ import { PageSkeleton } from '@/components/page';
 const BooksPage = lazy(() =>
   import('@/features/library/books/books-page').then((m) => ({ default: m.BooksPage })),
 );
-const AuthorsPage = lazy(() =>
-  import('@/features/library/people/authors-page').then((m) => ({ default: m.AuthorsPage })),
+const PeopleScreen = lazy(() =>
+  import('@/features/library/people/people-screen').then((m) => ({ default: m.PeopleScreen })),
 );
-const NarratorsPage = lazy(() =>
-  import('@/features/library/people/narrators-page').then((m) => ({ default: m.NarratorsPage })),
-);
+/** Library > Authors: everyone credited as an author, most books first. */
+const AuthorsPage = () => <PeopleScreen field="author" />;
+/** Library > Narrators: everyone credited as a narrator, most hours first. */
+const NarratorsPage = () => <PeopleScreen field="narrator" />;
 const SeriesPage = lazy(() =>
   import('@/features/library/series/series-page').then((m) => ({ default: m.SeriesPage })),
 );

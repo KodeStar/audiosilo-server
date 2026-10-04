@@ -13,7 +13,7 @@ import type {
 // "Fiction" and 2 "Kids", as in fixtures.ts.
 
 export function adminBook(over: Partial<AdminBook> = {}): AdminBook {
-  return {
+  const book = {
     library_id: 1,
     library_name: 'Fiction',
     path: 'Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings',
@@ -39,6 +39,8 @@ export function adminBook(over: Partial<AdminBook> = {}): AdminBook {
     edited: false,
     ...over,
   };
+  // The server's rule (an ASIN or ISBN set), unless a test says otherwise.
+  return { ...book, matched: over.matched ?? !!(book.asin || book.isbn) };
 }
 
 /** A small library: a series run, a book without cover or match, an opus book. */

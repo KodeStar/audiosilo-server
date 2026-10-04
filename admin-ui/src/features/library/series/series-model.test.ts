@@ -157,7 +157,7 @@ describe('groupSeriesPages', () => {
 });
 
 describe('metaCandidate and spineHeight', () => {
-  it('picks the first book with an ASIN or ISBN', () => {
+  it('picks the first matched book', () => {
     const a = book(1, 'A', { asin: '', isbn: '' });
     const b = book(2, 'B', { asin: '', isbn: '9780765326355' });
     expect(metaCandidate([a, b])).toBe(b);

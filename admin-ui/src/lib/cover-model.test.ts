@@ -1,4 +1,4 @@
-import { coverModel, coverTint, seededRandom } from './cover-model';
+import { coverModel, seededRandom } from './cover-model';
 
 describe('coverModel', () => {
   it('is deterministic for a title and author', () => {
@@ -7,7 +7,6 @@ describe('coverModel', () => {
     expect(a.layout).toBe(b.layout);
     expect(a.palette).toBe(b.palette);
     expect([a.rand(), a.rand()]).toEqual([b.rand(), b.rand()]);
-    expect(coverTint('The Way of Kings', 'Brandon Sanderson')).toBe(a.palette[1]);
   });
 
   it('spreads books over every layout', () => {
