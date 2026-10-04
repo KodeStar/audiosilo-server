@@ -120,19 +120,29 @@ func (s *Service) ListDevices(ctx context.Context, userID int64) ([]Device, erro
 
 // RevokeDevice signs one device out: it revokes a live session or API-key token
 // by id, whoever owns it (the admin console's "Sign out this device"). Other
-// devices of the same person stay signed in. An id naming no live session or key
+// devices of the same person stay signed in, but the browser it signed in from is
+// forgotten (IssueSession). An id naming no live session or key
 // (a pairing token included) returns ErrNotFound.
 func (s *Service) RevokeDevice(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE tokens SET revoked = 1 WHERE id = ? AND kind IN (?, ?) AND revoked = 0`,
-		id, KindSession, KindAPI)
-	if err != nil {
+	return s.db.WithTx(ctx, "RevokeDevice", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE tokens SET revoked = 1 WHERE id = ? AND kind IN (?, ?) AND revoked = 0`,
+			id, KindSession, KindAPI)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		// An admin signing a device out may be cutting off someone who had the
+		// password: forget its browser, on every session of the person that carries
+		// the key, so a sign-in from it is announced as a new device again.
+		_, err = tx.ExecContext(ctx,
+			`UPDATE tokens SET sign_in_key = ''
+			  WHERE sign_in_key <> ''
+			    AND (user_id, sign_in_key) = (SELECT user_id, sign_in_key FROM tokens WHERE id = ?)`, id)
 		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	})
 }
 
 // ForgetRevokedAddresses blanks the last address of every signed-out or expired

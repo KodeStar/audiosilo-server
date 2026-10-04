@@ -211,8 +211,8 @@ admin overrides; see Metadata overrides below).
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
   `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
   expires). Both pair through the same `ResolveAuthCode` → `IssuePairingToken` →
-  `ConsumePairingToken` path. **Redeem validates without consuming** (opening an
-  invite link costs nothing); **exchange claims the use** - `ConsumePairingToken`
+  `ConsumePairing` path. **Redeem validates without consuming** (opening an
+  invite link costs nothing); **exchange claims the use** - `ConsumePairing`
   folds the cap check, the code-expiry check and the first-claim `redeemed_at`
   stamp into one atomic UPDATE, and rejects a disabled/deleted user first, so a
   rejected attempt never burns a use or marks an invite accepted (`uses` counts

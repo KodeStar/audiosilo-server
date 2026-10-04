@@ -35,11 +35,6 @@ const (
 	// sends its next save with the position advanced by about the time that
 	// passed, and that listening belongs to the same session (continuousPlayback).
 	resumeWindow = 12 * time.Hour
-	// SessionRetention is how long raw sessions (device, app, time of day,
-	// playback mode) are kept before PruneSessions sums them into listening_daily.
-	// Just over a year, so the Activity page's longest range (a year, or the
-	// current calendar year) always reads raw sessions.
-	SessionRetention = 400 * 24 * time.Hour
 )
 
 // sessionTime is the session timestamp format: UTC with milliseconds, fixed

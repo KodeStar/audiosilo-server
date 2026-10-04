@@ -380,6 +380,8 @@ export interface AdminSettings {
     /** "" = derived from each request's host. */
     public_url: string;
     update_check: boolean;
+    /** Days raw listening sessions are kept before they become daily totals (30-3650). */
+    session_days: number;
   };
   network: {
     bind: string;
@@ -1063,6 +1065,9 @@ export interface ErrorEnvelope {
   code?: string;
   /** With code "invalid_override": the book field the edit was refused for. */
   field?: string;
+  /** With code "invalid_target": why (notify.Reason*), and a length's limit. */
+  reason?: string;
+  max?: number;
 }
 
 // ---- Admin catalog (Phase 2a API, consumed by the Library and Book screens) ----

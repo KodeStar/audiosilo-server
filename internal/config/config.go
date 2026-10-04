@@ -87,6 +87,28 @@ const (
 	MaxBackupKeep = 365
 )
 
+// ActivityConfig controls what the Activity pages keep.
+type ActivityConfig struct {
+	// SessionDays is how many days raw listening sessions (which device and app,
+	// the time of day, the playback mode) are kept before they are summed into
+	// per-day totals per listener and book. Settings > General changes it; the
+	// daily retention job applies a change.
+	SessionDays int `yaml:"session_days"`
+}
+
+// Session retention: just over a year by default, so the Activity page's longest
+// range (a year, or the current calendar year) reads raw sessions throughout.
+const (
+	DefaultSessionDays = 400
+	MinSessionDays     = 30
+	MaxSessionDays     = 3650
+)
+
+// SessionRetention is SessionDays as a duration.
+func (a ActivityConfig) SessionRetention() time.Duration {
+	return time.Duration(a.SessionDays) * 24 * time.Hour
+}
+
 // DemoConfig configures public demo mode: when enabled, an unauthenticated
 // visitor can mint a throwaway account via POST /api/v1/demo/session (granted the
 // named library), and idle demo accounts are reaped in the background.
@@ -182,6 +204,7 @@ type Config struct {
 	Demo           DemoConfig     `yaml:"demo"`     // public demo mode (throwaway accounts)
 	Metadata       MetadataConfig `yaml:"metadata"` // community metadata lookup (Phase 1.5)
 	Backups        BackupConfig   `yaml:"backups"`  // database backups (internal/backup)
+	Activity       ActivityConfig `yaml:"activity"` // listening history retention
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
@@ -229,6 +252,7 @@ func Default(dataDir string) *Config {
 		Metadata:       MetadataConfig{Enabled: true, BaseURL: DefaultMetadataBaseURL},
 		UpdateCheck:    true,
 		Backups:        BackupConfig{Schedule: DefaultBackupSchedule, Keep: DefaultBackupKeep},
+		Activity:       ActivityConfig{SessionDays: DefaultSessionDays},
 	}
 }
 
@@ -274,19 +298,7 @@ func (c *Config) Save() error {
 	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		return err
 	}
-	on := c
-	if c.file != nil {
-		on = c.Clone()
-		for key := range c.fromEnv {
-			copyField(on, c.file, key)
-		}
-		if c.onDisk {
-			for key := range c.pinned {
-				copyField(on, c.file, key)
-			}
-		}
-	}
-	out, err := yaml.Marshal(on)
+	out, err := yaml.Marshal(c.asSaved())
 	if err != nil {
 		return err
 	}
@@ -301,6 +313,24 @@ func (c *Config) Save() error {
 		c.onDisk = true
 	}
 	return nil
+}
+
+// asSaved is c as Save writes it to config.yaml: the file's own values for the
+// keys the environment sets (and, once the file exists, the launcher pins).
+func (c *Config) asSaved() *Config {
+	if c.file == nil {
+		return c
+	}
+	on := c.Clone()
+	for key := range c.fromEnv {
+		copyField(on, c.file, key)
+	}
+	if c.onDisk {
+		for key := range c.pinned {
+			copyField(on, c.file, key)
+		}
+	}
+	return on
 }
 
 // applyEnv overrides fields from AUDIOSILO_* environment variables (see fields)
@@ -440,6 +470,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Backups.Keep < 1 || c.Backups.Keep > MaxBackupKeep {
 		return fieldErr("backups.keep", fmt.Errorf("backups.keep must be from 1 to %d", MaxBackupKeep))
+	}
+	if d := c.Activity.SessionDays; d < MinSessionDays || d > MaxSessionDays {
+		return fieldErr("activity.session_days", fmt.Errorf("keep listening sessions from %d to %d days", MinSessionDays, MaxSessionDays))
 	}
 	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {
 		return fieldErr("backups.dir", fmt.Errorf("backups.dir must be an absolute path, got %q", d))

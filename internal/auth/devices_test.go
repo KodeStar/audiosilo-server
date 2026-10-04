@@ -176,3 +176,67 @@ func TestResolveRequestHeaderlessDoesNotRevertApp(t *testing.T) {
 		}
 	}
 }
+
+// A browser is known once one of the person's sessions came from it: a sign-out
+// keeps it known, an admin's "sign out this device" forgets it, and the key is
+// per person (another account signing in from the same browser is new to it).
+func TestIssueSessionKnowsTheBrowser(t *testing.T) {
+	s, ctx := newTestService(t)
+	ann, _ := s.CreateUser(ctx, "ann", "a-long-password", RoleAdmin)
+	bob, _ := s.CreateUser(ctx, "bob", "a-long-password", RoleUser)
+	const key = "8c4a2f1e-0b9d-4c57-9e1a-3f6d2b7c8e90"
+
+	known := func(user *User, key string) bool {
+		t.Helper()
+		secret, known, err := s.IssueSession(ctx, user.ID, "admin-web", key)
+		if err != nil || secret == "" {
+			t.Fatalf("IssueSession: %q %v", secret, err)
+		}
+		return known
+	}
+	if known(ann, key) {
+		t.Fatal("a first sign-in from a browser is known")
+	}
+	if !known(ann, key) {
+		t.Fatal("a second sign-in from the same browser is new")
+	}
+	if known(bob, key) {
+		t.Fatal("another person's browser key counts for this one")
+	}
+	// Twice each: a sign-in without a usable key never makes the next one known.
+	for _, unusable := range []string{"", "", "short", "short", "not a key; has spaces!", "not a key; has spaces!"} {
+		if known(ann, unusable) {
+			t.Fatalf("a sign-in with key %q is known", unusable)
+		}
+	}
+
+	// Signing out keeps the browser known.
+	secret, _, _ := s.IssueSession(ctx, ann.ID, "admin-web", key)
+	if err := s.RevokeToken(ctx, secret); err != nil {
+		t.Fatal(err)
+	}
+	if !known(ann, key) {
+		t.Fatal("a sign-out forgot the browser")
+	}
+
+	// An admin signing one of its sessions out forgets it on every session.
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(id) FROM tokens WHERE user_id = ? AND sign_in_key <> ''`, ann.ID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RevokeDevice(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if known(ann, key) {
+		t.Fatal("a browser an admin signed out is still known")
+	}
+	if !known(bob, key) {
+		t.Fatal("signing out ann's browser forgot bob's")
+	}
+	// The key is never stored as sent.
+	var n int
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE sign_in_key = ?`, key).Scan(&n)
+	if n != 0 {
+		t.Fatal("the browser key is stored in the clear")
+	}
+}

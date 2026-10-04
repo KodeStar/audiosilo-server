@@ -46,6 +46,17 @@ describe('notifications bell', () => {
     expect(await screen.findByRole('button', { name: 'Notifications' })).toBeInTheDocument();
   });
 
+  it('leads to the whole feed', async () => {
+    mockFetch(signedInRoutes({ 'GET /admin/events': { body: { events, next_before: 0 } } }));
+    const { router } = renderApp('/');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Notifications, 2 new' }));
+    const popup = await screen.findByRole('dialog', { name: 'Notifications' });
+    await user.click(within(popup).getByRole('link', { name: 'See all' }));
+    expect(router.state.location.pathname).toBe('/server/events');
+    expect(await screen.findByRole('heading', { name: 'Events', level: 1 })).toBeInTheDocument();
+  });
+
   it('says when nothing has happened', async () => {
     mockFetch(signedInRoutes());
     renderApp('/');

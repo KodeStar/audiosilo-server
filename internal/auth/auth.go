@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -51,11 +52,11 @@ var (
 	ErrInvalidCreds = errors.New("invalid credentials")
 	ErrInvalidToken = errors.New("invalid or expired token")
 	ErrInvalidCode  = errors.New("invalid or expired auth code")
-	// ErrCodeExhausted is returned by ConsumePairingToken when the parent invite
+	// ErrCodeExhausted is returned by ConsumePairing when the parent invite
 	// has no uses left, so the transport can tell "the invite is spent" apart
 	// from a bogus token.
 	ErrCodeExhausted = errors.New("invite has no uses left")
-	// ErrCodeExpired is returned by ConsumePairingToken when the parent invite
+	// ErrCodeExpired is returned by ConsumePairing when the parent invite
 	// expired between redeem and exchange.
 	ErrCodeExpired = errors.New("invite has expired")
 	// ErrLastAdmin is returned when an operation would leave no enabled admin.
@@ -230,19 +231,50 @@ func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName
 	if err != nil {
 		return "", err
 	}
-	if _, err := s.insertToken(ctx, userID, hash, kind, deviceName, s.expiresAt(ttl), nil); err != nil {
+	if _, err := s.insertToken(ctx, userID, hash, kind, deviceName, s.expiresAt(ttl), nil, ""); err != nil {
 		return "", err
 	}
 	return secret, nil
 }
 
+// signInKeyPattern bounds a browser's sign-in key: a random id the client made
+// (the admin console sends a UUID), never anything a person typed.
+var signInKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
+
+// IssueSession issues a session for a password sign-in. signInKey is the random
+// id the signing-in browser keeps for itself ("" or malformed: it sent none, and
+// the sign-in counts as a new device). knownBrowser reports whether an earlier
+// session of the same person came from that browser, revoked ones included (a
+// sign-out keeps the key; an admin's RevokeDevice forgets it).
+func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, signInKey string) (secret string, knownBrowser bool, err error) {
+	keyHash := ""
+	if signInKeyPattern.MatchString(signInKey) {
+		keyHash = hashSecret(signInKey)
+		err = s.db.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM tokens WHERE user_id = ? AND sign_in_key = ?)`, userID, keyHash).
+			Scan(&knownBrowser)
+		if err != nil {
+			return "", false, err
+		}
+	}
+	secret, hash, err := generateToken()
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := s.insertToken(ctx, userID, hash, KindSession, deviceName, nil, nil, keyHash); err != nil {
+		return "", false, err
+	}
+	return secret, knownBrowser, nil
+}
+
 // insertToken writes one tokens row and returns the write Result (for callers
 // that need the new row's id) - the single place the column list lives. expires
-// and authCodeID are nil for "no expiry" / "unlinked".
-func (s *Service) insertToken(ctx context.Context, userID int64, hash, kind, deviceName string, expires, authCodeID any) (sql.Result, error) {
+// and authCodeID are nil for "no expiry" / "unlinked"; signInKey is the hashed
+// browser key of a password sign-in ("" otherwise).
+func (s *Service) insertToken(ctx context.Context, userID int64, hash, kind, deviceName string, expires, authCodeID any, signInKey string) (sql.Result, error) {
 	return s.db.ExecContext(ctx,
-		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id)
-		 VALUES(?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID)
+		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id, sign_in_key)
+		 VALUES(?,?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID, signInKey)
 }
 
 // ResolveToken validates a presented token secret of exactly the given kind and
@@ -298,7 +330,7 @@ type tokenRow struct {
 // its (partial) user and token row, applying the shared validity checks:
 // unknown, revoked and expired tokens and disabled users all return
 // ErrInvalidToken. The single definition of "is this token valid", shared by
-// ResolveRequest (every authenticated request) and ConsumePairingToken
+// ResolveRequest (every authenticated request) and ConsumePairing
 // (exchange). token_hash is globally unique, so the kind filter only rejects a
 // real token presented where its kind is not accepted.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
@@ -394,7 +426,7 @@ func (s *Service) IssueAPIToken(ctx context.Context, userID int64, label string)
 	if err != nil {
 		return "", APIToken{}, err
 	}
-	res, err := s.insertToken(ctx, userID, hash, KindAPI, label, nil, nil)
+	res, err := s.insertToken(ctx, userID, hash, KindAPI, label, nil, nil, "")
 	if err != nil {
 		return "", APIToken{}, err
 	}
@@ -731,7 +763,7 @@ func (s *Service) RevokeAuthCode(ctx context.Context, id int64) error {
 }
 
 // RedeemedCode is a validated auth code resolved WITHOUT consuming a use. The
-// use is claimed when a device actually pairs (ConsumePairingToken), so opening
+// use is claimed when a device actually pairs (ConsumePairing), so opening
 // an invite link never burns a use on its own.
 type RedeemedCode struct {
 	User    *User
@@ -758,7 +790,7 @@ func (rc *RedeemedCode) UsesRemaining() *int {
 // codeState classifies whether an auth code can still claim a use:
 // ErrCodeExpired past its expiry, ErrCodeExhausted at its use cap, nil while
 // redeemable. The single Go definition of code liveness, shared by
-// ResolveAuthCode and the failed-claim classification in ConsumePairingToken;
+// ResolveAuthCode and the failed-claim classification in ConsumePairing;
 // the claim UPDATE's WHERE clause is its atomic SQL twin.
 func (s *Service) codeState(maxUses, uses int, expires sql.NullString) error {
 	if s.pastExpiry(expires) {
@@ -819,7 +851,7 @@ const recoveryPairingTTL = 10 * time.Minute
 // code, and the token dies with the code (cascade on delete/supersede, revoke
 // on rotate). Invite-kind tokens carry no expiry of their own - the parent
 // invite's expiry and use cap govern them at exchange, which is what lets
-// ConsumePairingToken report "invite has expired" rather than a generic token
+// ConsumePairing report "invite has expired" rather than a generic token
 // error. Recovery-kind tokens get recoveryPairingTTL instead.
 func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (string, error) {
 	secret, hash, err := generateToken()
@@ -830,13 +862,13 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 	if rc.Kind == CodeRecovery {
 		expires = s.expiresAt(recoveryPairingTTL)
 	}
-	if _, err := s.insertToken(ctx, rc.User.ID, hash, KindPairing, "", expires, rc.CodeID); err != nil {
+	if _, err := s.insertToken(ctx, rc.User.ID, hash, KindPairing, "", expires, rc.CodeID, ""); err != nil {
 		return "", err
 	}
 	return secret, nil
 }
 
-// ConsumePairingToken validates a pairing token and consumes it, returning the
+// ConsumePairing validates a pairing token and consumes it, returning the
 // bound user. An UNLINKED token (minted by /auth/pair, the demo flow, or
 // pre-migration) is atomically revoked - strictly single-use, and the
 // revoke-if-not-revoked write means two racing exchanges cannot both win. A
@@ -844,15 +876,9 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 // the cap check, the code-expiry check, and the first-claim redeemed_at stamp
 // into one UPDATE - and is NOT revoked: the code's cap and expiry govern how
 // many more devices may pair with it. A disabled user is rejected before any
-// use is consumed.
-func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User, error) {
-	u, _, err := s.ConsumePairing(ctx, secret)
-	return u, err
-}
-
-// ConsumePairing is ConsumePairingToken that also says which kind of code the
-// token came from (CodeInvite or CodeRecovery; "" for an unlinked token), so the
-// server can report an invite being used.
+// use is consumed. It also returns the kind of code the token came from
+// (CodeInvite or CodeRecovery; "" for an unlinked token), so the server can report
+// an invite being used.
 func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, string, error) {
 	hash := hashSecret(secret)
 	u, row, err := s.lookupToken(ctx, hash, KindPairing)

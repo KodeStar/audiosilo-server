@@ -226,7 +226,7 @@ export function activity(over: Partial<Activity> = {}): Activity {
 
 export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
   return {
-    general: { name: '', public_url: '', update_check: true },
+    general: { name: '', public_url: '', update_check: true, session_days: 400 },
     network: {
       bind: '0.0.0.0:8080',
       tls_mode: 'selfsigned',

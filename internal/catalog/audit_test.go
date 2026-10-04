@@ -64,10 +64,10 @@ func TestPageSizesClamp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if events, _, _ := c.ListServerEvents(ctx, 0, 500); len(events) != 100 {
+	if events, _, _ := c.ListServerEvents(ctx, 0, 500, ""); len(events) != 100 {
 		t.Fatalf("a big limit gave %d events, want the most (100)", len(events))
 	}
-	if events, _, _ := c.ListServerEvents(ctx, 0, 0); len(events) != 20 {
+	if events, _, _ := c.ListServerEvents(ctx, 0, 0, ""); len(events) != 20 {
 		t.Fatalf("no limit gave %d events, want the default (20)", len(events))
 	}
 }

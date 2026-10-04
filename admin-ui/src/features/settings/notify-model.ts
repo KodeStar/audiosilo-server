@@ -4,6 +4,9 @@ import type {
   NotifyTargetsEnvelope,
   ServerEventKind,
 } from '@/api/types';
+import type { TFunction } from 'i18next';
+import { ApiError } from '@/api/client';
+import { errorMessage } from '@/lib/errors';
 import { EVENT_KINDS } from '@/lib/server-events';
 
 // Settings > Notifications: what each kind of destination asks for, and how a
@@ -69,4 +72,18 @@ export function toggleEvent(
   if (on) set.add(kind);
   else set.delete(kind);
   return order.filter((k) => set.has(k));
+}
+
+/**
+ * A refused destination field in words: the server's reason code
+ * (notify.Reason*) worded in the console's language, or the server's own English
+ * sentence for a reason this console doesn't know yet.
+ */
+export function refusalMessage(err: unknown, t: TFunction): string {
+  if (err instanceof ApiError && err.code === 'invalid_target' && err.reason) {
+    const key = `notify.refusal.${err.reason}`;
+    const text = t(key, { max: err.max, defaultValue: '' });
+    if (text) return text;
+  }
+  return errorMessage(err, t);
 }

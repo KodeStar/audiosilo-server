@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '@/api/client';
 import type { NotifyTarget } from '@/api/types';
+import i18n from '@/i18n';
 import { EVENT_KINDS } from '@/lib/server-events';
-import { deliveryLook, reasonText, toggleEvent } from './notify-model';
+import { deliveryLook, reasonText, refusalMessage, toggleEvent } from './notify-model';
 
 const target = (over: Partial<NotifyTarget>): NotifyTarget => ({
   id: 1,
@@ -20,6 +22,18 @@ const target = (over: Partial<NotifyTarget>): NotifyTarget => ({
 });
 
 describe('notify model', () => {
+  it('words a refused field by its reason, else as the server said it', () => {
+    const t = i18n.getFixedT('en');
+    const refused = (reason: string | undefined, max?: number) =>
+      new ApiError(400, 'the server says no', 'invalid_target', 'name', { reason, max });
+    expect(refusalMessage(refused('name_too_long', 64), t)).toBe(
+      'A name can be at most 64 characters.',
+    );
+    expect(refusalMessage(refused('url_ntfy'), t)).toMatch(/^Enter the topic's address/);
+    expect(refusalMessage(refused('something_new'), t)).toBe('the server says no');
+    expect(refusalMessage(refused(undefined), t)).toBe('the server says no');
+  });
+
   it('words failure reasons, unknown ones generically', () => {
     expect(reasonText('http_404')).toEqual({
       key: 'notify.reason.http',

@@ -189,8 +189,6 @@ func Run(ctx context.Context, opts Options) error {
 		go demoReaper(ctx, authSvc, cfg.Demo.IdleTTLDuration(), log)
 	}
 
-	go retention(ctx, cat, authSvc, log)
-
 	// The update check (Settings > General): once a day while on, never while off.
 	upd := updates.New(api.Version, "", cfg.UpdateCheck, log)
 	upd.OnAvailable = func(r updates.Release) { ntf.UpdateFound(ctx, r.Version, r.Name, r.URL) }
@@ -203,6 +201,7 @@ func Run(ctx context.Context, opts Options) error {
 	go backups.Run(ctx)
 
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
+	go retention(ctx, cat, authSvc, a.SessionRetention, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
 	ntf.Run(ctx)
@@ -469,10 +468,11 @@ func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreR
 }
 
 // retention, once at startup and then daily until ctx is cancelled: rolls
-// listening sessions older than catalog.SessionRetention up into per-day totals
-// (dropping their device, app and time of day), blanks the address of signed-out
-// devices, and drops audit events and feed events past their retention.
-func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, log *slog.Logger) {
+// listening sessions older than sessions() (Settings > General, read at each run)
+// up into per-day totals (dropping their device, app and time of day), blanks the
+// address of signed-out devices, and drops audit events and feed events past their
+// retention.
+func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, sessions func() time.Duration, log *slog.Logger) {
 	prune := func() {
 		now := time.Now()
 		if _, err := cat.PruneAudit(ctx, now.Add(-catalog.AuditRetention)); err != nil && ctx.Err() == nil {
@@ -484,7 +484,7 @@ func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service,
 		if err := authSvc.ForgetRevokedAddresses(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("forgetting signed-out device addresses failed", "err", err)
 		}
-		n, err := cat.PruneSessions(ctx, time.Now().Add(-catalog.SessionRetention), time.Local)
+		n, err := cat.PruneSessions(ctx, now.Add(-sessions()), time.Local)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Warn("listening session retention failed", "err", err)

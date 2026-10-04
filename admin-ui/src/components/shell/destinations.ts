@@ -43,7 +43,7 @@ export const DESTINATIONS: readonly Destination[] = [
     key: 'server',
     route: '/server/{-$section}',
     icon: Server,
-    sections: ['settings', 'logs', 'audit', 'about'],
+    sections: ['settings', 'events', 'logs', 'audit', 'about'],
   },
 ];
 

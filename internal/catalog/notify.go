@@ -200,17 +200,22 @@ func (c *Catalog) ServerEventSeen(ctx context.Context, kind, dedupKey string) (b
 }
 
 // ListServerEvents returns events newest first (before > 0 pages: ids below it),
-// and the before of the next page (0 when this is the last).
-func (c *Catalog) ListServerEvents(ctx context.Context, before int64, limit int) ([]ServerEvent, int64, error) {
+// and the before of the next page (0 when this is the last). A kind keeps only
+// events of that kind.
+func (c *Catalog) ListServerEvents(ctx context.Context, before int64, limit int, kind string) ([]ServerEvent, int64, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	limit = min(limit, 100)
-	q := `SELECT id, at, kind, data FROM server_events`
+	q := `SELECT id, at, kind, data FROM server_events WHERE 1 = 1`
 	args := []any{}
 	if before > 0 {
-		q += ` WHERE id < ?`
+		q += ` AND id < ?`
 		args = append(args, before)
+	}
+	if kind != "" {
+		q += ` AND kind = ?`
+		args = append(args, kind)
 	}
 	q += ` ORDER BY id DESC LIMIT ?`
 	args = append(args, limit+1)

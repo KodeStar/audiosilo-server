@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // patch builds a WithSettings argument from "section.name" -> JSON text.
@@ -358,5 +359,67 @@ func TestNullOnlyForUnsettable(t *testing.T) {
 	next, err := c.WithSettings(map[string]map[string]json.RawMessage{"demo": {"max_users": json.RawMessage(`null`)}}, Checks{})
 	if err != nil || next.Demo.MaxUsers != nil {
 		t.Fatalf("null max_users: %v, %v", next, err)
+	}
+}
+
+// A change must leave config.yaml valid on its own, since the file keeps its own
+// values for what the environment sets: turning demo mode on while its library
+// comes only from AUDIOSILO_DEMO_LIBRARY would save a file that stops the server
+// starting once the variable is gone. A file that already leans on the
+// environment doesn't block unrelated changes.
+func TestWithSettingsKeepsTheFileValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte("server_id: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AUDIOSILO_DEMO_LIBRARY", "Books")
+	c, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.WithSettings(patch(map[string]string{"demo.enabled": `true`}), Checks{})
+	se := settingErr(t, err)
+	if se.Setting != "demo.enabled" || se.Reason != ReasonInvalid || !strings.Contains(se.Error(), "AUDIOSILO_DEMO_LIBRARY") {
+		t.Fatalf("demo on with its library only in the environment = %+v (%v)", se, se)
+	}
+	if _, err := c.WithSettings(patch(map[string]string{"general.name": `"Den"`}), Checks{}); err != nil {
+		t.Fatalf("an unrelated change: %v", err)
+	}
+
+	// The file already turns demo on and the variable supplies the library.
+	if err := os.WriteFile(Path(dir), []byte("server_id: x\ndemo:\n  enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err = Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.WithSettings(patch(map[string]string{"general.name": `"Den"`}), Checks{}); err != nil {
+		t.Fatalf("a change to a file that already leans on the environment: %v", err)
+	}
+}
+
+// How long raw listening sessions are kept: 400 days unless set, bounded, and set
+// from the console or AUDIOSILO_SESSION_DAYS (which then locks it).
+func TestSessionDaysSetting(t *testing.T) {
+	c := Default(t.TempDir())
+	if got := c.Settings()["general"]["session_days"]; got != DefaultSessionDays {
+		t.Fatalf("default = %v", got)
+	}
+	for _, bad := range []string{`10`, `4000`, `"90"`} {
+		if _, err := c.WithSettings(patch(map[string]string{"general.session_days": bad}), Checks{}); settingErr(t, err).Setting != "general.session_days" {
+			t.Fatalf("%s accepted", bad)
+		}
+	}
+	next, err := c.WithSettings(patch(map[string]string{"general.session_days": `90`}), Checks{})
+	if err != nil || next.Activity.SessionRetention() != 90*24*time.Hour {
+		t.Fatalf("90 days = %v, %v", next, err)
+	}
+
+	dir := t.TempDir()
+	t.Setenv("AUDIOSILO_SESSION_DAYS", "180")
+	c, _, err = Load(dir)
+	if err != nil || c.Activity.SessionDays != 180 || c.Locked()["general.session_days"] != "AUDIOSILO_SESSION_DAYS" {
+		t.Fatalf("from the environment = %+v %v %v", c.Activity, c.Locked(), err)
 	}
 }

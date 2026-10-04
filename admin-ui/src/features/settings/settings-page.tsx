@@ -167,6 +167,13 @@ function GeneralTopic({ settings }: { settings: AdminSettings }) {
           },
         ]}
       />
+      <SettingsForm
+        settings={settings}
+        section="general"
+        title={t('settings.general.history')}
+        description={t('settings.general.historyBody')}
+        fields={[{ name: 'session_days', kind: 'number', placeholder: '400' }]}
+      />
       <Card aria-labelledby="updates-title">
         <CardHeader
           titleId="updates-title"

@@ -18,9 +18,15 @@ import { Field, FormError } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { describedBy } from '@/lib/a11y';
-import { errorMessage } from '@/lib/errors';
 import { toast } from '@/lib/toast';
-import { DEFAULT_EVENTS, TARGET_FORM, TARGET_KINDS, toggleEvent, withTarget } from './notify-model';
+import {
+  DEFAULT_EVENTS,
+  TARGET_FORM,
+  TARGET_KINDS,
+  refusalMessage,
+  toggleEvent,
+  withTarget,
+} from './notify-model';
 
 interface Values {
   kind: NotifyTargetKind;
@@ -139,9 +145,9 @@ function TargetForm({
       const field =
         err instanceof ApiError && err.code === 'invalid_target' ? err.field : undefined;
       if (field && (FIELDS as readonly string[]).includes(field)) {
-        form.setError(field as FieldName, { message: errorMessage(err, t) });
+        form.setError(field as FieldName, { message: refusalMessage(err, t) });
       } else {
-        setFormError(errorMessage(err, t));
+        setFormError(refusalMessage(err, t));
       }
     }
   });

@@ -57,14 +57,35 @@ describe('settings', () => {
     const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));
     renderApp('/server');
     const user = userEvent.setup();
-    const save = await screen.findByRole('button', { name: 'Save changes' });
+    const name = await screen.findByRole('textbox', { name: 'Server name' });
+    const save = within(name.closest('section') as HTMLElement).getByRole('button', {
+      name: 'Save changes',
+    });
     expect(save).toBeDisabled();
-    await user.type(screen.getByRole('textbox', { name: 'Server name' }), 'Hearthside');
+    await user.type(name, 'Hearthside');
     await user.click(save);
     expect(await screen.findByText('This server saved')).toBeInTheDocument();
     expect(screen.getByText('Applied now. No restart needed.')).toBeInTheDocument();
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
       general: { name: 'Hearthside' },
+    });
+  });
+
+  it('keeps listening sessions for the days set', async () => {
+    const base = settingsWith();
+    const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));
+    renderApp('/server');
+    const user = userEvent.setup();
+    const days = await screen.findByRole('textbox', { name: 'Days to keep sessions' });
+    expect(days).toHaveValue('400');
+    await user.clear(days);
+    await user.type(days, '90');
+    await user.click(
+      within(days.closest('section') as HTMLElement).getByRole('button', { name: 'Save changes' }),
+    );
+    expect(await screen.findByText('Listening history saved')).toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+      general: { session_days: 90 },
     });
   });
 
@@ -85,7 +106,9 @@ describe('settings', () => {
     const user = userEvent.setup();
     const url = await screen.findByRole('textbox', { name: 'Public address' });
     await user.type(url, 'books.example.com');
-    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await user.click(
+      within(url.closest('section') as HTMLElement).getByRole('button', { name: 'Save changes' }),
+    );
     expect(await screen.findByRole('alert')).toHaveTextContent('must be an address starting with');
     expect(url).toHaveAttribute('aria-invalid', 'true');
     expect(url).toHaveValue('books.example.com');
@@ -96,7 +119,12 @@ describe('settings', () => {
       routes({
         'GET /admin/settings': {
           body: settingsWith({
-            general: { name: '', public_url: 'https://env.example.com', update_check: true },
+            general: {
+              name: '',
+              public_url: 'https://env.example.com',
+              update_check: true,
+              session_days: 400,
+            },
             locked: { 'general.public_url': 'AUDIOSILO_PUBLIC_URL' },
           }),
         },

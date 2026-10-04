@@ -44,6 +44,8 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.PublicURL }, fix: fixPublicURL},
 	{key: "update_check", env: "AUDIOSILO_UPDATE_CHECK", setting: "general.update_check",
 		ptr: func(c *Config) any { return &c.UpdateCheck }},
+	{key: "activity.session_days", env: "AUDIOSILO_SESSION_DAYS", setting: "general.session_days",
+		ptr: func(c *Config) any { return &c.Activity.SessionDays }},
 
 	{key: "bind", env: "AUDIOSILO_BIND", setting: "network.bind", restart: true,
 		ptr: func(c *Config) any { return &c.Bind }, fix: fixBind},
@@ -358,6 +360,20 @@ func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage, check
 		}
 		if id == "" && len(changed) > 0 {
 			id = changed[0].setting
+		}
+		return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: err}
+	}
+	// config.yaml keeps its own values for what the environment sets (Save), so the
+	// change must also leave the file valid on its own: else it saves a file that
+	// stops the server from starting once the variable is removed (demo mode on in
+	// the file, its library only in AUDIOSILO_DEMO_LIBRARY). A file that already
+	// leans on the environment doesn't block unrelated changes.
+	if err := next.asSaved().Validate(); err != nil && c.asSaved().Validate() == nil {
+		id := changed[0].setting
+		var fe *FieldError
+		if errors.As(err, &fe) && c.fromEnv[fe.Key] != "" {
+			err = fmt.Errorf("%w in config.yaml, where %s doesn't apply: set it there too, or set this the same way",
+				err, c.fromEnv[fe.Key])
 		}
 		return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: err}
 	}

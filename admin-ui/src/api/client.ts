@@ -1,3 +1,4 @@
+import { browserId } from '@/lib/browser-id';
 import { clearToken, getToken } from './token';
 import type {
   Activity,
@@ -11,6 +12,7 @@ import type {
   NotifyTargetInput,
   NotifyTargetsEnvelope,
   NotifyTestResult,
+  ServerEventKind,
   ServerEventPage,
   AuthorsResponse,
   BookEditRequest,
@@ -73,12 +75,23 @@ export class ApiError extends Error {
   readonly code?: string;
   /** The field a refused book edit names (code "invalid_override"). */
   readonly field?: string;
-  constructor(status: number, message: string, code?: string, field?: string) {
+  /** Why a destination field was refused (code "invalid_target"), and the limit a length refers to. */
+  readonly reason?: string;
+  readonly max?: number;
+  constructor(
+    status: number,
+    message: string,
+    code?: string,
+    field?: string,
+    detail: { reason?: string; max?: number } = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.field = field;
+    this.reason = detail.reason;
+    this.max = detail.max;
   }
 }
 
@@ -157,6 +170,10 @@ async function apiError(res: Response): Promise<ApiError> {
     msg,
     typeof env?.code === 'string' ? env.code : undefined,
     typeof env?.field === 'string' ? env.field : undefined,
+    {
+      reason: typeof env?.reason === 'string' ? env.reason : undefined,
+      max: typeof env?.max === 'number' ? env.max : undefined,
+    },
   );
 }
 
@@ -273,6 +290,7 @@ export const api = {
       username,
       password,
       device_name: 'admin-web',
+      device_id: browserId(),
     }),
   /** Revokes the stored session, or `token` when given (never touching storage). */
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
@@ -314,7 +332,7 @@ export const api = {
   testNotifyTarget: (id: number) =>
     request<NotifyTestResult>('POST', `/admin/notifications/${id}/test`),
   /** The bell's feed, newest first; `before` is the previous page's next_before. */
-  serverEvents: (opts: { before?: number; limit?: number } = {}) =>
+  serverEvents: (opts: { before?: number; limit?: number; kind?: ServerEventKind } = {}) =>
     request<ServerEventPage>('GET', `/admin/events${bookQuery(opts)}`),
 
   /** The audit log, newest first; `before` is the previous page's next_before. */
