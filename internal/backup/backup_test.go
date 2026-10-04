@@ -285,7 +285,7 @@ func TestRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("restored users = %v", got)
 	}
 	// The replaced database was kept, whole, as a backup.
-	if got := users(t, filepath.Join(e.dataDir, DirName, res.SafetyCopy)); len(got) != 2 {
+	if got := users(t, filepath.Join(e.dataDir, dirName, res.SafetyCopy)); len(got) != 2 {
 		t.Fatalf("safety copy users = %v", got)
 	}
 	if p, _ := e.svc.PendingRestore(); p != nil {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strings"
 )
 
 // VacuumInto writes a consistent, compacted copy of the whole database to path
@@ -18,17 +17,10 @@ import (
 // back for as long as the copy takes. An in-memory database (tests) has no second
 // connection to the same data, so it uses the writer.
 func (db *DB) VacuumInto(ctx context.Context, path string) error {
-	conn := db.writer
 	if !isMemoryDSN(db.dsn) {
-		c, err := sql.Open("sqlite", dsnPragmas(db.dsn))
-		if err != nil {
-			return fmt.Errorf("vacuum into: %w", err)
-		}
-		defer func() { _ = c.Close() }()
-		c.SetMaxOpenConns(1)
-		conn = c
+		return VacuumFile(ctx, db.dsn, path)
 	}
-	if _, err := conn.ExecContext(ctx, `VACUUM INTO ?`, path); err != nil {
+	if _, err := db.writer.ExecContext(ctx, `VACUUM INTO ?`, path); err != nil {
 		return fmt.Errorf("vacuum into: %w", err)
 	}
 	return nil
@@ -125,15 +117,13 @@ func Inspect(ctx context.Context, path string) (Info, error) {
 
 // knownMigrations is the set of migration names this server ships.
 func knownMigrations() (map[string]bool, error) {
-	entries, err := migrationsFS.ReadDir("migrations")
+	names, err := migrationNames()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			out[e.Name()] = true
-		}
+	out := make(map[string]bool, len(names))
+	for _, n := range names {
+		out[n] = true
 	}
 	return out, nil
 }

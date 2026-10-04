@@ -51,8 +51,8 @@ var (
 	ErrBusy = errors.New("a backup is already being made")
 )
 
-// DirName is the backups folder's name inside the data folder (the default).
-const DirName = "backups"
+// dirName is the backups folder's name inside the data folder (the default).
+const dirName = "backups"
 
 // Files in the data folder that carry a restore across a restart.
 const (
@@ -72,8 +72,8 @@ var nameRE = regexp.MustCompile(`^audiosilo-[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.db
 // madeRE splits a name this server made into its time and kind.
 var madeRE = regexp.MustCompile(`^audiosilo-(\d{8}-\d{6}Z)-(scheduled|manual|before-restore)\.db$`)
 
-// ValidName reports whether name can be a backup's file name.
-func ValidName(name string) bool { return nameRE.MatchString(name) && !strings.Contains(name, "..") }
+// validName reports whether name can be a backup's file name.
+func validName(name string) bool { return nameRE.MatchString(name) && !strings.Contains(name, "..") }
 
 // Backup is one backup file.
 type Backup struct {
@@ -130,24 +130,24 @@ type Service struct {
 	anchor time.Time // when Run started: what a server with no scheduled backup counts from
 }
 
-// New returns the service for the database db, kept in dir (DirName in dataDir when
+// New returns the service for the database db, kept in dir (dirName in dataDir when
 // empty).
 func New(db *store.DB, dataDir, dir string, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		db: db, dataDir: dataDir, dir: Dir(dataDir, dir), log: log,
+		db: db, dataDir: dataDir, dir: backupDir(dataDir, dir), log: log,
 		now: time.Now, loc: time.Local, wake: make(chan struct{}, 1), keep: 7,
 	}
 }
 
-// Dir is the backups folder for a data folder and the configured backups.dir.
-func Dir(dataDir, configured string) string {
+// backupDir is the backups folder for a data folder and the configured backups.dir.
+func backupDir(dataDir, configured string) string {
 	if configured != "" {
 		return configured
 	}
-	return filepath.Join(dataDir, DirName)
+	return filepath.Join(dataDir, dirName)
 }
 
 // SetSettings applies the schedule and how many scheduled backups to keep (both
@@ -189,10 +189,16 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // Status reports the folder, whether a backup is being made, the newest attempt and
-// the next scheduled one.
+// backup, and the next scheduled one.
 func (s *Service) Status() Status {
 	list, _ := s.List()
-	next := s.nextFrom(list)
+	return s.StatusOf(list)
+}
+
+// StatusOf is Status given the folder's backups (List), for a caller that has
+// listed them already.
+func (s *Service) StatusOf(list []Backup) Status {
+	next := s.next(list)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := Status{Dir: s.dir, Running: s.running}
@@ -213,14 +219,9 @@ func (s *Service) Status() Status {
 }
 
 // next is when the next scheduled backup is due (zero when off): its slot after
-// the newest scheduled backup, or after the last attempt, or after Run started.
-func (s *Service) next() time.Time {
-	list, _ := s.List()
-	return s.nextFrom(list)
-}
-
-// nextFrom is next, given the folder's backups.
-func (s *Service) nextFrom(list []Backup) time.Time {
+// the newest scheduled backup in list, or after the last attempt, or after Run
+// started.
+func (s *Service) next(list []Backup) time.Time {
 	s.mu.Lock()
 	sch, from := s.schedule, s.anchor
 	if s.tried.After(from) {
@@ -242,7 +243,8 @@ func (s *Service) nextFrom(list []Backup) time.Time {
 }
 
 func (s *Service) due() bool {
-	n := s.next()
+	list, _ := s.List()
+	n := s.next(list)
 	return !n.IsZero() && !n.After(s.now())
 }
 
@@ -385,7 +387,7 @@ func (s *Service) List() ([]Backup, error) {
 	}
 	out := []Backup{}
 	for _, e := range entries {
-		if !e.Type().IsRegular() || !ValidName(e.Name()) {
+		if !e.Type().IsRegular() || !validName(e.Name()) {
 			continue
 		}
 		fi, err := e.Info()
@@ -417,7 +419,7 @@ func describe(name string, fi os.FileInfo) Backup {
 
 // path is a backup's file, after checking the name; ErrNotFound when there is none.
 func (s *Service) path(name string) (string, os.FileInfo, error) {
-	if !ValidName(name) {
+	if !validName(name) {
 		return "", nil, ErrNotFound
 	}
 	p := filepath.Join(s.dir, name)

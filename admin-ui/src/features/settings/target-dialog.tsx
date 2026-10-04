@@ -9,6 +9,7 @@ import type {
   NotifyTarget,
   NotifyTargetInput,
   NotifyTargetKind,
+  NotifyTargetsEnvelope,
   ServerEventKind,
 } from '@/api/types';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -18,9 +19,8 @@ import { Input } from '@/components/ui/input';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { describedBy } from '@/lib/a11y';
 import { errorMessage } from '@/lib/errors';
-import { EVENT_KINDS } from '@/lib/server-events';
 import { toast } from '@/lib/toast';
-import { DEFAULT_EVENTS, TARGET_FORM, TARGET_KINDS, toggleEvent } from './notify-model';
+import { DEFAULT_EVENTS, TARGET_FORM, TARGET_KINDS, toggleEvent, withTarget } from './notify-model';
 
 interface Values {
   kind: NotifyTargetKind;
@@ -31,7 +31,9 @@ interface Values {
   events: ServerEventKind[];
 }
 
-type FieldName = 'kind' | 'name' | 'url' | 'secret' | 'events';
+/** The fields a refusal can name (notify.FieldError's Field). */
+const FIELDS = ['kind', 'name', 'url', 'secret', 'events'] as const;
+type FieldName = (typeof FIELDS)[number];
 
 /**
  * Adds a destination, or (with `target`) changes one. Its address and secret
@@ -40,10 +42,13 @@ type FieldName = 'kind' | 'name' | 'url' | 'secret' | 'events';
  */
 export function TargetDialog({
   target,
+  events,
   open,
   onOpenChange,
 }: {
   target?: NotifyTarget;
+  /** The events the server knows (knownEvents). */
+  events: ServerEventKind[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -57,13 +62,23 @@ export function TargetDialog({
         }
         description={target ? undefined : t('notify.dialog.addBody')}
       >
-        {open ? <TargetForm target={target} onDone={() => onOpenChange(false)} /> : null}
+        {open ? (
+          <TargetForm target={target} events={events} onDone={() => onOpenChange(false)} />
+        ) : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function TargetForm({ target, onDone }: { target?: NotifyTarget; onDone: () => void }) {
+function TargetForm({
+  target,
+  events,
+  onDone,
+}: {
+  target?: NotifyTarget;
+  events: ServerEventKind[];
+  onDone: () => void;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [formError, setFormError] = useState<string>();
@@ -101,9 +116,16 @@ function TargetForm({ target, onDone }: { target?: NotifyTarget; onDone: () => v
       else if (v.secret) input.secret = v.secret;
     }
     try {
-      if (target) await api.updateNotifyTarget(target.id, input);
-      else await api.createNotifyTarget({ ...input, kind: v.kind, enabled: true });
-      await qc.invalidateQueries({ queryKey: keys.notifyTargets });
+      if (target) {
+        const saved = await api.updateNotifyTarget(target.id, input);
+        qc.setQueryData<NotifyTargetsEnvelope>(
+          keys.notifyTargets,
+          (env) => env && withTarget(env, saved),
+        );
+      } else {
+        await api.createNotifyTarget({ ...input, kind: v.kind, enabled: true });
+        await qc.invalidateQueries({ queryKey: keys.notifyTargets });
+      }
       toast.add({
         title: target
           ? t('notify.toast.saved', { name: input.name })
@@ -115,7 +137,7 @@ function TargetForm({ target, onDone }: { target?: NotifyTarget; onDone: () => v
     } catch (err) {
       const field =
         err instanceof ApiError && err.code === 'invalid_target' ? err.field : undefined;
-      if (field && ['kind', 'name', 'url', 'secret', 'events'].includes(field)) {
+      if (field && (FIELDS as readonly string[]).includes(field)) {
         form.setError(field as FieldName, { message: errorMessage(err, t) });
       } else {
         setFormError(errorMessage(err, t));
@@ -224,13 +246,13 @@ function TargetForm({ target, onDone }: { target?: NotifyTarget; onDone: () => v
             name="events"
             render={({ field }) => (
               <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
-                {EVENT_KINDS.map((k) => (
+                {events.map((k) => (
                   <label key={k} className="flex items-start gap-2 text-[13px]">
                     <Checkbox
                       className="mt-0.5"
                       checked={field.value.includes(k)}
                       onCheckedChange={(on) =>
-                        field.onChange(toggleEvent(field.value, k, Boolean(on), EVENT_KINDS))
+                        field.onChange(toggleEvent(field.value, k, Boolean(on), events))
                       }
                     />
                     {t(`notify.event.${k}`)}

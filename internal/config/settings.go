@@ -218,6 +218,30 @@ func (c *Config) RestartPending(running *Config) []string {
 	return out
 }
 
+// SettingChange is one setting a save changed, from what to what (the audit log).
+type SettingChange struct {
+	Setting string `json:"setting"`
+	From    any    `json:"from"`
+	To      any    `json:"to"`
+}
+
+// ChangedSettings lists the console settings whose value differs between cur and
+// next, in id order. No setting holds a secret, so the values can be recorded.
+func ChangedSettings(cur, next *Config) []SettingChange {
+	out := []SettingChange{}
+	for i := range fields {
+		f := &fields[i]
+		if f.setting == "" {
+			continue
+		}
+		if from, to := f.value(cur), f.value(next); !reflect.DeepEqual(from, to) {
+			out = append(out, SettingChange{Setting: f.setting, From: from, To: to})
+		}
+	}
+	slices.SortFunc(out, func(a, b SettingChange) int { return strings.Compare(a.Setting, b.Setting) })
+	return out
+}
+
 // Effective returns c with each restart setting as running has it: the config
 // the server actually works with until it restarts with c.
 func (c *Config) Effective(running *Config) *Config {

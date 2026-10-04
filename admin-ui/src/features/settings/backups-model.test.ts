@@ -3,7 +3,6 @@ import type { BackupStatus } from '@/api/types';
 import {
   backupHealth,
   describeSchedule,
-  failureKey,
   formatSchedule,
   parseSchedule,
   restoreFailureKey,
@@ -78,8 +77,6 @@ describe('state', () => {
   });
 
   it('words failures, unknown ones generically', () => {
-    expect(failureKey('disk_full')).toBe('backups.failure.disk_full');
-    expect(failureKey('something new')).toBe('backups.failure.failed');
     expect(restoreFailureKey('newer')).toBe('backups.restore.failure.newer');
     expect(restoreFailureKey(undefined)).toBe('backups.restore.failure.failed');
   });

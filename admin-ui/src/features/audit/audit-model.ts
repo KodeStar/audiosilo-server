@@ -18,6 +18,7 @@ export const AUDIT_AREAS = [
   'notify',
 ] as const;
 
+/** i18next's t as far as these rules use it (options are optional, unlike lib/format's). */
 type Translate = (key: string, opts?: Record<string, unknown>) => string;
 
 /** Details whose values are codes with words of their own (`audit.enum.<key>.<value>`). */

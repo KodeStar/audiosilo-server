@@ -1,9 +1,13 @@
-import type { NotifyTarget, NotifyTargetKind, ServerEventKind } from '@/api/types';
+import type {
+  NotifyTarget,
+  NotifyTargetKind,
+  NotifyTargetsEnvelope,
+  ServerEventKind,
+} from '@/api/types';
+import { EVENT_KINDS } from '@/lib/server-events';
 
 // Settings > Notifications: what each kind of destination asks for, and how a
 // destination's last delivery reads. Pure, so the rules are tested on their own.
-
-export const TARGET_KINDS: readonly NotifyTargetKind[] = ['webhook', 'ntfy', 'discord'];
 
 /** What a destination of each kind asks for: an example address, and its secret if it takes one. */
 export const TARGET_FORM: Record<
@@ -14,6 +18,18 @@ export const TARGET_FORM: Record<
   ntfy: { placeholder: 'https://ntfy.sh/your-topic', secret: 'token' },
   discord: { placeholder: 'https://discord.com/api/webhooks/…', secret: null },
 };
+
+export const TARGET_KINDS = Object.keys(TARGET_FORM) as NotifyTargetKind[];
+
+/** The events the server knows and the console words, in the server's order. */
+export function knownEvents(env: NotifyTargetsEnvelope): ServerEventKind[] {
+  return EVENT_KINDS.filter((k) => env.events.includes(k));
+}
+
+/** The destinations with one replaced by the server's answer for it. */
+export function withTarget(env: NotifyTargetsEnvelope, t: NotifyTarget): NotifyTargetsEnvelope {
+  return { ...env, targets: env.targets.map((x) => (x.id === t.id ? t : x)) };
+}
 
 /** What a new destination is sent until the admin chooses: the problems, not the chatter. */
 export const DEFAULT_EVENTS: readonly ServerEventKind[] = [

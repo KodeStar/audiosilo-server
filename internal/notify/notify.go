@@ -12,6 +12,7 @@ package notify
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -343,7 +344,7 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Text, m.Link, m.Tags = strings.Join(lines, "\n"), link("/library"), []string{"books"}
 	case KindScanFailed:
 		m.Title = "Scanning " + str("library") + " failed"
-		m.Text = firstNonEmpty(str("detail"), "See the scan's log in Health > Jobs.")
+		m.Text = cmp.Or(str("detail"), "See the scan's log in Health > Jobs.")
 		m.Link, m.Tags, m.Priority, m.Color = link("/health/jobs"), []string{"warning"}, 4, colorBad
 	case KindLibraryUnavailable:
 		m.Title = str("library") + " is offline"
@@ -351,7 +352,7 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Link, m.Tags, m.Priority, m.Color = link("/library/libraries"), []string{"electric_plug"}, 4, colorWarn
 	case KindNewDevice:
 		m.Title = "New sign-in: " + str("user")
-		m.Text = strings.TrimSpace(strings.Join(nonEmpty(str("device"), str("app")), " · "))
+		m.Text = strings.Join(nonEmpty(str("device"), str("app")), " · ")
 		m.Link, m.Tags = link("/people/devices"), []string{"iphone"}
 	case KindInviteRedeemed:
 		m.Title = str("user") + "'s invite was used"
@@ -362,7 +363,7 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Link, m.Tags = link("/people/invites"), []string{"envelope"}
 	case KindUpdateAvailable:
 		m.Title = "AudioSilo " + str("version") + " is available"
-		m.Text = firstNonEmpty(str("name"), "A new version of the server is out.")
+		m.Text = cmp.Or(str("name"), "A new version of the server is out.")
 		m.Link, m.Tags = str("url"), []string{"package"}
 	case KindBackupFailed:
 		m.Title = "A backup failed"
@@ -393,13 +394,6 @@ func plural(n int, one, many, name string) string {
 		return fmt.Sprintf(one, name)
 	}
 	return fmt.Sprintf(many, n, name)
-}
-
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func nonEmpty(xs ...string) []string {
@@ -438,7 +432,7 @@ func ntfyBody(raw string, m message) (string, []byte, error) {
 	if topic == "" {
 		return "", nil, errors.New("not an ntfy topic")
 	}
-	msg := map[string]any{"topic": topic, "title": m.Title, "message": firstNonEmpty(m.Text, m.Title),
+	msg := map[string]any{"topic": topic, "title": m.Title, "message": cmp.Or(m.Text, m.Title),
 		"priority": m.Priority, "tags": m.Tags}
 	if m.Link != "" {
 		msg["click"] = m.Link

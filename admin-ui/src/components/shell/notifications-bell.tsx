@@ -150,8 +150,8 @@ function EventItem({
   const { t, i18n } = useTranslation();
   const d = describeEvent(event);
   const Icon = ICONS[event.kind] ?? Bell;
-  const body = (
-    <>
+  return (
+    <EventLinkTo link={d.link} onClick={onPick}>
       <span
         className={cn('grid size-[30px] shrink-0 place-items-center rounded-[9px]', TONE[d.tone])}
         aria-hidden="true"
@@ -179,11 +179,6 @@ function EventItem({
           {formatRelative(event.at, i18n.resolvedLanguage ?? 'en')}
         </time>
       </span>
-    </>
-  );
-  return (
-    <EventLinkTo link={d.link} onClick={onPick}>
-      {body}
     </EventLinkTo>
   );
 }
@@ -201,37 +196,15 @@ function EventLinkTo({
   onClick: () => void;
   children: React.ReactNode;
 }) {
-  const params = { section: link.section };
-  switch (link.destination) {
-    case 'library':
-      return (
-        <Link to="/library/{-$section}" params={params} onClick={onClick} className={itemClass}>
-          {children}
-        </Link>
-      );
-    case 'people':
-      return (
-        <Link to="/people/{-$section}" params={params} onClick={onClick} className={itemClass}>
-          {children}
-        </Link>
-      );
-    case 'health':
-      return (
-        <Link to="/health/{-$section}" params={params} onClick={onClick} className={itemClass}>
-          {children}
-        </Link>
-      );
-    case 'server':
-      return (
-        <Link
-          to="/server/{-$section}"
-          params={params}
-          search={link.topic ? { topic: link.topic } : {}}
-          onClick={onClick}
-          className={itemClass}
-        >
-          {children}
-        </Link>
-      );
-  }
+  return (
+    <Link
+      to={`/${link.destination}/{-$section}`}
+      params={{ section: link.section }}
+      search={link.topic ? { topic: link.topic } : {}}
+      onClick={onClick}
+      className={itemClass}
+    >
+      {children}
+    </Link>
+  );
 }

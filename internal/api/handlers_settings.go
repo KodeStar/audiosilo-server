@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"reflect"
-	"slices"
-	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
@@ -100,24 +97,6 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if a.rt.Backups != nil && next.Backups != cur.Backups {
 		a.rt.Backups.SetSettings(next.Backups.Schedule, next.Backups.Keep)
 	}
-	a.audit(r, "settings.update", "", map[string]any{"changes": settingChanges(cur, next)})
+	a.audit(r, "settings.update", "", map[string]any{"changes": config.ChangedSettings(cur, next)})
 	writeJSON(w, http.StatusOK, a.settingsEnvelope())
-}
-
-// settingChanges lists each setting a save changed, with its old and new value
-// (no setting holds a secret).
-func settingChanges(cur, next *config.Config) []map[string]any {
-	before, after := cur.Settings(), next.Settings()
-	out := []map[string]any{}
-	for section, fields := range after {
-		for name, v := range fields {
-			if old := before[section][name]; !reflect.DeepEqual(old, v) {
-				out = append(out, map[string]any{"setting": section + "." + name, "from": old, "to": v})
-			}
-		}
-	}
-	slices.SortFunc(out, func(a, b map[string]any) int {
-		return strings.Compare(a["setting"].(string), b["setting"].(string))
-	})
-	return out
 }

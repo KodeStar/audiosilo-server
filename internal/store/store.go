@@ -263,16 +263,11 @@ func (db *DB) Close() error {
 	return rerr
 }
 
-// migrate applies embedded migrations that have not yet been recorded. It runs
-// entirely on the writer connection (setup-time, single-threaded).
-func (db *DB) migrate(ctx context.Context) error {
-	if _, err := db.writer.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-		name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
-		return fmt.Errorf("create migrations table: %w", err)
-	}
+// migrationNames lists the embedded migrations in the order they apply.
+func migrationNames() ([]string, error) {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -280,11 +275,25 @@ func (db *DB) migrate(ctx context.Context) error {
 			continue
 		}
 		if !migrationName.MatchString(e.Name()) {
-			return fmt.Errorf("invalid migration filename %q: must match NNNN_*.sql", e.Name())
+			return nil, fmt.Errorf("invalid migration filename %q: must match NNNN_*.sql", e.Name())
 		}
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
+	return names, nil
+}
+
+// migrate applies embedded migrations that have not yet been recorded. It runs
+// entirely on the writer connection (setup-time, single-threaded).
+func (db *DB) migrate(ctx context.Context) error {
+	if _, err := db.writer.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		return fmt.Errorf("create migrations table: %w", err)
+	}
+	names, err := migrationNames()
+	if err != nil {
+		return err
+	}
 
 	for _, name := range names {
 		var exists int

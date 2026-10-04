@@ -2,6 +2,7 @@ package notify
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"slices"
@@ -22,9 +23,9 @@ var TargetKinds = []string{TargetWebhook, TargetNtfy, TargetDiscord}
 
 // Limits on a destination's fields.
 const (
-	MaxNameLen   = 64
-	MaxURLLen    = 2048
-	MaxSecretLen = 256
+	maxNameLen   = 64
+	maxURLLen    = 2048
+	maxSecretLen = 256
 )
 
 // FieldError is a refused destination field: which one and why, in words a form
@@ -57,8 +58,8 @@ func Clean(kind *string, name, rawURL, secret *string, events *[]string) error {
 	switch {
 	case *name == "":
 		return fieldErr("name", "give it a name")
-	case utf8.RuneCountInString(*name) > MaxNameLen:
-		return fieldErr("name", "a name can be at most 64 characters")
+	case utf8.RuneCountInString(*name) > maxNameLen:
+		return fieldErr("name", fmt.Sprintf("a name can be at most %d characters", maxNameLen))
 	case strings.IndexFunc(*name, unicode.IsControl) >= 0:
 		return fieldErr("name", "a name can't contain line breaks or control characters")
 	}
@@ -66,8 +67,8 @@ func Clean(kind *string, name, rawURL, secret *string, events *[]string) error {
 	if err := checkURL(*kind, *rawURL); err != nil {
 		return err
 	}
-	if len(*secret) > MaxSecretLen {
-		return fieldErr("secret", "at most 256 characters")
+	if len(*secret) > maxSecretLen {
+		return fieldErr("secret", fmt.Sprintf("at most %d characters", maxSecretLen))
 	}
 	if strings.IndexFunc(*secret, unicode.IsControl) >= 0 {
 		return fieldErr("secret", "can't contain line breaks or control characters")
@@ -92,7 +93,7 @@ func checkURL(kind, raw string) error {
 	if raw == "" {
 		return fieldErr("url", "enter the address to send to")
 	}
-	if len(raw) > MaxURLLen {
+	if len(raw) > maxURLLen {
 		return fieldErr("url", "the address is too long")
 	}
 	u, err := url.Parse(raw)

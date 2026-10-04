@@ -3,6 +3,7 @@ package backup
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +43,7 @@ func ParseSchedule(s string) (Schedule, error) {
 	case len(parts) == 3 && parts[0] == "daily":
 		parts = parts[1:]
 	case len(parts) == 4 && parts[0] == "weekly":
-		d := indexOf(days, parts[1])
+		d := slices.Index(days, parts[1])
 		if d < 0 {
 			return Schedule{}, ErrInvalidSchedule
 		}
@@ -58,15 +59,6 @@ func ParseSchedule(s string) (Schedule, error) {
 	}
 	sch.on, sch.hour, sch.mins = true, h, m
 	return sch, nil
-}
-
-func indexOf(list []string, s string) int {
-	for i, v := range list {
-		if v == s {
-			return i
-		}
-	}
-	return -1
 }
 
 // String is the canonical form ("" when off).

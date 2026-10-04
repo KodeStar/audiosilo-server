@@ -91,9 +91,8 @@ export const PAGES: Record<DestinationKey, Record<string, React.ComponentType>> 
 /** A destination's routed section: its screen, or a 404. */
 export function SectionPage({ destination }: { destination: Destination }) {
   const { section } = useParams({ strict: false }) as { section?: string };
-  const active = section ?? destination.sections[0];
-  if (!destination.sections.includes(active)) return <NotFound />;
-  const Page = PAGES[destination.key]?.[active];
+  // Every listed section has a screen (section-page.test.ts), so a missing one is a 404.
+  const Page = PAGES[destination.key][section ?? destination.sections[0]];
   if (!Page) return <NotFound />;
   return (
     <Suspense fallback={<PageSkeleton />}>

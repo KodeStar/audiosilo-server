@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -685,10 +684,7 @@ func (a *API) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid library id")
 		return
 	}
-	name := "#" + strconv.FormatInt(id, 10)
-	if lib, err := a.cat.GetLibrary(r.Context(), id); err == nil {
-		name = lib.Name
-	}
+	name := a.libraryName(r, id) // read before it's gone
 	if err := a.cat.DeleteLibrary(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete library")
 		return

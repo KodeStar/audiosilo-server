@@ -25,13 +25,23 @@ func (a *API) backupsOff(w http.ResponseWriter) bool {
 	return false
 }
 
-// backupsEnvelope is GET /admin/backups' answer: the files, the service's state and
-// any restore waiting for (or applied at) a start.
+// writeBackups answers with GET /admin/backups' envelope: the files, the service's
+// state and any restore waiting for (or applied at) a start.
+func (a *API) writeBackups(w http.ResponseWriter, status int) {
+	env, err := a.backupsEnvelope()
+	if err != nil {
+		a.writeCatalogError(w, err, "backups: list", "could not list the backups")
+		return
+	}
+	writeJSON(w, status, env)
+}
+
 func (a *API) backupsEnvelope() (map[string]any, error) {
 	list, err := a.rt.Backups.List()
 	if err != nil {
 		return nil, err
 	}
+	status := a.rt.Backups.StatusOf(list)
 	pending, err := a.rt.Backups.PendingRestore()
 	if err != nil {
 		return nil, err
@@ -42,7 +52,7 @@ func (a *API) backupsEnvelope() (map[string]any, error) {
 	}
 	return map[string]any{
 		"backups": list,
-		"status":  a.rt.Backups.Status(),
+		"status":  status,
 		"restore": map[string]any{"pending": pending, "last": last},
 	}, nil
 }
@@ -61,12 +71,7 @@ func (a *API) handleListBackups(w http.ResponseWriter, _ *http.Request) {
 	if a.backupsOff(w) {
 		return
 	}
-	env, err := a.backupsEnvelope()
-	if err != nil {
-		a.writeCatalogError(w, err, "backups: list", "could not list the backups")
-		return
-	}
-	writeJSON(w, http.StatusOK, env)
+	a.writeBackups(w, http.StatusOK)
 }
 
 // handleCreateBackup starts a backup now (admin only): POST /admin/backups answers
@@ -80,12 +85,7 @@ func (a *API) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "backup.create", "", nil)
-	env, err := a.backupsEnvelope()
-	if err != nil {
-		a.writeCatalogError(w, err, "backups: list", "could not list the backups")
-		return
-	}
-	writeJSON(w, http.StatusAccepted, env)
+	a.writeBackups(w, http.StatusAccepted)
 }
 
 // handleDownloadBackup sends a backup file (admin only): GET /admin/backups/{name}.
@@ -139,12 +139,7 @@ func (a *API) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "backup.restore", name, map[string]any{"schema": pending.Schema})
-	env, err := a.backupsEnvelope()
-	if err != nil {
-		a.writeCatalogError(w, err, "backups: list", "could not list the backups")
-		return
-	}
-	writeJSON(w, http.StatusOK, env)
+	a.writeBackups(w, http.StatusOK)
 }
 
 // handleCancelRestore drops a waiting restore (admin only): DELETE /admin/restore.

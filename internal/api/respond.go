@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -116,7 +117,8 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 			"error": te.Error(), "code": codeInvalidTarget, "field": te.Field,
 		})
 	case errors.Is(err, catalog.ErrTooManyTargets):
-		writeErrorCode(w, http.StatusConflict, codeTooManyTargets, "a server can have at most 20 destinations")
+		writeErrorCode(w, http.StatusConflict, codeTooManyTargets,
+			fmt.Sprintf("a server can have at most %d destinations", catalog.MaxNotifyTargets))
 	case errors.As(err, &se):
 		status, code := http.StatusBadRequest, codeInvalidSetting
 		switch se.Reason {

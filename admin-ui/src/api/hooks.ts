@@ -33,8 +33,6 @@ export const keys = {
   backups: ['admin', 'backups'] as const,
   notifyTargets: ['admin', 'notifications'] as const,
   events: ['admin', 'events'] as const,
-  /** Every page of the audit log, any filter (a prefix: an admin action adds to it). */
-  auditAll: ['admin', 'audit'] as const,
   audit: (filter: AuditFilter) => ['admin', 'audit', filter] as const,
   thumb: (libraryId: number, path: string, size: ThumbSize) =>
     ['thumb', libraryId, path, size] as const,

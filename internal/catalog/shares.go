@@ -322,6 +322,17 @@ func scanShare(row interface{ Scan(...any) error }) (*Share, error) {
 	return &s, nil
 }
 
+// ShareName is a share's name alone (ErrNotFound when there is none), without
+// GetShare's rules.
+func (c *Catalog) ShareName(ctx context.Context, id int64) (string, error) {
+	var name string
+	err := c.db.QueryRowContext(ctx, `SELECT name FROM shares WHERE id = ?`, id).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return name, err
+}
+
 // GetShare returns a share including its path rules.
 func (c *Catalog) GetShare(ctx context.Context, id int64) (*Share, error) {
 	row := c.db.QueryRowContext(ctx,

@@ -323,3 +323,23 @@ func TestPinnedSaveKeepsFile(t *testing.T) {
 		t.Fatalf("a console save must keep the file's pinned values: %+v", got)
 	}
 }
+
+func TestChangedSettings(t *testing.T) {
+	cur := Default(t.TempDir())
+	next := cur.Clone()
+	next.Name = "Den"
+	next.Backups.Keep = 14
+	next.CORSOrigins = []string{"http://localhost:8081"}
+	got := ChangedSettings(cur, next)
+	want := []SettingChange{
+		{Setting: "backups.keep", From: 7, To: 14},
+		{Setting: "general.name", From: "", To: "Den"},
+		{Setting: "network.cors_origins", From: []string{}, To: []string{"http://localhost:8081"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("changes = %#v", got)
+	}
+	if got := ChangedSettings(cur, cur.Clone()); len(got) != 0 {
+		t.Fatalf("no change listed %#v", got)
+	}
+}

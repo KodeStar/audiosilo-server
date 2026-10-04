@@ -29,8 +29,8 @@ export interface EventLink {
 
 /** An event in words: i18n keys and their values, how serious it is, where it leads. */
 export interface EventText {
-  title: { key: string; values: Record<string, string | number> };
-  body?: { key: string; values: Record<string, string | number> };
+  title: { key: string; values?: Record<string, string | number> };
+  body?: { key: string; values?: Record<string, string | number> };
   tone: EventTone;
   link: EventLink;
 }
@@ -39,7 +39,7 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
 
 /** How many added titles the bell lists before "and N more". */
-export const TITLES_SHOWN = 3;
+const TITLES_SHOWN = 3;
 
 export function describeEvent(ev: ServerEvent): EventText {
   const d = ev.data;
@@ -75,7 +75,7 @@ export function describeEvent(ev: ServerEvent): EventText {
     case 'library_unavailable':
       return {
         title: { key: 'events.library_unavailable.title', values: { library: str(d.library) } },
-        body: { key: 'events.library_unavailable.body', values: {} },
+        body: { key: 'events.library_unavailable.body' },
         tone: 'warn',
         link: { destination: 'library', section: 'libraries' },
       };
@@ -106,8 +106,8 @@ export function describeEvent(ev: ServerEvent): EventText {
       };
     case 'backup_failed':
       return {
-        title: { key: 'events.backup_failed.title', values: {} },
-        body: { key: backupFailureKey(str(d.error)), values: {} },
+        title: { key: 'events.backup_failed.title' },
+        body: { key: backupFailureKey(str(d.error)) },
         tone: 'bad',
         link: { destination: 'server', topic: 'backups' },
       };

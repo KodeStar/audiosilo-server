@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/notify"
@@ -52,9 +51,13 @@ type targetBody struct {
 	Events  *[]string `json:"events"`
 }
 
-// apply lays the body over t (kind only when creating) and checks the result.
+// apply lays the body over t and checks the result. A destination's kind is set
+// when it is created and can't change after.
 func (b targetBody) apply(t *catalog.NotifyTarget, creating bool) error {
-	if creating && b.Kind != nil {
+	if b.Kind != nil {
+		if !creating && *b.Kind != t.Kind {
+			return &notify.FieldError{Field: "kind", Err: errors.New("a destination's kind can't change; add a new one")}
+		}
 		t.Kind = *b.Kind
 	}
 	if b.Name != nil {
@@ -123,25 +126,13 @@ func (a *API) handleCreateNotifyTarget(w http.ResponseWriter, r *http.Request) {
 // handleUpdateNotifyTarget changes a destination (admin only): PATCH
 // /admin/notifications/{id} with the fields to change (not kind).
 func (a *API) handleUpdateNotifyTarget(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
 	var body targetBody
 	if err := decodeJSON(r, &body, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	t, err := a.cat.GetNotifyTarget(r.Context(), id)
-	if err != nil {
-		a.writeTargetError(w, err, "notify: get")
-		return
-	}
-	if body.Kind != nil && *body.Kind != t.Kind {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "a destination's kind can't change; add a new one", "code": codeInvalidTarget, "field": "kind",
-		})
+	t := a.loadTarget(w, r)
+	if t == nil {
 		return
 	}
 	if err := body.apply(t, false); err != nil {
@@ -160,17 +151,11 @@ func (a *API) handleUpdateNotifyTarget(w http.ResponseWriter, r *http.Request) {
 // handleDeleteNotifyTarget removes a destination (admin only): DELETE
 // /admin/notifications/{id}.
 func (a *API) handleDeleteNotifyTarget(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid id")
+	t := a.loadTarget(w, r)
+	if t == nil {
 		return
 	}
-	t, err := a.cat.GetNotifyTarget(r.Context(), id)
-	if err != nil {
-		a.writeTargetError(w, err, "notify: get")
-		return
-	}
-	if err := a.cat.DeleteNotifyTarget(r.Context(), id); err != nil {
+	if err := a.cat.DeleteNotifyTarget(r.Context(), t.ID); err != nil {
 		a.writeTargetError(w, err, "notify: delete")
 		return
 	}
@@ -182,22 +167,33 @@ func (a *API) handleDeleteNotifyTarget(w http.ResponseWriter, r *http.Request) {
 // /admin/notifications/{id}/test answers {ok, error} ("timeout", "unreachable",
 // "http_<status>", "failed") and the destination with the outcome recorded.
 func (a *API) handleTestNotifyTarget(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid id")
+	t := a.loadTarget(w, r)
+	if t == nil {
 		return
 	}
-	t, err := a.cat.GetNotifyTarget(r.Context(), id)
+	reason := a.rt.Notify.Test(r.Context(), *t)
+	t, err := a.cat.GetNotifyTarget(r.Context(), t.ID) // with the outcome Test recorded
 	if err != nil {
 		a.writeTargetError(w, err, "notify: get")
 		return
 	}
-	reason := a.rt.Notify.Test(r.Context(), *t)
-	if t, err = a.cat.GetNotifyTarget(r.Context(), id); err != nil {
-		a.writeTargetError(w, err, "notify: get")
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": reason == "", "error": reason, "target": targetView(*t)})
+}
+
+// loadTarget reads the destination the path's {id} names, answering 400/404 itself
+// (nil means the handler is done).
+func (a *API) loadTarget(w http.ResponseWriter, r *http.Request) *catalog.NotifyTarget {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return nil
+	}
+	t, err := a.cat.GetNotifyTarget(r.Context(), id)
+	if err != nil {
+		a.writeTargetError(w, err, "notify: get")
+		return nil
+	}
+	return t
 }
 
 func (a *API) writeTargetError(w http.ResponseWriter, err error, op string) {
@@ -211,14 +207,10 @@ func (a *API) writeTargetError(w http.ResponseWriter, err error, op string) {
 // handleServerEvents lists the event feed, newest first (admin only): GET
 // /admin/events?before=&limit= (<= 100).
 func (a *API) handleServerEvents(w http.ResponseWriter, r *http.Request) {
-	var before int64
-	if v := r.URL.Query().Get("before"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			writeError(w, http.StatusBadRequest, "invalid before")
-			return
-		}
-		before = n
+	before, ok := parseOptionalID(r.URL.Query().Get("before"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid before")
+		return
 	}
 	events, next, err := a.cat.ListServerEvents(r.Context(), before, queryInt(r, "limit", 20))
 	if err != nil {

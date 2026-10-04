@@ -35,18 +35,18 @@ var auditAreaRE = regexp.MustCompile(`^[a-z_]{1,32}$`)
 
 // handleAudit lists the audit log, newest first (admin only): GET /admin/audit with
 // ?actor_id=, ?area= (user, invite, library, book, share, settings, backup, notify,
-// device, progress, issue, scan), ?q= (target or actor, any case), ?before= (the
+// device, progress, issue), ?q= (target or actor, any case), ?before= (the
 // previous page's next_before) and ?limit= (<= 200).
 func (a *API) handleAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := catalog.AuditFilter{Query: q.Get("q"), Limit: queryInt(r, "limit", 50)}
-	if v := q.Get("actor_id"); v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid actor_id")
-			return
-		}
-		f.ActorID = &id
+	actor, ok := parseOptionalID(q.Get("actor_id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid actor_id")
+		return
+	}
+	if actor != 0 {
+		f.ActorID = &actor
 	}
 	if area := q.Get("area"); area != "" {
 		if !auditAreaRE.MatchString(area) {
@@ -55,13 +55,9 @@ func (a *API) handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Area = area
 	}
-	if v := q.Get("before"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			writeError(w, http.StatusBadRequest, "invalid before")
-			return
-		}
-		f.Before = n
+	if f.Before, ok = parseOptionalID(q.Get("before")); !ok {
+		writeError(w, http.StatusBadRequest, "invalid before")
+		return
 	}
 	if len(f.Query) > 200 {
 		writeError(w, http.StatusBadRequest, "search too long")
@@ -75,21 +71,44 @@ func (a *API) handleAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": events, "next_before": next})
 }
 
-// userName is an account's username for an audit target ("#<id>" when it can't
-// be read).
-func (a *API) userName(r *http.Request, id int64) string {
-	if u, err := a.auth.GetUser(r.Context(), id); err == nil {
-		return u.Username
+// Audit targets name things as a person reads them: a username, a share's or a
+// library's name, or "#<id>" when the name can't be read (gone, or a failed read).
+
+func orID(name string, err error, id int64) string {
+	if err != nil {
+		return "#" + strconv.FormatInt(id, 10)
 	}
-	return "#" + strconv.FormatInt(id, 10)
+	return name
 }
 
-// codeOwner is the username an auth code belongs to, for an audit target.
-func (a *API) codeOwner(r *http.Request, id int64) string {
-	if u, err := a.auth.AuthCodeUser(r.Context(), id); err == nil {
-		return u.Username
+func (a *API) userName(r *http.Request, id int64) string {
+	u, err := a.auth.GetUser(r.Context(), id)
+	if err != nil {
+		return orID("", err, id)
 	}
-	return "#" + strconv.FormatInt(id, 10)
+	return u.Username
+}
+
+// codeOwner is the username an auth code belongs to.
+func (a *API) codeOwner(r *http.Request, id int64) string {
+	u, err := a.auth.AuthCodeUser(r.Context(), id)
+	if err != nil {
+		return orID("", err, id)
+	}
+	return u.Username
+}
+
+func (a *API) shareName(r *http.Request, id int64) string {
+	name, err := a.cat.ShareName(r.Context(), id)
+	return orID(name, err, id)
+}
+
+func (a *API) libraryName(r *http.Request, id int64) string {
+	l, err := a.cat.GetLibrary(r.Context(), id)
+	if err != nil {
+		return orID("", err, id)
+	}
+	return l.Name
 }
 
 // inviteDetails are an invite's limits (never its code).
@@ -99,22 +118,6 @@ func inviteDetails(m auth.Minted) map[string]any {
 		d["expires_at"] = m.ExpiresAt
 	}
 	return d
-}
-
-// shareName is a share's name for an audit target ("#<id>" when it can't be read).
-func (a *API) shareName(r *http.Request, id int64) string {
-	if s, err := a.cat.GetShare(r.Context(), id); err == nil {
-		return s.Name
-	}
-	return "#" + strconv.FormatInt(id, 10)
-}
-
-// libraryName is a library's name for an audit target ("#<id>" when it can't be read).
-func (a *API) libraryName(r *http.Request, id int64) string {
-	if l, err := a.cat.GetLibrary(r.Context(), id); err == nil {
-		return l.Name
-	}
-	return "#" + strconv.FormatInt(id, 10)
 }
 
 // maxAuditPaths caps the paths an audit event lists (a selection of 1,000 books

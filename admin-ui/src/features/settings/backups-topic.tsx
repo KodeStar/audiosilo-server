@@ -25,7 +25,9 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { toastError } from '@/lib/errors';
 import { formatBytes, formatDateTime, formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import { describeSchedule, failureKey, restoreFailureKey, totalSize } from './backups-model';
+import { backupFailureKey } from '@/lib/server-events';
+import { CardEmpty } from './card-empty';
+import { describeSchedule, restoreFailureKey, totalSize } from './backups-model';
 import { SettingBadges, SettingsForm } from './settings-form';
 
 /** How long the outcome of the last restore stays on this page. */
@@ -172,7 +174,7 @@ function BackupList({ env, schedule }: { env: BackupsEnvelope; schedule: string 
     else
       toast.add({
         title: t('backups.failedToast'),
-        description: t(failureKey(status.last?.error)),
+        description: t(backupFailureKey(status.last?.error)),
       });
   }, [status.running, status.last, t]);
 
@@ -229,24 +231,19 @@ function BackupList({ env, schedule }: { env: BackupsEnvelope; schedule: string 
           className="mx-5 mb-4"
           title={t('backups.lastFailed', { when: formatDateTime(status.last.at, lang) })}
         >
-          {t(failureKey(status.last.error))}
+          {t(backupFailureKey(status.last.error))}
         </Notice>
       ) : null}
       {backups.length === 0 ? (
-        <div className="flex flex-col items-center gap-1.5 border-t px-6 py-10 text-center">
-          <span
-            className="mb-1 grid size-11 place-items-center rounded-[13px] bg-muted text-muted-foreground"
-            aria-hidden="true"
-          >
-            <Archive className="size-5" />
-          </span>
-          <b className="font-semibold">{t('backups.empty.title')}</b>
-          <p className="max-w-[420px] text-[13px] text-muted-foreground">
-            {status.next
+        <CardEmpty
+          icon={Archive}
+          title={t('backups.empty.title')}
+          body={
+            status.next
               ? t('backups.empty.next', { when: formatDateTime(status.next, lang) })
-              : t('backups.empty.off')}
-          </p>
-        </div>
+              : t('backups.empty.off')
+          }
+        />
       ) : (
         <ul className="flex flex-col divide-y border-t" aria-label={t('backups.listCard')}>
           {backups.map((b) => (

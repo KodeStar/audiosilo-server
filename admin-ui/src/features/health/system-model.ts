@@ -1,5 +1,6 @@
 import type { SystemStatus } from '@/api/types';
 import { certificateLook } from '@/features/settings/settings-model';
+import { backupHealth } from '@/features/settings/backups-model';
 import { backupFailureKey } from '@/lib/server-events';
 
 // Health > System: everything the server depends on as one list of rows, each
@@ -126,32 +127,54 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
 
   const b = sys.backups;
   if (b) {
-    const failed = b.last && !b.last.ok;
-    rows.push(
-      row({
-        kind: 'backups',
-        id: 'backups',
-        title: { key: 'system.row.backups' },
-        detail: failed
-          ? { key: backupFailureKey(b.last?.error) }
-          : b.latest
-            ? b.next
-              ? {
-                  key: 'system.detail.backupLatestNext',
-                  values: { at: b.latest.created_at, next: b.next },
-                }
-              : { key: 'system.detail.backupLatest', values: { at: b.latest.created_at } }
-            : b.next
-              ? { key: 'system.detail.backupNone', values: { next: b.next } }
+    const base = {
+      kind: 'backups',
+      id: 'backups',
+      title: { key: 'system.row.backups' },
+      value: b.dir,
+    } as const;
+    const at = b.latest?.created_at ?? '';
+    switch (backupHealth(b)) {
+      case 'failed':
+        rows.push(
+          row({
+            ...base,
+            detail: { key: backupFailureKey(b.last?.error) },
+            status: 'bad',
+            statusKey: 'system.status.failed',
+          }),
+        );
+        break;
+      case 'off':
+        rows.push(
+          row({
+            ...base,
+            detail: b.latest
+              ? { key: 'system.detail.backupLatest', values: { at } }
               : { key: 'system.detail.backupOff' },
-        value: b.dir,
-        ...(failed
-          ? { status: 'bad', statusKey: 'system.status.failed' }
-          : !b.next
-            ? { status: b.latest ? 'off' : 'warn', statusKey: 'system.status.off' }
-            : { status: 'ok' }),
-      }),
-    );
+            status: b.latest ? 'off' : 'warn',
+            statusKey: 'system.status.off',
+          }),
+        );
+        break;
+      case 'ok':
+        rows.push(
+          row({
+            ...base,
+            detail: { key: 'system.detail.backupLatestNext', values: { at, next: b.next ?? '' } },
+            status: 'ok',
+          }),
+        );
+        break;
+      case 'none':
+        rows.push(
+          row({
+            ...base,
+            detail: { key: 'system.detail.backupNone', values: { next: b.next ?? '' } },
+            status: 'ok',
+          }),
+        );
+    }
   }
 
   for (const lib of sys.libraries) {

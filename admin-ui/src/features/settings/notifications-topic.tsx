@@ -40,9 +40,9 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { toastError } from '@/lib/errors';
 import { formatRelative } from '@/lib/format';
-import { EVENT_KINDS } from '@/lib/server-events';
 import { toast } from '@/lib/toast';
-import { deliveryLook, reasonText, toggleEvent } from './notify-model';
+import { CardEmpty } from './card-empty';
+import { deliveryLook, knownEvents, reasonText, toggleEvent, withTarget } from './notify-model';
 import { TargetDialog } from './target-dialog';
 
 const KIND_ICONS: Record<NotifyTargetKind, LucideIcon> = {
@@ -90,26 +90,21 @@ export function NotificationsTopic() {
           }
         />
         {env.targets.length === 0 ? (
-          <div className="flex flex-col items-center gap-1.5 border-t px-6 py-10 text-center">
-            <span
-              className="mb-1 grid size-11 place-items-center rounded-[13px] bg-muted text-muted-foreground"
-              aria-hidden="true"
-            >
-              <BellRing className="size-5" />
-            </span>
-            <b className="font-semibold">{t('notify.empty.title')}</b>
-            <p className="max-w-[420px] text-[13px] text-muted-foreground">
-              {t('notify.empty.body')}
-            </p>
-            <Button size="sm" className="mt-2" onClick={() => setAdding(true)}>
-              <Plus aria-hidden="true" />
-              {t('notify.add')}
-            </Button>
-          </div>
+          <CardEmpty
+            icon={BellRing}
+            title={t('notify.empty.title')}
+            body={t('notify.empty.body')}
+            action={
+              <Button size="sm" onClick={() => setAdding(true)}>
+                <Plus aria-hidden="true" />
+                {t('notify.add')}
+              </Button>
+            }
+          />
         ) : (
           <ul className="flex flex-col divide-y border-t" aria-label={t('notify.targetsCard')}>
             {env.targets.map((target) => (
-              <TargetRow key={target.id} target={target} />
+              <TargetRow key={target.id} target={target} events={knownEvents(env)} />
             ))}
           </ul>
         )}
@@ -118,12 +113,12 @@ export function NotificationsTopic() {
       <Notice tone="info" icon={ShieldCheck}>
         {t('notify.privacy')}
       </Notice>
-      <TargetDialog open={adding} onOpenChange={setAdding} />
+      <TargetDialog open={adding} onOpenChange={setAdding} events={knownEvents(env)} />
     </>
   );
 }
 
-/** Saves a change to one destination and refreshes the list; restores the list on a failure. */
+/** Saves a change to one destination, shown at once; restores the list on a failure. */
 function useSaveTarget() {
   const qc = useQueryClient();
   return async (
@@ -141,17 +136,20 @@ function useSaveTarget() {
       });
     }
     try {
-      await api.updateNotifyTarget(id, change);
+      const saved = await api.updateNotifyTarget(id, change);
+      qc.setQueryData<NotifyTargetsEnvelope>(
+        keys.notifyTargets,
+        (env) => env && withTarget(env, saved),
+      );
     } catch (err) {
       if (before) qc.setQueryData(keys.notifyTargets, before);
       toastError(failed, err);
-    } finally {
       void qc.invalidateQueries({ queryKey: keys.notifyTargets });
     }
   };
 }
 
-function TargetRow({ target }: { target: NotifyTarget }) {
+function TargetRow({ target, events }: { target: NotifyTarget; events: ServerEventKind[] }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
@@ -178,7 +176,10 @@ function TargetRow({ target }: { target: NotifyTarget }) {
           description: t(reason.key, reason.values),
         });
       }
-      await qc.invalidateQueries({ queryKey: keys.notifyTargets });
+      qc.setQueryData<NotifyTargetsEnvelope>(
+        keys.notifyTargets,
+        (env) => env && withTarget(env, r.target),
+      );
     } catch (err) {
       toastError(t('notify.test.failed', { name: target.name }), err);
     } finally {
@@ -249,6 +250,7 @@ function TargetRow({ target }: { target: NotifyTarget }) {
       </div>
       <TargetDialog
         target={target}
+        events={events}
         open={dialog === 'edit'}
         onOpenChange={(o) => setDialog(o ? 'edit' : null)}
       />
@@ -273,8 +275,7 @@ function TargetRow({ target }: { target: NotifyTarget }) {
 function EventMatrix({ env }: { env: NotifyTargetsEnvelope }) {
   const { t } = useTranslation();
   const save = useSaveTarget();
-  // Events this server knows, in its order (a newer server may know more than the console words).
-  const kinds = EVENT_KINDS.filter((k) => env.events.includes(k));
+  const kinds = knownEvents(env);
   const flip = (target: NotifyTarget, kind: ServerEventKind, on: boolean) =>
     void save(
       target.id,

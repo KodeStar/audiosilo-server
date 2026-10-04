@@ -1,7 +1,5 @@
 import type { Backup, BackupStatus } from '@/api/types';
 
-export { backupFailureKey as failureKey } from '@/lib/server-events';
-
 // Settings > Backups: the schedule string the server stores ("", "daily:HH:MM",
 // "weekly:DAY:HH:MM"; backup.ParseSchedule) as the form edits it, and the small
 // rules the topic shows (what each backup is, why one failed).
