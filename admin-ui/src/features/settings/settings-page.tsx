@@ -20,6 +20,7 @@ import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
 import { SettingRow } from '@/components/setting-row';
+import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
@@ -27,7 +28,13 @@ import { formatDate, formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
-import { certificateLook, SETTINGS_PAGES, type SettingsPage } from './settings-model';
+import {
+  certificateLook,
+  lockOf,
+  SETTINGS_PAGES,
+  type CertStatus,
+  type SettingsPage,
+} from './settings-model';
 
 const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   general: Settings2,
@@ -165,25 +172,20 @@ function GeneralTopic({ settings }: { settings: AdminSettings }) {
         />
         <div className="px-5">
           <SettingRow
-            title={
-              <span className="inline-flex flex-wrap items-center gap-2">
-                {t('settings.general.update_check')}
-                <SettingBadges settings={settings} id="general.update_check" />
-              </span>
-            }
+            title={t('settings.general.update_check')}
+            badges={<SettingBadges settings={settings} id="general.update_check" />}
             htmlFor="update-switch"
             description={t('settings.general.update_checkBody')}
             descriptionId="update-switch-desc"
           >
             <InstantSwitch
-              settings={settings}
               id="update-switch"
               checked={settings.general.update_check}
-              disabled={Boolean(settings.locked['general.update_check'])}
+              disabled={Boolean(lockOf(settings, 'general.update_check'))}
               describedBy="update-switch-desc"
               patch={(on) => ({ general: { update_check: on } })}
               failedTitle={t('settings.updates.failed')}
-              onSaved={(_, on) =>
+              onSaved={(on) =>
                 toast.add({
                   title: on ? t('settings.updates.on') : t('settings.updates.off'),
                   description: on ? undefined : t('settings.updates.offBody'),
@@ -240,6 +242,13 @@ function NetworkTopic({ settings }: { settings: AdminSettings }) {
   );
 }
 
+const CERT_BADGE: Record<CertStatus, 'success' | 'warning' | 'destructive' | 'secondary'> = {
+  ok: 'success',
+  warn: 'warning',
+  bad: 'destructive',
+  waiting: 'secondary',
+};
+
 /** The served certificate's state, from the system status. */
 function CertificateRow() {
   const { t, i18n } = useTranslation();
@@ -252,7 +261,7 @@ function CertificateRow() {
   else if (tls) {
     const look = certificateLook(tls, Date.now());
     value = look ? (
-      <Badge variant={look.tone}>
+      <Badge variant={CERT_BADGE[look.status]}>
         {t(look.key, { days: formatNumber(look.days ?? 0, lang), count: look.days ?? 0 })}
       </Badge>
     ) : (
@@ -289,19 +298,14 @@ function PlayersTopic({ settings }: { settings: AdminSettings }) {
             title={t('settings.players.web_player')}
             description={t(`settings.players.source.${p.web_player || 'none'}Body`)}
           >
-            <span className="inline-flex items-center gap-1.5 font-semibold">
-              <span className="dot" data-tone={p.web_player ? 'ok' : 'off'} aria-hidden="true" />
+            <StatusText tone={p.web_player ? 'ok' : 'off'} className="font-semibold">
               {t(`settings.players.source.${p.web_player || 'none'}`)}
-            </span>
+            </StatusText>
           </SettingRow>
           {p.web_dir ? (
             <SettingRow
-              title={
-                <span className="inline-flex flex-wrap items-center gap-2">
-                  {t('settings.players.web_dir')}
-                  <SettingBadges settings={settings} id="players.web_dir" />
-                </span>
-              }
+              title={t('settings.players.web_dir')}
+              badges={<SettingBadges settings={settings} id="players.web_dir" />}
               description={t('settings.players.web_dirBody')}
             >
               <span className="font-mono text-[12.5px] [overflow-wrap:anywhere]">{p.web_dir}</span>
@@ -337,30 +341,23 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
         />
         <div className="divide-y px-5">
           <SettingRow
-            title={
-              <span className="inline-flex flex-wrap items-center gap-2">
-                {t('settings.metadata.toggle')}
-                <SettingBadges settings={settings} id="metadata.enabled" />
-              </span>
-            }
+            title={t('settings.metadata.toggle')}
+            badges={<SettingBadges settings={settings} id="metadata.enabled" />}
             htmlFor="metadata-switch"
             description={t('settings.metadata.toggleBody')}
             descriptionId="metadata-switch-desc"
           >
             <InstantSwitch
-              settings={settings}
               id="metadata-switch"
               checked={m.enabled && m.available}
-              disabled={!m.available || Boolean(settings.locked['metadata.enabled'])}
+              disabled={!m.available || Boolean(lockOf(settings, 'metadata.enabled'))}
               describedBy="metadata-switch-desc"
               patch={(on) => ({ metadata: { enabled: on } })}
               failedTitle={t('settings.metadata.failed')}
-              onSaved={(saved) =>
+              onSaved={(on) =>
                 toast.add({
-                  title: saved.metadata.enabled
-                    ? t('settings.metadata.on')
-                    : t('settings.metadata.off'),
-                  description: saved.metadata.enabled ? undefined : t('settings.metadata.offBody'),
+                  title: on ? t('settings.metadata.on') : t('settings.metadata.off'),
+                  description: on ? undefined : t('settings.metadata.offBody'),
                   type: 'success',
                 })
               }
@@ -399,18 +396,14 @@ function MetadataStatusRow() {
     <SettingRow title={t('settings.metadata.status')}>
       {!h ? (
         <span className="skel inline-block h-5 w-36" />
-      ) : h.reachable ? (
-        <span className="inline-flex items-center gap-1.5 font-semibold text-success">
-          <span className="dot" data-tone="ok" aria-hidden="true" />
-          {t('settings.metadata.responding', {
-            ms: formatNumber(h.latency_ms, i18n.resolvedLanguage ?? 'en'),
-          })}
-        </span>
       ) : (
-        <span className="inline-flex items-center gap-1.5 font-semibold text-destructive">
-          <span className="dot" data-tone="bad" aria-hidden="true" />
-          {t('settings.metadata.notResponding')}
-        </span>
+        <StatusText tone={h.reachable ? 'ok' : 'bad'} colored className="font-semibold">
+          {h.reachable
+            ? t('settings.metadata.responding', {
+                ms: formatNumber(h.latency_ms, i18n.resolvedLanguage ?? 'en'),
+              })
+            : t('settings.metadata.notResponding')}
+        </StatusText>
       )}
     </SettingRow>
   );

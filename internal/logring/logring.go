@@ -27,6 +27,8 @@ type Entry struct {
 	Level   string    `json:"level"` // debug | info | warn | error
 	Message string    `json:"message"`
 	Attrs   []Attr    `json:"attrs"`
+
+	level slog.Level // Level, for filtering
 }
 
 // Attr is one key=value of an Entry; a grouped key is dotted ("req.path").
@@ -57,9 +59,6 @@ func NewRing(capacity int) *Ring {
 	}
 	return &Ring{entries: make([]Entry, 0, capacity)}
 }
-
-// Capacity is how many records the ring keeps.
-func (r *Ring) Capacity() int { return cap(r.entries) }
 
 func (r *Ring) add(e Entry) {
 	r.mu.Lock()
@@ -93,22 +92,32 @@ type Result struct {
 	Truncated bool `json:"truncated"`
 }
 
-// Query returns the matching entries, oldest first.
+// Query returns the matching entries, oldest first. Only the entries after the
+// cursor are copied out of the ring (seqs are consecutive), so a live tail's
+// poll with nothing new costs next to nothing.
 func (r *Ring) Query(q Query) Result {
 	needle := strings.ToLower(strings.TrimSpace(q.Search))
 	r.mu.Lock()
-	all := make([]Entry, 0, len(r.entries))
-	all = append(all, r.entries[r.start:]...)
-	all = append(all, r.entries[:r.start]...)
-	last := r.seq
-	r.mu.Unlock()
-
-	res := Result{Entries: []Entry{}, LastSeq: last}
-	if len(all) > 0 && q.After > 0 && all[0].Seq > q.After+1 {
+	res := Result{Entries: []Entry{}, LastSeq: r.seq}
+	n := len(r.entries)
+	oldest := r.seq - uint64(n) + 1 // the Seq of the entry at r.start
+	skip := 0
+	switch {
+	case n == 0 || q.After >= r.seq:
+		skip = n
+	case q.After >= oldest:
+		skip = int(q.After - oldest + 1)
+	case q.After > 0 && q.After+1 < oldest:
 		res.Truncated = true // the ring moved past the cursor
 	}
-	for _, e := range all {
-		if e.Seq <= q.After || levelOf(e.Level) < q.Level || (needle != "" && !e.contains(needle)) {
+	newer := make([]Entry, 0, n-skip)
+	for i := skip; i < n; i++ {
+		newer = append(newer, r.entries[(r.start+i)%n])
+	}
+	r.mu.Unlock()
+
+	for _, e := range newer {
+		if e.level < q.Level || (needle != "" && !e.contains(needle)) {
 			continue
 		}
 		res.Entries = append(res.Entries, e)
@@ -135,7 +144,7 @@ func (e Entry) contains(needle string) bool {
 // ParseLevel reads a level name ("debug", "info", "warn", "error"; "" = debug).
 func ParseLevel(s string) (slog.Level, bool) {
 	switch strings.ToLower(s) {
-	case "", "debug", "all":
+	case "", "debug":
 		return slog.LevelDebug, true
 	case "info":
 		return slog.LevelInfo, true
@@ -157,11 +166,6 @@ func levelName(l slog.Level) string {
 		return "info"
 	}
 	return "debug"
-}
-
-func levelOf(name string) slog.Level {
-	l, _ := ParseLevel(name)
-	return l
 }
 
 // Handler is a slog.Handler that passes every record to the handler it wraps
@@ -189,8 +193,9 @@ func (h *Handler) Enabled(ctx context.Context, l slog.Level) bool {
 // (when the wrapped handler takes its level).
 func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	if r.Level >= h.level {
-		e := Entry{Time: r.Time, Level: levelName(r.Level), Message: cut(r.Message, maxMessage)}
-		e.Attrs = append(e.Attrs, h.attrs...)
+		e := Entry{Time: r.Time, Level: levelName(r.Level), level: r.Level, Message: cut(r.Message, maxMessage)}
+		e.Attrs = make([]Attr, len(h.attrs), min(len(h.attrs)+r.NumAttrs(), maxAttrs+1))
+		copy(e.Attrs, h.attrs)
 		r.Attrs(func(a slog.Attr) bool {
 			e.Attrs = flatten(e.Attrs, h.group, a)
 			return len(e.Attrs) < maxAttrs
@@ -270,16 +275,20 @@ func valueString(v slog.Value) string {
 // one; this keeps a future one out of a browser.
 var secretWords = []string{"token", "password", "passwd", "secret", "authorization", "cookie", "code", "key", "apikey"}
 
+// secretVerdicts caches secretKey's answer per key: the server logs a small,
+// fixed set of attribute keys, so this saves splitting every key of every record.
+var secretVerdicts sync.Map // key -> bool
+
 func secretKey(key string) bool {
+	if v, ok := secretVerdicts.Load(key); ok {
+		return v.(bool)
+	}
 	words := strings.FieldsFunc(strings.ToLower(key), func(r rune) bool {
 		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 	})
-	for _, w := range words {
-		if slices.Contains(secretWords, w) {
-			return true
-		}
-	}
-	return false
+	secret := slices.ContainsFunc(words, func(w string) bool { return slices.Contains(secretWords, w) })
+	secretVerdicts.Store(key, secret)
+	return secret
 }
 
 // cut shortens s to at most n bytes on a rune boundary, marking the cut.

@@ -18,7 +18,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/toolfetch"
 	"github.com/kodestar/audiosilo-server/internal/updates"
-	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
 // Runtime is what the launcher knows about the running server that the admin
@@ -45,7 +44,8 @@ const (
 	installSource = "source" // a local build (version "dev")
 )
 
-func installKind() string {
+// installKind is how this server was installed; it can't change while it runs.
+var installKind = sync.OnceValue(func() string {
 	switch {
 	case Version == "dev":
 		return installSource
@@ -53,7 +53,7 @@ func installKind() string {
 		return installDocker
 	}
 	return installBinary
-}
+})
 
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
@@ -70,38 +70,29 @@ type Tool struct {
 	Source string `json:"source"`
 }
 
-// toolVersions caches each tool's version: the paths are fixed for the life of
-// the process, and running `-version` takes a moment.
+// toolVersions runs each tool's `-version` once (the paths are fixed for the
+// life of the process), on its own deadline rather than a request's, so a
+// cancelled request neither caches a blank nor makes the next one wait again.
 type toolVersions struct {
-	mu   sync.Mutex
-	seen map[string]string
+	versions sync.Map // path -> func() string (sync.OnceValue)
 }
 
-func (tv *toolVersions) get(ctx context.Context, path string) string {
-	tv.mu.Lock()
-	defer tv.mu.Unlock()
-	if v, ok := tv.seen[path]; ok {
+func (tv *toolVersions) get(path string) string {
+	fn, _ := tv.versions.LoadOrStore(path, sync.OnceValue(func() string {
+		v, _ := toolfetch.Version(context.Background(), path)
 		return v
-	}
-	v, err := toolfetch.Version(ctx, path)
-	if err != nil && ctx.Err() != nil {
-		return "" // cancelled: ask again next time
-	}
-	if tv.seen == nil {
-		tv.seen = map[string]string{}
-	}
-	tv.seen[path] = v
-	return v
+	}))
+	return fn.(func() string)()
 }
 
-func (a *API) tool(ctx context.Context, name, path string) Tool {
+func (a *API) tool(name, path string) Tool {
 	t := Tool{Name: name, Path: path}
 	if path == "" {
 		return t
 	}
-	t.Version = a.toolVersions.get(ctx, path)
+	t.Version = a.toolVersions.get(path)
 	t.Source = "local"
-	if rel, err := filepath.Rel(filepath.Join(a.boot.DataDir, "tools"), path); err == nil && !strings.HasPrefix(rel, "..") {
+	if rel, err := filepath.Rel(toolfetch.Dir(a.config().DataDir), path); err == nil && !strings.HasPrefix(rel, "..") {
 		t.Source = "downloaded"
 	}
 	return t
@@ -161,15 +152,13 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 		metaHealth      *meta.Health
 		avail           map[int64]bool
 	)
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		ffmpeg, ffprobe = a.tool(ctx, "ffmpeg", a.ffmpeg), a.tool(ctx, "ffprobe", a.rt.FFprobe)
-	}()
+	wg.Add(4)
+	go func() { defer wg.Done(); ffmpeg = a.tool("ffmpeg", a.ffmpeg) }()
+	go func() { defer wg.Done(); ffprobe = a.tool("ffprobe", a.rt.FFprobe) }()
 	go func() {
 		defer wg.Done()
 		if a.metadataOn() {
-			h := a.meta.Ping(ctx)
+			h := a.meta.Ping()
 			metaHealth = &h
 		}
 	}()
@@ -182,15 +171,17 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 	roots := make([]LibraryStatus, 0, len(libs))
 	for _, l := range libs {
 		ls := LibraryStatus{ID: l.ID, Name: l.Name, Root: l.Root, Available: avail[l.ID]}
-		if d, ok := a.scanner.RootDisk(l); ok && ls.Available {
-			ls.Disk = &d
+		if ls.Available {
+			if d, ok := a.scanner.RootDisk(l); ok {
+				ls.Disk = &d
+			}
 		}
 		roots = append(roots, ls)
 	}
 
-	tlsStatus := TLSStatus{Mode: string(a.boot.TLS.Mode), Hosts: append([]string{}, a.boot.TLS.Hosts...),
+	tlsStatus := TLSStatus{Mode: string(a.config().TLS.Mode), Hosts: append([]string{}, a.config().TLS.Hosts...),
 		Certificates: []server.Certificate{}}
-	if certs, err := server.Certificates(a.boot); err != nil {
+	if certs, err := server.Certificates(a.config().Config); err != nil {
 		tlsStatus.Error = "the certificate file couldn't be read"
 		a.log.Warn("system: read certificate", "err", err)
 	} else if certs != nil {
@@ -199,39 +190,41 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":       a.config().DisplayName(),
-		"server_id":  a.boot.ServerID,
+		"server_id":  a.config().ServerID,
 		"version":    Version,
 		"go_version": runtime.Version(),
 		"os":         runtime.GOOS,
 		"arch":       runtime.GOARCH,
 		"install":    installKind(),
 		"started_at": a.rt.StartedAt.UTC(),
-		"data_dir":   a.boot.DataDir,
+		"data_dir":   a.config().DataDir,
 		"database":   db,
 		"tools":      []Tool{ffmpeg, ffprobe},
 		"metadata": MetadataStatus{
 			Enabled: a.config().Metadata.Enabled, Available: a.meta != nil,
-			BaseURL: a.boot.Metadata.BaseURL, Health: metaHealth,
+			BaseURL: a.config().Metadata.BaseURL, Health: metaHealth,
 		},
 		"tls":        tlsStatus,
 		"libraries":  roots,
-		"web_player": web.PlayerSource(a.boot.WebDir),
+		"web_player": a.playerSource,
 		"update":     a.updateStatus(),
 	})
 }
 
-// updateStatus is the update check's state, with the install kind the console
-// words its "how to update" for. A server without a checker reports it off.
-func (a *API) updateStatus() map[string]any {
+// UpdateStatus is the update check's state, with the install kind the console
+// words its "how to update" for.
+type UpdateStatus struct {
+	updates.Status
+	Install string `json:"install"`
+}
+
+// updateStatus reports the update check; a server without a checker reports it off.
+func (a *API) updateStatus() UpdateStatus {
 	st := updates.Status{Current: Version}
 	if a.rt.Updates != nil {
 		st = a.rt.Updates.Status()
 	}
-	return map[string]any{
-		"enabled": st.Enabled, "current": st.Current, "latest": st.Latest,
-		"update_available": st.Available, "comparable": st.Comparable,
-		"checked_at": st.CheckedAt, "error": st.Error, "install": installKind(),
-	}
+	return UpdateStatus{Status: st, Install: installKind()}
 }
 
 // handleUpdateStatus reports the update check (admin only): GET /admin/update.
@@ -247,7 +240,7 @@ func (a *API) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusConflict, codeUpdateCheckOff, "the update check is turned off")
 		return
 	}
-	if _, err := a.rt.Updates.Check(r.Context()); errors.Is(err, updates.ErrDisabled) {
+	if err := a.rt.Updates.Check(r.Context()); errors.Is(err, updates.ErrDisabled) {
 		writeErrorCode(w, http.StatusConflict, codeUpdateCheckOff, "the update check is turned off")
 		return
 	}
@@ -261,12 +254,6 @@ const maxLogEntries = 1000
 // ?level=info|warn|error (at least), ?q= (contains, any case), ?after=<seq> (the
 // live tail's cursor: only newer lines) and ?limit= (<= 1000, the newest).
 func (a *API) handleLogs(w http.ResponseWriter, r *http.Request) {
-	if a.rt.Logs == nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"entries": []logring.Entry{}, "last_seq": 0, "truncated": false, "capacity": 0,
-		})
-		return
-	}
 	q := r.URL.Query()
 	level, ok := logring.ParseLevel(q.Get("level"))
 	if !ok {
@@ -282,14 +269,16 @@ func (a *API) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		after = n
 	}
-	limit := min(max(queryInt(r, "limit", 500), 1), maxLogEntries)
-	q2 := strings.TrimSpace(q.Get("q"))
-	if len(q2) > 200 {
-		q2 = q2[:200]
+	search := q.Get("q")
+	if len(search) > 200 {
+		search = search[:200]
 	}
-	res := a.rt.Logs.Query(logring.Query{After: after, Level: level, Search: q2, Limit: limit})
-	writeJSON(w, http.StatusOK, map[string]any{
-		"entries": res.Entries, "last_seq": res.LastSeq, "truncated": res.Truncated,
-		"capacity": a.rt.Logs.Capacity(),
-	})
+	res := logring.Result{Entries: []logring.Entry{}}
+	if a.rt.Logs != nil {
+		res = a.rt.Logs.Query(logring.Query{
+			After: after, Level: level, Search: search,
+			Limit: min(max(queryInt(r, "limit", 500), 1), maxLogEntries),
+		})
+	}
+	writeJSON(w, http.StatusOK, res)
 }

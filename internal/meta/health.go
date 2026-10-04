@@ -20,10 +20,7 @@ type Health struct {
 
 // healthTTL is how long a Ping answer is reused, so a console left open on the
 // System page asks the shared service at most once a minute.
-const (
-	healthTTL     = time.Minute
-	healthTimeout = 5 * time.Second
-)
+const healthTTL = time.Minute
 
 type healthCache struct {
 	mu   sync.Mutex
@@ -32,20 +29,22 @@ type healthCache struct {
 
 // Ping asks the service's /healthz whether it is up (cached for a minute). Only
 // call it while the metadata lookup is on: turning it off stops every request.
-func (s *Service) Ping(ctx context.Context) Health {
+// One request at a time: callers meanwhile wait for its answer. It runs on the
+// client's own timeout, not a caller's context, so a caller that goes away
+// can't leave a "not responding" in the cache.
+func (s *Service) Ping() Health {
 	s.health.mu.Lock()
-	defer s.health.mu.Unlock() // one request at a time; the others get its answer
+	defer s.health.mu.Unlock()
 	if h := s.health.last; h != nil && time.Since(h.CheckedAt) < healthTTL {
 		return *h
 	}
-	h := s.ping(ctx)
+	h := s.ping()
 	s.health.last = &h
 	return h
 }
 
-func (s *Service) ping(ctx context.Context) Health {
-	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
-	defer cancel()
+func (s *Service) ping() Health {
+	ctx := context.Background() // bounded by the client's timeout
 	start := time.Now()
 	h := Health{CheckedAt: start}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.baseURL+"/healthz", nil)

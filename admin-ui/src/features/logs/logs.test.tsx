@@ -29,7 +29,6 @@ describe('logs', () => {
                 entries: polls === 1 ? [entry(3, 'error', 'ffmpeg failed')] : [],
                 last_seq: 3,
                 truncated: false,
-                capacity: 2000,
               },
             };
           }
@@ -41,7 +40,6 @@ describe('logs', () => {
                 : [entry(1, 'info', 'scan started'), entry(2, 'warn', 'root unavailable')],
               last_seq: 2,
               truncated: false,
-              capacity: 2000,
             },
           };
         },
@@ -64,7 +62,7 @@ describe('logs', () => {
   it('says when nothing matches', async () => {
     mockFetch(
       signedInRoutes({
-        'GET /admin/logs': { body: { entries: [], last_seq: 0, truncated: false, capacity: 2000 } },
+        'GET /admin/logs': { body: { entries: [], last_seq: 0, truncated: false } },
       }),
     );
     renderApp('/server/logs');

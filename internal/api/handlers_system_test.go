@@ -108,7 +108,7 @@ func TestSettingsApplyLiveOrAfterRestart(t *testing.T) {
 	if r.Header.Get("Access-Control-Allow-Origin") != "https://app.example.com" {
 		t.Fatalf("CORS applies at once, got %v %s", r.Header, b)
 	}
-	if got := e.api.boot.Bind; got != "0.0.0.0:8080" {
+	if got := e.api.config().Bind; got != "0.0.0.0:8080" {
 		t.Fatalf("the running bind must not change before a restart, got %q", got)
 	}
 	// Invite links use the new public address.

@@ -50,10 +50,10 @@ func TestCheckFindsNewerRelease(t *testing.T) {
 	srv := gh.serve(t)
 	c := New("v1.15.0", srv.URL, true, nil)
 
-	st, err := c.Check(context.Background())
-	if err != nil {
+	if err := c.Check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	st := c.Status()
 	if !st.Available || st.Latest == nil || st.Latest.Version != "v1.16.0" || st.CheckedAt == nil || st.Error != "" {
 		t.Fatalf("status = %+v", st)
 	}
@@ -61,12 +61,13 @@ func TestCheckFindsNewerRelease(t *testing.T) {
 		t.Fatalf("User-Agent = %v, want the version and nothing else", ua)
 	}
 	// Within a minute a Check answers without asking again.
-	if _, err := c.Check(context.Background()); err != nil || gh.requests.Load() != 1 {
+	if err := c.Check(context.Background()); err != nil || gh.requests.Load() != 1 {
 		t.Fatalf("a second Check within a minute must not request (requests = %d)", gh.requests.Load())
 	}
 	// Later, the conditional request gets a 304 and keeps what it knew.
 	c.now = func() time.Time { return time.Now().Add(2 * time.Minute) }
-	st, _ = c.Check(context.Background())
+	_ = c.Check(context.Background())
+	st = c.Status()
 	if gh.requests.Load() != 2 || st.Latest == nil || st.Latest.Version != "v1.16.0" {
 		t.Fatalf("after 304: requests %d, status %+v", gh.requests.Load(), st)
 	}
@@ -76,7 +77,7 @@ func TestDisabledMakesNoRequest(t *testing.T) {
 	gh := &fakeGitHub{}
 	srv := gh.serve(t)
 	c := New("v1.15.0", srv.URL, false, nil)
-	if _, err := c.Check(context.Background()); !errors.Is(err, ErrDisabled) {
+	if err := c.Check(context.Background()); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("Check while off = %v, want ErrDisabled", err)
 	}
 	if c.due() {
@@ -114,19 +115,22 @@ func TestCheckErrors(t *testing.T) {
 	for status, want := range map[int32]string{http.StatusForbidden: "rate_limited", http.StatusTooManyRequests: "rate_limited", http.StatusInternalServerError: "bad_response"} {
 		gh.status.Store(status)
 		c := New("v1.15.0", srv.URL, true, nil)
-		if st, _ := c.Check(context.Background()); st.Error != want || st.Latest != nil {
+		_ = c.Check(context.Background())
+		if st := c.Status(); st.Error != want || st.Latest != nil {
 			t.Errorf("HTTP %d: status %+v, want error %q", status, st, want)
 		}
 	}
 	c := New("v1.15.0", "http://127.0.0.1:1", true, nil)
-	if st, _ := c.Check(context.Background()); st.Error != "unreachable" {
+	_ = c.Check(context.Background())
+	if st := c.Status(); st.Error != "unreachable" {
 		t.Errorf("no server: error %q, want unreachable", st.Error)
 	}
 	// A prerelease or a tag that isn't a version is not offered.
 	gh.status.Store(0)
 	gh.tag.Store("nightly")
 	c = New("v1.15.0", srv.URL, true, nil)
-	if st, _ := c.Check(context.Background()); st.Error != "bad_response" || st.Latest != nil {
+	_ = c.Check(context.Background())
+	if st := c.Status(); st.Error != "bad_response" || st.Latest != nil {
 		t.Errorf("non-version tag: %+v", st)
 	}
 }
@@ -135,7 +139,8 @@ func TestLocalBuildNeverOffersUpdate(t *testing.T) {
 	gh := &fakeGitHub{}
 	srv := gh.serve(t)
 	c := New("dev", srv.URL, true, nil)
-	st, _ := c.Check(context.Background())
+	_ = c.Check(context.Background())
+	st := c.Status()
 	if st.Comparable || st.Available || st.Latest == nil {
 		t.Fatalf("a dev build shows the latest release but no update: %+v", st)
 	}

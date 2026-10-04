@@ -60,7 +60,7 @@ func (a *API) secureHeaders(next http.Handler) http.Handler {
 		// (autocert). Never for selfsigned: pinning HSTS would make the
 		// unavoidable certificate warning impossible to bypass and lock users
 		// out. With mode off (behind a reverse proxy) the proxy owns HSTS.
-		if a.boot.TLS.Mode == config.TLSAutocert {
+		if a.config().TLS.Mode == config.TLSAutocert {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)

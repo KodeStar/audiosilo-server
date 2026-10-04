@@ -12,7 +12,6 @@ const page = (seqs: number[], last: number, truncated = false): LogPage => ({
   entries: seqs.map(line),
   last_seq: last,
   truncated,
-  capacity: 2000,
 });
 
 describe('appendPage', () => {

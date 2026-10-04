@@ -20,27 +20,23 @@ export interface Tail {
 
 export const EMPTY_TAIL: Tail = { lines: [], lastSeq: 0, gap: false };
 
+const newest = (lines: LogEntry[]) =>
+  lines.length > MAX_LINES ? lines.slice(lines.length - MAX_LINES) : lines;
+
 /**
  * Adds a page to the tail. A first page replaces it; a later one appends what is
  * new (a line already held is never shown twice), keeping the newest MAX_LINES.
+ * A poll that brought nothing new returns the same tail, so nothing re-renders.
  */
 export function appendPage(tail: Tail, page: LogPage, first: boolean): Tail {
-  const known = first ? 0 : (tail.lines.at(-1)?.seq ?? 0);
+  if (first) return { lines: newest(page.entries), lastSeq: page.last_seq, gap: page.truncated };
+  const known = tail.lines.at(-1)?.seq ?? 0;
   const fresh = page.entries.filter((e) => e.seq > known);
-  const lines = first ? page.entries : [...tail.lines, ...fresh];
+  const lastSeq = Math.max(tail.lastSeq, page.last_seq);
+  if (fresh.length === 0 && lastSeq === tail.lastSeq && !page.truncated) return tail;
   return {
-    lines: lines.length > MAX_LINES ? lines.slice(lines.length - MAX_LINES) : lines,
-    lastSeq: first ? page.last_seq : Math.max(tail.lastSeq, page.last_seq),
-    gap: first ? page.truncated : tail.gap || page.truncated,
+    lines: newest([...tail.lines, ...fresh]),
+    lastSeq,
+    gap: tail.gap || page.truncated,
   };
-}
-
-/** A line's time as HH:MM:SS in the browser's zone. */
-export function lineTime(iso: string, lang: string): string {
-  return new Date(iso).toLocaleTimeString(lang, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
 }

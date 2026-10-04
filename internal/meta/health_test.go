@@ -1,7 +1,6 @@
 package meta
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -23,22 +22,22 @@ func TestPing(t *testing.T) {
 	defer srv.Close()
 
 	s := NewService(srv.URL+"/", nil)
-	h := s.Ping(context.Background())
+	h := s.Ping()
 	if !h.Reachable || h.Error != "" || h.CheckedAt.IsZero() {
 		t.Fatalf("Ping = %+v, want reachable", h)
 	}
-	s.Ping(context.Background())
+	s.Ping()
 	if hits.Load() != 1 {
 		t.Fatalf("a second Ping within a minute must reuse the answer, got %d requests", hits.Load())
 	}
 
 	status.Store(http.StatusServiceUnavailable)
 	s2 := NewService(srv.URL, nil)
-	if h := s2.Ping(context.Background()); h.Reachable || h.Error == "" {
+	if h := s2.Ping(); h.Reachable || h.Error == "" {
 		t.Fatalf("an unhealthy service = %+v", h)
 	}
 	s3 := NewService("http://127.0.0.1:1", nil)
-	if h := s3.Ping(context.Background()); h.Reachable || h.Error != "not responding" {
+	if h := s3.Ping(); h.Reachable || h.Error != "not responding" {
 		t.Fatalf("no service = %+v", h)
 	}
 }

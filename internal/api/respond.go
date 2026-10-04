@@ -82,7 +82,6 @@ const (
 	codeSettingLocked      = "setting_locked"    // + "field": set by the environment or the launcher
 	codeUnknownSetting     = "unknown_setting"   // + "field"
 	codeSettingReadOnly    = "setting_read_only" // + "field"
-	codeMetadataUnavail    = "metadata_unavailable"
 	codeUpdateCheckOff     = "update_check_off"
 )
 

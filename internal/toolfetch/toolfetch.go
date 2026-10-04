@@ -300,6 +300,9 @@ func writeExec(path string, r io.Reader) error {
 	return os.Rename(tmpName, path)
 }
 
+// Dir is where Ensure keeps downloaded tools for a data directory.
+func Dir(dataDir string) string { return filepath.Join(dataDir, "tools") }
+
 // Version runs `<path> -version` and returns the version it names: the word
 // after "version" on its first line ("6.1.1-3ubuntu5" from "ffmpeg version
 // 6.1.1-3ubuntu5 Copyright ..."), or "" if the line doesn't say.

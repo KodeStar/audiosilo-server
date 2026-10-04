@@ -152,9 +152,7 @@ func (c *Checker) Run(ctx context.Context) {
 		case <-c.wake:
 		}
 		if c.due() {
-			if err := c.check(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				c.log.Info("update check failed", "err", err)
-			}
+			c.check(ctx)
 		}
 		if !timer.Stop() {
 			select {
@@ -173,36 +171,35 @@ func (c *Checker) due() bool {
 	return c.enabled && (c.checked.IsZero() || c.now().Sub(c.checked) >= Interval)
 }
 
-// Check asks GitHub now ("Check now") and returns the new status. It refuses
+// Check asks GitHub now ("Check now"); Status then has the answer. It refuses
 // while the check is off (ErrDisabled). Within a minute of the last request it
-// answers with what that request found, without asking again.
-func (c *Checker) Check(ctx context.Context) (Status, error) {
+// doesn't ask again: Status still has that request's answer.
+func (c *Checker) Check(ctx context.Context) error {
 	c.mu.Lock()
-	switch {
-	case !c.enabled:
-		c.mu.Unlock()
-		return c.Status(), ErrDisabled
-	case c.inFlight || (!c.checked.IsZero() && c.now().Sub(c.checked) < minManual):
-		c.mu.Unlock()
-		return c.Status(), nil
-	}
+	enabled, recent := c.enabled, !c.checked.IsZero() && c.now().Sub(c.checked) < minManual
 	c.mu.Unlock()
-	err := c.check(ctx)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		c.log.Info("update check failed", "err", err)
+	switch {
+	case !enabled:
+		return ErrDisabled
+	case !recent:
+		c.check(ctx)
 	}
-	return c.Status(), nil
+	return nil
 }
 
-// check makes one request and records its outcome.
-func (c *Checker) check(ctx context.Context) error {
+// check makes one request (unless one is already on its way) and records its
+// outcome; a failure is logged and kept for Status.
+func (c *Checker) check(ctx context.Context) {
 	c.mu.Lock()
 	if c.inFlight {
 		c.mu.Unlock()
-		return nil
+		return
 	}
 	c.inFlight = true
-	etag := c.etag
+	etag := ""
+	if c.latest != nil { // only a remembered release makes a 304 meaningful
+		etag = c.etag
+	}
 	c.mu.Unlock()
 
 	rel, newTag, code, err := c.fetch(ctx, etag)
@@ -211,18 +208,18 @@ func (c *Checker) check(ctx context.Context) error {
 	defer c.mu.Unlock()
 	c.inFlight = false
 	if errors.Is(err, context.Canceled) {
-		return err
+		return
 	}
 	c.checked = c.now()
 	c.lastErr = code
 	if err != nil {
-		return err
+		c.log.Info("update check failed", "err", err)
+		return
 	}
 	if rel != nil {
 		c.latest = rel
 		c.etag = newTag
 	}
-	return nil
 }
 
 // fetch makes the request. rel is nil on a 304 (nothing new). code classifies a
@@ -235,12 +232,7 @@ func (c *Checker) fetch(ctx context.Context, etag string) (rel *Release, newTag,
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "AudioSilo/"+c.current)
 	if etag != "" {
-		c.mu.Lock()
-		have := c.latest != nil
-		c.mu.Unlock()
-		if have { // only a remembered release makes a 304 meaningful
-			req.Header.Set("If-None-Match", etag)
-		}
+		req.Header.Set("If-None-Match", etag)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {

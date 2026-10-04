@@ -18,6 +18,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { errorMessage, toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { useSaveSettings } from './use-save-settings';
+import { describedBy } from '@/lib/a11y';
 import { cn } from '@/lib/utils';
 import {
   listToText,
@@ -269,7 +270,7 @@ function FieldRow({
   const label = t(`settings.${settingId}`);
   const body = t(`settings.${settingId}Body`, { defaultValue: '' });
   const locked = Boolean(lockOf(settings, settingId));
-  const describedBy = error ? `${id}-error` : body ? `${id}-desc` : undefined;
+  const ariaDescribedBy = describedBy(id, Boolean(error), Boolean(body));
   const wide = spec.kind === 'list' || spec.kind === 'radio';
 
   let control: React.ReactNode;
@@ -281,7 +282,7 @@ function FieldRow({
           checked={value as boolean}
           disabled={locked}
           onCheckedChange={(v) => onChange(v)}
-          aria-describedby={describedBy}
+          aria-describedby={ariaDescribedBy}
         />
       );
       break;
@@ -293,7 +294,7 @@ function FieldRow({
           value={value as string}
           disabled={locked}
           onChange={(e) => onChange(e.target.value)}
-          aria-describedby={describedBy}
+          aria-describedby={ariaDescribedBy}
           aria-invalid={error ? true : undefined}
         >
           {spec.options.map((o) => (
@@ -326,7 +327,7 @@ function FieldRow({
           disabled={locked}
           spellCheck={false}
           onChange={(e) => onChange(e.target.value)}
-          aria-describedby={describedBy}
+          aria-describedby={ariaDescribedBy}
           aria-invalid={error ? true : undefined}
         />
       );
@@ -343,14 +344,14 @@ function FieldRow({
           disabled={locked}
           spellCheck={false}
           onChange={(e) => onChange(e.target.value)}
-          aria-describedby={describedBy}
+          aria-describedby={ariaDescribedBy}
           aria-invalid={error ? true : undefined}
         />
       );
   }
 
   return (
-    <div className={cn('flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5 py-4')}>
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5 py-4">
       <div className={cn('flex min-w-0 flex-1 basis-60 flex-col gap-0.5', wide && 'basis-full')}>
         <div className="flex flex-wrap items-center gap-2">
           {spec.kind === 'radio' ? (
@@ -384,7 +385,6 @@ function FieldRow({
 
 /** A switch that saves the moment it flips (no footer), restoring itself on a failure. */
 export function InstantSwitch({
-  settings,
   id,
   checked,
   disabled,
@@ -393,12 +393,11 @@ export function InstantSwitch({
   failedTitle,
   describedBy,
 }: {
-  settings: AdminSettings;
   id: string;
   checked: boolean;
   disabled?: boolean;
   patch: (on: boolean) => SettingsPatch;
-  onSaved: (saved: AdminSettings, on: boolean) => void;
+  onSaved: (on: boolean) => void;
   failedTitle: string;
   describedBy?: string;
 }) {
@@ -406,16 +405,18 @@ export function InstantSwitch({
   const save = useSaveSettings();
   const toggle = async (on: boolean) => {
     const before = qc.getQueryData<AdminSettings>(keys.settings);
-    // Show the new position at once; put it back if the save fails.
     const p = patch(on);
-    const optimistic = { ...settings } as AdminSettings;
-    for (const [section, fields] of Object.entries(p)) {
-      const key = section as SettingsSection;
-      (optimistic as unknown as Record<string, unknown>)[key] = { ...settings[key], ...fields };
+    // Show the new position at once; put it back if the save fails.
+    if (before) {
+      const shown: Record<string, unknown> = { ...before };
+      for (const [section, fields] of Object.entries(p)) {
+        shown[section] = { ...before[section as SettingsSection], ...fields };
+      }
+      qc.setQueryData(keys.settings, shown as unknown as AdminSettings);
     }
-    qc.setQueryData(keys.settings, optimistic);
     try {
-      onSaved(await save(p), on);
+      await save(p);
+      onSaved(on);
     } catch (err) {
       qc.setQueryData(keys.settings, before);
       toastError(failedTitle, err);

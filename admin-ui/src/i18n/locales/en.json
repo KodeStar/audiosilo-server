@@ -1497,7 +1497,6 @@
   "settings.players.android_packageBody": "Like app.audiosilo (App Links).",
   "settings.players.android_sha256": "Android certificate fingerprints",
   "settings.players.android_sha256Body": "SHA-256 of the app's signing certificate, one per line.",
-  "settings.metadata.enabled": "Look up community metadata",
   "settings.metadata.status": "Status",
   "settings.metadata.responding": "Responding · {{ms}} ms",
   "settings.metadata.notResponding": "Not responding",

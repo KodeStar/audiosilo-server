@@ -48,7 +48,7 @@ func TestWithSettingsNormalizes(t *testing.T) {
 		"general.update_check":    `false`,
 		"network.bind":            `":9000"`,
 	})
-	next, err := c.WithSettings(p)
+	next, err := c.WithSettings(p, ok)
 	if err != nil {
 		t.Fatalf("WithSettings: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestWithSettingsRefuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Default(t.TempDir()).WithSettings(patch(map[string]string{tc.id: tc.value}))
+			_, err := Default(t.TempDir()).WithSettings(patch(map[string]string{tc.id: tc.value}), ok)
 			se := settingErr(t, err)
 			if se.Reason != tc.reason || se.Setting != tc.id {
 				t.Fatalf("got %s/%s (%v), want %s/%s", se.Setting, se.Reason, se.Err, tc.id, tc.reason)
@@ -116,13 +116,13 @@ func TestWithSettingsRefuses(t *testing.T) {
 // A setting that only fails together with another (autocert needs hosts) is
 // reported on the setting Validate names.
 func TestWithSettingsCrossFieldError(t *testing.T) {
-	_, err := Default(t.TempDir()).WithSettings(patch(map[string]string{"network.tls_mode": `"autocert"`}))
+	_, err := Default(t.TempDir()).WithSettings(patch(map[string]string{"network.tls_mode": `"autocert"`}), ok)
 	if se := settingErr(t, err); se.Setting != "network.tls_hosts" || se.Reason != ReasonInvalid {
 		t.Fatalf("got %s/%s, want network.tls_hosts/invalid", se.Setting, se.Reason)
 	}
 	next, err := Default(t.TempDir()).WithSettings(patch(map[string]string{
 		"network.tls_mode": `"autocert"`, "network.tls_hosts": `["books.example.com"]`,
-	}))
+	}), ok)
 	if err != nil || next.TLS.Mode != TLSAutocert {
 		t.Fatalf("autocert with hosts: %v", err)
 	}
@@ -150,12 +150,12 @@ func TestEnvSettingsLockedAndNotSaved(t *testing.T) {
 	if got := c.Locked(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Locked = %v, want %v", got, want)
 	}
-	_, err = c.WithSettings(patch(map[string]string{"general.public_url": `"https://x.com"`}))
+	_, err = c.WithSettings(patch(map[string]string{"general.public_url": `"https://x.com"`}), ok)
 	if se := settingErr(t, err); se.Reason != ReasonLocked {
 		t.Fatalf("an env setting must be locked, got %s", se.Reason)
 	}
 
-	next, err := c.WithSettings(patch(map[string]string{"general.name": `"Hearthside"`}))
+	next, err := c.WithSettings(patch(map[string]string{"general.name": `"Hearthside"`}), ok)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestPinnedSettingsLocked(t *testing.T) {
 	if got := c.Locked()["network.bind"]; got != PinnedByLauncher {
 		t.Fatalf("pinned bind locked by %q, want %q", got, PinnedByLauncher)
 	}
-	_, err := c.WithSettings(patch(map[string]string{"network.bind": `":9000"`}))
+	_, err := c.WithSettings(patch(map[string]string{"network.bind": `":9000"`}), ok)
 	if se := settingErr(t, err); se.Reason != ReasonLocked {
 		t.Fatalf("a pinned setting must be locked, got %s", se.Reason)
 	}
@@ -192,7 +192,7 @@ func TestRestartPending(t *testing.T) {
 	running := Default(t.TempDir())
 	next, err := running.WithSettings(patch(map[string]string{
 		"network.bind": `":9000"`, "general.name": `"Den"`, "network.tls_hosts": `[]`,
-	}))
+	}), ok)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,5 +249,39 @@ func TestSettingsListsNeverNull(t *testing.T) {
 	b, _ := json.Marshal(s)
 	if strings.Contains(string(b), `"tls_hosts":null`) {
 		t.Fatalf("null list on the wire: %s", b)
+	}
+}
+
+// ok passes every check that needs the server (a metadata service, libraries).
+var ok = Checks{MetadataAvailable: true}
+
+// Checks that need the running server come back on their field too.
+func TestWithSettingsChecks(t *testing.T) {
+	c := Default(t.TempDir())
+	c.Metadata.Enabled = false
+	_, err := c.WithSettings(patch(map[string]string{"metadata.enabled": `true`}), Checks{})
+	if se := settingErr(t, err); se.Setting != "metadata.enabled" || se.Reason != ReasonInvalid {
+		t.Fatalf("enabling without a service: %s/%s", se.Setting, se.Reason)
+	}
+	exists := Checks{LibraryExists: func(name string) (bool, error) { return name == "Fiction", nil }}
+	_, err = Default(t.TempDir()).WithSettings(patch(map[string]string{"demo.library": `"Nope"`}), exists)
+	if se := settingErr(t, err); se.Setting != "demo.library" {
+		t.Fatalf("unknown library: %s/%s", se.Setting, se.Reason)
+	}
+	if _, err := Default(t.TempDir()).WithSettings(patch(map[string]string{"demo.library": `"Fiction"`}), exists); err != nil {
+		t.Fatalf("known library: %v", err)
+	}
+}
+
+// The live config keeps restart settings as the server started.
+func TestEffective(t *testing.T) {
+	running := Default(t.TempDir())
+	saved, err := running.WithSettings(patch(map[string]string{"network.bind": `":9000"`, "general.name": `"Den"`}), ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eff := saved.Effective(running)
+	if eff.Bind != running.Bind || eff.Name != "Den" {
+		t.Fatalf("Effective = bind %q name %q", eff.Bind, eff.Name)
 	}
 }

@@ -32,6 +32,8 @@ import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
 import { SessionState } from '@/components/session-state';
 import { StatTile } from '@/components/stat-tile';
+import { FactList } from '@/components/fact-list';
+import { StatusText, type StatusTone } from '@/components/status-text';
 import { Monogram } from '@/components/monogram';
 import { CATEGORY_LOOK } from '@/features/health/issues-model';
 import { OfflineNotice } from '@/features/libraries/offline-notice';
@@ -388,7 +390,7 @@ function LibrariesCard({
   );
 }
 
-type Status = { tone?: 'off' | 'warn'; key: string };
+type Status = { tone?: StatusTone; key: string };
 
 function metadataStatus(s: AdminSettings | undefined): Status | null {
   if (!s) return null;
@@ -434,9 +436,15 @@ function ServerCard() {
       t('home.server.address'),
       <span className="font-mono text-[12.5px]">{window.location.host}</span>,
     ],
-    [t('home.server.transcoding'), <StatusText status={capability(server.data, 'transcode')} />],
-    [t('home.server.webPlayer'), <StatusText status={capability(server.data, 'web_player')} />],
-    [t('home.server.metadata'), <StatusText status={metadataStatus(settings.data)} />],
+    [
+      t('home.server.transcoding'),
+      <CapabilityStatus status={capability(server.data, 'transcode')} />,
+    ],
+    [
+      t('home.server.webPlayer'),
+      <CapabilityStatus status={capability(server.data, 'web_player')} />,
+    ],
+    [t('home.server.metadata'), <CapabilityStatus status={metadataStatus(settings.data)} />],
   ];
   return (
     <section
@@ -456,29 +464,15 @@ function ServerCard() {
           <ArrowRight aria-hidden="true" />
         </Link>
       </div>
-      <dl className="grid grid-cols-[minmax(110px,auto)_1fr] gap-x-[18px] gap-y-2 text-[13px]">
-        {rows.map(([label, value]) => (
-          <div key={label} className="contents">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="min-w-0 font-[550] [overflow-wrap:anywhere]">
-              {value ?? <span className="skel inline-block h-4 w-16 align-middle" />}
-            </dd>
-          </div>
-        ))}
-      </dl>
+      <FactList rows={rows} />
     </section>
   );
 }
 
-function StatusText({ status }: { status: Status | null }) {
+function CapabilityStatus({ status }: { status: Status | null }) {
   const { t } = useTranslation();
   if (!status) return <span className="skel inline-block h-4 w-16 align-middle" />;
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className="dot" data-tone={status.tone} aria-hidden="true" />
-      {t(status.key)}
-    </span>
-  );
+  return <StatusText tone={status.tone}>{t(status.key)}</StatusText>;
 }
 
 /** No libraries yet: the welcome card (STYLEGUIDE.md, first-run). */

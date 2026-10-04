@@ -34,11 +34,9 @@ const webDemoPath = "/web/demo"
 
 // API holds handler dependencies.
 type API struct {
-	// boot is the config the server started with: what restart-only settings
-	// (listen address, TLS, web_dir, metadata.base_url, demo on/off) read, since
-	// changing them means a restart. live is the current config, swapped whole by
-	// a settings save (handlers_settings.go), for everything that applies at once;
-	// read it through config(). Neither is ever mutated in place.
+	// boot is the config the server started with; live (read through config())
+	// is the one it works with now, swapped whole by a settings save
+	// (handlers_settings.go). Neither is ever mutated in place.
 	boot    *config.Config
 	live    atomic.Pointer[liveConfig]
 	auth    *auth.Service
@@ -61,6 +59,9 @@ type API struct {
 	// tool paths, start time, the log ring and the update checker.
 	rt           Runtime
 	toolVersions toolVersions
+	// playerSource is where /web is served from ("embedded", "dir", ""), fixed
+	// for the life of the process like the mount itself.
+	playerSource string
 
 	// baseCtx is the server lifecycle context; work detached from a request (a
 	// book's re-read, which may outlast the request timeout) derives from it so it's
@@ -136,7 +137,8 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		streams:        catalog.NewStreamMarks(),
 	}
-	a.live.Store(newLiveConfig(cfg))
+	a.live.Store(newLiveConfig(cfg, cfg))
+	a.playerSource = web.PlayerSource(cfg.WebDir)
 	a.rt.StartedAt = time.Now()
 	return a
 }
@@ -310,7 +312,7 @@ func (a *API) Handler() http.Handler {
 	// Baked-in web UI: the public connect page and the admin console. API routes
 	// above are more specific, so ServeMux still prefers them over the "/"
 	// catch-all the web package registers.
-	if err := web.Register(mux, a.boot.WebDir); err != nil {
+	if err := web.Register(mux, a.config().WebDir); err != nil {
 		a.log.Error("failed to register web UI", "err", err)
 	}
 
@@ -318,7 +320,7 @@ func (a *API) Handler() http.Handler {
 	// visitor to demo.audiosilo.app lands straight on the instant-demo flow - no
 	// reverse-proxy rewrite required. `/{$}` matches only "/" and outranks the web
 	// package's "/" catch-all, leaving /connect, /admin and the rest untouched.
-	if a.boot.Demo.Enabled && web.HasPlayer(a.boot.WebDir) {
+	if a.config().Demo.Enabled && a.playerSource != "" {
 		mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, webDemoPath, http.StatusFound)
 		})

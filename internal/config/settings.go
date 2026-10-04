@@ -164,8 +164,9 @@ func (c *Config) Settings() map[string]map[string]any {
 	return out
 }
 
-// Locked maps each setting the console can't change to why: the AUDIOSILO_*
-// variable that set it, or PinnedByLauncher. Read-only settings aren't listed.
+// Locked maps each setting the environment or the launcher sets to which: the
+// AUDIOSILO_* variable, or PinnedByLauncher. A read-only setting is listed too
+// when a variable sets it (the console shows what sets it).
 func (c *Config) Locked() map[string]string {
 	out := map[string]string{}
 	for i := range fields {
@@ -204,6 +205,18 @@ func (c *Config) RestartPending(running *Config) []string {
 	return out
 }
 
+// Effective returns c with each restart setting as running has it: the config
+// the server actually works with until it restarts with c.
+func (c *Config) Effective(running *Config) *Config {
+	out := c.Clone()
+	for _, f := range fields {
+		if f.restart {
+			copyField(out, running, f.key)
+		}
+	}
+	return out
+}
+
 // Reasons a settings change is refused (SettingError.Reason).
 const (
 	ReasonUnknown  = "unknown"   // no such setting
@@ -235,37 +248,53 @@ func (e *SettingError) Error() string {
 
 func (e *SettingError) Unwrap() error { return e.Err }
 
-// WithSettings returns a copy of c with the console's changes applied
-// (section -> name -> JSON value), normalized and validated, or a *SettingError.
-// c itself is never changed.
-func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage) (*Config, error) {
-	next := c.Clone()
-	seen := 0
-	var changed []*field
+// Checks are what WithSettings can't tell from the config alone.
+type Checks struct {
+	// MetadataAvailable: the metadata service exists (base_url was valid when the
+	// server started), so the lookup can be turned on.
+	MetadataAvailable bool
+	// LibraryExists reports whether a library has this name (demo.library).
+	LibraryExists func(name string) (bool, error)
+}
+
+func fieldBySetting(id string) *field {
 	for i := range fields {
-		f := &fields[i]
-		if f.setting == "" {
-			continue
+		if fields[i].setting == id {
+			return &fields[i]
 		}
-		section, name, _ := strings.Cut(f.setting, ".")
-		raw, ok := patch[section][name]
-		if !ok {
-			continue
+	}
+	return nil
+}
+
+// WithSettings returns a copy of c with the console's changes applied
+// (section -> name -> JSON value), normalized and validated, or a *SettingError
+// naming the first refused setting (in id order). c itself is never changed.
+func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage, checks Checks) (*Config, error) {
+	var ids []string
+	for section, fs := range patch {
+		for name := range fs {
+			ids = append(ids, section+"."+name)
 		}
-		seen++
+	}
+	slices.Sort(ids)
+
+	next := c.Clone()
+	changed := make([]*field, 0, len(ids))
+	for _, id := range ids {
+		f := fieldBySetting(id)
 		switch {
+		case f == nil:
+			return nil, &SettingError{Setting: id, Reason: ReasonUnknown}
 		case f.readOnly:
-			return nil, &SettingError{Setting: f.setting, Reason: ReasonReadOnly}
+			return nil, &SettingError{Setting: id, Reason: ReasonReadOnly}
 		case c.lockedBy(f) != "":
-			return nil, &SettingError{Setting: f.setting, Reason: ReasonLocked}
+			return nil, &SettingError{Setting: id, Reason: ReasonLocked}
 		}
-		if err := json.Unmarshal(raw, f.ptr(next)); err != nil {
-			return nil, &SettingError{Setting: f.setting, Reason: ReasonInvalid, Err: errors.New("wrong type of value")}
+		section, name, _ := strings.Cut(id, ".")
+		if err := json.Unmarshal(patch[section][name], f.ptr(next)); err != nil {
+			return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: errors.New("wrong type of value")}
 		}
 		changed = append(changed, f)
-	}
-	if total := countEntries(patch); seen != total {
-		return nil, &SettingError{Setting: firstUnknown(patch), Reason: ReasonUnknown}
 	}
 	for _, f := range changed {
 		if f.fix == nil {
@@ -288,33 +317,20 @@ func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage) (*Con
 		}
 		return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: err}
 	}
-	return next, nil
-}
-
-func countEntries(patch map[string]map[string]json.RawMessage) int {
-	n := 0
-	for _, fs := range patch {
-		n += len(fs)
+	if next.Metadata.Enabled && !c.Metadata.Enabled && !checks.MetadataAvailable {
+		return nil, &SettingError{Setting: "metadata.enabled", Reason: ReasonInvalid,
+			Err: errors.New("no metadata service is configured: set its address, then restart the server")}
 	}
-	return n
-}
-
-// firstUnknown names the first (alphabetically) entry of patch that isn't a setting.
-func firstUnknown(patch map[string]map[string]json.RawMessage) string {
-	var unknown []string
-	for section, fs := range patch {
-		for name := range fs {
-			id := section + "." + name
-			if !slices.ContainsFunc(fields, func(f field) bool { return f.setting == id }) {
-				unknown = append(unknown, id)
-			}
+	if lib := next.Demo.Library; lib != "" && lib != c.Demo.Library && checks.LibraryExists != nil {
+		ok, err := checks.LibraryExists(lib)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, &SettingError{Setting: "demo.library", Reason: ReasonInvalid, Err: errors.New("no library has that name")}
 		}
 	}
-	slices.Sort(unknown)
-	if len(unknown) == 0 {
-		return ""
-	}
-	return unknown[0]
+	return next, nil
 }
 
 // MaxServerName is the longest server name, in characters.
@@ -370,8 +386,12 @@ func fixBind(c *Config) error {
 	return nil
 }
 
-// cleanList trims each entry and drops empty ones and repeats.
-func cleanList(l []string, norm func(string) string) []string {
+// maxListEntries bounds every list setting.
+const maxListEntries = 50
+
+// cleanList trims each entry, normalizes it, and drops empty ones and repeats;
+// more than maxListEntries is an error naming what the list holds.
+func cleanList(l []string, norm func(string) string, noun string) ([]string, error) {
 	out := []string{}
 	for _, s := range l {
 		s = strings.TrimSpace(s)
@@ -382,19 +402,20 @@ func cleanList(l []string, norm func(string) string) []string {
 			out = append(out, s)
 		}
 	}
-	return out
+	if len(out) > maxListEntries {
+		return nil, fmt.Errorf("at most %d %s", maxListEntries, noun)
+	}
+	return out, nil
 }
-
-// maxListEntries bounds every list setting.
-const maxListEntries = 50
 
 var hostnameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
 
 func fixHosts(c *Config) error {
-	c.TLS.Hosts = cleanList(c.TLS.Hosts, strings.ToLower)
-	if len(c.TLS.Hosts) > maxListEntries {
-		return fmt.Errorf("at most %d names", maxListEntries)
+	hosts, err := cleanList(c.TLS.Hosts, strings.ToLower, "names")
+	if err != nil {
+		return err
 	}
+	c.TLS.Hosts = hosts
 	for _, h := range c.TLS.Hosts {
 		if len(h) > 253 || !hostnameRE.MatchString(h) {
 			return fmt.Errorf("%q isn't a host name (no https://, port or path)", h)
@@ -406,7 +427,7 @@ func fixHosts(c *Config) error {
 // fixProxies accepts a bare IP as the one-address range ("10.0.0.2" ->
 // "10.0.0.2/32"); Validate checks the ranges.
 func fixProxies(c *Config) error {
-	c.TrustedProxies = cleanList(c.TrustedProxies, func(s string) string {
+	proxies, err := cleanList(c.TrustedProxies, func(s string) string {
 		if ip := net.ParseIP(s); ip != nil {
 			if ip.To4() != nil {
 				return s + "/32"
@@ -414,16 +435,14 @@ func fixProxies(c *Config) error {
 			return s + "/128"
 		}
 		return s
-	})
-	if len(c.TrustedProxies) > maxListEntries {
-		return fmt.Errorf("at most %d ranges", maxListEntries)
-	}
-	return nil
+	}, "ranges")
+	c.TrustedProxies = proxies
+	return err
 }
 
 func fixOrigins(c *Config) error {
 	var bad string
-	c.CORSOrigins = cleanList(c.CORSOrigins, func(s string) string {
+	origins, err := cleanList(c.CORSOrigins, func(s string) string {
 		if s == "*" {
 			return s
 		}
@@ -436,14 +455,12 @@ func fixOrigins(c *Config) error {
 			return s
 		}
 		return strings.ToLower(u.Scheme + "://" + u.Host)
-	})
+	}, "origins")
 	if bad != "" {
 		return fmt.Errorf("%q isn't a web origin (like https://example.com or http://localhost:8081)", bad)
 	}
-	if len(c.CORSOrigins) > maxListEntries {
-		return fmt.Errorf("at most %d origins", maxListEntries)
-	}
-	return nil
+	c.CORSOrigins = origins
+	return err
 }
 
 var (
@@ -453,10 +470,11 @@ var (
 )
 
 func fixAppleIDs(c *Config) error {
-	c.AppLinks.AppleAppIDs = cleanList(c.AppLinks.AppleAppIDs, nil)
-	if len(c.AppLinks.AppleAppIDs) > maxListEntries {
-		return fmt.Errorf("at most %d app IDs", maxListEntries)
+	ids, err := cleanList(c.AppLinks.AppleAppIDs, nil, "app IDs")
+	if err != nil {
+		return err
 	}
+	c.AppLinks.AppleAppIDs = ids
 	for _, id := range c.AppLinks.AppleAppIDs {
 		if !appleIDRE.MatchString(id) {
 			return fmt.Errorf("%q isn't TEAMID.bundle.id (a 10-character team ID, a dot, the bundle ID)", id)
@@ -474,10 +492,11 @@ func fixAndroidPackage(c *Config) error {
 }
 
 func fixFingerprints(c *Config) error {
-	c.AppLinks.AndroidSHA256 = cleanList(c.AppLinks.AndroidSHA256, strings.ToUpper)
-	if len(c.AppLinks.AndroidSHA256) > maxListEntries {
-		return fmt.Errorf("at most %d fingerprints", maxListEntries)
+	fps, err := cleanList(c.AppLinks.AndroidSHA256, strings.ToUpper, "fingerprints")
+	if err != nil {
+		return err
 	}
+	c.AppLinks.AndroidSHA256 = fps
 	for _, fp := range c.AppLinks.AndroidSHA256 {
 		if !fingerprintRE.MatchString(fp) {
 			return fmt.Errorf("%q isn't a SHA-256 fingerprint (32 pairs of hex digits joined by colons)", fp)

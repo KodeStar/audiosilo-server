@@ -513,7 +513,7 @@ export interface LogEntry {
   time: string;
   level: 'debug' | 'info' | 'warn' | 'error';
   message: string;
-  attrs: { key: string; value: string }[] | null;
+  attrs: { key: string; value: string }[];
 }
 
 /** GET /api/v1/admin/logs. */
@@ -523,8 +523,6 @@ export interface LogPage {
   last_seq: number;
   /** Matching lines were left out (past the limit, or dropped before the cursor). */
   truncated: boolean;
-  /** How many lines the server keeps. */
-  capacity: number;
 }
 
 /** catalog.Library (internal/catalog/model.go). */

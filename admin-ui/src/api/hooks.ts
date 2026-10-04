@@ -112,12 +112,16 @@ export function useSettings() {
 }
 
 /**
- * What the server depends on (Health > System, the Transcoding settings, About).
- * Polled while shown; the server caches the slow parts (metadata ping a minute,
- * root probes 15 s, tool versions for good).
+ * What the server depends on (Health > System; Settings and About read parts).
+ * Health > System polls it (`poll`); elsewhere it's fresh for a minute.
  */
-export function useSystem() {
-  return useQuery({ queryKey: keys.system, queryFn: api.system, refetchInterval: 30_000 });
+export function useSystem({ poll = false } = {}) {
+  return useQuery({
+    queryKey: keys.system,
+    queryFn: api.system,
+    staleTime: 60_000,
+    refetchInterval: poll ? 30_000 : false,
+  });
 }
 
 /** The update check's state (Overview's server card, About). */

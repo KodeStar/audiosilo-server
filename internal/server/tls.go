@@ -40,19 +40,25 @@ func tlsConfig(cfg *config.Config) (*tls.Config, error) {
 	}
 }
 
+// selfSignedPaths are where the self-signed pair lives: tls.cert_file/key_file,
+// else beside the data.
+func selfSignedPaths(cfg *config.Config) (cert, key string) {
+	cert, key = cfg.TLS.CertFile, cfg.TLS.KeyFile
+	if cert == "" {
+		cert = filepath.Join(cfg.DataDir, "selfsigned-cert.pem")
+	}
+	if key == "" {
+		key = filepath.Join(cfg.DataDir, "selfsigned-key.pem")
+	}
+	return cert, key
+}
+
 // loadOrCreateSelfSigned reuses a persisted cert/key pair when present,
 // otherwise generates a long-lived self-signed certificate and saves it so a
 // user who manually trusted the cert (LAN browsers / OS trust store) doesn't
 // have to re-trust it after every restart.
 func loadOrCreateSelfSigned(cfg *config.Config) (tls.Certificate, error) {
-	certPath := cfg.TLS.CertFile
-	keyPath := cfg.TLS.KeyFile
-	if certPath == "" {
-		certPath = filepath.Join(cfg.DataDir, "selfsigned-cert.pem")
-	}
-	if keyPath == "" {
-		keyPath = filepath.Join(cfg.DataDir, "selfsigned-key.pem")
-	}
+	certPath, keyPath := selfSignedPaths(cfg)
 	if _, err := os.Stat(certPath); err == nil {
 		if _, err := os.Stat(keyPath); err == nil {
 			return tls.LoadX509KeyPair(certPath, keyPath)

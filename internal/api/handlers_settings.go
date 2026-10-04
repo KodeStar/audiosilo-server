@@ -7,7 +7,6 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
-	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
 // Server settings, surfaced in the admin console's Server > Settings. Transport
@@ -23,29 +22,31 @@ import (
 // handler and the `metadata` capability both gate on this.
 func (a *API) metadataOn() bool { return a.meta != nil && a.config().Metadata.Enabled }
 
-// settingsEnvelope is the GET/PATCH answer: each section's settings, plus what
-// the console needs to show them honestly.
+// settingsEnvelope is the GET/PATCH answer: each section's saved settings, plus
+// what the console needs to show them honestly.
 //
 //	{"general": {...}, "network": {...}, "players": {...}, "metadata": {...}, "demo": {...},
 //	 "locked": {"network.tls_mode": "AUDIOSILO_TLS_MODE"},
 //	 "restart_settings": ["network.bind", ...], "restart_pending": ["network.bind"]}
 //
-// Read-only extras: metadata.available (the service exists, so the switch can
-// turn on), players.web_player (where /web is served from: "embedded", "dir" or
-// ""), demo.max_users_default (the cap while max_users is null).
+// Read-only facts ride along in their sections: metadata.available (the service
+// exists, so the switch can turn on), players.web_player (where /web is served
+// from: "embedded", "dir" or ""), demo.max_users_default (the cap while max_users
+// is null).
 func (a *API) settingsEnvelope() map[string]any {
-	live := a.config()
-	out := map[string]any{}
-	sections := live.Settings()
+	saved := a.config().saved
+	sections := saved.Settings()
+	sections["metadata"]["available"] = a.meta != nil
+	sections["players"]["web_player"] = a.playerSource
+	sections["demo"]["max_users_default"] = config.DefaultDemoMaxUsers
+	out := map[string]any{
+		"locked":           saved.Locked(),
+		"restart_settings": config.RestartSettings(),
+		"restart_pending":  saved.RestartPending(a.boot),
+	}
 	for name, fields := range sections {
 		out[name] = fields
 	}
-	sections["metadata"]["available"] = a.meta != nil
-	sections["players"]["web_player"] = web.PlayerSource(a.boot.WebDir)
-	sections["demo"]["max_users_default"] = config.DefaultDemoMaxUsers
-	out["locked"] = live.Locked()
-	out["restart_settings"] = config.RestartSettings()
-	out["restart_pending"] = live.RestartPending(a.boot)
 	return out
 }
 
@@ -69,33 +70,27 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// One save at a time: read, change, write config.yaml, swap.
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
-	cur := a.config().Config
-	next, err := cur.WithSettings(patch)
+	cur := a.config().saved
+	next, err := cur.WithSettings(patch, config.Checks{
+		MetadataAvailable: a.meta != nil,
+		LibraryExists: func(name string) (bool, error) {
+			_, err := a.cat.GetLibraryByName(r.Context(), name)
+			if errors.Is(err, catalog.ErrNotFound) {
+				return false, nil
+			}
+			return err == nil, err
+		},
+	})
 	if err != nil {
 		a.writeCatalogError(w, err, "settings: apply", "could not save settings")
 		return
-	}
-	if next.Metadata.Enabled && !cur.Metadata.Enabled && a.meta == nil {
-		writeErrorCode(w, http.StatusBadRequest, codeMetadataUnavail,
-			"metadata lookup is unavailable: set metadata.base_url to an absolute http(s) URL in the server config first")
-		return
-	}
-	if next.Demo.Library != "" && next.Demo.Library != cur.Demo.Library {
-		if _, err := a.cat.GetLibraryByName(r.Context(), next.Demo.Library); err != nil {
-			if errors.Is(err, catalog.ErrNotFound) {
-				err = &config.SettingError{Setting: "demo.library", Reason: config.ReasonInvalid,
-					Err: errors.New("no library has that name")}
-			}
-			a.writeCatalogError(w, err, "settings: demo library", "could not save settings")
-			return
-		}
 	}
 	if err := next.Save(); err != nil {
 		a.log.Error("persist settings failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not save settings")
 		return
 	}
-	a.live.Store(newLiveConfig(next))
+	a.live.Store(newLiveConfig(next, a.boot))
 	if a.rt.Updates != nil && next.UpdateCheck != cur.UpdateCheck {
 		a.rt.Updates.SetEnabled(next.UpdateCheck)
 	}

@@ -16,8 +16,11 @@ export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 
 /** A setting's id: "<section>.<name>", as the server names it. */
 export type SettingId = {
-  [S in SettingsSection]: `${S}.${Extract<keyof AdminSettings[S], string>}`;
+  [S in SettingsSection]: `${S}.${Exclude<Extract<keyof AdminSettings[S], string>, ReadOnlyFact>}`;
 }[SettingsSection];
+
+/** Facts the envelope carries beside the settings; not settings themselves. */
+type ReadOnlyFact = 'available' | 'web_player' | 'max_users_default';
 
 /** Why the console can't change a setting, if it can't: the variable that sets it, or "launcher". */
 export function lockOf(s: AdminSettings, id: SettingId): string | undefined {
@@ -76,25 +79,27 @@ export function patchIds(patch: SettingsPatch): SettingId[] {
 }
 
 /** How many days until `iso` (negative once past), whole days rounded down. */
-export function daysUntil(iso: string, now: number = Date.now()): number {
+function daysUntil(iso: string, now: number): number {
   return Math.floor((Date.parse(iso) - now) / 86_400_000);
 }
 
-/** How the served certificate reads: valid, expiring soon, expired, or not issued yet. */
+/** What the served certificate's state means: fine, worth a look, a problem, or not issued yet. */
+export type CertStatus = 'ok' | 'warn' | 'bad' | 'waiting';
+
+/**
+ * How the served certificate reads (null with plain HTTP): its i18n key, what
+ * that means, and the days it has left. Settings shows it as a badge, Health as a row.
+ */
 export function certificateLook(
   tls: SystemStatus['tls'],
   now: number,
-): {
-  key: string;
-  tone: 'success' | 'warning' | 'destructive' | 'secondary';
-  days?: number;
-} | null {
+): { key: string; status: CertStatus; days?: number } | null {
   if (tls.mode === 'off') return null;
-  if (tls.error) return { key: 'settings.network.cert.unreadable', tone: 'warning' };
+  if (tls.error) return { key: 'settings.network.cert.unreadable', status: 'warn' };
   const issued = tls.certificates.filter((c) => c.issued);
-  if (issued.length === 0) return { key: 'settings.network.cert.pending', tone: 'secondary' };
+  if (issued.length === 0) return { key: 'settings.network.cert.pending', status: 'waiting' };
   const days = Math.min(...issued.map((c) => daysUntil(c.not_after, now)));
-  if (days < 0) return { key: 'settings.network.cert.expired', tone: 'destructive' };
-  if (days < 14) return { key: 'settings.network.cert.expiring', tone: 'warning', days };
-  return { key: 'settings.network.cert.valid', tone: 'success', days };
+  if (days < 0) return { key: 'settings.network.cert.expired', status: 'bad' };
+  if (days < 14) return { key: 'settings.network.cert.expiring', status: 'warn', days };
+  return { key: 'settings.network.cert.valid', status: 'ok', days };
 }

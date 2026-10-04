@@ -15,6 +15,7 @@ import {
 import { api } from '@/api/client';
 import { keys, useSystem } from '@/api/hooks';
 import type { SystemStatus, UpdateStatus } from '@/api/types';
+import { FactList } from '@/components/fact-list';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
@@ -211,14 +212,9 @@ function ServerFacts({ sys }: { sys: SystemStatus }) {
   return (
     <Card aria-labelledby="facts-title">
       <CardHeader titleId="facts-title" title={t('about.server', { name: sys.name })} />
-      <dl className="grid grid-cols-[minmax(110px,auto)_1fr] gap-x-[18px] gap-y-2.5 p-5 text-[13px]">
-        {rows.map(([label, value]) => (
-          <div key={label} className="contents">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="min-w-0 font-[550] [overflow-wrap:anywhere]">{value}</dd>
-          </div>
-        ))}
-      </dl>
+      <div className="p-5">
+        <FactList rows={rows} />
+      </div>
       <div className="flex flex-wrap gap-2 border-t px-5 py-3.5">
         {(
           [

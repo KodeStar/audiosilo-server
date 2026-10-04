@@ -187,6 +187,6 @@ func TestRealIPTrust(t *testing.T) {
 // apiWithConfig is a bare API (no services) running with c, for middleware tests.
 func apiWithConfig(c *config.Config) *API {
 	a := &API{boot: c}
-	a.live.Store(newLiveConfig(c))
+	a.live.Store(newLiveConfig(c, c))
 	return a
 }

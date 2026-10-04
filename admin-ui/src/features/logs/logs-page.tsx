@@ -11,12 +11,13 @@ import { QueryError } from '@/components/query-error';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
+import { formatClockTime } from '@/lib/format';
 import { useDebounced } from '@/lib/use-debounced';
 import {
   appendPage,
   EMPTY_TAIL,
   LOG_LEVELS,
-  lineTime,
+  MAX_LINES,
   type LogLevelFilter,
   type Tail,
 } from './logs-model';
@@ -40,7 +41,7 @@ function useLogTail(level: LogLevelFilter, q: string, live: boolean) {
         level: level === 'all' ? undefined : level,
         q: q || undefined,
         after: prev?.lastSeq || undefined,
-        limit: prev ? 1000 : 500,
+        limit: prev ? MAX_LINES : MAX_LINES / 2,
       });
       return appendPage(prev ?? EMPTY_TAIL, page, !prev);
     },
@@ -134,12 +135,12 @@ export function LogsPage() {
                 {tail.data?.gap ? <div className="attr">{t('logs.gap')}</div> : null}
                 {lines.map((l) => (
                   <div key={l.seq}>
-                    <span className="ts">{lineTime(l.time, lang)}</span>
+                    <span className="ts">{formatClockTime(l.time, lang)}</span>
                     <span className="lv" data-level={l.level}>
                       {t(`logs.lvl.${l.level}`)}
                     </span>{' '}
                     {l.message}
-                    {l.attrs?.length ? (
+                    {l.attrs.length ? (
                       <span className="attr">
                         {' '}
                         {l.attrs.map((a) => `${a.key}=${a.value}`).join(' ')}

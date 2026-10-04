@@ -288,7 +288,7 @@ func resolveTools(ctx context.Context, dataDir string, opts Options, log *slog.L
 	needProbe := opts.FFprobePath != "" && ffprobe == ""
 	if needMpeg || needProbe {
 		// One download yields both tools; take whichever ones we were missing.
-		dlMpeg, dlProbe := toolfetch.Ensure(ctx, filepath.Join(dataDir, "tools"), log)
+		dlMpeg, dlProbe := toolfetch.Ensure(ctx, toolfetch.Dir(dataDir), log)
 		if needMpeg {
 			ffmpeg = dlMpeg
 		}

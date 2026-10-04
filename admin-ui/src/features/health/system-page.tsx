@@ -17,10 +17,11 @@ import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
+import { StatusText } from '@/components/status-text';
 import { buttonVariants } from '@/components/ui/button';
 import { formatBytes, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { systemRows, type RowStatus, type SystemRow } from './system-model';
+import { systemRows, type SystemRow } from './system-model';
 
 const ICONS: Record<SystemRow['kind'], LucideIcon> = {
   ffmpeg: Cpu,
@@ -33,13 +34,6 @@ const ICONS: Record<SystemRow['kind'], LucideIcon> = {
   update: Package,
 };
 
-const STATUS_CLASS: Record<RowStatus, string> = {
-  ok: 'text-success',
-  warn: 'text-warning',
-  bad: 'text-destructive',
-  off: 'text-muted-foreground',
-};
-
 /**
  * Health > System: everything the server depends on in one place (tools, the
  * community metadata service, the certificate, the database, each library's
@@ -47,7 +41,7 @@ const STATUS_CLASS: Record<RowStatus, string> = {
  */
 export function SystemPage() {
   const { t } = useTranslation();
-  const system = useSystem();
+  const system = useSystem({ poll: true });
   const sys = system.data;
   return (
     <Page>
@@ -151,19 +145,13 @@ function SystemList({ sys }: { sys: SystemStatus }) {
                     {r.value}
                   </span>
                 ) : null}
-                <span
-                  className={cn(
-                    'inline-flex min-w-[124px] items-center justify-end gap-1.5 text-[13px] font-semibold max-md:min-w-0',
-                    STATUS_CLASS[r.status],
-                  )}
+                <StatusText
+                  tone={r.status}
+                  colored
+                  className="min-w-[124px] justify-end text-[13px] font-semibold max-md:min-w-0"
                 >
-                  <span
-                    className="dot"
-                    data-tone={r.status === 'ok' ? undefined : r.status}
-                    aria-hidden="true"
-                  />
                   {t(r.statusKey)}
-                </span>
+                </StatusText>
               </li>
             );
           })}

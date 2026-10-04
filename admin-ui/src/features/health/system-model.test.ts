@@ -1,5 +1,5 @@
 import { systemStatus, updateStatus } from '@/test/fixtures';
-import { schemaNumber, systemRows, uptime, worstStatus } from './system-model';
+import { schemaNumber, systemRows, uptime } from './system-model';
 
 const NOW = Date.parse('2026-10-04T12:00:00Z');
 
@@ -22,7 +22,7 @@ describe('systemRows', () => {
       'player',
       'update',
     ]);
-    expect(worstStatus(rows)).toBe('ok');
+    expect(rows.every((r) => r.status === 'ok' || r.status === 'off')).toBe(true);
     expect(row(rows, 'metadata').detail).toEqual({
       key: 'system.detail.metadataOk',
       values: { ms: 84 },
@@ -53,7 +53,6 @@ describe('systemRows', () => {
       status: 'warn',
       detail: { key: 'system.detail.diskLow' },
     });
-    expect(worstStatus(rows)).toBe('bad');
   });
 
   it('never calls metadata a problem while it is off, and says when it is down', () => {

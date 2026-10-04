@@ -30,10 +30,7 @@ type Certificate struct {
 func Certificates(cfg *config.Config) ([]Certificate, error) {
 	switch cfg.TLS.Mode {
 	case config.TLSSelfSigned:
-		path := cfg.TLS.CertFile
-		if path == "" {
-			path = filepath.Join(cfg.DataDir, "selfsigned-cert.pem")
-		}
+		path, _ := selfSignedPaths(cfg)
 		c, err := readCert(path)
 		if err != nil {
 			return nil, err

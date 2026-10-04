@@ -14,7 +14,7 @@ import (
 // public but gated on demo mode, per-IP rate limited, and capped to bound abuse;
 // idle demo accounts are reaped in the background (auth.ReapIdleDemoUsers).
 func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
-	if !a.boot.Demo.Enabled {
+	if !a.config().Demo.Enabled {
 		writeError(w, http.StatusNotFound, "demo mode is not enabled")
 		return
 	}
@@ -96,7 +96,7 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		"token":     session,
 		"user":      u,
 		"pairing":   payload,
-		"server_id": a.boot.ServerID,
+		"server_id": a.config().ServerID,
 	})
 }
 
