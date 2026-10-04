@@ -12,11 +12,15 @@ import (
 
 // fakeGitHub answers like the releases/latest endpoint. status overrides the
 // answer once set; every request is counted, and If-None-Match is honoured.
+// With release set, each request signals entered on arrival and waits for
+// release to close before answering.
 type fakeGitHub struct {
 	requests atomic.Int32
 	status   atomic.Int32
 	tag      atomic.Value
 	sawUA    atomic.Value
+	entered  chan struct{}
+	release  chan struct{}
 }
 
 func (f *fakeGitHub) serve(t *testing.T) *httptest.Server {
@@ -25,6 +29,14 @@ func (f *fakeGitHub) serve(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.requests.Add(1)
 		f.sawUA.Store(r.Header.Get("User-Agent"))
+		if f.release != nil {
+			f.entered <- struct{}{}
+			select {
+			case <-f.release:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if s := f.status.Load(); s != 0 {
 			if s == http.StatusForbidden {
 				w.Header().Set("X-RateLimit-Remaining", "0")
@@ -212,4 +224,88 @@ func TestOnAvailable(t *testing.T) {
 	gh2.status.Store(http.StatusInternalServerError)
 	quiet.now = func() time.Time { return time.Now().Add(2 * time.Minute) }
 	_ = quiet.Check(context.Background())
+}
+
+// startInFlight starts what Run does, a check, against a GitHub that holds the
+// request until release is closed, and returns once the request has arrived.
+// scheduled closes when that check is done.
+func startInFlight(t *testing.T) (gh *fakeGitHub, c *Checker, release, scheduled chan struct{}) {
+	t.Helper()
+	gh = &fakeGitHub{entered: make(chan struct{}, 4), release: make(chan struct{})}
+	c = New("v1.15.0", gh.serve(t).URL, true, nil)
+	scheduled = make(chan struct{})
+	go func() { _ = c.check(context.Background()); close(scheduled) }()
+	<-gh.entered
+	return gh, c, gh.release, scheduled
+}
+
+// "Check now" while the daily check is on its way waits for that check's answer
+// and returns it, without a second request.
+func TestCheckJoinsTheCheckInFlight(t *testing.T) {
+	gh, c, release, scheduled := startInFlight(t)
+	manual := make(chan error, 1)
+	go func() { manual <- c.Check(context.Background()) }()
+	select {
+	case err := <-manual:
+		t.Fatalf("Check answered (%v) before the check in flight did: status %+v", err, c.Status())
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-manual; err != nil {
+		t.Fatal(err)
+	}
+	if st := c.Status(); st.Latest == nil || st.Latest.Version != "v1.16.0" || !st.Available {
+		t.Fatalf("Check returned before the answer was recorded: %+v", st)
+	}
+	<-scheduled
+	if n := gh.requests.Load(); n != 1 {
+		t.Fatalf("%d requests, want the one in flight only", n)
+	}
+}
+
+// A caller that gives up while waiting gets its context's error at once; the
+// request in flight goes on and is recorded.
+func TestCheckWaitRespectsContext(t *testing.T) {
+	gh, c, release, scheduled := startInFlight(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := c.Check(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Check = %v, want the caller's deadline", err)
+	}
+	if c.Status().CheckedAt != nil {
+		t.Fatal("nothing should be recorded yet")
+	}
+	close(release)
+	<-scheduled
+	if st := c.Status(); st.Latest == nil || gh.requests.Load() != 1 {
+		t.Fatalf("the check in flight wasn't recorded: %+v, %d requests", st, gh.requests.Load())
+	}
+}
+
+// When the request a check joined records nothing (its caller went away), the
+// waiting check asks itself instead of answering with an unchanged Status.
+func TestCheckAsksWhenTheJoinedRequestIsAbandoned(t *testing.T) {
+	gh := &fakeGitHub{entered: make(chan struct{}, 4), release: make(chan struct{})}
+	c := New("v1.15.0", gh.serve(t).URL, true, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan struct{})
+	go func() { _ = c.Check(ctx); close(first) }()
+	<-gh.entered
+	second := make(chan error, 1)
+	go func() { second <- c.Check(context.Background()) }()
+	time.Sleep(50 * time.Millisecond) // the second Check is waiting on the first
+	cancel()
+	<-first
+	select {
+	case <-gh.entered: // the second Check's own request
+	case err := <-second:
+		t.Fatalf("Check answered (%v) without asking, status %+v", err, c.Status())
+	}
+	close(gh.release)
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	if st := c.Status(); st.Latest == nil || st.Latest.Version != "v1.16.0" || gh.requests.Load() != 2 {
+		t.Fatalf("the waiting Check didn't ask itself: %+v, %d requests", st, gh.requests.Load())
+	}
 }

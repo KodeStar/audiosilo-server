@@ -79,13 +79,16 @@ type Checker struct {
 	// check that finds one (the notifications announce each version once).
 	OnAvailable func(Release)
 
-	mu       sync.Mutex
-	enabled  bool
-	latest   *Release
-	etag     string
-	checked  time.Time // the last request (zero: none)
-	lastErr  string
-	inFlight bool
+	mu      sync.Mutex
+	enabled bool
+	latest  *Release
+	etag    string
+	checked time.Time // the last request (zero: none)
+	lastErr string
+	// inFlight is closed when the request on its way is recorded (nil: none), so
+	// a check arriving meanwhile waits for that answer instead of asking again.
+	inFlight chan struct{}
+	recorded uint64 // how many requests' outcomes record has kept
 }
 
 // New returns a checker for the running version, asking url (DefaultURL when
@@ -156,7 +159,7 @@ func (c *Checker) Run(ctx context.Context) {
 		case <-c.wake:
 		}
 		if c.due() {
-			c.check(ctx)
+			_ = c.check(ctx)
 		}
 		if !timer.Stop() {
 			select {
@@ -177,7 +180,10 @@ func (c *Checker) due() bool {
 
 // Check asks GitHub now ("Check now"); Status then has the answer. It refuses
 // while the check is off (ErrDisabled). Within a minute of the last request it
-// doesn't ask again: Status still has that request's answer.
+// doesn't ask again: Status still has that request's answer. While a request is
+// on its way (the daily check, or another Check) it waits for that one's answer
+// rather than asking twice; ctx ending first returns its error, with Status
+// unchanged.
 func (c *Checker) Check(ctx context.Context) error {
 	c.mu.Lock()
 	enabled, recent := c.enabled, !c.checked.IsZero() && c.now().Sub(c.checked) < minManual
@@ -186,20 +192,33 @@ func (c *Checker) Check(ctx context.Context) error {
 	case !enabled:
 		return ErrDisabled
 	case !recent:
-		c.check(ctx)
+		return c.check(ctx)
 	}
 	return nil
 }
 
-// check makes one request (unless one is already on its way) and records its
-// outcome; a failure is logged and kept for Status.
-func (c *Checker) check(ctx context.Context) {
+// check makes one request and records its outcome; a failure is logged and kept
+// for Status. When a request is already on its way it makes none and waits for
+// that one to be recorded instead (or for ctx, whose error it then returns). If
+// that request recorded nothing (its caller went away first), it asks itself.
+func (c *Checker) check(ctx context.Context) error {
 	c.mu.Lock()
-	if c.inFlight {
+	for c.inFlight != nil {
+		wait, before := c.inFlight, c.recorded
 		c.mu.Unlock()
-		return
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		c.mu.Lock()
+		if c.recorded != before {
+			c.mu.Unlock()
+			return nil
+		}
 	}
-	c.inFlight = true
+	done := make(chan struct{})
+	c.inFlight = done
 	etag := ""
 	if c.latest != nil { // only a remembered release makes a 304 meaningful
 		etag = c.etag
@@ -210,15 +229,17 @@ func (c *Checker) check(ctx context.Context) {
 
 	c.mu.Lock()
 	c.record(ctx, rel, newTag, code, err)
+	c.inFlight = nil
+	close(done)
 	c.mu.Unlock()
 	if st := c.Status(); err == nil && st.Available && c.OnAvailable != nil {
 		c.OnAvailable(*st.Latest)
 	}
+	return nil
 }
 
 // record keeps a request's outcome. mu held.
 func (c *Checker) record(ctx context.Context, rel *Release, newTag, code string, err error) {
-	c.inFlight = false
 	// The caller went away (cancelled or past its deadline): nothing was learned,
 	// and fetch gives such a failure no code, so recording it would read as a
 	// successful check. Ask the caller's context, not the error: the client's own
@@ -227,6 +248,7 @@ func (c *Checker) record(ctx context.Context, rel *Release, newTag, code string,
 		return
 	}
 	c.checked = c.now()
+	c.recorded++
 	c.lastErr = code
 	if err != nil {
 		c.log.Info("update check failed", "err", err)
