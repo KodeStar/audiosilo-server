@@ -1,0 +1,70 @@
+version: 2
+
+# Keep the four dependency surfaces this repo actually has fresh, without
+# turning the pull request list into a dependency feed. Minor and patch updates
+# are GROUPED into one pull request per ecosystem per week - they are the bulk of
+# the traffic and are reviewed as one bump either way - while a major update
+# still arrives on its own, because that is the one that needs reading.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # The admin console (embedded from internal/web/adminui/dist).
+  - package-ecosystem: npm
+    directory: /admin-ui
+    schedule:
+      interval: weekly
+    groups:
+      admin-ui-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # The workflows reference actions by major tag (actions/checkout@v4), so for
+  # most of them the only update is the next major, which arrives on its own.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # The Dockerfile's base images (node:24-alpine, golang:1.25-alpine,
+  # alpine:3.24). The baked-in web player comes in through the WEB_IMAGE build
+  # arg, which dependabot does not follow - that pin moves with a release.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      base-images-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    # Node majors (the admin-console build stage): only the EVEN ones become
+    # LTS, so the odd majors are ignored and an even one still arrives as a pull
+    # request - to be merged together with admin-ui/.nvmrc, which dependabot
+    # does not move. Dependabot takes version patterns, not a parity rule;
+    # extend the list before Node 31 ships.
+    #
+    # golang: the image's MINOR is the Go language version, which has to move
+    # together with go.mod's `go` directive (CI's setup-go reads it) - a bump
+    # done by hand in one change, never an image-only pull request that builds
+    # on a Go the rest of the repository does not use.
+    ignore:
+      - dependency-name: node
+        versions: ["25.x", "27.x", "29.x"]
+      - dependency-name: golang
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
