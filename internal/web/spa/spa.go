@@ -16,8 +16,9 @@
 //
 // Caching: files under AssetDirs are fingerprinted and cached for a year; HTML and
 // every other file revalidate on each request (no-cache), so a new release is
-// picked up at once. Every response carries nosniff; HTML gets DocumentCSP and other
-// files FileCSP.
+// picked up at once. Every file carries a strong ETag, so a revalidation is a 304,
+// and text goes out gzipped to clients that accept it (see Files). Every response
+// carries nosniff; HTML gets DocumentCSP and other files FileCSP.
 package spa
 
 import (
@@ -90,6 +91,7 @@ func IsFile(fsys fs.FS, name string) bool {
 
 // Handler serves the app described by c.
 func Handler(c Config) http.Handler {
+	files := NewFiles()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		rel := strings.Trim(strings.TrimPrefix(r.URL.Path, c.Prefix), "/")
@@ -102,7 +104,7 @@ func Handler(c Config) http.Handler {
 		default:
 			name = "index.html" // a client-routed deep link: boot the SPA
 		}
-		c.serve(w, r, name, rel)
+		c.serve(w, r, files, name, rel)
 	})
 }
 
@@ -142,26 +144,20 @@ func (c Config) isAsset(rel string) bool {
 	return ext != "" && !strings.EqualFold(ext, ".html")
 }
 
-func (c Config) serve(w http.ResponseWriter, r *http.Request, name, rel string) {
-	f, err := c.FS.Open(name)
-	if err != nil {
+func (c Config) serve(w http.ResponseWriter, r *http.Request, files *Files, name, rel string) {
+	info, content, done, ok := openFile(c.FS, name)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	defer func() { _ = f.Close() }() // read-only
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
+	defer done()
 
 	h := w.Header()
 	h.Set("Content-Type", ContentType(name))
 	h.Set("Cache-Control", "no-cache")
-	var content io.ReadSeeker
 	if strings.HasSuffix(name, ".html") {
 		// The document's bytes feed its CSP (the player hashes inline scripts).
-		data, err := io.ReadAll(f)
+		data, err := io.ReadAll(content)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -175,20 +171,6 @@ func (c Config) serve(w http.ResponseWriter, r *http.Request, name, rel string) 
 		if c.inAssetDir(rel) {
 			h.Set("Cache-Control", immutable)
 		}
-		// embed.FS and os.DirFS files both seek, so ServeContent streams them;
-		// anything else is read once.
-		if rs, ok := f.(io.ReadSeeker); ok {
-			content = rs
-		} else {
-			data, err := io.ReadAll(f)
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			content = bytes.NewReader(data)
-		}
 	}
-	// Embedded files carry no modification time; ServeContent then omits
-	// Last-Modified and still handles Range, HEAD and If-Modified-Since.
-	http.ServeContent(w, r, name, info.ModTime(), content)
+	files.Serve(w, r, name, info, content)
 }

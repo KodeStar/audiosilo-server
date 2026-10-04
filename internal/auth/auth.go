@@ -285,12 +285,20 @@ func (s *Service) ResolveToken(ctx context.Context, secret, kind string) (*User,
 	return u, err
 }
 
+// touchInterval is how old a token's last_seen may be before a request writes it
+// again. Without it every authenticated request was a write on the single
+// writer; with it, "last seen" (the devices list, a user's last activity, the
+// demo reaper) is accurate to within this.
+const touchInterval = time.Minute
+
 // ResolveRequest validates a presented secret whose kind is one of kinds and
 // returns the user with the token that matched (its id, kind, device name and
 // app). It bumps the token's last_seen and records what the request says about
 // the device (Presence): its address, and its app when the request named one, so
 // a request without the header (a browser's <audio> fetching a stream) never
-// erases the app an earlier request reported. Middleware uses it to accept a
+// erases the app an earlier request reported. It skips that write when the
+// token's last_seen is under touchInterval old and the request reports nothing
+// the row doesn't already hold (needsTouch). Middleware uses it to accept a
 // session OR an api key on the same route while never accepting a pairing token
 // there, and uses the returned kind to bar an api key from routes that mint a
 // fresh durable credential (see denyAPIKey).
@@ -303,6 +311,9 @@ func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence,
 	cred := Credential{ID: row.id, Kind: row.kind, DeviceName: row.deviceName, Client: row.client}
 	if p.Client.App != "" {
 		cred.Client = p.Client
+	}
+	if !s.needsTouch(row, p) {
+		return u, cred, nil
 	}
 	// The app is written only when this request named one, decided in SQL rather
 	// than from the value read above: a request without the header racing one with
@@ -317,6 +328,21 @@ func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence,
 	return u, cred, nil
 }
 
+// needsTouch reports whether a request must write its token's row: last_seen is
+// unset, unreadable, ahead of the clock or touchInterval old, or the request
+// reports an address or an app the row doesn't hold.
+func (s *Service) needsTouch(row tokenRow, p Presence) bool {
+	if (p.IP != "" && p.IP != row.lastIP) || (p.Client.App != "" && p.Client != row.client) || !row.lastSeen.Valid {
+		return true
+	}
+	seen, err := time.Parse(time.RFC3339, row.lastSeen.String)
+	if err != nil {
+		return true
+	}
+	age := s.now().Sub(seen)
+	return age < 0 || age >= touchInterval
+}
+
 // tokenRow is what lookupToken reads about a valid token besides its user.
 type tokenRow struct {
 	id         int64
@@ -324,6 +350,8 @@ type tokenRow struct {
 	codeID     sql.NullInt64 // parent auth code of a linked pairing token
 	deviceName string
 	client     ClientInfo
+	lastSeen   sql.NullString
+	lastIP     string
 }
 
 // lookupToken resolves a token hash whose kind is one of the accepted kinds to
@@ -347,11 +375,11 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT u.id, u.username, u.role, u.disabled, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
-		        t.device_name, t.client_app, t.client_version, t.client_platform
+		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip
 		   FROM tokens t JOIN users u ON u.id = t.user_id
 		  WHERE t.token_hash = ? AND t.kind IN (`+inPlaceholders(len(kinds))+`)`, args...).
 		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &row.id, &row.kind, &expires, &revoked, &row.codeID,
-			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform)
+			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tokenRow{}, ErrInvalidToken
 	}
@@ -939,9 +967,9 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 }
 
 // userColumns selects the user fields plus a derived last-activity timestamp
-// (the newest tokens.last_seen across the account's tokens). Activity is bumped
-// on every authenticated request in ResolveRequest, so this reflects last use, not
-// just sign-in, without a dedicated column or extra writes.
+// (the newest tokens.last_seen across the account's tokens). ResolveRequest bumps
+// it on authenticated requests (at most once a minute per token), so this
+// reflects last use, not just sign-in, without a dedicated column.
 const userColumns = `u.id, u.username, u.role, u.disabled, u.password_hash, u.is_demo,
 	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id),
 	EXISTS(SELECT 1 FROM auth_codes c WHERE c.user_id = u.id AND c.kind = '` + CodeRecovery + `')`

@@ -204,7 +204,10 @@ function FacetChip({ option: o, lang }: { option: Option; lang: string }) {
       {o.on ? <Check className="size-[13px]" strokeWidth={2.6} aria-hidden="true" /> : null}
       {o.label}
       {o.count !== undefined ? (
-        <span className="tabular-nums opacity-60">{formatNumber(o.count, lang)}</span>
+        <>
+          {/* A real space: the accessible name is "M4B 3", not "M4B3". */}{' '}
+          <span className="tabular-nums opacity-60">{formatNumber(o.count, lang)}</span>
+        </>
       ) : null}
     </button>
   );

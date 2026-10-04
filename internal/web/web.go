@@ -69,8 +69,11 @@ func Register(mux *http.ServeMux, webDir string) error {
 	if err != nil {
 		return err
 	}
-	assets := http.StripPrefix("/assets/", http.FileServerFS(sub))
-	mux.Handle("GET /assets/", noSniff(assets))
+	// One cache of ETags and gzip forms for every embedded page and asset below.
+	files := spa.NewFiles()
+	mux.Handle("GET /assets/", noSniff(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		files.ServeFS(w, r, sub, strings.TrimPrefix(r.URL.Path, "/assets/"))
+	})))
 	// Browsers request /favicon.ico at the site root by default; point it at the
 	// embedded SVG mark (the HTML pages also link it explicitly via <link rel=icon>).
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
@@ -79,20 +82,21 @@ func Register(mux *http.ServeMux, webDir string) error {
 	// The admin console's PWA service worker and web manifest are served from the
 	// site root: a service worker can only control pages at or below its own URL,
 	// so /sw.js (scope "/") is what lets it control /admin.
-	mux.HandleFunc("GET /sw.js", rootAsset(sub, "sw.js", true))
-	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(sub, "manifest.webmanifest", false))
+	mux.HandleFunc("GET /sw.js", rootAsset(files, sub, "sw.js", true))
+	mux.HandleFunc("GET /manifest.webmanifest", rootAsset(files, sub, "manifest.webmanifest", false))
 	admin := adminui.Handler(adminui.FS(), contentSecurityPolicy)
 	mux.Handle("GET /admin", admin)
 	mux.Handle("GET /admin/", admin)
-	mux.HandleFunc("GET /connect", page(sub, "index.html"))
-	mux.HandleFunc("GET /connect/", page(sub, "index.html"))
+	connect := page(files, sub, "index.html")
+	mux.HandleFunc("GET /connect", connect)
+	mux.HandleFunc("GET /connect/", connect)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		// "/" is the catch-all; only the exact root serves the connect page.
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		page(sub, "index.html")(w, r)
+		connect(w, r)
 	})
 
 	if fsys, ok := playerFS(webDir); ok && spa.IsFile(fsys, "index.html") {
@@ -144,34 +148,24 @@ func PlayerSource(webDir string) string {
 // with the strict same-origin CSP. Used for the PWA service worker and web
 // manifest, which must live at the root for the worker's scope to cover /admin.
 // noCache disables HTTP caching (so an updated worker is picked up promptly).
-func rootAsset(fsys fs.FS, name string, noCache bool) http.HandlerFunc {
+func rootAsset(files *spa.Files, fsys fs.FS, name string, noCache bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := fs.ReadFile(fsys, name)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
 		w.Header().Set("Content-Type", spa.ContentType(name))
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if noCache {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
-		_, _ = w.Write(data)
+		files.ServeFS(w, r, fsys, name)
 	}
 }
 
 // page returns a handler that serves a single HTML file with a strict CSP.
-func page(fsys fs.FS, name string) http.HandlerFunc {
+func page(files *spa.Files, fsys fs.FS, name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := fs.ReadFile(fsys, name)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
-		_, _ = w.Write(data)
+		files.ServeFS(w, r, fsys, name)
 	}
 }
 

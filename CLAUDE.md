@@ -281,6 +281,10 @@ admin overrides; see Metadata overrides below).
   the console and the web player share: files under the asset dirs are immutable and 404 when
   missing, other files and HTML revalidate, a missing top-level file with an extension 404s,
   anything else boots `index.html` for client routing; MIME types are pinned process-wide.
+  Every static file (console, player, connect/setup assets) carries a strong content-hash ETag
+  (a match is a 304, documents included) and text types go out gzipped to clients that accept it
+  (`spa.Files`: worked out once per file and kept, redone when a web_dir file's size or mtime
+  changes; never for a Range request; `Vary: Accept-Encoding`).
   **The CSP does not change for it**: no inline script/style anywhere (`theme-init.js` is
   external, Base UI runs under `CSPProvider disableStyleElements`, banned libraries are
   ESLint-enforced, `admin-ui/scripts/check-csp.mjs` fails the build and `TestEmbeddedBuild`
@@ -690,8 +694,9 @@ admin overrides; see Metadata overrides below).
   pairing. `GET /admin/users/{id}` returns a user + accessible libraries + granted
   shares + issued auth codes (metadata only; codes are unretrievable by design);
   `DELETE /admin/authcodes/{id}` revokes a code. A user's **last activity** is
-  derived from `MAX(tokens.last_seen)` (bumped on every authenticated request in
-  `ResolveRequest`) - there is no `last_login` column; don't add one.
+  derived from `MAX(tokens.last_seen)` (bumped by authenticated requests in
+  `ResolveRequest`, at most once a minute per token unless the request's address or
+  app changed: `touchInterval`) - there is no `last_login` column; don't add one.
 - **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
   counts (`catalog.CountBooksByLibrary`) and a cross-user "currently listening"
   feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path);

@@ -92,7 +92,10 @@ export function LibraryFilter({
             <>
               {o.name}
               {o.aside !== undefined ? (
-                <span className="ml-1.5 text-subtle-foreground tabular-nums">{o.aside}</span>
+                <>
+                  {/* A real space: the accessible name is "Fiction 3", not "Fiction3". */}{' '}
+                  <span className="ml-1.5 text-subtle-foreground tabular-nums">{o.aside}</span>
+                </>
               ) : null}
             </>
           ),

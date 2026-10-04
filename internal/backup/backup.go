@@ -115,6 +115,7 @@ type Service struct {
 	now     func() time.Time
 	loc     *time.Location
 	wake    chan struct{}
+	readDir func(string) ([]os.DirEntry, error) // os.ReadDir; a test counts the listings
 
 	// OnFailure, when set, hears about every backup that failed (notifications).
 	OnFailure func(r Result)
@@ -128,6 +129,14 @@ type Service struct {
 	// waits for its next slot instead of retrying every minute.
 	tried  time.Time
 	anchor time.Time // when Run started: what a server with no scheduled backup counts from
+	// newest is the newest scheduled backup in the folder when it was first
+	// listed (zero: none), what the schedule counts from once newestKnown. The
+	// scheduler asks every minute and the folder may be on a NAS, so it is read
+	// once, not per tick. It needs no updating after that: every scheduled
+	// backup this process makes starts with an attempt (tried), which the
+	// schedule counts from instead once it is newer.
+	newest      time.Time
+	newestKnown bool
 }
 
 // New returns the service for the database db, kept in dir (dirName in dataDir when
@@ -138,7 +147,7 @@ func New(db *store.DB, dataDir, dir string, log *slog.Logger) *Service {
 	}
 	return &Service{
 		db: db, dataDir: dataDir, dir: backupDir(dataDir, dir), log: log,
-		now: time.Now, loc: time.Local, wake: make(chan struct{}, 1), keep: 7,
+		now: time.Now, loc: time.Local, wake: make(chan struct{}, 1), keep: 7, readDir: os.ReadDir,
 	}
 }
 
@@ -198,7 +207,7 @@ func (s *Service) Status() Status {
 // StatusOf is Status given the folder's backups (List), for a caller that has
 // listed them already.
 func (s *Service) StatusOf(list []Backup) Status {
-	next := s.next(list)
+	next := s.next()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := Status{Dir: s.dir, Running: s.running}
@@ -219,22 +228,17 @@ func (s *Service) StatusOf(list []Backup) Status {
 }
 
 // next is when the next scheduled backup is due (zero when off): its slot after
-// the newest scheduled backup in list (after Run started when there is none), or
-// after the last attempt when that is newer. Counting from the newest backup, not
-// from the start, is what makes a server that was off at its time catch up.
-func (s *Service) next(list []Backup) time.Time {
+// the newest scheduled backup (after Run started when there is none), or after
+// the last attempt when that is newer. Counting from the newest backup, not from
+// the start, is what makes a server that was off at its time catch up.
+func (s *Service) next() time.Time {
 	s.mu.Lock()
 	sch, anchor, tried := s.schedule, s.anchor, s.tried
 	s.mu.Unlock()
 	if sch.Off() {
 		return time.Time{}
 	}
-	var from time.Time
-	for _, b := range list {
-		if b.Kind == KindScheduled && b.CreatedAt.After(from) {
-			from = b.CreatedAt
-		}
-	}
+	from := s.newestScheduled()
 	if from.IsZero() {
 		from = anchor
 	}
@@ -248,9 +252,35 @@ func (s *Service) next(list []Backup) time.Time {
 }
 
 func (s *Service) due() bool {
-	list, _ := s.List()
-	n := s.next(list)
+	n := s.next()
 	return !n.IsZero() && !n.After(s.now())
+}
+
+// newestScheduled is the newest scheduled backup's time (zero when there is
+// none), listing the folder the first time only. An unreadable folder counts as
+// empty and is listed again next time.
+func (s *Service) newestScheduled() time.Time {
+	s.mu.Lock()
+	known, newest := s.newestKnown, s.newest
+	s.mu.Unlock()
+	if known {
+		return newest
+	}
+	list, err := s.List()
+	if err != nil {
+		return time.Time{}
+	}
+	newest = time.Time{}
+	for _, b := range list { // newest first
+		if b.Kind == KindScheduled {
+			newest = b.CreatedAt
+			break
+		}
+	}
+	s.mu.Lock()
+	s.newest, s.newestKnown = newest, true
+	s.mu.Unlock()
+	return newest
 }
 
 // Start makes a backup in the background; ErrBusy when one is being made already.
@@ -359,7 +389,7 @@ func reason(err error) string {
 
 // removeTemp deletes temporary files a stopped server left behind.
 func (s *Service) removeTemp() {
-	entries, err := os.ReadDir(s.dir)
+	entries, err := s.readDir(s.dir)
 	if err != nil {
 		return
 	}
@@ -401,9 +431,9 @@ func (s *Service) prune() {
 // List returns the backups in the folder, newest first (none when the folder
 // doesn't exist yet).
 func (s *Service) List() ([]Backup, error) {
-	entries, err := os.ReadDir(s.dir)
+	entries, err := s.readDir(s.dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return []Backup{}, nil
+		entries, err = nil, nil
 	}
 	if err != nil {
 		return nil, err
