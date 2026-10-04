@@ -562,7 +562,7 @@ export function useActivity(range: string, keepPrevious = false) {
 export function useListeningDays(range: string, userId = 0, enabled = true) {
   return useQuery({
     queryKey: keys.listeningDays(range, userId),
-    queryFn: () => api.listeningDays(range, userId || undefined).then((r) => r.days),
+    queryFn: () => api.listeningDays(range, userId || undefined),
     staleTime: 60_000,
     enabled,
   });

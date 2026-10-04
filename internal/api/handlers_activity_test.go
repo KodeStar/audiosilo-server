@@ -184,6 +184,16 @@ func TestAdminEditProgress(t *testing.T) {
 	if resp, body := e.do(t, "PATCH", edit, e.console, `{"finished":true,"started_at":"`+today+`","finished_at":"`+today+`"}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("started and finished today = %d %s", resp.StatusCode, body)
 	}
+	// Started earlier today and finished today: a day-only finish is the end of that
+	// day (or now), never midnight before the start.
+	if _, err := e.cat.EditProgress(ctx, e.memberID, catalog.Ref{LibraryID: e.libID, Path: unsouled},
+		catalog.ProgressEdit{StartedAt: catalog.OptionalTime{Set: true, Value: ptrTime(time.Now().Add(-time.Minute))}},
+		catalog.Scope{AllowAll: true}); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := e.do(t, "PATCH", edit, e.console, `{"finished":true,"finished_at":"`+today+`"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("finished the same day it was started = %d %s", resp.StatusCode, body)
+	}
 	resp, body = e.do(t, "GET", "/api/v1/admin/users/"+member+"/progress", e.console, "")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"finished_at":"`) {
 		t.Fatalf("user progress = %d %s", resp.StatusCode, body)
@@ -365,3 +375,5 @@ func TestAdminListeningDays(t *testing.T) {
 		t.Fatalf("member listening days = %d, want 403", resp.StatusCode)
 	}
 }
+
+func ptrTime(t time.Time) *time.Time { return &t }

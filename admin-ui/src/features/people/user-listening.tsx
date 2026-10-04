@@ -69,12 +69,13 @@ export function ListeningTab({ user }: { user: User }) {
 function ListeningYear({ user, progress }: { user: User; progress: UserProgress[] }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const year = new Date().getFullYear();
+  // The server's current year ("year"): its answer names it.
   // This person's days only: not the whole server's Activity page.
-  const listening = useListeningDays(String(year), user.id);
-  const days = listening.data;
+  const listening = useListeningDays('year', user.id);
+  const year = Number(listening.data?.range) || new Date().getFullYear();
+  const days = listening.data?.days;
   const listened = days?.reduce((s, d) => s + d.listened, 0) ?? 0;
-  const finished = finishedCount(progress, year);
+  const finished = finishedCount(progress, year, listening.data?.utc_offset ?? 0);
   const streak = days ? longestStreak(days) : 0;
   const facts = [
     [formatHours(listened, lang), t('user.year.hours')],

@@ -222,26 +222,28 @@ func (a *listenAcc) dayList() []ActivityDay {
 // ListeningDays is a period's listening day by day and nothing else: the year
 // calendar and a person's listening year, without the rest of the Activity page.
 type ListeningDays struct {
-	Range    string        `json:"range"`
-	From     string        `json:"from"`
-	To       string        `json:"to"`
-	Timezone string        `json:"timezone"`
-	Days     []ActivityDay `json:"days"`
+	Range    string `json:"range"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Timezone string `json:"timezone"`
+	// UTCOffset is the server's offset from UTC at To, in minutes.
+	UTCOffset int           `json:"utc_offset"`
+	Days      []ActivityDay `json:"days"`
 }
 
 // ListeningDaysFor is the listening per day in [from, to) (server time, loc), of
 // one user or of everyone (userID 0): the same days ActivityFor reports, without
 // the stats around them.
 func (c *Catalog) ListeningDaysFor(ctx context.Context, label string, from, to time.Time, loc *time.Location, userID int64) (*ListeningDays, error) {
-	acc := newListenAcc(from, to, loc, true)
+	acc := newListenAcc(from, to, loc, listenDays)
 	acc.onlyUser = userID
 	if err := c.collectListening(ctx, acc); err != nil {
 		return nil, err
 	}
-	zone, _ := to.In(loc).Zone()
+	zone, offset := to.In(loc).Zone()
 	return &ListeningDays{
 		Range: label, From: from.UTC().Format(time.RFC3339), To: to.UTC().Format(time.RFC3339),
-		Timezone: zone, Days: acc.dayList(),
+		Timezone: zone, UTCOffset: offset / 60, Days: acc.dayList(),
 	}, nil
 }
 
@@ -253,11 +255,11 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 		Range: label, From: from.UTC().Format(time.RFC3339), To: to.UTC().Format(time.RFC3339),
 		Timezone: zone, UTCOffset: offset / 60,
 	}
-	cur := newListenAcc(from, to, loc, true)
+	cur := newListenAcc(from, to, loc, listenAll)
 	if err := c.collectListening(ctx, cur); err != nil {
 		return nil, err
 	}
-	prev := newListenAcc(from.Add(-to.Sub(from)), from, loc, false)
+	prev := newListenAcc(from.Add(-to.Sub(from)), from, loc, listenTotals)
 	// The current period takes the whole hour holding from, so the previous one
 	// stops before it: that hour is counted once, not in both.
 	prev.endHour = cur.firstHour
@@ -286,11 +288,20 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 	return out, nil
 }
 
+// listenLevel is how much a listenAcc keeps beyond the period's totals.
+type listenLevel int
+
+const (
+	listenTotals listenLevel = iota // only the totals (the previous period)
+	listenDays                      // the totals and each day's listening per user (the calendar)
+	listenAll                       // everything the Activity page shows
+)
+
 // listenAcc accumulates listening over a period.
 type listenAcc struct {
 	from, to time.Time
 	loc      *time.Location
-	detail   bool  // everything, or only the totals (the previous period)
+	level    listenLevel
 	onlyUser int64 // only this user's listening (0 = everyone's)
 
 	listened  float64
@@ -334,10 +345,10 @@ type playKey struct {
 	codec      string
 }
 
-func newListenAcc(from, to time.Time, loc *time.Location, detail bool) *listenAcc {
+func newListenAcc(from, to time.Time, loc *time.Location, level listenLevel) *listenAcc {
 	f := from.In(loc)
 	return &listenAcc{
-		from: from, to: to, loc: loc, detail: detail,
+		from: from, to: to, loc: loc, level: level,
 		listeners: map[int64]bool{}, books: map[Ref]*bookAcc{}, days: map[string]map[int64]float64{},
 		authors: map[string]*personAcc{}, narrators: map[string]*personAcc{}, users: map[int64]*userAcc{},
 		playback: map[playKey]*PlaybackShare{}, clients: map[Client]map[int64]bool{},
@@ -368,13 +379,16 @@ func (a *listenAcc) add(r listenRow, day string, hour *time.Time, secs float64) 
 	}
 	b.listened += secs
 	b.listeners[r.user] = true
-	if !a.detail {
+	if a.level < listenDays {
 		return
 	}
 	if a.days[day] == nil {
 		a.days[day] = map[int64]float64{}
 	}
 	a.days[day][r.user] += secs
+	if a.level < listenAll {
+		return
+	}
 	if hour != nil {
 		a.hw[(int(hour.Weekday())+6)%7][hour.Hour()] += secs
 	}
@@ -412,7 +426,7 @@ func (a *listenAcc) user(r listenRow) *userAcc {
 func (a *listenAcc) countSession(r listenRow, n int) {
 	a.sessions += n
 	a.listeners[r.user] = true
-	if a.detail {
+	if a.level == listenAll {
 		a.user(r).sessions += n
 	}
 }
@@ -441,7 +455,7 @@ func (c *Catalog) collectListening(ctx context.Context, a *listenAcc) error {
 
 func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 	cols, joins := listenRowColumns, listenRowJoins("s")
-	if !a.detail { // totals only: no names needed
+	if a.level < listenAll { // totals or days only: no names needed
 		cols, joins = listenRowBlanks, ""
 	}
 	rows, err := c.db.QueryContext(ctx,
@@ -470,7 +484,7 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 			return err
 		}
 		a.addSession(r, parseSessionTime(startS), parseSessionTime(lastS), listened, playKey{transcoded, codec})
-		if a.detail {
+		if a.level == listenAll {
 			if a.clients[client] == nil {
 				a.clients[client] = map[int64]bool{}
 			}
@@ -496,7 +510,7 @@ func (a *listenAcc) addSession(r listenRow, start, last time.Time, listened floa
 	if startedIn {
 		a.countSession(r, 1)
 	}
-	if !a.detail {
+	if a.level < listenAll {
 		return
 	}
 	if inRange > 0 || startedIn {
@@ -518,7 +532,7 @@ func (a *listenAcc) addSession(r listenRow, start, last time.Time, listened floa
 
 func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 	cols, joins := listenRowColumns, listenRowJoins("d")
-	if !a.detail {
+	if a.level < listenAll {
 		cols, joins = listenRowBlanks, ""
 	}
 	rows, err := c.db.QueryContext(ctx,
@@ -948,7 +962,8 @@ var ErrInvalidRange = errors.New("invalid range")
 
 // ParseActivityRange turns the Activity page's period into [from, to): a
 // trailing range ("7d", "30d", "90d", "1y") ending now, or a calendar year in
-// server time ("2025"; the current year ends now). An empty value is "30d".
+// server time ("2025"; the current year ends now; "year" is the current one, and
+// the label names it). An empty value is "30d".
 // "Now" is rounded up to the next whole second, so a session recorded in the
 // same instant as the request still falls inside the period.
 func ParseActivityRange(v string, now time.Time, loc *time.Location) (label string, from, to time.Time, err error) {
@@ -956,6 +971,9 @@ func ParseActivityRange(v string, now time.Time, loc *time.Location) (label stri
 	now = now.Truncate(time.Second).Add(time.Second)
 	if v == "" {
 		v = "30d"
+	}
+	if v == "year" { // this calendar year, in server time (the browser's may differ)
+		v = now.In(loc).Format("2006")
 	}
 	if n, ok := days[v]; ok {
 		return v, now.Add(-time.Duration(n) * 24 * time.Hour), now, nil

@@ -268,6 +268,16 @@ func TestParseActivityRange(t *testing.T) {
 	if _, _, to, _ := ParseActivityRange("2026", now, time.UTC); !to.Equal(end) {
 		t.Fatalf("the current year ends now, got %v", to)
 	}
+	// "year" is the server's current year, whatever the browser's clock says: on
+	// Dec 31 server time a browser already in Jan 1 would ask for a year not begun.
+	newYearsEve := time.Date(2026, 12, 31, 20, 0, 0, 0, time.UTC)
+	label, from, _, err := ParseActivityRange("year", newYearsEve, time.UTC)
+	if err != nil || label != "2026" || !from.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("year: %q from %v (%v), want 2026", label, from, err)
+	}
+	if label, _, _, _ := ParseActivityRange("year", newYearsEve, time.FixedZone("UTC+10", 10*3600)); label != "2027" {
+		t.Fatalf("year in a zone already in 2027: %q", label)
+	}
 	for _, bad := range []string{"2d", "2027", "1999", "abcd", "30"} {
 		if _, _, _, err := ParseActivityRange(bad, now, time.UTC); !errors.Is(err, ErrInvalidRange) {
 			t.Errorf("%q: err = %v, want ErrInvalidRange", bad, err)

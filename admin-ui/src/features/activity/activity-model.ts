@@ -192,10 +192,16 @@ export function monthTotals(days: readonly ActivityDay[]): number[] {
   return out;
 }
 
-/** How many of a person's progress rows were finished within a year (by their finish date). */
-export function finishedCount(rows: readonly UserProgress[], year: number): number {
+/**
+ * How many of a person's progress rows were finished within a year, by their finish
+ * date in server time (`utcOffset` minutes), the calendar the listening days use.
+ */
+export function finishedCount(rows: readonly UserProgress[], year: number, utcOffset: number) {
   return rows.filter(
-    (r) => r.finished && r.finished_at && new Date(r.finished_at).getFullYear() === year,
+    (r) =>
+      r.finished &&
+      r.finished_at &&
+      new Date(Date.parse(r.finished_at) + utcOffset * 60_000).getUTCFullYear() === year,
   ).length;
 }
 
@@ -310,6 +316,6 @@ export function clientParts(client: Pick<ClientInfo, 'app' | 'version' | 'platfo
 }
 
 /** The years "Year in listening" offers: this year and the four before it, newest first. */
-export function recentYears(now: Date, count = 5): number[] {
-  return Array.from({ length: count }, (_, i) => now.getFullYear() - i);
+export function recentYears(thisYear: number, count = 5): number[] {
+  return Array.from({ length: count }, (_, i) => thisYear - i);
 }

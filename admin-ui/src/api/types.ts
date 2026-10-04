@@ -330,6 +330,8 @@ export interface ListeningDays {
   from: string;
   to: string;
   timezone: string;
+  /** The server's offset from UTC, in minutes. */
+  utc_offset: number;
   days: ActivityDay[];
 }
 

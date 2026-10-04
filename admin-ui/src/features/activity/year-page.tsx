@@ -1,7 +1,8 @@
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Sparkles } from 'lucide-react';
-import { useActivity, useServerInfo } from '@/api/hooks';
+import { useQueryClient } from '@tanstack/react-query';
+import { keys, useActivity, useServerInfo } from '@/api/hooks';
 import type { Activity } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { EmptyState } from '@/components/empty-state';
@@ -21,11 +22,15 @@ export function YearPage() {
   const { t } = useTranslation();
   const search = useSearch({ strict: false }) as { year?: number };
   const navigate = useNavigate();
-  const now = new Date();
-  const year = search.year ?? now.getFullYear();
-  const years = recentYears(now);
+  const qc = useQueryClient();
+  // With no year picked, the server's "year" (its current one, which the browser's
+  // clock can be a day away from around New Year); its answer names it.
+  const activity = useActivity(search.year ? String(search.year) : 'year');
+  const thisYear =
+    Number(qc.getQueryData<Activity>(keys.activity('year'))?.range) || new Date().getFullYear();
+  const year = search.year ?? thisYear;
+  const years = recentYears(thisYear);
   if (!years.includes(year)) years.push(year);
-  const activity = useActivity(String(year));
 
   return (
     <Page>
@@ -41,7 +46,7 @@ export function YearPage() {
               const y = Number(e.target.value);
               void navigate({
                 to: '.',
-                search: y === now.getFullYear() ? {} : { year: y },
+                search: y === thisYear ? {} : { year: y },
                 replace: true,
               });
             }}
@@ -72,7 +77,7 @@ export function YearPage() {
           body={t('year.empty.body')}
         />
       ) : (
-        <YearStory a={activity.data} year={year} current={year === now.getFullYear()} />
+        <YearStory a={activity.data} year={year} current={year === thisYear} />
       )}
     </Page>
   );
@@ -146,13 +151,13 @@ function YearStory({ a, year, current }: { a: Activity; year: number; current: b
                     })}
                     {narrator ? ` ${t('year.voice', { name: narrator.name })}` : ''}
                   </span>
-                  <div className="flex -space-x-2">
+                  <div className="flex -space-x-1.5">
                     {a.top_users.slice(0, 5).map((u) => (
                       <Monogram
                         key={u.user_id}
                         name={u.username}
-                        size={32}
-                        className="ring-2 ring-card"
+                        size={34}
+                        className="ring-[3px] ring-card"
                       />
                     ))}
                   </div>

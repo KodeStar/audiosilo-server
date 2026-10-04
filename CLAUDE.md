@@ -573,7 +573,10 @@ admin overrides; see Metadata overrides below).
   /admin/users/{id}/progress`, `PATCH /admin/libraries/{id}/progress?path=&user_id=`
   (`catalog.EditProgress`: finished / position / dates, stamped with server time + version so it
   beats stale device saves; it starts progress only on a book the *user* can see, by the user's own
-  scope, else 409 `no_access`, while existing rows stay editable after access is taken away) and `GET /admin/stats?range=7d|30d|90d|1y|<year>` (answers only `{"activity"}`,
+  scope, else 409 `no_access`, while existing rows stay editable after access is taken away; a
+  `YYYY-MM-DD` date is the start of that day for `started_at` and the end of it, or now if sooner, for
+  `finished_at`) and `GET /admin/stats?range=7d|30d|90d|1y|<year>|year` (`year` = the current year in
+  server time, labelled with it, so the browser's clock never picks the year; answers only `{"activity"}`,
   `catalog.ActivityFor`, bucketed in server time, without the Overview's figures; 400 `invalid_range`),
   plus `GET /admin/listening?range=&user_id=` (`catalog.ListeningDaysFor`: the same days, of everyone
   or one person, and nothing else: the year calendar and a person's listening year). Book-page

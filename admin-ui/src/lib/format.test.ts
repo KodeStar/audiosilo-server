@@ -87,6 +87,9 @@ describe('format', () => {
   it('formats listening in hours, one decimal under 10', () => {
     expect(formatHours(0, 'en')).toBe('0h');
     expect(formatHours(8640, 'en')).toBe('2.4h');
+    // Under an hour, minutes: a short period isn't all "0h".
+    expect(formatHours(1440, 'en')).toBe('24m');
+    expect(formatHours(30, 'en')).toBe('30s');
     expect(formatHours(460_800, 'en')).toBe('128h');
   });
 

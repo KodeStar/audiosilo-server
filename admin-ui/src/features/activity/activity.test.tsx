@@ -13,7 +13,9 @@ import { signedInRoutes } from '@/test/routes';
 function statsRoute(by: (range: string) => Activity = (range) => activity({ range })): MockRoute {
   return (req: MockRequest) => {
     const range = req.query.get('range');
-    return { body: range ? { activity: by(range) } : stats() };
+    // Like the server, "year" answers for (and is labelled with) the current year.
+    const label = range === 'year' ? String(new Date().getFullYear()) : range;
+    return { body: label ? { activity: by(label) } : stats() };
   };
 }
 
@@ -222,7 +224,8 @@ describe('year in listening', () => {
     expect(await screen.findByText('2 people listened for 9h.')).toBeInTheDocument();
     expect(screen.getByText('Book of the year')).toBeInTheDocument();
     expect(screen.getByText(/The most heard voice: Ray Porter/)).toBeInTheDocument();
-    expect(calls.some((c) => c.query.get('range') === String(year))).toBe(true);
+    // No year picked: the server's current year, which it names.
+    expect(calls.some((c) => c.query.get('range') === 'year')).toBe(true);
     const user = userEvent.setup();
     await user.selectOptions(screen.getByRole('combobox', { name: 'Year' }), String(year - 1));
     await waitFor(() => expect(router.state.location.search).toEqual({ year: year - 1 }));

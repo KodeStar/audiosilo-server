@@ -51,10 +51,12 @@ export function formatDuration(seconds: number, lang: string): string {
 }
 
 /**
- * Listening time in hours: "2.4h" (one decimal under 10), "128h", "0h" for none.
- * Totals over periods read better in hours than as "127h 48m".
+ * Listening time in hours: "2.4h" (one decimal under 10), "128h", "0h" for none;
+ * under an hour in minutes ("24m"), which "0.4h" says less clearly. Totals over
+ * periods read better in hours than as "127h 48m".
  */
 export function formatHours(seconds: number, lang: string): string {
+  if (seconds > 0 && seconds < 3570) return formatDuration(seconds, lang);
   const h = Math.max(0, seconds) / 3600;
   return unit(h < 10 ? Math.round(h * 10) / 10 : Math.round(h), 'hour', lang, 1);
 }

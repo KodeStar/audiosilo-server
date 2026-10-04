@@ -215,7 +215,7 @@ function YearCard({ current }: { current: Activity }) {
   const { t } = useTranslation();
   const own = current.range === '1y' ? current.days : undefined;
   const year = useListeningDays('1y', 0, !own);
-  const days = own ?? year.data;
+  const days = own ?? year.data?.days;
   return (
     <Card aria-labelledby="year-title">
       <CardHeader
@@ -313,7 +313,7 @@ function TopPeople({ a }: { a: Activity }) {
                 <b className="truncate font-semibold">{u.username}</b>
                 <span className="truncate text-[12px] text-muted-foreground">
                   {t('activity.topPeople.detail', {
-                    books: formatNumber(u.books, lang),
+                    ...counted(u.books, lang),
                     finished: formatNumber(u.finished, lang),
                   })}
                 </span>

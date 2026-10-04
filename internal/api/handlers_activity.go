@@ -158,9 +158,26 @@ func (a *API) handleUserProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // optionalTime decodes a date field that may be absent (leave it), null (clear
-// it), an RFC3339 time or a YYYY-MM-DD day (the start of that day, server time,
-// so "started today" and "finished today" both fit a book finished this morning).
-type optionalTime struct{ catalog.OptionalTime }
+// it), an RFC3339 time or a YYYY-MM-DD day (day is then set: the start of that
+// day, server time; endOfDay moves a finish date to the day's end).
+type optionalTime struct {
+	catalog.OptionalTime
+	day bool
+}
+
+// endOfDay moves a day-only finish date to the end of that day, or to now when
+// that is sooner: a book started at 3 pm and "finished today" was finished after
+// it started, not at midnight before it.
+func (o *optionalTime) endOfDay(now time.Time) {
+	if !o.day || o.Value == nil {
+		return
+	}
+	end := o.Value.AddDate(0, 0, 1).Add(-time.Second)
+	if end.After(now) {
+		end = now
+	}
+	o.Value = &end
+}
 
 func (o *optionalTime) UnmarshalJSON(b []byte) error {
 	o.Set = true
@@ -177,7 +194,7 @@ func (o *optionalTime) UnmarshalJSON(b []byte) error {
 		if derr != nil {
 			return err
 		}
-		t = day
+		t, o.day = day, true
 	}
 	o.Value = &t
 	return nil
@@ -201,14 +218,6 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 	if user == nil {
 		return
 	}
-	// The user's own scope, not the admin's: an edit may start progress only on a
-	// book the user can see (EditProgress applies it to new rows only).
-	scope, err := a.cat.UserScope(r.Context(), user.ID, lib.ID, user.Role == auth.RoleAdmin)
-	if err != nil {
-		a.log.Warn("user scope failed", "err", err, "user", userID)
-		writeError(w, http.StatusInternalServerError, "access check failed")
-		return
-	}
 	var body struct {
 		Finished   *bool        `json:"finished"`
 		Position   *float64     `json:"position"`
@@ -217,6 +226,15 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &body, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	body.FinishedAt.endOfDay(time.Now())
+	// The user's own scope, not the admin's: an edit may start progress only on a
+	// book the user can see (EditProgress applies it to new rows only).
+	scope, err := a.cat.UserScope(r.Context(), user.ID, lib.ID, user.Role == auth.RoleAdmin)
+	if err != nil {
+		a.log.Warn("user scope failed", "err", err, "user", userID)
+		writeError(w, http.StatusInternalServerError, "access check failed")
 		return
 	}
 	saved, err := a.cat.EditProgress(r.Context(), userID, catalog.Ref{LibraryID: lib.ID, Path: p}, catalog.ProgressEdit{

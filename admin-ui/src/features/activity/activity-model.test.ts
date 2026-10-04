@@ -196,7 +196,11 @@ describe('finishedCount', () => {
       row('d', null),
       row('e', '2026-03-01T10:00:00Z', false),
     ];
-    expect(finishedCount(rows, 2026)).toBe(2);
+    expect(finishedCount(rows, 2026, 0)).toBe(2);
+    // Counted in server time: 2025-12-31 23:30 UTC is already 2026 an hour east.
+    const eve = [row('f', '2025-12-31T23:30:00Z')];
+    expect(finishedCount(eve, 2025, 0)).toBe(1);
+    expect(finishedCount(eve, 2026, 60)).toBe(1);
   });
 });
 
@@ -262,6 +266,6 @@ describe('versions and clients', () => {
 
 describe('recentYears', () => {
   it('offers this year and four before it', () => {
-    expect(recentYears(new Date(2026, 5, 1))).toEqual([2026, 2025, 2024, 2023, 2022]);
+    expect(recentYears(2026)).toEqual([2026, 2025, 2024, 2023, 2022]);
   });
 });
