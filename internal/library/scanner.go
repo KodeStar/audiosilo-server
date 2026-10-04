@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -657,22 +658,37 @@ func partTitle(relPath string) string {
 // everything under it); rl, when set, logs unreadable entries. The walk stops with
 // ctx (a Stop, the scan's time limit, shutdown): on a large network share it can
 // take minutes.
+//
+// A root that is itself a symlink (a NAS mount linked into place) is resolved
+// first and the walk starts at its target: filepath.WalkDir Lstat's its root, so
+// such a root was one non-directory entry and indexed nothing. Links below the
+// root are still not followed. Rel paths are taken against the folder walked and
+// folders are named under lib.Root, so both are the same whether or not the root
+// is a link. (Not os.DirFS: it refuses folder names that aren't valid UTF-8,
+// which a Linux share can hold, and every scan would then read as partial.)
 func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog) (books []*catalog.Book, hadErrors bool, err error) {
 	dirs := map[string]bool{}
 	rootClean := filepath.Clean(lib.Root)
-	err = filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, walkErr error) error {
+	walkRoot := lib.Root
+	if fi, lerr := os.Lstat(lib.Root); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
+			walkRoot = resolved
+		}
+	}
+	err = filepath.WalkDir(walkRoot, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		rel := relPathOf(walkRoot, p) // "" for the root
 		if walkErr != nil {
 			// Warn and skip just the unreadable entry rather than aborting the whole
 			// scan, but record that discovery was partial so the caller skips pruning.
 			hadErrors = true
 			log.Warn("skipping unreadable path during discovery",
-				"library", lib.Name, "path", path, "err", walkErr)
+				"library", lib.Name, "path", filepath.Join(lib.Root, filepath.FromSlash(rel)), "err", walkErr)
 			if rl != nil {
 				rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
-					e.Path, e.Detail = relPathOf(lib.Root, path), pathErrText(walkErr)
+					e.Path, e.Detail = rel, pathErrText(walkErr)
 				})
 			}
 			return nil
@@ -681,18 +697,17 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 			// Skip hidden directories (.Trash-1000, Syncthing .stversions, .git) so
 			// their audio isn't indexed into books unreachable via the fs browse view
 			// (which also hides them). Never skip the library root itself, even when
-			// its own name begins with a dot; WalkDir passes the root argument
-			// verbatim, so a direct comparison identifies the root callback.
-			if path != lib.Root && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(relPathOf(lib.Root, path), true))) {
+			// its own name begins with a dot.
+			if p != walkRoot && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))) {
 				return fs.SkipDir
 			}
 			return nil
 		}
 		if isHidden(d.Name()) || !metadata.IsAudio(d.Name()) ||
-			(!ignore.Empty() && ignore.Match(relPathOf(lib.Root, path), false)) {
+			(!ignore.Empty() && ignore.Match(rel, false)) {
 			return nil
 		}
-		dirs[filepath.Dir(path)] = true
+		dirs[filepath.Join(lib.Root, filepath.FromSlash(path.Dir(rel)))] = true
 		return nil
 	})
 	if err != nil {
@@ -850,9 +865,10 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 	// SafeJoin is the security gate (rejects traversal and symlink escapes). It
 	// returns a symlink-RESOLVED path, but we derive the working path from an
 	// unresolved join so the rel_path computed by fileBook/folderBook matches the
-	// full scan, which walks lib.Root unresolved. Using SafeJoin's resolved path
-	// here would yield a "../"-laden rel_path whenever any component of lib.Root
-	// is a symlink (e.g. macOS /tmp -> /private/tmp, or a NAS /data -> /mnt/...).
+	// full scan, which names folders under lib.Root unresolved. Using SafeJoin's
+	// resolved path here would yield a "../"-laden rel_path whenever any component
+	// of lib.Root is a symlink (e.g. macOS /tmp -> /private/tmp, or a NAS /data ->
+	// /mnt/...).
 	if _, err := SafeJoin(lib.Root, relPath); err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -348,6 +349,52 @@ func TestIndexPathSymlinkedRoot(t *testing.T) {
 	// And the book must be retrievable by its folder path.
 	if _, err := cat.GetBookByPath(ctx, lib.ID, wantRel); err != nil {
 		t.Fatalf("GetBookByPath(%q) after on-demand index: %v", wantRel, err)
+	}
+}
+
+// TestScanSymlinkedRoot: a library whose root folder is itself a symlink indexes
+// the same books, under the same rel paths (book and file), as the folder it
+// points at. WalkDir doesn't follow a symlinked root, so this once indexed 0.
+func TestScanSymlinkedRoot(t *testing.T) {
+	cat, scanner, ctx := newScanEnv(t)
+	real, _ := filepath.Abs(testdataRoot(t))
+	link := filepath.Join(t.TempDir(), "library-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	paths := func(root string) []string {
+		t.Helper()
+		lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: filepath.Base(root), Root: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := scanner.Scan(ctx, *lib); err != nil {
+			t.Fatalf("Scan(%s): %v", root, err)
+		}
+		page, err := cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, b := range page.Books {
+			full, err := cat.GetBook(ctx, b.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, b.RelPath)
+			for _, f := range full.Files {
+				out = append(out, "  "+f.RelPath)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	want, got := paths(real), paths(link)
+	if len(want) == 0 {
+		t.Fatal("setup: the fixture library indexed nothing")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("symlinked root indexed %q, want %q", got, want)
 	}
 }
 
