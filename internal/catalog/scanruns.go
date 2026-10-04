@@ -133,11 +133,8 @@ func scanRunDest(r *ScanRun) []any {
 
 // ListScanRuns returns recorded runs newest first, without their logs: of one
 // library (or all, libraryID 0), older than the run `before` (0 = from the newest),
-// at most limit (1-200, default 50).
+// at most limit (the caller bounds it).
 func (c *Catalog) ListScanRuns(ctx context.Context, libraryID, before int64, limit int) ([]ScanRun, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
 	return queryRows(ctx, c.db, func(rows *sql.Rows, r *ScanRun) error {
 		return rows.Scan(scanRunDest(r)...)
 	}, `SELECT `+scanRunCols+scanRunFrom+`
@@ -167,23 +164,23 @@ func (c *Catalog) GetScanRun(ctx context.Context, id int64) (*ScanRun, error) {
 // LastScanStarts returns when each library's newest recorded scan started (what a
 // schedule counts from), by library id. Libraries never scanned are absent.
 func (c *Catalog) LastScanStarts(ctx context.Context) (map[int64]time.Time, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT library_id, MAX(started_at) FROM scan_runs GROUP BY library_id`)
+	type start struct {
+		id int64
+		at string
+	}
+	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, s *start) error {
+		return rows.Scan(&s.id, &s.at)
+	}, `SELECT library_id, MAX(started_at) FROM scan_runs GROUP BY library_id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[int64]time.Time{}
-	for rows.Next() {
-		var id int64
-		var at string
-		if err := rows.Scan(&id, &at); err != nil {
-			return nil, err
-		}
-		if t, err := time.Parse(time.RFC3339, at); err == nil {
-			out[id] = t
+	out := make(map[int64]time.Time, len(rows))
+	for _, r := range rows {
+		if t, err := time.Parse(time.RFC3339, r.at); err == nil {
+			out[r.id] = t
 		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // LastScanFinished returns when the newest finished scan of any library ended

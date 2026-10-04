@@ -1,13 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { api } from '@/api/client';
-import { invalidateCover, invalidateIssues, settleBookEdit } from '@/api/hooks';
+import { BULK_LIMIT, api } from '@/api/client';
+import { invalidateIssues, rescanBook } from '@/api/hooks';
 import type { AdminBook, BookRef, IssueKind } from '@/api/types';
 import { bookRoute, refOf } from '@/lib/book-route';
 import { toastError } from '@/lib/errors';
 import { counted } from '@/lib/format';
 import { toast } from '@/lib/toast';
+import { chunk } from '@/lib/utils';
 import { FIXES } from './issues-model';
 
 /**
@@ -20,10 +21,14 @@ export function useIssueActions(kind: IssueKind) {
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const navigate = useNavigate();
+  // Large selections go in batches of the server's limit.
+  const send = async (fn: typeof api.ignoreIssue, refs: BookRef[]) => {
+    for (const part of chunk(refs, BULK_LIMIT)) await fn(kind, part);
+  };
 
   const unignore = async (refs: BookRef[], quiet = false) => {
     try {
-      await api.unignoreIssue(kind, refs);
+      await send(api.unignoreIssue, refs.map(refOf));
       if (!quiet) {
         toast.add({
           title: t('health.toast.unignored', counted(refs.length, lang)),
@@ -41,7 +46,7 @@ export function useIssueActions(kind: IssueKind) {
   const ignore = async (books: Pick<AdminBook, 'library_id' | 'path' | 'title'>[]) => {
     const refs = books.map(refOf);
     try {
-      await api.ignoreIssue(kind, refs);
+      await send(api.ignoreIssue, refs);
       toast.add({
         title:
           books.length === 1
@@ -59,24 +64,21 @@ export function useIssueActions(kind: IssueKind) {
   };
 
   const rescan = async (b: AdminBook) => {
+    const title = b.title || b.path;
     try {
-      const fresh = await api.rescanBook(b.library_id, b.path);
-      settleBookEdit(qc, fresh);
-      invalidateCover(qc, b.library_id, b.path);
+      const fresh = await rescanBook(qc, b);
       toast.add(
         fresh.book.scan_error
           ? {
-              title: t('health.toast.stillBroken', { title: b.title || b.path }),
+              title: t('health.toast.stillBroken', { title }),
               description:
                 fresh.book.scan_error_detail || t(`health.code.${fresh.book.scan_error}`),
               type: 'warning',
             }
-          : { title: t('health.toast.fixed', { title: b.title || b.path }), type: 'success' },
+          : { title: t('health.toast.fixed', { title }), type: 'success' },
       );
     } catch (err) {
-      toastError(t('health.toast.rescanFailed', { title: b.title || b.path }), err);
-    } finally {
-      invalidateIssues(qc);
+      toastError(t('health.toast.rescanFailed', { title }), err);
     }
   };
 
@@ -86,7 +88,7 @@ export function useIssueActions(kind: IssueKind) {
         return navigate(bookRoute(b.library_id, b.path));
       case 'match':
         return navigate({
-          ...bookRoute(b.library_id, b.path),
+          to: '/library/book',
           search: { library: b.library_id, path: b.path, match: true },
         });
       case 'folder':
@@ -102,3 +104,5 @@ export function useIssueActions(kind: IssueKind) {
 
   return { ignore, unignore, fix, rescan };
 }
+
+export type IssueActions = ReturnType<typeof useIssueActions>;

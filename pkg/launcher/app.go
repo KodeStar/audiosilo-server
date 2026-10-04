@@ -150,7 +150,9 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	scanner.Start(ctx)
-	queueStartupScans(ctx, cat, scanner, log)
+	if _, err := scanner.EnqueueAll(ctx, library.TriggerStartup, nil); err != nil {
+		log.Warn("startup scan: list libraries failed", "err", err)
+	}
 
 	// In demo mode, reap idle throwaway accounts in the background.
 	if cfg.Demo.Enabled {
@@ -374,19 +376,6 @@ func syncLibraries(ctx context.Context, cfg *config.Config, cat *catalog.Catalog
 		}
 	}
 	return nil
-}
-
-// queueStartupScans queues one scan of every library in the job queue, which runs
-// them one at a time in the background.
-func queueStartupScans(ctx context.Context, cat *catalog.Catalog, scanner *library.Scanner, log *slog.Logger) {
-	libs, err := cat.ListLibraries(ctx)
-	if err != nil {
-		log.Warn("startup scan: list libraries failed", "err", err)
-		return
-	}
-	for _, l := range libs {
-		scanner.Enqueue(l, library.TriggerStartup, nil)
-	}
 }
 
 // demoReaper periodically deletes demo accounts idle longer than idleTTL, keeping

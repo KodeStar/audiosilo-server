@@ -37,6 +37,25 @@ type ignoreRule struct {
 // Ignore is a parsed ignore list. The zero value (and nil) ignores nothing.
 type Ignore struct{ rules []ignoreRule }
 
+// parseLine reads one stored line: skip for a blank line or a comment, else the
+// rule or why it can't be used.
+func parseLine(l string) (r ignoreRule, skip bool, err error) {
+	if l == "" || strings.HasPrefix(l, "#") {
+		return r, true, nil
+	}
+	if len(l) > maxIgnorePattern {
+		return r, false, fmt.Errorf("%w: %q is longer than %d characters", ErrInvalidIgnore, l, maxIgnorePattern)
+	}
+	r = parseRule(l)
+	if r.pattern == "" {
+		return r, false, fmt.Errorf("%w: %q matches nothing", ErrInvalidIgnore, l)
+	}
+	if _, err := path.Match(r.pattern, ""); err != nil {
+		return r, false, fmt.Errorf("%w: %q: %v", ErrInvalidIgnore, l, err)
+	}
+	return r, false, nil
+}
+
 // NormalizeIgnore cleans an ignore list for storage: trims each line, drops blank
 // lines, and validates every pattern (ErrInvalidIgnore, naming the line). Comments
 // are kept.
@@ -48,24 +67,16 @@ func NormalizeIgnore(lines []string) ([]string, error) {
 		if l == "" {
 			continue
 		}
+		_, skip, err := parseLine(l)
+		if err != nil {
+			return nil, err
+		}
+		if !skip {
+			if n++; n > maxIgnorePatterns {
+				return nil, fmt.Errorf("%w: more than %d patterns", ErrInvalidIgnore, maxIgnorePatterns)
+			}
+		}
 		out = append(out, l)
-		if strings.HasPrefix(l, "#") {
-			continue
-		}
-		n++
-		if n > maxIgnorePatterns {
-			return nil, fmt.Errorf("%w: more than %d patterns", ErrInvalidIgnore, maxIgnorePatterns)
-		}
-		if len(l) > maxIgnorePattern {
-			return nil, fmt.Errorf("%w: %q is longer than %d characters", ErrInvalidIgnore, l, maxIgnorePattern)
-		}
-		r := parseRule(l)
-		if r.pattern == "" {
-			return nil, fmt.Errorf("%w: %q matches nothing", ErrInvalidIgnore, l)
-		}
-		if _, err := path.Match(r.pattern, ""); err != nil {
-			return nil, fmt.Errorf("%w: %q: %v", ErrInvalidIgnore, l, err)
-		}
 	}
 	return out, nil
 }
@@ -75,18 +86,9 @@ func NormalizeIgnore(lines []string) ([]string, error) {
 func ParseIgnore(lines []string) *Ignore {
 	ig := &Ignore{}
 	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
+		if r, skip, err := parseLine(strings.TrimSpace(l)); !skip && err == nil {
+			ig.rules = append(ig.rules, r)
 		}
-		r := parseRule(l)
-		if r.pattern == "" {
-			continue
-		}
-		if _, err := path.Match(r.pattern, ""); err != nil {
-			continue
-		}
-		ig.rules = append(ig.rules, r)
 	}
 	return ig
 }

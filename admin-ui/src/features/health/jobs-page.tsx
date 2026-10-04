@@ -8,7 +8,7 @@ import { keys, useJobs, useLibraries, useScanRun, useScanRuns } from '@/api/hook
 import type { Job, ScanRun, ScheduledScan } from '@/api/types';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
-import { ProgressBar } from '@/components/progress-bar';
+import { Notice } from '@/components/notice';
 import { QueryError } from '@/components/query-error';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -21,13 +21,20 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { NativeSelect } from '@/components/ui/native-select';
 import { rescanAll, rescanLibrary } from '@/features/libraries/rescan';
+import { ScanProgressBar } from '@/features/libraries/library-card';
 import { scheduleLabel } from '@/features/libraries/scan-settings';
 import { toastError } from '@/lib/errors';
-import { formatDateTime, formatNumber, formatRelative, progressFraction } from '@/lib/format';
+import {
+  formatClockTime,
+  formatDateTime,
+  formatNumber,
+  formatRelative,
+  formatTook,
+} from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { say } from './issues-model';
-import { eventPhrase, formatTook, runSeconds, runSummary, statusTone } from './jobs-model';
+import { eventPhrase, runSeconds, runSummary, statusTone } from './jobs-model';
 
 /**
  * Health > Jobs: the scan running now (live), what waits behind it, the
@@ -125,20 +132,10 @@ function NowCard({
   if (loading) return <div className="skel h-[148px] rounded-xl" />;
   if (!job) {
     return (
-      <section
-        className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-5"
-        aria-label={t('jobs.now')}
-      >
-        <span
-          className="grid size-[38px] place-items-center rounded-[11px] bg-success-soft text-success"
-          aria-hidden="true"
-        >
-          <Check className="size-[18px]" />
-        </span>
-        <div className="flex flex-col">
-          <b>{t('jobs.idle.title')}</b>
-          <span className="text-[12.5px] text-muted-foreground">{t('jobs.idle.body')}</span>
-        </div>
+      <section aria-label={t('jobs.now')}>
+        <Notice tone="safe" icon={Check} title={t('jobs.idle.title')}>
+          {t('jobs.idle.body')}
+        </Notice>
       </section>
     );
   }
@@ -183,18 +180,7 @@ function NowCard({
           </Button>
         </div>
       </div>
-      <ProgressBar
-        fraction={p?.total ? progressFraction(p.done, p.total) : undefined}
-        label={t('libraries.scanProgress')}
-      />
-      <span className="-mt-2 text-[12px] text-muted-foreground tabular-nums">
-        {p?.total
-          ? t('libraries.scanCount', {
-              done: formatNumber(p.done, lang),
-              total: formatNumber(p.total, lang),
-            })
-          : t('libraries.scanDiscovering')}
-      </span>
+      {p ? <ScanProgressBar progress={p} lang={lang} /> : null}
       <dl className="grid grid-cols-3 gap-2 sm:grid-cols-5">
         {counters.map(([label, n]) => (
           <div key={label} className="flex flex-col-reverse">
@@ -412,7 +398,7 @@ function RunRow({ run: r, open, onToggle }: { run: ScanRun; open: boolean; onTog
 function RunLog({ id }: { id: number }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const run = useScanRun(id, true);
+  const run = useScanRun(id);
   if (run.isError) {
     return (
       <div className="px-5 pb-4">
@@ -435,11 +421,7 @@ function RunLog({ id }: { id: number }) {
           return (
             <li key={i} className="flex gap-3 [overflow-wrap:anywhere]">
               <span className="shrink-0 text-subtle-foreground tabular-nums">
-                {new Intl.DateTimeFormat(lang, {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                }).format(Date.parse(e.at))}
+                {formatClockTime(e.at, lang)}
               </span>
               <span
                 className={cn(

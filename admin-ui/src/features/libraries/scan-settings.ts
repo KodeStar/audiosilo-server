@@ -46,8 +46,3 @@ export function textToPatterns(text: string): string[] {
     .map((l) => l.trim())
     .filter(Boolean);
 }
-
-/** Whether two ignore lists are the same rules (an edit that changes them rescans). */
-export function samePatterns(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((p, i) => p === b[i]);
-}

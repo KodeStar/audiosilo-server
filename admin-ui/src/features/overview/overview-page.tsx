@@ -295,7 +295,7 @@ function RecentRow({ row, lang }: { row: ListeningRow; lang: string }) {
   );
 }
 
-/** The Health categories that need attention, most first, each opening its queue. */
+/** The Health categories that need attention, in the Health page's order, each opening its queue. */
 function NeedsAttention({ lang }: { lang: string }) {
   const { t } = useTranslation();
   const issues = useIssues();

@@ -115,9 +115,6 @@ func TestScheduleNext(t *testing.T) {
 	if got := every.Next(now.Add(-2*time.Hour), now); !got.Equal(now.Add(4 * time.Hour)) {
 		t.Errorf("every 6h after a scan 2h ago = %v", got)
 	}
-	if got := every.Next(time.Time{}, now); !got.Equal(now.Add(6 * time.Hour)) {
-		t.Errorf("every 6h, never scanned = %v", got)
-	}
 	daily, _ := ParseSchedule("daily:03:00")
 	// Last scan yesterday 03:05: today's 03:00 is due (the server was off at 03:00).
 	if got := daily.Next(time.Date(2026, 10, 3, 3, 5, 0, 0, loc), now); !got.Equal(time.Date(2026, 10, 4, 3, 0, 0, 0, loc)) {
@@ -320,6 +317,11 @@ func TestCancelRunningScan(t *testing.T) {
 	if len(runs) != 1 || runs[0].Status != catalog.RunCancelled {
 		t.Fatalf("runs = %+v, want one cancelled", runs)
 	}
+	// The log closes with the same outcome the row records.
+	full, _ := cat.GetScanRun(ctx, runs[0].ID)
+	if last := full.Log[len(full.Log)-1]; last.Kind != "cancelled" {
+		t.Fatalf("closing event = %+v, want cancelled", last)
+	}
 	if n, _ := cat.CountBooksByLibrary(ctx); n[lib.ID] != 0 {
 		t.Fatalf("a cancelled scan indexed %d books", n[lib.ID])
 	}
@@ -344,7 +346,8 @@ func TestQueueDue(t *testing.T) {
 	if len(queued) != 1 || queued[0].LibraryID != due.ID || queued[0].Trigger != TriggerSchedule {
 		t.Fatalf("queued = %+v, want only the due library, by schedule", queued)
 	}
-	next, _ := s.NextScans(ctx)
+	libs, _ := cat.ListLibraries(ctx)
+	next, _ := s.NextScans(ctx, libs)
 	if _, ok := next[due.ID]; !ok || len(next) != 2 {
 		t.Fatalf("next scans = %v, want the two scheduled libraries", next)
 	}

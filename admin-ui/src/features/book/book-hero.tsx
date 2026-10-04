@@ -23,8 +23,7 @@ import { api } from '@/api/client';
 import {
   invalidateBooks,
   invalidateCover,
-  invalidateIssues,
-  settleBookEdit,
+  rescanBook,
   useLibraries,
   useServerInfo,
 } from '@/api/hooks';
@@ -45,7 +44,7 @@ import { formatBytes, formatDuration, formatRelative } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { COVER_TYPES, coverFileProblem } from './book-model';
+import { COVER_TYPES, audioLine, coverFileProblem } from './book-model';
 import { HERO_GRID } from './layout';
 import { useHeroTint } from './use-hero-tint';
 
@@ -91,16 +90,7 @@ export function BookHero({
       : { icon: Repeat, label: t('book.hero.transcode'), tone: 'text-warning' };
   const facts: { icon: LucideIcon; label: string; tone?: string }[] = [
     { icon: Clock, label: formatDuration(b.duration, lang) },
-    {
-      icon: FileAudio,
-      label: [
-        b.format.toUpperCase(),
-        b.codec.toUpperCase(),
-        b.file_count > 1 ? t('book.hero.files', { count: b.file_count }) : '',
-      ]
-        .filter(Boolean)
-        .join(' · '),
-    },
+    { icon: FileAudio, label: audioLine(b, t) },
     { icon: HardDrive, label: formatBytes(b.size, lang) },
     playback,
     { icon: CalendarPlus, label: t('book.hero.added', { time: formatRelative(b.added_at, lang) }) },
@@ -291,10 +281,7 @@ function MoreMenu({
   // Reads the book's files again now (tags, chapters, cover, read problems).
   const rescan = async () => {
     try {
-      const fresh = await api.rescanBook(b.library_id, b.path);
-      settleBookEdit(qc, fresh);
-      invalidateCover(qc, b.library_id, b.path);
-      invalidateIssues(qc);
+      await rescanBook(qc, b);
       toast.add({ title: t('book.more.rescanned'), type: 'success' });
     } catch (err) {
       toastError(t('book.more.rescanFailed'), err);

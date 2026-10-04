@@ -216,7 +216,9 @@ export function LibraryCard({
         </div>
       </div>
 
-      {running ? <ScanProgressBar progress={l.scan} lang={lang} /> : null}
+      {running ? (
+        <ScanProgressBar progress={l.scan} lang={lang} className="px-4 pb-4 md:px-5 md:pb-5" />
+      ) : null}
 
       {!l.available && !running && !queued ? (
         <OfflineNotice library={l} className="mx-4 mb-4 md:mx-5 md:mb-5" />
@@ -298,10 +300,19 @@ function FannedCovers({ library: l }: { library: AdminLibrary }) {
   );
 }
 
-function ScanProgressBar({ progress: p, lang }: { progress: ScanProgress; lang: string }) {
+/** A scan's progress bar and "N of M books checked" (the library card, Health > Jobs). */
+export function ScanProgressBar({
+  progress: p,
+  lang,
+  className,
+}: {
+  progress: ScanProgress;
+  lang: string;
+  className?: string;
+}) {
   const { t } = useTranslation();
   return (
-    <div className="px-4 pb-4 md:px-5 md:pb-5">
+    <div className={className}>
       <ProgressBar
         fraction={p.total ? progressFraction(p.done, p.total) : undefined}
         label={t('libraries.scanProgress')}

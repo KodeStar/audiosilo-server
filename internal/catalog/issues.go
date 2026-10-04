@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -58,6 +59,13 @@ const ignoredExpr = `EXISTS(SELECT 1 FROM issue_ignores ii
 // ValidIssue reports whether kind is one of IssueKinds.
 func ValidIssue(kind string) bool { return slices.Contains(IssueKinds, kind) }
 
+// ValidBookIssue reports whether kind lists books (every kind but duplicates,
+// which come as groups): what GET /admin/books?issue= accepts.
+func ValidBookIssue(kind string) bool {
+	_, ok := issuePredicates[kind]
+	return ok
+}
+
 // IssueSample is a book shown on a category's card (its cover).
 type IssueSample struct {
 	LibraryID int64  `json:"library_id"`
@@ -77,49 +85,79 @@ type IssueCount struct {
 // maxIssueSamples is how many covers a category card fans out.
 const maxIssueSamples = 3
 
-// IssueCounts computes each of kinds (book kinds and duplicates, in that order).
+// IssueCounts computes each of kinds, in that order. Every book kind is counted
+// in one pass over the books, with the ignores pivoted once; samples are only
+// looked up for a kind that has any.
 func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount, error) {
-	out := make([]IssueCount, 0, len(kinds))
-	for _, kind := range kinds {
-		ic := IssueCount{Kind: kind, Samples: []IssueSample{}}
-		if kind == IssueDuplicate {
-			groups, err := c.DuplicateGroups(ctx, 0, true)
+	var bookKinds []string
+	for _, k := range kinds {
+		if k != IssueDuplicate && !ValidBookIssue(k) {
+			return nil, fmt.Errorf("%w: %q", ErrUnknownIssue, k)
+		}
+		if k != IssueDuplicate {
+			bookKinds = append(bookKinds, k)
+		}
+	}
+	counts := map[string]*IssueCount{}
+	if len(bookKinds) > 0 {
+		// The kinds are this file's constants, never request input, so they can name
+		// columns.
+		var cols, flags []string
+		dest := make([]any, 0, 2*len(bookKinds))
+		for _, k := range bookKinds {
+			ic := &IssueCount{Kind: k, Samples: []IssueSample{}}
+			counts[k] = ic
+			pred := issuePredicates[k]
+			cols = append(cols,
+				`COALESCE(SUM(CASE WHEN `+pred+` AND ig.`+k+` IS NOT 1 THEN 1 ELSE 0 END), 0)`,
+				`COALESCE(SUM(CASE WHEN `+pred+` AND ig.`+k+` IS 1 THEN 1 ELSE 0 END), 0)`)
+			flags = append(flags, `MAX(kind = '`+k+`') AS `+k)
+			dest = append(dest, &ic.Count, &ic.Ignored)
+		}
+		q := `SELECT ` + strings.Join(cols, ", ") + ` FROM books b
+			LEFT JOIN (SELECT library_id, path, ` + strings.Join(flags, ", ") + `
+			             FROM issue_ignores GROUP BY library_id, path) ig
+			       ON ig.library_id = b.library_id AND ig.path = b.rel_path`
+		if err := c.db.QueryRowContext(ctx, q).Scan(dest...); err != nil {
+			return nil, err
+		}
+		for _, k := range bookKinds {
+			if counts[k].Count == 0 {
+				continue
+			}
+			samples, err := queryRows(ctx, c.db, func(rows *sql.Rows, s *IssueSample) error {
+				return rows.Scan(&s.LibraryID, &s.Path, &s.Title)
+			}, `SELECT b.library_id, b.rel_path, b.title FROM books b
+			     WHERE `+issuePredicates[k]+` AND NOT `+ignoredExpr+`
+			     ORDER BY b.added_at DESC, b.id DESC LIMIT ?`, k, maxIssueSamples)
 			if err != nil {
 				return nil, err
 			}
-			for _, g := range groups {
-				if g.Ignored {
-					ic.Ignored++
-					continue
-				}
-				ic.Count++
-				if len(ic.Samples) < maxIssueSamples {
-					m := g.Books[0]
-					ic.Samples = append(ic.Samples, IssueSample{LibraryID: m.LibraryID, Path: m.Path, Title: m.Title})
-				}
-			}
-			out = append(out, ic)
+			counts[k].Samples = samples
+		}
+	}
+	out := make([]IssueCount, 0, len(kinds))
+	for _, k := range kinds {
+		if k != IssueDuplicate {
+			out = append(out, *counts[k])
 			continue
 		}
-		pred, ok := issuePredicates[kind]
-		if !ok {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownIssue, kind)
-		}
-		if err := c.db.QueryRowContext(ctx,
-			`SELECT COALESCE(SUM(CASE WHEN `+ignoredExpr+` THEN 0 ELSE 1 END), 0),
-			        COALESCE(SUM(CASE WHEN `+ignoredExpr+` THEN 1 ELSE 0 END), 0)
-			   FROM books b WHERE `+pred, kind, kind).Scan(&ic.Count, &ic.Ignored); err != nil {
-			return nil, err
-		}
-		samples, err := queryRows(ctx, c.db, func(rows *sql.Rows, s *IssueSample) error {
-			return rows.Scan(&s.LibraryID, &s.Path, &s.Title)
-		}, `SELECT b.library_id, b.rel_path, b.title FROM books b
-		     WHERE `+pred+` AND NOT `+ignoredExpr+`
-		     ORDER BY b.added_at DESC, b.id DESC LIMIT ?`, kind, maxIssueSamples)
+		ic := IssueCount{Kind: k, Samples: []IssueSample{}}
+		rows, sets, err := c.duplicateSets(ctx, 0)
 		if err != nil {
 			return nil, err
 		}
-		ic.Samples = samples
+		for _, set := range sets {
+			if set.ignored {
+				ic.Ignored++
+				continue
+			}
+			ic.Count++
+			if len(ic.Samples) < maxIssueSamples {
+				r := rows[set.members[0]]
+				ic.Samples = append(ic.Samples, IssueSample{LibraryID: r.libraryID, Path: r.path, Title: r.title})
+			}
+		}
 		out = append(out, ic)
 	}
 	return out, nil
@@ -142,18 +180,23 @@ type DuplicateMember struct {
 	Listeners int `json:"listeners"`
 }
 
-// maxDuplicateGroups bounds one duplicates answer.
+// maxDuplicateGroups bounds one duplicates answer (the count is not bounded).
 const maxDuplicateGroups = 500
 
 // dupRow is what duplicate detection reads per book.
 type dupRow struct {
-	id, libraryID                 int64
-	title, author, narrator, path string
-	asin, isbn, hash, format      string
-	duration                      float64
-	size                          int64
-	files, listeners              int
-	ignored                       bool
+	book             Book // the identity and quality fields
+	id, libraryID    int64
+	title, path      string
+	files, listeners int
+	ignored          bool
+}
+
+// dupSet is one group of copies: indexes into the rows, best copy first.
+type dupSet struct {
+	members   []int
+	sameFiles bool
+	ignored   bool // every member ignored as a duplicate
 }
 
 // sameLength reports whether two durations could be one recording (within a
@@ -165,132 +208,111 @@ func sameLength(a, b float64) bool {
 	return math.Abs(a-b) <= math.Max(60, 0.02*math.Max(a, b))
 }
 
-// DuplicateGroups finds books that look like the same book within each library
-// (copies in different libraries are deliberate, and players already show one), in
-// one library (or all, libraryID 0). A group every member of which an admin
-// ignored is left out unless withIgnored; a new copy brings it back.
-func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, withIgnored bool) ([]DuplicateGroup, error) {
+// duplicateSets finds the groups of copies within each library (of one library,
+// or all with libraryID 0): books sharing an identity signal (identitySignals),
+// except that audio must also match in size (an identical first part is not a
+// copy) and author/title/narrator only joins copies of a matching length (an
+// abridged edition is not a copy). Copies in different libraries are deliberate,
+// and players already show one, so they never group.
+func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow, []dupSet, error) {
 	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *dupRow) error {
-		return rows.Scan(&r.id, &r.libraryID, &r.path, &r.title, &r.author, &r.narrator, &r.asin,
-			&r.isbn, &r.hash, &r.format, &r.duration, &r.size, &r.files, &r.listeners, &r.ignored)
+		b := &r.book
+		return rows.Scan(&r.id, &r.libraryID, &r.path, &r.title, &b.Author, &b.Narrator, &b.ASIN,
+			&b.ISBN, &b.ContentHash, &b.Format, &b.Duration, &b.Size, &r.files, &r.listeners, &r.ignored)
 	}, `SELECT b.id, b.library_id, b.rel_path, b.title, b.author, b.narrator, b.asin, b.isbn,
-	           b.content_hash, b.format, b.duration, b.size, `+fileCountExpr+`,
-	           (SELECT COUNT(*) FROM progress p WHERE p.library_id = b.library_id AND p.rel_path = b.rel_path),
-	           `+strings.Replace(ignoredExpr, "?", "'"+IssueDuplicate+"'", 1)+`
-	      FROM books b WHERE (?1 = 0 OR b.library_id = ?1)`, libraryID)
+	           b.content_hash, b.format, b.duration, b.size, MAX(1, COALESCE(bf.n, 0)),
+	           COALESCE(p.n, 0), ii.path IS NOT NULL
+	      FROM books b
+	      LEFT JOIN (SELECT book_id, COUNT(*) AS n FROM book_files GROUP BY book_id) bf ON bf.book_id = b.id
+	      LEFT JOIN (SELECT library_id, rel_path, COUNT(*) AS n FROM progress GROUP BY library_id, rel_path) p
+	             ON p.library_id = b.library_id AND p.rel_path = b.rel_path
+	      LEFT JOIN issue_ignores ii ON ii.library_id = b.library_id AND ii.path = b.rel_path AND ii.kind = ?2
+	     WHERE (?1 = 0 OR b.library_id = ?1)`, libraryID, IssueDuplicate)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
-	parent := make([]int, len(rows))
-	for i := range parent {
-		parent[i] = i
-	}
-	var find func(int) int
-	find = func(i int) int {
-		if parent[i] != i {
-			parent[i] = find(parent[i])
-		}
-		return parent[i]
-	}
-	sameFiles := map[int]bool{} // roots of groups joined by identical audio
-	union := func(a, b int, files bool) {
-		ra, rb := find(a), find(b)
-		if ra != rb {
-			parent[rb] = ra
-			if sameFiles[rb] {
-				sameFiles[ra] = true
-			}
-		}
-		if files {
-			sameFiles[ra] = true
-		}
-	}
-	// Exact keys (identical audio, identifiers) join outright; author|title|narrator
-	// joins only copies of a matching length, so an abridged edition isn't a copy.
+	set := newDisjointSet(len(rows))
+	viaFiles := make([]bool, len(rows)) // joined to another copy by identical audio
 	exact := map[string]int{}
 	byMeta := map[string][]int{}
-	for i, r := range rows {
-		lib := fmt.Sprint(r.libraryID) + ":"
-		keys := []string{}
-		if r.hash != "" {
-			keys = append(keys, lib+"h:"+r.hash+":"+fmt.Sprint(r.size))
-		}
-		if v := norm(r.asin); v != "" {
-			keys = append(keys, lib+"a:"+v)
-		}
-		if v := norm(r.isbn); v != "" {
-			keys = append(keys, lib+"i:"+v)
-		}
-		for _, k := range keys {
-			if j, ok := exact[k]; ok {
-				union(j, i, strings.Contains(k, ":h:"))
-			} else {
-				exact[k] = i
+	for i := range rows {
+		r := &rows[i]
+		r.book.Title = r.title
+		lib := strconv.FormatInt(r.libraryID, 10) + ":"
+		for _, sig := range identitySignals(r.book) {
+			files := strings.HasPrefix(sig, "h:")
+			switch {
+			case strings.HasPrefix(sig, "m:"):
+				byMeta[lib+sig] = append(byMeta[lib+sig], i)
+				continue
+			case files:
+				sig += ":" + strconv.FormatInt(r.book.Size, 10)
 			}
-		}
-		if m := metaKey(Book{Author: r.author, Title: r.title, Narrator: r.narrator}); m != "" {
-			byMeta[lib+m] = append(byMeta[lib+m], i)
+			if j, ok := exact[lib+sig]; ok {
+				set.union(i, j)
+				viaFiles[i], viaFiles[j] = viaFiles[i] || files, viaFiles[j] || files
+			} else {
+				exact[lib+sig] = i
+			}
 		}
 	}
 	for _, idx := range byMeta {
 		for x := range idx {
-			for y := x + 1; y < len(idx); y++ {
-				if sameLength(rows[idx[x]].duration, rows[idx[y]].duration) {
-					union(idx[x], idx[y], false)
+			for _, y := range idx[x+1:] {
+				if sameLength(rows[idx[x]].book.Duration, rows[y].book.Duration) {
+					set.union(idx[x], y)
 				}
 			}
 		}
 	}
-
-	members := map[int][]int{}
-	var roots []int
-	for i := range rows {
-		r := find(i)
-		if _, seen := members[r]; !seen {
-			roots = append(roots, r)
-		}
-		members[r] = append(members[r], i)
-	}
-	type group struct {
-		reason  string
-		ignored bool
-		idx     []int
-	}
-	var groups []group
-	for _, root := range roots {
-		idx := members[root]
-		if len(idx) < 2 {
+	var sets []dupSet
+	for _, members := range set.groups() {
+		if len(members) < 2 {
 			continue
 		}
-		g := group{reason: "same_book", ignored: true, idx: idx}
-		if sameFiles[root] {
-			g.reason = "same_files"
+		ds := dupSet{members: members, ignored: true}
+		for _, i := range members {
+			ds.sameFiles = ds.sameFiles || viaFiles[i]
+			ds.ignored = ds.ignored && rows[i].ignored
 		}
-		for _, i := range idx {
-			g.ignored = g.ignored && rows[i].ignored
-		}
-		if g.ignored && !withIgnored {
-			continue
-		}
-		sort.SliceStable(g.idx, func(a, b int) bool { return betterCopy(rows[g.idx[a]], rows[g.idx[b]]) })
-		groups = append(groups, g)
+		sort.SliceStable(ds.members, func(a, b int) bool { return betterCopy(rows[ds.members[a]], rows[ds.members[b]]) })
+		sets = append(sets, ds)
 	}
-	// Newest-looking problems first is meaningless here; order by the kept copy's path.
-	sort.Slice(groups, func(a, b int) bool {
-		ra, rb := rows[groups[a].idx[0]], rows[groups[b].idx[0]]
+	// In a stable order: by library, then the kept copy's path.
+	sort.Slice(sets, func(a, b int) bool {
+		ra, rb := rows[sets[a].members[0]], rows[sets[b].members[0]]
 		if ra.libraryID != rb.libraryID {
 			return ra.libraryID < rb.libraryID
 		}
 		return lessFold(ra.path, rb.path)
 	})
-	if len(groups) > maxDuplicateGroups {
-		groups = groups[:maxDuplicateGroups]
-	}
+	return rows, sets, nil
+}
 
+// betterCopy reports whether a is the copy worth keeping over b: betterQuality,
+// then the one people listen to.
+func betterCopy(a, b dupRow) bool {
+	if better, ok := betterQuality(a.book, a.files, b.book, b.files); ok {
+		return better
+	}
+	return a.listeners > b.listeners
+}
+
+// DuplicateGroups returns the groups of copies (duplicateSets) with each copy's
+// admin row, at most maxDuplicateGroups. A group every member of which an admin
+// ignored is left out unless withIgnored; a new copy brings it back.
+func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, withIgnored bool) ([]DuplicateGroup, error) {
+	rows, sets, err := c.duplicateSets(ctx, libraryID)
+	if err != nil {
+		return nil, err
+	}
+	sets = slices.DeleteFunc(sets, func(s dupSet) bool { return s.ignored && !withIgnored })
+	if len(sets) > maxDuplicateGroups {
+		sets = sets[:maxDuplicateGroups]
+	}
 	var ids []int64
-	for _, g := range groups {
-		for _, i := range g.idx {
+	for _, s := range sets {
+		for _, i := range s.members {
 			ids = append(ids, rows[i].id)
 		}
 	}
@@ -298,34 +320,22 @@ func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, withIgno
 	if err != nil {
 		return nil, err
 	}
-	out := make([]DuplicateGroup, 0, len(groups))
-	for _, g := range groups {
-		dg := DuplicateGroup{Reason: g.reason, Ignored: g.ignored}
-		for _, i := range g.idx {
+	out := make([]DuplicateGroup, 0, len(sets))
+	for _, s := range sets {
+		g := DuplicateGroup{Reason: "same_book", Ignored: s.ignored}
+		if s.sameFiles {
+			g.Reason = "same_files"
+		}
+		for _, i := range s.members {
 			if b, ok := books[rows[i].id]; ok {
-				dg.Books = append(dg.Books, DuplicateMember{AdminBook: b, Listeners: rows[i].listeners})
+				g.Books = append(g.Books, DuplicateMember{AdminBook: b, Listeners: rows[i].listeners})
 			}
 		}
-		if len(dg.Books) >= 2 {
-			out = append(out, dg)
+		if len(g.Books) >= 2 {
+			out = append(out, g)
 		}
 	}
 	return out, nil
-}
-
-// betterCopy reports whether a is the copy worth keeping over b: the better format,
-// then a single file, then the higher bitrate, then the one people listen to.
-func betterCopy(a, b dupRow) bool {
-	if x, y := formatTier(a.format), formatTier(b.format); x != y {
-		return x > y
-	}
-	if x, y := a.files <= 1, b.files <= 1; x != y {
-		return x
-	}
-	if x, y := bitrate(Book{Size: a.size, Duration: a.duration}), bitrate(Book{Size: b.size, Duration: b.duration}); x != y {
-		return x > y
-	}
-	return a.listeners > b.listeners
 }
 
 // adminBooksByID returns admin rows for the given book ids, by id.
@@ -352,37 +362,33 @@ func (c *Catalog) adminBooksByID(ctx context.Context, ids []int64) (map[int64]Ad
 	return out, nil
 }
 
+// libraryCount is one library's number in a per-library tally.
+type libraryCount struct {
+	id int64
+	n  int
+}
+
 // ListenersByLibrary counts, per library, the people with listening progress in it
 // (what an offline library is keeping safe).
 func (c *Catalog) ListenersByLibrary(ctx context.Context) (map[int64]int, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT library_id, COUNT(DISTINCT user_id) FROM progress GROUP BY library_id`)
+	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, lc *libraryCount) error {
+		return rows.Scan(&lc.id, &lc.n)
+	}, `SELECT library_id, COUNT(DISTINCT user_id) FROM progress GROUP BY library_id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[int64]int{}
-	for rows.Next() {
-		var id int64
-		var n int
-		if err := rows.Scan(&id, &n); err != nil {
-			return nil, err
-		}
-		out[id] = n
+	out := make(map[int64]int, len(rows))
+	for _, r := range rows {
+		out[r.id] = r.n
 	}
-	return out, rows.Err()
+	return out, nil
 }
-
-// maxIgnoreBatch bounds one ignore or un-ignore request.
-const maxIgnoreBatch = 1000
-
-// ErrTooMany marks a batch over its limit.
-var ErrTooMany = errors.New("too many items")
 
 // IgnoreIssue records that an admin ignored kind for each book (idempotent). The
 // books needn't be indexed: the rows are path-keyed, like the index they outlive.
 func (c *Catalog) IgnoreIssue(ctx context.Context, kind string, refs []Ref, userID int64) error {
-	if err := checkIgnoreBatch(kind, refs); err != nil {
-		return err
+	if !ValidIssue(kind) {
+		return fmt.Errorf("%w: %q", ErrUnknownIssue, kind)
 	}
 	now := c.ts()
 	return c.db.WithTx(ctx, "IgnoreIssue", func(tx *sql.Tx) error {
@@ -401,8 +407,8 @@ func (c *Catalog) IgnoreIssue(ctx context.Context, kind string, refs []Ref, user
 
 // UnignoreIssue removes the admin's ignore of kind for each book.
 func (c *Catalog) UnignoreIssue(ctx context.Context, kind string, refs []Ref) error {
-	if err := checkIgnoreBatch(kind, refs); err != nil {
-		return err
+	if !ValidIssue(kind) {
+		return fmt.Errorf("%w: %q", ErrUnknownIssue, kind)
 	}
 	return c.db.WithTx(ctx, "UnignoreIssue", func(tx *sql.Tx) error {
 		for _, r := range refs {
@@ -414,14 +420,4 @@ func (c *Catalog) UnignoreIssue(ctx context.Context, kind string, refs []Ref) er
 		}
 		return nil
 	})
-}
-
-func checkIgnoreBatch(kind string, refs []Ref) error {
-	if !ValidIssue(kind) {
-		return fmt.Errorf("%w: %q", ErrUnknownIssue, kind)
-	}
-	if len(refs) > maxIgnoreBatch {
-		return fmt.Errorf("%w: at most %d books", ErrTooMany, maxIgnoreBatch)
-	}
-	return nil
 }

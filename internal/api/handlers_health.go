@@ -38,22 +38,10 @@ func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "issue counts failed", "could not count issues")
 		return
 	}
-	libs, err := a.adminLibraries(r.Context())
+	offline, err := a.offlineLibraries(r)
 	if err != nil {
-		a.writeCatalogError(w, err, "issue counts failed", "could not list libraries")
+		a.writeCatalogError(w, err, "issue counts failed", "could not check the libraries")
 		return
-	}
-	listeners, err := a.cat.ListenersByLibrary(r.Context())
-	if err != nil {
-		a.writeCatalogError(w, err, "issue counts failed", "could not count listeners")
-		return
-	}
-	offline := []offlineLibrary{}
-	for _, l := range libs {
-		if !l.Available {
-			offline = append(offline, offlineLibrary{LibraryID: l.ID, Name: l.Name, Root: l.Root,
-				Books: l.BookCount, Listeners: listeners[l.ID]})
-		}
 	}
 	checked, err := a.cat.LastScanFinished(r.Context())
 	if err != nil {
@@ -63,6 +51,36 @@ func (a *API) handleIssues(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"categories": counts, "offline": offline, "checked_at": checked,
 	})
+}
+
+// offlineLibraries lists the libraries whose root can't be read right now, with
+// their indexed books and listeners.
+func (a *API) offlineLibraries(r *http.Request) ([]offlineLibrary, error) {
+	ctx := r.Context()
+	libs, err := a.cat.ListLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := a.cat.CountBooksByLibrary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	available := a.scanner.RootsAvailable(libs, counts)
+	offline := []offlineLibrary{}
+	var listeners map[int64]int
+	for _, l := range libs {
+		if available[l.ID] {
+			continue
+		}
+		if listeners == nil {
+			if listeners, err = a.cat.ListenersByLibrary(ctx); err != nil {
+				return nil, err
+			}
+		}
+		offline = append(offline, offlineLibrary{LibraryID: l.ID, Name: l.Name, Root: l.Root,
+			Books: counts[l.ID], Listeners: listeners[l.ID]})
+	}
+	return offline, nil
 }
 
 // handleDuplicates serves GET /admin/issues/duplicates: groups of books that look
@@ -110,8 +128,12 @@ func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, apply func(ign
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if len(req.Books) == 0 {
+	switch {
+	case len(req.Books) == 0:
 		writeError(w, http.StatusBadRequest, "books is required")
+		return
+	case len(req.Books) > maxBulkBooks:
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, "too many books at once (at most 1000)")
 		return
 	}
 	for i, b := range req.Books {
@@ -161,14 +183,14 @@ type scheduledScan struct {
 // and every scheduled library's next scan.
 func (a *API) handleJobs(w http.ResponseWriter, r *http.Request) {
 	running, queued := a.scanner.Jobs()
-	next, err := a.scanner.NextScans(r.Context())
-	if err != nil {
-		a.writeCatalogError(w, err, "list jobs failed", "could not read the schedules")
-		return
-	}
 	libs, err := a.cat.ListLibraries(r.Context())
 	if err != nil {
 		a.writeCatalogError(w, err, "list jobs failed", "could not list libraries")
+		return
+	}
+	next, err := a.scanner.NextScans(r.Context(), libs)
+	if err != nil {
+		a.writeCatalogError(w, err, "list jobs failed", "could not read the schedules")
 		return
 	}
 	schedules := []scheduledScan{}

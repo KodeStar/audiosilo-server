@@ -1,15 +1,15 @@
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { RefreshCw, ShieldCheck, Unplug } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { useIssues, useLibraries, scanActive } from '@/api/hooks';
 import type { IssueCount, IssueKind, OfflineLibrary } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
-import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { OfflineNotice } from '@/features/libraries/offline-notice';
 import { rescanAll, rescanLibrary } from '@/features/libraries/rescan';
 import { counted, formatNumber, formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -90,7 +90,7 @@ export function IssuesPage() {
       {data?.offline.length ? (
         <div className="mb-6 flex flex-col gap-3">
           {data.offline.map((l) => (
-            <OfflineCard key={l.library_id} library={l} lang={lang} />
+            <OfflineCard key={l.library_id} library={l} />
           ))}
         </div>
       ) : null}
@@ -214,22 +214,19 @@ function CategoryCard({
 }
 
 /**
- * A library whose folder can't be read: the scanner kept everything (a safety
- * stop, STYLEGUIDE.md), so say what's safe and how to bring it back.
+ * A library whose folder can't be read: OfflineNotice (a safety stop when books
+ * were kept), naming the library, with a retry.
  */
-function OfflineCard({ library: l, lang }: { library: OfflineLibrary; lang: string }) {
+function OfflineCard({ library: o }: { library: OfflineLibrary }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const kept = l.books > 0;
+  const library = useLibraries().data?.find((l) => l.id === o.library_id);
+  if (!library) return null;
   return (
-    <Notice
-      tone={kept ? 'safe' : 'warn'}
-      icon={kept ? ShieldCheck : Unplug}
-      title={
-        kept
-          ? t('health.offline.title', { name: l.name })
-          : t('health.offline.emptyTitle', { name: l.name })
-      }
+    <OfflineNotice
+      library={library}
+      title={o.books ? t('health.offline.title', { name: o.name }) : undefined}
+      listeners={o.listeners}
       actions={
         <>
           <Link
@@ -239,21 +236,12 @@ function OfflineCard({ library: l, lang }: { library: OfflineLibrary; lang: stri
           >
             {t('health.offline.view')}
           </Link>
-          <Button size="sm" onClick={() => rescanLibrary(qc, { id: l.library_id, name: l.name })}>
+          <Button size="sm" onClick={() => rescanLibrary(qc, library)}>
             <RefreshCw aria-hidden="true" />
             {t('libraries.retry')}
           </Button>
         </>
       }
-    >
-      {kept ? (
-        <>
-          {t('health.offline.body', { root: l.root, ...counted(l.books, lang) })}{' '}
-          {l.listeners ? t('health.offline.listeners', counted(l.listeners, lang)) : null}
-        </>
-      ) : (
-        t('libraries.unreadable.body', { root: l.root })
-      )}
-    </Notice>
+    />
   );
 }

@@ -1,4 +1,5 @@
-import { eventPhrase, formatTook, runSeconds, runSummary, statusTone } from './jobs-model';
+import { formatTook } from '@/lib/format';
+import { eventPhrase, runSeconds, runSummary, statusTone } from './jobs-model';
 
 const run = { status: 'ok' as const, added: 0, updated: 0, moved: 0, removed: 0, errors: 0 };
 

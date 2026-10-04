@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -353,7 +352,7 @@ func (a *API) adminLibraries(ctx context.Context) ([]adminLibrary, error) {
 		return nil, err
 	}
 	available := a.scanner.RootsAvailable(libs, counts)
-	next, err := a.scanner.NextScans(ctx)
+	next, err := a.scanner.NextScans(ctx, libs)
 	if err != nil {
 		return nil, err
 	}
@@ -416,26 +415,11 @@ type libraryRequest struct {
 	IgnorePatterns *[]string `json:"ignore_patterns"`
 }
 
-// patch validates the request's scan settings (a 400 with its code on failure)
-// and returns the edit.
-func (req libraryRequest) patch(w http.ResponseWriter) (catalog.LibraryPatch, bool) {
-	p := catalog.LibraryPatch{Name: req.Name, Root: req.Root, DefaultView: req.DefaultView}
-	if req.ScanSchedule != nil {
-		if _, err := library.ParseSchedule(*req.ScanSchedule); err != nil {
-			writeErrorCode(w, http.StatusBadRequest, codeInvalidSchedule, err.Error())
-			return p, false
-		}
-		p.ScanSchedule = req.ScanSchedule
-	}
-	if req.IgnorePatterns != nil {
-		lines, err := library.NormalizeIgnore(*req.IgnorePatterns)
-		if err != nil {
-			writeErrorCode(w, http.StatusBadRequest, codeInvalidPattern, err.Error())
-			return p, false
-		}
-		p.IgnorePatterns = &lines
-	}
-	return p, true
+// patch is the request as a validated edit (library.ValidatePatch's errors).
+func (req libraryRequest) patch() (catalog.LibraryPatch, error) {
+	p := catalog.LibraryPatch{Name: req.Name, Root: req.Root, DefaultView: req.DefaultView,
+		ScanSchedule: req.ScanSchedule, IgnorePatterns: req.IgnorePatterns}
+	return p, library.ValidatePatch(&p)
 }
 
 func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
@@ -448,17 +432,13 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name and root are required")
 		return
 	}
-	p, ok := req.patch(w)
-	if !ok {
+	p, err := req.patch()
+	if err != nil {
+		a.writeCatalogError(w, err, "create library failed", "could not create library")
 		return
 	}
-	lib := catalog.Library{Name: p.Name, Root: p.Root, DefaultView: p.DefaultView}
-	if p.ScanSchedule != nil {
-		lib.ScanSchedule = *p.ScanSchedule
-	}
-	if p.IgnorePatterns != nil {
-		lib.IgnorePatterns = *p.IgnorePatterns
-	}
+	var lib catalog.Library
+	p.Apply(&lib)
 	created, err := a.cat.CreateLibrary(r.Context(), lib)
 	if err != nil {
 		a.writeCatalogError(w, err, "create library failed", "could not create library", "name", lib.Name)
@@ -471,7 +451,7 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateLibrary edits a library: name, root, default view, scan schedule and
 // ignore rules. A new root or new ignore rules make the index stale, so either
-// queues a rescan; browsing still works immediately.
+// queues a rescan, returned as `job`; browsing still works immediately.
 func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -483,11 +463,12 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	p, ok := req.patch(w)
-	if !ok {
+	p, err := req.patch()
+	if err != nil {
+		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
 		return
 	}
-	before, err := a.cat.GetLibrary(r.Context(), id)
+	updated, stale, err := a.cat.UpdateLibrary(r.Context(), id, p)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "library not found")
 		return
@@ -496,19 +477,15 @@ func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
 		return
 	}
-	updated, err := a.cat.UpdateLibrary(r.Context(), id, p)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "library not found")
-		return
+	resp := struct {
+		*catalog.Library
+		Job *library.Job `json:"job,omitempty"`
+	}{Library: updated}
+	if stale {
+		job := a.startScan(r, *updated, library.TriggerChange)
+		resp.Job = &job
 	}
-	if err != nil {
-		a.writeCatalogError(w, err, "update library failed", "could not update library", "library", id)
-		return
-	}
-	if updated.Root != before.Root || !slices.Equal(updated.IgnorePatterns, before.IgnorePatterns) {
-		a.startScan(r, *updated, library.TriggerChange)
-	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleReorderLibraries sets the libraries' display order from an ordered list
@@ -690,6 +667,21 @@ func (a *API) handleScanLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	job := a.startScan(r, *lib, library.TriggerManual)
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "scan started", "job": job})
+}
+
+// handleScanAll queues a scan of every library (the console's "Check again" and
+// "Rescan every library"); the queue runs them one at a time.
+func (a *API) handleScanAll(w http.ResponseWriter, r *http.Request) {
+	var by *int64
+	if u := userFrom(r.Context()); u != nil {
+		by = &u.ID
+	}
+	jobs, err := a.scanner.EnqueueAll(r.Context(), library.TriggerManual, by)
+	if err != nil {
+		a.writeCatalogError(w, err, "scan all failed", "could not queue the scans")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"jobs": jobs})
 }
 
 // handleScanStatus reports progress of the (possibly running) scan for a library

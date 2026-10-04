@@ -2,7 +2,6 @@ import i18n from '@/i18n';
 import {
   joinSchedule,
   patternsToText,
-  samePatterns,
   scheduleLabel,
   splitSchedule,
   textToPatterns,
@@ -35,6 +34,4 @@ it('turns the textarea into rules the way the server stores them', () => {
     'Extras/',
   ]);
   expect(patternsToText(['a', 'b'])).toBe('a\nb');
-  expect(samePatterns(['a', 'b'], textToPatterns('a\n b \n'))).toBe(true);
-  expect(samePatterns(['a'], ['a', 'b'])).toBe(false);
 });

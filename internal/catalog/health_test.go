@@ -151,10 +151,6 @@ func TestIssueCountsAndIgnores(t *testing.T) {
 	if err := c.IgnoreIssue(ctx, "bogus", ref, uid); err == nil {
 		t.Fatal("an unknown kind was accepted")
 	}
-	many := make([]Ref, maxIgnoreBatch+1)
-	if err := c.IgnoreIssue(ctx, IssueNoCover, many, uid); err == nil {
-		t.Fatal("an oversized batch was accepted")
-	}
 	// An ignore for a library that doesn't exist is dropped, not an error.
 	if err := c.IgnoreIssue(ctx, IssueNoCover, []Ref{{LibraryID: 999, Path: "x"}}, uid); err != nil {
 		t.Fatal(err)
@@ -239,12 +235,12 @@ func TestLibraryScanSettings(t *testing.T) {
 		t.Fatalf("library = %+v", got)
 	}
 	// A patch that leaves the settings out keeps them; an empty list clears.
-	updated, _ := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{Name: "Renamed"})
+	updated, _, _ := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{Name: "Renamed"})
 	if updated.ScanSchedule != "every:6h" || len(updated.IgnorePatterns) != 2 {
 		t.Fatalf("a rename lost the settings: %+v", updated)
 	}
 	off, none := "", []string{}
-	updated, _ = c.UpdateLibrary(ctx, lib.ID, LibraryPatch{ScanSchedule: &off, IgnorePatterns: &none})
+	updated, _, _ = c.UpdateLibrary(ctx, lib.ID, LibraryPatch{ScanSchedule: &off, IgnorePatterns: &none})
 	if updated.ScanSchedule != "" || len(updated.IgnorePatterns) != 0 {
 		t.Fatalf("clearing the settings: %+v", updated)
 	}

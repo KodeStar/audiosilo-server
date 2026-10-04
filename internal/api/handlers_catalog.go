@@ -113,7 +113,7 @@ func bookFilterFromQuery(q url.Values) (catalog.BookFilter, string) {
 	}
 	// ?issue= lists one Health issue's books (duplicates are groups, served by
 	// /admin/issues/duplicates); ?issue_ignored=true the ones an admin ignored.
-	if f.Issue = q.Get("issue"); f.Issue != "" && (f.Issue == catalog.IssueDuplicate || !catalog.ValidIssue(f.Issue)) {
+	if f.Issue = q.Get("issue"); f.Issue != "" && !catalog.ValidBookIssue(f.Issue) {
 		return f, "unknown issue"
 	}
 	switch v := q.Get("issue_ignored"); v {

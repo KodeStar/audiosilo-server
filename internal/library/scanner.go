@@ -30,7 +30,6 @@ type Scanner struct {
 	log         *slog.Logger
 
 	mu       sync.Mutex
-	scanning map[int64]bool         // library IDs currently scanning
 	progress map[int64]ScanProgress // latest progress per library (for the admin UI)
 	jobs     jobQueue               // guarded by mu
 
@@ -66,7 +65,6 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		cat:         cat,
 		ffprobePath: ffprobePath,
 		log:         log,
-		scanning:    map[int64]bool{},
 		progress:    map[int64]ScanProgress{},
 		jobs:        newJobQueue(),
 		roots:       newRootProber(),
@@ -74,11 +72,19 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 }
 
 // Progress returns the latest scan progress for a library (the zero value if it
-// has never been scanned this process).
+// has never been scanned this process), with whether a scan of it waits in the
+// queue.
 func (s *Scanner) Progress(libID int64) ScanProgress {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.progress[libID]
+	return s.progressLocked(libID)
+}
+
+// progressLocked is Progress with mu held.
+func (s *Scanner) progressLocked(libID int64) ScanProgress {
+	p := s.progress[libID]
+	p.Queued = s.jobs.queuedFor(libID)
+	return p
 }
 
 // updateProgress applies fn to a library's progress under the lock.
@@ -96,7 +102,6 @@ type ScanResult struct {
 	catalog.ScanCounts
 	Partial bool
 	Log     []catalog.RunEvent
-	Elapsed time.Duration
 }
 
 // ErrLibraryUnavailable means the library root could not be read, or it
@@ -133,40 +138,20 @@ func primaryPath(b *catalog.Book) string {
 	return b.RelPath
 }
 
-// Scan indexes a single library. It is safe to call concurrently for different
-// libraries; concurrent calls for the same library are coalesced (the second
-// returns at once with an empty result). The result is never nil: on an error it
-// holds what the scan had done and logged by then.
+// Scan indexes a single library. The job queue (jobs.go) calls it one scan at a
+// time and closes its log with how it ended (closingEvent); tests call it
+// directly. The result is never nil: on an error it holds what the scan had done
+// and logged by then.
 func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult, err error) {
 	res := &ScanResult{}
 	s.mu.Lock()
-	if s.scanning[lib.ID] {
-		s.mu.Unlock()
-		return res, nil
-	}
-	s.scanning[lib.ID] = true
-	s.progress[lib.ID] = ScanProgress{Running: true, Queued: s.jobs.queuedFor(lib.ID)}
+	s.progress[lib.ID] = ScanProgress{Running: true}
 	s.mu.Unlock()
 	rl := &runLog{}
 	start := time.Now()
 	defer func() {
-		switch {
-		case err == nil:
-			rl.add("info", "finished", func(e *catalog.RunEvent) { e.Count = res.Books })
-		case errors.Is(err, ErrLibraryUnavailable):
-			// The cause alone: the console words "stopped, nothing was removed" itself.
-			rl.add("error", "unavailable", func(e *catalog.RunEvent) {
-				e.Detail = strings.TrimPrefix(err.Error(), ErrLibraryUnavailable.Error()+": ")
-			})
-		case ctx.Err() != nil:
-			rl.add("warn", "cancelled", nil)
-		default:
-			rl.add("error", "failed", func(e *catalog.RunEvent) { e.Detail = err.Error() })
-		}
 		res.Log = rl.finish()
-		res.Elapsed = time.Since(start)
 		s.mu.Lock()
-		delete(s.scanning, lib.ID)
 		p := s.progress[lib.ID]
 		p.Running = false
 		p.Unavailable = errors.Is(err, ErrLibraryUnavailable)
@@ -337,26 +322,27 @@ type runLog struct {
 }
 
 // add records an event (fill sets its facts), or counts it once the log is full.
-// The closing events always fit: the cap leaves them room.
+// The cap leaves room for the truncation note and the closing event.
 func (l *runLog) add(level, kind string, fill func(*catalog.RunEvent)) {
-	closing := kind == "finished" || kind == "failed" || kind == "cancelled" || kind == "unavailable"
-	if len(l.events) >= maxRunEvents-2 && !closing {
+	if len(l.events) >= maxRunEvents-2 {
 		l.dropped++
 		return
 	}
-	e := catalog.RunEvent{At: time.Now().UTC().Format(time.RFC3339), Level: level, Kind: kind}
+	l.events = append(l.events, newEvent(level, kind, fill))
+}
+
+func newEvent(level, kind string, fill func(*catalog.RunEvent)) catalog.RunEvent {
+	e := catalog.RunEvent{At: now(), Level: level, Kind: kind}
 	if fill != nil {
 		fill(&e)
 	}
-	l.events = append(l.events, e)
+	return e
 }
 
-// finish returns the events, with a note of how many didn't fit before the closing one.
+// finish returns the events, with a note of how many didn't fit.
 func (l *runLog) finish() []catalog.RunEvent {
-	if l.dropped > 0 && len(l.events) > 0 {
-		last := l.events[len(l.events)-1]
-		trunc := catalog.RunEvent{At: last.At, Level: "info", Kind: "truncated", Count: l.dropped}
-		l.events = append(l.events[:len(l.events)-1], trunc, last)
+	if l.dropped > 0 {
+		l.events = append(l.events, newEvent("info", "truncated", func(e *catalog.RunEvent) { e.Count = l.dropped }))
 	}
 	return l.events
 }
@@ -639,12 +625,13 @@ func discoverAuto(lib catalog.Library, overrides map[string]string, ignore *Igno
 			// (which also hides them). Never skip the library root itself, even when
 			// its own name begins with a dot; WalkDir passes the root argument
 			// verbatim, so a direct comparison identifies the root callback.
-			if path != lib.Root && (isHidden(d.Name()) || ignore.Match(relPathOf(lib.Root, path), true)) {
+			if path != lib.Root && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(relPathOf(lib.Root, path), true))) {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if isHidden(d.Name()) || !metadata.IsAudio(d.Name()) || ignore.Match(relPathOf(lib.Root, path), false) {
+		if isHidden(d.Name()) || !metadata.IsAudio(d.Name()) ||
+			(!ignore.Empty() && ignore.Match(relPathOf(lib.Root, path), false)) {
 			return nil
 		}
 		dirs[filepath.Dir(path)] = true
@@ -700,7 +687,7 @@ func audioEntries(root, absDir string, ignore *Ignore) []os.DirEntry {
 	var audio []os.DirEntry
 	for _, de := range entries {
 		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) ||
-			ignore.Match(relPathOf(root, filepath.Join(absDir, de.Name())), false) {
+			(!ignore.Empty() && ignore.Match(relPathOf(root, filepath.Join(absDir, de.Name())), false)) {
 			continue
 		}
 		audio = append(audio, de)

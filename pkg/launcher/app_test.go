@@ -236,7 +236,9 @@ func TestStartupScansWarnAndContinue(t *testing.T) {
 	goodLib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Good", Root: good})
 
 	scanner.Start(ctx)
-	queueStartupScans(ctx, cat, scanner, discardLog())
+	if _, err := scanner.EnqueueAll(ctx, library.TriggerStartup, nil); err != nil {
+		t.Fatal(err)
+	}
 
 	deadline := time.Now().Add(10 * time.Second)
 	for {

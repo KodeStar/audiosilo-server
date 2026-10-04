@@ -47,24 +47,6 @@ export function runSeconds(run: Pick<ScanRun, 'started_at' | 'finished_at'>): nu
   return Number.isNaN(ms) ? undefined : Math.max(0, ms / 1000);
 }
 
-const unit = (n: number, u: 'hour' | 'minute' | 'second', lang: string, digits = 0) =>
-  new Intl.NumberFormat(lang, {
-    style: 'unit',
-    unit: u,
-    unitDisplay: 'narrow',
-    maximumFractionDigits: digits,
-  }).format(n);
-
-/** "0.4s", "22s", "1m 52s", "1h 3m": a scan's length, in the language's units. */
-export function formatTook(seconds: number, lang: string): string {
-  if (seconds < 9.95) return unit(Math.round(seconds * 10) / 10, 'second', lang, 1);
-  const s = Math.round(seconds);
-  if (s < 60) return unit(s, 'second', lang);
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${unit(m, 'minute', lang)} ${unit(s % 60, 'second', lang)}`;
-  return `${unit(Math.floor(m / 60), 'hour', lang)} ${unit(m % 60, 'minute', lang)}`;
-}
-
 /** The log event kinds library.runLog writes; anything else reads as "other". */
 const EVENT_KINDS = new Set([
   'started',
@@ -78,6 +60,7 @@ const EVENT_KINDS = new Set([
   'unavailable',
   'failed',
   'cancelled',
+  'interrupted',
   'finished',
   'truncated',
 ]);

@@ -115,10 +115,7 @@ export interface LibraryRequest {
   ignore_patterns?: string[];
 }
 
-/**
- * The schedules a library can take (library.ParseSchedule): none, an interval
- * after the last scan, or a daily time ("daily:HH:MM", server time).
- */
+/** The `every:` intervals a library schedule may use (library.ParseSchedule). */
 export const SCAN_INTERVALS = [
   'every:1h',
   'every:3h',

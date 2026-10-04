@@ -1,19 +1,25 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, X } from 'lucide-react';
-import { useAdminBooks, useLibraries } from '@/api/hooks';
-import type { AdminBook } from '@/api/types';
+import { Eye, EyeOff } from 'lucide-react';
+import { useAdminBooks, useLibraryRoots } from '@/api/hooks';
 import { BookCover } from '@/components/book-cover';
+import { BulkAction, BulkBar } from '@/components/bulk-bar';
 import { QueryError } from '@/components/query-error';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { onInk } from '@/components/ui/on-ink';
 import { useSelection } from '@/features/library/books/use-selection';
 import { bookRoute, refKey } from '@/lib/book-route';
-import { counted, formatNumber } from '@/lib/format';
+import { counted } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
-import { FIXES, FIX_LOOK, issueReason, type BookIssueKind } from './issues-model';
 import { AllClear } from './all-clear';
+import {
+  FIXES,
+  FIX_LOOK,
+  issueReason,
+  say,
+  type BookIssueKind,
+  type IssueFix,
+} from './issues-model';
 import { useIssueActions } from './use-issue-actions';
 
 /** How many books a page of an issue list loads. */
@@ -22,7 +28,7 @@ const PAGE = 50;
 /**
  * One category's books (STYLEGUIDE.md "Health triage"): cover, title, why, where,
  * Ignore and the category's one fix; select several for the floating bar. With
- * `ignored`, the books an admin ignored, each with Stop ignoring.
+ * `ignored`, the books an admin ignored, each with Show again.
  */
 export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: boolean }) {
   const { t, i18n } = useTranslation();
@@ -36,10 +42,9 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   });
   const selection = useSelection();
   const actions = useIssueActions(kind);
-  const roots = new Map((useLibraries().data ?? []).map((l) => [l.id, l.root]));
+  const roots = useLibraryRoots();
   const books = list.data?.pages.flatMap((p) => p.books ?? []) ?? [];
-  const fix = FIXES[kind];
-  const RescanIcon = FIX_LOOK.rescan.icon;
+  const fix = ignored ? null : FIXES[kind];
 
   if (list.isError) {
     return (
@@ -63,14 +68,14 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
       </div>
     );
   }
-  if (books.length === 0) {
-    return <AllClear ignored={ignored} />;
-  }
+  if (books.length === 0) return <AllClear ignored={ignored} />;
 
   const allSelected = books.every(selection.isSelected);
-  const act = (chosen: AdminBook[]) => {
+  /** Ignores (or shows again) the selection, and clears it. */
+  const toggleIgnore = () => {
+    const chosen = selection.books;
     selection.clear();
-    return ignored ? actions.unignore(chosen) : actions.ignore(chosen);
+    void (ignored ? actions.unignore(chosen) : actions.ignore(chosen));
   };
 
   return (
@@ -81,61 +86,56 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         </Button>
       </div>
       <ul className="divide-y rounded-xl border bg-card" aria-label={t(`health.kind.${kind}`)}>
-        {books.map((b) => {
-          const reason = issueReason(kind, b);
-          return (
-            <li key={refKey(b)} className="flex items-center gap-3.5 px-3.5 py-3 md:px-[18px]">
-              <Checkbox
-                checked={selection.isSelected(b)}
-                onCheckedChange={() => selection.toggle(b)}
-                aria-label={t('health.select', { title: b.title || b.path })}
+        {books.map((b) => (
+          <li key={refKey(b)} className="flex items-center gap-3.5 px-3.5 py-3 md:px-[18px]">
+            <Checkbox
+              checked={selection.isSelected(b)}
+              onCheckedChange={() => selection.toggle(b)}
+              aria-label={t('health.select', { title: b.title || b.path })}
+            />
+            <Link
+              {...bookRoute(b.library_id, b.path)}
+              className="w-12 shrink-0"
+              aria-label={t('health.open', { title: b.title || b.path })}
+            >
+              <BookCover
+                libraryId={b.library_id}
+                path={b.path}
+                title={b.title}
+                author={b.author}
+                size={160}
               />
+            </Link>
+            <div className="flex min-w-0 flex-1 flex-col">
               <Link
                 {...bookRoute(b.library_id, b.path)}
-                className="w-12 shrink-0"
-                aria-label={t('health.open', { title: b.title || b.path })}
+                className="truncate font-semibold hover:underline"
               >
-                <BookCover
-                  libraryId={b.library_id}
-                  path={b.path}
-                  title={b.title}
-                  author={b.author}
-                  size={160}
-                />
+                {b.title || b.path}
               </Link>
-              <div className="flex min-w-0 flex-1 flex-col">
-                <Link
-                  {...bookRoute(b.library_id, b.path)}
-                  className="truncate font-semibold hover:underline"
-                >
-                  {b.title || b.path}
-                </Link>
-                <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
-                  {t(reason.key, reason.values)}
-                </span>
-                <span className="truncate font-mono text-[11.5px] text-subtle-foreground max-md:hidden">
-                  {joinLibraryPath(roots.get(b.library_id), b.path)}
-                </span>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                {ignored ? (
-                  <Button variant="outline" size="sm" onClick={() => void actions.unignore([b])}>
-                    <Eye aria-hidden="true" />
-                    <span className="max-md:sr-only">{t('health.unignore')}</span>
-                  </Button>
-                ) : (
-                  <>
-                    <Button variant="ghost" size="sm" onClick={() => void actions.ignore([b])}>
-                      <EyeOff aria-hidden="true" className="md:hidden" />
-                      <span className="max-md:sr-only">{t('health.ignore')}</span>
-                    </Button>
-                    {fix ? <FixButton kind={kind} onClick={() => void actions.fix(b)} /> : null}
-                  </>
-                )}
-              </div>
-            </li>
-          );
-        })}
+              <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
+                {say(t, issueReason(kind, b), lang)}
+              </span>
+              <span className="truncate font-mono text-[11.5px] text-subtle-foreground max-md:hidden">
+                {joinLibraryPath(roots[b.library_id], b.path)}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {ignored ? (
+                <Button variant="outline" size="sm" onClick={() => void actions.unignore([b])}>
+                  <Eye aria-hidden="true" />
+                  <span className="max-md:sr-only">{t('health.unignore')}</span>
+                </Button>
+              ) : (
+                <Button variant="ghost" size="sm" onClick={() => void actions.ignore([b])}>
+                  <EyeOff aria-hidden="true" className="md:hidden" />
+                  <span className="max-md:sr-only">{t('health.ignore')}</span>
+                </Button>
+              )}
+              {fix ? <FixButton fix={fix} onClick={() => void actions.fix(b)} /> : null}
+            </div>
+          </li>
+        ))}
       </ul>
       {list.hasNextPage ? (
         <div className="mt-3 flex justify-center">
@@ -152,64 +152,31 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         {t(ignored ? 'health.footIgnored' : 'health.foot', counted(books.length, lang))}
       </p>
 
-      {selection.size ? (
-        <div className="float-bar" role="toolbar" aria-label={t('health.bulk.label')}>
-          <span className="mr-2 font-bold whitespace-nowrap tabular-nums" aria-live="polite">
-            {t('books.bulk.selected', {
-              count: selection.size,
-              formatted: formatNumber(selection.size, lang),
-            })}
-          </span>
-          {fix === 'rescan' && !ignored ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={onInk}
-              onClick={() => {
-                const chosen = selection.books;
-                selection.clear();
-                for (const b of chosen) void actions.rescan(b);
-              }}
-            >
-              <RescanIcon aria-hidden="true" />
-              <span className="max-md:sr-only">{t(FIX_LOOK.rescan.label)}</span>
-            </Button>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            className={onInk}
-            onClick={() => void act(selection.books)}
-          >
-            {ignored ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
-            <span className="max-md:sr-only">
-              {ignored ? t('health.unignore') : t('health.ignore')}
-            </span>
-          </Button>
-          <span
-            className="mx-1 h-[22px] w-px bg-[color-mix(in_oklab,var(--primary-foreground)_20%,transparent)]"
-            aria-hidden="true"
+      <BulkBar count={selection.size} label={t('health.bulk.label')} onClear={selection.clear}>
+        {fix === 'rescan' ? (
+          <BulkAction
+            icon={FIX_LOOK.rescan.icon}
+            label={t(FIX_LOOK.rescan.label)}
+            onClick={() => {
+              const chosen = selection.books;
+              selection.clear();
+              for (const b of chosen) void actions.rescan(b);
+            }}
           />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className={onInk}
-            aria-label={t('books.bulk.clear')}
-            onClick={selection.clear}
-          >
-            <X aria-hidden="true" />
-          </Button>
-        </div>
-      ) : null}
+        ) : null}
+        <BulkAction
+          icon={ignored ? Eye : EyeOff}
+          label={ignored ? t('health.unignore') : t('health.ignore')}
+          onClick={toggleIgnore}
+        />
+      </BulkBar>
     </>
   );
 }
 
 /** A category's fix as an outline button (the label hides on phones; the icon names it). */
-function FixButton({ kind, onClick }: { kind: BookIssueKind; onClick: () => void }) {
+function FixButton({ fix, onClick }: { fix: NonNullable<IssueFix>; onClick: () => void }) {
   const { t } = useTranslation();
-  const fix = FIXES[kind];
-  if (!fix) return null;
   const { icon: Icon, label } = FIX_LOOK[fix];
   return (
     <Button variant="outline" size="sm" onClick={onClick} aria-label={t(label)}>

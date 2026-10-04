@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { Database, FolderSearch } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import { invalidateLibraries, noteScanStarted, useDirs, useLibraries } from '@/api/hooks';
-import type { AdminLibrary } from '@/api/types';
+import type { AdminLibrary, Job, Library } from '@/api/types';
 import { FolderBrowser } from '@/components/folder-browser';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
@@ -23,7 +23,6 @@ import {
   SCHEDULE_CHOICES,
   joinSchedule,
   patternsToText,
-  samePatterns,
   scheduleLabel,
   splitSchedule,
   textToPatterns,
@@ -100,23 +99,20 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       scan_schedule: joinSchedule(v.schedule, v.time),
       ignore_patterns: patterns,
     };
-    // A new library is always scanned; an edit only when its folder or ignore
-    // rules change (the server decides the same way).
-    const rescans =
-      !library ||
-      v.folder !== library.root ||
-      !samePatterns(patterns, library.ignore_patterns ?? []);
     try {
-      const saved = await (library ? api.updateLibrary(library.id, lib) : api.createLibrary(lib));
+      // A new library is always scanned; an edit only when the server queued a
+      // scan for it (a new folder or new ignore rules).
+      const saved: Library & { job?: Job } = library
+        ? await api.updateLibrary(library.id, lib)
+        : await api.createLibrary(lib);
+      const rescans = !library || !!saved.job;
       invalidateLibraries(qc);
       if (rescans) noteScanStarted(qc, saved.id);
       toast.add({
         title: t(library ? 'libraries.toast.saved' : 'libraries.toast.added', { name: v.name }),
-        description: library
-          ? rescans
-            ? t('libraries.toast.savedBody')
-            : undefined
-          : t('libraries.toast.addedBody'),
+        description: rescans
+          ? t(library ? 'libraries.toast.savedBody' : 'libraries.toast.addedBody')
+          : undefined,
         type: 'success',
       });
       onDone();

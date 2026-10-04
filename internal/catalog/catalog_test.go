@@ -401,7 +401,7 @@ func TestUpdateLibrary(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	// Patch only the root; other fields are preserved.
-	updated, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{Root: "/srv/books"})
+	updated, _, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{Root: "/srv/books"})
 	if err != nil {
 		t.Fatal(err)
 	}

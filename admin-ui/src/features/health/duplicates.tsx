@@ -1,18 +1,19 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye } from 'lucide-react';
-import { useDuplicates, useLibraries } from '@/api/hooks';
+import { useDuplicates, useLibraryRoots } from '@/api/hooks';
 import type { DuplicateGroup, DuplicateMember } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { QueryError } from '@/components/query-error';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { audioLine } from '@/features/book/book-model';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { formatBytes, formatDuration, formatNumber, formatRelative } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
 import { cn } from '@/lib/utils';
 import { AllClear } from './all-clear';
-import { useIssueActions } from './use-issue-actions';
+import { useIssueActions, type IssueActions } from './use-issue-actions';
 
 /**
  * Likely duplicates (STYLEGUIDE.md "Duplicates use a side-by-side compare"): each
@@ -22,7 +23,9 @@ import { useIssueActions } from './use-issue-actions';
  */
 export function Duplicates({ ignored }: { ignored: boolean }) {
   const { t } = useTranslation();
-  const groups = useDuplicates(true, ignored);
+  const groups = useDuplicates(ignored);
+  const actions = useIssueActions('duplicate');
+  const roots = useLibraryRoots();
   if (groups.isError) {
     return (
       <QueryError
@@ -38,13 +41,18 @@ export function Duplicates({ ignored }: { ignored: boolean }) {
     );
   }
   const shown = ignored ? groups.data.filter((g) => g.ignored) : groups.data;
-  if (shown.length === 0) {
-    return <AllClear ignored={ignored} />;
-  }
+  if (shown.length === 0) return <AllClear ignored={ignored} />;
   return (
     <div className="flex flex-col gap-4">
       {shown.map((g, i) => (
-        <GroupCard key={refKey(g.books[0])} group={g} index={i} total={shown.length} />
+        <GroupCard
+          key={refKey(g.books[0])}
+          group={g}
+          index={i}
+          total={shown.length}
+          actions={actions}
+          roots={roots}
+        />
       ))}
     </div>
   );
@@ -54,14 +62,17 @@ function GroupCard({
   group: g,
   index,
   total,
+  actions,
+  roots,
 }: {
   group: DuplicateGroup;
   index: number;
   total: number;
+  actions: IssueActions;
+  roots: Record<number, string>;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const actions = useIssueActions('duplicate');
   const keep = g.books[0];
   return (
     <section className="rounded-xl border bg-card" aria-labelledby={`dup-${index}`}>
@@ -83,7 +94,13 @@ function GroupCard({
       </div>
       <div className="grid md:grid-cols-2">
         {g.books.map((b, i) => (
-          <CopyColumn key={refKey(b)} book={b} keep={i === 0} lang={lang} />
+          <CopyColumn
+            key={refKey(b)}
+            book={b}
+            keep={i === 0}
+            root={roots[b.library_id]}
+            lang={lang}
+          />
         ))}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-3">
@@ -105,40 +122,27 @@ function GroupCard({
 function CopyColumn({
   book: b,
   keep,
+  root,
   lang,
 }: {
   book: DuplicateMember;
   keep: boolean;
+  root: string | undefined;
   lang: string;
 }) {
   const { t } = useTranslation();
-  const root = useLibraries().data?.find((l) => l.id === b.library_id)?.root;
+  const none = t('health.dup.none');
   const rows: [string, React.ReactNode, boolean?][] = [
     [t('health.dup.path'), joinLibraryPath(root, b.path), true],
-    [
-      t('health.dup.format'),
-      [
-        b.format.toUpperCase(),
-        b.codec,
-        b.file_count > 1 ? t('health.dup.files', { count: b.file_count }) : '',
-      ]
-        .filter(Boolean)
-        .join(' · '),
-    ],
+    [t('health.dup.format'), audioLine(b, t)],
     [
       t('health.dup.length'),
       b.duration ? formatDuration(b.duration, lang) : t('health.dup.unknown'),
     ],
     [t('health.dup.size'), formatBytes(b.size, lang)],
-    [
-      t('health.dup.chapters'),
-      b.chapter_count > 1 ? formatNumber(b.chapter_count, lang) : t('health.dup.none'),
-    ],
+    [t('health.dup.chapters'), b.chapter_count > 1 ? formatNumber(b.chapter_count, lang) : none],
     [t('health.dup.matched'), b.matched ? t('health.dup.yes') : t('health.dup.no')],
-    [
-      t('health.dup.listeners'),
-      b.listeners ? formatNumber(b.listeners, lang) : t('health.dup.none'),
-    ],
+    [t('health.dup.listeners'), b.listeners ? formatNumber(b.listeners, lang) : none],
     [t('health.dup.added'), formatRelative(b.added_at, lang)],
   ];
   return (

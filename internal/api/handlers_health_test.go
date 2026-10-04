@@ -39,6 +39,7 @@ func TestHealthEndpointsRequireAdmin(t *testing.T) {
 		// The seeded books have no files on disk: the admin's answer is the 404.
 		{"POST", base + "/book/rescan?path=" + escape("Andy Weir/Artemis"), "", 404},
 		{"GET", "/api/v1/admin/jobs", "", 200},
+		{"POST", "/api/v1/admin/scan", "", 202},
 		{"DELETE", "/api/v1/admin/jobs/12345", "", 404},
 		{"GET", "/api/v1/admin/scan-runs", "", 200},
 		{"GET", "/api/v1/admin/scan-runs/" + strconv.FormatInt(runID, 10), "", 200},
@@ -125,6 +126,15 @@ func TestIssuesSummaryAndIgnore(t *testing.T) {
 		t.Fatalf("an un-ignored book isn't back: %s", body)
 	}
 
+	many := make([]string, maxBulkBooks+1)
+	for i := range many {
+		many[i] = `{"library_id":1,"path":"p` + strconv.Itoa(i) + `"}`
+	}
+	if resp, body := e.do(t, "POST", "/api/v1/admin/issues/ignore", adminTok,
+		`{"kind":"transcode","books":[`+strings.Join(many, ",")+`]}`); resp.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(body, `"code":"too_large"`) {
+		t.Fatalf("oversized ignore = %d %s", resp.StatusCode, body)
+	}
 	for _, bad := range []struct{ method, path, body string }{
 		{"GET", "/api/v1/admin/books?issue=duplicate", ""},
 		{"GET", "/api/v1/admin/books?issue=bogus", ""},
@@ -161,14 +171,16 @@ func TestLibraryScanSettingsEndpoints(t *testing.T) {
 		t.Fatalf("member PATCH = %d, want 403", resp.StatusCode)
 	}
 
-	if resp, body := e.do(t, "PATCH", url, adminTok, `{"scan_schedule":"daily:03:00"}`); resp.StatusCode != 200 {
-		t.Fatalf("schedule PATCH = %d %s", resp.StatusCode, body)
+	if resp, body := e.do(t, "PATCH", url, adminTok, `{"scan_schedule":"daily:03:00"}`); resp.StatusCode != 200 ||
+		strings.Contains(body, `"job"`) || !strings.Contains(body, `"name":"Main"`) {
+		t.Fatalf("schedule PATCH = %d %s, want the library and no job", resp.StatusCode, body)
 	}
 	if _, queued := e.api.scanner.Jobs(); len(queued) != 0 {
 		t.Fatalf("a schedule change queued a scan: %+v", queued)
 	}
-	if resp, body := e.do(t, "PATCH", url, adminTok, `{"ignore_patterns":[" *.tmp ","","Extras/"]}`); resp.StatusCode != 200 {
-		t.Fatalf("ignore PATCH = %d %s", resp.StatusCode, body)
+	if resp, body := e.do(t, "PATCH", url, adminTok, `{"ignore_patterns":[" *.tmp ","","Extras/"]}`); resp.StatusCode != 200 ||
+		!strings.Contains(body, `"job":{`) || !strings.Contains(body, `"trigger":"change"`) {
+		t.Fatalf("ignore PATCH = %d %s, want the queued job", resp.StatusCode, body)
 	}
 	if _, queued := e.api.scanner.Jobs(); len(queued) != 1 || queued[0].Trigger != "change" {
 		t.Fatalf("an ignore change didn't queue a rescan: %+v", queued)
@@ -192,6 +204,25 @@ func TestLibraryScanSettingsEndpoints(t *testing.T) {
 	}
 	if libs, _ := e.cat.ListLibraries(ctx); len(libs) != 1 {
 		t.Fatalf("a refused create made a library: %+v", libs)
+	}
+}
+
+// POST /admin/scan queues every library, one job each.
+func TestScanAll(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	ctx := context.Background()
+	for _, n := range []string{"A", "B"} {
+		if _, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: n, Root: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, body := e.do(t, "POST", "/api/v1/admin/scan", adminTok, "")
+	if resp.StatusCode != http.StatusAccepted || strings.Count(body, `"kind":"scan"`) != 2 {
+		t.Fatalf("scan all = %d %s", resp.StatusCode, body)
+	}
+	if _, queued := e.api.scanner.Jobs(); len(queued) != 2 {
+		t.Fatalf("queued = %+v", queued)
 	}
 }
 

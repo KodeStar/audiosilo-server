@@ -27,10 +27,10 @@ export function rescanLibrary(qc: QueryClient, library: { id: number; name: stri
   );
 }
 
-/** Queues a scan of every library (Health's "Check again"); the queue runs them one at a time. */
-export function rescanAll(qc: QueryClient, libraries: { id: number; name: string }[]) {
+/** Queues a scan of every library (Health's "Check again", the palette); one at a time. */
+export function rescanAll(qc: QueryClient, libraries: { id: number }[]) {
   const t = i18n.t;
-  Promise.all(libraries.map((l) => api.scanLibrary(l.id))).then(
+  api.scanAll().then(
     () => {
       for (const l of libraries) noteScanStarted(qc, l.id);
       toast.add({

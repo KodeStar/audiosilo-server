@@ -55,8 +55,7 @@ export const keys = {
   /** The Health summary and the duplicate groups (a prefix: a scan or an ignore changes them). */
   issues: ['admin', 'issues'] as const,
   issueSummary: ['admin', 'issues', 'summary'] as const,
-  duplicates: (libraryId: number, ignored: boolean) =>
-    ['admin', 'issues', 'duplicates', libraryId, ignored] as const,
+  duplicates: (ignored: boolean) => ['admin', 'issues', 'duplicates', ignored] as const,
   jobs: ['admin', 'jobs'] as const,
   /** Every page of scan history (a prefix). */
   scanRuns: ['admin', 'scan-runs'] as const,
@@ -176,10 +175,14 @@ export function settleBookEdit(qc: QueryClient, detail: AdminBookDetail) {
  * palette, another admin) and every minute otherwise, so a share that drops or
  * comes back shows up without a reload.
  */
+const librariesQuery = {
+  queryKey: keys.libraries,
+  queryFn: () => api.libraries().then((r) => r.libraries),
+};
+
 export function useLibraries() {
   return useQuery({
-    queryKey: keys.libraries,
-    queryFn: () => api.libraries().then((r) => r.libraries),
+    ...librariesQuery,
     staleTime: 30_000,
     refetchInterval: (q) => (q.state.data?.some(scanActive) ? 1000 : 60_000),
   });
@@ -221,8 +224,9 @@ const scanListeners = new Set<ScanListener>();
  * Watches every library's scan, mounted once (the shell): when one ends (seen
  * running or queued, or started here, and now neither) it refetches what a scan
  * changes (the overview's counts, that library's newest books, folder
- * listings and book pages, every admin book list and aggregate, the Health
- * issues and the scan history), then tells the screens that asked (useScanFinished).
+ * listings and book pages, every admin book list and aggregate, the scan
+ * history, and the Health issues once nothing scans), then tells the screens
+ * that asked (useScanFinished).
  */
 export function useScanWatcher() {
   const qc = useQueryClient();
@@ -232,6 +236,7 @@ export function useScanWatcher() {
   const running = useRef(new Set<number>());
   useEffect(() => {
     if (!libraries) return;
+    let ended = false;
     for (const l of libraries) {
       if (scanActive(l)) continue;
       const started = startedScans.get(l.id);
@@ -244,14 +249,17 @@ export function useScanWatcher() {
         keys.books,
         keys.browseLibrary(l.id),
         keys.bookPages(l.id),
-        keys.issues,
         keys.scanRuns,
       ]) {
         void qc.invalidateQueries({ queryKey: key });
       }
+      ended = true;
       for (const fn of scanListeners) fn(l);
     }
     running.current = new Set(libraries.filter(scanActive).map((l) => l.id));
+    // The issues are a whole-index computation: refresh them once the queue is
+    // idle, not after each scan of a "rescan every library".
+    if (ended && running.current.size === 0) void qc.invalidateQueries({ queryKey: keys.issues });
   }, [libraries, dataUpdatedAt, qc]);
 }
 
@@ -388,25 +396,52 @@ export function useIssues() {
   return useQuery({ queryKey: keys.issueSummary, queryFn: api.issues, staleTime: 30_000 });
 }
 
-/** Groups of copies of one book (the ignored ones too, with `ignored`). */
-export function useDuplicates(enabled: boolean, ignored = false, libraryId = 0) {
+/** Groups of copies of one book; with `ignored`, the ignored ones too (flagged). */
+export function useDuplicates(ignored: boolean) {
   return useQuery({
-    queryKey: keys.duplicates(libraryId, ignored),
-    queryFn: () =>
-      api
-        .duplicates({ library_id: libraryId || undefined, ignored: ignored || undefined })
-        .then((r) => r.groups ?? []),
-    enabled,
+    queryKey: keys.duplicates(ignored),
+    queryFn: () => api.duplicates({ ignored: ignored || undefined }).then((r) => r.groups ?? []),
   });
 }
 
-/** Refetches what an ignore, a fix or a rescan changes on the Health page. */
+/**
+ * Refetches what an ignore or un-ignore changes: the Health summary and
+ * duplicates, and the issue-filtered book lists (nothing else lists by issue).
+ */
 export function invalidateIssues(qc: QueryClient) {
+  void qc.invalidateQueries({ queryKey: keys.issues });
   void qc.invalidateQueries({
-    predicate: ({ queryKey: [scope, kind] }) =>
-      scope === 'admin' && (kind === 'issues' || kind === 'books'),
+    queryKey: keys.bookLists,
+    predicate: ({ queryKey }) => !!(queryKey[3] as BookListParams | undefined)?.issue,
   });
 }
+
+/**
+ * Reads a book's files again now (POST .../book/rescan) and writes the fresh page
+ * everywhere it shows, its cover, and the Health issues. Returns the page.
+ */
+export async function rescanBook(qc: QueryClient, ref: BookRef): Promise<AdminBookDetail> {
+  const fresh = await api.rescanBook(ref.library_id, ref.path);
+  settleBookEdit(qc, fresh);
+  invalidateCover(qc, ref.library_id, ref.path);
+  void qc.invalidateQueries({ queryKey: keys.issues });
+  return fresh;
+}
+
+/**
+ * Each library's root folder by id, stable while the roots don't change (the
+ * library list itself changes every second during a scan).
+ */
+export function useLibraryRoots(): Record<number, string> {
+  return (
+    useQuery({
+      ...librariesQuery,
+      staleTime: 30_000,
+      select: (libs) => Object.fromEntries(libs.map((l) => [l.id, l.root])),
+    }).data ?? NO_ROOTS
+  );
+}
+const NO_ROOTS: Record<number, string> = {};
 
 /**
  * The running scan, the queue and the schedules: polled every second while
@@ -432,9 +467,9 @@ export function useScanRuns(libraryId = 0) {
   });
 }
 
-/** One recorded scan with its log (fetched when its log is opened). */
-export function useScanRun(id: number, enabled: boolean) {
-  return useQuery({ queryKey: keys.scanRun(id), queryFn: () => api.scanRun(id), enabled });
+/** One recorded scan with its log (mounted when its log is opened). */
+export function useScanRun(id: number) {
+  return useQuery({ queryKey: keys.scanRun(id), queryFn: () => api.scanRun(id) });
 }
 
 /** The book page: fields with provenance, chapters, files, listeners, shares. */

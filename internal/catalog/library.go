@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -65,46 +66,54 @@ func (c *Catalog) UpsertLibraryByName(ctx context.Context, lib Library) (*Librar
 
 // LibraryPatch is an edit to a library: an empty string keeps a text field, a nil
 // pointer keeps a setting. The scan settings are validated by the caller
-// (library.ParseSchedule, library.NormalizeIgnore).
+// (library.ValidatePatch).
 type LibraryPatch struct {
 	Name, Root, DefaultView string
 	ScanSchedule            *string
 	IgnorePatterns          *[]string
 }
 
-// UpdateLibrary applies an edit and returns the result. Changing the root or the
-// ignore rules makes the index stale, so callers should trigger a rescan afterward.
-func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) (*Library, error) {
+// Apply writes the patch's fields onto l (a zero Library for a new one).
+func (p LibraryPatch) Apply(l *Library) {
+	if p.Name != "" {
+		l.Name = p.Name
+	}
+	if p.Root != "" {
+		l.Root = p.Root
+	}
+	if p.DefaultView != "" {
+		l.DefaultView = p.DefaultView
+	}
+	if p.ScanSchedule != nil {
+		l.ScanSchedule = *p.ScanSchedule
+	}
+	if p.IgnorePatterns != nil {
+		l.IgnorePatterns = *p.IgnorePatterns
+	}
+}
+
+// UpdateLibrary applies an edit and returns the result, and whether it made the
+// index stale (a new root or new ignore rules), in which case the caller should
+// rescan.
+func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) (*Library, bool, error) {
 	existing, err := c.GetLibrary(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if in.Name != "" {
-		existing.Name = in.Name
-	}
-	if in.Root != "" {
-		existing.Root = in.Root
-	}
-	if in.DefaultView != "" {
-		existing.DefaultView = in.DefaultView
-	}
-	if in.ScanSchedule != nil {
-		existing.ScanSchedule = *in.ScanSchedule
-	}
-	if in.IgnorePatterns != nil {
-		existing.IgnorePatterns = *in.IgnorePatterns
-	}
+	before := *existing
+	in.Apply(existing)
 	if _, err := c.db.ExecContext(ctx,
 		`UPDATE libraries SET name = ?, root = ?, default_view = ?, scan_schedule = ?, ignore_patterns = ?
 		  WHERE id = ?`,
 		existing.Name, existing.Root, existing.DefaultView, existing.ScanSchedule,
 		joinPatterns(existing.IgnorePatterns), id); err != nil {
 		if store.IsUniqueViolation(err) {
-			return nil, ErrNameTaken
+			return nil, false, ErrNameTaken
 		}
-		return nil, err
+		return nil, false, err
 	}
-	return existing, nil
+	stale := existing.Root != before.Root || !slices.Equal(existing.IgnorePatterns, before.IgnorePatterns)
+	return existing, stale, nil
 }
 
 // joinPatterns and splitPatterns store an ignore list as one pattern per line.

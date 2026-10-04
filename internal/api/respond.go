@@ -100,8 +100,10 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "the image is larger than 5 MB")
 	case errors.Is(err, catalog.ErrUnknownIssue):
 		writeError(w, http.StatusBadRequest, "unknown issue")
-	case errors.Is(err, catalog.ErrTooMany):
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, err.Error())
+	case errors.Is(err, library.ErrInvalidSchedule):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidSchedule, err.Error())
+	case errors.Is(err, library.ErrInvalidIgnore):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidPattern, err.Error())
 	case errors.Is(err, catalog.ErrNameTaken):
 		writeErrorCode(w, http.StatusConflict, codeNameTaken, "name already taken")
 	case errors.Is(err, catalog.ErrInvalidCursor):

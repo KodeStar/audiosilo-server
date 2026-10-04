@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -74,6 +75,20 @@ func (q *jobQueue) queuedFor(libID int64) bool {
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
+// EnqueueAll queues a scan of every library, in display order, and returns the
+// jobs (Health's "Check again", the startup scans).
+func (s *Scanner) EnqueueAll(ctx context.Context, trigger string, startedBy *int64) ([]Job, error) {
+	libs, err := s.cat.ListLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	jobs := make([]Job, len(libs))
+	for i, l := range libs {
+		jobs[i] = s.Enqueue(l, trigger, startedBy)
+	}
+	return jobs, nil
+}
+
 // Enqueue queues a scan of lib (see the coalescing rules above) and returns the
 // job that will scan it. The library reads as queued (or running) before this
 // returns, so a status poll right after the request that queued it sees the scan.
@@ -94,9 +109,6 @@ func (s *Scanner) Enqueue(lib catalog.Library, trigger string, startedBy *int64)
 	j := &Job{ID: q.nextID, Kind: "scan", LibraryID: lib.ID, LibraryName: lib.Name,
 		Trigger: trigger, StartedBy: startedBy, QueuedAt: now()}
 	q.queued = append(q.queued, j)
-	p := s.progress[lib.ID]
-	p.Queued = true
-	s.progress[lib.ID] = p
 	select {
 	case q.wake <- struct{}{}:
 	default:
@@ -130,9 +142,6 @@ func (s *Scanner) Cancel(id int64) bool {
 			continue
 		}
 		q.queued = append(q.queued[:i], q.queued[i+1:]...)
-		p := s.progress[j.LibraryID]
-		p.Queued = q.queuedFor(j.LibraryID)
-		s.progress[j.LibraryID] = p
 		return true
 	}
 	if r := q.running; r != nil && r.ID == id && r.cancel != nil {
@@ -152,7 +161,7 @@ func (j *Job) snapshot() Job {
 // runningSnapshot copies the running job with its library's progress. mu held.
 func (s *Scanner) runningSnapshot() Job {
 	j := s.jobs.running.snapshot()
-	p := s.progress[j.LibraryID]
+	p := s.progressLocked(j.LibraryID)
 	j.Progress = &p
 	return j
 }
@@ -190,7 +199,7 @@ func (s *Scanner) work(ctx context.Context) {
 		s.jobs.running = j
 		// It reads as running from here (Scan resets the counters when it starts).
 		p := s.progress[j.LibraryID]
-		p.Running, p.Queued = true, s.jobs.queuedFor(j.LibraryID)
+		p.Running = true
 		s.progress[j.LibraryID] = p
 		s.mu.Unlock()
 
@@ -230,8 +239,9 @@ func (s *Scanner) run(ctx, jctx context.Context, j *Job) {
 	if err != nil && status != catalog.RunCancelled && status != catalog.RunInterrupted {
 		s.log.Warn("scan failed", "library", lib.Name, "err", err)
 	}
+	log := append(res.Log, closingEvent(status, err, res))
 	if runID != 0 {
-		if err := s.cat.FinishScanRun(db, runID, status, res.ScanCounts, res.Log); err != nil {
+		if err := s.cat.FinishScanRun(db, runID, status, res.ScanCounts, log); err != nil {
 			s.log.Warn("record scan result failed", "library", lib.Name, "err", err)
 		}
 	}
@@ -255,13 +265,27 @@ func runStatus(res *ScanResult, err error, serverCtx, jobCtx context.Context) st
 	}
 }
 
-// NextScans returns when each scheduled library's next scan is due, by library id
-// (libraries without a schedule are absent).
-func (s *Scanner) NextScans(ctx context.Context) (map[int64]time.Time, error) {
-	libs, err := s.cat.ListLibraries(ctx)
-	if err != nil {
-		return nil, err
+// closingEvent is the last line of a scan's log: how it ended, from the same
+// status its scan_runs row records.
+func closingEvent(status string, err error, res *ScanResult) catalog.RunEvent {
+	switch status {
+	case catalog.RunOK, catalog.RunPartial:
+		return newEvent("info", "finished", func(e *catalog.RunEvent) { e.Count = res.Books })
+	case catalog.RunUnavailable:
+		// The cause alone: the console words "stopped, nothing was removed" itself.
+		return newEvent("error", "unavailable", func(e *catalog.RunEvent) {
+			e.Detail = strings.TrimPrefix(err.Error(), ErrLibraryUnavailable.Error()+": ")
+		})
+	case catalog.RunCancelled, catalog.RunInterrupted:
+		return newEvent("warn", status, nil)
+	default:
+		return newEvent("error", "failed", func(e *catalog.RunEvent) { e.Detail = err.Error() })
 	}
+}
+
+// NextScans returns when each of libs with a schedule is next due, by library id
+// (libraries without a schedule are absent).
+func (s *Scanner) NextScans(ctx context.Context, libs []catalog.Library) (map[int64]time.Time, error) {
 	last, err := s.cat.LastScanStarts(ctx)
 	if err != nil {
 		return nil, err
@@ -304,13 +328,14 @@ func (s *Scanner) schedule(ctx context.Context) {
 
 // queueDue queues the scans due at now.
 func (s *Scanner) queueDue(ctx context.Context, at time.Time) {
-	next, err := s.NextScans(ctx)
+	libs, err := s.cat.ListLibraries(ctx)
 	if err != nil {
 		s.log.Warn("scan schedule check failed", "err", err)
 		return
 	}
-	libs, err := s.cat.ListLibraries(ctx)
+	next, err := s.NextScans(ctx, libs)
 	if err != nil {
+		s.log.Warn("scan schedule check failed", "err", err)
 		return
 	}
 	for _, l := range libs {

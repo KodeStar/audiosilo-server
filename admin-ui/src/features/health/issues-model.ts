@@ -14,6 +14,7 @@ import {
 import type { TFunction } from 'i18next';
 import type { AdminBook, IssueCount, IssueKind, IssuesSummary } from '@/api/types';
 import { formatNumber } from '@/lib/format';
+import { relBaseName } from '@/lib/paths';
 
 // The Health page's categories (STYLEGUIDE.md "Health triage"): how each looks,
 // what a row says about its book, and the one fix it offers. Kept out of the
@@ -80,7 +81,7 @@ const hours = (seconds: number) => Math.floor(seconds / 3600);
 export function issueReason(kind: IssueKind, b: AdminBook): Phrase {
   switch (kind) {
     case 'scan_error': {
-      const file = b.scan_error_file ? baseName(b.scan_error_file) : '';
+      const file = b.scan_error_file ? relBaseName(b.scan_error_file) : '';
       const code = b.scan_error ?? 'unreadable';
       return { key: `health.reason.${code}`, values: { file, detail: b.scan_error_detail ?? '' } };
     }
@@ -103,11 +104,6 @@ export function issueReason(kind: IssueKind, b: AdminBook): Phrase {
     case 'duplicate':
       return { key: 'health.reason.duplicate' };
   }
-}
-
-/** The last segment of a slash path. */
-export function baseName(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
 }
 
 /**

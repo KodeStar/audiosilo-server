@@ -225,8 +225,6 @@ export type ThumbSize = 160 | 320 | 640;
 
 /** The server's cap on one bulk edit (handlers_catalog.go), applied all or nothing. */
 export const BULK_LIMIT = 1000;
-/** The server's cap on one ignore or un-ignore (catalog.maxIgnoreBatch). */
-export const IGNORE_LIMIT = 1000;
 /** The server's cap on the rules one POST /admin/shares/{id}/paths adds (handlers_shares.go). */
 export const SHARE_RULES_LIMIT = 1000;
 
@@ -246,15 +244,17 @@ export const api = {
   /** Queues a scan (coalesced with one already waiting); answers with the job. */
   scanLibrary: (id: number) =>
     request<{ status: string; job: Job }>('POST', `/admin/libraries/${id}/scan`),
+  /** Queues a scan of every library; the queue runs them one at a time. */
+  scanAll: () => request<{ jobs: Job[] }>('POST', '/admin/scan'),
   updateSettings: (patch: { metadata: { enabled: boolean } }) =>
     request<AdminSettings>('PATCH', '/admin/settings', patch),
 
   libraries: () => request<{ libraries: AdminLibrary[] }>('GET', '/admin/libraries'),
   createLibrary: (lib: LibraryRequest & { name: string; root: string }) =>
     request<Library>('POST', '/admin/libraries', lib),
-  /** Fields left out are kept; a new root or new ignore rules queue a rescan. */
+  /** Fields left out are kept; a new root or new ignore rules queue a rescan (`job`). */
   updateLibrary: (id: number, lib: LibraryRequest) =>
-    request<Library>('PATCH', `/admin/libraries/${id}`, lib),
+    request<Library & { job?: Job }>('PATCH', `/admin/libraries/${id}`, lib),
   deleteLibrary: (id: number) => request<void>('DELETE', `/admin/libraries/${id}`),
   reorderLibraries: (ids: number[]) =>
     request<{ libraries: AdminLibrary[] }>('PUT', '/admin/libraries/order', { ids }),
@@ -373,7 +373,7 @@ export const api = {
   issues: () => request<IssuesSummary>('GET', '/admin/issues'),
   duplicates: (opts: { library_id?: number; ignored?: boolean } = {}) =>
     request<{ groups: DuplicateGroup[] }>('GET', `/admin/issues/duplicates${bookQuery(opts)}`),
-  /** Stops showing these books under a category (at most IGNORE_LIMIT). */
+  /** Stops showing these books under a category (at most BULK_LIMIT). */
   ignoreIssue: (kind: IssueKind, books: BookRef[]) =>
     request<void>('POST', '/admin/issues/ignore', { kind, books }),
   unignoreIssue: (kind: IssueKind, books: BookRef[]) =>

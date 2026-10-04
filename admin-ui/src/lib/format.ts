@@ -28,8 +28,13 @@ export function formatPercent(fraction: number, lang: string): string {
   return numberFormat(lang, { style: 'percent', maximumFractionDigits: 0 }).format(f);
 }
 
-const unit = (n: number, u: 'hour' | 'minute' | 'second', lang: string) =>
-  numberFormat(lang, { style: 'unit', unit: u, unitDisplay: 'narrow' }).format(n);
+const unit = (n: number, u: 'hour' | 'minute' | 'second', lang: string, digits = 0) =>
+  numberFormat(lang, {
+    style: 'unit',
+    unit: u,
+    unitDisplay: 'narrow',
+    maximumFractionDigits: digits,
+  }).format(n);
 
 /**
  * A length as "27h 18m" ("45m" under an hour, "40s" under a minute), rounded
@@ -43,6 +48,16 @@ export function formatDuration(seconds: number, lang: string): string {
   const m = total % 60;
   if (!h) return unit(m, 'minute', lang);
   return m ? `${unit(h, 'hour', lang)} ${unit(m, 'minute', lang)}` : unit(h, 'hour', lang);
+}
+
+/** "0.4s", "22s", "1m 52s", "1h 3m": how long a job took, to the second. */
+export function formatTook(seconds: number, lang: string): string {
+  if (seconds < 9.95) return unit(Math.round(seconds * 10) / 10, 'second', lang, 1);
+  const s = Math.round(seconds);
+  if (s < 60) return unit(s, 'second', lang);
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${unit(m, 'minute', lang)} ${unit(s % 60, 'second', lang)}`;
+  return `${unit(Math.floor(m / 60), 'hour', lang)} ${unit(m % 60, 'minute', lang)}`;
 }
 
 const BYTE_UNITS = ['byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const;
@@ -114,6 +129,20 @@ export function formatDateTime(iso: string, lang: string): string {
     hour: 'numeric',
     minute: '2-digit',
   }).format(t);
+}
+
+const clockFormats = new Map<string, Intl.DateTimeFormat>();
+
+/** A time of day to the second ("10:20:19"), for log lines. "" if unparsable. */
+export function formatClockTime(iso: string, lang: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  let f = clockFormats.get(lang);
+  if (!f) {
+    f = new Intl.DateTimeFormat(lang, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    clockFormats.set(lang, f);
+  }
+  return f.format(t);
 }
 
 /** Today's date as the Overview eyebrow: "Saturday 3 October". */

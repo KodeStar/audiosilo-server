@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
 // Scheduled scans. A library's schedule is one of:
@@ -61,15 +63,12 @@ func ParseSchedule(s string) (Schedule, error) {
 // Off reports whether the schedule runs nothing.
 func (s Schedule) Off() bool { return s.every == 0 && !s.daily }
 
-// Next returns when the next scheduled scan is due, given when the library's last
-// scan started (zero if it never ran: then from now). The zero time when Off.
-func (s Schedule) Next(last, now time.Time) time.Time {
+// Next returns when the next scheduled scan is due, counting from `from` (when
+// the library's last scan started, or when the scheduler did for one never
+// scanned), in now's time zone. The zero time when Off.
+func (s Schedule) Next(from, now time.Time) time.Time {
 	if s.Off() {
 		return time.Time{}
-	}
-	from := last
-	if from.IsZero() {
-		from = now
 	}
 	if s.every > 0 {
 		return from.Add(s.every)
@@ -80,4 +79,22 @@ func (s Schedule) Next(last, now time.Time) time.Time {
 		at = at.AddDate(0, 0, 1)
 	}
 	return at
+}
+
+// ValidatePatch checks a library edit's scan settings (ErrInvalidSchedule,
+// ErrInvalidIgnore) and stores the ignore rules in their normalized form.
+func ValidatePatch(p *catalog.LibraryPatch) error {
+	if p.ScanSchedule != nil {
+		if _, err := ParseSchedule(*p.ScanSchedule); err != nil {
+			return err
+		}
+	}
+	if p.IgnorePatterns != nil {
+		lines, err := NormalizeIgnore(*p.IgnorePatterns)
+		if err != nil {
+			return err
+		}
+		p.IgnorePatterns = &lines
+	}
+	return nil
 }

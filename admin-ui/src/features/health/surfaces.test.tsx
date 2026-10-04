@@ -36,9 +36,12 @@ describe('library scan settings', () => {
   it('saves a daily schedule without a rescan, and new skip rules with one', async () => {
     const calls = mockFetch(
       libraryRoutes({
-        'PATCH /admin/libraries/1': (req) => ({
-          body: { ...libraries()[0], ...(req.body as object) },
-        }),
+        // Like the server: a scan is queued (and returned) when the skip rules change.
+        'PATCH /admin/libraries/1': (req) => {
+          const body = req.body as { ignore_patterns: string[] };
+          const job = body.ignore_patterns.length ? { id: 9, trigger: 'change' } : undefined;
+          return { body: { ...libraries()[0], ...body, job } };
+        },
       }),
     );
     renderApp('/library/libraries');
