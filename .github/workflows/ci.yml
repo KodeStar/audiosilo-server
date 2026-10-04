@@ -25,7 +25,7 @@ jobs:
       # The admin console (admin-ui/) is checked and built BEFORE the Go steps, so
       # the embed tests (internal/web/adminui) run against a real build instead of
       # skipping. Its build output is embedded, never committed.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: admin-ui/.nvmrc
           cache: npm

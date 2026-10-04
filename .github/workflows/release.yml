@@ -36,7 +36,7 @@ jobs:
           go-version-file: go.mod
 
       # The GoReleaser before-hook builds the admin console (admin-ui/) to embed.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: admin-ui/.nvmrc
           cache: npm
