@@ -1867,8 +1867,8 @@
   "notify.kind.discord": "Discord",
   "notify.kind.discordBody": "Un message dans un canal, via le Webhook du canal.",
   "notify.delivery.never": "Rien d'envoyé pour le moment",
-  "notify.delivery.ok": "Dernier envoi {{when}}",
-  "notify.delivery.failed": "Dernière tentative échouée {{when}}",
+  "notify.delivery.ok": "Dernier envoi ({{when}})",
+  "notify.delivery.failed": "Dernière tentative échouée ({{when}})",
   "notify.reason.timeout": "la réponse a pris trop de temps",
   "notify.reason.unreachable": "le serveur n'a pas pu se connecter",
   "notify.reason.http": "il a répondu HTTP {{status}}",
@@ -1918,7 +1918,7 @@
   "notify.dialog.add": "Ajouter la destination",
   "notify.dialog.save": "Enregistrer les modifications",
   "audit.title": "Journal d'audit",
-  "audit.description": "Ce que les administrateurs ont modifié, du plus récent au plus ancien. Conservé un an. Les connexions et l'écoute sont dans Activité ; les analyses dans Santé > Tâches.",
+  "audit.description": "Ce que les administrateurs ont modifié, du plus récent au plus ancien. Conservé un an. Les connexions sont dans Personnes > Appareils, l'écoute dans Activité ; les analyses dans Santé > Tâches.",
   "audit.filter.area": "Domaine",
   "audit.filter.allAreas": "Tout",
   "audit.filter.person": "Qui",
@@ -2068,5 +2068,6 @@
   "backups.schedule.weekly.sat": "Chaque samedi à {{time}}.",
   "backups.weekday.sun": "Dimanche",
   "backups.schedule.weekly.sun": "Chaque dimanche à {{time}}.",
-  "notify.dialog.secretAgain": "Cette adresse est sur un autre serveur : saisissez de nouveau le secret ou supprimez-le."
+  "notify.dialog.secretAgain": "Cette adresse est sur un autre serveur : saisissez de nouveau le secret ou supprimez-le.",
+  "backups.restore.point.revoked": "Les appareils déconnectés et les clés d'API révoquées depuis la sauvegarde fonctionnent de nouveau : déconnectez-les de nouveau ensuite (Personnes > Appareils)."
 }

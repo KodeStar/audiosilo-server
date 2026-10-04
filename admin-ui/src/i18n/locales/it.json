@@ -1867,8 +1867,8 @@
   "notify.kind.discord": "Discord",
   "notify.kind.discordBody": "Un messaggio in un canale, tramite il webhook del canale.",
   "notify.delivery.never": "Ancora nulla di inviato",
-  "notify.delivery.ok": "Ultimo invio {{when}}",
-  "notify.delivery.failed": "Ultimo tentativo non riuscito {{when}}",
+  "notify.delivery.ok": "Ultimo invio ({{when}})",
+  "notify.delivery.failed": "Ultimo tentativo non riuscito ({{when}})",
   "notify.reason.timeout": "ha impiegato troppo a rispondere",
   "notify.reason.unreachable": "il server non è riuscito a connettersi",
   "notify.reason.http": "ha risposto HTTP {{status}}",
@@ -1918,7 +1918,7 @@
   "notify.dialog.add": "Aggiungi la destinazione",
   "notify.dialog.save": "Salva le modifiche",
   "audit.title": "Registro di controllo",
-  "audit.description": "Cosa hanno modificato gli amministratori, dal più recente. Conservato per un anno. Accessi e ascolti sono in Attività; le scansioni in Stato > Attività pianificate.",
+  "audit.description": "Cosa hanno modificato gli amministratori, dal più recente. Conservato per un anno. Gli accessi sono in Persone > Dispositivi, gli ascolti in Attività; le scansioni in Stato > Attività pianificate.",
   "audit.filter.area": "Area",
   "audit.filter.allAreas": "Tutto",
   "audit.filter.person": "Chi",
@@ -2068,5 +2068,6 @@
   "backups.schedule.weekly.sat": "Ogni sabato alle {{time}}.",
   "backups.weekday.sun": "Domenica",
   "backups.schedule.weekly.sun": "Ogni domenica alle {{time}}.",
-  "notify.dialog.secretAgain": "Questo indirizzo è su un altro server: inserisci di nuovo il segreto o rimuovilo."
+  "notify.dialog.secretAgain": "Questo indirizzo è su un altro server: inserisci di nuovo il segreto o rimuovilo.",
+  "backups.restore.point.revoked": "I dispositivi disconnessi e le chiavi API revocate dopo il backup tornano a funzionare: disconnettili di nuovo dopo (Persone > Dispositivi)."
 }

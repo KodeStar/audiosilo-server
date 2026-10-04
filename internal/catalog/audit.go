@@ -79,9 +79,10 @@ type AuditFilter struct {
 // ListAudit returns events newest first, and the Before of the next page (0 when
 // this is the last).
 func (c *Catalog) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEvent, int64, error) {
-	if f.Limit <= 0 || f.Limit > 200 {
+	if f.Limit <= 0 {
 		f.Limit = 50
 	}
+	f.Limit = min(f.Limit, 200)
 	var where []string
 	var args []any
 	if f.ActorID != nil {

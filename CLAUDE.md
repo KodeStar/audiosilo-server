@@ -634,12 +634,14 @@ admin overrides; see Metadata overrides below).
   the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
   `dedup_key` announces an update once per version). `notify.Service.Emit` records the event and queues one
   delivery per enabled subscribed destination (4 workers, queue 256, drop + log when full); a delivery is
-  retried twice on timeout/unreachable/429/5xx, never follows a redirect, and records only a short reason
+  retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
+  worker), never follows a redirect, and records only a short reason
   (`timeout`, `unreachable`, `http_<status>`, `failed`), never the URL or the answer. Webhooks POST JSON
   with `X-AudioSilo-Event` and, with a secret, `X-AudioSilo-Timestamp` + `X-AudioSilo-Signature: sha256=`
   HMAC of `<timestamp>.<body>` (`notify.Sign`); ntfy is a JSON publish to the server root (Bearer token
   optional); Discord is one embed with `allowed_mentions` empty. Triggers: `Scanner.OnRunFinished`
-  (`book_added` with up to 5 titles from `ScanResult.AddedTitles`, `scan_failed`, `library_unavailable`
+  (`book_added` with up to 5 titles from `ScanResult.AddedTitles`, `scan_failed` (its `detail` is shown in the
+  bell but never sent out: `internalData`), `library_unavailable`
   only when the previous run wasn't), login/exchange (`new_device`, not demo accounts; `invite_redeemed`
   via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`.
   Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the

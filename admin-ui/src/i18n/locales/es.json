@@ -1867,8 +1867,8 @@
   "notify.kind.discord": "Discord",
   "notify.kind.discordBody": "Un mensaje en un canal, mediante el webhook del canal.",
   "notify.delivery.never": "Aún no se ha enviado nada",
-  "notify.delivery.ok": "Último envío {{when}}",
-  "notify.delivery.failed": "El último intento falló {{when}}",
+  "notify.delivery.ok": "Último envío ({{when}})",
+  "notify.delivery.failed": "El último intento falló ({{when}})",
   "notify.reason.timeout": "tardó demasiado en responder",
   "notify.reason.unreachable": "el servidor no pudo conectar",
   "notify.reason.http": "respondió HTTP {{status}}",
@@ -1918,7 +1918,7 @@
   "notify.dialog.add": "Añadir destino",
   "notify.dialog.save": "Guardar cambios",
   "audit.title": "Registro de auditoría",
-  "audit.description": "Lo que han cambiado los administradores, de más reciente a más antiguo. Se conserva durante un año. Los inicios de sesión y la escucha están en Actividad; las revisiones, en Estado > Tareas.",
+  "audit.description": "Lo que han cambiado los administradores, de más reciente a más antiguo. Se conserva durante un año. Los inicios de sesión están en Personas > Dispositivos; la escucha, en Actividad; las revisiones, en Estado > Tareas.",
   "audit.filter.area": "Área",
   "audit.filter.allAreas": "Todo",
   "audit.filter.person": "Quién",
@@ -2068,5 +2068,6 @@
   "backups.schedule.weekly.sat": "Cada sábado a las {{time}}.",
   "backups.weekday.sun": "Domingo",
   "backups.schedule.weekly.sun": "Cada domingo a las {{time}}.",
-  "notify.dialog.secretAgain": "Esta dirección está en otro servidor: vuelve a introducir el secreto o quítalo."
+  "notify.dialog.secretAgain": "Esta dirección está en otro servidor: vuelve a introducir el secreto o quítalo.",
+  "backups.restore.point.revoked": "Los dispositivos cerrados y las claves de API revocadas desde la copia vuelven a funcionar: ciérralos de nuevo después (Personas > Dispositivos)."
 }

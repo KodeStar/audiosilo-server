@@ -369,3 +369,37 @@ func TestSignedInDeviceIsOneLine(t *testing.T) {
 		t.Fatalf("device = %q", d)
 	}
 }
+
+// A destination that keeps failing waits for its retry off the workers, so the
+// others' deliveries go out meanwhile.
+func TestRetriesDontHoldTheWorkers(t *testing.T) {
+	s, cat, ctx := newService(t)
+	s.delays = []time.Duration{time.Hour} // the retry won't come during the test
+	for range workers + 1 {
+		failing := newFakeDest(t)
+		failing.code = http.StatusServiceUnavailable
+		addTarget(t, cat, TargetWebhook, failing.srv.URL, "", KindScanFailed)
+	}
+	good := newFakeDest(t)
+	addTarget(t, cat, TargetWebhook, good.srv.URL, "", KindScanFailed)
+	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	good.wait(t, 1)
+}
+
+// A failed scan's detail (the OS's own words, maybe a folder on the server) shows
+// in the bell but is never sent to a destination.
+func TestScanFailureDetailStaysHome(t *testing.T) {
+	s, cat, ctx := newService(t)
+	dest := newFakeDest(t)
+	addTarget(t, cat, TargetWebhook, dest.srv.URL, "", KindScanFailed)
+	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed,
+		Detail: "open /mnt/private/fiction: permission denied"})
+	got := dest.wait(t, 1)[0]
+	if strings.Contains(string(got.raw), "/mnt/private") {
+		t.Fatalf("the detail left the server: %s", got.raw)
+	}
+	events, _, _ := cat.ListServerEvents(ctx, 0, 1)
+	if events[0].Data["detail"] != "open /mnt/private/fiction: permission denied" {
+		t.Fatalf("the feed lost the detail: %v", events[0].Data)
+	}
+}

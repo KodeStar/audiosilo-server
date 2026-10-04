@@ -1748,8 +1748,8 @@
   "notify.kind.discord": "Discord",
   "notify.kind.discordBody": "A message in a channel, through the channel's webhook.",
   "notify.delivery.never": "Nothing sent yet",
-  "notify.delivery.ok": "Last sent {{when}}",
-  "notify.delivery.failed": "Last attempt failed {{when}}",
+  "notify.delivery.ok": "Last sent ({{when}})",
+  "notify.delivery.failed": "Last attempt failed ({{when}})",
   "notify.reason.timeout": "it took too long to answer",
   "notify.reason.unreachable": "the server couldn't connect",
   "notify.reason.http": "it answered HTTP {{status}}",
@@ -1799,7 +1799,7 @@
   "notify.dialog.add": "Add destination",
   "notify.dialog.save": "Save changes",
   "audit.title": "Audit log",
-  "audit.description": "What admins changed, newest first. Kept for a year. Sign-ins and listening are in Activity; scans in Health > Jobs.",
+  "audit.description": "What admins changed, newest first. Kept for a year. Sign-ins are in People > Devices, listening in Activity, scans in Health > Jobs.",
   "audit.filter.area": "Area",
   "audit.filter.allAreas": "Everything",
   "audit.filter.person": "Who",
@@ -1948,5 +1948,6 @@
   "backups.schedule.weekly.sat": "Every Saturday at {{time}}.",
   "backups.weekday.sun": "Sunday",
   "backups.schedule.weekly.sun": "Every Sunday at {{time}}.",
-  "notify.dialog.secretAgain": "This address is on another server: enter the secret again, or remove it."
+  "notify.dialog.secretAgain": "This address is on another server: enter the secret again, or remove it.",
+  "backups.restore.point.revoked": "Devices signed out and API keys revoked since the backup work again: sign them out again afterwards (People > Devices)."
 }

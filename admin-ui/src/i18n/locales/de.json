@@ -1748,8 +1748,8 @@
   "notify.kind.discord": "Discord",
   "notify.kind.discordBody": "Eine Nachricht in einem Kanal, über den Webhook des Kanals.",
   "notify.delivery.never": "Noch nichts gesendet",
-  "notify.delivery.ok": "Zuletzt gesendet {{when}}",
-  "notify.delivery.failed": "Letzter Versuch fehlgeschlagen {{when}}",
+  "notify.delivery.ok": "Zuletzt gesendet ({{when}})",
+  "notify.delivery.failed": "Letzter Versuch fehlgeschlagen ({{when}})",
   "notify.reason.timeout": "die Antwort dauerte zu lange",
   "notify.reason.unreachable": "der Server konnte keine Verbindung herstellen",
   "notify.reason.http": "er antwortete mit HTTP {{status}}",
@@ -1799,7 +1799,7 @@
   "notify.dialog.add": "Ziel hinzufügen",
   "notify.dialog.save": "Änderungen speichern",
   "audit.title": "Prüfprotokoll",
-  "audit.description": "Was Admins geändert haben, neueste zuerst. Wird ein Jahr aufbewahrt. Anmeldungen und Hören stehen unter Aktivität, Scans unter Zustand > Aufträge.",
+  "audit.description": "Was Admins geändert haben, neueste zuerst. Wird ein Jahr aufbewahrt. Anmeldungen stehen unter Personen > Geräte, Hören unter Aktivität, Scans unter Zustand > Aufträge.",
   "audit.filter.area": "Bereich",
   "audit.filter.allAreas": "Alles",
   "audit.filter.person": "Wer",
@@ -1948,5 +1948,6 @@
   "backups.schedule.weekly.sat": "Jeden Samstag um {{time}}.",
   "backups.weekday.sun": "Sonntag",
   "backups.schedule.weekly.sun": "Jeden Sonntag um {{time}}.",
-  "notify.dialog.secretAgain": "Diese Adresse liegt auf einem anderen Server: Gib das Secret erneut ein oder entferne es."
+  "notify.dialog.secretAgain": "Diese Adresse liegt auf einem anderen Server: Gib das Secret erneut ein oder entferne es.",
+  "backups.restore.point.revoked": "Seit der Sicherung abgemeldete Geräte und widerrufene API-Schlüssel funktionieren wieder: Melde sie danach erneut ab (Personen > Geräte)."
 }

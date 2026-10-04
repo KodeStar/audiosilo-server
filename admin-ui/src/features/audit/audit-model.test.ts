@@ -71,6 +71,21 @@ describe('audit model', () => {
     ]);
   });
 
+  it('words issue kinds and backup schedules', () => {
+    expect(detailLines(ev('issue.ignore', { kind: 'no_cover', books: 2 }), t, fmt)).toEqual([
+      { label: 'kind', value: 'no_cover' },
+      { label: 'books', value: '2' },
+    ]);
+    const [line] = detailLines(
+      ev('settings.update', {
+        changes: [{ setting: 'backups.schedule', from: 'daily:03:00', to: '' }],
+      }),
+      t,
+      fmt,
+    );
+    expect(line.value).toBe('daily → off');
+  });
+
   it('names events and writes times', () => {
     expect(
       detailLines(

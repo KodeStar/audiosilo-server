@@ -50,3 +50,24 @@ func TestAuditRetention(t *testing.T) {
 		t.Fatalf("pruned events %d, %v", n, err)
 	}
 }
+
+func TestPageSizesClamp(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c := New(db, time.Now)
+	for range 120 {
+		if _, err := c.RecordServerEvent(ctx, "book_added", nil, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if events, _, _ := c.ListServerEvents(ctx, 0, 500); len(events) != 100 {
+		t.Fatalf("a big limit gave %d events, want the most (100)", len(events))
+	}
+	if events, _, _ := c.ListServerEvents(ctx, 0, 0); len(events) != 20 {
+		t.Fatalf("no limit gave %d events, want the default (20)", len(events))
+	}
+}

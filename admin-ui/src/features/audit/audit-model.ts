@@ -1,4 +1,5 @@
 import type { AuditEvent } from '@/api/types';
+import { describeSchedule } from '@/features/settings/backups-model';
 
 // Server > Audit log: an admin action's code and facts (catalog.AuditEvent) as
 // the page words them. Pure: the page passes the translator in.
@@ -73,12 +74,14 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
     if (key === 'changes' && Array.isArray(v)) {
       for (const c of v as { setting?: unknown; from?: unknown; to?: unknown }[]) {
         const id = String(c.setting ?? '');
+        // A backup schedule is stored as code ("daily:03:00"): word it.
+        const word = (x: unknown) =>
+          id === 'backups.schedule' && typeof x === 'string'
+            ? scheduleText(x, t)
+            : valueText(x, t, fmt);
         out.push({
           label: t(`settings.${id}`, { defaultValue: id }),
-          value: t('audit.value.change', {
-            from: valueText(c.from, t, fmt),
-            to: valueText(c.to, t, fmt),
-          }),
+          value: t('audit.value.change', { from: word(c.from), to: word(c.to) }),
         });
       }
       continue;
@@ -106,7 +109,9 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
       continue;
     }
     let value: string;
-    if (ENUMS.has(key) && typeof v === 'string')
+    if (key === 'kind' && e.action.startsWith('issue.') && typeof v === 'string')
+      value = t(`health.kind.${v}`, { defaultValue: v });
+    else if (ENUMS.has(key) && typeof v === 'string')
       value = t(`audit.enum.${key}.${v}`, { defaultValue: v });
     else if (key === 'events' && Array.isArray(v))
       value = v.length
@@ -117,4 +122,9 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
     out.push({ label: label(key), value });
   }
   return out;
+}
+
+function scheduleText(s: string, t: Translate): string {
+  const d = describeSchedule(s);
+  return t(d.key, d.values);
 }

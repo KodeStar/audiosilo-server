@@ -202,9 +202,10 @@ func (c *Catalog) ServerEventSeen(ctx context.Context, kind, dedupKey string) (b
 // ListServerEvents returns events newest first (before > 0 pages: ids below it),
 // and the before of the next page (0 when this is the last).
 func (c *Catalog) ListServerEvents(ctx context.Context, before int64, limit int) ([]ServerEvent, int64, error) {
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 {
 		limit = 20
 	}
+	limit = min(limit, 100)
 	q := `SELECT id, at, kind, data FROM server_events`
 	args := []any{}
 	if before > 0 {

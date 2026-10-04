@@ -314,6 +314,7 @@ function BackupList({ env, schedule }: { env: BackupsEnvelope; schedule: string 
         <ul className="ml-5 flex list-disc flex-col gap-1 text-[13px] text-muted-foreground">
           <li>{t('backups.restore.point.copy')}</li>
           <li>{t('backups.restore.point.devices')}</li>
+          <li>{t('backups.restore.point.revoked')}</li>
           <li>{t('backups.restore.point.config')}</li>
         </ul>
       </ConfirmDialog>

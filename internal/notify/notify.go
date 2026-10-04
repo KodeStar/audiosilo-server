@@ -95,8 +95,9 @@ type Service struct {
 }
 
 type delivery struct {
-	target catalog.NotifyTarget
-	event  catalog.ServerEvent
+	target  catalog.NotifyTarget
+	event   catalog.ServerEvent
+	attempt int // 0 for the first
 }
 
 // New returns a service; Run delivers. server reports the server's name and
@@ -186,19 +187,27 @@ func (s *Service) Test(ctx context.Context, t catalog.NotifyTarget) string {
 	return reason
 }
 
-// deliver sends one message, retrying a passing failure, and records the outcome.
+// deliver sends one message and records the outcome, or queues a retry.
+//
+// A failure that may pass is queued again after its delay rather than waited out
+// here, so a destination that doesn't answer holds a worker for one attempt at a
+// time, never the others' deliveries.
 func (s *Service) deliver(ctx context.Context, d delivery) {
-	var reason string
-	for attempt := 0; ; attempt++ {
-		reason = s.send(ctx, d.target, d.event)
-		if reason == "" || !retryable(reason) || attempt >= len(s.delays) {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(s.delays[attempt]):
-		}
+	reason := s.send(ctx, d.target, d.event)
+	if reason != "" && retryable(reason) && d.attempt < len(s.delays) {
+		next := d
+		next.attempt++
+		time.AfterFunc(s.delays[d.attempt], func() {
+			if ctx.Err() != nil {
+				return
+			}
+			select {
+			case s.queue <- next:
+			default:
+				s.log.Warn("notification queue full; dropped a retry", "target", d.target.ID, "kind", d.event.Kind)
+			}
+		})
+		return
 	}
 	if reason != "" {
 		s.log.Info("notification not delivered", "target", d.target.ID, "kind", d.event.Kind, "reason", reason)
@@ -347,7 +356,7 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Text, m.Link, m.Tags = strings.Join(lines, "\n"), link("/library"), []string{"books"}
 	case KindScanFailed:
 		m.Title = "Scanning " + str("library") + " failed"
-		m.Text = cmp.Or(str("detail"), "See the scan's log in Health > Jobs.")
+		m.Text = "See the scan's log in Health > Jobs."
 		m.Link, m.Tags, m.Priority, m.Color = link("/health/jobs"), []string{"warning"}, 4, colorBad
 	case KindLibraryUnavailable:
 		m.Title = str("library") + " is offline"
@@ -420,8 +429,24 @@ func webhookBody(ev catalog.ServerEvent, m message, srv Server) map[string]any {
 		"title":   m.Title,
 		"message": m.Text,
 		"link":    m.Link,
-		"data":    ev.Data,
+		"data":    outbound(ev.Data),
 	}
+}
+
+// internalData are event facts the console's bell shows but no destination is
+// sent: a failed scan's detail is the tool's or the OS's own message, which can
+// name a folder on the server.
+var internalData = []string{"detail"}
+
+// outbound is an event's data without its internal facts.
+func outbound(data map[string]any) map[string]any {
+	out := make(map[string]any, len(data))
+	for k, v := range data {
+		if !slices.Contains(internalData, k) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // ntfyBody publishes as JSON to the server's root, which takes any title (headers
