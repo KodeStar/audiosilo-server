@@ -10,6 +10,7 @@ import {
   HardDrive,
   ImageMinus,
   ImageUp,
+  RefreshCw,
   Repeat,
   Share2,
   Sparkles,
@@ -19,7 +20,14 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidateBooks, invalidateCover, useLibraries, useServerInfo } from '@/api/hooks';
+import {
+  invalidateBooks,
+  invalidateCover,
+  invalidateIssues,
+  settleBookEdit,
+  useLibraries,
+  useServerInfo,
+} from '@/api/hooks';
 import type { AdminBookDetail } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Badge } from '@/components/ui/badge';
@@ -278,6 +286,20 @@ function MoreMenu({
   onAddToShare: () => void;
 }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
+  const b = detail.book;
+  // Reads the book's files again now (tags, chapters, cover, read problems).
+  const rescan = async () => {
+    try {
+      const fresh = await api.rescanBook(b.library_id, b.path);
+      settleBookEdit(qc, fresh);
+      invalidateCover(qc, b.library_id, b.path);
+      invalidateIssues(qc);
+      toast.add({ title: t('book.more.rescanned'), type: 'success' });
+    } catch (err) {
+      toastError(t('book.more.rescanFailed'), err);
+    }
+  };
   const copy = async () => {
     const ok = await copyText(joinLibraryPath(root, detail.book.path));
     toast.add(
@@ -302,6 +324,10 @@ function MoreMenu({
         <DropdownMenuItem onClick={onAddToShare}>
           <Share2 aria-hidden="true" />
           {t('book.more.addToShare')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => void rescan()}>
+          <RefreshCw aria-hidden="true" />
+          {t('book.more.rescan')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

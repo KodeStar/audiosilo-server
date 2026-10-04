@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -42,7 +43,7 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobePath,
-		"-v", "quiet",
+		"-v", "error", // errors only, on stderr: what the Health page shows for a file ffprobe can't read
 		"-print_format", "json",
 		"-show_format",
 		"-show_chapters",
@@ -52,7 +53,7 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return nil, probeError(err)
 	}
 	var parsed ffprobeOutput
 	if err := json.Unmarshal(out, &parsed); err != nil {
@@ -71,6 +72,33 @@ func probe(path, ffprobePath string) (*probeResult, error) {
 		})
 	}
 	return res, nil
+}
+
+// maxProbeMessage bounds the ffprobe message kept for the Health page.
+const maxProbeMessage = 300
+
+// probeError turns a failed ffprobe run into an error carrying its own message (the
+// last line it wrote to stderr, which names the problem: "moov atom not found"),
+// falling back to the exit status.
+func probeError(err error) error {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return err
+	}
+	lines := strings.Split(strings.TrimSpace(string(exit.Stderr)), "\n")
+	msg := strings.TrimSpace(lines[len(lines)-1])
+	if msg == "" {
+		return err
+	}
+	// ffprobe prefixes the input path ("/srv/books/x.m4b: Invalid data..."); the
+	// Health page shows the file separately.
+	if i := strings.LastIndex(msg, ": "); i >= 0 && strings.ContainsAny(msg[:i], "/\\") {
+		msg = msg[i+2:]
+	}
+	if len(msg) > maxProbeMessage {
+		msg = strings.ToValidUTF8(msg[:maxProbeMessage], "")
+	}
+	return errors.New(msg)
 }
 
 func normalizeTags(in map[string]string) map[string]string {

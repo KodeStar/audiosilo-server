@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useBlocker, useSearch } from '@tanstack/react-router';
+import { Link, useBlocker, useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookX, TriangleAlert } from 'lucide-react';
 import { ApiError } from '@/api/client';
@@ -24,13 +24,28 @@ import { SaveBar, SaveDiffDialog } from './save-changes';
 
 /** A book, addressed by library + path: its metadata (edited in place), chapters, files and access. */
 export function BookPage() {
-  const { library, path } = useSearch({ from: '/library/book' });
+  const { library, path, match } = useSearch({ from: '/library/book' });
   if (!library || !path) return <BookNotFound />;
   // A fresh page (drafts and all) per book.
-  return <BookLoader key={refKey({ library_id: library, path })} libraryId={library} path={path} />;
+  return (
+    <BookLoader
+      key={refKey({ library_id: library, path })}
+      libraryId={library}
+      path={path}
+      match={!!match}
+    />
+  );
 }
 
-function BookLoader({ libraryId, path }: { libraryId: number; path: string }) {
+function BookLoader({
+  libraryId,
+  path,
+  match,
+}: {
+  libraryId: number;
+  path: string;
+  match: boolean;
+}) {
   const { t } = useTranslation();
   const detail = useAdminBook(libraryId, path);
   if (detail.isError) {
@@ -46,7 +61,7 @@ function BookLoader({ libraryId, path }: { libraryId: number; path: string }) {
     );
   }
   if (!detail.data) return <BookSkeleton />;
-  return <BookView detail={detail.data} />;
+  return <BookView detail={detail.data} matchOnOpen={match} />;
 }
 
 function BookNotFound() {
@@ -103,13 +118,21 @@ function BookSkeleton() {
   );
 }
 
-function BookView({ detail }: { detail: AdminBookDetail }) {
+function BookView({ detail, matchOnOpen }: { detail: AdminBookDetail; matchOnOpen: boolean }) {
   const { t } = useTranslation();
+  const navigate = useNavigate({ from: '/library/book' });
   const [drafts, setDrafts] = useState<Drafts>({});
   // Values the server refused at the last save, by field (cleared once that field changes).
   const [refused, setRefused] = useState<Partial<Record<OverrideField, string>>>({});
   const [reviewing, setReviewing] = useState(false);
-  const [matching, setMatching] = useState(false);
+  const [matching, setMatchingState] = useState(matchOnOpen);
+  // Closing a dialog a link opened (?match=1) drops the param, so a reload doesn't reopen it.
+  const setMatching = (open: boolean) => {
+    setMatchingState(open);
+    if (!open && matchOnOpen) {
+      void navigate({ search: (s) => ({ library: s.library, path: s.path }), replace: true });
+    }
+  };
   const [sharing, setSharing] = useState(false);
   const count = Object.keys(drafts).length;
   const dirty = count > 0;

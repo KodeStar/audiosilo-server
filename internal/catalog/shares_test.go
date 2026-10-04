@@ -307,7 +307,7 @@ func TestGrantWholeLibraryFollowsTheMarkNotTheName(t *testing.T) {
 	if err := c.GrantWholeLibrary(ctx, maya, fiction.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.UpdateLibrary(ctx, fiction.ID, Library{Name: "Novels", Root: "/tmp/a"}); err != nil {
+	if _, err := c.UpdateLibrary(ctx, fiction.ID, LibraryPatch{Name: "Novels", Root: "/tmp/a"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.GrantWholeLibrary(ctx, sam, fiction.ID); err != nil {

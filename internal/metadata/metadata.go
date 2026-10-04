@@ -45,6 +45,10 @@ type Metadata struct {
 	Codec       string    `json:"codec"` // audio codec from ffprobe (e.g. aac, mp3, ac3)
 	HasCover    bool      `json:"has_cover"`
 	Chapters    []Chapter `json:"chapters,omitempty"`
+	// What went wrong reading the file. Extraction is best-effort, so these don't
+	// make Extract fail; the scanner records them for the Health page.
+	OpenErr  error `json:"-"` // the file couldn't be opened
+	ProbeErr error `json:"-"` // ffprobe was configured and couldn't read it
 }
 
 // AudioExtensions are the file extensions AudioSilo treats as audiobooks.
@@ -74,17 +78,22 @@ func Extract(path, ffprobePath string) (*Metadata, error) {
 	m := &Metadata{Format: strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")}
 
 	// Embedded tags via dhowden/tag (best-effort).
-	if f, err := os.Open(path); err == nil {
-		if md, terr := tag.ReadFrom(f); terr == nil {
-			applyTags(m, md)
-		}
-		f.Close()
+	f, err := os.Open(path)
+	if err != nil {
+		m.OpenErr = err
+		return m, nil // ffprobe can't read what the server can't open
 	}
+	if md, terr := tag.ReadFrom(f); terr == nil {
+		applyTags(m, md)
+	}
+	f.Close()
 
 	// ffprobe for duration + chapters + richer container tags (best-effort).
 	if ffprobePath != "" {
 		if p, err := probe(path, ffprobePath); err == nil {
 			applyProbe(m, p)
+		} else {
+			m.ProbeErr = err
 		}
 	}
 	return m, nil

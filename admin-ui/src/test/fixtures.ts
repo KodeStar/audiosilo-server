@@ -5,6 +5,9 @@ import type {
   AdminStats,
   Invite,
   InviteCreated,
+  IssuesSummary,
+  JobsState,
+  ScanProgress,
   ServerInfo,
   User,
   UserDetail,
@@ -86,7 +89,16 @@ export const settings: AdminSettings = {
 };
 
 /** No scan running. */
-export const idle = { running: false, total: 0, done: 0, indexed: 0 };
+export const idle: ScanProgress = {
+  running: false,
+  total: 0,
+  done: 0,
+  indexed: 0,
+  added: 0,
+  updated: 0,
+  moved: 0,
+  removed: 0,
+};
 
 export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
   const base: AdminLibrary[] = [
@@ -99,6 +111,8 @@ export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
       book_count: 2400,
       available: true,
       scan: idle,
+      scan_schedule: '',
+      ignore_patterns: [],
     },
     {
       id: 2,
@@ -109,6 +123,8 @@ export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
       book_count: 849,
       available: true,
       scan: idle,
+      scan_schedule: '',
+      ignore_patterns: [],
     },
   ];
   return base.map((l, i) => ({ ...l, ...over[i] }));
@@ -177,3 +193,25 @@ export const created: InviteCreated = {
   max_uses: 5,
   expires_at: new Date(Date.now() + 7 * 86400_000 + 60_000).toISOString(),
 };
+
+/** GET /admin/issues: a few books needing attention, nothing offline. */
+export function issuesSummary(over: Partial<IssuesSummary> = {}): IssuesSummary {
+  return {
+    categories: [
+      { kind: 'scan_error', count: 1, ignored: 0, samples: [] },
+      { kind: 'suspect', count: 0, ignored: 0, samples: [] },
+      { kind: 'duplicate', count: 1, ignored: 0, samples: [] },
+      { kind: 'no_cover', count: 2, ignored: 1, samples: [] },
+      { kind: 'no_chapters', count: 0, ignored: 0, samples: [] },
+      { kind: 'transcode', count: 0, ignored: 0, samples: [] },
+    ],
+    offline: [],
+    checked_at: '2026-10-04T08:00:00Z',
+    ...over,
+  };
+}
+
+/** GET /admin/jobs: nothing running, nothing queued, no schedules. */
+export function jobsState(over: Partial<JobsState> = {}): JobsState {
+  return { running: null, queued: [], schedules: [], ...over };
+}

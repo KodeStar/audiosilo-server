@@ -149,7 +149,8 @@ func Run(ctx context.Context, opts Options) error {
 	if err := syncLibraries(ctx, cfg, cat); err != nil {
 		return err
 	}
-	go initialScan(ctx, cat, scanner, log)
+	scanner.Start(ctx)
+	queueStartupScans(ctx, cat, scanner, log)
 
 	// In demo mode, reap idle throwaway accounts in the background.
 	if cfg.Demo.Enabled {
@@ -375,17 +376,16 @@ func syncLibraries(ctx context.Context, cfg *config.Config, cat *catalog.Catalog
 	return nil
 }
 
-// initialScan scans every library once at startup.
-func initialScan(ctx context.Context, cat *catalog.Catalog, scanner *library.Scanner, log *slog.Logger) {
+// queueStartupScans queues one scan of every library in the job queue, which runs
+// them one at a time in the background.
+func queueStartupScans(ctx context.Context, cat *catalog.Catalog, scanner *library.Scanner, log *slog.Logger) {
 	libs, err := cat.ListLibraries(ctx)
 	if err != nil {
-		log.Warn("initial scan: list libraries failed", "err", err)
+		log.Warn("startup scan: list libraries failed", "err", err)
 		return
 	}
 	for _, l := range libs {
-		if _, err := scanner.Scan(ctx, l); err != nil {
-			log.Warn("initial scan failed", "library", l.Name, "err", err)
-		}
+		scanner.Enqueue(l, library.TriggerStartup, nil)
 	}
 }
 

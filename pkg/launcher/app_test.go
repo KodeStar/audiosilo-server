@@ -221,21 +221,38 @@ func TestSyncLibraries(t *testing.T) {
 	}
 }
 
-// initialScan must warn-and-continue past a broken library root, still scanning
-// the healthy ones.
-func TestInitialScanWarnsAndContinues(t *testing.T) {
-	ctx := context.Background()
+// The startup scans carry on past a broken library root, still scanning the
+// healthy ones, and record each outcome.
+func TestStartupScansWarnAndContinue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	cat := catalog.New(testDB(t), time.Now)
 	scanner := library.NewScanner(cat, "", discardLog())
 
 	good, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	// A missing root makes its scan stop at the unavailable-root guard; the queue
+	// must record that and carry on rather than abort the startup scans.
+	missing, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Missing", Root: filepath.Join(t.TempDir(), "does-not-exist")})
 	goodLib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Good", Root: good})
-	// A missing root makes Scan return ErrLibraryUnavailable; initialScan must log
-	// and carry on rather than abort the whole startup scan.
-	cat.CreateLibrary(ctx, catalog.Library{Name: "Missing", Root: filepath.Join(t.TempDir(), "does-not-exist")})
 
-	initialScan(ctx, cat, scanner, discardLog())
+	scanner.Start(ctx)
+	queueStartupScans(ctx, cat, scanner, discardLog())
 
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		runs, _ := cat.ListScanRuns(ctx, 0, 0, 10)
+		if len(runs) == 2 && runs[0].FinishedAt != nil && runs[1].FinishedAt != nil {
+			status := map[int64]string{runs[0].LibraryID: runs[0].Status, runs[1].LibraryID: runs[1].Status}
+			if status[missing.ID] != catalog.RunUnavailable || status[goodLib.ID] != catalog.RunOK {
+				t.Fatalf("statuses = %v", status)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the startup scans never finished: %+v", runs)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	counts, err := cat.CountBooksByLibrary(ctx)
 	if err != nil {
 		t.Fatal(err)

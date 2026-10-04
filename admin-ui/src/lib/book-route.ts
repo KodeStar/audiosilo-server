@@ -8,14 +8,17 @@ export function bookRoute(libraryId: number, path: string) {
   return { to: '/library/book', search: { library: libraryId, path } } as const;
 }
 
-export type BookSearch = { library: number; path: string };
+/** The book page's search params; `match` opens the match dialog (Health's "Review match"). */
+export type BookSearch = { library: number; path: string; match?: true };
 
 /** The book page's search params, or undefined when they don't name a book. */
 export function parseBookSearch(s: Record<string, unknown>): BookSearch | undefined {
   const library = Number(s.library);
   const path =
     typeof s.path === 'string' ? s.path : typeof s.path === 'number' ? String(s.path) : '';
-  return Number.isInteger(library) && library > 0 && path ? { library, path } : undefined;
+  if (!Number.isInteger(library) || library <= 0 || !path) return undefined;
+  const match = s.match === true || s.match === 1 || s.match === '1';
+  return match ? { library, path, match } : { library, path };
 }
 
 export const refOf = (b: { library_id: number; path: string }): BookRef => ({

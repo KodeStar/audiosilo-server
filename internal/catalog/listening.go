@@ -249,13 +249,19 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 	})
 }
 
-// moveBookState carries the book's own path-keyed state (enrichment, an admin's
-// metadata edits, a custom cover) from oldPath to newPath.
+// moveBookState carries the book's own path-keyed state (enrichment, ignored
+// issues, an admin's metadata edits, a custom cover) from oldPath to newPath.
 func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string) error {
 	// book_enrichment is keyed on the book path too, so a move must carry the
 	// attached ASIN/ISBN to the new path or the moved book silently loses it.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE OR REPLACE book_enrichment SET path = ? WHERE library_id = ? AND path = ?`,
+		newPath, libraryID, oldPath); err != nil {
+		return err
+	}
+	// So do the Health issues an admin ignored for it.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE OR REPLACE issue_ignores SET path = ? WHERE library_id = ? AND path = ?`,
 		newPath, libraryID, oldPath); err != nil {
 		return err
 	}

@@ -101,7 +101,7 @@ func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
 		allow = scope.VisibleInBrowse
 	}
 	listing, err := library.BrowseFS(lib.Root, r.URL.Query().Get("path"),
-		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow)
+		queryInt(r, "offset", 0), queryInt(r, "limit", 200), allow, library.ParseIgnore(lib.IgnorePatterns))
 	if errors.Is(err, library.ErrOutsideRoot) {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return

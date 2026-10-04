@@ -5,6 +5,7 @@ import { Command, useCommandState } from 'cmdk';
 import { useTranslation } from 'react-i18next';
 import { Dialog } from '@base-ui/react/dialog';
 import {
+  CalendarClock,
   CornerDownLeft,
   DatabaseZap,
   ExternalLink,
@@ -18,7 +19,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useServerInfo, useStats } from '@/api/hooks';
-import { rescanLibrary } from '@/features/libraries/rescan';
+import { rescanAll, rescanLibrary } from '@/features/libraries/rescan';
 import { LANGUAGES, setLanguage, type Language } from '@/i18n';
 import { useSession } from '@/lib/session';
 import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
@@ -119,6 +120,21 @@ function PaletteBody({ close }: { close: () => void }) {
         rescanLibrary(queryClient, lib);
       },
     })),
+    ...((stats.data?.libraries.length ?? 0) > 1
+      ? [
+          {
+            id: 'rescan-all',
+            title: t('palette.action.rescanAll'),
+            subtitle: t('palette.action.rescanSub'),
+            icon: RefreshCw,
+            keywords: ['scan', 'health', 'check'],
+            run: () => {
+              close();
+              rescanAll(queryClient, stats.data?.libraries ?? []);
+            },
+          },
+        ]
+      : []),
     ...(server.data?.capabilities.web_player
       ? [
           {
@@ -178,6 +194,14 @@ function PaletteBody({ close }: { close: () => void }) {
       icon: Globe,
       keywords: ['meta', 'community', 'lookup', 'asin'],
       run: () => go('/server/{-$section}', { section: undefined }),
+    },
+    {
+      id: 'scan-settings',
+      title: t('palette.setting.scanSettings'),
+      subtitle: `${t('shell.dest.library')} › ${t('shell.section.library.libraries')}`,
+      icon: CalendarClock,
+      keywords: ['schedule', 'ignore', 'skip', 'scan', 'automatic'],
+      run: () => go('/library/{-$section}', { section: 'libraries' }),
     },
     ...THEME_OPTIONS.map<PaletteEntry>(({ pref, icon }) => ({
       id: `theme-${pref}`,

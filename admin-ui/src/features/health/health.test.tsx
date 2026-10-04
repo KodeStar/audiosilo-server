@@ -1,0 +1,208 @@
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { setToken } from '@/api/token';
+import type { DuplicateGroup } from '@/api/types';
+import { mockFetch, type MockRoute } from '@/test/fetch-mock';
+import { issuesSummary, libraries } from '@/test/fixtures';
+import { adminBook } from '@/test/library-fixtures';
+import { renderApp } from '@/test/render-app';
+import { signedInRoutes } from '@/test/routes';
+
+// Health > Issues: categories, the triage queue, ignore with Undo, fixes,
+// duplicates and the offline safety stop.
+
+const broken = adminBook({
+  path: 'Terry Pratchett/Guards! Guards!',
+  title: 'Guards! Guards!',
+  author: 'Terry Pratchett',
+  scan_error: 'empty_file',
+  scan_error_file: 'Terry Pratchett/Guards! Guards!/07.mp3',
+});
+const coverless = [
+  adminBook({ path: 'A/One', title: 'Book One', has_cover: false }),
+  adminBook({ path: 'A/Two', title: 'Book Two', has_cover: false }),
+];
+
+function routes(over: Record<string, MockRoute> = {}) {
+  return signedInRoutes({
+    'GET /admin/books': (req) => {
+      const issue = req.query.get('issue');
+      if (issue === 'scan_error') return { body: { books: [broken] } };
+      if (issue === 'no_cover') {
+        return { body: { books: req.query.get('issue_ignored') ? [] : coverless } };
+      }
+      return { body: { books: [] } };
+    },
+    ...over,
+  });
+}
+
+beforeEach(() => setToken('stored'));
+afterEach(() => vi.unstubAllGlobals());
+
+describe('library health', () => {
+  it('shows each category with its count and opens the first that needs attention', async () => {
+    mockFetch(routes());
+    renderApp('/health');
+    expect(await screen.findByRole('heading', { name: 'Library health' })).toBeInTheDocument();
+    expect(
+      await screen.findByText('4 things could be better. None of it loses data.'),
+    ).toBeInTheDocument();
+    const card = screen.getByRole('button', { name: /Missing covers/ });
+    expect(within(card).getByText('2')).toBeInTheDocument();
+    expect(within(card).getByText('1 ignored')).toBeInTheDocument();
+    // The first category with something in it is open: its book and why.
+    expect(screen.getByRole('button', { name: /Files that couldn't be read/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(await screen.findByText('07.mp3 is empty (0 bytes)')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Guards! Guards!' })).toBeInTheDocument();
+  });
+
+  it('ignores a book with an undo, and lists the ignored ones on request', async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/issues/ignore': { status: 204 },
+        'DELETE /admin/issues/ignore': { status: 204 },
+      }),
+    );
+    const user = userEvent.setup();
+    const { router } = renderApp('/health?issue=no_cover');
+    const row = (await screen.findByText('Book One')).closest('li')!;
+    await user.click(within(row).getByRole('button', { name: 'Ignore' }));
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/issues/ignore')?.body,
+      ).toEqual({
+        kind: 'no_cover',
+        books: [{ library_id: 1, path: 'A/One' }],
+      }),
+    );
+    expect(await screen.findByText('Ignored Book One')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'DELETE' && c.path === '/admin/issues/ignore')).toBe(
+        true,
+      ),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show ignored (1)' }));
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({ issue: 'no_cover', ignored: true }),
+    );
+    expect(await screen.findByText('Nothing ignored')).toBeInTheDocument();
+    expect(calls.some((c) => c.query.get('issue_ignored') === 'true')).toBe(true);
+  });
+
+  it('ignores a selection from the floating bar', async () => {
+    const calls = mockFetch(routes({ 'POST /admin/issues/ignore': { status: 204 } }));
+    const user = userEvent.setup();
+    renderApp('/health?issue=no_cover');
+    await screen.findByText('Book One');
+    await user.click(screen.getByRole('button', { name: 'Select all' }));
+    const bar = screen.getByRole('toolbar', { name: 'Actions for the selected books' });
+    expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+    await user.click(within(bar).getByRole('button', { name: 'Ignore' }));
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/issues/ignore')?.body,
+      ).toMatchObject({
+        kind: 'no_cover',
+        books: [
+          { library_id: 1, path: 'A/One' },
+          { library_id: 1, path: 'A/Two' },
+        ],
+      }),
+    );
+  });
+
+  it('reads an unreadable book again and says whether that fixed it', async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/libraries/1/book/rescan': {
+          body: {
+            book: { ...broken, scan_error: undefined },
+            fields: {},
+            chapters: [],
+            files: [],
+            listeners: [],
+            shares: [],
+            folder: { path: '', override: '' },
+            description: '',
+            indexed_at: '',
+          },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=scan_error');
+    await user.click(await screen.findByRole('button', { name: 'Read again' }));
+    expect(await screen.findByText('Guards! Guards! reads fine now')).toBeInTheDocument();
+    expect(calls.find((c) => c.path === '/admin/libraries/1/book/rescan')?.query.get('path')).toBe(
+      'Terry Pratchett/Guards! Guards!',
+    );
+  });
+
+  it('compares duplicates side by side and stops suggesting ones that differ', async () => {
+    const group: DuplicateGroup = {
+      reason: 'same_book',
+      ignored: false,
+      books: [
+        { ...adminBook({ path: 'Dune', title: 'Dune', format: 'm4b' }), listeners: 2 },
+        {
+          ...adminBook({ path: 'Dune (mp3)', title: 'Dune', format: 'mp3', file_count: 12 }),
+          listeners: 0,
+        },
+      ],
+    };
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues/duplicates': { body: { groups: [group] } },
+        'POST /admin/issues/ignore': { status: 204 },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=duplicate');
+    const card = (await screen.findByRole('heading', { name: 'Dune' })).closest('section')!;
+    expect(within(card).getByText('Worth keeping')).toBeInTheDocument();
+    expect(within(card).getByText('Another copy')).toBeInTheDocument();
+    expect(within(card).getByText(/same title, author and length/)).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: "They're different books" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === '/admin/issues/ignore')?.body).toEqual({
+        kind: 'duplicate',
+        books: [
+          { library_id: 1, path: 'Dune' },
+          { library_id: 1, path: 'Dune (mp3)' },
+        ],
+      }),
+    );
+  });
+
+  it('celebrates an offline library as a safety stop, with a retry', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues': {
+          body: issuesSummary({
+            offline: [
+              { library_id: 2, name: 'Kids', root: '/mnt/nas/kids', books: 849, listeners: 3 },
+            ],
+          }),
+        },
+        'GET /admin/libraries': { body: { libraries: libraries([{}, { available: false }]) } },
+        'POST /admin/libraries/2/scan': { status: 202, body: { status: 'scan started' } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health');
+    expect(await screen.findByText('Kids is offline. Nothing was deleted.')).toBeInTheDocument();
+    expect(screen.getByText(/kept all 849 books/)).toBeInTheDocument();
+    expect(screen.getByText(/Progress for 3 listeners is safe/)).toBeInTheDocument();
+    const notice = screen
+      .getByText('Kids is offline. Nothing was deleted.')
+      .closest('div')!.parentElement!;
+    await user.click(within(notice).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(calls.some((c) => c.path === '/admin/libraries/2/scan')).toBe(true));
+  });
+});

@@ -401,7 +401,7 @@ func TestUpdateLibrary(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	// Patch only the root; other fields are preserved.
-	updated, err := c.UpdateLibrary(ctx, lib.ID, Library{Root: "/srv/books"})
+	updated, err := c.UpdateLibrary(ctx, lib.ID, LibraryPatch{Root: "/srv/books"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,9 +597,9 @@ func TestDeleteBooksNotIn(t *testing.T) {
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "keep.m4b", Title: "Keep"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "gone.m4b", Title: "Gone"})
-	n, err := c.DeleteBooksNotIn(ctx, lib.ID, map[string]bool{"keep.m4b": true})
-	if err != nil || n != 1 {
-		t.Fatalf("expected 1 removed, got %d err=%v", n, err)
+	removed, err := c.DeleteBooksNotIn(ctx, lib.ID, map[string]bool{"keep.m4b": true})
+	if err != nil || len(removed) != 1 || removed[0] != "gone.m4b" {
+		t.Fatalf("expected gone.m4b removed, got %v err=%v", removed, err)
 	}
 	page, _ := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID})
 	if len(page.Books) != 1 || page.Books[0].RelPath != "keep.m4b" {

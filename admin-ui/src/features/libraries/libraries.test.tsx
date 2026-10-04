@@ -91,7 +91,12 @@ describe('libraries', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Add library and scan' }));
     expect(await screen.findByText('Added drama')).toBeInTheDocument();
     const post = calls.find((c) => c.method === 'POST' && c.path === '/admin/libraries');
-    expect(post?.body).toEqual({ name: 'drama', root: '/mnt/drama' });
+    expect(post?.body).toEqual({
+      name: 'drama',
+      root: '/mnt/drama',
+      scan_schedule: '',
+      ignore_patterns: [],
+    });
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Add a library' })).not.toBeInTheDocument(),
     );
@@ -168,7 +173,9 @@ describe('libraries', () => {
           return {
             body: {
               libraries: libraries([
-                { scan: running ? { running: true, total: 4, done: 1, indexed: 1 } : idle },
+                {
+                  scan: running ? { ...idle, running: true, total: 4, done: 1, indexed: 1 } : idle,
+                },
               ]),
             },
           };
@@ -329,10 +336,7 @@ describe('libraries, review regressions', () => {
       routes({
         'GET /admin/libraries': {
           body: {
-            libraries: libraries([
-              {},
-              { available: false, scan: { running: true, total: 0, done: 0, indexed: 0 } },
-            ]),
+            libraries: libraries([{}, { available: false, scan: { ...idle, running: true } }]),
           },
         },
       }),

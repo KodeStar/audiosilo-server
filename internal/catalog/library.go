@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
@@ -26,8 +27,9 @@ func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, err
 		lib.DefaultView = ViewHybrid
 	}
 	res, err := c.db.ExecContext(ctx,
-		`INSERT INTO libraries(name, root, default_view, created_at)
-		 VALUES(?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, c.ts())
+		`INSERT INTO libraries(name, root, default_view, scan_schedule, ignore_patterns, created_at)
+		 VALUES(?,?,?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, lib.ScanSchedule,
+		joinPatterns(lib.IgnorePatterns), c.ts())
 	if err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, ErrNameTaken
@@ -61,10 +63,18 @@ func (c *Catalog) UpsertLibraryByName(ctx context.Context, lib Library) (*Librar
 	return &lib, nil
 }
 
-// UpdateLibrary updates a library's mutable fields and returns the result.
-// Changing the root makes the index stale, so callers should trigger a rescan
-// afterward.
-func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in Library) (*Library, error) {
+// LibraryPatch is an edit to a library: an empty string keeps a text field, a nil
+// pointer keeps a setting. The scan settings are validated by the caller
+// (library.ParseSchedule, library.NormalizeIgnore).
+type LibraryPatch struct {
+	Name, Root, DefaultView string
+	ScanSchedule            *string
+	IgnorePatterns          *[]string
+}
+
+// UpdateLibrary applies an edit and returns the result. Changing the root or the
+// ignore rules makes the index stale, so callers should trigger a rescan afterward.
+func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) (*Library, error) {
 	existing, err := c.GetLibrary(ctx, id)
 	if err != nil {
 		return nil, err
@@ -78,15 +88,33 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in Library) (*Lib
 	if in.DefaultView != "" {
 		existing.DefaultView = in.DefaultView
 	}
+	if in.ScanSchedule != nil {
+		existing.ScanSchedule = *in.ScanSchedule
+	}
+	if in.IgnorePatterns != nil {
+		existing.IgnorePatterns = *in.IgnorePatterns
+	}
 	if _, err := c.db.ExecContext(ctx,
-		`UPDATE libraries SET name = ?, root = ?, default_view = ? WHERE id = ?`,
-		existing.Name, existing.Root, existing.DefaultView, id); err != nil {
+		`UPDATE libraries SET name = ?, root = ?, default_view = ?, scan_schedule = ?, ignore_patterns = ?
+		  WHERE id = ?`,
+		existing.Name, existing.Root, existing.DefaultView, existing.ScanSchedule,
+		joinPatterns(existing.IgnorePatterns), id); err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, ErrNameTaken
 		}
 		return nil, err
 	}
 	return existing, nil
+}
+
+// joinPatterns and splitPatterns store an ignore list as one pattern per line.
+func joinPatterns(p []string) string { return strings.Join(p, "\n") }
+
+func splitPatterns(s string) []string {
+	if s == "" {
+		return []string{}
+	}
+	return strings.Split(s, "\n")
 }
 
 // DeleteLibrary removes a library and everything indexed under it. Books cascade
@@ -109,18 +137,24 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 	return err
 }
 
+// libraryCols is what scanLibrary reads (AccessibleLibraries spells it out with
+// its table alias).
+const libraryCols = `id, name, root, default_view, sort_order, scan_schedule, ignore_patterns`
+
 func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 	var l Library
-	if err := row.Scan(&l.ID, &l.Name, &l.Root, &l.DefaultView, &l.SortOrder); err != nil {
+	var patterns string
+	if err := row.Scan(&l.ID, &l.Name, &l.Root, &l.DefaultView, &l.SortOrder, &l.ScanSchedule, &patterns); err != nil {
 		return nil, err
 	}
+	l.IgnorePatterns = splitPatterns(patterns)
 	return &l, nil
 }
 
 // GetLibrary returns a library by ID.
 func (c *Catalog) GetLibrary(ctx context.Context, id int64) (*Library, error) {
 	row := c.db.QueryRowContext(ctx,
-		`SELECT id, name, root, default_view, sort_order FROM libraries WHERE id = ?`, id)
+		`SELECT `+libraryCols+` FROM libraries WHERE id = ?`, id)
 	l, err := scanLibrary(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -131,7 +165,7 @@ func (c *Catalog) GetLibrary(ctx context.Context, id int64) (*Library, error) {
 // GetLibraryByName returns a library by name.
 func (c *Catalog) GetLibraryByName(ctx context.Context, name string) (*Library, error) {
 	row := c.db.QueryRowContext(ctx,
-		`SELECT id, name, root, default_view, sort_order FROM libraries WHERE name = ?`, name)
+		`SELECT `+libraryCols+` FROM libraries WHERE name = ?`, name)
 	l, err := scanLibrary(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -142,7 +176,7 @@ func (c *Catalog) GetLibraryByName(ctx context.Context, name string) (*Library, 
 // ListLibraries returns all libraries in display order (sort_order, then name).
 func (c *Catalog) ListLibraries(ctx context.Context) ([]Library, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT id, name, root, default_view, sort_order FROM libraries ORDER BY sort_order, name`)
+		`SELECT `+libraryCols+` FROM libraries ORDER BY sort_order, name`)
 	if err != nil {
 		return nil, err
 	}

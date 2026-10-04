@@ -99,16 +99,187 @@ export interface AdminLibrary extends Library {
   book_count: number;
   available: boolean;
   scan: ScanProgress;
+  /** "" = no scheduled scans; see SCAN_SCHEDULES (library.ParseSchedule). */
+  scan_schedule: string;
+  /** One pattern per entry (library.ParseIgnore); comments start with #. */
+  ignore_patterns: string[];
+  /** When the next scheduled scan is due (RFC 3339); absent without a schedule. */
+  next_scan_at?: string;
 }
+
+/** The body of POST /admin/libraries and PATCH /admin/libraries/{id} (handlers_admin.go libraryRequest). */
+export interface LibraryRequest {
+  name?: string;
+  root?: string;
+  scan_schedule?: string;
+  ignore_patterns?: string[];
+}
+
+/**
+ * The schedules a library can take (library.ParseSchedule): none, an interval
+ * after the last scan, or a daily time ("daily:HH:MM", server time).
+ */
+export const SCAN_INTERVALS = [
+  'every:1h',
+  'every:3h',
+  'every:6h',
+  'every:12h',
+  'every:24h',
+] as const;
 
 /** library.ScanProgress (internal/library/scanner.go), GET /admin/libraries/{id}/scan. */
 export interface ScanProgress {
   running: boolean;
+  /** A scan of the library waits in the job queue (behind another, or to run again). */
+  queued?: boolean;
   total: number;
   done: number;
   indexed: number;
+  /** What the scan has changed so far. */
+  added: number;
+  updated: number;
+  moved: number;
+  removed: number;
   /** The last finished scan stopped at the unavailable-root guard (nothing pruned). */
   unavailable?: boolean;
+}
+
+/** Why a scan was queued (library.Trigger*). */
+export type ScanTrigger = 'manual' | 'schedule' | 'startup' | 'change';
+
+/** library.Job (internal/library/jobs.go): a queued or running scan. */
+export interface Job {
+  id: number;
+  kind: 'scan';
+  library_id: number;
+  library_name: string;
+  trigger: ScanTrigger;
+  /** The admin who asked; null for a schedule or startup. */
+  started_by: number | null;
+  queued_at: string;
+  started_at?: string;
+  run_id?: number;
+  /** A running job's progress. */
+  progress?: ScanProgress;
+}
+
+/** One scheduled library in GET /admin/jobs (handlers_health.go scheduledScan). */
+export interface ScheduledScan {
+  library_id: number;
+  library_name: string;
+  schedule: string;
+  next_at: string;
+}
+
+/** GET /admin/jobs (handlers_health.go handleJobs). */
+export interface JobsState {
+  running: Job | null;
+  queued: Job[];
+  schedules: ScheduledScan[];
+}
+
+/** catalog.RunRunning etc. (internal/catalog/scanruns.go). */
+export type ScanRunStatus =
+  'running' | 'ok' | 'partial' | 'unavailable' | 'failed' | 'cancelled' | 'interrupted';
+
+/** catalog.RunEvent: one line of a scan's log (`kind` is a code the console words). */
+export interface RunEvent {
+  at: string;
+  level: 'info' | 'warn' | 'error';
+  kind: string;
+  path?: string;
+  to?: string;
+  /** A read problem's code (ScanErrorCode). */
+  code?: string;
+  /** A tool's or the OS's own message, shown as is. */
+  detail?: string;
+  count?: number;
+}
+
+/** catalog.ScanRun: one recorded scan (GET /admin/scan-runs, /admin/scan-runs/{id}). */
+export interface ScanRun {
+  id: number;
+  library_id: number;
+  library_name: string;
+  trigger: ScanTrigger;
+  started_by: number | null;
+  started_by_name?: string;
+  started_at: string;
+  finished_at: string | null;
+  status: ScanRunStatus;
+  books: number;
+  added: number;
+  updated: number;
+  moved: number;
+  removed: number;
+  errors: number;
+  /** Only on a single run. */
+  log?: RunEvent[];
+}
+
+/** GET /admin/scan-runs. */
+export interface ScanRunPage {
+  runs: ScanRun[];
+  next_before?: number;
+}
+
+/** catalog.IssueKinds, in the Health page's order. */
+export const ISSUE_KINDS = [
+  'scan_error',
+  'suspect',
+  'duplicate',
+  'no_cover',
+  'unmatched',
+  'no_chapters',
+  'transcode',
+] as const;
+export type IssueKind = (typeof ISSUE_KINDS)[number];
+
+/** A read problem's code (books.scan_error, library.noteProblem). */
+export type ScanErrorCode = 'unreadable' | 'empty_file' | 'probe_failed';
+
+/** catalog.IssueSample: a book shown on a category card. */
+export interface IssueSample {
+  library_id: number;
+  path: string;
+  title: string;
+}
+
+/** catalog.IssueCount: one category (for duplicates, counted in groups). */
+export interface IssueCount {
+  kind: IssueKind;
+  count: number;
+  ignored: number;
+  samples: IssueSample[];
+}
+
+/** handlers_health.go offlineLibrary: a library whose folder can't be read, and what it keeps. */
+export interface OfflineLibrary {
+  library_id: number;
+  name: string;
+  root: string;
+  books: number;
+  listeners: number;
+}
+
+/** GET /admin/issues (handlers_health.go handleIssues). */
+export interface IssuesSummary {
+  categories: IssueCount[];
+  offline: OfflineLibrary[];
+  /** When a scan last finished ("" = never). */
+  checked_at: string;
+}
+
+/** catalog.DuplicateMember. */
+export interface DuplicateMember extends AdminBook {
+  listeners: number;
+}
+
+/** catalog.DuplicateGroup: copies of one book in one library; books[0] is the one to keep. */
+export interface DuplicateGroup {
+  reason: 'same_files' | 'same_book';
+  ignored: boolean;
+  books: DuplicateMember[];
 }
 
 /** library.DirListing (internal/library/dirs.go), GET /admin/fs/dirs. */
@@ -314,6 +485,12 @@ export interface AdminBook {
   edited: boolean;
   /** The fields with an override (an edit or an accepted community value). */
   edited_fields: OverrideField[];
+  /** A read problem on its last indexing, in which file (library-relative), and the tool's message. */
+  scan_error?: ScanErrorCode;
+  scan_error_file?: string;
+  scan_error_detail?: string;
+  /** How many books its parts look like (>= 2: the folder may hold several). */
+  suspect_parts?: number;
 }
 
 /** GET /admin/books (catalog.AdminPage). */

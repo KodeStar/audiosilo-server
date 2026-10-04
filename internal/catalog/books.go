@@ -37,8 +37,9 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 		if err := tx.QueryRowContext(ctx,
 			`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
 			     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
-			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
+			     scan_error, scan_error_file, scan_error_detail, suspect_parts)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -47,14 +48,18 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     codec=excluded.codec, size=excluded.size, mtime=excluded.mtime,
 			     content_hash=excluded.content_hash, indexed_at=excluded.indexed_at,
 			     published=excluded.published, description=excluded.description,
-			     has_cover=excluded.has_cover, scanned=excluded.scanned
+			     has_cover=excluded.has_cover, scanned=excluded.scanned,
+			     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
+			     scan_error_detail=excluded.scan_error_detail,
+			     suspect_parts=excluded.suspect_parts
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
 			b.LibraryID, b.RelPath, b.IsFolder, b.Title, b.Author, b.Series,
 			b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
 			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
-			b.Published, b.Description, hasCover, scanned).Scan(&id); err != nil {
+			b.Published, b.Description, hasCover, scanned,
+			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -132,13 +137,17 @@ type Signature struct {
 	ContentHash string
 	CoverPath   string
 	HasCover    *bool // nil = never checked (indexed before migration 0016)
+	// SuspectUnchecked: a folder book whose parts haven't been checked for holding
+	// several books (indexed before migration 0017; see books.suspect_parts).
+	SuspectUnchecked bool
 }
 
 // Signatures returns the stored mtime/size for every book in a library, keyed
 // by rel_path. The scanner uses it to skip re-extracting unchanged books.
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover
+		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
+		        suspect_parts IS NULL
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -149,7 +158,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var rel string
 		var sig Signature
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
-			&sig.CoverPath, &sig.HasCover); err != nil {
+			&sig.CoverPath, &sig.HasCover, &sig.SuspectUnchecked); err != nil {
 			return nil, err
 		}
 		out[rel] = sig
@@ -176,38 +185,60 @@ func (c *Catalog) SetHasCover(ctx context.Context, libraryID int64, flags map[st
 	})
 }
 
-// DeleteBooksNotIn removes books in a library whose rel_path is not in keep.
-// Returns the number deleted. Used by the scanner to prune vanished files.
-func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep map[string]bool) (int, error) {
+// SetSuspectParts records, by path, how many separate books a folder book's parts
+// look like (the scanner's check of rows indexed before the column existed), in one
+// transaction.
+func (c *Catalog) SetSuspectParts(ctx context.Context, libraryID int64, parts map[string]int) error {
+	if len(parts) == 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "SetSuspectParts", func(tx *sql.Tx) error {
+		for relPath, n := range parts {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET suspect_parts = ? WHERE library_id = ? AND rel_path = ?`,
+				n, libraryID, relPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// DeleteBooksNotIn removes books in a library whose rel_path is not in keep and
+// returns their paths. Used by the scanner to prune vanished files (the paths go
+// in the scan's log).
+func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep map[string]bool) ([]string, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT id, rel_path FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	var stale []int64
+	var paths []string
 	for rows.Next() {
 		var id int64
 		var rel string
 		if err := rows.Scan(&id, &rel); err != nil {
 			rows.Close()
-			return 0, err
+			return nil, err
 		}
 		if !keep[rel] {
 			stale = append(stale, id)
+			paths = append(paths, rel)
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	for _, id := range stale {
 		if _, err := c.db.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, id); err != nil {
-			return 0, err
+			return nil, err
 		}
 		if _, err := c.db.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
-	return len(stale), nil
+	return paths, nil
 }
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,

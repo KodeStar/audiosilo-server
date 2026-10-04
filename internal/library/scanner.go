@@ -22,7 +22,8 @@ import (
 
 // Scanner walks library roots and keeps the catalog index up to date. The
 // filesystem view does not depend on it, so scanning can run in the background
-// after startup without blocking client browsing.
+// after startup without blocking client browsing. Scans normally go through its
+// job queue (jobs.go), which runs one at a time and records each in scan_runs.
 type Scanner struct {
 	cat         *catalog.Catalog
 	ffprobePath string
@@ -31,6 +32,7 @@ type Scanner struct {
 	mu       sync.Mutex
 	scanning map[int64]bool         // library IDs currently scanning
 	progress map[int64]ScanProgress // latest progress per library (for the admin UI)
+	jobs     jobQueue               // guarded by mu
 
 	roots *rootProber // bounded, cached checks that a library root is reachable
 }
@@ -39,9 +41,17 @@ type Scanner struct {
 // the admin UI can show a counter instead of guessing.
 type ScanProgress struct {
 	Running bool `json:"running"`
+	// Queued: a scan of the library waits in the job queue (behind another
+	// library's, or to run again after the current one).
+	Queued  bool `json:"queued,omitempty"`
 	Total   int  `json:"total"`
 	Done    int  `json:"done"`
 	Indexed int  `json:"indexed"`
+	// What the scan has changed so far (see catalog.ScanCounts).
+	Added   int `json:"added"`
+	Updated int `json:"updated"`
+	Moved   int `json:"moved"`
+	Removed int `json:"removed"`
 	// Unavailable is set when the last finished scan stopped at the
 	// unavailable-root guard (ErrLibraryUnavailable): nothing was pruned.
 	Unavailable bool `json:"unavailable,omitempty"`
@@ -58,6 +68,7 @@ func NewScanner(cat *catalog.Catalog, ffprobePath string, log *slog.Logger) *Sca
 		log:         log,
 		scanning:    map[int64]bool{},
 		progress:    map[int64]ScanProgress{},
+		jobs:        newJobQueue(),
 		roots:       newRootProber(),
 	}
 }
@@ -70,38 +81,21 @@ func (s *Scanner) Progress(libID int64) ScanProgress {
 	return s.progress[libID]
 }
 
-// ScanInBackground starts a scan of lib detached from the caller: bound to ctx
-// (the server's lifetime, so shutdown cancels it), capped at an hour, and logged
-// if it fails. The library reads as running before this returns, so a status
-// poll made right after the request that queued it sees the scan (a small
-// library could otherwise finish between the two requests and never be seen
-// running). A scan coalesced into one already running leaves that scan's
-// progress alone; it clears the mark when it finishes.
-func (s *Scanner) ScanInBackground(ctx context.Context, lib catalog.Library) {
+// updateProgress applies fn to a library's progress under the lock.
+func (s *Scanner) updateProgress(libID int64, fn func(*ScanProgress)) {
 	s.mu.Lock()
-	if !s.scanning[lib.ID] {
-		s.progress[lib.ID] = ScanProgress{Running: true}
-	}
-	s.mu.Unlock()
-	go func() {
-		ctx, cancel := context.WithTimeout(ctx, time.Hour)
-		defer cancel()
-		if _, err := s.Scan(ctx, lib); err != nil {
-			s.log.Warn("background scan failed", "library", lib.Name, "err", err)
-		}
-	}()
-}
-
-func (s *Scanner) setProgress(libID int64, p ScanProgress) {
-	s.mu.Lock()
+	p := s.progress[libID]
+	fn(&p)
 	s.progress[libID] = p
 	s.mu.Unlock()
 }
 
-// ScanResult summarizes a scan.
+// ScanResult summarizes a scan: what it found and changed, whether it skipped
+// pruning because part of the tree couldn't be read, and its log.
 type ScanResult struct {
-	Indexed int
-	Removed int
+	catalog.ScanCounts
+	Partial bool
+	Log     []catalog.RunEvent
 	Elapsed time.Duration
 }
 
@@ -116,7 +110,7 @@ var ErrLibraryUnavailable = errors.New("library root unavailable; skipping scan 
 
 // ErrNotIndexable means a resolved path is not a book (e.g. a directory that
 // holds no audio directly, or a directory the detector treats as a collection of
-// separate books rather than one book).
+// separate books rather than one book), or one the library's ignore rules skip.
 var ErrNotIndexable = errors.New("path is not an indexable book")
 
 // coverNames are sibling image files treated as a book's cover.
@@ -141,17 +135,36 @@ func primaryPath(b *catalog.Book) string {
 
 // Scan indexes a single library. It is safe to call concurrently for different
 // libraries; concurrent calls for the same library are coalesced (the second
-// returns immediately).
+// returns at once with an empty result). The result is never nil: on an error it
+// holds what the scan had done and logged by then.
 func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult, err error) {
+	res := &ScanResult{}
 	s.mu.Lock()
 	if s.scanning[lib.ID] {
 		s.mu.Unlock()
-		return &ScanResult{}, nil
+		return res, nil
 	}
 	s.scanning[lib.ID] = true
+	s.progress[lib.ID] = ScanProgress{Running: true, Queued: s.jobs.queuedFor(lib.ID)}
 	s.mu.Unlock()
-	s.setProgress(lib.ID, ScanProgress{Running: true})
+	rl := &runLog{}
+	start := time.Now()
 	defer func() {
+		switch {
+		case err == nil:
+			rl.add("info", "finished", func(e *catalog.RunEvent) { e.Count = res.Books })
+		case errors.Is(err, ErrLibraryUnavailable):
+			// The cause alone: the console words "stopped, nothing was removed" itself.
+			rl.add("error", "unavailable", func(e *catalog.RunEvent) {
+				e.Detail = strings.TrimPrefix(err.Error(), ErrLibraryUnavailable.Error()+": ")
+			})
+		case ctx.Err() != nil:
+			rl.add("warn", "cancelled", nil)
+		default:
+			rl.add("error", "failed", func(e *catalog.RunEvent) { e.Detail = err.Error() })
+		}
+		res.Log = rl.finish()
+		res.Elapsed = time.Since(start)
 		s.mu.Lock()
 		delete(s.scanning, lib.ID)
 		p := s.progress[lib.ID]
@@ -162,61 +175,70 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		// The scan just looked at the root; let the next availability check look again.
 		s.roots.forget(lib.Root)
 	}()
+	rl.add("info", "started", func(e *catalog.RunEvent) { e.Path = lib.Root })
 
-	start := time.Now()
 	sigs, err := s.cat.Signatures(ctx, lib.ID)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 
 	// Guard against an unavailable root (e.g. an unmounted network share):
 	// WalkDir would otherwise silently yield zero files and the prune step
 	// would wipe the index. Fail fast before discovery.
 	if info, statErr := os.Stat(lib.Root); statErr != nil || !info.IsDir() {
-		return nil, fmt.Errorf("%w: %q: %v", ErrLibraryUnavailable, lib.Root, statErr)
+		return res, fmt.Errorf("%w: %q: %v", ErrLibraryUnavailable, lib.Root, statErr)
 	}
 
 	overrides, err := s.cat.FolderOverrides(ctx, lib.ID)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	// Discovery walks the whole tree (slow on a large network share) and emits no
 	// per-file output, so bookend it with logs - otherwise a long scan looks hung.
 	s.log.Info("scan started: discovering books", "library", lib.Name, "root", lib.Root)
-	books, partialDiscovery, err := discoverAuto(lib, overrides, s.log)
+	books, partialDiscovery, err := discoverAuto(lib, overrides, ParseIgnore(lib.IgnorePatterns), s.log, rl)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
+	res.Books = len(books)
+	rl.add("info", "discovered", func(e *catalog.RunEvent) { e.Count = len(books) })
 	s.log.Info("discovery complete; indexing", "library", lib.Name, "books", len(books))
 
 	// A root that exists but now contains no audio files, while the index still
 	// has books, almost always means the mount dropped to an empty directory.
 	// Refuse to prune so the index (and cascaded progress/bookmarks) survive.
 	if len(books) == 0 && len(sigs) > 0 {
-		return nil, fmt.Errorf("%w: %q returned 0 audio files but %d are indexed",
+		return res, fmt.Errorf("%w: %q returned 0 audio files but %d are indexed",
 			ErrLibraryUnavailable, lib.Root, len(sigs))
 	}
 
 	// Carry user state across moved/renamed files before indexing.
-	s.detectMoves(ctx, lib, sigs, books)
+	res.Moved = s.detectMoves(ctx, lib, sigs, books, rl)
 
-	res := &ScanResult{}
 	keep := make(map[string]bool, len(books))
 	coverBackfill := map[string]bool{}
+	suspectBackfill := map[string]int{}
 	lastLog := time.Now()
+	report := func(done int) {
+		s.updateProgress(lib.ID, func(p *ScanProgress) {
+			p.Total, p.Done, p.Indexed = len(books), done, res.Added+res.Updated
+			p.Added, p.Updated, p.Moved, p.Removed = res.Added, res.Updated, res.Moved, res.Removed
+		})
+	}
 	for i, b := range books {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		s.setProgress(lib.ID, ScanProgress{Running: true, Total: len(books), Done: i, Indexed: res.Indexed})
+		report(i)
 		// Heartbeat so a long indexing pass (ffprobe per file over a network share)
 		// shows progress in the logs, not just in the admin UI counter.
 		if time.Since(lastLog) >= 15*time.Second {
-			s.log.Info("scan progress", "library", lib.Name, "done", i, "total", len(books), "indexed", res.Indexed)
+			s.log.Info("scan progress", "library", lib.Name, "done", i, "total", len(books), "indexed", res.Added+res.Updated)
 			lastLog = time.Now()
 		}
 		keep[b.RelPath] = true
-		if old, ok := sigs[b.RelPath]; ok && old.MTime == b.MTime && old.Size == b.Size &&
+		old, existed := sigs[b.RelPath]
+		if existed && old.MTime == b.MTime && old.Size == b.Size &&
 			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "")) {
 			// Unchanged since last scan; only skip the probe when ffprobe is
 			// disabled, or a prior probe already stored both duration and codec
@@ -229,6 +251,13 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				primary := filepath.Join(lib.Root, filepath.FromSlash(primaryPath(b)))
 				if old.HasCover == nil && readable(primary) {
 					_, _, coverBackfill[b.RelPath] = media.EmbeddedCover(primary)
+				}
+				// Rows indexed before 0017 haven't been checked for holding several
+				// books; the same kind of tag read does it.
+				if old.SuspectUnchecked && b.IsFolder {
+					if n, ok := suspectFromTags(lib, b); ok {
+						suspectBackfill[b.RelPath] = n
+					}
 				}
 				continue
 			}
@@ -246,20 +275,39 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		s.enrich(lib, b)
 		if _, err := s.cat.UpsertBook(ctx, b); err != nil {
 			s.log.Warn("index book failed", "library", lib.Name, "path", b.RelPath, "err", err)
+			res.Errors++
+			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.Detail = b.RelPath, err.Error() })
 			continue
 		}
-		res.Indexed++
+		if b.ScanError != "" {
+			res.Errors++
+			rl.add("warn", "problem", func(e *catalog.RunEvent) {
+				e.Path, e.Code, e.Detail = b.ScanErrorFile, b.ScanError, b.ScanErrorDetail
+			})
+		}
+		if existed {
+			res.Updated++
+		} else {
+			res.Added++
+		}
 	}
-	s.setProgress(lib.ID, ScanProgress{Running: true, Total: len(books), Done: len(books), Indexed: res.Indexed})
+	report(len(books))
 	if err := s.cat.SetHasCover(ctx, lib.ID, coverBackfill); err != nil {
 		s.log.Warn("record cover flags failed", "library", lib.Name, "err", err)
+	}
+	if err := s.cat.SetSuspectParts(ctx, lib.ID, suspectBackfill); err != nil {
+		s.log.Warn("record suspect folders failed", "library", lib.Name, "err", err)
 	}
 
 	// Only prune when discovery saw the whole tree. If a subtree was unreadable
 	// (partialDiscovery), its books are missing from `keep` through a mount/permission
 	// fault, not a real deletion - pruning would drop still-present books and their
 	// cascaded index rows. Skip it; a later clean scan reconciles genuine deletions.
+	// Removed books leave nothing behind but their paths in this scan's log: the
+	// listeners' progress is path-keyed and comes back if the files do.
 	if partialDiscovery {
+		res.Partial = true
+		rl.add("warn", "partial", nil)
 		s.log.Warn("skipping prune after partial discovery to protect the index",
 			"library", lib.Name)
 	} else {
@@ -267,12 +315,50 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if err != nil {
 			return res, err
 		}
-		res.Removed = removed
+		res.Removed = len(removed)
+		for _, p := range removed {
+			rl.add("info", "removed", func(e *catalog.RunEvent) { e.Path = p })
+		}
+		report(len(books))
 	}
-	res.Elapsed = time.Since(start)
 	s.log.Info("library scanned", "library", lib.Name,
-		"indexed", res.Indexed, "removed", res.Removed, "elapsed", res.Elapsed)
+		"added", res.Added, "updated", res.Updated, "moved", res.Moved, "removed", res.Removed,
+		"elapsed", time.Since(start))
 	return res, nil
+}
+
+// maxRunEvents bounds one scan's log; past it, events are counted, not kept.
+const maxRunEvents = 300
+
+// runLog collects a scan's events for its scan_runs row.
+type runLog struct {
+	events  []catalog.RunEvent
+	dropped int
+}
+
+// add records an event (fill sets its facts), or counts it once the log is full.
+// The closing events always fit: the cap leaves them room.
+func (l *runLog) add(level, kind string, fill func(*catalog.RunEvent)) {
+	closing := kind == "finished" || kind == "failed" || kind == "cancelled" || kind == "unavailable"
+	if len(l.events) >= maxRunEvents-2 && !closing {
+		l.dropped++
+		return
+	}
+	e := catalog.RunEvent{At: time.Now().UTC().Format(time.RFC3339), Level: level, Kind: kind}
+	if fill != nil {
+		fill(&e)
+	}
+	l.events = append(l.events, e)
+}
+
+// finish returns the events, with a note of how many didn't fit before the closing one.
+func (l *runLog) finish() []catalog.RunEvent {
+	if l.dropped > 0 && len(l.events) > 0 {
+		last := l.events[len(l.events)-1]
+		trunc := catalog.RunEvent{At: last.At, Level: "info", Kind: "truncated", Count: l.dropped}
+		l.events = append(l.events[:len(l.events)-1], trunc, last)
+	}
+	return l.events
 }
 
 // enrich fills metadata for a book from its primary file (tags + ffprobe) and
@@ -286,6 +372,10 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 
 	abs := filepath.Join(lib.Root, filepath.FromSlash(primary))
 	md, _ := metadata.Extract(abs, s.ffprobePath)
+	b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "", "", ""
+	if !b.IsFolder {
+		noteProblem(b, primary, b.Size, md)
+	}
 	if md != nil {
 		b.Title = chooseTitle(md.Title, b.Title)
 		if strings.TrimSpace(md.Author) != "" {
@@ -312,6 +402,8 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	if b.IsFolder {
 		s.buildMultiFileChapters(lib, b)
 	} else {
+		none := 0
+		b.SuspectParts = &none
 		b.Chapters = singleFileChapters(md, b.RelPath)
 		if md != nil && md.Duration > 0 {
 			b.Duration = md.Duration
@@ -449,10 +541,12 @@ func singleFileChapters(md *metadata.Metadata, relPath string) []metadata.Chapte
 func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
 	var cum float64
 	idx := 0
+	parts := make([]partFacts, 0, len(b.Files))
 	for i := range b.Files {
 		f := &b.Files[i]
 		abs := filepath.Join(lib.Root, filepath.FromSlash(f.RelPath))
 		md, _ := metadata.Extract(abs, s.ffprobePath)
+		noteProblem(b, f.RelPath, f.Size, md)
 		var dur float64
 		if md != nil {
 			dur = md.Duration
@@ -491,9 +585,12 @@ func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
 		if md != nil {
 			f.Codec = md.Codec
 		}
+		parts = append(parts, partFacts{title: partName(f.RelPath, md), duration: dur})
 		cum += dur
 	}
 	b.Duration = cum
+	n := suspectParts(parts)
+	b.SuspectParts = &n
 }
 
 // partTitle derives a chapter title from a part's filename, stripping the
@@ -517,7 +614,9 @@ func partTitle(relPath string) string {
 // the caller must NOT prune: the books under the failed subtree are absent from the
 // result through no fault of the filesystem-of-truth, and pruning them would drop a
 // still-present book and its cascaded index rows until the mount recovers.
-func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Logger) (books []*catalog.Book, hadErrors bool, err error) {
+// Files and folders the library's ignore rules match are skipped (a folder with
+// everything under it); rl, when set, logs unreadable entries.
+func discoverAuto(lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog) (books []*catalog.Book, hadErrors bool, err error) {
 	dirs := map[string]bool{}
 	rootClean := filepath.Clean(lib.Root)
 	err = filepath.WalkDir(lib.Root, func(path string, d fs.DirEntry, walkErr error) error {
@@ -527,6 +626,11 @@ func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Lo
 			hadErrors = true
 			log.Warn("skipping unreadable path during discovery",
 				"library", lib.Name, "path", path, "err", walkErr)
+			if rl != nil {
+				rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
+					e.Path, e.Detail = relPathOf(lib.Root, path), pathErrText(walkErr)
+				})
+			}
 			return nil
 		}
 		if d.IsDir() {
@@ -535,12 +639,12 @@ func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Lo
 			// (which also hides them). Never skip the library root itself, even when
 			// its own name begins with a dot; WalkDir passes the root argument
 			// verbatim, so a direct comparison identifies the root callback.
-			if path != lib.Root && isHidden(d.Name()) {
+			if path != lib.Root && (isHidden(d.Name()) || ignore.Match(relPathOf(lib.Root, path), true)) {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if isHidden(d.Name()) || !metadata.IsAudio(d.Name()) {
+		if isHidden(d.Name()) || !metadata.IsAudio(d.Name()) || ignore.Match(relPathOf(lib.Root, path), false) {
 			return nil
 		}
 		dirs[filepath.Dir(path)] = true
@@ -550,7 +654,7 @@ func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Lo
 		return nil, hadErrors, err
 	}
 	for dir := range dirs {
-		books = append(books, booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides)...)
+		books = append(books, booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides, ignore)...)
 	}
 	return books, hadErrors, nil
 }
@@ -563,13 +667,13 @@ func discoverAuto(lib catalog.Library, overrides map[string]string, log *slog.Lo
 // folder, so each such file is its own single-file book ("flat"); and a folder of
 // loose single-file books (one book per file) is expressed with the `collection`
 // override. `book` forces the folder-is-one-book reading (e.g. at the root).
-func booksInDir(lib catalog.Library, absDir string, isRoot bool, overrides map[string]string) []*catalog.Book {
-	audio := audioEntries(absDir)
+func booksInDir(lib catalog.Library, absDir string, isRoot bool, overrides map[string]string, ignore *Ignore) []*catalog.Book {
+	audio := audioEntries(lib.Root, absDir, ignore)
 	if len(audio) == 0 {
 		return nil
 	}
 	asBook := func() []*catalog.Book {
-		if b := folderBook(lib, absDir); b != nil {
+		if b := folderBook(lib, absDir, audio); b != nil {
 			return []*catalog.Book{b}
 		}
 		return nil
@@ -586,16 +690,17 @@ func booksInDir(lib catalog.Library, absDir string, isRoot bool, overrides map[s
 	return asBook()
 }
 
-// audioEntries returns the non-hidden audio files directly inside absDir, in the
-// stable name order os.ReadDir provides.
-func audioEntries(absDir string) []os.DirEntry {
+// audioEntries returns the non-hidden, non-ignored audio files directly inside
+// absDir, in the stable name order os.ReadDir provides.
+func audioEntries(root, absDir string, ignore *Ignore) []os.DirEntry {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
 		return nil
 	}
 	var audio []os.DirEntry
 	for _, de := range entries {
-		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) {
+		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) ||
+			ignore.Match(relPathOf(root, filepath.Join(absDir, de.Name())), false) {
 			continue
 		}
 		audio = append(audio, de)
@@ -650,21 +755,14 @@ func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Bo
 	}
 }
 
-// folderBook builds a (possibly multi-file) book from the audio files directly
-// inside absDir, or returns nil if the directory contains no audio. os.ReadDir
-// returns entries already sorted by name, giving stable part ordering.
-func folderBook(lib catalog.Library, absDir string) *catalog.Book {
-	entries, err := os.ReadDir(absDir)
-	if err != nil {
-		return nil
-	}
+// folderBook builds a (possibly multi-file) book from audio, the audio files
+// directly inside absDir (audioEntries), or returns nil if there are none. They
+// come sorted by name, giving stable part ordering.
+func folderBook(lib catalog.Library, absDir string, audio []os.DirEntry) *catalog.Book {
 	var files []catalog.BookFile
 	var totalSize, maxMTime int64
 	var added string // earliest file added time = when the book first appeared
-	for _, de := range entries {
-		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) {
-			continue
-		}
+	for _, de := range audio {
 		info, ierr := de.Info()
 		if ierr != nil {
 			continue
@@ -719,6 +817,11 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
 	}
 
+	// What the ignore rules keep out of a scan isn't in the library on demand either.
+	ignore := ParseIgnore(lib.IgnorePatterns)
+	if ignore.Covers(relPathOf(lib.Root, abs), info.IsDir()) {
+		return nil, fmt.Errorf("%w: %q is ignored", ErrNotIndexable, relPath)
+	}
 	overrides, err := s.cat.FolderOverrides(ctx, lib.ID)
 	if err != nil {
 		return nil, err
@@ -731,7 +834,7 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 		dir = filepath.Dir(abs)
 	}
 	rootClean := filepath.Clean(lib.Root)
-	candidates := booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides)
+	candidates := booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides, ignore)
 	book := pickBook(candidates, relPathOf(lib.Root, abs))
 	if book == nil {
 		return nil, fmt.Errorf("%w: no book at %q", ErrNotIndexable, relPath)
@@ -812,7 +915,8 @@ func fingerprintFile(absPath string) string {
 // from a vanished path to a new path with matching content, so a moved/renamed
 // file keeps its state. It only does work when something both disappeared and
 // appeared, keeping fingerprinting off the hot path of normal scans.
-func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map[string]catalog.Signature, books []*catalog.Book) {
+// It returns how many moves it carried state across, logging each to rl.
+func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map[string]catalog.Signature, books []*catalog.Book, rl *runLog) (moved int) {
 	discovered := make(map[string]bool, len(books))
 	for _, b := range books {
 		discovered[b.RelPath] = true
@@ -830,7 +934,7 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 		}
 	}
 	if len(disappeared) == 0 || len(newBooks) == 0 {
-		return
+		return 0
 	}
 	// The stored fingerprints for the disappeared paths are already in sigs
 	// (Signatures selects content_hash), so no extra query is needed.
@@ -852,13 +956,17 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 			}
 			if err := s.cat.MoveDurableState(ctx, lib.ID, oldPath, nb.RelPath); err != nil {
 				s.log.Warn("move state failed", "from", oldPath, "to", nb.RelPath, "err", err)
+				rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.To, e.Detail = oldPath, nb.RelPath, err.Error() })
 			} else {
 				s.log.Info("detected move", "library", lib.Name, "from", oldPath, "to", nb.RelPath)
+				rl.add("info", "moved", func(e *catalog.RunEvent) { e.Path, e.To = oldPath, nb.RelPath })
+				moved++
 			}
 			delete(oldFP, oldPath)
 			break
 		}
 	}
+	return moved
 }
 
 // reclassified reports whether a vanished path and a new path with the same

@@ -8,6 +8,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -110,7 +111,7 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "setup: create library failed", "could not create library", "name", req.LibraryName)
 		return
 	}
-	a.startScan(*lib)
+	a.scanner.Enqueue(*lib, library.TriggerManual, &adminUser.ID)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"user":    adminUser,

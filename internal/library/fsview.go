@@ -114,8 +114,9 @@ func resolveExisting(p string) string {
 // relPath "" (or "/") lists the root. Directories sort before files, both
 // alphabetically, giving a stable order for paging. If allow is non-nil, only
 // entries for which it returns true are included (applied before pagination so
-// pages stay full) - used to scope browsing to a share's path rules.
-func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string) bool) (*Listing, error) {
+// pages stay full) - used to scope browsing to a share's path rules. What the
+// library's ignore rules skip is left out too, as the scanner leaves it out.
+func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string) bool, ignore *Ignore) (*Listing, error) {
 	full, err := SafeJoin(root, relPath)
 	if err != nil {
 		return nil, err
@@ -148,6 +149,9 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 			continue // hide non-audio files; clicking one can't open a book
 		}
 		isDir := de.IsDir()
+		if ignore.Covers(childRel, isDir) {
+			continue // skipped by the library's ignore rules, here and by the scanner
+		}
 		// os.ReadDir already provides name + type for free; only files need a
 		// per-entry stat (for Size, used to compute bitrate). Skipping it for
 		// directories avoids one network round-trip per entry - the difference

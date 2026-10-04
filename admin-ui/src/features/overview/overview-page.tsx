@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowRight,
   BookOpen,
+  CheckCircle2,
+  ChevronRight,
   Headphones,
   LibraryBig,
   Plus,
@@ -10,11 +12,12 @@ import {
   TriangleAlert,
   Users,
 } from 'lucide-react';
-import { useOfflineLibraries, useServerInfo, useSettings, useStats } from '@/api/hooks';
+import { useIssues, useOfflineLibraries, useServerInfo, useSettings, useStats } from '@/api/hooks';
 import type { AdminSettings, LibraryStat, ListeningRow, ServerInfo } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
 import { Monogram } from '@/components/monogram';
+import { CATEGORY_LOOK } from '@/features/health/issues-model';
 import { OfflineNotice } from '@/features/libraries/offline-notice';
 import { Page } from '@/components/page';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -33,8 +36,8 @@ import { greetingFor, splitListening } from './overview-model';
 /**
  * Home (the mark): a greeting, who is listening right now, catalog totals,
  * recent listening, books per library and a server card. Built on today's
- * GET /admin/stats, /admin/settings and /server; the "what happened" and
- * "needs attention" cards arrive with Phases 3 and 4.
+ * GET /admin/stats, /admin/settings, /server and /admin/issues (the "needs
+ * attention" card); the "what happened" card arrives with Phase 4.
  */
 export function OverviewPage() {
   const { t, i18n } = useTranslation();
@@ -170,6 +173,7 @@ export function OverviewPage() {
           </div>
         </section>
         <aside className="flex flex-col gap-4">
+          <NeedsAttention lang={lang} />
           <LibrariesCard libraries={stats.data?.libraries} lang={lang} />
           <ServerCard />
         </aside>
@@ -288,6 +292,70 @@ function RecentRow({ row, lang }: { row: ListeningRow; lang: string }) {
         {formatRelative(row.updated_at, lang)}
       </span>
     </li>
+  );
+}
+
+/** The Health categories that need attention, most first, each opening its queue. */
+function NeedsAttention({ lang }: { lang: string }) {
+  const { t } = useTranslation();
+  const issues = useIssues();
+  const open = (issues.data?.categories ?? []).filter((c) => c.count > 0).slice(0, 6);
+  return (
+    <section className="rounded-xl border bg-card" aria-labelledby="attention-heading">
+      <div className="flex items-center justify-between gap-3 border-b px-5 py-3.5">
+        <h3 id="attention-heading" className="text-[14.5px]">
+          {t('home.attention.title')}
+        </h3>
+        <Link
+          to="/health/{-$section}"
+          params={{ section: undefined }}
+          className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+        >
+          {t('home.attention.triage')}
+          <ArrowRight aria-hidden="true" />
+        </Link>
+      </div>
+      {issues.isError ? (
+        <p className="px-5 py-4 text-[13px] text-muted-foreground">{t('home.attention.error')}</p>
+      ) : !issues.data ? (
+        <div className="flex flex-col gap-2 p-4">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="skel h-8" />
+          ))}
+        </div>
+      ) : open.length === 0 ? (
+        <p className="flex items-center gap-2 px-5 py-4 text-[13px] text-muted-foreground">
+          <CheckCircle2 className="size-4 text-success" aria-hidden="true" />
+          {t('home.attention.clear')}
+        </p>
+      ) : (
+        <ul>
+          {open.map((c) => {
+            const { icon: Icon, tile } = CATEGORY_LOOK[c.kind];
+            return (
+              <li key={c.kind}>
+                <Link
+                  to="/health/{-$section}"
+                  params={{ section: undefined }}
+                  search={{ issue: c.kind }}
+                  className="flex items-center gap-3 px-5 py-2.5 hover:bg-accent/50"
+                >
+                  <span
+                    className={cn('grid size-7 place-items-center rounded-[8px]', tile)}
+                    aria-hidden="true"
+                  >
+                    <Icon className="size-[15px]" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{t(`health.kind.${c.kind}`)}</span>
+                  <b className="tabular-nums">{formatNumber(c.count, lang)}</b>
+                  <ChevronRight className="size-[15px] text-subtle-foreground" aria-hidden="true" />
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 

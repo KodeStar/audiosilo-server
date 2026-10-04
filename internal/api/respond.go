@@ -66,6 +66,9 @@ const (
 	codeMetadataOff        = "metadata_off"
 	codeUnsupportedImage   = "unsupported_image"
 	codeTooLarge           = "too_large"
+	codeInvalidSchedule    = "invalid_schedule"
+	codeInvalidPattern     = "invalid_pattern"
+	codeNotIndexable       = "not_indexable"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
@@ -95,6 +98,10 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeErrorCode(w, http.StatusUnsupportedMediaType, codeUnsupportedImage, "the cover must be a JPEG, PNG or WebP image")
 	case errors.Is(err, catalog.ErrCoverTooLarge):
 		writeErrorCode(w, http.StatusRequestEntityTooLarge, codeTooLarge, "the image is larger than 5 MB")
+	case errors.Is(err, catalog.ErrUnknownIssue):
+		writeError(w, http.StatusBadRequest, "unknown issue")
+	case errors.Is(err, catalog.ErrTooMany):
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge, err.Error())
 	case errors.Is(err, catalog.ErrNameTaken):
 		writeErrorCode(w, http.StatusConflict, codeNameTaken, "name already taken")
 	case errors.Is(err, catalog.ErrInvalidCursor):

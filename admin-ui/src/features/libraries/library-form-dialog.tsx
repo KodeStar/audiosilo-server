@@ -5,7 +5,7 @@ import { z } from '@/lib/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Database, FolderSearch } from 'lucide-react';
-import { api } from '@/api/client';
+import { ApiError, api } from '@/api/client';
 import { invalidateLibraries, noteScanStarted, useDirs, useLibraries } from '@/api/hooks';
 import type { AdminLibrary } from '@/api/types';
 import { FolderBrowser } from '@/components/folder-browser';
@@ -14,15 +14,30 @@ import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/component
 import { Field } from '@/components/ui/field';
 import { describedBy } from '@/lib/a11y';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
+import { Textarea } from '@/components/ui/textarea';
 import { errorMessage, fieldMessage } from '@/lib/errors';
 import { absoluteBaseName, absoluteCrumbs, isAbsolutePath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
+import {
+  SCHEDULE_CHOICES,
+  joinSchedule,
+  patternsToText,
+  samePatterns,
+  scheduleLabel,
+  splitSchedule,
+  textToPatterns,
+  type ScheduleChoice,
+} from './scan-settings';
 
 // Messages are i18n keys, translated where they're shown.
 const schema = z.object({
   name: z.string().trim().min(1, 'libraries.form.nameRequired'),
   // Not `root`: react-hook-form reserves errors.root for form-level errors.
   folder: z.string().trim().min(1, 'libraries.form.folderRequired'),
+  schedule: z.enum(SCHEDULE_CHOICES as [ScheduleChoice, ...ScheduleChoice[]]),
+  time: z.string(),
+  ignore: z.string(),
 });
 type Values = z.infer<typeof schema>;
 
@@ -64,27 +79,55 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [browsing, setBrowsing] = useState(false);
+  const current = splitSchedule(library?.scan_schedule ?? '');
   const form = useForm<Values>({
     resolver: zodResolver(schema),
-    defaultValues: { name: library?.name ?? '', folder: library?.root ?? '' },
+    defaultValues: {
+      name: library?.name ?? '',
+      folder: library?.root ?? '',
+      schedule: current.choice,
+      time: current.time,
+      ignore: patternsToText(library?.ignore_patterns ?? []),
+    },
   });
   const { errors, isSubmitting } = form.formState;
 
   const onSubmit = form.handleSubmit(async (v) => {
-    const lib = { name: v.name, root: v.folder };
+    const patterns = textToPatterns(v.ignore);
+    const lib = {
+      name: v.name,
+      root: v.folder,
+      scan_schedule: joinSchedule(v.schedule, v.time),
+      ignore_patterns: patterns,
+    };
+    // A new library is always scanned; an edit only when its folder or ignore
+    // rules change (the server decides the same way).
+    const rescans =
+      !library ||
+      v.folder !== library.root ||
+      !samePatterns(patterns, library.ignore_patterns ?? []);
     try {
-      // Either way the server starts a scan, which the refetched list shows.
       const saved = await (library ? api.updateLibrary(library.id, lib) : api.createLibrary(lib));
       invalidateLibraries(qc);
-      noteScanStarted(qc, saved.id);
+      if (rescans) noteScanStarted(qc, saved.id);
       toast.add({
         title: t(library ? 'libraries.toast.saved' : 'libraries.toast.added', { name: v.name }),
-        description: t(library ? 'libraries.toast.savedBody' : 'libraries.toast.addedBody'),
+        description: library
+          ? rescans
+            ? t('libraries.toast.savedBody')
+            : undefined
+          : t('libraries.toast.addedBody'),
         type: 'success',
       });
       onDone();
     } catch (err) {
-      form.setError('folder', { message: errorMessage(err, t) });
+      const field =
+        err instanceof ApiError && err.code === 'invalid_schedule'
+          ? 'time'
+          : err instanceof ApiError && err.code === 'invalid_pattern'
+            ? 'ignore'
+            : 'folder';
+      form.setError(field, { message: errorMessage(err, t) });
     }
   });
 
@@ -99,6 +142,9 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
 
   const nameError = fieldMessage(errors.name?.message, t);
   const folderError = fieldMessage(errors.folder?.message, t);
+  const timeError = fieldMessage(errors.time?.message, t);
+  const ignoreError = fieldMessage(errors.ignore?.message, t);
+  const schedule = form.watch('schedule');
 
   return (
     <form onSubmit={(e) => void onSubmit(e)} noValidate className="contents">
@@ -151,6 +197,59 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
             editingId={library?.id}
           />
         ) : null}
+        <div className="grid gap-4 border-t pt-4 sm:grid-cols-2">
+          <Field
+            htmlFor="library-schedule"
+            label={t('libraries.form.schedule')}
+            description={t('libraries.form.scheduleHint')}
+          >
+            <NativeSelect
+              id="library-schedule"
+              aria-describedby="library-schedule-desc"
+              {...form.register('schedule')}
+            >
+              {SCHEDULE_CHOICES.map((c) => (
+                <option key={c} value={c}>
+                  {c === 'daily' ? t('libraries.schedule.daily') : scheduleLabel(c, t)}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+          {schedule === 'daily' ? (
+            <Field
+              htmlFor="library-time"
+              label={t('libraries.form.time')}
+              description={t('libraries.form.timeHint')}
+              error={timeError}
+            >
+              <Input
+                id="library-time"
+                type="time"
+                required
+                aria-invalid={timeError ? true : undefined}
+                aria-describedby={describedBy('library-time', !!timeError, true)}
+                {...form.register('time')}
+              />
+            </Field>
+          ) : null}
+        </div>
+        <Field
+          htmlFor="library-ignore"
+          label={t('libraries.form.ignore')}
+          description={t('libraries.form.ignoreHint')}
+          error={ignoreError}
+        >
+          <Textarea
+            id="library-ignore"
+            className="font-mono text-[13px]"
+            rows={3}
+            spellCheck={false}
+            placeholder={'*.sample.mp3\nExtras/'}
+            aria-invalid={ignoreError ? true : undefined}
+            aria-describedby={describedBy('library-ignore', !!ignoreError, true)}
+            {...form.register('ignore')}
+          />
+        </Field>
       </DialogBody>
       <DialogFormFooter
         busy={isSubmitting}
