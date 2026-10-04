@@ -44,6 +44,12 @@ describe('settings', () => {
     await userEvent.setup().click(within(nav).getByRole('link', { name: 'Demo mode' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ topic: 'demo' }));
     expect(await screen.findByRole('switch', { name: 'Enable demo mode' })).toBeInTheDocument();
+    // Only the open topic reads as current (General's empty search matches every topic).
+    expect(within(nav).getByRole('link', { name: 'Demo mode' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(nav).getByRole('link', { name: 'General' })).not.toHaveAttribute('aria-current');
   });
 
   it('saves only the changed fields and says they apply now', async () => {

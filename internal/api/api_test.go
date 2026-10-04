@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -30,6 +32,8 @@ type testEnv struct {
 	cfg      *config.Config
 	adminID  int64
 	authCode string
+	backups  *backup.Service
+	notify   *notify.Service
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -59,9 +63,15 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	}
 	scanner := library.NewScanner(cat, "", slog.Default())
 	a := New(cfg, authSvc, cat, scanner, "", slog.Default())
+	// Backups and notifications as the launcher wires them (deliveries need Run;
+	// tests that send start it).
+	backups := backup.New(db, cfg.DataDir, "", slog.Default())
+	ntf := notify.New(cat, "test", a.NotifyIdentity, slog.Default())
+	a.SetRuntime(Runtime{Backups: backups, Notify: ntf})
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
-	return &testEnv{srv: srv, api: a, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code}
+	return &testEnv{srv: srv, api: a, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code,
+		backups: backups, notify: ntf}
 }
 
 func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Response, string) {

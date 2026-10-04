@@ -1,5 +1,6 @@
 import type { SystemStatus } from '@/api/types';
 import { certificateLook } from '@/features/settings/settings-model';
+import { backupFailureKey } from '@/lib/server-events';
 
 // Health > System: everything the server depends on as one list of rows, each
 // with a status. Pure, so the rules (what counts as a problem) are tested
@@ -11,11 +12,23 @@ type Text = { key: string; values?: Record<string, string | number> };
 
 export interface SystemRow {
   /** Stable key, also the icon choice. */
-  kind: 'ffmpeg' | 'ffprobe' | 'metadata' | 'tls' | 'database' | 'library' | 'player' | 'update';
+  kind:
+    | 'ffmpeg'
+    | 'ffprobe'
+    | 'metadata'
+    | 'tls'
+    | 'database'
+    | 'backups'
+    | 'library'
+    | 'player'
+    | 'update';
   id: string;
   /** i18n key + values of the row's title (a library's name is passed through). */
   title: Text;
-  /** i18n key + values of the one-line detail (`free`/`total` are bytes, formatted by the page). */
+  /**
+   * i18n key + values of the one-line detail (`free`/`total` are bytes and `at`/`next`
+   * ISO times, formatted by the page).
+   */
   detail: Text;
   /** A short mono value on the right (a version, a path), or "". */
   value: string;
@@ -110,6 +123,36 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
       status: 'ok',
     }),
   );
+
+  const b = sys.backups;
+  if (b) {
+    const failed = b.last && !b.last.ok;
+    rows.push(
+      row({
+        kind: 'backups',
+        id: 'backups',
+        title: { key: 'system.row.backups' },
+        detail: failed
+          ? { key: backupFailureKey(b.last?.error) }
+          : b.latest
+            ? b.next
+              ? {
+                  key: 'system.detail.backupLatestNext',
+                  values: { at: b.latest.created_at, next: b.next },
+                }
+              : { key: 'system.detail.backupLatest', values: { at: b.latest.created_at } }
+            : b.next
+              ? { key: 'system.detail.backupNone', values: { next: b.next } }
+              : { key: 'system.detail.backupOff' },
+        value: b.dir,
+        ...(failed
+          ? { status: 'bad', statusKey: 'system.status.failed' }
+          : !b.next
+            ? { status: b.latest ? 'off' : 'warn', statusKey: 'system.status.off' }
+            : { status: 'ok' }),
+      }),
+    );
+  }
 
   for (const lib of sys.libraries) {
     const low = !!lib.disk && lib.disk.total > 0 && lib.disk.free / lib.disk.total < LOW_DISK;

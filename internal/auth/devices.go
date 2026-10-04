@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"regexp"
 	"strings"
 )
@@ -143,4 +144,16 @@ func (s *Service) ForgetRevokedAddresses(ctx context.Context) error {
 		`UPDATE tokens SET last_ip = ''
 		  WHERE last_ip <> '' AND (revoked = 1 OR (expires_at IS NOT NULL AND expires_at <= ?))`, s.ts())
 	return err
+}
+
+// DeviceLabel names a token for the audit log: its owner's username, the device
+// name (an API key's label) and its kind. ErrNotFound when there is no such token.
+func (s *Service) DeviceLabel(ctx context.Context, id int64) (username, name, kind string, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT u.username, t.device_name, t.kind FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.id = ?`, id).
+		Scan(&username, &name, &kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = ErrNotFound
+	}
+	return username, name, kind, err
 }

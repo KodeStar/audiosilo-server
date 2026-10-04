@@ -56,6 +56,7 @@ type DB struct {
 	writer *sql.DB
 	reader *sql.DB
 	log    *slog.Logger
+	dsn    string // as given to Open; VacuumInto opens its own connection on it
 
 	stopSampler context.CancelFunc // nil unless the pool-stats sampler is running
 }
@@ -129,7 +130,7 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*DB, error) {
 
 	// reader == writer until (and unless) a separate read pool is opened, so
 	// migrate() and any read during bootstrap go through the writer connection.
-	db := &DB{writer: writer, reader: writer, log: cfg.log}
+	db := &DB{writer: writer, reader: writer, log: cfg.log, dsn: dsn}
 	if err := db.migrate(ctx); err != nil {
 		writer.Close()
 		return nil, err

@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/kodestar/audiosilo-server/internal/backup"
 )
 
 // field is one config.yaml key that an AUDIOSILO_* variable or the admin
@@ -80,6 +82,15 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.Demo.MaxUsers }, fix: fixMaxUsers},
 	{key: "demo.idle_ttl", env: "AUDIOSILO_DEMO_IDLE_TTL", setting: "demo.idle_ttl", restart: true,
 		ptr: func(c *Config) any { return &c.Demo.IdleTTL }, fix: fixIdleTTL},
+
+	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
+		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
+	{key: "backups.keep", env: "AUDIOSILO_BACKUP_KEEP", setting: "backups.keep",
+		ptr: func(c *Config) any { return &c.Backups.Keep }},
+	// The folder is never set from the console: a backup holds every account's
+	// password hash, and the schedule's retention deletes files in it.
+	{key: "backups.dir", env: "AUDIOSILO_BACKUP_DIR", setting: "backups.dir", restart: true, readOnly: true,
+		ptr: func(c *Config) any { return &c.Backups.Dir }},
 }
 
 func fieldByKey(key string) *field {
@@ -519,6 +530,16 @@ func fixMaxUsers(c *Config) error {
 	if n := c.Demo.MaxUsers; n != nil && (*n < 0 || *n > MaxDemoUsers) {
 		return fmt.Errorf("must be from 0 (no limit) to %d", MaxDemoUsers)
 	}
+	return nil
+}
+
+// fixBackupSchedule stores the schedule in its canonical form ("daily:03:00").
+func fixBackupSchedule(c *Config) error {
+	sch, err := backup.ParseSchedule(c.Backups.Schedule)
+	if err != nil {
+		return err
+	}
+	c.Backups.Schedule = sch.String()
 	return nil
 }
 

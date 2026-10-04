@@ -114,19 +114,19 @@ type ignoreRequest struct {
 // handleIgnoreIssue serves POST /admin/issues/ignore: stop showing these books
 // under a category (idempotent; path-keyed, so it survives rescans and moves).
 func (a *API) handleIgnoreIssue(w http.ResponseWriter, r *http.Request) {
-	a.applyIgnore(w, r, func(req ignoreRequest) error {
+	a.applyIgnore(w, r, "issue.ignore", func(req ignoreRequest) error {
 		return a.cat.IgnoreIssue(r.Context(), req.Kind, req.Books, userFrom(r.Context()).ID)
 	})
 }
 
 // handleUnignoreIssue serves DELETE /admin/issues/ignore: show them again (Undo).
 func (a *API) handleUnignoreIssue(w http.ResponseWriter, r *http.Request) {
-	a.applyIgnore(w, r, func(req ignoreRequest) error {
+	a.applyIgnore(w, r, "issue.unignore", func(req ignoreRequest) error {
 		return a.cat.UnignoreIssue(r.Context(), req.Kind, req.Books)
 	})
 }
 
-func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, apply func(ignoreRequest) error) {
+func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, action string, apply func(ignoreRequest) error) {
 	var req ignoreRequest
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -151,6 +151,7 @@ func (a *API) applyIgnore(w http.ResponseWriter, r *http.Request, apply func(ign
 		a.writeCatalogError(w, err, "ignore issue failed", "could not save", "kind", req.Kind)
 		return
 	}
+	a.audit(r, action, "", map[string]any{"kind": req.Kind, "books": len(req.Books)})
 	w.WriteHeader(http.StatusNoContent)
 }
 

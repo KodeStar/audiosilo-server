@@ -16,6 +16,7 @@ import type {
   AdminBookDetail,
   AdminBookPage,
   AdminLibrary,
+  AuditFilter,
   BookRef,
   PersonField,
   SessionFilter,
@@ -29,6 +30,12 @@ export const keys = {
   system: ['admin', 'system'] as const,
   update: ['admin', 'update'] as const,
   logs: (level: string, q: string) => ['admin', 'logs', level, q] as const,
+  backups: ['admin', 'backups'] as const,
+  notifyTargets: ['admin', 'notifications'] as const,
+  events: ['admin', 'events'] as const,
+  /** Every page of the audit log, any filter (a prefix: an admin action adds to it). */
+  auditAll: ['admin', 'audit'] as const,
+  audit: (filter: AuditFilter) => ['admin', 'audit', filter] as const,
   thumb: (libraryId: number, path: string, size: ThumbSize) =>
     ['thumb', libraryId, path, size] as const,
   libraries: ['admin', 'libraries'] as const,
@@ -121,6 +128,41 @@ export function useSystem({ poll = false } = {}) {
     queryFn: api.system,
     staleTime: 60_000,
     refetchInterval: poll ? 30_000 : false,
+  });
+}
+
+/** The backups, their state and any restore waiting; polled each second while one is made. */
+export function useBackups() {
+  return useQuery({
+    queryKey: keys.backups,
+    queryFn: api.backups,
+    refetchInterval: (q) => (q.state.data?.status.running ? 1000 : false),
+  });
+}
+
+/** The notification destinations, with the event and destination kinds the server knows. */
+export function useNotifyTargets() {
+  return useQuery({ queryKey: keys.notifyTargets, queryFn: api.notifyTargets });
+}
+
+/** The bell's feed: the newest events, checked each minute. */
+export function useServerEvents() {
+  return useQuery({
+    queryKey: keys.events,
+    queryFn: () => api.serverEvents({ limit: 20 }),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+}
+
+/** The audit log, newest first, a page at a time (`fetchNextPage` for older ones). */
+export function useAudit(filter: AuditFilter) {
+  return useInfiniteQuery({
+    queryKey: keys.audit(filter),
+    queryFn: ({ pageParam }) => api.audit({ ...filter, before: pageParam, limit: 50 }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.next_before || undefined,
+    placeholderData: keepPreviousData,
   });
 }
 

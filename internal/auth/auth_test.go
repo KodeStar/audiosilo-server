@@ -923,3 +923,31 @@ func TestRotateKeepsOneActiveInvite(t *testing.T) {
 		t.Fatalf("after rotating the expired invite: %+v, want only it", codes)
 	}
 }
+
+// TestConsumePairingKind: an exchange says which kind of code it came from, so
+// the server can report an invite being used (and nothing for /auth/pair).
+func TestConsumePairingKind(t *testing.T) {
+	s, ctx := newTestService(t)
+	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
+	invite, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
+	if _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, invite)); err != nil || kind != CodeInvite {
+		t.Fatalf("invite: kind %q, %v", kind, err)
+	}
+	recovery, err := s.GenerateRecoveryCode(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, kind, err := s.ConsumePairing(ctx, pairThrough(t, s, ctx, recovery)); err != nil || kind != CodeRecovery {
+		t.Fatalf("recovery: kind %q, %v", kind, err)
+	}
+	unlinked, err := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, kind, err := s.ConsumePairing(ctx, unlinked); err != nil || kind != "" {
+		t.Fatalf("unlinked: kind %q, %v", kind, err)
+	}
+	if _, kind, err := s.ConsumePairing(ctx, "bogus"); err == nil || kind != "" {
+		t.Fatalf("bogus: kind %q, %v", kind, err)
+	}
+}

@@ -1,14 +1,13 @@
 import { Link, useRouterState } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { Popover } from '@base-ui/react/popover';
-import { Bell, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { useOfflineLibraries, useServerInfo } from '@/api/hooks';
 import { LogoTile } from '@/components/logo';
 import { formatVersion } from '@/lib/format';
-import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { DESTINATIONS, destinationFor } from './destinations';
 import { ThemeMenu, UserMenu } from './menus';
+import { NotificationsBell } from './notifications-bell';
 import { usePalette } from './palette-context';
 import { SubBar } from './sub-bar';
 
@@ -127,31 +126,4 @@ function ServerIdentity() {
 /** The server's name once an admin has given it one (Settings > General), else its address. */
 function serverLabel(name: string | undefined): string {
   return name && name !== 'AudioSilo' ? name : window.location.host;
-}
-
-/** Placeholder until notifications land (Phase 5b): explains what will appear here. */
-function NotificationsBell() {
-  const { t } = useTranslation();
-  return (
-    <Popover.Root>
-      <Popover.Trigger
-        className={buttonVariants({ variant: 'ghost-muted', size: 'icon' })}
-        aria-label={t('shell.notifications.title')}
-      >
-        <Bell className="size-[18px]" aria-hidden="true" />
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner sideOffset={8} align="end" className="z-50">
-          <Popover.Popup className="w-[min(340px,calc(100vw-24px))] rounded-lg border bg-popover p-4 shadow-overlay outline-none data-closed:animate-out data-closed:fade-out-0 data-open:animate-in data-open:fade-in-0">
-            <Popover.Title className="font-display text-[15px] font-[650]">
-              {t('shell.notifications.title')}
-            </Popover.Title>
-            <Popover.Description className="mt-1 text-[13px] text-muted-foreground">
-              {t('shell.notifications.soon')}
-            </Popover.Description>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
-  );
 }

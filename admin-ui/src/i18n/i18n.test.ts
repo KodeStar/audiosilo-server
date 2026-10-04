@@ -40,10 +40,9 @@ describe.each(Object.keys(LANGUAGES))('locale %s', (lang) => {
 });
 
 describe('navigation labels', () => {
-  it('exist for every destination, section and placeholder body', () => {
+  it('exist for every destination and section', () => {
     const needed = DESTINATIONS.flatMap((d) => [
       `shell.dest.${d.key}`,
-      `soon.body.${d.key}`,
       ...d.sections.map((s) => `shell.section.${d.key}.${s}`),
     ]);
     expect(needed.filter((k) => !(k in en))).toEqual([]);

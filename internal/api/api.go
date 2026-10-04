@@ -238,6 +238,24 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/update", a.requireAdmin(http.HandlerFunc(a.handleUpdateStatus)))
 	mux.Handle("POST /api/v1/admin/update/check", a.requireAdmin(http.HandlerFunc(a.handleUpdateCheck)))
 	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(http.HandlerFunc(a.handleLogs)))
+	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(http.HandlerFunc(a.handleAudit)))
+	mux.Handle("GET /api/v1/admin/events", a.requireAdmin(http.HandlerFunc(a.handleServerEvents)))
+
+	// Backups: the database copied into the backups folder; a restore applies at the
+	// next start. Downloads stream (see isStreamingPath).
+	mux.Handle("GET /api/v1/admin/backups", a.requireAdmin(http.HandlerFunc(a.handleListBackups)))
+	mux.Handle("POST /api/v1/admin/backups", a.requireAdmin(http.HandlerFunc(a.handleCreateBackup)))
+	mux.Handle("GET /api/v1/admin/backups/{name}", a.requireAdmin(http.HandlerFunc(a.handleDownloadBackup)))
+	mux.Handle("DELETE /api/v1/admin/backups/{name}", a.requireAdmin(http.HandlerFunc(a.handleDeleteBackup)))
+	mux.Handle("POST /api/v1/admin/backups/{name}/restore", a.requireAdmin(http.HandlerFunc(a.handleRestoreBackup)))
+	mux.Handle("DELETE /api/v1/admin/restore", a.requireAdmin(http.HandlerFunc(a.handleCancelRestore)))
+
+	// Notification destinations.
+	mux.Handle("GET /api/v1/admin/notifications", a.requireAdmin(http.HandlerFunc(a.handleListNotifyTargets)))
+	mux.Handle("POST /api/v1/admin/notifications", a.requireAdmin(http.HandlerFunc(a.handleCreateNotifyTarget)))
+	mux.Handle("PATCH /api/v1/admin/notifications/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateNotifyTarget)))
+	mux.Handle("DELETE /api/v1/admin/notifications/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteNotifyTarget)))
+	mux.Handle("POST /api/v1/admin/notifications/{id}/test", a.requireAdmin(http.HandlerFunc(a.handleTestNotifyTarget)))
 	mux.Handle("GET /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleListUsers)))
 	mux.Handle("POST /api/v1/admin/users", a.requireAdmin(http.HandlerFunc(a.handleCreateUser)))
 	mux.Handle("GET /api/v1/admin/users/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetUserDetail)))

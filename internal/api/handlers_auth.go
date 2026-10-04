@@ -124,7 +124,7 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "pairing_token is required")
 		return
 	}
-	u, err := a.auth.ConsumePairingToken(r.Context(), req.PairingToken)
+	u, codeKind, err := a.auth.ConsumePairing(r.Context(), req.PairingToken)
 	if err != nil {
 		a.redeemLimiter.Fail(ip)
 		switch {
@@ -148,6 +148,7 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return
 	}
+	a.reportSignIn(r, full, req.DeviceName, codeKind == auth.CodeInvite)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":     session,
 		"user":      full,
@@ -187,6 +188,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return
 	}
+	a.reportSignIn(r, full, req.DeviceName, false)
 	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": full, "server_id": a.config().ServerID})
 }
 
@@ -428,4 +430,18 @@ func (a *API) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// reportSignIn tells the notifications about a new session (not a demo
+// account's: those come and go by the dozen). The app is what the request's
+// X-AudioSilo-Client header says, if anything.
+func (a *API) reportSignIn(r *http.Request, u *auth.User, device string, viaInvite bool) {
+	if u.IsDemo {
+		return
+	}
+	app := ""
+	if c, ok := auth.ParseClient(r.Header.Get(auth.ClientHeader)); ok {
+		app = strings.TrimSpace(c.App + " " + c.Version)
+	}
+	a.rt.Notify.SignedIn(r.Context(), u.Username, device, app, viaInvite)
 }

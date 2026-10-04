@@ -12,9 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/backup"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/toolfetch"
 	"github.com/kodestar/audiosilo-server/internal/updates"
@@ -27,6 +29,8 @@ type Runtime struct {
 	StartedAt time.Time        // when the server started (New sets it; the launcher may too)
 	Logs      *logring.Ring    // the log viewer's records (nil: no viewer)
 	Updates   *updates.Checker // the update check (nil: none)
+	Backups   *backup.Service  // the database backups (nil: none)
+	Notify    *notify.Service  // the event feed's notifications (nil: none, which records nothing)
 }
 
 // SetRuntime sets what the launcher reports about the process. Call before Handler().
@@ -208,6 +212,7 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"libraries":  roots,
 		"web_player": a.playerSource,
 		"update":     a.updateStatus(),
+		"backups":    a.backupStatus(),
 	})
 }
 
