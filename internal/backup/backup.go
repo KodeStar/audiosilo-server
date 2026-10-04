@@ -254,13 +254,14 @@ func (s *Service) due() bool {
 }
 
 // Start makes a backup in the background; ErrBusy when one is being made already.
+// ctx bounds it: the server's lifetime, never a request's (the request ends first).
 // It reads as running from the moment Start returns, so a status read right after
 // (the request's answer) already shows it.
 func (s *Service) Start(ctx context.Context, trigger string) error {
 	if !s.begin(trigger) {
 		return ErrBusy
 	}
-	go func() { _, _ = s.make(context.WithoutCancel(ctx), trigger) }()
+	go func() { _, _ = s.make(ctx, trigger) }()
 	return nil
 }
 
@@ -304,7 +305,8 @@ func (s *Service) make(ctx context.Context, trigger string) (Backup, error) {
 	s.running = false
 	s.last = &res
 	s.mu.Unlock()
-	if err != nil && s.OnFailure != nil {
+	// A backup stopped because the server is stopping didn't fail: don't announce it.
+	if err != nil && ctx.Err() == nil && s.OnFailure != nil {
 		s.OnFailure(res)
 	}
 	return b, err
@@ -509,7 +511,10 @@ func (s *Service) RequestRestore(ctx context.Context, name, by string) (PendingR
 	if err != nil {
 		return PendingRestore{}, err
 	}
-	info, err := store.Inspect(ctx, p)
+	// The quick look (schema, readable) fits a request; the full check reads every
+	// page, so it waits for the start, which reports a damaged backup once and
+	// leaves the database as it is.
+	info, err := store.Inspect(ctx, p, false)
 	if err != nil {
 		return PendingRestore{}, err
 	}
@@ -580,7 +585,7 @@ func (s *Service) applyRestore(ctx context.Context, name, dbPath string, res *Re
 		res.Error = "missing"
 		return err
 	}
-	if _, err := store.Inspect(ctx, src); err != nil {
+	if _, err := store.Inspect(ctx, src, true); err != nil {
 		res.Error = "unusable"
 		if errors.Is(err, store.ErrNewerDatabase) {
 			res.Error = "newer"
@@ -629,12 +634,23 @@ func (s *Service) applyRestore(ctx context.Context, name, dbPath string, res *Re
 
 // keepAside renames the database at dbPath and its -wal/-shm to
 // <name>.before-restore-<time> beside it, returning the new name of the main file.
+// A failure puts back what was already moved, so the database is left as it was
+// (never its main file without its -wal).
 func keepAside(dbPath string) (string, error) {
 	kept := fmt.Sprintf("%s.before-restore-%s", dbPath, time.Now().UTC().Format(timeLayout))
+	var moved []string
 	for _, side := range []string{"-wal", "-shm", ""} {
-		if err := os.Rename(dbPath+side, kept+side); err != nil && !errors.Is(err, os.ErrNotExist) {
+		err := os.Rename(dbPath+side, kept+side)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			for _, m := range moved {
+				_ = os.Rename(kept+m, dbPath+m)
+			}
 			return "", err
 		}
+		moved = append(moved, side)
 	}
 	return filepath.Base(kept), nil
 }

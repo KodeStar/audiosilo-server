@@ -100,7 +100,9 @@ func (a *API) handleDownloadBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	a.audit(r, "backup.download", name, nil)
+	if r.Method == http.MethodGet { // a HEAD (the GET route answers it too) sends nothing
+		a.audit(r, "backup.download", name, nil)
+	}
 	h := w.Header()
 	h.Set("Content-Type", "application/vnd.sqlite3")
 	h.Set("Content-Disposition", `attachment; filename="`+b.Name+`"`)

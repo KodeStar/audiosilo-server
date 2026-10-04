@@ -25,7 +25,7 @@ func TestVacuumIntoAndInspect(t *testing.T) {
 	if err := db.VacuumInto(ctx, out); err != nil {
 		t.Fatal(err)
 	}
-	info, err := Inspect(ctx, out)
+	info, err := Inspect(ctx, out, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestInspectRefuses(t *testing.T) {
 	if err := os.WriteFile(junk, []byte("this is not sqlite at all, not even close"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Inspect(ctx, junk); !errors.Is(err, ErrNotADatabase) {
+	if _, err := Inspect(ctx, junk, false); !errors.Is(err, ErrNotADatabase) {
 		t.Fatalf("junk: err = %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestInspectRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	if _, err := Inspect(ctx, newer); !errors.Is(err, ErrNewerDatabase) || !errors.Is(err, ErrNotADatabase) {
+	if _, err := Inspect(ctx, newer, false); !errors.Is(err, ErrNewerDatabase) || !errors.Is(err, ErrNotADatabase) {
 		t.Fatalf("newer: err = %v", err)
 	}
 
@@ -79,11 +79,11 @@ func TestInspectRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = odb.Close()
-	if _, err := Inspect(ctx, other); !errors.Is(err, ErrNotADatabase) || errors.Is(err, ErrNewerDatabase) {
+	if _, err := Inspect(ctx, other, false); !errors.Is(err, ErrNotADatabase) || errors.Is(err, ErrNewerDatabase) {
 		t.Fatalf("other: err = %v", err)
 	}
 
-	if _, err := Inspect(ctx, filepath.Join(dir, "missing.db")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := Inspect(ctx, filepath.Join(dir, "missing.db"), false); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing: err = %v", err)
 	}
 }

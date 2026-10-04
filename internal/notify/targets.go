@@ -145,8 +145,9 @@ func SameOrigin(a, b string) bool {
 
 // Redact is how the console shows a destination's address: the host and the start
 // of the path, with the last path segment (a Discord token, an ntfy topic, a
-// webhook's own secret part) cut to its first four characters and the query and
-// any user name dropped. Never enough to send with.
+// webhook's own secret part) cut to its first four characters (none of a segment
+// that short: an ntfy topic is its own password) and the query and any user name
+// dropped. Never enough to send with.
 func Redact(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -157,6 +158,8 @@ func Redact(raw string) string {
 		last := p[i+1:]
 		if len(last) > 4 {
 			last = last[:4] + "…"
+		} else {
+			last = "…"
 		}
 		p = p[:i+1] + last
 	}

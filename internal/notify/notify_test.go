@@ -73,8 +73,9 @@ func TestRedact(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://discord.com/api/webhooks/123456/AbCdEfGhIj": "https://discord.com/api/webhooks/123456/AbCd…",
 		"https://ntfy.sh/hearthside-books":                   "https://ntfy.sh/hear…",
-		"https://user:pw@hooks.example.com/in?token=abc":     "https://hooks.example.com/in?…",
-		"http://10.0.0.2:8123/x":                             "http://10.0.0.2:8123/x",
+		"https://user:pw@hooks.example.com/in?token=abc":     "https://hooks.example.com/…?…",
+		"http://10.0.0.2:8123/x":                             "http://10.0.0.2:8123/…",
+		"https://ntfy.sh/abcd":                               "https://ntfy.sh/…",
 		"https://hooks.example.com":                          "https://hooks.example.com",
 	} {
 		if got := Redact(in); got != want {
@@ -335,7 +336,8 @@ func TestDedupAndOfflineOnce(t *testing.T) {
 	finish(catalog.RunOK)
 	finish(catalog.RunUnavailable)
 	finish(catalog.RunUnavailable)
-	finish(catalog.RunCancelled) // doesn't count as being back
+	finish(catalog.RunCancelled)   // doesn't count as being back
+	finish(catalog.RunInterrupted) // nor does a scan a restart cut short
 	finish(catalog.RunUnavailable)
 	if n := count(); n != 1 {
 		t.Fatalf("offline announced %d times while it stayed offline", n)
@@ -401,5 +403,40 @@ func TestScanFailureDetailStaysHome(t *testing.T) {
 	events, _, _ := cat.ListServerEvents(ctx, 0, 1)
 	if events[0].Data["detail"] != "open /mnt/private/fiction: permission denied" {
 		t.Fatalf("the feed lost the detail: %v", events[0].Data)
+	}
+}
+
+// A retry goes where the destination is set to send now: to its new address after
+// a change, and nowhere once it is switched off.
+func TestRetryFollowsTheDestination(t *testing.T) {
+	s, cat, ctx := newService(t)
+	s.delays = []time.Duration{300 * time.Millisecond}
+	old := newFakeDest(t)
+	old.code = http.StatusServiceUnavailable
+	moved := addTarget(t, cat, TargetWebhook, old.srv.URL, "", KindScanFailed)
+	off := newFakeDest(t)
+	off.code = http.StatusServiceUnavailable
+	disabled := addTarget(t, cat, TargetWebhook, off.srv.URL, "", KindScanFailed)
+
+	s.ScanFinished(ctx, library.RunReport{Library: catalog.Library{ID: 1, Name: "Fiction"}, Status: catalog.RunFailed})
+	old.wait(t, 1)
+	off.wait(t, 1)
+	next := newFakeDest(t)
+	moved.URL = next.srv.URL
+	if _, err := cat.SaveNotifyTarget(ctx, *moved); err != nil {
+		t.Fatal(err)
+	}
+	disabled.Enabled = false
+	if _, err := cat.SaveNotifyTarget(ctx, *disabled); err != nil {
+		t.Fatal(err)
+	}
+	next.wait(t, 1)
+	time.Sleep(100 * time.Millisecond)
+	old.mu.Lock()
+	off.mu.Lock()
+	defer old.mu.Unlock()
+	defer off.mu.Unlock()
+	if len(old.got) != 1 || len(off.got) != 1 {
+		t.Fatalf("retried to the old address %d times, to a switched-off one %d times", len(old.got)-1, len(off.got)-1)
 	}
 }

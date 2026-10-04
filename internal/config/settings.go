@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -328,7 +329,13 @@ func (c *Config) WithSettings(patch map[string]map[string]json.RawMessage, check
 			return nil, &SettingError{Setting: id, Reason: ReasonLocked}
 		}
 		section, name, _ := strings.Cut(id, ".")
-		if err := json.Unmarshal(patch[section][name], f.ptr(next)); err != nil {
+		raw := patch[section][name]
+		// JSON null leaves a value as it is, which would save "nothing" as a success:
+		// only a setting that can be unset (a pointer, like demo.max_users) takes it.
+		if string(bytes.TrimSpace(raw)) == "null" && reflect.ValueOf(f.ptr(next)).Elem().Kind() != reflect.Pointer {
+			return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: errors.New("enter a value")}
+		}
+		if err := json.Unmarshal(raw, f.ptr(next)); err != nil {
 			return nil, &SettingError{Setting: id, Reason: ReasonInvalid, Err: errors.New("wrong type of value")}
 		}
 		changed = append(changed, f)

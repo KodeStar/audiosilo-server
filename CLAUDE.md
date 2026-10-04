@@ -618,9 +618,10 @@ admin overrides; see Metadata overrides below).
   `weekly:DAY:HH:MM`, server time; default `daily:03:00`) and `backups.keep` (scheduled ones kept, default 7;
   manual and before-restore copies stay until deleted). Only names matching `backup.validName` are listed,
   served, deleted or restored, and a symlink is never followed. **A restore never swaps a live database**:
-  `RequestRestore` checks the file (`store.Inspect`: read-only open, `quick_check`, every applied migration
-  known to this server, else `ErrNewerDatabase`) and writes `<data>/restore.json`; the launcher's
-  `backup.ApplyPendingRestore` runs before `store.Open`, checks again, copies the current database into the
+  `RequestRestore` checks the file quickly (`store.Inspect` without `full`: read-only open, an AudioSilo
+  schema whose every applied migration this server knows, else `ErrNewerDatabase`; `quick_check` reads every
+  page, so it runs only at start) and writes `<data>/restore.json`; the launcher's
+  `backup.ApplyPendingRestore` runs before `store.Open`, checks again in full, copies the current database into the
   folder as `before-restore` (or, if it can't be read, renames its files aside in the data folder), swaps
   the backup in (removing the old -wal/-shm), writes `<data>/restore-result.json` and always removes the
   marker (a refused restore is reported once, not retried at every start); `recordRestore` logs it in the

@@ -240,12 +240,14 @@ func (c *Catalog) PruneServerEvents(ctx context.Context, cutoff time.Time) (int6
 }
 
 // PreviousRunStatus is the status of the library's scan before the run runID ("" when
-// there was none), so an offline library is announced once, not at every scan.
+// there was none), so an offline library is announced once, not at every scan. Runs
+// that never got to an answer (cancelled, cut short by a restart, still running)
+// are passed over.
 func (c *Catalog) PreviousRunStatus(ctx context.Context, libraryID, runID int64) (string, error) {
 	var status string
 	err := c.db.QueryRowContext(ctx,
-		`SELECT status FROM scan_runs WHERE library_id = ? AND id < ? AND status NOT IN (?, ?)
-		 ORDER BY id DESC LIMIT 1`, libraryID, runID, RunCancelled, RunRunning).Scan(&status)
+		`SELECT status FROM scan_runs WHERE library_id = ? AND id < ? AND status NOT IN (?, ?, ?)
+		 ORDER BY id DESC LIMIT 1`, libraryID, runID, RunCancelled, RunInterrupted, RunRunning).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

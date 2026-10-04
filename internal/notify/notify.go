@@ -193,6 +193,16 @@ func (s *Service) Test(ctx context.Context, t catalog.NotifyTarget) string {
 // here, so a destination that doesn't answer holds a worker for one attempt at a
 // time, never the others' deliveries.
 func (s *Service) deliver(ctx context.Context, d delivery) {
+	if d.attempt > 0 {
+		// A retry goes where the destination is set to send now: not at all once it
+		// is deleted, switched off or unsubscribed, and to its new address and secret
+		// after a change (a leaked one is rotated, not used again).
+		t, err := s.cat.GetNotifyTarget(context.WithoutCancel(ctx), d.target.ID)
+		if err != nil || !t.Enabled || !slices.Contains(t.Events, d.event.Kind) {
+			return
+		}
+		d.target = *t
+	}
 	reason := s.send(ctx, d.target, d.event)
 	if reason != "" && retryable(reason) && d.attempt < len(s.delays) {
 		next := d

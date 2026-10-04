@@ -343,3 +343,20 @@ func TestChangedSettings(t *testing.T) {
 		t.Fatalf("no change listed %#v", got)
 	}
 }
+
+// An emptied field arrives as null: refused for a setting that can't be unset,
+// taken (the default) by one that can.
+func TestNullOnlyForUnsettable(t *testing.T) {
+	c := Default(t.TempDir())
+	_, err := c.WithSettings(map[string]map[string]json.RawMessage{"backups": {"keep": json.RawMessage(`null`)}}, Checks{})
+	var se *SettingError
+	if !errors.As(err, &se) || se.Setting != "backups.keep" || se.Reason != ReasonInvalid {
+		t.Fatalf("null keep: err = %v", err)
+	}
+	n := 5
+	c.Demo.MaxUsers = &n
+	next, err := c.WithSettings(map[string]map[string]json.RawMessage{"demo": {"max_users": json.RawMessage(`null`)}}, Checks{})
+	if err != nil || next.Demo.MaxUsers != nil {
+		t.Fatalf("null max_users: %v, %v", next, err)
+	}
+}

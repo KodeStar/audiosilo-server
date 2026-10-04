@@ -208,6 +208,22 @@ func TestCreateBusyAndFailure(t *testing.T) {
 	}
 }
 
+// A backup stopped by the server stopping (its context ended) is not announced as
+// a failure.
+func TestStoppedBackupIsNotAFailure(t *testing.T) {
+	e := newEnv(t)
+	heard := false
+	e.svc.OnFailure = func(Result) { heard = true }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := e.svc.Create(ctx, KindScheduled); err == nil {
+		t.Fatal("a backup on an ended context succeeded")
+	}
+	if heard {
+		t.Fatal("a stopped backup was announced as failed")
+	}
+}
+
 func TestScheduleDue(t *testing.T) {
 	e := newEnv(t)
 	e.clock = time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)

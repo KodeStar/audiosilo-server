@@ -59,11 +59,11 @@ type Info struct {
 }
 
 // Inspect opens the SQLite file at path read-only and checks that this server can
-// use it as its database: it passes SQLite's quick_check, it is an AudioSilo
-// database, and every migration it has applied is one this server knows (a backup
-// from a newer server would have tables this one can't read). Nothing is written to
-// the file. A failed check wraps ErrNotADatabase (ErrNewerDatabase for the last).
-func Inspect(ctx context.Context, path string) (Info, error) {
+// use it as its database: it is an AudioSilo database, every migration it has
+// applied is one this server knows (a backup from a newer server would have tables
+// this one can't read) and, when full, it passes SQLite's quick_check (which reads
+// every page: seconds on a big database). Nothing is written to the file. A failed check wraps ErrNotADatabase (ErrNewerDatabase for the last).
+func Inspect(ctx context.Context, path string, full bool) (Info, error) {
 	var info Info
 	if _, err := os.Stat(path); err != nil {
 		return info, err
@@ -77,12 +77,14 @@ func Inspect(ctx context.Context, path string) (Info, error) {
 	defer func() { _ = conn.Close() }()
 	conn.SetMaxOpenConns(1)
 
-	var check string
-	if err := conn.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&check); err != nil {
-		return info, fmt.Errorf("%w: %v", ErrNotADatabase, err)
-	}
-	if check != "ok" {
-		return info, fmt.Errorf("%w: damaged (%s)", ErrNotADatabase, check)
+	if full {
+		var check string
+		if err := conn.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&check); err != nil {
+			return info, fmt.Errorf("%w: %v", ErrNotADatabase, err)
+		}
+		if check != "ok" {
+			return info, fmt.Errorf("%w: damaged (%s)", ErrNotADatabase, check)
+		}
 	}
 	known, err := knownMigrations()
 	if err != nil {
