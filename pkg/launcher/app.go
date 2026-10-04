@@ -165,6 +165,8 @@ func Run(ctx context.Context, opts Options) error {
 		go demoReaper(ctx, authSvc, cfg.Demo.IdleTTLDuration(), log)
 	}
 
+	go sessionRetention(ctx, cat, authSvc, log)
+
 	a := api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	if setupToken != "" {
@@ -402,6 +404,39 @@ func demoReaper(ctx context.Context, authSvc *auth.Service, idleTTL time.Duratio
 			return
 		case <-ticker.C:
 			reap()
+		}
+	}
+}
+
+// sessionRetention rolls listening sessions older than catalog.SessionRetention
+// up into per-day totals (dropping their device, app and time of day) and blanks
+// the address of signed-out devices, once at startup and then daily, until ctx is
+// cancelled.
+func sessionRetention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, log *slog.Logger) {
+	prune := func() {
+		if err := authSvc.ForgetRevokedAddresses(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("forgetting signed-out device addresses failed", "err", err)
+		}
+		n, err := cat.PruneSessions(ctx, time.Now().Add(-catalog.SessionRetention), time.Local)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Warn("listening session retention failed", "err", err)
+			}
+			return
+		}
+		if n > 0 {
+			log.Info("rolled old listening sessions up into daily totals", "count", n)
+		}
+	}
+	prune()
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
 		}
 	}
 }

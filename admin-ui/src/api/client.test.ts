@@ -48,6 +48,20 @@ describe('api client', () => {
     expect(calls[0].headers.Authorization).toBe('Bearer tok-1');
   });
 
+  it('names itself to the server on every request, signed in or not', async () => {
+    const calls = mockFetch({
+      'POST /auth/login': { body: { token: 't', user: admin, server_id: 's' } },
+      'GET /admin/stats': { body: stats() },
+    });
+    await api.login('chris', 'pw');
+    setToken('tok-1');
+    await api.stats();
+    expect(calls.map((c) => c.headers['X-AudioSilo-Client'])).toEqual([
+      'AudioSilo Admin (web)',
+      'AudioSilo Admin (web)',
+    ]);
+  });
+
   it('logs in with the admin-web device name and no stale header', async () => {
     const calls = mockFetch({
       'POST /auth/login': { body: { token: 't', user: admin, server_id: 's' } },

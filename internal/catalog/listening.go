@@ -96,17 +96,29 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 			in.Version = existing.Version + 1
 		}
 	}
+	// started_at is stamped by the first save and kept; finished_at is stamped
+	// when finished turns on and cleared when it turns off (a restart). Both take
+	// the save's own time (already checked by plausibleUpdatedAt), so a finish
+	// replayed from an offline queue is dated when it happened, normalized to
+	// RFC3339 UTC to the second (fixed width, so they compare as strings).
+	stamp := c.now().UTC().Format(time.RFC3339)
+	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil {
+		stamp = t.UTC().Format(time.RFC3339)
+	}
 	_, err = c.db.ExecContext(ctx,
 		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-		     playback_speed, version, device_id, updated_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?)
+		     playback_speed, version, device_id, updated_at, started_at, finished_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?6 THEN ?11 END)
 		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
 		     position=excluded.position, duration=excluded.duration,
 		     finished=excluded.finished, playback_speed=excluded.playback_speed,
 		     version=excluded.version, device_id=excluded.device_id,
-		     updated_at=excluded.updated_at`,
+		     updated_at=excluded.updated_at,
+		     finished_at=CASE WHEN NOT excluded.finished THEN NULL
+		                      WHEN progress.finished THEN progress.finished_at
+		                      ELSE ?11 END`,
 		userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
-		in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt)
+		in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +250,8 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 			`UPDATE bookmarks SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			`UPDATE notes SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			`UPDATE listening_history SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+			`UPDATE listening_sessions SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
+			`UPDATE listening_daily SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 			`UPDATE favourites SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
 		}
 		for _, stmt := range stmts {

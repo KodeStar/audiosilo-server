@@ -372,6 +372,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
 			return
 		}
+		a.streams.Note(credentialFrom(r.Context()).ID, lib.ID, rel, time.Now())
 		start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
 		media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
 		return

@@ -66,6 +66,12 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 
 func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Response, string) {
 	t.Helper()
+	return e.doHeaders(t, method, path, token, body, nil)
+}
+
+// doHeaders is do with extra request headers.
+func (e *testEnv) doHeaders(t *testing.T, method, path, token, body string, headers map[string]string) (*http.Response, string) {
+	t.Helper()
 	var r io.Reader
 	if body != "" {
 		r = strings.NewReader(body)
@@ -73,6 +79,9 @@ func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Resp
 	req, _ := http.NewRequest(method, e.srv.URL+path, r)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

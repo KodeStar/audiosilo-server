@@ -87,6 +87,10 @@ type API struct {
 	// are decoded at once across requests (see handlers_covers.go).
 	thumbs   *media.ThumbCache
 	thumbSem chan struct{}
+
+	// streams remembers recent transcoded streams per token, so the progress saves
+	// that follow mark the listening session as transcoded.
+	streams *catalog.StreamMarks
 }
 
 // New constructs an API. ffmpeg is the path to an ffmpeg binary used for
@@ -121,6 +125,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
+		streams:        catalog.NewStreamMarks(),
 	}
 	// Seed the runtime flag from config; the feature is on only when a service was
 	// built too (metadataOn), so an enabled flag with no base_url stays off.
@@ -251,6 +256,16 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/jobs/{id}", a.requireAdmin(http.HandlerFunc(a.handleCancelJob)))
 	mux.Handle("GET /api/v1/admin/scan-runs", a.requireAdmin(http.HandlerFunc(a.handleScanRuns)))
 	mux.Handle("GET /api/v1/admin/scan-runs/{id}", a.requireAdmin(http.HandlerFunc(a.handleScanRun)))
+
+	// Activity: listening sessions (derived from progress saves), devices (signed-in
+	// tokens) and an admin's edits of someone's progress. Stats are GET
+	// /admin/stats?range=.
+	mux.Handle("GET /api/v1/admin/sessions/live", a.requireAdmin(http.HandlerFunc(a.handleLiveSessions)))
+	mux.Handle("GET /api/v1/admin/sessions", a.requireAdmin(http.HandlerFunc(a.handleListSessions)))
+	mux.Handle("GET /api/v1/admin/devices", a.requireAdmin(http.HandlerFunc(a.handleListDevices)))
+	mux.Handle("DELETE /api/v1/admin/devices/{id}", a.requireAdmin(http.HandlerFunc(a.handleRevokeDevice)))
+	mux.Handle("GET /api/v1/admin/users/{id}/progress", a.requireAdmin(http.HandlerFunc(a.handleUserProgress)))
+	mux.Handle("PATCH /api/v1/admin/libraries/{id}/progress", a.requireAdmin(http.HandlerFunc(a.handleEditProgress)))
 
 	// Admin catalog: the console's Library and Book screens. Metadata edits are
 	// path-keyed overrides in the database; no file on disk is ever modified.

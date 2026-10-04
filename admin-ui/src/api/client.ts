@@ -84,6 +84,11 @@ export function setForbiddenHandler(fn: () => void) {
 
 const LOGIN_PATH = '/auth/login';
 
+/** How the console names itself to the server (X-AudioSilo-Client), so the People and Activity
+ * screens can tell a console session from a player. It ships inside the server, so it sends no
+ * version of its own. Always same-origin, so the header never costs a CORS preflight. */
+export const CLIENT_IDENTITY = 'AudioSilo Admin (web)';
+
 /**
  * Every API call goes through here: the bearer header, what a 401/403 means for
  * the session, and a failure raised as ApiError from the {"error"} envelope.
@@ -100,7 +105,7 @@ async function send(
     explicitToken?: string;
   } = {},
 ): Promise<Response> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { 'X-AudioSilo-Client': CLIENT_IDENTITY };
   const token = init.explicitToken ?? getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (init.raw) headers['Content-Type'] = init.raw.type || 'application/octet-stream';

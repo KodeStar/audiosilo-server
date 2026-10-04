@@ -249,41 +249,64 @@ func (s *Service) insertToken(ctx context.Context, userID int64, hash, kind, dev
 // returns its user, also bumping last_seen. Revoked/expired tokens return
 // ErrInvalidToken.
 func (s *Service) ResolveToken(ctx context.Context, secret, kind string) (*User, error) {
-	u, _, err := s.ResolveTokenKinds(ctx, secret, kind)
+	u, _, err := s.ResolveRequest(ctx, secret, Presence{}, kind)
 	return u, err
 }
 
-// ResolveTokenKinds is ResolveToken generalized over several accepted kinds: it
-// validates a presented secret whose kind is one of kinds, bumps last_seen and
-// returns the user together with the kind that actually matched. Middleware uses
-// it to accept a session OR an api key on the same route (an api key acts as its
-// owner) while never accepting a pairing token there, and uses the returned kind
-// to bar an api key from routes that mint a fresh durable credential (see
-// denyAPIKey). At least one kind must be supplied.
-func (s *Service) ResolveTokenKinds(ctx context.Context, secret string, kinds ...string) (*User, string, error) {
+// ResolveRequest validates a presented secret whose kind is one of kinds and
+// returns the user with the token that matched (its id, kind, device name and
+// app). It bumps the token's last_seen and records what the request says about
+// the device (Presence): its address, and its app when the request named one, so
+// a request without the header (a browser's <audio> fetching a stream) never
+// erases the app an earlier request reported. Middleware uses it to accept a
+// session OR an api key on the same route while never accepting a pairing token
+// there, and uses the returned kind to bar an api key from routes that mint a
+// fresh durable credential (see denyAPIKey).
+func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence, kinds ...string) (*User, Credential, error) {
 	hash := hashSecret(secret)
-	u, kind, _, err := s.lookupToken(ctx, hash, kinds...)
+	u, row, err := s.lookupToken(ctx, hash, kinds...)
 	if err != nil {
-		return nil, "", err
+		return nil, Credential{}, err
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE tokens SET last_seen = ? WHERE token_hash = ?`, s.ts(), hash)
-	return u, kind, nil
+	cred := Credential{ID: row.id, Kind: row.kind, DeviceName: row.deviceName, Client: row.client}
+	if p.Client.App != "" {
+		cred.Client = p.Client
+	}
+	// The app is written only when this request named one, decided in SQL rather
+	// than from the value read above: a request without the header racing one with
+	// it (covers loading beside an API call) must not write back the stale app.
+	_, _ = s.db.ExecContext(ctx,
+		`UPDATE tokens SET last_seen = ?1, last_ip = COALESCE(NULLIF(?2, ''), last_ip),
+		        client_app = CASE WHEN ?3 = '' THEN client_app ELSE ?3 END,
+		        client_version = CASE WHEN ?3 = '' THEN client_version ELSE ?4 END,
+		        client_platform = CASE WHEN ?3 = '' THEN client_platform ELSE ?5 END
+		  WHERE id = ?6`,
+		s.ts(), p.IP, p.Client.App, p.Client.Version, p.Client.Platform, row.id)
+	return u, cred, nil
+}
+
+// tokenRow is what lookupToken reads about a valid token besides its user.
+type tokenRow struct {
+	id         int64
+	kind       string
+	codeID     sql.NullInt64 // parent auth code of a linked pairing token
+	deviceName string
+	client     ClientInfo
 }
 
 // lookupToken resolves a token hash whose kind is one of the accepted kinds to
-// its (partial) user and parent auth-code link, applying the shared validity
-// checks: unknown, revoked and expired tokens and disabled users all return
+// its (partial) user and token row, applying the shared validity checks:
+// unknown, revoked and expired tokens and disabled users all return
 // ErrInvalidToken. The single definition of "is this token valid", shared by
-// ResolveToken/ResolveTokenKinds (every authenticated request) and
-// ConsumePairingToken (exchange). token_hash is globally unique, so the kind
-// filter only rejects a real token presented where its kind is not accepted.
-func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, string, sql.NullInt64, error) {
+// ResolveRequest (every authenticated request) and ConsumePairingToken
+// (exchange). token_hash is globally unique, so the kind filter only rejects a
+// real token presented where its kind is not accepted.
+func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
 		u       User
-		kind    string
+		row     tokenRow
 		expires sql.NullString
 		revoked bool
-		codeID  sql.NullInt64
 	)
 	args := make([]any, 0, len(kinds)+1)
 	args = append(args, hash)
@@ -291,20 +314,22 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		args = append(args, k)
 	}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.role, u.disabled, t.kind, t.expires_at, t.revoked, t.auth_code_id
+		`SELECT u.id, u.username, u.role, u.disabled, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
+		        t.device_name, t.client_app, t.client_version, t.client_platform
 		   FROM tokens t JOIN users u ON u.id = t.user_id
 		  WHERE t.token_hash = ? AND t.kind IN (`+inPlaceholders(len(kinds))+`)`, args...).
-		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &kind, &expires, &revoked, &codeID)
+		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &row.id, &row.kind, &expires, &revoked, &row.codeID,
+			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, "", codeID, ErrInvalidToken
+		return nil, tokenRow{}, ErrInvalidToken
 	}
 	if err != nil {
-		return nil, "", codeID, err
+		return nil, tokenRow{}, err
 	}
 	if revoked || u.Disabled || s.pastExpiry(expires) {
-		return nil, "", codeID, ErrInvalidToken
+		return nil, tokenRow{}, ErrInvalidToken
 	}
-	return &u, kind, codeID, nil
+	return &u, row, nil
 }
 
 // inPlaceholders returns "?,?,..." with n placeholders for a SQL IN clause. The
@@ -822,10 +847,11 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 // use is consumed.
 func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User, error) {
 	hash := hashSecret(secret)
-	u, _, codeID, err := s.lookupToken(ctx, hash, KindPairing)
+	u, row, err := s.lookupToken(ctx, hash, KindPairing)
 	if err != nil {
 		return nil, err
 	}
+	codeID := row.codeID
 	now := s.ts()
 	if !codeID.Valid {
 		res, err := s.db.ExecContext(ctx,
@@ -876,7 +902,7 @@ func (s *Service) ConsumePairingToken(ctx context.Context, secret string) (*User
 
 // userColumns selects the user fields plus a derived last-activity timestamp
 // (the newest tokens.last_seen across the account's tokens). Activity is bumped
-// on every authenticated request in ResolveToken, so this reflects last use, not
+// on every authenticated request in ResolveRequest, so this reflects last use, not
 // just sign-in, without a dedicated column or extra writes.
 const userColumns = `u.id, u.username, u.role, u.disabled, u.password_hash, u.is_demo,
 	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id),

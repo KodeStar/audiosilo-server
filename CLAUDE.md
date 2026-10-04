@@ -156,7 +156,11 @@ index, so a shifted chapter list can't move a rename; the API still sends indexe
 history, per library, bounded), `issue_ignores` (`library_id, path, kind`: an admin's "ignore this"
 on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` / `ignore_patterns`
 (per-library settings, off the player wire) and, on `books`, `scan_error` / `scan_error_file` /
-`scan_error_detail` (the last indexing's read problem) and `suspect_parts`. Sharing:
+`scan_error_detail` (the last indexing's read problem) and `suspect_parts`. Phase 4a (`0018`) adds
+`listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
+retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
+`client_platform` / `last_ip` (the app and newest address behind each token) and
+`progress.started_at` / `finished_at`. Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
 
@@ -174,7 +178,7 @@ admin overrides; see Metadata overrides below).
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,
   `Scope.Allows`/`VisibleInBrowse`/`pathFilterSQL`, the rate limiters,
-  `auth.ResolveToken`, or `web.htmlCSP`. Keep business logic in the non-`api`
+  `auth.ResolveRequest`/`lookupToken`, or `web.htmlCSP`. Keep business logic in the non-`api`
   packages so it stays unit-testable (`api` is transport-only).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
@@ -236,14 +240,14 @@ admin overrides; see Metadata overrides below).
   tokens for headless integrations, owner-scoped mint/list/revoke via
   `POST`/`GET`/`DELETE /auth/tokens` (`IssueAPIToken`/`ListAPITokens`/
   `RevokeTokenByID`; label carried in `device_name`, ≤100 chars). `requireAuth` now
-  accepts **session OR api** (`ResolveTokenKinds(KindSession, KindAPI)`), so a key
+  accepts **session OR api** (`ResolveRequest(..., KindSession, KindAPI)`), so a key
   authenticates like a session acting as its owner (an admin's key passes
   `requireAdmin`; media `?token=` accepts it too) but is never valid for pairing
   `/auth/exchange`; a pairing token is never accepted as a bearer credential.
   Secrets are stored SHA-256-only and shown once; create/list/revoke go through
   `gateSelfService` (shared `accountLimiter` + demo refusal). **Containment**: a key
   authenticates as its owner but cannot mint a *fresh durable credential* -
-  `ResolveTokenKinds` returns the matched kind and `denyAPIKey` refuses an api-key
+  `ResolveRequest` returns the matched kind (`Credential.Kind`) and `denyAPIKey` refuses an api-key
   caller (403) on `POST /auth/{tokens,recovery,pair,password}`, so revoking a leaked
   key cuts off everything it could reach (it cannot spawn another key/recovery
   code/pairing token/password that outlives its own revocation - GitHub's "a token
@@ -535,6 +539,42 @@ admin overrides; see Metadata overrides below).
   (queue every library: `Scanner.EnqueueAll`, also the startup scans), `GET /admin/scan-runs`
   (`?library_id=&before=&limit=`, `next_before`) and `GET /admin/scan-runs/{id}` (with the log).
   Codes `invalid_schedule`, `invalid_pattern`, `not_indexable`.
+- **Sessions, devices, Activity stats (admin redesign Phase 4a, `catalog/sessions.go`,
+  `activity.go`, `progress_admin.go`, `auth/devices.go`, `api/handlers_activity.go`)**: players name
+  themselves in `X-AudioSilo-Client: <app>[/<version>] [(<platform>)]` (`auth.ParseClient`, strict;
+  the console sends `AudioSilo Admin (web)`, the player `AudioSilo/<version> (<platform>)`, and only
+  same-origin on web). `authenticate` calls `auth.ResolveRequest`, which records the app (only when
+  the request names one, so a headerless `<audio>` fetch keeps it) and the newest IP on the token, and
+  puts the `auth.Credential` (token id, kind, device name, app) in the context (`credentialFrom`; every
+  context key lives in one iota block in `respond.go`, since the IP key once collided). CORS allows the
+  header. **Sessions are derived from progress saves**, not from the client-posted
+  `listening_history` spans (those arrive only on stop, are dropped offline and carry no device):
+  `handlePutProgress` passes every save to `catalog.RecordHeartbeat`, which extends the token's
+  session on that book when the save comes within `SessionGap` (10 min), or later when the position
+  advanced by about the time that passed (`continuousPlayback`, within `resumeWindow`, 12 h: Android
+  pauses the player's save timer while the screen is off), and otherwise starts a new one; listened
+  time is the position advance / speed, capped by the server time between saves (only server time is
+  used, so a wrong device clock or an offline replay can't inflate it); a session with nothing
+  listened yet (a single save: "Mark finished", the manager's stats sync) is shown nowhere
+  (`listenedSQL`) and deleted by retention; best effort (a failure is logged, the save still
+  succeeds). `catalog.StreamMarks` (in memory) remembers `?transcode=1` streams per token for 10 min
+  so the session is marked transcoded. Session times are fixed-width millisecond UTC strings
+  (`sessionTime`) so they compare as text; hours are taken with `hourOf` (not `time.Date`, which
+  loops on a daylight-saving fall-back). Retention: `pkg/launcher.sessionRetention` runs
+  `PruneSessions` at startup and daily, rolling sessions older than `SessionRetention` (400 days) into
+  `listening_daily` per local day, listener and book, and blanks `last_ip` on signed-out or expired tokens
+  (`auth.ForgetRevokedAddresses`). `SaveProgress` stamps `progress.started_at` on insert and
+  `finished_at` when `finished` turns on (cleared when it turns off), both from the save's own
+  `updated_at`; both are admin-only (not on the player's progress JSON). Endpoints
+  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP), `GET
+  /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
+  /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
+  /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET
+  /admin/users/{id}/progress`, `PATCH /admin/libraries/{id}/progress?path=&user_id=`
+  (`catalog.EditProgress`: finished / position / dates, stamped with server time + version so it
+  beats stale device saves) and `GET /admin/stats?range=7d|30d|90d|1y|<year>` (adds `activity`,
+  `catalog.ActivityFor`, bucketed in server time; 400 `invalid_range`). Sessions and roll-ups move
+  with the book (`MoveDurableState`).
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
@@ -574,10 +614,11 @@ admin overrides; see Metadata overrides below).
   shares + issued auth codes (metadata only; codes are unretrievable by design);
   `DELETE /admin/authcodes/{id}` revokes a code. A user's **last activity** is
   derived from `MAX(tokens.last_seen)` (bumped on every authenticated request in
-  `ResolveToken`) - there is no `last_login` column; don't add one.
+  `ResolveRequest`) - there is no `last_login` column; don't add one.
 - **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
   counts (`catalog.CountBooksByLibrary`) and a cross-user "currently listening"
-  feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path).
+  feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path);
+  with `?range=` it adds the Activity page's `activity` block (see Phase 4a above).
 - **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
   ties) in `catalog.SaveProgress` - the realtime layer (Phase C) must reuse it so
   REST and WebSocket writes converge.

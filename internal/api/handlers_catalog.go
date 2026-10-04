@@ -83,7 +83,7 @@ func bookFilterFromQuery(q url.Values) (catalog.BookFilter, string) {
 		Narrator: q.Get("narrator"), Formats: q["format"], Codecs: q["codec"],
 	}
 	var ok bool
-	if f.LibraryID, ok = parseLibraryID(q.Get("library_id")); !ok {
+	if f.LibraryID, ok = parseOptionalID(q.Get("library_id")); !ok {
 		return f, "invalid library_id"
 	}
 	if len(f.Formats) > maxFilterValues || len(f.Codecs) > maxFilterValues {
@@ -138,9 +138,9 @@ func bookFilterFromQuery(q url.Values) (catalog.BookFilter, string) {
 	return f, ""
 }
 
-// parseLibraryID reads an optional ?library_id= value: 0 when absent, false when
-// present but not a positive id.
-func parseLibraryID(v string) (int64, bool) {
+// parseOptionalID reads an optional id query value (?library_id=, ?user_id=, a
+// keyset cursor): 0 when absent, false when present but not a positive id.
+func parseOptionalID(v string) (int64, bool) {
 	if v == "" {
 		return 0, true
 	}
@@ -166,7 +166,7 @@ func normalizeInstant(v string) (string, bool) {
 // handleAdminPeople serves GET /admin/authors and /admin/narrators.
 func (a *API) handleAdminPeople(field, key string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		libID, ok := parseLibraryID(r.URL.Query().Get("library_id"))
+		libID, ok := parseOptionalID(r.URL.Query().Get("library_id"))
 		if !ok {
 			writeError(w, http.StatusBadRequest, "invalid library_id")
 			return
@@ -184,7 +184,7 @@ func (a *API) handleAdminPeople(field, key string) http.HandlerFunc {
 
 // handleAdminSeries serves GET /admin/series.
 func (a *API) handleAdminSeries(w http.ResponseWriter, r *http.Request) {
-	libID, ok := parseLibraryID(r.URL.Query().Get("library_id"))
+	libID, ok := parseOptionalID(r.URL.Query().Get("library_id"))
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return
