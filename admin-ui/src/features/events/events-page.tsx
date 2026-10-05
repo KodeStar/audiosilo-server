@@ -26,7 +26,7 @@ export function EventsPage() {
   return (
     <Page>
       <PageHead title={t('eventsPage.title')} description={t('eventsPage.description')} />
-      <div className="flex flex-wrap items-center gap-2.5">
+      <div className="mb-4 flex flex-wrap items-center gap-2.5">
         <NativeSelect
           className="w-full sm:w-[240px]"
           value={kind}
