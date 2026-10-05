@@ -1357,6 +1357,21 @@ export interface CoverThumb {
   data: string;
 }
 
+/** One entry of POST /admin/books/works (handlers_catalog.go bookWork), in request order. */
+export interface BookWork {
+  library_id: number;
+  path: string;
+  /** The community work the book's ASIN/ISBN resolves to; "" when it has none, has no match or the lookup failed. */
+  work_id: string;
+  /** This book's lookup failed or ran out of time: asking again later may resolve it. Never for a clean miss. */
+  failed: boolean;
+}
+
+/** POST /admin/books/works: which community work each book is. */
+export interface BookWorks {
+  works: BookWork[];
+}
+
 /** meta.MetaPosition. */
 export interface MetaPosition {
   chapter: number;

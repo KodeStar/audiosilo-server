@@ -20,6 +20,7 @@ var notAudited = map[string]string{
 	"handleCancelJob":        "a cancelled scan is recorded in scan_runs",
 	"handleUpdateCheck":      "asks GitHub; changes nothing",
 	"handleAdminCovers":      "a read (a POST only for its batch body)",
+	"handleAdminBookWorks":   "a read (a POST only for its batch body)",
 	"handleTestNotifyTarget": "sends a test message; its outcome is recorded on the destination",
 }
 

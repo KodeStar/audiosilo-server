@@ -1,8 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { BookMeta } from '@/api/types';
-import { mockFetch, type MockRoute } from '@/test/fetch-mock';
+import type { BookMeta, BookRef } from '@/api/types';
+import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail, books, series } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
@@ -37,11 +37,26 @@ const wayOfKingsMeta: BookMeta = {
   ],
 };
 
+/** POST /admin/books/works: each fixture book is the work named like its title. */
+function worksReply(req: MockRequest): MockReply {
+  const refs = (req.body as { books: BookRef[] }).books;
+  return {
+    body: {
+      works: refs.map((r) => ({
+        ...r,
+        work_id: books.find((b) => b.path === r.path)?.title ?? '',
+        failed: false,
+      })),
+    },
+  };
+}
+
 function routes(over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
     'GET /admin/series': { body: { series } },
     'GET /admin/books': { body: { books } },
     'GET /libraries/1/meta': { body: wayOfKingsMeta },
+    'POST /admin/books/works': worksReply,
     // The book page a spine opens.
     'GET /admin/libraries/1/book': { body: bookDetail() },
     ...over,
@@ -79,6 +94,45 @@ describe('series', () => {
     expect(
       within(murderbot).getByText("Match a book of this series to see what's missing"),
     ).toBeInTheDocument();
+  });
+
+  it("places a book on its community entry when its series index doesn't say", async () => {
+    // Words of Radiance carries the series but no number; its ASIN says it is book 2.
+    const unnumbered = [books[0], { ...books[1], series_index: 0 }, ...books.slice(2)];
+    let release = () => {};
+    const calls = mockFetch(
+      routes({
+        'GET /admin/books': { body: { books: unnumbered } },
+        'POST /admin/books/works': (req) =>
+          new Promise<void>((resolve) => (release = resolve)).then(() => worksReply(req)),
+      }),
+    );
+    renderApp('/library/series');
+    const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+    // Every matched book is asked about, the rail's own too, in one request.
+    await waitFor(() => expect(calls.some((c) => c.path === '/admin/books/works')).toBe(true));
+    const asked = calls.filter((c) => c.path === '/admin/books/works');
+    expect(asked.map((c) => (c.body as { books: BookRef[] }).books)).toEqual([
+      [
+        { library_id: 1, path: books[0].path },
+        { library_id: 1, path: books[1].path },
+      ],
+    ]);
+    // While the works load, no gaps (they would be wrong).
+    expect(card).toHaveTextContent('Brandon Sanderson · 2 books');
+    expect(within(card).queryByRole('img', { name: /not in your library/ })).toBeNull();
+
+    release();
+    await waitFor(() => expect(card).toHaveTextContent('You have 1, 2 of 5; missing 3-5'));
+    expect(within(card).getByRole('button', { name: '#2 Words of Radiance' })).toBeInTheDocument();
+    expect(within(card).queryByRole('img', { name: /#2 Words of Radiance/ })).toBeNull();
+  });
+
+  it('falls back to the series index when the works fail', async () => {
+    mockFetch(routes({ 'POST /admin/books/works': { status: 502, body: { error: 'down' } } }));
+    renderApp('/library/series');
+    const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+    await waitFor(() => expect(card).toHaveTextContent('You have 1, 2 of 5; missing 3-5'));
   });
 
   it('opens a book from its spine', async () => {

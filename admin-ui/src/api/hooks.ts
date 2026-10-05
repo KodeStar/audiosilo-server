@@ -1,16 +1,20 @@
 import { useEffect, useRef } from 'react';
 import {
   keepPreviousData,
+  queryOptions,
   useInfiniteQuery,
+  useQueries,
   useQuery,
   useQueryClient,
   type InfiniteData,
   type QueryClient,
+  type UseQueryResult,
 } from '@tanstack/react-query';
-import { refKey } from '@/lib/book-route';
+import { refKey, refOf } from '@/lib/book-route';
 import { compact } from '@/lib/utils';
 import { api, type BookFilter, type BookListParams, type MatchBy, type ThumbSize } from './client';
 import { loadThumb } from './cover-batch';
+import { loadWork, type WorkAnswer } from './work-batch';
 import type {
   AdminBook,
   AdminBookDetail,
@@ -64,6 +68,8 @@ export const keys = {
   match: (libraryId: number, path: string, by: MatchBy) =>
     ['admin', 'book', libraryId, path, 'match', by] as const,
   bookMeta: (libraryId: number, path: string) => ['meta', libraryId, path] as const,
+  /** A book's community work, by identity and identifiers: a new ASIN or ISBN asks again. */
+  bookWork: (b: AdminBook) => ['meta', 'work', b.library_id, b.path, b.asin, b.isbn] as const,
   /** The Health summary and the duplicate groups (a prefix: a scan or an ignore changes them). */
   issues: ['admin', 'issues'] as const,
   issueSummary: ['admin', 'issues', 'summary'] as const,
@@ -609,6 +615,45 @@ export function useBookMeta(libraryId: number, path: string, enabled: boolean) {
     retry: false,
     staleTime: 60 * 60_000,
   });
+}
+
+/**
+ * How soon a book whose work may have failed to resolve is asked about again:
+ * the server holds a failed lookup this long anyway (meta errorTTL).
+ */
+export const WORKS_RETRY_MS = 2 * 60_000;
+
+/**
+ * One book's community work (POST /admin/books/works, batched with every book
+ * asked about in the same moment: work-batch.ts). A final answer is kept for the
+ * session, so a resolved book is never sent again; one that may have failed is
+ * asked again no sooner than WORKS_RETRY_MS (a remount or a window focus).
+ */
+export const bookWorkQuery = (b: AdminBook) =>
+  queryOptions({
+    queryKey: keys.bookWork(b),
+    // The book's refKey rides along so the card's combine can key the answers.
+    queryFn: async ({ signal }) => ({ key: refKey(b), ...(await loadWork(refOf(b), signal)) }),
+    staleTime: (q) => (q.state.data?.final === false ? WORKS_RETRY_MS : Infinity),
+    gcTime: Infinity,
+    retry: false,
+  });
+
+/** The resolved work ids by refKey, and whether any book is still being asked about. */
+function combineWorks(results: UseQueryResult<WorkAnswer & { key: string }>[]) {
+  const ids = new Map<string, string>();
+  for (const r of results) {
+    if (r.data?.id) ids.set(r.data.key, r.data.id);
+  }
+  return { ids, pending: results.some((r) => r.isPending) };
+}
+
+/**
+ * Which community work each book is, as work ids by refKey: the Series cards
+ * place owned books on a rail by them. Books that didn't resolve are absent.
+ */
+export function useBookWorks(books: AdminBook[]) {
+  return useQueries({ queries: books.map(bookWorkQuery), combine: combineWorks });
 }
 
 /**

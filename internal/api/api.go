@@ -308,6 +308,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/books/facets", a.requireAdmin(http.HandlerFunc(a.handleAdminBookFacets)))
 	mux.Handle("POST /api/v1/admin/books/bulk", a.requireAdmin(http.HandlerFunc(a.handleAdminBulkEdit)))
 	mux.Handle("POST /api/v1/admin/covers", a.requireAdmin(http.HandlerFunc(a.handleAdminCovers)))
+	mux.Handle("POST /api/v1/admin/books/works", a.requireAdmin(http.HandlerFunc(a.handleAdminBookWorks)))
 	mux.Handle("GET /api/v1/admin/authors", a.requireAdmin(a.handleAdminPeople(catalog.PeopleAuthors, "authors")))
 	mux.Handle("GET /api/v1/admin/narrators", a.requireAdmin(a.handleAdminPeople(catalog.PeopleNarrators, "narrators")))
 	mux.Handle("GET /api/v1/admin/series", a.requireAdmin(http.HandlerFunc(a.handleAdminSeries)))

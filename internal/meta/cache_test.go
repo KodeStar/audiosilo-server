@@ -11,15 +11,15 @@ func TestCacheGetMissAndExpiry(t *testing.T) {
 	clk := &clock{t: time.Unix(1_700_000_000, 0)}
 	c := newCache(clk.now)
 
-	if _, hit, _ := c.getEnrichment("absent"); hit {
+	if _, hit, _ := cacheGet[Enrichment](c, "absent"); hit {
 		t.Fatal("expected a miss for an absent key")
 	}
-	c.putEnrichment("k", &Enrichment{Matched: true}, positiveTTL)
-	if _, hit, err := c.getEnrichment("k"); !hit || err != nil {
+	cachePut(c, "k", &Enrichment{Matched: true}, positiveTTL)
+	if _, hit, err := cacheGet[Enrichment](c, "k"); !hit || err != nil {
 		t.Fatalf("expected a hit right after put, got hit=%v err=%v", hit, err)
 	}
 	clk.advance(positiveTTL + time.Second)
-	if _, hit, _ := c.getEnrichment("k"); hit {
+	if _, hit, _ := cacheGet[Enrichment](c, "k"); hit {
 		t.Fatal("expected an expired entry to miss")
 	}
 }
@@ -32,41 +32,41 @@ func TestCacheGetMissAndExpiry(t *testing.T) {
 func TestCacheTypedAccessorsIsolatePayloads(t *testing.T) {
 	c := newCache(nil)
 
-	c.putEnrichment("e", &Enrichment{Matched: true}, positiveTTL)
-	c.putWork("w", &MetaWork{ID: "the-martian"}, positiveTTL)
+	cachePut(c, "e", &Enrichment{Matched: true}, positiveTTL)
+	cachePut(c, "w", &MetaWork{ID: "the-martian"}, positiveTTL)
 
-	if work, hit, _ := c.getWork("e"); hit || work != nil {
+	if work, hit, _ := cacheGet[MetaWork](c, "e"); hit || work != nil {
 		t.Fatal("an enrichment entry must not satisfy a work read")
 	}
-	if res, hit, _ := c.getEnrichment("w"); hit || res != nil {
+	if res, hit, _ := cacheGet[Enrichment](c, "w"); hit || res != nil {
 		t.Fatal("a work entry must not satisfy an enrichment read")
 	}
-	if res, hit, err := c.getEnrichment("e"); !hit || err != nil || res == nil {
+	if res, hit, err := cacheGet[Enrichment](c, "e"); !hit || err != nil || res == nil {
 		t.Fatalf("enrichment hit = %v/%v/%v", res, hit, err)
 	}
-	if work, hit, err := c.getWork("w"); !hit || err != nil || work == nil {
+	if work, hit, err := cacheGet[MetaWork](c, "w"); !hit || err != nil || work == nil {
 		t.Fatalf("work hit = %v/%v/%v", work, hit, err)
 	}
 
 	// A "no match" marker: ErrNotFound through either accessor (it carries no
 	// payload, so there is no type to disagree with) - but only while live.
 	c.putMiss("miss", notFoundTTL)
-	if _, hit, err := c.getEnrichment("miss"); !hit || !errors.Is(err, ErrNotFound) {
+	if _, hit, err := cacheGet[Enrichment](c, "miss"); !hit || !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cached miss = hit %v, err %v", hit, err)
 	}
 	// A cached transport error surfaces as itself, not as a not-found.
 	c.putError("boom", errTest)
-	if _, hit, err := c.getWork("boom"); !hit || !errors.Is(err, errTest) {
+	if _, hit, err := cacheGet[MetaWork](c, "boom"); !hit || !errors.Is(err, errTest) {
 		t.Fatalf("cached error = hit %v, err %v", hit, err)
 	}
 }
 
 // TestCacheKeyspacesDistinct: every key is minted through keyspace.key, and the
-// three spaces must not collide for the same id.
+// four spaces must not collide for the same id.
 func TestCacheKeyspacesDistinct(t *testing.T) {
 	const id = "the-martian"
-	keys := map[string]bool{nsASIN.key(id): true, nsISBN.key(id): true, nsWork.key(id): true}
-	if len(keys) != 3 {
+	keys := map[string]bool{nsASIN.key(id): true, nsISBN.key(id): true, nsWork.key(id): true, nsLookup.key(id): true}
+	if len(keys) != 4 {
 		t.Fatalf("key spaces collide: %v", keys)
 	}
 	if got := nsWork.key(id); got != "w:"+id {
@@ -80,7 +80,7 @@ func TestCacheEvictsUnderCap(t *testing.T) {
 
 	// Fill past the cap; the map must never exceed it.
 	for i := 0; i < cacheCap+500; i++ {
-		c.putEnrichment("k"+strconv.Itoa(i), &Enrichment{Matched: true}, positiveTTL)
+		cachePut(c, "k"+strconv.Itoa(i), &Enrichment{Matched: true}, positiveTTL)
 	}
 	c.mu.Lock()
 	n := len(c.m)
@@ -100,8 +100,8 @@ func TestCacheEvictsExpiredFirst(t *testing.T) {
 	}
 	clk.advance(errorTTL + time.Second)
 	// A fresh insert triggers eviction, which drops the expired entries first.
-	c.putEnrichment("fresh", &Enrichment{Matched: true}, positiveTTL)
-	if _, hit, _ := c.getEnrichment("fresh"); !hit {
+	cachePut(c, "fresh", &Enrichment{Matched: true}, positiveTTL)
+	if _, hit, _ := cacheGet[Enrichment](c, "fresh"); !hit {
 		t.Fatal("fresh entry should be retained")
 	}
 	c.mu.Lock()
@@ -124,15 +124,15 @@ func TestWorkFloodCannotEvictEnrichment(t *testing.T) {
 	// touch (they are what keeps a warm library's book views cheap).
 	const enrichments = 50
 	for i := 0; i < enrichments; i++ {
-		c.putEnrichment(nsASIN.key("B0"+strconv.Itoa(i)), &Enrichment{Matched: true}, positiveTTL)
+		cachePut(c, nsASIN.key("B0"+strconv.Itoa(i)), &Enrichment{Matched: true}, positiveTTL)
 	}
 	// Flood well past BOTH the work quota and the global cap.
 	for i := 0; i < cacheCap*2; i++ {
-		c.putWork(nsWork.key("w"+strconv.Itoa(i)), &MetaWork{ID: "w" + strconv.Itoa(i)}, positiveTTL)
+		cachePut(c, nsWork.key("w"+strconv.Itoa(i)), &MetaWork{ID: "w" + strconv.Itoa(i)}, positiveTTL)
 	}
 
 	for i := 0; i < enrichments; i++ {
-		if _, hit, err := c.getEnrichment(nsASIN.key("B0" + strconv.Itoa(i))); !hit || err != nil {
+		if _, hit, err := cacheGet[Enrichment](c, nsASIN.key("B0"+strconv.Itoa(i))); !hit || err != nil {
 			t.Fatalf("enrichment %d evicted by a work flood (hit=%v err=%v)", i, hit, err)
 		}
 	}
@@ -154,9 +154,123 @@ func TestWorkFloodCannotEvictEnrichment(t *testing.T) {
 	// The quota bounds the work space without disabling it: the most recent
 	// work entry is still cached.
 	last := nsWork.key("w" + strconv.Itoa(cacheCap*2-1))
-	if _, hit, err := c.getWork(last); !hit || err != nil {
+	if _, hit, err := cacheGet[MetaWork](c, last); !hit || err != nil {
 		t.Fatalf("newest work entry should be cached (hit=%v err=%v)", hit, err)
 	}
+}
+
+// TestLookupFloodCannotEvictEnrichment: one Series page can resolve every matched
+// book of a large library; those lookup entries stay inside their own quota so
+// the enrichments the players read survive, and a cached lookup reads back only
+// as itself.
+func TestLookupFloodCannotEvictEnrichment(t *testing.T) {
+	c := newCache(nil)
+	const enrichments = 50
+	for i := range enrichments {
+		cachePut(c, nsASIN.key("B0"+strconv.Itoa(i)), &Enrichment{Matched: true}, positiveTTL)
+	}
+	for i := range cacheCap * 2 {
+		id := "w" + strconv.Itoa(i)
+		cachePut(c, nsLookup.key(nsASIN.key("L"+strconv.Itoa(i))), &upstreamLookup{Work: &upstreamWorkCard{ID: id}}, positiveTTL)
+	}
+	for i := range enrichments {
+		if _, hit, err := cacheGet[Enrichment](c, nsASIN.key("B0"+strconv.Itoa(i))); !hit || err != nil {
+			t.Fatalf("enrichment %d evicted by a lookup flood (hit=%v err=%v)", i, hit, err)
+		}
+	}
+	if n := owned(c, nsLookup); n > maxLookupEntries {
+		t.Fatalf("lookup entries = %d, want <= %d", n, maxLookupEntries)
+	}
+	last := nsLookup.key(nsASIN.key("L" + strconv.Itoa(cacheCap*2-1)))
+	if l, hit, err := cacheGet[upstreamLookup](c, last); !hit || err != nil || l.Work.ID != "w"+strconv.Itoa(cacheCap*2-1) {
+		t.Fatalf("newest lookup = %+v hit=%v err=%v", l, hit, err)
+	}
+	if _, hit, _ := cacheGet[Enrichment](c, last); hit {
+		t.Fatal("a lookup entry must not satisfy an enrichment read")
+	}
+}
+
+// TestLookupFloodAtCapKeepsEnrichments: with the cache already full of
+// enrichments (players warmed it), a lookup flood below its quota frees the room
+// from its own key space, not from the enrichments.
+func TestLookupFloodAtCapKeepsEnrichments(t *testing.T) {
+	c := newCache(nil)
+	const lookups = 100
+	enrichments := cacheCap - lookups
+	for i := range enrichments {
+		cachePut(c, nsASIN.key("B"+strconv.Itoa(i)), &Enrichment{Matched: true}, positiveTTL)
+	}
+	for i := range lookups * 5 {
+		cachePut(c, nsLookup.key(nsASIN.key("L"+strconv.Itoa(i))), &upstreamLookup{Work: &upstreamWorkCard{ID: "w"}}, positiveTTL)
+	}
+	if n := owned(c, nsASIN); n != enrichments {
+		t.Fatalf("enrichments = %d after a lookup flood at the cap, want %d", n, enrichments)
+	}
+}
+
+// TestCacheQuotaCounts: the per-key-space counts that let a store skip the quota
+// scan must match the map through every way an entry comes and goes - a new
+// insert, an overwrite, expiry on read, the quota's own eviction and the global
+// eviction at cacheCap.
+func TestCacheQuotaCounts(t *testing.T) {
+	clk := &clock{t: time.Unix(1_700_000_000, 0)}
+	c := newCache(clk.now)
+	check := func(when string) {
+		t.Helper()
+		for ns := range quotas {
+			c.mu.Lock()
+			counted := c.counts[ns]
+			c.mu.Unlock()
+			if n := owned(c, ns); counted != n {
+				t.Fatalf("%s: counts[%q] = %d, map holds %d", when, ns, counted, n)
+			}
+		}
+	}
+
+	for i := range 10 {
+		c.putError(nsWork.key("w"+strconv.Itoa(i)), errTest)
+		c.putMiss(nsLookup.key("l"+strconv.Itoa(i)), notFoundTTL)
+	}
+	c.putMiss(nsLookup.key("l0"), notFoundTTL) // an overwrite is not a new entry
+	check("insert")
+	if c.counts[nsWork] != 10 || c.counts[nsLookup] != 10 {
+		t.Fatalf("counts = %v, want 10 each", c.counts)
+	}
+
+	clk.advance(errorTTL + time.Second) // the work entries expire, the lookups don't
+	if _, hit, _ := cacheGet[MetaWork](c, nsWork.key("w0")); hit {
+		t.Fatal("an expired entry must miss")
+	}
+	check("expiry on read")
+
+	// Past the work quota: expired entries go first, then live ones.
+	for i := range maxWorkEntries + 5 {
+		cachePut(c, nsWork.key("n"+strconv.Itoa(i)), &MetaWork{ID: "n"}, positiveTTL)
+	}
+	check("quota eviction")
+	if c.counts[nsWork] != maxWorkEntries {
+		t.Fatalf("work entries = %d, want %d", c.counts[nsWork], maxWorkEntries)
+	}
+
+	// Past the global cap with entries no quota covers: arbitrary evictions may
+	// take quota entries too.
+	for i := range cacheCap {
+		cachePut(c, nsASIN.key("B"+strconv.Itoa(i)), &Enrichment{Matched: true}, positiveTTL)
+	}
+	check("global eviction")
+}
+
+// owned counts the entries of ns in the map.
+func owned(c *cache, ns keyspace) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for k := range c.m {
+		if ns.owns(k) {
+			n++
+		}
+	}
+	return n
 }
 
 var errTest = errTestType("boom")

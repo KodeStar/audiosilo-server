@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -381,6 +382,68 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"candidates": cands})
+}
+
+// maxWorkBooks caps one POST /admin/books/works: more books than a real series
+// holds, and a bound on the upstream lookups one request can start.
+const maxWorkBooks = 100
+
+// bookWork is one entry of POST /admin/books/works, in request order. WorkID is
+// the community work the book's ASIN/ISBN resolves to, "" when it has none, has
+// no match, or the lookup failed. Failed is true only for the last: the lookup
+// failed or ran out of time, so asking again later may resolve it.
+type bookWork struct {
+	LibraryID int64  `json:"library_id"`
+	Path      string `json:"path"`
+	WorkID    string `json:"work_id"`
+	Failed    bool   `json:"failed"`
+}
+
+// handleAdminBookWorks serves POST /admin/books/works {"books":[{library_id,path}]}:
+// which community work each book is, so the Series screen can place an owned book
+// on a series rail by identity rather than by its series_index. The resolution
+// (cached, bounded, under the compose budget) is meta.Service.WorkIDs.
+//
+// Responses: metadata off -> 404 (code metadata_off); otherwise 200
+// {"works": [...]}, each entry saying whether its own lookup failed. A ref naming
+// no indexed book is answered with an empty work_id (not failed), like a book
+// without identifiers.
+func (a *API) handleAdminBookWorks(w http.ResponseWriter, r *http.Request) {
+	if !a.metadataOn() {
+		writeErrorCode(w, http.StatusNotFound, codeMetadataOff, "community metadata is turned off")
+		return
+	}
+	var req struct {
+		Books []catalog.Ref `json:"books"`
+	}
+	if err := decodeJSON(r, &req, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	switch {
+	case len(req.Books) == 0:
+		writeError(w, http.StatusBadRequest, "books is required")
+		return
+	case len(req.Books) > maxWorkBooks:
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("too many books in one request (at most %d)", maxWorkBooks))
+		return
+	}
+	found, err := a.cat.BooksByRefs(r.Context(), req.Books)
+	if err != nil {
+		a.writeCatalogError(w, err, "load books for work ids failed", "could not load books")
+		return
+	}
+	ids := make([]meta.BookIDs, len(found))
+	for i, b := range found {
+		ids[i] = meta.BookIDs{ASIN: b.ASIN, ISBN: b.ISBN}
+	}
+	works := a.meta.WorkIDs(r.Context(), ids)
+	out := make([]bookWork, len(req.Books))
+	for i, ref := range req.Books {
+		out[i] = bookWork{LibraryID: ref.LibraryID, Path: ref.Path, WorkID: works[i].ID, Failed: works[i].Failed}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"works": out})
 }
 
 // handleAdminSetCover serves PUT /admin/libraries/{id}/cover?path=: upload a custom
