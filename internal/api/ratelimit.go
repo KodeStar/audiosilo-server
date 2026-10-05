@@ -130,8 +130,10 @@ func (l *limiter) sweep(now time.Time) {
 	}
 }
 
-// ipRateLimiter is a per-IP token-bucket limiter for overall request rate.
-type ipRateLimiter struct {
+// rateLimiter is a token-bucket limiter on request rate, one bucket per key: the
+// client IP for the general API, the credential for authenticated media (see
+// rateLimit and requireMediaAuth).
+type rateLimiter struct {
 	mu        sync.Mutex
 	rate      float64 // tokens per second
 	burst     float64 // bucket capacity
@@ -146,7 +148,7 @@ type bucket struct {
 	last   time.Time
 }
 
-func newIPRateLimiter(ratePerSec, burst float64) *ipRateLimiter {
+func newRateLimiter(ratePerSec, burst float64) *rateLimiter {
 	// A bucket idle long enough to refill to full is equivalent to a fresh one,
 	// so it can be evicted. Use the refill time (with margin), floored at 1 min.
 	idle := time.Minute
@@ -155,7 +157,7 @@ func newIPRateLimiter(ratePerSec, burst float64) *ipRateLimiter {
 			idle = refill
 		}
 	}
-	return &ipRateLimiter{
+	return &rateLimiter{
 		rate:    ratePerSec,
 		burst:   burst,
 		buckets: map[string]*bucket{},
@@ -165,8 +167,8 @@ func newIPRateLimiter(ratePerSec, burst float64) *ipRateLimiter {
 }
 
 // sweep drops buckets idle long enough to have refilled to full, bounding memory
-// under a flood of distinct IPs. Runs at most once per idleTTL (caller holds lock).
-func (r *ipRateLimiter) sweep(now time.Time) {
+// under a flood of distinct keys. Runs at most once per idleTTL (caller holds lock).
+func (r *rateLimiter) sweep(now time.Time) {
 	if now.Sub(r.lastSweep) < r.idleTTL {
 		return
 	}
@@ -178,25 +180,48 @@ func (r *ipRateLimiter) sweep(now time.Time) {
 	}
 }
 
-// Allow consumes one token for ip, refilling based on elapsed time.
-func (r *ipRateLimiter) Allow(ip string) bool {
+// refill returns key's bucket (a full one when it has none) topped up for the
+// time since its last use. Caller holds the lock.
+func (r *rateLimiter) refill(key string, now time.Time) *bucket {
+	r.sweep(now)
+	b := r.buckets[key]
+	if b == nil {
+		b = &bucket{tokens: r.burst, last: now}
+		r.buckets[key] = b
+	}
+	b.tokens = min(b.tokens+now.Sub(b.last).Seconds()*r.rate, r.burst)
+	b.last = now
+	return b
+}
+
+// Allow consumes one token for key, refilling based on elapsed time.
+func (r *rateLimiter) Allow(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	now := r.now()
-	r.sweep(now)
-	b := r.buckets[ip]
-	if b == nil {
-		r.buckets[ip] = &bucket{tokens: r.burst - 1, last: now}
-		return true
-	}
-	b.tokens += now.Sub(b.last).Seconds() * r.rate
-	if b.tokens > r.burst {
-		b.tokens = r.burst
-	}
-	b.last = now
+	b := r.refill(key, r.now())
 	if b.tokens < 1 {
 		return false
 	}
 	b.tokens--
 	return true
+}
+
+// Ready reports whether key has a token to spend, without spending it.
+func (r *rateLimiter) Ready(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.refill(key, r.now()).tokens >= 1
+}
+
+// Charge spends one token for key whether or not one is left, for work already
+// done (a token lookup that passed Ready). Concurrent requests that all passed
+// Ready before any of them was charged each pay, so the bucket can go into debt
+// and Ready stays false until the debt is repaid. The debt stops at -burst: that
+// bounds how long one address can be shut out, and a bucket idle for idleTTL
+// (at least two full refills) has still repaid it before sweep drops it.
+func (r *rateLimiter) Charge(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	b := r.refill(key, r.now())
+	b.tokens = max(b.tokens-1, -r.burst)
 }

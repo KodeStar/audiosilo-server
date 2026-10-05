@@ -81,11 +81,12 @@ type API struct {
 	// bootstraps the admin via the printed first-run banner instead).
 	setupToken string
 
-	loginLimiter   *limiter // per-IP lockout for password login
-	redeemLimiter  *limiter // per-IP lockout for auth-code redemption
-	demoLimiter    *limiter // per-IP cap on demo account creation
-	accountLimiter *limiter // per-IP cap on self-service password/recovery mutations
-	ipLimiter      *ipRateLimiter
+	loginLimiter   *limiter     // per-IP lockout for password login
+	redeemLimiter  *limiter     // per-IP lockout for auth-code redemption
+	demoLimiter    *limiter     // per-IP cap on demo account creation
+	accountLimiter *limiter     // per-IP cap on self-service password/recovery mutations
+	ipLimiter      *rateLimiter // general request rate, per IP (see rateLimit)
+	mediaLimiter   *rateLimiter // authenticated media rate, per credential (see requireMediaAuth)
 
 	// transcodeSem bounds the number of concurrent ffmpeg transcodes. Each transcode
 	// is a long-lived process pinning roughly a core; without a cap a single client
@@ -131,7 +132,8 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		redeemLimiter:  newLimiter(10, 15*time.Minute),
 		demoLimiter:    newLimiter(5, 15*time.Minute),  // ≤5 demo accounts per IP / 15 min
 		accountLimiter: newLimiter(10, 15*time.Minute), // ≤10 password/recovery mutations per IP / 15 min
-		ipLimiter:      newIPRateLimiter(20, 40),       // ~20 req/s, burst 40, per IP
+		ipLimiter:      newRateLimiter(50, 200),        // ~50 req/s, burst 200, per IP
+		mediaLimiter:   newRateLimiter(200, 2000),      // ~200 req/s, burst 2000, per credential
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
@@ -345,7 +347,7 @@ func (a *API) Handler() http.Handler {
 	}
 
 	// Global middleware (outermost first): security headers, CORS, real-IP,
-	// per-IP rate limiting, then a per-request timeout. timeout is innermost so it
+	// rate limiting by route class, then a per-request timeout. timeout is innermost so it
 	// bounds only the handler/DB work (not the rate-limit/CORS layers) and so a
 	// stuck DB connection fails fast with 503 instead of hanging forever.
 	var h http.Handler = mux

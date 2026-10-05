@@ -67,10 +67,10 @@ func TestLimiterReset(t *testing.T) {
 	}
 }
 
-// ipRateLimiter is the per-IP token bucket on overall request rate.
-func TestIPRateLimiterBucket(t *testing.T) {
+// rateLimiter is the token bucket on request rate (per IP, or per credential for media).
+func TestRateLimiterBucket(t *testing.T) {
 	now := time.Now()
-	r := newIPRateLimiter(10, 2) // 10 tokens/sec, burst of 2
+	r := newRateLimiter(10, 2) // 10 tokens/sec, burst of 2
 	r.now = func() time.Time { return now }
 	const ip = "9.9.9.9"
 
@@ -90,10 +90,79 @@ func TestIPRateLimiterBucket(t *testing.T) {
 	}
 }
 
-// A flood of distinct IPs must not grow the bucket map without bound.
-func TestIPRateLimiterEviction(t *testing.T) {
+// Ready reports whether a token is left without spending it: media checks it
+// before authenticating, so a throttled address can't run token lookups.
+func TestRateLimiterReady(t *testing.T) {
 	now := time.Now()
-	r := newIPRateLimiter(20, 40)
+	r := newRateLimiter(10, 2)
+	r.now = func() time.Time { return now }
+	const ip = "9.9.9.9"
+
+	for range 5 {
+		if !r.Ready(ip) {
+			t.Fatal("a fresh key must be ready, however often it is asked")
+		}
+	}
+	r.Allow(ip)
+	r.Allow(ip)
+	if r.Ready(ip) {
+		t.Fatal("an empty bucket must not be ready")
+	}
+	now = now.Add(100 * time.Millisecond) // refills one token
+	for range 3 {
+		if !r.Ready(ip) {
+			t.Fatal("a refilled bucket must be ready, and asking must not spend it")
+		}
+	}
+	if !r.Allow(ip) || r.Allow(ip) {
+		t.Fatal("exactly the one refilled token must be left to spend")
+	}
+}
+
+// Charge pays for work already done even past empty: requests that all passed
+// Ready together each pay, so the bucket goes into debt (down to -burst) and
+// stays not ready until the debt is repaid.
+func TestRateLimiterCharge(t *testing.T) {
+	now := time.Now()
+	r := newRateLimiter(10, 2)
+	r.now = func() time.Time { return now }
+	const ip = "9.9.9.9"
+
+	// Four requests passed Ready on a full bucket of two before any was charged.
+	for range 4 {
+		r.Charge(ip)
+	}
+	now = now.Add(200 * time.Millisecond) // refills two tokens: back to zero
+	if r.Ready(ip) || r.Allow(ip) {
+		t.Fatal("a bucket still repaying its debt must not be ready")
+	}
+	now = now.Add(100 * time.Millisecond) // one more: a token to spend
+	if !r.Ready(ip) {
+		t.Fatal("a bucket that has repaid its debt must be ready")
+	}
+
+	// However many are charged, the debt stops at -burst: from there three
+	// tokens (300 ms) make it ready again.
+	for range 100 {
+		r.Charge(ip)
+	}
+	now = now.Add(200 * time.Millisecond)
+	if r.Ready(ip) {
+		t.Fatal("a bucket at the debt floor must not be ready before it refills to one")
+	}
+	now = now.Add(100 * time.Millisecond)
+	if !r.Ready(ip) {
+		t.Fatal("the debt must stop at -burst")
+	}
+	if r.Charge("8.8.8.8"); !r.Ready("8.8.8.8") {
+		t.Fatal("another key must keep its own bucket")
+	}
+}
+
+// A flood of distinct IPs must not grow the bucket map without bound.
+func TestRateLimiterEviction(t *testing.T) {
+	now := time.Now()
+	r := newRateLimiter(20, 40)
 	r.now = func() time.Time { return now }
 	for i := 0; i < 100; i++ {
 		r.Allow(fmt.Sprintf("10.0.0.%d", i))

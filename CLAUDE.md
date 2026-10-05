@@ -481,17 +481,24 @@ admin overrides; see Metadata overrides below).
   thumbnails as `data:` URLs in request order (`""` = no art), resolved like
   `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
   one `catalog.CoverSources` query per library for the whole batch.
-  One request per page of covers instead of one per cover (the per-IP limiter
-  allows a burst of 40), no token in any URL, ~20 KB a cover instead of full art.
-  (The limiter counts every request except the static files `web.Register`
-  mounts, `web.IsStatic` via `mux.Handler`: a cold console page is forty-odd
-  chunks.)
+  One request per page of covers instead of one per cover, no token in any URL,
+  ~20 KB a cover instead of full art.
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
   (decompression bombs), `media.ThumbCache` is a byte-bounded LRU keyed by the art's
   version (custom `updated_at`, file size + mtime) holding finished data: URLs, and
   `thumbSem` bounds decodes (reads are bounded per request, outside it). Admin book rows
   carry `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
+- **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
+  `api/ratelimit.go`), read off the handler `mux.Handler` picks: static files
+  (`web.IsStatic`) are not counted; media routes (`requireMediaAuth`, whose
+  `mediaHandler` marks cover/stream) limit themselves: refused while the address's
+  general bucket is empty (`Ready`), a failed authentication charges it (`Charge`:
+  even past empty, down to -burst, so requests that passed `Ready` together all pay), an
+  authenticated one spends from `mediaLimiter` (~200/s, burst 2000, per credential id)
+  and charges the address's bucket when that refuses it (the lookup was already done);
+  everything else spends from `ipLimiter` (~50/s, burst 200, per IP). The brute-force
+  lockouts (`limiter`) are separate. Tests: `ratelimit_routes_test.go`.
 - **Job queue, scan history, schedules, ignore rules (admin redesign Phase 3, `library/jobs.go`,
   `schedule.go`, `ignore.go`, `problems.go`)**: every scan (startup, schedule, admin rescan, a
   library or folder-setting change) goes through `Scanner.Enqueue`; `Scanner.Start` runs ONE

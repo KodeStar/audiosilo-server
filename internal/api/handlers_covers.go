@@ -22,9 +22,8 @@ import (
 // bearer token, which must never ride in a URL (proxy logs, history), and its CSP
 // allows images only from 'self' and data:. So it fetches covers itself and shows
 // them as data: URLs - and a grid of a few hundred covers must not cost a few
-// hundred requests (the per-IP limiter allows a burst of 40) or megabytes of
-// full-size art for 158px tiles. One request returns up to maxCoverBatch small
-// JPEG thumbnails, each already a data: URL.
+// hundred requests or megabytes of full-size art for 158px tiles. One request
+// returns up to maxCoverBatch small JPEG thumbnails, each already a data: URL.
 
 const (
 	// maxCoverBatch caps one request: about a screenful of a cover grid.
