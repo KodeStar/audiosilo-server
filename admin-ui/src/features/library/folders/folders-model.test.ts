@@ -4,6 +4,9 @@ import {
   ancestorsOf,
   audioFilesOf,
   entryIn,
+  joinChoices,
+  offersBook,
+  offersCollection,
   treeKeyAction,
   treeRows,
   visibleListings,
@@ -184,4 +187,53 @@ describe('a folder', () => {
     expect(modeOf('auto')).toBeNull();
     expect(modeOf('book')).toBe('book');
   });
+});
+
+it('offers the choices that mean something for a folder', () => {
+  // Audio of its own: every choice.
+  expect(joinChoices(3, {}, [])).toEqual({
+    enabled: ['auto', 'book', 'collection'],
+    joinable: false,
+    subBooks: 0,
+  });
+  // Audio only in its disc folders: joined into one book, or each its own; nothing to split.
+  expect(
+    joinChoices(0, { split_discs: true }, [
+      dir('B/CD1', { is_book: true }),
+      dir('B/CD2', { is_book: true }),
+      dir('B/Art'),
+    ]),
+  ).toEqual({
+    enabled: ['auto', 'book'],
+    joinable: true,
+    subBooks: 2,
+  });
+  // Already joined (its discs are no books of their own any more).
+  expect(joinChoices(0, { override: 'book', is_book: true }, [])).toMatchObject({
+    enabled: ['auto', 'book'],
+    joinable: true,
+  });
+  // A folder of books that aren't discs (an author's, a series'): the server joins
+  // nothing there, so only clearing an override it carries (one set before).
+  const books = [dir('A/One', { is_book: true }), dir('A/Two', { is_book: true })];
+  expect(joinChoices(0, {}, books).enabled).toEqual([]);
+  expect(joinChoices(0, { override: 'book' }, books)).toMatchObject({
+    enabled: ['auto'],
+    joinable: false,
+  });
+  expect(joinChoices(0, { override: 'collection' }, []).enabled).toEqual(['auto']);
+});
+
+it('offers "Always one book" in the detection dialog where it means something', () => {
+  expect(offersBook({ is_book: true })).toBe(true); // a book (its own audio, or joined)
+  expect(offersBook({ split_discs: true })).toBe(true); // discs to join
+  expect(offersBook({ override: 'collection' })).toBe(true); // its own audio, split
+  expect(offersBook({ override: 'book' })).toBe(true); // what it is set to
+  expect(offersBook({})).toBe(false); // a folder of books, or of nothing
+});
+
+it('offers "Separate books" in the detection dialog except on discs to join', () => {
+  expect(offersCollection({})).toBe(true);
+  expect(offersCollection({ split_discs: true })).toBe(false); // no files of its own to split
+  expect(offersCollection({ split_discs: true, override: 'collection' })).toBe(true); // as set
 });

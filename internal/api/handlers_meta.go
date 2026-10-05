@@ -25,13 +25,16 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "metadata lookup not enabled")
 		return
 	}
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	book, err := a.bookForPath(r.Context(), lib, path)
+	book, err := a.bookForPath(r.Context(), lib, scope, path)
 	switch {
+	case errors.Is(err, library.ErrNotAllowed):
+		writeError(w, http.StatusForbidden, msgNoPathAccess)
+		return
 	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no book at that path")
 		return

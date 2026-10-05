@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 
@@ -38,8 +39,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
 			     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
 			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
-			     scan_error, scan_error_file, scan_error_detail, suspect_parts)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -51,7 +52,7 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     has_cover=excluded.has_cover, scanned=excluded.scanned,
 			     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
 			     scan_error_detail=excluded.scan_error_detail,
-			     suspect_parts=excluded.suspect_parts
+			     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -59,7 +60,7 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
 			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
 			b.Published, b.Description, hasCover, scanned,
-			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts).Scan(&id); err != nil {
+			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -207,6 +208,9 @@ type Signature struct {
 	// ScanError and ScanErrorFile are the read problem the last indexing recorded
 	// (books.scan_error), so a scan can look at that file again.
 	ScanError, ScanErrorFile string
+	// SplitParent is books.split_parent as stored, so a scan records a change to it
+	// (a disc folder's sibling added or gone) without re-indexing the book.
+	SplitParent string
 }
 
 // Signatures returns the stored mtime/size for every book in a library, keyed
@@ -214,7 +218,7 @@ type Signature struct {
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
-		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file
+		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -226,7 +230,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var sig Signature
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
-			&sig.ScanError, &sig.ScanErrorFile); err != nil {
+			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent); err != nil {
 			return nil, err
 		}
 		out[rel] = sig
@@ -270,6 +274,55 @@ func (c *Catalog) SetSuspectParts(ctx context.Context, libraryID int64, parts ma
 		}
 		return nil
 	})
+}
+
+// SetSplitParent records, by path, which books are discs of a book split across
+// disc folders (the folder holding them; "" = not one), for books a scan left
+// unchanged, in one transaction.
+func (c *Catalog) SetSplitParent(ctx context.Context, libraryID int64, parents map[string]string) error {
+	if len(parents) == 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "SetSplitParent", func(tx *sql.Tx) error {
+		for relPath, parent := range parents {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET split_parent = ? WHERE library_id = ? AND rel_path = ?`,
+				parent, libraryID, relPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// SplitFolders reports which of folders (library-relative) hold a book split across
+// disc folders whose discs are indexed as books of their own: a split_parent of
+// some book. The admin console offers "Always one book", which joins them, on
+// those (and on a folder already joined).
+func (c *Catalog) SplitFolders(ctx context.Context, libraryID int64, folders []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(folders) == 0 {
+		return out, nil
+	}
+	args := []any{libraryID}
+	for _, f := range folders {
+		args = append(args, f)
+	}
+	rows, err := c.db.QueryContext(ctx, `SELECT DISTINCT split_parent FROM books
+		WHERE library_id = ? AND split_parent <> '' AND split_parent IN (`+
+		strings.Repeat("?,", len(folders)-1)+`?)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out[p] = true
+	}
+	return out, rows.Err()
 }
 
 // DeleteBooksNotIn removes books in a library whose rel_path is not in keep and
@@ -343,6 +396,38 @@ func scanBook(row interface{ Scan(...any) error }) (*Book, error) {
 // and chapters. Used by the resolve endpoint to map a browsed path to a book.
 func (c *Catalog) GetBookByPath(ctx context.Context, libraryID int64, relPath string) (*Book, error) {
 	id, err := bookIDByPath(ctx, c.db, libraryID, relPath)
+	if err != nil {
+		return nil, err
+	}
+	return c.GetBook(ctx, id)
+}
+
+// GetBookHolding returns the indexed folder book holding relPath below its own
+// path: a folder book above relPath one of whose files is relPath or lies under it
+// (a part of a folder book; a disc folder of a joined book, or a file in one). The
+// innermost such book wins; ErrNotFound when there is none. It answers a path a
+// client still holds after a join (a disc folder's) from the index, where
+// GetBookByPath, by the book's own path, finds nothing.
+func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath string) (*Book, error) {
+	args := []any{libraryID}
+	for d := path.Dir(relPath); d != "." && d != "/"; d = path.Dir(d) {
+		args = append(args, d)
+	}
+	if len(args) == 1 {
+		return nil, ErrNotFound
+	}
+	n := len(args) - 1
+	args = append(args, relPath, escapeLike(relPath)+"/%")
+	var id int64
+	err := c.db.QueryRowContext(ctx,
+		`SELECT b.id FROM books b
+		  WHERE b.library_id = ? AND b.is_folder = 1 AND b.rel_path IN (`+placeholders(n)+`)
+		    AND EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id
+		                  AND (f.rel_path = ? OR f.rel_path LIKE ? ESCAPE '\'))
+		  ORDER BY length(b.rel_path) DESC LIMIT 1`, args...).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}

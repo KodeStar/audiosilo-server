@@ -701,6 +701,10 @@ func TestScannerFolderOverrides(t *testing.T) {
 	if err != nil || b.IsFolder || b.RelPath != "Will Wight/Cradle/01 - Unsouled.m4b" {
 		t.Fatalf("IndexPath under collection override should be the single-file book: %+v (err %v)", b, err)
 	}
+	// The folder itself is no book then.
+	if b, err := scanner.IndexPath(ctx, *lib, "Will Wight/Cradle"); !errors.Is(err, ErrNotIndexable) {
+		t.Fatalf("IndexPath of a collection folder = %+v (err %v), want ErrNotIndexable", b, err)
+	}
 
 	// Clearing reverts to one folder book.
 	if err := cat.DeleteFolderOverride(ctx, lib.ID, "Will Wight/Cradle"); err != nil {

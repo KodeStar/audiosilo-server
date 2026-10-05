@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -124,9 +125,15 @@ const maxAddedTitles = 5
 var ErrLibraryUnavailable = errors.New("library root unavailable; skipping scan to protect the index")
 
 // ErrNotIndexable means a resolved path is not a book (e.g. a directory that
-// holds no audio directly, or a directory the detector treats as a collection of
-// separate books rather than one book), or one the library's ignore rules skip.
+// holds no audio directly and isn't joined into one, or a directory the detector
+// treats as a collection of separate books rather than one book), or one the
+// library's ignore rules skip.
 var ErrNotIndexable = errors.New("path is not an indexable book")
+
+// ErrNotAllowed means the book a path resolves to lies outside what the caller may
+// reach (IndexPathWithin): a disc folder of a joined book, say, for a caller
+// granted only the disc. Nothing was indexed.
+var ErrNotAllowed = errors.New("the book at that path is outside the caller's scope")
 
 // coverNames are sibling image files treated as a book's cover.
 var coverNames = []string{"cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.png"}
@@ -219,18 +226,34 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			ErrLibraryUnavailable, lib.Root, len(sigs))
 	}
 
+	// The paths discovery found, built once: what detectMoves and splitFrom compare
+	// the index with, and the prune's keep (every book found stays; carryJoinedState
+	// adds the books it couldn't carry from, after both have read it).
+	keep := make(map[string]bool, len(books))
+	for _, b := range books {
+		keep[b.RelPath] = true
+	}
+
 	// Carry user state across moved/renamed files before indexing. A moved book is
 	// counted once, as moved: not as new at its new path, nor as removed at its old.
-	moves := s.detectMoves(ctx, lib, sigs, books, rl)
+	moves := s.detectMoves(ctx, lib, sigs, books, keep, rl)
 	res.Moved = len(moves)
 	movedTo := make(map[string]bool, len(moves))
 	for _, to := range moves {
 		movedTo[to] = true
 	}
 
-	keep := make(map[string]bool, len(books))
+	// Books a folder's joined book splits back into (its `book` override removed);
+	// the folder's book went, and they are no new content.
+	split := s.splitFrom(ctx, lib, books, keep, sigs, moves)
+	splitRoots := make(map[string]bool, len(split))
+	for _, root := range split {
+		splitRoots[root] = true
+	}
+
 	coverBackfill := map[string]bool{}
 	suspectBackfill := map[string]int{}
+	splitBackfill := map[string]string{}
 	lastLog := time.Now()
 	report := func(done int) {
 		s.updateProgress(lib.ID, func(p *ScanProgress) {
@@ -249,7 +272,6 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Info("scan progress", "library", lib.Name, "done", i, "total", len(books), "indexed", res.Added+res.Updated)
 			lastLog = time.Now()
 		}
-		keep[b.RelPath] = true
 		old, existed := sigs[b.RelPath]
 		if existed && old.MTime == b.MTime && old.Size == b.Size &&
 			(s.ffprobePath == "" || (old.Duration > 0 && old.Codec != "")) &&
@@ -257,12 +279,17 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// Unchanged since last scan; only skip the probe when ffprobe is
 			// disabled, or a prior probe already stored both duration and codec
 			// (so books indexed before the codec column get it backfilled).
+			// Whether it is a disc of a split book turns on its siblings, so it can
+			// change while the book doesn't (and starts unset before migration 0022).
+			if old.SplitParent != b.SplitParent {
+				splitBackfill[b.RelPath] = b.SplitParent
+			}
 			if old.ContentHash != "" {
 				// Rows indexed before migration 0016 have no cover flag; fill it with a
 				// tag read (no ffprobe) rather than re-indexing the book.
 				// A file that can't be opened right now (a flaky mount) is left unknown
 				// for the next scan rather than recorded as having no cover.
-				primary := filepath.Join(lib.Root, filepath.FromSlash(primaryPath(b)))
+				primary := absOf(lib, primaryPath(b))
 				if old.HasCover == nil && readable(primary) {
 					_, _, coverBackfill[b.RelPath] = media.EmbeddedCover(primary)
 				}
@@ -281,7 +308,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			// first: if the file still can't be read, the full re-enrich would fail
 			// the same way, so a persistently unreadable book costs one cheap
 			// failed open per scan instead of an ffprobe sweep forever.
-			b.ContentHash = fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primaryPath(b))))
+			b.ContentHash = fingerprintFile(absOf(lib, primaryPath(b)))
 			if b.ContentHash == "" {
 				continue
 			}
@@ -302,7 +329,11 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		switch {
 		case existed:
 			res.Updated++
-		case !movedTo[b.RelPath]:
+		case !movedTo[b.RelPath] && !joinsIndexed(b, sigs) && split[b.RelPath] == "":
+			// New content. A moved book is counted as moved, a book joined from disc
+			// books already indexed is a reshape logged as joined (carryJoinedState),
+			// and a disc split back out of a joined book one logged as split (below):
+			// none is new, nor announced as added.
 			res.Added++
 			if len(res.AddedTitles) < maxAddedTitles {
 				res.AddedTitles = append(res.AddedTitles, b.Title)
@@ -315,6 +346,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	if err := s.cat.SetSuspectParts(ctx, lib.ID, suspectBackfill); err != nil {
 		s.log.Warn("record suspect folders failed", "library", lib.Name, "err", err)
+	}
+	if err := s.cat.SetSplitParent(ctx, lib.ID, splitBackfill); err != nil {
+		s.log.Warn("record split discs failed", "library", lib.Name, "err", err)
 	}
 
 	// Only prune when discovery saw the whole tree. If a subtree was unreadable
@@ -335,13 +369,22 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
+		// Books a folder now joins into one hand their state to it first (logged as
+		// joined, not removed); like the prune, this runs to completion once begun.
+		joinedFrom := s.carryJoinedState(context.WithoutCancel(ctx), lib, sigs, overrides, keep, moves, rl)
 		removed, err := s.cat.DeleteBooksNotIn(context.WithoutCancel(ctx), lib.ID, keep)
 		if err != nil {
 			return res, err
 		}
 		for _, p := range removed {
-			if _, moved := moves[p]; moved {
-				continue // the book moved (logged as moved), it wasn't removed
+			if _, moved := moves[p]; moved || joinedFrom[p] {
+				continue // the book moved or was joined (logged as such), it wasn't removed
+			}
+			if splitRoots[p] {
+				// A joined book split back into its discs: a reshape, not a removal.
+				s.log.Info("split into its discs", "library", lib.Name, "path", p)
+				rl.add("info", "split", func(e *catalog.RunEvent) { e.Path = p })
+				continue
 			}
 			res.Removed++
 			rl.add("info", "removed", func(e *catalog.RunEvent) { e.Path = p })
@@ -410,7 +453,7 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	base := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
 	b.Title, b.Author, b.Series, b.SeriesIndex = base.Title, base.Author, base.Series, base.SeriesIndex
 
-	abs := filepath.Join(lib.Root, filepath.FromSlash(primary))
+	abs := absOf(lib, primary)
 	md, _ := metadata.Extract(abs, s.ffprobePath)
 	b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "", "", ""
 	if !b.IsFolder {
@@ -455,13 +498,18 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	// Sibling cover art takes precedence; otherwise the cover handler falls back
 	// to embedded art from the primary file. A folder book's art lives INSIDE the
 	// book folder; a loose single-file book's art sits in the same directory.
-	bookAbs := filepath.Join(lib.Root, filepath.FromSlash(b.RelPath))
+	bookAbs := absOf(lib, b.RelPath)
 	if b.IsFolder {
 		b.CoverPath = findCover(lib.Root, bookAbs, true)
 		// A multi-CD book's art often sits in the parent (e.g. ".../Book/CD1" with
 		// the cover in ".../Book"); fall back there for disc-part subfolders.
 		if b.CoverPath == "" && isDiscFolder(filepath.Base(bookAbs)) {
 			b.CoverPath = findCover(lib.Root, filepath.Dir(bookAbs), true)
+		}
+		// A folder joined from its disc folders: its own art first (above), then the
+		// first disc's.
+		if first := dirOf(primary); b.CoverPath == "" && first != b.RelPath {
+			b.CoverPath = findCover(lib.Root, absOf(lib, first), true)
 		}
 	} else {
 		b.CoverPath = findCover(lib.Root, filepath.Dir(bookAbs), false)
@@ -584,7 +632,7 @@ func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
 	parts := make([]partFacts, 0, len(b.Files))
 	for i := range b.Files {
 		f := &b.Files[i]
-		abs := filepath.Join(lib.Root, filepath.FromSlash(f.RelPath))
+		abs := absOf(lib, f.RelPath)
 		md, _ := metadata.Extract(abs, s.ffprobePath)
 		noteProblem(b, f.RelPath, f.Size, md)
 		var dur float64
@@ -612,7 +660,7 @@ func (s *Scanner) buildMultiFileChapters(lib catalog.Library, b *catalog.Book) {
 		} else {
 			b.Chapters = append(b.Chapters, metadata.Chapter{
 				Index:      idx,
-				Title:      partTitle(f.RelPath),
+				Title:      joinedPartTitle(b.RelPath, f.RelPath),
 				FileIndex:  f.Seq,
 				FilePath:   f.RelPath,
 				Start:      0,
@@ -648,7 +696,8 @@ func partTitle(relPath string) string {
 // contains audio files on its own - so a mixed library (some folders are one
 // multi-file book, others hold several single-file books) is handled without any
 // layout setting. overrides forces a folder's interpretation when the heuristic
-// gets it wrong (see booksInDir).
+// gets it wrong (see booksInDir); a `book` override on a folder whose audio lives
+// only in its disc folders joins them into one book (see discSets, joinedBook).
 // The bool return reports whether discovery hit any per-entry error (an
 // unreadable/permission-denied subtree on a partially-mounted share). When true,
 // the caller must NOT prune: the books under the failed subtree are absent from the
@@ -667,23 +716,65 @@ func partTitle(relPath string) string {
 // is a link. (Not os.DirFS: it refuses folder names that aren't valid UTF-8,
 // which a Linux share can hold, and every scan would then read as partial.)
 func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string]string, ignore *Ignore, log *slog.Logger, rl *runLog) (books []*catalog.Book, hadErrors bool, err error) {
-	dirs := map[string]bool{}
-	rootClean := filepath.Clean(lib.Root)
 	walkRoot := lib.Root
 	if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
 		walkRoot = resolved
 	}
-	err = filepath.WalkDir(walkRoot, func(p string, d fs.DirEntry, walkErr error) error {
+	dirs, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl)
+	if err != nil {
+		return nil, hadErrors, err
+	}
+	return booksOf(lib, dirs, overrides), hadErrors, nil
+}
+
+// booksOf turns the folders that directly hold audio (dirs: library-relative, with
+// their audio files, as audioDirs found them for the whole library) into books:
+// each folder's own (booksInDir), except that the disc folders of a disc set with a
+// `book` override (discSets, joinRoot) make one book of their folder (joinedBook).
+// The discs of a disc set not joined are marked as such (markSplitDiscs).
+func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[string]string) []*catalog.Book {
+	sets := discSets(maps.Keys(dirs))
+	isDiscSet := func(p string) bool { return sets[p] }
+	var books []*catalog.Book
+	joined := map[string]map[string][]audioFile{}
+	for rel, audio := range dirs {
+		if root, ok := joinRoot(overrides, rel, isDiscSet); ok {
+			if joined[root] == nil {
+				joined[root] = map[string][]audioFile{}
+			}
+			joined[root][rel] = audio
+			continue
+		}
+		books = append(books, booksInDir(lib, rel, audio, overrides)...)
+	}
+	for root, discs := range joined {
+		if b := joinedBook(lib, root, discs); b != nil {
+			books = append(books, b)
+		}
+	}
+	markSplitDiscs(books, sets)
+	return books
+}
+
+// audioDirs walks walkFrom (the folder at library-relative fromRel, "" for the
+// root) and returns the folders under it that directly hold audio, library-relative,
+// each with its audio files in name order: the files audioEntries would list, read
+// in the same walk rather than again. Hidden and ignored entries are skipped as
+// discovery does; see discoverAuto for hadErrors and rl. walkFrom itself is never
+// skipped, even when its own name begins with a dot.
+func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog) (dirs map[string][]audioFile, hadErrors bool, err error) {
+	dirs = map[string][]audioFile{}
+	err = filepath.WalkDir(walkFrom, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		rel := relPathOf(walkRoot, p) // "" for the root
+		rel := path.Join(fromRel, relPathOf(walkFrom, p))
 		if walkErr != nil {
 			// Warn and skip just the unreadable entry rather than aborting the whole
 			// scan, but record that discovery was partial so the caller skips pruning.
 			hadErrors = true
 			log.Warn("skipping unreadable path during discovery",
-				"library", lib.Name, "path", filepath.Join(lib.Root, filepath.FromSlash(rel)), "err", walkErr)
+				"library", lib.Name, "path", absOf(lib, rel), "err", walkErr)
 			if rl != nil {
 				rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
 					e.Path, e.Detail = rel, pathErrText(walkErr)
@@ -694,27 +785,33 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 		if d.IsDir() {
 			// Skip hidden directories (.Trash-1000, Syncthing .stversions, .git) so
 			// their audio isn't indexed into books unreachable via the fs browse view
-			// (which also hides them). Never skip the library root itself, even when
-			// its own name begins with a dot.
-			if rel != "" && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))) {
+			// (which also hides them).
+			if rel != fromRel && (isHidden(d.Name()) || (!ignore.Empty() && ignore.Match(rel, true))) {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if isHidden(d.Name()) || !metadata.IsAudio(d.Name()) ||
-			(!ignore.Empty() && ignore.Match(rel, false)) {
+		if !isAudioEntry(d, rel, ignore) {
 			return nil
 		}
-		dirs[filepath.Join(lib.Root, filepath.FromSlash(path.Dir(rel)))] = true
+		dir := dirOf(rel)
+		dirs[dir] = append(dirs[dir], audioFile{abs: absOf(lib, rel), de: d})
 		return nil
 	})
-	if err != nil {
-		return nil, hadErrors, err
-	}
-	for dir := range dirs {
-		books = append(books, booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides, ignore)...)
-	}
-	return books, hadErrors, nil
+	return dirs, hadErrors, err
+}
+
+// isAudioEntry reports whether a directory entry (at library-relative rel) is an
+// audio file discovery reads: not a folder, not hidden, an audio extension, and
+// not ignored. The walk and audioEntries share it, so both see the same files.
+func isAudioEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
+	return !de.IsDir() && !isHidden(de.Name()) && metadata.IsAudio(de.Name()) &&
+		(ignore.Empty() || !ignore.Match(rel, false))
+}
+
+// absOf is the folder or file at a library-relative path, named under lib.Root.
+func absOf(lib catalog.Library, rel string) string {
+	return filepath.Join(lib.Root, filepath.FromSlash(rel))
 }
 
 // booksInDir turns the audio files directly inside absDir into books. The model
@@ -724,57 +821,65 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 // exceptions: audio sitting directly in the library root has no enclosing book
 // folder, so each such file is its own single-file book ("flat"); and a folder of
 // loose single-file books (one book per file) is expressed with the `collection`
-// override. `book` forces the folder-is-one-book reading (e.g. at the root).
-func booksInDir(lib catalog.Library, absDir string, isRoot bool, overrides map[string]string, ignore *Ignore) []*catalog.Book {
-	audio := audioEntries(lib.Root, absDir, ignore)
+// override. `book` forces the folder-is-one-book reading (e.g. at the root); on a
+// disc set (a folder whose audio is only in its disc folders) it joins them instead
+// (joinedBook), which never reaches here. audio is the folder's (rel's) own audio files
+// (audioEntries, or the discovery walk's).
+func booksInDir(lib catalog.Library, rel string, audio []audioFile, overrides map[string]string) []*catalog.Book {
 	if len(audio) == 0 {
 		return nil
 	}
 	asBook := func() []*catalog.Book {
-		if b := folderBook(lib, absDir, audio); b != nil {
+		if b := folderBook(lib, absOf(lib, rel), audio); b != nil {
 			return []*catalog.Book{b}
 		}
 		return nil
 	}
-	switch overrides[relPathOf(lib.Root, absDir)] {
+	switch overrides[rel] {
 	case catalog.OverrideBook:
 		return asBook()
 	case catalog.OverrideCollection:
-		return fileBooksIn(lib, absDir, audio)
+		return fileBooksIn(lib, audio)
 	}
-	if isRoot {
-		return fileBooksIn(lib, absDir, audio)
+	if rel == "" {
+		return fileBooksIn(lib, audio)
 	}
 	return asBook()
 }
 
+// audioFile is one audio file found for a book: its path under lib.Root and its
+// directory entry.
+type audioFile struct {
+	abs string
+	de  fs.DirEntry
+}
+
 // audioEntries returns the non-hidden, non-ignored audio files directly inside
 // absDir, in the stable name order os.ReadDir provides.
-func audioEntries(root, absDir string, ignore *Ignore) []os.DirEntry {
+func audioEntries(root, absDir string, ignore *Ignore) []audioFile {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
 		return nil
 	}
-	var audio []os.DirEntry
+	var audio []audioFile
 	for _, de := range entries {
-		if de.IsDir() || isHidden(de.Name()) || !metadata.IsAudio(de.Name()) ||
-			(!ignore.Empty() && ignore.Match(relPathOf(root, filepath.Join(absDir, de.Name())), false)) {
-			continue
+		abs := filepath.Join(absDir, de.Name())
+		if isAudioEntry(de, relPathOf(root, abs), ignore) {
+			audio = append(audio, audioFile{abs: abs, de: de})
 		}
-		audio = append(audio, de)
 	}
 	return audio
 }
 
-// fileBooksIn builds one single-file book per audio file in absDir.
-func fileBooksIn(lib catalog.Library, absDir string, audio []os.DirEntry) []*catalog.Book {
+// fileBooksIn builds one single-file book per audio file.
+func fileBooksIn(lib catalog.Library, audio []audioFile) []*catalog.Book {
 	var books []*catalog.Book
-	for _, de := range audio {
-		info, err := de.Info()
+	for _, f := range audio {
+		info, err := f.de.Info()
 		if err != nil {
 			continue
 		}
-		books = append(books, fileBook(lib, filepath.Join(absDir, de.Name()), info))
+		books = append(books, fileBook(lib, f.abs, info))
 	}
 	return books
 }
@@ -813,28 +918,27 @@ func fileBook(lib catalog.Library, absPath string, info os.FileInfo) *catalog.Bo
 	}
 }
 
-// folderBook builds a (possibly multi-file) book from audio, the audio files
-// directly inside absDir (audioEntries), or returns nil if there are none. They
-// come sorted by name, giving stable part ordering.
-func folderBook(lib catalog.Library, absDir string, audio []os.DirEntry) *catalog.Book {
+// folderBook builds a (possibly multi-file) book at absDir from audio, its
+// files in play order (audioEntries' name order, or joinedBook's), or returns nil
+// if there are none.
+func folderBook(lib catalog.Library, absDir string, audio []audioFile) *catalog.Book {
 	var files []catalog.BookFile
 	var totalSize, maxMTime int64
 	var added string // earliest file added time = when the book first appeared
-	for _, de := range audio {
-		info, ierr := de.Info()
+	for _, f := range audio {
+		info, ierr := f.de.Info()
 		if ierr != nil {
 			continue
 		}
-		abs := filepath.Join(absDir, de.Name())
-		frel, _ := filepath.Rel(lib.Root, abs)
+		frel, _ := filepath.Rel(lib.Root, f.abs)
 		files = append(files, catalog.BookFile{
-			RelPath: filepath.ToSlash(frel), Seq: len(files), Format: ext(de.Name()), Size: info.Size(),
+			RelPath: filepath.ToSlash(frel), Seq: len(files), Format: ext(f.de.Name()), Size: info.Size(),
 		})
 		totalSize += info.Size()
 		if m := info.ModTime().Unix(); m > maxMTime {
 			maxMTime = m
 		}
-		if a := addedAt(abs, info); added == "" || a < added {
+		if a := addedAt(f.abs, info); added == "" || a < added {
 			added = a // RFC3339 UTC sorts lexicographically, so min string = earliest
 		}
 	}
@@ -860,6 +964,14 @@ func folderBook(lib catalog.Library, absDir string, audio []os.DirEntry) *catalo
 // single (multi-file) book, resolving either the book folder or a file inside it
 // yields that same folder book.
 func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath string) (*catalog.Book, error) {
+	return s.IndexPathWithin(ctx, lib, relPath, nil)
+}
+
+// IndexPathWithin is IndexPath for a caller who may reach only the paths allow
+// accepts (nil: every path). The book relPath resolves to can lie above it (the
+// folder book of a part, the joined book of a disc folder); when allow refuses the
+// book's path, it returns ErrNotAllowed before probing or indexing anything.
+func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relPath string, allow func(string) bool) (*catalog.Book, error) {
 	// SafeJoin is the security gate (rejects traversal and symlink escapes). It
 	// returns a symlink-RESOLVED path, but we derive the working path from an
 	// unresolved join so the rel_path computed by fileBook/folderBook matches the
@@ -870,7 +982,7 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 	if _, err := SafeJoin(lib.Root, relPath); err != nil {
 		return nil, err
 	}
-	abs := filepath.Join(lib.Root, filepath.FromSlash(relPath))
+	abs := absOf(lib, relPath)
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotIndexable, err)
@@ -887,16 +999,55 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 	}
 	// Classify the containing directory exactly as a full scan would, then pick
 	// the book the requested path resolves to: the folder book itself, a
-	// single-file book, or the folder book a clicked part belongs to.
-	dir := abs
+	// single-file book, or the folder book a clicked part belongs to. Inside a
+	// folder joined into one book, that is the joined book, for a disc folder too.
+	dirRel := relPathOf(lib.Root, abs)
 	if !info.IsDir() {
-		dir = filepath.Dir(abs)
+		dirRel = dirOf(dirRel)
 	}
-	rootClean := filepath.Clean(lib.Root)
-	candidates := booksInDir(lib, dir, filepath.Clean(dir) == rootClean, overrides, ignore)
+	own := audioEntries(lib.Root, absOf(lib, dirRel), ignore)
+	// Whether a folder with a `book` override is a disc set turns on its whole
+	// subtree, walked only then; the walk is the joined book's too.
+	var discs map[string][]audioFile
+	var walkErr error
+	isDiscSet := func(p string) bool {
+		// The folder itself holding audio, or (for the folder holding it) a folder
+		// that is no disc with audio of its own: no disc set, no walk (an author's or
+		// a series' stale override).
+		if p == dirRel {
+			if len(own) > 0 {
+				return false
+			}
+		} else if len(own) == 0 || !isDiscFolder(path.Base(dirRel)) {
+			return false
+		}
+		dirs, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, s.log, nil)
+		if err != nil {
+			walkErr = err
+			return false
+		}
+		discs = dirs
+		return discSets(maps.Keys(dirs))[p]
+	}
+	var candidates []*catalog.Book
+	if root, ok := joinRoot(overrides, dirRel, isDiscSet); ok {
+		if b := joinedBook(lib, root, discs); b != nil {
+			candidates = []*catalog.Book{b}
+		}
+	} else if walkErr != nil {
+		return nil, walkErr
+	} else {
+		candidates = booksInDir(lib, dirRel, own, overrides)
+	}
 	book := pickBook(candidates, relPathOf(lib.Root, abs))
 	if book == nil {
 		return nil, fmt.Errorf("%w: no book at %q", ErrNotIndexable, relPath)
+	}
+	if allow != nil && !allow(book.RelPath) {
+		return nil, ErrNotAllowed
+	}
+	if book.SplitParent, err = s.splitParentOf(ctx, lib, book, ignore); err != nil {
+		return nil, err
 	}
 
 	s.enrich(lib, book)
@@ -909,16 +1060,38 @@ func (s *Scanner) IndexPath(ctx context.Context, lib catalog.Library, relPath st
 	return s.cat.GetBook(ctx, id)
 }
 
+// splitParentOf is books.split_parent for a book IndexPath indexes, worked out as a
+// full scan would (markSplitDiscs): the folder holding it when that is a disc set
+// (discSets, from the folder's subtree), read only for a folder book with a disc
+// name. A disc set with a `book` override would have made the joined book instead.
+func (s *Scanner) splitParentOf(ctx context.Context, lib catalog.Library, b *catalog.Book, ignore *Ignore) (string, error) {
+	parent := dirOf(b.RelPath)
+	if !b.IsFolder || parent == "" || !isDiscFolder(path.Base(b.RelPath)) {
+		return "", nil
+	}
+	dirs, _, err := audioDirs(ctx, lib, absOf(lib, parent), parent, ignore, s.log, nil)
+	if err != nil {
+		return "", err
+	}
+	if discSets(maps.Keys(dirs))[parent] {
+		return parent, nil
+	}
+	return "", nil
+}
+
 // pickBook returns the book from candidates whose path matches want - the book's
 // own rel_path (single-file or folder book) or, for a part the client clicked
-// inside a folder book, one of that book's files.
+// inside a folder book, one of that book's files, or a folder holding some of
+// them (a disc folder of a joined book).
 func pickBook(candidates []*catalog.Book, want string) *catalog.Book {
 	for _, b := range candidates {
 		if b.RelPath == want {
 			return b
 		}
 		for _, f := range b.Files {
-			if f.RelPath == want {
+			// A folder book's subfolder is a disc folder of a joined book; a folder of
+			// single-file books (collection) is no book.
+			if f.RelPath == want || (b.IsFolder && want != "" && strings.HasPrefix(f.RelPath, want+"/")) {
 				return b
 			}
 		}
@@ -974,16 +1147,13 @@ func fingerprintFile(absPath string) string {
 // from a vanished path to a new path with matching content, so a moved/renamed
 // file keeps its state. It only does work when something both disappeared and
 // appeared, keeping fingerprinting off the hot path of normal scans.
-// It returns the moves it carried state across (old path -> new path), logging
-// each to rl.
-func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map[string]catalog.Signature, books []*catalog.Book, rl *runLog) (moved map[string]string) {
-	discovered := make(map[string]bool, len(books))
-	for _, b := range books {
-		discovered[b.RelPath] = true
-	}
+// found is the paths of books (discovery's). It returns the moves it carried
+// state across (old path -> new path), logging each to rl.
+func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map[string]catalog.Signature,
+	books []*catalog.Book, found map[string]bool, rl *runLog) (moved map[string]string) {
 	var disappeared []string
 	for relPath := range sigs {
-		if !discovered[relPath] {
+		if !found[relPath] {
 			disappeared = append(disappeared, relPath)
 		}
 	}
@@ -1006,7 +1176,7 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 		}
 	}
 	for _, nb := range newBooks {
-		fp := fingerprintFile(filepath.Join(lib.Root, filepath.FromSlash(primaryPath(nb))))
+		fp := fingerprintFile(absOf(lib, primaryPath(nb)))
 		nb.ContentHash = fp // reused by enrich, avoiding a second read
 		if fp == "" {
 			continue
@@ -1037,5 +1207,12 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 // an equal size (a single-part folder) makes the two the same.
 func reclassified(oldPath string, old catalog.Signature, nb *catalog.Book) bool {
 	nested := strings.HasPrefix(nb.RelPath, oldPath+"/") || strings.HasPrefix(oldPath, nb.RelPath+"/")
-	return nested && old.Size != nb.Size
+	if nested && old.Size != nb.Size {
+		return true
+	}
+	// A joined book shares its first disc's fingerprint: renamed away from its
+	// `book` override (which stays on the old path), it reads again as one book per
+	// disc, and its first disc is not the joined book moved (the joined timeline's
+	// positions and finish don't fit one disc).
+	return old.IsFolder && nb.IsFolder && isDiscFolder(path.Base(nb.RelPath)) && old.Size > nb.Size
 }

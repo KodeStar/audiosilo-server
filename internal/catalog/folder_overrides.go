@@ -15,7 +15,11 @@ var ErrInvalidOverrideMode = errors.New(`folder override mode must be "book" or 
 // the heuristic gets wrong. Overrides are durable, path-keyed config (no FK to
 // the rebuildable books index) so they survive a re-scan/rebuild.
 const (
-	// OverrideBook forces the folder to be one (possibly multi-file) book.
+	// OverrideBook forces the folder to be one (possibly multi-file) book; on a
+	// folder whose audio is only in disc folders directly in it (CD1, CD2...; at
+	// least two, nothing else with audio beneath it) it joins them into one book
+	// (library.joinedBook). On any other folder with no audio of its own it does
+	// nothing, as before joining existed.
 	OverrideBook = "book"
 	// OverrideCollection forces each direct audio file to be its own book.
 	OverrideCollection = "collection"

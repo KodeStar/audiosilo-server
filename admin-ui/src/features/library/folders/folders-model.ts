@@ -1,4 +1,5 @@
 import type { FsEntry, FsListing } from '@/api/types';
+import type { FolderChoice } from './folder-modes';
 import { relParent } from '@/lib/paths';
 
 // Library > Folders, the logic: shaping lazily loaded listings into the rows of
@@ -142,3 +143,46 @@ export function audioFilesOf(listing: FsListing) {
     : undefined;
   return { files, size, duration };
 }
+
+/**
+ * Which choices a folder (its `entry`, holding `audioFiles` of its own and
+ * `folders`) offers. A folder with audio of its own offers all three. One whose
+ * audio is only in disc folders directly in it (a book ripped to CD1, CD2...: the
+ * server's `split_discs`), or already joined from them, can be joined: "Always one
+ * book" reads its disc folders as one book, in disc order (`joinable`, with
+ * `subBooks` the discs read as books today). The server joins nothing else, so no
+ * other folder without audio offers it (an author's or a series' folder would read
+ * the same). "Separate books" splits a folder's own files, so it has none to split.
+ * A folder with neither offers only clearing an override it has.
+ */
+export function joinChoices(
+  audioFiles: number,
+  entry: Pick<FsEntry, 'override' | 'is_book' | 'split_discs'>,
+  folders: readonly FsEntry[],
+): { enabled: FolderChoice[]; joinable: boolean; subBooks: number } {
+  if (audioFiles > 0)
+    return { enabled: ['auto', 'book', 'collection'], joinable: false, subBooks: 0 };
+  // A book without audio of its own is a joined one (or was, until the rescan an
+  // override's removal started ends).
+  const joinable = !!entry.is_book || !!entry.split_discs;
+  const enabled: FolderChoice[] = joinable ? ['auto', 'book'] : entry.override ? ['auto'] : [];
+  return { enabled, joinable, subBooks: folders.filter((f) => f.is_book).length };
+}
+
+/**
+ * Whether the folder detection dialog offers "Always one book" for a folder, from
+ * its entry alone: a book (its own audio, or joined), one split into separate books
+ * (its own audio), a disc set to join, or what it is set to already. A folder of
+ * books (an author's, a series') isn't one: the server would read it the same.
+ */
+export const offersBook = (e: Pick<FsEntry, 'override' | 'is_book' | 'split_discs'>) =>
+  !!e.is_book || !!e.split_discs || !!e.override;
+
+/**
+ * Whether the folder detection dialog offers "Separate books" for a folder: not on
+ * a disc set (`split_discs`), which has no files of its own to split (as in
+ * joinChoices), unless that is what it is set to already. An override there would
+ * read the same, yet settle its Health issue without joining the discs.
+ */
+export const offersCollection = (e: Pick<FsEntry, 'override' | 'split_discs'>) =>
+  !e.split_discs || e.override === 'collection';

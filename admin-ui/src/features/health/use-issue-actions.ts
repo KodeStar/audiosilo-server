@@ -1,12 +1,14 @@
+import { useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BULK_LIMIT, api } from '@/api/client';
-import { invalidateIssues, rescanBook } from '@/api/hooks';
+import { invalidateIssues, rescanBook, setFolderMode } from '@/api/hooks';
 import type { AdminBook, BookRef, IssueKind } from '@/api/types';
-import { bookRoute, refOf } from '@/lib/book-route';
+import { bookRoute, refKey, refOf } from '@/lib/book-route';
 import { toastError } from '@/lib/errors';
 import { counted } from '@/lib/format';
+import { relBaseName, relParent } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { chunk } from '@/lib/utils';
 import { FIXES } from './issues-model';
@@ -17,13 +19,22 @@ const RESCAN_CONCURRENCY = 2;
 /**
  * What the Health page does to books: ignore them under a category (with Undo),
  * show them again, and each category's fix (open the book, its match dialog or
- * its folder's detection, or read its files again).
+ * its folder's detection, read its files again, or join its disc folders).
  */
 export function useIssueActions(kind: IssueKind) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const navigate = useNavigate();
+  // The books whose fix (a re-read or a join) is in flight: the ref guards a second
+  // click before the re-render lands, the state disables their fix buttons.
+  const inFlight = useRef(new Set<string>());
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const markBusy = (key: string, on: boolean) => {
+    if (on) inFlight.current.add(key);
+    else inFlight.current.delete(key);
+    setBusy(new Set(inFlight.current));
+  };
   // Large selections go in batches of the server's limit.
   const send = async (fn: typeof api.ignoreIssue, refs: BookRef[]) => {
     for (const part of chunk(refs, BULK_LIMIT)) await fn(kind, part);
@@ -99,6 +110,39 @@ export function useIssueActions(kind: IssueKind) {
     invalidateIssues(qc);
   };
 
+  /**
+   * Joins the disc folders a split book is listed by (its first disc) into one
+   * book: "Always one book" on the folder holding them, which rescans the library.
+   */
+  const join = async (b: AdminBook) => {
+    const folder = relParent(b.path);
+    const name = relBaseName(folder);
+    try {
+      await setFolderMode(qc, b.library_id, folder, 'book');
+      toast.add({
+        title: t('health.toast.joined', { folder: name }),
+        description: t('health.toast.joinedBody'),
+        type: 'success',
+      });
+    } catch (err) {
+      toastError(t('health.toast.joinFailed', { folder: name }), err);
+    } finally {
+      invalidateIssues(qc);
+    }
+  };
+
+  /** Runs a book's async fix once at a time: a click while it is in flight does nothing. */
+  const once = async (b: AdminBook, run: () => Promise<void>) => {
+    const key = refKey(b);
+    if (inFlight.current.has(key)) return;
+    markBusy(key, true);
+    try {
+      await run();
+    } finally {
+      markBusy(key, false);
+    }
+  };
+
   const fix = (b: AdminBook) => {
     switch (FIXES[kind]) {
       case 'cover':
@@ -115,11 +159,16 @@ export function useIssueActions(kind: IssueKind) {
           search: { library: b.library_id, folder: b.path },
         });
       case 'rescan':
-        return rescan(b);
+        return once(b, () => rescan(b));
+      case 'join':
+        return once(b, () => join(b));
     }
   };
 
-  return { ignore, unignore, fix, rescan, rescanMany };
+  /** Whether a book's fix is in flight (its fix button is disabled meanwhile). */
+  const fixing = (b: BookRef) => busy.has(refKey(b));
+
+  return { ignore, unignore, fix, fixing, rescan, rescanMany };
 }
 
 export type IssueActions = ReturnType<typeof useIssueActions>;

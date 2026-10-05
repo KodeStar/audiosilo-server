@@ -561,7 +561,11 @@ placeholders exactly in the grid slot (no layout shift), shimmer 1.4s (off with 
   labelled dry run with a disabled primary and a link to Server › Files. Always states that progress
   follows via move-tracking.
 - **Folder detection**: radio cards Automatic / Always one book / Separate books, with what each means
-  _for this folder_ ("Here: 3 books").
+  _for this folder_ ("Here: 3 books"). A folder whose audio is only in its disc folders (CD1, CD2...:
+  the server's `split_discs`) offers Automatic and Always one book (which joins them, in disc order);
+  Separate books stays disabled there. Any other folder without audio of its own (an author's, a
+  series') offers neither, and the detection dialog doesn't offer Always one book on it: the server
+  would read it the same.
 - **Safety stops**: unavailable roots are shown with the shield, the count of preserved books and
   listeners, and the fix ("Mount /mnt/nas/lectures and retry").
 - **Health triage**: category cards (count, icon, fanned covers) → queue with cover, reason, path, one

@@ -42,6 +42,12 @@ type Entry struct {
 	// directory ("book" or "collection"), empty when auto-detected. Surfaced so
 	// the admin console can show and toggle it.
 	Override string `json:"override,omitempty"`
+
+	// SplitDiscs marks a folder whose audio is only in disc folders directly in it
+	// (CD1, CD2...), each indexed as its own book: a `book` override joins them into
+	// one (see discSets). Surfaced so the admin console offers that only here; set
+	// for an admin's request only (annotateWithBooks), never on a player's listing.
+	SplitDiscs bool `json:"split_discs,omitempty"`
 }
 
 // Listing is a page of directory entries.

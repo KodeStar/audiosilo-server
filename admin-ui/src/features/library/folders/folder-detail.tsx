@@ -3,8 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, FileAudio, FolderOpen, FolderX } from 'lucide-react';
-import { api } from '@/api/client';
-import { keys, noteScanStarted, useBrowse } from '@/api/hooks';
+import { setFolderMode, useBrowse } from '@/api/hooks';
 import type { AdminLibrary, FsEntry } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Notice } from '@/components/notice';
@@ -18,7 +17,7 @@ import { counted, formatBytes, formatDuration } from '@/lib/format';
 import { joinLibraryPath, relBaseName, relParent } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { FOLDER_CHOICES, choiceOf, modeOf, type FolderChoice } from './folder-modes';
-import { audioFilesOf, entryIn } from './folders-model';
+import { audioFilesOf, entryIn, foldersIn, joinChoices } from './folders-model';
 
 /**
  * The selected folder: what it is, how AudioSilo reads it (each choice saved
@@ -63,17 +62,29 @@ export function FolderDetail({ library, path }: { library: AdminLibrary; path: s
       </div>
     );
   }
-  return <Detail key={path} library={library} entry={entry} files={audioFilesOf(own.data)} />;
+  const files = audioFilesOf(own.data);
+  return (
+    <Detail
+      key={path}
+      library={library}
+      entry={entry}
+      files={files}
+      // A folder with no audio of its own can still be joined from its disc folders.
+      join={joinChoices(files.files.length, entry, foldersIn(own.data))}
+    />
+  );
 }
 
 function Detail({
   library,
   entry,
   files: { files, size, duration },
+  join,
 }: {
   library: AdminLibrary;
   entry: FsEntry;
   files: ReturnType<typeof audioFilesOf>;
+  join: ReturnType<typeof joinChoices>;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -82,19 +93,23 @@ function Detail({
   const [saving, setSaving] = useState<FolderChoice>();
   const count = files.length;
   const fileCount = counted(count, lang);
+  /** What a choice means for a folder joined from its disc folders. */
+  const joinHere = (c: FolderChoice) => {
+    if (c === 'auto') return t('folders.mode.autoJoinHere');
+    if (c !== 'book') return undefined;
+    return join.subBooks
+      ? t('folders.mode.bookJoinCount', counted(join.subBooks, lang))
+      : t('folders.mode.bookJoinHere');
+  };
 
   const choose = async (choice: FolderChoice) => {
     if (choice === choiceOf(entry.override)) return;
     setSaving(choice);
     try {
-      await api.setFolderOverride(library.id, entry.path, modeOf(choice));
-      // The override shows at once; the books it makes are refetched once the
-      // rescan it started ends (the scan watcher).
-      noteScanStarted(qc, library.id);
-      await qc.invalidateQueries({ queryKey: keys.browseLibrary(library.id) });
+      await setFolderMode(qc, library.id, entry.path, modeOf(choice));
       toast.add({
         title: t(`folders.toast.${choice}`, fileCount),
-        description: t('folders.toast.body', { library: library.name }),
+        description: t(toastBody(join.joinable, choice, entry.override), { library: library.name }),
         type: 'success',
       });
     } catch (err) {
@@ -154,18 +169,22 @@ function Detail({
             options={FOLDER_CHOICES.map((c) => ({
               value: c,
               title: t(`folders.mode.${c}`),
-              // What the choice means, then (for a folder with audio) what it means here.
+              // What the choice means, then what it means here: for a folder with
+              // audio, its files; for one joined from its disc folders, those.
               description: [
                 t(`folders.mode.${c}Body`),
-                count && c !== 'book' && t(`folders.mode.${c}Here`, fileCount),
+                count > 0 && c !== 'book' && t(`folders.mode.${c}Here`, fileCount),
+                join.joinable && joinHere(c),
               ]
                 .filter(Boolean)
                 .join(' '),
-              disabled: count === 0 || saving !== undefined,
+              disabled: !join.enabled.includes(c) || saving !== undefined,
             }))}
           />
           {count === 0 ? (
-            <p className="text-[12.5px] text-muted-foreground">{t('folders.detail.noAudio')}</p>
+            <p className="text-[12.5px] text-muted-foreground">
+              {t(join.joinable ? 'folders.detail.subfolderAudio' : 'folders.detail.noAudio')}
+            </p>
           ) : null}
         </div>
       </Card>
@@ -206,4 +225,14 @@ function Detail({
       ) : null}
     </div>
   );
+}
+
+/**
+ * What a change does to listening progress: it moves with each file, carries over
+ * to a folder joined from its disc folders, or (un-joining) stays with the joined book.
+ */
+function toastBody(joinable: boolean, choice: FolderChoice, override: FsEntry['override']) {
+  if (!joinable) return 'folders.toast.body';
+  if (choice === 'book') return 'folders.toast.joinBody';
+  return override === 'book' ? 'folders.toast.unjoinBody' : 'folders.toast.body';
 }

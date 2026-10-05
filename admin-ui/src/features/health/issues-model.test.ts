@@ -16,6 +16,11 @@ it('says why a book is listed, per category', () => {
     key: 'health.reason.suspect',
     values: { count: 3, files: 3 },
   });
+  // A split book is listed by its first disc and named by the folder holding them.
+  expect(issueReason('split_discs', adminBook({ path: 'Cowell/Dragonese/CD 1' }))).toEqual({
+    key: 'health.reason.split_discs',
+    values: { folder: 'Dragonese' },
+  });
   // One chapter reads differently from none; hours round down.
   expect(
     issueReason('no_chapters', adminBook({ chapter_count: 1, duration: 3 * 3600 + 1800 })),

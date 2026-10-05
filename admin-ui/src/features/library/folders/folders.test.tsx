@@ -70,12 +70,85 @@ describe('folders', () => {
     expect(a).toHaveAttribute('aria-expanded', 'true');
     expect(a).toHaveAttribute('aria-selected', 'true');
     expect(router.state.location.search).toMatchObject({ folder: 'A' });
-    // A holds no audio of its own: nothing to detect.
-    expect(await screen.findByText(/holds no audio files of its own/)).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Separate books/ })).toHaveAttribute(
-      'aria-disabled',
-      'true',
+    // A holds no audio of its own, only the book B in a folder that isn't a disc:
+    // nothing to detect, and nothing to join (an author's or a series' folder).
+    expect(
+      await screen.findByText(/Always one book only joins a folder of disc folders/),
+    ).toBeInTheDocument();
+    for (const name of [/Automatic/, /Always one book/, /Separate books/]) {
+      expect(screen.getByRole('radio', { name })).toHaveAttribute('aria-disabled', 'true');
+    }
+  });
+
+  it('joins a folder whose audio is only in its disc folders', async () => {
+    let override: FolderMode | undefined;
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/fs': (req) => {
+          const path = req.query.get('path') ?? '';
+          const fs: Record<string, FsEntry[]> = {
+            // As the server has it once each change's rescan has run.
+            '': [dir('Dragonese', { override, is_book: !!override, split_discs: !override })],
+            Dragonese: [
+              dir('Dragonese/CD1', { is_book: !override }),
+              dir('Dragonese/CD2', { is_book: !override }),
+            ],
+          };
+          const entries = fs[path] ?? [];
+          return { body: { path, entries, total: entries.length, offset: 0 } };
+        },
+        'PUT /admin/libraries/1/folder-override': (req) => {
+          override = (req.body as { mode: FolderMode }).mode;
+          return { body: { status: 'override set' } };
+        },
+        'DELETE /admin/libraries/1/folder-override': () => {
+          override = undefined;
+          return { body: { status: 'override cleared' } };
+        },
+      }),
     );
+    renderApp('/library/folders?library=1&folder=Dragonese');
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText(/Here: 2 disc folders become one book, in disc order\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/only disc folders \(CD1, CD2\.\.\.\)\. Always one book joins them/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Here: each disc folder is its own book\./)).toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: /Always one book/ }));
+    expect(await screen.findByText('Pinned as one book')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Rescanning Fiction. Listening progress on its disc folders carries over to the one book.',
+      ),
+    ).toBeInTheDocument();
+    const put = calls.find((c) => c.method === 'PUT');
+    expect(put?.query.get('path')).toBe('Dragonese');
+    expect(put?.body).toEqual({ mode: 'book' });
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: /Always one book/ })).toBeChecked(),
+    );
+
+    // Back to automatic: the discs are books again; the joined book keeps its progress.
+    await user.click(screen.getByRole('radio', { name: /Automatic/ }));
+    expect(
+      await screen.findByText(
+        'Rescanning Fiction. Each disc folder is its own book again; progress on the one book is kept for it, not split back.',
+      ),
+    ).toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'DELETE')?.query.get('path')).toBe('Dragonese');
+  });
+
+  it('offers nothing for a folder with no audio and no folders', async () => {
+    mockFetch(routes());
+    renderApp('/library/folders?library=1&folder=Other');
+    expect(
+      await screen.findByText(/holds no audio files of its own, so there is nothing to detect/),
+    ).toBeInTheDocument();
+    for (const name of [/Automatic/, /Always one book/, /Separate books/]) {
+      expect(screen.getByRole('radio', { name })).toHaveAttribute('aria-disabled', 'true');
+    }
   });
 
   it('opens the ancestors of a deep-linked folder and shows how it is read', async () => {

@@ -139,7 +139,13 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                   <span className="max-md:sr-only">{t('health.ignore')}</span>
                 </Button>
               )}
-              {fix ? <FixButton fix={fix} onClick={() => void actions.fix(b)} /> : null}
+              {fix ? (
+                <FixButton
+                  fix={fix}
+                  disabled={actions.fixing(b)}
+                  onClick={() => void actions.fix(b)}
+                />
+              ) : null}
             </div>
           </li>
         ))}
@@ -182,11 +188,19 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
 }
 
 /** A category's fix as an outline button (the label hides on phones; the icon names it). */
-function FixButton({ fix, onClick }: { fix: NonNullable<IssueFix>; onClick: () => void }) {
+function FixButton({
+  fix,
+  disabled,
+  onClick,
+}: {
+  fix: NonNullable<IssueFix>;
+  disabled: boolean;
+  onClick: () => void;
+}) {
   const { t } = useTranslation();
   const { icon: Icon, label } = FIX_LOOK[fix];
   return (
-    <Button variant="outline" size="sm" onClick={onClick} aria-label={t(label)}>
+    <Button variant="outline" size="sm" onClick={onClick} disabled={disabled} aria-label={t(label)}>
       <Icon aria-hidden="true" />
       <span className="max-md:hidden">{t(label)}</span>
     </Button>
