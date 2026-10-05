@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,21 +146,27 @@ func clientIP(r *http.Request) string {
 	return peerIP(r.RemoteAddr)
 }
 
-// rateLimit enforces the per-IP token-bucket request rate on every route but the
-// static files the web package registers (the admin console, the web player, the
-// connect page; web.IsStatic), which mux would hand the request to. Those are
-// served from memory or, for a player in web_dir, through spa.Files' per-version
-// cache (a stat per request), and one cold console page is forty-odd chunk
-// requests, more than the whole burst: counting them turned a first visit's own
-// scripts and API calls into 429s.
+// rateLimit enforces the request rate by route class, read off the handler the
+// mux would pick for r. Static files the web package registers (the admin
+// console, the web player, the connect page; web.IsStatic) are not counted: they
+// are served from memory or, for a player in web_dir, through spa.Files'
+// per-version cache, and one cold console page is forty-odd chunk requests.
+// Media routes limit themselves (requireMediaAuth). Everything else spends from
+// the general bucket, keyed by address because it runs before authentication: it
+// bounds the work done (token lookups included) for a caller nobody has
+// identified yet.
 func (a *API) rateLimit(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h, _ := mux.Handler(r); !web.IsStatic(h, r) && !a.ipLimiter.Allow(clientIP(r)) {
-			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+		if h, _ := mux.Handler(r); !web.IsStatic(h, r) && !isMedia(h) && !a.ipLimiter.Allow(clientIP(r)) {
+			rateLimited(w)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func rateLimited(w http.ResponseWriter) {
+	writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 }
 
 // bearerToken extracts a session token from the Authorization header. When
@@ -187,42 +194,89 @@ func bearerToken(r *http.Request, allowQuery bool) string {
 // so it satisfies requireAuth (and requireAdmin, when the owner is an admin)
 // exactly like a session; a pairing token is never accepted here.
 func (a *API) requireAuth(next http.Handler) http.Handler {
-	return a.authenticate(next, false)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, failure := a.authenticate(r, false)
+		if failure != "" {
+			writeError(w, http.StatusUnauthorized, failure)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // requireMediaAuth is requireAuth that additionally accepts the credential as a
 // `token` query parameter, for browser media elements that cannot set headers.
 // Restrict its use to cover/stream GETs (see bearerToken). An API key works here
 // too (it behaves as a session everywhere a session does).
+//
+// It also owns the media rate limit, which rateLimit leaves to it: a browser grid
+// loads every cover as its own request, so sharing the general budget turned a
+// fast server's covers into 429s. A media request spends nothing from its
+// address's general bucket, but is refused while that bucket is empty and pays
+// into it when it fails to authenticate, so unauthenticated media is bounded
+// exactly like the general API. One that authenticates spends from its
+// credential's media bucket instead: the credential is what the request just
+// proved, and several people behind one address (a household behind NAT, or every
+// visitor behind a reverse proxy missing from trusted_proxies) would otherwise
+// share one budget, so one person's cover grid could blank another's. A runaway
+// client or a leaked token is still capped: a request its credential's bucket
+// refuses has already cost a token lookup, so it pays into the address's bucket
+// too, and a client hammering past its budget is soon refused before the lookup.
+// Both payments are Charge, not Allow: requests that passed Ready together each
+// pay, even past empty, so concurrency can't buy lookups the bucket never paid for.
 func (a *API) requireMediaAuth(next http.Handler) http.Handler {
-	return a.authenticate(next, true)
+	return mediaHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
+		if !a.ipLimiter.Ready(ip) {
+			rateLimited(w)
+			return
+		}
+		ctx, failure := a.authenticate(r, true)
+		if failure != "" {
+			a.ipLimiter.Charge(ip)
+			writeError(w, http.StatusUnauthorized, failure)
+			return
+		}
+		if !a.mediaLimiter.Allow(strconv.FormatInt(credentialFrom(ctx).ID, 10)) {
+			a.ipLimiter.Charge(ip)
+			rateLimited(w)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})}
 }
 
-func (a *API) authenticate(next http.Handler, allowQueryToken bool) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := bearerToken(r, allowQueryToken)
-		if token == "" {
-			writeError(w, http.StatusUnauthorized, "missing bearer token")
-			return
-		}
-		// Session OR api key - both authenticate; pairing tokens are excluded, so
-		// a QR/pairing secret can never be used as a durable credential here.
-		// The request's address and app (X-AudioSilo-Client) are recorded on the
-		// token, for the admin console's devices and sessions.
-		presence := auth.Presence{IP: clientIP(r)}
-		presence.Client, _ = auth.ParseClient(r.Header.Get(auth.ClientHeader))
-		u, cred, err := a.auth.ResolveRequest(r.Context(), token, presence, auth.KindSession, auth.KindAPI)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid or expired token")
-			return
-		}
-		// The credential carries the matched kind, so credential-minting handlers
-		// can bar an api key (denyAPIKey) - a leaked key must not spawn a durable
-		// credential.
-		ctx := context.WithValue(r.Context(), userKey, u)
-		ctx = context.WithValue(ctx, credentialKey, cred)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+// mediaHandler marks a route wrapped in requireMediaAuth, so rateLimit can tell
+// media from the general API by the handler the mux picks for a request.
+type mediaHandler struct{ http.Handler }
+
+func isMedia(h http.Handler) bool {
+	_, ok := h.(mediaHandler)
+	return ok
+}
+
+// authenticate resolves r's credential and returns r's context carrying the user
+// and the credential, or the reason for a 401.
+func (a *API) authenticate(r *http.Request, allowQueryToken bool) (context.Context, string) {
+	token := bearerToken(r, allowQueryToken)
+	if token == "" {
+		return nil, "missing bearer token"
+	}
+	// Session OR api key - both authenticate; pairing tokens are excluded, so
+	// a QR/pairing secret can never be used as a durable credential here.
+	// The request's address and app (X-AudioSilo-Client) are recorded on the
+	// token, for the admin console's devices and sessions.
+	presence := auth.Presence{IP: clientIP(r)}
+	presence.Client, _ = auth.ParseClient(r.Header.Get(auth.ClientHeader))
+	u, cred, err := a.auth.ResolveRequest(r.Context(), token, presence, auth.KindSession, auth.KindAPI)
+	if err != nil {
+		return nil, "invalid or expired token"
+	}
+	// The credential carries the matched kind, so credential-minting handlers
+	// can bar an api key (denyAPIKey) - a leaked key must not spawn a durable
+	// credential.
+	ctx := context.WithValue(r.Context(), userKey, u)
+	return context.WithValue(ctx, credentialKey, cred), ""
 }
 
 // requireAdmin is requireAuth plus an admin-role check.
