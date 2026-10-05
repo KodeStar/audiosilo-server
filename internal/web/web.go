@@ -188,7 +188,7 @@ var inlineScriptRE = regexp.MustCompile(`(?is)<script([^>]*)>(.*?)</script>`)
 // htmlCSP builds the player's Content-Security-Policy for one HTML document.
 // Scripts stay strict ('self' plus a sha256 hash of each inline <script> in the
 // doc, so no 'unsafe-inline'); styles allow 'unsafe-inline' because
-// react-native-web/nativewind inject styles at runtime, which cannot be hashed
+// react-native-web/Uniwind inject styles at runtime, which cannot be hashed
 // ahead of time. Everything else is same-origin.
 func htmlCSP(html []byte) string {
 	hashes := map[string]struct{}{}
