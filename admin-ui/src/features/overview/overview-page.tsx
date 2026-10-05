@@ -126,7 +126,7 @@ export function OverviewPage() {
           </h2>
         </div>
         {!split ? (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {[0, 1].map((i) => (
               <div key={i} className="skel h-[92px] rounded-xl" />
             ))}
@@ -136,7 +136,7 @@ export function OverviewPage() {
             {t('home.live.empty')}
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {split.live.map((s) => (
               <LiveCard key={s.id} session={s} lang={lang} />
             ))}
@@ -167,7 +167,7 @@ export function OverviewPage() {
         />
       </div>
 
-      <div className="mt-10 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mt-10 grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section aria-labelledby="recent-heading" className="min-w-0">
           <h2 id="recent-heading" className="h2 mb-3.5">
             {t('home.recent.title')}

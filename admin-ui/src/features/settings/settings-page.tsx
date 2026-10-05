@@ -27,6 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { formatDate, formatNumber } from '@/lib/format';
+import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { BackupsTopic } from './backups-topic';
@@ -65,7 +66,7 @@ export function SettingsPage() {
   return (
     <Page>
       <PageHead title={t('settings.title')} description={t('settings.description')} />
-      <div className="grid gap-6 md:grid-cols-[210px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-[210px_minmax(0,1fr)]">
         <nav
           aria-label={t('settings.topics')}
           className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-col md:overflow-visible md:p-0"
@@ -158,7 +159,7 @@ function GeneralTopic({ settings }: { settings: AdminSettings }) {
         section="general"
         title={t('settings.general.card')}
         fields={[
-          { name: 'name', kind: 'text', placeholder: 'AudioSilo' },
+          { name: 'name', kind: 'text', placeholder: DEFAULT_SERVER_NAME },
           {
             name: 'public_url',
             kind: 'text',

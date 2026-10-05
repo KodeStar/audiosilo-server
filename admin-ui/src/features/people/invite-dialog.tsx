@@ -232,7 +232,7 @@ function InviteForm({
             </div>
           </>
         ) : null}
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field htmlFor="invite-uses" label={t('invite.devices')}>
             <NativeSelect id="invite-uses" {...form.register('uses')}>
               {USES.map((n) => (

@@ -12,6 +12,7 @@ import {
   formatPercent,
   formatRelative,
   formatVersion,
+  hostOf,
   progressFraction,
   seriesIndexLabel,
 } from './format';
@@ -103,5 +104,11 @@ describe('format', () => {
   it('prefixes numeric versions only', () => {
     expect(formatVersion('0.9.2')).toBe('v0.9.2');
     expect(formatVersion('dev')).toBe('dev');
+  });
+
+  it('takes the host (and any port) from a URL', () => {
+    expect(hostOf('https://books.example.com/connect#code=ABCD')).toBe('books.example.com');
+    expect(hostOf('http://192.168.1.4:8080')).toBe('192.168.1.4:8080');
+    expect(hostOf('not a url')).toBe('not a url');
   });
 });

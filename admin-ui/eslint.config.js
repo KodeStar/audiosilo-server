@@ -48,6 +48,30 @@ const cspRestrictedSyntax = [
   },
 ];
 
+// A grid whose columns come only from a min-width breakpoint (`md:grid-cols-2`) is
+// one implicit `auto` column on a phone, which grows to the width of any truncated
+// line inside it and overflows the page. Flag a class string with a breakpoint
+// column template and no base `grid-cols-*` of its own. Breakpoints are the named
+// ones, arbitrary `min-[...]` and container `@md`, with any variants stacked after
+// (`md:hover:`); `max-md:` is not a min-width breakpoint, so it is left alone. The
+// base must sit in the same string as the breakpoint template; a template literal
+// counts as one string, its quasis and any string literal inside it alike.
+const breakpointCols =
+  '/(^|[\\s:])(sm|md|lg|xl|2xl|min-\\[[^\\]]*\\]|@[a-z0-9]+):([^\\s:]+:)*grid-cols-/';
+const baseCols = '/(^|\\s)grid-cols-/';
+const gridMessage =
+  'A breakpoint-only grid needs a base grid-cols-1 in the same class string (STYLEGUIDE.md section 12: responsive grid needs a base grid-cols-1).';
+const layoutRestrictedSyntax = [
+  {
+    selector: `Literal[value=${breakpointCols}]:not([value=${baseCols}]):not(TemplateLiteral:has(> TemplateElement[value.cooked=${baseCols}]) Literal)`,
+    message: gridMessage,
+  },
+  {
+    selector: `TemplateLiteral:has(> TemplateElement[value.cooked=${breakpointCols}]):not(:has(> TemplateElement[value.cooked=${baseCols}]))`,
+    message: gridMessage,
+  },
+];
+
 export default defineConfig(
   {
     ignores: ['dist', 'node_modules', 'coverage'],
@@ -69,7 +93,7 @@ export default defineConfig(
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
       'no-restricted-imports': ['error', cspRestrictedImports],
-      'no-restricted-syntax': ['error', ...cspRestrictedSyntax],
+      'no-restricted-syntax': ['error', ...cspRestrictedSyntax, ...layoutRestrictedSyntax],
     },
   },
   {

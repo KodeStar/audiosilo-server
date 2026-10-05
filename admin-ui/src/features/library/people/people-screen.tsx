@@ -127,7 +127,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
             </ul>
           ) : (
             <ul
-              className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3"
+              className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3"
               aria-label={t(`${ns}.title`)}
             >
               {shown.map((p) => (
@@ -226,7 +226,7 @@ function PeopleSkeleton({ field }: { field: PersonField }) {
     </div>
   ) : (
     <div
-      className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3"
+      className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3"
       role="status"
       aria-label={t('common.loading')}
     >

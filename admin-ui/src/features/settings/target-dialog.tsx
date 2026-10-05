@@ -162,7 +162,7 @@ function TargetForm({
                 label={t('notify.dialog.kind')}
                 value={field.value}
                 onValueChange={field.onChange}
-                className="grid gap-2 sm:grid-cols-3"
+                className="grid grid-cols-1 gap-2 sm:grid-cols-3"
                 options={TARGET_KINDS.map((k) => ({
                   value: k,
                   title: t(`notify.kind.${k}`),
@@ -248,7 +248,7 @@ function TargetForm({
             control={form.control}
             name="events"
             render={({ field }) => (
-              <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
                 {events.map((k) => (
                   <label key={k} className="flex items-start gap-2 text-[13px]">
                     <Checkbox

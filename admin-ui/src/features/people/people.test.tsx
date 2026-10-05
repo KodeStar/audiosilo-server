@@ -14,6 +14,7 @@ import {
   member,
   sam,
   samDetail,
+  serverInfo,
   users,
 } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
@@ -76,6 +77,8 @@ describe('people', () => {
 
     const ready = await screen.findByRole('dialog', { name: 'Invite ready for Uncle Ray' });
     expect(within(ready).getByRole('img', { name: /QR code/ })).toBeInTheDocument();
+    // Named by the host the link uses (the public address), not the one this browser used.
+    expect(within(ready).getByText('books.example.com')).toBeInTheDocument();
     expect(within(ready).getByLabelText('Invite link')).toHaveValue(created.invite_url);
     expect(within(ready).getByLabelText('Code')).toHaveValue('ABCD-1234');
     // The server's expiry for the new invite, as a date: it's a record.
@@ -304,6 +307,7 @@ describe('invites', () => {
           },
         },
         'POST /admin/authcodes/31/rotate': { body: created },
+        'GET /server': { body: { ...serverInfo, name: 'Tank' } },
       }),
     );
     renderApp('/people/invites');
@@ -317,6 +321,8 @@ describe('invites', () => {
     await user.click(screen.getByRole('button', { name: "Rotate sam's invite" }));
     const ready = await screen.findByRole('dialog', { name: 'Invite ready for sam' });
     expect(within(ready).getByLabelText('Code')).toHaveValue('ABCD-1234');
+    // A server the admin has named is called by that name, not its address.
+    expect(within(ready).getByText('Tank')).toBeInTheDocument();
     expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/authcodes/31/rotate')).toBe(
       true,
     );

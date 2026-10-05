@@ -191,7 +191,7 @@ function YearStory({ a, year, current }: { a: Activity; year: number; current: b
         </div>
       </Card>
 
-      <div className="grid items-start gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
         <Card aria-labelledby="year-books-title">
           <CardHeader titleId="year-books-title" title={t('year.mostPlayed')} />
           <ul className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-4 p-5">

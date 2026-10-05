@@ -333,7 +333,7 @@ function FieldRow({
           value={value as string}
           onValueChange={(v) => onChange(v)}
           options={spec.options.map((o) => ({ ...o, disabled: locked || o.disabled }))}
-          className="grid gap-2 md:grid-cols-3"
+          className="grid grid-cols-1 gap-2 md:grid-cols-3"
         />
       );
       break;

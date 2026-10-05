@@ -437,7 +437,7 @@ export function samDetail(over: Partial<UserDetail> = {}): UserDetail {
 
 export const created: InviteCreated = {
   auth_code: 'ABCD-1234',
-  invite_url: 'https://books.example/connect#code=ABCD-1234',
+  invite_url: 'https://books.example.com/connect#code=ABCD-1234',
   max_uses: 5,
   expires_at: new Date(Date.now() + 7 * 86400_000 + 60_000).toISOString(),
 };

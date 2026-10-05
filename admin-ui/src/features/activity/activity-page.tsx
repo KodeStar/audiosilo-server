@@ -165,11 +165,11 @@ function ActivityView({ a }: { a: Activity }) {
               <HoursChart days={a.days} names={names} />
             </div>
           </Card>
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <YearCard current={a} />
             <WhenCard a={a} />
           </div>
-          <div className="grid items-start gap-4 xl:grid-cols-2">
+          <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
             <TopBooks a={a} />
             <div className="flex min-w-0 flex-col gap-4">
               <TopPeople a={a} />
@@ -177,7 +177,7 @@ function ActivityView({ a }: { a: Activity }) {
               <Inactive a={a} />
             </div>
           </div>
-          <div className="grid items-start gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2 xl:grid-cols-3">
             <FunnelCard a={a} />
             <PlaybackCard a={a} />
             <AppsCard a={a} />
@@ -193,7 +193,7 @@ function ActivityView({ a }: { a: Activity }) {
           <Inactive a={a} />
         </>
       )}
-      <div className="grid items-start gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
         <Card aria-labelledby="growth-title">
           <CardHeader
             titleId="growth-title"
@@ -343,7 +343,7 @@ function MostHeard({ a }: { a: Activity }) {
   return (
     <Card aria-labelledby="heard-title">
       <CardHeader titleId="heard-title" title={t('activity.heard.title')} />
-      <div className="grid gap-5 p-5 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 p-5 sm:grid-cols-2">
         {lists.map((l) => (
           <div key={l.key} className="flex min-w-0 flex-col gap-2">
             <span className="eyebrow">{l.title}</span>

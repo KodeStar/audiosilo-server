@@ -605,6 +605,9 @@ placeholders exactly in the grid slot (no layout shift), shimmer 1.4s (off with 
   (top books, apps in use are lists, not only bars).
 - `prefers-reduced-motion` respected everywhere, including the shared-element cover transition.
 - Mobile: 16px gutters, no horizontal page scroll; wide content scrolls in its own container.
+  A grid that only gets columns from a breakpoint (`md:grid-cols-2`) starts from `grid-cols-1`
+  (`minmax(0, 1fr)`): without it the phone layout is one implicit `auto` column, which grows to
+  the full width of any `truncate`d (nowrap) line inside it, so `min-w-0` never gets to shrink it.
 
 ---
 

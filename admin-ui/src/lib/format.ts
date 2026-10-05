@@ -196,3 +196,12 @@ export function progressFraction(position: number, duration: number): number {
 export function formatVersion(version: string): string {
   return /^\d/.test(version) ? `v${version}` : version;
 }
+
+/** "https://books.example.com/connect" -> "books.example.com" (with any port); an unparseable URL as is. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
