@@ -150,7 +150,7 @@ function Detail({
             label={t('folders.detail.question')}
             value={saving ?? choiceOf(entry.override)}
             onValueChange={(c) => void choose(c)}
-            className="grid gap-2.5 xl:grid-cols-3"
+            className="grid grid-cols-1 gap-2.5 xl:grid-cols-3"
             options={FOLDER_CHOICES.map((c) => ({
               value: c,
               title: t(`folders.mode.${c}`),

@@ -46,7 +46,7 @@ export function ListeningTab({ user }: { user: User }) {
           onRetry={() => void progress.refetch()}
         />
       ) : (
-        <div className="grid items-start gap-4 xl:grid-cols-2">
+        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
           <ProgressCard
             title={t('user.listening.inProgress')}
             empty={t('user.listening.noneInProgress')}

@@ -21,6 +21,7 @@ import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
 import { buttonVariants } from '@/components/ui/button';
 import { formatBytes, formatDateTime, formatNumber } from '@/lib/format';
+import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { cn } from '@/lib/utils';
 import { systemRows, type SystemRow } from './system-model';
 
@@ -49,7 +50,7 @@ export function SystemPage() {
     <Page>
       <PageHead
         title={t('system.title')}
-        description={t('system.description', { name: sys?.name ?? 'AudioSilo' })}
+        description={t('system.description', { name: sys?.name ?? DEFAULT_SERVER_NAME })}
       />
       {system.isError ? (
         <QueryError

@@ -62,7 +62,7 @@ export function PeoplePage() {
         />
       ) : !users.data ? (
         <div
-          className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
+          className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
           role="status"
           aria-label={t('common.loading')}
         >
@@ -78,7 +78,7 @@ export function PeoplePage() {
           action={inviteButton}
         />
       ) : (
-        <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {list.map((u) => (
             <li key={u.id} className="min-w-0">
               <PersonCard

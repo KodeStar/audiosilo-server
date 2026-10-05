@@ -353,7 +353,7 @@ function SignInTab({ user: u }: { user: User }) {
   const [password, setPassword] = useState(false);
   const [clearing, setClearing] = useState(false);
   return (
-    <div className="grid items-start gap-4 lg:grid-cols-2">
+    <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
       <Card className="flex flex-col gap-3 p-5" aria-labelledby="password-title">
         <h2 id="password-title" className="h3">
           {t('user.signIn.password')}

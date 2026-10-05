@@ -1,12 +1,14 @@
 import { useTranslation } from 'react-i18next';
 import { Clock, Copy, ShieldCheck, Users } from 'lucide-react';
+import { useServerInfo } from '@/api/hooks';
 import { LogoTile } from '@/components/logo';
 import { QrCode } from '@/components/qr-code';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { copyText } from '@/lib/clipboard';
-import { formatDateTime } from '@/lib/format';
+import { formatDateTime, hostOf } from '@/lib/format';
+import { serverLabel } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import type { ShownInvite } from './invite-dialog';
 
@@ -14,11 +16,15 @@ import type { ShownInvite } from './invite-dialog';
  * A freshly minted (or rotated) invite: the ink card with the QR code, then the
  * link and the code with copy buttons. The code is shown only this once; the
  * server keeps a hash. The QR is drawn in the browser, so the code never goes
- * back to the server in an image request.
+ * back to the server in an image request. The card names the server the way the
+ * person invited knows it, not by whatever address this browser happens to use.
  */
 export function InviteCard({ invite }: { invite: ShownInvite }) {
   const { name, invite_url: url, auth_code: code, max_uses: maxUses, expires_at } = invite;
   const { t, i18n } = useTranslation();
+  const server = useServerInfo();
+  // The link's host is the server's public address, else the host it was asked on.
+  const serverName = serverLabel(server.data?.name, hostOf(url));
   const copy = async (text: string, what: string) => {
     if (await copyText(text)) toast.add({ title: t('invite.copied', { what }), type: 'success' });
     else toast.add({ title: t('invite.copyFailed'), description: text, type: 'warning' });
@@ -29,7 +35,7 @@ export function InviteCard({ invite }: { invite: ShownInvite }) {
         <div className="mb-5 flex items-center gap-2.5">
           <LogoTile />
           <span className="flex min-w-0 flex-col">
-            <b className="truncate font-display text-[15px]">{window.location.host}</b>
+            <b className="truncate font-display text-[15px]">{serverName}</b>
             <span className="text-[12px] opacity-70">{t('invite.card.from')}</span>
           </span>
         </div>

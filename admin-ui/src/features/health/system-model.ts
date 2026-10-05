@@ -1,6 +1,7 @@
 import type { SystemStatus } from '@/api/types';
 import { certificateLook } from '@/features/settings/settings-model';
 import { backupHealth } from '@/features/settings/backups-model';
+import { hostOf } from '@/lib/format';
 import { backupFailureKey } from '@/lib/server-events';
 
 // Health > System: everything the server depends on as one list of rows, each
@@ -241,14 +242,6 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
 /** "0018_sessions.sql" -> 18. */
 export function schemaNumber(name: string): number {
   return Number.parseInt(name, 10) || 0;
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }
 
 /** How long the server has been up, in whole units: [n, unit]. */

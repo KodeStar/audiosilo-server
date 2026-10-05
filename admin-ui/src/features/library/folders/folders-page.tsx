@@ -173,7 +173,7 @@ function FolderExplorer({
   }
 
   return (
-    <div className="grid items-start gap-5 md:grid-cols-[minmax(240px,340px)_minmax(0,1fr)]">
+    <div className="grid grid-cols-1 items-start gap-5 md:grid-cols-[minmax(240px,340px)_minmax(0,1fr)]">
       <Card className="max-h-[45vh] overflow-y-auto p-2.5 md:max-h-[70vh]">
         <div className="flex min-w-0 items-center gap-2 px-2 py-1.5 text-[13.5px] font-semibold">
           <Database className="size-[15px] shrink-0 text-muted-foreground" aria-hidden="true" />

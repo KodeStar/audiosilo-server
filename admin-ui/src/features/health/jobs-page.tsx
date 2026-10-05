@@ -102,7 +102,7 @@ export function JobsPage() {
           onRetry={() => void jobs.refetch()}
         />
       ) : (
-        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="flex min-w-0 flex-col gap-4">
             <NowCard job={jobs.data?.running} loading={jobs.isPending} onStop={cancel} />
             {jobs.data?.queued.length ? (

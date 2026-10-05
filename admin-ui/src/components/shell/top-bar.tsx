@@ -4,6 +4,7 @@ import { Search } from 'lucide-react';
 import { useOfflineLibraries, useServerInfo } from '@/api/hooks';
 import { LogoTile } from '@/components/logo';
 import { formatVersion } from '@/lib/format';
+import { serverLabel } from '@/lib/server-label';
 import { cn } from '@/lib/utils';
 import { DESTINATIONS, destinationFor } from './destinations';
 import { ThemeMenu, UserMenu } from './menus';
@@ -113,7 +114,7 @@ function ServerIdentity() {
         className="max-w-[220px] truncate font-display text-base leading-none font-bold tracking-[-0.02em]"
         title={window.location.host}
       >
-        {serverLabel(server.data?.name)}
+        {serverLabel(server.data?.name, window.location.host)}
       </span>
       <span className="flex items-center gap-[5px] text-[11.5px] leading-[1.2] text-muted-foreground">
         <span className="dot" data-tone={tone} aria-hidden="true" />
@@ -121,9 +122,4 @@ function ServerIdentity() {
       </span>
     </span>
   );
-}
-
-/** The server's name once an admin has given it one (Settings > General), else its address. */
-function serverLabel(name: string | undefined): string {
-  return name && name !== 'AudioSilo' ? name : window.location.host;
 }

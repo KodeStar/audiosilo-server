@@ -137,7 +137,7 @@ function AuditRow({ event: e }: { event: AuditEvent }) {
   });
   const system = e.via === 'system';
   return (
-    <li className="grid gap-x-4 gap-y-1.5 px-5 py-3.5 md:grid-cols-[130px_170px_minmax(0,1fr)]">
+    <li className="grid grid-cols-1 gap-x-4 gap-y-1.5 px-5 py-3.5 md:grid-cols-[130px_170px_minmax(0,1fr)]">
       <time dateTime={e.at} className="text-[12.5px] text-muted-foreground tabular-nums md:pt-0.5">
         {formatDateTime(e.at, lang)}
       </time>
