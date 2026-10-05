@@ -64,12 +64,22 @@ func (c *client) getJSON(ctx context.Context, path string, out any) error {
 		return ErrNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("meta: upstream status %d for %s", resp.StatusCode, path)
+		return &statusError{code: resp.StatusCode, path: path}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("meta: decode %s: %w", path, err)
 	}
 	return nil
+}
+
+// statusError is an upstream answer outside 2xx other than a 404.
+type statusError struct {
+	code int
+	path string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("meta: upstream status %d for %s", e.code, e.path)
 }
 
 // lookup resolves an asin (preferred) or isbn to a work id + recording id via
@@ -110,6 +120,33 @@ func (c *client) searchWorks(ctx context.Context, q string, limit int) (*upstrea
 		return nil, err
 	}
 	return &out, nil
+}
+
+// errNoMatchResults is a works/match 200 that is not a match answer: no
+// "results" member at all. A metaserve cannot send one, so it is something else
+// answering for it, and the caller falls back as it does for a 404.
+var errNoMatchResults = errors.New("meta: works/match answered without results")
+
+// matchWorks runs metaserve's structured match via GET /api/v1/works/match. An
+// older metaserve has no such route and answers 404 (ErrNotFound, through
+// works/{id} reading "match" as an id); see routeMissing.
+func (c *client) matchWorks(ctx context.Context, v url.Values) ([]upstreamMatchResult, error) {
+	var out struct {
+		// Raw, so a body WITHOUT the member (nil) is told apart from an empty
+		// answer, "[]" or "null" alike.
+		Results json.RawMessage `json:"results"`
+	}
+	if err := c.getJSON(ctx, "/api/v1/works/match?"+v.Encode(), &out); err != nil {
+		return nil, err
+	}
+	if out.Results == nil {
+		return nil, errNoMatchResults
+	}
+	var results []upstreamMatchResult
+	if err := json.Unmarshal(out.Results, &results); err != nil {
+		return nil, fmt.Errorf("meta: decode works/match results: %w", err)
+	}
+	return results, nil
 }
 
 // series fetches an ordered series rail via GET /api/v1/series/{id}.
@@ -177,6 +214,17 @@ type upstreamSearch struct {
 		ID       string  `json:"id"`
 		CoverURL *string `json:"cover_url"`
 	} `json:"results"`
+}
+
+// upstreamMatchResult is one GET works/match result, best first: a work card
+// (only the id and cover are needed; the full document is fetched by id) with
+// its score, reasons and the recording an identifier named.
+type upstreamMatchResult struct {
+	ID          string        `json:"id"`
+	CoverURL    *string       `json:"cover_url"`
+	Score       int           `json:"score"`
+	RecordingID string        `json:"recording_id"`
+	Reasons     *MatchReasons `json:"reasons"`
 }
 
 type upstreamPosition struct {

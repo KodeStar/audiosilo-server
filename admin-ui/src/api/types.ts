@@ -1351,8 +1351,27 @@ export interface MatchCandidate {
   recordings: MatchRecording[];
   /** The recording an ASIN/ISBN lookup resolved to. */
   recording_id?: string;
-  /** 0-100: how well the work fits the book (100 = identifier hit). */
+  /**
+   * 0-100: how well the work fits the book - the community service's structured
+   * match score, 100 for an identifier hit, or (older service) the title, author
+   * and runtime agreement.
+   */
   score: number;
+  /** Which facts agreed, when the community service's match scored it. */
+  reasons?: MatchReasons;
+}
+
+/** meta.MatchReasons: each field present only when the request let it be judged. */
+export interface MatchReasons {
+  /** Best title similarity, 0-1. */
+  title?: number;
+  /** Typed-text similarity, 0-1 (1 when it named the series and volume). */
+  text?: number;
+  author?: 'full' | 'surname' | 'none';
+  series?: 'position' | 'name' | 'conflict' | 'none';
+  /** Relative runtime difference of the closest recording (0.02 = 2%). */
+  runtime?: number;
+  identifier?: 'asin' | 'isbn';
 }
 
 /** One entry of POST /admin/covers (handlers_covers.go coverThumb), in request order. */

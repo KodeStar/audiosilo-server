@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -212,6 +213,10 @@ type Service struct {
 	flights  map[string]*lookupFlight
 	// health caches Ping's answer.
 	health healthCache
+	now    func() time.Time
+	// matchUnsupportedUntil (unix nanoseconds) is when works/match is next
+	// tried after metaserve answered it as an unknown route (Candidates).
+	matchUnsupportedUntil atomic.Int64
 }
 
 // NewService builds a Service for the given metaserve base URL. now may be nil
@@ -229,6 +234,7 @@ func NewService(baseURL string, now func() time.Time) *Service {
 		workSem:       make(chan struct{}, maxConcurrentWorkFetches),
 		lookupSem:     make(chan struct{}, maxConcurrentLookups),
 		flights:       map[string]*lookupFlight{},
+		now:           now,
 	}
 }
 

@@ -276,6 +276,42 @@ func TestAdminBulkEditAPI(t *testing.T) {
 	}
 }
 
+// TestAdminMatchSendsTheBookFacts: against a metaserve with the structured
+// match, the handler hands it the book's tags AND its library path, and the
+// console gets metaserve's score and reasons in the unchanged envelope.
+func TestAdminMatchSendsTheBookFacts(t *testing.T) {
+	m := &mockMetaserve{lookupCode: http.StatusNotFound, match: true}
+	e := newMetaEnvMock(t, true, m)
+	adminTok, _, _ := adminAndMember(t, e)
+	_, base := seedCatalog(t, e)
+	_, body := e.do(t, "GET", base+"/book/match?path="+escape("Andy Weir/Artemis")+"&q=artemis", adminTok, "")
+	var out struct {
+		Candidates []struct {
+			WorkID  string `json:"work_id"`
+			Score   int
+			Reasons struct {
+				Title  float64
+				Author string
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Candidates) != 1 || out.Candidates[0].Score != 88 || out.Candidates[0].Reasons.Author != "full" {
+		t.Fatalf("match = %s", body)
+	}
+	m.mu.Lock()
+	got := m.gotMatch
+	m.mu.Unlock()
+	// The path's author folder and the tagged inverted credit both go up; the
+	// title is the path's and the tag's (deduplicated).
+	if got.Get("q") != "artemis" || strings.Join(got["author"], "|") != "Andy Weir|Weir, Andy" ||
+		strings.Join(got["title"], "|") != "Artemis" || got.Get("runtime") != "32400" {
+		t.Fatalf("works/match sent %v", got)
+	}
+}
+
 func TestAdminMatchAPI(t *testing.T) {
 	e := newMetaEnv(t, true, 0)
 	adminTok, _, _ := adminAndMember(t, e)

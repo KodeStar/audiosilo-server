@@ -345,8 +345,9 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminMatch serves GET /admin/libraries/{id}/book/match?path=: community
-// works the book might be. ?q= searches that text and ?asin= / ?isbn= look an
-// identifier up; with none, meta.Candidates searches the book's own facts.
+// works the book might be. ?q= adds that text to the book's own facts (its tags
+// and its library path) and ?asin= / ?isbn= look an identifier up; with none,
+// meta.Candidates matches the book's facts and looks its own identifiers up.
 //
 // Responses: metadata off -> 404 (code metadata_off); no book -> 404; upstream
 // down -> 502; otherwise 200 {"candidates": [...]} (possibly empty).
@@ -369,7 +370,8 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 	mq := meta.MatchQuery{
 		Text: strings.TrimSpace(query.Get("q")), ASIN: strings.TrimSpace(query.Get("asin")),
 		ISBN: strings.TrimSpace(query.Get("isbn")), Title: book.Title, Series: book.Series,
-		Author: book.Author, Duration: book.Duration, BookASIN: book.ASIN, BookISBN: book.ISBN,
+		SeriesIndex: book.SeriesIndex, Author: book.Author, Duration: book.Duration,
+		Path: book.RelPath, IsFolder: book.IsFolder, BookASIN: book.ASIN, BookISBN: book.ISBN,
 	}
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {
 		writeError(w, http.StatusBadRequest, "query too long")

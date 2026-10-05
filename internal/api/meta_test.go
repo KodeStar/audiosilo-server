@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -22,10 +23,23 @@ func escape(s string) string { return url.QueryEscape(s) }
 type mockMetaserve struct {
 	lookupCode int // non-zero overrides the lookup response status
 	workCode   int // non-zero overrides the works/{id} response status
+	// match serves works/match (a current metaserve); without it the route
+	// falls through to works/{id} and 404s, as on a metaserve that predates it.
+	match    bool
+	mu       sync.Mutex
+	gotMatch url.Values
 }
 
 func (m *mockMetaserve) handler() http.Handler {
 	mux := http.NewServeMux()
+	if m.match {
+		mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, r *http.Request) {
+			m.mu.Lock()
+			m.gotMatch = r.URL.Query()
+			m.mu.Unlock()
+			_, _ = w.Write([]byte(`{"results":[{"kind":"work","id":"the-martian","title":"The Martian","cover_url":"https://c/w.jpg","score":88,"reasons":{"title":1,"author":"full"}}]}`))
+		})
+	}
 	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
 		if m.lookupCode != 0 {
 			w.WriteHeader(m.lookupCode)

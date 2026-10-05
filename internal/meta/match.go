@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"math"
+	"net/http"
+	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
+	"unicode/utf8"
 
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -18,25 +24,37 @@ import (
 // an admin can attach one (its ASIN/ISBN, through the existing enrichment write) and
 // accept fields from it (as community-sourced overrides). Admin-only and
 // interactive, so results are not cached; the fan-out is bounded instead.
+//
+// The candidates come from metaserve's STRUCTURED match (GET works/match), which
+// takes the book's facts separately - title and author guesses from the tags AND
+// from the folder path, the series folder and the volume number, the runtime, the
+// typed text, an identifier - because a book's tags are often garbage where its
+// path is good, and works/search, which needs every word of one query, finds
+// neither. An older metaserve without the route answers 404, and then the dialog
+// searches exactly as it did before (searchHits, frozen).
 
 // maxMatchCandidates caps how many search hits are expanded into full works.
 const maxMatchCandidates = 6
 
-// MatchQuery describes the book being matched. Text is what to search for and
-// ASIN/ISBN an identifier to look up directly; when all three are empty the book's
-// own facts are used (its title and author as the text, its ASIN/ISBN). Title,
-// Author and Duration also score the candidates; Series lets the book's title be
-// read without its series name and edition fluff (match.CleanTitle).
+// MatchQuery describes the book being matched. Text is what the admin typed and
+// ASIN/ISBN an identifier they gave; when all three are empty the book's own
+// identifiers are looked up. Title, Series, SeriesIndex and Author are the book's
+// (tagged or edited) facts, Path and IsFolder its library path, which is read for
+// facts of its own (derivePathFacts); all of them, with Duration, find and score
+// the candidates.
 type MatchQuery struct {
-	Text     string
-	ASIN     string
-	ISBN     string
-	Title    string
-	Series   string
-	Author   string
-	Duration float64 // seconds; 0 when unknown
-	BookASIN string
-	BookISBN string
+	Text        string
+	ASIN        string
+	ISBN        string
+	Title       string
+	Series      string
+	SeriesIndex float64
+	Author      string
+	Duration    float64 // seconds; 0 when unknown
+	Path        string  // the book's rel_path
+	IsFolder    bool
+	BookASIN    string
+	BookISBN    string
 }
 
 // MatchCandidate is one community work a book might be.
@@ -54,9 +72,32 @@ type MatchCandidate struct {
 	Recordings     []MatchRecording `json:"recordings"`
 	// RecordingID names the recording an ASIN/ISBN lookup resolved to.
 	RecordingID string `json:"recording_id,omitempty"`
-	// Score (0-100) is how well the work fits the book: title, author and runtime
-	// agreement, or 100 for an identifier hit.
+	// Score (0-100) is how well the work fits the book: metaserve's structured
+	// match score, 100 for an identifier hit, or (against an older metaserve)
+	// the title, author and runtime agreement scoreCandidate finds.
 	Score int `json:"score"`
+	// Reasons say which facts agreed, as metaserve's match reports them. From
+	// the older search it is absent, except on an identifier lookup's hit,
+	// which carries the identifier it was found by.
+	Reasons *MatchReasons `json:"reasons,omitempty"`
+}
+
+// MatchReasons is metaserve's account of a match score (works/match `reasons`),
+// passed through unchanged. Each field is omitted when the request did not let
+// it be judged.
+type MatchReasons struct {
+	// Title is the best title similarity (0-1) over the title guesses.
+	Title *float64 `json:"title,omitempty"`
+	// Text is the typed text's similarity (0-1), read as a title.
+	Text *float64 `json:"text,omitempty"`
+	// Author is "full", "surname" or "none".
+	Author string `json:"author,omitempty"`
+	// Series is "position", "name", "conflict" or "none".
+	Series string `json:"series,omitempty"`
+	// Runtime is the relative difference to the closest recording (0.02 = 2%).
+	Runtime *float64 `json:"runtime,omitempty"`
+	// Identifier is "asin" or "isbn" when the work was found by it.
+	Identifier string `json:"identifier,omitempty"`
 }
 
 // MatchSeries is a series the work belongs to, with its position.
@@ -78,6 +119,40 @@ type MatchRecording struct {
 	CoverURL    string          `json:"cover_url,omitempty"`
 }
 
+// matchHit is one work to expand into a candidate. A hit whose score is known
+// carries its reasons (an identifier hit, metaserve's match); one without them
+// came from the older search and scoreCandidate scores it.
+type matchHit struct {
+	id, recordingID, cover string
+	score                  int
+	reasons                *MatchReasons
+}
+
+// matchUnsupportedTTL is how long a metaserve that answered works/match as an
+// unknown route is taken to lack it: the dialog then searches directly instead
+// of paying for that 404 on every open, and a metaserve upgraded meanwhile is
+// noticed within the TTL.
+const matchUnsupportedTTL = 15 * time.Minute
+
+// maxMatchIdentifier is the longest asin/isbn works/match reads (metaserve's
+// own maxMatchIdentifier).
+const maxMatchIdentifier = 20
+
+// maxMatchValueBytes is how much of each text value works/match reads
+// (metaserve's maxQueryBytes).
+const maxMatchValueBytes = 256
+
+// boundBytes cuts s to at most n bytes on a rune boundary.
+func boundBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
 // Candidates finds the community works a book might be, best first. It returns an
 // empty list when nothing matches, and an error only when the community service
 // could not be reached.
@@ -86,51 +161,54 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	defer cancel()
 
 	text, asin, isbn := strings.TrimSpace(q.Text), normalizeASIN(q.ASIN), normalizeISBN(q.ISBN)
+	// An identifier the admin typed (with no text) asks for that record alone.
+	identifierOnly := text == "" && (asin != "" || isbn != "")
 	if text == "" && asin == "" && isbn == "" {
-		// The book's own facts. metaserve's search requires every word, so the title
-		// goes in without what tags add and a community record lacks: the series
-		// name and "(Unabridged)" or ", Book 1" fluff.
-		text = strings.TrimSpace(match.CleanTitle(q.Title, q.Series) + " " + q.Author)
 		asin, isbn = normalizeASIN(q.BookASIN), normalizeISBN(q.BookISBN)
 	}
 
-	// The identifier lookup and the text search are independent; run them together.
-	type hit struct {
-		id, recordingID, cover string
-		identified             bool
-	}
 	var (
-		lookupHit          *hit
-		search             *upstreamSearch
-		lookupErr, findErr error
-		first              sync.WaitGroup
+		hits    []matchHit
+		legErrs []error
+		matched bool
 	)
-	if asin != "" || isbn != "" {
-		first.Go(func() {
-			lookup, err := s.client.lookup(ctx, asin, isbn)
-			switch {
-			case err != nil:
-				lookupErr = err
-			case lookup.Work != nil:
-				lookupHit = &hit{id: lookup.Work.ID, recordingID: lookup.RecordingID, cover: deref(lookup.Work.CoverURL), identified: true}
+	// A book that says nothing metaserve can match on (no title, author, series
+	// or usable identifier anywhere) would only earn a 400, and the search has
+	// nothing to look for either: an empty answer, without a request.
+	params := matchParams(q, text, asin, isbn)
+	if !identifierOnly && !hasMatchFacts(params) {
+		return []MatchCandidate{}, nil
+	}
+	if !identifierOnly && s.now().UnixNano() >= s.matchUnsupportedUntil.Load() {
+		// One request answers it all: metaserve looks the identifier up too.
+		res, err := s.client.matchWorks(ctx, params)
+		switch {
+		case err == nil:
+			matched = true
+			for _, r := range res {
+				if r.ID == "" {
+					continue
+				}
+				h := matchHit{id: r.ID, cover: deref(r.CoverURL), score: r.Score, reasons: r.Reasons}
+				if h.reasons == nil {
+					h.reasons = &MatchReasons{}
+				}
+				if h.reasons.Identifier != "" {
+					h.recordingID = r.RecordingID
+				}
+				hits = append(hits, h)
 			}
-		})
-	}
-	if text != "" {
-		first.Go(func() { search, findErr = s.client.searchWorks(ctx, text, maxMatchCandidates) })
-	}
-	first.Wait()
-
-	var hits []hit
-	if lookupHit != nil {
-		hits = append(hits, *lookupHit)
-	}
-	if search != nil {
-		for _, r := range search.Results {
-			if r.ID != "" && !slices.ContainsFunc(hits, func(h hit) bool { return h.id == r.ID }) {
-				hits = append(hits, hit{id: r.ID, cover: deref(r.CoverURL)})
-			}
+		case ctx.Err() == nil && routeMissing(err):
+			s.matchUnsupportedUntil.Store(s.now().Add(matchUnsupportedTTL).UnixNano())
+		default:
+			// A metaserve that HAS the route but failed (a 503 over its budget, a
+			// 5xx, a timeout) is an outage the dialog reports, not a reason to
+			// answer from a weaker search.
+			return nil, err
 		}
+	}
+	if !matched {
+		hits, legErrs = s.searchHits(ctx, q, text, asin, isbn, identifierOnly)
 	}
 	if len(hits) > maxMatchCandidates {
 		hits = hits[:maxMatchCandidates]
@@ -149,8 +227,8 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 			}
 			c := s.toCandidate(detail, h.cover)
 			c.RecordingID = h.recordingID
-			if h.identified {
-				c.Score = 100
+			if h.reasons != nil {
+				c.Score, c.Reasons = h.score, h.reasons
 			} else {
 				c.Score = scoreCandidate(q, c)
 			}
@@ -174,7 +252,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	// way - either leg, or expanding a hit - is an outage, not "no match": the leg
 	// that failed may well have found the book.
 	if len(cands) == 0 {
-		for _, err := range []error{expandErr, lookupErr, findErr} {
+		for _, err := range append([]error{expandErr}, legErrs...) {
 			if err != nil && !errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
@@ -182,6 +260,151 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	}
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].Score > cands[j].Score })
 	return cands, nil
+}
+
+// routeMissing reports whether a works/match error says the route does not
+// exist - an older metaserve 404s it (through works/{id} reading "match" as an
+// id), a 405 or a 200 that is not a match answer says the same - as opposed
+// to a metaserve that has it and failed.
+func routeMissing(err error) bool {
+	var st *statusError
+	return errors.Is(err, ErrNotFound) || errors.Is(err, errNoMatchResults) ||
+		(errors.As(err, &st) && st.code == http.StatusMethodNotAllowed)
+}
+
+// searchHits is the dialog's search before works/match: the identifier lookup
+// and works/search, concurrently. It is FROZEN - the fallback for a metaserve
+// that predates works/match, kept as it was (and scored by the tag-only
+// scoreCandidate) except that a lookup hit now names its identifier in
+// reasons. Delete it, with scoreCandidate and the unsupported-route
+// memo, once the production metaserve serves works/match. legErrs holds each
+// leg's failure.
+func (s *Service) searchHits(ctx context.Context, q MatchQuery, text, asin, isbn string, identifierOnly bool) (hits []matchHit, legErrs []error) {
+	if text == "" && !identifierOnly {
+		// The book's own facts. metaserve's search requires every word, so the title
+		// goes in without what tags add and a community record lacks: the series
+		// name and "(Unabridged)" or ", Book 1" fluff.
+		text = strings.TrimSpace(match.CleanTitle(q.Title, q.Series) + " " + q.Author)
+	}
+	var (
+		lookupHit          *matchHit
+		search             *upstreamSearch
+		lookupErr, findErr error
+		first              sync.WaitGroup
+	)
+	if asin != "" || isbn != "" {
+		first.Go(func() {
+			lookup, err := s.client.lookup(ctx, asin, isbn)
+			switch {
+			case err != nil:
+				lookupErr = err
+			case lookup.Work != nil:
+				by := "isbn"
+				if asin != "" {
+					by = "asin"
+				}
+				lookupHit = &matchHit{id: lookup.Work.ID, recordingID: lookup.RecordingID, cover: deref(lookup.Work.CoverURL),
+					score: 100, reasons: &MatchReasons{Identifier: by}}
+			}
+		})
+	}
+	if text != "" {
+		first.Go(func() { search, findErr = s.client.searchWorks(ctx, text, maxMatchCandidates) })
+	}
+	first.Wait()
+
+	if lookupHit != nil {
+		hits = append(hits, *lookupHit)
+	}
+	if search != nil {
+		for _, r := range search.Results {
+			if r.ID != "" && !slices.ContainsFunc(hits, func(h matchHit) bool { return h.id == r.ID }) {
+				hits = append(hits, matchHit{id: r.ID, cover: deref(r.CoverURL)})
+			}
+		}
+	}
+	return hits, []error{lookupErr, findErr}
+}
+
+// matchParams is the works/match request for a book: the typed text and
+// identifiers, then every guess its path and tags make. Tag and path guesses go
+// in side by side because metaserve judges each fact by its BEST guess - a
+// garbage tag beside a good path costs nothing - and the path's lead, since
+// they are the ones that are usually right when the two disagree. Numbering is
+// left on: metaserve reads it ("Sharpe - 08 - Sharpe's Eagle" is volume 8 of
+// the series) and cleans each title guess against the series itself.
+func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
+	p := derivePathFacts(q.Path, q.IsFolder)
+	v := url.Values{}
+	add := func(key, val string) {
+		// metaserve reads at most maxMatchValueBytes of each value, so a longer
+		// tag is cut here too: past that it only lengthens the URL, and a proxy's
+		// 414 would fail the dialog for that book every time.
+		val = strings.TrimSpace(boundBytes(strings.TrimSpace(val), maxMatchValueBytes))
+		if val != "" && !slices.Contains(v[key], val) {
+			v.Add(key, val)
+		}
+	}
+	add("q", text)
+	// metaserve ignores a longer identifier (a garbage tag), so one alone must
+	// not make a request it would refuse as naming nothing.
+	if len(asin) <= maxMatchIdentifier {
+		add("asin", asin)
+	}
+	if len(isbn) <= maxMatchIdentifier {
+		add("isbn", isbn)
+	}
+	add("title", p.Title)
+	add("title", q.Title)
+	add("author", p.Author)
+	add("author", q.Author)
+	// Both series guesses go up, the folder's first, then the tag's unless it
+	// names the same series: metaserve judges each and counts the better, so the
+	// author folder a "Fiction/<author>/<book>" layout puts in the series slot
+	// costs nothing beside a right tag. (A metaserve that reads one series reads
+	// the folder's, as before.)
+	// The folder's own numbering ("03 - Tawny Man") is not part of the name it
+	// shares with a tag ("Tawny Man"); metaserve cuts it the same way.
+	_, folderName := metadata.SplitSeriesIndex(p.Series)
+	differ := p.Series != "" && q.Series != "" && match.Fold(q.Series) != match.Fold(p.Series) &&
+		match.Fold(q.Series) != match.Fold(folderName)
+	add("series", p.Series)
+	if p.Series == "" || differ {
+		add("series", q.Series)
+	}
+	// The tagged position numbers the tagged series, but metaserve takes one
+	// position for every series guess, and a stated one replaces the volume a
+	// title's numbering carries. So it goes up only when no DIFFERENT series
+	// folder goes up with it: beside "03 - Tawny Man" (a book tagged Realm of the
+	// Elderlings #15) it would turn the folder's agreement into a conflict, and
+	// left out, metaserve takes the volume from the leaf ("TM02 - Golden Fool")
+	// while the tag's series still agrees by name. A volume the path gives the
+	// series folder ("Stormlight Archive/03") is paired the same way, and leads
+	// the tag's like every path fact.
+	switch {
+	case differ:
+	case p.Position != "":
+		v.Set("position", p.Position)
+	case q.SeriesIndex > 0:
+		v.Set("position", strconv.FormatFloat(q.SeriesIndex, 'f', -1, 64))
+	}
+	if q.Duration >= 1 {
+		v.Set("runtime", strconv.Itoa(int(math.Round(q.Duration))))
+	}
+	v.Set("limit", strconv.Itoa(maxMatchCandidates))
+	return v
+}
+
+// hasMatchFacts reports whether a works/match request names anything metaserve
+// can match on; one with none (only a runtime, a position, the limit) it
+// refuses with a 400.
+func hasMatchFacts(v url.Values) bool {
+	for _, k := range []string{"q", "title", "author", "series", "asin", "isbn"} {
+		if v.Has(k) {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeASIN and normalizeISBN put an identifier in the form metaserve's exact
@@ -233,9 +456,10 @@ const (
 	weightRuntime = 15.0
 )
 
-// scoreCandidate rates a candidate against the book, 0-100. A fact the book (or
-// the candidate) lacks is left out of the denominator rather than counted as a
-// mismatch, so an untagged book isn't penalized for having no author.
+// scoreCandidate rates a candidate against the book, 0-100, for the frozen
+// works/search fallback (searchHits). A fact the book (or the candidate) lacks
+// is left out of the denominator rather than counted as a mismatch, so an
+// untagged book isn't penalized for having no author.
 func scoreCandidate(q MatchQuery, c *MatchCandidate) int {
 	var got, total float64
 	if q.Title != "" {
