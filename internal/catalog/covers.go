@@ -127,8 +127,15 @@ func (c *Catalog) Cover(ctx context.Context, libraryID int64, path string) (*Cus
 func (c *Catalog) DeleteCover(ctx context.Context, libraryID int64, path string) error {
 	path = CleanRelPath(path)
 	return c.db.WithTx(ctx, "DeleteCover", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM book_covers WHERE library_id = ? AND path = ?`, libraryID, path); err != nil {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM book_covers WHERE library_id = ? AND path = ?`, libraryID, path)
+		if err != nil {
+			return err
+		}
+		// Only a removed custom cover changes the art: with none to remove, the
+		// book keeps its identity (and its colour), which may already be its
+		// image's own version from a thumbnail rather than the index form.
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
 			return err
 		}
 		return refreshCoverArt(ctx, tx, libraryID, path)

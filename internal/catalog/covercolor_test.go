@@ -192,6 +192,33 @@ func TestCustomCoverVersion(t *testing.T) {
 	}
 }
 
+// TestDeleteMissingCoverKeepsVersion: deleting a custom cover a book does not
+// have leaves its cover identity alone, including one a thumbnail already moved
+// to the image's own version, and its colour stays exposed.
+func TestDeleteMissingCoverKeepsVersion(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "a.m4b", Title: "A", MTime: 1, Size: 10, CoverPath: "a.jpg"}); err != nil {
+		t.Fatal(err)
+	}
+	src := coverSource(t, c, lib.ID, "a.m4b")
+	cc := CoverColor{Bg: "#102030"}
+	if err := c.RecordCoverColors(ctx, []CoverColorRecord{{
+		LibraryID: lib.ID, Path: "a.m4b", Art: src.Art, Version: "s123-456", Color: cc}}); err != nil {
+		t.Fatal(err)
+	}
+	gotCC, before := coverState(t, c, lib.ID, "a.m4b")
+	if gotCC == nil || before != CoverVersion("s123-456") {
+		t.Fatalf("after thumbnail: cover = %+v %q", gotCC, before)
+	}
+	if err := c.DeleteCover(ctx, lib.ID, "a.m4b"); err != nil {
+		t.Fatal(err)
+	}
+	if gotCC, v := coverState(t, c, lib.ID, "a.m4b"); gotCC == nil || *gotCC != cc || v != before {
+		t.Fatalf("after deleting a missing cover: cover = %+v %q, want %+v %q", gotCC, v, cc, before)
+	}
+}
+
 // TestMovedCustomCoverVersion: a move carrying a custom cover gives the book at
 // the new path the custom cover's version.
 func TestMovedCustomCoverVersion(t *testing.T) {

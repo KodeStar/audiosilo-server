@@ -162,7 +162,8 @@ on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` /
 (per-library settings, off the player wire) and, on `books`, `scan_error` / `scan_error_file` /
 `scan_error_detail` (the last indexing's read problem) and `suspect_parts`; `0022` adds `books.split_parent` (the
 folder holding a disc of a book split across disc folders, else `''`); `0023` adds
-`books.cover_color` / `cover_version` (derived from cover thumbnails, see below) and `0024`
+`books.cover_art` (the cover art identity whose short hash is the wire `cover_version`) and
+`books.cover_color` (read from a thumbnail, tagged with the version it was read for; both derived, see below) and `0024`
 `meta_cache` (the community metadata cache's persistent level: derived, keyed by identifier,
 not user state; see Phase 1.5 below). Phase 4a (`0018`) adds
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
