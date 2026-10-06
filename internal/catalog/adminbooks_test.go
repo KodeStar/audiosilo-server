@@ -225,7 +225,7 @@ func TestBookFacets(t *testing.T) {
 
 func TestPeopleAggregate(t *testing.T) {
 	c, ctx, libA, _ := seedAdminLibrary(t)
-	agg, err := c.People(ctx, PeopleAuthors, libA)
+	agg, err := c.People(ctx, PeopleAuthors, libA, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,11 +237,11 @@ func TestPeopleAggregate(t *testing.T) {
 	if !reflect.DeepEqual(agg.Suggestions, wantS) {
 		t.Fatalf("suggestions = %+v", agg.Suggestions)
 	}
-	all, _ := c.People(ctx, PeopleNarrators, 0)
+	all, _ := c.People(ctx, PeopleNarrators, 0, nil)
 	if len(all.People) != 2 || all.Unknown != 4 {
 		t.Fatalf("narrators = %+v unknown=%d", all.People, all.Unknown)
 	}
-	if _, err := c.People(ctx, "rel_path", 0); err == nil {
+	if _, err := c.People(ctx, "rel_path", 0, nil); err == nil {
 		t.Fatal("an unknown people field must be refused")
 	}
 }
@@ -278,13 +278,58 @@ func TestPersonKey(t *testing.T) {
 
 func TestSeriesAggregate(t *testing.T) {
 	c, ctx, _, _ := seedAdminLibrary(t)
-	series, err := c.Series(ctx, 0)
+	series, err := c.Series(ctx, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []SeriesCount{{Name: "Mistborn", Author: "Brandon Sanderson", Books: 3, Duration: 9000, Positions: []float64{1, 2, 4}}}
 	if !reflect.DeepEqual(series, want) {
 		t.Fatalf("series = %+v", series)
+	}
+}
+
+// TestAggregatesScoped: with a scope, People and Series count only the books the
+// scope grants (denied: one outside it contributes nothing, nor does another
+// library's, even with libraryID 0), and nil counts every book (allowed).
+func TestAggregatesScoped(t *testing.T) {
+	c, ctx, libA, libB := seedAdminLibrary(t)
+	mistborn := &Scope{LibraryID: libA, Paths: []string{"Sanderson/Mistborn"}}
+	agg, err := c.People(ctx, PeopleAuthors, libA, mistborn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []PersonCount{{"Brandon Sanderson", 2, 5000}, {"Sanderson, Brandon", 1, 4000}}
+	if !reflect.DeepEqual(agg.People, want) || agg.Unknown != 0 {
+		t.Fatalf("scoped authors = %+v unknown=%d", agg.People, agg.Unknown)
+	}
+	// A whole-library scope still keeps to its own library.
+	agg, _ = c.People(ctx, PeopleNarrators, 0, &Scope{LibraryID: libA, AllowAll: true})
+	if want := []PersonCount{{"Scott Brick", 1, 9000}}; !reflect.DeepEqual(agg.People, want) || agg.Unknown != 4 {
+		t.Fatalf("library-A narrators = %+v unknown=%d", agg.People, agg.Unknown)
+	}
+	agg, _ = c.People(ctx, PeopleNarrators, 0, nil)
+	if len(agg.People) != 2 {
+		t.Fatalf("unscoped narrators = %+v", agg.People)
+	}
+	// An empty grant counts nothing; so does another library's scope.
+	for _, s := range []*Scope{{LibraryID: libA}, {LibraryID: libB, AllowAll: true}} {
+		agg, _ = c.People(ctx, PeopleAuthors, libA, s)
+		if len(agg.People) != 0 || agg.Unknown != 0 {
+			t.Errorf("scope %+v: authors = %+v unknown=%d, want none", s, agg.People, agg.Unknown)
+		}
+	}
+
+	series, err := c.Series(ctx, libA, &Scope{LibraryID: libA, Paths: []string{"Sanderson/Mistborn/1", "Sanderson/Mistborn/4"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantS := []SeriesCount{{Name: "Mistborn", Author: "Brandon Sanderson", Books: 2, Duration: 5000, Positions: []float64{1, 4}}}
+	if !reflect.DeepEqual(series, wantS) {
+		t.Fatalf("scoped series = %+v", series)
+	}
+	series, _ = c.Series(ctx, libA, &Scope{LibraryID: libA, Paths: []string{"Herbert"}})
+	if series == nil || len(series) != 0 {
+		t.Fatalf("series outside the grant = %#v, want empty", series)
 	}
 }
 

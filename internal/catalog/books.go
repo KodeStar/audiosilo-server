@@ -493,6 +493,7 @@ type ListOptions struct {
 	LibraryID int64
 	Author    string // optional exact-match filter
 	Series    string // optional exact-match filter
+	Narrator  string // optional exact-match filter
 	Sort      string // "author" (default) | "title" | "recent"
 	Limit     int
 	Cursor    string // opaque keyset cursor from a previous page
@@ -557,6 +558,10 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 	if opt.Series != "" {
 		where = append(where, "series = ?")
 		args = append(args, opt.Series)
+	}
+	if opt.Narrator != "" {
+		where = append(where, "narrator = ?")
+		args = append(args, opt.Narrator)
 	}
 	// Restrict to the caller's access scope (share path rules), if provided.
 	if opt.Scope != nil {
