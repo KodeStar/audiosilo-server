@@ -1,9 +1,11 @@
 package meta
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // named is rail(...) with a series name.
@@ -233,11 +235,23 @@ func TestPlaceOwned(t *testing.T) {
 		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/novella"}, Series: "S", SeriesIndex: 2, ASIN: "B0NOVELLA"},
 		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/2"}, Series: "S", SeriesIndex: 2},
 	}
-	got := locals(svc.PlaceOwned(env, MetaLocal{LibraryID: 1, Path: "S/1"}, books)[0].Works)
+	got := locals(svc.PlaceOwned(context.Background(), env, MetaLocal{LibraryID: 1, Path: "S/1"}, books)[0].Works)
 	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("placed = %q, want %q", got, want)
 	}
 	if books[0].WorkID != "" || env.Series[0].Works[0].Local != nil {
 		t.Fatal("PlaceOwned modified its input")
+	}
+
+	// After a restart the memory is empty, but the novella's enrichment is in
+	// the store: it is placed by its work id still, not by its index.
+	store := newMemStore()
+	store.put(StoredEntry{Key: nsASIN.key("B0NOVELLA"), Version: storeVersion, Source: "http://meta.invalid",
+		Payload: []byte(`{"matched":true,"work":{"id":"novella"}}`), Expires: time.Now().Add(time.Hour)})
+	restarted := NewService("http://meta.invalid", nil)
+	restarted.SetStore(store)
+	got = locals(restarted.PlaceOwned(context.Background(), env, MetaLocal{LibraryID: 1, Path: "S/1"}, books)[0].Works)
+	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("placed after a restart = %q, want %q", got, want)
 	}
 }

@@ -379,7 +379,11 @@ admin overrides; see Metadata overrides below).
   however stale is served when the upstream fails (not on caller cancellation),
   held in memory for errorTTL. Rows carry `storeVersion` and the metaserve
   `source`; others are ignored. Derived, rebuildable, not user state; the
-  launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000). No config
+  launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000), works
+  (`w:`, caller-chosen ids) within a share of their own (`catalog.MetaCacheWorkRows`,
+  2 000) so they never push the books' enrichments out. A work's later 404
+  replaces its stored row (no new row for an unknown id). Writes are bounded by
+  `storeWriteTimeout` (250 ms): a busy writer costs the row, not the response. No config
   key: only the service reads or writes it, so `metadata.enabled` off touches nothing.
   **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
   (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one,
@@ -391,7 +395,8 @@ admin overrides; see Metadata overrides below).
   (CC BY-SA, apart from `description`) and `attribution` (present iff the work
   has characters/recaps/recap_summary/community_description); `MetaRecording`
   carries `chapter_count`. `Service.CachedWorkID` answers an identifier's work id
-  from the memory cache only (no upstream, no store).
+  from the cache alone: memory, else its enrichment's stored row, fresh or stale
+  (never the upstream), so placement does not flip with a restart or an eviction.
   **Owned entries (`local`)**: every rail entry, main view and each
   `orderings[].works[]`, carries `local` `{library_id, path}` when the CALLER owns
   that work. Resolved per request AFTER the cache, on a copy of the rails (never
@@ -413,11 +418,13 @@ admin overrides; see Metadata overrides below).
   upstream error/unmatched/no rails/unnumbered -> fall through), `series`
   (`catalog.NextInSeries`: same library, exact series, smallest higher index in
   scope; numbered books but none later -> `{source:"series"}`), `folder`
-  (`library.NextSibling` over the parent's `BrowseFS` listing, paged to the end,
-  scope- and ignore-filtered, annotated by `BooksByPaths`; the player's
-  `findNextSibling`, except the current book does not count as "indexed" for the
-  bare-folder fallback), else `{source:"none"}`. `book` is the list shape;
-  everything named is in the caller's scope.
+  (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
+  ignore-filtered, annotated by `BooksByPaths`, which reads any number of paths in
+  chunks; the player's `findNextSibling`: names compared as its `localeCompare`
+  (numeric, base) does, by `x/text/collate`, and a bare folder only when nothing in
+  the folder, the current book included, is indexed), else `{source:"none"}`. A
+  failure to place the caller's books falls through like an upstream one. `book`
+  is the list shape; everything named is in the caller's scope.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
@@ -632,21 +639,24 @@ admin overrides; see Metadata overrides below).
   ~20 KB a cover instead of full art.
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
   (decompression bombs), `media.ThumbCache` is a byte-bounded LRU keyed by the art's
-  version (custom `updated_at`, file size + mtime) holding the raw JPEG plus its palette
-  (the admin batch base64-encodes it), and
-  `thumbSem` bounds decodes (reads are bounded per request, outside it). The player gets
+  version (custom `updated_at`, file size + mtime) holding the raw JPEG (the admin
+  batch base64-encodes it), and
+  `coverReads` bounds the art being read or waiting to be decoded and `thumbSem` the
+  decodes, both across requests. The player gets
   the same thumbnails from `GET /libraries/{id}/cover?size=160|320|640` (capability
   `cover_sizes`; one code path, `coverArt` + `coverThumbnail`; ETag = size + art version,
   304 on a match; custom `no-cache`, file art `max-age=86400`; any other size 400).
-  Every thumbnail (a cache hit too) records on the book what it lacks: `cover_version`
-  (`catalog.CoverVersion`, a 10-char hash of the art version) and `cover_color`
-  (`media.CoverPalette` on the scaled image: dominant bucket = `bg`, the most vibrant
-  bucket nudged in HSL lightness to WCAG 4.5:1 against it = `accent`, else none;
-  `on_accent` white/black) via `catalog.RecordCoverColors`, which skips a record whose
-  art has moved on (custom stamp or sidecar changed since it was read). `SetCover` sets
-  `cover_version` at once (colours cleared), `DeleteCover` clears both, `UpsertBook` clears
-  both when `mtime` or `cover_path` changed. Both are on the player `Book` JSON
-  (`omitempty`). Admin book rows
+  `cover_version` (`catalog.CoverVersion`, a 10-char hash of `books.cover_art`) is set
+  from index data whenever a book is indexed (custom stamp, else mtime, size and
+  sidecar path; `SetCover`, `DeleteCover`, moves and joins recompute it). Every
+  thumbnail (a cache hit too, a 304 revalidation included) records on a book what
+  it lacks for the art it read: `cover_color` (`media.CoverPalette` on the scaled image:
+  dominant bucket = `bg`, the most vibrant bucket nudged in HSL lightness to WCAG 4.5:1
+  against it = `accent`, else none; `on_accent` white/black) and, with it, the art's
+  own version as `cover_art`, so `cover_version` follows a sidecar replaced in place
+  and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
+  compare-and-set on the identity it was read under and bounded (250 ms, detached
+  from the request). Both are on the player `Book` JSON (`omitempty`). Admin book rows
   carry `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in

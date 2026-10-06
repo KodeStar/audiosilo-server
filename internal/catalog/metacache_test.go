@@ -56,7 +56,7 @@ func TestMetaCacheRows(t *testing.T) {
 	if err := c.PutMetaCache(ctx, MetaCacheEntry{Key: "w:0", Version: 1, Expires: expires}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := c.PruneMetaCache(ctx, 3)
+	n, err := c.PruneMetaCache(ctx, 3, 3)
 	if err != nil || n != 3 {
 		t.Fatalf("pruned %d, %v; want 3", n, err)
 	}
@@ -65,7 +65,42 @@ func TestMetaCacheRows(t *testing.T) {
 			t.Errorf("%s kept = %v, want %v", key, got != nil, kept)
 		}
 	}
-	if n, err := c.PruneMetaCache(ctx, MetaCacheRows); err != nil || n != 0 {
+	if n, err := c.PruneMetaCache(ctx, MetaCacheRows, MetaCacheWorkRows); err != nil || n != 0 {
 		t.Fatalf("pruning under the cap = %d, %v", n, err)
+	}
+}
+
+// TestMetaCacheWorksShare: works fetched by id (any signed-in caller picks the
+// id) keep only their own share, so a run of them never pushes the books'
+// enrichments out, however recently they were written.
+func TestMetaCacheWorksShare(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	c := New(db, func() time.Time { return now })
+	put := func(key string) {
+		t.Helper()
+		now = now.Add(time.Minute)
+		if err := c.PutMetaCache(ctx, MetaCacheEntry{Key: key, Version: 1, Expires: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, key := range []string{"a:B01", "i:9780000000002", "a:B03"} {
+		put(key)
+	}
+	for i := range 10 {
+		put("w:" + strconv.Itoa(i))
+	}
+	if n, err := c.PruneMetaCache(ctx, 5, 2); err != nil || n != 8 {
+		t.Fatalf("pruned %d, %v; want the 8 oldest works", n, err)
+	}
+	for key, kept := range map[string]bool{"a:B01": true, "i:9780000000002": true, "a:B03": true, "w:9": true, "w:8": true, "w:7": false, "w:0": false} {
+		if got, _ := c.GetMetaCache(ctx, key); (got != nil) != kept {
+			t.Errorf("%s kept = %v, want %v", key, got != nil, kept)
+		}
 	}
 }

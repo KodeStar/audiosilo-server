@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -56,8 +57,9 @@ type coverThumb struct {
 	Data      string `json:"data"`
 }
 
-// maxCoverReads bounds one request's concurrent art reads (a slow network mount
-// shouldn't get 60 at once); decodes are bounded across requests by thumbSem.
+// maxCoverReads bounds the art reads in progress across all requests (a slow
+// network mount shouldn't get a grid's 60 at once), and so how many images are
+// held in memory waiting to be decoded; decodes are bounded by thumbSem.
 const maxCoverReads = 8
 
 // handleAdminCovers serves POST /admin/covers {"books":[{library_id,path}],"size"}.
@@ -113,7 +115,6 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]coverThumb, len(req.Books))
 	recs := make([]*catalog.CoverColorRecord, len(req.Books))
-	reads := make(chan struct{}, maxCoverReads)
 	var wg sync.WaitGroup
 	for i, ref := range req.Books {
 		out[i] = coverThumb{LibraryID: ref.LibraryID, Path: ref.Path}
@@ -129,7 +130,7 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 			}
 			// An image that can't be read is "" for now (not cached, so the next
 			// page load tries again); one that can't be decoded is "" for good.
-			jpg, rec, err := a.coverThumbnail(ctx, lib, paths[i], src, art, req.Size, reads)
+			jpg, rec, err := a.coverThumbnail(ctx, lib, paths[i], src, art, req.Size)
 			if err != nil || jpg == nil {
 				return
 			}
@@ -189,12 +190,19 @@ func (a *API) handleCoverThumbnail(w http.ResponseWriter, r *http.Request, lib *
 	if src.CustomAt != "" {
 		cond.cacheControl = customCoverCache
 	}
-	if cond.notModified(w, r) {
+	// A book without a colour for this art goes on to read it (usually from the
+	// thumbnail cache) even for a client revalidating its copy: conditional.serve
+	// still answers that with a 304, and the colour is not left missing for as
+	// long as every client holding the thumbnail only ever revalidates it.
+	if src.Colored && src.Art == art.version && cond.notModified(w, r) {
 		return
 	}
-	jpg, rec, err := a.coverThumbnail(ctx, lib, path, src, art, size, make(chan struct{}, 1))
+	jpg, rec, err := a.coverThumbnail(ctx, lib, path, src, art, size)
 	switch {
 	case err != nil:
+		if ctx.Err() == nil {
+			a.log.Warn("cover thumbnail failed", "err", err, "library", lib.ID, "path", path)
+		}
 		writeError(w, http.StatusInternalServerError, "could not load cover")
 		return
 	case jpg == nil:
@@ -218,21 +226,22 @@ type artSource struct {
 // coverThumbnail returns the art's JPEG thumbnail at size through the shared
 // cache, nil when the art can't be decoded (cached, so it isn't re-read every
 // time); an error is a read that failed or was cancelled, not cached, so the next
-// request tries again. When the book at path has no colour for its current art
-// (src), rec is the colour read from the thumbnail, to record
-// (recordCoverColors); else nil. reads bounds the caller's concurrent art reads;
-// thumbSem bounds decodes across requests.
+// request tries again. Unless the book at path already holds a colour for this
+// very art (its cover art identity is the art's version, and it is coloured),
+// rec is the colour read from the thumbnail, to record (recordCoverColors); else
+// nil. The identity check is what notices a sidecar replaced in place, which no
+// index change shows.
 func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path string, src catalog.CoverSource,
-	art *artSource, size int, reads chan struct{}) (jpg []byte, rec *catalog.CoverColorRecord, err error) {
+	art *artSource, size int) (jpg []byte, rec *catalog.CoverColorRecord, err error) {
 	key := strconv.FormatInt(lib.ID, 10) + "\x00" + path + "\x00" + strconv.Itoa(size) + "\x00" + art.version
 	jpg, ok := a.thumbs.Get(key)
 	if !ok {
-		if jpg, err = a.makeThumbnail(ctx, lib, path, art, size, reads); err != nil {
+		if jpg, err = a.makeThumbnail(ctx, lib, path, art, size); err != nil {
 			return nil, nil, err
 		}
 		a.thumbs.Put(key, jpg)
 	}
-	if jpg == nil || src.Colored {
+	if jpg == nil || (src.Colored && src.Art == art.version) {
 		return jpg, nil, nil
 	}
 	palette, err := media.PaletteOf(jpg)
@@ -240,19 +249,22 @@ func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path str
 		a.log.Debug("cover palette failed", "err", err, "library", lib.ID, "path", path)
 		return jpg, nil, nil
 	}
-	return jpg, &catalog.CoverColorRecord{LibraryID: lib.ID, Path: path, Art: src.Art, Color: palette}, nil
+	return jpg, &catalog.CoverColorRecord{LibraryID: lib.ID, Path: path, Art: src.Art, Version: art.version, Color: palette}, nil
 }
 
 // makeThumbnail reads the art and scales it to size: nil when there is no art or
-// it can't be decoded, an error when the read failed or ctx ended.
-func (a *API) makeThumbnail(ctx context.Context, lib *catalog.Library, path string, art *artSource, size int, reads chan struct{}) ([]byte, error) {
+// it can't be decoded, an error when the read failed or ctx ended. A coverReads
+// slot is held from the read to the end of the decode, so however many requests
+// want thumbnails, only that many images are ever held in memory (and read from
+// a slow mount at once); thumbSem, taken after it, bounds the decodes.
+func (a *API) makeThumbnail(ctx context.Context, lib *catalog.Library, path string, art *artSource, size int) ([]byte, error) {
 	select {
-	case reads <- struct{}{}:
+	case a.coverReads <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+	defer func() { <-a.coverReads }()
 	raw, err := art.load()
-	<-reads
 	if errors.Is(err, media.ErrImageTooLarge) {
 		// An oversized sidecar stays oversized: no art (cached), not a retry that
 		// re-reads it on every page.
@@ -279,9 +291,16 @@ func (a *API) makeThumbnail(ctx context.Context, lib *catalog.Library, path stri
 	return jpg, nil
 }
 
+// coverColorWriteTimeout bounds recording thumbnails' colours, which runs before
+// they are sent: the single writer may be held (a scan, a prune), and a colour
+// is not worth holding the images back for longer than this.
+const coverColorWriteTimeout = 250 * time.Millisecond
+
 // recordCoverColors stores the colours coverThumbnail read (nil entries are
-// skipped). A failure only costs the colours until the next thumbnail, so it is
-// logged, not answered.
+// skipped). A failure only costs the colours until the next thumbnail (which
+// reads them again, revalidation included), so it is logged, not answered. The
+// write is detached from the request, so a client that has moved on still
+// leaves its colours behind, and bounded by coverColorWriteTimeout.
 func (a *API) recordCoverColors(ctx context.Context, recs ...*catalog.CoverColorRecord) {
 	var batch []catalog.CoverColorRecord
 	for _, r := range recs {
@@ -289,7 +308,15 @@ func (a *API) recordCoverColors(ctx context.Context, recs ...*catalog.CoverColor
 			batch = append(batch, *r)
 		}
 	}
-	if err := a.cat.RecordCoverColors(ctx, batch); err != nil {
+	if len(batch) == 0 {
+		return
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), coverColorWriteTimeout)
+	defer cancel()
+	switch err := a.cat.RecordCoverColors(wctx, batch); {
+	case err != nil && wctx.Err() != nil:
+		a.log.Debug("record cover colours timed out (the writer is busy)", "err", err)
+	case err != nil:
 		a.log.Warn("record cover colours failed", "err", err)
 	}
 }
@@ -324,7 +351,18 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 	}
 	if abs, err := library.SafeJoin(lib.Root, src.AudioPath); err == nil {
 		return fileArt("e", abs, func() ([]byte, error) {
-			data, _, _ := media.EmbeddedCover(abs)
+			data, _, ok := media.EmbeddedCover(abs)
+			if !ok {
+				// No art, or a file that couldn't be read: EmbeddedCover can't
+				// tell them apart. One that won't even open (a mount in trouble,
+				// out of file descriptors) is a failure worth retrying, not "no
+				// art" cached for this version.
+				f, err := os.Open(abs)
+				if err != nil {
+					return nil, err
+				}
+				_ = f.Close()
+			}
 			return data, nil
 		})
 	}

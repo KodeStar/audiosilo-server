@@ -6,6 +6,7 @@ package library
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -120,7 +121,7 @@ func resolveExisting(p string) string {
 // page of ListDir, its files with their Size and ModTime. relPath "" (or "/")
 // lists the root.
 func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string) bool, ignore *Ignore) (*Listing, error) {
-	full, entries, err := listDir(root, relPath, allow, ignore)
+	entries, dirEntries, err := listDir(root, relPath, allow, ignore)
 	if err != nil {
 		return nil, err
 	}
@@ -131,14 +132,16 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 	offset = min(max(offset, 0), total)
 	end := min(offset+limit, total)
 	page := entries[offset:end]
-	// Only files need a stat (for Size, used to compute bitrate), and only the
-	// page's: one round-trip per entry is the difference between a snappy and a
-	// multi-second listing on a network mount.
+	// Only files need their info (for Size, used to compute bitrate), and only
+	// the page's: one round-trip per entry is the difference between a snappy and
+	// a multi-second listing on a network mount. The directory read's own entry
+	// answers it (a stat on Linux and macOS, nothing at all on Windows, which
+	// lists it with the name).
 	for i := range page {
 		if page[i].IsDir {
 			continue
 		}
-		if info, err := os.Lstat(filepath.Join(full, page[i].Name)); err == nil {
+		if info, err := dirEntries[offset+i].Info(); err == nil {
 			page[i].Size = info.Size()
 			page[i].ModTime = info.ModTime().Unix()
 		}
@@ -156,21 +159,26 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 // library's ignore rules skip, as the scanner skips it. Directories sort before
 // files, both by name, case folded, a stable order for paging.
 func ListDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
-	_, entries, err := listDir(root, relPath, allow, ignore)
+	entries, _, err := listDir(root, relPath, allow, ignore)
 	return entries, err
 }
 
-// listDir is ListDir, with the directory's absolute path.
-func listDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) (string, []Entry, error) {
+// listDir is ListDir, with each entry's fs.DirEntry from the directory read,
+// in the same order.
+func listDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
 	full, err := SafeJoin(root, relPath)
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
 	dirEntries, err := os.ReadDir(full)
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
-	entries := make([]Entry, 0, len(dirEntries))
+	type listed struct {
+		Entry
+		de fs.DirEntry
+	}
+	entries := make([]listed, 0, len(dirEntries))
 	// The canonical rel path prefixes each entry's Path; scope checks and
 	// persisted path keys rely on this same form (see catalog.CleanRelPath).
 	cleanRel := catalog.CleanRelPath(relPath)
@@ -193,7 +201,7 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 		if ignore.Covers(childRel, isDir) {
 			continue // skipped by the library's ignore rules, here and by the scanner
 		}
-		entries = append(entries, Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir})
+		entries = append(entries, listed{Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir}, de})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].IsDir != entries[j].IsDir {
@@ -201,7 +209,12 @@ func listDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 		}
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
-	return full, entries, nil
+	out := make([]Entry, len(entries))
+	des := make([]fs.DirEntry, len(entries))
+	for i, e := range entries {
+		out[i], des[i] = e.Entry, e.de
+	}
+	return out, des, nil
 }
 
 // MarkBooks fills in the entries the index holds as books (books by path, as

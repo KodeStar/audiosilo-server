@@ -15,7 +15,8 @@ import (
 // maxSeriesBooks bounds SeriesBooks. A series rail holds tens of works, and a
 // /meta envelope at most a few rails with their orderings, so this leaves room
 // for every copy of every book of a long series in several libraries while
-// keeping one envelope's lookup bounded whatever the library holds.
+// keeping the rows one envelope's lookup returns bounded whatever the library
+// holds.
 const maxSeriesBooks = 1000
 
 // SeriesBooks returns the books within scopes whose series matches one of names
@@ -50,8 +51,13 @@ func (c *Catalog) SeriesBooks(ctx context.Context, scopes []Scope, names []strin
 		args = append(args, n)
 	}
 	args = append(append(args, fargs...), maxSeriesBooks)
+	// CROSS JOIN keeps books the outer loop, so the series' books are found by
+	// idx_books_series (library_id, series) and sorted, a handful of rows. As a
+	// plain JOIN, a single-library scope had SQLite walk that whole library by
+	// (library_id, rel_path) to get rel_path's order for free: tens of
+	// milliseconds on every /meta of a large library, for a few books.
 	rows, err := c.db.QueryContext(ctx, `SELECT `+prefixCols("b.")+` FROM books b
-		  JOIN libraries l ON l.id = b.library_id
+		  CROSS JOIN libraries l ON l.id = b.library_id
 		 WHERE b.series IN (`+placeholders(len(spellings))+`) AND `+frag+`
 		 ORDER BY l.sort_order, l.name, l.id, b.rel_path LIMIT ?`, args...)
 	if err != nil {

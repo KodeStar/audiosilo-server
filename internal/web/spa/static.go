@@ -279,7 +279,7 @@ func notModified(r *http.Request, etag string, mod time.Time) bool {
 		return false
 	}
 	if inm := r.Header.Get("If-None-Match"); inm != "" {
-		return etagListMatches(inm, etag)
+		return ETagListMatches(inm, etag)
 	}
 	if ims := r.Header.Get("If-Modified-Since"); ims != "" && hasModTime(mod) {
 		t, err := http.ParseTime(ims)
@@ -292,9 +292,9 @@ func notModified(r *http.Request, etag string, mod time.Time) bool {
 // have none), as http.ServeContent decides.
 func hasModTime(mod time.Time) bool { return !mod.IsZero() && !mod.Equal(time.Unix(0, 0)) }
 
-// etagListMatches reports whether an If-None-Match list names etag ("*" names
-// any), comparing weakly as RFC 9110 13.1.2 has it.
-func etagListMatches(list, etag string) bool {
+// ETagListMatches reports whether an If-None-Match list names etag ("*" names
+// any), comparing weakly as RFC 9110 13.1.2 has it. The api's covers use it too.
+func ETagListMatches(list, etag string) bool {
 	for _, t := range strings.Split(list, ",") {
 		t = strings.TrimSpace(t)
 		if t == "*" || strings.TrimPrefix(t, "W/") == etag {

@@ -99,10 +99,12 @@ type API struct {
 	transcodeSem chan struct{}
 
 	// thumbs caches cover thumbnails (GET cover ?size= and the admin console's
-	// batch); thumbSem bounds how many are decoded at once across requests (see
+	// batch); coverReads bounds the art being read or waiting to be decoded and
+	// thumbSem how many are decoded at once, both across requests (see
 	// handlers_covers.go).
-	thumbs   *media.ThumbCache
-	thumbSem chan struct{}
+	thumbs     *media.ThumbCache
+	coverReads chan struct{}
+	thumbSem   chan struct{}
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
@@ -146,6 +148,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		mediaLimiter:   newRateLimiter(200, 2000),      // ~200 req/s, burst 2000, per credential
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
+		coverReads:     make(chan struct{}, maxCoverReads),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		streams:        catalog.NewStreamMarks(),
 	}

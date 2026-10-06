@@ -87,9 +87,16 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	// with its own copy first, never writes through to env.
 	cp := *env
 	out := &cp
-	if out.Series, _, err = a.localRails(r.Context(), catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, env); err != nil {
-		a.writeCatalogError(w, err, "place owned books for meta failed", "could not load books", "library", lib.ID, "path", path)
-		return
+	// `local` is an extra like `previous`: when the caller's books can't be
+	// placed, the envelope goes out without it (the shared rails, unannotated)
+	// rather than failing a lookup that succeeded - and that a client which never
+	// reads `local` asked for.
+	if rails, _, err := a.localRails(r.Context(), catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, env); err != nil {
+		if r.Context().Err() == nil {
+			a.log.Warn("place owned books for meta failed", "err", err, "library", lib.ID, "path", path)
+		}
+	} else {
+		out.Series = rails
 	}
 	if queryHas(q["include"], "previous") {
 		out.Previous = a.meta.Previous(r.Context(), env)
@@ -122,7 +129,7 @@ func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.E
 		cands[i] = meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
 			Series: b.Series, SeriesIndex: b.SeriesIndex, ASIN: b.ASIN, ISBN: b.ISBN}
 	}
-	return a.meta.PlaceOwned(env, meta.MetaLocal(requested), cands), books, nil
+	return a.meta.PlaceOwned(ctx, env, meta.MetaLocal(requested), cands), books, nil
 }
 
 // listeningChapter is where the caller is in book, for spoilers=hide: the

@@ -64,6 +64,8 @@ func (m *memStore) put(e StoredEntry) {
 type storeEnv struct {
 	m    *mockMeta
 	down atomic.Bool
+	// gone makes upstream answer 404 for every work, the Martian included.
+	gone atomic.Bool
 	// lookups counts every lookup request, including the ones this wrapper
 	// answers itself (an outage, B0NOPE) before the mock sees them.
 	lookups atomic.Int32
@@ -84,7 +86,7 @@ func newStoreEnv(t *testing.T) *storeEnv {
 		case e.down.Load():
 			w.WriteHeader(http.StatusInternalServerError)
 		case r.URL.Path == "/api/v1/lookup" && r.URL.Query().Get("asin") == "B0NOPE",
-			strings.HasPrefix(r.URL.Path, "/api/v1/works/") && r.URL.Path != "/api/v1/works/the-martian":
+			strings.HasPrefix(r.URL.Path, "/api/v1/works/") && (e.gone.Load() || r.URL.Path != "/api/v1/works/the-martian"):
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			h.ServeHTTP(w, r)
@@ -263,6 +265,32 @@ func TestStoreIncompletePersistedBriefly(t *testing.T) {
 	}
 }
 
+// TestStoreIncompleteKeepsTheFallback: an incomplete envelope (a rail failed on
+// a flaky upstream) does not replace a stored complete one, which stays the
+// fallback a later outage serves, every rail included.
+func TestStoreIncompleteKeepsTheFallback(t *testing.T) {
+	e := newStoreEnv(t)
+	ctx := context.Background()
+	env, err := e.service().Enrich(ctx, martianASIN, "")
+	if err != nil || len(env.Series) == 0 {
+		t.Fatalf("complete envelope = %+v, %v", env, err)
+	}
+	rails := len(env.Series)
+
+	e.clk.advance(positiveTTL + time.Hour) // the stored row is stale
+	e.m.seriesFailing = map[string]bool{"mars": true}
+	e.m.failSeries.Store(true)
+	if env, err := e.service().Enrich(ctx, martianASIN, ""); err != nil || len(env.Series) != rails-1 {
+		t.Fatalf("flaky upstream = %d rails, %v; want one missing", len(env.Series), err)
+	}
+
+	e.clk.advance(errorTTL + time.Minute)
+	e.down.Store(true)
+	if env, err := e.service().Enrich(ctx, martianASIN, ""); err != nil || len(env.Series) != rails {
+		t.Fatalf("outage fallback = %+v, %v; want the stored envelope with its %d rails", env, err, rails)
+	}
+}
+
 // TestStoreWorks: a positive work is persisted and served after a restart, and
 // outlives an outage; a work-id miss is never persisted (the id is the caller's
 // choice).
@@ -300,6 +328,44 @@ func TestStoreWorks(t *testing.T) {
 
 // TestStoreIgnoresOtherVersionsAndSources: a row of another format version, or
 // from another metaserve, is never served, however fresh.
+// TestStoreWorkRemovedUpstream: a stored work upstream later answers 404 for has
+// its row replaced by the miss, so no later outage serves the removed work as its
+// fallback; an id never stored still leaves no row.
+func TestStoreWorkRemovedUpstream(t *testing.T) {
+	e := newStoreEnv(t)
+	ctx := context.Background()
+	if _, err := e.service().Work(ctx, "the-martian"); err != nil {
+		t.Fatal(err)
+	}
+	// A day on, upstream has removed it, and a restarted server asks.
+	e.clk.advance(positiveTTL + time.Second)
+	e.gone.Store(true)
+	svc := e.service()
+	if w, err := svc.Work(ctx, "the-martian"); !errors.Is(err, ErrNotFound) || w != nil {
+		t.Fatalf("removed work = %+v, %v; want ErrNotFound", w, err)
+	}
+	if row, ok := e.store.row(nsWork.key("the-martian")); !ok || len(row.Payload) != 0 {
+		t.Fatalf("row after the 404 = %d payload bytes (stored %v); want the miss in its place", len(row.Payload), ok)
+	}
+	if _, err := svc.Work(ctx, "never-seen"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown work = %v, want ErrNotFound", err)
+	}
+	if _, ok := e.store.row(nsWork.key("never-seen")); ok {
+		t.Fatal("a work-id miss was persisted")
+	}
+
+	// Within the miss's TTL a restarted server answers it from the row.
+	if _, err := e.service().Work(ctx, "the-martian"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("restart within the miss = %v, want ErrNotFound", err)
+	}
+	// Past it, during an outage: the outage's error, not the removed work.
+	e.clk.advance(notFoundTTL + time.Second)
+	e.down.Store(true)
+	if w, err := e.service().Work(ctx, "the-martian"); err == nil || errors.Is(err, ErrNotFound) || w != nil {
+		t.Fatalf("outage after removal = %+v, %v; want the upstream error", w, err)
+	}
+}
+
 func TestStoreIgnoresOtherVersionsAndSources(t *testing.T) {
 	for name, mutate := range map[string]func(*StoredEntry){
 		"version": func(r *StoredEntry) { r.Version = storeVersion + 1 },

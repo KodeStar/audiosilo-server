@@ -484,7 +484,7 @@ func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service,
 		if err := authSvc.ForgetRevokedAddresses(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("forgetting signed-out device addresses failed", "err", err)
 		}
-		if _, err := cat.PruneMetaCache(ctx, catalog.MetaCacheRows); err != nil && ctx.Err() == nil {
+		if _, err := cat.PruneMetaCache(ctx, catalog.MetaCacheRows, catalog.MetaCacheWorkRows); err != nil && ctx.Err() == nil {
 			log.Warn("meta cache retention failed", "err", err)
 		}
 		n, err := cat.PruneSessions(ctx, now.Add(-sessions()), time.Local)

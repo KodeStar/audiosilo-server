@@ -2,6 +2,7 @@ package meta
 
 import (
 	"cmp"
+	"context"
 	"math"
 	"slices"
 
@@ -45,14 +46,14 @@ func SeriesNames(rails []MetaSeries) []string {
 }
 
 // PlaceOwned is PlaceLocal over env's rails for the caller's books, each book's
-// work id read from the in-memory cache by its identifiers (CachedWorkID: never
-// upstream, never the store). requested is the book env is for. env and books are
+// work id read from the cache by its identifiers (CachedWorkID: memory, else the
+// store; never upstream). requested is the book env is for. env and books are
 // never modified.
-func (s *Service) PlaceOwned(env *Enrichment, requested MetaLocal, books []LocalBook) []MetaSeries {
+func (s *Service) PlaceOwned(ctx context.Context, env *Enrichment, requested MetaLocal, books []LocalBook) []MetaSeries {
 	cands := slices.Clone(books)
 	for i := range cands {
 		if cands[i].WorkID == "" {
-			cands[i].WorkID, _ = s.CachedWorkID(cands[i].ASIN, cands[i].ISBN)
+			cands[i].WorkID, _ = s.CachedWorkID(ctx, cands[i].ASIN, cands[i].ISBN)
 		}
 	}
 	current := ""

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -10,9 +11,12 @@ import (
 	"image/png"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -294,30 +298,34 @@ func TestCoverColorAndVersion(t *testing.T) {
 		t.Fatalf("list after thumbnail: %+v, want %+v at %q", b, cc, uploaded)
 	}
 
-	// The console's batch records too, without moving the version.
+	// The console's batch records too, and moves the version from the index's
+	// identity to the art's own: the one the thumbnail's ETag carries.
 	postCovers(t, e, adminTok, coversBody(libID, 160, "Sidecar"))
-	cc, version = itemCover(t, e, adminTok, libID, "Sidecar")
-	if version != first["Sidecar"].Version || cc == nil || cc.Bg != "#000000" || cc.Accent != "" {
-		t.Fatalf("sidecar after batch: color %+v version %q, want black bg, no accent, %q", cc, version, first["Sidecar"].Version)
+	cc, artVersion := itemCover(t, e, adminTok, libID, "Sidecar")
+	thumb, _ := e.do(t, "GET", coverURL(libID, "Sidecar", "160"), adminTok, "")
+	etag := thumb.Header.Get("ETag")
+	if artVersion == first["Sidecar"].Version || etag != `"thumb-160-`+artVersion+`"` || cc == nil || cc.Bg != "#000000" || cc.Accent != "" {
+		t.Fatalf("sidecar after batch: color %+v version %q (ETag %s), want black bg, no accent, the art's version", cc, artVersion, etag)
 	}
 
 	// A re-index that touches the book moves its version, and its colour stops
-	// showing; the next thumbnail records it again, even from the cache (the art
-	// itself did not change).
+	// showing; the next thumbnail records it again (from the cache: the art
+	// itself did not change), even one that only revalidates a copy and is
+	// answered 304, and the version is the art's own again.
 	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "Sidecar",
 		IsFolder: true, Title: "Sidecar", Format: "m4b", CoverPath: "Sidecar/cover.jpg", MTime: 42,
 		Files: []catalog.BookFile{{RelPath: "Sidecar/book.m4b", Seq: 1}}}); err != nil {
 		t.Fatal(err)
 	}
 	cc, touched := itemCover(t, e, adminTok, libID, "Sidecar")
-	if cc != nil || touched == "" || touched == first["Sidecar"].Version {
+	if cc != nil || touched == "" || touched == artVersion {
 		t.Fatalf("after re-index: color %+v version %q, want a new version and no colour", cc, touched)
 	}
-	if resp, _ := e.do(t, "GET", coverURL(libID, "Sidecar", "160"), adminTok, ""); resp.StatusCode != http.StatusOK {
-		t.Fatalf("cached thumb = %d", resp.StatusCode)
+	if resp, _ := e.doHeaders(t, "GET", coverURL(libID, "Sidecar", "160"), adminTok, "", map[string]string{"If-None-Match": etag}); resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("revalidated thumb = %d, want 304", resp.StatusCode)
 	}
-	if cc, version := itemCover(t, e, adminTok, libID, "Sidecar"); cc == nil || version != touched {
-		t.Fatalf("after a cached thumbnail: color %+v version %q, want a colour at %q", cc, version, touched)
+	if cc, version := itemCover(t, e, adminTok, libID, "Sidecar"); cc == nil || version != artVersion {
+		t.Fatalf("after a revalidated thumbnail: color %+v version %q, want a colour at %q", cc, version, artVersion)
 	}
 
 	// Another upload: the colour read from the previous one no longer shows.
@@ -329,6 +337,103 @@ func TestCoverColorAndVersion(t *testing.T) {
 	}
 	if cc, version := itemCover(t, e, adminTok, libID, "Bare"); cc != nil || version != fileVersion {
 		t.Fatalf("after delete: color %+v version %q, want no colour and the file art's %q", cc, version, fileVersion)
+	}
+}
+
+// TestCoverSidecarReplacedInPlace: a sidecar image overwritten in place leaves
+// the index as it was (the audio's mtime and size, the sidecar's path), so no
+// re-index moves the book's cover; its next thumbnail does - a new ETag, the new
+// art's colour, and a cover_version that moves with them.
+func TestCoverSidecarReplacedInPlace(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, root := seedCovers(t, e)
+
+	first, _ := e.do(t, "GET", coverURL(libID, "Sidecar", "320"), adminTok, "")
+	oldColor, oldVersion := itemCover(t, e, adminTok, libID, "Sidecar")
+	if first.StatusCode != http.StatusOK || oldColor == nil || oldColor.Bg != "#000000" {
+		t.Fatalf("first thumbnail = %d, colour %+v", first.StatusCode, oldColor)
+	}
+
+	sidecar := filepath.Join(root, "Sidecar", "cover.jpg")
+	if err := os.WriteFile(sidecar, bandedPNG(t, 300, 300), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(sidecar, later, later); err != nil {
+		t.Fatal(err)
+	}
+
+	next, _ := e.doHeaders(t, "GET", coverURL(libID, "Sidecar", "320"), adminTok, "", map[string]string{"If-None-Match": first.Header.Get("ETag")})
+	cc, version := itemCover(t, e, adminTok, libID, "Sidecar")
+	if next.StatusCode != http.StatusOK || next.Header.Get("ETag") == first.Header.Get("ETag") {
+		t.Fatalf("replaced art = %d (ETag %s), want 200 with a new ETag", next.StatusCode, next.Header.Get("ETag"))
+	}
+	if cc == nil || cc.Bg != "#141e50" || version == oldVersion || next.Header.Get("ETag") != `"thumb-320-`+version+`"` {
+		t.Fatalf("after the replaced art's thumbnail: colour %+v version %q (was %q, ETag %s), want navy at the new art's version",
+			cc, version, oldVersion, next.Header.Get("ETag"))
+	}
+}
+
+// id3WithCover is an .mp3 that is nothing but an ID3v2.3 tag holding one APIC
+// (front cover) frame with the JPEG img: a book with embedded art.
+func id3WithCover(img []byte) []byte {
+	var frame bytes.Buffer
+	frame.WriteByte(0)                  // text encoding: ISO-8859-1
+	frame.WriteString("image/jpeg\x00") // MIME type
+	frame.WriteByte(3)                  // picture type: front cover
+	frame.WriteByte(0)                  // an empty description
+	frame.Write(img)
+	var tag bytes.Buffer
+	tag.WriteString("APIC")
+	_ = binary.Write(&tag, binary.BigEndian, uint32(frame.Len()))
+	tag.Write([]byte{0, 0}) // frame flags
+	tag.Write(frame.Bytes())
+	n := tag.Len() // the header's size is syncsafe: 7 bits a byte
+	head := []byte{'I', 'D', '3', 3, 0, 0, byte(n >> 21 & 0x7f), byte(n >> 14 & 0x7f), byte(n >> 7 & 0x7f), byte(n & 0x7f)}
+	return append(head, tag.Bytes()...)
+}
+
+// TestCoverEmbeddedReadFailureRetried: embedded art that can't be read right now
+// (here an audio file that won't open, as on a mount in trouble) is a 500 the
+// next request retries, not "no art" cached for that art's version.
+func TestCoverEmbeddedReadFailureRetried(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens any file")
+	}
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	ctx := context.Background()
+	root := t.TempDir()
+	audio := filepath.Join(root, "Emb", "book.mp3")
+	if err := os.MkdirAll(filepath.Dir(audio), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(audio, id3WithCover(testImage(t, 400, 400, false)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: "Emb", IsFolder: true, Title: "Emb",
+		Format: "mp3", Files: []catalog.BookFile{{RelPath: "Emb/book.mp3", Seq: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(audio, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(audio, 0o644) })
+
+	if resp, body := e.do(t, "GET", coverURL(lib.ID, "Emb", "160"), adminTok, ""); resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("unreadable embedded art = %d %s, want 500", resp.StatusCode, body)
+	}
+	if err := os.Chmod(audio, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := e.do(t, "GET", coverURL(lib.ID, "Emb", "160"), adminTok, "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("readable again = %d %s, want the thumbnail", resp.StatusCode, body)
 	}
 }
 

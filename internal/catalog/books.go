@@ -102,32 +102,41 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 // by rel_path. It is used to annotate filesystem-view entries with their
 // book id and metadata (the hybrid view), so a user who browses to a file or
 // book folder can act on it directly. Files and book folders both match here.
+// Any number of paths may be asked for (a whole folder, for GET /next): they are
+// read in chunks that stay well under SQLite's bound-parameter limit.
 func (c *Catalog) BooksByPaths(ctx context.Context, libraryID int64, paths []string) (map[string]Book, error) {
 	out := map[string]Book{}
-	if len(paths) == 0 {
-		return out, nil
+	const chunk = 500
+	for start := 0; start < len(paths); start += chunk {
+		part := paths[start:min(start+chunk, len(paths))]
+		args := make([]any, 0, len(part)+1)
+		args = append(args, libraryID)
+		for _, p := range part {
+			args = append(args, p)
+		}
+		if err := c.booksByPaths(ctx, out, `SELECT `+bookCols+` FROM books WHERE library_id = ? AND rel_path IN (`+
+			placeholders(len(part))+`)`, args); err != nil {
+			return nil, err
+		}
 	}
-	placeholders := make([]string, len(paths))
-	args := []any{libraryID}
-	for i, p := range paths {
-		placeholders[i] = "?"
-		args = append(args, p)
-	}
-	q := `SELECT ` + bookCols + ` FROM books WHERE library_id = ? AND rel_path IN (` +
-		strings.Join(placeholders, ",") + `)`
+	return out, nil
+}
+
+// booksByPaths runs one BooksByPaths query into out.
+func (c *Catalog) booksByPaths(ctx context.Context, out map[string]Book, q string, args []any) error {
 	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		b, err := scanBook(rows)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		out[b.RelPath] = *b
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 // BookIdentifiers is what BooksByRefs reads of the book at one Ref: its path

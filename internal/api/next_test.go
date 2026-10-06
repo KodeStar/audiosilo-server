@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
@@ -179,6 +180,48 @@ func TestMetaLocalPerCaller(t *testing.T) {
 	}
 }
 
+// TestMetaLocalPlacementFailure: `local` is an extra. When the caller's books
+// can't be placed (here a share with more path rules than one SQLite expression
+// holds), the envelope still goes out, without `local`, rather than failing a
+// lookup that succeeded - a client that never reads `local` included.
+func TestMetaLocalPlacementFailure(t *testing.T) {
+	e := newSagaEnv(t, true, sagaBooks()...)
+	ctx := context.Background()
+	u, err := e.auth.CreateUser(ctx, "wide", "wide-password", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Wide"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := []catalog.PathRule{{LibraryID: e.lib.ID, Path: "Saga/2"}}
+	for i := range 1100 {
+		rules = append(rules, catalog.PathRule{LibraryID: e.lib.ID, Path: "Pad/" + strconv.Itoa(i)})
+	}
+	if err := e.cat.AddSharePaths(ctx, share.ID, rules); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantShare(ctx, u.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	scopes, err := e.cat.UserScopes(ctx, u.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cat.SeriesBooks(ctx, scopes, []string{"Saga"}); err == nil {
+		t.Skip("placing books no longer fails for a share this wide; this test needs another trigger")
+	}
+	tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "t", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := railLocals(t, e, "Saga/2", tok) // fails the test unless 200 with rails
+	if want := map[string]string{"one": "", "two": "", "three": "", "four": ""}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("locals = %v, want the rails without any", got)
+	}
+}
+
 // TestMetaLocalCachedWorkID: a book whose enrichment the cache already holds is
 // placed by its work id, beating a book numbered like the entry.
 func TestMetaLocalCachedWorkID(t *testing.T) {
@@ -333,14 +376,25 @@ func TestNextFolder(t *testing.T) {
 	if n.Source != nextFolder || n.nextPath() != "Saga/10" || n.Book == nil || n.Book.RelPath != "Saga/10" {
 		t.Fatalf("indexed = %s", n.raw)
 	}
-	// Nothing else in the folder indexed yet: the next folder, without a book.
+	// Nothing else in the folder indexed: the current book is, so a bare folder
+	// after it is not offered (it may be a series or author folder, which would
+	// strand the player), as the player's own folder walk decides.
 	n = getNext(t, e.testEnv, e.url("next", "Loose/Part A"), e.adminTok)
-	if n.Source != nextFolder || n.nextPath() != "Loose/Part B" || n.Book != nil {
+	if n.Source != nextNone || n.Next != nil || n.Book != nil {
 		t.Fatalf("unindexed = %s", n.raw)
 	}
-	// Denied: the member is granted Saga/1 and Saga/2 only; Saga/10 is not theirs.
-	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok); n.nextPath() != "Saga/2" || strings.Contains(n.raw, "Saga/10") {
+	// Denied: the member is granted Saga/1 and Saga/2 only; Saga/10 is not
+	// theirs, and Saga/2 is not indexed yet, so nothing follows for them.
+	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok); n.Source != nextNone || strings.Contains(n.raw, "Saga/10") {
 		t.Fatalf("member = %s", n.raw)
+	}
+	// Allowed: once Saga/2 is indexed it is the member's next book.
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib.ID, RelPath: "Saga/2", IsFolder: true,
+		Title: "Saga/2", Format: "m4b", AddedAt: "2024-01-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok); n.nextPath() != "Saga/2" || n.Book == nil || strings.Contains(n.raw, "Saga/10") {
+		t.Fatalf("member after Saga/2 is indexed = %s", n.raw)
 	}
 	// Alone in its folder: none.
 	if n := getNext(t, e.testEnv, e.url("next", "Alone/Only"), e.adminTok); n.Source != nextNone || n.Next != nil || n.Book != nil {

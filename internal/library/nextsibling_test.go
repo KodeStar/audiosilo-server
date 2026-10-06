@@ -37,9 +37,13 @@ func TestNextSibling(t *testing.T) {
 			[]Entry{dirEntry("Book 1", false), dirEntry("Book 2", false), fileEntry("Book 3.mp3", false)},
 			"S/Book 1", "S/Book 2",
 		},
-		"the current book does not count as indexed": {
+		"the current book counts as indexed, as in the player": {
 			[]Entry{dirEntry("Book 1", true), dirEntry("Book 2", false)},
-			"S/Book 1", "S/Book 2",
+			"S/Book 1", "",
+		},
+		"a series folder beside the only book is not a book": {
+			[]Entry{dirEntry("Elantris", true), dirEntry("Mistborn", false)},
+			"S/Elantris", "",
 		},
 		"an earlier indexed book does": {
 			[]Entry{dirEntry("Book 0", true), dirEntry("Book 1", true), dirEntry("Book 2", false)},
@@ -56,6 +60,26 @@ func TestNextSibling(t *testing.T) {
 		"the last": {
 			[]Entry{dirEntry("Book 1", true), dirEntry("Book 2", true)},
 			"S/Book 2", "",
+		},
+		"numbers apart from the title's own": {
+			[]Entry{dirEntry("02 - Animal Farm", true), dirEntry("01 - 1984", true)},
+			"S/01 - 1984", "S/02 - Animal Farm",
+		},
+		"a title that starts with a number": {
+			[]Entry{dirEntry("Reacher 13 - Gone Tomorrow", true), dirEntry("Reacher 15 - Worth Dying For", true), dirEntry("Reacher 14 - 61 Hours", true)},
+			"S/Reacher 13 - Gone Tomorrow", "S/Reacher 14 - 61 Hours",
+		},
+		"never back to an earlier title": {
+			[]Entry{dirEntry("Reacher 14 - 61 Hours", true), dirEntry("Reacher 15 - Worth Dying For", true)},
+			"S/Reacher 15 - Worth Dying For", "",
+		},
+		"a novella numbered between two books": {
+			[]Entry{dirEntry("Kingkiller 2 - The Wise Man's Fear", true), dirEntry("Kingkiller 2.5 - The Slow Regard", true), dirEntry("Kingkiller 1 - The Name of the Wind", true)},
+			"S/Kingkiller 1 - The Name of the Wind", "S/Kingkiller 2 - The Wise Man's Fear",
+		},
+		"accents folded": {
+			[]Entry{dirEntry("Eve", true), dirEntry("Émile", true), dirEntry("Anna", true)},
+			"S/Anna", "S/Émile",
 		},
 		"names read alike keep a stable order": {
 			[]Entry{dirEntry("Book 02", true), dirEntry("Book 2", true), dirEntry("Book 1", true)},

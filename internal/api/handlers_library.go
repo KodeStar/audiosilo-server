@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -15,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
 // handleListLibraries lists libraries the caller can reach (via any share).
@@ -362,11 +362,12 @@ type conditional struct {
 	etag, cacheControl string
 }
 
-// notModified answers r with a 304 when its If-None-Match holds the ETag,
-// reporting whether it did, so the body need not be read at all.
+// notModified answers r with a 304 when its If-None-Match names the ETag (as
+// http.ServeContent in serve would), reporting whether it did, so the body need
+// not be read at all.
 func (c conditional) notModified(w http.ResponseWriter, r *http.Request) bool {
 	inm := r.Header.Get("If-None-Match")
-	if inm == "" || !strings.Contains(inm, c.etag) {
+	if inm == "" || !spa.ETagListMatches(inm, c.etag) {
 		return false
 	}
 	c.setHeaders(w)

@@ -75,7 +75,8 @@ func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catal
 // still ends the lookup - playing a later owned book would skip one. The current
 // work last on the rail is the end of the series ({source: community}). nil
 // (fall through) when metadata is off, the book is unmatched or has no rails,
-// the upstream fails, or the current position is not a number.
+// the upstream fails, the current position is not a number, or the caller's
+// books can't be placed.
 func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.Book) (*nextBook, error) {
 	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
 		return nil, nil
@@ -90,16 +91,28 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 	if env.Work == nil || len(env.Series) == 0 {
 		return nil, nil
 	}
+	// The next entry is read off the shared rail first: placing the caller's
+	// books moves no entry, so the end of the series and an unreadable position
+	// are answered without looking up what the caller owns.
+	work, ok := meta.NextOnRail(env.Series[0], env.Work.ID)
+	switch {
+	case !ok:
+		return nil, nil
+	case work == nil:
+		return &nextBook{Source: nextCommunity}, nil
+	}
 	rails, books, err := a.localRails(ctx, catalog.Ref{LibraryID: libraryID, Path: book.RelPath}, env)
 	if err != nil {
-		return nil, err
-	}
-	work, ok := meta.NextOnRail(rails[0], env.Work.ID)
-	if !ok {
+		// Like an upstream failure: without knowing what the caller owns, the
+		// local sources answer.
+		if ctx.Err() == nil {
+			a.log.Warn("place owned books for next book failed", "err", err, "library", libraryID, "path", book.RelPath)
+		}
 		return nil, nil
 	}
+	work, _ = meta.NextOnRail(rails[0], env.Work.ID) // the same entry, with the caller's local
 	out := &nextBook{Source: nextCommunity, Work: work}
-	if work != nil && work.Local != nil {
+	if work.Local != nil {
 		ref := catalog.Ref(*work.Local)
 		out.Next = &ref
 		for i := range books {

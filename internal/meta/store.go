@@ -13,7 +13,8 @@ import (
 //   - enrichments (a:/i:): positive, "no match" and incomplete envelopes (the
 //     last for errorTTL only, as in memory);
 //   - works (w:): positive answers only (a work id is the caller's choice, so its
-//     misses would let any signed-in user grow the table);
+//     misses would let any signed-in user grow the table), except that a later
+//     "no match" replaces a stored work's row;
 //   - never a transport error, and never the l: key space.
 //
 // Reads are read-through (readStored): a fresh row is served and warms memory
@@ -56,10 +57,16 @@ type StoredEntry struct {
 // the whole positive TTL or, during an outage, indefinitely).
 const storeVersion = 1
 
-// storeTimeout bounds one store read or write on the request path. The store is
-// a local SQLite file, so this only bites when its single writer is busy
-// (a scan's batch); a cache write is never worth holding a /meta response for.
+// storeTimeout bounds one store read on the request path (reads never wait on
+// the database's single writer, so this only bites when the file is in trouble).
 const storeTimeout = 2 * time.Second
+
+// storeWriteTimeout bounds one store write, which the request waits for. A
+// write waits on the single writer, which a scan's batch or a long prune can
+// hold, and a cache write is never worth holding a /meta response for: the
+// answer is already in memory, so a write cut short costs only the row (and
+// the warm start after a restart it would have given).
+const storeWriteTimeout = 250 * time.Millisecond
 
 // SetStore gives the Service a persistent second level (see Store). Call it
 // once, right after NewService and before the Service is used; nil (the
@@ -94,7 +101,7 @@ func readStored[T any](ctx context.Context, s *Service, key string) (value *T, e
 // saveStored persists key's answer for ttl: value's JSON, or a "no match" for a
 // nil value. The write runs detached from the caller's cancellation (the answer
 // is already in memory either way, and a player navigating away must not lose
-// it for the next restart), bounded by storeTimeout.
+// it for the next restart), bounded by storeWriteTimeout.
 func saveStored[T any](ctx context.Context, s *Service, key string, value *T, ttl time.Duration) {
 	if s.store == nil {
 		return
@@ -107,7 +114,7 @@ func saveStored[T any](ctx context.Context, s *Service, key string, value *T, tt
 		}
 		body = b
 	}
-	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
 	defer cancel()
 	s.store.Save(sctx, StoredEntry{
 		Key:     key,

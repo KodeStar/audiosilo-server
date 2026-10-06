@@ -369,7 +369,12 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 		// reasoning as the error branch above.
 		if ctx.Err() == nil {
 			cachePut(s.cache, key, result, errorTTL)
-			saveStored(ctx, s, key, result, errorTTL)
+			// Not over a stored positive answer, though: that one, stale but
+			// with every rail it had, stays the outage fallback (a row that
+			// lives two minutes adds nothing to a restart).
+			if stored == nil {
+				saveStored(ctx, s, key, result, errorTTL)
+			}
 		}
 		return result, nil
 	default:
@@ -474,12 +479,14 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 	if work, hit, err := cacheGet[MetaWork](s.cache, key); hit {
 		return work, err
 	}
-	// Then the persistent store, as in Enrich. Only positive works are ever
-	// written there, so a row decoding to "no match" is not one of ours and is
-	// read as a miss.
+	// Then the persistent store, as in Enrich. A work is stored only once it was
+	// found, so a "no match" row is a stored work's later 404 (below).
 	stored, expires, fresh := readStored[MetaWork](ctx, s, key)
-	if fresh && stored != nil {
+	if fresh {
 		cachePutUntil(s.cache, key, stored, expires)
+		if stored == nil {
+			return nil, ErrNotFound
+		}
 		return stored, nil
 	}
 
@@ -487,8 +494,14 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		// Held in memory only: the id is the caller's choice, so a persisted
-		// miss would let any signed-in user grow the table (see Store).
+		// miss would let any signed-in user grow the table (see Store). Except
+		// over a stored answer for the id, which it replaces (no new row): left
+		// alone, that row would bring the work upstream no longer has back as
+		// the fallback of every later outage.
 		s.cache.putMiss(key, notFoundTTL)
+		if stored != nil {
+			saveStored[MetaWork](ctx, s, key, nil, notFoundTTL)
+		}
 		return nil, ErrNotFound
 	case err != nil:
 		// Same discrimination as Enrich: only cache failures the UPSTREAM

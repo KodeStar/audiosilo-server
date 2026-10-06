@@ -20,6 +20,14 @@ import (
 // still covering far more books than the in-memory cache's 2048 entries.
 const MetaCacheRows = 20_000
 
+// MetaCacheWorkRows is how many of them may be works fetched by id (the "w:" key
+// space, migration 0024). A work id is the caller's choice (GET /meta/work), so
+// without a share of their own a walk through the metadata site's works would
+// push every book's enrichment out of the table - the rows it exists for - as
+// the in-memory cache's own work quota (internal/meta maxWorkEntries) prevents
+// there.
+const MetaCacheWorkRows = 2_000
+
 // MetaCacheEntry is one persisted meta cache row.
 type MetaCacheEntry struct {
 	Key     string
@@ -61,14 +69,26 @@ func (c *Catalog) PutMetaCache(ctx context.Context, e MetaCacheEntry) error {
 	return err
 }
 
-// PruneMetaCache keeps the newest keep rows (by write time) and deletes the
-// rest, returning how many went. Run daily by the launcher's retention.
-func (c *Catalog) PruneMetaCache(ctx context.Context, keep int) (int64, error) {
-	res, err := c.db.ExecContext(ctx,
+// PruneMetaCache keeps the newest keepWorks work rows and then the newest keep
+// rows of all (by write time), deleting the rest and returning how many went.
+// Run daily by the launcher's retention.
+func (c *Catalog) PruneMetaCache(ctx context.Context, keep, keepWorks int) (int64, error) {
+	// 'w;' is the key right after every "w:..." one, so the range is the work
+	// key space, read off the primary key.
+	works, err := c.db.ExecContext(ctx,
+		`DELETE FROM meta_cache WHERE key >= 'w:' AND key < 'w;' AND rowid NOT IN
+		    (SELECT rowid FROM meta_cache WHERE key >= 'w:' AND key < 'w;'
+		      ORDER BY stored_at DESC, rowid DESC LIMIT ?)`, max(keepWorks, 0))
+	if err != nil {
+		return 0, err
+	}
+	all, err := c.db.ExecContext(ctx,
 		`DELETE FROM meta_cache WHERE rowid NOT IN
 		    (SELECT rowid FROM meta_cache ORDER BY stored_at DESC, rowid DESC LIMIT ?)`, max(keep, 0))
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	nWorks, _ := works.RowsAffected()
+	nAll, err := all.RowsAffected()
+	return nWorks + nAll, err
 }

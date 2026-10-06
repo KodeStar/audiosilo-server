@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -58,7 +59,10 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 // coverArtSQL is a books row's cover art identity from index data alone: "c" and
 // its custom cover's updated_at (CustomArtVersion) when it has one, else "f" and
 // its mtime, size and sidecar path. Migration 0023 backfills with the same
-// expression.
+// expression. It holds until a thumbnail reads the art itself: RecordCoverColors
+// then moves it to that art's own version (its file's size and mtime), so the
+// cover_version follows a sidecar or embedded image replaced in place, which
+// leaves the index (the audio's mtime and size, the sidecar's path) as it was.
 const coverArtSQL = `COALESCE(
 	(SELECT 'c' || cv.updated_at FROM book_covers cv
 	  WHERE cv.library_id = books.library_id AND cv.path = books.rel_path),
@@ -141,7 +145,8 @@ type CoverSource struct {
 	AudioPath string // the audio file whose embedded art is the fallback
 	// Art is the book's cover art identity (books.cover_art), what a colour read
 	// from a thumbnail is recorded against (CoverColorRecord); Colored is whether
-	// the book holds a colour for that art already.
+	// the book holds a colour for that identity already (a thumbnail also checks
+	// the identity is still its art's version).
 	Art     string
 	Colored bool
 }
@@ -211,28 +216,34 @@ func CoverVersion(art string) string {
 	return hex.EncodeToString(sum[:])[:10]
 }
 
-// CoverColorRecord is a colour read from a thumbnail of a book's cover, with the
-// book's cover art identity (CoverSource.Art) when its source was read.
+// CoverColorRecord is a colour read from a thumbnail of a book's cover: Art is
+// the book's cover art identity (CoverSource.Art) when its source was read, and
+// Version the version of the art the thumbnail was made of (CustomArtVersion, or
+// its file's size and mtime), which becomes the book's identity with the colour.
 type CoverColorRecord struct {
 	LibraryID int64
 	Path      string
 	Art       string
+	Version   string
 	Color     CoverColor
 }
 
 // RecordCoverColors stores thumbnails' colours on their books, in one
-// transaction. Each is compare-and-set on the art it was read under: a book whose
-// art has moved on since (a custom cover set or removed, a re-index) keeps what
-// it has, so a slow thumbnail of old art never lands on new art.
+// transaction, moving each book's cover art identity to the version of the art
+// read (so its cover_version moves with an image replaced in place). Each is
+// compare-and-set on the identity it was read under: a book whose art has moved
+// on since (a custom cover set or removed, a re-index) keeps what it has, so a
+// slow thumbnail of old art never lands on new art.
 func (c *Catalog) RecordCoverColors(ctx context.Context, recs []CoverColorRecord) error {
 	if len(recs) == 0 {
 		return nil
 	}
 	return c.db.WithTx(ctx, "RecordCoverColors", func(tx *sql.Tx) error {
 		for _, r := range recs {
+			art := cmp.Or(r.Version, r.Art)
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE books SET cover_color = ? WHERE library_id = ? AND rel_path = ? AND cover_art = ?`,
-				encodeCoverColor(CoverVersion(r.Art), r.Color), r.LibraryID, r.Path, r.Art); err != nil {
+				`UPDATE books SET cover_art = ?, cover_color = ? WHERE library_id = ? AND rel_path = ? AND cover_art = ?`,
+				art, encodeCoverColor(CoverVersion(art), r.Color), r.LibraryID, r.Path, r.Art); err != nil {
 				return err
 			}
 		}

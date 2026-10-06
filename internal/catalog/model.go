@@ -68,9 +68,10 @@ type Book struct {
 	// CoverVersion is a short opaque token that changes when the cover art does
 	// (a client appends it to cover URLs as a cache-buster): the hash of
 	// books.cover_art (CoverVersion), set whenever the book is indexed and when a
-	// custom cover is set or removed. CoverColor is the cover's palette for the
-	// player's themed screens, read from a thumbnail of the art
-	// (RecordCoverColors); absent until one has been made for this version.
+	// custom cover is set or removed, and moved to the art's own version by a
+	// thumbnail of it. CoverColor is the cover's palette for the player's themed
+	// screens, read from a thumbnail of the art (RecordCoverColors); absent until
+	// one has been made for this version.
 	CoverColor   *CoverColor `json:"cover_color,omitempty"`
 	CoverVersion string      `json:"cover_version,omitempty"`
 	// ScanError is what went wrong reading the book's files when it was last indexed
