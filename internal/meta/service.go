@@ -180,6 +180,10 @@ type MetaSeriesWork struct {
 	Authors  []MetaPersonRef `json:"authors"`
 	CoverURL string          `json:"cover_url,omitempty"`
 	WebURL   string          `json:"web_url"`
+	// Local is the book the CALLER can open that is this work (PlaceLocal). It
+	// is set per request on a copy of the rails, never on an envelope the cache
+	// holds.
+	Local *MetaLocal `json:"local,omitempty"`
 }
 
 // MetaSeries is a full ordered series rail, including the current work.
