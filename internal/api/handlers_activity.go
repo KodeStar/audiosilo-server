@@ -202,6 +202,55 @@ func (o *optionalTime) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// progressEditBody is the body of a progress edit, the admin's and the
+// listener's own (handleEditMyProgress): absent fields stay as they are.
+type progressEditBody struct {
+	Finished   *bool        `json:"finished"`
+	Position   *float64     `json:"position"`
+	StartedAt  optionalTime `json:"started_at"`
+	FinishedAt optionalTime `json:"finished_at"`
+}
+
+// msgBadProgressEdit is the 400 for a progress edit that doesn't fit its book
+// (catalog.ErrInvalidProgressEdit, or an exact date in the future).
+const msgBadProgressEdit = "those dates or that position don't fit this book"
+
+// editDateSkew is how far ahead of the server's clock an exact (RFC3339) date in
+// a progress edit may be: a client clock running a little fast, not a future
+// date.
+const editDateSkew = 5 * time.Minute
+
+// decodeProgressEdit reads a progress edit's body, a day-only finish moved to the
+// end of that day (or now), answering 400 for a malformed one (nil: done). An
+// exact date in the future is refused here, where it can still be told from a
+// day-only one: the catalog's day of slack is for a day-only start (the client's
+// today can be the server's tomorrow), and a future finish would be left out of
+// the year's finished books until it came.
+func decodeProgressEdit(w http.ResponseWriter, r *http.Request) *progressEditBody {
+	var body progressEditBody
+	if err := decodeJSON(r, &body, 0); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return nil
+	}
+	now := time.Now()
+	for _, d := range []optionalTime{body.StartedAt, body.FinishedAt} {
+		if d.Value != nil && !d.day && d.Value.After(now.Add(editDateSkew)) {
+			writeError(w, http.StatusBadRequest, msgBadProgressEdit)
+			return nil
+		}
+	}
+	body.FinishedAt.endOfDay(now)
+	return &body
+}
+
+// edit is the body as the catalog's ProgressEdit.
+func (b *progressEditBody) edit() catalog.ProgressEdit {
+	return catalog.ProgressEdit{
+		Finished: b.Finished, Position: b.Position,
+		StartedAt: b.StartedAt.OptionalTime, FinishedAt: b.FinishedAt.OptionalTime,
+	}
+}
+
 // handleEditProgress is an admin's edit of a user's progress on a book
 // (?path=&user_id=): mark finished or not, move the position, set or clear the
 // start and finish dates.
@@ -220,17 +269,10 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 	if user == nil {
 		return
 	}
-	var body struct {
-		Finished   *bool        `json:"finished"`
-		Position   *float64     `json:"position"`
-		StartedAt  optionalTime `json:"started_at"`
-		FinishedAt optionalTime `json:"finished_at"`
-	}
-	if err := decodeJSON(r, &body, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	body := decodeProgressEdit(w, r)
+	if body == nil {
 		return
 	}
-	body.FinishedAt.endOfDay(time.Now())
 	// The user's own scope, not the admin's: an edit may start progress only on a
 	// book the user can see (EditProgress applies it to new rows only).
 	scope, err := a.cat.UserScope(r.Context(), user.ID, lib.ID, user.Role == auth.RoleAdmin)
@@ -239,10 +281,7 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "access check failed")
 		return
 	}
-	saved, err := a.cat.EditProgress(r.Context(), userID, catalog.Ref{LibraryID: lib.ID, Path: p}, catalog.ProgressEdit{
-		Finished: body.Finished, Position: body.Position,
-		StartedAt: body.StartedAt.OptionalTime, FinishedAt: body.FinishedAt.OptionalTime,
-	}, scope)
+	saved, err := a.cat.EditProgress(r.Context(), userID, catalog.Ref{LibraryID: lib.ID, Path: p}, body.edit(), scope)
 	switch {
 	case errors.Is(err, catalog.ErrNotFound):
 		writeErrorCode(w, http.StatusNotFound, codeBookNotFound, "no progress or book at this path")

@@ -249,6 +249,39 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/libraries/{id}/favourites", a.requireAuth(http.HandlerFunc(a.handleAddFavourite)))
 	mux.Handle("DELETE /api/v1/libraries/{id}/favourites", a.requireAuth(http.HandlerFunc(a.handleRemoveFavourite)))
 
+	// Phase 1b: up next + collections
+	mux.Handle("GET /api/v1/me/queue", a.requireAuth(http.HandlerFunc(a.handleGetQueue)))
+	mux.Handle("PUT /api/v1/me/queue", a.requireAuth(http.HandlerFunc(a.handleSetQueue)))
+	mux.Handle("POST /api/v1/me/queue", a.requireAuth(http.HandlerFunc(a.handleAddToQueue)))
+	mux.Handle("DELETE /api/v1/me/queue", a.requireAuth(http.HandlerFunc(a.handleRemoveFromQueue)))
+	mux.Handle("GET /api/v1/me/collections", a.requireAuth(http.HandlerFunc(a.handleListCollections)))
+	mux.Handle("POST /api/v1/me/collections", a.requireAuth(http.HandlerFunc(a.handleCreateCollection)))
+	mux.Handle("GET /api/v1/me/collections/{id}", a.requireAuth(http.HandlerFunc(a.handleGetCollection)))
+	mux.Handle("PATCH /api/v1/me/collections/{id}", a.requireAuth(http.HandlerFunc(a.handleUpdateCollection)))
+	mux.Handle("DELETE /api/v1/me/collections/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteCollection)))
+	mux.Handle("PUT /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleSetCollectionItems)))
+	mux.Handle("POST /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleAddCollectionItem)))
+	mux.Handle("DELETE /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleRemoveCollectionItem)))
+	mux.Handle("PUT /api/v1/me/collections/{id}/shares", a.requireAuth(http.HandlerFunc(a.handleSetCollectionShares)))
+	mux.Handle("GET /api/v1/me/share-targets", a.requireAuth(http.HandlerFunc(a.handleShareTargets)))
+
+	// Phase 1b: your listening (capability user_stats): the caller's own stats,
+	// listening per day and yearly goal.
+	mux.Handle("GET /api/v1/me/stats", a.requireAuth(http.HandlerFunc(a.handleMyStats)))
+	mux.Handle("GET /api/v1/me/listening", a.requireAuth(http.HandlerFunc(a.handleMyListening)))
+	mux.Handle("GET /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handleGetGoal)))
+	mux.Handle("PUT /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handlePutGoal)))
+	mux.Handle("DELETE /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handleDeleteGoal)))
+
+	// Phase 1b: ratings, progress edits, my devices
+	mux.Handle("GET /api/v1/libraries/{id}/rating", a.requireAuth(http.HandlerFunc(a.handleGetRating)))
+	mux.Handle("PUT /api/v1/libraries/{id}/rating", a.requireAuth(http.HandlerFunc(a.handlePutRating)))
+	mux.Handle("DELETE /api/v1/libraries/{id}/rating", a.requireAuth(http.HandlerFunc(a.handleDeleteRating)))
+	mux.Handle("GET /api/v1/me/ratings", a.requireAuth(http.HandlerFunc(a.handleListRatings)))
+	mux.Handle("PATCH /api/v1/libraries/{id}/progress", a.requireAuth(http.HandlerFunc(a.handleEditMyProgress)))
+	mux.Handle("GET /api/v1/me/devices", a.requireAuth(http.HandlerFunc(a.handleListMyDevices)))
+	mux.Handle("DELETE /api/v1/me/devices/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeMyDevice)))
+
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
 	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))

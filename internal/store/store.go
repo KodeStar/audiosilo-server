@@ -178,6 +178,15 @@ func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 	return db.writer.ExecContext(ctx, query, args...)
 }
 
+// WriteRowContext runs one statement that writes and reads a row back (an
+// INSERT/UPDATE ... RETURNING) on the writer pool. QueryRowContext would send it
+// to the reader pool, whose query_only refuses any write on a file-backed
+// database ("attempt to write a readonly database") while an in-memory test,
+// reader == writer, passes.
+func (db *DB) WriteRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return db.writer.QueryRowContext(ctx, query, args...)
+}
+
 // BeginTx starts a transaction on the writer pool. Prefer WithTx, which also
 // guarantees rollback and logs slow transactions.
 func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {

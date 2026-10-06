@@ -8,13 +8,29 @@ import (
 )
 
 // UserProgress is one of a person's books as the admin console lists it: the
-// progress row with the book's title and the start and finish dates.
+// progress row with the book's title and the start and finish dates. Its own
+// StartedAt/FinishedAt (null when unknown, as the console reads them) shadow the
+// embedded Progress's, which stay empty here; AsProgress is the player's shape.
 type UserProgress struct {
 	Progress
 	Title      string  `json:"title"`
 	Author     string  `json:"author"`
 	StartedAt  *string `json:"started_at"`
 	FinishedAt *string `json:"finished_at"`
+}
+
+// AsProgress is the row as the player's Progress, carrying the dates (absent when
+// unknown).
+func (p UserProgress) AsProgress() Progress {
+	out := p.Progress
+	out.StartedAt, out.FinishedAt = "", ""
+	if p.StartedAt != nil {
+		out.StartedAt = *p.StartedAt
+	}
+	if p.FinishedAt != nil {
+		out.FinishedAt = *p.FinishedAt
+	}
+	return out
 }
 
 const userProgressColumns = `p.library_id, p.rel_path, p.position, p.duration, p.finished, p.playback_speed,
@@ -68,8 +84,9 @@ type OptionalTime struct {
 	Value *time.Time
 }
 
-// ProgressEdit is an admin's change to someone's progress on a book. Nil or
-// unset fields stay as they are.
+// ProgressEdit is a change to someone's progress on a book: an admin's, or the
+// listener's own (PATCH /libraries/{id}/progress). Nil or unset fields stay as
+// they are.
 type ProgressEdit struct {
 	Finished   *bool
 	Position   *float64
@@ -77,19 +94,50 @@ type ProgressEdit struct {
 	FinishedAt OptionalTime
 }
 
-// EditProgress applies an admin's edit to a user's progress on a book, creating
-// the row when the book is indexed and the user has none. Marking a book finished
-// moves the position to the end (players read that as done) and stamps the finish
-// now unless the edit names a date; marking it unfinished clears the finish date
-// and keeps the position unless the edit sets one. The write is stamped with the
+// changes reports whether the edit sets anything at all.
+func (e ProgressEdit) changes() bool {
+	return e.Finished != nil || e.Position != nil || e.StartedAt.Set || e.FinishedAt.Set
+}
+
+// EditProgress applies an edit (an admin's, or the user's own) to a user's
+// progress on a book, creating the row when the book is indexed and the user has
+// none. Marking a book finished moves the position to the end (players read that
+// as done) and stamps the finish now unless the edit names a date; marking it
+// unfinished clears the finish date and keeps the position unless the edit sets
+// one. It is not playback, so it records no listening session. The write is stamped with the
 // server's time and a higher version, so under last-write-wins it beats what a
 // device saved before it, while any device with the book loaded overrides it on
 // its next save, as it should. Returns ErrNotFound when the user has no progress
 // on the path and no book is indexed there, and ErrNoAccess when the user has none
-// and `scope` (the user's own, not the admin's) doesn't allow the path.
+// and `scope` (the user's own, not the admin's) doesn't allow the path. An edit
+// that sets nothing writes nothing (as UpdateCollection's): it answers the row as
+// it is, or ErrNotFound with none, rather than starting the book or, stamped now,
+// outranking a device's pending save.
 func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e ProgressEdit, scope Scope) (*UserProgress, error) {
 	now := c.now()
-	err := c.db.WithTx(ctx, "EditProgress", func(tx *sql.Tx) error {
+	var err error
+	if e.changes() {
+		err = c.editProgress(ctx, userID, ref, e, scope, now)
+	}
+	if err != nil {
+		return nil, err
+	}
+	up, err := scanUserProgress(c.db.QueryRowContext(ctx,
+		`SELECT `+userProgressColumns+` FROM progress p
+		   LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
+		  WHERE p.user_id = ? AND p.library_id = ? AND p.rel_path = ?`, userID, ref.LibraryID, ref.Path))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound // an edit that set nothing, on no progress
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &up, nil
+}
+
+// editProgress writes EditProgress's edit, in one transaction.
+func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e ProgressEdit, scope Scope, now time.Time) error {
+	return c.db.WithTx(ctx, "EditProgress", func(tx *sql.Tx) error {
 		var (
 			p                 Progress
 			started, finished sql.NullString
@@ -165,6 +213,10 @@ func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e Pro
 				return ErrInvalidProgressEdit
 			}
 		}
+		// updated_at keeps the edit's milliseconds, fixed-width like the players'
+		// own stamps (formatSessionTime): devices stamp their saves in milliseconds,
+		// and a whole-second stamp would let a save made up to a second BEFORE the
+		// edit win last-write-wins against it.
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at)
@@ -174,18 +226,7 @@ func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
 			     finished_at=excluded.finished_at`,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
-			p.Version+1, p.DeviceID, now.UTC().Format(time.RFC3339), started, finished)
+			p.Version+1, p.DeviceID, formatSessionTime(now), started, finished)
 		return err
 	})
-	if err != nil {
-		return nil, err
-	}
-	up, err := scanUserProgress(c.db.QueryRowContext(ctx,
-		`SELECT `+userProgressColumns+` FROM progress p
-		   LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
-		  WHERE p.user_id = ? AND p.library_id = ? AND p.rel_path = ?`, userID, ref.LibraryID, ref.Path))
-	if err != nil {
-		return nil, err
-	}
-	return &up, nil
 }

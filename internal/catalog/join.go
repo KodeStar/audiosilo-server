@@ -73,6 +73,10 @@ func (p JoinPart) end(pos, rowDuration float64) float64 {
 //     part, finished.
 //   - bookmarks, notes, listening history and sessions: offset the same way.
 //   - favourites and daily roll-ups: re-keyed (a listener's favourite once).
+//   - ratings: re-keyed; where a listener rated more than one part (or the joined
+//     book), the newest updated_at wins.
+//   - up-next entries and collection items: re-keyed; a list already holding the
+//     joined book (or an earlier part's entry) keeps that one, in its place.
 //
 // The book's own config is COPIED, not moved, so the disc books keep theirs if the
 // override is removed: an admin's metadata edits, attached ASIN/ISBN and custom

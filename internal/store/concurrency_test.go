@@ -112,7 +112,7 @@ func TestPing(t *testing.T) {
 }
 
 // TestReaderSeesCommittedWritesAndRejectsWrites guards the two invariants the
-// reader/writer split rests on, neither of which the :memory: API suite exercises
+// reader/writer split rests on, neither of which a :memory: store exercises
 // (there reader == writer, a single pool):
 //   - the reader pool observes a write committed on the writer pool (WAL
 //     cross-connection visibility) - the read-your-writes guarantee that

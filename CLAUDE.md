@@ -18,7 +18,7 @@ Module path: `github.com/kodestar/audiosilo-server`.
 ```sh
 go build ./...                 # build everything
 go vet ./...                   # static checks
-go test -race ./...            # unit + integration tests (in-memory SQLite + testdata fixtures)
+go test -race ./...            # unit + integration tests (SQLite + testdata fixtures)
 golangci-lint run              # lint (v2 required since Go 1.25; config .golangci.yml)
 go build -o bin/audiosilo ./cmd/audiosilo
 ./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
@@ -165,14 +165,39 @@ folder holding a disc of a book split across disc folders, else `''`); `0023` ad
 `books.cover_art` (the cover art identity whose short hash is the wire `cover_version`) and
 `books.cover_color` (read from a thumbnail, tagged with the version it was read for; both derived, see below) and `0024`
 `meta_cache` (the community metadata cache's persistent level: derived, keyed by identifier,
-not user state; see Phase 1.5 below). Phase 4a (`0018`) adds
+not user state; see Phase 1.5 below). `0027` adds `ratings` (a listener's 1-5 stars + note per
+book: durable, path-keyed, no FK to the index, purged with its user or library). Phase 4a (`0018`) adds
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
 retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
 `client_platform` / `last_ip` (the app and newest address behind each token) and
 `progress.started_at` / `finished_at`. Phase 5b (`0019`) adds `audit_events` (the admin audit log), `notification_targets`
-(where notifications go) and `server_events` (the console's bell); backups are files, not rows. Sharing:
+(where notifications go) and `server_events` (the console's bell); backups are files, not rows. Player
+redesign Phase 1b `0028` adds `listening_goals` (`user_id` PK → users CASCADE, `books_per_year`
+1-1000: a person's yearly goal; names no book, so nothing moves it) and `0029` the index
+`listening_sessions(user_id, last_at)` (a person's own stats read their sessions by it). Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
+
+Player redesign Phase 1b: `up_next` (`0025`: a user's queue) and `collections` /
+`collection_items` / `collection_shares` (`0026`: named lists, shared read-only with named
+users). Items are path-keyed like favourites (no FK to `books`), ordered by `position`, and
+share ONE implementation (`catalog/lists.go` `orderedList`: add-at/move as one range shift plus
+the row, remove leaving a gap (positions need not be dense), replace with the skip rule writing
+only the rows that changed, books attached by `booksAt`); every read passes through the
+READER's current access (a viewer never sees or counts an owner's item outside their own
+shares; such "hidden" rows are kept). An add works in the list as the CALLER sees it (their
+scopes; for a collection, the owner's): `position` is a 0-based index among the visible rows
+(lands just before the visible row at it; absent or past the visible end = just after the last
+visible row; hidden rows stay put), and the caps (`MaxQueue` 500, `MaxCollectionItems` 1000)
+count visible rows: a new book the hidden rows alone would overflow evicts the oldest hidden
+rows (`added_at`), 409 only when the visible rows are at the cap (a whole-list PUT replaces
+everything, hidden rows included, and its length check is unchanged); a move or join carries them
+(`carryListeningState`, the destination entry kept on a collision).
+Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
+`handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
+`not_owner`, both settled before the body is checked; a whole-list PUT without its
+`items` / `user_ids` array is 400, never "empty it"; a viewer disabled since being shared
+stays in `shared_with` and may be sent back; capabilities `queue`, `collections`).
 
 Book identity carries `author`/`series`/`title` plus optional `asin`/`isbn` so a
 future metadata site can attach enrichment without reshaping the schema. The
@@ -182,8 +207,10 @@ admin overrides; see Metadata overrides below).
 ## Conventions
 
 - **Every feature ships with a test.** Handler/integration tests use the
-  `newTestEnv` harness in `internal/api/api_test.go` (in-memory SQLite +
-  `testdata/library` fixtures); pure-logic tests sit next to the code (see
+  `newTestEnv` harness in `internal/api/api_test.go` (a temp-file SQLite, so reads
+  go through the read-only reader pool as in production and a write sent through a
+  read method fails the test, + `testdata/library` fixtures; `catalog`'s
+  `newTestCatalog` is file-backed for the same reason); pure-logic tests sit next to the code (see
   `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,
@@ -436,7 +463,11 @@ admin overrides; see Metadata overrides below).
   shipped app build claims - self-hosted arbitrary domains fall back to the web
   player + the custom-scheme "Open in app" button.
 - **SQLite** runs with a single write connection (writers serialize) plus a
-  read-only reader pool, WAL mode.
+  read-only reader pool, WAL mode. `store.DB.QueryContext`/`QueryRowContext` go to
+  the READER (`query_only`): any statement that writes, including `INSERT ...
+  RETURNING`, must use `ExecContext`, `WriteRowContext` or a `WithTx` transaction.
+  An in-memory DB has reader == writer and would hide a misroute, which is why the
+  test stores are temp files.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
 - **Path safety**: any filesystem access derived from user input goes through
@@ -770,7 +801,17 @@ admin overrides; see Metadata overrides below).
   (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
   how much). `SaveProgress` stamps `progress.started_at` on insert and
   `finished_at` when `finished` turns on (cleared when it turns off), both from the save's own
-  `updated_at`; both are admin-only (not on the player's progress JSON). Endpoints
+  `updated_at`; a save's own `started_at`/`finished_at` are ignored. The player's progress JSON
+  carries them as `started_at`/`finished_at` (`omitempty`; `catalog.Progress`, player redesign
+  Phase 1b, capability `progress_edit`), and the listener edits their own with `PATCH
+  /libraries/{id}/progress?path=` (`handleEditMyProgress`: the admin's `catalog.EditProgress`, its
+  body decoded by the shared `decodeProgressEdit`, with the caller's own scope from
+  `authorizedScope`: 403 outside it, even for an existing row; 404 `book_not_found` with no row and
+  no book; 400 for a bad body or `ErrInvalidProgressEdit`, and for an exact (RFC3339) date in the
+  future, admin edits too (a day-only start keeps the catalog's day of slack); an edit that sets
+  nothing writes nothing, answering the row as it is or 404 with none; no listening session
+  recorded). An edit's `updated_at` keeps its sub-second time, and `SaveProgress` compares and
+  writes in one writer transaction, so an older device save never overwrites a newer edit. Endpoints
   (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
@@ -787,6 +828,21 @@ admin overrides; see Metadata overrides below).
   or one person, and nothing else: the year calendar and a person's listening year). Book-page
   listeners carry `started_at`/`finished_at`. Sessions and roll-ups move
   with the book (`MoveDurableState`).
+- **Your listening (player redesign Phase 1b, capability `user_stats`, `catalog/userstats.go`,
+  `goals.go`, `api/handlers_userstats.go`)**: the caller's own stats, from the same accumulator as the
+  Activity page, built for one user by `newUserListenAcc` (the one user-id guard; its reads take the
+  per-user query spellings, served by `idx_sessions_user_last` / `idx_daily_user` / the progress key).
+  `GET /me/stats?range=` → `{"stats": catalog.UserStats}` (totals/previous without
+  `listeners`, `days` as `{date, listened}`, hours, top books/authors/narrators/series, `finished_books`
+  ≤ 100, playback, clients; none of the admin-only steps run). **Privacy**: the types have no field that
+  can carry another user, user 0 is refused (`errNoUser`: 0 is "everyone" to the
+  accumulator), and the rows naming a book pass the caller's CURRENT access (`UserScopes` +
+  `scopesAllow` / `scopesFilterSQL`): a revoked share's book leaves `top_books`/`finished_books` and the
+  authors/narrators/series (ranked from in-scope books only, `listenAcc.topPeople`), while the totals,
+  days and hours keep all the caller's time. `GET /me/listening?range=` → `catalog.UserListening`
+  (period + `days`, no `by_user`). `GET /me/goal` → `{goal: {books_per_year, updated_at (ms UTC)} | null, year,
+  finished}` (this calendar year in server time, the caller's finishes, counted like `totals.finished`),
+  `PUT /me/goal` `{books_per_year: 1..1000}` (else 400) answers as GET, `DELETE /me/goal` 204, idempotent.
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
@@ -958,10 +1014,13 @@ admin overrides; see Metadata overrides below).
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
-`export`, `browse_people`, `cover_sizes`, `next_book`); flip them on as phases land.
+`export`, `browse_people`, `cover_sizes`, `next_book`, `queue`, `collections`,
+`user_stats`, `ratings`, `progress_edit`, `my_devices`); flip them on as phases land.
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
-(`GET /libraries/{id}/next`). `transcode` already reflects whether ffmpeg is configured;
+(`GET /libraries/{id}/next`). `queue`, `collections`, `user_stats`, `ratings`,
+`progress_edit` and `my_devices` are true (player redesign Phase 1b, see the API surface
+below and Your listening). `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
@@ -983,6 +1042,20 @@ The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}
 `libraryScope`: 403 no access, 404 unknown library; counts only the caller's
 granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
 by exact `author=`, `series=` and `narrator=`.
+Player redesign Phase 1b (`api/handlers_ratings.go`, `handlers_mydevices.go`): **ratings**
+are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null}`; `Rating =
+{library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a
+part path to its book with `bookAt` and stores on the book's path, 400 for a rating that isn't a
+whole 1-5 or a note over 500 runes after trimming; GET/DELETE are exact via `authorizedPath`;
+DELETE 204 idempotent) and `GET /me/ratings` (`{"ratings": [Rating + book?]}`, newest first,
+scope-filtered like favourites: a revoked share hides a rating, never deletes it; books via
+`BooksByPaths`). Table `ratings` (`0027`), path-keyed, carried by `carryListeningState` (a
+collision keeps the newer `updated_at`, whole). **My devices** are `GET
+/me/devices` (the caller's own live sessions and API keys, `auth.ListDevices(caller)` without
+`user_id`/`username`, `current` marks the request's token) and `DELETE /me/devices/{id}` (200
+`{"current": bool}`; `auth.RevokeOwnDevice`, owner-scoped: anyone else's, unknown, revoked or
+pairing id is 404 and untouched; revoking the current device is allowed and its token is dead from
+the next request; an API-key caller may revoke).
 What to play after a book is `GET /libraries/{id}/next?path=` (authed, scoped like
 `item`: 400 bad id/missing path, 403 outside the grant, 404 no library/book;
 `{source: community|series|folder|none, next?, book?, work?}`, see Next book above).

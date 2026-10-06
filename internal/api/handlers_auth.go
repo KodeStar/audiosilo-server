@@ -40,6 +40,12 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"browse_people": true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
 			"cover_sizes":   true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
 			"next_book":     true,                 // what to play after a book (GET /libraries/{id}/next)
+			"queue":         true,                 // the up-next queue (/me/queue)
+			"collections":   true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
+			"user_stats":    true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
+			"ratings":       true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
+			"progress_edit": true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
+			"my_devices":    true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
@@ -349,9 +355,18 @@ func (a *API) gateSelfService(w http.ResponseWriter, r *http.Request) *auth.User
 	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
 		return nil
 	}
+	return a.nonDemoAccount(w, r)
+}
+
+// nonDemoAccount loads the caller's full account, refusing a demo account (403
+// "not available for demo accounts": a public demo must not change its account,
+// list the server's usernames or share with them). On a refusal or a failure it
+// has written the response and returns nil.
+func (a *API) nonDemoAccount(w http.ResponseWriter, r *http.Request) *auth.User {
 	u := userFrom(r.Context())
 	full, err := a.auth.GetUser(r.Context(), u.ID)
 	if err != nil {
+		a.log.Warn("load account failed", "user", u.ID, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return nil
 	}

@@ -22,6 +22,11 @@ type Ref struct {
 }
 
 // Progress is a user's playback position for a book.
+//
+// StartedAt and FinishedAt (RFC3339 UTC, "" = unknown/none, then absent from the
+// JSON) are server-kept: SaveProgress stamps them and ignores a client's; past
+// that, only an edit (EditProgress) sets them, and a move or join carries them. UserProgress shadows both with its own
+// nullable fields for the admin console's wire shape.
 type Progress struct {
 	Ref
 	Position      float64 `json:"position"`
@@ -31,6 +36,17 @@ type Progress struct {
 	Version       int64   `json:"version"`
 	DeviceID      string  `json:"device_id"`
 	UpdatedAt     string  `json:"updated_at"`
+	StartedAt     string  `json:"started_at,omitempty"`
+	FinishedAt    string  `json:"finished_at,omitempty"`
+}
+
+// progressColumns are the columns of a Progress, in scanProgress's order.
+const progressColumns = `library_id, rel_path, position, duration, finished, playback_speed, version, device_id,
+	updated_at, COALESCE(started_at, ''), COALESCE(finished_at, '')`
+
+func scanProgress(row interface{ Scan(...any) error }, p *Progress) error {
+	return row.Scan(&p.LibraryID, &p.Path, &p.Position, &p.Duration, &p.Finished, &p.PlaybackSpeed,
+		&p.Version, &p.DeviceID, &p.UpdatedAt, &p.StartedAt, &p.FinishedAt)
 }
 
 // Bookmark is a saved position with an optional note.
@@ -54,13 +70,15 @@ type Note struct {
 
 // GetProgress returns a user's progress for a book path, or nil if none.
 func (c *Catalog) GetProgress(ctx context.Context, userID int64, ref Ref) (*Progress, error) {
+	return getProgress(ctx, c.db, userID, ref)
+}
+
+// getProgress is GetProgress read through q (the reader pool, or a transaction).
+func getProgress(ctx context.Context, q querier, userID int64, ref Ref) (*Progress, error) {
 	var p Progress
-	err := c.db.QueryRowContext(ctx,
-		`SELECT library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at
-		   FROM progress WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
-		userID, ref.LibraryID, ref.Path).
-		Scan(&p.LibraryID, &p.Path, &p.Position, &p.Duration, &p.Finished, &p.PlaybackSpeed,
-			&p.Version, &p.DeviceID, &p.UpdatedAt)
+	err := scanProgress(q.QueryRowContext(ctx,
+		`SELECT `+progressColumns+` FROM progress WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
+		userID, ref.LibraryID, ref.Path), &p)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -73,7 +91,12 @@ func (c *Catalog) GetProgress(ctx context.Context, userID int64, ref Ref) (*Prog
 // SaveProgress writes progress using last-write-wins reconciliation: an update
 // is applied only if its (updated_at, version) is newer than what is stored.
 // It returns the effective stored progress. This is the same merge the realtime
-// sync layer will reuse, so REST and WebSocket writes converge.
+// sync layer will reuse, so REST and WebSocket writes converge. The start and
+// finish dates are the server's (see the stamps below): in's are ignored (never
+// bound; the write's RETURNING sets the echo's, a stale save echoes the stored row).
+// The comparison and the write are one writer transaction, so a write that lands
+// between them (another device's save, an EditProgress) can't be overwritten by
+// an older save that read the row before it.
 func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (*Progress, error) {
 	// Distrust an unparseable or far-future client timestamp (see
 	// plausibleUpdatedAt) and substitute server time.
@@ -82,19 +105,6 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 	}
 	if in.PlaybackSpeed <= 0 {
 		in.PlaybackSpeed = 1.0
-	}
-	existing, err := c.GetProgress(ctx, userID, in.Ref)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil && !isNewer(in, *existing) {
-		return existing, nil // incoming update is stale; keep stored value
-	}
-	if in.Version == 0 {
-		in.Version = 1
-		if existing != nil {
-			in.Version = existing.Version + 1
-		}
 	}
 	// started_at is stamped by the first save and kept; finished_at is stamped
 	// when finished turns on and cleared when it turns off (a restart). Both take
@@ -105,24 +115,48 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil {
 		stamp = t.UTC().Format(time.RFC3339)
 	}
-	_, err = c.db.ExecContext(ctx,
-		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-		     playback_speed, version, device_id, updated_at, started_at, finished_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?6 THEN ?11 END)
-		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
-		     position=excluded.position, duration=excluded.duration,
-		     finished=excluded.finished, playback_speed=excluded.playback_speed,
-		     version=excluded.version, device_id=excluded.device_id,
-		     updated_at=excluded.updated_at,
-		     finished_at=CASE WHEN NOT excluded.finished THEN NULL
-		                      WHEN progress.finished THEN progress.finished_at
-		                      ELSE ?11 END`,
-		userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
-		in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp)
+	var out *Progress
+	err := c.db.WithTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
+		existing, err := getProgress(ctx, tx, userID, in.Ref)
+		if err != nil {
+			return err
+		}
+		if existing != nil && !isNewer(in, *existing) {
+			out = existing // incoming update is stale; keep stored value
+			return nil
+		}
+		if in.Version == 0 {
+			in.Version = 1
+			if existing != nil {
+				in.Version = existing.Version + 1
+			}
+		}
+		// RETURNING reads the dates the row ended up with (a kept start, a kept or
+		// new finish), so the echo carries the stored ones.
+		if err := tx.QueryRowContext(ctx,
+			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
+			     playback_speed, version, device_id, updated_at, started_at, finished_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?6 THEN ?11 END)
+			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
+			     position=excluded.position, duration=excluded.duration,
+			     finished=excluded.finished, playback_speed=excluded.playback_speed,
+			     version=excluded.version, device_id=excluded.device_id,
+			     updated_at=excluded.updated_at,
+			     finished_at=CASE WHEN NOT excluded.finished THEN NULL
+			                      WHEN progress.finished THEN progress.finished_at
+			                      ELSE ?11 END
+			 RETURNING COALESCE(started_at, ''), COALESCE(finished_at, '')`,
+			userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
+			in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp).Scan(&in.StartedAt, &in.FinishedAt); err != nil {
+			return err
+		}
+		out = &in
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &in, nil
+	return out, nil
 }
 
 // plausibleUpdatedAt reports whether a client-supplied updated_at can be
@@ -156,8 +190,7 @@ func (c *Catalog) ListProgress(ctx context.Context, userID int64, scopes []Scope
 	filter, fargs := scopesFilterSQL("library_id", "rel_path", scopes)
 	args := append([]any{userID}, fargs...)
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT library_id, rel_path, position, duration, finished, playback_speed, version, device_id, updated_at
-		   FROM progress WHERE user_id = ? AND `+filter, args...)
+		`SELECT `+progressColumns+` FROM progress WHERE user_id = ? AND `+filter, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -165,8 +198,7 @@ func (c *Catalog) ListProgress(ctx context.Context, userID int64, scopes []Scope
 	var out []Progress
 	for rows.Next() {
 		var p Progress
-		if err := rows.Scan(&p.LibraryID, &p.Path, &p.Position, &p.Duration, &p.Finished,
-			&p.PlaybackSpeed, &p.Version, &p.DeviceID, &p.UpdatedAt); err != nil {
+		if err := scanProgress(rows, &p); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -260,7 +292,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // part ends on into's timeline, JoinPart.end).
 // Progress where the listener already has some on into merges by merge: a move
 // takes the newer save (mergeNewest), a join the furthest (mergeFurthest); a
-// favourite lands once.
+// favourite lands once; an up-next entry or collection item already on into
+// stays (with its position) and the carried one goes; a rating already on into
+// is replaced only by a newer one (updated_at; a tie keeps into's).
 //
 // This is the one list of per-user path-keyed tables: add a table -> add a line
 // (and, if it can be keyed on a folder, see carryFavourites).
@@ -269,6 +303,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // baseline), and only the values are bound parameters here anyway.
 func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
 	merge progressMerge) error {
+	if part.Path == into {
+		return nil // nothing to carry (and the delete-after-copy below would lose it)
+	}
 	if err := carryProgress(ctx, tx, libraryID, part, into, total, merge); err != nil {
 		return err
 	}
@@ -288,6 +325,21 @@ func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part 
 		        finished = finished AND ?6
 		  WHERE library_id = ?4 AND rel_path = ?5`,
 		`UPDATE listening_daily SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		// Lists (orderedList): a list already holding into keeps that entry.
+		`UPDATE OR IGNORE up_next SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		`DELETE FROM up_next WHERE library_id = ?4 AND rel_path = ?5`,
+		`UPDATE OR IGNORE collection_items SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		`DELETE FROM collection_items WHERE library_id = ?4 AND rel_path = ?5`,
+		// Ratings: the newer updated_at wins, whole (as a move's progress,
+		// mergeNewest); a tie keeps into's.
+		`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
+		 SELECT user_id, library_id, ?1, rating, note, created_at, updated_at
+		   FROM ratings WHERE library_id = ?4 AND rel_path = ?5
+		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
+		     rating = excluded.rating, note = excluded.note,
+		     created_at = excluded.created_at, updated_at = excluded.updated_at
+		   WHERE excluded.updated_at > ratings.updated_at`,
+		`DELETE FROM ratings WHERE library_id = ?4 AND rel_path = ?5`,
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt, into, part.Offset, total, libraryID, part.Path, part.Last,
