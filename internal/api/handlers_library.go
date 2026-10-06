@@ -205,6 +205,7 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 		LibraryID: id,
 		Author:    r.URL.Query().Get("author"),
 		Series:    r.URL.Query().Get("series"),
+		Narrator:  r.URL.Query().Get("narrator"),
 		Sort:      r.URL.Query().Get("sort"),
 		Limit:     queryInt(r, "limit", 50),
 		Cursor:    r.URL.Query().Get("cursor"),
@@ -253,8 +254,16 @@ func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"books": books})
 }
 
-// handleItem returns full book detail (metadata + files + chapters) for a path,
-// indexing it on demand if needed.
+// itemBook is the item endpoint's book: the shape every player book has, plus
+// the description, which only this single-book response carries (catalog.Book
+// leaves it out so list, search and recent pages stay small).
+type itemBook struct {
+	*catalog.Book
+	Description string `json:"description,omitempty"`
+}
+
+// handleItem returns full book detail (metadata + files + chapters + description)
+// for a path, indexing it on demand if needed.
 func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
@@ -272,7 +281,7 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	default:
 		dp := media.DirectPlayable(book.Codec)
 		book.DirectPlayable = &dp
-		writeJSON(w, http.StatusOK, book)
+		writeJSON(w, http.StatusOK, itemBook{Book: book, Description: book.Description})
 	}
 }
 

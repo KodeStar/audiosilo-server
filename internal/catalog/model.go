@@ -56,9 +56,10 @@ type Book struct {
 	AddedAt     string  `json:"added_at,omitempty"` // RFC3339; filesystem birth time (scanner)
 	ContentHash string  `json:"-"`
 	// Published (YYYY[-MM[-DD]]) and Description come only from an edit or a
-	// community match today. They are admin-console fields for now (not on the
-	// player wire), so they are kept out of this envelope.
-	Published   string `json:"-"`
+	// community match today. Published rides on every player book; Description can
+	// be long, so it is kept out of this envelope and only the item endpoint adds
+	// it (api's itemBook), leaving list pages small.
+	Published   string `json:"published,omitempty"`
 	Description string `json:"-"`
 	// HasCover reports cover art (a sibling image or embedded art); nil until a
 	// scan has checked. Set by the scanner; read by the admin catalog.

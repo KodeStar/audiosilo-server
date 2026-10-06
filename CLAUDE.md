@@ -406,7 +406,9 @@ admin overrides; see Metadata overrides below).
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
   (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
   `Scope.VisibleInBrowse` filters `/fs` to a navigable subtree, and
-  `pathFilterSQL` scopes `ListBooks`/`Search`. Every content handler authorizes
+  `pathFilterSQL` scopes `ListBooks`/`Search` and the player's browse aggregates
+  (`People`/`Series` given a `*Scope`, which also pins them to the scope's library;
+  nil = the admin's unscoped view). Every content handler authorizes
   the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`.
   Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
@@ -496,9 +498,10 @@ admin overrides; see Metadata overrides below).
   rescan rewrites the scanned values and re-applies the edit before anything can read
   the row) and why there is no separate post-scan enrichment pass any more.
   `SetEnrichment` and `EditBook`/`EditBooks` call it too. Players, search, `/fs` and
-  export read the row, so they see edits with no join; the player's book JSON shape is
-  unchanged (`published`, `description`, `has_cover`, per-file codec are admin-only,
-  `json:"-"`). Validation: `normalizeOverride`; sources: a scanned value is `path` when
+  export read the row, so they see edits with no join. The player's book JSON carries
+  `published` on every book and `description` only on `GET /libraries/{id}/item` (api's
+  `itemBook` adds it; `catalog.Book` keeps it `json:"-"` so list, search and recent pages
+  stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Validation: `normalizeOverride`; sources: a scanned value is `path` when
   it equals what `DeriveFromPath` yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
@@ -519,7 +522,9 @@ admin overrides; see Metadata overrides below).
   `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
   `GET /admin/authors|narrators` (whole field values + `merge_suggestions` from
   `personKey`, keyed by `match.Fold`, which keeps every script's letters) and
-  `/admin/series`; `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
+  `/admin/series` (`catalog.People`/`Series` with a nil scope; the player's
+  `/libraries/{id}/authors|narrators|series` take the same aggregates within the
+  caller's scope, without `merge_suggestions`); `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
   page: per-field provenance, chapters, files, listeners, shares, folder override);
   `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
   STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
@@ -870,8 +875,9 @@ admin overrides; see Metadata overrides below).
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `export`); flip them
-on as phases land. `transcode` already reflects whether ffmpeg is configured;
+`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `export`,
+`browse_people`); flip them on as phases land. `browse_people` is true (the
+player's browse lists and `/books?narrator=`). `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
@@ -887,6 +893,11 @@ metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
 the other `?path=` content endpoints; 404 when metadata is disabled), plus
 `GET /meta/work?id=<work id>` (authed, no library scope - global community data;
 404 when metadata is disabled or the work id is unknown).
+The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}`),
+`/narrators` (`{narrators, unknown}`) and `/series` (`{series}`) (authed,
+`libraryScope`: 403 no access, 404 unknown library; counts only the caller's
+granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
+by exact `author=`, `series=` and `narrator=`.
 The library export is `GET /admin/libraries/{id}/export` (admin only; returns a
 JSON attachment, not the usual envelope - see Library export above).
 Server settings are `GET`/`PATCH /admin/settings` (admin only): a section-keyed
