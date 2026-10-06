@@ -411,11 +411,14 @@ admin overrides; see Metadata overrides below).
   ties: the requested book's library, then library sort order, then path.
   **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
-  `{source, next?, book?, work?}` from the first source that applies:
-  `community` (metadata on + matched + a rail: `meta.NextOnRail` on the first
-  rail's MAIN view, placed by the same `localRails`; owned -> next + book + work,
-  not owned -> work only, never skipping ahead; last -> `{source:"community"}`;
-  upstream error/unmatched/no rails/unnumbered -> fall through), `series`
+  `{source, next?, book?, work?}`; `source` names the step that produced `next`
+  (or decided there is none): `community` (metadata on + matched + a rail:
+  `meta.NextOnRail` on the first rail's MAIN view, placed by the same
+  `localRails`; answers only when the next entry is placed -> next + book + work.
+  Otherwise the steps below answer: an unplaced next entry rides along as `work`
+  without `local`, since failing to place (untagged, series named unlike the rail)
+  proves nothing; current work last on the rail (it can lag the library),
+  upstream error/unmatched/no rails/unnumbered -> no `work`), `series`
   (`catalog.NextInSeries`: same library, exact series, smallest higher index in
   scope; numbered books but none later -> `{source:"series"}`), `folder`
   (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
@@ -423,8 +426,9 @@ admin overrides; see Metadata overrides below).
   chunks; the player's `findNextSibling`: names compared as its `localeCompare`
   (numeric, base) does, by `x/text/collate`, and a bare folder only when nothing in
   the folder, the current book included, is indexed), else `{source:"none"}`. A
-  failure to place the caller's books falls through like an upstream one. `book`
-  is the list shape; everything named is in the caller's scope.
+  failure to place the caller's books leaves the next entry unplaced (as `/meta`
+  degrades). `book` is the list shape; everything `next` names is in the caller's
+  scope.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the

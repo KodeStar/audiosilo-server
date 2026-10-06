@@ -292,21 +292,69 @@ func TestNextCommunity(t *testing.T) {
 		}
 	}
 
-	// Not owned (denied: Saga/3 is outside the member's grant): the work alone,
-	// and no later owned book either (Private/4 is out of reach too, and must
-	// not be skipped to anyway).
+	// Not placed (denied: Saga/3 is outside the member's grant): placing proves
+	// nothing either way, so the local steps answer - here the end of the
+	// member's numbered Saga (Saga/1 is the only other) - with the community's
+	// next work beside it, without `local`. Nothing outside the grant leaks.
 	n = getNext(t, e.testEnv, e.url("next", "Saga/2"), e.memberTok)
-	if n.Source != nextCommunity || n.Next != nil || n.Book != nil || n.Work == nil || n.Work.ID != "three" || n.Work.Local != nil {
-		t.Fatalf("not owned = %s", n.raw)
+	if n.Source != nextSeries || n.Next != nil || n.Book != nil || n.Work == nil || n.Work.ID != "three" || n.Work.Local != nil {
+		t.Fatalf("not placed = %s", n.raw)
 	}
 	if strings.Contains(n.raw, "Saga/3") || strings.Contains(n.raw, "Private/4") {
 		t.Fatalf("a book outside the grant leaked: %s", n.raw)
 	}
+}
 
-	// The last work: the end of the series.
-	n = getNext(t, e.testEnv, e.url("next", "Private/4"), e.adminTok)
-	if n.Source != nextCommunity || n.Next != nil || n.Work != nil {
-		t.Fatalf("last = %s", n.raw)
+// TestNextCommunityUnplaced: a next rail entry the caller's books can't be
+// placed on (untagged, or tagged under a series named unlike the rail) does not
+// stop the lookup: the series or folder step answers, with the community's next
+// work attached without `local`.
+func TestNextCommunityUnplaced(t *testing.T) {
+	e := newSagaEnv(t, true,
+		&catalog.Book{RelPath: "Loose/1", ASIN: "B0ONE", IsFolder: true}, // untagged
+		&catalog.Book{RelPath: "Loose/2", IsFolder: true},
+		&catalog.Book{RelPath: "Chron/1", Series: "Saga Chronicles", SeriesIndex: 1, ASIN: "B0ONE"},
+		&catalog.Book{RelPath: "Chron/2", Series: "Saga Chronicles", SeriesIndex: 2},
+	)
+	mkdirs(t, e.lib.Root, "Loose/1", "Loose/2", "Chron/1", "Chron/2")
+
+	for from, want := range map[string]struct{ source, next string }{
+		"Loose/1": {nextFolder, "Loose/2"},
+		"Chron/1": {nextSeries, "Chron/2"},
+	} {
+		n := getNext(t, e.testEnv, e.url("next", from), e.adminTok)
+		if n.Source != want.source || n.nextPath() != want.next || n.Book == nil || n.Book.RelPath != want.next ||
+			n.Work == nil || n.Work.ID != "two" || n.Work.Local != nil {
+			t.Fatalf("%s = %s, want %s %s with work two unplaced", from, n.raw, want.source, want.next)
+		}
+	}
+}
+
+// TestNextCommunityLast: the current work last on the rail does not end the
+// series either - the rail can lag the library - so the local steps answer,
+// with no community work.
+func TestNextCommunityLast(t *testing.T) {
+	e := newSagaEnv(t, true, append(sagaBooks(),
+		&catalog.Book{RelPath: "Saga/5", Series: "Saga", SeriesIndex: 5},
+		&catalog.Book{RelPath: "Late/4", ASIN: "B0FOUR", IsFolder: true}, // untagged
+		&catalog.Book{RelPath: "Late/5", IsFolder: true},
+	)...)
+	mkdirs(t, e.lib.Root, "Late/4", "Late/5")
+
+	for from, want := range map[string]struct{ source, next string }{
+		"Private/4": {nextSeries, "Saga/5"},
+		"Late/4":    {nextFolder, "Late/5"},
+	} {
+		n := getNext(t, e.testEnv, e.url("next", from), e.adminTok)
+		if n.Source != want.source || n.nextPath() != want.next || n.Work != nil {
+			t.Fatalf("%s = %s, want %s %s without work", from, n.raw, want.source, want.next)
+		}
+	}
+	// Nothing locally either: none, still without work.
+	e = newSagaEnv(t, true, &catalog.Book{RelPath: "Only/4", ASIN: "B0FOUR", IsFolder: true})
+	mkdirs(t, e.lib.Root, "Only/4")
+	if n := getNext(t, e.testEnv, e.url("next", "Only/4"), e.adminTok); n.Source != nextNone || n.Next != nil || n.Work != nil {
+		t.Fatalf("last with nothing local = %s", n.raw)
 	}
 }
 

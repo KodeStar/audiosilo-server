@@ -19,9 +19,11 @@ const (
 )
 
 // nextBook is GET /libraries/{id}/next's answer: what to play after a book.
-// Next is set only for a book the caller can open; Book is its indexed metadata
-// in the list shape (no files, chapters or description); Work is the community
-// work that comes next (source community), with `local` when the caller owns it.
+// Source names the step that produced Next (or decided there is none). Next is
+// set only for a book the caller can open; Book is its indexed metadata in the
+// list shape (no files, chapters or description). Work is the community work
+// that comes next: with `local` beside a community Next, or without it beside a
+// series/folder/none answer when the caller's copy could not be placed.
 type nextBook struct {
 	Source string               `json:"source"`
 	Next   *catalog.Ref         `json:"next,omitempty"`
@@ -52,32 +54,42 @@ func (a *API) handleNext(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveNext is the next book after book for the caller (scope is theirs in
-// lib), from the first source that has an answer: the book's community series
-// (communityNext), its local series numbering (seriesNext), the next sibling in
-// its folder (folderNext), else none. Whatever it names is in the caller's scope.
+// lib). The community series answers when it places the next entry on one of
+// the caller's books (communityNext). Failing to place proves nothing - the
+// books may be untagged, or tagged under a series named unlike the rail, and the
+// rail can lag the library - so otherwise the local series numbering
+// (seriesNext), then the book's folder (folderNext), then none answer, carrying
+// the community's unplaced next work, if it named one, as Work. Whatever Next
+// names is in the caller's scope.
 func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
-	if next, err := a.communityNext(ctx, lib.ID, book); next != nil || err != nil {
-		return next, err
+	work, placed := a.communityNext(ctx, lib.ID, book)
+	if work != nil && work.Local != nil {
+		ref := catalog.Ref(*work.Local)
+		return &nextBook{Source: nextCommunity, Next: &ref, Book: placed, Work: work}, nil
 	}
-	if next, err := a.seriesNext(ctx, lib.ID, scope, book); next != nil || err != nil {
-		return next, err
+	next, err := a.seriesNext(ctx, lib.ID, scope, book)
+	if next == nil && err == nil {
+		next, err = a.folderNext(ctx, lib, scope, book)
 	}
-	if next, err := a.folderNext(ctx, lib, scope, book); next != nil || err != nil {
-		return next, err
+	if err != nil {
+		return nil, err
 	}
-	return &nextBook{Source: nextNone}, nil
+	if next == nil {
+		next = &nextBook{Source: nextNone}
+	}
+	next.Work = work
+	return next, nil
 }
 
-// communityNext reads the next book off the community series: the entry after
-// the current work on the first rail's main view (meta.NextOnRail), placed for
-// the caller as the /meta envelope places it (localRails). An owned next entry
-// is next + book + work; one the caller does not own is the work alone, which
-// still ends the lookup - playing a later owned book would skip one. The current
-// work last on the rail is the end of the series ({source: community}). nil
-// (fall through) when metadata is off, the book is unmatched or has no rails,
-// the upstream fails, the current position is not a number, or the caller's
-// books can't be placed.
-func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.Book) (*nextBook, error) {
+// communityNext is the entry after the current work on the first rail's main
+// view (meta.NextOnRail), placed for the caller as the /meta envelope places it
+// (localRails): work.Local is set when it is one of the caller's books, and
+// placed is then that book's indexed metadata (when found). work is nil when
+// there is no community answer: metadata off, the book unmatched or without
+// rails, the upstream failing, the current position not a number, or the
+// current work last on the rail. When the caller's books can't be placed, work
+// is the rail's entry without `local`, as /meta degrades.
+func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.Book) (work *meta.MetaSeriesWork, placed *catalog.Book) {
 	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
 		return nil, nil
 	}
@@ -95,34 +107,26 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 	// books moves no entry, so the end of the series and an unreadable position
 	// are answered without looking up what the caller owns.
 	work, ok := meta.NextOnRail(env.Series[0], env.Work.ID)
-	switch {
-	case !ok:
+	if !ok || work == nil {
 		return nil, nil
-	case work == nil:
-		return &nextBook{Source: nextCommunity}, nil
 	}
 	rails, books, err := a.localRails(ctx, catalog.Ref{LibraryID: libraryID, Path: book.RelPath}, env)
 	if err != nil {
-		// Like an upstream failure: without knowing what the caller owns, the
-		// local sources answer.
 		if ctx.Err() == nil {
 			a.log.Warn("place owned books for next book failed", "err", err, "library", libraryID, "path", book.RelPath)
 		}
-		return nil, nil
+		return work, nil
 	}
 	work, _ = meta.NextOnRail(rails[0], env.Work.ID) // the same entry, with the caller's local
-	out := &nextBook{Source: nextCommunity, Work: work}
-	if work.Local != nil {
-		ref := catalog.Ref(*work.Local)
-		out.Next = &ref
-		for i := range books {
-			if books[i].LibraryID == ref.LibraryID && books[i].RelPath == ref.Path {
-				out.Book = &books[i]
-				break
-			}
+	if work.Local == nil {
+		return work, nil
+	}
+	for i := range books {
+		if books[i].LibraryID == work.Local.LibraryID && books[i].RelPath == work.Local.Path {
+			return work, &books[i]
 		}
 	}
-	return out, nil
+	return work, nil
 }
 
 // seriesNext reads the next book off the book's local series numbering: the
