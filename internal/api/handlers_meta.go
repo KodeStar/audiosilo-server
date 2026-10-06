@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/meta"
@@ -23,6 +24,9 @@ import (
 //   - book has neither asin nor isbn, or the lookup found no match: 200 {"matched": false}.
 //   - upstream unreachable/error: 502.
 //   - match: 200 {"matched": true, ...} (see internal/meta.Enrichment).
+//
+// Every rail entry the caller owns carries `local`, the book to open for it
+// (localRails), resolved for this caller on a copy of the rails.
 //
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a
@@ -92,6 +96,10 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	// with its own copy first, never writes through to env.
 	cp := *env
 	out := &cp
+	if out.Series, _, err = a.localRails(r.Context(), catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, env); err != nil {
+		a.writeCatalogError(w, err, "place owned books for meta failed", "could not load books", "library", lib.ID, "path", path)
+		return
+	}
 	if queryHas(q["include"], "previous") {
 		out.Previous = a.meta.Previous(r.Context(), env)
 	}
@@ -99,6 +107,53 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		out = meta.HideSpoilers(out, chapter, finished)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// localRails is env's rails with `local` set on each entry the caller owns
+// (meta.PlaceLocal), and the candidate books by ref (for /next's `book`). The
+// candidates are the caller's books in every library they reach, scope-filtered
+// (catalog.SeriesBooks over their UserScopes), whose series is named like one of
+// the rails or orderings; each is placed by the work id the meta cache already
+// holds for it (Service.CachedWorkID, never an upstream call), else by its series
+// index. requested is the book env is for: it holds the current work's entry.
+// The rails returned are a new slice; env is shared and never modified.
+func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.Enrichment) ([]meta.MetaSeries, map[catalog.Ref]catalog.Book, error) {
+	if len(env.Series) == 0 {
+		return env.Series, nil, nil
+	}
+	u := userFrom(ctx)
+	scopes, err := a.cat.UserScopes(ctx, u.ID, u.Role == auth.RoleAdmin)
+	if err != nil {
+		return nil, nil, err
+	}
+	var names []string
+	for _, rail := range env.Series {
+		names = append(names, rail.Name)
+		for _, o := range rail.Orderings {
+			names = append(names, o.Name)
+		}
+	}
+	books, err := a.cat.SeriesBooks(ctx, scopes, names)
+	if err != nil {
+		return nil, nil, err
+	}
+	cands := make([]meta.LocalBook, len(books))
+	byRef := make(map[catalog.Ref]catalog.Book, len(books))
+	for i, b := range books {
+		workID, _ := a.meta.CachedWorkID(b.ASIN, b.ISBN)
+		cands[i] = meta.LocalBook{
+			MetaLocal:   meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
+			Series:      b.Series,
+			SeriesIndex: b.SeriesIndex,
+			WorkID:      workID,
+		}
+		byRef[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}] = b
+	}
+	current := ""
+	if env.Work != nil {
+		current = env.Work.ID
+	}
+	return meta.PlaceLocal(env.Series, current, meta.MetaLocal{LibraryID: requested.LibraryID, Path: requested.Path}, cands), byRef, nil
 }
 
 // listeningChapter is where the caller is in book, for spoilers=hide: the

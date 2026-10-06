@@ -817,7 +817,7 @@ func TestContentPathTraversalIsNeutralized(t *testing.T) {
 	libPath := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10)
 	escape := url.QueryEscape("../../../../etc/passwd")
 
-	for _, ep := range []string{"/item", "/chapters", "/cover", "/stream"} {
+	for _, ep := range []string{"/item", "/next", "/chapters", "/cover", "/stream"} {
 		resp, body := e.do(t, "GET", libPath+ep+"?path="+escape, adminTok, "")
 		if resp.StatusCode == http.StatusOK || resp.StatusCode >= 500 {
 			t.Fatalf("%s with traversal path = %d %s, want a clean 4xx (not 200/5xx)", ep, resp.StatusCode, body)
@@ -863,7 +863,7 @@ func TestScopedPathTraversalDenied(t *testing.T) {
 
 	// Denied: climbing out of the grant with ".." must be 403 on every content route.
 	escape := url.QueryEscape("AuthorA/../AuthorB/secret.m4b")
-	for _, ep := range []string{"/item", "/chapters", "/cover", "/stream"} {
+	for _, ep := range []string{"/item", "/next", "/chapters", "/cover", "/stream"} {
 		resp, body := e.do(t, "GET", libPath+ep+"?path="+escape, memberTok, "")
 		if resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("%s traversal out of scope = %d %s, want 403", ep, resp.StatusCode, body)

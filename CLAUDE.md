@@ -107,7 +107,7 @@ internal/catalog/     libraries, access grants, books, FTS search, listening sta
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; the admin console's match (match.go: metaserve works/match over tag + path facts, pathfacts.go; works/search fallback for an older metaserve); owned books' work ids for the Series cards (workids.go)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; the admin console's match (match.go: metaserve works/match over tag + path facts, pathfacts.go; works/search fallback for an older metaserve); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
@@ -375,6 +375,32 @@ admin overrides; see Metadata overrides below).
   has characters/recaps/recap_summary/community_description); `MetaRecording`
   carries `chapter_count`. `Service.CachedWorkID` answers an identifier's work id
   from the memory cache only (no upstream, no store).
+  **Owned entries (`local`)**: every rail entry, main view and each
+  `orderings[].works[]`, carries `local` `{library_id, path}` when the CALLER owns
+  that work. Resolved per request AFTER the cache, on a copy of the rails (never
+  stored: the cached envelope is shared): `api.localRails` fetches the caller's
+  candidates (`catalog.SeriesBooks` over their `UserScopes`, scope-filtered: books
+  whose series folds to a rail/ordering name by `match.SeriesKey`, the console's
+  `seriesKey` - NFKD, case, punctuation and spacing ignored) and `meta.PlaceLocal`
+  places them: the current work's entry -> the requested book; else the book whose
+  work id `CachedWorkID` knows; else (orderings) the main view's book for that work;
+  else `series_index` == the entry's numeric position on a series named like that
+  view. A book with a known work id is never placed by index; one book per entry;
+  ties: the requested book's library, then library sort order, then path.
+  **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
+  (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
+  `{source, next?, book?, work?}` from the first source that applies:
+  `community` (metadata on + matched + a rail: `meta.NextOnRail` on the first
+  rail's MAIN view, placed by the same `localRails`; owned -> next + book + work,
+  not owned -> work only, never skipping ahead; last -> `{source:"community"}`;
+  upstream error/unmatched/no rails/unnumbered -> fall through), `series`
+  (`catalog.NextInSeries`: same library, exact series, smallest higher index in
+  scope; numbered books but none later -> `{source:"series"}`), `folder`
+  (`library.NextSibling` over the parent's `BrowseFS` listing, paged to the end,
+  scope- and ignore-filtered, annotated by `BooksByPaths`; the player's
+  `findNextSibling`, except the current book does not count as "indexed" for the
+  bare-folder fallback), else `{source:"none"}`. `book` is the list shape;
+  everything named is in the caller's scope.
   **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
   each family (key `ordering_of || id`) into ONE rail whose top-level view is the
   MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
@@ -402,7 +428,7 @@ admin overrides; see Metadata overrides below).
 - **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
   is the handle (a query param, to avoid encoded-slash issues). `item`/`chapters`/
-  `cover`/`meta` resolve `(library, path)` to a book in ONE place, `bookForPath`:
+  `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
   (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
   demand (`Scanner.IndexPathWithin`) if the scan hasn't reached it. A book found
@@ -896,9 +922,10 @@ admin overrides; see Metadata overrides below).
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `export`,
-`browse_people`); flip them on as phases land. `browse_people` is true (the
-player's browse lists and `/books?narrator=`). `transcode` already reflects whether ffmpeg is configured;
+`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
+`export`, `browse_people`, `next_book`); flip them on as phases land.
+`browse_people` is true (the player's browse lists and `/books?narrator=`);
+`next_book` is true (`GET /libraries/{id}/next`). `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
@@ -919,6 +946,9 @@ The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}
 `libraryScope`: 403 no access, 404 unknown library; counts only the caller's
 granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
 by exact `author=`, `series=` and `narrator=`.
+What to play after a book is `GET /libraries/{id}/next?path=` (authed, scoped like
+`item`: 400 bad id/missing path, 403 outside the grant, 404 no library/book;
+`{source: community|series|folder|none, next?, book?, work?}`, see Next book above).
 The library export is `GET /admin/libraries/{id}/export` (admin only; returns a
 JSON attachment, not the usual envelope - see Library export above).
 Server settings are `GET`/`PATCH /admin/settings` (admin only): a section-keyed

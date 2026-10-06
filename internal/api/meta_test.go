@@ -393,13 +393,15 @@ func TestMetaSeriesOrderingEnvelope(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &env); err != nil {
 		t.Fatalf("decode envelope: %v: %s", err, body)
 	}
+	// The requested book holds its own work's entry in both views (`local`).
+	local := `"local":{"library_id":` + strconv.FormatInt(libID, 10) + `,"path":"C. S. Lewis/LWW"}`
 	want := `[{"id":"narnia","name":"Narnia","position":"1","works":[` +
-		`{"id":"lww","title":"LWW","position":"1","authors":[],"web_url":"BASE/work?id=lww"},` +
+		`{"id":"lww","title":"LWW","position":"1","authors":[],"web_url":"BASE/work?id=lww",` + local + `},` +
 		`{"id":"mn","title":"MN","position":"6","authors":[],"cover_url":"https://c/mn.jpg","web_url":"BASE/work?id=mn"}],` +
 		`"ordering":"publication",` +
 		`"orderings":[{"id":"narnia-chrono","name":"Narnia (Chronological)","ordering":"chronological","ordering_of":"narnia","position":"2","works":[` +
 		`{"id":"mn","title":"MN","position":"1","authors":[],"cover_url":"https://c/mn.jpg","web_url":"BASE/work?id=mn"},` +
-		`{"id":"lww","title":"LWW","position":"2","authors":[],"web_url":"BASE/work?id=lww"}]}]}]`
+		`{"id":"lww","title":"LWW","position":"2","authors":[],"web_url":"BASE/work?id=lww",` + local + `}]}]}]`
 	if got := strings.ReplaceAll(string(env.Series), mock.URL, "BASE"); got != want {
 		t.Fatalf("series envelope:\n got %s\nwant %s", got, want)
 	}
