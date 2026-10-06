@@ -134,7 +134,7 @@ func (l orderedList) add(ctx context.Context, tx listTx, owner int64, ref Ref, p
 	switch {
 	case at == len(rest) && at > 0:
 		pos = rest[at-1].pos + 1
-	case at == len(rest): // the only row
+	case at == len(rest): // an empty list
 		pos = 0
 	case at > 0 && rest[at-1].pos >= rest[at].pos:
 		// Equal positions (a hand-written database) can't take a shift between
