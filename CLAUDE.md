@@ -165,7 +165,8 @@ folder holding a disc of a book split across disc folders, else `''`); `0023` ad
 `books.cover_art` (the cover art identity whose short hash is the wire `cover_version`) and
 `books.cover_color` (read from a thumbnail, tagged with the version it was read for; both derived, see below) and `0024`
 `meta_cache` (the community metadata cache's persistent level: derived, keyed by identifier,
-not user state; see Phase 1.5 below). Phase 4a (`0018`) adds
+not user state; see Phase 1.5 below). `0027` adds `ratings` (a listener's 1-5 stars + note per
+book: durable, path-keyed, no FK to the index, purged with its user or library). Phase 4a (`0018`) adds
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
 retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
 `client_platform` / `last_ip` (the app and newest address behind each token) and
@@ -772,7 +773,13 @@ admin overrides; see Metadata overrides below).
   (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
   how much). `SaveProgress` stamps `progress.started_at` on insert and
   `finished_at` when `finished` turns on (cleared when it turns off), both from the save's own
-  `updated_at`; both are admin-only (not on the player's progress JSON). Endpoints
+  `updated_at`; a save's own `started_at`/`finished_at` are ignored. The player's progress JSON
+  carries them as `started_at`/`finished_at` (`omitempty`; `catalog.Progress`, player redesign
+  Phase 1b, capability `progress_edit`), and the listener edits their own with `PATCH
+  /libraries/{id}/progress?path=` (`handleEditMyProgress`: the admin's `catalog.EditProgress`, its
+  body decoded by the shared `decodeProgressEdit`, with the caller's own scope from
+  `authorizedScope`: 403 outside it, even for an existing row; 404 `book_not_found` with no row and
+  no book; 400 for a bad body or `ErrInvalidProgressEdit`; no listening session recorded). Endpoints
   (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
@@ -974,10 +981,12 @@ admin overrides; see Metadata overrides below).
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
-`export`, `browse_people`, `cover_sizes`, `next_book`); flip them on as phases land.
+`export`, `browse_people`, `cover_sizes`, `next_book`, `ratings`, `progress_edit`,
+`my_devices`); flip them on as phases land.
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
-(`GET /libraries/{id}/next`). `transcode` already reflects whether ffmpeg is configured;
+(`GET /libraries/{id}/next`). `ratings`, `progress_edit` and `my_devices` are true (player
+redesign Phase 1b, see the API surface below). `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
@@ -999,6 +1008,20 @@ The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}
 `libraryScope`: 403 no access, 404 unknown library; counts only the caller's
 granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
 by exact `author=`, `series=` and `narrator=`.
+Player redesign Phase 1b (`api/handlers_ratings.go`, `handlers_mydevices.go`): **ratings**
+are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null}`; `Rating =
+{library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a
+part path to its book with `bookAt` and stores on the book's path, 400 for a rating that isn't a
+whole 1-5 or a note over 500 runes after trimming; GET/DELETE are exact via `authorizedPath`;
+DELETE 204 idempotent) and `GET /me/ratings` (`{"ratings": [Rating + book?]}`, newest first,
+scope-filtered like favourites: a revoked share hides a rating, never deletes it; books via
+`BooksByPaths`). Table `ratings` (`0027`), path-keyed, carried by `carryRatings` from
+`carryListeningState` (a collision keeps the newer `updated_at`, whole). **My devices** are `GET
+/me/devices` (the caller's own live sessions and API keys, `auth.ListDevices(caller)` without
+`user_id`/`username`, `current` marks the request's token) and `DELETE /me/devices/{id}` (200
+`{"current": bool}`; `auth.RevokeOwnDevice`, owner-scoped: anyone else's, unknown, revoked or
+pairing id is 404 and untouched; revoking the current device is allowed and its token is dead from
+the next request; an API-key caller may revoke).
 What to play after a book is `GET /libraries/{id}/next?path=` (authed, scoped like
 `item`: 400 bad id/missing path, 403 outside the grant, 404 no library/book;
 `{source: community|series|folder|none, next?, book?, work?}`, see Next book above).

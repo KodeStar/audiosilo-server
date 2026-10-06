@@ -41,6 +41,9 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"cover_sizes":   true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
 			"next_book":     true,                 // what to play after a book (GET /libraries/{id}/next)
 			"user_stats":    true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
+			"ratings":       true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
+			"progress_edit": true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
+			"my_devices":    true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
