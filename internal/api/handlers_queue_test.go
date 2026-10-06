@@ -17,16 +17,11 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
-// The lists tests' books: two scanned from testdata (folder books) and one
-// indexed directly; cradlePart is a part of the Cradle book.
-const (
-	cradle     = "Will Wight/Cradle"
-	cradlePart = cradle + "/01 - Unsouled.m4b"
-	thread     = "Will Wight/Threadlight"
-	mist       = "Brandon Sanderson/Mistborn"
-)
+// The lists tests' books: cradleBook and mistbornBook (scanned from testdata,
+// see ratings_test.go, with cradlePart a part of Cradle) and thread, indexed directly.
+const thread = "Will Wight/Threadlight"
 
-// listsEnv is a library (cradle, thread, mist) and the accounts the queue and collection tests
+// listsEnv is a library (cradleBook, thread, mistbornBook) and the accounts the queue and collection tests
 // need: olive (whole library, owns things), kid (the "Will Wight" folder only),
 // sam (whole library, a stranger to olive's things), a demo account (whole
 // library) and a disabled one.
@@ -184,16 +179,16 @@ func TestQueueRoundTrip(t *testing.T) {
 			t.Fatalf("add %s = %d %s", p, status, b)
 		}
 	}
-	status, body := post(l.addJSON(mist, 0))
+	status, body := post(l.addJSON(mistbornBook, 0))
 	if status != http.StatusOK || !strings.Contains(body, `"queue":[`) {
 		t.Fatalf("add at 0 = %d %s", status, body)
 	}
 	got := l.queueOf(t, l.oliveTok)
-	if itemPathsOf(got) != mist+"|"+cradle+"|"+thread {
+	if itemPathsOf(got) != mistbornBook+"|"+cradleBook+"|"+thread {
 		t.Fatalf("order = %s", itemPathsOf(got))
 	}
 	var book map[string]any
-	if err := json.Unmarshal(got[0].Book, &book); err != nil || book["rel_path"] != mist || book["title"] == "" {
+	if err := json.Unmarshal(got[0].Book, &book); err != nil || book["rel_path"] != mistbornBook || book["title"] == "" {
 		t.Fatalf("book not attached: %s", got[0].Book)
 	}
 	if _, ok := book["description"]; ok || got[0].AddedAt == "" {
@@ -201,7 +196,7 @@ func TestQueueRoundTrip(t *testing.T) {
 	}
 	post(l.addJSON(thread, -1))    // already queued: stays
 	post(l.addJSON(cradlePart, 9)) // moves to the end
-	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != mist+"|"+thread+"|"+cradle {
+	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != mistbornBook+"|"+thread+"|"+cradleBook {
 		t.Fatalf("order after re-add and move = %s", got)
 	}
 
@@ -210,7 +205,7 @@ func TestQueueRoundTrip(t *testing.T) {
 			t.Fatalf("remove = %d %s", resp.StatusCode, b)
 		}
 	}
-	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != mist+"|"+cradle {
+	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != mistbornBook+"|"+cradleBook {
 		t.Fatalf("order after remove = %s", got)
 	}
 
@@ -242,7 +237,7 @@ func TestQueueRoundTrip(t *testing.T) {
 // replace touches only their own.
 func TestQueueIsPrivate(t *testing.T) {
 	l := newListsEnv(t)
-	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(cradle, mist)); resp.StatusCode != http.StatusOK {
+	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(cradleBook, mistbornBook)); resp.StatusCode != http.StatusOK {
 		t.Fatalf("olive's replace = %d %s", resp.StatusCode, b)
 	}
 	// Allowed: sam has his own (empty) queue.
@@ -250,9 +245,9 @@ func TestQueueIsPrivate(t *testing.T) {
 		t.Fatalf("sam sees %+v", got)
 	}
 	// Denied: sam's writes don't reach olive's queue.
-	l.do(t, "DELETE", "/api/v1/me/queue"+l.removeQuery(cradle), l.samTok, "")
+	l.do(t, "DELETE", "/api/v1/me/queue"+l.removeQuery(cradleBook), l.samTok, "")
 	l.do(t, "PUT", "/api/v1/me/queue", l.samTok, l.itemsJSON(thread))
-	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != cradle+"|"+mist {
+	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != cradleBook+"|"+mistbornBook {
 		t.Fatalf("olive's queue after sam's writes = %s", got)
 	}
 	if got := itemPathsOf(l.queueOf(t, l.samTok)); got != thread {
@@ -267,21 +262,21 @@ func TestQueueScope(t *testing.T) {
 	l := newListsEnv(t)
 	ctx := context.Background()
 	// Denied: Mistborn is outside kid's share.
-	if resp, b := l.do(t, "POST", "/api/v1/me/queue", l.kidTok, l.addJSON(mist, -1)); resp.StatusCode != http.StatusForbidden {
+	if resp, b := l.do(t, "POST", "/api/v1/me/queue", l.kidTok, l.addJSON(mistbornBook, -1)); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("out-of-scope add = %d %s, want 403", resp.StatusCode, b)
 	}
 	// A path that cleans to outside the share is out of scope too.
-	if resp, _ := l.do(t, "POST", "/api/v1/me/queue", l.kidTok, l.addJSON("Will Wight/../"+mist, -1)); resp.StatusCode != http.StatusForbidden {
+	if resp, _ := l.do(t, "POST", "/api/v1/me/queue", l.kidTok, l.addJSON("Will Wight/../"+mistbornBook, -1)); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("dot-dot add = %d, want 403", resp.StatusCode)
 	}
 	// Allowed, and the replace's skip rule.
 	resp, body := l.do(t, "PUT", "/api/v1/me/queue", l.kidTok,
-		l.itemsJSON(mist, cradle, cradlePart, "Will Wight", "Will Wight/Nope.m4b", "/"+cradle+"/", "Will Wight/../"+mist))
+		l.itemsJSON(mistbornBook, cradleBook, cradlePart, "Will Wight", "Will Wight/Nope.m4b", "/"+cradleBook+"/", "Will Wight/../"+mistbornBook))
 	if resp.StatusCode != http.StatusOK || strings.Contains(body, "Mistborn") {
 		t.Fatalf("replace = %d %s", resp.StatusCode, body)
 	}
-	if got := itemPathsOf(l.queueOf(t, l.kidTok)); got != cradle {
-		t.Fatalf("kid's queue = %s, want only %s", got, cradle)
+	if got := itemPathsOf(l.queueOf(t, l.kidTok)); got != cradleBook {
+		t.Fatalf("kid's queue = %s, want only %s", got, cradleBook)
 	}
 
 	// Revoked: hidden, not deleted.
@@ -294,7 +289,7 @@ func TestQueueScope(t *testing.T) {
 	if err := l.cat.GrantShare(ctx, l.kid, l.share); err != nil {
 		t.Fatal(err)
 	}
-	if got := itemPathsOf(l.queueOf(t, l.kidTok)); got != cradle {
+	if got := itemPathsOf(l.queueOf(t, l.kidTok)); got != cradleBook {
 		t.Fatalf("re-granted queue = %s", got)
 	}
 }
@@ -315,7 +310,7 @@ func TestQueueLimits(t *testing.T) {
 	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(many[:catalog.MaxQueue]...)); resp.StatusCode != http.StatusOK {
 		t.Fatalf("replace with %d = %d %s", catalog.MaxQueue, resp.StatusCode, b)
 	}
-	if err := l.cat.AddToQueue(ctx, l.olive, catalog.Ref{LibraryID: l.libID, Path: cradle}, nil); err != nil {
+	if err := l.cat.AddToQueue(ctx, l.olive, catalog.Ref{LibraryID: l.libID, Path: cradleBook}, nil); err != nil {
 		t.Fatal(err)
 	}
 	for i := range catalog.MaxQueue - 1 {
@@ -323,11 +318,11 @@ func TestQueueLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	resp, b := l.do(t, "POST", "/api/v1/me/queue", l.oliveTok, l.addJSON(mist, -1))
+	resp, b := l.do(t, "POST", "/api/v1/me/queue", l.oliveTok, l.addJSON(mistbornBook, -1))
 	if resp.StatusCode != http.StatusConflict || !strings.Contains(b, `"code":"queue_full"`) {
 		t.Fatalf("add to a full queue = %d %s", resp.StatusCode, b)
 	}
-	if resp, b := l.do(t, "POST", "/api/v1/me/queue", l.oliveTok, l.addJSON(cradle, 3)); resp.StatusCode != http.StatusOK {
+	if resp, b := l.do(t, "POST", "/api/v1/me/queue", l.oliveTok, l.addJSON(cradleBook, 3)); resp.StatusCode != http.StatusOK {
 		t.Fatalf("move within a full queue = %d %s", resp.StatusCode, b)
 	}
 }

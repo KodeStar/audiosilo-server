@@ -82,18 +82,18 @@ func TestCollectionsLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"items":[`) {
 		t.Fatalf("add item = %d %s", resp.StatusCode, body)
 	}
-	l.do(t, "POST", colURL(col.ID, "/items"), l.oliveTok, l.addJSON(mist, 0))
+	l.do(t, "POST", colURL(col.ID, "/items"), l.oliveTok, l.addJSON(mistbornBook, 0))
 	got, _ := l.detail(t, l.oliveTok, col.ID)
-	if itemPathsOf(got.Items) != mist+"|"+cradle || got.Collection.ItemCount != 2 || len(got.Collection.Preview) != 2 {
+	if itemPathsOf(got.Items) != mistbornBook+"|"+cradleBook || got.Collection.ItemCount != 2 || len(got.Collection.Preview) != 2 {
 		t.Fatalf("detail = %+v", got)
 	}
 
-	resp, body = l.do(t, "PUT", colURL(col.ID, "/items"), l.oliveTok, l.itemsJSON(thread, "Will Wight/Nope", cradle, thread))
+	resp, body = l.do(t, "PUT", colURL(col.ID, "/items"), l.oliveTok, l.itemsJSON(thread, "Will Wight/Nope", cradleBook, thread))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("replace = %d %s", resp.StatusCode, body)
 	}
 	got, _ = l.detail(t, l.oliveTok, col.ID)
-	if itemPathsOf(got.Items) != thread+"|"+cradle {
+	if itemPathsOf(got.Items) != thread+"|"+cradleBook {
 		t.Fatalf("after replace = %s", itemPathsOf(got.Items))
 	}
 	for range 2 {
@@ -102,7 +102,7 @@ func TestCollectionsLifecycle(t *testing.T) {
 		}
 	}
 	got, _ = l.detail(t, l.oliveTok, col.ID)
-	if itemPathsOf(got.Items) != cradle {
+	if itemPathsOf(got.Items) != cradleBook {
 		t.Fatalf("after remove = %s", itemPathsOf(got.Items))
 	}
 
@@ -126,7 +126,7 @@ func TestCollectionsLifecycle(t *testing.T) {
 		"patch long name":      {"PATCH", colURL(col.ID, ""), fmt.Sprintf(`{"name":%q}`, strings.Repeat("n", 101)), 400},
 		"bad id":               {"GET", "/api/v1/me/collections/abc", "", 400},
 		"add not a book":       {"POST", colURL(col.ID, "/items"), l.addJSON("Will Wight/Nope.m4b", -1), 404},
-		"add negative":         {"POST", colURL(col.ID, "/items"), fmt.Sprintf(`{"library_id":%d,"path":%q,"position":-2}`, l.libID, mist), 400},
+		"add negative":         {"POST", colURL(col.ID, "/items"), fmt.Sprintf(`{"library_id":%d,"path":%q,"position":-2}`, l.libID, mistbornBook), 400},
 		"remove no path":       {"DELETE", colURL(col.ID, "/items?library_id=1"), "", 400},
 		"unknown collection":   {"GET", colURL(9999, ""), "", 404},
 	} {
@@ -148,14 +148,14 @@ func TestCollectionsLifecycle(t *testing.T) {
 func TestCollectionsStrangerIs404(t *testing.T) {
 	l := newListsEnv(t)
 	col := l.createCollection(t, l.oliveTok, "Olive's")
-	l.do(t, "POST", colURL(col.ID, "/items"), l.oliveTok, l.addJSON(cradle, -1))
+	l.do(t, "POST", colURL(col.ID, "/items"), l.oliveTok, l.addJSON(cradleBook, -1))
 
 	for _, tc := range []struct{ method, url, body string }{
 		{"GET", colURL(col.ID, ""), ""},
 		{"PATCH", colURL(col.ID, ""), `{"name":"Mine"}`},
-		{"PUT", colURL(col.ID, "/items"), l.itemsJSON(mist)},
-		{"POST", colURL(col.ID, "/items"), l.addJSON(mist, -1)},
-		{"DELETE", colURL(col.ID, "/items") + l.removeQuery(cradle), ""},
+		{"PUT", colURL(col.ID, "/items"), l.itemsJSON(mistbornBook)},
+		{"POST", colURL(col.ID, "/items"), l.addJSON(mistbornBook, -1)},
+		{"DELETE", colURL(col.ID, "/items") + l.removeQuery(cradleBook), ""},
 		{"PUT", colURL(col.ID, "/shares"), fmt.Sprintf(`{"user_ids":[%d]}`, l.sam)},
 		{"DELETE", colURL(col.ID, ""), ""},
 	} {
@@ -165,7 +165,7 @@ func TestCollectionsStrangerIs404(t *testing.T) {
 	}
 	// Allowed: the owner still has it, unchanged; denied: the stranger lists nothing.
 	got, _ := l.detail(t, l.oliveTok, col.ID)
-	if got.Collection.Name != "Olive's" || itemPathsOf(got.Items) != cradle || string(got.Collection.SharedWith) != "[]" {
+	if got.Collection.Name != "Olive's" || itemPathsOf(got.Items) != cradleBook || string(got.Collection.SharedWith) != "[]" {
 		t.Fatalf("after a stranger's writes = %+v", got)
 	}
 	if _, body := l.do(t, "GET", "/api/v1/me/collections", l.samTok, ""); body != "{\"collections\":[]}\n" {
@@ -179,7 +179,7 @@ func TestCollectionsStrangerIs404(t *testing.T) {
 func TestCollectionsViewer(t *testing.T) {
 	l := newListsEnv(t)
 	col := l.createCollection(t, l.oliveTok, "Family")
-	l.do(t, "PUT", colURL(col.ID, "/items"), l.oliveTok, l.itemsJSON(mist, cradle, thread))
+	l.do(t, "PUT", colURL(col.ID, "/items"), l.oliveTok, l.itemsJSON(mistbornBook, cradleBook, thread))
 	resp, body := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d]}`, l.kid))
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"shared_with":[{"id":`+strconv.FormatInt(l.kid, 10)+`,"username":"kid"}]`) {
 		t.Fatalf("share = %d %s", resp.StatusCode, body)
@@ -187,11 +187,11 @@ func TestCollectionsViewer(t *testing.T) {
 	kidsOwn := l.createCollection(t, l.kidTok, "Kid's own")
 	// Kid's own collection takes only what kid can reach: an out-of-scope add is
 	// 403, a replace skips it.
-	if resp, _ := l.do(t, "POST", colURL(kidsOwn.ID, "/items"), l.kidTok, l.addJSON(mist, -1)); resp.StatusCode != http.StatusForbidden {
+	if resp, _ := l.do(t, "POST", colURL(kidsOwn.ID, "/items"), l.kidTok, l.addJSON(mistbornBook, -1)); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("out-of-scope add = %d, want 403", resp.StatusCode)
 	}
-	if resp, b := l.do(t, "PUT", colURL(kidsOwn.ID, "/items"), l.kidTok, l.itemsJSON(mist, cradle)); resp.StatusCode != http.StatusOK ||
-		strings.Contains(b, "Mistborn") || !strings.Contains(b, cradle) {
+	if resp, b := l.do(t, "PUT", colURL(kidsOwn.ID, "/items"), l.kidTok, l.itemsJSON(mistbornBook, cradleBook)); resp.StatusCode != http.StatusOK ||
+		strings.Contains(b, "Mistborn") || !strings.Contains(b, cradleBook) {
 		t.Fatalf("replace with an out-of-scope book = %d %s", resp.StatusCode, b)
 	}
 
@@ -203,7 +203,7 @@ func TestCollectionsViewer(t *testing.T) {
 	// The viewer: Mistborn (outside kid's share) is invisible, count and preview included.
 	got, body = l.detail(t, l.kidTok, col.ID)
 	if got.Collection.Owned || got.Collection.SharedWith != nil || got.Collection.ItemCount != 2 ||
-		itemPathsOf(got.Items) != cradle+"|"+thread || len(got.Collection.Preview) != 2 || strings.Contains(body, "Mistborn") {
+		itemPathsOf(got.Items) != cradleBook+"|"+thread || len(got.Collection.Preview) != 2 || strings.Contains(body, "Mistborn") {
 		t.Fatalf("viewer's view = %s", body)
 	}
 	_, body = l.do(t, "GET", "/api/v1/me/collections", l.kidTok, "")
@@ -218,9 +218,9 @@ func TestCollectionsViewer(t *testing.T) {
 
 	for _, tc := range []struct{ method, url, body string }{
 		{"PATCH", colURL(col.ID, ""), `{"name":"Mine"}`},
-		{"PUT", colURL(col.ID, "/items"), l.itemsJSON(cradle)},
-		{"POST", colURL(col.ID, "/items"), l.addJSON(cradle, 0)},
-		{"DELETE", colURL(col.ID, "/items") + l.removeQuery(cradle), ""},
+		{"PUT", colURL(col.ID, "/items"), l.itemsJSON(cradleBook)},
+		{"POST", colURL(col.ID, "/items"), l.addJSON(cradleBook, 0)},
+		{"DELETE", colURL(col.ID, "/items") + l.removeQuery(cradleBook), ""},
 		{"PUT", colURL(col.ID, "/shares"), `{"user_ids":[]}`},
 	} {
 		resp, b := l.do(t, tc.method, tc.url, l.kidTok, tc.body)
@@ -332,7 +332,7 @@ func TestCollectionLimitsHTTP(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	resp, b = l.do(t, "POST", colURL(first.ID, "/items"), l.oliveTok, l.addJSON(cradle, -1))
+	resp, b = l.do(t, "POST", colURL(first.ID, "/items"), l.oliveTok, l.addJSON(cradleBook, -1))
 	if resp.StatusCode != http.StatusConflict || !strings.Contains(b, `"code":"collection_full"`) {
 		t.Fatalf("add to a full collection = %d %s", resp.StatusCode, b)
 	}
