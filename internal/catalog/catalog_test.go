@@ -429,6 +429,36 @@ func TestFavouritesCRUDAndScope(t *testing.T) {
 	}
 }
 
+// A renamed folder's favourite is re-keyed to the new path, landing once where it
+// is already favourited; a same-path call leaves it be.
+func TestMoveFolderFavourites(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	uid := seedUser(t, c, ctx)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
+	for _, p := range []string{"Old Series", "Other", "New Other"} {
+		if err := c.AddFavourite(ctx, uid, Ref{LibraryID: lib.ID, Path: p}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, mv := range [][2]string{{"Old Series", "New Series"}, {"Other", "New Other"}, {"New Series", "New Series"}} {
+		if err := c.MoveFolderFavourites(ctx, lib.ID, mv[0], mv[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	favs, err := c.ListAllFavourites(ctx, uid, []Scope{{LibraryID: lib.ID, AllowAll: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range favs {
+		got = append(got, f.Path)
+	}
+	slices.Sort(got)
+	if want := []string{"New Other", "New Series"}; !slices.Equal(got, want) {
+		t.Fatalf("favourites = %v, want %v", got, want)
+	}
+}
+
 func TestUpdateLibrary(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})

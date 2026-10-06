@@ -1,6 +1,9 @@
 package catalog
 
-import "context"
+import (
+	"context"
+	"database/sql"
+)
 
 // Favourite is a user-hearted item, addressed by the path identity (Ref). It may
 // be a navigation folder, a book folder, or a single-file book. The Book* fields
@@ -37,6 +40,21 @@ func (c *Catalog) RemoveFavourite(ctx context.Context, userID int64, ref Ref) er
 		`DELETE FROM favourites WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
 		userID, ref.LibraryID, ref.Path)
 	return err
+}
+
+// MoveFolderFavourites re-keys every listener's favourite on a renamed folder
+// (oldPath) to its new path, landing once where a listener already favourited it.
+// A book's favourite follows the book's own move (MoveDurableState); this is for a
+// navigation folder (an author, a series), which has no book of its own to move, so
+// the scanner passes each folder its moves say was renamed (renamedFolders). Like
+// MoveDurableState, a same-path call is a no-op.
+func (c *Catalog) MoveFolderFavourites(ctx context.Context, libraryID int64, oldPath, newPath string) error {
+	if oldPath == newPath {
+		return nil
+	}
+	return c.db.WithTx(ctx, "MoveFolderFavourites", func(tx *sql.Tx) error {
+		return carryFavourites(ctx, tx, libraryID, oldPath, newPath)
+	})
 }
 
 // ListAllFavourites returns a user's favourites across every library they can

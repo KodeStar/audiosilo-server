@@ -1145,8 +1145,9 @@ func fingerprintFile(absPath string) string {
 
 // detectMoves migrates durable user state (progress/bookmarks/notes/history)
 // from a vanished path to a new path with matching content, so a moved/renamed
-// file keeps its state. It only does work when something both disappeared and
-// appeared, keeping fingerprinting off the hot path of normal scans.
+// file keeps its state, then carries the favourites of the folders those moves
+// say were renamed (renamedFolders). It only does work when something both
+// disappeared and appeared, keeping fingerprinting off the hot path of normal scans.
 // found is the paths of books (discovery's). It returns the moves it carried
 // state across (old path -> new path), logging each to rl.
 func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map[string]catalog.Signature,
@@ -1197,7 +1198,80 @@ func (s *Scanner) detectMoves(ctx context.Context, lib catalog.Library, sigs map
 			break
 		}
 	}
+	// A navigation folder (an author, a series) has no book of its own to move, so
+	// a favourite on it follows the folder the moved books say was renamed.
+	for from, to := range renamedFolders(lib, moved) {
+		if err := s.cat.MoveFolderFavourites(ctx, lib.ID, from, to); err != nil {
+			s.log.Warn("move folder favourites failed", "library", lib.Name, "from", from, "to", to, "err", err)
+			rl.add("error", "error", func(e *catalog.RunEvent) { e.Path, e.To, e.Detail = from, to, err.Error() })
+		}
+	}
 	return moved
+}
+
+// renamedFolders works out the folders a scan's moves (old path -> new path) say
+// were renamed or moved: the ancestors of a moved book, paired up from the end -
+// the folders holding the two paths, then on up while the names of the pair match
+// ("Series A/Book" -> "Series B/Book" pairs "Series A" with "Series B"; a book
+// renamed as it went still left its folder for the new one). A pair counts only
+// when every move agrees on where the folder went and the old folder is gone from
+// disk (a book moved out of a folder that is still there says nothing about it).
+func renamedFolders(lib catalog.Library, moved map[string]string) map[string]string {
+	out := map[string]string{} // "" = the moves disagree
+	for o, n := range moved {
+		for {
+			o, n = path.Dir(o), path.Dir(n)
+			if o == "." || n == "." || o == n {
+				break // the root, or the ancestors both paths share
+			}
+			to := n
+			if prev, ok := out[o]; ok && prev != n {
+				to = ""
+			}
+			out[o] = to
+			if path.Base(o) != path.Base(n) {
+				break
+			}
+		}
+	}
+	listed := map[string]map[string]bool{} // each folder's entry names, read once
+	for from, to := range out {
+		if to == "" || dirPresent(lib, from, listed) {
+			delete(out, from)
+		}
+	}
+	return out
+}
+
+// dirPresent reports whether a folder at exactly this path is on disk. A
+// case-insensitive filesystem still answers to the old name of a folder renamed
+// only in case ("WIth" -> "With"), or of any folder under one so renamed, so when
+// the path still answers, each name along it must be in its parent's listing
+// (listed caches the listings). It errs toward present: a folder it can't check
+// keeps its favourites.
+func dirPresent(lib catalog.Library, rel string, listed map[string]map[string]bool) bool {
+	if _, err := os.Lstat(absOf(lib, rel)); err != nil {
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+	for dir := rel; dir != "."; dir = path.Dir(dir) {
+		parent := path.Dir(dir)
+		names, ok := listed[parent]
+		if !ok {
+			entries, err := os.ReadDir(absOf(lib, parent))
+			if err != nil {
+				return true
+			}
+			names = make(map[string]bool, len(entries))
+			for _, e := range entries {
+				names[e.Name()] = true
+			}
+			listed[parent] = names
+		}
+		if !names[path.Base(dir)] {
+			return false
+		}
+	}
+	return true
 }
 
 // reclassified reports whether a vanished path and a new path with the same

@@ -421,7 +421,10 @@ admin overrides; see Metadata overrides below).
   already at the new path is a removed book's, so its position or finish must not win by
   being further on); a **join** keeps the furthest (`mergeFurthest`: the rows are parts of one
   book; finished over not, the newer save's stamp, the earlier start). Both take a version
-  above both rows.
+  above both rows. A favourite on a navigation folder (author, series) has no book to move:
+  `detectMoves` re-keys it (`catalog.MoveFolderFavourites`) to the folder its moved books
+  went to (`renamedFolders`), only when every move out of it agrees and it is gone from disk
+  by exact name (so a case-only rename, of it or a folder above it, counts).
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
   convention (and Audiobookshelf): **a directory that directly contains audio is
