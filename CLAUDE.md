@@ -107,7 +107,7 @@ internal/catalog/     libraries, access grants, books, FTS search, listening sta
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; match search for the admin console (match.go)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; match search for the admin console (match.go); owned books' work ids for the Series cards (workids.go)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
@@ -465,6 +465,21 @@ admin overrides; see Metadata overrides below).
   bounded by `workSem` via `fetchWork`; with no query it searches the book's own facts,
   its title through `match.CleanTitle` since metaserve's search requires every word;
   identifiers normalized for the exact lookup; metadata off -> 404 `metadata_off`);
+  `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
+  `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id
+  (`meta.Service.WorkIDs`: per distinct normalized identifier, first the cached enrichment's
+  work id (a cached "no match" too), so a book a player opened costs the card no lookup, then its
+  own `"l:"` key space (Enrich's TTLs, quota `maxLookupEntries`), which only `fetchLookup` writes
+  (Enrich's compose looks up fresh and records nothing there); only misses go upstream,
+  through `sharedLookup`: bounded across console requests by `lookupSem`, concurrent misses of one
+  identifier sharing one flight whose waiters can each leave without failing the others, the batch
+  under `composeBudget`, and a failure from the caller's, the flight's or the budget's context never
+  cached. One-way: Enrich never reads `"l:"` nor waits on `lookupSem`, so a console batch can't time
+  a player's `/meta` out or age its enrichment); `""` = no identifier, no match or a failed lookup,
+  and per book `failed` says its own lookup failed or ran out of time, so asking again may resolve it
+  (never for a clean miss); metadata off -> 404
+  `metadata_off`. The Series cards place an owned book on a community rail by this work id first and
+  fall back to `series_index` (display only: no book is changed);
   `PUT`/`DELETE /admin/libraries/{id}/cover?path=` (custom cover in the DB;
   `catalog.SetCover` enforces 5 MiB, sniffed JPEG/PNG/WebP and an indexed book), which
   `GET /libraries/{id}/cover` serves first (by the requested path, then by the book a

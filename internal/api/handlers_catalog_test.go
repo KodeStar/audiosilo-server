@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,6 +56,7 @@ func TestAdminCatalogEndpointsRequireAdmin(t *testing.T) {
 		{"GET", "/api/v1/admin/books", "", 200},
 		{"GET", "/api/v1/admin/books/facets", "", 200},
 		{"POST", "/api/v1/admin/books/bulk", bulk, 200},
+		{"POST", "/api/v1/admin/books/works", `{"books":[{"library_id":` + strconv.FormatInt(libID, 10) + `,"path":"Andy Weir/Artemis"}]}`, 200},
 		{"GET", "/api/v1/admin/authors", "", 200},
 		{"GET", "/api/v1/admin/narrators", "", 200},
 		{"GET", "/api/v1/admin/series", "", 200},
@@ -315,6 +317,76 @@ func TestAdminMatchAPI(t *testing.T) {
 	resp, body := off.do(t, "GET", offBase+"/book/match?path="+escape("Andy Weir/The Martian"), offTok, "")
 	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, codeMetadataOff) {
 		t.Fatalf("metadata off = %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestAdminBookWorksAPI: each book's community work id, in request order, for the
+// Series screen; books with no identifier or no indexed book answer "" and are not
+// failed, a down upstream marks only the books it couldn't look up as failed, and
+// metadata off is a 404 like the match.
+func TestAdminBookWorksAPI(t *testing.T) {
+	e := newMetaEnv(t, true, 0)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, _ := seedCatalog(t, e)
+	ctx := context.Background()
+	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: libID, RelPath: "Andy Weir/Project Hail Mary",
+		IsFolder: true, Title: "Project Hail Mary", Author: "Andy Weir", ASIN: "B08GB58KD5", AddedAt: "2024-03-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	lib := strconv.FormatInt(libID, 10)
+	body := `{"books":[` +
+		`{"library_id":` + lib + `,"path":"Andy Weir/Project Hail Mary/"},` + // trailing slash: still the book
+		`{"library_id":` + lib + `,"path":"Andy Weir/Artemis"},` + // no ASIN/ISBN
+		`{"library_id":` + lib + `,"path":"Andy Weir/Nope"},` + // no book indexed there
+		`{"library_id":999,"path":"Andy Weir/Project Hail Mary"}]}` // no such library
+	resp, got := e.do(t, "POST", "/api/v1/admin/books/works", adminTok, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("works = %d %s", resp.StatusCode, got)
+	}
+	var out struct {
+		Works []bookWork `json:"works"`
+	}
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, len(out.Works))
+	for i, w := range out.Works {
+		ids[i] = w.WorkID
+	}
+	if !slices.Equal(ids, []string{"the-martian", "", "", ""}) || strings.Contains(got, `"failed":true`) ||
+		out.Works[0].LibraryID != libID || out.Works[0].Path != "Andy Weir/Project Hail Mary/" || out.Works[3].LibraryID != 999 {
+		t.Fatalf("works = %s", got)
+	}
+
+	for name, tc := range map[string]struct{ body, code string }{
+		"empty":    {`{"books":[]}`, ""},
+		"bad json": {`{"books":`, ""},
+		"too many": {`{"books":[` + strings.Repeat(`{"library_id":1,"path":"x"},`, maxWorkBooks) + `{"library_id":1,"path":"x"}]}`, codeTooLarge},
+	} {
+		resp, got := e.do(t, "POST", "/api/v1/admin/books/works", adminTok, tc.body)
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got, tc.code) {
+			t.Errorf("%s = %d %s, want 400 %s", name, resp.StatusCode, got, tc.code)
+		}
+	}
+
+	down := newMetaEnv(t, true, http.StatusInternalServerError)
+	downTok, _, _ := adminAndMember(t, down)
+	downLib := seedBook(t, down, "Author/Book", "B0DOWN")
+	downRef := `{"library_id":` + strconv.FormatInt(downLib, 10) + `,"path":`
+	_, got = down.do(t, "POST", "/api/v1/admin/books/works", downTok,
+		`{"books":[`+downRef+`"Author/Book"},`+downRef+`"Author/None"}]}`) // the second has no book: no lookup
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Works) != 2 || out.Works[0].WorkID != "" || !out.Works[0].Failed || out.Works[1].Failed {
+		t.Fatalf("upstream down = %s, want only the looked-up book failed", got)
+	}
+
+	off := newMetaEnv(t, false, 0)
+	offTok, _, _ := adminAndMember(t, off)
+	resp, got = off.do(t, "POST", "/api/v1/admin/books/works", offTok, `{"books":[{"library_id":1,"path":"x"}]}`)
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(got, codeMetadataOff) {
+		t.Fatalf("metadata off = %d %s", resp.StatusCode, got)
 	}
 }
 

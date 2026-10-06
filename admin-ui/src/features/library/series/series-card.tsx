@@ -1,7 +1,7 @@
-import { useId } from 'react';
+import { useId, useMemo } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
-import { useBookMeta } from '@/api/hooks';
+import { useBookMeta, useBookWorks } from '@/api/hooks';
 import type { AdminBook, SeriesCount } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { ProvenanceMarker } from '@/components/provenance';
@@ -14,9 +14,11 @@ import {
   formatPositions,
   metaCandidate,
   pickRail,
+  placeBooks,
   seriesStatus,
   spineHeight,
   spineRow,
+  type Placed,
   type SeriesStatus,
 } from './series-model';
 import { useInView } from './use-in-view';
@@ -24,7 +26,9 @@ import { useInView } from './use-in-view';
 /**
  * One series: its name, author and what the server holds, then the books as
  * spines on a shelf (missing entries as dashed ghosts, from the community rail
- * of one of its books, fetched once the card nears the viewport).
+ * of one of its books, fetched once the card nears the viewport). The matched
+ * books are then resolved to their community works, so each lands on its own
+ * entry whatever its series index says.
  */
 export function SeriesCard({
   series: s,
@@ -51,7 +55,18 @@ export function SeriesCard({
     metadata && seen && !!candidate,
   );
   const rail = meta.data?.matched ? pickRail(meta.data.series, s.name) : undefined;
-  const status = rail ? seriesStatus(rail, books) : undefined;
+  // Every matched book is asked about (the rail's own book too), batched with
+  // the other cards' books.
+  const matched = useMemo(() => (rail ? books.filter((b) => b.matched) : []), [books, rail]);
+  const works = useBookWorks(matched);
+  // Until the works answer, no rail: wrong gaps would flash, then go. A failed
+  // lookup answers too (unresolved: the book falls back to its series index).
+  const placedOn = rail && !works.pending ? rail : undefined;
+  const placed = useMemo(
+    () => placeBooks(books, placedOn, works.ids),
+    [books, placedOn, works.ids],
+  );
+  const status = useMemo(() => placedOn && seriesStatus(placedOn, placed), [placedOn, placed]);
   const known = status && status.total > 0 ? status : undefined;
   const unmatched = metadata && complete && (!candidate || meta.data?.matched === false);
   const fmt = (n: number) => formatNumber(n, lang);
@@ -98,7 +113,7 @@ export function SeriesCard({
       {books.length === 0 && !complete ? (
         <div className="skel h-[200px] rounded-lg" role="status" aria-label={t('common.loading')} />
       ) : (
-        <Shelf name={s.name} books={books} status={known} fmt={fmt} fan={seen} />
+        <Shelf name={s.name} placed={placed} status={known} fmt={fmt} fan={seen} />
       )}
     </section>
   );
@@ -125,13 +140,18 @@ function Summary({ status, fmt }: { status: SeriesStatus; fmt: (n: number) => st
 
 function Shelf({
   name,
-  books,
+  placed,
   status,
   fmt,
   fan,
 }: {
   name: string;
-  books: AdminBook[];
+  /**
+   * The series' books in their local order (by series index; placeBooks keeps it),
+   * each with its place on the rail. spineRow sorts the spines by place; the fan
+   * of covers keeps the local order.
+   */
+  placed: Placed[];
   status?: SeriesStatus;
   fmt: (n: number) => string;
   /** The card has come into view: its fan of covers may load. */
@@ -141,7 +161,7 @@ function Shelf({
   const navigate = useNavigate();
   // The fan only fits beside the spines on wide screens; elsewhere its covers aren't fetched.
   const wide = useMediaQuery('(min-width: 1024px)');
-  const spines = spineRow(books, status?.missing ?? []);
+  const spines = spineRow(placed, status?.missing ?? []);
   return (
     // Room above for the hover lift and below for the shelf's shadow, inside the scroller.
     <div className="hscroll -mx-0.5 -mt-3 -mb-[18px] px-0.5 pt-3 pb-[18px]">
@@ -168,8 +188,8 @@ function Shelf({
           const b = sp.book;
           const [c1, c3, , ink] = coverModel(b.title, b.author).palette;
           const label =
-            b.series_index > 0
-              ? t('series.spine', { index: fmt(b.series_index), title: b.title })
+            sp.position > 0
+              ? t('series.spine', { index: fmt(sp.position), title: b.title })
               : b.title;
           return (
             <li key={refKey(b)} className="flex h-full items-end">
@@ -188,9 +208,7 @@ function Shelf({
                   } as React.CSSProperties
                 }
               >
-                {b.series_index > 0 ? (
-                  <span className="spine-idx">{fmt(b.series_index)}</span>
-                ) : null}
+                {sp.position > 0 ? <span className="spine-idx">{fmt(sp.position)}</span> : null}
                 {b.title}
               </button>
             </li>
@@ -198,7 +216,7 @@ function Shelf({
         })}
         {fan && wide ? (
           <li aria-hidden="true" className="ml-auto flex self-center pr-3 pl-10">
-            {books.slice(0, 4).map((b, i) => (
+            {placed.slice(0, 4).map(({ book: b }, i) => (
               <div
                 key={refKey(b)}
                 className="w-24"

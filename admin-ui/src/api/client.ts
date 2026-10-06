@@ -19,6 +19,7 @@ import type {
   BookFacets,
   BookMeta,
   BookRef,
+  BookWorks,
   CoverThumb,
   Device,
   DuplicateGroup,
@@ -280,6 +281,8 @@ export type ThumbSize = 160 | 320 | 640;
 
 /** The server's cap on one bulk edit (handlers_catalog.go), applied all or nothing. */
 export const BULK_LIMIT = 1000;
+/** The server's cap on the books one POST /admin/books/works resolves (handlers_catalog.go). */
+export const WORKS_LIMIT = 100;
 /** The server's cap on the rules one POST /admin/shares/{id}/paths adds (handlers_shares.go). */
 export const SHARE_RULES_LIMIT = 1000;
 
@@ -443,6 +446,8 @@ export const api = {
   /** The book's community metadata (series rails for the Series gaps). */
   bookMeta: (libraryId: number, path: string) =>
     request<BookMeta>('GET', `/libraries/${libraryId}/meta${pathQuery(path)}`),
+  /** Which community work each book is, in request order (at most WORKS_LIMIT). */
+  bookWorks: (books: BookRef[]) => request<BookWorks>('POST', '/admin/books/works', { books }),
   /** Cover thumbnails as data: URLs, in request order (at most 60). */
   coverThumbs: (books: BookRef[], size: ThumbSize = 320) =>
     request<{ covers: CoverThumb[] }>('POST', '/admin/covers', { books, size }),

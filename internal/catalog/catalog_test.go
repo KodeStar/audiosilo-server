@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,36 @@ func TestCountBooksByLibrary(t *testing.T) {
 	}
 	if counts[libA.ID] != 2 || counts[libB.ID] != 1 {
 		t.Fatalf("unexpected counts: %+v", counts)
+	}
+}
+
+// TestBooksByRefs: books across libraries in one call, aligned to the refs (by
+// the cleaned path); refs naming no indexed book (or no library) are the zero
+// value.
+func TestBooksByRefs(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
+	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/tmp/b"})
+	c.UpsertBook(ctx, &Book{LibraryID: libA.ID, RelPath: "Weir/Hail Mary", Title: "Project Hail Mary", ASIN: "B08GB58KD5"})
+	c.UpsertBook(ctx, &Book{LibraryID: libB.ID, RelPath: "Weir/Artemis", Title: "Artemis", ISBN: "9780553448122"})
+
+	got, err := c.BooksByRefs(ctx, []Ref{
+		{LibraryID: libA.ID, Path: "Weir/Hail Mary/"},
+		{LibraryID: libB.ID, Path: "Weir/Artemis"},
+		{LibraryID: libB.ID, Path: "Weir/Hail Mary"}, // the other library's book
+		{LibraryID: 999, Path: "Weir/Artemis"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []BookIdentifiers{
+		{RelPath: "Weir/Hail Mary", ASIN: "B08GB58KD5"},
+		{RelPath: "Weir/Artemis", ISBN: "9780553448122"},
+		{},
+		{},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("BooksByRefs = %+v, want %+v", got, want)
 	}
 }
 

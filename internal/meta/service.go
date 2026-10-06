@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,6 +49,18 @@ const composeTimeout = 15 * time.Second
 // configurable; it is a courtesy limit on a shared third party, matching the
 // api package's transcodeSem precedent.
 const maxConcurrentWorkFetches = 4
+
+// maxConcurrentLookups bounds how many uncached identifier lookups the admin
+// console's Series cards (WorkIDs) may have in flight upstream at once, across
+// every console request (cache hits never touch it, and a book a player has
+// enriched is answered from its enrichment). A Series page asks about every
+// matched book of a few dozen cards at once, so without a shared bound one
+// screen of cards would fan out to the community service in parallel. Like
+// maxConcurrentWorkFetches, a courtesy limit on a shared third party; a lookup is
+// one small GET, so a queue here drains quickly. A player's Enrich never waits
+// here: its lookup is one per opened book (as before WorkIDs existed), and a
+// console batch must not be able to time a player's /meta out.
+const maxConcurrentLookups = 4
 
 // MetaPersonRef is the {id,name} shape for an author or narrator.
 type MetaPersonRef struct {
@@ -190,6 +203,13 @@ type Service struct {
 	// workSem bounds concurrent uncached work-id fetches upstream (see
 	// maxConcurrentWorkFetches).
 	workSem chan struct{}
+	// lookupSem bounds WorkIDs' concurrent uncached identifier lookups (see
+	// maxConcurrentLookups).
+	lookupSem chan struct{}
+	// flights are WorkIDs' lookups in flight, by "l:" key, so concurrent misses
+	// of one identifier share one upstream GET (see sharedLookup).
+	flightMu sync.Mutex
+	flights  map[string]*lookupFlight
 	// health caches Ping's answer.
 	health healthCache
 }
@@ -207,6 +227,8 @@ func NewService(baseURL string, now func() time.Time) *Service {
 		cache:         newCache(now),
 		composeBudget: composeTimeout,
 		workSem:       make(chan struct{}, maxConcurrentWorkFetches),
+		lookupSem:     make(chan struct{}, maxConcurrentLookups),
+		flights:       map[string]*lookupFlight{},
 	}
 }
 
@@ -214,19 +236,20 @@ func NewService(baseURL string, now func() time.Time) *Service {
 // It returns ErrNotFound when there is no match, and a non-nil, non-ErrNotFound
 // error when the upstream is unreachable. Results (including "not found" and
 // transport errors) are cached so a hot path or a down upstream is not re-hit.
+// The identifiers are normalized (normalizeASIN, normalizeISBN) first, so the
+// spellings of one identifier share one cache entry and one upstream lookup.
 //
 // The returned *Enrichment is shared with the cache and other callers - treat
 // it as immutable; never modify it (or anything it points to) after the call.
 func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, error) {
-	asin = strings.TrimSpace(asin)
-	isbn = strings.TrimSpace(isbn)
+	asin, isbn = normalizeASIN(asin), normalizeISBN(isbn)
 	key := cacheKey(asin, isbn)
 	if key == "" {
 		return nil, ErrNotFound
 	}
 	// A hit resolves to the memoised outcome directly: err is nil for a positive
 	// result, ErrNotFound for a cached "no match", or the cached transport error.
-	if result, hit, err := s.cache.getEnrichment(key); hit {
+	if result, hit, err := cacheGet[Enrichment](s.cache, key); hit {
 		return result, err
 	}
 
@@ -262,11 +285,11 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 		// caused by the CALLER's cancellation mid-fan-out - cache nothing at
 		// all, same reasoning as the error branch above.
 		if ctx.Err() == nil {
-			s.cache.putEnrichment(key, result, errorTTL)
+			cachePut(s.cache, key, result, errorTTL)
 		}
 		return result, nil
 	default:
-		s.cache.putEnrichment(key, result, positiveTTL)
+		cachePut(s.cache, key, result, positiveTTL)
 		return result, nil
 	}
 }
@@ -285,16 +308,32 @@ func cacheKey(asin, isbn string) string {
 	}
 }
 
+// lookup asks the upstream about one identifier (normalized; the asin preferred)
+// for its work and the recording it matched. It neither reads nor writes the
+// cache. On a nil error the work is non-nil with an id; a lookup without one is
+// ErrNotFound.
+func (s *Service) lookup(ctx context.Context, asin, isbn string) (*upstreamLookup, error) {
+	l, err := s.client.lookup(ctx, asin, isbn)
+	switch {
+	case err != nil:
+		return nil, err
+	case l.Work == nil || l.Work.ID == "":
+		return nil, ErrNotFound
+	}
+	return l, nil
+}
+
 // compose runs the uncached lookup -> work -> series fan-out. complete is false
 // when the envelope is usable but a series rail fetch failed (the caller caches
-// such a partial result only briefly).
+// such a partial result only briefly). Its lookup is always a fresh upstream GET,
+// never bounded by lookupSem and never recorded in the "l:" key space: the
+// enrichment Enrich caches carries the work id already (WorkIDs reads it there),
+// so a second copy would only shrink the room the lookup quota leaves to the
+// console's own lookups.
 func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, bool, error) {
-	lookup, err := s.client.lookup(ctx, asin, isbn)
+	lookup, err := s.lookup(ctx, asin, isbn)
 	if err != nil {
 		return nil, false, err
-	}
-	if lookup.Work == nil {
-		return nil, false, ErrNotFound
 	}
 	detail, err := s.client.work(ctx, lookup.Work.ID)
 	if err != nil {
@@ -346,7 +385,7 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 	key := nsWork.key(id)
 	// Same resolution as Enrich: a hit carries nil, ErrNotFound or the cached
 	// transport error.
-	if work, hit, err := s.cache.getWork(key); hit {
+	if work, hit, err := cacheGet[MetaWork](s.cache, key); hit {
 		return work, err
 	}
 
@@ -366,7 +405,7 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		return nil, err
 	}
 	work := toWork(detail)
-	s.cache.putWork(key, work, positiveTTL)
+	cachePut(s.cache, key, work, positiveTTL)
 	return work, nil
 }
 
@@ -393,8 +432,8 @@ func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail
 	// with a nil error. Without this guard it would be cached POSITIVE for 24h and
 	// served as a 200 carrying a blank work, breaking the client contract that any
 	// failure reads as "unavailable" (it would render an empty card instead). Treat
-	// it as the not-found it effectively is, mirroring compose's lookup.Work == nil
-	// guard.
+	// it as the not-found it effectively is, mirroring lookup's guard against a
+	// lookup without a work.
 	if detail == nil || detail.ID == "" {
 		return nil, ErrNotFound
 	}

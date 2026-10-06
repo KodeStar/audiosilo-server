@@ -202,6 +202,13 @@ describe('api client', () => {
     expect(Object.fromEntries(calls[0].query)).toEqual({ path: 'A/B & C', asin: 'B003P2WO5E' });
   });
 
+  it('asks which community work each book is, by identity', async () => {
+    const works = [{ library_id: 3, path: 'Andy Weir/Artemis', work_id: 'artemis', failed: false }];
+    const calls = mockFetch({ 'POST /admin/books/works': { body: { works } } });
+    expect(await api.bookWorks([{ library_id: 3, path: 'Andy Weir/Artemis' }])).toEqual({ works });
+    expect(calls[0].body).toEqual({ books: [{ library_id: 3, path: 'Andy Weir/Artemis' }] });
+  });
+
   it('uploads a cover as the raw image with its type, not JSON', async () => {
     mockFetch({ 'PUT /admin/libraries/1/cover': { body: { status: 'cover set' } } });
     const image = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: 'image/jpeg' });

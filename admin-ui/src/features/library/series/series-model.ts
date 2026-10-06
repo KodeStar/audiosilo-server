@@ -1,10 +1,12 @@
-import type { AdminBook, AdminBookPage, MetaSeries } from '@/api/types';
+import type { AdminBook, AdminBookPage, MetaSeries, MetaSeriesWork } from '@/api/types';
+import { refKey } from '@/lib/book-route';
 import { hashString } from '@/lib/monogram';
 
 // The Series screen's pure parts: grouping the series-sorted book list into
-// series, matching a book's community series rail to a local series, the gaps
-// (rail positions the server doesn't hold), "1, 2, 4-6" position lists and the
-// spine row that interleaves owned books with missing entries.
+// series, matching a book's community series rail to a local series, placing
+// the owned books on it, the gaps (rail positions the server doesn't hold),
+// "1, 2, 4-6" position lists and the spine row that interleaves owned books
+// with missing entries.
 
 /** Series a page of cards shows at first, and how many more each "Show more" adds. */
 export const CARD_STEP = 24;
@@ -25,8 +27,23 @@ export interface SeriesStatus {
   missing: RailEntry[];
 }
 
-export type Spine =
-  { kind: 'book'; book: AdminBook; position: number } | { kind: 'gap'; entry: RailEntry };
+/** Which community work each owned book is: work ids by refKey (resolved books only). */
+export type WorkIds = ReadonlyMap<string, string>;
+
+/** An owned book's place on the shelf. */
+export interface Placed {
+  book: AdminBook;
+  /**
+   * 'rail': it holds `position` on the rail (by its work, else by its series
+   * index). 'end': drawn after the rail, holding nothing (unnumbered, or known to
+   * be a work this rail doesn't list).
+   */
+  slot: 'rail' | 'end';
+  /** The number it shows: its rail position when placed by its work, else its series index (0 = none). */
+  position: number;
+}
+
+export type Spine = ({ kind: 'book' } & Placed) | { kind: 'gap'; entry: RailEntry };
 
 const samePosition = (a: number, b: number) => Math.abs(a - b) < 1e-6;
 
@@ -45,11 +62,14 @@ export function pickRail(rails: MetaSeries[] | undefined, name: string): MetaSer
   return rails.find((r) => seriesKey(r.name) === key) ?? rails[0];
 }
 
+/** A rail work's position, NaN when it is unnumbered (blank, or not a number). */
+const railPosition = (w: MetaSeriesWork) => (w.position.trim() === '' ? NaN : Number(w.position));
+
 /** A rail's numbered entries, ascending, one per position (the first title wins). */
 export function railEntries(rail: MetaSeries): RailEntry[] {
   const out: RailEntry[] = [];
   for (const w of rail.works) {
-    const position = w.position.trim() === '' ? NaN : Number(w.position);
+    const position = railPosition(w);
     if (!Number.isFinite(position) || out.some((e) => samePosition(e.position, position))) continue;
     out.push({ position, title: w.title });
   }
@@ -57,11 +77,38 @@ export function railEntries(rail: MetaSeries): RailEntry[] {
 }
 
 /**
- * The rail against the books the server holds (compared by series_index; a
- * book without one, index 0, holds no position).
+ * Where each owned book sits. A book whose community work is on the rail holds
+ * that work's position, whatever its series index says (local numbering is often
+ * missing or different). A book known to be another work holds none and goes to
+ * the end; one that didn't resolve (no identifier, no match, or no rail yet) falls
+ * back to its series index, and without one goes to the end.
  */
-export function seriesStatus(rail: MetaSeries, owned: AdminBook[]): SeriesStatus {
-  const held = owned.map((b) => b.series_index).filter((i) => i > 0);
+export function placeBooks(owned: AdminBook[], rail?: MetaSeries, works?: WorkIds): Placed[] {
+  const byIndex = (book: AdminBook): Placed => ({
+    book,
+    slot: book.series_index > 0 ? 'rail' : 'end',
+    position: book.series_index,
+  });
+  if (!rail) return owned.map(byIndex);
+  // Each work's position on the rail: its first numbered one.
+  const positions = new Map<string, number>();
+  for (const w of rail.works) {
+    const position = railPosition(w);
+    if (Number.isFinite(position) && !positions.has(w.id)) positions.set(w.id, position);
+  }
+  return owned.map((book): Placed => {
+    const work = works?.get(refKey(book));
+    if (work === undefined) return byIndex(book);
+    const position = positions.get(work);
+    return position === undefined
+      ? { book, slot: 'end', position: book.series_index }
+      : { book, slot: 'rail', position };
+  });
+}
+
+/** The rail against the books the server holds, placed by placeBooks. */
+export function seriesStatus(rail: MetaSeries, placed: Placed[]): SeriesStatus {
+  const held = placed.filter((p) => p.slot === 'rail').map((p) => p.position);
   const entries = railEntries(rail);
   const isHeld = (e: RailEntry) => held.some((i) => samePosition(i, e.position));
   return {
@@ -105,23 +152,25 @@ export function sortSeriesBooks(books: AdminBook[]): AdminBook[] {
 }
 
 /**
- * The shelf: owned books and missing entries in series order, unnumbered books
- * at the end.
+ * The shelf: placed books and missing entries in series order, then the books
+ * at the end (numbered ones by their number, unnumbered last).
  */
-export function spineRow(owned: AdminBook[], missing: RailEntry[]): Spine[] {
+export function spineRow(placed: Placed[], missing: RailEntry[]): Spine[] {
   const spines: Spine[] = [
-    ...owned.map((book): Spine => ({ kind: 'book', book, position: book.series_index })),
+    ...placed.map((p): Spine => ({ kind: 'book', ...p })),
     ...missing.map((entry): Spine => ({ kind: 'gap', entry })),
   ];
-  const pos = (s: Spine) => {
-    const p = s.kind === 'book' ? s.position : s.entry.position;
-    return s.kind === 'book' && p <= 0 ? Infinity : p;
+  const order = (s: Spine): [number, number] => {
+    if (s.kind === 'gap') return [s.entry.position, 0];
+    if (s.slot === 'rail') return [s.position, 0];
+    return [Infinity, s.position > 0 ? s.position : Infinity];
   };
+  const cmp = (x: number, y: number) => (x === y ? 0 : x < y ? -1 : 1);
+  const title = (s: Spine) => (s.kind === 'book' ? s.book.title : s.entry.title);
   return spines.sort((a, b) => {
-    const d = pos(a) - pos(b);
-    if (d) return d;
-    const title = (s: Spine) => (s.kind === 'book' ? s.book.title : s.entry.title);
-    return title(a).localeCompare(title(b));
+    const [a1, a2] = order(a);
+    const [b1, b2] = order(b);
+    return cmp(a1, b1) || cmp(a2, b2) || title(a).localeCompare(title(b));
   });
 }
 

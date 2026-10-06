@@ -126,6 +126,69 @@ func (c *Catalog) BooksByPaths(ctx context.Context, libraryID int64, paths []str
 	return out, rows.Err()
 }
 
+// BookIdentifiers is what BooksByRefs reads of the book at one Ref: its path
+// (cleaned, CleanRelPath) and its identifiers. The zero value, RelPath "", means
+// no book is indexed there.
+type BookIdentifiers struct {
+	RelPath string
+	ASIN    string
+	ISBN    string
+}
+
+// BooksByRefs returns the identifiers of the book at each ref, aligned to refs:
+// a ref naming no indexed book, or no library, is the zero value. One query per
+// library, selecting only the columns the answer holds.
+func (c *Catalog) BooksByRefs(ctx context.Context, refs []Ref) ([]BookIdentifiers, error) {
+	paths, byLib := groupRefs(refs)
+	found := make(map[Ref]BookIdentifiers, len(refs))
+	for libID, ps := range byLib {
+		if err := c.identifiersIn(ctx, libID, ps, found); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]BookIdentifiers, len(refs))
+	for i, r := range refs {
+		out[i] = found[Ref{LibraryID: r.LibraryID, Path: paths[i]}]
+	}
+	return out, nil
+}
+
+// identifiersIn adds the identifiers of the books at paths in one library to
+// found, keyed by ref.
+func (c *Catalog) identifiersIn(ctx context.Context, libraryID int64, paths []string, found map[Ref]BookIdentifiers) error {
+	args := make([]any, 0, len(paths)+1)
+	args = append(args, libraryID)
+	for _, p := range paths {
+		args = append(args, p)
+	}
+	rows, err := c.db.QueryContext(ctx, `SELECT rel_path, asin, isbn FROM books
+		 WHERE library_id = ? AND rel_path IN (`+placeholders(len(paths))+`)`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b BookIdentifiers
+		if err := rows.Scan(&b.RelPath, &b.ASIN, &b.ISBN); err != nil {
+			return err
+		}
+		found[Ref{LibraryID: libraryID, Path: b.RelPath}] = b
+	}
+	return rows.Err()
+}
+
+// groupRefs cleans each ref's path (CleanRelPath), returning the cleaned paths in
+// ref order and the same paths grouped by library, for one query per library.
+func groupRefs(refs []Ref) (paths []string, byLib map[int64][]string) {
+	paths = make([]string, len(refs))
+	byLib = map[int64][]string{}
+	for i, r := range refs {
+		paths[i] = CleanRelPath(r.Path)
+		byLib[r.LibraryID] = append(byLib[r.LibraryID], paths[i])
+	}
+	return paths, byLib
+}
+
 // Signature captures the on-disk fingerprint used to skip unchanged books, plus
 // the stored Duration/Codec so the scanner can re-probe entries that predate a
 // metadata column (e.g. codec) and never had it backfilled.
