@@ -22,6 +22,7 @@ import type {
   AdminLibrary,
   AuditFilter,
   BookRef,
+  FolderMode,
   PersonField,
   ServerEventKind,
   SessionFilter,
@@ -316,6 +317,23 @@ export function noteScanStarted(qc: QueryClient, libraryId: number) {
   void qc.cancelQueries({ queryKey: keys.libraries });
   void qc.invalidateQueries({ queryKey: keys.libraries });
   void qc.invalidateQueries({ queryKey: keys.jobs });
+}
+
+/**
+ * Saves how a folder of a library reads (`null`: automatic), which rescans the
+ * library: notes that scan (noteScanStarted) and refetches the library's folder
+ * listings, so the override shows on every screen at once; the books it makes
+ * follow when the rescan ends (the scan watcher).
+ */
+export async function setFolderMode(
+  qc: QueryClient,
+  libraryId: number,
+  path: string,
+  mode: FolderMode | null,
+) {
+  await api.setFolderOverride(libraryId, path, mode);
+  noteScanStarted(qc, libraryId);
+  await qc.invalidateQueries({ queryKey: keys.browseLibrary(libraryId) });
 }
 
 type ScanListener = (library: AdminLibrary) => void;

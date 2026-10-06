@@ -69,6 +69,10 @@ type API struct {
 	// the real one via SetBaseContext.
 	baseCtx context.Context
 
+	// indexPath reads a path's book on demand (bookForPath's fallback):
+	// scanner.IndexPathWithin, a field so tests can count the re-reads.
+	indexPath func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error)
+
 	// timeoutDur bounds non-streaming requests (see the timeout middleware).
 	// Defaults to requestTimeout; a field so tests can shorten it.
 	timeoutDur time.Duration
@@ -123,6 +127,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		auth:           authSvc,
 		cat:            cat,
 		scanner:        scanner,
+		indexPath:      scanner.IndexPathWithin,
 		ffmpeg:         ffmpeg,
 		meta:           metaSvc,
 		log:            log,

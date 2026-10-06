@@ -29,8 +29,8 @@ const (
 )
 
 // RunEvent is one line of a scan's log. Kind is a code the console words
-// (started, discovered, unreadable, moved, problem, error, removed, partial,
-// unavailable, failed, cancelled, finished, truncated); Path/To/Code/Detail/Count
+// (started, discovered, unreadable, moved, joined, split, problem, error, removed,
+// partial, unavailable, failed, cancelled, finished, truncated); Path/To/Code/Detail/Count
 // carry its facts. Code is a problem's code (books.scan_error); Detail is a tool's
 // or the OS's own message, shown as-is.
 type RunEvent struct {

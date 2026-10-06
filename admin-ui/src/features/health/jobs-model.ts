@@ -53,6 +53,8 @@ const EVENT_KINDS = new Set([
   'discovered',
   'unreadable',
   'moved',
+  'joined',
+  'split',
   'problem',
   'error',
   'removed',
@@ -67,11 +69,17 @@ const EVENT_KINDS = new Set([
 
 /**
  * A log line in words. `problem` names a read problem by its code, which
- * `codeWord` puts into words (the log line embeds it).
+ * `codeWord` puts into words (the log line embeds it). A `joined` disc whose
+ * length was unknown (code `length_unknown`) kept its progress, and says so.
  */
 export function eventPhrase(e: RunEvent, codeWord: (code: string) => string): Phrase {
   // A problem with the tool's own message words it in brackets after the problem.
-  const kind = e.kind === 'problem' && e.detail ? 'problemDetail' : e.kind;
+  const kind =
+    e.kind === 'problem' && e.detail
+      ? 'problemDetail'
+      : e.kind === 'joined' && e.code === 'length_unknown'
+        ? 'joinedKept'
+        : e.kind;
   return {
     key: EVENT_KINDS.has(e.kind) ? `jobs.event.${kind}` : 'jobs.event.other',
     values: {
@@ -80,7 +88,7 @@ export function eventPhrase(e: RunEvent, codeWord: (code: string) => string): Ph
       to: e.to ?? '',
       detail: e.detail ?? '',
       count: e.count ?? 0,
-      problem: e.code ? codeWord(e.code) : '',
+      problem: e.kind === 'problem' && e.code ? codeWord(e.code) : '',
     },
   };
 }

@@ -1,6 +1,8 @@
 import {
   AlertCircle,
+  Combine,
   Copy,
+  Disc3,
   Globe,
   ImageOff,
   ImageUp,
@@ -14,7 +16,7 @@ import {
 import type { TFunction } from 'i18next';
 import type { AdminBook, IssueCount, IssueKind, IssuesSummary } from '@/api/types';
 import { formatNumber } from '@/lib/format';
-import { relBaseName } from '@/lib/paths';
+import { relBaseName, relParent } from '@/lib/paths';
 
 // The Health page's categories (STYLEGUIDE.md "Health triage"): how each looks,
 // what a row says about its book, and the one fix it offers. Kept out of the
@@ -24,6 +26,7 @@ import { relBaseName } from '@/lib/paths';
 export const CATEGORY_LOOK: Record<IssueKind, { icon: LucideIcon; tile: string }> = {
   scan_error: { icon: AlertCircle, tile: 'bg-destructive-soft text-destructive' },
   suspect: { icon: Split, tile: 'bg-brand-soft text-brand-ink' },
+  split_discs: { icon: Disc3, tile: 'bg-brand-soft text-brand-ink' },
   duplicate: { icon: Copy, tile: 'bg-info-soft text-info' },
   no_cover: { icon: ImageOff, tile: 'bg-warning-soft text-warning' },
   unmatched: { icon: Globe, tile: 'bg-prov-community-soft text-prov-community' },
@@ -33,14 +36,16 @@ export const CATEGORY_LOOK: Record<IssueKind, { icon: LucideIcon; tile: string }
 
 /**
  * What fixing a book under a category does: open its page (a cover upload, or the
- * match dialog), open its folder's detection, read its files again, or nothing
- * the console can do (the row only offers Ignore).
+ * match dialog), open its folder's detection, read its files again, join its
+ * folder's disc folders into one book, or nothing the console can do (the row
+ * only offers Ignore).
  */
-export type IssueFix = 'cover' | 'match' | 'folder' | 'rescan' | null;
+export type IssueFix = 'cover' | 'match' | 'folder' | 'rescan' | 'join' | null;
 
 export const FIXES: Record<IssueKind, IssueFix> = {
   scan_error: 'rescan',
   suspect: 'folder',
+  split_discs: 'join',
   duplicate: null, // the compare view has its own actions
   no_cover: 'cover',
   unmatched: 'match',
@@ -54,6 +59,7 @@ export const FIX_LOOK: Record<NonNullable<IssueFix>, { icon: LucideIcon; label: 
   match: { icon: Sparkles, label: 'health.fix.match' },
   folder: { icon: Split, label: 'health.fix.folder' },
   rescan: { icon: RefreshCw, label: 'health.fix.rescan' },
+  join: { icon: Combine, label: 'health.fix.join' },
 };
 
 /** An i18n key and its values: a row's reason, worded where it's shown. */
@@ -89,6 +95,12 @@ export function issueReason(kind: IssueKind, b: AdminBook): Phrase {
       return {
         key: 'health.reason.suspect',
         values: { count: b.suspect_parts ?? 2, files: b.file_count },
+      };
+    case 'split_discs':
+      // Listed by its first disc: the book is the folder holding the discs.
+      return {
+        key: 'health.reason.split_discs',
+        values: { folder: relBaseName(relParent(b.path)) },
       };
     case 'no_cover':
       return { key: 'health.reason.no_cover' };

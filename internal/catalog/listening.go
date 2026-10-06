@@ -225,42 +225,190 @@ func (c *Catalog) ListeningOverview(ctx context.Context, limit int) ([]Listening
 
 // MoveDurableState migrates a user-state from an old path to a new one within a
 // library, used by the scanner when it detects a file move. It is a no-op if
-// nothing references the old path (or the two paths are the same).
+// nothing references the old path (or the two paths are the same). A listener who
+// already has progress at the new path (a stale row of an earlier book there) keeps
+// the newer save of the two (mergeNewest, not the furthest: a removed book's stale
+// finish must not mark the moved book finished), and a favourite lands once, so
+// such a collision no longer fails the move.
 func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath, newPath string) error {
 	if oldPath == newPath {
 		return nil
 	}
 	// Two transactions, each all or nothing: the book's own state first, then the
-	// per-user state. They are separate so that a collision in a per-user table (a
-	// plain UPDATE that fails when the destination already holds a row for the same
-	// user) can't also strand the admin's edits and cover at a path the scan is about
-	// to prune.
+	// per-user state. They are separate so that a failure carrying the per-user
+	// state can't also strand the admin's edits and cover at a path the scan is
+	// about to prune.
 	if err := c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
 		return moveBookState(ctx, tx, libraryID, oldPath, newPath)
 	}); err != nil {
 		return err
 	}
 	return c.db.WithTx(ctx, "MoveDurableState", func(tx *sql.Tx) error {
-		// One fully-constant UPDATE per durable-state table, iterated. The statements
-		// are spelled out rather than built as `"UPDATE "+table+...` on purpose: that
-		// concatenation trips gosec G202 (the project lints at a green baseline), and
-		// only the values are bound parameters here anyway. Add a table -> add a line.
-		stmts := []string{
-			`UPDATE progress SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-			`UPDATE bookmarks SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-			`UPDATE notes SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-			`UPDATE listening_history SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-			`UPDATE listening_sessions SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-			`UPDATE listening_daily SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-			`UPDATE favourites SET rel_path = ? WHERE library_id = ? AND rel_path = ?`,
-		}
-		for _, stmt := range stmts {
-			if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {
-				return fmt.Errorf("move listening state: %w", err)
-			}
+		// A move is a join of one part at offset 0 that ends the book, except that
+		// a collision takes the newer save rather than the furthest.
+		if err := carryListeningState(ctx, tx, libraryID, JoinPart{Path: oldPath, Last: true}, newPath, 0, mergeNewest); err != nil {
+			return fmt.Errorf("move listening state: %w", err)
 		}
 		return nil
 	})
+}
+
+// carryListeningState hands every listener's state on one path (part.Path) to
+// another (into), inside tx: a move (MoveDurableState) or one part of a join
+// (JoinDurableState). Positions land on into's timeline (JoinPart.at; unchanged
+// for a move); total is into's length (0 = unknown: each row takes where its
+// part ends on into's timeline, JoinPart.end).
+// Progress where the listener already has some on into merges by merge: a move
+// takes the newer save (mergeNewest), a join the furthest (mergeFurthest); a
+// favourite lands once.
+//
+// This is the one list of per-user path-keyed tables: add a table -> add a line.
+// The statements are spelled out rather than built as `"UPDATE "+table+...` on
+// purpose: that concatenation trips gosec G202 (the project lints at a green
+// baseline), and only the values are bound parameters here anyway.
+func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
+	merge progressMerge) error {
+	if err := carryProgress(ctx, tx, libraryID, part, into, total, merge); err != nil {
+		return err
+	}
+	stmts := []string{
+		`UPDATE bookmarks SET rel_path = ?1, position = position + ?2 WHERE library_id = ?4 AND rel_path = ?5`,
+		`UPDATE notes SET rel_path = ?1, position = position + ?2 WHERE library_id = ?4 AND rel_path = ?5`,
+		`UPDATE listening_history SET rel_path = ?1, from_pos = from_pos + ?2, to_pos = to_pos + ?2
+		  WHERE library_id = ?4 AND rel_path = ?5`,
+		// A session that finished a part finished the joined book only when the
+		// part ends it (JoinPart.Last). Its length is the joined book's, or with that
+		// unknown where its part ends (JoinPart.end; SET reads the old end_pos).
+		`UPDATE listening_sessions SET rel_path = ?1, start_pos = start_pos + ?2, end_pos = end_pos + ?2,
+		        duration = CASE WHEN ?3 > 0 THEN MAX(duration, ?3)
+		                        WHEN ?7 > 0 THEN ?2 + MAX(?7, end_pos)
+		                        WHEN ?2 > 0 THEN ?2 + MAX(duration, end_pos)
+		                        ELSE duration END,
+		        finished = finished AND ?6
+		  WHERE library_id = ?4 AND rel_path = ?5`,
+		`UPDATE listening_daily SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		`INSERT OR IGNORE INTO favourites(user_id, library_id, rel_path, created_at)
+		 SELECT user_id, library_id, ?1, created_at FROM favourites WHERE library_id = ?4 AND rel_path = ?5`,
+		`DELETE FROM favourites WHERE library_id = ?4 AND rel_path = ?5`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt, into, part.Offset, total, libraryID, part.Path, part.Last,
+			part.Duration); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// listenerProgress is one listener's progress row on a path.
+type listenerProgress struct {
+	user int64
+	UserProgress
+}
+
+// progressOn reads every listener's progress on one path.
+func progressOn(ctx context.Context, tx *sql.Tx, libraryID int64, relPath string) ([]listenerProgress, error) {
+	return queryRows(ctx, tx, func(rows *sql.Rows, r *listenerProgress) error {
+		var err error
+		r.UserProgress, err = scanUserProgress(rows, &r.user)
+		return err
+	}, `SELECT `+userProgressColumns+`, p.user_id FROM progress p
+	      LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
+	     WHERE p.library_id = ? AND p.rel_path = ?`, libraryID, relPath)
+}
+
+// carryProgress moves every listener's progress on part.Path to into, placed on
+// into's timeline (JoinPart.at), merged with any they already have there (merge).
+func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
+	merge progressMerge) error {
+	from, err := progressOn(ctx, tx, libraryID, part.Path)
+	if err != nil || len(from) == 0 {
+		return err
+	}
+	have, err := progressOn(ctx, tx, libraryID, into)
+	if err != nil {
+		return err
+	}
+	existing := make(map[int64]UserProgress, len(have))
+	for _, r := range have {
+		existing[r.user] = r.UserProgress
+	}
+	for _, r := range from {
+		p := r.UserProgress
+		p.Position, p.Finished = part.at(p.Position, p.Finished)
+		if total <= 0 {
+			p.Duration = part.end(p.Position, p.Duration)
+		}
+		if !p.Finished {
+			p.FinishedAt = nil
+		}
+		if cur, ok := existing[r.user]; ok {
+			p = merge(cur, p)
+		}
+		if total > 0 {
+			p.Duration = total
+		}
+		if p.Finished && p.FinishedAt == nil {
+			at := p.UpdatedAt // a finish never dated: the save that holds it
+			if t, err := time.Parse(time.RFC3339, at); err == nil {
+				at = t.UTC().Format(time.RFC3339)
+			}
+			p.FinishedAt = &at
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
+			     playback_speed, version, device_id, updated_at, started_at, finished_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
+			     position=excluded.position, duration=excluded.duration, finished=excluded.finished,
+			     playback_speed=excluded.playback_speed, version=excluded.version,
+			     device_id=excluded.device_id, updated_at=excluded.updated_at,
+			     started_at=excluded.started_at, finished_at=excluded.finished_at`,
+			r.user, libraryID, into, p.Position, p.Duration, p.Finished, p.PlaybackSpeed, p.Version,
+			p.DeviceID, p.UpdatedAt, p.StartedAt, p.FinishedAt); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM progress WHERE library_id = ? AND rel_path = ?`, libraryID, part.Path)
+	return err
+}
+
+// progressMerge is one listener's progress from the row already on a path (have)
+// and the row carried onto it (carried): mergeNewest for a move, mergeFurthest for
+// a join.
+type progressMerge func(have, carried UserProgress) UserProgress
+
+// mergeNewest is a move's merge: the newer save wins whole (isNewer: updated_at,
+// then version), under a version above both. A row already at a book's new path is
+// another book's, left behind when it was removed; its position, or its finish,
+// says nothing about the moved book, so it can't win by being further on.
+func mergeNewest(have, carried UserProgress) UserProgress {
+	out := have
+	if isNewer(carried.Progress, have.Progress) {
+		out = carried
+	}
+	out.Version = max(have.Version, carried.Version) + 1
+	return out
+}
+
+// mergeFurthest is a join's merge (the rows are parts of one book, on its
+// timeline): the furthest position wins (finished over not, at the same place),
+// with its speed, device and finish date; the result takes the newer save
+// (isNewer), the earlier start, and a version above both, so it is not older than
+// either save it replaces.
+func mergeFurthest(a, b UserProgress) UserProgress {
+	out, other := a, b
+	if b.Position > a.Position || (b.Position == a.Position && b.Finished && !a.Finished) {
+		out, other = b, a
+	}
+	if isNewer(other.Progress, out.Progress) {
+		out.UpdatedAt = other.UpdatedAt
+	}
+	out.Version = max(a.Version, b.Version) + 1
+	if other.StartedAt != nil && (out.StartedAt == nil || *other.StartedAt < *out.StartedAt) {
+		out.StartedAt = other.StartedAt
+	}
+	return out
 }
 
 // moveBookState carries the book's own path-keyed state (enrichment, ignored

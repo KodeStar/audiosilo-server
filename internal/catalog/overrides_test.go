@@ -625,13 +625,16 @@ func TestMoveDropsStaleStateForAnEditedBook(t *testing.T) {
 	}
 }
 
-// TestMoveCarriesEditsPastAListenerCollision: a per-user row already at the new
-// path (a stale progress row of the same user) still fails that part of the move,
-// but it no longer strands the book's own edits and cover with it.
-func TestMoveCarriesEditsPastAListenerCollision(t *testing.T) {
+// TestMoveMergesAListenerCollision: a per-user row already at the new path (a
+// stale progress row or favourite of the same user) no longer fails the move: the
+// listener keeps the newer save whole (not the furthest: a removed book's stale
+// finish there must not mark the moved book finished), under a version above both,
+// and the favourite once; the book's own edits and cover move as ever.
+func TestMoveMergesAListenerCollision(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)
+	bob := seedNamedUser(t, c, "bob")
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "old/Book")); err != nil {
 		t.Fatal(err)
 	}
@@ -641,13 +644,56 @@ func TestMoveCarriesEditsPastAListenerCollision(t *testing.T) {
 	if err := c.SetCover(ctx, lib.ID, "old/Book", pngBytes, 0); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"old/Book", "new/Book"} {
-		if _, err := c.SaveProgress(ctx, uid, Progress{Ref: Ref{LibraryID: lib.ID, Path: p}, Position: 7}); err != nil {
+	for _, s := range []struct {
+		user     int64
+		path     string
+		pos      float64
+		finished bool
+		at       string
+	}{
+		// The user's stale row at the new path finished an earlier book there, before
+		// the moving book's (newer) save.
+		{uid, "old/Book", 3, false, "2026-01-02T10:00:00Z"},
+		{uid, "new/Book", 7, true, "2026-01-01T10:00:00Z"},
+		// bob's row at the new path is the newer save: it stays, though nearer the start.
+		{bob, "old/Book", 9, false, "2026-01-01T10:00:00Z"},
+		{bob, "new/Book", 4, false, "2026-01-03T10:00:00Z"},
+	} {
+		ref := Ref{LibraryID: lib.ID, Path: s.path}
+		if _, err := c.SaveProgress(ctx, s.user, Progress{Ref: ref, Position: s.pos, Finished: s.finished,
+			UpdatedAt: s.at, Version: 5}); err != nil {
 			t.Fatal(err)
 		}
+		if s.user == uid {
+			if err := c.AddFavourite(ctx, uid, ref); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-	if err := c.MoveDurableState(ctx, lib.ID, "old/Book", "new/Book"); err == nil {
-		t.Fatal("the per-user collision should still be reported")
+	if err := c.MoveDurableState(ctx, lib.ID, "old/Book", "new/Book"); err != nil {
+		t.Fatalf("a listener collision failed the move: %v", err)
+	}
+	p, _ := c.GetProgress(ctx, uid, Ref{LibraryID: lib.ID, Path: "new/Book"})
+	if p == nil || p.Position != 3 || p.Finished || p.UpdatedAt != "2026-01-02T10:00:00Z" || p.Version != 6 {
+		t.Fatalf("merged progress = %+v, want the moving book's newer save (3, not finished), version 6", p)
+	}
+	var finishedAt *string
+	if err := c.db.QueryRowContext(ctx, `SELECT finished_at FROM progress WHERE user_id = ? AND rel_path = 'new/Book'`,
+		uid).Scan(&finishedAt); err != nil || finishedAt != nil {
+		t.Fatalf("the stale finish date survived the move: %v (err %v)", finishedAt, err)
+	}
+	if p, _ := c.GetProgress(ctx, bob, Ref{LibraryID: lib.ID, Path: "new/Book"}); p == nil || p.Position != 4 ||
+		p.UpdatedAt != "2026-01-03T10:00:00Z" || p.Version != 6 {
+		t.Fatalf("bob's merged progress = %+v, want the newer save at the new path (4), version 6", p)
+	}
+	for _, u := range []int64{uid, bob} {
+		if left, _ := c.GetProgress(ctx, u, Ref{LibraryID: lib.ID, Path: "old/Book"}); left != nil {
+			t.Fatalf("progress left at the old path: %+v", left)
+		}
+	}
+	favs, _ := c.ListAllFavourites(ctx, uid, []Scope{{LibraryID: lib.ID, AllowAll: true}})
+	if len(favs) != 1 || favs[0].Path != "new/Book" {
+		t.Fatalf("favourites = %+v, want new/Book once", favs)
 	}
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "new/Book")); err != nil {
 		t.Fatal(err)

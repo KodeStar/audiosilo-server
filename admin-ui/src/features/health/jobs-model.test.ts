@@ -44,6 +44,31 @@ it('words a log line, naming a read problem by its code', () => {
   );
   expect(p.key).toBe('jobs.event.problem');
   expect(p.values).toMatchObject({ path: 'A/02.mp3', problem: 'word:empty_file' });
+  // A disc joined into one book names both.
+  const joined = eventPhrase(
+    { at: 'x', level: 'info', kind: 'joined', path: 'A/Book/CD1', to: 'A/Book' },
+    String,
+  );
+  expect(joined.key).toBe('jobs.event.joined');
+  expect(joined.values).toMatchObject({ path: 'A/Book/CD1', to: 'A/Book' });
+  // A disc of unknown length kept its progress, and says so.
+  const kept = eventPhrase(
+    {
+      at: 'x',
+      level: 'info',
+      kind: 'joined',
+      path: 'A/Book/CD2',
+      to: 'A/Book',
+      code: 'length_unknown',
+    },
+    String,
+  );
+  expect(kept.key).toBe('jobs.event.joinedKept');
+  expect(kept.values).toMatchObject({ path: 'A/Book/CD2', to: 'A/Book', problem: '' });
+  // A joined book split back into its discs names the folder.
+  const split = eventPhrase({ at: 'x', level: 'info', kind: 'split', path: 'A/Book' }, String);
+  expect(split.key).toBe('jobs.event.split');
+  expect(split.values).toMatchObject({ path: 'A/Book' });
   expect(eventPhrase({ at: 'x', level: 'info', kind: 'brand-new' }, String).key).toBe(
     'jobs.event.other',
   );

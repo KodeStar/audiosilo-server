@@ -26,12 +26,13 @@ const (
 	IssueUnmatched  = "unmatched"
 	IssueTranscode  = "transcode"
 	IssueSuspect    = "suspect"
+	IssueSplitDiscs = "split_discs"
 	IssueScanError  = "scan_error"
 	IssueDuplicate  = "duplicate"
 )
 
 // IssueKinds are the kinds an issue can be ignored for, in the Health page's order.
-var IssueKinds = []string{IssueScanError, IssueSuspect, IssueDuplicate, IssueNoCover,
+var IssueKinds = []string{IssueScanError, IssueSuspect, IssueSplitDiscs, IssueDuplicate, IssueNoCover,
 	IssueUnmatched, IssueNoChapters, IssueTranscode}
 
 // ErrUnknownIssue marks an issue kind that isn't one of IssueKinds.
@@ -52,7 +53,20 @@ var issuePredicates = map[string]string{
 	IssueSuspect: `(COALESCE(b.suspect_parts, 0) >= 2 AND NOT EXISTS(SELECT 1 FROM folder_overrides fo
 		WHERE fo.library_id = b.library_id AND fo.path = b.rel_path AND fo.mode = '` + OverrideBook + `'))`,
 	IssueScanError: `(b.scan_error <> '')`,
+	// One book split across disc folders, listed once: by its first disc.
+	IssueSplitDiscs: `(` + splitDiscExpr + ` AND NOT EXISTS(SELECT 1 FROM books s
+		WHERE s.library_id = b.library_id AND s.split_parent <> '' AND s.split_parent = b.split_parent
+		  AND s.rel_path < b.rel_path))`,
 }
+
+// splitDiscExpr is "b is one disc of a book split across disc folders": a CD rip
+// ("Book/CD1", "Book/CD2", the tracks in each, none in "Book") reads as one book per
+// disc until an admin sets the folder holding them to "Always one book" (a `book`
+// override, which joins them; library.joinedBook). The scan tells such a disc
+// (books.split_parent, the folder holding it); any override on that folder settles
+// it (one sets how it reads: joined, or deliberately not).
+const splitDiscExpr = `(b.split_parent <> '' AND NOT EXISTS(SELECT 1 FROM folder_overrides fo
+		WHERE fo.library_id = b.library_id AND fo.path = b.split_parent))`
 
 // ignoredExpr is "an admin ignored this book for the kind bound to its parameter".
 const ignoredExpr = `EXISTS(SELECT 1 FROM issue_ignores ii
@@ -226,7 +240,9 @@ func sameLength(a, b float64) bool {
 // except that audio must also match in size (an identical first part is not a
 // copy) and author/title/narrator only joins copies of a matching length (an
 // abridged edition is not a copy). Copies in different libraries are deliberate,
-// and players already show one, so they never group.
+// and players already show one, so they never group. The discs of a book split
+// across disc folders look alike (one title, similar lengths) but are listed under
+// their own issue, whose fix joins them, so they never group either.
 func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow, []dupSet, error) {
 	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *dupRow) error {
 		return rows.Scan(&r.id, &r.libraryID, &r.path, &r.title, &r.author, &r.narrator, &r.asin,
@@ -239,7 +255,7 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 	      LEFT JOIN (SELECT library_id, rel_path, COUNT(*) AS n FROM progress GROUP BY library_id, rel_path) p
 	             ON p.library_id = b.library_id AND p.rel_path = b.rel_path
 	      LEFT JOIN issue_ignores ii ON ii.library_id = b.library_id AND ii.path = b.rel_path AND ii.kind = ?2
-	     WHERE (?1 = 0 OR b.library_id = ?1)`, libraryID, IssueDuplicate)
+	     WHERE (?1 = 0 OR b.library_id = ?1) AND NOT `+splitDiscExpr, libraryID, IssueDuplicate)
 	if err != nil {
 		return nil, nil, err
 	}

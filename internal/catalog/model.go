@@ -66,11 +66,14 @@ type Book struct {
 	// ScanError is what went wrong reading the book's files when it was last indexed
 	// (a code; "" = nothing), in which file (library-relative) and the tool's
 	// message. SuspectParts is how many separate books its parts look like (0 = one;
-	// nil = not checked). Set by the scanner; read by the Health page.
+	// nil = not checked). SplitParent is the folder holding it when it is one disc of
+	// a book split across disc folders ("" = not; see books.split_parent). Set by the
+	// scanner; read by the Health page.
 	ScanError       string             `json:"-"`
 	ScanErrorFile   string             `json:"-"`
 	ScanErrorDetail string             `json:"-"`
 	SuspectParts    *int               `json:"-"`
+	SplitParent     string             `json:"-"`
 	Files           []BookFile         `json:"files,omitempty"`
 	Chapters        []metadata.Chapter `json:"chapters,omitempty"`
 

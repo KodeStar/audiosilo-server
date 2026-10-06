@@ -3,7 +3,6 @@ package library
 import (
 	"errors"
 	"io/fs"
-	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -52,7 +51,7 @@ func problemCleared(lib catalog.Library, sig catalog.Signature, ffprobePath stri
 	if sig.ScanErrorFile == "" || (sig.ScanError != problemUnreadable && sig.ScanError != problemProbe) {
 		return false
 	}
-	md, _ := metadata.Extract(filepath.Join(lib.Root, filepath.FromSlash(sig.ScanErrorFile)), ffprobePath)
+	md, _ := metadata.Extract(absOf(lib, sig.ScanErrorFile), ffprobePath)
 	return md.OpenErr == nil && (sig.ScanError == problemUnreadable || md.ProbeErr == nil)
 }
 
@@ -143,7 +142,7 @@ func suspectParts(parts []partFacts) int {
 func suspectFromTags(lib catalog.Library, b *catalog.Book) (n int, ok bool) {
 	parts := make([]partFacts, 0, len(b.Files))
 	for _, f := range b.Files {
-		md, _ := metadata.Extract(filepath.Join(lib.Root, filepath.FromSlash(f.RelPath)), "")
+		md, _ := metadata.Extract(absOf(lib, f.RelPath), "")
 		if md.OpenErr != nil {
 			return 0, false
 		}

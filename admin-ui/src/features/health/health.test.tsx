@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBook, DuplicateGroup } from '@/api/types';
-import { mockFetch, type MockRoute } from '@/test/fetch-mock';
+import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import { issuesSummary, libraries } from '@/test/fixtures';
 import { adminBook } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
@@ -22,6 +22,16 @@ const coverless = [
   adminBook({ path: 'A/One', title: 'Book One', has_cover: false }),
   adminBook({ path: 'A/Two', title: 'Book Two', has_cover: false }),
 ];
+
+// A book ripped to disc folders, listed by its first disc.
+const disc = adminBook({ path: 'Cowell/Dragonese/CD1', title: 'Dragonese' });
+
+/** The issues with one book split across disc folders. */
+function splitSummary() {
+  const summary = issuesSummary();
+  summary.categories.splice(2, 0, { kind: 'split_discs', count: 1, ignored: 0, samples: [] });
+  return summary;
+}
 
 /** A book page as POST .../book/rescan answers it. */
 function rescanned(book: AdminBook) {
@@ -157,6 +167,80 @@ describe('library health', () => {
     expect(calls.find((c) => c.path === '/admin/libraries/1/book/rescan')?.query.get('path')).toBe(
       'Terry Pratchett/Guards! Guards!',
     );
+  });
+
+  it('joins a book split across disc folders into one', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues': { body: splitSummary() },
+        'GET /admin/books': (req) =>
+          req.query.get('issue') === 'split_discs'
+            ? { body: { books: [disc] } }
+            : { body: { books: [] } },
+        'PUT /admin/libraries/1/folder-override': { body: { status: 'override set' } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=split_discs');
+    expect(
+      await screen.findByText('Dragonese reads as one book per disc folder'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /One book split into disc folders/ }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Join into one book' }));
+    expect(await screen.findByText('Joining the discs of Dragonese')).toBeInTheDocument();
+    const put = calls.find((c) => c.method === 'PUT');
+    expect(put?.query.get('path')).toBe('Cowell/Dragonese');
+    expect(put?.body).toEqual({ mode: 'book' });
+    // The issues are fetched again once the folder is set.
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === '/admin/issues').length).toBeGreaterThan(1),
+    );
+  });
+
+  it('sends one join while the first is in flight', async () => {
+    let answer: (reply: MockReply) => void = () => {};
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues': { body: splitSummary() },
+        'GET /admin/books': (req) =>
+          req.query.get('issue') === 'split_discs'
+            ? { body: { books: [disc] } }
+            : { body: { books: [] } },
+        'PUT /admin/libraries/1/folder-override': () =>
+          new Promise<MockReply>((resolve) => (answer = resolve)),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=split_discs');
+    const join = await screen.findByRole('button', { name: 'Join into one book' });
+    await user.click(join);
+    await waitFor(() => expect(join).toBeDisabled());
+    await user.click(join);
+    expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
+    answer({ body: { status: 'override set' } });
+    expect(await screen.findByText('Joining the discs of Dragonese')).toBeInTheDocument();
+    await waitFor(() => expect(join).toBeEnabled());
+    expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
+  });
+
+  it('says when joining the discs failed', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/issues': { body: splitSummary() },
+        'GET /admin/books': (req) =>
+          req.query.get('issue') === 'split_discs'
+            ? { body: { books: [disc] } }
+            : { body: { books: [] } },
+        'PUT /admin/libraries/1/folder-override': { status: 500, body: { error: 'disk full' } },
+      }),
+    );
+    renderApp('/health?issue=split_discs');
+    await userEvent
+      .setup()
+      .click(await screen.findByRole('button', { name: 'Join into one book' }));
+    expect(await screen.findByText("Couldn't join the discs of Dragonese")).toBeInTheDocument();
   });
 
   it('drops a book the re-read fixed from its list', async () => {

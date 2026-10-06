@@ -845,6 +845,7 @@ export interface ScanRunPage {
 export const ISSUE_KINDS = [
   'scan_error',
   'suspect',
+  'split_discs',
   'duplicate',
   'no_cover',
   'unmatched',
@@ -923,6 +924,11 @@ export interface FsEntry {
   series_index?: number;
   duration?: number;
   override?: FolderMode;
+  /**
+   * A folder whose audio is only in disc folders directly in it (CD1, CD2...), each
+   * read as its own book: "Always one book" joins them (library.discSets).
+   */
+  split_discs?: boolean;
 }
 
 /** library.Listing (internal/library/fsview.go). */

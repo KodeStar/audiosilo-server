@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Split } from 'lucide-react';
-import { api } from '@/api/client';
-import { keys, noteScanStarted, useBrowse } from '@/api/hooks';
+import { setFolderMode, useBrowse } from '@/api/hooks';
 import type { AdminLibrary, FolderMode, FsEntry } from '@/api/types';
 import { FolderBrowser } from '@/components/folder-browser';
 import { Dialog, DialogBody, DialogContent } from '@/components/ui/dialog';
@@ -14,6 +13,7 @@ import {
   modeOf,
   type FolderChoice,
 } from '@/features/library/folders/folder-modes';
+import { offersBook, offersCollection } from '@/features/library/folders/folders-model';
 import { errorMessage, toastError } from '@/lib/errors';
 import { libraryCrumbs } from '@/lib/paths';
 import { toast } from '@/lib/toast';
@@ -56,9 +56,7 @@ function DetectionBrowser({ library }: { library: AdminLibrary }) {
 
   const setMode = async (entry: FsEntry, mode: FolderMode | null) => {
     try {
-      await api.setFolderOverride(library.id, entry.path, mode);
-      void qc.invalidateQueries({ queryKey: keys.browse(library.id, path) });
-      noteScanStarted(qc, library.id); // the rescan it started
+      await setFolderMode(qc, library.id, entry.path, mode);
       toast.add({
         title: t('detect.toast.saved', { name: entry.name }),
         description: t('detect.toast.savedBody', { library: library.name }),
@@ -98,7 +96,14 @@ function DetectionBrowser({ library }: { library: AdminLibrary }) {
             onChange={(e) => void setMode(entry, modeOf(e.target.value as FolderChoice))}
           >
             {FOLDER_CHOICES.map((c) => (
-              <option key={c} value={c}>
+              <option
+                key={c}
+                value={c}
+                disabled={
+                  (c === 'book' && !offersBook(entry)) ||
+                  (c === 'collection' && !offersCollection(entry))
+                }
+              >
                 {t(`folders.mode.${c}`)}
               </option>
             ))}

@@ -21,13 +21,15 @@ const userProgressColumns = `p.library_id, p.rel_path, p.position, p.duration, p
 	p.version, p.device_id, p.updated_at, COALESCE(b.title, ''), COALESCE(b.author, ''),
 	p.started_at, p.finished_at`
 
-func scanUserProgress(row interface{ Scan(...any) error }) (UserProgress, error) {
+// scanUserProgress reads a row of userProgressColumns, then any extra columns
+// selected after them into extra.
+func scanUserProgress(row interface{ Scan(...any) error }, extra ...any) (UserProgress, error) {
 	var (
 		p                 UserProgress
 		started, finished sql.NullString
 	)
-	err := row.Scan(&p.LibraryID, &p.Path, &p.Position, &p.Duration, &p.Finished, &p.PlaybackSpeed,
-		&p.Version, &p.DeviceID, &p.UpdatedAt, &p.Title, &p.Author, &started, &finished)
+	err := row.Scan(append([]any{&p.LibraryID, &p.Path, &p.Position, &p.Duration, &p.Finished, &p.PlaybackSpeed,
+		&p.Version, &p.DeviceID, &p.UpdatedAt, &p.Title, &p.Author, &started, &finished}, extra...)...)
 	if started.Valid {
 		p.StartedAt = &started.String
 	}

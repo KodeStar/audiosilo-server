@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -51,36 +52,61 @@ func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, 
 // authorizedPath resolves {id} + ?path=, checks the path is within the caller's
 // scope, and returns the library + path. Used by every path-addressed endpoint.
 func (a *API) authorizedPath(r *http.Request) (*catalog.Library, string, int, string) {
+	lib, rel, _, status, msg := a.authorizedScope(r)
+	return lib, rel, status, msg
+}
+
+// authorizedScope is authorizedPath plus the caller's scope, for an endpoint that
+// resolves the path to a book (bookForPath), which may lie above it.
+func (a *API) authorizedScope(r *http.Request) (*catalog.Library, string, catalog.Scope, int, string) {
 	id, ok := pathInt(r, "id")
 	if !ok {
-		return nil, "", http.StatusBadRequest, "invalid library id"
+		return nil, "", catalog.Scope{}, http.StatusBadRequest, "invalid library id"
 	}
 	lib, scope, status, msg := a.libraryScope(r, id)
 	if status != 0 {
-		return nil, "", status, msg
+		return nil, "", scope, status, msg
 	}
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
 	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
 	// to nothing ("", ".", "/", "Author/..") addresses no content.
 	rel := catalog.CleanRelPath(r.URL.Query().Get("path"))
 	if rel == "" {
-		return nil, "", http.StatusBadRequest, "path is required"
+		return nil, "", scope, http.StatusBadRequest, "path is required"
 	}
 	if !scope.Allows(rel) {
-		return nil, "", http.StatusForbidden, "no access to this path"
+		return nil, "", scope, http.StatusForbidden, msgNoPathAccess
 	}
-	return lib, rel, 0, ""
+	return lib, rel, scope, 0, ""
 }
 
-// bookForPath returns the indexed book for a (library, path), indexing it on
-// demand if the background scan has not reached it yet.
-func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, path string) (*catalog.Book, error) {
-	if b, err := a.cat.GetBookByPath(ctx, lib.ID, path); err == nil {
-		return b, nil
-	} else if !errors.Is(err, catalog.ErrNotFound) {
-		return nil, err
+// msgNoPathAccess is the 403 for a path outside the caller's scope, and for one
+// inside it whose book lies outside it (bookForPath): the two read the same, so
+// the answer says nothing about what is there.
+const msgNoPathAccess = "no access to this path"
+
+// bookForPath returns the indexed book for a (library, path) the caller's scope
+// allows: the book at the path, else the indexed folder book holding it (a part
+// path, or a disc folder of a joined book, which shipped clients still hold after
+// the join), else the book read on demand if the background scan has not reached
+// it yet. A book above the path must be allowed too: a share granted only a disc
+// folder (made before its join) reaches neither the joined book nor its other
+// discs, and never triggers its re-read. That is library.ErrNotAllowed, which
+// handlers answer as a path outside scope (msgNoPathAccess).
+func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catalog.Scope, path string) (*catalog.Book, error) {
+	b, err := a.cat.GetBookByPath(ctx, lib.ID, path)
+	if errors.Is(err, catalog.ErrNotFound) {
+		b, err = a.cat.GetBookHolding(ctx, lib.ID, path)
 	}
-	return a.scanner.IndexPath(ctx, *lib, path)
+	switch {
+	case errors.Is(err, catalog.ErrNotFound):
+		return a.indexPath(ctx, *lib, path, scope.Allows)
+	case err != nil:
+		return nil, err
+	case !scope.Allows(b.RelPath):
+		return nil, library.ErrNotAllowed
+	}
+	return b, nil
 }
 
 // handleBrowseFS serves the filtered filesystem view: the real directory tree,
@@ -136,6 +162,15 @@ func (a *API) annotateWithBooks(r *http.Request, libraryID int64, listing *libra
 	if err != nil {
 		a.log.Warn("annotate fs overrides failed", "library", libraryID, "err", err)
 	}
+	// Which folders a `book` override would join from their disc folders; likewise.
+	// For an admin only (the console's Folders screen offers the join there): it is
+	// no part of the player's listing, which stays as it was for everyone else.
+	var split map[string]bool
+	if u := userFrom(r.Context()); u != nil && u.Role == auth.RoleAdmin {
+		if split, err = a.cat.SplitFolders(r.Context(), libraryID, paths); err != nil {
+			a.log.Warn("annotate fs split discs failed", "library", libraryID, "err", err)
+		}
+	}
 	for i := range listing.Entries {
 		e := &listing.Entries[i]
 		if b, ok := books[e.Path]; ok {
@@ -149,6 +184,7 @@ func (a *API) annotateWithBooks(r *http.Request, libraryID int64, listing *libra
 		if m, ok := overrides[e.Path]; ok {
 			e.Override = m
 		}
+		e.SplitDiscs = e.IsDir && split[e.Path]
 	}
 }
 
@@ -220,13 +256,15 @@ func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
 // handleItem returns full book detail (metadata + files + chapters) for a path,
 // indexing it on demand if needed.
 func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	book, err := a.bookForPath(r.Context(), lib, path)
+	book, err := a.bookForPath(r.Context(), lib, scope, path)
 	switch {
+	case errors.Is(err, library.ErrNotAllowed):
+		writeError(w, http.StatusForbidden, msgNoPathAccess)
 	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no book at that path")
 	case err != nil:
@@ -242,13 +280,16 @@ func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 // carries file_path so playback is purely path-based and a single chaptered m4b
 // and a folder of mp3 parts render identically.
 func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	book, err := a.bookForPath(r.Context(), lib, path)
+	book, err := a.bookForPath(r.Context(), lib, scope, path)
 	switch {
+	case errors.Is(err, library.ErrNotAllowed):
+		writeError(w, http.StatusForbidden, msgNoPathAccess)
+		return
 	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no book at that path")
 		return
@@ -384,7 +425,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 // admin console, else a sibling cover file if indexed, else embedded art from the
 // book's primary audio file.
 func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
-	lib, path, status, msg := a.authorizedPath(r)
+	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
@@ -392,8 +433,11 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	if a.answerCustomCover(w, r, lib.ID, path) {
 		return
 	}
-	book, err := a.bookForPath(r.Context(), lib, path)
+	book, err := a.bookForPath(r.Context(), lib, scope, path)
 	switch {
+	case errors.Is(err, library.ErrNotAllowed):
+		writeError(w, http.StatusForbidden, msgNoPathAccess)
+		return
 	case errors.Is(err, library.ErrNotIndexable):
 		writeError(w, http.StatusNotFound, "no cover")
 		return

@@ -160,7 +160,8 @@ index, so a shifted chapter list can't move a rename; the API still sends indexe
 history, per library, bounded), `issue_ignores` (`library_id, path, kind`: an admin's "ignore this"
 on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` / `ignore_patterns`
 (per-library settings, off the player wire) and, on `books`, `scan_error` / `scan_error_file` /
-`scan_error_detail` (the last indexing's read problem) and `suspect_parts`. Phase 4a (`0018`) adds
+`scan_error_detail` (the last indexing's read problem) and `suspect_parts`; `0022` adds `books.split_parent` (the
+folder holding a disc of a book split across disc folders, else `''`). Phase 4a (`0018`) adds
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
 retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
 `client_platform` / `last_ip` (the app and newest address behind each token) and
@@ -380,8 +381,13 @@ admin overrides; see Metadata overrides below).
 - **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
   is the handle (a query param, to avoid encoded-slash issues). `item`/`chapters`/
-  `cover` resolve `(library, path)` to a book via `GetBookByPath`, indexing on
-  demand (`Scanner.IndexPath`) if the scan hasn't reached it; `stream` serves an
+  `cover`/`meta` resolve `(library, path)` to a book in ONE place, `bookForPath`:
+  `GetBookByPath`, then the indexed folder book holding the path
+  (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
+  demand (`Scanner.IndexPathWithin`) if the scan hasn't reached it. A book found
+  above the requested path must be in the caller's scope too (`library.ErrNotAllowed`,
+  answered as the out-of-scope 403 `no access to this path`, nothing read or
+  indexed for that caller); `stream` serves an
   audio file path directly, or transcodes it with `?transcode=1` (see below). The
   `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
   `.nfo` are filtered in `BrowseFS` so a click is always playable) and annotates
@@ -406,7 +412,16 @@ admin overrides; see Metadata overrides below).
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
   new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
   durable state old→new (`catalog.MoveDurableState`). Re-tagging keeps state via
-  the path key; moving keeps it via the fingerprint.
+  the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
+  ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
+  a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
+  timeline, a listener's progress already at the new path merged by a strategy the caller
+  passes (`progressMerge`), a favourite landing once, so a collision never fails a move. A
+  **move** takes the newest save whole (`mergeNewest`: `updated_at`, then version; a row
+  already at the new path is a removed book's, so its position or finish must not win by
+  being further on); a **join** keeps the furthest (`mergeFurthest`: the rows are parts of one
+  book; finished over not, the newer save's stamp, the earlier start). Both take a version
+  above both rows.
 - **Auto book/folder detection**: there is **no per-library layout**. The model
   (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
   convention (and Audiobookshelf): **a directory that directly contains audio is
@@ -422,6 +437,52 @@ admin overrides; see Metadata overrides below).
   progress/bookmarks). `PUT/DELETE /admin/libraries/{id}/folder-override?path=`
   sets/clears it and rescans; the admin console's per-library **Folder detection** dialog
   drives it. `GET /fs` annotates each entry's effective `override`.
+  **Joined books (`library/joined.go`)**: `book` joins only a **disc set** (`discSets`): a
+  folder below the root with no audio of its own whose every folder holding audio beneath
+  it is a disc folder (`isDiscFolder`: cd/disc/disk + number) **directly** in it, at least
+  two (`minDiscs`; one disc already reads as one book). A CD rip (`Book/CD1`, `Book/CD2`,
+  ...) becomes ONE book of its discs' audio (hidden/ignore rules applied), with no books for
+  the discs. Any other folder keeps `book`'s old meaning (its own files; without any, a
+  no-op): overrides the old detection dialog set on author/series folders must never merge
+  a series (or its listeners' progress) on upgrade, and nothing is auto-detected
+  (re-shaping existing books would orphan progress). Order: the disc folders by
+  `discOrder` (natural: CD2 before CD10, "CD 1" = "CD1", ties by path), each disc's files
+  in exactly the order a book of that disc alone has them (byte-wise name order, as
+  `audioEntries`/the walk read them; NOT natural), since the state carry-over maps a disc
+  position as offset + position. Files and chapters keep real paths in the discs
+  (`file_path`, a chapter title led by its disc: "CD2 - 01"); the cover is the folder's own
+  image, then the first disc's; `IndexPath` resolves the folder, a disc folder or a file in
+  it to the joined book, and so does `bookForPath` from the index first (`GetBookHolding`),
+  so the disc paths shipped clients still hold don't re-walk and re-probe every disc on
+  each request. Reaching the joined book through a disc path takes a grant on the book: a
+  share made before the join on one disc folder gets the out-of-scope 403 for it (as for
+  the book's own path) and never triggers the re-read, though it still streams the disc's
+  real files (scoped on the file path). Discovery and `IndexPath` decide a join in one place (`joinRoot`:
+  the folder or its parent, with `book` and a disc set), and the discovery walk
+  (`audioDirs`) reads each folder's audio files once, handing them to
+  `booksInDir`/`joinedBook`. The scan where it takes effect runs `carryJoinedState` before
+  the prune: `catalog.JoinDurableState` moves the disc books' listening state onto the
+  joined timeline (offset = earlier discs' lengths; furthest progress per listener wins;
+  bookmarks/notes/history/sessions offset; favourites once) and copies their
+  edits/cover/enrichment (earliest disc wins per field, chapter renames re-keyed). A disc's
+  listening state is carried only when its offset is **known** (`joinParts`): the first
+  disc's always (0), a later disc's only when every earlier disc's length is (its files',
+  else its indexed length). With ffprobe off or failing, a later disc is `Unplaced`: its
+  listening state stays on its own path (path-keyed, back if the join is undone) rather
+  than landing in disc 1, its config is still copied, and its `joined` event carries code
+  `length_unknown` (the console: "progress stayed with the disc: length unknown"). Each
+  disc is logged `joined`, not `removed`, and the joined book is a reshape, not new
+  content: not counted in `Added`/`AddedTitles` (`joinsIndexed`), so no "books added"
+  notification. Removing the override splits the discs out again; the joined state stays
+  on the folder's path. That un-join is a reshape too (`Scanner.splitFrom`, the
+  `joinsIndexed` counterpart: books in the disc folders of a folder whose stored book was
+  joined, `isJoined`, and is no book now): the discs are not counted in
+  `Added`/`AddedTitles`, and the joined book is logged `split`, not `removed` (nor counted
+  in `Removed`). A folder book with audio of its own that goes is still `removed`. `GET /fs`
+  marks a disc set whose discs are indexed (`split_discs`, from `books.split_parent`) for an
+  **admin** caller only (`annotateWithBooks`; `omitempty`), so the player's listing is
+  unchanged; the console offers "Always one book" on a folder without audio only there or
+  on a joined book.
 - **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
   edits never touch files. A `books` row holds the **effective** values - what the scan
   found (kept in `books.scanned`, JSON field -> value, stamped with the upsert's
@@ -443,9 +504,9 @@ admin overrides; see Metadata overrides below).
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
   `MoveDurableState` carries overrides and custom covers as one set: when the moved book
   has any, the new path's own rows in all three tables are dropped first; it moves
-  them (with enrichment) in a transaction of their own, so a per-user collision can't
-  strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
-  back) with its own first part (`reclassified`).
+  them (with enrichment) in a transaction of their own, so a failure carrying the per-user
+  state can't strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
+  back) with its own first part, nor a joined book renamed away from its override with its first disc (`reclassified`).
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
   with a tag read (`media.EmbeddedCover`, no ffprobe).
@@ -555,7 +616,14 @@ admin overrides; see Metadata overrides below).
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h), `unmatched` (left out of the summary
   while metadata is off), `transcode`, `suspect` (not a folder with a `book` override, the
-  category's own fix), `scan_error`. `duplicate` is groups within one
+  category's own fix), `scan_error`, `split_discs` (one book split across disc folders, listed by
+  its first disc: `books.split_parent` set, no override on that folder; the console's fix sets
+  `book` on it, which joins them; its discs never also group as duplicates). `split_parent` is
+  worked out during discovery (`library.markSplitDiscs`: a folder book whose folder is a disc
+  set, the same `discSets` predicate the join uses, so the fix always joins; `IndexPath` the
+  same from the folder's subtree) and stored by `UpsertBook`; an unchanged book whose value
+  differs (a sibling came or went, a pre-0022 row) gets it via `SetSplitParent` without a
+  reindex. `duplicate` is groups within one
   library (`DuplicateGroups`: same fingerprint AND size, same ASIN/ISBN, or `metaKey` with a
   length within 1 min / 2%, an unknown length matching only another unknown one; copies across
   libraries are deliberate); a group is hidden while every member is ignored, so a new copy
