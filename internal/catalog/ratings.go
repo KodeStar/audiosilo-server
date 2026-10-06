@@ -84,7 +84,7 @@ func (c *Catalog) SetRating(ctx context.Context, userID int64, ref Ref, stars in
 	}
 	now := formatSessionTime(c.now())
 	var r Rating
-	err = scanRating(c.db.QueryRowContext(ctx,
+	err = scanRating(c.db.WriteRowContext(ctx,
 		`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
 		 VALUES(?,?,?,?,?,?,?)
 		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET

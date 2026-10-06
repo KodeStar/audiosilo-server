@@ -122,7 +122,7 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 	}
 	// RETURNING reads the dates the row ended up with (a kept start, a kept or new
 	// finish), so the echo carries the stored ones.
-	err = c.db.QueryRowContext(ctx,
+	err = c.db.WriteRowContext(ctx,
 		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 		     playback_speed, version, device_id, updated_at, started_at, finished_at)
 		 VALUES(?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?6 THEN ?11 END)

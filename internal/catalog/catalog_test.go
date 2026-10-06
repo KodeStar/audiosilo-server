@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +17,20 @@ func newTestCatalog(t *testing.T) (*Catalog, context.Context) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return New(db, time.Now), ctx
+}
+
+// newFileTestCatalog is newTestCatalog on a FILE-backed database: reads go to the
+// read-only reader pool (query_only) as in production, so a write issued through
+// a read method fails here, where :memory: (reader == writer) would hide it.
+func newFileTestCatalog(t *testing.T) (*Catalog, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
