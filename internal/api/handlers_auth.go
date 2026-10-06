@@ -40,6 +40,8 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"browse_people": true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
 			"cover_sizes":   true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
 			"next_book":     true,                 // what to play after a book (GET /libraries/{id}/next)
+			"queue":         true,                 // the up-next queue (/me/queue)
+			"collections":   true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
 			"user_stats":    true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
 			"ratings":       true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
 			"progress_edit": true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
