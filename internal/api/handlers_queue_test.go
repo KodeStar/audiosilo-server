@@ -1,0 +1,333 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/library"
+)
+
+// The lists tests' books: two scanned from testdata (folder books) and one
+// indexed directly; cradlePart is a part of the Cradle book.
+const (
+	cradle     = "Will Wight/Cradle"
+	cradlePart = cradle + "/01 - Unsouled.m4b"
+	thread     = "Will Wight/Threadlight"
+	mist       = "Brandon Sanderson/Mistborn"
+)
+
+// listsEnv is a library (cradle, thread, mist) and the accounts the queue and collection tests
+// need: olive (whole library, owns things), kid (the "Will Wight" folder only),
+// sam (whole library, a stranger to olive's things), a demo account (whole
+// library) and a disabled one.
+type listsEnv struct {
+	*testEnv
+	libID                       int64
+	share                       int64 // kid's "Will Wight" share
+	olive, kid, sam, demo, dora int64
+	oliveTok, kidTok, samTok    string
+	demoTok                     string
+}
+
+func newListsEnv(t *testing.T) *listsEnv {
+	t.Helper()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
+	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: thread, IsFolder: true,
+		Title: "Threadlight", Author: "Will Wight"}); err != nil {
+		t.Fatal(err)
+	}
+	user := func(name string, demo bool) (int64, string) {
+		t.Helper()
+		var u *auth.User
+		var err error
+		if demo {
+			u, err = e.auth.CreateDemoUser(ctx, name)
+		} else {
+			u, err = e.auth.CreateUser(ctx, name, "", auth.RoleUser)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "t", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u.ID, tok
+	}
+	l := &listsEnv{testEnv: e, libID: lib.ID}
+	l.olive, l.oliveTok = user("olive", false)
+	l.kid, l.kidTok = user("kid", false)
+	l.sam, l.samTok = user("sam", false)
+	l.demo, l.demoTok = user("demo_1", true)
+	l.dora, _ = user("dora", false)
+	for _, id := range []int64{l.olive, l.sam, l.demo} {
+		if err := e.cat.GrantWholeLibrary(ctx, id, lib.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Wight only"})
+	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantShare(ctx, l.kid, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	l.share = share.ID
+	if err := e.auth.SetDisabled(ctx, l.dora, true); err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+// refJSON is a {library_id, path} body fragment.
+func (l *listsEnv) refJSON(path string) string {
+	b, _ := json.Marshal(catalog.Ref{LibraryID: l.libID, Path: path})
+	return string(b)
+}
+
+// addJSON is a list add body, with a position when pos >= 0.
+func (l *listsEnv) addJSON(path string, pos int) string {
+	in := map[string]any{"library_id": l.libID, "path": path}
+	if pos >= 0 {
+		in["position"] = pos
+	}
+	b, _ := json.Marshal(in)
+	return string(b)
+}
+
+// itemsJSON is a whole-list replace body.
+func (l *listsEnv) itemsJSON(paths ...string) string {
+	refs := make([]string, len(paths))
+	for i, p := range paths {
+		refs[i] = l.refJSON(p)
+	}
+	return `{"items":[` + strings.Join(refs, ",") + `]}`
+}
+
+// removeQuery is ?library_id=&path= for a list remove.
+func (l *listsEnv) removeQuery(path string) string {
+	return "?library_id=" + strconv.FormatInt(l.libID, 10) + "&path=" + url.QueryEscape(path)
+}
+
+// wireItem is an up-next entry / collection item as the wire carries it.
+type wireItem struct {
+	LibraryID int64           `json:"library_id"`
+	Path      string          `json:"path"`
+	AddedAt   string          `json:"added_at"`
+	Book      json.RawMessage `json:"book"`
+}
+
+func itemPathsOf(items []wireItem) string {
+	var out []string
+	for _, it := range items {
+		out = append(out, it.Path)
+	}
+	return strings.Join(out, "|")
+}
+
+// queueOf GETs a caller's queue, failing on anything but 200.
+func (l *listsEnv) queueOf(t *testing.T, tok string) []wireItem {
+	t.Helper()
+	resp, body := l.do(t, "GET", "/api/v1/me/queue", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET queue = %d %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Queue []wireItem `json:"queue"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil || out.Queue == nil {
+		t.Fatalf("queue body %s: %v", body, err)
+	}
+	return out.Queue
+}
+
+// The capabilities advertise the queue and collections.
+func TestListCapabilities(t *testing.T) {
+	e := newTestEnv(t)
+	_, body := e.do(t, "GET", "/api/v1/server", "", "")
+	if !strings.Contains(body, `"queue":true`) || !strings.Contains(body, `"collections":true`) {
+		t.Fatalf("/server capabilities: %s", body)
+	}
+}
+
+// Add (end, at a position, a move, an idempotent re-add), read with the book
+// attached in its list shape, remove (idempotent), and the request errors.
+func TestQueueRoundTrip(t *testing.T) {
+	l := newListsEnv(t)
+	post := func(body string) (int, string) {
+		t.Helper()
+		resp, b := l.do(t, "POST", "/api/v1/me/queue", l.oliveTok, body)
+		return resp.StatusCode, b
+	}
+	if got := l.queueOf(t, l.oliveTok); len(got) != 0 {
+		t.Fatalf("fresh queue = %+v", got)
+	}
+	// A part path stores its book's path.
+	for _, p := range []string{cradlePart, thread} {
+		if status, b := post(l.addJSON(p, -1)); status != http.StatusOK {
+			t.Fatalf("add %s = %d %s", p, status, b)
+		}
+	}
+	status, body := post(l.addJSON(mist, 0))
+	if status != http.StatusOK || !strings.Contains(body, `"queue":[`) {
+		t.Fatalf("add at 0 = %d %s", status, body)
+	}
+	got := l.queueOf(t, l.oliveTok)
+	if itemPathsOf(got) != mist+"|"+cradle+"|"+thread {
+		t.Fatalf("order = %s", itemPathsOf(got))
+	}
+	var book map[string]any
+	if err := json.Unmarshal(got[0].Book, &book); err != nil || book["rel_path"] != mist || book["title"] == "" {
+		t.Fatalf("book not attached: %s", got[0].Book)
+	}
+	if _, ok := book["description"]; ok || got[0].AddedAt == "" {
+		t.Fatalf("entry not in the list shape: %+v %s", got[0], got[0].Book)
+	}
+	post(l.addJSON(thread, -1))    // already queued: stays
+	post(l.addJSON(cradlePart, 9)) // moves to the end
+	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != mist+"|"+thread+"|"+cradle {
+		t.Fatalf("order after re-add and move = %s", got)
+	}
+
+	for range 2 {
+		if resp, b := l.do(t, "DELETE", "/api/v1/me/queue"+l.removeQuery(thread), l.oliveTok, ""); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("remove = %d %s", resp.StatusCode, b)
+		}
+	}
+	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != mist+"|"+cradle {
+		t.Fatalf("order after remove = %s", got)
+	}
+
+	for name, tc := range map[string]struct {
+		method, query, body string
+		want                int
+	}{
+		"negative position": {"POST", "", fmt.Sprintf(`{"library_id":%d,"path":%q,"position":-1}`, l.libID, thread), 400},
+		"fraction position": {"POST", "", fmt.Sprintf(`{"library_id":%d,"path":%q,"position":1.5}`, l.libID, thread), 400},
+		"unknown field":     {"POST", "", `{"library_id":1,"path":"x","extra":1}`, 400},
+		"no library":        {"POST", "", `{"path":"` + thread + `"}`, 400},
+		"no path":           {"POST", "", fmt.Sprintf(`{"library_id":%d}`, l.libID), 400},
+		"not a book":        {"POST", "", l.addJSON("Will Wight/Nope.m4b", -1), 404},
+		"unknown library":   {"POST", "", `{"library_id":999,"path":"x"}`, 403},
+		"bad replace":       {"PUT", "", `{"items":"no"}`, 400},
+		"remove no path":    {"DELETE", "?library_id=" + strconv.FormatInt(l.libID, 10), "", 400},
+		"remove bad lib":    {"DELETE", "?library_id=x&path=a", "", 400},
+	} {
+		if resp, b := l.do(t, tc.method, "/api/v1/me/queue"+tc.query, l.oliveTok, tc.body); resp.StatusCode != tc.want {
+			t.Errorf("%s = %d %s, want %d", name, resp.StatusCode, b, tc.want)
+		}
+	}
+	if resp, _ := l.do(t, "GET", "/api/v1/me/queue", "", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated GET = %d", resp.StatusCode)
+	}
+}
+
+// A queue is its owner's alone: another user never sees it, and their remove or
+// replace touches only their own.
+func TestQueueIsPrivate(t *testing.T) {
+	l := newListsEnv(t)
+	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(cradle, mist)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("olive's replace = %d %s", resp.StatusCode, b)
+	}
+	// Allowed: sam has his own (empty) queue.
+	if got := l.queueOf(t, l.samTok); len(got) != 0 {
+		t.Fatalf("sam sees %+v", got)
+	}
+	// Denied: sam's writes don't reach olive's queue.
+	l.do(t, "DELETE", "/api/v1/me/queue"+l.removeQuery(cradle), l.samTok, "")
+	l.do(t, "PUT", "/api/v1/me/queue", l.samTok, l.itemsJSON(thread))
+	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != cradle+"|"+mist {
+		t.Fatalf("olive's queue after sam's writes = %s", got)
+	}
+	if got := itemPathsOf(l.queueOf(t, l.samTok)); got != thread {
+		t.Fatalf("sam's queue = %s", got)
+	}
+}
+
+// The caller's access gates the queue: an out-of-scope add is 403 and never
+// stored, a replace skips what is out of scope or not exactly a book, and a
+// revoked share hides a queued book without deleting it (re-granting shows it).
+func TestQueueScope(t *testing.T) {
+	l := newListsEnv(t)
+	ctx := context.Background()
+	// Denied: Mistborn is outside kid's share.
+	if resp, b := l.do(t, "POST", "/api/v1/me/queue", l.kidTok, l.addJSON(mist, -1)); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("out-of-scope add = %d %s, want 403", resp.StatusCode, b)
+	}
+	// A path that cleans to outside the share is out of scope too.
+	if resp, _ := l.do(t, "POST", "/api/v1/me/queue", l.kidTok, l.addJSON("Will Wight/../"+mist, -1)); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("dot-dot add = %d, want 403", resp.StatusCode)
+	}
+	// Allowed, and the replace's skip rule.
+	resp, body := l.do(t, "PUT", "/api/v1/me/queue", l.kidTok,
+		l.itemsJSON(mist, cradle, cradlePart, "Will Wight", "Will Wight/Nope.m4b", "/"+cradle+"/", "Will Wight/../"+mist))
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, "Mistborn") {
+		t.Fatalf("replace = %d %s", resp.StatusCode, body)
+	}
+	if got := itemPathsOf(l.queueOf(t, l.kidTok)); got != cradle {
+		t.Fatalf("kid's queue = %s, want only %s", got, cradle)
+	}
+
+	// Revoked: hidden, not deleted.
+	if err := l.cat.RevokeShare(ctx, l.kid, l.share); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.queueOf(t, l.kidTok); len(got) != 0 {
+		t.Fatalf("revoked queue still shows %+v", got)
+	}
+	if err := l.cat.GrantShare(ctx, l.kid, l.share); err != nil {
+		t.Fatal(err)
+	}
+	if got := itemPathsOf(l.queueOf(t, l.kidTok)); got != cradle {
+		t.Fatalf("re-granted queue = %s", got)
+	}
+}
+
+// The queue holds MaxQueue books: a replace of more is 400, an add to a full
+// queue 409 queue_full, a move within it still works.
+func TestQueueLimits(t *testing.T) {
+	l := newListsEnv(t)
+	ctx := context.Background()
+	many := make([]string, catalog.MaxQueue+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("Will Wight/x%03d.m4b", i)
+	}
+	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(many...)); resp.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(b, "too many items") {
+		t.Fatalf("replace with %d = %d %s", len(many), resp.StatusCode, b)
+	}
+	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(many[:catalog.MaxQueue]...)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("replace with %d = %d %s", catalog.MaxQueue, resp.StatusCode, b)
+	}
+	if err := l.cat.AddToQueue(ctx, l.olive, catalog.Ref{LibraryID: l.libID, Path: cradle}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := range catalog.MaxQueue - 1 {
+		if err := l.cat.AddToQueue(ctx, l.olive, catalog.Ref{LibraryID: l.libID, Path: many[i]}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, b := l.do(t, "POST", "/api/v1/me/queue", l.oliveTok, l.addJSON(mist, -1))
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(b, `"code":"queue_full"`) {
+		t.Fatalf("add to a full queue = %d %s", resp.StatusCode, b)
+	}
+	if resp, b := l.do(t, "POST", "/api/v1/me/queue", l.oliveTok, l.addJSON(cradle, 3)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("move within a full queue = %d %s", resp.StatusCode, b)
+	}
+}

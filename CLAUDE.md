@@ -174,6 +174,17 @@ retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `cl
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
 
+Player redesign Phase 1b: `up_next` (`0025`: a user's queue) and `collections` /
+`collection_items` / `collection_shares` (`0026`: named lists, shared read-only with named
+users). Items are path-keyed like favourites (no FK to `books`), ordered by `position`, and
+share ONE implementation (`catalog/lists.go` `orderedList`: add-at/move, remove, replace with
+the skip rule, books attached by `BooksByPaths`); every read passes through the READER's
+current access (a viewer never sees or counts an owner's item outside their own shares); a
+move or join carries them (`carryListsState`, the destination entry kept on a collision).
+Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
+`handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
+`not_owner`; capabilities `queue`, `collections`).
+
 Book identity carries `author`/`series`/`title` plus optional `asin`/`isbn` so a
 future metadata site can attach enrichment without reshaping the schema. The
 `books` metadata columns are the effective values (scan, then enrichment, then

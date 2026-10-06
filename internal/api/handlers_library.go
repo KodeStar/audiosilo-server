@@ -79,14 +79,20 @@ func (a *API) authorizedScope(r *http.Request) (*catalog.Library, string, catalo
 	if !ok {
 		return nil, "", catalog.Scope{}, http.StatusBadRequest, "invalid library id"
 	}
-	lib, scope, status, msg := a.libraryScope(r, id)
+	return a.scopedPath(r, id, r.URL.Query().Get("path"))
+}
+
+// scopedPath is authorizedScope for a library id and a raw path the caller got
+// from elsewhere (a request body: POST /me/queue, /me/collections/{id}/items).
+func (a *API) scopedPath(r *http.Request, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	lib, scope, status, msg := a.libraryScope(r, libraryID)
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
 	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
 	// to nothing ("", ".", "/", "Author/..") addresses no content.
-	rel := catalog.CleanRelPath(r.URL.Query().Get("path"))
+	rel := catalog.CleanRelPath(rawPath)
 	if rel == "" {
 		return nil, "", scope, http.StatusBadRequest, "path is required"
 	}
