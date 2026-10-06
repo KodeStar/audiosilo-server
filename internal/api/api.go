@@ -249,6 +249,14 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/libraries/{id}/favourites", a.requireAuth(http.HandlerFunc(a.handleAddFavourite)))
 	mux.Handle("DELETE /api/v1/libraries/{id}/favourites", a.requireAuth(http.HandlerFunc(a.handleRemoveFavourite)))
 
+	// Phase 1b: your listening (capability user_stats): the caller's own stats,
+	// listening per day and yearly goal.
+	mux.Handle("GET /api/v1/me/stats", a.requireAuth(http.HandlerFunc(a.handleMyStats)))
+	mux.Handle("GET /api/v1/me/listening", a.requireAuth(http.HandlerFunc(a.handleMyListening)))
+	mux.Handle("GET /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handleGetGoal)))
+	mux.Handle("PUT /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handlePutGoal)))
+	mux.Handle("DELETE /api/v1/me/goal", a.requireAuth(http.HandlerFunc(a.handleDeleteGoal)))
+
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
 	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))

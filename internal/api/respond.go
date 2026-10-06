@@ -160,6 +160,8 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeError(w, http.StatusBadRequest, "those dates or that position don't fit this book")
 	case errors.Is(err, catalog.ErrInvalidRange):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidRange, "range must be 7d, 30d, 90d, 1y or a year")
+	case errors.Is(err, catalog.ErrInvalidGoal):
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("books_per_year must be a whole number from 1 to %d", catalog.MaxBooksPerYear))
 	default:
 		a.log.Warn(op, append([]any{"err", err}, logKV...)...)
 		writeError(w, http.StatusInternalServerError, genericMsg)
