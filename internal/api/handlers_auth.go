@@ -355,9 +355,18 @@ func (a *API) gateSelfService(w http.ResponseWriter, r *http.Request) *auth.User
 	if !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
 		return nil
 	}
+	return a.nonDemoAccount(w, r)
+}
+
+// nonDemoAccount loads the caller's full account, refusing a demo account (403
+// "not available for demo accounts": a public demo must not change its account,
+// list the server's usernames or share with them). On a refusal or a failure it
+// has written the response and returns nil.
+func (a *API) nonDemoAccount(w http.ResponseWriter, r *http.Request) *auth.User {
 	u := userFrom(r.Context())
 	full, err := a.auth.GetUser(r.Context(), u.ID)
 	if err != nil {
+		a.log.Warn("load account failed", "user", u.ID, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return nil
 	}

@@ -91,6 +91,9 @@ const (
 	codeBackupTooNew       = "backup_too_new"
 	codeInvalidTarget      = "invalid_target" // + "field", "reason" (notify.Reason*), "max" for a length
 	codeTooManyTargets     = "too_many_targets"
+	codeQueueFull          = "queue_full"
+	codeCollectionFull     = "collection_full"
+	codeCollectionsFull    = "collections_full"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
@@ -162,6 +165,30 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidRange, "range must be 7d, 30d, 90d, 1y or a year")
 	case errors.Is(err, catalog.ErrInvalidGoal):
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("books_per_year must be a whole number from 1 to %d", catalog.MaxBooksPerYear))
+	// The player's lists, collections and ratings (Phase 1b).
+	case errors.Is(err, catalog.ErrQueueFull):
+		writeErrorCode(w, http.StatusConflict, codeQueueFull, fmt.Sprintf("the queue holds at most %d books", catalog.MaxQueue))
+	case errors.Is(err, catalog.ErrCollectionFull):
+		writeErrorCode(w, http.StatusConflict, codeCollectionFull,
+			fmt.Sprintf("a collection holds at most %d books", catalog.MaxCollectionItems))
+	case errors.Is(err, catalog.ErrCollectionsFull):
+		writeErrorCode(w, http.StatusConflict, codeCollectionsFull,
+			fmt.Sprintf("you can have at most %d collections", catalog.MaxCollections))
+	case errors.Is(err, catalog.ErrTooManyItems):
+		writeError(w, http.StatusBadRequest, "too many items")
+	case errors.Is(err, catalog.ErrInvalidName):
+		writeError(w, http.StatusBadRequest, "the name must be 1 to 100 characters, with no control characters")
+	case errors.Is(err, catalog.ErrInvalidDescription):
+		writeError(w, http.StatusBadRequest, "the description must be at most 1000 characters, with no control characters but line breaks and tabs")
+	case errors.Is(err, catalog.ErrUnknownUser):
+		writeError(w, http.StatusBadRequest, "unknown user")
+	case errors.Is(err, catalog.ErrTooManyShares):
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("a collection can be shared with at most %d users", catalog.MaxCollectionShares))
+	case errors.Is(err, catalog.ErrInvalidRating):
+		writeError(w, http.StatusBadRequest, catalog.ErrInvalidRating.Error())
+	case errors.Is(err, catalog.ErrRatingNoteTooLong):
+		writeError(w, http.StatusBadRequest, catalog.ErrRatingNoteTooLong.Error())
 	default:
 		a.log.Warn(op, append([]any{"err", err}, logKV...)...)
 		writeError(w, http.StatusInternalServerError, genericMsg)

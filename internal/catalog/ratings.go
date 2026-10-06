@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -20,7 +21,7 @@ var (
 	// ErrInvalidRating is a rating outside 1-5.
 	ErrInvalidRating = errors.New("rating must be a whole number from 1 to 5")
 	// ErrRatingNoteTooLong is a note longer than MaxRatingNote characters.
-	ErrRatingNoteTooLong = errors.New("the note is longer than 500 characters")
+	ErrRatingNoteTooLong = fmt.Errorf("the note is longer than %d characters", MaxRatingNote)
 )
 
 // Rating is one listener's rating of a book.

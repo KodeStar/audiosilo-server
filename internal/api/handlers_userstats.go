@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -18,17 +17,20 @@ import (
 func (a *API) handleMyStats(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
-	if err == nil {
-		var scopes []catalog.Scope
-		if scopes, err = a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin); err == nil {
-			var stats *catalog.UserStats
-			if stats, err = a.cat.UserStatsFor(r.Context(), label, from, to, time.Local, u.ID, scopes); err == nil {
-				writeJSON(w, http.StatusOK, map[string]any{"stats": stats})
-				return
-			}
-		}
+	if err != nil {
+		a.writeCatalogError(w, err, "user stats failed", "could not load your stats", "user", u.ID)
+		return
 	}
-	a.writeCatalogError(w, err, "user stats failed", "could not load your stats", "user", u.ID)
+	scopes, ok := a.callerScopes(w, r, "could not load your stats")
+	if !ok {
+		return
+	}
+	stats, err := a.cat.UserStatsFor(r.Context(), label, from, to, time.Local, u.ID, scopes)
+	if err != nil {
+		a.writeCatalogError(w, err, "user stats failed", "could not load your stats", "user", u.ID)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stats": stats})
 }
 
 // handleMyListening answers GET /me/listening?range=: the caller's listening per
@@ -36,14 +38,16 @@ func (a *API) handleMyStats(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleMyListening(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	label, from, to, err := catalog.ParseActivityRange(r.URL.Query().Get("range"), time.Now(), time.Local)
-	if err == nil {
-		var days *catalog.UserListening
-		if days, err = a.cat.UserListeningFor(r.Context(), label, from, to, time.Local, u.ID); err == nil {
-			writeJSON(w, http.StatusOK, days)
-			return
-		}
+	if err != nil {
+		a.writeCatalogError(w, err, "user listening failed", "could not load your listening", "user", u.ID)
+		return
 	}
-	a.writeCatalogError(w, err, "user listening failed", "could not load your listening", "user", u.ID)
+	days, err := a.cat.UserListeningFor(r.Context(), label, from, to, time.Local, u.ID)
+	if err != nil {
+		a.writeCatalogError(w, err, "user listening failed", "could not load your listening", "user", u.ID)
+		return
+	}
+	writeJSON(w, http.StatusOK, days)
 }
 
 // writeGoal answers with the caller's goal and this year's finished books.

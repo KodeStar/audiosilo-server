@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,25 @@ func newTestEnv(t *testing.T) *testEnv {
 	return newTestEnvWith(t, nil)
 }
 
+// distinctMillis is time.Now that never answers the same millisecond twice, so
+// two catalog writes a test makes back to back always stamp different times (the
+// lists' and collections' fixed-width millisecond stamps would otherwise tie on
+// a fast machine, and "updated_at moved" checks would flake).
+func distinctMillis() func() time.Time {
+	var mu sync.Mutex
+	var last time.Time
+	return func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now()
+		if now.Sub(last) < time.Millisecond { // a millisecond apart: their stamps differ
+			now = last.Add(time.Millisecond)
+		}
+		last = now
+		return now
+	}
+}
+
 // newTestEnvWith builds a test env, optionally mutating the config before the
 // handler is constructed (needed for routes registered at build time, e.g. the
 // demo root redirect).
@@ -53,7 +73,7 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	t.Cleanup(func() { db.Close() })
 
 	authSvc := auth.New(db, time.Now)
-	cat := catalog.New(db, time.Now)
+	cat := catalog.New(db, distinctMillis())
 	admin, _ := authSvc.CreateUser(ctx, "admin", "admin-password", auth.RoleAdmin)
 	code, _ := authSvc.CreateAuthCode(ctx, admin.ID, "test", 0, 0)
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -46,19 +45,15 @@ func (a *API) handlePutRating(w http.ResponseWriter, r *http.Request) {
 	var typeErr *json.UnmarshalTypeError
 	switch err := decodeJSON(r, &body, 0); {
 	case errors.As(err, &typeErr) && typeErr.Field == "rating", err == nil && body.Rating == nil:
-		writeError(w, http.StatusBadRequest, msgInvalidRating) // 4.5, "4", null or absent
+		writeError(w, http.StatusBadRequest, catalog.ErrInvalidRating.Error()) // 4.5, "4", null or absent
 		return
 	case err != nil:
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	// Checked before bookAt, which may read an unindexed book from disk.
-	switch _, err := catalog.CheckRating(*body.Rating, body.Note); {
-	case errors.Is(err, catalog.ErrInvalidRating):
-		writeError(w, http.StatusBadRequest, msgInvalidRating)
-		return
-	case errors.Is(err, catalog.ErrRatingNoteTooLong):
-		writeError(w, http.StatusBadRequest, "the note is longer than 500 characters")
+	if _, err := catalog.CheckRating(*body.Rating, body.Note); err != nil {
+		a.writeCatalogError(w, err, "check rating failed", "could not save rating")
 		return
 	}
 	book, ok := a.bookAt(w, r, lib, scope, path, "no book at this path", "could not save rating")
@@ -73,8 +68,6 @@ func (a *API) handlePutRating(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rating": saved})
 }
-
-const msgInvalidRating = "rating must be a whole number from 1 to 5"
 
 // handleDeleteRating clears the caller's rating of the book at ?path= (exact).
 // Idempotent: 204 whether or not there was one.
@@ -95,12 +88,11 @@ func (a *API) handleDeleteRating(w http.ResponseWriter, r *http.Request) {
 // still reach, newest first, each with its book when indexed: {"ratings": [...]}.
 // A rating under a since-revoked share stays stored but is not returned.
 func (a *API) handleListRatings(w http.ResponseWriter, r *http.Request) {
-	u := userFrom(r.Context())
-	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
-	if err != nil {
-		a.writeCatalogError(w, err, "rating scopes failed", "could not load ratings")
+	scopes, ok := a.callerScopes(w, r, "could not load ratings")
+	if !ok {
 		return
 	}
+	u := userFrom(r.Context())
 	ratings, err := a.cat.ListRatings(r.Context(), u.ID, scopes)
 	if err != nil {
 		a.writeCatalogError(w, err, "list ratings failed", "could not load ratings")

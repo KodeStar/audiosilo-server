@@ -36,10 +36,45 @@ func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, 
 	if err != nil {
 		return nil, scope, http.StatusInternalServerError, "access check failed"
 	}
+	return a.scopedLibrary(r, scope)
+}
+
+// callerScopes is the caller's current access in every library (UserScopes), for
+// a cross-library read or a request that reads more than one library; on a
+// failure it answers 500 with msg and returns false.
+func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) ([]catalog.Scope, bool) {
+	u := userFrom(r.Context())
+	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
+	if err != nil {
+		a.log.Warn("load user scopes failed", "user", u.ID, "err", err)
+		writeError(w, http.StatusInternalServerError, msg)
+		return nil, false
+	}
+	return scopes, true
+}
+
+// scopeIn is the caller's scope in one library out of their callerScopes, as
+// UserScope gives it: an admin's is AllowAll (for any id: an unknown library is
+// then a 404, not a 403), anyone else's the library's entry or none.
+func scopeIn(r *http.Request, scopes []catalog.Scope, libraryID int64) catalog.Scope {
+	if userFrom(r.Context()).Role == auth.RoleAdmin {
+		return catalog.Scope{LibraryID: libraryID, AllowAll: true}
+	}
+	for _, s := range scopes {
+		if s.LibraryID == libraryID {
+			return s
+		}
+	}
+	return catalog.Scope{LibraryID: libraryID}
+}
+
+// scopedLibrary loads the library the caller's scope is for: 403 when the scope
+// grants nothing, 404 for no such library.
+func (a *API) scopedLibrary(r *http.Request, scope catalog.Scope) (*catalog.Library, catalog.Scope, int, string) {
 	if !scope.AllowAll && len(scope.Paths) == 0 {
 		return nil, scope, http.StatusForbidden, "no access to this library"
 	}
-	lib, err := a.cat.GetLibrary(r.Context(), libraryID)
+	lib, err := a.cat.GetLibrary(r.Context(), scope.LibraryID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil, scope, http.StatusNotFound, "library not found"
 	}
@@ -83,12 +118,28 @@ func (a *API) authorizedScope(r *http.Request) (*catalog.Library, string, catalo
 }
 
 // scopedPath is authorizedScope for a library id and a raw path the caller got
-// from elsewhere (a request body: POST /me/queue, /me/collections/{id}/items).
+// from elsewhere.
 func (a *API) scopedPath(r *http.Request, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
 	lib, scope, status, msg := a.libraryScope(r, libraryID)
 	if status != 0 {
 		return nil, "", scope, status, msg
 	}
+	return pathInScope(lib, scope, rawPath)
+}
+
+// scopedPathIn is scopedPath with the caller's scopes already loaded
+// (callerScopes): a request body's book (POST /me/queue,
+// /me/collections/{id}/items) whose answer reads the caller's lists with them.
+func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID int64, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
+	lib, scope, status, msg := a.scopedLibrary(r, scopeIn(r, scopes, libraryID))
+	if status != 0 {
+		return nil, "", scope, status, msg
+	}
+	return pathInScope(lib, scope, rawPath)
+}
+
+// pathInScope cleans rawPath and checks scope allows it (400 empty, 403 outside).
+func pathInScope(lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
 	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
 	// to nothing ("", ".", "/", "Author/..") addresses no content.

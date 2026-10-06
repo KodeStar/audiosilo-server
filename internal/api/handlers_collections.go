@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
@@ -24,22 +23,21 @@ func collectionID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, ok
 }
 
-// refuseDemo answers 403 for a demo account and reports whether it did (or
-// failed to tell): a public demo must not list the server's usernames, nor share
-// with them.
-func (a *API) refuseDemo(w http.ResponseWriter, r *http.Request) bool {
-	u := userFrom(r.Context())
-	full, err := a.auth.GetUser(r.Context(), u.ID)
-	if err != nil {
-		a.log.Warn("load account failed", "user", u.ID, "err", err)
-		writeError(w, http.StatusInternalServerError, "could not load account")
-		return true
+// codeNotOwner is a viewer's write to a collection shared with them.
+const codeNotOwner = "not_owner"
+
+// writeCollectionError maps a collections error: a collection the caller can't
+// open 404, a viewer's write 403 not_owner; anything else as writeCatalogError
+// (the limits and bad input, else a logged 500).
+func (a *API) writeCollectionError(w http.ResponseWriter, err error, op, generic string, logKV ...any) {
+	switch {
+	case errors.Is(err, catalog.ErrNotFound):
+		writeError(w, http.StatusNotFound, "collection not found")
+	case errors.Is(err, catalog.ErrNotOwner):
+		writeErrorCode(w, http.StatusForbidden, codeNotOwner, "only the collection's owner can change it")
+	default:
+		a.writeCatalogError(w, err, op, generic, logKV...)
 	}
-	if full.IsDemo {
-		writeError(w, http.StatusForbidden, "not available for demo accounts")
-		return true
-	}
-	return false
 }
 
 // handleListCollections answers the caller's collections: owned first, then
@@ -52,7 +50,7 @@ func (a *API) handleListCollections(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	cols, err := a.cat.Collections(r.Context(), u.ID, scopes)
 	if err != nil {
-		a.writeListError(w, err, "list collections failed", "could not load collections", "user", u.ID)
+		a.writeCollectionError(w, err, "list collections failed", "could not load collections", "user", u.ID)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"collections": cols})
@@ -71,7 +69,7 @@ func (a *API) handleCreateCollection(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	col, err := a.cat.CreateCollection(r.Context(), u.ID, in.Name, in.Description)
 	if err != nil {
-		a.writeListError(w, err, "create collection failed", "could not create the collection", "user", u.ID)
+		a.writeCollectionError(w, err, "create collection failed", "could not create the collection", "user", u.ID)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"collection": col})
@@ -83,20 +81,18 @@ func (a *API) handleGetCollection(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.writeCollectionDetail(w, r, id)
+	if scopes, ok := a.callerScopes(w, r, "could not load the collection"); ok {
+		a.writeCollectionDetail(w, r, id, scopes)
+	}
 }
 
 // writeCollectionDetail answers {collection, items} as GET /me/collections/{id}
-// does (the item writes answer the same).
-func (a *API) writeCollectionDetail(w http.ResponseWriter, r *http.Request, id int64) {
-	scopes, ok := a.callerScopes(w, r, "could not load the collection")
-	if !ok {
-		return
-	}
+// does (the item writes answer the same), as the caller (scopes) sees it.
+func (a *API) writeCollectionDetail(w http.ResponseWriter, r *http.Request, id int64, scopes []catalog.Scope) {
 	u := userFrom(r.Context())
 	col, items, err := a.cat.CollectionDetail(r.Context(), id, u.ID, scopes)
 	if err != nil {
-		a.writeListError(w, err, "load collection failed", "could not load the collection", "collection", id)
+		a.writeCollectionError(w, err, "load collection failed", "could not load the collection", "collection", id)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"collection": col, "items": items})
@@ -111,7 +107,7 @@ func (a *API) writeCollection(w http.ResponseWriter, r *http.Request, id int64) 
 	u := userFrom(r.Context())
 	col, err := a.cat.Collection(r.Context(), id, u.ID, scopes)
 	if err != nil {
-		a.writeListError(w, err, "load collection failed", "could not load the collection", "collection", id)
+		a.writeCollectionError(w, err, "load collection failed", "could not load the collection", "collection", id)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"collection": col})
@@ -134,7 +130,7 @@ func (a *API) handleUpdateCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	u := userFrom(r.Context())
 	if err := a.cat.UpdateCollection(r.Context(), id, u.ID, in.Name, in.Description); err != nil {
-		a.writeListError(w, err, "update collection failed", "could not save the collection", "collection", id)
+		a.writeCollectionError(w, err, "update collection failed", "could not save the collection", "collection", id)
 		return
 	}
 	a.writeCollection(w, r, id)
@@ -149,7 +145,7 @@ func (a *API) handleDeleteCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	u := userFrom(r.Context())
 	if err := a.cat.DeleteCollection(r.Context(), id, u.ID); err != nil {
-		a.writeListError(w, err, "delete collection failed", "could not delete the collection", "collection", id)
+		a.writeCollectionError(w, err, "delete collection failed", "could not delete the collection", "collection", id)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -173,15 +169,16 @@ func (a *API) handleSetCollectionItems(w http.ResponseWriter, r *http.Request) {
 	}
 	u := userFrom(r.Context())
 	if err := a.cat.SetCollectionItems(r.Context(), id, u.ID, in.Items, scopes); err != nil {
-		a.writeListError(w, err, "set collection items failed", "could not save the collection", "collection", id)
+		a.writeCollectionError(w, err, "set collection items failed", "could not save the collection", "collection", id)
 		return
 	}
-	a.writeCollectionDetail(w, r, id)
+	a.writeCollectionDetail(w, r, id, scopes)
 }
 
 // handleAddCollectionItem adds one book to a collection (owner only; the queue's
-// add semantics) and answers the detail. Who may write is settled before the
-// book is resolved, so a stranger or a viewer triggers no read or indexing.
+// add semantics; full is 409 collection_full) and answers the detail. Who may
+// write is settled before the book is resolved, so a stranger or a viewer
+// triggers no read or indexing.
 func (a *API) handleAddCollectionItem(w http.ResponseWriter, r *http.Request) {
 	id, ok := collectionID(w, r)
 	if !ok {
@@ -189,24 +186,18 @@ func (a *API) handleAddCollectionItem(w http.ResponseWriter, r *http.Request) {
 	}
 	u := userFrom(r.Context())
 	if err := a.cat.RequireCollectionOwner(r.Context(), id, u.ID); err != nil {
-		a.writeListError(w, err, "load collection failed", "could not add the book", "collection", id)
+		a.writeCollectionError(w, err, "load collection failed", "could not add the book", "collection", id)
 		return
 	}
-	ref, position, ok := a.decodeListAdd(w, r)
+	ref, position, scopes, ok := a.decodeListAdd(w, r)
 	if !ok {
 		return
 	}
-	err := a.cat.AddCollectionItem(r.Context(), id, u.ID, ref, position)
-	if errors.Is(err, catalog.ErrListFull) {
-		writeErrorCode(w, http.StatusConflict, codeCollectionFull,
-			"a collection holds at most "+strconv.Itoa(catalog.MaxCollectionItems)+" books")
+	if err := a.cat.AddCollectionItem(r.Context(), id, u.ID, ref, position); err != nil {
+		a.writeCollectionError(w, err, "add collection item failed", "could not add the book", "collection", id)
 		return
 	}
-	if err != nil {
-		a.writeListError(w, err, "add collection item failed", "could not add the book", "collection", id)
-		return
-	}
-	a.writeCollectionDetail(w, r, id)
+	a.writeCollectionDetail(w, r, id, scopes)
 }
 
 // handleRemoveCollectionItem takes a book off a collection (owner only;
@@ -222,7 +213,7 @@ func (a *API) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Request)
 	}
 	u := userFrom(r.Context())
 	if err := a.cat.RemoveCollectionItem(r.Context(), id, u.ID, ref); err != nil {
-		a.writeListError(w, err, "remove collection item failed", "could not remove the book", "collection", id)
+		a.writeCollectionError(w, err, "remove collection item failed", "could not remove the book", "collection", id)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -232,7 +223,7 @@ func (a *API) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Request)
 // never for a demo account).
 func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) {
 	id, ok := collectionID(w, r)
-	if !ok || a.refuseDemo(w, r) {
+	if !ok || a.nonDemoAccount(w, r) == nil {
 		return
 	}
 	var in struct {
@@ -244,7 +235,7 @@ func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) 
 	}
 	u := userFrom(r.Context())
 	if err := a.cat.SetCollectionShares(r.Context(), id, u.ID, in.UserIDs); err != nil {
-		a.writeListError(w, err, "set collection shares failed", "could not share the collection", "collection", id)
+		a.writeCollectionError(w, err, "set collection shares failed", "could not share the collection", "collection", id)
 		return
 	}
 	a.writeCollection(w, r, id)
@@ -253,13 +244,13 @@ func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) 
 // handleShareTargets lists who the caller may share a collection with (never for
 // a demo account).
 func (a *API) handleShareTargets(w http.ResponseWriter, r *http.Request) {
-	if a.refuseDemo(w, r) {
+	if a.nonDemoAccount(w, r) == nil {
 		return
 	}
 	u := userFrom(r.Context())
 	users, err := a.cat.ShareTargets(r.Context(), u.ID)
 	if err != nil {
-		a.writeListError(w, err, "list share targets failed", "could not load users", "user", u.ID)
+		a.writeCollectionError(w, err, "list share targets failed", "could not load users", "user", u.ID)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": users})
