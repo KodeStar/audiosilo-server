@@ -431,3 +431,65 @@ func TestWorkIDsCanceledWaiterKeepsFlight(t *testing.T) {
 		t.Fatalf("lookups = %d, want 1", got)
 	}
 }
+
+// TestCachedWorkID: the work id for an identifier from the in-memory cache only
+// - the enrichment first, then the "l:" lookup - with a cached "no match" as
+// ("", true). A miss, a cached failure, a book without identifiers and a row
+// only the persistent store holds all answer ("", false), and nothing ever
+// reaches the upstream or the store.
+func TestCachedWorkID(t *testing.T) {
+	m := fullMock()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	store := newMemStore()
+	svc := NewService(srv.URL, nil)
+	svc.SetStore(store)
+	ctx := context.Background()
+
+	if id, ok := svc.CachedWorkID(ctx, "B00FLIJJSY", ""); ok || id != "" {
+		t.Fatalf("cold = %q, %v", id, ok)
+	}
+	if id, ok := svc.CachedWorkID(ctx, "", ""); ok || id != "" {
+		t.Fatalf("no identifiers = %q, %v", id, ok)
+	}
+	// An enrichment answers it, by any spelling of the identifier.
+	if _, err := svc.Enrich(ctx, "B00FLIJJSY", ""); err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := svc.CachedWorkID(ctx, " b00flijjsy ", ""); !ok || id != "the-martian" {
+		t.Fatalf("enriched = %q, %v", id, ok)
+	}
+	// A cached "no match" enrichment.
+	svc.cache.putMiss(nsISBN.key("9780000000002"), notFoundTTL)
+	if id, ok := svc.CachedWorkID(ctx, "", "9780000000002"); !ok || id != "" {
+		t.Fatalf("cached no match = %q, %v", id, ok)
+	}
+	// The console's lookup key space: an answer, and a failure (not an answer).
+	cachePut(svc.cache, nsLookup.key(nsASIN.key("B0LOOKED")), &upstreamLookup{Work: &upstreamWorkCard{ID: "looked"}}, positiveTTL)
+	if id, ok := svc.CachedWorkID(ctx, "B0LOOKED", ""); !ok || id != "looked" {
+		t.Fatalf("lookup entry = %q, %v", id, ok)
+	}
+	svc.cache.putError(nsLookup.key(nsASIN.key("B0FAILED")), errors.New("down"))
+	if id, ok := svc.CachedWorkID(ctx, "B0FAILED", ""); ok || id != "" {
+		t.Fatalf("cached failure = %q, %v", id, ok)
+	}
+	// A row only the store holds answers too (a restart, an eviction), stale
+	// or not: a work id does not age; a stored "no match" is an answer; a row of
+	// another format or source is not.
+	store.put(StoredEntry{Key: nsASIN.key("B0STORED"), Version: storeVersion, Source: srv.URL,
+		Payload: []byte(`{"matched":true,"work":{"id":"stored"}}`), Expires: time.Now().Add(-time.Hour)})
+	store.put(StoredEntry{Key: nsASIN.key("B0NOMATCH"), Version: storeVersion, Source: srv.URL, Expires: time.Now().Add(time.Hour)})
+	store.put(StoredEntry{Key: nsASIN.key("B0OTHER"), Version: storeVersion + 1, Source: srv.URL,
+		Payload: []byte(`{"matched":true,"work":{"id":"other"}}`), Expires: time.Now().Add(time.Hour)})
+	for asin, want := range map[string]struct {
+		id string
+		ok bool
+	}{"B0STORED": {"stored", true}, "B0NOMATCH": {"", true}, "B0OTHER": {"", false}} {
+		if id, ok := svc.CachedWorkID(ctx, asin, ""); id != want.id || ok != want.ok {
+			t.Fatalf("store row %s = %q, %v; want %q, %v", asin, id, ok, want.id, want.ok)
+		}
+	}
+	if m.lookupHits.Load() != 1 {
+		t.Fatalf("lookups = %d, want only the Enrich's", m.lookupHits.Load())
+	}
+}

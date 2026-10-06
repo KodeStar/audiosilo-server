@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -15,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
 // handleListLibraries lists libraries the caller can reach (via any share).
@@ -47,6 +47,22 @@ func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, 
 		return nil, scope, http.StatusInternalServerError, "could not load library"
 	}
 	return lib, scope, 0, ""
+}
+
+// browseScope resolves {id} to the library and the caller's scope in it, writing
+// the error (400 bad id, 403 no access, 404 unknown library) when it can't.
+func (a *API) browseScope(w http.ResponseWriter, r *http.Request) (*catalog.Library, catalog.Scope, bool) {
+	id, ok := pathInt(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library id")
+		return nil, catalog.Scope{}, false
+	}
+	lib, scope, status, msg := a.libraryScope(r, id)
+	if status != 0 {
+		writeError(w, status, msg)
+		return nil, catalog.Scope{}, false
+	}
+	return lib, scope, true
 }
 
 // authorizedPath resolves {id} + ?path=, checks the path is within the caller's
@@ -109,17 +125,30 @@ func (a *API) bookForPath(ctx context.Context, lib *catalog.Library, scope catal
 	return b, nil
 }
 
+// bookAt is bookForPath for a handler: on a failure it writes the answer and
+// returns false. A book above the path outside scope is the 403 msgNoPathAccess,
+// no book at the path is a 404 notFound, anything else writeCatalogError's
+// answer with generic.
+func (a *API) bookAt(w http.ResponseWriter, r *http.Request, lib *catalog.Library, scope catalog.Scope, path, notFound, generic string) (*catalog.Book, bool) {
+	book, err := a.bookForPath(r.Context(), lib, scope, path)
+	switch {
+	case errors.Is(err, library.ErrNotAllowed):
+		writeError(w, http.StatusForbidden, msgNoPathAccess)
+	case errors.Is(err, library.ErrNotIndexable):
+		writeError(w, http.StatusNotFound, notFound)
+	case err != nil:
+		a.writeCatalogError(w, err, "load book for path failed", generic, "library", lib.ID, "path", path)
+	default:
+		return book, true
+	}
+	return nil, false
+}
+
 // handleBrowseFS serves the filtered filesystem view: the real directory tree,
 // scoped to the caller's share path rules, requiring no prior indexing.
 func (a *API) handleBrowseFS(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
+	lib, scope, ok := a.browseScope(w, r)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid library id")
-		return
-	}
-	lib, scope, status, msg := a.libraryScope(r, id)
-	if status != 0 {
-		writeError(w, status, msg)
 		return
 	}
 	var allow func(string) bool
@@ -171,16 +200,9 @@ func (a *API) annotateWithBooks(r *http.Request, libraryID int64, listing *libra
 			a.log.Warn("annotate fs split discs failed", "library", libraryID, "err", err)
 		}
 	}
+	library.MarkBooks(listing.Entries, books)
 	for i := range listing.Entries {
 		e := &listing.Entries[i]
-		if b, ok := books[e.Path]; ok {
-			e.IsBook = true
-			e.Title = b.Title
-			e.Author = b.Author
-			e.Series = b.Series
-			e.SeriesIndex = b.SeriesIndex
-			e.Duration = b.Duration
-		}
 		if m, ok := overrides[e.Path]; ok {
 			e.Override = m
 		}
@@ -191,27 +213,22 @@ func (a *API) annotateWithBooks(r *http.Request, libraryID int64, listing *libra
 // handleListBooks serves the computed/hybrid view from the index, scoped to the
 // caller's share path rules.
 func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
+	lib, scope, ok := a.browseScope(w, r)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid library id")
-		return
-	}
-	_, scope, status, msg := a.libraryScope(r, id)
-	if status != 0 {
-		writeError(w, status, msg)
 		return
 	}
 	page, err := a.cat.ListBooks(r.Context(), catalog.ListOptions{
-		LibraryID: id,
+		LibraryID: lib.ID,
 		Author:    r.URL.Query().Get("author"),
 		Series:    r.URL.Query().Get("series"),
+		Narrator:  r.URL.Query().Get("narrator"),
 		Sort:      r.URL.Query().Get("sort"),
 		Limit:     queryInt(r, "limit", 50),
 		Cursor:    r.URL.Query().Get("cursor"),
 		Scope:     &scope,
 	})
 	if err != nil {
-		a.writeCatalogError(w, err, "list books failed", "could not load books", "library", id)
+		a.writeCatalogError(w, err, "list books failed", "could not load books", "library", lib.ID)
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
@@ -253,27 +270,21 @@ func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"books": books})
 }
 
-// handleItem returns full book detail (metadata + files + chapters) for a path,
-// indexing it on demand if needed.
+// handleItem returns full book detail (metadata + files + chapters + description)
+// for a path, indexing it on demand if needed.
 func (a *API) handleItem(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
-	book, err := a.bookForPath(r.Context(), lib, scope, path)
-	switch {
-	case errors.Is(err, library.ErrNotAllowed):
-		writeError(w, http.StatusForbidden, msgNoPathAccess)
-	case errors.Is(err, library.ErrNotIndexable):
-		writeError(w, http.StatusNotFound, "no book at that path")
-	case err != nil:
-		a.writeCatalogError(w, err, "load book failed", "could not load book", "library", lib.ID, "path", path)
-	default:
-		dp := media.DirectPlayable(book.Codec)
-		book.DirectPlayable = &dp
-		writeJSON(w, http.StatusOK, book)
+	book, ok := a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book")
+	if !ok {
+		return
 	}
+	dp := media.DirectPlayable(book.Codec)
+	book.DirectPlayable = &dp
+	writeJSON(w, http.StatusOK, book)
 }
 
 // handleChapters returns a book's normalized playable units. Each chapter
@@ -285,16 +296,8 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	book, err := a.bookForPath(r.Context(), lib, scope, path)
-	switch {
-	case errors.Is(err, library.ErrNotAllowed):
-		writeError(w, http.StatusForbidden, msgNoPathAccess)
-		return
-	case errors.Is(err, library.ErrNotIndexable):
-		writeError(w, http.StatusNotFound, "no book at that path")
-		return
-	case err != nil:
-		a.writeCatalogError(w, err, "load chapters failed", "could not load chapters", "library", lib.ID, "path", path)
+	book, ok := a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load chapters")
+	if !ok {
 		return
 	}
 	// Emit [] rather than null for empty files/chapters so the envelope matches the
@@ -335,10 +338,7 @@ func (a *API) serveCustomCover(w http.ResponseWriter, r *http.Request, libID int
 	if err != nil {
 		return false, err
 	}
-	if inm := r.Header.Get("If-None-Match"); inm != "" && strings.Contains(inm, coverETag(info.UpdatedAt)) {
-		w.Header().Set("Cache-Control", "private, no-cache")
-		w.Header().Set("ETag", coverETag(info.UpdatedAt))
-		w.WriteHeader(http.StatusNotModified)
+	if (conditional{etag: coverETag(info.UpdatedAt), cacheControl: customCoverCache}).notModified(w, r) {
 		return true, nil
 	}
 	cv, err := a.cat.Cover(r.Context(), libID, path)
@@ -348,13 +348,44 @@ func (a *API) serveCustomCover(w http.ResponseWriter, r *http.Request, libID int
 	if err != nil {
 		return false, err
 	}
-	w.Header().Set("Cache-Control", "private, no-cache")
-	w.Header().Set("ETag", coverETag(cv.UpdatedAt))
-	w.Header().Set("Content-Type", cv.MIME)
-	// A zero modtime: no Last-Modified (see above); ServeContent still honours the
-	// ETag for conditional and Range requests.
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(cv.Data))
+	conditional{etag: coverETag(cv.UpdatedAt), cacheControl: customCoverCache}.serve(w, r, cv.MIME, cv.Data)
 	return true, nil
+}
+
+// customCoverCache is a custom cover's Cache-Control (and its thumbnails'): it can
+// be replaced at any moment, so it is revalidated every time.
+const customCoverCache = "private, no-cache"
+
+// conditional is a response revalidated by its ETag alone: no Last-Modified (a
+// zero modtime), so a validator never matches another source's file dates.
+type conditional struct {
+	etag, cacheControl string
+}
+
+// notModified answers r with a 304 when its If-None-Match names the ETag (as
+// http.ServeContent in serve would), reporting whether it did, so the body need
+// not be read at all.
+func (c conditional) notModified(w http.ResponseWriter, r *http.Request) bool {
+	inm := r.Header.Get("If-None-Match")
+	if inm == "" || !spa.ETagListMatches(inm, c.etag) {
+		return false
+	}
+	c.setHeaders(w)
+	w.WriteHeader(http.StatusNotModified)
+	return true
+}
+
+// serve sends body; ServeContent still honours the ETag for conditional and
+// Range requests.
+func (c conditional) serve(w http.ResponseWriter, r *http.Request, contentType string, body []byte) {
+	c.setHeaders(w)
+	w.Header().Set("Content-Type", contentType)
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
+}
+
+func (c conditional) setHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", c.cacheControl)
+	w.Header().Set("ETag", c.etag)
 }
 
 // answerCustomCover answers r from the custom cover at path if there is one, and
@@ -423,26 +454,23 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 
 // handleCover serves a book's cover for a path: a custom cover uploaded in the
 // admin console, else a sibling cover file if indexed, else embedded art from the
-// book's primary audio file.
+// book's primary audio file. With ?size= it is a JPEG thumbnail of that art
+// instead (handleCoverThumbnail).
 func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
 		return
 	}
+	if r.URL.Query().Has("size") {
+		a.handleCoverThumbnail(w, r, lib, path, scope)
+		return
+	}
 	if a.answerCustomCover(w, r, lib.ID, path) {
 		return
 	}
-	book, err := a.bookForPath(r.Context(), lib, scope, path)
-	switch {
-	case errors.Is(err, library.ErrNotAllowed):
-		writeError(w, http.StatusForbidden, msgNoPathAccess)
-		return
-	case errors.Is(err, library.ErrNotIndexable):
-		writeError(w, http.StatusNotFound, "no cover")
-		return
-	case err != nil:
-		a.writeCatalogError(w, err, "load cover failed", "could not load cover", "library", lib.ID, "path", path)
+	book, ok := a.bookAt(w, r, lib, scope, path, "no cover", "could not load cover")
+	if !ok {
 		return
 	}
 	// The lookup above was by the requested path. A part path resolves to its folder

@@ -474,7 +474,11 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 			return err
 		}
 	}
-	return nil
+	// The custom cover moved: each path's book now has other art.
+	if err := refreshCoverArt(ctx, tx, libraryID, oldPath); err != nil {
+		return err
+	}
+	return refreshCoverArt(ctx, tx, libraryID, newPath)
 }
 
 // AddBookmark stores a bookmark and returns it with its ID.

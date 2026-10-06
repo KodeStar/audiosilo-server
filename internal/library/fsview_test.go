@@ -249,3 +249,49 @@ func TestBrowseFSAllowFilter(t *testing.T) {
 		t.Fatalf("second page NextOffset = %d, want 0 (all permitted entries consumed)", page1.NextOffset)
 	}
 }
+
+// TestListDirIsBrowseFSUnpaged: ListDir is the whole listing BrowseFS pages over
+// (same entries, same order, same filters), without the files' sizes.
+func TestListDirIsBrowseFSUnpaged(t *testing.T) {
+	root := t.TempDir()
+	rel := writeAudioFiles(t, root, "Book", 7)
+	for _, d := range []string{"b-dir", "A-dir", "hidden-by-allow"} {
+		if err := os.MkdirAll(filepath.Join(root, rel, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, rel, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	allow := func(p string) bool { return !strings.HasSuffix(p, "hidden-by-allow") }
+	all, err := ListDir(root, rel, allow, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paged []Entry
+	for offset := 0; ; {
+		listing, err := BrowseFS(root, rel, offset, 3, allow, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		paged = append(paged, listing.Entries...)
+		if listing.NextOffset == 0 {
+			break
+		}
+		offset = listing.NextOffset
+	}
+	if len(all) != 9 || len(paged) != len(all) {
+		t.Fatalf("ListDir = %d entries, BrowseFS = %d; want 9 each (2 folders, 7 files)", len(all), len(paged))
+	}
+	if !all[0].IsDir || all[0].Name != "A-dir" || all[1].Name != "b-dir" {
+		t.Fatalf("folders first, by folded name: %+v", all[:2])
+	}
+	for i, e := range all {
+		if e.Path != paged[i].Path || e.IsDir != paged[i].IsDir || e.IsAudio != paged[i].IsAudio {
+			t.Fatalf("entry %d: ListDir %+v, BrowseFS %+v", i, e, paged[i])
+		}
+		if e.Size != 0 || (!e.IsDir && paged[i].Size == 0) {
+			t.Fatalf("entry %d sizes: ListDir %d, BrowseFS %d; want none and the file's", i, e.Size, paged[i].Size)
+		}
+	}
+}

@@ -607,7 +607,7 @@ func TestPathFilterMatchesScopeAllows(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 
-	rules := []string{"Sci_Fi", "Fantasy/Sanderson", "100%Pure"}
+	rules := []string{"Sci_Fi", "Fantasy/Sanderson", "100%Pure", `Back\Slash`, "Saga/1"}
 	paths := []string{
 		"Sci_Fi/A/Dune.m4b",         // under a rule with a LIKE wildcard ('_')
 		"SciXFi/B/Leak.m4b",         // wildcard-matching sibling - must NOT match
@@ -616,6 +616,14 @@ func TestPathFilterMatchesScopeAllows(t *testing.T) {
 		"Fantasy/Hobb/Other.m4b",    // different subtree - must NOT match
 		"100%Pure/C/Yes.m4b",        // under a rule with a LIKE wildcard ('%')
 		"100XPure/D/No.m4b",         // '%'-matching sibling - must NOT match
+		`Back\Slash/E/Yes.m4b`,      // under a rule holding the old escape char
+		"Saga/1",                    // the granted book itself
+		"Saga/1/Part.m4b",           // under it
+		"saga/1/Secret.m4b",         // a case variant (Linux) - must NOT match
+		"sci_fi/A/Leak.m4b",         // a case variant - must NOT match
+		"Fantasy/sanderson/No.m4b",  // a case variant - must NOT match
+		"Saga/10/No.m4b",            // a sibling sharing the prefix - must NOT match
+		"Saga/1.5/No.m4b",           // a sibling sorting just after "Saga/1" - must NOT match
 	}
 	for i, p := range paths {
 		c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, Title: fmt.Sprintf("T%d", i), Author: "A"})
@@ -677,5 +685,35 @@ func TestDatabaseInfo(t *testing.T) {
 	}
 	if info.Bytes <= 0 || !strings.HasPrefix(info.Schema, "00") || !strings.HasSuffix(info.Schema, ".sql") {
 		t.Fatalf("DatabaseInfo = %+v", info)
+	}
+}
+
+// TestBooksByPathsManyPaths: a whole folder's paths (GET /next lists the folder
+// unpaged) are read in chunks, so no number of paths can exceed SQLite's
+// bound-parameter limit, and every indexed one comes back whichever chunk it is in.
+func TestBooksByPathsManyPaths(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	paths := make([]string, 40000)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("Flat/%05d.m4b", i)
+	}
+	indexed := []string{paths[0], paths[499], paths[500], paths[39999]}
+	for _, p := range indexed {
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, Title: p, AddedAt: "2024-01-01T00:00:00Z"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := c.BooksByPaths(ctx, lib.ID, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(indexed) {
+		t.Fatalf("BooksByPaths = %d books, want %d", len(got), len(indexed))
+	}
+	for _, p := range indexed {
+		if b, ok := got[p]; !ok || b.RelPath != p {
+			t.Fatalf("BooksByPaths is missing %q", p)
+		}
 	}
 }

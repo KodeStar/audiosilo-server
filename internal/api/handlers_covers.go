@@ -11,13 +11,17 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 )
 
-// Cover thumbnails for the admin console's grids (POST /admin/covers). The console
+// Cover thumbnails, for the player (GET /libraries/{id}/cover?size=, below) and
+// the admin console's grids (POST /admin/covers); both make them in one place
+// (coverArt, coverThumbnail), which also records the cover's colour on a book that
+// has none for its current art (catalog.RecordCoverColors). The console
 // can't load covers as plain <img> URLs: its session is a full-privilege admin
 // bearer token, which must never ride in a URL (proxy logs, history), and its CSP
 // allows images only from 'self' and data:. So it fetches covers itself and shows
@@ -33,8 +37,8 @@ const (
 	defaultThumbSize = 320
 	// maxSidecarBytes bounds a sidecar image read whole to thumbnail it.
 	maxSidecarBytes = 32 << 20
-	// thumbCacheBytes bounds the in-memory thumbnail cache (~27 KB a cover as a
-	// base64 data: URL).
+	// thumbCacheBytes bounds the in-memory thumbnail cache (~20 KB a 320px cover
+	// as JPEG).
 	thumbCacheBytes = 48 << 20
 	// maxConcurrentThumbnails caps decodes across all requests: a large cover
 	// decodes to tens of megabytes.
@@ -53,8 +57,9 @@ type coverThumb struct {
 	Data      string `json:"data"`
 }
 
-// maxCoverReads bounds one request's concurrent art reads (a slow network mount
-// shouldn't get 60 at once); decodes are bounded across requests by thumbSem.
+// maxCoverReads bounds the art reads in progress across all requests (a slow
+// network mount shouldn't get a grid's 60 at once), and so how many images are
+// held in memory waiting to be decoded; decodes are bounded by thumbSem.
 const maxCoverReads = 8
 
 // handleAdminCovers serves POST /admin/covers {"books":[{library_id,path}],"size"}.
@@ -109,7 +114,7 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]coverThumb, len(req.Books))
-	reads := make(chan struct{}, maxCoverReads)
+	recs := make([]*catalog.CoverColorRecord, len(req.Books))
 	var wg sync.WaitGroup
 	for i, ref := range req.Books {
 		out[i] = coverThumb{LibraryID: ref.LibraryID, Path: ref.Path}
@@ -118,40 +123,148 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 			continue // an unknown library, or no book indexed at the path: no art
 		}
 		lib := byID[ref.LibraryID]
-		wg.Go(func() { out[i].Data = a.coverThumbnail(ctx, lib, paths[i], src, req.Size, reads) })
+		wg.Go(func() {
+			art := a.coverArt(ctx, lib, paths[i], src)
+			if art == nil {
+				return
+			}
+			// An image that can't be read is "" for now (not cached, so the next
+			// page load tries again); one that can't be decoded is "" for good.
+			jpg, rec, err := a.coverThumbnail(ctx, lib, paths[i], src, art, req.Size)
+			if err != nil || jpg == nil {
+				return
+			}
+			out[i].Data = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpg)
+			recs[i] = rec
+		})
 	}
 	wg.Wait()
+	a.recordCoverColors(ctx, recs...)
 	writeJSON(w, http.StatusOK, map[string]any{"covers": out})
 }
 
+// handleCoverThumbnail serves GET /libraries/{id}/cover?size= for a path the
+// caller's scope allows: the cover of the book at the path (else of the book
+// holding it, bookForPath, with its 403/404) as a JPEG thumbnail of one of
+// thumbSizes, from the same art, cache and decode bound as POST /admin/covers.
+// The ETag is the art's version and the size, so revalidating an unchanged cover
+// is a 304 with nothing read; a custom cover is revalidated each time (it can be
+// replaced at any moment), file art is fresh for a day like full art.
+func (a *API) handleCoverThumbnail(w http.ResponseWriter, r *http.Request, lib *catalog.Library, path string, scope catalog.Scope) {
+	size, err := strconv.Atoi(r.URL.Query().Get("size"))
+	if err != nil || !slices.Contains(thumbSizes, size) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("size must be one of %v", thumbSizes))
+		return
+	}
+	ctx := r.Context()
+	sources, err := a.cat.CoverSources(ctx, lib.ID, []string{path})
+	if err != nil {
+		a.writeCatalogError(w, err, "cover sources failed", "could not load cover", "library", lib.ID, "path", path)
+		return
+	}
+	src, ok := sources[path]
+	if !ok {
+		// No book indexed at the path itself: a part path, a disc folder, or a
+		// book not indexed yet.
+		book, found := a.bookAt(w, r, lib, scope, path, "no cover", "could not load cover")
+		if !found {
+			return
+		}
+		path = book.RelPath
+		if sources, err = a.cat.CoverSources(ctx, lib.ID, []string{path}); err != nil {
+			a.writeCatalogError(w, err, "cover sources failed", "could not load cover", "library", lib.ID, "path", path)
+			return
+		}
+		src, ok = sources[path]
+	}
+	var art *artSource
+	if ok {
+		art = a.coverArt(ctx, lib, path, src)
+	}
+	if art == nil {
+		writeError(w, http.StatusNotFound, "no cover")
+		return
+	}
+	cond := conditional{etag: `"thumb-` + strconv.Itoa(size) + "-" + catalog.CoverVersion(art.version) + `"`,
+		cacheControl: "private, max-age=86400"}
+	if src.CustomAt != "" {
+		cond.cacheControl = customCoverCache
+	}
+	// A book without a colour for this art goes on to read it (usually from the
+	// thumbnail cache) even for a client revalidating its copy: conditional.serve
+	// still answers that with a 304, and the colour is not left missing for as
+	// long as every client holding the thumbnail only ever revalidates it.
+	if src.Colored && src.Art == art.version && cond.notModified(w, r) {
+		return
+	}
+	jpg, rec, err := a.coverThumbnail(ctx, lib, path, src, art, size)
+	switch {
+	case err != nil:
+		if ctx.Err() == nil {
+			a.log.Warn("cover thumbnail failed", "err", err, "library", lib.ID, "path", path)
+		}
+		writeError(w, http.StatusInternalServerError, "could not load cover")
+		return
+	case jpg == nil:
+		writeError(w, http.StatusNotFound, "no cover")
+		return
+	}
+	a.recordCoverColors(ctx, rec)
+	cond.serve(w, r, "image/jpeg", jpg)
+}
+
 // artSource is where a book's cover comes from: a version that changes whenever
-// the art does (the thumbnail cache key), and how to read the image. load returns
-// (nil, nil) when the source turns out to hold no art, and an error only for a
-// failure worth retrying (an unreadable network mount).
+// the art does (the thumbnail cache key, and the thumbnail's ETag), and how to
+// read the image. load returns (nil, nil) when the source turns out to hold no
+// art, and an error only for a failure worth retrying (an unreadable network
+// mount).
 type artSource struct {
 	version string
 	load    func() ([]byte, error)
 }
 
-// coverThumbnail returns the book's thumbnail as a data: URL, or "" when it has no
-// usable art. An image that can't be read is "" for now (not cached, so the next
-// page load tries again); one that can't be decoded is "" for good (cached).
-func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path string, src catalog.CoverSource, size int, reads chan struct{}) string {
-	art := a.coverArt(ctx, lib, path, src)
-	if art == nil {
-		return ""
-	}
+// coverThumbnail returns the art's JPEG thumbnail at size through the shared
+// cache, nil when the art can't be decoded (cached, so it isn't re-read every
+// time); an error is a read that failed or was cancelled, not cached, so the next
+// request tries again. Unless the book at path already holds a colour for this
+// very art (its cover art identity is the art's version, and it is coloured),
+// rec is the colour read from the thumbnail, to record (recordCoverColors); else
+// nil. The identity check is what notices a sidecar replaced in place, which no
+// index change shows.
+func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path string, src catalog.CoverSource,
+	art *artSource, size int) (jpg []byte, rec *catalog.CoverColorRecord, err error) {
 	key := strconv.FormatInt(lib.ID, 10) + "\x00" + path + "\x00" + strconv.Itoa(size) + "\x00" + art.version
-	if url, ok := a.thumbs.Get(key); ok {
-		return url
+	jpg, ok := a.thumbs.Get(key)
+	if !ok {
+		if jpg, err = a.makeThumbnail(ctx, lib, path, art, size); err != nil {
+			return nil, nil, err
+		}
+		a.thumbs.Put(key, jpg)
 	}
+	if jpg == nil || (src.Colored && src.Art == art.version) {
+		return jpg, nil, nil
+	}
+	palette, err := media.PaletteOf(jpg)
+	if err != nil {
+		a.log.Debug("cover palette failed", "err", err, "library", lib.ID, "path", path)
+		return jpg, nil, nil
+	}
+	return jpg, &catalog.CoverColorRecord{LibraryID: lib.ID, Path: path, Art: src.Art, Version: art.version, Color: palette}, nil
+}
+
+// makeThumbnail reads the art and scales it to size: nil when there is no art or
+// it can't be decoded, an error when the read failed or ctx ended. A coverReads
+// slot is held from the read to the end of the decode, so however many requests
+// want thumbnails, only that many images are ever held in memory (and read from
+// a slow mount at once); thumbSem, taken after it, bounds the decodes.
+func (a *API) makeThumbnail(ctx context.Context, lib *catalog.Library, path string, art *artSource, size int) ([]byte, error) {
 	select {
-	case reads <- struct{}{}:
+	case a.coverReads <- struct{}{}:
 	case <-ctx.Done():
-		return ""
+		return nil, ctx.Err()
 	}
+	defer func() { <-a.coverReads }()
 	raw, err := art.load()
-	<-reads
 	if errors.Is(err, media.ErrImageTooLarge) {
 		// An oversized sidecar stays oversized: no art (cached), not a retry that
 		// re-reads it on every page.
@@ -159,25 +272,53 @@ func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path str
 	}
 	if err != nil {
 		a.log.Debug("read cover art failed", "err", err, "library", lib.ID, "path", path)
-		return ""
+		return nil, err
 	}
-	url := ""
-	if raw != nil {
-		select {
-		case a.thumbSem <- struct{}{}:
-		case <-ctx.Done():
-			return ""
-		}
-		thumb, err := media.Thumbnail(raw, size)
-		<-a.thumbSem
-		if err != nil {
-			a.log.Debug("cover thumbnail failed", "err", err, "library", lib.ID, "path", path)
-		} else {
-			url = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(thumb)
+	if raw == nil {
+		return nil, nil
+	}
+	select {
+	case a.thumbSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	jpg, err := media.Thumbnail(raw, size)
+	<-a.thumbSem
+	if err != nil {
+		a.log.Debug("cover thumbnail failed", "err", err, "library", lib.ID, "path", path)
+		return nil, nil
+	}
+	return jpg, nil
+}
+
+// coverColorWriteTimeout bounds recording thumbnails' colours, which runs before
+// they are sent: the single writer may be held (a scan, a prune), and a colour
+// is not worth holding the images back for longer than this.
+const coverColorWriteTimeout = 250 * time.Millisecond
+
+// recordCoverColors stores the colours coverThumbnail read (nil entries are
+// skipped). A failure only costs the colours until the next thumbnail (which
+// reads them again, revalidation included), so it is logged, not answered. The
+// write is detached from the request, so a client that has moved on still
+// leaves its colours behind, and bounded by coverColorWriteTimeout.
+func (a *API) recordCoverColors(ctx context.Context, recs ...*catalog.CoverColorRecord) {
+	var batch []catalog.CoverColorRecord
+	for _, r := range recs {
+		if r != nil {
+			batch = append(batch, *r)
 		}
 	}
-	a.thumbs.Put(key, url)
-	return url
+	if len(batch) == 0 {
+		return
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), coverColorWriteTimeout)
+	defer cancel()
+	switch err := a.cat.RecordCoverColors(wctx, batch); {
+	case err != nil && wctx.Err() != nil:
+		a.log.Debug("record cover colours timed out (the writer is busy)", "err", err)
+	case err != nil:
+		a.log.Warn("record cover colours failed", "err", err)
+	}
 }
 
 // coverArt is where the book at path takes its cover from, in the order
@@ -185,7 +326,7 @@ func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path str
 // its sidecar image (inside the library root), the art embedded in its audio.
 func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, src catalog.CoverSource) *artSource {
 	if src.CustomAt != "" {
-		return &artSource{version: "c" + src.CustomAt, load: func() ([]byte, error) {
+		return &artSource{version: catalog.CustomArtVersion(src.CustomAt), load: func() ([]byte, error) {
 			cv, err := a.cat.Cover(ctx, lib.ID, path)
 			if errors.Is(err, catalog.ErrNotFound) {
 				return nil, nil // removed a moment ago
@@ -210,7 +351,18 @@ func (a *API) coverArt(ctx context.Context, lib *catalog.Library, path string, s
 	}
 	if abs, err := library.SafeJoin(lib.Root, src.AudioPath); err == nil {
 		return fileArt("e", abs, func() ([]byte, error) {
-			data, _, _ := media.EmbeddedCover(abs)
+			data, _, ok := media.EmbeddedCover(abs)
+			if !ok {
+				// No art, or a file that couldn't be read: EmbeddedCover can't
+				// tell them apart. One that won't even open (a mount in trouble,
+				// out of file descriptors) is a failure worth retrying, not "no
+				// art" cached for this version.
+				f, err := os.Open(abs)
+				if err != nil {
+					return nil, err
+				}
+				_ = f.Close()
+			}
 			return data, nil
 		})
 	}

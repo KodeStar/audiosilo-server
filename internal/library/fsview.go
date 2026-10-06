@@ -6,6 +6,7 @@ package library
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -116,26 +117,68 @@ func resolveExisting(p string) string {
 	}
 }
 
-// BrowseFS lists a directory within a library root with offset pagination.
-// relPath "" (or "/") lists the root. Directories sort before files, both
-// alphabetically, giving a stable order for paging. If allow is non-nil, only
-// entries for which it returns true are included (applied before pagination so
-// pages stay full) - used to scope browsing to a share's path rules. What the
-// library's ignore rules skip is left out too, as the scanner leaves it out.
+// BrowseFS lists a directory within a library root with offset pagination: a
+// page of ListDir, its files with their Size and ModTime. relPath "" (or "/")
+// lists the root.
 func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string) bool, ignore *Ignore) (*Listing, error) {
-	full, err := SafeJoin(root, relPath)
-	if err != nil {
-		return nil, err
-	}
-	dirEntries, err := os.ReadDir(full)
+	entries, dirEntries, err := listDir(root, relPath, allow, ignore)
 	if err != nil {
 		return nil, err
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
+	total := len(entries)
+	offset = min(max(offset, 0), total)
+	end := min(offset+limit, total)
+	page := entries[offset:end]
+	// Only files need their info (for Size, used to compute bitrate), and only
+	// the page's: one round-trip per entry is the difference between a snappy and
+	// a multi-second listing on a network mount. The directory read's own entry
+	// answers it (a stat on Linux and macOS, nothing at all on Windows, which
+	// lists it with the name).
+	for i := range page {
+		if page[i].IsDir {
+			continue
+		}
+		if info, err := dirEntries[offset+i].Info(); err == nil {
+			page[i].Size = info.Size()
+			page[i].ModTime = info.ModTime().Unix()
+		}
+	}
+	out := &Listing{Path: catalog.CleanRelPath(relPath), Entries: page, Total: total, Offset: offset}
+	if end < total {
+		out.NextOffset = end
+	}
+	return out, nil
+}
 
-	entries := make([]Entry, 0, len(dirEntries))
+// ListDir is a directory within a library root as the player browses it, whole
+// and without Size or ModTime: hidden and non-audio files left out, and so is
+// whatever allow refuses (a share's path rules; nil allows everything) or the
+// library's ignore rules skip, as the scanner skips it. Directories sort before
+// files, both by name, case folded, a stable order for paging.
+func ListDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, error) {
+	entries, _, err := listDir(root, relPath, allow, ignore)
+	return entries, err
+}
+
+// listDir is ListDir, with each entry's fs.DirEntry from the directory read,
+// in the same order.
+func listDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
+	full, err := SafeJoin(root, relPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	dirEntries, err := os.ReadDir(full)
+	if err != nil {
+		return nil, nil, err
+	}
+	type listed struct {
+		Entry
+		de fs.DirEntry
+	}
+	entries := make([]listed, 0, len(dirEntries))
 	// The canonical rel path prefixes each entry's Path; scope checks and
 	// persisted path keys rely on this same form (see catalog.CleanRelPath).
 	cleanRel := catalog.CleanRelPath(relPath)
@@ -151,32 +194,14 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 		if allow != nil && !allow(childRel) {
 			continue // outside the caller's share scope
 		}
-		if !de.IsDir() && !metadata.IsAudio(name) {
+		isDir := de.IsDir()
+		if !isDir && !metadata.IsAudio(name) {
 			continue // hide non-audio files; clicking one can't open a book
 		}
-		isDir := de.IsDir()
 		if ignore.Covers(childRel, isDir) {
 			continue // skipped by the library's ignore rules, here and by the scanner
 		}
-		// os.ReadDir already provides name + type for free; only files need a
-		// per-entry stat (for Size, used to compute bitrate). Skipping it for
-		// directories avoids one network round-trip per entry - the difference
-		// between a snappy and a multi-second author listing on a network mount.
-		var size, modTime int64
-		if !isDir {
-			if info, err := de.Info(); err == nil {
-				size = info.Size()
-				modTime = info.ModTime().Unix()
-			}
-		}
-		entries = append(entries, Entry{
-			Name:    name,
-			Path:    childRel,
-			IsDir:   isDir,
-			IsAudio: !isDir && metadata.IsAudio(name),
-			Size:    size,
-			ModTime: modTime,
-		})
+		entries = append(entries, listed{Entry{Name: name, Path: childRel, IsDir: isDir, IsAudio: !isDir}, de})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].IsDir != entries[j].IsDir {
@@ -184,21 +209,26 @@ func BrowseFS(root, relPath string, offset, limit int, allow func(relPath string
 		}
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
+	out := make([]Entry, len(entries))
+	des := make([]fs.DirEntry, len(entries))
+	for i, e := range entries {
+		out[i], des[i] = e.Entry, e.de
+	}
+	return out, des, nil
+}
 
-	total := len(entries)
-	if offset < 0 {
-		offset = 0
+// MarkBooks fills in the entries the index holds as books (books by path, as
+// catalog.BooksByPaths returns them): IsBook and the book's metadata.
+func MarkBooks(entries []Entry, books map[string]catalog.Book) {
+	for i := range entries {
+		e := &entries[i]
+		if b, ok := books[e.Path]; ok {
+			e.IsBook = true
+			e.Title = b.Title
+			e.Author = b.Author
+			e.Series = b.Series
+			e.SeriesIndex = b.SeriesIndex
+			e.Duration = b.Duration
+		}
 	}
-	if offset > total {
-		offset = total
-	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
-	out := &Listing{Path: cleanRel, Entries: entries[offset:end], Total: total, Offset: offset}
-	if end < total {
-		out.NextOffset = end
-	}
-	return out, nil
 }

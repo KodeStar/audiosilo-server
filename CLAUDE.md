@@ -107,7 +107,7 @@ internal/catalog/     libraries, access grants, books, FTS search, listening sta
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; the admin console's match (match.go: metaserve works/match over tag + path facts, pathfacts.go; works/search fallback for an older metaserve); owned books' work ids for the Series cards (workids.go)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, pathfacts.go; works/search fallback for an older metaserve); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
@@ -161,7 +161,11 @@ history, per library, bounded), `issue_ignores` (`library_id, path, kind`: an ad
 on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` / `ignore_patterns`
 (per-library settings, off the player wire) and, on `books`, `scan_error` / `scan_error_file` /
 `scan_error_detail` (the last indexing's read problem) and `suspect_parts`; `0022` adds `books.split_parent` (the
-folder holding a disc of a book split across disc folders, else `''`). Phase 4a (`0018`) adds
+folder holding a disc of a book split across disc folders, else `''`); `0023` adds
+`books.cover_art` (the cover art identity whose short hash is the wire `cover_version`) and
+`books.cover_color` (read from a thumbnail, tagged with the version it was read for; both derived, see below) and `0024`
+`meta_cache` (the community metadata cache's persistent level: derived, keyed by identifier,
+not user state; see Phase 1.5 below). Phase 4a (`0018`) adds
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
 retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
 `client_platform` / `last_ip` (the app and newest address behind each token) and
@@ -310,8 +314,8 @@ admin overrides; see Metadata overrides below).
   The `work` also carries the community **characters** and **recaps** (the CC
   BY-SA expressive layer: spoiler-tagged, position-keyed - `reveal`/`through`
   are logical work-chapter positions) when metaserve has them, plus a
-  whole-book `recap_summary` (`{in_short, ending}` - `ending` is a full spoiler
-  by construction); all three are additive/`omitempty`, mirrored on
+  whole-book `recap_summary` (`{in_short, ending}` - both summarize the whole
+  book, and `ending` is a full spoiler by construction); all three are additive/`omitempty`, mirrored on
   `upstreamWorkDetail` and `MetaWork` and passed through by
   `toCharacters`/`toRecaps`/`toRecapSummary` (which drops an all-blank summary).
   **Work-id lookup**: `GET /api/v1/meta/work?id=<work id>` (authed, *not*
@@ -353,7 +357,7 @@ admin overrides; see Metadata overrides below).
   transport-only. Degradation: disabled -> 404 (and the `metadata` capability is
   false, so clients hide the UI); no asin/isbn or no upstream match -> `200
   {"matched": false}`; upstream unreachable -> 502. Out of scope for now: no cover
-  remote-fallback, no persisting meta into the DB, no tag-based ASIN extraction.
+  remote-fallback, no tag-based ASIN extraction.
   **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
   each family (key `ordering_of || id`) into ONE rail whose top-level view is the
   MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
@@ -367,6 +371,65 @@ admin overrides; see Metadata overrides below).
   work listed at two positions of one series is now one rail rather than two
   (`TestEnrichRepeatedMembershipIsOneRail`). Server-side because shipped players
   lag.
+  **Persistent meta cache** (`meta_cache`, migration 0024): `meta.Store` is a
+  SQLite second level behind the memory cache (`catalog/metacache.go`, adapted to
+  `meta.Store` by `api.metaStore`, which logs failures; best effort, a failure
+  never fails a lookup). Same keys and TTLs; persisted: enrichments (positive,
+  not-found, incomplete) and positive works only - never transport errors, never
+  work-id misses. A fresh row warms memory for its remaining TTL; a positive row
+  however stale is served when the upstream fails (not on caller cancellation),
+  held in memory for errorTTL. Rows carry `storeVersion` and the metaserve
+  `source`; others are ignored. Derived, rebuildable, not user state; the
+  launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000), works
+  (`w:`, caller-chosen ids) within a share of their own (`catalog.MetaCacheWorkRows`,
+  2 000) so they never push the books' enrichments out. A work's later 404
+  replaces its stored row (no new row for an unknown id). Writes are bounded by
+  `storeWriteTimeout` (250 ms): a busy writer costs the row, not the response. No config
+  key: only the service reads or writes it, so `metadata.enabled` off touches nothing.
+  **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
+  (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one,
+  nearest first, max 5, failures left out) and `?spoilers=hide` gates the current
+  work by the CALLER's saved progress (`meta.ChapterAt` + `meta.HideSpoilers`,
+  mirroring the player's `meta-gating.ts`; previous works lose only
+  `recap_summary.ending`). Both work on a per-request copy - the cached envelope
+  is shared and immutable. `MetaWork` also carries `community_description`
+  (CC BY-SA, apart from `description`) and `attribution` (present iff the work
+  has characters/recaps/recap_summary/community_description); `MetaRecording`
+  carries `chapter_count`. `Service.CachedWorkID` answers an identifier's work id
+  from the cache alone: memory, else its enrichment's stored row, fresh or stale
+  (never the upstream), so placement does not flip with a restart or an eviction.
+  **Owned entries (`local`)**: every rail entry, main view and each
+  `orderings[].works[]`, carries `local` `{library_id, path}` when the CALLER owns
+  that work. Resolved per request AFTER the cache, on a copy of the rails (never
+  stored: the cached envelope is shared): `api.localRails` fetches the caller's
+  candidates (`catalog.SeriesBooks` over their `UserScopes`, scope-filtered: books
+  whose series folds to a rail/ordering name by `match.SeriesKey`, the console's
+  `seriesKey` - NFKD, case, punctuation and spacing ignored) and `meta.PlaceLocal`
+  places them: the current work's entry -> the requested book; else the book whose
+  work id `CachedWorkID` knows; else (orderings) the main view's book for that work;
+  else `series_index` == the entry's numeric position on a series named like that
+  view. A book with a known work id is never placed by index; one book per entry;
+  ties: the requested book's library, then library sort order, then path.
+  **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
+  (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
+  `{source, next?, book?, work?}`; `source` names the step that produced `next`
+  (or decided there is none): `community` (metadata on + matched + a rail:
+  `meta.NextOnRail` on the first rail's MAIN view, placed by the same
+  `localRails`; answers only when the next entry is placed -> next + book + work.
+  Otherwise the steps below answer: an unplaced next entry rides along as `work`
+  without `local`, since failing to place (untagged, series named unlike the rail)
+  proves nothing; current work last on the rail (it can lag the library),
+  upstream error/unmatched/no rails/unnumbered -> no `work`), `series`
+  (`catalog.NextInSeries`: same library, exact series, smallest higher index in
+  scope; numbered books but none later -> `{source:"series"}`), `folder`
+  (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
+  ignore-filtered, annotated by `BooksByPaths`, which reads any number of paths in
+  chunks; the player's `findNextSibling`: names compared as its `localeCompare`
+  (numeric, base) does, by `x/text/collate`, and a bare folder only when nothing in
+  the folder, the current book included, is indexed), else `{source:"none"}`. A
+  failure to place the caller's books leaves the next entry unplaced (as `/meta`
+  degrades). `book` is the list shape; everything `next` names is in the caller's
+  scope.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
@@ -381,7 +444,7 @@ admin overrides; see Metadata overrides below).
 - **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
   chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
   is the handle (a query param, to avoid encoded-slash issues). `item`/`chapters`/
-  `cover`/`meta` resolve `(library, path)` to a book in ONE place, `bookForPath`:
+  `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
   `GetBookByPath`, then the indexed folder book holding the path
   (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
   demand (`Scanner.IndexPathWithin`) if the scan hasn't reached it. A book found
@@ -406,7 +469,9 @@ admin overrides; see Metadata overrides below).
   rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
   (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
   `Scope.VisibleInBrowse` filters `/fs` to a navigable subtree, and
-  `pathFilterSQL` scopes `ListBooks`/`Search`. Every content handler authorizes
+  `pathFilterSQL` scopes `ListBooks`/`Search` and the player's browse aggregates
+  (`People`/`Series` given a `*Scope`, which also pins them to the scope's library;
+  nil = the admin's unscoped view). Every content handler authorizes
   the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`.
   Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
 - **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
@@ -499,9 +564,10 @@ admin overrides; see Metadata overrides below).
   rescan rewrites the scanned values and re-applies the edit before anything can read
   the row) and why there is no separate post-scan enrichment pass any more.
   `SetEnrichment` and `EditBook`/`EditBooks` call it too. Players, search, `/fs` and
-  export read the row, so they see edits with no join; the player's book JSON shape is
-  unchanged (`published`, `description`, `has_cover`, per-file codec are admin-only,
-  `json:"-"`). Validation: `normalizeOverride`; sources: a scanned value is `path` when
+  export read the row, so they see edits with no join. The player's book JSON carries
+  `published` on every book and `description` only on `GET /libraries/{id}/item` (api's
+  `itemBook` adds it; `catalog.Book` keeps it `json:"-"` so list, search and recent pages
+  stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Validation: `normalizeOverride`; sources: a scanned value is `path` when
   it equals what `DeriveFromPath` yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
@@ -522,7 +588,9 @@ admin overrides; see Metadata overrides below).
   `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
   `GET /admin/authors|narrators` (whole field values + `merge_suggestions` from
   `personKey`, keyed by `match.Fold`, which keeps every script's letters) and
-  `/admin/series`; `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
+  `/admin/series` (`catalog.People`/`Series` with a nil scope; the player's
+  `/libraries/{id}/authors|narrators|series` take the same aggregates within the
+  caller's scope, without `merge_suggestions`); `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
   page: per-field provenance, chapters, files, listeners, shares, folder override);
   `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
   STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
@@ -579,8 +647,24 @@ admin overrides; see Metadata overrides below).
   ~20 KB a cover instead of full art.
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
   (decompression bombs), `media.ThumbCache` is a byte-bounded LRU keyed by the art's
-  version (custom `updated_at`, file size + mtime) holding finished data: URLs, and
-  `thumbSem` bounds decodes (reads are bounded per request, outside it). Admin book rows
+  version (custom `updated_at`, file size + mtime) holding the raw JPEG (the admin
+  batch base64-encodes it), and
+  `coverReads` bounds the art being read or waiting to be decoded and `thumbSem` the
+  decodes, both across requests. The player gets
+  the same thumbnails from `GET /libraries/{id}/cover?size=160|320|640` (capability
+  `cover_sizes`; one code path, `coverArt` + `coverThumbnail`; ETag = size + art version,
+  304 on a match; custom `no-cache`, file art `max-age=86400`; any other size 400).
+  `cover_version` (`catalog.CoverVersion`, a 10-char hash of `books.cover_art`) is set
+  from index data whenever a book is indexed (custom stamp, else mtime, size and
+  sidecar path; `SetCover`, `DeleteCover`, moves and joins recompute it). Every
+  thumbnail (a cache hit too, a 304 revalidation included) records on a book what
+  it lacks for the art it read: `cover_color` (`media.CoverPalette` on the scaled image:
+  dominant bucket = `bg`, the most vibrant bucket nudged in HSL lightness to WCAG 4.5:1
+  against it = `accent`, else none; `on_accent` white/black) and, with it, the art's
+  own version as `cover_art`, so `cover_version` follows a sidecar replaced in place
+  and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
+  compare-and-set on the identity it was read under and bounded (250 ms, detached
+  from the request). Both are on the player `Book` JSON (`omitempty`). Admin book rows
   carry `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
@@ -873,12 +957,16 @@ admin overrides; see Metadata overrides below).
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `export`); flip them
-on as phases land. `transcode` already reflects whether ffmpeg is configured;
+`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
+`export`, `browse_people`, `cover_sizes`, `next_book`); flip them on as phases land.
+`browse_people` is true (the player's browse lists and `/books?narrator=`),
+`cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
+(`GET /libraries/{id}/next`). `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
-`metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`).
+`metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`);
+`meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`) tracks `metadata`.
 
 ## API surface
 
@@ -890,6 +978,14 @@ metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
 the other `?path=` content endpoints; 404 when metadata is disabled), plus
 `GET /meta/work?id=<work id>` (authed, no library scope - global community data;
 404 when metadata is disabled or the work id is unknown).
+The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}`),
+`/narrators` (`{narrators, unknown}`) and `/series` (`{series}`) (authed,
+`libraryScope`: 403 no access, 404 unknown library; counts only the caller's
+granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
+by exact `author=`, `series=` and `narrator=`.
+What to play after a book is `GET /libraries/{id}/next?path=` (authed, scoped like
+`item`: 400 bad id/missing path, 403 outside the grant, 404 no library/book;
+`{source: community|series|folder|none, next?, book?, work?}`, see Next book above).
 The library export is `GET /admin/libraries/{id}/export` (admin only; returns a
 JSON attachment, not the usual envelope - see Library export above).
 Server settings are `GET`/`PATCH /admin/settings` (admin only): a section-keyed

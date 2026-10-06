@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 )
@@ -230,4 +231,48 @@ func workIDOf(l *upstreamLookup, err error) WorkID {
 	default:
 		return WorkID{Failed: true}
 	}
+}
+
+// CachedWorkID is an identifier's community work id from the cache alone, never
+// the upstream: memory first (cachedWorkID: its enrichment, else its lookup
+// entry), else its enrichment's row in the persistent store, fresh or stale - a
+// book's work id does not age with its envelope, and an answer that flipped with
+// a restart or a memory eviction would move the caller's books between rail
+// entries. ok is true when the cache holds an answer: the work id, or "" for a
+// cached "no match"; a miss, a cached failure and no identifier are ("", false).
+func (s *Service) CachedWorkID(ctx context.Context, asin, isbn string) (id string, ok bool) {
+	key := cacheKey(normalizeASIN(asin), normalizeISBN(isbn))
+	if key == "" {
+		return "", false
+	}
+	if w, hit := s.cachedWorkID(key); hit && !w.Failed {
+		return w.ID, true
+	}
+	return s.storedWorkID(ctx, key)
+}
+
+// storedWorkID is the work id of key's persisted enrichment (see CachedWorkID),
+// decoding nothing else of it.
+func (s *Service) storedWorkID(ctx context.Context, key string) (string, bool) {
+	if s.store == nil {
+		return "", false
+	}
+	lctx, cancel := context.WithTimeout(ctx, storeTimeout)
+	defer cancel()
+	e, found := s.store.Load(lctx, key)
+	if !found || e.Version != storeVersion || e.Source != s.baseURL {
+		return "", false
+	}
+	if len(e.Payload) == 0 {
+		return "", true // a stored "no match"
+	}
+	var env struct {
+		Work *struct {
+			ID string `json:"id"`
+		} `json:"work"`
+	}
+	if json.Unmarshal(e.Payload, &env) != nil || env.Work == nil || env.Work.ID == "" {
+		return "", false
+	}
+	return env.Work.ID, true
 }

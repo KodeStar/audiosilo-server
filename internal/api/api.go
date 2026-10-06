@@ -98,10 +98,13 @@ type API struct {
 	// small self-hosted box. A full channel returns 503 rather than forking more.
 	transcodeSem chan struct{}
 
-	// thumbs caches the admin console's cover thumbnails; thumbSem bounds how many
-	// are decoded at once across requests (see handlers_covers.go).
-	thumbs   *media.ThumbCache
-	thumbSem chan struct{}
+	// thumbs caches cover thumbnails (GET cover ?size= and the admin console's
+	// batch); coverReads bounds the art being read or waiting to be decoded and
+	// thumbSem how many are decoded at once, both across requests (see
+	// handlers_covers.go).
+	thumbs     *media.ThumbCache
+	coverReads chan struct{}
+	thumbSem   chan struct{}
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
@@ -121,6 +124,10 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	var metaSvc *meta.Service
 	if cfg.Metadata.ValidBaseURL() {
 		metaSvc = meta.NewService(cfg.Metadata.BaseURL, nil)
+		// Its cache's persistent second level, in the server's own database. No
+		// config key of its own: it is read and written only through the
+		// service, which only runs while metadata.enabled is on.
+		metaSvc.SetStore(metaStore{cat: cat, log: log})
 	}
 	a := &API{
 		boot:           cfg,
@@ -141,6 +148,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		mediaLimiter:   newRateLimiter(200, 2000),      // ~200 req/s, burst 2000, per credential
 		transcodeSem:   make(chan struct{}, maxConcurrentTranscodes),
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
+		coverReads:     make(chan struct{}, maxCoverReads),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
 		streams:        catalog.NewStreamMarks(),
 	}
@@ -206,7 +214,11 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries", a.requireAuth(http.HandlerFunc(a.handleListLibraries)))
 	mux.Handle("GET /api/v1/libraries/{id}/fs", a.requireAuth(http.HandlerFunc(a.handleBrowseFS)))
 	mux.Handle("GET /api/v1/libraries/{id}/books", a.requireAuth(http.HandlerFunc(a.handleListBooks)))
+	mux.Handle("GET /api/v1/libraries/{id}/authors", a.requireAuth(a.handleBrowsePeople(catalog.PeopleAuthors, "authors")))
+	mux.Handle("GET /api/v1/libraries/{id}/narrators", a.requireAuth(a.handleBrowsePeople(catalog.PeopleNarrators, "narrators")))
+	mux.Handle("GET /api/v1/libraries/{id}/series", a.requireAuth(http.HandlerFunc(a.handleBrowseSeries)))
 	mux.Handle("GET /api/v1/libraries/{id}/item", a.requireAuth(http.HandlerFunc(a.handleItem)))
+	mux.Handle("GET /api/v1/libraries/{id}/next", a.requireAuth(http.HandlerFunc(a.handleNext)))
 	mux.Handle("GET /api/v1/libraries/{id}/chapters", a.requireAuth(http.HandlerFunc(a.handleChapters)))
 	mux.Handle("GET /api/v1/libraries/{id}/meta", a.requireAuth(http.HandlerFunc(a.handleMeta)))
 	// Community work lookup by metadata-site work id - global, read-only data

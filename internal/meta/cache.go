@@ -143,7 +143,14 @@ func cacheGet[T any](c *cache, key string) (result *T, hit bool, err error) {
 // incomplete one). A nil result is a "no match" and is stored as such (see
 // payload).
 func cachePut[T any](c *cache, key string, result *T, ttl time.Duration) {
-	c.store(key, cacheEntry{value: payload(result), expiry: c.now().Add(ttl)})
+	cachePutUntil(c, key, result, c.now().Add(ttl))
+}
+
+// cachePutUntil is cachePut with an absolute expiry: a row read back from the
+// persistent store warms memory for what is left of ITS TTL, not a fresh one, so
+// a restart never stretches an answer's age past the policy above.
+func cachePutUntil[T any](c *cache, key string, result *T, expiry time.Time) {
+	c.store(key, cacheEntry{value: payload(result), expiry: expiry})
 }
 
 // get returns the live entry for key, or ok=false when it is absent or expired

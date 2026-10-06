@@ -107,13 +107,14 @@ func pathFilterSQL(col string, s Scope) (string, []any) {
 	var conds []string
 	var args []any
 	for _, p := range s.Paths {
-		// The exact-match arm binds p literally; the subtree arm uses LIKE, so
-		// p must have its LIKE metacharacters ('%', '_', and the escape char)
-		// escaped or an ordinary folder name like "Sci_Fi" would over-match a
-		// sibling "SciXFi/...". This keeps the SQL filter consistent with the
-		// authoritative Go gate (pathAllowedBy), which uses a literal prefix.
-		conds = append(conds, "("+col+" = ? OR "+col+` LIKE ? ESCAPE '\')`)
-		args = append(args, p, escapeLike(p)+"/%")
+		// The exact-match arm binds p literally; the subtree arm is the byte range
+		// of the paths that start with p+"/" ('0' is the byte after '/'), so it is
+		// the literal, case-sensitive prefix of the authoritative Go gate
+		// (pathAllowedBy). LIKE was neither: it ignores ASCII case, so a grant on
+		// "Saga" reached a sibling "saga/..." on a case-sensitive filesystem, and
+		// its wildcards needed escaping.
+		conds = append(conds, "("+col+" = ? OR ("+col+" >= ? AND "+col+" < ?))")
+		args = append(args, p, p+"/", p+"0")
 	}
 	return "(" + strings.Join(conds, " OR ") + ")", args
 }

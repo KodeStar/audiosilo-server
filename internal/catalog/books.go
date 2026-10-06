@@ -64,6 +64,9 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			return err
 		}
 		b.ID = id
+		if err := refreshCoverArt(ctx, tx, b.LibraryID, b.RelPath); err != nil {
+			return err
+		}
 
 		if _, err := tx.ExecContext(ctx, `DELETE FROM book_files WHERE book_id = ?`, id); err != nil {
 			return err
@@ -99,32 +102,41 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 // by rel_path. It is used to annotate filesystem-view entries with their
 // book id and metadata (the hybrid view), so a user who browses to a file or
 // book folder can act on it directly. Files and book folders both match here.
+// Any number of paths may be asked for (a whole folder, for GET /next): they are
+// read in chunks that stay well under SQLite's bound-parameter limit.
 func (c *Catalog) BooksByPaths(ctx context.Context, libraryID int64, paths []string) (map[string]Book, error) {
 	out := map[string]Book{}
-	if len(paths) == 0 {
-		return out, nil
+	const chunk = 500
+	for start := 0; start < len(paths); start += chunk {
+		part := paths[start:min(start+chunk, len(paths))]
+		args := make([]any, 0, len(part)+1)
+		args = append(args, libraryID)
+		for _, p := range part {
+			args = append(args, p)
+		}
+		if err := c.booksByPaths(ctx, out, `SELECT `+bookCols+` FROM books WHERE library_id = ? AND rel_path IN (`+
+			placeholders(len(part))+`)`, args); err != nil {
+			return nil, err
+		}
 	}
-	placeholders := make([]string, len(paths))
-	args := []any{libraryID}
-	for i, p := range paths {
-		placeholders[i] = "?"
-		args = append(args, p)
-	}
-	q := `SELECT ` + bookCols + ` FROM books WHERE library_id = ? AND rel_path IN (` +
-		strings.Join(placeholders, ",") + `)`
+	return out, nil
+}
+
+// booksByPaths runs one BooksByPaths query into out.
+func (c *Catalog) booksByPaths(ctx context.Context, out map[string]Book, q string, args []any) error {
 	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		b, err := scanBook(rows)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		out[b.RelPath] = *b
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 // BookIdentifiers is what BooksByRefs reads of the book at one Ref: its path
@@ -373,22 +385,30 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
-	added_at, content_hash, published, description, has_cover`
+	added_at, content_hash, published, has_cover, cover_art, cover_color`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
-// selecting bookCols (plain or prefixed) scans it the same way.
-func bookDest(b *Book) []any {
+// selecting bookCols (plain or prefixed) scans it the same way; finish, called
+// after the scan, derives the cover fields from the columns behind them.
+func bookDest(b *Book) (dest []any, finish func()) {
+	var art, color string
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
-		&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
-		&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
-		&b.Published, &b.Description, &b.HasCover}
+			&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
+			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
+			&b.Published, &b.HasCover, &art, &color},
+		func() {
+			b.CoverVersion = CoverVersion(art)
+			b.CoverColor, _ = decodeCoverColor(color, b.CoverVersion)
+		}
 }
 
 func scanBook(row interface{ Scan(...any) error }) (*Book, error) {
 	var b Book
-	if err := row.Scan(bookDest(&b)...); err != nil {
+	dest, finish := bookDest(&b)
+	if err := row.Scan(dest...); err != nil {
 		return nil, err
 	}
+	finish()
 	return &b, nil
 }
 
@@ -434,23 +454,27 @@ func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath s
 	return c.GetBook(ctx, id)
 }
 
-// GetBook returns a book by ID including its files and chapters.
+// GetBook returns a book by ID including its files, chapters and description
+// (which only this single-book read loads).
 func (c *Catalog) GetBook(ctx context.Context, id int64) (*Book, error) {
-	row := c.db.QueryRowContext(ctx, `SELECT `+bookCols+` FROM books WHERE id = ?`, id)
-	b, err := scanBook(row)
+	var b Book
+	dest, finish := bookDest(&b)
+	err := c.db.QueryRowContext(ctx, `SELECT `+bookCols+`, description FROM books WHERE id = ?`, id).
+		Scan(append(dest, &b.Description)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := c.loadFiles(ctx, b); err != nil {
+	finish()
+	if err := c.loadFiles(ctx, &b); err != nil {
 		return nil, err
 	}
-	if err := c.loadChapters(ctx, b); err != nil {
+	if err := c.loadChapters(ctx, &b); err != nil {
 		return nil, err
 	}
-	return b, nil
+	return &b, nil
 }
 
 func (c *Catalog) loadFiles(ctx context.Context, b *Book) error {
@@ -493,6 +517,7 @@ type ListOptions struct {
 	LibraryID int64
 	Author    string // optional exact-match filter
 	Series    string // optional exact-match filter
+	Narrator  string // optional exact-match filter
 	Sort      string // "author" (default) | "title" | "recent"
 	Limit     int
 	Cursor    string // opaque keyset cursor from a previous page
@@ -557,6 +582,10 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 	if opt.Series != "" {
 		where = append(where, "series = ?")
 		args = append(args, opt.Series)
+	}
+	if opt.Narrator != "" {
+		where = append(where, "narrator = ?")
+		args = append(args, opt.Narrator)
 	}
 	// Restrict to the caller's access scope (share path rules), if provided.
 	if opt.Scope != nil {

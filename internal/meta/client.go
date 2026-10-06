@@ -197,8 +197,11 @@ type upstreamRecording struct {
 	ReleaseDate string              `json:"release_date"`
 	Publisher   string              `json:"publisher"`
 	CoverURL    string              `json:"cover_url"`
-	ASIN        []upstreamASIN      `json:"asin"`
-	ISBN        []string            `json:"isbn"`
+	// ChapterCount is the recording's chapter count, 0 when upstream does not
+	// know it.
+	ChapterCount int            `json:"chapter_count"`
+	ASIN         []upstreamASIN `json:"asin"`
+	ISBN         []string       `json:"isbn"`
 }
 
 // upstreamASIN is one of a recording's ASINs; Audible ASINs are per marketplace.
@@ -255,6 +258,15 @@ type upstreamRecapSummary struct {
 	Ending  string `json:"ending"`
 }
 
+// upstreamCommunityDescription is metaserve's CC BY-SA, spoiler-free work
+// description (the works-community layer), named apart from the CC0 core
+// `description` because the two carry different licenses. The object is omitted
+// for a work without one, and its text is never empty when it is present.
+type upstreamCommunityDescription struct {
+	Text    string `json:"text"`
+	License string `json:"license"`
+}
+
 type upstreamWorkDetail struct {
 	ID             string                `json:"id"`
 	Title          string                `json:"title"`
@@ -268,6 +280,9 @@ type upstreamWorkDetail struct {
 	Characters     []upstreamCharacter   `json:"characters"`
 	Recaps         []upstreamRecap       `json:"recaps"`
 	RecapSummary   *upstreamRecapSummary `json:"recap_summary"`
+	// CommunityDescription is the CC BY-SA description (see
+	// upstreamCommunityDescription); nil for most works.
+	CommunityDescription *upstreamCommunityDescription `json:"community_description"`
 }
 
 type upstreamSeriesEntry struct {

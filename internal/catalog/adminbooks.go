@@ -15,8 +15,10 @@ import (
 )
 
 // The admin catalog: the queries behind the console's Library screens. Admin-only
-// and unscoped (an admin sees every library); addressed by (library_id, path) like
-// everything else, with the internal book id only ever inside an opaque cursor.
+// and unscoped (an admin sees every library), except the People and Series
+// aggregates, which the player's browse lists take too, within the caller's scope;
+// addressed by (library_id, path) like everything else, with the internal book id
+// only ever inside an opaque cursor.
 
 // AdminBook is one row of the admin book list.
 type AdminBook struct {
@@ -572,7 +574,8 @@ type PeopleAggregate struct {
 	Unknown     int // books with the field blank
 }
 
-// The people fields an aggregate can be taken over; constant queries per field.
+// The people fields an aggregate can be taken over; constant queries per field,
+// with one slot for the scope filter (aggregateScope).
 const (
 	PeopleAuthors   = "author"
 	PeopleNarrators = "narrator"
@@ -580,21 +583,33 @@ const (
 
 var peopleQueries = map[string]string{
 	PeopleAuthors: `SELECT author, COUNT(*), COALESCE(SUM(duration), 0) FROM books
-		WHERE (? = 0 OR library_id = ?) GROUP BY author`,
+		WHERE (? = 0 OR library_id = ?) AND %s GROUP BY author`,
 	PeopleNarrators: `SELECT narrator, COUNT(*), COALESCE(SUM(duration), 0) FROM books
-		WHERE (? = 0 OR library_id = ?) GROUP BY narrator`,
+		WHERE (? = 0 OR library_id = ?) AND %s GROUP BY narrator`,
+}
+
+// aggregateScope is the WHERE fragment (over `books`) limiting an aggregate to a
+// caller's scope: nil is unrestricted (the admin console), else only the books of
+// the scope's library that it grants, so a scoped player never counts a book
+// outside the grant.
+func aggregateScope(scope *Scope) (string, []any) {
+	if scope == nil {
+		return "1", nil
+	}
+	return scopesFilterSQL("library_id", "rel_path", []Scope{*scope})
 }
 
 // People aggregates the authors or narrators (field = PeopleAuthors/PeopleNarrators)
-// of one library, or all of them (libraryID 0). Names are the whole effective field
-// value: a "Kramer & Reading" narrator credit is one entry, matching the exact
-// filter and the bulk edit that act on it.
-func (c *Catalog) People(ctx context.Context, field string, libraryID int64) (*PeopleAggregate, error) {
+// of one library, or all of them (libraryID 0), within scope (nil = every book).
+// Names are the whole effective field value: a "Kramer & Reading" narrator credit
+// is one entry, matching the exact filter and the bulk edit that act on it.
+func (c *Catalog) People(ctx context.Context, field string, libraryID int64, scope *Scope) (*PeopleAggregate, error) {
 	q, ok := peopleQueries[field]
 	if !ok {
 		return nil, fmt.Errorf("unknown people field %q", field)
 	}
-	rows, err := c.db.QueryContext(ctx, q, libraryID, libraryID)
+	frag, fargs := aggregateScope(scope)
+	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(q, frag), append([]any{libraryID, libraryID}, fargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -714,13 +729,14 @@ type SeriesCount struct {
 	Positions []float64 `json:"positions"` // distinct non-zero positions, ascending
 }
 
-// Series aggregates the series of one library (or all, libraryID 0): books, the
-// positions held (so the console can mark gaps against community series data) and
-// the dominant author.
-func (c *Catalog) Series(ctx context.Context, libraryID int64) ([]SeriesCount, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT series, author, series_index, duration FROM books
-		  WHERE series <> '' AND (? = 0 OR library_id = ?)`, libraryID, libraryID)
+// Series aggregates the series of one library (or all, libraryID 0) within scope
+// (nil = every book): books, the positions held (so the console can mark gaps
+// against community series data) and the dominant author.
+func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope) ([]SeriesCount, error) {
+	frag, fargs := aggregateScope(scope)
+	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(`SELECT series, author, series_index, duration FROM books
+		  WHERE series <> '' AND (? = 0 OR library_id = ?) AND %s`, frag),
+		append([]any{libraryID, libraryID}, fargs...)...)
 	if err != nil {
 		return nil, err
 	}

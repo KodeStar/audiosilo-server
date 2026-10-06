@@ -104,6 +104,37 @@ type MetaRecapSummary struct {
 	Ending  string `json:"ending,omitempty"`
 }
 
+// MetaCommunityDescription is the community-written, spoiler-free description of
+// a work (the CC BY-SA layer). It is kept apart from MetaWork.Description - the
+// CC0 core's publisher-style blurb - because the two carry different licenses
+// and a client must be able to credit this one. License is upstream's license
+// code (e.g. "CC-BY-SA-4.0"); Text is never empty.
+type MetaCommunityDescription struct {
+	Text    string `json:"text"`
+	License string `json:"license,omitempty"`
+}
+
+// The credit line every CC BY-SA layer carries (see MetaAttribution). Declared
+// once, here, so the legal text a client renders is the server's, never
+// reassembled per client; a license bump edits these lines and nothing else.
+// The URL matches metaserve's own ccBySAURL.
+const (
+	attributionContributors = "AudioSilo Meta community contributors"
+	attributionLicense      = "CC BY-SA 4.0"
+	attributionLicenseURL   = "https://creativecommons.org/licenses/by-sa/4.0/"
+)
+
+// MetaAttribution is the credit the CC BY-SA layer (characters, recaps,
+// recap_summary, community_description) requires wherever it is shown. The
+// server writes it so every client renders the same legal text; SourceURL is
+// the work's page on the metadata site (the envelope's web_url).
+type MetaAttribution struct {
+	Credit     string `json:"credit"`
+	License    string `json:"license"`
+	LicenseURL string `json:"license_url"`
+	SourceURL  string `json:"source_url"`
+}
+
 // MetaWork is the abstract book in an enrichment envelope. It is also the
 // standalone payload of Service.Work (a work-id-addressed lookup for a sibling
 // book in a series).
@@ -118,6 +149,13 @@ type MetaWork struct {
 	Characters     []MetaCharacter   `json:"characters,omitempty"`
 	Recaps         []MetaRecap       `json:"recaps,omitempty"`
 	RecapSummary   *MetaRecapSummary `json:"recap_summary,omitempty"`
+	// CommunityDescription is the CC BY-SA description, separate from
+	// Description (see MetaCommunityDescription).
+	CommunityDescription *MetaCommunityDescription `json:"community_description,omitempty"`
+	// Attribution is present iff the work carries any CC BY-SA content (see
+	// carriesCommunityContent), so a client shows the credit exactly when it
+	// shows content that needs it.
+	Attribution *MetaAttribution `json:"attribution,omitempty"`
 }
 
 // MetaRecording is the specific narration/production matched by the lookup.
@@ -129,6 +167,8 @@ type MetaRecording struct {
 	ReleaseDate string          `json:"release_date,omitempty"`
 	Publisher   string          `json:"publisher,omitempty"`
 	CoverURL    string          `json:"cover_url,omitempty"`
+	// ChapterCount is the recording's chapter count; omitted when 0/unknown.
+	ChapterCount int `json:"chapter_count,omitempty"`
 }
 
 // MetaSeriesWork is one entry of a series rail. It carries its own web_url so the
@@ -140,6 +180,10 @@ type MetaSeriesWork struct {
 	Authors  []MetaPersonRef `json:"authors"`
 	CoverURL string          `json:"cover_url,omitempty"`
 	WebURL   string          `json:"web_url"`
+	// Local is the book the CALLER can open that is this work (PlaceLocal). It
+	// is set per request on a copy of the rails, never on an envelope the cache
+	// holds.
+	Local *MetaLocal `json:"local,omitempty"`
 }
 
 // MetaSeries is a full ordered series rail, including the current work.
@@ -189,6 +233,10 @@ type Enrichment struct {
 	Recording *MetaRecording `json:"recording,omitempty"`
 	Series    []MetaSeries   `json:"series,omitempty"`
 	WebURL    string         `json:"web_url"`
+	// Previous is the works before this one in its series, nearest first
+	// (GET /libraries/{id}/meta?include=previous; see Service.Previous). It is
+	// set per request on a copy, never on an envelope the cache holds.
+	Previous []*MetaWork `json:"previous,omitempty"`
 }
 
 // Service composes book enrichments from the metadata API, with a bounded TTL
@@ -198,6 +246,9 @@ type Service struct {
 	client  *client
 	baseURL string // metaserve base URL (no trailing slash) for building web_url
 	cache   *cache
+	// store is the persistent second level behind cache (see Store); nil keeps
+	// the cache in memory only.
+	store Store
 	// composeBudget bounds one full compose fan-out. Defaults to composeTimeout;
 	// a field only so tests can shrink it.
 	composeBudget time.Duration
@@ -245,6 +296,10 @@ func NewService(baseURL string, now func() time.Time) *Service {
 // The identifiers are normalized (normalizeASIN, normalizeISBN) first, so the
 // spellings of one identifier share one cache entry and one upstream lookup.
 //
+// With a Store (SetStore) the cache has a persistent second level: answers
+// survive a restart, and a positive one is served past its TTL when the
+// upstream is down (see Store for exactly what is kept).
+//
 // The returned *Enrichment is shared with the cache and other callers - treat
 // it as immutable; never modify it (or anything it points to) after the call.
 func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, error) {
@@ -258,6 +313,17 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	if result, hit, err := cacheGet[Enrichment](s.cache, key); hit {
 		return result, err
 	}
+	// Then the persistent store: a fresh row answers as memory would have (and
+	// warms it for the rest of its TTL); a stale positive row is held back as the
+	// fallback should the upstream fail below.
+	stored, expires, fresh := readStored[Enrichment](ctx, s, key)
+	if fresh {
+		cachePutUntil(s.cache, key, stored, expires)
+		if stored == nil {
+			return nil, ErrNotFound
+		}
+		return stored, nil
+	}
 
 	// Run the whole fan-out under its own deadline (see composeTimeout): a
 	// slow-but-alive upstream must not eat the API's whole request budget, and
@@ -269,6 +335,7 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	switch {
 	case errors.Is(err, ErrNotFound):
 		s.cache.putMiss(key, notFoundTTL)
+		saveStored[Enrichment](ctx, s, key, nil, notFoundTTL)
 		return nil, ErrNotFound
 	case err != nil:
 		// Only cache failures the UPSTREAM caused. When the caller's own context
@@ -280,6 +347,15 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 		// upstream failure, including the client's per-call 5s timeout or the
 		// compose deadline firing under a live caller.
 		if ctx.Err() == nil {
+			// An upstream failure with a persisted positive answer, however
+			// stale, serves that answer: it is held in memory for errorTTL
+			// (exactly as the error would have been), so the upstream is asked
+			// again soon, and the row itself is left as it was. An error is
+			// never persisted.
+			if stored != nil {
+				cachePut(s.cache, key, stored, errorTTL)
+				return stored, nil
+			}
 			s.cache.putError(key, err)
 		}
 		return nil, err
@@ -287,15 +363,23 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 		// A usable envelope, but at least one series rail failed transiently.
 		// Caching it for the full positive TTL would hide "more in this series"
 		// for a day on a blip, so hold it only briefly (errorTTL) and retry
-		// soon. And if the caller's context is done, the missing rails were
-		// caused by the CALLER's cancellation mid-fan-out - cache nothing at
-		// all, same reasoning as the error branch above.
+		// soon - in the store too, so a restart retries it as soon. And if the
+		// caller's context is done, the missing rails were caused by the
+		// CALLER's cancellation mid-fan-out - cache nothing at all, same
+		// reasoning as the error branch above.
 		if ctx.Err() == nil {
 			cachePut(s.cache, key, result, errorTTL)
+			// Not over a stored positive answer, though: that one, stale but
+			// with every rail it had, stays the outage fallback (a row that
+			// lives two minutes adds nothing to a restart).
+			if stored == nil {
+				saveStored(ctx, s, key, result, errorTTL)
+			}
 		}
 		return result, nil
 	default:
 		cachePut(s.cache, key, result, positiveTTL)
+		saveStored(ctx, s, key, result, positiveTTL)
 		return result, nil
 	}
 }
@@ -354,7 +438,7 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 	rails, complete := s.seriesRails(ctx, detail)
 	env := &Enrichment{
 		Matched:   true,
-		Work:      toWork(detail),
+		Work:      s.toWork(detail),
 		Recording: pickRecording(detail.Recordings, lookup.RecordingID),
 		Series:    rails,
 		WebURL:    s.workURL(detail.ID),
@@ -377,7 +461,8 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 // id is caller-chosen (not derived from a book this server holds) the uncached
 // fetches are additionally bounded by maxConcurrentWorkFetches, and the work key
 // space has its own cache quota (maxWorkEntries) so a flood of ids cannot evict
-// the enrichment cache.
+// the enrichment cache. A Store keeps the positive works only, for the same
+// reason.
 //
 // The returned *MetaWork is shared with the cache and other callers - treat it
 // as immutable; never modify it (or anything it points to) after the call.
@@ -394,24 +479,48 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 	if work, hit, err := cacheGet[MetaWork](s.cache, key); hit {
 		return work, err
 	}
+	// Then the persistent store, as in Enrich. A work is stored only once it was
+	// found, so a "no match" row is a stored work's later 404 (below).
+	stored, expires, fresh := readStored[MetaWork](ctx, s, key)
+	if fresh {
+		cachePutUntil(s.cache, key, stored, expires)
+		if stored == nil {
+			return nil, ErrNotFound
+		}
+		return stored, nil
+	}
 
 	detail, err := s.fetchWork(ctx, id)
 	switch {
 	case errors.Is(err, ErrNotFound):
+		// Held in memory only: the id is the caller's choice, so a persisted
+		// miss would let any signed-in user grow the table (see Store). Except
+		// over a stored answer for the id, which it replaces (no new row): left
+		// alone, that row would bring the work upstream no longer has back as
+		// the fallback of every later outage.
 		s.cache.putMiss(key, notFoundTTL)
+		if stored != nil {
+			saveStored[MetaWork](ctx, s, key, nil, notFoundTTL)
+		}
 		return nil, ErrNotFound
 	case err != nil:
 		// Same discrimination as Enrich: only cache failures the UPSTREAM
 		// caused. A failure from the CALLER's own cancelled context (players
 		// abort in-flight fetches on navigation) must not poison this work with
-		// 502s for the whole error TTL while upstream is healthy.
+		// 502s for the whole error TTL while upstream is healthy. And as in
+		// Enrich, a persisted positive work outlives the outage.
 		if ctx.Err() == nil {
+			if stored != nil {
+				cachePut(s.cache, key, stored, errorTTL)
+				return stored, nil
+			}
 			s.cache.putError(key, err)
 		}
 		return nil, err
 	}
-	work := toWork(detail)
+	work := s.toWork(detail)
 	cachePut(s.cache, key, work, positiveTTL)
+	saveStored(ctx, s, key, work, positiveTTL)
 	return work, nil
 }
 
@@ -448,20 +557,43 @@ func (s *Service) fetchWork(ctx context.Context, id string) (*upstreamWorkDetail
 
 // toWork maps an upstream work document to the outward MetaWork shape. Shared
 // by the enrichment composition and the work-id lookup so both expose exactly
-// the same fields.
-func toWork(detail *upstreamWorkDetail) *MetaWork {
-	return &MetaWork{
-		ID:             detail.ID,
-		Title:          detail.Title,
-		Subtitle:       detail.Subtitle,
-		Authors:        toPersonRefs(detail.Authors),
-		Language:       detail.Language,
-		FirstPublished: detail.FirstPublished,
-		Description:    detail.Description,
-		Characters:     toCharacters(detail.Characters),
-		Recaps:         toRecaps(detail.Recaps),
-		RecapSummary:   toRecapSummary(detail.RecapSummary),
+// the same fields. A method only because the attribution's source_url is the
+// work's page on this service's metadata site.
+func (s *Service) toWork(detail *upstreamWorkDetail) *MetaWork {
+	w := &MetaWork{
+		ID:                   detail.ID,
+		Title:                detail.Title,
+		Subtitle:             detail.Subtitle,
+		Authors:              toPersonRefs(detail.Authors),
+		Language:             detail.Language,
+		FirstPublished:       detail.FirstPublished,
+		Description:          detail.Description,
+		Characters:           toCharacters(detail.Characters),
+		Recaps:               toRecaps(detail.Recaps),
+		RecapSummary:         toRecapSummary(detail.RecapSummary),
+		CommunityDescription: toCommunityDescription(detail.CommunityDescription),
 	}
+	if carriesCommunityContent(w) {
+		w.Attribution = s.attribution(w.ID)
+	}
+	return w
+}
+
+// attribution builds the CC BY-SA credit for one work.
+func (s *Service) attribution(workID string) *MetaAttribution {
+	return &MetaAttribution{
+		Credit:     attributionContributors,
+		License:    attributionLicense,
+		LicenseURL: attributionLicenseURL,
+		SourceURL:  s.workURL(workID),
+	}
+}
+
+// carriesCommunityContent reports whether w holds any of the CC BY-SA layer -
+// the content its Attribution credits. HideSpoilers re-asks after gating, so a
+// work whose every community entry was held back drops the credit too.
+func carriesCommunityContent(w *MetaWork) bool {
+	return len(w.Characters) > 0 || len(w.Recaps) > 0 || w.RecapSummary != nil || w.CommunityDescription != nil
 }
 
 // pickRecording returns the recording matching recordingID, falling back to the
@@ -481,13 +613,14 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 		}
 	}
 	return &MetaRecording{
-		ID:          chosen.ID,
-		Narrators:   toPersonRefs(chosen.Narrators),
-		Abridged:    chosen.Abridged,
-		RuntimeMin:  chosen.RuntimeMin,
-		ReleaseDate: chosen.ReleaseDate,
-		Publisher:   chosen.Publisher,
-		CoverURL:    chosen.CoverURL,
+		ID:           chosen.ID,
+		Narrators:    toPersonRefs(chosen.Narrators),
+		Abridged:     chosen.Abridged,
+		RuntimeMin:   chosen.RuntimeMin,
+		ReleaseDate:  chosen.ReleaseDate,
+		Publisher:    chosen.Publisher,
+		CoverURL:     chosen.CoverURL,
+		ChapterCount: chosen.ChapterCount,
 	}
 }
 
@@ -713,6 +846,17 @@ func toRecapSummary(in *upstreamRecapSummary) *MetaRecapSummary {
 		return nil
 	}
 	return &MetaRecapSummary{InShort: in.InShort, Ending: in.Ending}
+}
+
+// toCommunityDescription maps the upstream CC BY-SA description. Returns nil
+// (omitted) when upstream has none, or - defensively, since metaserve never
+// sends one - when its text is blank, which would render as an empty block
+// under a license credit.
+func toCommunityDescription(in *upstreamCommunityDescription) *MetaCommunityDescription {
+	if in == nil || strings.TrimSpace(in.Text) == "" {
+		return nil
+	}
+	return &MetaCommunityDescription{Text: in.Text, License: in.License}
 }
 
 func deref(s *string) string {

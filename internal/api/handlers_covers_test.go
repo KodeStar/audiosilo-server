@@ -251,7 +251,7 @@ func TestAdminCoversOversizedSidecarCached(t *testing.T) {
 	}
 	key := strconv.FormatInt(libID, 10) + "\x00Sidecar\x00" + strconv.Itoa(defaultThumbSize) +
 		"\x00" + fmt.Sprintf("s%d-%d", fi.Size(), fi.ModTime().UnixNano())
-	if v, ok := e.api.thumbs.Get(key); !ok || v != "" {
-		t.Fatalf("oversized sidecar cache entry = %q, %v; want a cached no-art entry", v, ok)
+	if v, ok := e.api.thumbs.Get(key); !ok || v != nil {
+		t.Fatalf("oversized sidecar cache entry = %d bytes, %v; want a cached no-art entry", len(v), ok)
 	}
 }

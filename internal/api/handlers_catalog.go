@@ -172,7 +172,7 @@ func (a *API) handleAdminPeople(field, key string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid library_id")
 			return
 		}
-		agg, err := a.cat.People(r.Context(), field, libID)
+		agg, err := a.cat.People(r.Context(), field, libID, nil)
 		if err != nil {
 			a.writeCatalogError(w, err, "admin people aggregate failed", "could not list "+key, "field", field)
 			return
@@ -190,7 +190,7 @@ func (a *API) handleAdminSeries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return
 	}
-	series, err := a.cat.Series(r.Context(), libID)
+	series, err := a.cat.Series(r.Context(), libID, nil)
 	if err != nil {
 		a.writeCatalogError(w, err, "admin series aggregate failed", "could not list series")
 		return

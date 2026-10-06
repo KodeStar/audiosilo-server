@@ -155,6 +155,10 @@ func joinBookState(ctx context.Context, tx *sql.Tx, libraryID int64, into string
 			}
 		}
 	}
+	// A copied custom cover is the joined book's art from now on.
+	if err := refreshCoverArt(ctx, tx, libraryID, into); err != nil {
+		return err
+	}
 	id, err := bookIDByPath(ctx, tx, libraryID, into)
 	if errors.Is(err, ErrNotFound) {
 		return nil // indexed later; UpsertBook layers the copies on then
