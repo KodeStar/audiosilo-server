@@ -40,6 +40,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"browse_people": true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
 			"cover_sizes":   true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
 			"next_book":     true,                 // what to play after a book (GET /libraries/{id}/next)
+			"user_stats":    true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},

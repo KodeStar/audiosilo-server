@@ -16,14 +16,8 @@ import (
 // completion (from progress), the devices in use (from tokens) and the state of
 // the collection. Listening is bucketed in server time (loc).
 type Activity struct {
-	// Range is the period asked for: "7d", "30d", "90d", "1y", or a year ("2025").
-	Range    string `json:"range"`
-	From     string `json:"from"`
-	To       string `json:"to"`
-	Timezone string `json:"timezone"` // the server's zone abbreviation at To
-	// UTCOffset is the server's offset from UTC at To, in minutes.
-	UTCOffset int            `json:"utc_offset"`
-	Totals    ActivityTotals `json:"totals"`
+	Period
+	Totals ActivityTotals `json:"totals"`
 	// Estimated is how much of Totals.Listened is an estimate (seconds): listening
 	// from before the server recorded sessions that the players' spans didn't
 	// cover (migration 0021). It is in the totals and the top lists, never in Days
@@ -49,6 +43,24 @@ type Activity struct {
 	Storage        Storage         `json:"storage"`
 	Coverage       Coverage        `json:"coverage"`
 	InactiveUsers  []InactiveUser  `json:"inactive_users"`
+}
+
+// Period labels a stats period (the Activity page, a person's stats): the range
+// asked for ("7d", "30d", "90d", "1y", or a year, "2025"), its bounds (RFC3339
+// UTC) and the server's zone, which days, hours and weekdays are counted in.
+type Period struct {
+	Range    string `json:"range"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Timezone string `json:"timezone"` // the server's zone abbreviation at To
+	// UTCOffset is the server's offset from UTC at To, in minutes.
+	UTCOffset int `json:"utc_offset"`
+}
+
+func periodOf(label string, from, to time.Time, loc *time.Location) Period {
+	zone, offset := to.In(loc).Zone()
+	return Period{Range: label, From: from.UTC().Format(time.RFC3339), To: to.UTC().Format(time.RFC3339),
+		Timezone: zone, UTCOffset: offset / 60}
 }
 
 // ActivityTotals sums a period. Listened is wall-clock seconds; Sessions counts
@@ -227,13 +239,8 @@ func (a *listenAcc) dayList() []ActivityDay {
 // ListeningDays is a period's listening day by day and nothing else: the year
 // calendar and a person's listening year, without the rest of the Activity page.
 type ListeningDays struct {
-	Range    string `json:"range"`
-	From     string `json:"from"`
-	To       string `json:"to"`
-	Timezone string `json:"timezone"`
-	// UTCOffset is the server's offset from UTC at To, in minutes.
-	UTCOffset int           `json:"utc_offset"`
-	Days      []ActivityDay `json:"days"`
+	Period
+	Days []ActivityDay `json:"days"`
 }
 
 // ListeningDaysFor is the listening per day in [from, to) (server time, loc), of
@@ -245,37 +252,22 @@ func (c *Catalog) ListeningDaysFor(ctx context.Context, label string, from, to t
 	if err := c.collectListening(ctx, acc); err != nil {
 		return nil, err
 	}
-	zone, offset := to.In(loc).Zone()
-	return &ListeningDays{
-		Range: label, From: from.UTC().Format(time.RFC3339), To: to.UTC().Format(time.RFC3339),
-		Timezone: zone, UTCOffset: offset / 60, Days: acc.dayList(),
-	}, nil
+	return &ListeningDays{Period: periodOf(label, from, to, loc), Days: acc.dayList()}, nil
 }
 
 // ActivityFor computes the Activity page for [from, to), labelled label. loc is
 // the server's zone, which days, hours and weekdays are counted in.
 func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
-	zone, offset := to.In(loc).Zone()
-	out := &Activity{
-		Range: label, From: from.UTC().Format(time.RFC3339), To: to.UTC().Format(time.RFC3339),
-		Timezone: zone, UTCOffset: offset / 60,
-	}
-	cur := newListenAcc(from, to, loc, listenAll)
-	if err := c.collectListening(ctx, cur); err != nil {
-		return nil, err
-	}
-	prev := newListenAcc(from.Add(-to.Sub(from)), from, loc, listenTotals)
-	// The current period takes the whole hour holding from, so the previous one
-	// stops before it: that hour is counted once, not in both.
-	prev.endHour = cur.firstHour
-	if err := c.collectListening(ctx, prev); err != nil {
-		return nil, err
-	}
-	finished, err := c.finishedByUser(ctx, from, to)
+	out := &Activity{Period: periodOf(label, from, to, loc)}
+	cur, prev, err := c.listenPeriods(ctx, from, to, loc, 0)
 	if err != nil {
 		return nil, err
 	}
-	prevFinished, err := c.finishedByUser(ctx, prev.from, prev.to)
+	finished, err := c.finishedByUser(ctx, from, to, 0)
+	if err != nil {
+		return nil, err
+	}
+	prevFinished, err := c.finishedByUser(ctx, prev.from, prev.to, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -293,6 +285,26 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 	return out, nil
 }
 
+// listenPeriods collects the listening of [from, to) in full and of the same
+// length of time just before it as totals, of one user or of everyone (onlyUser
+// 0).
+func (c *Catalog) listenPeriods(ctx context.Context, from, to time.Time, loc *time.Location, onlyUser int64) (cur, prev *listenAcc, err error) {
+	cur = newListenAcc(from, to, loc, listenAll)
+	cur.onlyUser = onlyUser
+	if err := c.collectListening(ctx, cur); err != nil {
+		return nil, nil, err
+	}
+	prev = newListenAcc(from.Add(-to.Sub(from)), from, loc, listenTotals)
+	prev.onlyUser = onlyUser
+	// The current period takes the whole hour holding from, so the previous one
+	// stops before it: that hour is counted once, not in both.
+	prev.endHour = cur.firstHour
+	if err := c.collectListening(ctx, prev); err != nil {
+		return nil, nil, err
+	}
+	return cur, prev, nil
+}
+
 // listenLevel is how much a listenAcc keeps beyond the period's totals.
 type listenLevel int
 
@@ -307,7 +319,9 @@ type listenAcc struct {
 	from, to time.Time
 	loc      *time.Location
 	level    listenLevel
-	onlyUser int64 // only this user's listening (0 = everyone's)
+	// onlyUser keeps only this user's listening (0 = everyone's). With one user,
+	// the cross-user facts (users, the intervals for the peak) are not kept.
+	onlyUser int64
 
 	listened  float64
 	estimated float64 // the part of listened that is estimated (listening_daily.estimated)
@@ -316,8 +330,6 @@ type listenAcc struct {
 	books     map[Ref]*bookAcc
 	days      map[string]map[int64]float64
 	hw        [7][24]float64
-	authors   map[string]*personAcc
-	narrators map[string]*personAcc
 	users     map[int64]*userAcc
 	playback  map[playKey]*PlaybackShare
 	intervals [][2]time.Time
@@ -329,14 +341,9 @@ type listenAcc struct {
 }
 
 type bookAcc struct {
-	title, author, narrator string
-	listened                float64
-	listeners               map[int64]bool
-}
-
-type personAcc struct {
-	listened float64
-	books    map[Ref]bool
+	title, author, narrator, series string
+	listened                        float64
+	listeners                       map[int64]bool
 }
 
 type userAcc struct {
@@ -356,7 +363,7 @@ func newListenAcc(from, to time.Time, loc *time.Location, level listenLevel) *li
 	return &listenAcc{
 		from: from, to: to, loc: loc, level: level,
 		listeners: map[int64]bool{}, books: map[Ref]*bookAcc{}, days: map[string]map[int64]float64{},
-		authors: map[string]*personAcc{}, narrators: map[string]*personAcc{}, users: map[int64]*userAcc{},
+		users:    map[int64]*userAcc{},
 		playback: map[playKey]*PlaybackShare{}, clients: map[Client]map[int64]bool{},
 		firstHour: hourOf(f),
 		endHour:   to,
@@ -371,6 +378,7 @@ type listenRow struct {
 	username           string
 	ref                Ref
 	title, author, nar string
+	series             string
 }
 
 // add credits secs of listening to a row on a local day (and, for a raw session,
@@ -380,7 +388,7 @@ func (a *listenAcc) add(r listenRow, day string, hour *time.Time, secs float64) 
 	a.listeners[r.user] = true
 	b := a.books[r.ref]
 	if b == nil {
-		b = &bookAcc{title: r.title, author: r.author, narrator: r.nar, listeners: map[int64]bool{}}
+		b = &bookAcc{title: r.title, author: r.author, narrator: r.nar, series: r.series, listeners: map[int64]bool{}}
 		a.books[r.ref] = b
 	}
 	b.listened += secs
@@ -400,25 +408,16 @@ func (a *listenAcc) add(r listenRow, day string, hour *time.Time, secs float64) 
 	if hour != nil {
 		a.hw[(int(hour.Weekday())+6)%7][hour.Hour()] += secs
 	}
-	for _, p := range []struct {
-		m    map[string]*personAcc
-		name string
-	}{{a.authors, r.author}, {a.narrators, r.nar}} {
-		if p.name == "" {
-			continue
-		}
-		acc := p.m[p.name]
-		if acc == nil {
-			acc = &personAcc{books: map[Ref]bool{}}
-			p.m[p.name] = acc
-		}
-		acc.listened += secs
-		acc.books[r.ref] = true
+	if a.everyone() {
+		u := a.user(r)
+		u.listened += secs
+		u.books[r.ref] = true
 	}
-	u := a.user(r)
-	u.listened += secs
-	u.books[r.ref] = true
 }
+
+// everyone reports whether the accumulator holds everyone's listening (the
+// admin's), so the per-listener facts are wanted.
+func (a *listenAcc) everyone() bool { return a.onlyUser == 0 }
 
 func (a *listenAcc) user(r listenRow) *userAcc {
 	u := a.users[r.user]
@@ -434,7 +433,7 @@ func (a *listenAcc) user(r listenRow) *userAcc {
 func (a *listenAcc) countSession(r listenRow, n int) {
 	a.sessions += n
 	a.listeners[r.user] = true
-	if a.level == listenAll {
+	if a.level == listenAll && a.everyone() {
 		a.user(r).sessions += n
 	}
 }
@@ -442,8 +441,8 @@ func (a *listenAcc) countSession(r listenRow, n int) {
 // listenRowColumns are the names a listening row shows (listenRowJoins supplies
 // them); listenRowBlanks stand in when only totals are wanted.
 const (
-	listenRowColumns = `u.username, COALESCE(b.title, ''), COALESCE(b.author, ''), COALESCE(b.narrator, '')`
-	listenRowBlanks  = `'', '', '', ''`
+	listenRowColumns = `u.username, COALESCE(b.title, ''), COALESCE(b.author, ''), COALESCE(b.narrator, ''), COALESCE(b.series, '')`
+	listenRowBlanks  = `'', '', '', '', ''`
 )
 
 // listenRowJoins joins the user and the book of a listening table aliased t.
@@ -487,7 +486,7 @@ func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 			client               Client
 			backfilled           bool
 		)
-		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar,
+		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series,
 			&startS, &lastS, &listened, &codec, &transcoded, &token, &client.App, &client.Version,
 			&client.Platform, &backfilled); err != nil {
 			return err
@@ -541,7 +540,7 @@ func (a *listenAcc) addSession(r listenRow, start, last time.Time, listened floa
 		}
 	}
 	s, e := maxTime(start, a.from), minTime(last, a.to)
-	if !e.Before(s) {
+	if a.everyone() && !e.Before(s) {
 		a.intervals = append(a.intervals, [2]time.Time{s, e})
 	}
 }
@@ -567,7 +566,7 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 			sessions  int
 			estimated bool
 		)
-		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar,
+		if err := rows.Scan(&r.user, &r.ref.LibraryID, &r.ref.Path, &r.username, &r.title, &r.author, &r.nar, &r.series,
 			&day, &listened, &sessions, &estimated); err != nil {
 			return err
 		}
@@ -595,16 +594,9 @@ func (a *listenAcc) result(out *Activity, finished map[int64]int) {
 	out.Estimated = a.estimated
 	out.HourWeekday = a.hw
 	out.Days = a.dayList()
-	out.TopBooks = []TopBook{}
-	for ref, b := range a.books {
-		out.TopBooks = append(out.TopBooks, TopBook{LibraryID: ref.LibraryID, Path: ref.Path, Title: b.title,
-			Author: b.author, Listened: b.listened, Listeners: len(b.listeners)})
-	}
-	out.TopBooks = topN(out.TopBooks, func(x, y TopBook) int {
-		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Title, y.Title), cmp.Compare(x.Path, y.Path))
-	})
-	out.TopAuthors = topPeople(a.authors)
-	out.TopNarrators = topPeople(a.narrators)
+	out.TopBooks = a.topBooks(nil)
+	out.TopAuthors = a.topPeople(bookAuthor, nil)
+	out.TopNarrators = a.topPeople(bookNarrator, nil)
 	out.TopUsers = []TopUser{}
 	for id, u := range a.users {
 		out.TopUsers = append(out.TopUsers, TopUser{UserID: id, Username: u.name, Listened: u.listened,
@@ -613,33 +605,81 @@ func (a *listenAcc) result(out *Activity, finished map[int64]int) {
 	out.TopUsers = topN(out.TopUsers, func(x, y TopUser) int {
 		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Username, y.Username))
 	})
-	out.Playback = []PlaybackShare{}
-	for _, p := range a.playback {
-		out.Playback = append(out.Playback, *p)
-	}
-	slices.SortFunc(out.Playback, func(x, y PlaybackShare) int {
-		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Codec, y.Codec))
-	})
+	out.Playback = a.playbackList()
 	out.PeakConcurrent = peakConcurrent(a.intervals)
-	out.Clients = []ClientCount{}
-	for cl, devices := range a.clients {
-		out.Clients = append(out.Clients, ClientCount{App: cl.App, Version: cl.Version, Platform: cl.Platform,
-			Devices: len(devices)})
+	out.Clients = a.clientList()
+}
+
+// topBooks ranks the books listened to, keeping only those keep allows (nil:
+// all of them).
+func (a *listenAcc) topBooks(keep func(Ref) bool) []TopBook {
+	out := []TopBook{}
+	for ref, b := range a.books {
+		if keep != nil && !keep(ref) {
+			continue
+		}
+		out = append(out, TopBook{LibraryID: ref.LibraryID, Path: ref.Path, Title: b.title,
+			Author: b.author, Listened: b.listened, Listeners: len(b.listeners)})
 	}
-	slices.SortFunc(out.Clients, func(x, y ClientCount) int {
-		return cmp.Or(cmp.Compare(y.Devices, x.Devices), cmp.Compare(x.App, y.App),
-			cmp.Compare(x.Version, y.Version), cmp.Compare(x.Platform, y.Platform))
+	return topN(out, func(x, y TopBook) int {
+		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Title, y.Title), cmp.Compare(x.Path, y.Path))
 	})
 }
 
-func topPeople(m map[string]*personAcc) []TopPerson {
-	out := []TopPerson{}
-	for name, p := range m {
-		out = append(out, TopPerson{Name: name, Listened: p.listened, Books: len(p.books)})
+func bookAuthor(b *bookAcc) string   { return b.author }
+func bookNarrator(b *bookAcc) string { return b.narrator }
+func bookSeries(b *bookAcc) string   { return b.series }
+
+// topPeople ranks an author, narrator or series (name picks which; the whole
+// field value, as the Library aggregates count them) by the listening of its
+// books, counting only the books keep allows (nil: all of them).
+func (a *listenAcc) topPeople(name func(*bookAcc) string, keep func(Ref) bool) []TopPerson {
+	people := map[string]*TopPerson{}
+	for ref, b := range a.books {
+		n := name(b)
+		if n == "" || (keep != nil && !keep(ref)) {
+			continue
+		}
+		p := people[n]
+		if p == nil {
+			p = &TopPerson{Name: n}
+			people[n] = p
+		}
+		p.Listened += b.listened
+		p.Books++
+	}
+	out := make([]TopPerson, 0, len(people))
+	for _, p := range people {
+		out = append(out, *p)
 	}
 	return topN(out, func(x, y TopPerson) int {
 		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Name, y.Name))
 	})
+}
+
+// playbackList is the listening by playback mode, most first.
+func (a *listenAcc) playbackList() []PlaybackShare {
+	out := []PlaybackShare{}
+	for _, p := range a.playback {
+		out = append(out, *p)
+	}
+	slices.SortFunc(out, func(x, y PlaybackShare) int {
+		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Codec, y.Codec))
+	})
+	return out
+}
+
+// clientList is the app builds listened with, by how many devices used each.
+func (a *listenAcc) clientList() []ClientCount {
+	out := []ClientCount{}
+	for cl, devices := range a.clients {
+		out = append(out, ClientCount{App: cl.App, Version: cl.Version, Platform: cl.Platform, Devices: len(devices)})
+	}
+	slices.SortFunc(out, func(x, y ClientCount) int {
+		return cmp.Or(cmp.Compare(y.Devices, x.Devices), cmp.Compare(x.App, y.App),
+			cmp.Compare(x.Version, y.Version), cmp.Compare(x.Platform, y.Platform))
+	})
+	return out
 }
 
 func topN[T any](s []T, order func(a, b T) int) []T {
@@ -691,12 +731,13 @@ func minTime(a, b time.Time) time.Time {
 	return b
 }
 
-// finishedByUser counts the books each user finished in [from, to).
-func (c *Catalog) finishedByUser(ctx context.Context, from, to time.Time) (map[int64]int, error) {
+// finishedByUser counts the books each user finished in [from, to), of everyone
+// or of one user (onlyUser 0 = everyone).
+func (c *Catalog) finishedByUser(ctx context.Context, from, to time.Time, onlyUser int64) (map[int64]int, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT user_id, COUNT(*) FROM progress
-		  WHERE finished = 1 AND finished_at >= ? AND finished_at < ? GROUP BY user_id`,
-		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
+		  WHERE finished = 1 AND finished_at >= ? AND finished_at < ? AND (? = 0 OR user_id = ?) GROUP BY user_id`,
+		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339), onlyUser, onlyUser)
 	if err != nil {
 		return nil, err
 	}

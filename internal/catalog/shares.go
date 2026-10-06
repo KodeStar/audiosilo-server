@@ -80,6 +80,17 @@ func (s Scope) Allows(p string) bool {
 	return false
 }
 
+// scopesAllow reports whether one of scopes (a user's per-library scopes, as
+// UserScopes returns them) grants ref: the Go twin of scopesFilterSQL.
+func scopesAllow(scopes []Scope, ref Ref) bool {
+	for _, s := range scopes {
+		if s.LibraryID == ref.LibraryID && s.Allows(ref.Path) {
+			return true
+		}
+	}
+	return false
+}
+
 // VisibleInBrowse reports whether p should appear when browsing the filtered
 // filesystem tree: it is granted (under/equal a rule) OR an ancestor of a rule
 // (so the user can navigate toward granted content).
