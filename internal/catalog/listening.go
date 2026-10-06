@@ -92,12 +92,12 @@ func getProgress(ctx context.Context, q querier, userID int64, ref Ref) (*Progre
 // is applied only if its (updated_at, version) is newer than what is stored.
 // It returns the effective stored progress. This is the same merge the realtime
 // sync layer will reuse, so REST and WebSocket writes converge. The start and
-// finish dates are the server's (see the stamps below): in's are ignored.
+// finish dates are the server's (see the stamps below): in's are ignored (never
+// bound; the write's RETURNING sets the echo's, a stale save echoes the stored row).
 // The comparison and the write are one writer transaction, so a write that lands
 // between them (another device's save, an EditProgress) can't be overwritten by
 // an older save that read the row before it.
 func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (*Progress, error) {
-	in.StartedAt, in.FinishedAt = "", ""
 	// Distrust an unparseable or far-future client timestamp (see
 	// plausibleUpdatedAt) and substitute server time.
 	if !plausibleUpdatedAt(in.UpdatedAt, c.now()) {

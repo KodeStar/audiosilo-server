@@ -177,9 +177,12 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 	case errors.Is(err, catalog.ErrTooManyItems):
 		writeError(w, http.StatusBadRequest, "too many items")
 	case errors.Is(err, catalog.ErrInvalidName):
-		writeError(w, http.StatusBadRequest, "the name must be 1 to 100 characters, with no control characters")
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("the name must be 1 to %d characters, with no control characters", catalog.MaxCollectionName))
 	case errors.Is(err, catalog.ErrInvalidDescription):
-		writeError(w, http.StatusBadRequest, "the description must be at most 1000 characters, with no control characters but line breaks and tabs")
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"the description must be at most %d characters, with no control characters but line breaks and tabs",
+			catalog.MaxCollectionDescription))
 	case errors.Is(err, catalog.ErrUnknownUser):
 		writeError(w, http.StatusBadRequest, "unknown user")
 	case errors.Is(err, catalog.ErrTooManyShares):

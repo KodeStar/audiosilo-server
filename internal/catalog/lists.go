@@ -358,23 +358,25 @@ func (c *Catalog) visibleItems(ctx context.Context, l orderedList, owner int64, 
 	if err != nil {
 		return nil, err
 	}
-	return items, c.attachBooks(ctx, items)
+	return items, attachBooks(ctx, c, items, func(it *ListItem) (Ref, **Book) { return it.Ref, &it.Book })
 }
 
-// attachBooks sets each item's Book from the index (booksAt), leaving it nil
-// where no book is indexed at the path.
-func (c *Catalog) attachBooks(ctx context.Context, items []ListItem) error {
+// attachBooks sets each item's book from the index (booksAt) at the ref slot
+// gives with the field to set, leaving the field nil where no book is indexed at
+// the path.
+func attachBooks[T any](ctx context.Context, c *Catalog, items []T, slot func(*T) (Ref, **Book)) error {
 	refs := make([]Ref, len(items))
-	for i, it := range items {
-		refs[i] = it.Ref
+	for i := range items {
+		refs[i], _ = slot(&items[i])
 	}
 	books, err := c.booksAt(ctx, refs)
 	if err != nil {
 		return err
 	}
 	for i := range items {
-		if b, ok := books[items[i].Ref]; ok {
-			items[i].Book = &b
+		ref, field := slot(&items[i])
+		if b, ok := books[ref]; ok {
+			*field = &b
 		}
 	}
 	return nil

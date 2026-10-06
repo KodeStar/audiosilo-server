@@ -24,8 +24,8 @@ const (
 	MaxCollections           = 100  // owned per user
 	MaxCollectionItems       = 1000 // items per collection
 	MaxCollectionShares      = 50   // users a collection is shared with
-	maxCollectionName        = 100  // characters, after trimming
-	maxCollectionDescription = 1000 // characters, after trimming
+	MaxCollectionName        = 100  // characters, after trimming
+	MaxCollectionDescription = 1000 // characters, after trimming
 	collectionPreviewSize    = 4    // books in Collection.Preview
 )
 
@@ -90,7 +90,7 @@ var collectionItems = orderedList{
 func cleanCollectionName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	n := utf8.RuneCountInString(name)
-	if n == 0 || n > maxCollectionName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
+	if n == 0 || n > MaxCollectionName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
 		return "", ErrInvalidName
 	}
 	return name, nil
@@ -102,7 +102,7 @@ func cleanCollectionName(name string) (string, error) {
 func cleanCollectionDescription(desc string) (string, error) {
 	desc = strings.TrimSpace(desc)
 	bad := func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' }
-	if utf8.RuneCountInString(desc) > maxCollectionDescription || !utf8.ValidString(desc) || strings.ContainsFunc(desc, bad) {
+	if utf8.RuneCountInString(desc) > MaxCollectionDescription || !utf8.ValidString(desc) || strings.ContainsFunc(desc, bad) {
 		return "", ErrInvalidDescription
 	}
 	return desc, nil
@@ -354,7 +354,8 @@ func (c *Catalog) attachShares(ctx context.Context, cols []Collection) error {
 }
 
 // CreateCollection makes a collection owned by userID (name and description
-// cleaned by cleanCollectionName/cleanCollectionDescription) and returns it. An
+// cleaned by cleanCollectionName/cleanCollectionDescription) and returns it as
+// its owner sees it (built from what the insert wrote: no items, no shares). An
 // owner of MaxCollections already is ErrCollectionsFull.
 func (c *Catalog) CreateCollection(ctx context.Context, userID int64, name, description string) (*Collection, error) {
 	name, err := cleanCollectionName(name)
@@ -364,28 +365,32 @@ func (c *Catalog) CreateCollection(ctx context.Context, userID int64, name, desc
 	if description, err = cleanCollectionDescription(description); err != nil {
 		return nil, err
 	}
-	var id int64
+	col := &Collection{Name: name, Description: description, Owner: CollectionUser{ID: userID}, Owned: true,
+		SharedWith: &[]CollectionUser{}, Preview: []Book{}}
 	if err := c.db.WithTx(ctx, "CreateCollection", func(tx *sql.Tx) error {
 		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM collections WHERE user_id = ?`, userID).Scan(&n); err != nil {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT username, (SELECT COUNT(*) FROM collections WHERE user_id = ?1) FROM users WHERE id = ?1`,
+			userID).Scan(&col.Owner.Username, &n); err != nil {
 			return err
 		}
 		if n >= MaxCollections {
 			return ErrCollectionsFull
 		}
-		now := c.stamp()
+		col.CreatedAt = c.stamp()
+		col.UpdatedAt = col.CreatedAt
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO collections(user_id, name, description, created_at, updated_at) VALUES(?,?,?,?,?)`,
-			userID, name, description, now, now)
+			userID, name, description, col.CreatedAt, col.UpdatedAt)
 		if err != nil {
 			return err
 		}
-		id, err = res.LastInsertId()
+		col.ID, err = res.LastInsertId()
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	return c.Collection(ctx, id, userID, nil)
+	return col, nil
 }
 
 // UpdateCollection renames a collection and/or changes its description (nil

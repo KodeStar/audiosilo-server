@@ -3,6 +3,7 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,10 @@ func TestCollectionRoles(t *testing.T) {
 	if col.Name != "Bedtime" || !col.Owned || col.SharedWith == nil || len(*col.SharedWith) != 0 ||
 		col.ItemCount != 0 || col.Preview == nil || col.Owner.Username != "olive" {
 		t.Fatalf("created = %+v", col)
+	}
+	// What the create answers (built without reading it back) is what a read gives.
+	if read, err := c.Collection(ctx, col.ID, e.owner, e.all); err != nil || !reflect.DeepEqual(read, col) {
+		t.Fatalf("created = %+v, read back %+v (%v)", col, read, err)
 	}
 	for _, p := range []string{"Adult/X", "Kid/A"} {
 		if err := c.AddCollectionItem(ctx, col.ID, e.owner, e.ref(p), nil, e.all); err != nil {

@@ -119,18 +119,5 @@ func (c *Catalog) ListRatings(ctx context.Context, userID int64, scopes []Scope)
 	if err != nil {
 		return nil, err
 	}
-	refs := make([]Ref, len(out))
-	for i, r := range out {
-		refs[i] = r.Ref
-	}
-	books, err := c.booksAt(ctx, refs)
-	if err != nil {
-		return nil, err
-	}
-	for i := range out {
-		if b, ok := books[out[i].Ref]; ok {
-			out[i].Book = &b
-		}
-	}
-	return out, nil
+	return out, attachBooks(ctx, c, out, func(r *RatedBook) (Ref, **Book) { return r.Ref, &r.Book })
 }
