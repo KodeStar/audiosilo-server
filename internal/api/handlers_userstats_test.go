@@ -15,11 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
-// The scanned fixture library's two books (folders of parts).
-const (
-	cradleBook   = "Will Wight/Cradle"
-	mistbornBook = "Brandon Sanderson/Mistborn"
-)
+// cradleBook and mistbornBook (the fixture library's two books) live in ratings_test.go.
 
 // statsEnv is the activity env with the library scanned and the member granted
 // only the "Will Wight" folder.
