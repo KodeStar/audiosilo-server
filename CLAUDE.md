@@ -107,7 +107,7 @@ internal/catalog/     libraries, access grants, books, FTS search, listening sta
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; match search for the admin console (match.go); owned books' work ids for the Series cards (workids.go)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; the admin console's match (match.go: metaserve works/match over tag + path facts, pathfacts.go; works/search fallback for an older metaserve); owned books' work ids for the Series cards (workids.go)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
@@ -521,11 +521,26 @@ admin overrides; see Metadata overrides below).
   `personKey`, keyed by `match.Fold`, which keeps every script's letters) and
   `/admin/series`; `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
   page: per-field provenance, chapters, files, listeners, shares, folder override);
-  `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve
-  `works/search` + `lookup` concurrently, up to 6 works expanded and scored, uncached,
-  bounded by `workSem` via `fetchWork`; with no query it searches the book's own facts,
-  its title through `match.CleanTitle` since metaserve's search requires every word;
-  identifiers normalized for the exact lookup; metadata off -> 404 `metadata_off`);
+  `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
+  STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
+  `workSem` via `fetchWork`. The match gets the book's facts separately
+  (`matchParams`): the path's LAYOUT (`derivePathFacts`: disc/track folders dropped,
+  top folder = author, holding folder = series, leaf = a title guess sent RAW -
+  metaserve is the one place that reads `SW06 - `/`Sharpe - 08 - `/`02. `
+  numbering and takes the position from it) then the tagged title, path + tag
+  authors, the series folder AND the tagged series when they differ (folder first;
+  metaserve judges each, the better counts), the tagged position (only when no
+  DIFFERENT series folder goes up: one position applies to every series guess and
+  replaces the leaf's numbering), runtime, `?q=`, and the asin/isbn (typed;
+  the book's only when nothing was typed), which metaserve looks up itself; candidates carry metaserve's
+  `score` and `reasons`. A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
+  Fallback, FROZEN until the production metaserve serves `works/match` (then delete
+  it): when the route is missing (404 through `works/{id}`, 405, or a 200 without
+  `results`) `searchHits` runs the old `lookup` + `works/search` unchanged (typed
+  text, else `CleanTitle` + author) scored by the tag-only `scoreCandidate`, and
+  the missing route is remembered for 15 min (`matchUnsupportedUntil`); a 503/5xx
+  from works/match is an outage (502), never a fallback; identifiers normalized for
+  the exact lookup; metadata off -> 404 `metadata_off`);
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
   `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id
   (`meta.Service.WorkIDs`: per distinct normalized identifier, first the cached enrichment's
