@@ -28,14 +28,15 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"version":   Version,
 		"api":       "v1",
 		"capabilities": map[string]bool{
-			"admin_ui":   true,                 // baked-in admin console at /admin
-			"web_player": a.playerSource != "", // web player served at /web (when web_dir is populated)
-			"transcode":  a.ffmpeg != "",       // on-the-fly MP3 transcoding via ffmpeg
-			"upload":     false,                // Phase B
-			"websocket":  false,                // Phase C
-			"api_keys":   true,                 // user-minted personal access tokens (POST /auth/tokens)
-			"export":     true,                 // admin library export (GET /admin/libraries/{id}/export)
-			"metadata":   a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
+			"admin_ui":    true,                 // baked-in admin console at /admin
+			"web_player":  a.playerSource != "", // web player served at /web (when web_dir is populated)
+			"transcode":   a.ffmpeg != "",       // on-the-fly MP3 transcoding via ffmpeg
+			"upload":      false,                // Phase B
+			"websocket":   false,                // Phase C
+			"api_keys":    true,                 // user-minted personal access tokens (POST /auth/tokens)
+			"export":      true,                 // admin library export (GET /admin/libraries/{id}/export)
+			"metadata":    a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
+			"meta_bundle": a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},

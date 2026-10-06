@@ -121,6 +121,10 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	var metaSvc *meta.Service
 	if cfg.Metadata.ValidBaseURL() {
 		metaSvc = meta.NewService(cfg.Metadata.BaseURL, nil)
+		// Its cache's persistent second level, in the server's own database. No
+		// config key of its own: it is read and written only through the
+		// service, which only runs while metadata.enabled is on.
+		metaSvc.SetStore(metaStore{cat: cat, log: log})
 	}
 	a := &API{
 		boot:           cfg,

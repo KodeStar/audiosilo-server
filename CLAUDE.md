@@ -353,7 +353,28 @@ admin overrides; see Metadata overrides below).
   transport-only. Degradation: disabled -> 404 (and the `metadata` capability is
   false, so clients hide the UI); no asin/isbn or no upstream match -> `200
   {"matched": false}`; upstream unreachable -> 502. Out of scope for now: no cover
-  remote-fallback, no persisting meta into the DB, no tag-based ASIN extraction.
+  remote-fallback, no tag-based ASIN extraction.
+  **Persistent meta cache** (`meta_cache`, migration 0024): `meta.Store` is a
+  SQLite second level behind the memory cache (`catalog/metacache.go`, adapted to
+  `meta.Store` by `api.metaStore`, which logs failures; best effort, a failure
+  never fails a lookup). Same keys and TTLs; persisted: enrichments (positive,
+  not-found, incomplete) and positive works only - never transport errors, never
+  work-id misses. A fresh row warms memory for its remaining TTL; a positive row
+  however stale is served when the upstream fails (not on caller cancellation),
+  held in memory for errorTTL. Rows carry `storeVersion` and the metaserve
+  `source`; others are ignored. Derived, rebuildable, not user state; the
+  launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000).
+  **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
+  (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one,
+  nearest first, max 5, failures left out) and `?spoilers=hide` gates the current
+  work by the CALLER's saved progress (`meta.ChapterAt` + `meta.HideSpoilers`,
+  mirroring the player's `meta-gating.ts`; previous works lose only
+  `recap_summary.ending`). Both work on a per-request copy - the cached envelope
+  is shared and immutable. `MetaWork` also carries `community_description`
+  (CC BY-SA, apart from `description`) and `attribution` (present iff the work
+  has characters/recaps/recap_summary/community_description); `MetaRecording`
+  carries `chapter_count`. `Service.CachedWorkID` answers an identifier's work id
+  from the memory cache only (no upstream, no store).
   **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
   each family (key `ordering_of || id`) into ONE rail whose top-level view is the
   MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so

@@ -431,3 +431,55 @@ func TestWorkIDsCanceledWaiterKeepsFlight(t *testing.T) {
 		t.Fatalf("lookups = %d, want 1", got)
 	}
 }
+
+// TestCachedWorkID: the work id for an identifier from the in-memory cache only
+// - the enrichment first, then the "l:" lookup - with a cached "no match" as
+// ("", true). A miss, a cached failure, a book without identifiers and a row
+// only the persistent store holds all answer ("", false), and nothing ever
+// reaches the upstream or the store.
+func TestCachedWorkID(t *testing.T) {
+	m := fullMock()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	store := newMemStore()
+	svc := NewService(srv.URL, nil)
+	svc.SetStore(store)
+
+	if id, ok := svc.CachedWorkID("B00FLIJJSY", ""); ok || id != "" {
+		t.Fatalf("cold = %q, %v", id, ok)
+	}
+	if id, ok := svc.CachedWorkID("", ""); ok || id != "" {
+		t.Fatalf("no identifiers = %q, %v", id, ok)
+	}
+	// An enrichment answers it, by any spelling of the identifier.
+	if _, err := svc.Enrich(context.Background(), "B00FLIJJSY", ""); err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := svc.CachedWorkID(" b00flijjsy ", ""); !ok || id != "the-martian" {
+		t.Fatalf("enriched = %q, %v", id, ok)
+	}
+	// A cached "no match" enrichment.
+	svc.cache.putMiss(nsISBN.key("9780000000002"), notFoundTTL)
+	if id, ok := svc.CachedWorkID("", "9780000000002"); !ok || id != "" {
+		t.Fatalf("cached no match = %q, %v", id, ok)
+	}
+	// The console's lookup key space: an answer, and a failure (not an answer).
+	cachePut(svc.cache, nsLookup.key(nsASIN.key("B0LOOKED")), &upstreamLookup{Work: &upstreamWorkCard{ID: "looked"}}, positiveTTL)
+	if id, ok := svc.CachedWorkID("B0LOOKED", ""); !ok || id != "looked" {
+		t.Fatalf("lookup entry = %q, %v", id, ok)
+	}
+	svc.cache.putError(nsLookup.key(nsASIN.key("B0FAILED")), errors.New("down"))
+	if id, ok := svc.CachedWorkID("B0FAILED", ""); ok || id != "" {
+		t.Fatalf("cached failure = %q, %v", id, ok)
+	}
+	// A row only the store holds is not consulted.
+	store.put(StoredEntry{Key: nsASIN.key("B0STORED"), Version: storeVersion, Source: srv.URL,
+		Payload: []byte(`{"matched":true,"work":{"id":"stored"}}`), Expires: time.Now().Add(time.Hour)})
+	loads := store.loads.Load()
+	if id, ok := svc.CachedWorkID("B0STORED", ""); ok || id != "" || store.loads.Load() != loads {
+		t.Fatalf("store-only row = %q, %v (loads %d -> %d)", id, ok, loads, store.loads.Load())
+	}
+	if m.lookupHits.Load() != 1 {
+		t.Fatalf("lookups = %d, want only the Enrich's", m.lookupHits.Load())
+	}
+}

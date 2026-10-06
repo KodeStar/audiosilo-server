@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // escape url-escapes a ?path= value (a query param, matching the other tests).
@@ -400,5 +402,247 @@ func TestMetaSeriesOrderingEnvelope(t *testing.T) {
 		`{"id":"lww","title":"LWW","position":"2","authors":[],"web_url":"BASE/work?id=lww"}]}]}]`
 	if got := strings.ReplaceAll(string(env.Series), mock.URL, "BASE"); got != want {
 		t.Fatalf("series envelope:\n got %s\nwant %s", got, want)
+	}
+}
+
+// ---- the /meta bundle: include=previous, spoilers=hide ----------------------
+
+// bundleEnv serves a three-book series upstream - the requested book is book
+// two - with a book 1.5 that 404s (left out of previous) and a book three after
+// it (never previous). Book two's cast is revealed at chapters 1, 3 and 5.
+func bundleEnv(t *testing.T) (*testEnv, string) {
+	t.Helper()
+	works := map[string]string{
+		"book-one": `{"id":"book-one","title":"One","authors":[],"language":"en","series":[{"id":"s","name":"S","position":"1"}],` +
+			`"characters":[{"id":"hero","name":"Hero","reveal":{"chapter":1}}],"recap_summary":{"in_short":"One in short.","ending":"One ends."}}`,
+		"book-two": `{"id":"book-two","title":"Two","authors":[],"language":"en","series":[{"id":"s","name":"S","position":"2"}],` +
+			`"recordings":[{"id":"r2","narrators":[],"chapter_count":5}],` +
+			`"characters":[{"id":"early","name":"Early","reveal":{"chapter":1}},{"id":"middle","name":"Middle","reveal":{"chapter":3}},{"id":"late","name":"Late","reveal":{"chapter":5}}],` +
+			`"recaps":[{"through":{"chapter":0},"text":"Before."},{"through":{"chapter":2},"text":"Through two."}],` +
+			`"recap_summary":{"in_short":"Two in short.","ending":"Two ends."}}`,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"work":{"id":"book-two","title":"Two","authors":[]},"recording_id":"r2"}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		body, ok := works[r.PathValue("id")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"s","name":"S","authors":[],"works":[` +
+			`{"position":"1","work":{"id":"book-one","title":"One","authors":[]}},` +
+			`{"position":"1.5","work":{"id":"book-gone","title":"Gone","authors":[]}},` +
+			`{"position":"2","work":{"id":"book-two","title":"Two","authors":[]}},` +
+			`{"position":"3","work":{"id":"book-three","title":"Three","authors":[]}}]}`))
+	})
+	mock := httptest.NewServer(mux)
+	t.Cleanup(mock.Close)
+	e := newTestEnvWith(t, func(c *config.Config) {
+		c.Metadata.Enabled = true
+		c.Metadata.BaseURL = mock.URL
+	})
+	return e, mock.URL
+}
+
+// seedChapteredBook seeds a five-chapter book (chapters start every 100s) and
+// returns its library.
+func seedChapteredBook(t *testing.T, e *testEnv, path, asin string) *catalog.Library {
+	t.Helper()
+	ctx := context.Background()
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := &catalog.Book{LibraryID: lib.ID, RelPath: path, Title: "Two", Author: "A", ASIN: asin, AddedAt: "2020-01-01"}
+	for i := range 5 {
+		book.Chapters = append(book.Chapters, metadata.Chapter{Index: i, Title: "Ch", FilePath: path, Start: float64(i * 100), End: float64(i*100 + 100), BookOffset: float64(i * 100)})
+	}
+	if _, err := e.cat.UpsertBook(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	return lib
+}
+
+// bundleBody is the slice of the envelope the bundle tests read.
+type bundleBody struct {
+	Matched bool `json:"matched"`
+	Work    struct {
+		ID         string `json:"id"`
+		Characters []struct {
+			ID string `json:"id"`
+		} `json:"characters"`
+		Recaps []struct {
+			Text string `json:"text"`
+		} `json:"recaps"`
+		RecapSummary *struct {
+			InShort string `json:"in_short"`
+			Ending  string `json:"ending"`
+		} `json:"recap_summary"`
+		Attribution *struct {
+			Credit    string `json:"credit"`
+			SourceURL string `json:"source_url"`
+		} `json:"attribution"`
+	} `json:"work"`
+	Recording struct {
+		ChapterCount int `json:"chapter_count"`
+	} `json:"recording"`
+	Previous []struct {
+		ID           string `json:"id"`
+		RecapSummary *struct {
+			InShort string `json:"in_short"`
+			Ending  string `json:"ending"`
+		} `json:"recap_summary"`
+	} `json:"previous"`
+}
+
+func getBundle(t *testing.T, e *testEnv, path, token string) bundleBody {
+	t.Helper()
+	resp, body := e.do(t, "GET", path, token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d %s", path, resp.StatusCode, body)
+	}
+	var b bundleBody
+	if err := json.Unmarshal([]byte(body), &b); err != nil {
+		t.Fatalf("decode: %v: %s", err, body)
+	}
+	return b
+}
+
+func characterIDsOf(b bundleBody) []string {
+	var ids []string
+	for _, c := range b.Work.Characters {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
+// TestMetaIncludePrevious: include=previous adds the works before this one,
+// nearest first, a failed one left out; without it (or with an unknown value)
+// the envelope is unchanged, and the cached envelope never carries a previous
+// list into a later plain request.
+func TestMetaIncludePrevious(t *testing.T) {
+	e, base := bundleEnv(t)
+	lib := seedChapteredBook(t, e, "A/Two", "B0TWO")
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+	path := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/meta?path=" + escape("A/Two")
+
+	b := getBundle(t, e, path+"&include=previous", adminTok)
+	if len(b.Previous) != 1 || b.Previous[0].ID != "book-one" {
+		t.Fatalf("previous = %+v, want [book-one] (book-gone 404s, book-three is later)", b.Previous)
+	}
+	// Without spoilers=hide a previous work is whole.
+	if s := b.Previous[0].RecapSummary; s == nil || s.Ending != "One ends." {
+		t.Fatalf("previous summary = %+v", s)
+	}
+	// The additive fields ride along.
+	if b.Recording.ChapterCount != 5 || b.Work.Attribution == nil || b.Work.Attribution.SourceURL != base+"/work?id=book-two" {
+		t.Fatalf("chapter_count/attribution = %d / %+v", b.Recording.ChapterCount, b.Work.Attribution)
+	}
+
+	for _, q := range []string{"", "&include=everything", "&spoilers=maybe"} {
+		_, body := e.do(t, "GET", path+q, adminTok, "")
+		if strings.Contains(body, `"previous"`) {
+			t.Fatalf("%q carries previous: %s", q, body)
+		}
+		if !strings.Contains(body, `"ending":"Two ends."`) || !strings.Contains(body, `"late"`) {
+			t.Fatalf("%q is not the full envelope: %s", q, body)
+		}
+	}
+}
+
+// TestMetaSpoilersHide is the allowed+denied pair for spoiler gating: the
+// caller's OWN saved progress gates the current work, and another user's
+// progress on the same book never leaks into it.
+func TestMetaSpoilersHide(t *testing.T) {
+	e, _ := bundleEnv(t)
+	ctx := context.Background()
+	lib := seedChapteredBook(t, e, "A/Two", "B0TWO")
+	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
+	reader, err := e.auth.CreateUser(ctx, "reader", "reader-password", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantWholeLibrary(ctx, reader.ID, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	readerTok, _ := e.auth.IssueToken(ctx, reader.ID, auth.KindSession, "t", 0)
+	path := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/meta?path=" + escape("A/Two") + "&spoilers=hide&include=previous"
+
+	// No progress: the opening cast, the chapter-0 recap, no summary; the
+	// previous book loses only its ending.
+	b := getBundle(t, e, path, readerTok)
+	if ids := characterIDsOf(b); !slices.Equal(ids, []string{"early"}) {
+		t.Fatalf("no progress: characters = %v, want [early]", ids)
+	}
+	if len(b.Work.Recaps) != 1 || b.Work.Recaps[0].Text != "Before." || b.Work.RecapSummary != nil {
+		t.Fatalf("no progress: recaps = %+v, summary = %+v", b.Work.Recaps, b.Work.RecapSummary)
+	}
+	if len(b.Previous) != 1 || b.Previous[0].RecapSummary == nil || b.Previous[0].RecapSummary.InShort != "One in short." || b.Previous[0].RecapSummary.Ending != "" {
+		t.Fatalf("previous under spoilers=hide = %+v", b.Previous)
+	}
+
+	// The admin is mid-book (inside chapter 4): more cast, the chapter-2 recap.
+	if _, err := e.cat.SaveProgress(ctx, e.adminID, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: "A/Two"}, Position: 350, Duration: 500}); err != nil {
+		t.Fatal(err)
+	}
+	b = getBundle(t, e, path, adminTok)
+	if ids := characterIDsOf(b); !slices.Equal(ids, []string{"early", "middle"}) {
+		t.Fatalf("chapter 4: characters = %v, want [early middle]", ids)
+	}
+	if len(b.Work.Recaps) != 2 || b.Work.RecapSummary != nil {
+		t.Fatalf("chapter 4: recaps = %+v, summary = %+v", b.Work.Recaps, b.Work.RecapSummary)
+	}
+
+	// Denied: the admin's progress is not the reader's. The reader still sees
+	// only the opening cast.
+	if ids := characterIDsOf(getBundle(t, e, path, readerTok)); !slices.Equal(ids, []string{"early"}) {
+		t.Fatalf("another user's progress leaked: characters = %v", ids)
+	}
+
+	// Finished reveals the whole current work.
+	if _, err := e.cat.SaveProgress(ctx, reader.ID, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: "A/Two"}, Position: 10, Duration: 500, Finished: true}); err != nil {
+		t.Fatal(err)
+	}
+	b = getBundle(t, e, path, readerTok)
+	if ids := characterIDsOf(b); len(ids) != 3 || b.Work.RecapSummary == nil || b.Work.RecapSummary.Ending != "Two ends." {
+		t.Fatalf("finished: characters = %v, summary = %+v", ids, b.Work.RecapSummary)
+	}
+
+	// The gating never reached the shared cached envelope: a plain request is
+	// whole.
+	if ids := characterIDsOf(getBundle(t, e, "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/meta?path="+escape("A/Two"), readerTok)); len(ids) != 3 {
+		t.Fatalf("plain request after gating: characters = %v", ids)
+	}
+}
+
+// TestMetaBundleCapability: meta_bundle follows the metadata switch.
+func TestMetaBundleCapability(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		e := newMetaEnv(t, enabled, 0)
+		_, si := e.do(t, "GET", "/api/v1/server", "", "")
+		if want := `"meta_bundle":` + strconv.FormatBool(enabled); !strings.Contains(si, want) {
+			t.Fatalf("enabled=%v: /server missing %s: %s", enabled, want, si)
+		}
+	}
+}
+
+// TestMetaPersistentCache: the api wires the catalog's meta_cache behind the
+// service, so a lookup leaves a row a restarted server reads.
+func TestMetaPersistentCache(t *testing.T) {
+	e := newMetaEnv(t, true, 0)
+	libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
+	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+	path := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta?path=" + escape("Andy Weir/The Martian")
+	if resp, body := e.do(t, "GET", path, adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("meta = %d %s", resp.StatusCode, body)
+	}
+	row, err := e.cat.GetMetaCache(context.Background(), "a:B00FLIJJSY")
+	if err != nil || row == nil || !strings.Contains(string(row.Payload), `"the-martian"`) || row.Source != e.cfg.Metadata.BaseURL {
+		t.Fatalf("meta_cache row = %+v, %v", row, err)
 	}
 }

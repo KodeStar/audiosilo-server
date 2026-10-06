@@ -470,8 +470,8 @@ func recordRestore(ctx context.Context, cat *catalog.Catalog, r *backup.RestoreR
 // retention, once at startup and then daily until ctx is cancelled: rolls
 // listening sessions older than sessions() (Settings > General, read at each run)
 // up into per-day totals (dropping their device, app and time of day), blanks the
-// address of signed-out devices, and drops audit events and feed events past their
-// retention.
+// address of signed-out devices, drops audit events and feed events past their
+// retention, and trims the community metadata cache to its newest rows.
 func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service, sessions func() time.Duration, log *slog.Logger) {
 	prune := func() {
 		now := time.Now()
@@ -483,6 +483,9 @@ func retention(ctx context.Context, cat *catalog.Catalog, authSvc *auth.Service,
 		}
 		if err := authSvc.ForgetRevokedAddresses(ctx); err != nil && ctx.Err() == nil {
 			log.Warn("forgetting signed-out device addresses failed", "err", err)
+		}
+		if _, err := cat.PruneMetaCache(ctx, catalog.MetaCacheRows); err != nil && ctx.Err() == nil {
+			log.Warn("meta cache retention failed", "err", err)
 		}
 		n, err := cat.PruneSessions(ctx, now.Add(-sessions()), time.Local)
 		if err != nil {
