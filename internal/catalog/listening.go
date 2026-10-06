@@ -295,6 +295,9 @@ func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part 
 			return err
 		}
 	}
+	if err := carryListsState(ctx, tx, libraryID, part.Path, into); err != nil {
+		return err
+	}
 	return carryFavourites(ctx, tx, libraryID, part.Path, into)
 }
 
