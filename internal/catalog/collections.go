@@ -78,7 +78,7 @@ var collectionItems = orderedList{
 	max:     MaxCollectionItems,
 	full:    ErrCollectionFull,
 	load:    `SELECT library_id, rel_path, added_at, position FROM collection_items WHERE collection_id = ?` + orderBy,
-	visible: `SELECT library_id, rel_path, added_at, position FROM collection_items WHERE collection_id = ? AND `,
+	visible: `SELECT library_id, rel_path, added_at FROM collection_items WHERE collection_id = ? AND `,
 	insert:  `INSERT INTO collection_items(collection_id, library_id, rel_path, position, added_at) VALUES(?,?,?,?,?)`,
 	setPos:  `UPDATE collection_items SET position = ? WHERE collection_id = ? AND library_id = ? AND rel_path = ?`,
 	shift:   `UPDATE collection_items SET position = position + 1 WHERE collection_id = ? AND position >= ?`,
@@ -456,11 +456,14 @@ func (c *Catalog) changeItems(ctx context.Context, op string, id, userID int64,
 }
 
 // AddCollectionItem adds a book (ref, its own path: the caller resolves and
-// authorizes it) to a collection userID owns, at position (orderedList.add). A
-// full collection is ErrCollectionFull (an ErrListFull).
-func (c *Catalog) AddCollectionItem(ctx context.Context, id, userID int64, ref Ref, position *int) error {
+// authorizes it) to a collection userID owns, at position, an index in the items
+// as the owner sees them with scopes (their UserScopes; see orderedList.add). A
+// collection whose visible items number MaxCollectionItems is ErrCollectionFull
+// (an ErrListFull); one full only because of hidden items loses the oldest of
+// them instead.
+func (c *Catalog) AddCollectionItem(ctx context.Context, id, userID int64, ref Ref, position *int, scopes []Scope) error {
 	return c.changeItems(ctx, "AddCollectionItem", id, userID, func(tx *sql.Tx, now string) (bool, error) {
-		return collectionItems.add(ctx, tx, id, ref, position, now)
+		return collectionItems.add(ctx, tx, id, ref, position, scopes, now)
 	})
 }
 

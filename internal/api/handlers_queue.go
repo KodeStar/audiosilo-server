@@ -16,8 +16,9 @@ import (
 const listBodyMax = 4 << 20
 
 // listAdd is the body of an add to a list (POST /me/queue, POST
-// /me/collections/{id}/items): a book and where to put it (0-based in the stored
-// order; absent = the end, or where it already is).
+// /me/collections/{id}/items): a book and where to put it (a 0-based index in the
+// list as the caller sees it, as the GET answers it; absent = after the last
+// entry, or where it already is; see catalog orderedList.add).
 type listAdd struct {
 	LibraryID int64  `json:"library_id"`
 	Path      string `json:"path"`
@@ -140,14 +141,15 @@ func (a *API) handleSetQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAddToQueue queues one book (or moves a queued one to position) and
-// answers the queue. A full queue is 409 queue_full (writeCatalogError).
+// answers the queue. A queue the caller sees full is 409 queue_full
+// (writeCatalogError).
 func (a *API) handleAddToQueue(w http.ResponseWriter, r *http.Request) {
 	ref, position, scopes, ok := a.decodeListAdd(w, r)
 	if !ok {
 		return
 	}
 	u := userFrom(r.Context())
-	if err := a.cat.AddToQueue(r.Context(), u.ID, ref, position); err != nil {
+	if err := a.cat.AddToQueue(r.Context(), u.ID, ref, position, scopes); err != nil {
 		a.writeCatalogError(w, err, "add to queue failed", "could not add the book", "user", u.ID)
 		return
 	}

@@ -41,7 +41,7 @@ func TestMoveCarriesLists(t *testing.T) {
 	queue := func(user int64, paths ...string) {
 		t.Helper()
 		for _, p := range paths {
-			if err := c.AddToQueue(ctx, user, ref(p), nil); err != nil {
+			if err := c.AddToQueue(ctx, user, ref(p), nil, all); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -53,12 +53,12 @@ func TestMoveCarriesLists(t *testing.T) {
 	annCol, _ := c.CreateCollection(ctx, ann, "Ann's", "")
 	bobCol, _ := c.CreateCollection(ctx, bob, "Bob's", "")
 	for _, p := range []string{"x", "old", "y"} {
-		if err := c.AddCollectionItem(ctx, annCol.ID, ann, ref(p), nil); err != nil {
+		if err := c.AddCollectionItem(ctx, annCol.ID, ann, ref(p), nil, all); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, p := range []string{"old", "new"} {
-		if err := c.AddCollectionItem(ctx, bobCol.ID, bob, ref(p), nil); err != nil {
+		if err := c.AddCollectionItem(ctx, bobCol.ID, bob, ref(p), nil, all); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -88,13 +88,13 @@ func TestJoinCarriesLists(t *testing.T) {
 	cd1, cd2, cd3 := into+"/CD1", into+"/CD2", into+"/CD3"
 	ref := func(p string) Ref { return Ref{LibraryID: lib.ID, Path: p} }
 	for _, p := range []string{"a", cd2, "b", cd1, cd3} {
-		if err := c.AddToQueue(ctx, ann, ref(p), nil); err != nil {
+		if err := c.AddToQueue(ctx, ann, ref(p), nil, all); err != nil {
 			t.Fatal(err)
 		}
 	}
 	col, _ := c.CreateCollection(ctx, ann, "Discs", "")
 	for _, p := range []string{cd1, "a", cd2} {
-		if err := c.AddCollectionItem(ctx, col.ID, ann, ref(p), nil); err != nil {
+		if err := c.AddCollectionItem(ctx, col.ID, ann, ref(p), nil, all); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -115,11 +115,12 @@ func TestListsPurgedWithUserAndLibrary(t *testing.T) {
 	keep, _ := c.CreateLibrary(ctx, Library{Name: "K", Root: "/tmp/k"})
 	ann, bob := seedNamedUser(t, c, "ann"), seedNamedUser(t, c, "bob")
 	ref := func(l *Library, p string) Ref { return Ref{LibraryID: l.ID, Path: p} }
+	both := []Scope{{LibraryID: lib.ID, AllowAll: true}, {LibraryID: keep.ID, AllowAll: true}}
 	for _, u := range []int64{ann, bob} {
-		if err := c.AddToQueue(ctx, u, ref(lib, "a"), nil); err != nil {
+		if err := c.AddToQueue(ctx, u, ref(lib, "a"), nil, both); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.AddToQueue(ctx, u, ref(keep, "k"), nil); err != nil {
+		if err := c.AddToQueue(ctx, u, ref(keep, "k"), nil, both); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -131,10 +132,10 @@ func TestListsPurgedWithUserAndLibrary(t *testing.T) {
 		if owner == ann {
 			other = bob
 		}
-		if err := c.AddCollectionItem(ctx, col.ID, owner, ref(lib, "a"), nil); err != nil {
+		if err := c.AddCollectionItem(ctx, col.ID, owner, ref(lib, "a"), nil, both); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.AddCollectionItem(ctx, col.ID, owner, ref(keep, "k"), nil); err != nil {
+		if err := c.AddCollectionItem(ctx, col.ID, owner, ref(keep, "k"), nil, both); err != nil {
 			t.Fatal(err)
 		}
 		if err := c.SetCollectionShares(ctx, col.ID, owner, []int64{other}); err != nil {

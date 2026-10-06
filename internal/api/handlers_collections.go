@@ -192,7 +192,7 @@ func (a *API) handleAddCollectionItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.cat.AddCollectionItem(r.Context(), id, u.ID, ref, position); err != nil {
+	if err := a.cat.AddCollectionItem(r.Context(), id, u.ID, ref, position, scopes); err != nil {
 		a.writeCollectionError(w, err, "add collection item failed", "could not add the book", "collection", id)
 		return
 	}

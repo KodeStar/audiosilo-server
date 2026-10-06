@@ -328,7 +328,7 @@ func TestCollectionLimitsHTTP(t *testing.T) {
 		t.Fatalf("replace with %d = %d %s", catalog.MaxCollectionItems, resp.StatusCode, b)
 	}
 	for i := range catalog.MaxCollectionItems {
-		if err := l.cat.AddCollectionItem(ctx, first.ID, l.olive, catalog.Ref{LibraryID: l.libID, Path: many[i]}, nil); err != nil {
+		if err := l.cat.AddCollectionItem(ctx, first.ID, l.olive, catalog.Ref{LibraryID: l.libID, Path: many[i]}, nil, []catalog.Scope{{LibraryID: l.libID, AllowAll: true}}); err != nil {
 			t.Fatal(err)
 		}
 	}

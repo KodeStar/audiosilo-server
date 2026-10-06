@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Ordered lists of books: the up-next queue (up_next, one per user) and a
@@ -15,6 +16,13 @@ import (
 // the position column; a read returns only the entries the READER's current
 // access allows (the rows themselves are kept, as for favourites) with the book
 // attached when one is indexed at the path.
+//
+// A row outside the reader's current access is "hidden": never returned or
+// counted, but kept, so it comes back with access. A writer works in the list as
+// they see it: an add's position is an index among their visible rows, and the
+// cap counts only those (an add the hidden rows alone would overflow evicts the
+// oldest of them; see orderedList.add). A whole-list replace deletes hidden rows
+// like any other row not listed.
 
 // ListItem is one entry of an ordered list (an up-next entry, a collection item):
 // the book's path identity, when it was added, and the book itself (the list
@@ -26,8 +34,9 @@ type ListItem struct {
 }
 
 var (
-	// ErrListFull is an add to a list already holding its maximum. Each list
-	// returns its own error wrapping it (ErrQueueFull, ErrCollectionFull).
+	// ErrListFull is an add of a new book to a list whose rows the caller can
+	// see already number its maximum. Each list returns its own error wrapping it
+	// (ErrQueueFull, ErrCollectionFull).
 	ErrListFull = errors.New("list is full")
 	// ErrQueueFull is an add to a full up-next queue (MaxQueue).
 	ErrQueueFull = fmt.Errorf("%w: the queue holds at most %d books", ErrListFull, MaxQueue)
@@ -45,17 +54,20 @@ var (
 //
 // position orders an owner's rows and need not be dense: a remove leaves a gap,
 // an add at an index shifts only the rows from there on, and a replace keeps
-// every row whose stored position still fits its new place. A 0-based index (an
-// add's position) is a rank in the stored order, hidden rows included.
+// every row whose stored position still fits its new place. An add's 0-based
+// index counts only the rows the caller can see (see add); it never is a rank in
+// the stored order, which holds hidden rows too.
 type orderedList struct {
+	// max is how many rows an owner's list holds: the visible rows an add may
+	// reach, and the stored rows an add keeps it to (evicting hidden ones).
 	max int
 	// full is the error of an add to a full list (wraps ErrListFull).
 	full error
 	// load reads an owner's rows in stored order: library_id, rel_path, added_at,
 	// position. One parameter: the owner.
 	load string
-	// visible is load's SELECT up to "WHERE <owner> = ? AND ", for a scope filter
-	// (scopesFilterSQL) and then orderBy appended.
+	// visible reads library_id, rel_path, added_at up to "WHERE <owner> = ? AND ",
+	// for a scope filter (scopesFilterSQL) and then orderBy appended.
 	visible string
 	// insert: owner, library_id, rel_path, position, added_at.
 	insert string
@@ -101,13 +113,20 @@ func (l orderedList) fits(refs []Ref) error {
 	return nil
 }
 
-// add puts ref on the owner's list at position (0-based in the stored order; nil,
-// or past the end, = the end; a negative one counts as 0), inside tx. A ref already
-// listed moves to position when one is given and otherwise stays where it is (an
-// idempotent add). A new ref on a full list is the list's full error. It reports
-// whether anything changed. Whatever the list's length, the write is at most one
-// range shift and one insert or update.
-func (l orderedList) add(ctx context.Context, tx listTx, owner int64, ref Ref, position *int, now string) (bool, error) {
+// add puts ref on the owner's list at position, inside tx, as the caller sees
+// the list (scopes, their UserScopes: a row outside them is hidden, and the
+// caller never sees or counts it). position is a 0-based index among the visible
+// rows: ref lands just before the visible row now at that index; nil, or at
+// least the number of visible rows, puts it just after the last visible row (the
+// stored end when none is visible). Hidden rows stay where they are. A ref
+// already listed moves to position when one is given and otherwise stays where it
+// is (an idempotent add). A new ref when the visible rows already number l.max is
+// the list's full error; when hidden rows fill the stored list instead, the
+// oldest of them (added_at, then stored order) are deleted until the new ref
+// fits. It reports whether anything changed. Whatever the list's length, the
+// write is at most one range shift and one insert or update (plus the
+// evictions).
+func (l orderedList) add(ctx context.Context, tx listTx, owner int64, ref Ref, position *int, scopes []Scope, now string) (bool, error) {
 	rows, err := l.rows(ctx, tx, owner)
 	if err != nil {
 		return false, err
@@ -116,17 +135,16 @@ func (l orderedList) add(ctx context.Context, tx listTx, owner int64, ref Ref, p
 	switch {
 	case cur >= 0 && position == nil:
 		return false, nil
-	case cur < 0 && len(rows) >= l.max:
-		return false, l.full
+	case cur < 0:
+		if rows, err = l.makeRoom(ctx, tx, owner, rows, scopes); err != nil {
+			return false, err
+		}
 	}
 	rest := rows // the other rows, in stored order
 	if cur >= 0 {
 		rest = slices.Delete(slices.Clone(rows), cur, cur+1)
 	}
-	at := len(rest)
-	if position != nil {
-		at = min(max(*position, 0), len(rest))
-	}
+	at := visibleAt(rest, position, scopes)
 	if at == cur {
 		return false, nil // already there
 	}
@@ -156,6 +174,60 @@ func (l orderedList) add(ctx context.Context, tx listTx, owner int64, ref Ref, p
 		_, err = tx.ExecContext(ctx, l.insert, owner, ref.LibraryID, ref.Path, pos, now)
 	}
 	return err == nil, err
+}
+
+// makeRoom makes room for one new row on the owner's list stored as rows, inside
+// tx, and returns the rows that remain: the list's full error when the rows the
+// caller can see (scopes) already number l.max, else, when the stored rows
+// would then exceed l.max, the hidden rows deleted oldest first (added_at, ties in
+// stored order) until they wouldn't.
+func (l orderedList) makeRoom(ctx context.Context, tx listTx, owner int64, rows []listRow, scopes []Scope) ([]listRow, error) {
+	var hidden []int // indexes into rows, in stored order
+	for i, r := range rows {
+		if !scopesAllow(scopes, r.Ref) {
+			hidden = append(hidden, i)
+		}
+	}
+	if len(rows)-len(hidden) >= l.max {
+		return nil, l.full
+	}
+	over := len(rows) + 1 - l.max // at most len(hidden), as the visible rows are fewer than l.max
+	if over <= 0 {
+		return rows, nil
+	}
+	slices.SortStableFunc(hidden, func(a, b int) int { return strings.Compare(rows[a].AddedAt, rows[b].AddedAt) })
+	evict := make(map[int]bool, over)
+	for _, i := range hidden[:over] {
+		if _, err := tx.ExecContext(ctx, l.remove, owner, rows[i].LibraryID, rows[i].Path); err != nil {
+			return nil, err
+		}
+		evict[i] = true
+	}
+	kept := make([]listRow, 0, len(rows)-over)
+	for i, r := range rows {
+		if !evict[i] {
+			kept = append(kept, r)
+		}
+	}
+	return kept, nil
+}
+
+// visibleAt is where a row goes among rest (the list's other rows, in stored
+// order) for position (see add): the index in rest of the visible row (scopes) at
+// that index among the visible ones, else just after the last visible row, else
+// (none visible) the end. A negative position counts as 0.
+func visibleAt(rest []listRow, position *int, scopes []Scope) int {
+	at, seen := len(rest), 0
+	for i, r := range rest {
+		if !scopesAllow(scopes, r.Ref) {
+			continue
+		}
+		if position != nil && seen == max(*position, 0) {
+			return i
+		}
+		at, seen = i+1, seen+1
+	}
+	return at
 }
 
 // replace makes refs (already deduplicated and checked, see listableRefs and
@@ -281,8 +353,7 @@ func (l orderedList) drop(ctx context.Context, tx listTx, owner int64, ref Ref) 
 func (c *Catalog) visibleItems(ctx context.Context, l orderedList, owner int64, scopes []Scope) ([]ListItem, error) {
 	filter, fargs := scopesFilterSQL("library_id", "rel_path", scopes)
 	items, err := queryRows(ctx, c.db, func(rows *sql.Rows, it *ListItem) error {
-		var pos int64
-		return rows.Scan(&it.LibraryID, &it.Path, &it.AddedAt, &pos)
+		return rows.Scan(&it.LibraryID, &it.Path, &it.AddedAt)
 	}, l.visible+filter+orderBy, append([]any{owner}, fargs...)...)
 	if err != nil {
 		return nil, err

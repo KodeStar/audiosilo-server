@@ -13,7 +13,7 @@ var upNext = orderedList{
 	max:     MaxQueue,
 	full:    ErrQueueFull,
 	load:    `SELECT library_id, rel_path, added_at, position FROM up_next WHERE user_id = ?` + orderBy,
-	visible: `SELECT library_id, rel_path, added_at, position FROM up_next WHERE user_id = ? AND `,
+	visible: `SELECT library_id, rel_path, added_at FROM up_next WHERE user_id = ? AND `,
 	insert:  `INSERT INTO up_next(user_id, library_id, rel_path, position, added_at) VALUES(?,?,?,?,?)`,
 	setPos:  `UPDATE up_next SET position = ? WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
 	shift:   `UPDATE up_next SET position = position + 1 WHERE user_id = ? AND position >= ?`,
@@ -22,17 +22,21 @@ var upNext = orderedList{
 
 // Queue returns a user's up-next queue in order: only the books their current
 // access allows (scopes, from UserScopes); entries under a since-revoked share are
-// kept but not returned, and come back if access does.
+// kept but not returned, and come back if access does (unless an add evicted them
+// to make room, see AddToQueue).
 func (c *Catalog) Queue(ctx context.Context, userID int64, scopes []Scope) ([]ListItem, error) {
 	return c.visibleItems(ctx, upNext, userID, scopes)
 }
 
 // AddToQueue queues a book (ref, its own path: the caller resolves and authorizes
-// it) at position (see orderedList.add): an already-queued book moves only when a
-// position is given. A full queue is ErrQueueFull (an ErrListFull).
-func (c *Catalog) AddToQueue(ctx context.Context, userID int64, ref Ref, position *int) error {
+// it) at position, an index in the queue as the user sees it with scopes (their
+// UserScopes; see orderedList.add): an already-queued book moves only when a
+// position is given. A queue whose visible entries number MaxQueue is
+// ErrQueueFull (an ErrListFull); one full only because of hidden entries loses
+// the oldest of them instead.
+func (c *Catalog) AddToQueue(ctx context.Context, userID int64, ref Ref, position *int, scopes []Scope) error {
 	return c.db.WithTx(ctx, "AddToQueue", func(tx *sql.Tx) error {
-		_, err := upNext.add(ctx, tx, userID, ref, position, c.stamp())
+		_, err := upNext.add(ctx, tx, userID, ref, position, scopes, c.stamp())
 		return err
 	})
 }

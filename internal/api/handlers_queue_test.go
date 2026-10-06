@@ -277,11 +277,11 @@ func TestQueueLimits(t *testing.T) {
 	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(many[:catalog.MaxQueue]...)); resp.StatusCode != http.StatusOK {
 		t.Fatalf("replace with %d = %d %s", catalog.MaxQueue, resp.StatusCode, b)
 	}
-	if err := l.cat.AddToQueue(ctx, l.olive, catalog.Ref{LibraryID: l.libID, Path: cradleBook}, nil); err != nil {
+	if err := l.cat.AddToQueue(ctx, l.olive, catalog.Ref{LibraryID: l.libID, Path: cradleBook}, nil, []catalog.Scope{{LibraryID: l.libID, AllowAll: true}}); err != nil {
 		t.Fatal(err)
 	}
 	for i := range catalog.MaxQueue - 1 {
-		if err := l.cat.AddToQueue(ctx, l.olive, catalog.Ref{LibraryID: l.libID, Path: many[i]}, nil); err != nil {
+		if err := l.cat.AddToQueue(ctx, l.olive, catalog.Ref{LibraryID: l.libID, Path: many[i]}, nil, []catalog.Scope{{LibraryID: l.libID, AllowAll: true}}); err != nil {
 			t.Fatal(err)
 		}
 	}

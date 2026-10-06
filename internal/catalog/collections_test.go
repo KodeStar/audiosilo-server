@@ -95,7 +95,7 @@ func TestCollectionRoles(t *testing.T) {
 		t.Fatalf("created = %+v", col)
 	}
 	for _, p := range []string{"Adult/X", "Kid/A"} {
-		if err := c.AddCollectionItem(ctx, col.ID, e.owner, e.ref(p), nil); err != nil {
+		if err := c.AddCollectionItem(ctx, col.ID, e.owner, e.ref(p), nil, e.all); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -130,7 +130,7 @@ func TestCollectionRoles(t *testing.T) {
 	name := "Mine now"
 	writes := map[string]func(user int64) error{
 		"update":       func(u int64) error { return c.UpdateCollection(ctx, col.ID, u, &name, nil) },
-		"add item":     func(u int64) error { return c.AddCollectionItem(ctx, col.ID, u, e.ref("Kid/A"), intp(0)) },
+		"add item":     func(u int64) error { return c.AddCollectionItem(ctx, col.ID, u, e.ref("Kid/A"), intp(0), e.all) },
 		"set items":    func(u int64) error { return c.SetCollectionItems(ctx, col.ID, u, nil, e.all) },
 		"remove item":  func(u int64) error { return c.RemoveCollectionItem(ctx, col.ID, u, e.ref("Kid/A")) },
 		"set shares":   func(u int64) error { return c.SetCollectionShares(ctx, col.ID, u, nil) },
@@ -223,7 +223,7 @@ func TestCollectionsOrderAndUpdatedAt(t *testing.T) {
 		return col.UpdatedAt
 	}
 	before := stamp(a.ID)
-	if err := c.AddCollectionItem(ctx, a.ID, e.owner, e.ref("Kid/A"), nil); err != nil {
+	if err := c.AddCollectionItem(ctx, a.ID, e.owner, e.ref("Kid/A"), nil, e.all); err != nil {
 		t.Fatal(err)
 	}
 	afterAdd := stamp(a.ID)
@@ -233,7 +233,7 @@ func TestCollectionsOrderAndUpdatedAt(t *testing.T) {
 	if got := names(); got != "A,B,S2,S1" {
 		t.Fatalf("order after A changed = %s", got)
 	}
-	if err := c.AddCollectionItem(ctx, a.ID, e.owner, e.ref("Kid/A"), nil); err != nil {
+	if err := c.AddCollectionItem(ctx, a.ID, e.owner, e.ref("Kid/A"), nil, e.all); err != nil {
 		t.Fatal(err)
 	}
 	if stamp(a.ID) != afterAdd {
@@ -285,7 +285,7 @@ func TestCollectionLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.AddCollectionItem(ctx, first.ID, e.owner, e.ref("Kid/A"), nil); !errors.Is(err, ErrListFull) {
+	if err := c.AddCollectionItem(ctx, first.ID, e.owner, e.ref("Kid/A"), nil, e.all); !errors.Is(err, ErrListFull) {
 		t.Fatalf("add to a full collection = %v, want ErrListFull", err)
 	}
 	if err := c.SetCollectionItems(ctx, first.ID, e.owner, make([]Ref, MaxCollectionItems+1), e.all); !errors.Is(err, ErrTooManyItems) {

@@ -182,10 +182,16 @@ Player redesign Phase 1b: `up_next` (`0025`: a user's queue) and `collections` /
 `collection_items` / `collection_shares` (`0026`: named lists, shared read-only with named
 users). Items are path-keyed like favourites (no FK to `books`), ordered by `position`, and
 share ONE implementation (`catalog/lists.go` `orderedList`: add-at/move as one range shift plus
-the row, remove leaving a gap (positions need not be dense; an add's index is a rank in the
-stored order), replace with the skip rule writing only the rows that changed, books attached by
-`booksAt`); every read passes through the READER's current access (a viewer never sees or
-counts an owner's item outside their own shares); a move or join carries them
+the row, remove leaving a gap (positions need not be dense), replace with the skip rule writing
+only the rows that changed, books attached by `booksAt`); every read passes through the
+READER's current access (a viewer never sees or counts an owner's item outside their own
+shares; such "hidden" rows are kept). An add works in the list as the CALLER sees it (their
+scopes; for a collection, the owner's): `position` is a 0-based index among the visible rows
+(lands just before the visible row at it; absent or past the visible end = just after the last
+visible row; hidden rows stay put), and the caps (`MaxQueue` 500, `MaxCollectionItems` 1000)
+count visible rows: a new book the hidden rows alone would overflow evicts the oldest hidden
+rows (`added_at`), 409 only when the visible rows are at the cap (a whole-list PUT replaces
+everything, hidden rows included, and its length check is unchanged); a move or join carries them
 (`carryListeningState`, the destination entry kept on a collision).
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403

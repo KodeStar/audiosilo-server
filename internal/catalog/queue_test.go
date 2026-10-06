@@ -44,7 +44,7 @@ func TestQueueAddMoveRemove(t *testing.T) {
 	ref := func(p string) Ref { return Ref{LibraryID: lib.ID, Path: p} }
 	add := func(p string, pos *int) {
 		t.Helper()
-		if err := c.AddToQueue(ctx, user, ref(p), pos); err != nil {
+		if err := c.AddToQueue(ctx, user, ref(p), pos, all); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -87,14 +87,14 @@ func TestQueueFull(t *testing.T) {
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	user := seedUser(t, c, ctx)
 	for i := range MaxQueue {
-		if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: fmt.Sprintf("b%03d", i)}, nil); err != nil {
+		if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: fmt.Sprintf("b%03d", i)}, nil, []Scope{{LibraryID: lib.ID, AllowAll: true}}); err != nil {
 			t.Fatalf("add %d: %v", i, err)
 		}
 	}
-	if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: "one-more"}, nil); !errors.Is(err, ErrListFull) {
+	if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: "one-more"}, nil, []Scope{{LibraryID: lib.ID, AllowAll: true}}); !errors.Is(err, ErrListFull) {
 		t.Fatalf("add to a full queue = %v, want ErrListFull", err)
 	}
-	if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: "b499"}, intp(0)); err != nil {
+	if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: "b499"}, intp(0), []Scope{{LibraryID: lib.ID, AllowAll: true}}); err != nil {
 		t.Fatalf("move within a full queue: %v", err)
 	}
 	got := queuePaths(t, c, user, []Scope{{LibraryID: lib.ID, AllowAll: true}})
@@ -123,10 +123,10 @@ func TestSetQueueSkipRule(t *testing.T) {
 	ref := func(p string) Ref { return Ref{LibraryID: lib.ID, Path: p} }
 
 	// A row stored while the user could reach it, now hidden.
-	if err := c.AddToQueue(ctx, user, ref("Adult/X"), nil); err != nil {
+	if err := c.AddToQueue(ctx, user, ref("Adult/X"), nil, []Scope{{LibraryID: lib.ID, AllowAll: true}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AddToQueue(ctx, user, ref("Kid/A"), nil); err != nil {
+	if err := c.AddToQueue(ctx, user, ref("Kid/A"), nil, []Scope{{LibraryID: lib.ID, AllowAll: true}}); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := c.Queue(ctx, user, kid)
@@ -171,7 +171,7 @@ func TestQueueVisibility(t *testing.T) {
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	user := seedUser(t, c, ctx)
 	for _, p := range []string{"Kid/A", "Adult/X"} {
-		if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: p}, nil); err != nil {
+		if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: p}, nil, []Scope{{LibraryID: lib.ID, AllowAll: true}}); err != nil {
 			t.Fatal(err)
 		}
 	}

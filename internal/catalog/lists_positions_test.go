@@ -71,22 +71,22 @@ func TestListWritesStayLocal(t *testing.T) {
 
 	want = slices.Insert(want, 0, "new")
 	step("insert at the front", 2, func(tx listTx) (bool, error) {
-		return upNext.add(ctx, tx, user, ref("new"), intp(0), "now")
+		return upNext.add(ctx, tx, user, ref("new"), intp(0), all, "now")
 	})
 	want = slices.Insert(want, 250, "mid")
 	step("insert in the middle", 2, func(tx listTx) (bool, error) {
-		return upNext.add(ctx, tx, user, ref("mid"), intp(250), "now")
+		return upNext.add(ctx, tx, user, ref("mid"), intp(250), all, "now")
 	})
 	want = slices.Insert(want[:len(want)-1], 0, "b497")
 	step("move the last to the front", 2, func(tx listTx) (bool, error) {
-		return upNext.add(ctx, tx, user, ref("b497"), intp(0), "now")
+		return upNext.add(ctx, tx, user, ref("b497"), intp(0), all, "now")
 	})
 	want = append(slices.Delete(want, 1, 2), "new")
 	step("move to the end", 1, func(tx listTx) (bool, error) {
-		return upNext.add(ctx, tx, user, ref("new"), intp(MaxQueue), "now")
+		return upNext.add(ctx, tx, user, ref("new"), intp(MaxQueue), all, "now")
 	})
 	step("move to where it is", 0, func(tx listTx) (bool, error) {
-		return upNext.add(ctx, tx, user, ref("mid"), intp(slices.Index(want, "mid")), "now")
+		return upNext.add(ctx, tx, user, ref("mid"), intp(slices.Index(want, "mid")), all, "now")
 	})
 	want = slices.DeleteFunc(want, func(p string) bool { return p == "b100" })
 	step("remove", 1, func(tx listTx) (bool, error) {
@@ -125,7 +125,7 @@ func TestListOrderMatchesModel(t *testing.T) {
 				pos = intp(rng.IntN(len(model) + 3))
 			}
 			if err := c.db.WithTx(ctx, "add", func(tx *sql.Tx) error {
-				_, err := upNext.add(ctx, tx, user, ref(p), pos, "now")
+				_, err := upNext.add(ctx, tx, user, ref(p), pos, all, "now")
 				return err
 			}); err != nil {
 				t.Fatal(err)
@@ -187,7 +187,7 @@ func TestListAddBetweenEqualPositions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: "x"}, intp(1)); err != nil {
+	if err := c.AddToQueue(ctx, user, Ref{LibraryID: lib.ID, Path: "x"}, intp(1), []Scope{{LibraryID: lib.ID, AllowAll: true}}); err != nil {
 		t.Fatal(err)
 	}
 	wantPaths(t, "queue", queuePaths(t, c, user, []Scope{{LibraryID: lib.ID, AllowAll: true}}), "a", "x", "b", "c")

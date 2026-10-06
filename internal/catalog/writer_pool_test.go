@@ -92,7 +92,7 @@ func TestUserStateWritesUseTheWriter(t *testing.T) {
 		t.Fatalf("DeleteListeningGoal: %v", err)
 	}
 
-	if err := c.AddToQueue(ctx, uid, ref, nil); err != nil {
+	if err := c.AddToQueue(ctx, uid, ref, nil, scopes); err != nil {
 		t.Fatalf("AddToQueue: %v", err)
 	}
 	if err := c.SetQueue(ctx, uid, []Ref{ref}, scopes); err != nil {
@@ -110,7 +110,7 @@ func TestUserStateWritesUseTheWriter(t *testing.T) {
 	if err := c.UpdateCollection(ctx, col.ID, uid, &name, nil); err != nil {
 		t.Fatalf("UpdateCollection: %v", err)
 	}
-	if err := c.AddCollectionItem(ctx, col.ID, uid, ref, nil); err != nil {
+	if err := c.AddCollectionItem(ctx, col.ID, uid, ref, nil, scopes); err != nil {
 		t.Fatalf("AddCollectionItem: %v", err)
 	}
 	if err := c.SetCollectionItems(ctx, col.ID, uid, []Ref{ref}, scopes); err != nil {
