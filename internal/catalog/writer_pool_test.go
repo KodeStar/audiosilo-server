@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// fileCatalogWithBook is a file-backed catalog holding one indexed book and one
-// user.
+// fileCatalogWithBook is a file-backed catalog (as newTestCatalog's always is)
+// holding one indexed book and one user.
 func fileCatalogWithBook(t *testing.T) (*Catalog, context.Context, int64, Ref) {
 	t.Helper()
-	c, ctx := newFileTestCatalog(t)
+	c, ctx := newTestCatalog(t)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if err != nil {
 		t.Fatal(err)

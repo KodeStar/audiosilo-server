@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata" // the daylight-saving zones dayList is tested in, wherever the tests run
 )
 
 // statsFixture is the session fixture (ann = f.user, clock Thu 2026-10-01 09:00
@@ -326,5 +327,46 @@ func TestListeningGoal(t *testing.T) {
 	var n int
 	if err := f.c.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM listening_goals`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("goals left after the user was deleted = %d, %v", n, err)
+	}
+}
+
+// The day list has every calendar date of the period once, in a zone where
+// daylight saving starts at midnight (that midnight doesn't exist, and from's
+// clock time plus a day read as the day before: a date came out twice, its
+// listening counted twice) and in one that skipped a whole date (the list never
+// got past it).
+func TestDayListEveryDateOnce(t *testing.T) {
+	for _, tc := range []struct {
+		zone     string
+		from, to [3]int // y, m, d (local midnight)
+		dates    int
+		listened string // a day listened to, inside the period
+	}{
+		{"America/Santiago", [3]int{2026, 1, 1}, [3]int{2026, 10, 6}, 278, "2026-09-05"},
+		{"America/Havana", [3]int{2026, 3, 1}, [3]int{2026, 3, 15}, 14, "2026-03-07"},
+		{"Atlantic/Azores", [3]int{2026, 3, 20}, [3]int{2026, 4, 5}, 16, "2026-03-28"},
+		{"Pacific/Apia", [3]int{2011, 12, 28}, [3]int{2012, 1, 2}, 5, "2011-12-29"},
+	} {
+		loc, err := time.LoadLocation(tc.zone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		from := time.Date(tc.from[0], time.Month(tc.from[1]), tc.from[2], 0, 0, 0, 0, loc)
+		to := time.Date(tc.to[0], time.Month(tc.to[1]), tc.to[2], 0, 0, 0, 0, loc)
+		a := newListenAcc(from, to, loc, listenDays)
+		a.days[tc.listened] = map[int64]float64{1: 1800}
+		days := a.dayList()
+		seen := map[string]bool{}
+		var sum float64
+		for i, d := range days {
+			if seen[d.Date] || (i > 0 && d.Date <= days[i-1].Date) {
+				t.Fatalf("%s: %s out of order or twice in %d days", tc.zone, d.Date, len(days))
+			}
+			seen[d.Date] = true
+			sum += d.Listened
+		}
+		if len(days) != tc.dates || sum != 1800 || !seen[tc.listened] {
+			t.Fatalf("%s: %d days (want %d), %v s listened (want 1800)", tc.zone, len(days), tc.dates, sum)
+		}
 	}
 }

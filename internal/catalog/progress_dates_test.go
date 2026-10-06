@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 )
@@ -67,5 +68,63 @@ func TestEditProgressMarkUnfinishedKeepsPosition(t *testing.T) {
 	if p.Finished || p.Position != 7000 || p.FinishedAt != "" || p.StartedAt != "2026-10-01T09:00:00Z" ||
 		p.Version != 2 || p.UpdatedAt != "2026-10-01T09:01:00Z" {
 		t.Fatalf("mark unfinished = %+v", p)
+	}
+}
+
+// An edit keeps its sub-second time: a device save made earlier in the same
+// second that reaches the server after the edit is older, and loses
+// last-write-wins as an older save must (a whole-second stamp let it win).
+func TestEditProgressBeatsAnOlderSaveInTheSameSecond(t *testing.T) {
+	f := newSessionFixture(t)
+	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 3000, Duration: 7200,
+		UpdatedAt: f.clock.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	f.clock = f.clock.Add(5*time.Second + 900*time.Millisecond) // the edit, at 09:00:05.900
+	yes := true
+	if _, err := f.c.EditProgress(f.ctx, f.user, f.book, ProgressEdit{Finished: &yes}, Scope{LibraryID: f.lib, AllowAll: true}); err != nil {
+		t.Fatal(err)
+	}
+	older := f.clock.Add(-400 * time.Millisecond).Format(time.RFC3339Nano) // a save from 09:00:05.500
+	got, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 3010, Duration: 7200, UpdatedAt: older})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Finished || got.Position != 7200 {
+		t.Fatalf("an older save undid the edit: %+v", got)
+	}
+}
+
+// SaveProgress compares and writes in one transaction: a newer write that
+// commits while an older save waits for the writer is not overwritten by it.
+func TestSaveProgressKeepsANewerWriteItRaced(t *testing.T) {
+	f := newSessionFixture(t)
+	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 100, Duration: 7200,
+		UpdatedAt: f.clock.Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	older := f.clock.Add(time.Second).Format(time.RFC3339)     // a device's save
+	newer := f.clock.Add(2 * time.Second).Format(time.RFC3339) // the write that beats it (an edit, another device)
+	done := make(chan error, 1)
+	if err := f.c.db.WithTx(f.ctx, "newer write", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(f.ctx, `UPDATE progress SET position = 200, updated_at = ?, version = version + 1
+		  WHERE user_id = ? AND library_id = ? AND rel_path = ?`, newer, f.user, f.book.LibraryID, f.book.Path); err != nil {
+			return err
+		}
+		go func() {
+			_, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 150, Duration: 7200, UpdatedAt: older})
+			done <- err
+		}()
+		time.Sleep(100 * time.Millisecond) // the older save starts while the newer write is uncommitted
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.c.GetProgress(f.ctx, f.user, f.book)
+	if err != nil || got.Position != 200 || got.UpdatedAt != newer {
+		t.Fatalf("the older save overwrote the newer write: %+v %v", got, err)
 	}
 }

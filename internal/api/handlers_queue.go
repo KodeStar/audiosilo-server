@@ -25,9 +25,27 @@ type listAdd struct {
 }
 
 // listReplace is the body of a whole-list replace (PUT /me/queue, PUT
-// /me/collections/{id}/items).
+// /me/collections/{id}/items). Items is a pointer so an absent or null key can be
+// told from an explicit [] (which clears the list).
 type listReplace struct {
-	Items []catalog.Ref `json:"items"`
+	Items *[]catalog.Ref `json:"items"`
+}
+
+// decodeListReplace reads a listReplace body, answering 400 itself for a
+// malformed one or one without an items array: a whole replace deletes every
+// stored entry not listed, so a body that names no list must not read as "empty
+// it" (a client's {} or {"items": null} would wipe the list, hidden entries too).
+func decodeListReplace(w http.ResponseWriter, r *http.Request) ([]catalog.Ref, bool) {
+	var in listReplace
+	if err := decodeJSON(r, &in, listBodyMax); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return nil, false
+	}
+	if in.Items == nil {
+		writeError(w, http.StatusBadRequest, "items is required")
+		return nil, false
+	}
+	return *in.Items, true
 }
 
 // decodeListAdd reads a listAdd body and resolves its book the way a single add
@@ -105,9 +123,8 @@ func (a *API) writeQueue(w http.ResponseWriter, r *http.Request, scopes []catalo
 // indexed books in their scope; others are left out, not an error) and answers
 // the stored result.
 func (a *API) handleSetQueue(w http.ResponseWriter, r *http.Request) {
-	var in listReplace
-	if err := decodeJSON(r, &in, listBodyMax); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	items, ok := decodeListReplace(w, r)
+	if !ok {
 		return
 	}
 	scopes, ok := a.callerScopes(w, r, "could not save the queue")
@@ -115,7 +132,7 @@ func (a *API) handleSetQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	if err := a.cat.SetQueue(r.Context(), u.ID, in.Items, scopes); err != nil {
+	if err := a.cat.SetQueue(r.Context(), u.ID, items, scopes); err != nil {
 		a.writeCatalogError(w, err, "set queue failed", "could not save the queue", "user", u.ID)
 		return
 	}

@@ -158,9 +158,8 @@ func (a *API) handleSetCollectionItems(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in listReplace
-	if err := decodeJSON(r, &in, listBodyMax); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	items, ok := decodeListReplace(w, r)
+	if !ok {
 		return
 	}
 	scopes, ok := a.callerScopes(w, r, "could not save the collection")
@@ -168,7 +167,7 @@ func (a *API) handleSetCollectionItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	if err := a.cat.SetCollectionItems(r.Context(), id, u.ID, in.Items, scopes); err != nil {
+	if err := a.cat.SetCollectionItems(r.Context(), id, u.ID, items, scopes); err != nil {
 		a.writeCollectionError(w, err, "set collection items failed", "could not save the collection", "collection", id)
 		return
 	}
@@ -227,14 +226,20 @@ func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var in struct {
-		UserIDs []int64 `json:"user_ids"`
+		// A pointer, as listReplace's items: an absent or null list is a bad body,
+		// not "unshare everyone" (an explicit [] is that).
+		UserIDs *[]int64 `json:"user_ids"`
 	}
 	if err := decodeJSON(r, &in, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	if in.UserIDs == nil {
+		writeError(w, http.StatusBadRequest, "user_ids is required")
+		return
+	}
 	u := userFrom(r.Context())
-	if err := a.cat.SetCollectionShares(r.Context(), id, u.ID, in.UserIDs); err != nil {
+	if err := a.cat.SetCollectionShares(r.Context(), id, u.ID, *in.UserIDs); err != nil {
 		a.writeCollectionError(w, err, "set collection shares failed", "could not share the collection", "collection", id)
 		return
 	}

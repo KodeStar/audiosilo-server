@@ -13,21 +13,11 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
-func newTestCatalog(t *testing.T) (*Catalog, context.Context) {
-	t.Helper()
-	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return New(db, time.Now), ctx
-}
-
-// newFileTestCatalog is newTestCatalog on a FILE-backed database: reads go to the
+// newTestCatalog opens a catalog on a FILE-backed database: reads go to the
 // read-only reader pool (query_only) as in production, so a write issued through
-// a read method fails here, where :memory: (reader == writer) would hide it.
-func newFileTestCatalog(t *testing.T) (*Catalog, context.Context) {
+// a read method (an INSERT ... RETURNING via QueryRowContext) fails the test,
+// where :memory: (reader == writer, one pool) would hide it.
+func newTestCatalog(t *testing.T) (*Catalog, context.Context) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))

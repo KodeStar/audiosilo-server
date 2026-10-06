@@ -44,7 +44,10 @@ func newTestEnv(t *testing.T) *testEnv {
 // distinctMillis is time.Now that never answers the same millisecond twice, so
 // two catalog writes a test makes back to back always stamp different times (the
 // lists' and collections' fixed-width millisecond stamps would otherwise tie on
-// a fast machine, and "updated_at moved" checks would flake).
+// a fast machine, and "updated_at moved" checks would flake). It waits for the
+// next real millisecond rather than inventing one: a clock that ran ahead of
+// time.Now would stamp a finish after the end of the period the handlers build
+// from time.Now, and /me/stats and /me/goal would then miss it.
 func distinctMillis() func() time.Time {
 	var mu sync.Mutex
 	var last time.Time
@@ -52,8 +55,9 @@ func distinctMillis() func() time.Time {
 		mu.Lock()
 		defer mu.Unlock()
 		now := time.Now()
-		if now.Sub(last) < time.Millisecond { // a millisecond apart: their stamps differ
-			now = last.Add(time.Millisecond)
+		if wait := last.Add(time.Millisecond).Sub(now); wait > 0 { // a millisecond apart: their stamps differ
+			time.Sleep(wait)
+			now = time.Now()
 		}
 		last = now
 		return now
@@ -66,7 +70,10 @@ func distinctMillis() func() time.Time {
 func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
+	// A file-backed database, as in production: reads go to the read-only reader
+	// pool, so a write routed through a read method fails here instead of passing
+	// on :memory: (reader == writer) and failing in production.
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

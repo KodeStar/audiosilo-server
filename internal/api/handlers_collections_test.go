@@ -337,3 +337,71 @@ func TestCollectionLimitsHTTP(t *testing.T) {
 		t.Fatalf("add to a full collection = %d %s", resp.StatusCode, b)
 	}
 }
+
+// Who may write is settled before the body is checked: with a body the owner
+// would get a 400 for, a stranger still gets 404 and a viewer 403 not_owner.
+func TestCollectionWritesCheckTheOwnerFirst(t *testing.T) {
+	l := newListsEnv(t)
+	col := l.createCollection(t, l.oliveTok, "Olive's")
+	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d]}`, l.kid)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("share = %d %s", resp.StatusCode, b)
+	}
+	ids := make([]string, catalog.MaxCollectionShares+1)
+	for i := range ids {
+		ids[i] = strconv.Itoa(1000 + i)
+	}
+	for _, tc := range []struct{ what, method, url, body string }{
+		{"empty name", "PATCH", colURL(col.ID, ""), `{"name":"  "}`},
+		{"long name", "PATCH", colURL(col.ID, ""), fmt.Sprintf(`{"name":%q}`, strings.Repeat("n", 101))},
+		{"long description", "PATCH", colURL(col.ID, ""), fmt.Sprintf(`{"description":%q}`, strings.Repeat("d", 1001))},
+		{"too many shares", "PUT", colURL(col.ID, "/shares"), `{"user_ids":[` + strings.Join(ids, ",") + `]}`},
+	} {
+		if resp, b := l.do(t, tc.method, tc.url, l.samTok, tc.body); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("stranger, %s = %d %s, want 404", tc.what, resp.StatusCode, b)
+		}
+		if resp, b := l.do(t, tc.method, tc.url, l.kidTok, tc.body); resp.StatusCode != http.StatusForbidden ||
+			!strings.Contains(b, `"code":"not_owner"`) {
+			t.Errorf("viewer, %s = %d %s, want 403 not_owner", tc.what, resp.StatusCode, b)
+		}
+		if resp, b := l.do(t, tc.method, tc.url, l.oliveTok, tc.body); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("owner, %s = %d %s, want 400", tc.what, resp.StatusCode, b)
+		}
+	}
+}
+
+// A viewer disabled after the collection was shared with them stays in its
+// shared_with, and the owner can send that list back (as it is, or with someone
+// added); a disabled user it isn't shared with yet is still refused.
+func TestCollectionSharesKeepADisabledViewer(t *testing.T) {
+	l := newListsEnv(t)
+	col := l.createCollection(t, l.oliveTok, "Family")
+	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d]}`, l.kid)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("share = %d %s", resp.StatusCode, b)
+	}
+	if err := l.auth.SetDisabled(context.Background(), l.kid, true); err != nil {
+		t.Fatal(err)
+	}
+	kid := fmt.Sprintf(`{"id":%d,"username":"kid"}`, l.kid)
+	got, _ := l.detail(t, l.oliveTok, col.ID)
+	if string(got.Collection.SharedWith) != "["+kid+"]" {
+		t.Fatalf("shared_with after kid was disabled = %s", got.Collection.SharedWith)
+	}
+	for _, list := range []string{fmt.Sprint(l.kid), fmt.Sprintf("%d,%d", l.kid, l.sam)} {
+		resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, `{"user_ids":[`+list+`]}`)
+		if resp.StatusCode != http.StatusOK || !strings.Contains(b, kid) {
+			t.Fatalf("re-save [%s] with the disabled viewer = %d %s", list, resp.StatusCode, b)
+		}
+	}
+	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d,%d]}`, l.kid, l.dora)); resp.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(b, "unknown user") {
+		t.Fatalf("share with a disabled user not shared yet = %d %s, want 400", resp.StatusCode, b)
+	}
+	// Dropped, the disabled viewer can't be added back while disabled.
+	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d]}`, l.sam)); resp.StatusCode != http.StatusOK ||
+		strings.Contains(b, `"username":"kid"`) {
+		t.Fatalf("drop the disabled viewer = %d %s", resp.StatusCode, b)
+	}
+	if resp, _ := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d,%d]}`, l.kid, l.sam)); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("re-add the disabled user = %d, want 400", resp.StatusCode)
+	}
+}

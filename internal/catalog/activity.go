@@ -217,10 +217,16 @@ const (
 )
 
 // dayList is every day of the period, oldest first, zeros included, with each
-// listener's share.
+// listener's share. It steps through calendar dates (in UTC, which has no
+// daylight saving), not from's local clock time: where daylight saving starts at
+// midnight (America/Santiago, Havana, the Azores), from's time plus a day can
+// fall in the hour that doesn't exist and read as the day before, which then
+// came out twice, its listening counted twice; and a date a zone skipped
+// entirely (Pacific/Apia's 2011-12-30) never advanced at all.
 func (a *listenAcc) dayList() []ActivityDay {
 	out := []ActivityDay{}
-	for d := a.from.In(a.loc); ; d = d.AddDate(0, 0, 1) {
+	first := a.from.In(a.loc)
+	for d := time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, time.UTC); ; d = d.AddDate(0, 0, 1) {
 		day := d.Format(time.DateOnly)
 		if day > a.lastDay {
 			break

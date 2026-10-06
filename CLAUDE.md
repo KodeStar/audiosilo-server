@@ -18,7 +18,7 @@ Module path: `github.com/kodestar/audiosilo-server`.
 ```sh
 go build ./...                 # build everything
 go vet ./...                   # static checks
-go test -race ./...            # unit + integration tests (in-memory SQLite + testdata fixtures)
+go test -race ./...            # unit + integration tests (SQLite + testdata fixtures)
 golangci-lint run              # lint (v2 required since Go 1.25; config .golangci.yml)
 go build -o bin/audiosilo ./cmd/audiosilo
 ./bin/audiosilo --data ./data  # first run prints admin creds + auth code ONCE
@@ -189,7 +189,9 @@ counts an owner's item outside their own shares); a move or join carries them
 (`carryListeningState`, the destination entry kept on a collision).
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
-`not_owner`; capabilities `queue`, `collections`).
+`not_owner`, both settled before the body is checked; a whole-list PUT without its
+`items` / `user_ids` array is 400, never "empty it"; a viewer disabled since being shared
+stays in `shared_with` and may be sent back; capabilities `queue`, `collections`).
 
 Book identity carries `author`/`series`/`title` plus optional `asin`/`isbn` so a
 future metadata site can attach enrichment without reshaping the schema. The
@@ -199,8 +201,10 @@ admin overrides; see Metadata overrides below).
 ## Conventions
 
 - **Every feature ships with a test.** Handler/integration tests use the
-  `newTestEnv` harness in `internal/api/api_test.go` (in-memory SQLite +
-  `testdata/library` fixtures); pure-logic tests sit next to the code (see
+  `newTestEnv` harness in `internal/api/api_test.go` (a temp-file SQLite, so reads
+  go through the read-only reader pool as in production and a write sent through a
+  read method fails the test, + `testdata/library` fixtures; `catalog`'s
+  `newTestCatalog` is file-backed for the same reason); pure-logic tests sit next to the code (see
   `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,
@@ -793,7 +797,11 @@ admin overrides; see Metadata overrides below).
   /libraries/{id}/progress?path=` (`handleEditMyProgress`: the admin's `catalog.EditProgress`, its
   body decoded by the shared `decodeProgressEdit`, with the caller's own scope from
   `authorizedScope`: 403 outside it, even for an existing row; 404 `book_not_found` with no row and
-  no book; 400 for a bad body or `ErrInvalidProgressEdit`; no listening session recorded). Endpoints
+  no book; 400 for a bad body or `ErrInvalidProgressEdit`, and for an exact (RFC3339) date in the
+  future, admin edits too (a day-only start keeps the catalog's day of slack); an edit that sets
+  nothing writes nothing, answering the row as it is or 404 with none; no listening session
+  recorded). An edit's `updated_at` keeps its sub-second time, and `SaveProgress` compares and
+  writes in one writer transaction, so an older device save never overwrites a newer edit. Endpoints
   (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
@@ -996,12 +1004,13 @@ admin overrides; see Metadata overrides below).
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
-`export`, `browse_people`, `cover_sizes`, `next_book`, `ratings`, `progress_edit`,
-`my_devices`); flip them on as phases land.
+`export`, `browse_people`, `cover_sizes`, `next_book`, `queue`, `collections`,
+`user_stats`, `ratings`, `progress_edit`, `my_devices`); flip them on as phases land.
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
-(`GET /libraries/{id}/next`). `ratings`, `progress_edit` and `my_devices` are true (player
-redesign Phase 1b, see the API surface below). `transcode` already reflects whether ffmpeg is configured;
+(`GET /libraries/{id}/next`). `queue`, `collections`, `user_stats`, `ratings`,
+`progress_edit` and `my_devices` are true (player redesign Phase 1b, see the API surface
+below and Your listening). `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live

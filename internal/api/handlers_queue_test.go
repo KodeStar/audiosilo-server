@@ -293,3 +293,50 @@ func TestQueueLimits(t *testing.T) {
 		t.Fatalf("move within a full queue = %d %s", resp.StatusCode, b)
 	}
 }
+
+// A whole-list replace must name its list: an absent or null items (or
+// user_ids) is a 400 that changes nothing, never "empty it" (a client's {} would
+// otherwise wipe the list, hidden entries included); an explicit [] clears.
+func TestListReplaceNeedsTheList(t *testing.T) {
+	l := newListsEnv(t)
+	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(cradleBook, mistbornBook)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("queue = %d %s", resp.StatusCode, b)
+	}
+	col := l.createCollection(t, l.oliveTok, "Mine")
+	if resp, b := l.do(t, "PUT", colURL(col.ID, "/items"), l.oliveTok, l.itemsJSON(cradleBook)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("items = %d %s", resp.StatusCode, b)
+	}
+	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d]}`, l.sam)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("shares = %d %s", resp.StatusCode, b)
+	}
+	for _, body := range []string{`{}`, `{"items":null}`, `null`} {
+		if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, body); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("PUT /me/queue %s = %d %s, want 400", body, resp.StatusCode, b)
+		}
+		if resp, b := l.do(t, "PUT", colURL(col.ID, "/items"), l.oliveTok, body); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("PUT items %s = %d %s, want 400", body, resp.StatusCode, b)
+		}
+	}
+	for _, body := range []string{`{}`, `{"user_ids":null}`, `null`} {
+		if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, body); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("PUT shares %s = %d %s, want 400", body, resp.StatusCode, b)
+		}
+	}
+	if got := itemPathsOf(l.queueOf(t, l.oliveTok)); got != cradleBook+"|"+mistbornBook {
+		t.Fatalf("queue after the refused replaces = %s", got)
+	}
+	got, _ := l.detail(t, l.oliveTok, col.ID)
+	if itemPathsOf(got.Items) != cradleBook || !strings.Contains(string(got.Collection.SharedWith), `"username":"sam"`) {
+		t.Fatalf("collection after the refused replaces = %+v", got)
+	}
+
+	// An explicit empty list clears.
+	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, `{"items":[]}`); resp.StatusCode != http.StatusOK ||
+		strings.TrimSpace(b) != `{"queue":[]}` {
+		t.Fatalf(`PUT {"items":[]} = %d %s`, resp.StatusCode, b)
+	}
+	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, `{"user_ids":[]}`); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(b, `"shared_with":[]`) {
+		t.Fatalf(`PUT {"user_ids":[]} = %d %s`, resp.StatusCode, b)
+	}
+}

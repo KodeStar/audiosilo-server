@@ -160,7 +160,7 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 	case errors.Is(err, library.ErrOutsideRoot):
 		writeError(w, http.StatusBadRequest, "invalid path")
 	case errors.Is(err, catalog.ErrInvalidProgressEdit):
-		writeError(w, http.StatusBadRequest, "those dates or that position don't fit this book")
+		writeError(w, http.StatusBadRequest, msgBadProgressEdit)
 	case errors.Is(err, catalog.ErrInvalidRange):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidRange, "range must be 7d, 30d, 90d, 1y or a year")
 	case errors.Is(err, catalog.ErrInvalidGoal):

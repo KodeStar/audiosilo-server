@@ -180,3 +180,66 @@ func TestEditMyProgressLastWriteWins(t *testing.T) {
 		t.Fatalf("a newer save lost to the edit: %+v", p)
 	}
 }
+
+// An exact (RFC3339) date in the future is refused, start or finish, beyond a
+// client clock running a little fast; a day-only start keeps its day of slack
+// (the client's today can be the server's tomorrow). A future finish would
+// otherwise sit outside this year's finished books until it came.
+func TestEditMyProgressFutureDates(t *testing.T) {
+	e := newRateEnv(t)
+	at := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(time.RFC3339) }
+	for _, bad := range []string{
+		`{"finished":true,"finished_at":"` + at(2*time.Hour) + `"}`,
+		`{"finished":true,"finished_at":"` + at(20*time.Hour) + `"}`,
+		`{"started_at":"` + at(2*time.Hour) + `"}`,
+	} {
+		if status, _, raw := e.patchProgress(t, e.kidTok, cradleBook, bad); status != http.StatusBadRequest {
+			t.Errorf("PATCH %s = %d %s, want 400", bad, status, raw)
+		}
+	}
+	if got, _ := e.cat.GetProgress(context.Background(), e.kidID, catalog.Ref{LibraryID: e.libID, Path: cradleBook}); got != nil {
+		t.Fatalf("a refused edit wrote progress: %+v", got)
+	}
+
+	// Allowed: a finish a minute ahead (a fast client clock), and a day-only start
+	// of tomorrow.
+	if status, p, raw := e.patchProgress(t, e.kidTok, cradleBook,
+		`{"finished":true,"finished_at":"`+at(time.Minute)+`"}`); status != http.StatusOK || !p.Finished {
+		t.Fatalf("a finish a minute ahead = %d %s, want 200", status, raw)
+	}
+	tomorrow := time.Now().AddDate(0, 0, 1).Format(time.DateOnly)
+	if status, _, raw := e.patchProgress(t, e.eveTok, mistbornBook, `{"started_at":"`+tomorrow+`"}`); status != http.StatusOK {
+		t.Fatalf("a day-only start of tomorrow = %d %s, want 200", status, raw)
+	}
+}
+
+// An edit that sets nothing ({} or null) writes nothing: it doesn't start a book
+// (no row: 404) or re-stamp an existing row, which would make a device's pending
+// older save lose to it.
+func TestEditMyProgressEmptyEditWritesNothing(t *testing.T) {
+	e := newRateEnv(t)
+	ctx := context.Background()
+	ref := catalog.Ref{LibraryID: e.libID, Path: cradleBook}
+	for _, body := range []string{`{}`, `null`} {
+		if status, _, raw := e.patchProgress(t, e.kidTok, cradleBook, body); status != http.StatusNotFound {
+			t.Fatalf("PATCH %s with no progress = %d %s, want 404", body, status, raw)
+		}
+	}
+	if got, _ := e.cat.GetProgress(ctx, e.kidID, ref); got != nil {
+		t.Fatalf("an empty edit started the book: %+v", got)
+	}
+	saved, err := e.cat.SaveProgress(ctx, e.kidID, catalog.Progress{Ref: ref, Position: 50, Duration: 120,
+		UpdatedAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, p, raw := e.patchProgress(t, e.kidTok, cradleBook, `{}`)
+	if status != http.StatusOK || p.Position != 50 || p.Version != saved.Version || p.UpdatedAt != saved.UpdatedAt {
+		t.Fatalf("PATCH {} on a row = %d %s, want it unchanged (%+v)", status, raw, saved)
+	}
+	// A save the device made half an hour ago still lands.
+	if got, err := e.cat.SaveProgress(ctx, e.kidID, catalog.Progress{Ref: ref, Position: 70, Duration: 120,
+		UpdatedAt: time.Now().Add(-30 * time.Minute).UTC().Format(time.RFC3339)}); err != nil || got.Position != 70 {
+		t.Fatalf("a later device save after an empty edit = %+v %v", got, err)
+	}
+}

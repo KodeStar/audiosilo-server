@@ -70,8 +70,13 @@ type Note struct {
 
 // GetProgress returns a user's progress for a book path, or nil if none.
 func (c *Catalog) GetProgress(ctx context.Context, userID int64, ref Ref) (*Progress, error) {
+	return getProgress(ctx, c.db, userID, ref)
+}
+
+// getProgress is GetProgress read through q (the reader pool, or a transaction).
+func getProgress(ctx context.Context, q querier, userID int64, ref Ref) (*Progress, error) {
 	var p Progress
-	err := scanProgress(c.db.QueryRowContext(ctx,
+	err := scanProgress(q.QueryRowContext(ctx,
 		`SELECT `+progressColumns+` FROM progress WHERE user_id = ? AND library_id = ? AND rel_path = ?`,
 		userID, ref.LibraryID, ref.Path), &p)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -88,6 +93,9 @@ func (c *Catalog) GetProgress(ctx context.Context, userID int64, ref Ref) (*Prog
 // It returns the effective stored progress. This is the same merge the realtime
 // sync layer will reuse, so REST and WebSocket writes converge. The start and
 // finish dates are the server's (see the stamps below): in's are ignored.
+// The comparison and the write are one writer transaction, so a write that lands
+// between them (another device's save, an EditProgress) can't be overwritten by
+// an older save that read the row before it.
 func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (*Progress, error) {
 	in.StartedAt, in.FinishedAt = "", ""
 	// Distrust an unparseable or far-future client timestamp (see
@@ -98,19 +106,6 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 	if in.PlaybackSpeed <= 0 {
 		in.PlaybackSpeed = 1.0
 	}
-	existing, err := c.GetProgress(ctx, userID, in.Ref)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil && !isNewer(in, *existing) {
-		return existing, nil // incoming update is stale; keep stored value
-	}
-	if in.Version == 0 {
-		in.Version = 1
-		if existing != nil {
-			in.Version = existing.Version + 1
-		}
-	}
 	// started_at is stamped by the first save and kept; finished_at is stamped
 	// when finished turns on and cleared when it turns off (a restart). Both take
 	// the save's own time (already checked by plausibleUpdatedAt), so a finish
@@ -120,27 +115,48 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 	if t, err := time.Parse(time.RFC3339, in.UpdatedAt); err == nil {
 		stamp = t.UTC().Format(time.RFC3339)
 	}
-	// RETURNING reads the dates the row ended up with (a kept start, a kept or new
-	// finish), so the echo carries the stored ones.
-	err = c.db.WriteRowContext(ctx,
-		`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
-		     playback_speed, version, device_id, updated_at, started_at, finished_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?6 THEN ?11 END)
-		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
-		     position=excluded.position, duration=excluded.duration,
-		     finished=excluded.finished, playback_speed=excluded.playback_speed,
-		     version=excluded.version, device_id=excluded.device_id,
-		     updated_at=excluded.updated_at,
-		     finished_at=CASE WHEN NOT excluded.finished THEN NULL
-		                      WHEN progress.finished THEN progress.finished_at
-		                      ELSE ?11 END
-		 RETURNING COALESCE(started_at, ''), COALESCE(finished_at, '')`,
-		userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
-		in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp).Scan(&in.StartedAt, &in.FinishedAt)
+	var out *Progress
+	err := c.db.WithTx(ctx, "SaveProgress", func(tx *sql.Tx) error {
+		existing, err := getProgress(ctx, tx, userID, in.Ref)
+		if err != nil {
+			return err
+		}
+		if existing != nil && !isNewer(in, *existing) {
+			out = existing // incoming update is stale; keep stored value
+			return nil
+		}
+		if in.Version == 0 {
+			in.Version = 1
+			if existing != nil {
+				in.Version = existing.Version + 1
+			}
+		}
+		// RETURNING reads the dates the row ended up with (a kept start, a kept or
+		// new finish), so the echo carries the stored ones.
+		if err := tx.QueryRowContext(ctx,
+			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
+			     playback_speed, version, device_id, updated_at, started_at, finished_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?6 THEN ?11 END)
+			 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
+			     position=excluded.position, duration=excluded.duration,
+			     finished=excluded.finished, playback_speed=excluded.playback_speed,
+			     version=excluded.version, device_id=excluded.device_id,
+			     updated_at=excluded.updated_at,
+			     finished_at=CASE WHEN NOT excluded.finished THEN NULL
+			                      WHEN progress.finished THEN progress.finished_at
+			                      ELSE ?11 END
+			 RETURNING COALESCE(started_at, ''), COALESCE(finished_at, '')`,
+			userID, in.LibraryID, in.Path, in.Position, in.Duration, in.Finished,
+			in.PlaybackSpeed, in.Version, in.DeviceID, in.UpdatedAt, stamp).Scan(&in.StartedAt, &in.FinishedAt); err != nil {
+			return err
+		}
+		out = &in
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &in, nil
+	return out, nil
 }
 
 // plausibleUpdatedAt reports whether a client-supplied updated_at can be

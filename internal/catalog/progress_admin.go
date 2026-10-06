@@ -94,6 +94,11 @@ type ProgressEdit struct {
 	FinishedAt OptionalTime
 }
 
+// changes reports whether the edit sets anything at all.
+func (e ProgressEdit) changes() bool {
+	return e.Finished != nil || e.Position != nil || e.StartedAt.Set || e.FinishedAt.Set
+}
+
 // EditProgress applies an edit (an admin's, or the user's own) to a user's
 // progress on a book, creating the row when the book is indexed and the user has
 // none. Marking a book finished moves the position to the end (players read that
@@ -104,10 +109,35 @@ type ProgressEdit struct {
 // device saved before it, while any device with the book loaded overrides it on
 // its next save, as it should. Returns ErrNotFound when the user has no progress
 // on the path and no book is indexed there, and ErrNoAccess when the user has none
-// and `scope` (the user's own, not the admin's) doesn't allow the path.
+// and `scope` (the user's own, not the admin's) doesn't allow the path. An edit
+// that sets nothing writes nothing (as UpdateCollection's): it answers the row as
+// it is, or ErrNotFound with none, rather than starting the book or, stamped now,
+// outranking a device's pending save.
 func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e ProgressEdit, scope Scope) (*UserProgress, error) {
 	now := c.now()
-	err := c.db.WithTx(ctx, "EditProgress", func(tx *sql.Tx) error {
+	var err error
+	if e.changes() {
+		err = c.editProgress(ctx, userID, ref, e, scope, now)
+	}
+	if err != nil {
+		return nil, err
+	}
+	up, err := scanUserProgress(c.db.QueryRowContext(ctx,
+		`SELECT `+userProgressColumns+` FROM progress p
+		   LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
+		  WHERE p.user_id = ? AND p.library_id = ? AND p.rel_path = ?`, userID, ref.LibraryID, ref.Path))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound // an edit that set nothing, on no progress
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &up, nil
+}
+
+// editProgress writes EditProgress's edit, in one transaction.
+func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e ProgressEdit, scope Scope, now time.Time) error {
+	return c.db.WithTx(ctx, "EditProgress", func(tx *sql.Tx) error {
 		var (
 			p                 Progress
 			started, finished sql.NullString
@@ -183,6 +213,9 @@ func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e Pro
 				return ErrInvalidProgressEdit
 			}
 		}
+		// updated_at keeps the edit's sub-second time (as c.ts() does): devices
+		// stamp their saves in milliseconds, and a whole-second stamp would let a
+		// save made up to a second BEFORE the edit win last-write-wins against it.
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at)
@@ -192,18 +225,7 @@ func (c *Catalog) EditProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
 			     finished_at=excluded.finished_at`,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
-			p.Version+1, p.DeviceID, now.UTC().Format(time.RFC3339), started, finished)
+			p.Version+1, p.DeviceID, now.UTC().Format(time.RFC3339Nano), started, finished)
 		return err
 	})
-	if err != nil {
-		return nil, err
-	}
-	up, err := scanUserProgress(c.db.QueryRowContext(ctx,
-		`SELECT `+userProgressColumns+` FROM progress p
-		   LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
-		  WHERE p.user_id = ? AND p.library_id = ? AND p.rel_path = ?`, userID, ref.LibraryID, ref.Path))
-	if err != nil {
-		return nil, err
-	}
-	return &up, nil
 }

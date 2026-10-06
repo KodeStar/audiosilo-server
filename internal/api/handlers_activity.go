@@ -211,15 +211,35 @@ type progressEditBody struct {
 	FinishedAt optionalTime `json:"finished_at"`
 }
 
+// msgBadProgressEdit is the 400 for a progress edit that doesn't fit its book
+// (catalog.ErrInvalidProgressEdit, or an exact date in the future).
+const msgBadProgressEdit = "those dates or that position don't fit this book"
+
+// editDateSkew is how far ahead of the server's clock an exact (RFC3339) date in
+// a progress edit may be: a client clock running a little fast, not a future
+// date.
+const editDateSkew = 5 * time.Minute
+
 // decodeProgressEdit reads a progress edit's body, a day-only finish moved to the
-// end of that day (or now), answering 400 for a malformed one (nil: done).
+// end of that day (or now), answering 400 for a malformed one (nil: done). An
+// exact date in the future is refused here, where it can still be told from a
+// day-only one: the catalog's day of slack is for a day-only start (the client's
+// today can be the server's tomorrow), and a future finish would be left out of
+// the year's finished books until it came.
 func decodeProgressEdit(w http.ResponseWriter, r *http.Request) *progressEditBody {
 	var body progressEditBody
 	if err := decodeJSON(r, &body, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return nil
 	}
-	body.FinishedAt.endOfDay(time.Now())
+	now := time.Now()
+	for _, d := range []optionalTime{body.StartedAt, body.FinishedAt} {
+		if d.Value != nil && !d.day && d.Value.After(now.Add(editDateSkew)) {
+			writeError(w, http.StatusBadRequest, msgBadProgressEdit)
+			return nil
+		}
+	}
+	body.FinishedAt.endOfDay(now)
 	return &body
 }
 

@@ -40,8 +40,9 @@ var (
 	// ErrInvalidDescription is a description over the limit, or holding control
 	// characters (other than line breaks and tabs) or invalid UTF-8.
 	ErrInvalidDescription = errors.New("invalid collection description")
-	// ErrUnknownUser is a share naming a user that does not exist, is disabled, is
-	// a demo account, or is the owner.
+	// ErrUnknownUser is a share naming a user that does not exist, is the owner,
+	// or is disabled or a demo account (and not already shared with: a viewer
+	// disabled since keeps their share).
 	ErrUnknownUser = errors.New("unknown user")
 	// ErrTooManyShares is a share list longer than MaxCollectionShares.
 	ErrTooManyShares = errors.New("too many users")
@@ -266,52 +267,60 @@ func (c *Catalog) countAndPreview(ctx context.Context, cols []Collection, scopes
 		byID[cols[i].ID], ids[i] = &cols[i], cols[i].ID
 	}
 	filter, fargs := scopesFilterSQL("ci.library_id", "ci.rel_path", scopes)
-	return inChunks(ids, func(in string, args []any) error {
-		args = append(args, fargs...)
+	if err := inChunks(ids, func(in string, args []any) error {
 		type countRow struct{ id, n int64 }
 		counts, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *countRow) error {
 			return rows.Scan(&r.id, &r.n)
 		}, `SELECT ci.collection_id, COUNT(*) FROM collection_items ci
-		  WHERE ci.collection_id IN (`+in+`) AND `+filter+` GROUP BY ci.collection_id`, args...)
+		  WHERE ci.collection_id IN (`+in+`) AND `+filter+` GROUP BY ci.collection_id`, append(args, fargs...)...)
 		if err != nil {
 			return err
 		}
 		for _, r := range counts {
 			byID[r.id].ItemCount = int(r.n)
 		}
-
-		type previewRow struct {
-			id int64
-			Ref
-		}
-		prev, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *previewRow) error {
-			return rows.Scan(&r.id, &r.LibraryID, &r.Path)
-		}, `SELECT collection_id, library_id, rel_path FROM (
-		      SELECT ci.collection_id, ci.library_id, ci.rel_path,
-		             ROW_NUMBER() OVER (PARTITION BY ci.collection_id
-		                                ORDER BY ci.position, ci.library_id, ci.rel_path) AS rn
-		        FROM collection_items ci
-		        JOIN books b ON b.library_id = ci.library_id AND b.rel_path = ci.rel_path
-		       WHERE ci.collection_id IN (`+in+`) AND `+filter+`)
-		  WHERE rn <= ? ORDER BY collection_id, rn`, append(args, collectionPreviewSize)...)
-		if err != nil {
-			return err
-		}
-		refs := make([]Ref, len(prev))
-		for i, p := range prev {
-			refs[i] = p.Ref
-		}
-		books, err := c.booksAt(ctx, refs)
-		if err != nil {
-			return err
-		}
-		for _, p := range prev {
-			if b, ok := books[p.Ref]; ok {
-				byID[p.id].Preview = append(byID[p.id].Preview, b)
-			}
-		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	// The previews, one bounded read per collection: its items in stored order
+	// (idx_collection_items_order), stopping at the first collectionPreviewSize
+	// indexed ones the reader can see, rather than ranking every item of every
+	// collection to keep four of each. INDEXED BY because a path-scoped reader's
+	// filter otherwise leads the planner to the primary key (an OR of path
+	// ranges), which reads every visible item and sorts them all for the four.
+	preview := `SELECT ci.library_id, ci.rel_path FROM collection_items ci INDEXED BY idx_collection_items_order
+	   JOIN books b ON b.library_id = ci.library_id AND b.rel_path = ci.rel_path
+	  WHERE ci.collection_id = ? AND ` + filter + `
+	  ORDER BY ci.position, ci.library_id, ci.rel_path LIMIT ?`
+	var (
+		refs []Ref
+		of   []*Collection // the collection each of refs previews
+	)
+	for i := range cols {
+		col := &cols[i]
+		args := append(append([]any{col.ID}, fargs...), collectionPreviewSize)
+		got, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *Ref) error {
+			return rows.Scan(&r.LibraryID, &r.Path)
+		}, preview, args...)
+		if err != nil {
+			return err
+		}
+		for _, r := range got {
+			refs, of = append(refs, r), append(of, col)
+		}
+	}
+	books, err := c.booksAt(ctx, refs)
+	if err != nil {
+		return err
+	}
+	for i, r := range refs {
+		if b, ok := books[r]; ok {
+			of[i].Preview = append(of[i].Preview, b)
+		}
+	}
+	return nil
 }
 
 // attachShares fills who the reader's own collections among cols are shared
@@ -380,28 +389,30 @@ func (c *Catalog) CreateCollection(ctx context.Context, userID int64, name, desc
 }
 
 // UpdateCollection renames a collection and/or changes its description (nil
-// leaves a field), owner only; updated_at moves when either is given.
+// leaves a field), owner only; updated_at moves when either is given. Who may
+// change it is settled before the input is checked, so a stranger is ErrNotFound
+// and a viewer ErrNotOwner whatever the body holds.
 func (c *Catalog) UpdateCollection(ctx context.Context, id, userID int64, name, description *string) error {
-	var err error
-	var n, d string
-	if name != nil {
-		if n, err = cleanCollectionName(*name); err != nil {
-			return err
-		}
-	}
-	if description != nil {
-		if d, err = cleanCollectionDescription(*description); err != nil {
-			return err
-		}
-	}
 	return c.db.WithTx(ctx, "UpdateCollection", func(tx *sql.Tx) error {
 		if err := requireOwner(ctx, tx, id, userID); err != nil {
 			return err
 		}
+		var err error
+		var n, d string
+		if name != nil {
+			if n, err = cleanCollectionName(*name); err != nil {
+				return err
+			}
+		}
+		if description != nil {
+			if d, err = cleanCollectionDescription(*description); err != nil {
+				return err
+			}
+		}
 		if name == nil && description == nil {
 			return nil
 		}
-		_, err := tx.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			`UPDATE collections SET name = CASE WHEN ?1 THEN ?2 ELSE name END,
 			        description = CASE WHEN ?3 THEN ?4 ELSE description END, updated_at = ?5
 			  WHERE id = ?6`, name != nil, n, description != nil, d, c.stamp(), id)
@@ -481,17 +492,20 @@ func (c *Catalog) RemoveCollectionItem(ctx context.Context, id, userID int64, re
 }
 
 // SetCollectionShares replaces who a collection userID owns is shared with. Every
-// id must be an existing, enabled, non-demo user other than the owner, else
+// id must be an existing, enabled, non-demo user other than the owner, or one the
+// collection is already shared with (a viewer disabled since stays in
+// shared_with, so the list the owner was shown can be sent back), else
 // ErrUnknownUser and nothing changes; more than MaxCollectionShares (after
-// duplicates collapse) is ErrTooManyShares.
+// duplicates collapse) is ErrTooManyShares. Who may change it is settled first: a
+// stranger is ErrNotFound and a viewer ErrNotOwner whatever the list holds.
 func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, userIDs []int64) error {
 	ids := slices.Compact(slices.Sorted(slices.Values(userIDs)))
-	if len(ids) > MaxCollectionShares {
-		return ErrTooManyShares
-	}
 	return c.db.WithTx(ctx, "SetCollectionShares", func(tx *sql.Tx) error {
 		if err := requireOwner(ctx, tx, id, userID); err != nil {
 			return err
+		}
+		if len(ids) > MaxCollectionShares {
+			return ErrTooManyShares
 		}
 		// The ids go in as one JSON array (json_each), so the statements stay
 		// constant: set-based, with nothing concatenated into SQL in a transaction.
@@ -501,8 +515,10 @@ func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, use
 		}
 		var valid int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users
-		  WHERE disabled = 0 AND is_demo = 0 AND id != ? AND id IN (SELECT value FROM json_each(?))`,
-			userID, string(list)).Scan(&valid); err != nil {
+		  WHERE id != ?1 AND id IN (SELECT value FROM json_each(?2))
+		    AND ((disabled = 0 AND is_demo = 0)
+		         OR id IN (SELECT user_id FROM collection_shares WHERE collection_id = ?3))`,
+			userID, string(list), id).Scan(&valid); err != nil {
 			return err
 		}
 		if valid != len(ids) {
