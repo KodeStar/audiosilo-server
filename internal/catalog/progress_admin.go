@@ -213,9 +213,10 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 				return ErrInvalidProgressEdit
 			}
 		}
-		// updated_at keeps the edit's sub-second time (as c.ts() does): devices
-		// stamp their saves in milliseconds, and a whole-second stamp would let a
-		// save made up to a second BEFORE the edit win last-write-wins against it.
+		// updated_at keeps the edit's milliseconds, fixed-width like the players'
+		// own stamps (formatSessionTime): devices stamp their saves in milliseconds,
+		// and a whole-second stamp would let a save made up to a second BEFORE the
+		// edit win last-write-wins against it.
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished,
 			     playback_speed, version, device_id, updated_at, started_at, finished_at)
@@ -225,7 +226,7 @@ func (c *Catalog) editProgress(ctx context.Context, userID int64, ref Ref, e Pro
 			     updated_at=excluded.updated_at, started_at=excluded.started_at,
 			     finished_at=excluded.finished_at`,
 			userID, ref.LibraryID, ref.Path, p.Position, p.Duration, p.Finished, p.PlaybackSpeed,
-			p.Version+1, p.DeviceID, now.UTC().Format(time.RFC3339Nano), started, finished)
+			p.Version+1, p.DeviceID, formatSessionTime(now), started, finished)
 		return err
 	})
 }

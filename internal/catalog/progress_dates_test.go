@@ -66,7 +66,7 @@ func TestEditProgressMarkUnfinishedKeepsPosition(t *testing.T) {
 	}
 	p := got.AsProgress()
 	if p.Finished || p.Position != 7000 || p.FinishedAt != "" || p.StartedAt != "2026-10-01T09:00:00Z" ||
-		p.Version != 2 || p.UpdatedAt != "2026-10-01T09:01:00Z" {
+		p.Version != 2 || p.UpdatedAt != "2026-10-01T09:01:00.000Z" {
 		t.Fatalf("mark unfinished = %+v", p)
 	}
 }
