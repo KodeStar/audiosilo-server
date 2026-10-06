@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -946,5 +947,116 @@ func TestReclassifyingAFolderIsNotAMove(t *testing.T) {
 	}
 	if book.Title != "The Box Set" {
 		t.Fatalf("the folder book's edit didn't come back with the folder: %q", book.Title)
+	}
+}
+
+// A favourite on a navigation folder (a series) has no book of its own to move:
+// it follows the folder its moved books say was renamed. The case-only rename is
+// the one seen in the wild (on a case-insensitive filesystem the old name still
+// answers a stat - of the folder, and of every folder under one so renamed). A
+// book moved out of a folder that is still there says nothing about that folder,
+// so its favourite stays put.
+func TestFolderFavouriteFollowsRename(t *testing.T) {
+	const oldSeries, newSeries = "Shirtaloon/He Who Fights WIth Monsters", "Shirtaloon/He Who Fights With Monsters"
+	for _, tc := range []struct {
+		name     string
+		books    []string // book folders, each given a copy of the fixture
+		favs     []string
+		from, to string // what is renamed on disk
+		wantFavs []string
+	}{
+		{"case-only series rename", []string{oldSeries + "/Book 1"}, []string{"Shirtaloon", oldSeries},
+			oldSeries, newSeries, []string{"Shirtaloon", newSeries}},
+		{"case-only author rename", []string{oldSeries + "/Book 1"}, []string{"Shirtaloon", oldSeries},
+			"Shirtaloon", "shirtaloon", []string{"shirtaloon", "shirtaloon/He Who Fights WIth Monsters"}},
+		{"book moved out of a folder that stays", []string{"Author/Series A/Book 1", "Author/Series A/Book 2"},
+			[]string{"Author/Series A"}, "Author/Series A/Book 1", "Author/Series B/Book 1", []string{"Author/Series A"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := store.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { db.Close() })
+			cat := catalog.New(db, time.Now)
+			root := t.TempDir()
+			for _, b := range tc.books {
+				copyFixtureM4B(t, filepath.Join(root, b, "01.m4b"))
+			}
+			lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "M", Root: root})
+			scanner := NewScanner(cat, "", slog.Default())
+			if _, err := scanner.Scan(ctx, *lib); err != nil {
+				t.Fatal(err)
+			}
+			uid := seedUserID(t, db)
+			for _, p := range tc.favs {
+				if err := cat.AddFavourite(ctx, uid, catalog.Ref{LibraryID: lib.ID, Path: p}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, tc.to)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(filepath.Join(root, tc.from), filepath.Join(root, tc.to)); err != nil {
+				t.Fatal(err)
+			}
+			res, err := scanner.Scan(ctx, *lib)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Moved != 1 {
+				t.Fatalf("one book should have moved, got %+v", res)
+			}
+			favs, err := cat.ListAllFavourites(ctx, uid, []catalog.Scope{{LibraryID: lib.ID, AllowAll: true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, f := range favs {
+				got = append(got, f.Path)
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.wantFavs) {
+				t.Fatalf("favourites = %v, want %v", got, tc.wantFavs)
+			}
+		})
+	}
+}
+
+// renamedFolders pairs the folders a scan's moves left with the ones they went to,
+// and keeps a pair only when every move out of the folder agrees and the folder is
+// gone from disk.
+func TestRenamedFolders(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		moved map[string]string
+		disk  []string // folders on disk after the moves
+		want  map[string]string
+	}{
+		{"author and series renamed", map[string]string{"A/S/B1": "A2/S/B1"}, []string{"A2/S/B1"},
+			map[string]string{"A/S": "A2/S", "A": "A2"}},
+		{"a book renamed as it went still left its folder", map[string]string{"S/Bk 1": "S2/Book 1"},
+			[]string{"S2/Book 1"}, map[string]string{"S": "S2"}},
+		{"the moves disagree", map[string]string{"S/B1": "X/B1", "S/B2": "Y/B2 (Remastered)"},
+			[]string{"X/B1", "Y/B2 (Remastered)"}, map[string]string{}},
+		{"the folder is still there", map[string]string{"S/B1": "T/B1"}, []string{"S/B2", "T/B1"},
+			map[string]string{}},
+		{"renamed in place, and out of the root", map[string]string{"A/Book": "A/Book (2020)", "Loose.m4b": "A/Loose.m4b"},
+			[]string{"A/Book (2020)"}, map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, d := range tc.disk {
+				if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(d)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := renamedFolders(catalog.Library{Root: root}, tc.moved)
+			if !maps.Equal(got, tc.want) {
+				t.Fatalf("renamedFolders = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

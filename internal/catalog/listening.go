@@ -262,7 +262,8 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // takes the newer save (mergeNewest), a join the furthest (mergeFurthest); a
 // favourite lands once.
 //
-// This is the one list of per-user path-keyed tables: add a table -> add a line.
+// This is the one list of per-user path-keyed tables: add a table -> add a line
+// (and, if it can be keyed on a folder, see carryFavourites).
 // The statements are spelled out rather than built as `"UPDATE "+table+...` on
 // purpose: that concatenation trips gosec G202 (the project lints at a green
 // baseline), and only the values are bound parameters here anyway.
@@ -287,9 +288,6 @@ func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part 
 		        finished = finished AND ?6
 		  WHERE library_id = ?4 AND rel_path = ?5`,
 		`UPDATE listening_daily SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
-		`INSERT OR IGNORE INTO favourites(user_id, library_id, rel_path, created_at)
-		 SELECT user_id, library_id, ?1, created_at FROM favourites WHERE library_id = ?4 AND rel_path = ?5`,
-		`DELETE FROM favourites WHERE library_id = ?4 AND rel_path = ?5`,
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt, into, part.Offset, total, libraryID, part.Path, part.Last,
@@ -297,7 +295,22 @@ func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part 
 			return err
 		}
 	}
-	return nil
+	return carryFavourites(ctx, tx, libraryID, part.Path, into)
+}
+
+// carryFavourites hands every listener's favourite on one path to another, inside
+// tx, landing once where a listener already favourited it. It is the one table of
+// carryListeningState that can also be keyed on a navigation folder, so a folder
+// rename carries it too (MoveFolderFavourites).
+func carryFavourites(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO favourites(user_id, library_id, rel_path, created_at)
+		 SELECT user_id, library_id, ?, created_at FROM favourites WHERE library_id = ? AND rel_path = ?`,
+		into, libraryID, from); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM favourites WHERE library_id = ? AND rel_path = ?`, libraryID, from)
+	return err
 }
 
 // listenerProgress is one listener's progress row on a path.
