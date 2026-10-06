@@ -40,6 +40,9 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"browse_people": true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
 			"cover_sizes":   true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
 			"next_book":     true,                 // what to play after a book (GET /libraries/{id}/next)
+			"ratings":       true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
+			"progress_edit": true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
+			"my_devices":    true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},

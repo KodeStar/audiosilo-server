@@ -124,19 +124,39 @@ func (s *Service) ListDevices(ctx context.Context, userID int64) ([]Device, erro
 // forgotten (IssueSession). An id naming no live session or key
 // (a pairing token included) returns ErrNotFound.
 func (s *Service) RevokeDevice(ctx context.Context, id int64) error {
-	return s.db.WithTx(ctx, "RevokeDevice", func(tx *sql.Tx) error {
+	return s.revokeDevice(ctx, "RevokeDevice", id, 0)
+}
+
+// RevokeOwnDevice is RevokeDevice for the device's owner (the player's "My
+// devices"): it signs out one of userID's own live sessions or API keys, the one
+// making the request included. Another user's token, like an unknown, revoked or
+// pairing one, returns ErrNotFound and is left alone, so the answer never says
+// whether someone else's id exists.
+func (s *Service) RevokeOwnDevice(ctx context.Context, userID, id int64) error {
+	if userID <= 0 {
+		return ErrNotFound // 0 would mean "whoever owns it" to revokeDevice
+	}
+	return s.revokeDevice(ctx, "RevokeOwnDevice", id, userID)
+}
+
+// revokeDevice is RevokeDevice and RevokeOwnDevice: owner 0 revokes whoever owns
+// the token, any other owner only a token of theirs.
+func (s *Service) revokeDevice(ctx context.Context, op string, id, owner int64) error {
+	return s.db.WithTx(ctx, op, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE tokens SET revoked = 1 WHERE id = ? AND kind IN (?, ?) AND revoked = 0`,
-			id, KindSession, KindAPI)
+			`UPDATE tokens SET revoked = 1
+			  WHERE id = ?1 AND kind IN (?2, ?3) AND revoked = 0 AND (?4 = 0 OR user_id = ?4)`,
+			id, KindSession, KindAPI, owner)
 		if err != nil {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return ErrNotFound
 		}
-		// An admin signing a device out may be cutting off someone who had the
-		// password: forget its browser, on every session of the person that carries
-		// the key, so a sign-in from it is announced as a new device again.
+		// Signing a device out may be cutting off someone who had the password (an
+		// admin's call, or the owner's on a device they don't recognise): forget its
+		// browser, on every session of the person that carries the key, so a sign-in
+		// from it is announced as a new device again.
 		_, err = tx.ExecContext(ctx,
 			`UPDATE tokens SET sign_in_key = ''
 			  WHERE sign_in_key <> ''

@@ -8,13 +8,29 @@ import (
 )
 
 // UserProgress is one of a person's books as the admin console lists it: the
-// progress row with the book's title and the start and finish dates.
+// progress row with the book's title and the start and finish dates. Its own
+// StartedAt/FinishedAt (null when unknown, as the console reads them) shadow the
+// embedded Progress's, which stay empty here; AsProgress is the player's shape.
 type UserProgress struct {
 	Progress
 	Title      string  `json:"title"`
 	Author     string  `json:"author"`
 	StartedAt  *string `json:"started_at"`
 	FinishedAt *string `json:"finished_at"`
+}
+
+// AsProgress is the row as the player's Progress, carrying the dates (absent when
+// unknown).
+func (p UserProgress) AsProgress() Progress {
+	out := p.Progress
+	out.StartedAt, out.FinishedAt = "", ""
+	if p.StartedAt != nil {
+		out.StartedAt = *p.StartedAt
+	}
+	if p.FinishedAt != nil {
+		out.FinishedAt = *p.FinishedAt
+	}
+	return out
 }
 
 const userProgressColumns = `p.library_id, p.rel_path, p.position, p.duration, p.finished, p.playback_speed,
@@ -68,8 +84,9 @@ type OptionalTime struct {
 	Value *time.Time
 }
 
-// ProgressEdit is an admin's change to someone's progress on a book. Nil or
-// unset fields stay as they are.
+// ProgressEdit is a change to someone's progress on a book: an admin's, or the
+// listener's own (PATCH /libraries/{id}/progress). Nil or unset fields stay as
+// they are.
 type ProgressEdit struct {
 	Finished   *bool
 	Position   *float64
@@ -77,11 +94,12 @@ type ProgressEdit struct {
 	FinishedAt OptionalTime
 }
 
-// EditProgress applies an admin's edit to a user's progress on a book, creating
-// the row when the book is indexed and the user has none. Marking a book finished
-// moves the position to the end (players read that as done) and stamps the finish
-// now unless the edit names a date; marking it unfinished clears the finish date
-// and keeps the position unless the edit sets one. The write is stamped with the
+// EditProgress applies an edit (an admin's, or the user's own) to a user's
+// progress on a book, creating the row when the book is indexed and the user has
+// none. Marking a book finished moves the position to the end (players read that
+// as done) and stamps the finish now unless the edit names a date; marking it
+// unfinished clears the finish date and keeps the position unless the edit sets
+// one. It is not playback, so it records no listening session. The write is stamped with the
 // server's time and a higher version, so under last-write-wins it beats what a
 // device saved before it, while any device with the book loaded overrides it on
 // its next save, as it should. Returns ErrNotFound when the user has no progress

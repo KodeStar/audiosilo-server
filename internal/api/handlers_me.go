@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -68,6 +69,36 @@ func (a *API) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 	// played just now, whether or not it won last-write-wins against the stored row.
 	a.recordHeartbeat(r, u.ID, in)
 	writeJSON(w, http.StatusOK, map[string]any{"progress": saved})
+}
+
+// handleEditMyProgress is the caller's own edit of their progress on a book
+// (PATCH ?path=): mark it finished or not (unfinished keeps the position), move
+// the position, set or clear the start and finish dates. The admin's edit
+// (catalog.EditProgress) with the caller's scope: a path outside it is 403, and a
+// new row is created only for an indexed book. It is not playback, so it records
+// no listening session.
+func (a *API) handleEditMyProgress(w http.ResponseWriter, r *http.Request) {
+	lib, path, scope, status, msg := a.authorizedScope(r)
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	body := decodeProgressEdit(w, r)
+	if body == nil {
+		return
+	}
+	u := userFrom(r.Context())
+	saved, err := a.cat.EditProgress(r.Context(), u.ID, catalog.Ref{LibraryID: lib.ID, Path: path}, body.edit(), scope)
+	switch {
+	case errors.Is(err, catalog.ErrNotFound):
+		writeErrorCode(w, http.StatusNotFound, codeBookNotFound, "no progress or book at this path")
+	case errors.Is(err, catalog.ErrNoAccess):
+		writeError(w, http.StatusForbidden, msgNoPathAccess)
+	case err != nil:
+		a.writeCatalogError(w, err, "edit own progress failed", "could not save progress", "library", lib.ID, "path", path)
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"progress": saved.AsProgress()})
+	}
 }
 
 func (a *API) handleListBookmarks(w http.ResponseWriter, r *http.Request) {
