@@ -16,8 +16,9 @@ import (
 // the caller's CURRENT access, so a revoked share's path, title or author never
 // echoes back. The totals, days and hours are the caller's own time, all of it.
 
-// errNoUser guards the per-user entry points: user 0 means "everyone" to the
-// listening accumulator, which must never reach a person's own stats.
+// errNoUser refuses a person's own stats for no user (newUserListenAcc,
+// GoalStatusFor): user 0 means "everyone" to the listening accumulator, which
+// must never reach a person's own stats.
 var errNoUser = errors.New("catalog: personal stats need a user")
 
 // UserStats is one person's listening over a period.
@@ -86,18 +87,19 @@ const finishedBooksLimit = 100
 // in the server's zone loc. scopes is the user's current access (UserScopes):
 // the rows naming a book keep only the books it grants.
 func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.Time, loc *time.Location, userID int64, scopes []Scope) (*UserStats, error) {
-	if userID <= 0 {
-		return nil, errNoUser
-	}
-	cur, prev, err := c.listenPeriods(ctx, from, to, loc, userID)
+	cur, err := newUserListenAcc(from, to, loc, listenAll, userID)
 	if err != nil {
 		return nil, err
 	}
-	finished, err := c.finishedByUser(ctx, from, to, userID)
+	prev, err := c.listenPeriods(ctx, cur)
 	if err != nil {
 		return nil, err
 	}
-	prevFinished, err := c.finishedByUser(ctx, prev.from, prev.to, userID)
+	finished, err := c.finishedCount(ctx, userID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	prevFinished, err := c.finishedCount(ctx, userID, prev.from, prev.to)
 	if err != nil {
 		return nil, err
 	}
@@ -108,9 +110,9 @@ func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.
 	keep := func(ref Ref) bool { return scopesAllow(scopes, ref) }
 	out := &UserStats{
 		Period:   periodOf(label, from, to, loc),
-		Totals:   userTotals(cur.totals(finished)),
-		Previous: userTotals(prev.totals(prevFinished)), Estimated: cur.estimated,
-		Days: cur.dayTotals(), HourWeekday: cur.hw,
+		Totals:   userTotals(cur, finished),
+		Previous: userTotals(prev, prevFinished), Estimated: cur.estimated,
+		Days: listeningDayList(cur.dayList()), HourWeekday: cur.hw,
 		TopBooks:      []UserTopBook{},
 		TopAuthors:    cur.topPeople(bookAuthor, keep),
 		TopNarrators:  cur.topPeople(bookNarrator, keep),
@@ -126,20 +128,29 @@ func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.
 	return out, nil
 }
 
-// userTotals drops the listener count from a one-user accumulator's totals.
-func userTotals(t ActivityTotals) UserTotals {
-	return UserTotals{Listened: t.Listened, Sessions: t.Sessions, Books: t.Books, Finished: t.Finished}
+// userTotals is a one-user accumulator's totals (no listener count) with the
+// books they finished in its period.
+func userTotals(a *listenAcc, finished int) UserTotals {
+	return UserTotals{Listened: a.listened, Sessions: a.sessions, Books: len(a.books), Finished: finished}
 }
 
-// dayTotals is every day of the period with its listening, oldest first, zeros
-// included, without the per-listener split.
-func (a *listenAcc) dayTotals() []ListeningDay {
-	days := a.dayList()
+// listeningDayList is days without the per-listener split.
+func listeningDayList(days []ActivityDay) []ListeningDay {
 	out := make([]ListeningDay, len(days))
 	for i, d := range days {
 		out[i] = ListeningDay{Date: d.Date, Listened: d.Listened}
 	}
 	return out
+}
+
+// finishedCount counts the books userID finished in [from, to) (the progress
+// primary key serves it: user_id leads).
+func (c *Catalog) finishedCount(ctx context.Context, userID int64, from, to time.Time) (int, error) {
+	var n int
+	err := c.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM progress WHERE user_id = ? AND finished = 1 AND finished_at >= ? AND finished_at < ?`,
+		userID, from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)).Scan(&n)
+	return n, err
 }
 
 // finishedBooks lists the books userID finished in [from, to) that scopes still
@@ -148,16 +159,12 @@ func (c *Catalog) finishedBooks(ctx context.Context, userID int64, from, to time
 	filter, fargs := scopesFilterSQL("p.library_id", "p.rel_path", scopes)
 	args := append([]any{userID, from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)}, fargs...)
 	args = append(args, finishedBooksLimit)
-	out, err := queryRows(ctx, c.db, func(rows *sql.Rows, b *FinishedBook) error {
+	return queryRows(ctx, c.db, func(rows *sql.Rows, b *FinishedBook) error {
 		return rows.Scan(&b.LibraryID, &b.Path, &b.Title, &b.Author, &b.FinishedAt)
 	}, `SELECT p.library_id, p.rel_path, COALESCE(b.title, ''), COALESCE(b.author, ''), p.finished_at
 	      FROM progress p LEFT JOIN books b ON b.library_id = p.library_id AND b.rel_path = p.rel_path
 	     WHERE p.user_id = ? AND p.finished = 1 AND p.finished_at >= ? AND p.finished_at < ? AND `+filter+`
 	     ORDER BY p.finished_at DESC, p.library_id, p.rel_path LIMIT ?`, args...)
-	if out == nil && err == nil {
-		out = []FinishedBook{}
-	}
-	return out, err
 }
 
 // UserListening is one person's listening per day over a period (the client
@@ -170,13 +177,13 @@ type UserListening struct {
 // UserListeningFor is userID's own listening per day in [from, to) (server time,
 // loc): the days of ListeningDaysFor for that user, without the per-listener split.
 func (c *Catalog) UserListeningFor(ctx context.Context, label string, from, to time.Time, loc *time.Location, userID int64) (*UserListening, error) {
-	if userID <= 0 {
-		return nil, errNoUser
-	}
-	acc := newListenAcc(from, to, loc, listenDays)
-	acc.onlyUser = userID
-	if err := c.collectListening(ctx, acc); err != nil {
+	acc, err := newUserListenAcc(from, to, loc, listenDays, userID)
+	if err != nil {
 		return nil, err
 	}
-	return &UserListening{Period: periodOf(label, from, to, loc), Days: acc.dayTotals()}, nil
+	days, err := c.listeningDays(ctx, label, acc)
+	if err != nil {
+		return nil, err
+	}
+	return &UserListening{Period: days.Period, Days: listeningDayList(days.Days)}, nil
 }

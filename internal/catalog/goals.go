@@ -47,11 +47,9 @@ func (c *Catalog) GoalStatusFor(ctx context.Context, userID int64, now time.Time
 	case !errors.Is(err, sql.ErrNoRows):
 		return nil, err
 	}
-	finished, err := c.finishedByUser(ctx, from, to, userID)
-	if err != nil {
+	if out.Finished, err = c.finishedCount(ctx, userID, from, to); err != nil {
 		return nil, err
 	}
-	out.Finished = finished[userID]
 	return out, nil
 }
 

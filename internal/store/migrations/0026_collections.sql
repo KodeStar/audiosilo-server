@@ -31,6 +31,9 @@ CREATE TABLE collection_items (
 );
 -- The scanner's carry on a move/join looks rows up by path, across collections.
 CREATE INDEX idx_collection_items_path ON collection_items(library_id, rel_path);
+-- A collection's items in their order (detail reads, the previews of
+-- GET /me/collections, the range shift of an insert at a position).
+CREATE INDEX idx_collection_items_order ON collection_items(collection_id, position);
 
 -- Who a collection is shared with (read-only viewers). Removed with the
 -- collection or the viewer; a viewer leaving deletes only their own row. At most

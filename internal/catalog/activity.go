@@ -249,25 +249,31 @@ type ListeningDays struct {
 func (c *Catalog) ListeningDaysFor(ctx context.Context, label string, from, to time.Time, loc *time.Location, userID int64) (*ListeningDays, error) {
 	acc := newListenAcc(from, to, loc, listenDays)
 	acc.onlyUser = userID
+	return c.listeningDays(ctx, label, acc)
+}
+
+// listeningDays collects acc (a listenDays accumulator) and answers its days.
+func (c *Catalog) listeningDays(ctx context.Context, label string, acc *listenAcc) (*ListeningDays, error) {
 	if err := c.collectListening(ctx, acc); err != nil {
 		return nil, err
 	}
-	return &ListeningDays{Period: periodOf(label, from, to, loc), Days: acc.dayList()}, nil
+	return &ListeningDays{Period: periodOf(label, acc.from, acc.to, acc.loc), Days: acc.dayList()}, nil
 }
 
 // ActivityFor computes the Activity page for [from, to), labelled label. loc is
 // the server's zone, which days, hours and weekdays are counted in.
 func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.Time, loc *time.Location) (*Activity, error) {
 	out := &Activity{Period: periodOf(label, from, to, loc)}
-	cur, prev, err := c.listenPeriods(ctx, from, to, loc, 0)
+	cur := newListenAcc(from, to, loc, listenAll)
+	prev, err := c.listenPeriods(ctx, cur)
 	if err != nil {
 		return nil, err
 	}
-	finished, err := c.finishedByUser(ctx, from, to, 0)
+	finished, err := c.finishedByUser(ctx, from, to)
 	if err != nil {
 		return nil, err
 	}
-	prevFinished, err := c.finishedByUser(ctx, prev.from, prev.to, 0)
+	prevFinished, err := c.finishedByUser(ctx, prev.from, prev.to)
 	if err != nil {
 		return nil, err
 	}
@@ -285,24 +291,22 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 	return out, nil
 }
 
-// listenPeriods collects the listening of [from, to) in full and of the same
-// length of time just before it as totals, of one user or of everyone (onlyUser
-// 0).
-func (c *Catalog) listenPeriods(ctx context.Context, from, to time.Time, loc *time.Location, onlyUser int64) (cur, prev *listenAcc, err error) {
-	cur = newListenAcc(from, to, loc, listenAll)
-	cur.onlyUser = onlyUser
+// listenPeriods collects cur (a period's listening, in full) and returns the
+// totals of the same length of time just before it, of the same listeners (one
+// user's, or everyone's).
+func (c *Catalog) listenPeriods(ctx context.Context, cur *listenAcc) (prev *listenAcc, err error) {
 	if err := c.collectListening(ctx, cur); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	prev = newListenAcc(from.Add(-to.Sub(from)), from, loc, listenTotals)
-	prev.onlyUser = onlyUser
+	prev = newListenAcc(cur.from.Add(-cur.to.Sub(cur.from)), cur.from, cur.loc, listenTotals)
+	prev.onlyUser = cur.onlyUser
 	// The current period takes the whole hour holding from, so the previous one
 	// stops before it: that hour is counted once, not in both.
 	prev.endHour = cur.firstHour
 	if err := c.collectListening(ctx, prev); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return cur, prev, nil
+	return prev, nil
 }
 
 // listenLevel is how much a listenAcc keeps beyond the period's totals.
@@ -319,8 +323,8 @@ type listenAcc struct {
 	from, to time.Time
 	loc      *time.Location
 	level    listenLevel
-	// onlyUser keeps only this user's listening (0 = everyone's). With one user,
-	// the cross-user facts (users, the intervals for the peak) are not kept.
+	// onlyUser keeps only this user's listening (0 = everyone's; a person's own
+	// stats build theirs with newUserListenAcc).
 	onlyUser int64
 
 	listened  float64
@@ -372,6 +376,18 @@ func newListenAcc(from, to time.Time, loc *time.Location, level listenLevel) *li
 	}
 }
 
+// newUserListenAcc is newListenAcc for one person's listening only: the one way
+// their own stats build an accumulator, and the one guard that a user id is
+// given (onlyUser 0 would collect everyone's).
+func newUserListenAcc(from, to time.Time, loc *time.Location, level listenLevel, userID int64) (*listenAcc, error) {
+	if userID <= 0 {
+		return nil, errNoUser
+	}
+	a := newListenAcc(from, to, loc, level)
+	a.onlyUser = userID
+	return a, nil
+}
+
 // listenRow is one raw session or one rolled-up day, as collectListening reads it.
 type listenRow struct {
 	user               int64
@@ -408,16 +424,10 @@ func (a *listenAcc) add(r listenRow, day string, hour *time.Time, secs float64) 
 	if hour != nil {
 		a.hw[(int(hour.Weekday())+6)%7][hour.Hour()] += secs
 	}
-	if a.everyone() {
-		u := a.user(r)
-		u.listened += secs
-		u.books[r.ref] = true
-	}
+	u := a.user(r)
+	u.listened += secs
+	u.books[r.ref] = true
 }
-
-// everyone reports whether the accumulator holds everyone's listening (the
-// admin's), so the per-listener facts are wanted.
-func (a *listenAcc) everyone() bool { return a.onlyUser == 0 }
 
 func (a *listenAcc) user(r listenRow) *userAcc {
 	u := a.users[r.user]
@@ -433,7 +443,7 @@ func (a *listenAcc) user(r listenRow) *userAcc {
 func (a *listenAcc) countSession(r listenRow, n int) {
 	a.sessions += n
 	a.listeners[r.user] = true
-	if a.level == listenAll && a.everyone() {
+	if a.level == listenAll {
 		a.user(r).sessions += n
 	}
 }
@@ -460,18 +470,31 @@ func (c *Catalog) collectListening(ctx context.Context, a *listenAcc) error {
 	return c.collectDays(ctx, a)
 }
 
+// The periods of collectSessions and collectDays: everyone's, or one user's. Two
+// spellings rather than one "(? = 0 OR user_id = ?)", which no index can serve:
+// one user's reads by idx_sessions_user_last / idx_daily_user, everyone's by
+// idx_sessions_last / idx_daily_day.
+const (
+	sessionsOfEveryone = ` WHERE s.started_at < ? AND s.last_at >= ? AND ` + listenedSQL
+	sessionsOfUser     = ` WHERE s.user_id = ? AND s.started_at < ? AND s.last_at >= ? AND ` + listenedSQL
+	daysOfEveryone     = ` WHERE d.day >= ? AND d.day <= ?`
+	daysOfUser         = ` WHERE d.user_id = ? AND d.day >= ? AND d.day <= ?`
+)
+
 func (c *Catalog) collectSessions(ctx context.Context, a *listenAcc) error {
 	cols, joins := listenRowColumns, listenRowJoins("s")
 	if a.level < listenAll { // totals or days only: no names needed
 		cols, joins = listenRowBlanks, ""
 	}
+	where, args := sessionsOfEveryone, []any{formatSessionTime(a.to), formatSessionTime(a.from)}
+	if a.onlyUser != 0 {
+		where, args = sessionsOfUser, append([]any{a.onlyUser}, args...)
+	}
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT s.user_id, s.library_id, s.rel_path, `+cols+`,
 		        s.started_at, s.last_at, s.listened, s.codec, s.transcoded,
 		        s.token_id, s.client_app, s.client_version, s.client_platform, s.backfilled
-		   FROM listening_sessions s `+joins+`
-		  WHERE s.started_at < ? AND s.last_at >= ? AND (? = 0 OR s.user_id = ?) AND `+listenedSQL,
-		formatSessionTime(a.to), formatSessionTime(a.from), a.onlyUser, a.onlyUser)
+		   FROM listening_sessions s `+joins+where, args...)
 	if err != nil {
 		return err
 	}
@@ -540,7 +563,7 @@ func (a *listenAcc) addSession(r listenRow, start, last time.Time, listened floa
 		}
 	}
 	s, e := maxTime(start, a.from), minTime(last, a.to)
-	if a.everyone() && !e.Before(s) {
+	if !e.Before(s) {
 		a.intervals = append(a.intervals, [2]time.Time{s, e})
 	}
 }
@@ -550,10 +573,13 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 	if a.level < listenAll {
 		cols, joins = listenRowBlanks, ""
 	}
+	where, args := daysOfEveryone, []any{a.firstDay, a.lastDay}
+	if a.onlyUser != 0 {
+		where, args = daysOfUser, append([]any{a.onlyUser}, args...)
+	}
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT d.user_id, d.library_id, d.rel_path, `+cols+`, d.day, d.listened, d.sessions, d.estimated
-		   FROM listening_daily d `+joins+`
-		  WHERE d.day >= ? AND d.day <= ? AND (? = 0 OR d.user_id = ?)`, a.firstDay, a.lastDay, a.onlyUser, a.onlyUser)
+		   FROM listening_daily d `+joins+where, args...)
 	if err != nil {
 		return err
 	}
@@ -731,13 +757,12 @@ func minTime(a, b time.Time) time.Time {
 	return b
 }
 
-// finishedByUser counts the books each user finished in [from, to), of everyone
-// or of one user (onlyUser 0 = everyone).
-func (c *Catalog) finishedByUser(ctx context.Context, from, to time.Time, onlyUser int64) (map[int64]int, error) {
+// finishedByUser counts the books each user finished in [from, to).
+func (c *Catalog) finishedByUser(ctx context.Context, from, to time.Time) (map[int64]int, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT user_id, COUNT(*) FROM progress
-		  WHERE finished = 1 AND finished_at >= ? AND finished_at < ? AND (? = 0 OR user_id = ?) GROUP BY user_id`,
-		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339), onlyUser, onlyUser)
+		  WHERE finished = 1 AND finished_at >= ? AND finished_at < ? GROUP BY user_id`,
+		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
