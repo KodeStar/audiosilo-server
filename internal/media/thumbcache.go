@@ -5,11 +5,13 @@ import (
 	"sync"
 )
 
-// ThumbCache is a small in-memory LRU of cover thumbnails, held in the form they
-// are sent (a data: URL, so a hit costs no encoding) and bounded by the bytes it
-// holds. Keys carry a version of the source art (a custom cover's timestamp, a
-// file's size and modification time), so a replaced cover is a new key and the
-// stale entry simply ages out. An empty value records "this source has no usable
+// ThumbCache is a small in-memory LRU of cover thumbnails, bounded by the bytes
+// it holds. One entry serves every endpoint that sends the thumbnail: it holds the
+// raw JPEG (sent as is by GET /libraries/{id}/cover?size=, base64-encoded into a
+// data: URL by the console's POST /admin/covers) with the palette read from it.
+// Keys carry a version of the source art (a custom cover's timestamp, a file's
+// size and modification time), so a replaced cover is a new key and the stale
+// entry simply ages out. A Thumb with no JPEG records "this source has no usable
 // art" so a book without a cover isn't re-read on every page.
 type ThumbCache struct {
 	mu    sync.Mutex
@@ -19,8 +21,16 @@ type ThumbCache struct {
 	items map[string]*list.Element
 }
 
+// Thumb is a cached cover thumbnail: the JPEG and the cover's Palette read from
+// it. A nil JPEG means the source has no usable art.
+type Thumb struct {
+	JPEG    []byte
+	Palette Palette
+}
+
 type thumbEntry struct {
-	key, value string
+	key   string
+	value Thumb
 }
 
 // entryOverhead approximates an entry's bookkeeping cost, so a cache full of
@@ -32,25 +42,28 @@ func NewThumbCache(maxBytes int) *ThumbCache {
 	return &ThumbCache{max: maxBytes, order: list.New(), items: map[string]*list.Element{}}
 }
 
-func entryCost(key, value string) int { return len(key) + len(value) + entryOverhead }
+func entryCost(key string, value Thumb) int {
+	p := value.Palette
+	return len(key) + len(value.JPEG) + len(p.Bg) + len(p.Accent) + len(p.OnAccent) + entryOverhead
+}
 
-// Get returns the cached thumbnail for key ("" for "no art") and whether key was
-// cached at all.
-func (c *ThumbCache) Get(key string) (string, bool) {
+// Get returns the cached thumbnail for key (no JPEG for "no art") and whether key
+// was cached at all. The JPEG is shared: callers must not modify it.
+func (c *ThumbCache) Get(key string) (Thumb, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	el, ok := c.items[key]
 	if !ok {
-		return "", false
+		return Thumb{}, false
 	}
 	c.order.MoveToFront(el)
 	return el.Value.(*thumbEntry).value, true
 }
 
-// Put stores value under key ("" = no art), evicting the least recently used
+// Put stores value under key (no JPEG = no art), evicting the least recently used
 // entries to stay within the byte bound. An entry larger than the whole cache is
 // not stored.
-func (c *ThumbCache) Put(key, value string) {
+func (c *ThumbCache) Put(key string, value Thumb) {
 	cost := entryCost(key, value)
 	if cost > c.max {
 		return

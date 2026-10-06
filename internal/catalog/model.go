@@ -63,6 +63,14 @@ type Book struct {
 	// HasCover reports cover art (a sibling image or embedded art); nil until a
 	// scan has checked. Set by the scanner; read by the admin catalog.
 	HasCover *bool `json:"-"`
+	// CoverColor is the cover's palette for the player's themed screens, and
+	// CoverVersion a short opaque token that changes when the cover art does (a
+	// client appends it to cover URLs as a cache-buster). Both are derived
+	// (books.cover_color/cover_version): absent until a thumbnail of the art has
+	// been made (RecordCoverColors), reset by SetCover/DeleteCover and by a
+	// re-index that changes the book's mtime or sidecar.
+	CoverColor   *CoverColor `json:"cover_color,omitempty"`
+	CoverVersion string      `json:"cover_version,omitempty"`
 	// ScanError is what went wrong reading the book's files when it was last indexed
 	// (a code; "" = nothing), in which file (library-relative) and the tool's
 	// message. SuspectParts is how many separate books its parts look like (0 = one;
@@ -94,6 +102,15 @@ type Book struct {
 	// OtherLocations are the same book's other (non-winning) copies in a
 	// de-duplicated list, so a client can show "also on X" and let the user switch.
 	OtherLocations []BookLocation `json:"other_locations,omitempty"`
+}
+
+// CoverColor is a cover's palette (lowercase "#rrggbb"): Bg its dominant colour;
+// Accent a vibrant one that reads against Bg (WCAG contrast >= 4.5:1) and
+// OnAccent white or black for text on it, both "" when the cover has none.
+type CoverColor struct {
+	Bg       string `json:"bg"`
+	Accent   string `json:"accent,omitempty"`
+	OnAccent string `json:"on_accent,omitempty"`
 }
 
 // BookLocation points at one copy of a book in a particular library - used to

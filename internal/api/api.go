@@ -98,8 +98,9 @@ type API struct {
 	// small self-hosted box. A full channel returns 503 rather than forking more.
 	transcodeSem chan struct{}
 
-	// thumbs caches the admin console's cover thumbnails; thumbSem bounds how many
-	// are decoded at once across requests (see handlers_covers.go).
+	// thumbs caches cover thumbnails (GET cover ?size= and the admin console's
+	// batch); thumbSem bounds how many are decoded at once across requests (see
+	// handlers_covers.go).
 	thumbs   *media.ThumbCache
 	thumbSem chan struct{}
 
