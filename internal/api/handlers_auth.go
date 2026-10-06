@@ -38,6 +38,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"metadata":      a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
 			"meta_bundle":   a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
 			"browse_people": true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
+			"cover_sizes":   true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},

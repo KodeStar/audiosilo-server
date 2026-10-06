@@ -52,7 +52,14 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     has_cover=excluded.has_cover, scanned=excluded.scanned,
 			     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
 			     scan_error_detail=excluded.scan_error_detail,
-			     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent
+			     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent,
+			     -- The cover's colours and version describe the art a thumbnail was
+			     -- made of: a changed book file or sidecar may be new art, so they
+			     -- go until the next thumbnail (both read the row before this update).
+			     cover_color = CASE WHEN books.mtime <> excluded.mtime OR books.cover_path <> excluded.cover_path
+			                        THEN '' ELSE books.cover_color END,
+			     cover_version = CASE WHEN books.mtime <> excluded.mtime OR books.cover_path <> excluded.cover_path
+			                          THEN '' ELSE books.cover_version END
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -373,7 +380,7 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
-	added_at, content_hash, published, description, has_cover`
+	added_at, content_hash, published, description, has_cover, cover_color, cover_version`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
 // selecting bookCols (plain or prefixed) scans it the same way.
@@ -381,7 +388,7 @@ func bookDest(b *Book) []any {
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
 		&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 		&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
-		&b.Published, &b.Description, &b.HasCover}
+		&b.Published, &b.Description, &b.HasCover, coverColorDest{&b.CoverColor}, &b.CoverVersion}
 }
 
 func scanBook(row interface{ Scan(...any) error }) (*Book, error) {

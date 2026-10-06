@@ -161,7 +161,8 @@ history, per library, bounded), `issue_ignores` (`library_id, path, kind`: an ad
 on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` / `ignore_patterns`
 (per-library settings, off the player wire) and, on `books`, `scan_error` / `scan_error_file` /
 `scan_error_detail` (the last indexing's read problem) and `suspect_parts`; `0022` adds `books.split_parent` (the
-folder holding a disc of a book split across disc folders, else `''`). Phase 4a (`0018`) adds
+folder holding a disc of a book split across disc folders, else `''`); `0023` adds
+`books.cover_color` / `cover_version` (derived from cover thumbnails, see below). Phase 4a (`0018`) adds
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
 retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
 `client_platform` / `last_ip` (the app and newest address behind each token) and
@@ -602,8 +603,21 @@ admin overrides; see Metadata overrides below).
   ~20 KB a cover instead of full art.
   `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
   (decompression bombs), `media.ThumbCache` is a byte-bounded LRU keyed by the art's
-  version (custom `updated_at`, file size + mtime) holding finished data: URLs, and
-  `thumbSem` bounds decodes (reads are bounded per request, outside it). Admin book rows
+  version (custom `updated_at`, file size + mtime) holding the raw JPEG plus its palette
+  (the admin batch base64-encodes it), and
+  `thumbSem` bounds decodes (reads are bounded per request, outside it). The player gets
+  the same thumbnails from `GET /libraries/{id}/cover?size=160|320|640` (capability
+  `cover_sizes`; one code path, `coverArt` + `coverThumbnail`; ETag = size + art version,
+  304 on a match; custom `no-cache`, file art `max-age=86400`; any other size 400).
+  Every thumbnail (a cache hit too) records on the book what it lacks: `cover_version`
+  (`catalog.CoverVersion`, a 10-char hash of the art version) and `cover_color`
+  (`media.CoverPalette` on the scaled image: dominant bucket = `bg`, the most vibrant
+  bucket nudged in HSL lightness to WCAG 4.5:1 against it = `accent`, else none;
+  `on_accent` white/black) via `catalog.RecordCoverColors`, which skips a record whose
+  art has moved on (custom stamp or sidecar changed since it was read). `SetCover` sets
+  `cover_version` at once (colours cleared), `DeleteCover` clears both, `UpsertBook` clears
+  both when `mtime` or `cover_path` changed. Both are on the player `Book` JSON
+  (`omitempty`). Admin book rows
   carry `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in

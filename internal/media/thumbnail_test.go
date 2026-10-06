@@ -53,7 +53,7 @@ func decodedSize(t *testing.T, data []byte) (int, int) {
 }
 
 func TestThumbnailScalesDownKeepingAspect(t *testing.T) {
-	out, err := Thumbnail(encodePNG(t, 1200, 900, color.NRGBA{200, 30, 90, 255}), 320)
+	out, _, err := Thumbnail(encodePNG(t, 1200, 900, color.NRGBA{200, 30, 90, 255}), 320)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestThumbnailScalesDownKeepingAspect(t *testing.T) {
 
 func TestThumbnailSmallJPEGReturnedAsIs(t *testing.T) {
 	src := encodeJPEG(t, 200, 200)
-	out, err := Thumbnail(src, 320)
+	out, _, err := Thumbnail(src, 320)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestThumbnailSmallJPEGReturnedAsIs(t *testing.T) {
 }
 
 func TestThumbnailSmallPNGBecomesJPEGWithoutUpscaling(t *testing.T) {
-	out, err := Thumbnail(encodePNG(t, 100, 150, color.NRGBA{0, 0, 0, 0}), 320)
+	out, _, err := Thumbnail(encodePNG(t, 100, 150, color.NRGBA{0, 0, 0, 0}), 320)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,13 +100,13 @@ func TestThumbnailRefusesDecompressionBomb(t *testing.T) {
 	bomb := append([]byte(nil), src...)
 	copy(bomb[16:24], []byte{0, 1, 0x86, 0xa0, 0, 1, 0x86, 0xa0})
 	binary.BigEndian.PutUint32(bomb[29:33], crc32.ChecksumIEEE(bomb[12:29]))
-	if _, err := Thumbnail(bomb, 320); !errors.Is(err, ErrImageTooLarge) {
+	if _, _, err := Thumbnail(bomb, 320); !errors.Is(err, ErrImageTooLarge) {
 		t.Fatalf("err = %v, want ErrImageTooLarge", err)
 	}
 }
 
 func TestThumbnailRejectsNonImage(t *testing.T) {
-	if _, err := Thumbnail([]byte("<svg xmlns='http://www.w3.org/2000/svg'/>"), 320); err == nil {
+	if _, _, err := Thumbnail([]byte("<svg xmlns='http://www.w3.org/2000/svg'/>"), 320); err == nil {
 		t.Fatal("an SVG (not a raster cover) should be refused")
 	}
 }
@@ -144,7 +144,7 @@ func TestThumbnailDecodesBMP(t *testing.T) {
 	if _, ok := coverMIME(buf.Bytes()); !ok {
 		t.Fatal("coverMIME refused a BMP")
 	}
-	out, err := Thumbnail(buf.Bytes(), 160)
+	out, _, err := Thumbnail(buf.Bytes(), 160)
 	if err != nil {
 		t.Fatal(err)
 	}

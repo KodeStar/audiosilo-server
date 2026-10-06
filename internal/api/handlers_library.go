@@ -432,11 +432,16 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 
 // handleCover serves a book's cover for a path: a custom cover uploaded in the
 // admin console, else a sibling cover file if indexed, else embedded art from the
-// book's primary audio file.
+// book's primary audio file. With ?size= it is a JPEG thumbnail of that art
+// instead (handleCoverThumbnail).
 func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
+		return
+	}
+	if r.URL.Query().Has("size") {
+		a.handleCoverThumbnail(w, r, lib, path, scope)
 		return
 	}
 	if a.answerCustomCover(w, r, lib.ID, path) {
