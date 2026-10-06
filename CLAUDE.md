@@ -173,17 +173,20 @@ retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `cl
 `progress.started_at` / `finished_at`. Phase 5b (`0019`) adds `audit_events` (the admin audit log), `notification_targets`
 (where notifications go) and `server_events` (the console's bell); backups are files, not rows. Player
 redesign Phase 1b `0028` adds `listening_goals` (`user_id` PK → users CASCADE, `books_per_year`
-1-1000: a person's yearly goal; names no book, so nothing moves it). Sharing:
+1-1000: a person's yearly goal; names no book, so nothing moves it) and `0029` the index
+`listening_sessions(user_id, last_at)` (a person's own stats read their sessions by it). Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
 
 Player redesign Phase 1b: `up_next` (`0025`: a user's queue) and `collections` /
 `collection_items` / `collection_shares` (`0026`: named lists, shared read-only with named
 users). Items are path-keyed like favourites (no FK to `books`), ordered by `position`, and
-share ONE implementation (`catalog/lists.go` `orderedList`: add-at/move, remove, replace with
-the skip rule, books attached by `BooksByPaths`); every read passes through the READER's
-current access (a viewer never sees or counts an owner's item outside their own shares); a
-move or join carries them (`carryListsState`, the destination entry kept on a collision).
+share ONE implementation (`catalog/lists.go` `orderedList`: add-at/move as one range shift plus
+the row, remove leaving a gap (positions need not be dense; an add's index is a rank in the
+stored order), replace with the skip rule writing only the rows that changed, books attached by
+`booksAt`); every read passes through the READER's current access (a viewer never sees or
+counts an owner's item outside their own shares); a move or join carries them
+(`carryListeningState`, the destination entry kept on a collision).
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
 `not_owner`; capabilities `queue`, `collections`).
@@ -1026,8 +1029,8 @@ part path to its book with `bookAt` and stores on the book's path, 400 for a rat
 whole 1-5 or a note over 500 runes after trimming; GET/DELETE are exact via `authorizedPath`;
 DELETE 204 idempotent) and `GET /me/ratings` (`{"ratings": [Rating + book?]}`, newest first,
 scope-filtered like favourites: a revoked share hides a rating, never deletes it; books via
-`BooksByPaths`). Table `ratings` (`0027`), path-keyed, carried by `carryRatings` from
-`carryListeningState` (a collision keeps the newer `updated_at`, whole). **My devices** are `GET
+`BooksByPaths`). Table `ratings` (`0027`), path-keyed, carried by `carryListeningState` (a
+collision keeps the newer `updated_at`, whole). **My devices** are `GET
 /me/devices` (the caller's own live sessions and API keys, `auth.ListDevices(caller)` without
 `user_id`/`username`, `current` marks the request's token) and `DELETE /me/devices/{id}` (200
 `{"current": bool}`; `auth.RevokeOwnDevice`, owner-scoped: anyone else's, unknown, revoked or

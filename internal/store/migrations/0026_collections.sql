@@ -17,10 +17,9 @@ CREATE INDEX idx_collections_user ON collections(user_id);
 
 -- A collection's books, in order. Durable, path-keyed like up_next (no FK to the
 -- rebuildable books index): rel_path is a book's path, carried by a move or a
--- join (catalog.carryListsState). Each reader sees only the items THEIR current
--- access allows; the rows themselves are kept. position is 0-based and kept
--- dense by the writes that reorder. At most catalog.MaxCollectionItems per
--- collection.
+-- join (catalog.carryListeningState). Each reader sees only the items THEIR
+-- current access allows; the rows themselves are kept. position orders them
+-- (gaps allowed, as up_next). At most catalog.MaxCollectionItems per collection.
 CREATE TABLE collection_items (
     collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
     library_id    INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,

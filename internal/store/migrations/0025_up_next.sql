@@ -6,10 +6,11 @@
 -- a re-scan, re-tagging, and a share being revoked and granted again (a row
 -- outside the listener's current access is kept but not returned). rel_path is
 -- always a BOOK's path (catalog.CleanRelPath form). A move or a join carries the
--- rows (catalog.carryListsState); user and library deletes cascade them away.
+-- rows (catalog.carryListeningState); user and library deletes cascade them away.
 --
--- position orders a user's rows (0-based, kept dense by the writes that reorder:
--- catalog.orderedList); added_at is when the book was queued (RFC3339 UTC). At
+-- position orders a user's rows (catalog.orderedList; gaps allowed: a remove
+-- leaves one, an insert shifts only the rows after it); added_at is when the
+-- book was queued (RFC3339 UTC). At
 -- most catalog.MaxQueue rows per user.
 CREATE TABLE up_next (
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

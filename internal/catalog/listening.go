@@ -276,7 +276,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // part ends on into's timeline, JoinPart.end).
 // Progress where the listener already has some on into merges by merge: a move
 // takes the newer save (mergeNewest), a join the furthest (mergeFurthest); a
-// favourite lands once.
+// favourite lands once; an up-next entry or collection item already on into
+// stays (with its position) and the carried one goes; a rating already on into
+// is replaced only by a newer one (updated_at; a tie keeps into's).
 //
 // This is the one list of per-user path-keyed tables: add a table -> add a line
 // (and, if it can be keyed on a folder, see carryFavourites).
@@ -285,6 +287,9 @@ func (c *Catalog) MoveDurableState(ctx context.Context, libraryID int64, oldPath
 // baseline), and only the values are bound parameters here anyway.
 func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPart, into string, total float64,
 	merge progressMerge) error {
+	if part.Path == into {
+		return nil // nothing to carry (and the delete-after-copy below would lose it)
+	}
 	if err := carryProgress(ctx, tx, libraryID, part, into, total, merge); err != nil {
 		return err
 	}
@@ -304,18 +309,27 @@ func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part 
 		        finished = finished AND ?6
 		  WHERE library_id = ?4 AND rel_path = ?5`,
 		`UPDATE listening_daily SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		// Lists (orderedList): a list already holding into keeps that entry.
+		`UPDATE OR IGNORE up_next SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		`DELETE FROM up_next WHERE library_id = ?4 AND rel_path = ?5`,
+		`UPDATE OR IGNORE collection_items SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		`DELETE FROM collection_items WHERE library_id = ?4 AND rel_path = ?5`,
+		// Ratings: the newer updated_at wins, whole (as a move's progress,
+		// mergeNewest); a tie keeps into's.
+		`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
+		 SELECT user_id, library_id, ?1, rating, note, created_at, updated_at
+		   FROM ratings WHERE library_id = ?4 AND rel_path = ?5
+		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
+		     rating = excluded.rating, note = excluded.note,
+		     created_at = excluded.created_at, updated_at = excluded.updated_at
+		   WHERE excluded.updated_at > ratings.updated_at`,
+		`DELETE FROM ratings WHERE library_id = ?4 AND rel_path = ?5`,
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt, into, part.Offset, total, libraryID, part.Path, part.Last,
 			part.Duration); err != nil {
 			return err
 		}
-	}
-	if err := carryListsState(ctx, tx, libraryID, part.Path, into); err != nil {
-		return err
-	}
-	if err := carryRatings(ctx, tx, libraryID, part.Path, into); err != nil {
-		return err
 	}
 	return carryFavourites(ctx, tx, libraryID, part.Path, into)
 }

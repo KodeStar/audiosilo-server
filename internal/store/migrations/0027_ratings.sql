@@ -4,7 +4,7 @@
 -- Durable, path-keyed user state like progress and favourites: (user_id,
 -- library_id, rel_path) on the book's own path, deliberately NOT FK'd to the
 -- rebuildable books index, so it survives a rebuild, re-tagging and a move
--- (catalog.carryRatings). A user or library delete purges it (cascade).
+-- (catalog.carryListeningState). A user or library delete purges it (cascade).
 -- created_at / updated_at are fixed-width millisecond UTC strings, so they order
 -- and compare as text (a move collision keeps the newer updated_at).
 CREATE TABLE ratings (

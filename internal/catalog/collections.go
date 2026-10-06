@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -74,16 +75,18 @@ type Collection struct {
 // collection.
 var collectionItems = orderedList{
 	max:     MaxCollectionItems,
+	full:    ErrCollectionFull,
 	load:    `SELECT library_id, rel_path, added_at, position FROM collection_items WHERE collection_id = ?` + orderBy,
 	visible: `SELECT library_id, rel_path, added_at, position FROM collection_items WHERE collection_id = ? AND `,
 	insert:  `INSERT INTO collection_items(collection_id, library_id, rel_path, position, added_at) VALUES(?,?,?,?,?)`,
 	setPos:  `UPDATE collection_items SET position = ? WHERE collection_id = ? AND library_id = ? AND rel_path = ?`,
+	shift:   `UPDATE collection_items SET position = position + 1 WHERE collection_id = ? AND position >= ?`,
 	remove:  `DELETE FROM collection_items WHERE collection_id = ? AND library_id = ? AND rel_path = ?`,
 }
 
-// CleanCollectionName trims a collection name and checks it: 1 to 100
+// cleanCollectionName trims a collection name and checks it: 1 to 100
 // characters, valid UTF-8, no control characters. ErrInvalidName otherwise.
-func CleanCollectionName(name string) (string, error) {
+func cleanCollectionName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	n := utf8.RuneCountInString(name)
 	if n == 0 || n > maxCollectionName || !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
@@ -92,10 +95,10 @@ func CleanCollectionName(name string) (string, error) {
 	return name, nil
 }
 
-// CleanCollectionDescription trims a description and checks it: at most 1000
+// cleanCollectionDescription trims a description and checks it: at most 1000
 // characters, valid UTF-8, no control characters but line breaks and tabs.
 // ErrInvalidDescription otherwise.
-func CleanCollectionDescription(desc string) (string, error) {
+func cleanCollectionDescription(desc string) (string, error) {
 	desc = strings.TrimSpace(desc)
 	bad := func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' }
 	if utf8.RuneCountInString(desc) > maxCollectionDescription || !utf8.ValidString(desc) || strings.ContainsFunc(desc, bad) {
@@ -140,16 +143,10 @@ func (c *Catalog) RequireCollectionOwner(ctx context.Context, id, userID int64) 
 	return requireOwner(ctx, c.db, id, userID)
 }
 
-// The collections a reader can open, and the fragments that pick a set of them
-// for the decorating reads (counts, previews, shares): every collection the
-// reader owns or was shared, or one collection by id.
-const (
-	collectionCols = `SELECT c.id, c.name, c.description, c.user_id, u.username, c.user_id = ?, c.created_at, c.updated_at
+// collectionCols selects a collection as a reader sees it (the one parameter: the
+// reader, for owned).
+const collectionCols = `SELECT c.id, c.name, c.description, c.user_id, u.username, c.user_id = ?, c.created_at, c.updated_at
 	   FROM collections c JOIN users u ON u.id = c.user_id`
-	readableIDs = ` IN (SELECT id FROM collections WHERE user_id = ? UNION
-	                    SELECT collection_id FROM collection_shares WHERE user_id = ?)`
-	oneID = ` = ?`
-)
 
 // Collections returns the collections userID owns, then those shared with them,
 // each group newest updated_at first, as they see them (scopes, their
@@ -161,32 +158,34 @@ func (c *Catalog) Collections(ctx context.Context, userID int64, scopes []Scope)
 	if err != nil {
 		return nil, err
 	}
-	return cols, c.decorate(ctx, cols, userID, scopes, readableIDs, userID, userID)
+	if err := c.countAndPreview(ctx, cols, scopes); err != nil {
+		return nil, err
+	}
+	return cols, c.attachShares(ctx, cols)
 }
 
 // Collection returns one collection as userID sees it (see Collections), or
 // ErrNotFound when they neither own it nor were shared it.
 func (c *Catalog) Collection(ctx context.Context, id, userID int64, scopes []Scope) (*Collection, error) {
-	if _, err := collectionRole(ctx, c.db, id, userID); err != nil {
-		return nil, err
-	}
-	cols, err := c.collectionRows(ctx, collectionCols+` WHERE c.id = ?`, userID, id)
+	col, err := c.readableCollection(ctx, id, userID)
 	if err != nil {
 		return nil, err
 	}
-	if len(cols) == 0 { // deleted since the role check
-		return nil, ErrNotFound
+	cols := []Collection{*col}
+	if err := c.countAndPreview(ctx, cols, scopes); err != nil {
+		return nil, err
 	}
-	if err := c.decorate(ctx, cols, userID, scopes, oneID, id); err != nil {
+	if err := c.attachShares(ctx, cols); err != nil {
 		return nil, err
 	}
 	return &cols[0], nil
 }
 
 // CollectionDetail is Collection plus its items as userID sees them: in order,
-// only those their current access allows, each with its book when indexed.
+// only those their current access allows, each with its book when indexed. The
+// count and the preview come from those items.
 func (c *Catalog) CollectionDetail(ctx context.Context, id, userID int64, scopes []Scope) (*Collection, []ListItem, error) {
-	col, err := c.Collection(ctx, id, userID, scopes)
+	col, err := c.readableCollection(ctx, id, userID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -194,111 +193,166 @@ func (c *Catalog) CollectionDetail(ctx context.Context, id, userID int64, scopes
 	if err != nil {
 		return nil, nil, err
 	}
+	col.ItemCount = len(items)
+	for _, it := range items {
+		if it.Book != nil && len(col.Preview) < collectionPreviewSize {
+			col.Preview = append(col.Preview, *it.Book)
+		}
+	}
+	if err := c.attachShares(ctx, []Collection{*col}); err != nil {
+		return nil, nil, err
+	}
 	return col, items, nil
 }
 
-// collectionRows reads collections by a query selecting collectionCols.
+// readableCollection reads collection id as userID sees it, undecorated (no count,
+// preview or shares): their own or one shared with them, else ErrNotFound.
+func (c *Catalog) readableCollection(ctx context.Context, id, userID int64) (*Collection, error) {
+	cols, err := c.collectionRows(ctx, collectionCols+`
+	  WHERE c.id = ? AND (c.user_id = ? OR
+	        EXISTS(SELECT 1 FROM collection_shares s WHERE s.collection_id = c.id AND s.user_id = ?))`,
+		userID, id, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return nil, ErrNotFound
+	}
+	return &cols[0], nil
+}
+
+// collectionRows reads collections by a query selecting collectionCols. An owned
+// one gets an empty SharedWith, which attachShares fills (a viewer's stays nil:
+// never shown).
 func (c *Catalog) collectionRows(ctx context.Context, query string, args ...any) ([]Collection, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, col *Collection) error {
 		col.Preview = []Book{}
-		return rows.Scan(&col.ID, &col.Name, &col.Description, &col.Owner.ID, &col.Owner.Username,
-			&col.Owned, &col.CreatedAt, &col.UpdatedAt)
+		if err := rows.Scan(&col.ID, &col.Name, &col.Description, &col.Owner.ID, &col.Owner.Username,
+			&col.Owned, &col.CreatedAt, &col.UpdatedAt); err != nil {
+			return err
+		}
+		if col.Owned {
+			col.SharedWith = &[]CollectionUser{}
+		}
+		return nil
 	}, query, args...)
 }
 
-// decorate fills cols' item counts and previews as the reader sees them (scopes)
-// and, on the ones the reader owns, who they are shared with. which (readableIDs
-// or oneID, with its args) picks the collections cols holds.
-func (c *Catalog) decorate(ctx context.Context, cols []Collection, readerID int64, scopes []Scope, which string, whichArgs ...any) error {
-	if len(cols) == 0 {
-		return nil
-	}
-	byID := make(map[int64]*Collection, len(cols))
-	for i := range cols {
-		byID[cols[i].ID] = &cols[i]
-		if cols[i].Owned {
-			cols[i].SharedWith = &[]CollectionUser{}
-		}
-	}
-	filter, fargs := scopesFilterSQL("ci.library_id", "ci.rel_path", scopes)
-	args := append(slices.Clone(whichArgs), fargs...)
+// idChunk bounds the ids one IN (...) list binds.
+const idChunk = 500
 
-	// Visible items per collection.
-	type countRow struct{ id, n int64 }
-	counts, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *countRow) error {
-		return rows.Scan(&r.id, &r.n)
-	}, `SELECT ci.collection_id, COUNT(*) FROM collection_items ci
-	  WHERE ci.collection_id`+which+` AND `+filter+` GROUP BY ci.collection_id`, args...)
-	if err != nil {
-		return err
-	}
-	for _, r := range counts {
-		if col := byID[r.id]; col != nil {
-			col.ItemCount = int(r.n)
+// inChunks calls read with each chunk of ids as an IN list's placeholders and
+// arguments.
+func inChunks(ids []int64, read func(in string, args []any) error) error {
+	for start := 0; start < len(ids); start += idChunk {
+		part := ids[start:min(start+idChunk, len(ids))]
+		args := make([]any, len(part))
+		for i, id := range part {
+			args[i] = id
 		}
-	}
-
-	// The first visible indexed items of each, for the preview.
-	type previewRow struct {
-		id int64
-		Ref
-	}
-	prev, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *previewRow) error {
-		return rows.Scan(&r.id, &r.LibraryID, &r.Path)
-	}, `SELECT collection_id, library_id, rel_path FROM (
-	      SELECT ci.collection_id, ci.library_id, ci.rel_path,
-	             ROW_NUMBER() OVER (PARTITION BY ci.collection_id
-	                                ORDER BY ci.position, ci.library_id, ci.rel_path) AS rn
-	        FROM collection_items ci
-	        JOIN books b ON b.library_id = ci.library_id AND b.rel_path = ci.rel_path
-	       WHERE ci.collection_id`+which+` AND `+filter+`)
-	  WHERE rn <= ? ORDER BY collection_id, rn`, append(args, collectionPreviewSize)...)
-	if err != nil {
-		return err
-	}
-	items := make([]ListItem, len(prev))
-	for i, p := range prev {
-		items[i].Ref = p.Ref
-	}
-	if err := c.attachBooks(ctx, items); err != nil {
-		return err
-	}
-	for i, p := range prev {
-		if col := byID[p.id]; col != nil && items[i].Book != nil {
-			col.Preview = append(col.Preview, *items[i].Book)
-		}
-	}
-
-	// Who the reader's own collections are shared with (never a viewer's).
-	type shareRow struct {
-		id int64
-		CollectionUser
-	}
-	shares, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *shareRow) error {
-		return rows.Scan(&r.id, &r.ID, &r.Username)
-	}, `SELECT s.collection_id, u.id, u.username FROM collection_shares s JOIN users u ON u.id = s.user_id
-	  WHERE s.collection_id`+which+` AND s.collection_id IN (SELECT id FROM collections WHERE user_id = ?)
-	  ORDER BY u.username, u.id`, append(slices.Clone(whichArgs), readerID)...)
-	if err != nil {
-		return err
-	}
-	for _, s := range shares {
-		if col := byID[s.id]; col != nil && col.SharedWith != nil {
-			*col.SharedWith = append(*col.SharedWith, s.CollectionUser)
+		if err := read(placeholders(len(args)), args); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
+// countAndPreview fills cols' item counts and previews (the first
+// collectionPreviewSize indexed items) as the reader sees them (scopes).
+func (c *Catalog) countAndPreview(ctx context.Context, cols []Collection, scopes []Scope) error {
+	byID := make(map[int64]*Collection, len(cols))
+	ids := make([]int64, len(cols))
+	for i := range cols {
+		byID[cols[i].ID], ids[i] = &cols[i], cols[i].ID
+	}
+	filter, fargs := scopesFilterSQL("ci.library_id", "ci.rel_path", scopes)
+	return inChunks(ids, func(in string, args []any) error {
+		args = append(args, fargs...)
+		type countRow struct{ id, n int64 }
+		counts, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *countRow) error {
+			return rows.Scan(&r.id, &r.n)
+		}, `SELECT ci.collection_id, COUNT(*) FROM collection_items ci
+		  WHERE ci.collection_id IN (`+in+`) AND `+filter+` GROUP BY ci.collection_id`, args...)
+		if err != nil {
+			return err
+		}
+		for _, r := range counts {
+			byID[r.id].ItemCount = int(r.n)
+		}
+
+		type previewRow struct {
+			id int64
+			Ref
+		}
+		prev, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *previewRow) error {
+			return rows.Scan(&r.id, &r.LibraryID, &r.Path)
+		}, `SELECT collection_id, library_id, rel_path FROM (
+		      SELECT ci.collection_id, ci.library_id, ci.rel_path,
+		             ROW_NUMBER() OVER (PARTITION BY ci.collection_id
+		                                ORDER BY ci.position, ci.library_id, ci.rel_path) AS rn
+		        FROM collection_items ci
+		        JOIN books b ON b.library_id = ci.library_id AND b.rel_path = ci.rel_path
+		       WHERE ci.collection_id IN (`+in+`) AND `+filter+`)
+		  WHERE rn <= ? ORDER BY collection_id, rn`, append(args, collectionPreviewSize)...)
+		if err != nil {
+			return err
+		}
+		refs := make([]Ref, len(prev))
+		for i, p := range prev {
+			refs[i] = p.Ref
+		}
+		books, err := c.booksAt(ctx, refs)
+		if err != nil {
+			return err
+		}
+		for _, p := range prev {
+			if b, ok := books[p.Ref]; ok {
+				byID[p.id].Preview = append(byID[p.id].Preview, b)
+			}
+		}
+		return nil
+	})
+}
+
+// attachShares fills who the reader's own collections among cols are shared
+// with (collectionRows gave each an empty SharedWith).
+func (c *Catalog) attachShares(ctx context.Context, cols []Collection) error {
+	shared := map[int64]*[]CollectionUser{}
+	var ids []int64
+	for _, col := range cols {
+		if col.Owned {
+			shared[col.ID] = col.SharedWith
+			ids = append(ids, col.ID)
+		}
+	}
+	return inChunks(ids, func(in string, args []any) error {
+		type shareRow struct {
+			id int64
+			CollectionUser
+		}
+		shares, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *shareRow) error {
+			return rows.Scan(&r.id, &r.ID, &r.Username)
+		}, `SELECT s.collection_id, u.id, u.username FROM collection_shares s JOIN users u ON u.id = s.user_id
+		  WHERE s.collection_id IN (`+in+`) ORDER BY u.username, u.id`, args...)
+		if err != nil {
+			return err
+		}
+		for _, sh := range shares {
+			*shared[sh.id] = append(*shared[sh.id], sh.CollectionUser)
+		}
+		return nil
+	})
+}
+
 // CreateCollection makes a collection owned by userID (name and description
-// cleaned by CleanCollectionName/CleanCollectionDescription) and returns it. An
+// cleaned by cleanCollectionName/cleanCollectionDescription) and returns it. An
 // owner of MaxCollections already is ErrCollectionsFull.
 func (c *Catalog) CreateCollection(ctx context.Context, userID int64, name, description string) (*Collection, error) {
-	name, err := CleanCollectionName(name)
+	name, err := cleanCollectionName(name)
 	if err != nil {
 		return nil, err
 	}
-	if description, err = CleanCollectionDescription(description); err != nil {
+	if description, err = cleanCollectionDescription(description); err != nil {
 		return nil, err
 	}
 	var id int64
@@ -331,12 +385,12 @@ func (c *Catalog) UpdateCollection(ctx context.Context, id, userID int64, name, 
 	var err error
 	var n, d string
 	if name != nil {
-		if n, err = CleanCollectionName(*name); err != nil {
+		if n, err = cleanCollectionName(*name); err != nil {
 			return err
 		}
 	}
 	if description != nil {
-		if d, err = CleanCollectionDescription(*description); err != nil {
+		if d, err = cleanCollectionDescription(*description); err != nil {
 			return err
 		}
 	}
@@ -392,7 +446,7 @@ func (c *Catalog) changeItems(ctx context.Context, op string, id, userID int64,
 
 // AddCollectionItem adds a book (ref, its own path: the caller resolves and
 // authorizes it) to a collection userID owns, at position (orderedList.add). A
-// full collection is ErrListFull.
+// full collection is ErrCollectionFull (an ErrListFull).
 func (c *Catalog) AddCollectionItem(ctx context.Context, id, userID int64, ref Ref, position *int) error {
 	return c.changeItems(ctx, "AddCollectionItem", id, userID, func(tx *sql.Tx, now string) (bool, error) {
 		return collectionItems.add(ctx, tx, id, ref, position, now)
@@ -406,8 +460,8 @@ func (c *Catalog) SetCollectionItems(ctx context.Context, id, userID int64, refs
 	if err := requireOwner(ctx, c.db, id, userID); err != nil {
 		return err // answer a stranger or a viewer before reading anything for them
 	}
-	if len(refs) > MaxCollectionItems {
-		return ErrTooManyItems
+	if err := collectionItems.fits(refs); err != nil {
+		return err
 	}
 	keep, err := c.listableRefs(ctx, refs, scopes)
 	if err != nil {
@@ -439,44 +493,28 @@ func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, use
 		if err := requireOwner(ctx, tx, id, userID); err != nil {
 			return err
 		}
-		for _, uid := range ids {
-			if uid == userID {
-				return ErrUnknownUser
-			}
-			var ok bool
-			err := tx.QueryRowContext(ctx,
-				`SELECT 1 FROM users WHERE id = ? AND disabled = 0 AND is_demo = 0`, uid).Scan(&ok)
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrUnknownUser
-			}
-			if err != nil {
-				return err
-			}
-		}
-		current, err := queryRows(ctx, tx, func(rows *sql.Rows, uid *int64) error {
-			return rows.Scan(uid)
-		}, `SELECT user_id FROM collection_shares WHERE collection_id = ?`, id)
+		// The ids go in as one JSON array (json_each), so the statements stay
+		// constant: set-based, with nothing concatenated into SQL in a transaction.
+		list, err := json.Marshal(append([]int64{}, ids...)) // [] for none, never null
 		if err != nil {
 			return err
 		}
-		for _, uid := range current {
-			if _, found := slices.BinarySearch(ids, uid); found {
-				continue
-			}
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM collection_shares WHERE collection_id = ? AND user_id = ?`, id, uid); err != nil {
-				return err
-			}
+		var valid int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users
+		  WHERE disabled = 0 AND is_demo = 0 AND id != ? AND id IN (SELECT value FROM json_each(?))`,
+			userID, string(list)).Scan(&valid); err != nil {
+			return err
 		}
-		now := c.stamp()
-		for _, uid := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`INSERT OR IGNORE INTO collection_shares(collection_id, user_id, created_at) VALUES(?,?,?)`,
-				id, uid, now); err != nil {
-				return err
-			}
+		if valid != len(ids) {
+			return ErrUnknownUser
 		}
-		return nil
+		if _, err := tx.ExecContext(ctx, `DELETE FROM collection_shares
+		  WHERE collection_id = ? AND user_id NOT IN (SELECT value FROM json_each(?))`, id, string(list)); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO collection_shares(collection_id, user_id, created_at)
+		  SELECT ?, value, ? FROM json_each(?)`, id, c.stamp(), string(list))
+		return err
 	})
 }
 

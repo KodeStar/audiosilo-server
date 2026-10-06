@@ -10,8 +10,8 @@ import (
 
 // Ratings (player redesign Phase 1b): a listener's own 1-5 star rating and short
 // note on a book. Durable user state, path-keyed on the book's own path and not
-// FK'd to the index, carried by a move or join (carryRatings) like the rest of
-// carryListeningState's tables.
+// FK'd to the index, carried by a move or join like the rest of
+// carryListeningState's tables (a collision keeps the newer updated_at).
 
 // MaxRatingNote bounds a rating's note, in characters (runes), after trimming.
 const MaxRatingNote = 500
@@ -118,47 +118,18 @@ func (c *Catalog) ListRatings(ctx context.Context, userID int64, scopes []Scope)
 	if err != nil {
 		return nil, err
 	}
-	byLib := map[int64][]int{} // library -> indexes into out
+	refs := make([]Ref, len(out))
 	for i, r := range out {
-		byLib[r.LibraryID] = append(byLib[r.LibraryID], i)
+		refs[i] = r.Ref
 	}
-	for libID, idx := range byLib {
-		paths := make([]string, len(idx))
-		for j, i := range idx {
-			paths[j] = out[i].Path
-		}
-		books, err := c.BooksByPaths(ctx, libID, paths)
-		if err != nil {
-			return nil, err
-		}
-		for _, i := range idx {
-			if b, ok := books[out[i].Path]; ok {
-				out[i].Book = &b
-			}
+	books, err := c.booksAt(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if b, ok := books[out[i].Ref]; ok {
+			out[i].Book = &b
 		}
 	}
 	return out, nil
-}
-
-// carryRatings hands every listener's rating on one path to another, inside tx (a
-// move or one part of a join, see carryListeningState). Where the listener already
-// rated the destination, the newer updated_at wins whole (a tie keeps the
-// destination's), as a move's progress does (mergeNewest).
-func carryRatings(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
-	if from == into {
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
-		 SELECT user_id, library_id, ?1, rating, note, created_at, updated_at
-		   FROM ratings WHERE library_id = ?2 AND rel_path = ?3
-		 ON CONFLICT(user_id, library_id, rel_path) DO UPDATE SET
-		     rating = excluded.rating, note = excluded.note,
-		     created_at = excluded.created_at, updated_at = excluded.updated_at
-		   WHERE excluded.updated_at > ratings.updated_at`,
-		into, libraryID, from); err != nil {
-		return err
-	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM ratings WHERE library_id = ? AND rel_path = ?`, libraryID, from)
-	return err
 }

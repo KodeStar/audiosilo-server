@@ -26,12 +26,12 @@ func TestCollectionNameAndDescription(t *testing.T) {
 		{"bad\u0085name", "", true},
 		{"\xff", "", true},
 	} {
-		got, err := CleanCollectionName(tc.in)
+		got, err := cleanCollectionName(tc.in)
 		if (err != nil) != tc.err || got != tc.want {
-			t.Errorf("CleanCollectionName(%q) = %q, %v", tc.in, got, err)
+			t.Errorf("cleanCollectionName(%q) = %q, %v", tc.in, got, err)
 		}
 		if err != nil && !errors.Is(err, ErrInvalidName) {
-			t.Errorf("CleanCollectionName(%q) error = %v, want ErrInvalidName", tc.in, err)
+			t.Errorf("cleanCollectionName(%q) error = %v, want ErrInvalidName", tc.in, err)
 		}
 	}
 	for _, tc := range []struct {
@@ -45,9 +45,9 @@ func TestCollectionNameAndDescription(t *testing.T) {
 		{"bell\a", true},
 		{"\xff", true},
 	} {
-		if _, err := CleanCollectionDescription(tc.in); (err != nil) != tc.err ||
+		if _, err := cleanCollectionDescription(tc.in); (err != nil) != tc.err ||
 			(err != nil && !errors.Is(err, ErrInvalidDescription)) {
-			t.Errorf("CleanCollectionDescription(%.20q) = %v", tc.in, err)
+			t.Errorf("cleanCollectionDescription(%.20q) = %v", tc.in, err)
 		}
 	}
 }
@@ -347,6 +347,17 @@ func TestCollectionSharesAndTargets(t *testing.T) {
 	}
 	if _, err := c.Collection(ctx, col.ID, e.viewer, e.all); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unshared viewer = %v, want ErrNotFound", err)
+	}
+	// No ids unshares it from everyone.
+	if err := c.SetCollectionShares(ctx, col.ID, e.owner, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = c.Collection(ctx, col.ID, e.owner, e.all)
+	if got.SharedWith == nil || len(*got.SharedWith) != 0 {
+		t.Fatalf("shares after unsharing all = %+v", got.SharedWith)
+	}
+	if _, err := c.Collection(ctx, col.ID, e.stranger, e.all); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unshared stranger = %v, want ErrNotFound", err)
 	}
 
 	targets, err := c.ShareTargets(ctx, e.owner)

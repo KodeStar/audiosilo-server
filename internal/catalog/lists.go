@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 )
 
@@ -25,8 +26,13 @@ type ListItem struct {
 }
 
 var (
-	// ErrListFull is an add to a list already holding its maximum.
+	// ErrListFull is an add to a list already holding its maximum. Each list
+	// returns its own error wrapping it (ErrQueueFull, ErrCollectionFull).
 	ErrListFull = errors.New("list is full")
+	// ErrQueueFull is an add to a full up-next queue (MaxQueue).
+	ErrQueueFull = fmt.Errorf("%w: the queue holds at most %d books", ErrListFull, MaxQueue)
+	// ErrCollectionFull is an add to a full collection (MaxCollectionItems).
+	ErrCollectionFull = fmt.Errorf("%w: a collection holds at most %d books", ErrListFull, MaxCollectionItems)
 	// ErrTooManyItems is a whole-list replace longer than the list's maximum.
 	ErrTooManyItems = errors.New("too many items")
 )
@@ -36,8 +42,15 @@ var (
 // out per table rather than built from a table name: concatenating SQL inside a
 // transaction trips gosec G202 (see carryListeningState), and only values are
 // bound parameters anyway.
+//
+// position orders an owner's rows and need not be dense: a remove leaves a gap,
+// an add at an index shifts only the rows from there on, and a replace keeps
+// every row whose stored position still fits its new place. A 0-based index (an
+// add's position) is a rank in the stored order, hidden rows included.
 type orderedList struct {
 	max int
+	// full is the error of an add to a full list (wraps ErrListFull).
+	full error
 	// load reads an owner's rows in stored order: library_id, rel_path, added_at,
 	// position. One parameter: the owner.
 	load string
@@ -48,8 +61,16 @@ type orderedList struct {
 	insert string
 	// setPos: position, owner, library_id, rel_path.
 	setPos string
+	// shift moves the rows at or after a position one place on: owner, position.
+	shift string
 	// remove: owner, library_id, rel_path.
 	remove string
+}
+
+// listTx is the transaction an orderedList reads and writes in (a *sql.Tx).
+type listTx interface {
+	rowQuerier
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // orderBy is the stored order of an ordered list's rows: position, ties (a carry
@@ -64,16 +85,148 @@ type listRow struct {
 }
 
 // rows reads an owner's entries in stored order, inside tx.
-func (l orderedList) rows(ctx context.Context, tx *sql.Tx, owner int64) ([]listRow, error) {
+func (l orderedList) rows(ctx context.Context, tx listTx, owner int64) ([]listRow, error) {
 	return queryRows(ctx, tx, func(rows *sql.Rows, r *listRow) error {
 		return rows.Scan(&r.LibraryID, &r.Path, &r.AddedAt, &r.pos)
 	}, l.load, owner)
 }
 
-// write stores next as the owner's whole list (positions 0..n-1), given the rows
-// stored now (old): rows no longer listed are deleted, new ones inserted, and
-// only rows whose position moved are updated. It reports whether anything changed.
-func (l orderedList) write(ctx context.Context, tx *sql.Tx, owner int64, old, next []listRow) (bool, error) {
+// fits is the length check of a whole-list replace, made once, on the refs as
+// given (before de-duplication and the skip rule): more than the list's maximum
+// is ErrTooManyItems.
+func (l orderedList) fits(refs []Ref) error {
+	if len(refs) > l.max {
+		return ErrTooManyItems
+	}
+	return nil
+}
+
+// add puts ref on the owner's list at position (0-based in the stored order; nil,
+// or past the end, = the end; a negative one counts as 0), inside tx. A ref already
+// listed moves to position when one is given and otherwise stays where it is (an
+// idempotent add). A new ref on a full list is the list's full error. It reports
+// whether anything changed. Whatever the list's length, the write is at most one
+// range shift and one insert or update.
+func (l orderedList) add(ctx context.Context, tx listTx, owner int64, ref Ref, position *int, now string) (bool, error) {
+	rows, err := l.rows(ctx, tx, owner)
+	if err != nil {
+		return false, err
+	}
+	cur := slices.IndexFunc(rows, func(r listRow) bool { return r.Ref == ref })
+	switch {
+	case cur >= 0 && position == nil:
+		return false, nil
+	case cur < 0 && len(rows) >= l.max:
+		return false, l.full
+	}
+	rest := rows // the other rows, in stored order
+	if cur >= 0 {
+		rest = slices.Delete(slices.Clone(rows), cur, cur+1)
+	}
+	at := len(rest)
+	if position != nil {
+		at = min(max(*position, 0), len(rest))
+	}
+	if at == cur {
+		return false, nil // already there
+	}
+	var pos int64
+	switch {
+	case at == len(rest) && at > 0:
+		pos = rest[at-1].pos + 1
+	case at == len(rest): // the only row
+		pos = 0
+	case at > 0 && rest[at-1].pos >= rest[at].pos:
+		// Equal positions (a hand-written database) can't take a shift between
+		// them: number the whole list afresh.
+		entry := listRow{Ref: ref, AddedAt: now}
+		if cur >= 0 {
+			entry = rows[cur]
+		}
+		return l.write(ctx, tx, owner, rows, numbered(slices.Insert(slices.Clone(rest), at, entry)))
+	default:
+		pos = rest[at].pos
+		if _, err := tx.ExecContext(ctx, l.shift, owner, pos); err != nil {
+			return false, err
+		}
+	}
+	if cur >= 0 {
+		_, err = tx.ExecContext(ctx, l.setPos, pos, owner, ref.LibraryID, ref.Path)
+	} else {
+		_, err = tx.ExecContext(ctx, l.insert, owner, ref.LibraryID, ref.Path, pos, now)
+	}
+	return err == nil, err
+}
+
+// replace makes refs (already deduplicated and checked, see listableRefs and
+// fits) the owner's whole list in that order, inside tx: an entry already listed
+// keeps its added_at, a new one is added now. It reports whether anything
+// changed.
+func (l orderedList) replace(ctx context.Context, tx listTx, owner int64, refs []Ref, now string) (bool, error) {
+	rows, err := l.rows(ctx, tx, owner)
+	if err != nil {
+		return false, err
+	}
+	stored := make(map[Ref]listRow, len(rows))
+	for _, r := range rows {
+		stored[r.Ref] = r
+	}
+	next := make([]listRow, len(refs))
+	for i, ref := range refs {
+		r, ok := stored[ref]
+		if !ok {
+			r = listRow{Ref: ref, AddedAt: now, pos: -1}
+		}
+		next[i] = r
+	}
+	return l.write(ctx, tx, owner, rows, placed(next))
+}
+
+// placed gives next (in its new order; a row's pos is its stored position, -1
+// for a new one) strictly increasing positions, keeping as many stored ones as
+// it cheaply can: either each row keeps its position while it is above the
+// previous row's (taking the previous + 1 otherwise), or the list is numbered
+// 0..n-1, whichever moves fewer stored rows.
+func placed(next []listRow) []listRow {
+	kept := make([]listRow, len(next))
+	last := int64(-1)
+	for i, r := range next {
+		if r.pos <= last {
+			r.pos = last + 1
+		}
+		kept[i], last = r, r.pos
+	}
+	dense := numbered(slices.Clone(next))
+	if moves(next, dense) < moves(next, kept) {
+		return dense
+	}
+	return kept
+}
+
+// numbered sets rows' positions to 0..n-1, in place, and returns rows.
+func numbered(rows []listRow) []listRow {
+	for i := range rows {
+		rows[i].pos = int64(i)
+	}
+	return rows
+}
+
+// moves counts the rows a placement writes: new ones and moved ones.
+func moves(was, now []listRow) int {
+	n := 0
+	for i := range was {
+		if was[i].pos != now[i].pos {
+			n++
+		}
+	}
+	return n
+}
+
+// write stores next (with its positions) as the owner's whole list, given the
+// rows stored now (old): rows no longer listed are deleted, new ones inserted,
+// and only rows whose position moved are updated. It reports whether anything
+// changed.
+func (l orderedList) write(ctx context.Context, tx listTx, owner int64, old, next []listRow) (bool, error) {
 	stored := make(map[Ref]listRow, len(old))
 	for _, r := range old {
 		stored[r.Ref] = r
@@ -92,16 +245,16 @@ func (l orderedList) write(ctx context.Context, tx *sql.Tx, owner int64, old, ne
 		}
 		changed = true
 	}
-	for i, r := range next {
+	for _, r := range next {
 		cur, ok := stored[r.Ref]
 		switch {
 		case !ok:
-			if _, err := tx.ExecContext(ctx, l.insert, owner, r.LibraryID, r.Path, i, r.AddedAt); err != nil {
+			if _, err := tx.ExecContext(ctx, l.insert, owner, r.LibraryID, r.Path, r.pos, r.AddedAt); err != nil {
 				return false, err
 			}
 			changed = true
-		case cur.pos != int64(i):
-			if _, err := tx.ExecContext(ctx, l.setPos, i, owner, r.LibraryID, r.Path); err != nil {
+		case cur.pos != r.pos:
+			if _, err := tx.ExecContext(ctx, l.setPos, r.pos, owner, r.LibraryID, r.Path); err != nil {
 				return false, err
 			}
 			changed = true
@@ -110,66 +263,10 @@ func (l orderedList) write(ctx context.Context, tx *sql.Tx, owner int64, old, ne
 	return changed, nil
 }
 
-// add puts ref on the owner's list at position (0-based in the stored order; nil,
-// or past the end, = the end; a negative one counts as 0), inside tx. A ref already
-// listed moves to position when one is given and otherwise stays where it is (an
-// idempotent add). A new ref on a full list is ErrListFull. It reports whether
-// anything changed.
-func (l orderedList) add(ctx context.Context, tx *sql.Tx, owner int64, ref Ref, position *int, now string) (bool, error) {
-	rows, err := l.rows(ctx, tx, owner)
-	if err != nil {
-		return false, err
-	}
-	next := slices.Clone(rows)
-	entry := listRow{Ref: ref, AddedAt: now}
-	if i := slices.IndexFunc(next, func(r listRow) bool { return r.Ref == ref }); i >= 0 {
-		if position == nil {
-			return false, nil
-		}
-		entry = next[i]
-		next = slices.Delete(next, i, i+1)
-	} else if len(next) >= l.max {
-		return false, ErrListFull
-	}
-	at := len(next)
-	if position != nil {
-		at = min(max(*position, 0), len(next))
-	}
-	next = slices.Insert(next, at, entry)
-	return l.write(ctx, tx, owner, rows, next)
-}
-
-// replace makes refs (already deduplicated and checked, see listableRefs) the
-// owner's whole list in that order, inside tx: an entry already listed keeps its
-// added_at, a new one is added now. More than the list's maximum is
-// ErrTooManyItems. It reports whether anything changed.
-func (l orderedList) replace(ctx context.Context, tx *sql.Tx, owner int64, refs []Ref, now string) (bool, error) {
-	if len(refs) > l.max {
-		return false, ErrTooManyItems
-	}
-	rows, err := l.rows(ctx, tx, owner)
-	if err != nil {
-		return false, err
-	}
-	added := make(map[Ref]string, len(rows))
-	for _, r := range rows {
-		added[r.Ref] = r.AddedAt
-	}
-	next := make([]listRow, len(refs))
-	for i, ref := range refs {
-		at, ok := added[ref]
-		if !ok {
-			at = now
-		}
-		next[i] = listRow{Ref: ref, AddedAt: at}
-	}
-	return l.write(ctx, tx, owner, rows, next)
-}
-
-// drop removes ref from the owner's list (idempotent), inside tx. The positions
-// after it keep their order; the next write renumbers them. It reports whether a
-// row was removed.
-func (l orderedList) drop(ctx context.Context, tx *sql.Tx, owner int64, ref Ref) (bool, error) {
+// drop removes ref from the owner's list (idempotent), inside tx, leaving a gap
+// in the positions (the order needs none closed). It reports whether a row was
+// removed.
+func (l orderedList) drop(ctx context.Context, tx listTx, owner int64, ref Ref) (bool, error) {
 	res, err := tx.ExecContext(ctx, l.remove, owner, ref.LibraryID, ref.Path)
 	if err != nil {
 		return false, err
@@ -193,22 +290,16 @@ func (c *Catalog) visibleItems(ctx context.Context, l orderedList, owner int64, 
 	return items, c.attachBooks(ctx, items)
 }
 
-// attachBooks sets each item's Book from the index (BooksByPaths, one chunked read
-// per library), leaving it nil where no book is indexed at the path.
+// attachBooks sets each item's Book from the index (booksAt), leaving it nil
+// where no book is indexed at the path.
 func (c *Catalog) attachBooks(ctx context.Context, items []ListItem) error {
-	byLib := map[int64][]string{}
-	for _, it := range items {
-		byLib[it.LibraryID] = append(byLib[it.LibraryID], it.Path)
+	refs := make([]Ref, len(items))
+	for i, it := range items {
+		refs[i] = it.Ref
 	}
-	books := make(map[Ref]Book, len(items))
-	for libID, paths := range byLib {
-		found, err := c.BooksByPaths(ctx, libID, paths)
-		if err != nil {
-			return err
-		}
-		for p, b := range found {
-			books[Ref{LibraryID: libID, Path: p}] = b
-		}
+	books, err := c.booksAt(ctx, refs)
+	if err != nil {
+		return err
 	}
 	for i := range items {
 		if b, ok := books[items[i].Ref]; ok {
@@ -218,41 +309,48 @@ func (c *Catalog) attachBooks(ctx context.Context, items []ListItem) error {
 	return nil
 }
 
+// booksAt reads the books indexed at refs (BooksByPaths: one chunked read per
+// library), keyed by ref; a ref with no book is absent.
+func (c *Catalog) booksAt(ctx context.Context, refs []Ref) (map[Ref]Book, error) {
+	byLib := map[int64][]string{}
+	for _, r := range refs {
+		byLib[r.LibraryID] = append(byLib[r.LibraryID], r.Path)
+	}
+	out := make(map[Ref]Book, len(refs))
+	for libID, paths := range byLib {
+		found, err := c.BooksByPaths(ctx, libID, paths)
+		if err != nil {
+			return nil, err
+		}
+		for p, b := range found {
+			out[Ref{LibraryID: libID, Path: p}] = b
+		}
+	}
+	return out, nil
+}
+
 // listableRefs is the skip rule of a whole-list replace: refs in order, each
 // path cleaned (CleanRelPath), duplicates collapsed (the first wins), keeping only
 // those that name exactly an indexed book (no part path, no indexing on demand)
 // the caller's current access allows (scopes). Nothing skipped is an error.
 func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) ([]Ref, error) {
-	byLib := make(map[int64]Scope, len(scopes))
-	for _, s := range scopes {
-		byLib[s.LibraryID] = s
-	}
 	seen := make(map[Ref]bool, len(refs))
 	var cands []Ref
-	paths := map[int64][]string{}
 	for _, r := range refs {
 		r.Path = CleanRelPath(r.Path)
-		s, ok := byLib[r.LibraryID]
-		if r.Path == "" || seen[r] || !ok || !s.Allows(r.Path) {
+		if r.Path == "" || seen[r] || !scopesAllow(scopes, r) {
 			continue
 		}
 		seen[r] = true
 		cands = append(cands, r)
-		paths[r.LibraryID] = append(paths[r.LibraryID], r.Path)
 	}
-	indexed := map[Ref]bool{}
-	for libID, ps := range paths {
-		found, err := c.BooksByPaths(ctx, libID, ps)
-		if err != nil {
-			return nil, err
-		}
-		for p := range found {
-			indexed[Ref{LibraryID: libID, Path: p}] = true
-		}
+	books, err := c.booksAt(ctx, cands)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]Ref, 0, len(cands))
 	for _, r := range cands {
-		if indexed[r] {
+		if _, ok := books[r]; ok {
 			out = append(out, r)
 		}
 	}
@@ -263,21 +361,3 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 // updated_at): UTC, fixed width with milliseconds, so the newest-first orders
 // compare it as text.
 func (c *Catalog) stamp() string { return formatSessionTime(c.now()) }
-
-// carryListsState hands the up-next entries and collection items on one path to
-// another, inside tx (a move or one part of a join; see carryListeningState). A
-// list that already holds the destination keeps that entry (and its position)
-// and drops the moved one, so a collision never fails the carry.
-func carryListsState(ctx context.Context, tx *sql.Tx, libraryID int64, from, into string) error {
-	for _, stmt := range []string{
-		`UPDATE OR IGNORE up_next SET rel_path = ?1 WHERE library_id = ?2 AND rel_path = ?3`,
-		`DELETE FROM up_next WHERE library_id = ?2 AND rel_path = ?3`,
-		`UPDATE OR IGNORE collection_items SET rel_path = ?1 WHERE library_id = ?2 AND rel_path = ?3`,
-		`DELETE FROM collection_items WHERE library_id = ?2 AND rel_path = ?3`,
-	} {
-		if _, err := tx.ExecContext(ctx, stmt, into, libraryID, from); err != nil {
-			return err
-		}
-	}
-	return nil
-}
