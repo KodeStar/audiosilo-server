@@ -11,6 +11,7 @@ func TestSeriesKey(t *testing.T) {
 		{"Ⅻ Kingdoms", "xiikingdoms"}, // NFKD spells the numeral out
 		{"Война и мир", "воинаимир"},  // й decomposes; its breve goes, as in the console
 		{"ﬁre", "fire"},               // NFKD splits the ligature
+		{"第〇巻", "第〇巻"},                // every number, as \p{N}: Fold (digits only) would drop the 〇
 		{"--", ""},
 	} {
 		if got := SeriesKey(tc.in); got != tc.want {

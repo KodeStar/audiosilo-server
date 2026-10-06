@@ -65,19 +65,19 @@ func TestPreviousWorkIDs(t *testing.T) {
 		"no rails": {want: nil},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := PreviousWorkIDs(&Enrichment{Work: cur, Series: tc.series})
+			got := previousWorkIDs(&Enrichment{Work: cur, Series: tc.series})
 			if !slices.Equal(got, tc.want) {
-				t.Fatalf("PreviousWorkIDs = %v, want %v", got, tc.want)
+				t.Fatalf("previousWorkIDs = %v, want %v", got, tc.want)
 			}
 		})
 	}
-	if got := PreviousWorkIDs(nil); got != nil {
+	if got := previousWorkIDs(nil); got != nil {
 		t.Fatalf("nil envelope = %v", got)
 	}
 }
 
 // TestPreviousFetchesInOrderAndSkipsFailures: Previous resolves the ids through
-// Work, keeps PreviousWorkIDs' order, and leaves a failed one out.
+// Work, keeps previousWorkIDs' order, and leaves a failed one out.
 func TestPreviousFetchesInOrderAndSkipsFailures(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {

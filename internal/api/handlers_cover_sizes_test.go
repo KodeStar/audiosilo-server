@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -141,7 +138,8 @@ func TestCoverSizeValidation(t *testing.T) {
 }
 
 // TestCoverSizeScope: a scoped user gets thumbnails inside the grant (by the
-// media ?token= too) and the out-of-scope 403 outside it, with no art.
+// media ?token= too) and the out-of-scope 403 outside it, with no art, including
+// for a granted part path whose book lies outside the grant.
 func TestCoverSizeScope(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := context.Background()
@@ -171,6 +169,15 @@ func TestCoverSizeScope(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "GET", coverURL(libID, "Sidecar", "160"), "", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous thumb = %d, want 401", resp.StatusCode)
+	}
+
+	// A grant of a part path only: its book lies above it, outside the grant.
+	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: libID, Path: "Custom/book.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = e.do(t, "GET", coverURL(libID, "Custom/book.m4b", "160"), tok, "")
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, msgNoPathAccess) {
+		t.Fatalf("thumb by a part path of an out-of-scope book = %d %s, want 403 %q", resp.StatusCode, body, msgNoPathAccess)
 	}
 }
 
@@ -210,77 +217,118 @@ func TestCoverSizeETag(t *testing.T) {
 	}
 }
 
-// TestCoverColorAndVersion: a custom upload moves the book's cover_version at
-// once; a thumbnail (GET ?size= or the console's batch) records its colours,
-// seen on the item and in lists; removing the custom cover clears both.
+// listCovers fetches GET /books and returns each book's cover_version and
+// cover_color by path.
+func listCovers(t *testing.T, e *testEnv, tok string, libID int64) map[string]struct {
+	Color   *catalog.CoverColor
+	Version string
+} {
+	t.Helper()
+	resp, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(libID, 10)+"/books", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("books = %d %s", resp.StatusCode, body)
+	}
+	var page struct {
+		Books []struct {
+			Path         string              `json:"rel_path"`
+			CoverColor   *catalog.CoverColor `json:"cover_color"`
+			CoverVersion string              `json:"cover_version"`
+		} `json:"books"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]struct {
+		Color   *catalog.CoverColor
+		Version string
+	}{}
+	for _, b := range page.Books {
+		out[b.Path] = struct {
+			Color   *catalog.CoverColor
+			Version string
+		}{b.CoverColor, b.CoverVersion}
+	}
+	return out
+}
+
+// TestCoverColorAndVersion: every book carries a cover_version from its first
+// list response, before any thumbnail; a custom upload moves it at once and a
+// removal reverts it to the file art's; a thumbnail (GET ?size= or the console's
+// batch) records the colour, which stops showing once the version moves on.
 func TestCoverColorAndVersion(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
-	libID, root := seedCovers(t, e)
+	libID, _ := seedCovers(t, e)
 	id := strconv.FormatInt(libID, 10)
 
-	// Seeded with a custom cover: a version already, no colours until a thumbnail.
-	cc, seeded := itemCover(t, e, adminTok, libID, "Custom")
-	if seeded == "" || cc != nil {
-		t.Fatalf("seeded custom cover: color %+v version %q, want a version and no colour", cc, seeded)
+	first := listCovers(t, e, adminTok, libID)
+	for _, p := range []string{"Sidecar", "Custom", "Bare", "Escape"} {
+		if b := first[p]; b.Version == "" || b.Color != nil {
+			t.Fatalf("first list: %s has version %q colour %+v, want a version and no colour", p, b.Version, b.Color)
+		}
 	}
+	fileVersion := first["Bare"].Version
 
-	resp, body := e.do(t, "PUT", "/api/v1/admin/libraries/"+id+"/cover?path=Custom", adminTok, string(bandedPNG(t, 400, 400)))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("upload = %d %s", resp.StatusCode, body)
+	upload := func() string {
+		t.Helper()
+		resp, body := e.do(t, "PUT", "/api/v1/admin/libraries/"+id+"/cover?path=Bare", adminTok, string(bandedPNG(t, 400, 400)))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("upload = %d %s", resp.StatusCode, body)
+		}
+		cc, v := itemCover(t, e, adminTok, libID, "Bare")
+		if v == "" || v == fileVersion || cc != nil {
+			t.Fatalf("after upload: color %+v version %q (file art %q), want a new version and no colour", cc, v, fileVersion)
+		}
+		return v
 	}
-	cc, uploaded := itemCover(t, e, adminTok, libID, "Custom")
-	if uploaded == "" || uploaded == seeded || cc != nil {
-		t.Fatalf("after upload: color %+v version %q (was %q), want a new version and no colour", cc, uploaded, seeded)
-	}
+	uploaded := upload()
 
-	if resp, _ := e.do(t, "GET", coverURL(libID, "Custom", "320"), adminTok, ""); resp.StatusCode != http.StatusOK {
+	if resp, _ := e.do(t, "GET", coverURL(libID, "Bare", "320"), adminTok, ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("thumb = %d", resp.StatusCode)
 	}
-	cc, version := itemCover(t, e, adminTok, libID, "Custom")
+	cc, version := itemCover(t, e, adminTok, libID, "Bare")
 	if version != uploaded || cc == nil || cc.Bg != "#141e50" || cc.Accent == "" || cc.OnAccent == "" {
 		t.Fatalf("after thumbnail: color %+v version %q, want navy bg with an accent at %q", cc, version, uploaded)
 	}
-	_, body = e.do(t, "GET", "/api/v1/libraries/"+id+"/books", adminTok, "")
-	if !strings.Contains(body, `"cover_color":{"bg":"#141e50"`) || !strings.Contains(body, `"cover_version":"`+uploaded+`"`) {
-		t.Fatalf("list lacks the custom cover's colour/version: %s", body)
+	if b := listCovers(t, e, adminTok, libID)["Bare"]; b.Color == nil || *b.Color != *cc || b.Version != uploaded {
+		t.Fatalf("list after thumbnail: %+v, want %+v at %q", b, cc, uploaded)
 	}
 
-	// The console's batch records too: the sidecar's version is its file's.
+	// The console's batch records too, without moving the version.
 	postCovers(t, e, adminTok, coversBody(libID, 160, "Sidecar"))
-	fi, err := os.Stat(filepath.Join(root, "Sidecar", "cover.jpg"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	cc, version = itemCover(t, e, adminTok, libID, "Sidecar")
-	want := catalog.CoverVersion(fmt.Sprintf("s%d-%d", fi.Size(), fi.ModTime().UnixNano()))
-	if version != want || cc == nil || cc.Bg != "#000000" || cc.Accent != "" {
-		t.Fatalf("sidecar after batch: color %+v version %q, want black bg, no accent, %q", cc, version, want)
+	if version != first["Sidecar"].Version || cc == nil || cc.Bg != "#000000" || cc.Accent != "" {
+		t.Fatalf("sidecar after batch: color %+v version %q, want black bg, no accent, %q", cc, version, first["Sidecar"].Version)
 	}
 
-	// A re-index that touches the book clears them; the next thumbnail restores
-	// them even from the cache (the art itself did not change).
+	// A re-index that touches the book moves its version, and its colour stops
+	// showing; the next thumbnail records it again, even from the cache (the art
+	// itself did not change).
 	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID, RelPath: "Sidecar",
 		IsFolder: true, Title: "Sidecar", Format: "m4b", CoverPath: "Sidecar/cover.jpg", MTime: 42,
 		Files: []catalog.BookFile{{RelPath: "Sidecar/book.m4b", Seq: 1}}}); err != nil {
 		t.Fatal(err)
 	}
-	if cc, version := itemCover(t, e, adminTok, libID, "Sidecar"); cc != nil || version != "" {
-		t.Fatalf("after re-index: color %+v version %q, want both cleared", cc, version)
+	cc, touched := itemCover(t, e, adminTok, libID, "Sidecar")
+	if cc != nil || touched == "" || touched == first["Sidecar"].Version {
+		t.Fatalf("after re-index: color %+v version %q, want a new version and no colour", cc, touched)
 	}
 	if resp, _ := e.do(t, "GET", coverURL(libID, "Sidecar", "160"), adminTok, ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("cached thumb = %d", resp.StatusCode)
 	}
-	if cc, version := itemCover(t, e, adminTok, libID, "Sidecar"); cc == nil || version != want {
-		t.Fatalf("after a cached thumbnail: color %+v version %q, want restored %q", cc, version, want)
+	if cc, version := itemCover(t, e, adminTok, libID, "Sidecar"); cc == nil || version != touched {
+		t.Fatalf("after a cached thumbnail: color %+v version %q, want a colour at %q", cc, version, touched)
 	}
 
-	resp, body = e.do(t, "DELETE", "/api/v1/admin/libraries/"+id+"/cover?path=Custom", adminTok, "")
+	// Another upload: the colour read from the previous one no longer shows.
+	upload()
+
+	resp, body := e.do(t, "DELETE", "/api/v1/admin/libraries/"+id+"/cover?path=Bare", adminTok, "")
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete = %d %s", resp.StatusCode, body)
 	}
-	if cc, version := itemCover(t, e, adminTok, libID, "Custom"); cc != nil || version != "" {
-		t.Fatalf("after delete: color %+v version %q, want both cleared", cc, version)
+	if cc, version := itemCover(t, e, adminTok, libID, "Bare"); cc != nil || version != fileVersion {
+		t.Fatalf("after delete: color %+v version %q, want no colour and the file art's %q", cc, version, fileVersion)
 	}
 }
 

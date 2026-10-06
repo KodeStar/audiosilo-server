@@ -212,3 +212,32 @@ func TestNextOnRail(t *testing.T) {
 		})
 	}
 }
+
+func TestSeriesNames(t *testing.T) {
+	r := named("Main", "1")
+	r.Orderings = []MetaSeriesOrdering{{Name: "Chronological"}}
+	got := SeriesNames([]MetaSeries{r, named("Other", "2")})
+	if want := []string{"Main", "Chronological", "Other"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("SeriesNames = %q, want %q", got, want)
+	}
+}
+
+// TestPlaceOwned: a book the cache knows is placed by its work (here a novella
+// numbered like volume 2 holds no slot), the rest by series index; the books
+// given are not modified.
+func TestPlaceOwned(t *testing.T) {
+	svc := NewService("http://meta.invalid", nil)
+	cachePut(svc.cache, nsASIN.key("B0NOVELLA"), &Enrichment{Matched: true, Work: &MetaWork{ID: "novella"}}, positiveTTL)
+	env := &Enrichment{Work: &MetaWork{ID: "one"}, Series: []MetaSeries{named("S", "1", "one@1", "two@2", "novella@2.5")}}
+	books := []LocalBook{
+		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/novella"}, Series: "S", SeriesIndex: 2, ASIN: "B0NOVELLA"},
+		{MetaLocal: MetaLocal{LibraryID: 1, Path: "S/2"}, Series: "S", SeriesIndex: 2},
+	}
+	got := locals(svc.PlaceOwned(env, MetaLocal{LibraryID: 1, Path: "S/1"}, books)[0].Works)
+	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("placed = %q, want %q", got, want)
+	}
+	if books[0].WorkID != "" || env.Series[0].Works[0].Local != nil {
+		t.Fatal("PlaceOwned modified its input")
+	}
+}

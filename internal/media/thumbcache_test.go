@@ -6,7 +6,7 @@ import (
 )
 
 func TestThumbCacheEvictsLeastRecentlyUsed(t *testing.T) {
-	data := Thumb{JPEG: []byte(strings.Repeat("x", 100))}
+	data := []byte(strings.Repeat("x", 100))
 	cost := entryCost("a", data)
 	c := NewThumbCache(cost * 2)
 	c.Put("a", data)
@@ -27,29 +27,29 @@ func TestThumbCacheEvictsLeastRecentlyUsed(t *testing.T) {
 
 func TestThumbCacheRemembersNoArt(t *testing.T) {
 	c := NewThumbCache(1 << 10)
-	c.Put("none", Thumb{})
+	c.Put("none", nil)
 	data, ok := c.Get("none")
-	if !ok || data.JPEG != nil {
-		t.Fatalf("got %q, %v; want a cached no-art value", data.JPEG, ok)
+	if !ok || data != nil {
+		t.Fatalf("got %q, %v; want a cached no-art value", data, ok)
 	}
 }
 
 func TestThumbCacheReplaceKeepsAccounting(t *testing.T) {
 	c := NewThumbCache(1 << 10)
-	small := Thumb{JPEG: []byte("small"), Palette: Palette{Bg: "#102030"}}
-	c.Put("k", Thumb{JPEG: []byte(strings.Repeat("x", 500))})
+	small := []byte("small")
+	c.Put("k", []byte(strings.Repeat("x", 500)))
 	c.Put("k", small)
 	if c.used != entryCost("k", small) {
 		t.Fatalf("used = %d after a replace, want %d", c.used, entryCost("k", small))
 	}
-	if got, _ := c.Get("k"); string(got.JPEG) != "small" || got.Palette != small.Palette {
-		t.Fatalf("got %+v after a replace, want %+v", got, small)
+	if got, _ := c.Get("k"); string(got) != "small" {
+		t.Fatalf("got %q after a replace, want %q", got, small)
 	}
 }
 
 func TestThumbCacheSkipsOversizedEntry(t *testing.T) {
 	c := NewThumbCache(100)
-	c.Put("big", Thumb{JPEG: []byte(strings.Repeat("x", 200))})
+	c.Put("big", []byte(strings.Repeat("x", 200)))
 	if _, ok := c.Get("big"); ok {
 		t.Fatal("an entry larger than the cache should not be stored")
 	}

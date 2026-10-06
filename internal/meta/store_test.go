@@ -24,25 +24,24 @@ type memStore struct {
 
 func newMemStore() *memStore { return &memStore{rows: map[string]StoredEntry{}} }
 
-func (m *memStore) Load(_ context.Context, key string) (StoredEntry, bool, error) {
+func (m *memStore) Load(_ context.Context, key string) (StoredEntry, bool) {
 	m.loads.Add(1)
 	if m.failLoad.Load() {
-		return StoredEntry{}, false, errors.New("disk on fire")
+		return StoredEntry{}, false // a failed read is a miss
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.rows[key]
-	return e, ok, nil
+	return e, ok
 }
 
-func (m *memStore) Save(_ context.Context, e StoredEntry) error {
+func (m *memStore) Save(_ context.Context, e StoredEntry) {
 	if m.failSave.Load() {
-		return errors.New("disk full")
+		return // a failed write is dropped
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.rows[e.Key] = e
-	return nil
 }
 
 func (m *memStore) row(key string) (StoredEntry, bool) {

@@ -22,7 +22,7 @@ import (
 // whole series' cast lists; older books are a /meta/work call away.
 const maxPrevious = 5
 
-// PreviousWorkIDs returns the work ids before the envelope's work, nearest
+// previousWorkIDs returns the work ids before the envelope's work, nearest
 // first, at most maxPrevious. They come from each rail's MAIN view only (never
 // an alternate ordering: a chronological order's earlier books are the
 // reading-order spoiler the main view exists to avoid): every entry whose
@@ -31,7 +31,7 @@ const maxPrevious = 5
 // rail order and then entry order, and an id found on two rails counts once, at
 // its nearest. A rail whose own position does not parse as a number contributes
 // nothing, nor does an entry whose position does not ("1-3" omnibus, blank).
-func PreviousWorkIDs(env *Enrichment) []string {
+func previousWorkIDs(env *Enrichment) []string {
 	if env == nil {
 		return nil
 	}
@@ -83,7 +83,7 @@ func parsePosition(s string) (float64, bool) {
 	return f, true
 }
 
-// Previous fetches the works PreviousWorkIDs names, in that order, each through
+// Previous fetches the works previousWorkIDs names, in that order, each through
 // Work - so each is cached (and persisted) on its own and an uncached one waits
 // on the same workSem bound as any /meta/work call. They are fetched
 // concurrently under the caller's ctx. A work that fails (not found, upstream
@@ -92,7 +92,7 @@ func parsePosition(s string) (float64, bool) {
 //
 // The returned works are shared with the cache - treat them as immutable.
 func (s *Service) Previous(ctx context.Context, env *Enrichment) []*MetaWork {
-	ids := PreviousWorkIDs(env)
+	ids := previousWorkIDs(env)
 	if len(ids) == 0 {
 		return nil
 	}
@@ -137,22 +137,17 @@ func ChapterAt(starts []float64, position float64) int {
 }
 
 // HideSpoilers returns a copy of env gated for a listener at chapter (see
-// ChapterAt) of the current work, finished or not, by the player's own rules
-// (meta-gating.ts):
+// ChapterAt) of the current work, finished or not:
 //   - finished: the current work is kept whole;
-//   - a character is kept iff it is revealed by max(chapter, 1) - a book not yet
-//     started still shows the cast it opens with;
+//   - a character is kept iff it is revealed by max(chapter, 1);
 //   - a recap is kept iff it covers chapter 0 (before this book) or a chapter
-//     already behind the listener (through < chapter, strictly: the chapter
-//     being heard is not over);
-//   - recap_summary is dropped unless finished: its in_short and its ending
-//     both summarize the whole book.
+//     already behind the listener (through < chapter);
+//   - recap_summary is dropped unless finished (in_short and ending both
+//     summarize the whole book).
 //
-// Previous works are earlier books, so their cast and recaps stay; only their
-// recap_summary's ending - how that book ends - is dropped. A work left with no
-// CC BY-SA content after gating drops its attribution too (it credits nothing
-// the client will show). env is never modified: every changed work is a copy,
-// and an unchanged one is shared as it was.
+// Previous works keep their cast and recaps and lose only their recap_summary's
+// ending. A work left with no CC BY-SA content drops its attribution too. env is
+// never modified: a changed work is a copy, an unchanged one is shared.
 func HideSpoilers(env *Enrichment, chapter int, finished bool) *Enrichment {
 	if env == nil {
 		return nil

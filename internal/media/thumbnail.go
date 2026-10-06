@@ -35,29 +35,23 @@ var ErrImageTooLarge = errors.New("image dimensions too large")
 const thumbnailQuality = 80
 
 // Thumbnail scales cover art down to fit within size x size pixels and encodes it
-// as a JPEG, with the cover's Palette read from the scaled image (so large art is
-// decoded once). It never scales up: art already within size is re-encoded only
-// when it isn't a JPEG (a JPEG that small is returned as is, its palette read from
-// the small image; one that won't decode is still returned, with no palette).
-// Transparent areas are flattened onto white, as a cover is shown on a card.
-func Thumbnail(src []byte, size int) ([]byte, Palette, error) {
+// as a JPEG. It never scales up: art already within size is re-encoded only when
+// it isn't a JPEG (a JPEG that small is returned as is). Transparent areas are
+// flattened onto white, as a cover is shown on a card.
+func Thumbnail(src []byte, size int) ([]byte, error) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(src))
 	if err != nil {
-		return nil, Palette{}, err
+		return nil, err
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > MaxThumbnailSourcePixels {
-		return nil, Palette{}, ErrImageTooLarge
+		return nil, ErrImageTooLarge
 	}
 	if format == "jpeg" && cfg.Width <= size && cfg.Height <= size {
-		var p Palette
-		if img, err := jpeg.Decode(bytes.NewReader(src)); err == nil {
-			p = CoverPalette(img)
-		}
-		return src, p, nil
+		return src, nil
 	}
 	img, _, err := image.Decode(bytes.NewReader(src))
 	if err != nil {
-		return nil, Palette{}, err
+		return nil, err
 	}
 	w, h := fitWithin(cfg.Width, cfg.Height, size)
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -72,9 +66,9 @@ func Thumbnail(src []byte, size int) ([]byte, Palette, error) {
 	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), op, nil)
 	var out bytes.Buffer
 	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: thumbnailQuality}); err != nil {
-		return nil, Palette{}, err
+		return nil, err
 	}
-	return out.Bytes(), CoverPalette(dst), nil
+	return out.Bytes(), nil
 }
 
 // fitWithin returns w x h scaled down (never up) so the longer side is at most

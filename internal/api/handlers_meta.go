@@ -9,7 +9,6 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 )
 
@@ -46,16 +45,8 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	book, err := a.bookForPath(r.Context(), lib, scope, path)
-	switch {
-	case errors.Is(err, library.ErrNotAllowed):
-		writeError(w, http.StatusForbidden, msgNoPathAccess)
-		return
-	case errors.Is(err, library.ErrNotIndexable):
-		writeError(w, http.StatusNotFound, "no book at that path")
-		return
-	case err != nil:
-		a.writeCatalogError(w, err, "load book for meta failed", "could not load book", "library", lib.ID, "path", path)
+	book, ok := a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book")
+	if !ok {
 		return
 	}
 	if book.ASIN == "" && book.ISBN == "" {
@@ -84,7 +75,7 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		finished bool
 	)
 	if hide {
-		if chapter, finished, err = a.listeningChapter(r, lib.ID, book); err != nil {
+		if chapter, finished, err = a.listeningChapter(r.Context(), lib.ID, book); err != nil {
 			a.writeCatalogError(w, err, "load progress for meta failed", "could not load progress", "library", lib.ID, "path", path)
 			return
 		}
@@ -109,15 +100,11 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// localRails is env's rails with `local` set on each entry the caller owns
-// (meta.PlaceLocal), and the candidate books by ref (for /next's `book`). The
-// candidates are the caller's books in every library they reach, scope-filtered
-// (catalog.SeriesBooks over their UserScopes), whose series is named like one of
-// the rails or orderings; each is placed by the work id the meta cache already
-// holds for it (Service.CachedWorkID, never an upstream call), else by its series
-// index. requested is the book env is for: it holds the current work's entry.
-// The rails returned are a new slice; env is shared and never modified.
-func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.Enrichment) ([]meta.MetaSeries, map[catalog.Ref]catalog.Book, error) {
+// localRails is env's rails placed for the caller (meta.Service.PlaceOwned), and
+// the books it placed them from: the caller's books in every library they reach
+// whose series is named like a rail (catalog.SeriesBooks over their UserScopes).
+// requested is the book env is for. env is shared and never modified.
+func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.Enrichment) ([]meta.MetaSeries, []catalog.Book, error) {
 	if len(env.Series) == 0 {
 		return env.Series, nil, nil
 	}
@@ -126,42 +113,24 @@ func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.E
 	if err != nil {
 		return nil, nil, err
 	}
-	var names []string
-	for _, rail := range env.Series {
-		names = append(names, rail.Name)
-		for _, o := range rail.Orderings {
-			names = append(names, o.Name)
-		}
-	}
-	books, err := a.cat.SeriesBooks(ctx, scopes, names)
+	books, err := a.cat.SeriesBooks(ctx, scopes, meta.SeriesNames(env.Series))
 	if err != nil {
 		return nil, nil, err
 	}
 	cands := make([]meta.LocalBook, len(books))
-	byRef := make(map[catalog.Ref]catalog.Book, len(books))
 	for i, b := range books {
-		workID, _ := a.meta.CachedWorkID(b.ASIN, b.ISBN)
-		cands[i] = meta.LocalBook{
-			MetaLocal:   meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
-			Series:      b.Series,
-			SeriesIndex: b.SeriesIndex,
-			WorkID:      workID,
-		}
-		byRef[catalog.Ref{LibraryID: b.LibraryID, Path: b.RelPath}] = b
+		cands[i] = meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
+			Series: b.Series, SeriesIndex: b.SeriesIndex, ASIN: b.ASIN, ISBN: b.ISBN}
 	}
-	current := ""
-	if env.Work != nil {
-		current = env.Work.ID
-	}
-	return meta.PlaceLocal(env.Series, current, meta.MetaLocal{LibraryID: requested.LibraryID, Path: requested.Path}, cands), byRef, nil
+	return a.meta.PlaceOwned(env, meta.MetaLocal(requested), cands), books, nil
 }
 
 // listeningChapter is where the caller is in book, for spoilers=hide: the
 // chapter number holding their saved position (meta.ChapterAt over the book's
 // chapter offsets) and whether they finished it. Read from the CALLER's own
 // progress only; no saved progress is chapter 0, not finished.
-func (a *API) listeningChapter(r *http.Request, libraryID int64, book *catalog.Book) (chapter int, finished bool, err error) {
-	p, err := a.cat.GetProgress(r.Context(), userFrom(r.Context()).ID, catalog.Ref{LibraryID: libraryID, Path: book.RelPath})
+func (a *API) listeningChapter(ctx context.Context, libraryID int64, book *catalog.Book) (chapter int, finished bool, err error) {
+	p, err := a.cat.GetProgress(ctx, userFrom(ctx).ID, catalog.Ref{LibraryID: libraryID, Path: book.RelPath})
 	if err != nil || p == nil {
 		return 0, false, err
 	}
@@ -272,24 +241,22 @@ type metaStore struct {
 	log *slog.Logger
 }
 
-func (m metaStore) Load(ctx context.Context, key string) (meta.StoredEntry, bool, error) {
+func (m metaStore) Load(ctx context.Context, key string) (meta.StoredEntry, bool) {
 	e, err := m.cat.GetMetaCache(ctx, key)
 	if err != nil {
 		if ctx.Err() == nil {
 			m.log.Warn("reading the meta cache failed", "err", err)
 		}
-		return meta.StoredEntry{}, false, err
+		return meta.StoredEntry{}, false
 	}
 	if e == nil {
-		return meta.StoredEntry{}, false, nil
+		return meta.StoredEntry{}, false
 	}
-	return meta.StoredEntry(*e), true, nil
+	return meta.StoredEntry(*e), true
 }
 
-func (m metaStore) Save(ctx context.Context, e meta.StoredEntry) error {
-	err := m.cat.PutMetaCache(ctx, catalog.MetaCacheEntry(e))
-	if err != nil && ctx.Err() == nil {
+func (m metaStore) Save(ctx context.Context, e meta.StoredEntry) {
+	if err := m.cat.PutMetaCache(ctx, catalog.MetaCacheEntry(e)); err != nil && ctx.Err() == nil {
 		m.log.Warn("writing the meta cache failed", "err", err)
 	}
-	return err
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -27,10 +26,10 @@ const maxSeriesBooks = 1000
 //
 // Two index-friendly queries: the distinct series spellings of the caller's
 // libraries (idx_books_series, never a table row), folded here to find the
-// spellings that match, then the books of exactly those spellings within each
-// scope. The first is not narrowed by the share's paths, since a spelling is
-// only compared, never returned; the second is, so a book outside the grant is
-// never returned.
+// spellings that match, then the books of exactly those spellings within scopes.
+// The first is not narrowed by the share's paths, since a spelling is only
+// compared, never returned; the second is, so a book outside the grant is never
+// returned.
 func (c *Catalog) SeriesBooks(ctx context.Context, scopes []Scope, names []string) ([]Book, error) {
 	want := map[string]bool{}
 	for _, n := range names {
@@ -45,28 +44,15 @@ func (c *Catalog) SeriesBooks(ctx context.Context, scopes []Scope, names []strin
 	if err != nil || len(spellings) == 0 {
 		return nil, err
 	}
-	var conds []string
-	var args []any
-	for _, s := range scopes {
-		names := spellings[s.LibraryID]
-		if len(names) == 0 {
-			continue
-		}
-		frag, fargs := pathFilterSQL("b.rel_path", s)
-		conds = append(conds, "(b.library_id = ? AND b.series IN ("+placeholders(len(names))+") AND "+frag+")")
-		args = append(args, s.LibraryID)
-		for _, n := range names {
-			args = append(args, n)
-		}
-		args = append(args, fargs...)
+	frag, fargs := scopesFilterSQL("b.library_id", "b.rel_path", scopes)
+	args := make([]any, 0, len(spellings)+len(fargs)+1)
+	for _, n := range spellings {
+		args = append(args, n)
 	}
-	if len(conds) == 0 {
-		return nil, nil
-	}
-	args = append(args, maxSeriesBooks)
+	args = append(append(args, fargs...), maxSeriesBooks)
 	rows, err := c.db.QueryContext(ctx, `SELECT `+prefixCols("b.")+` FROM books b
 		  JOIN libraries l ON l.id = b.library_id
-		 WHERE (`+strings.Join(conds, " OR ")+`)
+		 WHERE b.series IN (`+placeholders(len(spellings))+`) AND `+frag+`
 		 ORDER BY l.sort_order, l.name, l.id, b.rel_path LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -83,28 +69,27 @@ func (c *Catalog) SeriesBooks(ctx context.Context, scopes []Scope, names []strin
 	return out, rows.Err()
 }
 
-// seriesSpellings returns, per library of scopes, the series values whose
+// seriesSpellings returns the distinct series values of scopes' libraries whose
 // folded key is in want.
-func (c *Catalog) seriesSpellings(ctx context.Context, scopes []Scope, want map[string]bool) (map[int64][]string, error) {
+func (c *Catalog) seriesSpellings(ctx context.Context, scopes []Scope, want map[string]bool) ([]string, error) {
 	args := make([]any, len(scopes))
 	for i, s := range scopes {
 		args[i] = s.LibraryID
 	}
-	rows, err := c.db.QueryContext(ctx, `SELECT DISTINCT library_id, series FROM books
+	rows, err := c.db.QueryContext(ctx, `SELECT DISTINCT series FROM books
 		 WHERE library_id IN (`+placeholders(len(scopes))+`) AND series <> ''`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[int64][]string{}
+	var out []string
 	for rows.Next() {
-		var libID int64
 		var series string
-		if err := rows.Scan(&libID, &series); err != nil {
+		if err := rows.Scan(&series); err != nil {
 			return nil, err
 		}
 		if want[match.SeriesKey(series)] {
-			out[libID] = append(out[libID], series)
+			out = append(out, series)
 		}
 	}
 	return out, rows.Err()

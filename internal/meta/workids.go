@@ -232,15 +232,11 @@ func workIDOf(l *upstreamLookup, err error) WorkID {
 	}
 }
 
-// CachedWorkID answers an identifier's community work id from the in-memory
-// cache ONLY: the book's enrichment first, then its WorkIDs lookup entry (see
-// cachedWorkID). It never calls the upstream and never reads the persistent
-// store, so it costs a map read and is safe to ask about every book of a series
-// on a hot path (placing a caller's owned books on the rails of a /meta
-// envelope). ok is true when the cache holds an answer: the work id, or "" for
-// a cached "no match". A miss, a cached failure, and a book with neither
-// identifier all answer ("", false) - nothing is known, so the caller falls
-// back to whatever else it has (a series index).
+// CachedWorkID is an identifier's community work id from the in-memory cache
+// only (cachedWorkID: its enrichment, else its lookup entry), never the upstream
+// or the store, so it is a map read. ok is true when the cache holds an answer:
+// the work id, or "" for a cached "no match"; a miss, a cached failure and no
+// identifier are ("", false).
 func (s *Service) CachedWorkID(asin, isbn string) (id string, ok bool) {
 	key := cacheKey(normalizeASIN(asin), normalizeISBN(isbn))
 	if key == "" {

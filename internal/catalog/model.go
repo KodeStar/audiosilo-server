@@ -8,6 +8,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
@@ -57,19 +58,19 @@ type Book struct {
 	ContentHash string  `json:"-"`
 	// Published (YYYY[-MM[-DD]]) and Description come only from an edit or a
 	// community match today. Published rides on every player book; Description can
-	// be long, so it is kept out of this envelope and only the item endpoint adds
-	// it (api's itemBook), leaving list pages small.
+	// be long, so only GetBook (the single-book read behind the item endpoint)
+	// loads it, leaving list, search and recent pages small.
 	Published   string `json:"published,omitempty"`
-	Description string `json:"-"`
+	Description string `json:"description,omitempty"`
 	// HasCover reports cover art (a sibling image or embedded art); nil until a
 	// scan has checked. Set by the scanner; read by the admin catalog.
 	HasCover *bool `json:"-"`
-	// CoverColor is the cover's palette for the player's themed screens, and
-	// CoverVersion a short opaque token that changes when the cover art does (a
-	// client appends it to cover URLs as a cache-buster). Both are derived
-	// (books.cover_color/cover_version): absent until a thumbnail of the art has
-	// been made (RecordCoverColors), reset by SetCover/DeleteCover and by a
-	// re-index that changes the book's mtime or sidecar.
+	// CoverVersion is a short opaque token that changes when the cover art does
+	// (a client appends it to cover URLs as a cache-buster): the hash of
+	// books.cover_art (CoverVersion), set whenever the book is indexed and when a
+	// custom cover is set or removed. CoverColor is the cover's palette for the
+	// player's themed screens, read from a thumbnail of the art
+	// (RecordCoverColors); absent until one has been made for this version.
 	CoverColor   *CoverColor `json:"cover_color,omitempty"`
 	CoverVersion string      `json:"cover_version,omitempty"`
 	// ScanError is what went wrong reading the book's files when it was last indexed
@@ -105,14 +106,10 @@ type Book struct {
 	OtherLocations []BookLocation `json:"other_locations,omitempty"`
 }
 
-// CoverColor is a cover's palette (lowercase "#rrggbb"): Bg its dominant colour;
-// Accent a vibrant one that reads against Bg (WCAG contrast >= 4.5:1) and
-// OnAccent white or black for text on it, both "" when the cover has none.
-type CoverColor struct {
-	Bg       string `json:"bg"`
-	Accent   string `json:"accent,omitempty"`
-	OnAccent string `json:"on_accent,omitempty"`
-}
+// CoverColor is a cover's palette (media.Palette): Bg its dominant colour; Accent
+// a vibrant one that reads against Bg and OnAccent white or black for text on it,
+// both "" when the cover has none.
+type CoverColor = media.Palette
 
 // BookLocation points at one copy of a book in a particular library - used to
 // list the non-winning copies behind a de-duplicated search/recent result.

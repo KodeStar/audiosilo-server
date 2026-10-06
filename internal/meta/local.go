@@ -21,13 +21,45 @@ type MetaLocal struct {
 }
 
 // LocalBook is one of the caller's books PlaceLocal may place: its handle, its
-// local series and index, and the community work it is when the meta cache
-// already knows ("" when it does not).
+// local series and index, its identifiers, and the community work it is when
+// known ("" when not; PlaceOwned fills it from the identifiers).
 type LocalBook struct {
 	MetaLocal
 	Series      string
 	SeriesIndex float64
+	ASIN, ISBN  string
 	WorkID      string
+}
+
+// SeriesNames is every name rails go by, each rail's and each of its orderings':
+// the names the caller's books' series are matched against for PlaceOwned.
+func SeriesNames(rails []MetaSeries) []string {
+	var names []string
+	for _, rail := range rails {
+		names = append(names, rail.Name)
+		for _, o := range rail.Orderings {
+			names = append(names, o.Name)
+		}
+	}
+	return names
+}
+
+// PlaceOwned is PlaceLocal over env's rails for the caller's books, each book's
+// work id read from the in-memory cache by its identifiers (CachedWorkID: never
+// upstream, never the store). requested is the book env is for. env and books are
+// never modified.
+func (s *Service) PlaceOwned(env *Enrichment, requested MetaLocal, books []LocalBook) []MetaSeries {
+	cands := slices.Clone(books)
+	for i := range cands {
+		if cands[i].WorkID == "" {
+			cands[i].WorkID, _ = s.CachedWorkID(cands[i].ASIN, cands[i].ISBN)
+		}
+	}
+	current := ""
+	if env.Work != nil {
+		current = env.Work.ID
+	}
+	return PlaceLocal(env.Series, current, requested, cands)
 }
 
 // samePosition reports whether a series index and a rail position name the same

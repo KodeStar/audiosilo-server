@@ -65,10 +65,11 @@ const dedupJoins = `
 // scanCandidate scans a row selected as prefixCols("b.") + dedupCols.
 func scanCandidate(rows *sql.Rows, rankIdx int) (candidate, error) {
 	var c candidate
-	b := &c.book
-	if err := rows.Scan(append(bookDest(b), &c.sortOrder, &c.libName, &c.fileCount)...); err != nil {
+	dest, finish := bookDest(&c.book)
+	if err := rows.Scan(append(dest, &c.sortOrder, &c.libName, &c.fileCount)...); err != nil {
 		return candidate{}, err
 	}
+	finish()
 	c.rankIdx = rankIdx
 	return c, nil
 }

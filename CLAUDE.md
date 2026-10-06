@@ -107,7 +107,7 @@ internal/catalog/     libraries, access grants, books, FTS search, listening sta
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
 internal/media/       Range streaming, download, embedded cover extraction
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache; the admin console's match (match.go: metaserve works/match over tag + path facts, pathfacts.go; works/search fallback for an older metaserve); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, pathfacts.go; works/search fallback for an older metaserve); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
@@ -162,7 +162,9 @@ on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` /
 (per-library settings, off the player wire) and, on `books`, `scan_error` / `scan_error_file` /
 `scan_error_detail` (the last indexing's read problem) and `suspect_parts`; `0022` adds `books.split_parent` (the
 folder holding a disc of a book split across disc folders, else `''`); `0023` adds
-`books.cover_color` / `cover_version` (derived from cover thumbnails, see below). Phase 4a (`0018`) adds
+`books.cover_color` / `cover_version` (derived from cover thumbnails, see below) and `0024`
+`meta_cache` (the community metadata cache's persistent level: derived, keyed by identifier,
+not user state; see Phase 1.5 below). Phase 4a (`0018`) adds
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
 retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
 `client_platform` / `last_ip` (the app and newest address behind each token) and
@@ -311,8 +313,8 @@ admin overrides; see Metadata overrides below).
   The `work` also carries the community **characters** and **recaps** (the CC
   BY-SA expressive layer: spoiler-tagged, position-keyed - `reveal`/`through`
   are logical work-chapter positions) when metaserve has them, plus a
-  whole-book `recap_summary` (`{in_short, ending}` - `ending` is a full spoiler
-  by construction); all three are additive/`omitempty`, mirrored on
+  whole-book `recap_summary` (`{in_short, ending}` - both summarize the whole
+  book, and `ending` is a full spoiler by construction); all three are additive/`omitempty`, mirrored on
   `upstreamWorkDetail` and `MetaWork` and passed through by
   `toCharacters`/`toRecaps`/`toRecapSummary` (which drops an all-blank summary).
   **Work-id lookup**: `GET /api/v1/meta/work?id=<work id>` (authed, *not*
@@ -355,6 +357,19 @@ admin overrides; see Metadata overrides below).
   false, so clients hide the UI); no asin/isbn or no upstream match -> `200
   {"matched": false}`; upstream unreachable -> 502. Out of scope for now: no cover
   remote-fallback, no tag-based ASIN extraction.
+  **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
+  each family (key `ordering_of || id`) into ONE rail whose top-level view is the
+  MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
+  a shipped player that ignores the new fields never sees a chronological order's
+  earlier books as "previous". The other orders ride along as additive
+  `orderings` (at most `maxOrderingAlternates` = 2 per family, failures make the
+  envelope partial), and `maxSeriesRails` counts FAMILIES. Every main view is
+  fetched before any alternate, so under `composeTimeout` a slow upstream costs
+  alternates, never rails (`TestEnrichMainsBeforeAlternates`). A pre-v7 upstream
+  yields byte-identical rails (`TestEnrichPreV7RailsUnchanged`), except that a
+  work listed at two positions of one series is now one rail rather than two
+  (`TestEnrichRepeatedMembershipIsOneRail`). Server-side because shipped players
+  lag.
   **Persistent meta cache** (`meta_cache`, migration 0024): `meta.Store` is a
   SQLite second level behind the memory cache (`catalog/metacache.go`, adapted to
   `meta.Store` by `api.metaStore`, which logs failures; best effort, a failure
@@ -364,7 +379,8 @@ admin overrides; see Metadata overrides below).
   however stale is served when the upstream fails (not on caller cancellation),
   held in memory for errorTTL. Rows carry `storeVersion` and the metaserve
   `source`; others are ignored. Derived, rebuildable, not user state; the
-  launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000).
+  launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000). No config
+  key: only the service reads or writes it, so `metadata.enabled` off touches nothing.
   **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
   (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one,
   nearest first, max 5, failures left out) and `?spoilers=hide` gates the current
@@ -402,19 +418,6 @@ admin overrides; see Metadata overrides below).
   `findNextSibling`, except the current book does not count as "indexed" for the
   bare-folder fallback), else `{source:"none"}`. `book` is the list shape;
   everything named is in the caller's scope.
-  **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
-  each family (key `ordering_of || id`) into ONE rail whose top-level view is the
-  MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
-  a shipped player that ignores the new fields never sees a chronological order's
-  earlier books as "previous". The other orders ride along as additive
-  `orderings` (at most `maxOrderingAlternates` = 2 per family, failures make the
-  envelope partial), and `maxSeriesRails` counts FAMILIES. Every main view is
-  fetched before any alternate, so under `composeTimeout` a slow upstream costs
-  alternates, never rails (`TestEnrichMainsBeforeAlternates`). A pre-v7 upstream
-  yields byte-identical rails (`TestEnrichPreV7RailsUnchanged`), except that a
-  work listed at two positions of one series is now one rail rather than two
-  (`TestEnrichRepeatedMembershipIsOneRail`). Server-side because shipped players
-  lag.
 - **Native deep-link association**: `GET /.well-known/apple-app-site-association`
   and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
   YAML) and 404 when unset. They only enable auto-app-launch for domains the
@@ -937,13 +940,15 @@ admin overrides; see Metadata overrides below).
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
-`export`, `browse_people`, `next_book`); flip them on as phases land.
-`browse_people` is true (the player's browse lists and `/books?narrator=`);
-`next_book` is true (`GET /libraries/{id}/next`). `transcode` already reflects whether ffmpeg is configured;
+`export`, `browse_people`, `cover_sizes`, `next_book`); flip them on as phases land.
+`browse_people` is true (the player's browse lists and `/books?narrator=`),
+`cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
+(`GET /libraries/{id}/next`). `transcode` already reflects whether ffmpeg is configured;
 `api_keys` is true (user-minted personal access tokens are supported);
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
-`metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`).
+`metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`);
+`meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`) tracks `metadata`.
 
 ## API surface
 

@@ -51,8 +51,8 @@ func checkPalette(t *testing.T, p Palette) {
 		return
 	}
 	accent := parseHex(t, p.Accent)
-	if c := contrast(accent, bg); c < MinAccentContrast {
-		t.Fatalf("accent %s on bg %s: contrast %.2f, want >= %.1f", p.Accent, p.Bg, c, MinAccentContrast)
+	if c := contrast(accent, bg); c < minAccentContrast {
+		t.Fatalf("accent %s on bg %s: contrast %.2f, want >= %.1f", p.Accent, p.Bg, c, minAccentContrast)
 	}
 	white, black := contrast(accent, rgb8{255, 255, 255}), contrast(accent, rgb8{})
 	want := "#ffffff"
@@ -66,7 +66,7 @@ func checkPalette(t *testing.T, p Palette) {
 
 func TestCoverPaletteSolidColour(t *testing.T) {
 	blue := color.NRGBA{30, 90, 200, 255}
-	p := CoverPalette(bands(300, 300, []color.NRGBA{blue}, []float64{1}))
+	p := coverPalette(bands(300, 300, []color.NRGBA{blue}, []float64{1}))
 	if p.Bg != "#1e5ac8" {
 		t.Fatalf("bg = %s, want #1e5ac8", p.Bg)
 	}
@@ -84,7 +84,7 @@ func TestCoverPaletteSolidColour(t *testing.T) {
 
 func TestCoverPaletteTwoColours(t *testing.T) {
 	navy, orange := color.NRGBA{20, 30, 80, 255}, color.NRGBA{240, 140, 20, 255}
-	p := CoverPalette(bands(100, 100, []color.NRGBA{navy, orange}, []float64{0.7, 0.3}))
+	p := coverPalette(bands(100, 100, []color.NRGBA{navy, orange}, []float64{0.7, 0.3}))
 	// Navy is the most populous; orange is the vibrant one and already reads on it.
 	want := Palette{Bg: "#141e50", Accent: "#f08c14", OnAccent: "#000000"}
 	if p != want {
@@ -99,7 +99,7 @@ func TestCoverPaletteGreyscaleHasNoAccent(t *testing.T) {
 			img.SetGray(x, y, color.Gray{Y: uint8(x)})
 		}
 	}
-	p := CoverPalette(img)
+	p := coverPalette(img)
 	if p.Bg == "" || p.Accent != "" || p.OnAccent != "" {
 		t.Fatalf("greyscale palette = %+v, want a bg and no accent", p)
 	}
@@ -110,11 +110,11 @@ func TestCoverPaletteGreyscaleHasNoAccent(t *testing.T) {
 // darker, keeping its hue and saturation, until it reaches the contrast bar.
 func TestCoverPaletteNudgesLowContrastAccent(t *testing.T) {
 	slate, red := color.NRGBA{50, 50, 60, 255}, color.NRGBA{200, 60, 60, 255}
-	p := CoverPalette(bands(100, 100, []color.NRGBA{slate, red}, []float64{0.7, 0.3}))
+	p := coverPalette(bands(100, 100, []color.NRGBA{slate, red}, []float64{0.7, 0.3}))
 	if p.Bg != "#32323c" {
 		t.Fatalf("bg = %s, want #32323c", p.Bg)
 	}
-	if c := contrast(rgb8{200, 60, 60}, rgb8{50, 50, 60}); c >= MinAccentContrast {
+	if c := contrast(rgb8{200, 60, 60}, rgb8{50, 50, 60}); c >= minAccentContrast {
 		t.Fatalf("fixture red already has contrast %.2f; the test needs one below the bar", c)
 	}
 	checkPalette(t, p)
@@ -132,18 +132,18 @@ func TestCoverPaletteNudgesLowContrastAccent(t *testing.T) {
 // nudge bounds: the accent is left out rather than turned black or white.
 func TestCoverPaletteOmitsUnreadableAccent(t *testing.T) {
 	grey, red := color.NRGBA{117, 117, 117, 255}, color.NRGBA{220, 30, 30, 255}
-	p := CoverPalette(bands(100, 100, []color.NRGBA{grey, red}, []float64{0.7, 0.3}))
+	p := coverPalette(bands(100, 100, []color.NRGBA{grey, red}, []float64{0.7, 0.3}))
 	if p != (Palette{Bg: "#757575"}) {
 		t.Fatalf("palette = %+v, want only bg #757575", p)
 	}
 }
 
 func TestCoverPaletteTransparentIsWhite(t *testing.T) {
-	p := CoverPalette(image.NewNRGBA(image.Rect(0, 0, 10, 10)))
+	p := coverPalette(image.NewNRGBA(image.Rect(0, 0, 10, 10)))
 	if p.Bg != "#ffffff" {
 		t.Fatalf("bg = %s, want #ffffff (flattened onto white)", p.Bg)
 	}
-	if (CoverPalette(image.NewNRGBA(image.Rectangle{})) != Palette{}) {
+	if (coverPalette(image.NewNRGBA(image.Rectangle{})) != Palette{}) {
 		t.Fatal("an empty image should have no palette")
 	}
 }
@@ -160,7 +160,7 @@ func TestCoverPaletteContrastProperty(t *testing.T) {
 			colors[i] = color.NRGBA{uint8(rng.IntN(256)), uint8(rng.IntN(256)), uint8(rng.IntN(256)), 255}
 			shares[i] = 1 / float64(n)
 		}
-		p := CoverPalette(bands(80+rng.IntN(400), 80+rng.IntN(400), colors, shares))
+		p := coverPalette(bands(80+rng.IntN(400), 80+rng.IntN(400), colors, shares))
 		checkPalette(t, p)
 		if p.Accent != "" {
 			accents++
@@ -171,22 +171,22 @@ func TestCoverPaletteContrastProperty(t *testing.T) {
 	}
 }
 
-// Thumbnail reads the palette from the image it makes, and from a small JPEG it
-// passes through.
-func TestThumbnailReadsPalette(t *testing.T) {
-	_, p, err := Thumbnail(encodePNG(t, 1200, 900, color.NRGBA{200, 30, 90, 255}), 320)
+// PaletteOf reads the palette from a thumbnail's JPEG, and refuses what is not
+// one.
+func TestPaletteOf(t *testing.T) {
+	thumb, err := Thumbnail(encodePNG(t, 1200, 900, color.NRGBA{200, 30, 90, 255}), 320)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := PaletteOf(thumb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Bg != "#c81e5a" {
-		t.Fatalf("scaled bg = %s, want #c81e5a", p.Bg)
+		t.Fatalf("bg = %s, want #c81e5a", p.Bg)
 	}
 	checkPalette(t, p)
-	_, p, err = Thumbnail(encodeJPEG(t, 200, 200), 320)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Bg != "#000000" {
-		t.Fatalf("pass-through bg = %s, want #000000", p.Bg)
+	if _, err := PaletteOf(encodePNG(t, 10, 10, color.NRGBA{0, 0, 0, 255})); err == nil {
+		t.Fatal("PaletteOf read a PNG; want an error")
 	}
 }

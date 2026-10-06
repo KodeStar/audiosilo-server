@@ -1,25 +1,29 @@
 package media
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"math"
 )
 
 // Palette is the colours a player themes a book's screens with, read from its
 // cover: Bg is the dominant colour; Accent a vibrant one, its lightness nudged
-// until it reads against Bg (a WCAG contrast of at least MinAccentContrast);
+// until it reads against Bg (a WCAG contrast of at least minAccentContrast);
 // OnAccent the text colour on Accent (white or black, whichever contrasts more).
 // All are lowercase "#rrggbb". Accent and OnAccent are "" when the cover has no
 // vibrant colour (near-greyscale art) or none can be made to read against Bg.
 type Palette struct {
-	Bg, Accent, OnAccent string
+	Bg       string `json:"bg"`
+	Accent   string `json:"accent,omitempty"`
+	OnAccent string `json:"on_accent,omitempty"`
 }
 
-// MinAccentContrast is the WCAG contrast ratio an accent keeps against the
+// minAccentContrast is the WCAG contrast ratio an accent keeps against the
 // background: the AA level for normal text.
-const MinAccentContrast = 4.5
+const minAccentContrast = 4.5
 
 const (
 	// paletteGrid is the most samples read per side: a cover's colours show at
@@ -57,10 +61,20 @@ func (b *bucket) mean() rgb8 {
 	return rgb8{uint8((b.sr + b.n/2) / b.n), uint8((b.sg + b.n/2) / b.n), uint8((b.sb + b.n/2) / b.n)}
 }
 
-// CoverPalette reads a cover's Palette from its image, sampling at most
+// PaletteOf reads a cover's Palette from a JPEG of it: a Thumbnail, small enough
+// that decoding it costs little.
+func PaletteOf(jpg []byte) (Palette, error) {
+	img, err := jpeg.Decode(bytes.NewReader(jpg))
+	if err != nil {
+		return Palette{}, err
+	}
+	return coverPalette(img), nil
+}
+
+// coverPalette reads a cover's Palette from its image, sampling at most
 // paletteGrid x paletteGrid pixels. Transparent areas count as white (a cover is
 // shown on a card, as Thumbnail flattens it). An empty image has no palette.
-func CoverPalette(img image.Image) Palette {
+func coverPalette(img image.Image) Palette {
 	bounds := img.Bounds()
 	if bounds.Empty() {
 		return Palette{}
@@ -136,10 +150,10 @@ func vibrantColor(buckets []bucket, total int) (rgb8, bool) {
 
 // readableAccent returns accent, or the nearest colour of the same hue and
 // saturation (by HSL lightness, within the nudge bounds) whose contrast against bg
-// is at least MinAccentContrast. The check is on the 8-bit colour that is sent, so
+// is at least minAccentContrast. The check is on the 8-bit colour that is sent, so
 // rounding can't take it below the bar. false when no lightness reaches it.
 func readableAccent(accent, bg rgb8) (rgb8, bool) {
-	if contrast(accent, bg) >= MinAccentContrast {
+	if contrast(accent, bg) >= minAccentContrast {
 		return accent, true
 	}
 	h, s, l := toHSL(accent)
@@ -154,7 +168,7 @@ func readableAccent(accent, bg rgb8) (rgb8, bool) {
 			if nl < nudgeMinLight || nl > nudgeMaxLight || delta >= foundDelta {
 				break
 			}
-			if c := fromHSL(h, s, nl); contrast(c, bg) >= MinAccentContrast {
+			if c := fromHSL(h, s, nl); contrast(c, bg) >= minAccentContrast {
 				found, foundDelta = c, delta
 				break
 			}

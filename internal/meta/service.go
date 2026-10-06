@@ -316,13 +316,13 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	// Then the persistent store: a fresh row answers as memory would have (and
 	// warms it for the rest of its TTL); a stale positive row is held back as the
 	// fallback should the upstream fail below.
-	row := readStored[Enrichment](ctx, s, key)
-	if row.fresh {
-		cachePutUntil(s.cache, key, row.value, row.expires)
-		if row.value == nil {
+	stored, expires, fresh := readStored[Enrichment](ctx, s, key)
+	if fresh {
+		cachePutUntil(s.cache, key, stored, expires)
+		if stored == nil {
 			return nil, ErrNotFound
 		}
-		return row.value, nil
+		return stored, nil
 	}
 
 	// Run the whole fan-out under its own deadline (see composeTimeout): a
@@ -352,9 +352,9 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 			// (exactly as the error would have been), so the upstream is asked
 			// again soon, and the row itself is left as it was. An error is
 			// never persisted.
-			if row.stale != nil {
-				cachePut(s.cache, key, row.stale, errorTTL)
-				return row.stale, nil
+			if stored != nil {
+				cachePut(s.cache, key, stored, errorTTL)
+				return stored, nil
 			}
 			s.cache.putError(key, err)
 		}
@@ -477,10 +477,10 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 	// Then the persistent store, as in Enrich. Only positive works are ever
 	// written there, so a row decoding to "no match" is not one of ours and is
 	// read as a miss.
-	row := readStored[MetaWork](ctx, s, key)
-	if row.fresh && row.value != nil {
-		cachePutUntil(s.cache, key, row.value, row.expires)
-		return row.value, nil
+	stored, expires, fresh := readStored[MetaWork](ctx, s, key)
+	if fresh && stored != nil {
+		cachePutUntil(s.cache, key, stored, expires)
+		return stored, nil
 	}
 
 	detail, err := s.fetchWork(ctx, id)
@@ -497,9 +497,9 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		// 502s for the whole error TTL while upstream is healthy. And as in
 		// Enrich, a persisted positive work outlives the outage.
 		if ctx.Err() == nil {
-			if row.stale != nil {
-				cachePut(s.cache, key, row.stale, errorTTL)
-				return row.stale, nil
+			if stored != nil {
+				cachePut(s.cache, key, stored, errorTTL)
+				return stored, nil
 			}
 			s.cache.putError(key, err)
 		}
