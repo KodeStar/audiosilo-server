@@ -463,7 +463,11 @@ admin overrides; see Metadata overrides below).
   shipped app build claims - self-hosted arbitrary domains fall back to the web
   player + the custom-scheme "Open in app" button.
 - **SQLite** runs with a single write connection (writers serialize) plus a
-  read-only reader pool, WAL mode.
+  read-only reader pool, WAL mode. `store.DB.QueryContext`/`QueryRowContext` go to
+  the READER (`query_only`): any statement that writes, including `INSERT ...
+  RETURNING`, must use `ExecContext`, `WriteRowContext` or a `WithTx` transaction.
+  An in-memory DB has reader == writer and would hide a misroute, which is why the
+  test stores are temp files.
 - **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
   endpoints to OFFSET for large tables.
 - **Path safety**: any filesystem access derived from user input goes through
