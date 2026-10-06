@@ -5,22 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-)
-
-// The fixture library's books: the Cradle folder holds two parts (one book), the
-// Mistborn folder one file (also a book, the folder).
-const (
-	cradleBook   = "Will Wight/Cradle"
-	cradlePart   = "Will Wight/Cradle/01 - Unsouled.m4b"
-	mistbornBook = "Brandon Sanderson/Mistborn"
 )
 
 // rateEnv is a test env with the fixture library scanned, "kid" granted only the
@@ -36,41 +26,12 @@ type rateEnv struct {
 func newRateEnv(t *testing.T) *rateEnv {
 	t.Helper()
 	e := newTestEnv(t)
-	ctx := context.Background()
-	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.api.scanner.Scan(ctx, *lib); err != nil {
-		t.Fatal(err)
-	}
-	user := func(name string) (int64, string) {
-		u, err := e.auth.CreateUser(ctx, name, name+"-password", auth.RoleUser)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, name+"'s phone", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return u.ID, tok
-	}
+	lib := newFixtureLibrary(t, e)
 	re := &rateEnv{testEnv: e, libID: lib.ID}
-	re.kidID, re.kidTok = user("kid")
-	re.eveID, re.eveTok = user("eve")
-	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Wight only"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	re.kidShare = share.ID
-	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.cat.GrantShare(ctx, re.kidID, share.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.cat.GrantWholeLibrary(ctx, re.eveID, lib.ID); err != nil {
+	re.kidID, re.kidTok = newUserWithSession(t, e, "kid", false)
+	re.eveID, re.eveTok = newUserWithSession(t, e, "eve", false)
+	re.kidShare = grantWightOnly(t, e, lib.ID, re.kidID)
+	if err := e.cat.GrantWholeLibrary(context.Background(), re.eveID, lib.ID); err != nil {
 		t.Fatal(err)
 	}
 	return re

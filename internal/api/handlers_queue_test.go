@@ -4,21 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
 // The lists tests' books: cradleBook and mistbornBook (scanned from testdata,
-// see ratings_test.go, with cradlePart a part of Cradle) and thread, indexed directly.
+// see fixtures_1b_test.go, with cradlePart a part of Cradle) and thread, indexed directly.
 const thread = "Will Wight/Threadlight"
 
 // listsEnv is a library (cradleBook, thread, mistbornBook) and the accounts the queue and collection tests
@@ -38,52 +34,23 @@ func newListsEnv(t *testing.T) *listsEnv {
 	t.Helper()
 	e := newTestEnv(t)
 	ctx := context.Background()
-	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
-	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
-		t.Fatal(err)
-	}
+	lib := newFixtureLibrary(t, e)
 	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: lib.ID, RelPath: thread, IsFolder: true,
 		Title: "Threadlight", Author: "Will Wight"}); err != nil {
 		t.Fatal(err)
 	}
-	user := func(name string, demo bool) (int64, string) {
-		t.Helper()
-		var u *auth.User
-		var err error
-		if demo {
-			u, err = e.auth.CreateDemoUser(ctx, name)
-		} else {
-			u, err = e.auth.CreateUser(ctx, name, "", auth.RoleUser)
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		tok, err := e.auth.IssueToken(ctx, u.ID, auth.KindSession, "t", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return u.ID, tok
-	}
 	l := &listsEnv{testEnv: e, libID: lib.ID}
-	l.olive, l.oliveTok = user("olive", false)
-	l.kid, l.kidTok = user("kid", false)
-	l.sam, l.samTok = user("sam", false)
-	l.demo, l.demoTok = user("demo_1", true)
-	l.dora, _ = user("dora", false)
+	l.olive, l.oliveTok = newUserWithSession(t, e, "olive", false)
+	l.kid, l.kidTok = newUserWithSession(t, e, "kid", false)
+	l.sam, l.samTok = newUserWithSession(t, e, "sam", false)
+	l.demo, l.demoTok = newUserWithSession(t, e, "demo_1", true)
+	l.dora, _ = newUserWithSession(t, e, "dora", false)
 	for _, id := range []int64{l.olive, l.sam, l.demo} {
 		if err := e.cat.GrantWholeLibrary(ctx, id, lib.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
-	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Wight only"})
-	if err := e.cat.AddSharePath(ctx, share.ID, catalog.PathRule{LibraryID: lib.ID, Path: "Will Wight"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.cat.GrantShare(ctx, l.kid, share.ID); err != nil {
-		t.Fatal(err)
-	}
-	l.share = share.ID
+	l.share = grantWightOnly(t, e, lib.ID, l.kid)
 	if err := e.auth.SetDisabled(ctx, l.dora, true); err != nil {
 		t.Fatal(err)
 	}

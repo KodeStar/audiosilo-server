@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,10 +11,9 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
-// cradleBook and mistbornBook (the fixture library's two books) live in ratings_test.go.
+// cradleBook and mistbornBook (the fixture library's two books) live in fixtures_1b_test.go.
 
 // statsEnv is the activity env with the library scanned and the member granted
 // only the "Will Wight" folder.
@@ -27,23 +25,12 @@ type statsEnv struct {
 func newStatsEnv(t *testing.T) *statsEnv {
 	t.Helper()
 	e := newActivityEnv(t)
-	ctx := context.Background()
-	lib, err := e.cat.GetLibrary(ctx, e.libID)
+	lib, err := e.cat.GetLibrary(context.Background(), e.libID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := library.NewScanner(e.cat, "", slog.Default()).Scan(ctx, *lib); err != nil {
-		t.Fatal(err)
-	}
-	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Wight",
-		Paths: []catalog.PathRule{{LibraryID: e.libID, Path: "Will Wight"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := e.cat.GrantShare(ctx, e.memberID, share.ID); err != nil {
-		t.Fatal(err)
-	}
-	return &statsEnv{activityEnv: e, shareID: share.ID}
+	scanFixture(t, e.testEnv, lib)
+	return &statsEnv{activityEnv: e, shareID: grantWightOnly(t, e.testEnv, e.libID, e.memberID)}
 }
 
 // save sends a progress save on path from token.
