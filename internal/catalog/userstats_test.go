@@ -300,7 +300,7 @@ func TestListeningGoal(t *testing.T) {
 	f.finish(t, f.bob, f.book, time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC))
 
 	g, err = f.c.GoalStatusFor(f.ctx, f.user, f.clock, time.UTC)
-	if err != nil || g.Goal == nil || g.Goal.BooksPerYear != 24 || g.Goal.UpdatedAt != "2026-10-01T09:00:00Z" || g.Finished != 1 {
+	if err != nil || g.Goal == nil || g.Goal.BooksPerYear != 24 || g.Goal.UpdatedAt != "2026-10-01T09:00:00.000Z" || g.Finished != 1 {
 		t.Fatalf("ann's goal = %+v (%+v), %v", g, g.Goal, err)
 	}
 	gb, err := f.c.GoalStatusFor(f.ctx, f.bob, f.clock, time.UTC)

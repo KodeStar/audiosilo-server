@@ -6,6 +6,7 @@
 -- Durable user state, not part of the rebuildable index: it names no book, so it
 -- has no library or path and nothing moves it. The FK to users purges it with
 -- the account; backups (VACUUM INTO) carry it like every other table.
+-- updated_at is fixed-width millisecond UTC, like the other Phase 1b stamps.
 CREATE TABLE listening_goals (
     user_id        INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     books_per_year INTEGER NOT NULL CHECK (books_per_year BETWEEN 1 AND 1000),

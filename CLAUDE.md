@@ -812,16 +812,17 @@ admin overrides; see Metadata overrides below).
   with the book (`MoveDurableState`).
 - **Your listening (player redesign Phase 1b, capability `user_stats`, `catalog/userstats.go`,
   `goals.go`, `api/handlers_userstats.go`)**: the caller's own stats, from the same accumulator as the
-  Activity page with `listenAcc.onlyUser` set (which also skips the per-listener facts: users, peak
-  intervals). `GET /me/stats?range=` → `{"stats": catalog.UserStats}` (totals/previous without
+  Activity page, built for one user by `newUserListenAcc` (the one user-id guard; its reads take the
+  per-user query spellings, served by `idx_sessions_user_last` / `idx_daily_user` / the progress key).
+  `GET /me/stats?range=` → `{"stats": catalog.UserStats}` (totals/previous without
   `listeners`, `days` as `{date, listened}`, hours, top books/authors/narrators/series, `finished_books`
   ≤ 100, playback, clients; none of the admin-only steps run). **Privacy**: the types have no field that
-  can carry another user, the per-user entry points refuse user 0 (`errNoUser`: 0 is "everyone" to the
+  can carry another user, user 0 is refused (`errNoUser`: 0 is "everyone" to the
   accumulator), and the rows naming a book pass the caller's CURRENT access (`UserScopes` +
   `scopesAllow` / `scopesFilterSQL`): a revoked share's book leaves `top_books`/`finished_books` and the
   authors/narrators/series (ranked from in-scope books only, `listenAcc.topPeople`), while the totals,
   days and hours keep all the caller's time. `GET /me/listening?range=` → `catalog.UserListening`
-  (period + `days`, no `by_user`). `GET /me/goal` → `{goal: {books_per_year, updated_at} | null, year,
+  (period + `days`, no `by_user`). `GET /me/goal` → `{goal: {books_per_year, updated_at (ms UTC)} | null, year,
   finished}` (this calendar year in server time, the caller's finishes, counted like `totals.finished`),
   `PUT /me/goal` `{books_per_year: 1..1000}` (else 400) answers as GET, `DELETE /me/goal` 204, idempotent.
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`

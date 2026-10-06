@@ -62,7 +62,7 @@ func (c *Catalog) SetListeningGoal(ctx context.Context, userID int64, booksPerYe
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO listening_goals(user_id, books_per_year, updated_at) VALUES(?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET books_per_year = excluded.books_per_year, updated_at = excluded.updated_at`,
-		userID, booksPerYear, c.now().UTC().Format(time.RFC3339))
+		userID, booksPerYear, c.stamp())
 	return err
 }
 

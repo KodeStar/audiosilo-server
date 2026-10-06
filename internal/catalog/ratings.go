@@ -83,7 +83,7 @@ func (c *Catalog) SetRating(ctx context.Context, userID int64, ref Ref, stars in
 	if err != nil {
 		return nil, err
 	}
-	now := formatSessionTime(c.now())
+	now := c.stamp()
 	var r Rating
 	err = scanRating(c.db.WriteRowContext(ctx,
 		`INSERT INTO ratings(user_id, library_id, rel_path, rating, note, created_at, updated_at)
