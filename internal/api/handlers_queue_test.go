@@ -57,6 +57,9 @@ func newListsEnv(t *testing.T) *listsEnv {
 	return l
 }
 
+// at is a path-addressed URL in the lists' library (bookURL).
+func (l *listsEnv) at(endpoint, path string) string { return bookURL(l.libID, endpoint, path) }
+
 // refJSON is a {library_id, path} body fragment.
 func (l *listsEnv) refJSON(path string) string {
 	b, _ := json.Marshal(catalog.Ref{LibraryID: l.libID, Path: path})

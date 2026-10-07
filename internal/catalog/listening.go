@@ -49,13 +49,22 @@ func scanProgress(row interface{ Scan(...any) error }, p *Progress) error {
 		&p.Version, &p.DeviceID, &p.UpdatedAt, &p.StartedAt, &p.FinishedAt)
 }
 
-// Bookmark is a saved position with an optional note.
+// Bookmark is a saved position with an optional note and label (a machine key
+// the player maps to its own text, "" for none; see checkBookmark).
 type Bookmark struct {
 	ID int64 `json:"id"`
 	Ref
 	Position  float64 `json:"position"`
 	Note      string  `json:"note"`
+	Label     string  `json:"label"`
 	CreatedAt string  `json:"created_at"`
+}
+
+// bookmarkColumns are the columns of a Bookmark, in scanBookmark's order.
+const bookmarkColumns = `id, library_id, rel_path, position, note, label, created_at`
+
+func scanBookmark(row interface{ Scan(...any) error }, b *Bookmark) error {
+	return row.Scan(&b.ID, &b.LibraryID, &b.Path, &b.Position, &b.Note, &b.Label, &b.CreatedAt)
 }
 
 // Note is free-form text attached to a book (optionally a position).
@@ -66,6 +75,13 @@ type Note struct {
 	Body      string  `json:"body"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
+}
+
+// noteColumns are the columns of a Note, in scanNote's order.
+const noteColumns = `id, library_id, rel_path, position, body, created_at, updated_at`
+
+func scanNote(row interface{ Scan(...any) error }, n *Note) error {
+	return row.Scan(&n.ID, &n.LibraryID, &n.Path, &n.Position, &n.Body, &n.CreatedAt, &n.UpdatedAt)
 }
 
 // GetProgress returns a user's progress for a book path, or nil if none.
@@ -533,12 +549,16 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	return refreshCoverArt(ctx, tx, libraryID, newPath)
 }
 
-// AddBookmark stores a bookmark and returns it with its ID.
+// AddBookmark stores a bookmark and returns it with its ID. ErrInvalidPosition,
+// ErrBookmarkNoteTooLong or ErrInvalidLabel for a bookmark checkBookmark refuses.
 func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*Bookmark, error) {
-	b.CreatedAt = c.ts()
+	if err := checkBookmark(&b.Position, &b.Note, &b.Label); err != nil {
+		return nil, err
+	}
+	b.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text
 	res, err := c.db.ExecContext(ctx,
-		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at)
-		 VALUES(?,?,?,?,?,?)`, userID, b.LibraryID, b.Path, b.Position, b.Note, b.CreatedAt)
+		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, label, created_at)
+		 VALUES(?,?,?,?,?,?,?)`, userID, b.LibraryID, b.Path, b.Position, b.Note, b.Label, b.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -546,25 +566,13 @@ func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*B
 	return &b, nil
 }
 
-// ListBookmarks returns a user's bookmarks for a book path ordered by position.
+// ListBookmarks returns a user's bookmarks for a book path ordered by position
+// ([] when none).
 func (c *Catalog) ListBookmarks(ctx context.Context, userID int64, ref Ref) ([]Bookmark, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT id, library_id, rel_path, position, note, created_at FROM bookmarks
+	return queryRows(ctx, c.db, func(rows *sql.Rows, b *Bookmark) error { return scanBookmark(rows, b) },
+		`SELECT `+bookmarkColumns+` FROM bookmarks
 		  WHERE user_id = ? AND library_id = ? AND rel_path = ? ORDER BY position`,
 		userID, ref.LibraryID, ref.Path)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Bookmark
-	for rows.Next() {
-		var b Bookmark
-		if err := rows.Scan(&b.ID, &b.LibraryID, &b.Path, &b.Position, &b.Note, &b.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
 }
 
 // DeleteBookmark removes a user's bookmark by ID.
@@ -574,9 +582,13 @@ func (c *Catalog) DeleteBookmark(ctx context.Context, userID, id int64) error {
 	return err
 }
 
-// AddNote stores a note and returns it with its ID.
+// AddNote stores a note and returns it with its ID. ErrNoteBodyTooLong or
+// ErrInvalidPosition for a note checkNote refuses.
 func (c *Catalog) AddNote(ctx context.Context, userID int64, n Note) (*Note, error) {
-	n.CreatedAt = c.ts()
+	if err := checkNote(&n.Body, &n.Position); err != nil {
+		return nil, err
+	}
+	n.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text
 	n.UpdatedAt = n.CreatedAt
 	res, err := c.db.ExecContext(ctx,
 		`INSERT INTO notes(user_id, library_id, rel_path, position, body, created_at, updated_at)
@@ -588,25 +600,13 @@ func (c *Catalog) AddNote(ctx context.Context, userID int64, n Note) (*Note, err
 	return &n, nil
 }
 
-// ListNotes returns a user's notes for a book path ordered by position.
+// ListNotes returns a user's notes for a book path ordered by position ([] when
+// none).
 func (c *Catalog) ListNotes(ctx context.Context, userID int64, ref Ref) ([]Note, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT id, library_id, rel_path, position, body, created_at, updated_at FROM notes
+	return queryRows(ctx, c.db, func(rows *sql.Rows, n *Note) error { return scanNote(rows, n) },
+		`SELECT `+noteColumns+` FROM notes
 		  WHERE user_id = ? AND library_id = ? AND rel_path = ? ORDER BY position`,
 		userID, ref.LibraryID, ref.Path)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Note
-	for rows.Next() {
-		var n Note
-		if err := rows.Scan(&n.ID, &n.LibraryID, &n.Path, &n.Position, &n.Body, &n.CreatedAt, &n.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
 }
 
 // DeleteNote removes a user's note by ID.
@@ -615,18 +615,35 @@ func (c *Catalog) DeleteNote(ctx context.Context, userID, id int64) error {
 	return err
 }
 
-// AddHistory records a listening-history span.
+// AddHistory records a listening-history span. The client's start and end are
+// stored in the fixed-width UTC millisecond form (c.stamp), since the all-books
+// history orders by ended_at as text (historySpan; never refused: shipped players
+// send what they send).
 func (c *Catalog) AddHistory(ctx context.Context, userID int64, ref Ref, from, to float64, startedAt, endedAt string) error {
-	if startedAt == "" {
-		startedAt = c.ts()
-	}
-	if endedAt == "" {
-		endedAt = c.ts()
-	}
+	startedAt, endedAt = c.historySpan(startedAt, endedAt)
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO listening_history(user_id, library_id, rel_path, from_pos, to_pos, started_at, ended_at)
 		 VALUES(?,?,?,?,?,?,?)`, userID, ref.LibraryID, ref.Path, from, to, startedAt, endedAt)
 	return err
+}
+
+// historySpan is AddHistory's normalisation of a client's span times: RFC3339
+// (any fraction, any offset) to c.stamp's form. When only one side parses, the
+// other takes it (a zero-length span there), so the span never starts after it
+// ends; when neither does, both are the server's time now.
+func (c *Catalog) historySpan(startedAt, endedAt string) (string, string) {
+	start, startErr := time.Parse(time.RFC3339Nano, startedAt)
+	end, endErr := time.Parse(time.RFC3339Nano, endedAt)
+	switch {
+	case startErr == nil && endErr == nil:
+		return formatSessionTime(start), formatSessionTime(end)
+	case startErr == nil:
+		return formatSessionTime(start), formatSessionTime(start)
+	case endErr == nil:
+		return formatSessionTime(end), formatSessionTime(end)
+	}
+	now := c.stamp()
+	return now, now
 }
 
 // History is a recorded listening span.
@@ -639,50 +656,27 @@ type History struct {
 	EndedAt   string  `json:"ended_at"`
 }
 
-func clampHistoryLimit(limit int) int {
-	if limit <= 0 || limit > 500 {
+// clampPageLimit is a list's page size: limit, at most 500; 100 when it is
+// absent (0) or negative.
+func clampPageLimit(limit int) int {
+	if limit <= 0 {
 		return 100
 	}
-	return limit
+	return min(limit, 500)
 }
 
-func scanHistory(rows *sql.Rows) ([]History, error) {
-	defer rows.Close()
-	var out []History
-	for rows.Next() {
-		var h History
-		if err := rows.Scan(&h.ID, &h.LibraryID, &h.Path, &h.From, &h.To, &h.StartedAt, &h.EndedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, h)
-	}
-	return out, rows.Err()
+// historyColumns are the columns of a History, in scanHistory's order.
+const historyColumns = `id, library_id, rel_path, from_pos, to_pos, started_at, ended_at`
+
+func scanHistory(row interface{ Scan(...any) error }, h *History) error {
+	return row.Scan(&h.ID, &h.LibraryID, &h.Path, &h.From, &h.To, &h.StartedAt, &h.EndedAt)
 }
 
-// ListHistory returns a user's listening history for a book path, newest first.
+// ListHistory returns a user's listening history for a book path, newest first
+// ([] when none).
 func (c *Catalog) ListHistory(ctx context.Context, userID int64, ref Ref, limit int) ([]History, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT id, library_id, rel_path, from_pos, to_pos, started_at, ended_at FROM listening_history
-		  WHERE user_id = ? AND library_id = ? AND rel_path = ? ORDER BY ended_at DESC LIMIT ?`,
-		userID, ref.LibraryID, ref.Path, clampHistoryLimit(limit))
-	if err != nil {
-		return nil, err
-	}
-	return scanHistory(rows)
-}
-
-// ListAllHistory returns a user's recent listening history across all books,
-// scoped to paths they can still access. The scope filter is applied in the query
-// so LIMIT counts only accessible rows (see UserScopes); empty scopes yield none.
-func (c *Catalog) ListAllHistory(ctx context.Context, userID int64, scopes []Scope, limit int) ([]History, error) {
-	filter, fargs := scopesFilterSQL("library_id", "rel_path", scopes)
-	args := append([]any{userID}, fargs...)
-	args = append(args, clampHistoryLimit(limit))
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT id, library_id, rel_path, from_pos, to_pos, started_at, ended_at FROM listening_history
-		  WHERE user_id = ? AND `+filter+` ORDER BY ended_at DESC LIMIT ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	return scanHistory(rows)
+	return queryRows(ctx, c.db, func(rows *sql.Rows, h *History) error { return scanHistory(rows, h) },
+		`SELECT `+historyColumns+` FROM listening_history
+		  WHERE user_id = ? AND library_id = ? AND rel_path = ? ORDER BY ended_at DESC, id DESC LIMIT ?`,
+		userID, ref.LibraryID, ref.Path, clampPageLimit(limit))
 }

@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -37,10 +35,8 @@ func newRateEnv(t *testing.T) *rateEnv {
 	return re
 }
 
-// at is a path-addressed URL in the fixture library (endpoint "rating", "progress").
-func (e *rateEnv) at(endpoint, path string) string {
-	return "/api/v1/libraries/" + strconv.FormatInt(e.libID, 10) + "/" + endpoint + "?path=" + url.QueryEscape(path)
-}
+// at is a path-addressed URL in the fixture library (bookURL).
+func (e *rateEnv) at(endpoint, path string) string { return bookURL(e.libID, endpoint, path) }
 
 // myRatings decodes GET /me/ratings for tok.
 func (e *rateEnv) myRatings(t *testing.T, tok string) []catalog.RatedBook {
@@ -201,8 +197,9 @@ func TestMyRatingsOwnAndScoped(t *testing.T) {
 	}
 }
 
-// GET /server advertises the ratings, progress_edit and my_devices capabilities.
-func TestRatingsProgressEditDevicesCapabilities(t *testing.T) {
+// GET /server advertises the user-state capabilities of the player redesign:
+// ratings, progress_edit and my_devices (1b), annotations (4).
+func TestUserStateCapabilities(t *testing.T) {
 	e := newTestEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
 	var out struct {
@@ -211,7 +208,7 @@ func TestRatingsProgressEditDevicesCapabilities(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []string{"ratings", "progress_edit", "my_devices"} {
+	for _, c := range []string{"ratings", "progress_edit", "my_devices", "annotations"} {
 		if !out.Capabilities[c] {
 			t.Errorf("capability %s missing: %s", c, body)
 		}

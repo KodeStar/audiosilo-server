@@ -363,7 +363,7 @@ func (c *Catalog) visibleItems(ctx context.Context, l orderedList, owner int64, 
 
 // attachBooks sets each item's book from the index (booksAt) at the ref slot
 // gives with the field to set, leaving the field nil where no book is indexed at
-// the path.
+// the path. Items on one ref share one *Book (read-only: it is only encoded).
 func attachBooks[T any](ctx context.Context, c *Catalog, items []T, slot func(*T) (Ref, **Book)) error {
 	refs := make([]Ref, len(items))
 	for i := range items {
@@ -373,21 +373,30 @@ func attachBooks[T any](ctx context.Context, c *Catalog, items []T, slot func(*T
 	if err != nil {
 		return err
 	}
+	shared := make(map[Ref]*Book, len(books))
+	for ref, b := range books {
+		shared[ref] = &b
+	}
 	for i := range items {
 		ref, field := slot(&items[i])
-		if b, ok := books[ref]; ok {
-			*field = &b
+		if b, ok := shared[ref]; ok {
+			*field = b
 		}
 	}
 	return nil
 }
 
 // booksAt reads the books indexed at refs (BooksByPaths: one chunked read per
-// library), keyed by ref; a ref with no book is absent.
+// library, each path once however many refs repeat it), keyed by ref; a ref with
+// no book is absent.
 func (c *Catalog) booksAt(ctx context.Context, refs []Ref) (map[Ref]Book, error) {
 	byLib := map[int64][]string{}
+	seen := make(map[Ref]bool, len(refs))
 	for _, r := range refs {
-		byLib[r.LibraryID] = append(byLib[r.LibraryID], r.Path)
+		if !seen[r] {
+			seen[r] = true
+			byLib[r.LibraryID] = append(byLib[r.LibraryID], r.Path)
+		}
 	}
 	out := make(map[Ref]Book, len(refs))
 	for libID, paths := range byLib {

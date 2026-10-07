@@ -7,29 +7,13 @@ import (
 	"time"
 )
 
-// ratingFixture is a catalog with a controllable clock, one library and two users.
-type ratingFixture struct {
-	c        *Catalog
-	clock    time.Time
-	lib      int64
-	ann, bob int64
-}
+// ratingFixture is the user-state fixture with the rating helpers.
+type ratingFixture struct{ *userStateFixture }
 
 func newRatingFixture(t *testing.T) *ratingFixture {
 	t.Helper()
-	c, ctx := newTestCatalog(t)
-	f := &ratingFixture{c: c, clock: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}
-	c.now = func() time.Time { return f.clock }
-	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.lib = lib.ID
-	f.ann, f.bob = seedNamedUser(t, c, "ann"), seedNamedUser(t, c, "bob")
-	return f
+	return &ratingFixture{newUserStateFixture(t, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))}
 }
-
-func (f *ratingFixture) ref(p string) Ref { return Ref{LibraryID: f.lib, Path: p} }
 
 // rate stores a rating a minute after the last one, so each is newer.
 func (f *ratingFixture) rate(t *testing.T, user int64, p string, stars int, note string) *Rating {

@@ -123,15 +123,14 @@ func (a *API) handleAddBookmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var bm catalog.Bookmark
-	if err := decodeJSON(r, &bm, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodePositioned(w, decodeJSON(r, &bm, 0)) {
 		return
 	}
 	bm.Ref = catalog.Ref{LibraryID: lib.ID, Path: path}
 	u := userFrom(r.Context())
 	saved, err := a.cat.AddBookmark(r.Context(), u.ID, bm)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save bookmark")
+		a.writeCatalogError(w, err, "add bookmark failed", "could not save bookmark", "library", lib.ID, "path", path)
 		return
 	}
 	writeJSON(w, http.StatusCreated, saved)
@@ -173,15 +172,14 @@ func (a *API) handleAddNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var n catalog.Note
-	if err := decodeJSON(r, &n, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodePositioned(w, decodeJSON(r, &n, 0)) {
 		return
 	}
 	n.Ref = catalog.Ref{LibraryID: lib.ID, Path: path}
 	u := userFrom(r.Context())
 	saved, err := a.cat.AddNote(r.Context(), u.ID, n)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save note")
+		a.writeCatalogError(w, err, "add note failed", "could not save note", "library", lib.ID, "path", path)
 		return
 	}
 	writeJSON(w, http.StatusCreated, saved)
@@ -201,23 +199,6 @@ func (a *API) handleDeleteNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleListAllHistory returns the caller's recent listening history across
-// books, filtered to paths the caller can still access.
-func (a *API) handleListAllHistory(w http.ResponseWriter, r *http.Request) {
-	u := userFrom(r.Context())
-	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load history")
-		return
-	}
-	items, err := a.cat.ListAllHistory(r.Context(), u.ID, scopes, queryInt(r, "limit", 100))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load history")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"history": items})
-}
-
 func (a *API) handleListHistory(w http.ResponseWriter, r *http.Request) {
 	lib, path, status, msg := a.authorizedPath(r)
 	if status != 0 {
@@ -226,7 +207,7 @@ func (a *API) handleListHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	u := userFrom(r.Context())
 	items, err := a.cat.ListHistory(r.Context(), u.ID,
-		catalog.Ref{LibraryID: lib.ID, Path: path}, queryInt(r, "limit", 100))
+		catalog.Ref{LibraryID: lib.ID, Path: path}, queryInt(r, "limit", 0))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load history")
 		return
