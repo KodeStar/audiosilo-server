@@ -387,11 +387,16 @@ func attachBooks[T any](ctx context.Context, c *Catalog, items []T, slot func(*T
 }
 
 // booksAt reads the books indexed at refs (BooksByPaths: one chunked read per
-// library), keyed by ref; a ref with no book is absent.
+// library, each path once however many refs repeat it), keyed by ref; a ref with
+// no book is absent.
 func (c *Catalog) booksAt(ctx context.Context, refs []Ref) (map[Ref]Book, error) {
 	byLib := map[int64][]string{}
+	seen := make(map[Ref]bool, len(refs))
 	for _, r := range refs {
-		byLib[r.LibraryID] = append(byLib[r.LibraryID], r.Path)
+		if !seen[r] {
+			seen[r] = true
+			byLib[r.LibraryID] = append(byLib[r.LibraryID], r.Path)
+		}
 	}
 	out := make(map[Ref]Book, len(refs))
 	for libID, paths := range byLib {
