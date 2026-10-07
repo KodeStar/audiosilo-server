@@ -47,7 +47,7 @@ import {
   formatList,
   formatNumber,
   formatRelative,
-  seriesIndexLabel,
+  seriesLabel,
 } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
@@ -560,9 +560,8 @@ function ItemRow({
     : [];
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
-  // The community's series and the book's place in it, as the book page words a position.
-  const position = seriesIndexLabel(Number(p.values.series_index ?? 0), lang, t);
-  const series = p.values.series ? [p.values.series, position].filter(Boolean).join(' ') : '';
+  // The community's series and the book's place in it ("Mars #2").
+  const series = seriesLabel(p.values.series, Number(p.values.series_index), lang, t);
 
   return (
     <li
