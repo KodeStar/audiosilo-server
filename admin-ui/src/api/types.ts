@@ -406,6 +406,8 @@ export interface AdminSettings {
   metadata: {
     enabled: boolean;
     base_url: string;
+    /** The Audible marketplace whose ASIN a match takes (one of MATCH_REGIONS; "" = the US store's). */
+    region: string;
     /** The service exists (base_url was valid when the server started), so the switch can turn on. */
     available: boolean;
   };
@@ -1342,10 +1344,34 @@ export interface MatchRecording {
   runtime_min?: number;
   release_date?: string;
   publisher?: string;
+  /** Best first for this server: the preferred marketplace's, then the US store's, then the rest. */
   asins: string[];
+  /** Each ASIN with its marketplace, as the community lists them (absent from an older server). */
+  asin_refs?: ASINRef[];
   isbns: string[];
   cover_url?: string;
 }
+
+/** meta.ASINRef: one of a recording's ASINs and the Audible marketplace it sells in. */
+export interface ASINRef {
+  region: string;
+  asin: string;
+}
+
+/** The Audible marketplaces (config.Regions, the community metadata's region vocabulary). */
+export const MATCH_REGIONS = [
+  'us',
+  'uk',
+  'ca',
+  'au',
+  'de',
+  'fr',
+  'es',
+  'it',
+  'jp',
+  'in',
+  'br',
+] as const;
 
 /** meta.MatchCandidate (GET /admin/libraries/{id}/book/match). */
 export interface MatchCandidate {
@@ -1486,4 +1512,98 @@ export interface BookMeta {
   recording?: MetaRecording;
   series?: MetaSeries[];
   web_url?: string;
+}
+
+/** catalog.MatchMode*: a run over unmatched books, or a second look at community ASINs. */
+export type MatchRunMode = 'match' | 'repick';
+
+/** catalog.Match* statuses. matching and applying are working. */
+export type MatchRunStatus =
+  'matching' | 'ready' | 'applying' | 'applied' | 'cancelled' | 'failed' | 'interrupted';
+
+/** catalog.Outcome*: confident, worth a look, no candidate, or the service failed. */
+export type MatchOutcome = 'auto' | 'review' | 'none' | 'error';
+
+/** matchrun.Scope*: how much applying may write. */
+export type MatchScope = 'ids' | 'fill' | 'overwrite';
+
+/** catalog.MatchRun (GET /admin/match-runs, /admin/match-runs/{id}). */
+export interface MatchRun {
+  id: number;
+  /** null = every library. */
+  library_id: number | null;
+  library_name?: string;
+  mode: MatchRunMode;
+  region: string;
+  status: MatchRunStatus;
+  started_by: number | null;
+  started_by_name?: string;
+  started_at: string;
+  finished_at: string | null;
+  /** Books to match, and matched so far. */
+  total: number;
+  done: number;
+  /** The last apply's scope ("" before one). */
+  scope: MatchScope | '';
+  apply_total: number;
+  apply_done: number;
+  applied_at: string | null;
+  /** Why a failed run stopped: metadata_off | metadata_unavailable | internal. */
+  error?: string;
+  counts: {
+    auto: number;
+    /** Confident items not applied yet. */
+    pending: number;
+    review: number;
+    none: number;
+    error: number;
+    applied: number;
+    skipped: number;
+    failed: number;
+  };
+}
+
+/** catalog.MatchProposal: what the best community candidate offers a book. */
+export interface MatchProposal {
+  work_id?: string;
+  recording_id?: string;
+  title?: string;
+  authors?: string;
+  narrators?: string;
+  runtime_min?: number;
+  web_url?: string;
+  cover_url?: string;
+  /** The proposed ASIN's marketplace. */
+  asin_region?: string;
+  /** Each field the community has a value for, in stored form. */
+  values: Partial<Record<OverrideField, string>>;
+}
+
+/** matchrun.ItemView: one book a run matched, as the review shows it. */
+export interface MatchRunItem {
+  id: number;
+  run_id: number;
+  library_id: number;
+  path: string;
+  outcome: MatchOutcome;
+  score: number;
+  /** The next candidate's score (0 = none). */
+  runner_up: number;
+  proposal: MatchProposal;
+  /** What applying did: '' (not yet) | applied | skipped | failed. */
+  applied: '' | 'applied' | 'skipped' | 'failed';
+  /** Why: book_gone | nothing_to_change | edit_failed | cover_failed | metadata_unavailable. */
+  detail?: string;
+  /** The book as it is now. */
+  book: { title: string; author: string };
+  /** Nothing is indexed at the path any more. */
+  gone?: boolean;
+  /** What each scope would write: fields (in display order) and the cover. */
+  changes: Partial<Record<MatchScope, { fields: OverrideField[]; cover: boolean }>>;
+}
+
+/** GET /admin/match-runs/{id}/items: a page, and the id the next reads after (0 = the last). */
+export interface MatchRunItemPage {
+  items: MatchRunItem[];
+  next_after: number;
 }

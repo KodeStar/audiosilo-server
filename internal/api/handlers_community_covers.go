@@ -137,23 +137,43 @@ func (a *API) handleAdminSetCommunityCover(w http.ResponseWriter, r *http.Reques
 		a.writeBookError(w, err, "load book for cover failed", "could not save the cover", "library", lib.ID, "path", p)
 		return
 	}
-	data, err := a.fetchCover(ctx, req.URL, maxCommunityCoverBytes)
+	data, err := a.communityCover(ctx, req.URL)
 	switch {
 	case errors.Is(err, meta.ErrCoverURL):
 		writeError(w, http.StatusBadRequest, "url must be an absolute http(s) URL")
 		return
-	case errors.Is(err, media.ErrImageTooLarge):
-		err = catalog.ErrCoverTooLarge
-	case err != nil:
+	case err != nil && !errors.Is(err, catalog.ErrCoverTooLarge) && !errors.Is(err, catalog.ErrUnsupportedImage):
 		if ctx.Err() == nil {
 			a.log.Warn("fetch community cover failed", "err", err, "url", req.URL)
 		}
 		writeErrorCode(w, http.StatusBadGateway, codeCoverUnavailable, "could not fetch the cover")
 		return
-	default:
-		data, err = a.keepableCover(ctx, data, req.URL)
 	}
 	a.saveCustomCover(w, r, lib, p, data, err, map[string]any{"source": catalog.SourceCommunity})
+}
+
+// communityCover fetches a community cover as it may be kept (keepableCover):
+// meta.ErrCoverURL for a URL that isn't one, catalog.ErrCoverTooLarge /
+// ErrUnsupportedImage for an image that can't be kept, else the fetch's failure.
+func (a *API) communityCover(ctx context.Context, rawURL string) ([]byte, error) {
+	data, err := a.fetchCover(ctx, rawURL, maxCommunityCoverBytes)
+	switch {
+	case errors.Is(err, media.ErrImageTooLarge):
+		return nil, catalog.ErrCoverTooLarge
+	case err != nil:
+		return nil, err
+	}
+	return a.keepableCover(ctx, data, rawURL)
+}
+
+// saveMatchCover keeps a community cover as a book's custom cover for a bulk match
+// run (matchrun.CoverSaver): the match dialog's cover tick without the request.
+func (a *API) saveMatchCover(ctx context.Context, libraryID int64, path, rawURL string, userID int64) error {
+	data, err := a.communityCover(ctx, rawURL)
+	if err != nil {
+		return err
+	}
+	return a.cat.SetCover(ctx, libraryID, path, data, userID)
 }
 
 // keepableCover is a fetched community cover as it may be kept: refused

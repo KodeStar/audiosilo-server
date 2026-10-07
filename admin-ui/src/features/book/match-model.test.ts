@@ -2,6 +2,7 @@ import type { MatchCandidate, MatchRecording } from '@/api/types';
 import { bookDetail } from '@/test/library-fixtures';
 import {
   acceptRequest,
+  asinRegion,
   communityCover,
   communityValues,
   compareRows,
@@ -142,5 +143,38 @@ describe('community cover', () => {
   it("isn't ticked when the server couldn't fetch its preview", () => {
     expect(defaultCoverTick(false, 'https://c/rec.jpg', null)).toBe(false);
     expect(defaultCoverTick(false, 'https://c/rec.jpg', 'data:image/jpeg;base64,AA')).toBe(true);
+  });
+});
+
+describe('marketplaces', () => {
+  const us = recording({
+    id: 'us',
+    asins: ['B0US000001'],
+    asin_refs: [{ region: 'us', asin: 'B0US000001' }],
+  });
+  const uk = recording({
+    id: 'uk',
+    asins: ['B0UK000001', 'B0US000002'],
+    asin_refs: [
+      { region: 'uk', asin: 'B0UK000001' },
+      { region: 'us', asin: 'B0US000002' },
+    ],
+  });
+
+  it('breaks a runtime tie for the preferred marketplace, as the server does', () => {
+    const c = candidate({ recordings: [us, uk] });
+    expect(defaultRecording(c, 2730 * 60, 'uk')?.id).toBe('uk');
+    expect(defaultRecording(c, 2730 * 60)?.id).toBe('us');
+    // The runtime still comes first.
+    const short = recording({ ...uk, runtime_min: 1000 });
+    expect(defaultRecording(candidate({ recordings: [us, short] }), 2730 * 60, 'uk')?.id).toBe(
+      'us',
+    );
+  });
+
+  it("names an ASIN's marketplace", () => {
+    expect(asinRegion(uk, 'B0UK000001')).toBe('uk');
+    expect(asinRegion(uk, 'B0NOPE0000')).toBe('');
+    expect(asinRegion(recording(), 'B003P2WO5E')).toBe('');
   });
 });

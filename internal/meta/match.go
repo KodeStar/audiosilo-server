@@ -41,7 +41,9 @@ const maxMatchCandidates = 6
 // identifiers are looked up. Title, Series, SeriesIndex and Author are the book's
 // (tagged or edited) facts, Path and IsFolder its library path, which is read for
 // facts of its own (metadata.ReadPathLayout); all of them, with Duration, find and score
-// the candidates.
+// the candidates. Region is the server's preferred Audible marketplace (config
+// metadata.region, "" for none), which orders each recording's ASINs; Limit caps
+// the works expanded (0 = maxMatchCandidates; a bulk run needs only the best two).
 type MatchQuery struct {
 	Text        string
 	ASIN        string
@@ -55,6 +57,16 @@ type MatchQuery struct {
 	IsFolder    bool
 	BookASIN    string
 	BookISBN    string
+	Region      string
+	Limit       int
+}
+
+// limit is how many works the query expands.
+func (q MatchQuery) limit() int {
+	if q.Limit > 0 && q.Limit < maxMatchCandidates {
+		return q.Limit
+	}
+	return maxMatchCandidates
 }
 
 // MatchCandidate is one community work a book might be.
@@ -107,6 +119,9 @@ type MatchSeries struct {
 }
 
 // MatchRecording is one recording (narration/edition) of a candidate work.
+// ASINs are best first for this server (orderASINs): the preferred marketplace's,
+// then the US store's, then the rest. ASINRefs keeps each with its marketplace, as
+// metaserve lists them.
 type MatchRecording struct {
 	ID          string          `json:"id"`
 	Narrators   []MetaPersonRef `json:"narrators"`
@@ -115,8 +130,84 @@ type MatchRecording struct {
 	ReleaseDate string          `json:"release_date,omitempty"`
 	Publisher   string          `json:"publisher,omitempty"`
 	ASINs       []string        `json:"asins"`
+	ASINRefs    []ASINRef       `json:"asin_refs"`
 	ISBNs       []string        `json:"isbns"`
 	CoverURL    string          `json:"cover_url,omitempty"`
+}
+
+// ASINRef is one of a recording's ASINs with the Audible marketplace it sells in
+// (metaserve's region vocabulary: us, uk, ca, au, de, fr, es, it, jp, in, br). A
+// publisher-direct ASIN sold worldwide under one id appears once per region.
+type ASINRef struct {
+	Region string `json:"region"`
+	ASIN   string `json:"asin"`
+}
+
+// fallbackRegion is the marketplace whose ASIN comes next when the preferred one
+// has none: the one nearly every recording carries, and metaserve's own default.
+const fallbackRegion = "us"
+
+// orderASINs is a recording's distinct ASINs best first for a server preferring
+// region: that marketplace's, then fallbackRegion's, then the rest in metaserve's
+// order (by region). Without the ordering the first would be whichever region
+// sorts first alphabetically (au before uk before us).
+func orderASINs(refs []ASINRef, region string) []string {
+	out := []string{}
+	add := func(match func(ASINRef) bool) {
+		for _, r := range refs {
+			if r.ASIN != "" && match(r) && !slices.Contains(out, r.ASIN) {
+				out = append(out, r.ASIN)
+			}
+		}
+	}
+	if region != "" {
+		add(func(r ASINRef) bool { return r.Region == region })
+	}
+	add(func(r ASINRef) bool { return r.Region == fallbackRegion })
+	add(func(ASINRef) bool { return true })
+	return out
+}
+
+// RegionASIN is the recording's ASIN in region, "" when it sells there under none.
+func (r MatchRecording) RegionASIN(region string) string {
+	for _, a := range r.ASINRefs {
+		if a.Region == region && a.ASIN != "" {
+			return a.ASIN
+		}
+	}
+	return ""
+}
+
+// HasRegion reports whether the recording sells in region.
+func (r MatchRecording) HasRegion(region string) bool {
+	return region != "" && r.RegionASIN(region) != ""
+}
+
+// DefaultRecording is the recording of c a book most likely is, as the match
+// dialog picks it (admin-ui match-model.ts defaultRecording): the one an
+// identifier lookup resolved to, else the one whose runtime is closest to the
+// book's (seconds), a recording selling in the preferred region winning a tie;
+// recordings without a runtime come last. nil when c has none.
+func DefaultRecording(c *MatchCandidate, seconds float64, region string) *MatchRecording {
+	var best *MatchRecording
+	bestGap := math.Inf(1)
+	for i := range c.Recordings {
+		r := &c.Recordings[i]
+		if c.RecordingID != "" && r.ID == c.RecordingID {
+			return r
+		}
+	}
+	for i := range c.Recordings {
+		r := &c.Recordings[i]
+		gap := math.Inf(1)
+		if r.RuntimeMin > 0 {
+			gap = math.Abs(float64(r.RuntimeMin)*60 - seconds)
+		}
+		if best == nil || gap < bestGap || (gap == bestGap && r.HasRegion(region) && !best.HasRegion(region)) {
+			best, bestGap = r, gap
+		}
+	}
+	return best
 }
 
 // matchHit is one work to expand into a candidate. A hit whose score is known
@@ -210,8 +301,8 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	if !matched {
 		hits, legErrs = s.searchHits(ctx, q, text, asin, isbn, identifierOnly)
 	}
-	if len(hits) > maxMatchCandidates {
-		hits = hits[:maxMatchCandidates]
+	if len(hits) > q.limit() {
+		hits = hits[:q.limit()]
 	}
 
 	// Expand each hit into its full work document, a few at a time.
@@ -225,7 +316,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 				errs[i] = err
 				return
 			}
-			c := s.toCandidate(detail, h.cover)
+			c := s.toCandidate(detail, h.cover, q.Region)
 			c.RecordingID = h.recordingID
 			if h.reasons != nil {
 				c.Score, c.Reasons = h.score, h.reasons
@@ -391,7 +482,7 @@ func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
 	if q.Duration >= 1 {
 		v.Set("runtime", strconv.Itoa(int(math.Round(q.Duration))))
 	}
-	v.Set("limit", strconv.Itoa(maxMatchCandidates))
+	v.Set("limit", strconv.Itoa(q.limit()))
 	return v
 }
 
@@ -416,7 +507,7 @@ func normalizeISBN(s string) string {
 	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(s)))
 }
 
-func (s *Service) toCandidate(d *upstreamWorkDetail, cover string) *MatchCandidate {
+func (s *Service) toCandidate(d *upstreamWorkDetail, cover, region string) *MatchCandidate {
 	c := &MatchCandidate{
 		WorkID: d.ID, Title: d.Title, Subtitle: d.Subtitle, Authors: toPersonRefs(d.Authors),
 		Language: d.Language, FirstPublished: d.FirstPublished, Description: d.Description,
@@ -432,13 +523,14 @@ func (s *Service) toCandidate(d *upstreamWorkDetail, cover string) *MatchCandida
 	for _, r := range d.Recordings {
 		mr := MatchRecording{
 			ID: r.ID, Narrators: toPersonRefs(r.Narrators), Abridged: r.Abridged, RuntimeMin: r.RuntimeMin,
-			ReleaseDate: r.ReleaseDate, Publisher: r.Publisher, ASINs: []string{}, ISBNs: []string{}, CoverURL: r.CoverURL,
+			ReleaseDate: r.ReleaseDate, Publisher: r.Publisher, ASINRefs: []ASINRef{}, ISBNs: []string{}, CoverURL: r.CoverURL,
 		}
 		for _, a := range r.ASIN {
-			if a.ASIN != "" && !slices.Contains(mr.ASINs, a.ASIN) {
-				mr.ASINs = append(mr.ASINs, a.ASIN)
+			if ref := ASINRef(a); a.ASIN != "" && !slices.Contains(mr.ASINRefs, ref) {
+				mr.ASINRefs = append(mr.ASINRefs, ref)
 			}
 		}
+		mr.ASINs = orderASINs(mr.ASINRefs, region)
 		mr.ISBNs = append(mr.ISBNs, r.ISBN...)
 		if c.CoverURL == "" {
 			c.CoverURL = r.CoverURL

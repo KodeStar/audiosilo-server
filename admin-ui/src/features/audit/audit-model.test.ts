@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import i18n from '@/i18n';
 import type { AuditEvent } from '@/api/types';
 import { actionText, detailLines, valueText } from './audit-model';
 
@@ -113,5 +114,16 @@ describe('audit model', () => {
         fmt,
       ),
     ).toEqual([{ label: 'paths', value: 'Fiction: Dune, Kids and 10 more' }]);
+  });
+
+  it('words a bulk match apply in the console language', () => {
+    const tr = i18n.getFixedT('en');
+    const e = ev('book.match_apply', { run: 3, books: 412, scope: 'fill' });
+    expect(actionText(e, tr)).toBe('Applied community matches');
+    expect(detailLines(e, tr, fmt)).toEqual([
+      { label: 'Run', value: '3' },
+      { label: 'Books', value: '412' },
+      { label: 'What to write', value: "Fill in what's missing" },
+    ]);
   });
 });

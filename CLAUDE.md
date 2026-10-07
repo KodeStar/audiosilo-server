@@ -108,6 +108,7 @@ internal/library/     filesystem view (fsview.go) + background scanner (scanner.
 internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing, the scan's baseline); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
+internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
@@ -368,9 +369,10 @@ admin overrides; see Metadata overrides below).
   or served as a positive blank work. Degradation: metadata off
   -> 404; missing/blank `id` -> 400; malformed `id` -> 400; unknown work id ->
   404; upstream error -> 502.
-  Config is `metadata.{enabled,base_url}` (env `AUDIOSILO_METADATA_ENABLED` /
-  `AUDIOSILO_METADATA_BASE_URL`; `base_url` must be an absolute http(s) URL when
-  enabled) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
+  Config is `metadata.{enabled,base_url,region}` (env `AUDIOSILO_METADATA_ENABLED` /
+  `AUDIOSILO_METADATA_BASE_URL` / `AUDIOSILO_METADATA_REGION`; `base_url` must be an
+  absolute http(s) URL when enabled; `region`, the preferred Audible marketplace, one
+  of `config.Regions` or "", applies live) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
   is constructed in `api.New` whenever `base_url` is valid (`MetadataConfig.ValidBaseURL`),
   regardless of `enabled`, and the live config's `metadata.enabled` gates it - so an admin
   can flip it on/off without a restart (Server settings, below). The handler and the
@@ -652,7 +654,28 @@ admin overrides; see Metadata overrides below).
   text, else `CleanTitle` + author) scored by the tag-only `scoreCandidate`, and
   the missing route is remembered for 15 min (`matchUnsupportedUntil`); a 503/5xx
   from works/match is an outage (502), never a fallback; identifiers normalized for
-  the exact lookup; metadata off -> 404 `metadata_off`);
+  the exact lookup; metadata off -> 404 `metadata_off`). Each recording keeps its
+  ASINs' marketplaces (`asin_refs`) and `asins` is ordered by `metadata.region`
+  (`orderASINs`: the preferred store's, then `us`, then the rest; metaserve lists
+  them by region, so without it `au` beat `uk`), the answer names the `region`;
+  `meta.DefaultRecording` is the dialog's recording pick in Go (identifier's, else
+  closest runtime, the preferred marketplace breaking a tie). **Bulk matching**
+  (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
+  `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
+  `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
+  its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
+  network, and `library` must not import `meta`); 2 workers, `Limit: 2` works
+  expanded per book, 5 failures in a row stop it (`metadata_unavailable`), metadata
+  off stops it. A run only records (`match_run_items`: outcome auto/review/none/error,
+  the best candidate's `catalog.MatchProposal`); apply writes community overrides
+  via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep
+  checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,
+  never a position beside another series, a cover only for a book with none), which
+  also computes each item's `changes` for the review, so the two can't disagree.
+  Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN. A repick only touches an
+  ASIN whose override is `source=community`. `InterruptMatchRuns` (launcher, at
+  start) settles runs a stopped server left: matching -> interrupted, applying ->
+  ready. Newest 10 runs kept. Audited `book.match_run|asin_repick|match_apply|match_stop`;
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
   `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id
   (`meta.Service.WorkIDs`: per distinct normalized identifier, first the cached enrichment's

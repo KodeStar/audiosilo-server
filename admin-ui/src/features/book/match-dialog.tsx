@@ -20,6 +20,7 @@ import {
   settleBookEdit,
   useCommunityCover,
   useMatchCandidates,
+  useSettings,
 } from '@/api/hooks';
 import type { AdminBookDetail, MatchCandidate, MatchRecording, OverrideField } from '@/api/types';
 import { BookCover, CoverArt } from '@/components/book-cover';
@@ -39,8 +40,10 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { regionTag } from '@/lib/regions';
 import {
   acceptRequest,
+  asinRegion,
   candidateAuthors,
   communityCover,
   compareRows,
@@ -128,10 +131,11 @@ function MatchBody({
   const [coverTick, setCoverTick] = useState(false);
   const [busy, setBusy] = useState(false);
   const search = useMatchCandidates(b.library_id, b.path, by, true);
+  const region = useSettings().data?.metadata.region ?? '';
   const candidates = search.data ?? [];
   const picked = candidates.find((c) => c.work_id === pickId) ?? candidates[0];
   const recordingOf = (c: MatchCandidate, id = recId) =>
-    c.recordings?.find((r) => r.id === id) ?? defaultRecording(c, b.duration);
+    c.recordings?.find((r) => r.id === id) ?? defaultRecording(c, b.duration, region);
   const rec = picked ? recordingOf(picked) : undefined;
   const rows = picked ? compareRows(detail.fields, picked, rec) : [];
   const coverUrl = picked ? communityCover(picked, rec) : '';
@@ -400,6 +404,9 @@ function Candidates({
               {rec?.asins?.[0] || rec?.isbns?.[0] ? (
                 <span className="font-mono text-[12px] text-subtle-foreground">
                   {rec.asins?.[0] || rec.isbns?.[0]}
+                  {rec.asins?.[0] && asinRegion(rec, rec.asins[0])
+                    ? ` · ${regionTag(asinRegion(rec, rec.asins[0]))}`
+                    : ''}
                 </span>
               ) : null}
             </span>

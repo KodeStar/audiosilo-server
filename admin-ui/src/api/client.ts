@@ -31,6 +31,11 @@ import type {
   ListeningDays,
   ListeningSession,
   MatchCandidate,
+  MatchOutcome,
+  MatchRun,
+  MatchRunItemPage,
+  MatchRunMode,
+  MatchScope,
   ProgressEdit,
   ScanRun,
   ScanRunPage,
@@ -445,6 +450,20 @@ export const api = {
       'GET',
       `/admin/libraries/${libraryId}/book/match${bookQuery({ path, ...by })}`,
     ),
+  /** Bulk matching: the kept runs, newest first, and the marketplace a new one prefers. */
+  matchRuns: () => request<{ runs: MatchRun[]; region: string }>('GET', '/admin/match-runs'),
+  /** Starts matching every unmatched book (of one library), or a repick, in the background. */
+  startMatchRun: (opts: { library_id?: number; mode?: MatchRunMode }) =>
+    request<MatchRun>('POST', '/admin/match-runs', opts),
+  matchRun: (id: number) => request<MatchRun>('GET', `/admin/match-runs/${id}`),
+  matchRunItems: (id: number, opts: { outcome?: MatchOutcome; after?: number; limit?: number }) =>
+    request<MatchRunItemPage>('GET', `/admin/match-runs/${id}/items${bookQuery(opts)}`),
+  /** Writes the confident matches (less `exclude`, plus `include`) under `scope`, in the background. */
+  applyMatchRun: (
+    id: number,
+    body: { scope: MatchScope; include?: number[]; exclude?: number[] },
+  ) => request<MatchRun>('POST', `/admin/match-runs/${id}/apply`, body),
+  cancelMatchRun: (id: number) => request<void>('POST', `/admin/match-runs/${id}/cancel`),
   /** The book's community metadata (series rails for the Series gaps). */
   bookMeta: (libraryId: number, path: string) =>
     request<BookMeta>('GET', `/libraries/${libraryId}/meta${pathQuery(path)}`),

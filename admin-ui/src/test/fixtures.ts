@@ -243,7 +243,12 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
       android_package: '',
       android_sha256: [],
     },
-    metadata: { enabled: true, base_url: 'https://meta.audiosilo.app', available: true },
+    metadata: {
+      enabled: true,
+      base_url: 'https://meta.audiosilo.app',
+      region: '',
+      available: true,
+    },
     demo: { enabled: false, library: '', max_users: null, max_users_default: 200, idle_ttl: '' },
     backups: { schedule: 'daily:03:00', keep: 7, dir: '' },
     locked: { 'players.web_dir': 'AUDIOSILO_WEB_DIR' },
