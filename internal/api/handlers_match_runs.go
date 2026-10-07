@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
@@ -144,14 +143,10 @@ func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown outcome")
 		return
 	}
-	var after int64
-	if v := q.Get("after"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			writeError(w, http.StatusBadRequest, "invalid after")
-			return
-		}
-		after = n
+	after, ok := parseOptionalID(q.Get("after"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid after")
+		return
 	}
 	limit := min(max(queryInt(r, "limit", 50), 1), maxMatchItemsPage)
 	run := a.matchRunFor(w, r)

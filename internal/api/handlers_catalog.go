@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 )
 
@@ -351,8 +352,7 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 // meta.Candidates matches the book's facts and looks its own identifiers up.
 //
 // Responses: metadata off -> 404 (code metadata_off); no book -> 404; upstream
-// down -> 502; otherwise 200 {"candidates": [...], "region"} (possibly empty;
-// region is the preferred marketplace each recording's asins are ordered by).
+// down -> 502; otherwise 200 {"candidates": [...]} (possibly empty).
 func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return
@@ -368,13 +368,9 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	mq := meta.MatchQuery{
-		Text: strings.TrimSpace(query.Get("q")), ASIN: strings.TrimSpace(query.Get("asin")),
-		ISBN: strings.TrimSpace(query.Get("isbn")), Title: book.Title, Series: book.Series,
-		SeriesIndex: book.SeriesIndex, Author: book.Author, Duration: book.Duration,
-		Path: book.RelPath, IsFolder: book.IsFolder, BookASIN: book.ASIN, BookISBN: book.ISBN,
-		Region: a.config().Metadata.PreferredRegion(),
-	}
+	mq := matchrun.QueryFor(book, a.config().Metadata.PreferredRegion())
+	mq.Text, mq.ASIN = strings.TrimSpace(query.Get("q")), strings.TrimSpace(query.Get("asin"))
+	mq.ISBN = strings.TrimSpace(query.Get("isbn"))
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {
 		writeError(w, http.StatusBadRequest, "query too long")
 		return
@@ -385,7 +381,7 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "metadata service unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"candidates": cands, "region": mq.Region})
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": cands})
 }
 
 // maxWorkBooks caps one POST /admin/books/works: more books than a real series

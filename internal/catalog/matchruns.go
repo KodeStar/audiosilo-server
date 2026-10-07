@@ -90,9 +90,6 @@ type MatchRun struct {
 	Counts        MatchRunCounts `json:"counts"`
 }
 
-// Active reports whether the run is still working (matching or applying).
-func (r *MatchRun) Active() bool { return r.Status == MatchMatching || r.Status == MatchApplying }
-
 // MatchProposal is what the best community candidate offers a book: the work and
 // recording it is, how to show it, and the value it has for each overridable
 // field (in stored form; a field it has nothing for is absent).
@@ -186,11 +183,12 @@ func (c *Catalog) BeginApply(ctx context.Context, runID int64, scope string, tot
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		if err == nil {
-			err = ErrRunNotReady
-		}
+	n, err := res.RowsAffected()
+	if err != nil {
 		return err
+	}
+	if n == 0 {
+		return ErrRunNotReady
 	}
 	return nil
 }
@@ -235,18 +233,25 @@ func (c *Catalog) InterruptMatchRuns(ctx context.Context) error {
 	})
 }
 
+// matchRunCols reads a run with its counts, from one pass over its items that
+// idx_match_run_items_counts covers (the console polls the runs each second while
+// one works).
 const matchRunCols = `r.id, r.library_id, COALESCE(l.name, ''), r.mode, r.region, r.status, r.started_by,
 	COALESCE(u.username, ''), r.started_at, r.finished_at, r.total, r.done, r.scope, r.apply_total,
-	r.apply_done, r.applied_at, r.error,
-	(SELECT COUNT(*) FROM match_run_items i WHERE i.run_id = r.id AND i.outcome = 'auto'),
-	(SELECT COUNT(*) FROM match_run_items i WHERE i.run_id = r.id AND i.outcome = 'auto' AND i.applied = ''),
-	(SELECT COUNT(*) FROM match_run_items i WHERE i.run_id = r.id AND i.outcome = 'review'),
-	(SELECT COUNT(*) FROM match_run_items i WHERE i.run_id = r.id AND i.outcome = 'none'),
-	(SELECT COUNT(*) FROM match_run_items i WHERE i.run_id = r.id AND i.outcome = 'error'),
-	(SELECT COUNT(*) FROM match_run_items i WHERE i.run_id = r.id AND i.applied = 'applied'),
-	(SELECT COUNT(*) FROM match_run_items i WHERE i.run_id = r.id AND i.applied = 'skipped'),
-	(SELECT COUNT(*) FROM match_run_items i WHERE i.run_id = r.id AND i.applied = 'failed')
-	FROM match_runs r LEFT JOIN libraries l ON l.id = r.library_id LEFT JOIN users u ON u.id = r.started_by`
+	r.apply_done, r.applied_at, r.error, COALESCE(n.auto, 0), COALESCE(n.pending, 0),
+	COALESCE(n.review, 0), COALESCE(n.none, 0), COALESCE(n.error, 0), COALESCE(n.applied, 0),
+	COALESCE(n.skipped, 0), COALESCE(n.failed, 0)
+	FROM match_runs r LEFT JOIN libraries l ON l.id = r.library_id LEFT JOIN users u ON u.id = r.started_by
+	LEFT JOIN (SELECT run_id,
+	                  SUM(outcome = '` + OutcomeAuto + `') AS auto,
+	                  SUM(outcome = '` + OutcomeAuto + `' AND applied = '') AS pending,
+	                  SUM(outcome = '` + OutcomeReview + `') AS review,
+	                  SUM(outcome = '` + OutcomeNone + `') AS none,
+	                  SUM(outcome = '` + OutcomeError + `') AS error,
+	                  SUM(applied = '` + ItemApplied + `') AS applied,
+	                  SUM(applied = '` + ItemSkipped + `') AS skipped,
+	                  SUM(applied = '` + ItemFailed + `') AS failed
+	             FROM match_run_items GROUP BY run_id) n ON n.run_id = r.id`
 
 func scanMatchRun(row interface{ Scan(...any) error }, r *MatchRun) error {
 	n := &r.Counts
@@ -297,11 +302,11 @@ func (c *Catalog) ListMatchRunItems(ctx context.Context, runID int64, outcome st
 	items, err := queryRows(ctx, c.db, scanMatchItem, `SELECT `+matchItemCols+` FROM match_run_items
 	     WHERE run_id = ? AND (? = '' OR outcome = ?) AND id > ? ORDER BY id LIMIT ?`,
 		runID, outcome, outcome, after, limit+1)
-	if err != nil || len(items) <= limit {
-		return items, 0, err
+	if err != nil {
+		return nil, 0, err
 	}
-	items = items[:limit]
-	return items, items[len(items)-1].ID, nil
+	items, next := pageBefore(items, limit, func(it MatchRunItem) int64 { return it.ID })
+	return items, next, nil
 }
 
 // MatchItemsToApply lists the items an apply works through: the run's confident
@@ -313,11 +318,19 @@ func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, include, e
 	if err != nil {
 		return nil, err
 	}
+	set := func(ids []int64) map[int64]bool {
+		m := make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			m[id] = true
+		}
+		return m
+	}
+	in, out := set(include), set(exclude)
 	return slices.DeleteFunc(all, func(it MatchRunItem) bool {
 		if it.Outcome == OutcomeAuto {
-			return slices.Contains(exclude, it.ID)
+			return out[it.ID]
 		}
-		return !slices.Contains(include, it.ID)
+		return !in[it.ID]
 	}), nil
 }
 

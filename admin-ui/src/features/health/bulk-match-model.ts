@@ -20,10 +20,16 @@ export function bulkPhase(run: MatchRun | undefined): BulkPhase {
   }
 }
 
+/** What the run is counting: the books matched, or (applying) the matches applied. */
+export function runProgress(run: MatchRun): { done: number; total: number } {
+  return run.status === 'applying'
+    ? { done: run.apply_done, total: run.apply_total }
+    : { done: run.done, total: run.total };
+}
+
 /** How far the run has got, 0..1 (undefined while it has nothing to count). */
 export function runFraction(run: MatchRun): number | undefined {
-  const [done, total] =
-    run.status === 'applying' ? [run.apply_done, run.apply_total] : [run.done, run.total];
+  const { done, total } = runProgress(run);
   return total > 0 ? done / total : undefined;
 }
 
@@ -40,9 +46,8 @@ export const NO_PICKS: Picks = { exclude: new Set(), include: new Set() };
 
 /** Whether an apply takes the item: confident unless left out, a review one only if put in. */
 export function isChosen(item: MatchRunItem, picks: Picks): boolean {
-  if (item.applied || item.gone) return false;
-  if (item.outcome === 'auto') return !picks.exclude.has(item.id);
-  return item.outcome === 'review' && picks.include.has(item.id);
+  if (!isPickable(item)) return false;
+  return item.outcome === 'auto' ? !picks.exclude.has(item.id) : picks.include.has(item.id);
 }
 
 /** Whether the item has a checkbox at all: a candidate, not applied yet, its book still there. */

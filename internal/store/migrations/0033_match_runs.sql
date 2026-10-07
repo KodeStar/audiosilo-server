@@ -44,3 +44,5 @@ CREATE TABLE match_run_items (
     detail     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_match_run_items_run ON match_run_items(run_id, outcome, id);
+-- The run's counts (catalog.matchRunCols) read the index alone.
+CREATE INDEX idx_match_run_items_counts ON match_run_items(run_id, outcome, applied);

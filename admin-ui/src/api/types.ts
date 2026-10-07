@@ -1348,6 +1348,8 @@ export interface MatchRecording {
   asins: string[];
   /** Each ASIN with its marketplace, as the community lists them (absent from an older server). */
   asin_refs?: ASINRef[];
+  /** The marketplace asins[0] sells in. */
+  asin_region?: string;
   isbns: string[];
   cover_url?: string;
 }
@@ -1388,6 +1390,8 @@ export interface MatchCandidate {
   recordings: MatchRecording[];
   /** The recording an ASIN/ISBN lookup resolved to. */
   recording_id?: string;
+  /** The recording the book most likely is (the server's meta.DefaultRecording). */
+  default_recording_id?: string;
   /**
    * 0-100: how well the work fits the book - the community service's structured
    * match score, 100 for an identifier hit, or (older service) the title, author
@@ -1524,8 +1528,9 @@ export type MatchRunStatus =
 /** catalog.Outcome*: confident, worth a look, no candidate, or the service failed. */
 export type MatchOutcome = 'auto' | 'review' | 'none' | 'error';
 
-/** matchrun.Scope*: how much applying may write. */
-export type MatchScope = 'ids' | 'fill' | 'overwrite';
+/** matchrun.Scopes: how much applying may write, narrowest first. */
+export const MATCH_SCOPES = ['ids', 'fill', 'overwrite'] as const;
+export type MatchScope = (typeof MATCH_SCOPES)[number];
 
 /** catalog.MatchRun (GET /admin/match-runs, /admin/match-runs/{id}). */
 export interface MatchRun {

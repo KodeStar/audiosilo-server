@@ -84,6 +84,9 @@ type MatchCandidate struct {
 	Recordings     []MatchRecording `json:"recordings"`
 	// RecordingID names the recording an ASIN/ISBN lookup resolved to.
 	RecordingID string `json:"recording_id,omitempty"`
+	// DefaultRecordingID is the recording the book most likely is
+	// (DefaultRecording): what the console's dialog and a bulk run start from.
+	DefaultRecordingID string `json:"default_recording_id,omitempty"`
 	// Score (0-100) is how well the work fits the book: metaserve's structured
 	// match score, 100 for an identifier hit, or (against an older metaserve)
 	// the title, author and runtime agreement scoreCandidate finds.
@@ -121,7 +124,7 @@ type MatchSeries struct {
 // MatchRecording is one recording (narration/edition) of a candidate work.
 // ASINs are best first for this server (orderASINs): the preferred marketplace's,
 // then the US store's, then the rest. ASINRefs keeps each with its marketplace, as
-// metaserve lists them.
+// metaserve lists them, and ASINRegion names the first one's.
 type MatchRecording struct {
 	ID          string          `json:"id"`
 	Narrators   []MetaPersonRef `json:"narrators"`
@@ -131,8 +134,10 @@ type MatchRecording struct {
 	Publisher   string          `json:"publisher,omitempty"`
 	ASINs       []string        `json:"asins"`
 	ASINRefs    []ASINRef       `json:"asin_refs"`
-	ISBNs       []string        `json:"isbns"`
-	CoverURL    string          `json:"cover_url,omitempty"`
+	// ASINRegion is the marketplace ASINs[0] sells in ("" without an ASIN).
+	ASINRegion string   `json:"asin_region,omitempty"`
+	ISBNs      []string `json:"isbns"`
+	CoverURL   string   `json:"cover_url,omitempty"`
 }
 
 // ASINRef is one of a recording's ASINs with the Audible marketplace it sells in
@@ -318,6 +323,9 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 			}
 			c := s.toCandidate(detail, h.cover, q.Region)
 			c.RecordingID = h.recordingID
+			if rec := DefaultRecording(c, q.Duration, q.Region); rec != nil {
+				c.DefaultRecordingID = rec.ID
+			}
 			if h.reasons != nil {
 				c.Score, c.Reasons = h.score, h.reasons
 			} else {
@@ -531,6 +539,14 @@ func (s *Service) toCandidate(d *upstreamWorkDetail, cover, region string) *Matc
 			}
 		}
 		mr.ASINs = orderASINs(mr.ASINRefs, region)
+		if len(mr.ASINs) > 0 {
+			// The preferred region's when the first is sold there too.
+			for _, a := range mr.ASINRefs {
+				if a.ASIN == mr.ASINs[0] && (mr.ASINRegion == "" || a.Region == region) {
+					mr.ASINRegion = a.Region
+				}
+			}
+		}
 		mr.ISBNs = append(mr.ISBNs, r.ISBN...)
 		if c.CoverURL == "" {
 			c.CoverURL = r.CoverURL

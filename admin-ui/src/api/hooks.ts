@@ -44,6 +44,8 @@ export const keys = {
   eventList: (kind: ServerEventKind | undefined) =>
     ['admin', 'events', 'list', kind ?? ''] as const,
   audit: (filter: AuditFilter) => ['admin', 'audit', filter] as const,
+  /** Every cover thumbnail (a prefix). */
+  thumbs: ['thumb'] as const,
   thumb: (libraryId: number, path: string, size: ThumbSize) =>
     ['thumb', libraryId, path, size] as const,
   libraries: ['admin', 'libraries'] as const,
@@ -65,6 +67,8 @@ export const keys = {
   people: (field: PersonField, libraryId?: number) =>
     ['admin', 'books', 'people', field, libraryId ?? 0] as const,
   series: (libraryId?: number) => ['admin', 'books', 'series', libraryId ?? 0] as const,
+  /** Every book page of every library (a prefix). */
+  allBookPages: ['admin', 'book'] as const,
   /** Every book page of one library (a prefix: a scan changes them). */
   bookPages: (libraryId: number) => ['admin', 'book', libraryId] as const,
   book: (libraryId: number, path: string) => ['admin', 'book', libraryId, path] as const,
@@ -613,11 +617,10 @@ export function matchRunActive(r: MatchRun | undefined) {
 }
 
 /** Bulk match runs, newest first; polled each second while one works. */
-export function useMatchRuns(enabled = true) {
+export function useMatchRuns() {
   return useQuery({
     queryKey: keys.matchRuns,
     queryFn: api.matchRuns,
-    enabled,
     refetchInterval: (q) => (q.state.data?.runs.some(matchRunActive) ? 1000 : false),
   });
 }

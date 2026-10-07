@@ -334,7 +334,7 @@ func TestAdminMatchAPI(t *testing.T) {
 		out.Candidates[0].CoverURL != "https://c/w.jpg" || len(out.Candidates[0].Recordings[0].ASINs) != 1 {
 		t.Fatalf("match = %s", body)
 	}
-	if _, body := e.do(t, "GET", url+"&q=nothing", adminTok, ""); body != "{\"candidates\":[],\"region\":\"\"}\n" {
+	if _, body := e.do(t, "GET", url+"&q=nothing", adminTok, ""); body != "{\"candidates\":[]}\n" {
 		t.Fatalf("no hits = %q", body)
 	}
 	if resp, _ := e.do(t, "GET", url+"&q=down", adminTok, ""); resp.StatusCode != http.StatusBadGateway {

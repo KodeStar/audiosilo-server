@@ -25,43 +25,15 @@ export function parseMatchQuery(input: string): MatchBy {
   return { q: text };
 }
 
-/** Whether a recording sells in an Audible marketplace (region "" = none preferred: no). */
-export function sellsIn(r: MatchRecording, region: string): boolean {
-  return !!region && (r.asin_refs ?? []).some((a) => a.region === region);
-}
-
 /**
- * The recording a candidate most likely is: the one an identifier hit, else the
- * closest runtime, one selling in the preferred marketplace winning a tie (the
- * server's meta.DefaultRecording, which a bulk match run uses).
+ * The recording a candidate most likely is: the server's pick (the one an
+ * identifier hit, else the closest runtime, the preferred marketplace breaking a
+ * tie: meta.DefaultRecording), else the first.
  */
-export function defaultRecording(
-  c: MatchCandidate,
-  bookSeconds: number,
-  region = '',
-): MatchRecording | undefined {
+export function defaultRecording(c: MatchCandidate): MatchRecording | undefined {
   const recs = c.recordings ?? [];
-  const hit = c.recording_id ? recs.find((r) => r.id === c.recording_id) : undefined;
-  if (hit) return hit;
-  let best: MatchRecording | undefined;
-  let bestGap = Infinity;
-  for (const r of recs) {
-    const gap = r.runtime_min ? Math.abs(r.runtime_min * 60 - bookSeconds) : Infinity;
-    if (
-      !best ||
-      gap < bestGap ||
-      (gap === bestGap && sellsIn(r, region) && !sellsIn(best, region))
-    ) {
-      best = r;
-      bestGap = gap;
-    }
-  }
-  return best;
-}
-
-/** The marketplace a recording's ASIN sells in ("" when it doesn't say). */
-export function asinRegion(rec: MatchRecording | undefined, asin: string | undefined): string {
-  return (rec?.asin_refs ?? []).find((a) => a.asin === asin)?.region ?? '';
+  const id = c.default_recording_id || c.recording_id;
+  return recs.find((r) => r.id === id) ?? recs[0];
 }
 
 /** A community value as the server would store it ("" when absent or one it would refuse). */

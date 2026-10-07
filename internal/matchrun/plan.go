@@ -49,6 +49,15 @@ var Scopes = []string{ScopeIDs, ScopeFill, ScopeOverwrite}
 // ValidScope reports whether s is one of Scopes.
 func ValidScope(s string) bool { return slices.Contains(Scopes, s) }
 
+// QueryFor is the match query for book b on a server preferring region: its own
+// facts, as both the match dialog and a bulk run send them.
+func QueryFor(b *catalog.Book, region string) meta.MatchQuery {
+	return meta.MatchQuery{
+		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, Author: b.Author, Duration: b.Duration,
+		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: b.ASIN, BookISBN: b.ISBN, Region: region,
+	}
+}
+
 var yearRE = regexp.MustCompile(`^\d{4}`)
 
 // Propose is what candidate c offers a book as recording rec (nil = none): the
@@ -75,8 +84,7 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 			published = rec.ReleaseDate
 		}
 		if len(rec.ASINs) > 0 {
-			raw[catalog.FieldASIN] = rec.ASINs[0]
-			p.ASINRegion = regionOf(rec, rec.ASINs[0])
+			raw[catalog.FieldASIN], p.ASINRegion = rec.ASINs[0], rec.ASINRegion
 		}
 		if len(rec.ISBNs) > 0 {
 			raw[catalog.FieldISBN] = rec.ISBNs[0]
@@ -95,17 +103,6 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 		p.ASINRegion = ""
 	}
 	return p
-}
-
-// regionOf is the marketplace an ASIN of rec sells in: the first metaserve lists
-// it under, as the ASINs are ordered (the preferred region's comes first).
-func regionOf(rec *meta.MatchRecording, asin string) string {
-	for _, r := range rec.ASINRefs {
-		if r.ASIN == asin {
-			return r.Region
-		}
-	}
-	return ""
 }
 
 func names(people []meta.MetaPersonRef) string {
@@ -149,6 +146,15 @@ func Plan(scope string, st *catalog.MatchState, p catalog.MatchProposal) (set ma
 	}
 	cover = scope != ScopeIDs && st.CoverMissing && p.CoverURL != ""
 	return set, cover
+}
+
+// planFor is what applying p to a book in state st writes for a run in mode: a
+// repick's ASIN (whatever the scope), else Plan's.
+func planFor(mode, scope string, st *catalog.MatchState, p catalog.MatchProposal) (map[string]string, bool) {
+	if mode == catalog.MatchModeRepick {
+		return PlanRepick(st, p), false
+	}
+	return Plan(scope, st, p)
 }
 
 // PlanRepick is what applying a repick item writes: its ASIN, while the book's

@@ -4,8 +4,22 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight, Check, LoaderCircle, Sparkles } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, matchRunActive, useLibraries, useMatchRunItems, useMatchRuns } from '@/api/hooks';
-import type { MatchOutcome, MatchRun, MatchRunItem, MatchScope } from '@/api/types';
+import {
+  invalidateBooks,
+  invalidateIssues,
+  keys,
+  matchRunActive,
+  useLibraries,
+  useMatchRunItems,
+  useMatchRuns,
+} from '@/api/hooks';
+import {
+  MATCH_SCOPES,
+  type MatchOutcome,
+  type MatchRun,
+  type MatchRunItem,
+  type MatchScope,
+} from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
 import { QueryError } from '@/components/query-error';
@@ -24,9 +38,9 @@ import { RadioCards } from '@/components/ui/radio-cards';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { scoreTone } from '@/features/book/match-model';
 import { bookRoute } from '@/lib/book-route';
-import { STORES, regionName, regionTag } from '@/lib/regions';
+import { regionName, regionTag, storeOf } from '@/lib/regions';
 import { toastError } from '@/lib/errors';
-import { counted, formatDuration, formatNumber, formatRelative } from '@/lib/format';
+import { counted, formatDuration, formatList, formatNumber, formatRelative } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -37,6 +51,7 @@ import {
   isChosen,
   isPickable,
   runFraction,
+  runProgress,
   togglePick,
   type Picks,
 } from './bulk-match-model';
@@ -61,21 +76,23 @@ export function BulkMatch() {
   const [busy, setBusy] = useState(false);
   const [reviewing, setReviewing] = useState(false);
 
-  // A run that stops working may have changed books: they leave "Not matched",
-  // and their pages, lists and covers are stale. Keyed on the run's status, not
-  // on having seen it working: a small apply can finish between two polls.
+  // An apply that stops has changed books: they leave "Not matched", and their
+  // pages, lists and covers are stale. Keyed on the run's state, not on having
+  // seen it working (a small apply can finish between two polls); matching
+  // alone changes no book.
   const active = matchRunActive(run);
-  const stamp = run ? `${run.id}:${run.status}` : '';
+  const stamp = run ? `${run.id}:${run.status}:${run.apply_done}` : '';
+  const applied = (run?.apply_done ?? 0) > 0;
   const seen = useRef(stamp);
   useEffect(() => {
-    if (seen.current && stamp !== seen.current && !active) {
-      void qc.invalidateQueries({ queryKey: keys.books });
-      void qc.invalidateQueries({ queryKey: keys.issues });
-      void qc.invalidateQueries({ queryKey: ['admin', 'book'] });
-      void qc.invalidateQueries({ queryKey: ['thumb'] });
+    if (seen.current && stamp !== seen.current && !active && applied) {
+      invalidateBooks(qc);
+      invalidateIssues(qc);
+      void qc.invalidateQueries({ queryKey: keys.allBookPages });
+      void qc.invalidateQueries({ queryKey: keys.thumbs });
     }
     seen.current = stamp;
-  }, [stamp, active, qc]);
+  }, [stamp, active, applied, qc]);
 
   const start = async (mode: 'match' | 'repick') => {
     setBusy(true);
@@ -176,7 +193,7 @@ export function BulkMatch() {
           <p className="text-[12.5px] text-subtle-foreground">
             {t('health.bulkMatch.privacy')}{' '}
             {region ? (
-              t('health.bulkMatch.regionSet', { store: STORES[region] ?? region })
+              t('health.bulkMatch.regionSet', { store: storeOf(region) })
             ) : (
               <>
                 {t('health.bulkMatch.regionNone')}{' '}
@@ -205,7 +222,7 @@ export function BulkMatch() {
 function Working({ run, lang, onStop }: { run: MatchRun; lang: string; onStop: () => void }) {
   const { t } = useTranslation();
   const applying = run.status === 'applying';
-  const [done, total] = applying ? [run.apply_done, run.apply_total] : [run.done, run.total];
+  const { done, total } = runProgress(run);
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -356,7 +373,7 @@ function ReviewDialog({
         }
         description={
           repick
-            ? t('health.bulkMatch.repickDescription', { store: STORES[run.region] ?? run.region })
+            ? t('health.bulkMatch.repickDescription', { store: storeOf(run.region) })
             : t('health.bulkMatch.reviewDescription')
         }
       >
@@ -364,35 +381,35 @@ function ReviewDialog({
           <>
             <DialogBody className="flex flex-col gap-4">
               {repick ? null : (
-                <RadioCards
-                  label={t('health.bulkMatch.scope.label')}
-                  value={scope}
-                  onValueChange={setScope}
-                  options={(['ids', 'fill', 'overwrite'] as const).map((s) => ({
-                    value: s,
-                    title: t(`health.bulkMatch.scope.${s}`),
-                    description: t(`health.bulkMatch.scope.${s}Body`),
-                  }))}
-                />
-              )}
-              {repick ? null : (
-                <SegmentedControl
-                  label={t('health.bulkMatch.outcomes')}
-                  value={tab}
-                  onChange={setTab}
-                  className="self-start"
-                  options={OUTCOMES.filter((o) => counts[o] > 0 || o === 'auto').map((o) => ({
-                    value: o,
-                    label: (
-                      <>
-                        {t(`health.bulkMatch.tab.${o}`)}
-                        <span className="ml-1.5 text-subtle-foreground tabular-nums">
-                          {formatNumber(counts[o], lang)}
-                        </span>
-                      </>
-                    ),
-                  }))}
-                />
+                <>
+                  <RadioCards
+                    label={t('health.bulkMatch.scope.label')}
+                    value={scope}
+                    onValueChange={setScope}
+                    options={MATCH_SCOPES.map((s) => ({
+                      value: s,
+                      title: t(`health.bulkMatch.scope.${s}`),
+                      description: t(`health.bulkMatch.scope.${s}Body`),
+                    }))}
+                  />
+                  <SegmentedControl
+                    label={t('health.bulkMatch.outcomes')}
+                    value={tab}
+                    onChange={setTab}
+                    className="self-start"
+                    options={OUTCOMES.filter((o) => counts[o] > 0 || o === 'auto').map((o) => ({
+                      value: o,
+                      label: (
+                        <>
+                          {t(`health.bulkMatch.tab.${o}`)}
+                          <span className="ml-1.5 text-subtle-foreground tabular-nums">
+                            {formatNumber(counts[o], lang)}
+                          </span>
+                        </>
+                      ),
+                    }))}
+                  />
+                </>
               )}
               <ItemList
                 key={tab}
@@ -514,7 +531,6 @@ function ItemRow({
         ...change.fields.map((f) => t(`book.field.${f}`)),
       ]
     : [];
-  const list = new Intl.ListFormat(lang, { style: 'long', type: 'conjunction' });
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
 
@@ -583,7 +599,7 @@ function ItemRow({
         ) : candidate ? (
           <span className="text-[12px] text-subtle-foreground">
             {changed.length
-              ? t('health.bulkMatch.changes', { fields: list.format(changed) })
+              ? t('health.bulkMatch.changes', { fields: formatList(changed, lang) })
               : t('health.bulkMatch.nothingToChange')}
           </span>
         ) : null}

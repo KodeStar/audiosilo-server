@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
@@ -154,81 +155,79 @@ func (r *Runner) Cancel(id int64) bool {
 // Wait blocks until no run is working (tests, shutdown).
 func (r *Runner) Wait() { r.wg.Wait() }
 
-// match matches each book, a few at a time, recording an item per book, then
-// settles the run.
-func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book) {
-	jobs := make(chan *catalog.Book)
-	var (
-		mu         sync.Mutex
-		streak     int
-		stopCode   string
-		stopReason error
-	)
-	stop := func(code string, err error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if stopCode == "" {
-			stopCode, stopReason = code, err
-		}
-	}
-	stopped := func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return stopCode != ""
-	}
-	work, halt := context.WithCancel(ctx)
-	defer halt()
+// each runs fn on every item, workers at a time, handing items out while ctx
+// lasts and more says to go on (asked before each one). fn checks ctx itself.
+func each[T any](ctx context.Context, items []T, more func() bool, fn func(*T)) {
+	jobs := make(chan *T)
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Go(func() {
-			for b := range jobs {
-				item, err := r.matchBook(work, o, b)
-				if work.Err() != nil {
-					return
-				}
-				mu.Lock()
-				if err != nil {
-					streak++
-				} else {
-					streak = 0
-				}
-				down := streak >= maxFailStreak
-				mu.Unlock()
-				if down {
-					stop(ErrCodeUnavailable, err)
-					halt()
-					return
-				}
-				if err := r.cat.RecordMatchItem(work, runID, item); err != nil {
-					if work.Err() == nil {
-						stop(ErrCodeInternal, err)
-						halt()
-					}
-					return
-				}
+			for it := range jobs {
+				fn(it)
 			}
 		})
 	}
 feed:
-	for i := range books {
-		if !r.enabled() {
-			stop(ErrCodeMetadataOff, nil)
+	for i := range items {
+		if !more() {
 			break
 		}
 		select {
-		case jobs <- &books[i]:
-		case <-work.Done():
+		case jobs <- &items[i]:
+		case <-ctx.Done():
 			break feed
 		}
 	}
 	close(jobs)
 	wg.Wait()
+}
+
+func always() bool { return true }
+
+// match matches each book, a few at a time, recording an item per book, then
+// settles the run.
+func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book) {
+	work, halt := context.WithCancel(ctx)
+	defer halt()
+	var (
+		once     sync.Once
+		stopCode string
+		stopErr  error
+		streak   atomic.Int32
+	)
+	// stop ends the run by itself, the first reason given being the one recorded.
+	stop := func(code string, err error) {
+		once.Do(func() { stopCode, stopErr = code, err })
+		halt()
+	}
+	enabled := func() bool {
+		if r.enabled() {
+			return true
+		}
+		stop(ErrCodeMetadataOff, nil)
+		return false
+	}
+	each(work, books, enabled, func(b *catalog.Book) {
+		item, err := r.matchBook(work, o, b)
+		switch {
+		case work.Err() != nil:
+			return
+		case err == nil:
+			streak.Store(0)
+		case streak.Add(1) >= maxFailStreak:
+			stop(ErrCodeUnavailable, err)
+			return
+		}
+		if err := r.cat.RecordMatchItem(work, runID, item); err != nil && work.Err() == nil {
+			stop(ErrCodeInternal, err)
+		}
+	})
 
 	status := catalog.MatchReady
 	switch {
-	case stopped():
+	case stopCode != "": // each has returned: every worker is done with it
 		status = catalog.MatchFailed
-		r.log.Warn("match run stopped", "run", runID, "code", stopCode, "err", stopReason)
+		r.log.Warn("match run stopped", "run", runID, "code", stopCode, "err", stopErr)
 	case ctx.Err() != nil && !r.stoppedByAdmin():
 		return // the server is stopping: the next start settles it
 	case ctx.Err() != nil:
@@ -246,11 +245,9 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 	if o.Mode == catalog.MatchModeRepick {
 		return r.repickBook(ctx, o.Region, b, item)
 	}
-	cands, err := r.matcher.Candidates(ctx, meta.MatchQuery{
-		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, Author: b.Author, Duration: b.Duration,
-		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: b.ASIN, BookISBN: b.ISBN,
-		Region: o.Region, Limit: bulkCandidates,
-	})
+	q := QueryFor(b, o.Region)
+	q.Limit = bulkCandidates
+	cands, err := r.matcher.Candidates(ctx, q)
 	if err != nil {
 		item.Outcome, item.Detail = catalog.OutcomeError, ErrCodeUnavailable
 		return item, err
@@ -284,11 +281,9 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 		return nil, nil
 	}
 	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
-	item.Proposal = catalog.MatchProposal{
-		WorkID: c.WorkID, RecordingID: rec.ID, Title: c.Title, Authors: names(c.Authors),
-		Narrators: names(rec.Narrators), RuntimeMin: rec.RuntimeMin, WebURL: c.WebURL,
-		ASINRegion: region, Values: map[string]string{catalog.FieldASIN: want},
-	}
+	item.Proposal = Propose(c, rec)
+	// The ASIN is all a repick changes.
+	item.Proposal.Values, item.Proposal.ASINRegion = map[string]string{catalog.FieldASIN: want}, region
 	return item, nil
 }
 
@@ -335,31 +330,15 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 
 // apply applies each item, a few at a time, then settles the run.
 func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catalog.MatchRunItem, o ApplyOptions) {
-	jobs := make(chan *catalog.MatchRunItem)
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Go(func() {
-			for it := range jobs {
-				applied, detail := r.applyItem(ctx, run.Mode, it, o)
-				if ctx.Err() != nil {
-					return // not marked: the next apply takes it again
-				}
-				if err := r.cat.MarkMatchItem(ctx, run.ID, it.ID, applied, detail); err != nil {
-					r.log.Error("mark match item failed", "run", run.ID, "item", it.ID, "err", err)
-				}
-			}
-		})
-	}
-feed:
-	for i := range items {
-		select {
-		case jobs <- &items[i]:
-		case <-ctx.Done():
-			break feed
+	each(ctx, items, always, func(it *catalog.MatchRunItem) {
+		applied, detail := r.applyItem(ctx, run.Mode, it, o)
+		if ctx.Err() != nil {
+			return // not marked: the next apply takes it again
 		}
-	}
-	close(jobs)
-	wg.Wait()
+		if err := r.cat.MarkMatchItem(ctx, run.ID, it.ID, applied, detail); err != nil {
+			r.log.Error("mark match item failed", "run", run.ID, "item", it.ID, "err", err)
+		}
+	})
 	if ctx.Err() != nil && !r.stoppedByAdmin() {
 		return // the server is stopping: the next start puts it back to ready
 	}
@@ -379,15 +358,7 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 		r.log.Warn("load book for match apply failed", "library", it.LibraryID, "path", it.Path, "err", err)
 		return catalog.ItemFailed, "edit_failed"
 	}
-	var (
-		set   map[string]string
-		cover bool
-	)
-	if mode == catalog.MatchModeRepick {
-		set = PlanRepick(st, it.Proposal)
-	} else {
-		set, cover = Plan(o.Scope, st, it.Proposal)
-	}
+	set, cover := planFor(mode, o.Scope, st, it.Proposal)
 	if len(set) == 0 && !cover {
 		return catalog.ItemSkipped, "nothing_to_change"
 	}
@@ -456,13 +427,7 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author}
 			for _, scope := range Scopes {
-				var set map[string]string
-				var cover bool
-				if run.Mode == catalog.MatchModeRepick {
-					set = PlanRepick(st, it.Proposal)
-				} else {
-					set, cover = Plan(scope, st, it.Proposal)
-				}
+				set, cover := planFor(run.Mode, scope, st, it.Proposal)
 				ch := Change{Fields: []string{}, Cover: cover}
 				for _, f := range catalog.OverrideFields {
 					if _, ok := set[f]; ok {

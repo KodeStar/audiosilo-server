@@ -17,8 +17,8 @@ var martian = meta.MatchCandidate{
 	Recordings: []meta.MatchRecording{{
 		ID: "bray", RuntimeMin: 634, Narrators: []meta.MetaPersonRef{{Name: "R. C. Bray"}},
 		ASINs:    []string{"B0UK000001", "B0US000001"},
-		ASINRefs: []meta.ASINRef{{Region: "uk", ASIN: "B0UK000001"}, {Region: "us", ASIN: "B0US000001"}},
-		ISBNs:    []string{"978-0553418026"}, CoverURL: "https://c/rec.jpg", ReleaseDate: "2013-03-22",
+		ASINRefs: []meta.ASINRef{{Region: "uk", ASIN: "B0UK000001"}, {Region: "us", ASIN: "B0US000001"}}, ASINRegion: "uk",
+		ISBNs: []string{"978-0553418026"}, CoverURL: "https://c/rec.jpg", ReleaseDate: "2013-03-22",
 	}},
 }
 

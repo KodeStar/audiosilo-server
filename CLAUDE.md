@@ -657,9 +657,10 @@ admin overrides; see Metadata overrides below).
   the exact lookup; metadata off -> 404 `metadata_off`). Each recording keeps its
   ASINs' marketplaces (`asin_refs`) and `asins` is ordered by `metadata.region`
   (`orderASINs`: the preferred store's, then `us`, then the rest; metaserve lists
-  them by region, so without it `au` beat `uk`), the answer names the `region`;
-  `meta.DefaultRecording` is the dialog's recording pick in Go (identifier's, else
-  closest runtime, the preferred marketplace breaking a tie). **Bulk matching**
+  them by region, so without it `au` beat `uk`), `asin_region` names the first's;
+  `meta.DefaultRecording` (identifier's, else closest runtime, the preferred
+  marketplace breaking a tie) sets each candidate's `default_recording_id`, which
+  the dialog starts from (the console has no copy of the rule). **Bulk matching**
   (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
   `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
   `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,

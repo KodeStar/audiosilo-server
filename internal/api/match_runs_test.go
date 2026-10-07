@@ -208,7 +208,7 @@ func TestMetadataRegionSetting(t *testing.T) {
 	}
 	matchURL := "/api/v1/admin/libraries/" + strconv.FormatInt(libID, 10) + "/book/match?path=" + escape("Andy Weir/The Martian")
 	_, body := e.do(t, "GET", matchURL, adminTok, "")
-	if !strings.Contains(body, `"asins":["B0US000001","B0UK000001"]`) || !strings.Contains(body, `"region":""`) {
+	if !strings.Contains(body, `"asins":["B0US000001","B0UK000001"]`) || !strings.Contains(body, `"asin_region":"us"`) {
 		t.Fatalf("no preference: US first = %s", body)
 	}
 	if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"region":"UK"}}`); resp.StatusCode != http.StatusOK ||
@@ -216,7 +216,8 @@ func TestMetadataRegionSetting(t *testing.T) {
 		t.Fatalf("set region = %d %s", resp.StatusCode, body)
 	}
 	_, body = e.do(t, "GET", matchURL, adminTok, "")
-	if !strings.Contains(body, `"asins":["B0UK000001","B0US000001"]`) || !strings.Contains(body, `"region":"uk"`) ||
+	if !strings.Contains(body, `"asins":["B0UK000001","B0US000001"]`) || !strings.Contains(body, `"asin_region":"uk"`) ||
+		!strings.Contains(body, `"default_recording_id":"bray"`) ||
 		!strings.Contains(body, `"asin_refs":[{"region":"uk","asin":"B0UK000001"},{"region":"us","asin":"B0US000001"}]`) {
 		t.Fatalf("uk preferred = %s", body)
 	}

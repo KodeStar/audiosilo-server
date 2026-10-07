@@ -151,7 +151,12 @@ describe('bulk matching', () => {
       routes([], {
         'GET /admin/match-runs': () => ({ body: { runs: [current], region: 'uk' } }),
         'POST /admin/match-runs/5/apply': () => {
-          current = run({ status: 'applied', applied_at: '2026-10-07T10:06:00Z' });
+          current = run({
+            status: 'applied',
+            applied_at: '2026-10-07T10:06:00Z',
+            apply_total: 2,
+            apply_done: 2,
+          });
           return { status: 202, body: run({ status: 'applying' }) };
         },
       }),
