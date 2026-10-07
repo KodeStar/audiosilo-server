@@ -96,9 +96,10 @@ func decodeNoteJSON(w http.ResponseWriter, err error) bool {
 	return false
 }
 
-// pageOptions reads ?limit= and ?cursor= (catalog.PageOptions).
+// pageOptions reads ?limit= and ?cursor= (catalog.PageOptions; an absent or bad
+// limit is 0, which the catalog's clamp turns into its default).
 func pageOptions(r *http.Request) catalog.PageOptions {
-	return catalog.PageOptions{Limit: queryInt(r, "limit", 100), Cursor: r.URL.Query().Get("cursor")}
+	return catalog.PageOptions{Limit: queryInt(r, "limit", 0), Cursor: r.URL.Query().Get("cursor")}
 }
 
 // handleListMyBookmarks answers a page of the caller's bookmarks across every

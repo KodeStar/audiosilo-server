@@ -166,7 +166,7 @@ func ownRow(scanErr error, scopes []Scope, ref *Ref) error {
 	return nil
 }
 
-// PageOptions pages a list newest first: Limit rows (clampHistoryLimit: default
+// PageOptions pages a list newest first: Limit rows (clampPageLimit: default
 // 100, at most 500), after the opaque Cursor a previous page's NextCursor gave.
 type PageOptions struct {
 	Limit  int
@@ -218,12 +218,11 @@ type HistoryPage struct {
 // a revoked share stays stored but is not returned. ErrInvalidCursor for a cursor
 // that doesn't decode.
 func (c *Catalog) ListMyBookmarks(ctx context.Context, userID int64, scopes []Scope, opt PageOptions) (*BookmarkPage, error) {
-	items, next, err := userPage(ctx, c, userID, scopes, opt, pageQuery{
+	items, next, err := userPage(ctx, c, userID, scopes, opt, pageQuery[MyBookmark]{
 		cols: bookmarkColumns, from: "bookmarks", key: "created_at",
-	}, func(rows *sql.Rows, b *MyBookmark) error {
-		return scanBookmark(rows, &b.Bookmark)
-	}, func(b *MyBookmark) (string, int64, Ref, **Book) {
-		return b.CreatedAt, b.ID, b.Ref, &b.Book
+		scan:     func(rows *sql.Rows, b *MyBookmark) error { return scanBookmark(rows, &b.Bookmark) },
+		slot:     func(b *MyBookmark) (Ref, **Book) { return b.Ref, &b.Book },
+		cursorOf: func(b *MyBookmark) (string, int64) { return b.CreatedAt, b.ID },
 	})
 	if err != nil {
 		return nil, err
@@ -233,12 +232,11 @@ func (c *Catalog) ListMyBookmarks(ctx context.Context, userID int64, scopes []Sc
 
 // ListMyNotes is ListMyBookmarks for the user's notes (newest created_at first).
 func (c *Catalog) ListMyNotes(ctx context.Context, userID int64, scopes []Scope, opt PageOptions) (*NotePage, error) {
-	items, next, err := userPage(ctx, c, userID, scopes, opt, pageQuery{
+	items, next, err := userPage(ctx, c, userID, scopes, opt, pageQuery[MyNote]{
 		cols: noteColumns, from: "notes", key: "created_at",
-	}, func(rows *sql.Rows, n *MyNote) error {
-		return scanNote(rows, &n.Note)
-	}, func(n *MyNote) (string, int64, Ref, **Book) {
-		return n.CreatedAt, n.ID, n.Ref, &n.Book
+		scan:     func(rows *sql.Rows, n *MyNote) error { return scanNote(rows, &n.Note) },
+		slot:     func(n *MyNote) (Ref, **Book) { return n.Ref, &n.Book },
+		cursorOf: func(n *MyNote) (string, int64) { return n.CreatedAt, n.ID },
 	})
 	if err != nil {
 		return nil, err
@@ -250,12 +248,11 @@ func (c *Catalog) ListMyNotes(ctx context.Context, userID int64, scopes []Scope,
 // books (newest ended_at first). The access filter is in the query, so a page
 // counts only rows the caller can still reach.
 func (c *Catalog) ListAllHistory(ctx context.Context, userID int64, scopes []Scope, opt PageOptions) (*HistoryPage, error) {
-	items, next, err := userPage(ctx, c, userID, scopes, opt, pageQuery{
+	items, next, err := userPage(ctx, c, userID, scopes, opt, pageQuery[HistoryEntry]{
 		cols: historyColumns, from: "listening_history", key: "ended_at",
-	}, func(rows *sql.Rows, h *HistoryEntry) error {
-		return scanHistoryRow(rows, &h.History)
-	}, func(h *HistoryEntry) (string, int64, Ref, **Book) {
-		return h.EndedAt, h.ID, h.Ref, &h.Book
+		scan:     func(rows *sql.Rows, h *HistoryEntry) error { return scanHistory(rows, &h.History) },
+		slot:     func(h *HistoryEntry) (Ref, **Book) { return h.Ref, &h.Book },
+		cursorOf: func(h *HistoryEntry) (string, int64) { return h.EndedAt, h.ID },
 	})
 	if err != nil {
 		return nil, err
@@ -263,21 +260,24 @@ func (c *Catalog) ListAllHistory(ctx context.Context, userID int64, scopes []Sco
 	return &HistoryPage{History: items, NextCursor: next}, nil
 }
 
-// pageQuery names one user-state table a userPage reads: its columns, the table
-// and the text column it orders by (newest first, id breaking ties). All three are
-// constants of this file, never input.
-type pageQuery struct {
+// pageQuery is one user-state list a userPage reads: the columns, the table and
+// the text column it orders by (newest first, id breaking ties), all constants of
+// this file, never input; how a row scans; where its book goes (attachBooks'
+// slot); and its keyset values (the next cursor).
+type pageQuery[T any] struct {
 	cols, from, key string
+	scan            func(*sql.Rows, *T) error
+	slot            func(*T) (Ref, **Book)
+	cursorOf        func(*T) (string, int64)
 }
 
 // userPage reads one page of a user's rows of q.from newest first, keyset-paged
 // on (q.key, id) so a tie in the timestamp neither repeats nor skips a row, with
-// the access filter applied in the query before the page is cut. key gives a row's
-// keyset values and the slot for its book, which is attached for the whole page in
-// one batch (attachBooks). The cursor is opaque (encodeCursor): ErrInvalidCursor
-// when it doesn't decode.
-func userPage[T any](ctx context.Context, c *Catalog, userID int64, scopes []Scope, opt PageOptions, q pageQuery,
-	scan func(*sql.Rows, *T) error, key func(*T) (string, int64, Ref, **Book)) ([]T, string, error) {
+// the access filter applied in the query before the page is cut, and the page's
+// books attached in one batch (attachBooks). The cursor is opaque (encodeCursor):
+// ErrInvalidCursor when it doesn't decode.
+func userPage[T any](ctx context.Context, c *Catalog, userID int64, scopes []Scope, opt PageOptions,
+	q pageQuery[T]) ([]T, string, error) {
 	filter, fargs := scopesFilterSQL("library_id", "rel_path", scopes)
 	where := `user_id = ? AND ` + filter
 	args := append([]any{userID}, fargs...)
@@ -289,8 +289,8 @@ func userPage[T any](ctx context.Context, c *Catalog, userID int64, scopes []Sco
 		where += ` AND (` + q.key + `, id) < (?, ?)`
 		args = append(args, val, id)
 	}
-	limit := clampHistoryLimit(opt.Limit)
-	items, err := queryRows(ctx, c.db, scan, `SELECT `+q.cols+` FROM `+q.from+` WHERE `+where+
+	limit := clampPageLimit(opt.Limit)
+	items, err := queryRows(ctx, c.db, q.scan, `SELECT `+q.cols+` FROM `+q.from+` WHERE `+where+
 		` ORDER BY `+q.key+` DESC, id DESC LIMIT ?`, append(args, limit+1)...)
 	if err != nil {
 		return nil, "", err
@@ -298,14 +298,9 @@ func userPage[T any](ctx context.Context, c *Catalog, userID int64, scopes []Sco
 	var next string
 	if len(items) > limit {
 		items = items[:limit]
-		val, id, _, _ := key(&items[limit-1])
-		next = encodeCursor(val, id)
+		next = encodeCursor(q.cursorOf(&items[limit-1]))
 	}
-	err = attachBooks(ctx, c, items, func(it *T) (Ref, **Book) {
-		_, _, ref, book := key(it)
-		return ref, book
-	})
-	if err != nil {
+	if err := attachBooks(ctx, c, items, q.slot); err != nil {
 		return nil, "", err
 	}
 	return items, next, nil

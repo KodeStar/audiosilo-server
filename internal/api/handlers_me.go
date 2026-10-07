@@ -208,7 +208,7 @@ func (a *API) handleListHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	u := userFrom(r.Context())
 	items, err := a.cat.ListHistory(r.Context(), u.ID,
-		catalog.Ref{LibraryID: lib.ID, Path: path}, queryInt(r, "limit", 100))
+		catalog.Ref{LibraryID: lib.ID, Path: path}, queryInt(r, "limit", 0))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load history")
 		return

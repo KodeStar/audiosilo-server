@@ -416,6 +416,14 @@ func TestMyAnnotationListsShape(t *testing.T) {
 			t.Fatalf("GET %s empty = %d %s, want %s", c.route, resp.StatusCode, body, c.want)
 		}
 	}
+	// The per-book lists too ([] now, null before: every player coalesces).
+	for _, kind := range []string{"bookmarks", "notes", "history"} {
+		want := `{"` + kind + `":[]}`
+		if resp, body := l.do(t, "GET", l.annURL(kind, cradleBook), l.samTok, ""); resp.StatusCode != http.StatusOK ||
+			strings.TrimSpace(body) != want {
+			t.Fatalf("GET %s on a book, empty = %d %s, want %s", kind, resp.StatusCode, body, want)
+		}
+	}
 	span := `{"from_pos":0,"to_pos":30,"started_at":"2026-01-01T00:00:00Z","ended_at":"2026-01-01T00:00:30Z"}`
 	for range 2 {
 		if resp, b := l.do(t, "POST", l.annURL("history", cradleBook), l.samTok, span); resp.StatusCode != http.StatusCreated {
