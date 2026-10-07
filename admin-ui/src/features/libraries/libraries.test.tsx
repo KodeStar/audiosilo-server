@@ -96,6 +96,7 @@ describe('libraries', () => {
       root: '/mnt/drama',
       scan_schedule: '',
       ignore_patterns: [],
+      metadata_source: 'tags',
     });
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Add a library' })).not.toBeInTheDocument(),

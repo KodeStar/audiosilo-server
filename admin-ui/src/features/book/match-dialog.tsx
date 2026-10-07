@@ -14,9 +14,15 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { ApiError, api, type MatchBy } from '@/api/client';
-import { settleBookEdit, useMatchCandidates } from '@/api/hooks';
+import {
+  cachedCommunityCover,
+  invalidateBookCover,
+  settleBookEdit,
+  useCommunityCover,
+  useMatchCandidates,
+} from '@/api/hooks';
 import type { AdminBookDetail, MatchCandidate, MatchRecording, OverrideField } from '@/api/types';
-import { GeneratedCover } from '@/components/generated-cover';
+import { BookCover, CoverArt } from '@/components/book-cover';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -35,7 +41,10 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
   acceptRequest,
+  candidateAuthors,
+  communityCover,
   compareRows,
+  defaultCoverTick,
   defaultRecording,
   defaultTicks,
   lengthComparison,
@@ -50,7 +59,9 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 3)}...`
  * Match with community metadata (STYLEGUIDE.md "Match with community"): find
  * the work (by the book's own facts, words, or an ASIN / ISBN), then compare
  * field by field and accept the ticked ones. The admin's own edits start
- * unticked. Each opening starts afresh, at the search.
+ * unticked, and so does the community cover for a book with art of its own.
+ * Covers are fetched by the server (the console's CSP loads no other host's
+ * images). Each opening starts afresh, at the search.
  */
 export function MatchDialog({
   open,
@@ -114,6 +125,7 @@ function MatchBody({
   const [pickId, setPickId] = useState<string>();
   const [recId, setRecId] = useState<string>();
   const [ticks, setTicks] = useState<Set<OverrideField>>(new Set());
+  const [coverTick, setCoverTick] = useState(false);
   const [busy, setBusy] = useState(false);
   const search = useMatchCandidates(b.library_id, b.path, by, true);
   const candidates = search.data ?? [];
@@ -122,34 +134,63 @@ function MatchBody({
     c.recordings?.find((r) => r.id === id) ?? defaultRecording(c, b.duration);
   const rec = picked ? recordingOf(picked) : undefined;
   const rows = picked ? compareRows(detail.fields, picked, rec) : [];
+  const coverUrl = picked ? communityCover(picked, rec) : '';
+  // defaultCoverTick never ticks a candidate without a cover.
+  const taking = ticks.size + Number(coverTick);
+
+  /** The default ticks for a recording of the picked candidate. */
+  const resetTicks = (c: MatchCandidate, r: MatchRecording | undefined) => {
+    setTicks(defaultTicks(compareRows(detail.fields, c, r)));
+    const cover = communityCover(c, r);
+    setCoverTick(defaultCoverTick(b.has_cover, cover, cachedCommunityCover(qc, cover)));
+  };
 
   const compare = () => {
-    setTicks(defaultTicks(rows));
+    if (picked) resetTicks(picked, rec);
     setStep('compare');
   };
 
   const pickRecording = (id: string) => {
     setRecId(id);
-    if (picked) setTicks(defaultTicks(compareRows(detail.fields, picked, recordingOf(picked, id))));
+    if (picked) resetTicks(picked, recordingOf(picked, id));
   };
 
   const accept = async () => {
     setBusy(true);
     try {
-      settleBookEdit(qc, await api.editBook(b.library_id, b.path, acceptRequest(rows, ticks)));
-      const tookEdits = rows.some((r) => ticks.has(r.field) && r.offered && r.source === 'edited');
-      toast.add({
-        title: t('book.match.accepted', { count: ticks.size }),
-        description: tookEdits
-          ? t('book.match.acceptedTitle', { title: picked?.title ?? '' })
-          : t('book.match.acceptedBody'),
-        type: 'success',
-      });
-      onDone();
+      if (ticks.size) {
+        settleBookEdit(qc, await api.editBook(b.library_id, b.path, acceptRequest(rows, ticks)));
+      }
     } catch (err) {
       setBusy(false);
       toastError(t('book.match.acceptFailed'), err);
+      return;
     }
+    const coverErr: unknown = coverTick
+      ? await api.setCommunityCover(b.library_id, b.path, coverUrl).then(
+          () => invalidateBookCover(qc, b),
+          (err: unknown) => err ?? new Error('cover failed'),
+        )
+      : undefined;
+    if (coverErr) {
+      toastError(
+        t(ticks.size ? 'book.match.coverFailedFieldsTaken' : 'book.match.coverFailed'),
+        coverErr,
+      );
+      // With nothing taken, stay, so the admin can try again or untick it.
+      if (ticks.size) onDone();
+      else setBusy(false);
+      return;
+    }
+    const tookEdits = rows.some((r) => ticks.has(r.field) && r.offered && r.source === 'edited');
+    toast.add({
+      title: t('book.match.accepted', { count: taking }),
+      description: tookEdits
+        ? t('book.match.acceptedTitle', { title: picked?.title ?? '' })
+        : t('book.match.acceptedBody'),
+      type: 'success',
+    });
+    onDone();
   };
 
   return step === 'search' ? (
@@ -208,6 +249,7 @@ function MatchBody({
       <DialogBody className="flex flex-col gap-4">
         <CompareHeader
           candidate={picked}
+          coverUrl={coverUrl}
           recording={rec}
           bookSeconds={b.duration}
           onRecording={pickRecording}
@@ -221,6 +263,15 @@ function MatchBody({
             else next.delete(f);
             setTicks(next);
           }}
+          cover={
+            <CoverRow
+              detail={detail}
+              coverUrl={coverUrl}
+              candidate={picked}
+              on={coverTick}
+              onToggle={setCoverTick}
+            />
+          }
         />
       </DialogBody>
       <DialogFooter>
@@ -231,9 +282,9 @@ function MatchBody({
         <DialogClose render={<Button type="button" variant="ghost" />}>
           {t('common.cancel')}
         </DialogClose>
-        <Button onClick={() => void accept()} disabled={busy || ticks.size === 0}>
+        <Button onClick={() => void accept()} disabled={busy || taking === 0}>
           {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-          {t('book.match.accept', { count: ticks.size })}
+          {t('book.match.accept', { count: taking })}
         </Button>
       </DialogFooter>
     </>
@@ -323,7 +374,7 @@ function Candidates({
       {candidates.map((c) => {
         const rec = recordingOf(c);
         const length = lengthComparison(rec?.runtime_min, bookSeconds);
-        const authors = (c.authors ?? []).map((a) => a.name).join(', ');
+        const authors = candidateAuthors(c);
         return (
           <Radio.Root
             key={c.work_id}
@@ -334,7 +385,7 @@ function Candidates({
               <Radio.Indicator className="size-2.5 rounded-full bg-brand" />
             </span>
             <span className="w-14 shrink-0">
-              <GeneratedCover title={c.title} author={authors} />
+              <CommunityCover url={communityCover(c, rec)} title={c.title} author={authors} />
             </span>
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <b className="font-semibold [overflow-wrap:anywhere]">
@@ -373,26 +424,143 @@ function Candidates({
   );
 }
 
+/** A community cover the server fetched (useCommunityCover), or the procedural cover. */
+function CommunityCover({ url, title, author }: { url: string; title: string; author: string }) {
+  const cover = useCommunityCover(url);
+  return (
+    <CoverArt src={cover.data} pending={!!url && cover.isPending} title={title} author={author} />
+  );
+}
+
+/**
+ * One row of the compare table: a checkbox when the community offers a value
+ * (else a check), the field, then what the server has and what the community has.
+ */
+function CompareRowShell({
+  label,
+  offered,
+  on,
+  onToggle,
+  dim,
+  mine,
+  theirs,
+  theirsClassName,
+}: {
+  label: string;
+  offered: boolean;
+  on: boolean;
+  onToggle: (on: boolean) => void;
+  /** The community agrees: the row recedes. */
+  dim?: boolean;
+  mine: React.ReactNode;
+  theirs: React.ReactNode;
+  theirsClassName?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <tr
+      className={cn(
+        'align-top',
+        dim && 'opacity-55',
+        on && 'bg-[color-mix(in_oklab,var(--brand)_7%,transparent)]',
+      )}
+    >
+      <td className="px-3 py-2.5">
+        {offered ? (
+          <Checkbox
+            checked={on}
+            onCheckedChange={onToggle}
+            aria-label={t('book.match.acceptField', { field: label })}
+          />
+        ) : (
+          <Check className="size-[15px] text-subtle-foreground" aria-hidden="true" />
+        )}
+      </td>
+      <th scope="row" className="px-2 py-2.5 text-left font-semibold whitespace-nowrap">
+        {label}
+      </th>
+      <td className="px-2 py-2.5">{mine}</td>
+      <td className={cn('px-3 py-2.5', theirsClassName)}>{theirs}</td>
+    </tr>
+  );
+}
+
+/** The compare table's cover row: the book's art beside the community's, ticked to take it. */
+function CoverRow({
+  detail,
+  coverUrl,
+  candidate,
+  on,
+  onToggle,
+}: {
+  detail: AdminBookDetail;
+  coverUrl: string;
+  candidate: MatchCandidate;
+  on: boolean;
+  onToggle: (on: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const b = detail.book;
+  return (
+    <CompareRowShell
+      label={t('book.match.cover')}
+      offered={!!coverUrl}
+      on={on}
+      onToggle={onToggle}
+      mine={
+        b.has_cover ? (
+          <span className={cn('block w-14', on && 'opacity-55')}>
+            <BookCover
+              libraryId={b.library_id}
+              path={b.path}
+              title={b.title}
+              author={b.author}
+              size={160}
+            />
+          </span>
+        ) : (
+          <i className="text-subtle-foreground">{t('book.match.empty')}</i>
+        )
+      }
+      theirs={
+        coverUrl ? (
+          <span className="block w-14">
+            <CommunityCover
+              url={coverUrl}
+              title={candidate.title}
+              author={candidateAuthors(candidate)}
+            />
+          </span>
+        ) : (
+          <i className="text-subtle-foreground">{t('book.match.notProvided')}</i>
+        )
+      }
+    />
+  );
+}
+
 function CompareHeader({
   candidate: c,
+  coverUrl,
   recording,
   bookSeconds,
   onRecording,
 }: {
   candidate: MatchCandidate;
+  coverUrl: string;
   recording: MatchRecording | undefined;
   bookSeconds: number;
   onRecording: (id: string) => void;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const authors = (c.authors ?? []).map((a) => a.name).join(', ');
+  const authors = candidateAuthors(c);
   const recs = c.recordings ?? [];
   const length = lengthComparison(recording?.runtime_min, bookSeconds);
   return (
     <div className="flex flex-wrap items-center gap-3.5">
       <span className="w-[52px] shrink-0">
-        <GeneratedCover title={c.title} author={authors} />
+        <CommunityCover url={coverUrl} title={c.title} author={authors} />
       </span>
       <div className="flex min-w-0 flex-1 basis-60 flex-col gap-1">
         <b className="font-semibold [overflow-wrap:anywhere]">{c.title}</b>
@@ -443,10 +611,13 @@ function CompareTable({
   rows,
   ticks,
   onToggle,
+  cover,
 }: {
   rows: CompareRow[];
   ticks: Set<OverrideField>;
   onToggle: (field: OverrideField, on: boolean) => void;
+  /** The cover row, first. */
+  cover: React.ReactNode;
 }) {
   const { t } = useTranslation();
   return (
@@ -463,33 +634,19 @@ function CompareTable({
           </tr>
         </thead>
         <tbody className="divide-y">
+          {cover}
           {rows.map((r) => {
-            const label = t(`book.field.${r.field}`);
             const on = ticks.has(r.field);
             return (
-              <tr
+              <CompareRowShell
                 key={r.field}
-                className={cn(
-                  'align-top',
-                  r.same && 'opacity-55',
-                  on && 'bg-[color-mix(in_oklab,var(--brand)_7%,transparent)]',
-                )}
-              >
-                <td className="px-3 py-2.5">
-                  {r.offered ? (
-                    <Checkbox
-                      checked={on}
-                      onCheckedChange={(v) => onToggle(r.field, v)}
-                      aria-label={t('book.match.acceptField', { field: label })}
-                    />
-                  ) : (
-                    <Check className="size-[15px] text-subtle-foreground" aria-hidden="true" />
-                  )}
-                </td>
-                <th scope="row" className="px-2 py-2.5 text-left font-semibold whitespace-nowrap">
-                  {label}
-                </th>
-                <td className="px-2 py-2.5">
+                label={t(`book.field.${r.field}`)}
+                offered={r.offered}
+                on={on}
+                onToggle={(v) => onToggle(r.field, v)}
+                dim={r.same}
+                theirsClassName={cn('[overflow-wrap:anywhere]', on && 'font-[550] text-foreground')}
+                mine={
                   <div className="flex flex-col items-start gap-1">
                     <span
                       className={cn(
@@ -506,22 +663,17 @@ function CompareTable({
                     </span>
                     <ProvenanceMarker source={r.source} />
                   </div>
-                </td>
-                <td
-                  className={cn(
-                    'px-3 py-2.5 [overflow-wrap:anywhere]',
-                    on && 'font-[550] text-foreground',
-                  )}
-                >
-                  {r.same ? (
+                }
+                theirs={
+                  r.same ? (
                     <span className="text-subtle-foreground">{t('book.match.same')}</span>
                   ) : r.theirs ? (
                     clip(r.theirs, 150)
                   ) : (
                     <i className="text-subtle-foreground">{t('book.match.notProvided')}</i>
-                  )}
-                </td>
-              </tr>
+                  )
+                }
+              />
             );
           })}
         </tbody>

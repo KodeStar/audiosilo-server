@@ -48,7 +48,8 @@ var OverrideFields = []string{
 }
 
 // Where a field's value came from. A scanned value is SourcePath when it is what
-// the path yields (metadata.DeriveFromPath) and SourceTag otherwise; an override is
+// the path yields (metadata.DeriveFromPath, or in a library that prefers its
+// folders metadata.FromPathLayout) and SourceTag otherwise; an override is
 // SourceEdited (typed by an admin) or SourceCommunity (accepted from a
 // community-metadata match); an ASIN/ISBN attached by enrichment reads as
 // SourceCommunity too (it was matched to an external record). "" means no value.
@@ -335,9 +336,12 @@ func nullableID(id int64) any {
 // bookLayers is everything that decides a book's metadata: what the scan found,
 // the enrichment attached to its path and its overrides.
 type bookLayers struct {
-	libID      int64
-	path       string
-	isFolder   bool
+	libID    int64
+	path     string
+	isFolder bool
+	// preferPath is the library's MetadataFromPath: the folder layout's values
+	// come before the scanned ones (see resolve).
+	preferPath bool
 	scanned    bookFields
 	enrichment bookFields // asin/isbn only, blanks left out
 	overrides  map[string]storedOverride
@@ -349,16 +353,17 @@ type bookLayers struct {
 
 func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, error) {
 	l := &bookLayers{enrichment: bookFields{}}
-	var raw, indexedAt string
+	var raw, indexedAt, source string
 	var row Book
 	if err := q.QueryRowContext(ctx,
-		`SELECT library_id, rel_path, is_folder, scanned, indexed_at,
-		        title, author, narrator, series, series_index
-		   FROM books WHERE id = ?`, bookID).
+		`SELECT b.library_id, b.rel_path, b.is_folder, b.scanned, b.indexed_at,
+		        b.title, b.author, b.narrator, b.series, b.series_index, l.metadata_source
+		   FROM books b JOIN libraries l ON l.id = b.library_id WHERE b.id = ?`, bookID).
 		Scan(&l.libID, &l.path, &l.isFolder, &raw, &indexedAt,
-			&row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex); err != nil {
+			&row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex, &source); err != nil {
 		return nil, err
 	}
+	l.preferPath = source == MetadataFromPath
 	scanned, stamp, err := parseScanned(raw)
 	if err != nil {
 		return nil, err
@@ -390,22 +395,19 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 	return l, nil
 }
 
-// resolve layers the fields - what the scan found, then enrichment, then the
-// overrides - each with where its value came from. It is the single statement of
-// that precedence: refreshEffective writes its values to the books row and the book
-// page shows it as provenance, so the two can never disagree.
+// resolve layers the fields - what the scan found (the folder layout first in a
+// library that prefers it, see scannedFields), then enrichment, then the overrides -
+// each with where its value came from. It is the single statement of that
+// precedence: refreshEffective writes its values to the books row and the book page
+// shows it as provenance, so the two can never disagree.
 func (l *bookLayers) resolve() map[string]FieldValue {
-	derived := metadata.DeriveFromPath(l.path, l.isFolder)
-	fromPath := bookFields{
-		FieldTitle: derived.Title, FieldAuthor: derived.Author, FieldSeries: derived.Series,
-		FieldSeriesIndex: formatSeriesPosition(derived.SeriesIndex),
-	}
+	scanned, baseline, layout := l.scannedFields()
 	out := make(map[string]FieldValue, len(OverrideFields))
 	for _, field := range OverrideFields {
-		fv := FieldValue{Value: l.scanned[field], Scanned: l.scanned[field]}
+		fv := FieldValue{Value: scanned[field], Scanned: scanned[field]}
 		switch fv.Value {
 		case "":
-		case fromPath[field]:
+		case baseline[field], layout[field]:
 			fv.Source = SourcePath
 		default:
 			fv.Source = SourceTag
@@ -419,6 +421,54 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 		out[field] = fv
 	}
 	return out
+}
+
+// scannedFields is what the scan says for each field, with the path readings a
+// value is told apart by (one equal to either is SourcePath, else a tag's; layout
+// is nil outside a library that prefers its folders). The stored snapshot is the
+// tags over the scan's path baseline (metadata.DeriveFromPath). A library that
+// prefers its folders reads the path with the layout instead
+// (metadata.FromPathLayout): its value goes over a tag's wherever it says anything,
+// and replaces the baseline's own reading even with nothing ("George Orwell/Animal
+// Farm" names no series, where the baseline takes the author folder for one); the
+// title always keeps a value. The position goes with the series: the layout's
+// own, else the scanned one only while the series it numbers stays (the same
+// series, by any case), so a tag's position stays beside the tag's series even
+// when it equals the leaf's number ("Brandon Sanderson/01 - The Way of Kings"
+// tagged The Stormlight Archive #1), and goes with a series the layout replaced
+// or dropped.
+func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
+	baseline = pathFields(metadata.DeriveFromPath(l.path, l.isFolder))
+	if !l.preferPath {
+		return l.scanned, baseline, nil
+	}
+	layout = pathFields(metadata.FromPathLayout(l.path, l.isFolder))
+	if raw := metadata.ReadPathLayout(l.path, l.isFolder); raw.Title != "" &&
+		strings.EqualFold(strings.TrimSpace(l.scanned[FieldTitle]), raw.Title) {
+		// The tag title IS the folder's name, number and all ("13 Reasons Why"):
+		// the number is part of the title, not a volume the layout can split off.
+		layout[FieldTitle], layout[FieldSeriesIndex] = l.scanned[FieldTitle], raw.Position
+	}
+	scanned = maps.Clone(l.scanned)
+	for _, field := range []string{FieldTitle, FieldAuthor, FieldSeries} {
+		if v := layout[field]; v != "" || (field != FieldTitle && l.scanned[field] == baseline[field]) {
+			scanned[field] = v
+		}
+	}
+	if v := layout[FieldSeriesIndex]; v != "" {
+		scanned[FieldSeriesIndex] = v
+	} else if scanned[FieldSeries] == "" || !strings.EqualFold(scanned[FieldSeries], l.scanned[FieldSeries]) {
+		scanned[FieldSeriesIndex] = ""
+	}
+	return scanned, baseline, layout
+}
+
+// pathFields is the fields a path reading gives, in their stored form.
+func pathFields(m *metadata.Metadata) bookFields {
+	return bookFields{
+		FieldTitle: m.Title, FieldAuthor: m.Author, FieldSeries: m.Series,
+		FieldSeriesIndex: formatSeriesPosition(m.SeriesIndex),
+	}
 }
 
 // refreshEffective rebuilds a book's effective metadata (bookLayers.resolve) into

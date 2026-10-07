@@ -283,6 +283,8 @@ describe('book page', () => {
   });
 });
 
+const COVER_DATA = 'data:image/jpeg;base64,AAAA';
+
 const candidate: MatchCandidate = {
   work_id: 'the-way-of-kings',
   title: 'The Way of Kings',
@@ -313,9 +315,41 @@ describe('match with community metadata', () => {
   function matchRoutes(detail: AdminBookDetail, over: Record<string, MockRoute> = {}) {
     return routes(detail, {
       'GET /admin/libraries/1/book/match': { body: { candidates: [candidate] } },
+      // The server fetches community covers; the console only ever sees data: URLs.
+      'POST /admin/meta/covers': (req) => ({
+        body: {
+          covers: (req.body as { urls: string[] }).urls.map((u) =>
+            u === candidate.cover_url ? COVER_DATA : '',
+          ),
+        },
+      }),
+      'PUT /admin/libraries/1/cover/community': { body: { status: 'cover set' } },
       ...over,
     });
   }
+
+  /** Opens the dialog on the book page and goes on to compare its first candidate. */
+  async function openCompare() {
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    await within(dialog).findByRole('radio', { name: /The Way of Kings/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Compare fields' }));
+    const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
+    return { user, compare };
+  }
+
+  /** Unticks every field, leaving the cover the only thing taken. */
+  async function onlyCover(user: ReturnType<typeof userEvent.setup>, compare: HTMLElement) {
+    const cover = within(compare).getByRole('checkbox', { name: 'Accept Cover' });
+    for (const box of within(compare).getAllByRole('checkbox')) {
+      if (box !== cover && box.getAttribute('aria-checked') === 'true') await user.click(box);
+    }
+  }
+
+  const coverPuts = (calls: MockRequest[]) =>
+    calls.filter((c) => c.method === 'PUT' && c.path === '/admin/libraries/1/cover/community');
 
   it('accepts only the ticked fields as community values, own edits unticked', async () => {
     const detail = bookDetail();
@@ -329,8 +363,14 @@ describe('match with community metadata', () => {
     expect(radio).toBeChecked();
     expect(within(dialog).getByText('100% match')).toBeInTheDocument();
     expect(within(dialog).getByText('Length matches your files')).toBeInTheDocument();
-    // Remote cover art is never loaded (the CSP blocks it): a generated cover stands in.
-    expect(dialog.querySelector('img')).toBeNull();
+    // Remote cover art is never loaded (the CSP blocks it): the server's thumbnail is.
+    await waitFor(() =>
+      expect(within(dialog).getByRole('img', { name: 'The Way of Kings' })).toHaveAttribute(
+        'src',
+        COVER_DATA,
+      ),
+    );
+    expect([...dialog.querySelectorAll('img')].every((i) => i.src.startsWith('data:'))).toBe(true);
     // With no search typed, the book's own facts are searched.
     const search = calls.find((c) => c.path === '/admin/libraries/1/book/match');
     expect([...search!.query.keys()]).toEqual(['path']);
@@ -340,6 +380,8 @@ describe('match with community metadata', () => {
       name: 'Compare with community metadata',
     });
     expect(within(compare).getByRole('checkbox', { name: 'Accept Narrator' })).not.toBeChecked();
+    // The book has art of its own: the community's cover is offered, not ticked.
+    expect(within(compare).getByRole('checkbox', { name: 'Accept Cover' })).not.toBeChecked();
     expect(within(compare).getByRole('checkbox', { name: 'Accept Published' })).toBeChecked();
     const description = within(compare).getByRole('checkbox', { name: 'Accept Description' });
     expect(description).toBeChecked();
@@ -352,6 +394,64 @@ describe('match with community metadata', () => {
     expect(patches(calls).map((c) => c.body)).toEqual([
       { set: { published: '2010' }, source: 'community' },
     ]);
+    expect(coverPuts(calls)).toHaveLength(0);
+  });
+
+  it('takes the community cover for a book without art', async () => {
+    const detail = bookDetail();
+    detail.book.has_cover = false;
+    const calls = mockFetch(matchRoutes(detail));
+    const { user, compare } = await openCompare();
+    expect(within(compare).getByRole('checkbox', { name: 'Accept Cover' })).toBeChecked();
+    // Only the cover: the fields stay as they are.
+    await onlyCover(user, compare);
+    await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
+
+    expect(await screen.findByText('Accepted 1 field from the community')).toBeInTheDocument();
+    expect(patches(calls)).toHaveLength(0);
+    expect(coverPuts(calls).map((c) => c.body)).toEqual([{ url: candidate.cover_url }]);
+    // The compare step reuses the candidate list's thumbnail: one cover request in all.
+    expect(calls.filter((c) => c.path === '/admin/meta/covers')).toHaveLength(1);
+  });
+
+  it("leaves a cover the server couldn't preview unticked", async () => {
+    const detail = bookDetail();
+    detail.book.has_cover = false;
+    mockFetch(matchRoutes(detail, { 'POST /admin/meta/covers': { body: { covers: [''] } } }));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    await within(dialog).findByRole('radio', { name: /The Way of Kings/ });
+    // The preview has answered: a generated cover, no skeleton.
+    await waitFor(() => expect(dialog.querySelector('.skel')).toBeNull());
+    await user.click(within(dialog).getByRole('button', { name: 'Compare fields' }));
+    const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
+    const cover = within(compare).getByRole('checkbox', { name: 'Accept Cover' });
+    expect(cover).not.toBeChecked();
+    // Still offered: the admin may try it.
+    expect(cover).toBeEnabled();
+  });
+
+  it("keeps the dialog open when the cover alone can't be fetched", async () => {
+    const detail = bookDetail();
+    detail.book.has_cover = false;
+    mockFetch(
+      matchRoutes(detail, {
+        'PUT /admin/libraries/1/cover/community': {
+          status: 502,
+          body: { error: 'could not fetch the cover', code: 'cover_unavailable' },
+        },
+      }),
+    );
+    const { user, compare } = await openCompare();
+    await onlyCover(user, compare);
+    await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
+
+    expect(
+      await screen.findByText("The cover couldn't be fetched. Nothing changed."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Compare with community metadata' })).toBeVisible();
   });
 
   it('searches by an ASIN pasted into the box', async () => {

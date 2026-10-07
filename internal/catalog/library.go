@@ -27,10 +27,13 @@ func (c *Catalog) CreateLibrary(ctx context.Context, lib Library) (*Library, err
 	if lib.DefaultView == "" {
 		lib.DefaultView = ViewHybrid
 	}
+	if err := checkMetadataSource(&lib); err != nil {
+		return nil, err
+	}
 	res, err := c.db.ExecContext(ctx,
-		`INSERT INTO libraries(name, root, default_view, scan_schedule, ignore_patterns, created_at)
-		 VALUES(?,?,?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, lib.ScanSchedule,
-		joinPatterns(lib.IgnorePatterns), c.ts())
+		`INSERT INTO libraries(name, root, default_view, scan_schedule, ignore_patterns, metadata_source, created_at)
+		 VALUES(?,?,?,?,?,?,?)`, lib.Name, lib.Root, lib.DefaultView, lib.ScanSchedule,
+		joinPatterns(lib.IgnorePatterns), lib.MetadataSource, c.ts())
 	if err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, ErrNameTaken
@@ -66,11 +69,12 @@ func (c *Catalog) UpsertLibraryByName(ctx context.Context, lib Library) (*Librar
 
 // LibraryPatch is an edit to a library: an empty string keeps a text field, a nil
 // pointer keeps a setting. The scan settings are validated by the caller
-// (library.ValidatePatch).
+// (library.ValidatePatch), the metadata source here (checkMetadataSource).
 type LibraryPatch struct {
 	Name, Root, DefaultView string
 	ScanSchedule            *string
 	IgnorePatterns          *[]string
+	MetadataSource          *string
 }
 
 // Apply writes the patch's fields onto l (a zero Library for a new one).
@@ -90,11 +94,18 @@ func (p LibraryPatch) Apply(l *Library) {
 	if p.IgnorePatterns != nil {
 		l.IgnorePatterns = *p.IgnorePatterns
 	}
+	if p.MetadataSource != nil {
+		l.MetadataSource = *p.MetadataSource
+	}
 }
 
 // UpdateLibrary applies an edit and returns the result, and whether it made the
 // index stale (a new root or new ignore rules), in which case the caller should
-// rescan.
+// rescan. A new metadata source is no reason to: the library's books are
+// re-resolved from what the scan stored, in the edit's own transaction, so no
+// reader sees the new setting with the old values. Whether the source changed is
+// read inside that transaction, not from the earlier read: an edit that raced this
+// one may have switched it since.
 func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) (*Library, bool, error) {
 	existing, err := c.GetLibrary(ctx, id)
 	if err != nil {
@@ -102,11 +113,31 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	}
 	before := *existing
 	in.Apply(existing)
-	if _, err := c.db.ExecContext(ctx,
-		`UPDATE libraries SET name = ?, root = ?, default_view = ?, scan_schedule = ?, ignore_patterns = ?
-		  WHERE id = ?`,
-		existing.Name, existing.Root, existing.DefaultView, existing.ScanSchedule,
-		joinPatterns(existing.IgnorePatterns), id); err != nil {
+	if err := checkMetadataSource(existing); err != nil {
+		return nil, false, err
+	}
+	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
+		var stored string
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_source FROM libraries WHERE id = ?`, id).
+			Scan(&stored); errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE libraries SET name = ?, root = ?, default_view = ?, scan_schedule = ?, ignore_patterns = ?,
+			     metadata_source = ?
+			  WHERE id = ?`,
+			existing.Name, existing.Root, existing.DefaultView, existing.ScanSchedule,
+			joinPatterns(existing.IgnorePatterns), existing.MetadataSource, id); err != nil {
+			return err
+		}
+		if existing.MetadataSource == stored {
+			return nil
+		}
+		return refreshLibrary(ctx, tx, id)
+	})
+	if err != nil {
 		if store.IsUniqueViolation(err) {
 			return nil, false, ErrNameTaken
 		}
@@ -114,6 +145,22 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	}
 	stale := existing.Root != before.Root || !slices.Equal(existing.IgnorePatterns, before.IgnorePatterns)
 	return existing, stale, nil
+}
+
+// refreshLibrary re-resolves the effective metadata of every book in a library
+// (refreshEffective), as a change to how it is resolved needs.
+func refreshLibrary(ctx context.Context, tx *sql.Tx, libraryID int64) error {
+	ids, err := queryRows(ctx, tx, func(r *sql.Rows, id *int64) error { return r.Scan(id) },
+		`SELECT id FROM books WHERE library_id = ?`, libraryID)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := refreshEffective(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // joinPatterns and splitPatterns store an ignore list as one pattern per line.
@@ -148,12 +195,13 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 
 // libraryCols is what scanLibrary reads (AccessibleLibraries spells it out with
 // its table alias).
-const libraryCols = `id, name, root, default_view, sort_order, scan_schedule, ignore_patterns`
+const libraryCols = `id, name, root, default_view, sort_order, scan_schedule, ignore_patterns, metadata_source`
 
 func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {
 	var l Library
 	var patterns string
-	if err := row.Scan(&l.ID, &l.Name, &l.Root, &l.DefaultView, &l.SortOrder, &l.ScanSchedule, &patterns); err != nil {
+	if err := row.Scan(&l.ID, &l.Name, &l.Root, &l.DefaultView, &l.SortOrder, &l.ScanSchedule, &patterns,
+		&l.MetadataSource); err != nil {
 		return nil, err
 	}
 	l.IgnorePatterns = splitPatterns(patterns)

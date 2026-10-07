@@ -5,6 +5,7 @@ import { keys, useScanWatcher } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { idle, issuesSummary, libraries } from '@/test/fixtures';
+import type { MetadataSource } from '@/api/types';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -70,6 +71,36 @@ describe('library scan settings', () => {
       }),
     );
     expect(await screen.findByText('AudioSilo is rescanning it now.')).toBeInTheDocument();
+  });
+
+  it('takes book details from folder names without a rescan', async () => {
+    let source: MetadataSource = 'tags';
+    const calls = mockFetch(
+      libraryRoutes({
+        'GET /admin/libraries': () => ({
+          body: { libraries: libraries([{ metadata_source: source }]) },
+        }),
+        'PATCH /admin/libraries/1': (req) => {
+          source = (req.body as { metadata_source: MetadataSource }).metadata_source;
+          return { body: { ...libraries()[0], ...(req.body as object) } };
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const { user, dialog } = await openEdit();
+    const select = within(dialog).getByLabelText('Book details come from');
+    expect(select).toHaveValue('tags');
+    await user.selectOptions(select, 'path');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toMatchObject({
+        metadata_source: 'path',
+      }),
+    );
+    expect(await screen.findByText('Saved Fiction')).toBeInTheDocument();
+    expect(screen.queryByText('AudioSilo is rescanning it now.')).not.toBeInTheDocument();
+    const card = await screen.findByRole('listitem', { name: 'Fiction' });
+    expect(await within(card).findByText('Details from folder names')).toBeInTheDocument();
   });
 
   it('puts a refused pattern under the skip field', async () => {

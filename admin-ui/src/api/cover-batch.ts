@@ -1,6 +1,6 @@
 import { refKey } from '@/lib/book-route';
 import { createBatcher, type Batched } from './batcher';
-import { api, type ThumbSize } from './client';
+import { COMMUNITY_COVERS_LIMIT, api, type ThumbSize } from './client';
 import type { BookRef } from './types';
 
 // Cover thumbnails are requested one per <BookCover> but fetched in batches
@@ -42,4 +42,32 @@ async function sendCovers(refs: BookRef[], size: ThumbSize) {
   const { covers } = await api.coverThumbs(refs, size);
   const byKey = new Map((covers ?? []).map((c) => [refKey(c), c.data || null]));
   return refs.map((r) => byKey.get(refKey(r)) ?? null);
+}
+
+/** One community-cover batcher per size (POST /admin/meta/covers carries one size). */
+const communityBySize = new Map<ThumbSize, Batched<string, string | null>>();
+
+/**
+ * A community cover image (a match candidate's cover_url) as a thumbnail data:
+ * URL the server fetched, or null when it couldn't; batched like loadThumb, at
+ * most COMMUNITY_COVERS_LIMIT a request.
+ */
+export function loadCommunityCover(
+  url: string,
+  size: ThumbSize,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  let load = communityBySize.get(size);
+  if (!load) {
+    load = createBatcher({
+      key: (u: string) => u,
+      limit: COMMUNITY_COVERS_LIMIT,
+      send: async (urls: string[]) => {
+        const { covers } = await api.communityCovers(urls, size);
+        return urls.map((_, i) => covers?.[i] || null);
+      },
+    });
+    communityBySize.set(size, load);
+  }
+  return load(url, signal);
 }

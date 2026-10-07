@@ -40,7 +40,7 @@ const maxMatchCandidates = 6
 // ASIN/ISBN an identifier they gave; when all three are empty the book's own
 // identifiers are looked up. Title, Series, SeriesIndex and Author are the book's
 // (tagged or edited) facts, Path and IsFolder its library path, which is read for
-// facts of its own (derivePathFacts); all of them, with Duration, find and score
+// facts of its own (metadata.ReadPathLayout); all of them, with Duration, find and score
 // the candidates.
 type MatchQuery struct {
 	Text        string
@@ -334,7 +334,7 @@ func (s *Service) searchHits(ctx context.Context, q MatchQuery, text, asin, isbn
 // left on: metaserve reads it ("Sharpe - 08 - Sharpe's Eagle" is volume 8 of
 // the series) and cleans each title guess against the series itself.
 func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
-	p := derivePathFacts(q.Path, q.IsFolder)
+	p := metadata.ReadPathLayout(q.Path, q.IsFolder)
 	v := url.Values{}
 	add := func(key, val string) {
 		// metaserve reads at most maxMatchValueBytes of each value, so a longer

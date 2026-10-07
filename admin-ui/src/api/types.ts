@@ -724,9 +724,19 @@ export interface AdminLibrary extends Library {
   scan_schedule: string;
   /** One pattern per entry (library.ParseIgnore); comments start with #. */
   ignore_patterns: string[];
+  /** Where the books' title, author, series and position come from first. */
+  metadata_source: MetadataSource;
   /** When the next scheduled scan is due (RFC 3339); absent without a schedule. */
   next_scan_at?: string;
 }
+
+/**
+ * catalog.MetadataFromTags / MetadataFromPath: a library's books take their
+ * details from the files' tags first, or from the folder layout first
+ * (Author/Series/01 - Title); the other fills what the first leaves empty.
+ */
+export const METADATA_SOURCES = ['tags', 'path'] as const;
+export type MetadataSource = (typeof METADATA_SOURCES)[number];
 
 /** The body of POST /admin/libraries and PATCH /admin/libraries/{id} (handlers_admin.go libraryRequest). */
 export interface LibraryRequest {
@@ -734,6 +744,7 @@ export interface LibraryRequest {
   root?: string;
   scan_schedule?: string;
   ignore_patterns?: string[];
+  metadata_source?: MetadataSource;
 }
 
 /** The `every:` intervals a library schedule may use (library.ParseSchedule). */
