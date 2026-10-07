@@ -55,10 +55,15 @@ func checkBookmark(note, label *string) error {
 	return nil
 }
 
-// checkNoteBody is ErrNoteBodyTooLong for a body over MaxNoteBody characters.
-func checkNoteBody(body string) error {
-	if utf8.RuneCountInString(body) > MaxNoteBody {
+// checkNote validates the note fields an add or an edit sets (nil: not set):
+// ErrNoteBodyTooLong for a body over MaxNoteBody characters, ErrInvalidPosition
+// for a position that is negative or not finite.
+func checkNote(body *string, position *float64) error {
+	if body != nil && utf8.RuneCountInString(*body) > MaxNoteBody {
 		return ErrNoteBodyTooLong
+	}
+	if position != nil && (*position < 0 || math.IsNaN(*position) || math.IsInf(*position, 0)) {
+		return ErrInvalidPosition
 	}
 	return nil
 }
@@ -113,8 +118,8 @@ func (c *Catalog) EditBookmark(ctx context.Context, userID, id int64, edit Bookm
 
 // EditNote applies an edit to the user's note id, stamps updated_at and returns
 // the whole note. ErrNotFound as EditBookmark; then ErrNothingToChange for an
-// empty edit, ErrNoteBodyTooLong, and ErrInvalidPosition for a position that is
-// negative or not finite. One writer transaction, as EditBookmark.
+// empty edit and checkNote's errors for a bad value it sets. One writer
+// transaction, as EditBookmark.
 func (c *Catalog) EditNote(ctx context.Context, userID, id int64, edit NoteEdit, scopes []Scope) (*Note, error) {
 	var n Note
 	err := c.db.WithTx(ctx, "EditNote", func(tx *sql.Tx) error {
@@ -126,18 +131,14 @@ func (c *Catalog) EditNote(ctx context.Context, userID, id int64, edit NoteEdit,
 		if edit.Body == nil && edit.Position == nil {
 			return ErrNothingToChange
 		}
+		if err := checkNote(edit.Body, edit.Position); err != nil {
+			return err
+		}
 		if edit.Body != nil {
-			if err := checkNoteBody(*edit.Body); err != nil {
-				return err
-			}
 			n.Body = *edit.Body
 		}
 		if edit.Position != nil {
-			p := *edit.Position
-			if p < 0 || math.IsNaN(p) || math.IsInf(p, 0) {
-				return ErrInvalidPosition
-			}
-			n.Position = p
+			n.Position = *edit.Position
 		}
 		n.UpdatedAt = c.stamp()
 		_, err := tx.ExecContext(ctx, `UPDATE notes SET body = ?, position = ?, updated_at = ? WHERE id = ?`,

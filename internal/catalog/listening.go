@@ -594,10 +594,10 @@ func (c *Catalog) DeleteBookmark(ctx context.Context, userID, id int64) error {
 	return err
 }
 
-// AddNote stores a note and returns it with its ID. ErrNoteBodyTooLong for a
-// body over MaxNoteBody characters.
+// AddNote stores a note and returns it with its ID. ErrNoteBodyTooLong or
+// ErrInvalidPosition for a note checkNote refuses.
 func (c *Catalog) AddNote(ctx context.Context, userID int64, n Note) (*Note, error) {
-	if err := checkNoteBody(n.Body); err != nil {
+	if err := checkNote(&n.Body, &n.Position); err != nil {
 		return nil, err
 	}
 	n.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text

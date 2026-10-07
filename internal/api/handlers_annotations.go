@@ -60,13 +60,7 @@ func (a *API) handleEditNote(w http.ResponseWriter, r *http.Request) {
 		Body     *string  `json:"body"`
 		Position *float64 `json:"position"`
 	}
-	var typeErr *json.UnmarshalTypeError
-	switch err := decodeJSONOptional(r, &in, 0); {
-	case errors.As(err, &typeErr) && typeErr.Field == "position":
-		writeError(w, http.StatusBadRequest, catalog.ErrInvalidPosition.Error()) // "12", true
-		return
-	case err != nil:
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeNoteJSON(w, decodeJSONOptional(r, &in, 0)) {
 		return
 	}
 	scopes, ok := a.callerScopes(w, r, "could not save note")
@@ -84,6 +78,22 @@ func (a *API) handleEditNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, saved)
+}
+
+// decodeNoteJSON answers a note body's decode error (POST and PATCH alike): a
+// position of the wrong type ("12", true) is 400 invalid position, anything else
+// malformed 400 invalid request. It reports whether the body decoded.
+func decodeNoteJSON(w http.ResponseWriter, err error) bool {
+	var typeErr *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &typeErr) && typeErr.Field == "position":
+		writeError(w, http.StatusBadRequest, catalog.ErrInvalidPosition.Error())
+	case err != nil:
+		writeError(w, http.StatusBadRequest, "invalid request")
+	default:
+		return true
+	}
+	return false
 }
 
 // pageOptions reads ?limit= and ?cursor= (catalog.PageOptions).

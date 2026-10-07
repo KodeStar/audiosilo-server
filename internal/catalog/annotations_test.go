@@ -87,10 +87,10 @@ func TestCheckBookmarkAndNoteBounds(t *testing.T) {
 	if err := checkBookmark(new(strings.Repeat("a", MaxBookmarkNote+1)), nil); !errors.Is(err, ErrBookmarkNoteTooLong) {
 		t.Errorf("an over-long note = %v, want ErrBookmarkNoteTooLong", err)
 	}
-	if err := checkNoteBody(strings.Repeat("é", MaxNoteBody)); err != nil {
+	if err := checkNote(new(strings.Repeat("é", MaxNoteBody)), new(0.0)); err != nil {
 		t.Errorf("a body of %d characters refused: %v", MaxNoteBody, err)
 	}
-	if err := checkNoteBody(strings.Repeat("a", MaxNoteBody+1)); !errors.Is(err, ErrNoteBodyTooLong) {
+	if err := checkNote(new(strings.Repeat("a", MaxNoteBody+1)), nil); !errors.Is(err, ErrNoteBodyTooLong) {
 		t.Errorf("an over-long body = %v, want ErrNoteBodyTooLong", err)
 	}
 
@@ -102,6 +102,17 @@ func TestCheckBookmarkAndNoteBounds(t *testing.T) {
 	}
 	if _, err := f.c.AddNote(ctx, f.ann, Note{Ref: f.ref(annBookA), Body: strings.Repeat("a", MaxNoteBody+1)}); !errors.Is(err, ErrNoteBodyTooLong) {
 		t.Fatalf("AddNote with an over-long body = %v", err)
+	}
+	for _, p := range []float64{-1, math.NaN(), math.Inf(1)} {
+		if err := checkNote(nil, &p); !errors.Is(err, ErrInvalidPosition) {
+			t.Errorf("position %v = %v, want ErrInvalidPosition", p, err)
+		}
+		if _, err := f.c.AddNote(ctx, f.ann, Note{Ref: f.ref(annBookA), Position: p}); !errors.Is(err, ErrInvalidPosition) {
+			t.Errorf("AddNote at %v = %v, want ErrInvalidPosition", p, err)
+		}
+	}
+	if ns, _ := f.c.ListNotes(ctx, f.ann, f.ref(annBookA)); len(ns) != 0 {
+		t.Fatalf("a refused note was stored: %+v", ns)
 	}
 	if bms, _ := f.c.ListBookmarks(ctx, f.ann, f.ref(annBookA)); len(bms) != 0 {
 		t.Fatalf("a refused bookmark was stored: %+v", bms)

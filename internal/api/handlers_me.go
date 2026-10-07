@@ -173,8 +173,7 @@ func (a *API) handleAddNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var n catalog.Note
-	if err := decodeJSON(r, &n, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodeNoteJSON(w, decodeJSON(r, &n, 0)) {
 		return
 	}
 	n.Ref = catalog.Ref{LibraryID: lib.ID, Path: path}
