@@ -22,6 +22,16 @@ import (
 // handler and the `metadata` capability both gate on this.
 func (a *API) metadataOn() bool { return a.meta != nil && a.config().Metadata.Enabled }
 
+// metadataOff answers the admin console's community-metadata endpoints while the
+// lookup is off: true when it wrote the 404 metadata_off, so the handler stops.
+func (a *API) metadataOff(w http.ResponseWriter) bool {
+	if a.metadataOn() {
+		return false
+	}
+	writeErrorCode(w, http.StatusNotFound, codeMetadataOff, "community metadata is turned off")
+	return true
+}
+
 // settingsEnvelope is the GET/PATCH answer: each section's saved settings, plus
 // what the console needs to show them honestly.
 //

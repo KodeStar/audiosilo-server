@@ -6,6 +6,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -33,6 +34,34 @@ type Library struct {
 	// admin library list carries them.
 	ScanSchedule   string   `json:"-"`
 	IgnorePatterns []string `json:"-"`
+	// MetadataSource is where its books' title, author, series and position come
+	// from first (MetadataFromTags or MetadataFromPath); an admin setting too.
+	MetadataSource string `json:"-"`
+}
+
+// A library's MetadataSource: the files' tags first (the default), or the folder
+// layout first (metadata.FromPathLayout). The other fills what the first leaves
+// empty.
+const (
+	MetadataFromTags = "tags"
+	MetadataFromPath = "path"
+)
+
+// ErrInvalidMetadataSource marks a library metadata source other than
+// MetadataFromTags or MetadataFromPath.
+var ErrInvalidMetadataSource = errors.New(`metadata_source must be "tags" or "path"`)
+
+// checkMetadataSource defaults an unset metadata source to MetadataFromTags and
+// refuses one that is neither.
+func checkMetadataSource(l *Library) error {
+	switch l.MetadataSource {
+	case "":
+		l.MetadataSource = MetadataFromTags
+	case MetadataFromTags, MetadataFromPath:
+	default:
+		return ErrInvalidMetadataSource
+	}
+	return nil
 }
 
 // Book is an indexed audiobook (single file or a folder of files).

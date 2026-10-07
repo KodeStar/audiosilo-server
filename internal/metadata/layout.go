@@ -1,19 +1,18 @@
-package meta
+package metadata
 
 import (
 	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode"
-
-	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
-// pathFacts is what a book's library path says about it, read for matching.
-// Tags are often garbage where the folder layout is good ("Bernard
-// Cornwell/Richard Sharpe/Sharpe - 08 - Sharpe's Eagle" for a file tagged title
-// "Bernard Cornwell"), so the match dialog sends both.
-type pathFacts struct {
+// PathLayout is what a book's library path says about it by its LAYOUT. Tags
+// are often garbage where the folder layout is good ("Bernard Cornwell/Richard
+// Sharpe/Sharpe - 08 - Sharpe's Eagle" for a file tagged title "Bernard
+// Cornwell"), so the match dialog sends it beside the tags, and a library that
+// prefers its folders takes its metadata from it (FromPathLayout).
+type PathLayout struct {
 	// Author is the top folder of a book at least one folder deep.
 	Author string
 	// Series is the folder holding the book, for a book at least two deep.
@@ -28,7 +27,7 @@ type pathFacts struct {
 	Position string
 }
 
-// derivePathFacts reads the LAYOUT of a book's rel_path - which folder is the
+// ReadPathLayout reads the LAYOUT of a book's rel_path - which folder is the
 // author, which the series, which the book - and nothing inside the names:
 //
 //   - a disc or track folder ("CD1", "Disc 2", "Track 01") is a PART of the book,
@@ -43,7 +42,11 @@ type pathFacts struct {
 //   - the top folder is the author whenever the book is at least one folder
 //     deep ("George Orwell/1984"), and the folder holding the book is the series
 //     only when there is an author folder above it.
-func derivePathFacts(relPath string, isFolder bool) pathFacts {
+//
+// Unlike DeriveFromPath (the scan's baseline under the tags), one folder above
+// the book is its author, not its series: "Author/Title" is the commonest
+// layout of all.
+func ReadPathLayout(relPath string, isFolder bool) PathLayout {
 	segs := strings.Split(strings.Trim(filepath.ToSlash(relPath), "/"), "/")
 	if !isFolder {
 		last := segs[len(segs)-1]
@@ -54,7 +57,7 @@ func derivePathFacts(relPath string, isFolder bool) pathFacts {
 		dropped = segs[len(segs)-1]
 		segs = segs[:len(segs)-1]
 	}
-	var f pathFacts
+	var f PathLayout
 	if len(segs) >= 2 {
 		f.Author = segs[0]
 	}
@@ -71,6 +74,27 @@ func derivePathFacts(relPath string, isFolder bool) pathFacts {
 	return f
 }
 
+// FromPathLayout is the metadata a library that prefers its folders over the
+// tags takes from a book's path (ReadPathLayout): the leaf's leading volume
+// number ("03 - Abaddon's Gate") split off the title, a series folder's own
+// numbering ("03 - Tawny Man") off the series name, and the position only
+// alongside a series. A field left empty is one the path doesn't say, which
+// the tags then fill.
+func FromPathLayout(relPath string, isFolder bool) *Metadata {
+	l := ReadPathLayout(relPath, isFolder)
+	m := &Metadata{Author: strings.TrimSpace(l.Author)}
+	idx, title := splitSeriesIndex(l.Title)
+	m.Title = title
+	if l.Series != "" {
+		_, m.Series = splitSeriesIndex(l.Series)
+		m.SeriesIndex = idx
+		if l.Position != "" {
+			m.SeriesIndex, _ = strconv.ParseFloat(l.Position, 64)
+		}
+	}
+	return m
+}
+
 // plainVolume reads a part label that is a plain number ("03") as the volume
 // it names ("3"); a label with a disc word ("CD1", "Part 3"), or a zero, is
 // not one and gives "".
@@ -83,17 +107,16 @@ func plainVolume(seg string) string {
 }
 
 // isPartLabel reports whether a path segment names a part of a book rather
-// than the book: metadata.IsGenericTitle ("CD1", "Disc 2", "Track 01", "03"),
-// except a bare number of four or more digits, which is a title ("1984")
-// rather than a volume, a name with no digit at all, and a name with a letter
-// outside ASCII: IsGenericTitle reads only ASCII letters, so it takes a name
-// in any other script for an empty label ("Война и мир") or a bare number
-// ("Метро 2033").
+// than the book: IsGenericTitle ("CD1", "Disc 2", "Track 01", "03"), except a
+// bare number of four or more digits, which is a title ("1984") rather than a
+// volume, a name with no digit at all, and a name with a letter outside ASCII:
+// IsGenericTitle reads only ASCII letters, so it takes a name in any other
+// script for an empty label ("Война и мир") or a bare number ("Метро 2033").
 func isPartLabel(seg string) bool {
 	n := strings.TrimSpace(seg)
 	if !strings.ContainsAny(n, "0123456789") || (len(n) >= 4 && strings.Trim(n, "0123456789") == "") ||
 		strings.ContainsFunc(n, func(r rune) bool { return r > unicode.MaxASCII && unicode.IsLetter(r) }) {
 		return false
 	}
-	return metadata.IsGenericTitle(seg)
+	return IsGenericTitle(seg)
 }

@@ -361,6 +361,7 @@ export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
       scan: idle,
       scan_schedule: '',
       ignore_patterns: [],
+      metadata_source: 'tags',
     },
     {
       id: 2,
@@ -373,6 +374,7 @@ export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
       scan: idle,
       scan_schedule: '',
       ignore_patterns: [],
+      metadata_source: 'tags',
     },
   ];
   return base.map((l, i) => ({ ...l, ...over[i] }));

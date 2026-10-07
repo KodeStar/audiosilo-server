@@ -20,13 +20,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import {
-  invalidateBooks,
-  invalidateCover,
-  rescanBook,
-  useLibraries,
-  useServerInfo,
-} from '@/api/hooks';
+import { invalidateBookCover, rescanBook, useLibraries, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { Badge } from '@/components/ui/badge';
@@ -188,10 +182,7 @@ function CoverMenu({ detail }: { detail: AdminBookDetail }) {
   const b = detail.book;
 
   // The art, the book page and every list row and count (has_cover, the curating shelf).
-  const refresh = () => {
-    invalidateCover(qc, b.library_id, b.path);
-    invalidateBooks(qc, [b]);
-  };
+  const refresh = () => invalidateBookCover(qc, b);
 
   const upload = async (file: File) => {
     const problem = coverFileProblem(file);

@@ -25,6 +25,10 @@ func TestSplitSeriesIndex(t *testing.T) {
 		{"Book 1984 - Title", 1984, "Title"},
 		// Realistic three-digit volume numbers still parse.
 		{"100 - Long Series Vol", 100, "Long Series Vol"},
+		// A number running into the words is part of the title.
+		{"20,000 Leagues Under the Sea", 0, "20,000 Leagues Under the Sea"},
+		{"3rd Rock", 0, "3rd Rock"},
+		{"1's and 0's", 0, "1's and 0's"},
 	}
 	for _, c := range cases {
 		idx, title := splitSeriesIndex(c.in)

@@ -13,7 +13,7 @@ import {
 import { refKey, refOf } from '@/lib/book-route';
 import { compact } from '@/lib/utils';
 import { api, type BookFilter, type BookListParams, type MatchBy, type ThumbSize } from './client';
-import { loadThumb } from './cover-batch';
+import { loadCommunityCover, loadThumb } from './cover-batch';
 import { loadWork, type WorkAnswer } from './work-batch';
 import type {
   AdminBook,
@@ -68,6 +68,7 @@ export const keys = {
   book: (libraryId: number, path: string) => ['admin', 'book', libraryId, path] as const,
   match: (libraryId: number, path: string, by: MatchBy) =>
     ['admin', 'book', libraryId, path, 'match', by] as const,
+  communityCover: (url: string, size: ThumbSize) => ['admin', 'communityCover', size, url] as const,
   bookMeta: (libraryId: number, path: string) => ['meta', libraryId, path] as const,
   /** A book's community work, by identity and identifiers: a new ASIN or ISBN asks again. */
   bookWork: (b: AdminBook) => ['meta', 'work', b.library_id, b.path, b.asin, b.isbn] as const,
@@ -216,6 +217,33 @@ export function invalidateCover(qc: QueryClient, libraryId: number, path: string
   void qc.invalidateQueries({ queryKey: ['thumb', libraryId, path] });
 }
 
+/**
+ * Refetches what a new or removed custom cover touches: the art, the book page and
+ * the book lists and counts (has_cover, custom_cover, the no_cover issue).
+ */
+export function invalidateBookCover(qc: QueryClient, ref: BookRef) {
+  invalidateCover(qc, ref.library_id, ref.path);
+  void qc.invalidateQueries({ queryKey: keys.book(ref.library_id, ref.path), exact: true });
+  invalidateBooks(qc);
+}
+
+/**
+ * Refetches what reads a library's books differently after they were re-read or
+ * re-resolved (a scan, a new metadata source): the lists, pages, counts and
+ * browse views.
+ */
+export function invalidateLibraryBooks(qc: QueryClient, libraryId: number) {
+  for (const key of [
+    keys.stats,
+    keys.recentBooks(libraryId),
+    keys.books,
+    keys.browseLibrary(libraryId),
+    keys.bookPages(libraryId),
+  ]) {
+    void qc.invalidateQueries({ queryKey: key });
+  }
+}
+
 /** Whether a query key is one of these books' pages (or a match search on one). */
 function bookPageOf(refs: BookRef[]) {
   const wanted = new Set(refs.map(refKey));
@@ -362,16 +390,8 @@ export function useScanWatcher() {
       const startedHere = started !== undefined && Date.now() - started < STARTED_SCAN_TTL_MS;
       if (started !== undefined) startedScans.delete(l.id);
       if (!running.current.has(l.id) && !startedHere) continue;
-      for (const key of [
-        keys.stats,
-        keys.recentBooks(l.id),
-        keys.books,
-        keys.browseLibrary(l.id),
-        keys.bookPages(l.id),
-        keys.scanRuns,
-      ]) {
-        void qc.invalidateQueries({ queryKey: key });
-      }
+      invalidateLibraryBooks(qc, l.id);
+      void qc.invalidateQueries({ queryKey: keys.scanRuns });
       ended = true;
       for (const fn of scanListeners) fn(l);
     }
@@ -619,6 +639,35 @@ export function useMatchCandidates(libraryId: number, path: string, by: MatchBy,
     retry: false,
     staleTime: 5 * 60_000,
   });
+}
+
+/**
+ * A community cover image (a match candidate's cover_url) as a thumbnail data:
+ * URL the server fetched (null = it couldn't), batched with every other cover
+ * asked for in the same moment (cover-batch.ts). Keyed by URL, so the candidate
+ * list and the compare step share one answer. Not retried: the dialog shows a
+ * generated cover instead.
+ */
+export function useCommunityCover(url: string, size: ThumbSize = 160) {
+  return useQuery({
+    queryKey: keys.communityCover(url, size),
+    queryFn: ({ signal }) => loadCommunityCover(url, size, signal),
+    enabled: !!url,
+    retry: false,
+    staleTime: 60 * 60_000,
+  });
+}
+
+/**
+ * What useCommunityCover already holds for a URL: its thumbnail, null when the
+ * server couldn't fetch it, undefined before it has answered.
+ */
+export function cachedCommunityCover(
+  qc: QueryClient,
+  url: string,
+  size: ThumbSize = 160,
+): string | null | undefined {
+  return qc.getQueryData<string | null>(keys.communityCover(url, size));
 }
 
 /**

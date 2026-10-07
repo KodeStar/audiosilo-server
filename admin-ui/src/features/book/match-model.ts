@@ -52,6 +52,11 @@ function clean(field: OverrideField, raw: string | undefined): string {
   return error ? '' : value;
 }
 
+/** A candidate's authors, as one line. */
+export function candidateAuthors(c: MatchCandidate): string {
+  return (c.authors ?? []).map((a) => a.name).join(', ');
+}
+
 /** What the community says for each field, from the work and the chosen recording. */
 export function communityValues(
   c: MatchCandidate,
@@ -61,7 +66,7 @@ export function communityValues(
   const year = (c.first_published || rec?.release_date || '').match(/^\d{4}/)?.[0];
   return {
     title: clean('title', c.title),
-    author: clean('author', (c.authors ?? []).map((a) => a.name).join(', ')),
+    author: clean('author', candidateAuthors(c)),
     narrator: clean('narrator', (rec?.narrators ?? []).map((n) => n.name).join(', ')),
     series: clean('series', series?.name),
     series_index: clean('series_index', series?.position),
@@ -102,6 +107,25 @@ export function compareRows(
       offered: !!theirs[f] && !same,
     };
   });
+}
+
+/** The cover the community has for a candidate: the recording's, else the work's ("" = none). */
+export function communityCover(c: MatchCandidate, rec: MatchRecording | undefined): string {
+  return rec?.cover_url || c.cover_url || '';
+}
+
+/**
+ * Whether the community cover starts ticked: only for a book with no art of its
+ * own. Art in the book's files, or one the admin uploaded, is kept unless ticked.
+ * Nor one the server already couldn't fetch (`preview` null; undefined = not
+ * answered yet): taking it would only fail.
+ */
+export function defaultCoverTick(
+  hasCover: boolean,
+  coverUrl: string,
+  preview?: string | null,
+): boolean {
+  return !!coverUrl && !hasCover && preview !== null;
 }
 
 /** Ticked by default: every offered field the admin hasn't edited themselves. */

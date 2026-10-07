@@ -2,8 +2,10 @@ import type { MatchCandidate, MatchRecording } from '@/api/types';
 import { bookDetail } from '@/test/library-fixtures';
 import {
   acceptRequest,
+  communityCover,
   communityValues,
   compareRows,
+  defaultCoverTick,
   defaultRecording,
   defaultTicks,
   lengthComparison,
@@ -117,5 +119,28 @@ describe('lengthComparison', () => {
     expect(scoreTone(90)).toBe('success');
     expect(scoreTone(60)).toBe('warning');
     expect(scoreTone(59)).toBe('outline');
+  });
+});
+
+describe('community cover', () => {
+  it("is the recording's cover, else the work's", () => {
+    const c = candidate({ cover_url: 'https://c/work.jpg' });
+    expect(communityCover(c, recording({ cover_url: 'https://c/rec.jpg' }))).toBe(
+      'https://c/rec.jpg',
+    );
+    expect(communityCover(c, recording())).toBe('https://c/work.jpg');
+    expect(communityCover(c, undefined)).toBe('https://c/work.jpg');
+    expect(communityCover(candidate({ cover_url: undefined }), recording())).toBe('');
+  });
+
+  it('starts ticked only for a book without art', () => {
+    expect(defaultCoverTick(false, 'https://c/rec.jpg')).toBe(true);
+    expect(defaultCoverTick(true, 'https://c/rec.jpg')).toBe(false);
+    expect(defaultCoverTick(false, '')).toBe(false);
+  });
+
+  it("isn't ticked when the server couldn't fetch its preview", () => {
+    expect(defaultCoverTick(false, 'https://c/rec.jpg', null)).toBe(false);
+    expect(defaultCoverTick(false, 'https://c/rec.jpg', 'data:image/jpeg;base64,AA')).toBe(true);
   });
 });

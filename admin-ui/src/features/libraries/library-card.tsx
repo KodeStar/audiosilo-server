@@ -167,6 +167,12 @@ export function LibraryCard({
                 })}
               </span>
             ) : null}
+            {l.metadata_source === 'path' ? (
+              <span className="ml-3 inline-flex items-center gap-1">
+                <FolderTree className="size-3.5" aria-hidden="true" />
+                {t('libraries.sourcePath')}
+              </span>
+            ) : null}
           </span>
         </div>
 

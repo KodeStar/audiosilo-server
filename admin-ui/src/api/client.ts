@@ -279,6 +279,8 @@ export type MatchBy = { q?: string; asin?: string; isbn?: string };
 /** The cover thumbnail sizes POST /admin/covers renders (handlers_covers.go). */
 export type ThumbSize = 160 | 320 | 640;
 
+/** The server's cap on one POST /admin/meta/covers (handlers_community_covers.go). */
+export const COMMUNITY_COVERS_LIMIT = 12;
 /** The server's cap on one bulk edit (handlers_catalog.go), applied all or nothing. */
 export const BULK_LIMIT = 1000;
 /** The server's cap on the books one POST /admin/books/works resolves (handlers_catalog.go). */
@@ -458,6 +460,14 @@ export const api = {
       raw: image,
     });
   },
+  /** Thumbnails of community cover images (match candidates' cover_url), as data: URLs or "", in order (at most COMMUNITY_COVERS_LIMIT). */
+  communityCovers: (urls: string[], size: ThumbSize = 160) =>
+    request<{ covers: string[] }>('POST', '/admin/meta/covers', { urls, size }),
+  /** Fetches a community cover on the server and keeps it as the book's custom cover. */
+  setCommunityCover: (libraryId: number, path: string, url: string) =>
+    request<void>('PUT', `/admin/libraries/${libraryId}/cover/community${pathQuery(path)}`, {
+      url,
+    }),
   deleteCover: (libraryId: number, path: string) =>
     request<void>('DELETE', `/admin/libraries/${libraryId}/cover${pathQuery(path)}`),
   /** Reads one book's files again now; answers with its page (404 not_indexable if it's gone). */

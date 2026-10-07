@@ -26,13 +26,42 @@ export function BookCover({
   className?: string;
 }) {
   const cover = useCover(libraryId, path, size);
-  if (cover.isPending) {
+  return (
+    <CoverArt
+      src={cover.data}
+      pending={cover.isPending}
+      title={title}
+      author={author}
+      className={className}
+    />
+  );
+}
+
+/**
+ * A cover from a thumbnail data: URL: a skeleton while `pending`, the procedural
+ * cover without one. BookCover feeds it a book's art; the match dialog a
+ * community cover the server fetched.
+ */
+export function CoverArt({
+  src,
+  pending,
+  title,
+  author = '',
+  className,
+}: {
+  src: string | null | undefined;
+  pending: boolean;
+  title: string;
+  author?: string;
+  className?: string;
+}) {
+  if (pending) {
     return <div className={cn('cover skel', className)} role="img" aria-label={title} />;
   }
-  if (!cover.data) return <GeneratedCover title={title} author={author} className={className} />;
+  if (!src) return <GeneratedCover title={title} author={author} className={className} />;
   return (
     <div className={cn('cover', className)}>
-      <img src={cover.data} alt={title} decoding="async" />
+      <img src={src} alt={title} decoding="async" />
     </div>
   );
 }
