@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -705,9 +706,9 @@ func decodeCursor(s string) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	// Split at the LAST NUL: the id never holds one, while a sort value may (a
-	// listening span's ended_at is the client's text).
-	i := strings.LastIndexByte(string(raw), 0)
+	// Split at the LAST NUL, encodeCursor's exact inverse: the id never holds
+	// one, so a sort value that does still round-trips.
+	i := bytes.LastIndexByte(raw, 0)
 	if i < 0 {
 		return "", 0, errors.New("malformed cursor")
 	}

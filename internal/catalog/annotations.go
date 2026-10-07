@@ -137,7 +137,7 @@ func (c *Catalog) EditNote(ctx context.Context, userID, id int64, edit NoteEdit,
 			}
 			n.Position = p
 		}
-		n.UpdatedAt = c.ts()
+		n.UpdatedAt = c.stamp()
 		_, err := tx.ExecContext(ctx, `UPDATE notes SET body = ?, position = ?, updated_at = ? WHERE id = ?`,
 			n.Body, n.Position, n.UpdatedAt, id)
 		return err

@@ -448,7 +448,7 @@ func TestAnnotationListsPage(t *testing.T) {
 }
 
 // A cursor that doesn't decode is ErrInvalidCursor; a sort value holding a NUL
-// (a client's ended_at) still round-trips.
+// still round-trips (decodeCursor is encodeCursor's exact inverse).
 func TestAnnotationListsCursor(t *testing.T) {
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
@@ -466,19 +466,6 @@ func TestAnnotationListsCursor(t *testing.T) {
 	}
 	if v, id, err := decodeCursor(encodeCursor("odd\x00value", 42)); err != nil || v != "odd\x00value" || id != 42 {
 		t.Fatalf("a NUL in the value: %q %d %v", v, id, err)
-	}
-	for _, ended := range []string{"x\x00a", "x\x00b"} {
-		if err := f.c.AddHistory(ctx, f.ann, f.ref(annBookA), 0, 1, ended, ended); err != nil {
-			t.Fatal(err)
-		}
-	}
-	p, err := f.c.ListAllHistory(ctx, f.ann, f.all, PageOptions{Limit: 1})
-	if err != nil || len(p.History) != 1 || p.NextCursor == "" {
-		t.Fatalf("first page = %+v %v", p, err)
-	}
-	p2, err := f.c.ListAllHistory(ctx, f.ann, f.all, PageOptions{Limit: 1, Cursor: p.NextCursor})
-	if err != nil || len(p2.History) != 1 || p2.History[0].ID == p.History[0].ID || p2.NextCursor != "" {
-		t.Fatalf("second page = %+v %v", p2, err)
 	}
 	// Empty lists are [], never null.
 	empty, err := f.c.ListMyBookmarks(ctx, f.bob, f.all, PageOptions{})
@@ -516,5 +503,92 @@ func TestAnnotationsMoveAndPurge(t *testing.T) {
 	}
 	if bms, _ := f.c.ListBookmarks(ctx, f.bob, f.ref("new/Book")); len(bms) != 1 || bms[0].Label != "quote" {
 		t.Fatalf("deleting ann touched bob's bookmark: %+v", bms)
+	}
+}
+
+// The lists order by their timestamp as text, so it is stored fixed width (UTC
+// milliseconds): a whole second sorts before its own fractions, which
+// RFC3339Nano's trimmed form ("...:00Z" after "...:00.5Z") would get wrong. Here
+// the ids run against time, so only the timestamp can order the rows right.
+func TestAnnotationTimestampsSortAsText(t *testing.T) {
+	f := newAnnotationFixture(t)
+	ctx := t.Context()
+	base := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	var bms, notes []int64
+	for _, frac := range []time.Duration{500 * time.Millisecond, 250 * time.Millisecond, 0} {
+		f.clock = base.Add(frac)
+		bms = append(bms, f.bookmark(t, f.ann, annBookA, 0, "", "").ID)
+		notes = append(notes, f.note(t, f.ann, annBookA, 0, "").ID)
+	}
+	gotBM, err := f.c.ListMyBookmarks(ctx, f.ann, f.all, PageOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotNotes, err := f.c.ListMyNotes(ctx, f.ann, f.all, PageOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bmIDs, noteIDs []int64
+	for _, b := range gotBM.Bookmarks {
+		bmIDs = append(bmIDs, b.ID)
+	}
+	for _, n := range gotNotes.Notes {
+		noteIDs = append(noteIDs, n.ID)
+	}
+	if !slices.Equal(bmIDs, bms) || !slices.Equal(noteIDs, notes) {
+		t.Fatalf("bookmarks %v (want %v), notes %v (want %v)", bmIDs, bms, noteIDs, notes)
+	}
+	if got := gotBM.Bookmarks[2].CreatedAt; got != "2026-10-07T09:00:00.000Z" {
+		t.Fatalf("created_at = %q, want the fixed-width form", got)
+	}
+	f.clock = base.Add(time.Minute)
+	pos := 1.0
+	if n, err := f.c.EditNote(ctx, f.ann, notes[0], NoteEdit{Position: &pos}, f.all); err != nil ||
+		n.UpdatedAt != "2026-10-07T09:01:00.000Z" {
+		t.Fatalf("edited note = %+v %v, want updated_at in the fixed-width form", n, err)
+	}
+}
+
+// A listening span's client times are stored fixed width in UTC (any fraction,
+// any offset), so the history orders by them as text; an empty or unparsable one
+// is the server's time, never a refusal.
+func TestAddHistoryNormalisesTimes(t *testing.T) {
+	f := newAnnotationFixture(t)
+	ctx := t.Context()
+	f.clock = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct{ in, want string }{
+		{"2026-10-07T10:00:00.5Z", "2026-10-07T10:00:00.500Z"},
+		{"2026-10-07T10:00:00Z", "2026-10-07T10:00:00.000Z"},
+		{"2026-10-07T12:00:00.25+02:00", "2026-10-07T10:00:00.250Z"},
+		{"yesterday-ish", "2026-10-07T12:00:00.000Z"},
+		{"", "2026-10-07T12:00:00.000Z"},
+	} {
+		if err := f.c.AddHistory(ctx, f.bob, f.ref(annBookA), 0, 1, c.in, c.in); err != nil {
+			t.Fatalf("AddHistory(%q) = %v", c.in, err)
+		}
+		got, err := f.c.ListHistory(ctx, f.bob, f.ref(annBookA), 500)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found bool
+		for _, h := range got {
+			found = found || (h.StartedAt == c.want && h.EndedAt == c.want)
+		}
+		if !found {
+			t.Fatalf("AddHistory(%q): history %+v, want a span at %q", c.in, got, c.want)
+		}
+	}
+	p, err := f.c.ListAllHistory(ctx, f.bob, f.all, PageOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ended []string
+	for _, h := range p.History {
+		ended = append(ended, h.EndedAt)
+	}
+	want := []string{"2026-10-07T12:00:00.000Z", "2026-10-07T12:00:00.000Z", "2026-10-07T10:00:00.500Z",
+		"2026-10-07T10:00:00.250Z", "2026-10-07T10:00:00.000Z"}
+	if !slices.Equal(ended, want) {
+		t.Fatalf("history newest first = %v, want %v", ended, want)
 	}
 }

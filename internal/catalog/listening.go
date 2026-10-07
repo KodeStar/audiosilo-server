@@ -555,7 +555,7 @@ func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*B
 	if err := CheckBookmark(b.Note, b.Label); err != nil {
 		return nil, err
 	}
-	b.CreatedAt = c.ts()
+	b.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text
 	res, err := c.db.ExecContext(ctx,
 		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, label, created_at)
 		 VALUES(?,?,?,?,?,?,?)`, userID, b.LibraryID, b.Path, b.Position, b.Note, b.Label, b.CreatedAt)
@@ -600,7 +600,7 @@ func (c *Catalog) AddNote(ctx context.Context, userID int64, n Note) (*Note, err
 	if err := checkNoteBody(n.Body); err != nil {
 		return nil, err
 	}
-	n.CreatedAt = c.ts()
+	n.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text
 	n.UpdatedAt = n.CreatedAt
 	res, err := c.db.ExecContext(ctx,
 		`INSERT INTO notes(user_id, library_id, rel_path, position, body, created_at, updated_at)
@@ -639,18 +639,25 @@ func (c *Catalog) DeleteNote(ctx context.Context, userID, id int64) error {
 	return err
 }
 
-// AddHistory records a listening-history span.
+// AddHistory records a listening-history span. The client's start and end are
+// stored in the fixed-width UTC millisecond form (c.stamp), since the all-books
+// history orders by ended_at as text; an empty or unparsable one is the server's
+// time instead (never refused: shipped players send what they send).
 func (c *Catalog) AddHistory(ctx context.Context, userID int64, ref Ref, from, to float64, startedAt, endedAt string) error {
-	if startedAt == "" {
-		startedAt = c.ts()
-	}
-	if endedAt == "" {
-		endedAt = c.ts()
-	}
+	startedAt, endedAt = c.historyTime(startedAt), c.historyTime(endedAt)
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO listening_history(user_id, library_id, rel_path, from_pos, to_pos, started_at, ended_at)
 		 VALUES(?,?,?,?,?,?,?)`, userID, ref.LibraryID, ref.Path, from, to, startedAt, endedAt)
 	return err
+}
+
+// historyTime is AddHistory's normalisation of a client time: RFC3339 (any
+// fraction, any offset) to c.stamp's form, else the server's time now.
+func (c *Catalog) historyTime(v string) string {
+	if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+		return formatSessionTime(t)
+	}
+	return c.stamp()
 }
 
 // History is a recorded listening span.
