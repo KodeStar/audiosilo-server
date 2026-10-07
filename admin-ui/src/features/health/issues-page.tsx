@@ -14,6 +14,7 @@ import { OfflineNotice } from '@/features/libraries/offline-notice';
 import { rescanAll, rescanLibrary } from '@/features/libraries/rescan';
 import { counted, formatNumber, formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { BulkMatch } from './bulk-match';
 import { Duplicates } from './duplicates';
 import { IssueBooks } from './issue-books';
 import { CATEGORY_LOOK, attentionTotal, isBookKind, pickCategory } from './issues-model';
@@ -147,6 +148,7 @@ export function IssuesPage() {
               </Button>
             ) : null}
           </div>
+          {cat.kind === 'unmatched' && !ignored ? <BulkMatch /> : null}
           {isBookKind(cat.kind) ? (
             <IssueBooks key={`${cat.kind}:${ignored}`} kind={cat.kind} ignored={ignored} />
           ) : (

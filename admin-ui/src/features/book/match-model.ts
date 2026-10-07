@@ -25,24 +25,15 @@ export function parseMatchQuery(input: string): MatchBy {
   return { q: text };
 }
 
-/** The recording a candidate most likely is: the one an identifier hit, else the closest runtime. */
-export function defaultRecording(
-  c: MatchCandidate,
-  bookSeconds: number,
-): MatchRecording | undefined {
+/**
+ * The recording a candidate most likely is: the server's pick (the one an
+ * identifier hit, else the closest runtime, the preferred marketplace breaking a
+ * tie: meta.DefaultRecording), else the first.
+ */
+export function defaultRecording(c: MatchCandidate): MatchRecording | undefined {
   const recs = c.recordings ?? [];
-  const hit = c.recording_id ? recs.find((r) => r.id === c.recording_id) : undefined;
-  if (hit) return hit;
-  let best: MatchRecording | undefined;
-  let bestGap = Infinity;
-  for (const r of recs) {
-    const gap = r.runtime_min ? Math.abs(r.runtime_min * 60 - bookSeconds) : Infinity;
-    if (!best || gap < bestGap) {
-      best = r;
-      bestGap = gap;
-    }
-  }
-  return best;
+  const id = c.default_recording_id || c.recording_id;
+  return recs.find((r) => r.id === id) ?? recs[0];
 }
 
 /** A community value as the server would store it ("" when absent or one it would refuse). */

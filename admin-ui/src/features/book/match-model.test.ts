@@ -57,14 +57,14 @@ describe('defaultRecording', () => {
   const short = recording({ id: 'abridged', runtime_min: 600 });
   const full = recording({ id: 'full', runtime_min: 2730 });
 
-  it('prefers the recording an identifier hit', () => {
+  it("takes the server's pick, else an identifier's, else the first", () => {
+    expect(
+      defaultRecording(candidate({ recordings: [short, full], default_recording_id: 'full' }))?.id,
+    ).toBe('full');
     const c = candidate({ recordings: [full, short], recording_id: 'abridged' });
-    expect(defaultRecording(c, 163800)?.id).toBe('abridged');
-  });
-
-  it('else takes the runtime closest to the files', () => {
-    expect(defaultRecording(candidate({ recordings: [short, full] }), 163800)?.id).toBe('full');
-    expect(defaultRecording(candidate({ recordings: [] }), 100)).toBeUndefined();
+    expect(defaultRecording(c)?.id).toBe('abridged');
+    expect(defaultRecording(candidate({ recordings: [short, full] }))?.id).toBe('abridged');
+    expect(defaultRecording(candidate({ recordings: [] }))).toBeUndefined();
   });
 });
 

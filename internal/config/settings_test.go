@@ -46,6 +46,7 @@ func TestWithSettingsNormalizes(t *testing.T) {
 		"demo.max_users":          `null`,
 		"demo.idle_ttl":           `" 2h "`,
 		"metadata.base_url":       `"https://meta.example.com/"`,
+		"metadata.region":         `" UK "`,
 		"general.update_check":    `false`,
 		"network.bind":            `":9000"`,
 	})
@@ -66,6 +67,7 @@ func TestWithSettingsNormalizes(t *testing.T) {
 		{"android_package", next.AppLinks.AndroidPackage, "com.example.app"},
 		{"idle_ttl", next.Demo.IdleTTL, "2h"},
 		{"base_url", next.Metadata.BaseURL, "https://meta.example.com"},
+		{"region", next.Metadata.Region, "uk"},
 		{"update_check", next.UpdateCheck, false},
 		{"bind", next.Bind, ":9000"},
 	}
@@ -88,6 +90,7 @@ func TestWithSettingsRefuses(t *testing.T) {
 		{"control char in name", "general.name", `"a\nb"`, ReasonInvalid},
 		{"no scheme", "general.public_url", `"books.example.com"`, ReasonInvalid},
 		{"query in url", "general.public_url", `"https://x.com/?a=1"`, ReasonInvalid},
+		{"unknown marketplace", "metadata.region", `"gb"`, ReasonInvalid},
 		{"port out of range", "network.bind", `":70000"`, ReasonInvalid},
 		{"no port", "network.bind", `"localhost"`, ReasonInvalid},
 		{"bad tls mode", "network.tls_mode", `"sometimes"`, ReasonInvalid},

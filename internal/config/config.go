@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -155,6 +156,18 @@ func (d DemoConfig) IdleTTLDuration() time.Duration {
 type MetadataConfig struct {
 	Enabled bool   `yaml:"enabled"`  // activate the meta lookup (default true)
 	BaseURL string `yaml:"base_url"` // metaserve base URL; site at / and API at /api/v1
+	// Region is the Audible marketplace whose ASIN a match takes when a recording
+	// sells in several (one of Regions; "" = no preference, the US store's first).
+	Region string `yaml:"region"`
+}
+
+// Regions are the Audible marketplaces metadata.region may name: the community
+// metadata's own region vocabulary (audiosilo-meta schema/common.schema.json).
+var Regions = []string{"us", "uk", "ca", "au", "de", "fr", "es", "it", "jp", "in", "br"}
+
+// PreferredRegion is Region in the form the community metadata uses (lower case).
+func (m MetadataConfig) PreferredRegion() string {
+	return strings.ToLower(strings.TrimSpace(m.Region))
 }
 
 // ValidBaseURL reports whether BaseURL is a usable absolute http(s) URL. The
@@ -476,6 +489,10 @@ func (c *Config) Validate() error {
 	}
 	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {
 		return fieldErr("backups.dir", fmt.Errorf("backups.dir must be an absolute path, got %q", d))
+	}
+	if r := c.Metadata.PreferredRegion(); r != "" && !slices.Contains(Regions, r) {
+		return fieldErr("metadata.region", fmt.Errorf("metadata.region must be one of %s, got %q",
+			strings.Join(Regions, ", "), c.Metadata.Region))
 	}
 	if c.Metadata.Enabled {
 		if c.Metadata.BaseURL == "" {

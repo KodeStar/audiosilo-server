@@ -23,6 +23,8 @@ import type {
   AuditFilter,
   BookRef,
   FolderMode,
+  MatchOutcome,
+  MatchRun,
   PersonField,
   ServerEventKind,
   SessionFilter,
@@ -42,6 +44,8 @@ export const keys = {
   eventList: (kind: ServerEventKind | undefined) =>
     ['admin', 'events', 'list', kind ?? ''] as const,
   audit: (filter: AuditFilter) => ['admin', 'audit', filter] as const,
+  /** Every cover thumbnail (a prefix). */
+  thumbs: ['thumb'] as const,
   thumb: (libraryId: number, path: string, size: ThumbSize) =>
     ['thumb', libraryId, path, size] as const,
   libraries: ['admin', 'libraries'] as const,
@@ -63,6 +67,8 @@ export const keys = {
   people: (field: PersonField, libraryId?: number) =>
     ['admin', 'books', 'people', field, libraryId ?? 0] as const,
   series: (libraryId?: number) => ['admin', 'books', 'series', libraryId ?? 0] as const,
+  /** Every book page of every library (a prefix). */
+  allBookPages: ['admin', 'book'] as const,
   /** Every book page of one library (a prefix: a scan changes them). */
   bookPages: (libraryId: number) => ['admin', 'book', libraryId] as const,
   book: (libraryId: number, path: string) => ['admin', 'book', libraryId, path] as const,
@@ -77,6 +83,10 @@ export const keys = {
   issueSummary: ['admin', 'issues', 'summary'] as const,
   duplicates: (ignored: boolean) => ['admin', 'issues', 'duplicates', ignored] as const,
   jobs: ['admin', 'jobs'] as const,
+  /** Bulk match runs and every page of their items (a prefix). */
+  matchRuns: ['admin', 'match-runs'] as const,
+  matchRunItems: (id: number, outcome: MatchOutcome) =>
+    ['admin', 'match-runs', id, 'items', outcome] as const,
   /** Every page of scan history (a prefix). */
   scanRuns: ['admin', 'scan-runs'] as const,
   scanRunList: (libraryId: number) => ['admin', 'scan-runs', 'list', libraryId] as const,
@@ -598,6 +608,30 @@ export function useJobs() {
     queryFn: api.jobs,
     refetchInterval: (q) =>
       q.state.data && (q.state.data.running || q.state.data.queued.length) ? 1000 : 15_000,
+  });
+}
+
+/** Whether a bulk match run is still working. */
+export function matchRunActive(r: MatchRun | undefined) {
+  return r?.status === 'matching' || r?.status === 'applying';
+}
+
+/** Bulk match runs, newest first; polled each second while one works. */
+export function useMatchRuns() {
+  return useQuery({
+    queryKey: keys.matchRuns,
+    queryFn: api.matchRuns,
+    refetchInterval: (q) => (q.state.data?.runs.some(matchRunActive) ? 1000 : false),
+  });
+}
+
+/** One outcome's books of a match run, a page at a time (the review). */
+export function useMatchRunItems(id: number, outcome: MatchOutcome) {
+  return useInfiniteQuery({
+    queryKey: keys.matchRunItems(id, outcome),
+    queryFn: ({ pageParam }) => api.matchRunItems(id, { outcome, after: pageParam, limit: 50 }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (last) => last.next_after || undefined,
   });
 }
 

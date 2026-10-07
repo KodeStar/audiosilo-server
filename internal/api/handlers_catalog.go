@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 )
 
@@ -367,12 +368,9 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	mq := meta.MatchQuery{
-		Text: strings.TrimSpace(query.Get("q")), ASIN: strings.TrimSpace(query.Get("asin")),
-		ISBN: strings.TrimSpace(query.Get("isbn")), Title: book.Title, Series: book.Series,
-		SeriesIndex: book.SeriesIndex, Author: book.Author, Duration: book.Duration,
-		Path: book.RelPath, IsFolder: book.IsFolder, BookASIN: book.ASIN, BookISBN: book.ISBN,
-	}
+	mq := matchrun.QueryFor(book, a.config().Metadata.PreferredRegion())
+	mq.Text, mq.ASIN = strings.TrimSpace(query.Get("q")), strings.TrimSpace(query.Get("asin"))
+	mq.ISBN = strings.TrimSpace(query.Get("isbn"))
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {
 		writeError(w, http.StatusBadRequest, "query too long")
 		return

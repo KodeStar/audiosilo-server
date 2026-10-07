@@ -39,6 +39,7 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { regionTag } from '@/lib/regions';
 import {
   acceptRequest,
   candidateAuthors,
@@ -131,7 +132,7 @@ function MatchBody({
   const candidates = search.data ?? [];
   const picked = candidates.find((c) => c.work_id === pickId) ?? candidates[0];
   const recordingOf = (c: MatchCandidate, id = recId) =>
-    c.recordings?.find((r) => r.id === id) ?? defaultRecording(c, b.duration);
+    c.recordings?.find((r) => r.id === id) ?? defaultRecording(c);
   const rec = picked ? recordingOf(picked) : undefined;
   const rows = picked ? compareRows(detail.fields, picked, rec) : [];
   const coverUrl = picked ? communityCover(picked, rec) : '';
@@ -400,6 +401,7 @@ function Candidates({
               {rec?.asins?.[0] || rec?.isbns?.[0] ? (
                 <span className="font-mono text-[12px] text-subtle-foreground">
                   {rec.asins?.[0] || rec.isbns?.[0]}
+                  {rec.asins?.[0] && rec.asin_region ? ` · ${regionTag(rec.asin_region)}` : ''}
                 </span>
               ) : null}
             </span>

@@ -27,6 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { formatDate, formatNumber } from '@/lib/format';
+import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -349,7 +350,7 @@ function PlayersTopic({ settings }: { settings: AdminSettings }) {
 }
 
 function MetadataTopic({ settings }: { settings: AdminSettings }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const m = settings.metadata;
   return (
     <>
@@ -396,6 +397,22 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
           </Notice>
         ) : null}
       </Card>
+      <SettingsForm
+        settings={settings}
+        section="metadata"
+        title={t('settings.metadata.matchingCard')}
+        description={t('settings.metadata.matchingCardBody')}
+        fields={[
+          {
+            name: 'region',
+            kind: 'select',
+            options: [
+              { value: '', label: t('settings.metadata.regionNone') },
+              ...regionOptions(i18n.resolvedLanguage ?? 'en'),
+            ],
+          },
+        ]}
+      />
       <SettingsForm
         settings={settings}
         section="metadata"

@@ -76,6 +76,8 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.Metadata.Enabled }},
 	{key: "metadata.base_url", env: "AUDIOSILO_METADATA_BASE_URL", setting: "metadata.base_url", restart: true,
 		ptr: func(c *Config) any { return &c.Metadata.BaseURL }, fix: fixBaseURL},
+	{key: "metadata.region", env: "AUDIOSILO_METADATA_REGION", setting: "metadata.region",
+		ptr: func(c *Config) any { return &c.Metadata.Region }, fix: fixRegion},
 
 	{key: "demo.enabled", env: "AUDIOSILO_DEMO_ENABLED", setting: "demo.enabled", restart: true,
 		ptr: func(c *Config) any { return &c.Demo.Enabled }},
@@ -432,6 +434,13 @@ func fixPublicURL(c *Config) (err error) {
 func fixBaseURL(c *Config) (err error) {
 	c.Metadata.BaseURL, err = httpURL(c.Metadata.BaseURL)
 	return err
+}
+
+// fixRegion stores the marketplace as the community metadata names it ("UK" ->
+// "uk"); Validate checks it is one.
+func fixRegion(c *Config) error {
+	c.Metadata.Region = c.Metadata.PreferredRegion()
+	return nil
 }
 
 func fixBind(c *Config) error {

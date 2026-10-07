@@ -96,6 +96,10 @@ const (
 	codeQueueFull          = "queue_full"
 	codeCollectionFull     = "collection_full"
 	codeCollectionsFull    = "collections_full"
+	codeNoRegion           = "no_region"
+	codeMatchRunBusy       = "match_run_busy"
+	codeMatchRunNotReady   = "match_run_not_ready"
+	codeMatchRunNotRunning = "match_run_not_running"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
