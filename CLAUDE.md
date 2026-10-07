@@ -184,7 +184,8 @@ opaque `next_cursor`, each row's `book` attached per page; `PATCH /bookmarks/{id
 the owner's edits, one writer transaction, 404 for another user's id or a path outside current access;
 an edit checks only the fields it sets). Their `created_at`, a note's `updated_at` and a listening span's
 `started_at`/`ended_at` are fixed-width UTC milliseconds (`c.stamp`; a client's span times are
-normalised, an unparsable one replaced by the server's), since the lists order by them as text. The
+normalised, an unparsable one replaced by the server's; `0031` rewrites the rows stored before it),
+since the lists order by them as text. The
 per-book `GET /libraries/{id}/bookmarks|notes|history` answer `[]` when empty (`null` before). Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
