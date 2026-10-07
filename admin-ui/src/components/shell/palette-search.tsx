@@ -11,7 +11,7 @@ import {
 import { BookCover } from '@/components/book-cover';
 import { Monogram } from '@/components/monogram';
 import { bookRoute, refKey } from '@/lib/book-route';
-import { seriesIndexLabel } from '@/lib/format';
+import { seriesLabel } from '@/lib/format';
 import { useDebounced } from '@/lib/use-debounced';
 import { topMatches } from './palette-filter';
 import type { Go, PaletteEntry } from './command-palette';
@@ -59,11 +59,7 @@ export function usePaletteSearch(
   const books = (settled === q ? (booksQuery.data?.books ?? []) : []).map<PaletteEntry>((b) => ({
     id: `book:${refKey(b)}`,
     title: b.title,
-    subtitle: [
-      b.author,
-      b.series && [b.series, seriesIndexLabel(b.series_index, lang, t)].filter(Boolean).join(' '),
-      b.library_name,
-    ]
+    subtitle: [b.author, seriesLabel(b.series, b.series_index, lang, t), b.library_name]
       .filter(Boolean)
       .join(' · '),
     visual: (

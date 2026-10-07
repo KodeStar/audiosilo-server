@@ -115,6 +115,16 @@ export function seriesIndexLabel(index: number, lang: string, t: Translate): str
   return index > 0 ? t('books.tile.seriesIndex', { index: formatNumber(index, lang) }) : '';
 }
 
+/** A series with the book's place in it, "Mars #2" ("" with no series). */
+export function seriesLabel(
+  series: string | undefined,
+  index: number,
+  lang: string,
+  t: Translate,
+): string {
+  return series ? [series, seriesIndexLabel(index, lang, t)].filter(Boolean).join(' ') : '';
+}
+
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ['year', 365 * 24 * 3600],
   ['month', 30 * 24 * 3600],

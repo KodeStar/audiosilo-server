@@ -15,6 +15,7 @@ import {
   hostOf,
   progressFraction,
   seriesIndexLabel,
+  seriesLabel,
 } from './format';
 
 describe('format', () => {
@@ -83,6 +84,9 @@ describe('format', () => {
     const t = (key: string, opts: Record<string, unknown>) => `${key}:${String(opts.index)}`;
     expect(seriesIndexLabel(2, 'en', t)).toBe('books.tile.seriesIndex:2');
     expect(seriesIndexLabel(0, 'en', t)).toBe('');
+    expect(seriesLabel('Mars', 2, 'en', t)).toBe('Mars books.tile.seriesIndex:2');
+    expect(seriesLabel('Mars', Number(undefined), 'en', t)).toBe('Mars');
+    expect(seriesLabel(undefined, 2, 'en', t)).toBe('');
   });
 
   it('formats listening in hours, one decimal under 10', () => {
