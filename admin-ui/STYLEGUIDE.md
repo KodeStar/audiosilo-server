@@ -555,7 +555,9 @@ placeholders exactly in the grid slot (no layout shift), shimmer 1.4s (off with 
   "Revert" restores the file tag (with Undo toast).
 - **Match with community**: candidates as radio cards (cover, edition, narrator, length vs. your files,
   match %), then a side-by-side table: _On your server_ (with provenance) vs _Community_, a checkbox per
-  differing field; your own edits are unticked by default. "Accept N fields".
+  differing field; your own edits are unticked by default. The cover is the table's first row (the
+  book's art beside the community's, fetched by the server as a thumbnail, since the CSP loads no
+  other host's images), ticked only for a book without art. "Accept N fields".
 - **Rename on disk** (gated): always shows the template and a before → after path diff per book
   (changed segments struck/inserted). When "Allow renaming and moving folders" is off the dialog is a
   labelled dry run with a disabled primary and a link to Server › Files. Always states that progress

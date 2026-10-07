@@ -25,24 +25,15 @@ export function parseMatchQuery(input: string): MatchBy {
   return { q: text };
 }
 
-/** The recording a candidate most likely is: the one an identifier hit, else the closest runtime. */
-export function defaultRecording(
-  c: MatchCandidate,
-  bookSeconds: number,
-): MatchRecording | undefined {
+/**
+ * The recording a candidate most likely is: the server's pick (the one an
+ * identifier hit, else the closest runtime, the preferred marketplace breaking a
+ * tie: meta.DefaultRecording), else the first.
+ */
+export function defaultRecording(c: MatchCandidate): MatchRecording | undefined {
   const recs = c.recordings ?? [];
-  const hit = c.recording_id ? recs.find((r) => r.id === c.recording_id) : undefined;
-  if (hit) return hit;
-  let best: MatchRecording | undefined;
-  let bestGap = Infinity;
-  for (const r of recs) {
-    const gap = r.runtime_min ? Math.abs(r.runtime_min * 60 - bookSeconds) : Infinity;
-    if (!best || gap < bestGap) {
-      best = r;
-      bestGap = gap;
-    }
-  }
-  return best;
+  const id = c.default_recording_id || c.recording_id;
+  return recs.find((r) => r.id === id) ?? recs[0];
 }
 
 /** A community value as the server would store it ("" when absent or one it would refuse). */
@@ -50,6 +41,11 @@ function clean(field: OverrideField, raw: string | undefined): string {
   if (!raw) return '';
   const { value, error } = checkField(field, raw);
   return error ? '' : value;
+}
+
+/** A candidate's authors, as one line. */
+export function candidateAuthors(c: MatchCandidate): string {
+  return (c.authors ?? []).map((a) => a.name).join(', ');
 }
 
 /** What the community says for each field, from the work and the chosen recording. */
@@ -61,7 +57,7 @@ export function communityValues(
   const year = (c.first_published || rec?.release_date || '').match(/^\d{4}/)?.[0];
   return {
     title: clean('title', c.title),
-    author: clean('author', (c.authors ?? []).map((a) => a.name).join(', ')),
+    author: clean('author', candidateAuthors(c)),
     narrator: clean('narrator', (rec?.narrators ?? []).map((n) => n.name).join(', ')),
     series: clean('series', series?.name),
     series_index: clean('series_index', series?.position),
@@ -102,6 +98,25 @@ export function compareRows(
       offered: !!theirs[f] && !same,
     };
   });
+}
+
+/** The cover the community has for a candidate: the recording's, else the work's ("" = none). */
+export function communityCover(c: MatchCandidate, rec: MatchRecording | undefined): string {
+  return rec?.cover_url || c.cover_url || '';
+}
+
+/**
+ * Whether the community cover starts ticked: only for a book with no art of its
+ * own. Art in the book's files, or one the admin uploaded, is kept unless ticked.
+ * Nor one the server already couldn't fetch (`preview` null; undefined = not
+ * answered yet): taking it would only fail.
+ */
+export function defaultCoverTick(
+  hasCover: boolean,
+  coverUrl: string,
+  preview?: string | null,
+): boolean {
+  return !!coverUrl && !hasCover && preview !== null;
 }
 
 /** Ticked by default: every offered field the admin hasn't edited themselves. */

@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/dhowden/tag"
 )
@@ -322,6 +324,11 @@ func splitSeriesIndex(name string) (float64, string) {
 	// as a series index when it was explicitly marked ("Book 1984", "#1984"). This
 	// keeps ordinary volume numbers (up to 999) working while not mangling titles.
 	if !explicit && i >= 4 {
+		return 0, strings.TrimSpace(name)
+	}
+	// A number running straight into a letter or a digit group ("3rd Rock",
+	// "20,000 Leagues", "1's and 0's") is part of the title, not a volume.
+	if r, _ := utf8.DecodeRuneInString(s[i:]); unicode.IsLetter(r) || strings.ContainsRune(",'’", r) {
 		return 0, strings.TrimSpace(name)
 	}
 	idx, _ := strconv.ParseFloat(s[:i], 64)

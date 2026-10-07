@@ -15,6 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/web"
@@ -51,6 +52,8 @@ type API struct {
 	// config's metadata.enabled is the on/off switch: the handler and the
 	// `metadata` capability flag gate on meta != nil AND it (metadataOn).
 	meta *meta.Service
+	// matchRuns runs bulk community matching (Health > Not matched); nil with meta.
+	matchRuns *matchrun.Runner
 	// settingsMu serializes settings saves (read, change, write config.yaml, swap).
 	settingsMu sync.Mutex
 	log        *slog.Logger
@@ -72,6 +75,11 @@ type API struct {
 	// indexPath reads a path's book on demand (bookForPath's fallback):
 	// scanner.IndexPathWithin, a field so tests can count the re-reads.
 	indexPath func(ctx context.Context, lib catalog.Library, rel string, allow func(string) bool) (*catalog.Book, error)
+
+	// fetchCover fetches a community cover image (meta.Service.FetchCover, which
+	// connects to public addresses only), a field so tests can serve covers from
+	// loopback. nil with meta; the handlers that use it check metadataOn first.
+	fetchCover func(ctx context.Context, url string, limit int64) ([]byte, error)
 
 	// timeoutDur bounds non-streaming requests (see the timeout middleware).
 	// Defaults to requestTimeout; a field so tests can shorten it.
@@ -105,6 +113,10 @@ type API struct {
 	thumbs     *media.ThumbCache
 	coverReads chan struct{}
 	thumbSem   chan struct{}
+	// communityReads bounds the community covers being fetched or waiting to be
+	// decoded for thumbnails, across requests (handlers_community_covers.go), as
+	// coverReads does the library's own art.
+	communityReads chan struct{}
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
@@ -150,7 +162,12 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		thumbs:         media.NewThumbCache(thumbCacheBytes),
 		coverReads:     make(chan struct{}, maxCoverReads),
 		thumbSem:       make(chan struct{}, maxConcurrentThumbnails),
+		communityReads: make(chan struct{}, maxCommunityCoverReads),
 		streams:        catalog.NewStreamMarks(),
+	}
+	if metaSvc != nil {
+		a.fetchCover = metaSvc.FetchCover
+		a.matchRuns = matchrun.New(cat, metaSvc, a.saveMatchCover, a.metadataOn, log)
 	}
 	a.live.Store(newLiveConfig(cfg, cfg))
 	a.playerSource = web.PlayerSource(cfg.WebDir)
@@ -365,6 +382,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/books/facets", a.requireAdmin(http.HandlerFunc(a.handleAdminBookFacets)))
 	mux.Handle("POST /api/v1/admin/books/bulk", a.requireAdmin(http.HandlerFunc(a.handleAdminBulkEdit)))
 	mux.Handle("POST /api/v1/admin/covers", a.requireAdmin(http.HandlerFunc(a.handleAdminCovers)))
+	mux.Handle("POST /api/v1/admin/meta/covers", a.requireAdmin(http.HandlerFunc(a.handleCommunityCovers)))
 	mux.Handle("POST /api/v1/admin/books/works", a.requireAdmin(http.HandlerFunc(a.handleAdminBookWorks)))
 	mux.Handle("GET /api/v1/admin/authors", a.requireAdmin(a.handleAdminPeople(catalog.PeopleAuthors, "authors")))
 	mux.Handle("GET /api/v1/admin/narrators", a.requireAdmin(a.handleAdminPeople(catalog.PeopleNarrators, "narrators")))
@@ -372,7 +390,16 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminBook)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminEditBook)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/book/match", a.requireAdmin(http.HandlerFunc(a.handleAdminMatch)))
+	// Bulk community matching: a background run over the unmatched books, reviewed
+	// before it is applied (handlers_match_runs.go).
+	mux.Handle("GET /api/v1/admin/match-runs", a.requireAdmin(http.HandlerFunc(a.handleListMatchRuns)))
+	mux.Handle("POST /api/v1/admin/match-runs", a.requireAdmin(http.HandlerFunc(a.handleStartMatchRun)))
+	mux.Handle("GET /api/v1/admin/match-runs/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetMatchRun)))
+	mux.Handle("GET /api/v1/admin/match-runs/{id}/items", a.requireAdmin(http.HandlerFunc(a.handleMatchRunItems)))
+	mux.Handle("POST /api/v1/admin/match-runs/{id}/apply", a.requireAdmin(http.HandlerFunc(a.handleApplyMatchRun)))
+	mux.Handle("POST /api/v1/admin/match-runs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleCancelMatchRun)))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/cover", a.requireAdmin(http.HandlerFunc(a.handleAdminSetCover)))
+	mux.Handle("PUT /api/v1/admin/libraries/{id}/cover/community", a.requireAdmin(http.HandlerFunc(a.handleAdminSetCommunityCover)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/cover", a.requireAdmin(http.HandlerFunc(a.handleAdminDeleteCover)))
 
 	// Filesystem-based shares: named sets of path rules, granted to users.

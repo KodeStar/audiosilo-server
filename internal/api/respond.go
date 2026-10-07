@@ -73,9 +73,11 @@ const (
 	codeBookNotFound       = "book_not_found"
 	codeMetadataOff        = "metadata_off"
 	codeUnsupportedImage   = "unsupported_image"
+	codeCoverUnavailable   = "cover_unavailable"
 	codeTooLarge           = "too_large"
 	codeInvalidSchedule    = "invalid_schedule"
 	codeInvalidPattern     = "invalid_pattern"
+	codeInvalidMetaSource  = "invalid_metadata_source"
 	codeNotIndexable       = "not_indexable"
 	codeCurrentDevice      = "current_device"
 	codeInvalidRange       = "invalid_range"
@@ -94,6 +96,10 @@ const (
 	codeQueueFull          = "queue_full"
 	codeCollectionFull     = "collection_full"
 	codeCollectionsFull    = "collections_full"
+	codeNoRegion           = "no_region"
+	codeMatchRunBusy       = "match_run_busy"
+	codeMatchRunNotReady   = "match_run_not_ready"
+	codeMatchRunNotRunning = "match_run_not_running"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.
@@ -151,6 +157,8 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidSchedule, err.Error())
 	case errors.Is(err, library.ErrInvalidIgnore):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidPattern, err.Error())
+	case errors.Is(err, catalog.ErrInvalidMetadataSource):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidMetaSource, err.Error())
 	case errors.Is(err, catalog.ErrNameTaken):
 		writeErrorCode(w, http.StatusConflict, codeNameTaken, "name already taken")
 	case errors.Is(err, catalog.ErrInvalidCursor):

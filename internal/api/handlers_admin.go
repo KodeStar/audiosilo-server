@@ -346,6 +346,7 @@ type adminLibrary struct {
 	// when the next scheduled scan is due.
 	ScanSchedule   string   `json:"scan_schedule"`
 	IgnorePatterns []string `json:"ignore_patterns"`
+	MetadataSource string   `json:"metadata_source"`
 	NextScanAt     string   `json:"next_scan_at,omitempty"`
 }
 
@@ -384,6 +385,7 @@ func (a *API) adminLibraries(ctx context.Context) ([]adminLibrary, error) {
 			Scan:           a.scanner.Progress(l.ID),
 			ScanSchedule:   l.ScanSchedule,
 			IgnorePatterns: l.IgnorePatterns,
+			MetadataSource: l.MetadataSource,
 		}
 		if at, ok := next[l.ID]; ok {
 			out[i].NextScanAt = at.UTC().Format(time.RFC3339)
@@ -432,6 +434,7 @@ type libraryRequest struct {
 	DefaultView    string    `json:"default_view"`
 	ScanSchedule   *string   `json:"scan_schedule"`
 	IgnorePatterns *[]string `json:"ignore_patterns"`
+	MetadataSource *string   `json:"metadata_source"`
 }
 
 // changes are the fields an edit sent, for the audit log.
@@ -448,13 +451,16 @@ func (req libraryRequest) changes() map[string]any {
 	if req.IgnorePatterns != nil {
 		d["ignore_patterns"] = len(*req.IgnorePatterns)
 	}
+	if req.MetadataSource != nil {
+		d["metadata_source"] = *req.MetadataSource
+	}
 	return d
 }
 
 // patch is the request as a validated edit (library.ValidatePatch's errors).
 func (req libraryRequest) patch() (catalog.LibraryPatch, error) {
 	p := catalog.LibraryPatch{Name: req.Name, Root: req.Root, DefaultView: req.DefaultView,
-		ScanSchedule: req.ScanSchedule, IgnorePatterns: req.IgnorePatterns}
+		ScanSchedule: req.ScanSchedule, IgnorePatterns: req.IgnorePatterns, MetadataSource: req.MetadataSource}
 	return p, library.ValidatePatch(&p)
 }
 
@@ -486,9 +492,10 @@ func (a *API) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, created)
 }
 
-// handleUpdateLibrary edits a library: name, root, default view, scan schedule and
-// ignore rules. A new root or new ignore rules make the index stale, so either
-// queues a rescan, returned as `job`; browsing still works immediately.
+// handleUpdateLibrary edits a library: name, root, default view, scan schedule,
+// ignore rules and metadata source. A new root or new ignore rules make the index
+// stale, so either queues a rescan, returned as `job`; browsing still works
+// immediately. A new metadata source re-resolves the books before it answers.
 func (a *API) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {

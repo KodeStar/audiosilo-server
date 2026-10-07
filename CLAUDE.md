@@ -105,9 +105,10 @@ internal/store/       SQLite (modernc, pure Go) open + embedded migrations (inte
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
-internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing)
+internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structural path parsing, the scan's baseline); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values)
 internal/media/       Range streaming, download, embedded cover extraction
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, pathfacts.go; works/search fallback for an older metaserve); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
+internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
@@ -380,9 +381,10 @@ admin overrides; see Metadata overrides below).
   or served as a positive blank work. Degradation: metadata off
   -> 404; missing/blank `id` -> 400; malformed `id` -> 400; unknown work id ->
   404; upstream error -> 502.
-  Config is `metadata.{enabled,base_url}` (env `AUDIOSILO_METADATA_ENABLED` /
-  `AUDIOSILO_METADATA_BASE_URL`; `base_url` must be an absolute http(s) URL when
-  enabled) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
+  Config is `metadata.{enabled,base_url,region}` (env `AUDIOSILO_METADATA_ENABLED` /
+  `AUDIOSILO_METADATA_BASE_URL` / `AUDIOSILO_METADATA_REGION`; `base_url` must be an
+  absolute http(s) URL when enabled; `region`, the preferred Audible marketplace, one
+  of `config.Regions` or "", applies live) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
   is constructed in `api.New` whenever `base_url` is valid (`MetadataConfig.ValidBaseURL`),
   regardless of `enabled`, and the live config's `metadata.enabled` gates it - so an admin
   can flip it on/off without a restart (Server settings, below). The handler and the
@@ -611,7 +613,7 @@ admin overrides; see Metadata overrides below).
   `published` on every book and `description` only on `GET /libraries/{id}/item` (api's
   `itemBook` adds it; `catalog.Book` keeps it `json:"-"` so list, search and recent pages
   stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Validation: `normalizeOverride`; sources: a scanned value is `path` when
-  it equals what `DeriveFromPath` yields, else `tag`; an override is `edited` or
+  it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
   `MoveDurableState` carries overrides and custom covers as one set: when the moved book
@@ -619,6 +621,16 @@ admin overrides; see Metadata overrides below).
   them (with enrichment) in a transaction of their own, so a failure carrying the per-user
   state can't strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
   back) with its own first part, nor a joined book renamed away from its override with its first disc (`reclassified`).
+  **Metadata source** (`libraries.metadata_source`, `0032`; `catalog.MetadataFromTags`, the
+  default, or `MetadataFromPath`; admin-only on the wire as `metadata_source`, PATCH 400
+  `invalid_metadata_source`): a path-first library resolves the scanned layer with the folder
+  layout over the tags (`bookLayers.scannedFields`: `metadata.FromPathLayout`, where one folder
+  above the book is its AUTHOR, not its series as `DeriveFromPath` reads it; a layout value goes
+  over a tag's wherever it says anything and replaces the baseline's own reading even with
+  nothing; the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it; the position goes with the series: the layout's own, else
+  the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
+  and `UpdateLibrary` re-resolves the library's books (`refreshLibrary`) in the edit's own
+  transaction, no rescan (about 1 s per 5,000 books).
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
   with a tag read (`media.EmbeddedCover`, no ffprobe).
@@ -638,7 +650,7 @@ admin overrides; see Metadata overrides below).
   `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
   STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
   `workSem` via `fetchWork`. The match gets the book's facts separately
-  (`matchParams`): the path's LAYOUT (`derivePathFacts`: disc/track folders dropped,
+  (`matchParams`): the path's LAYOUT (`metadata.ReadPathLayout`: disc/track folders dropped,
   top folder = author, holding folder = series, leaf = a title guess sent RAW -
   metaserve is the one place that reads `SW06 - `/`Sharpe - 08 - `/`02. `
   numbering and takes the position from it) then the tagged title, path + tag
@@ -654,7 +666,30 @@ admin overrides; see Metadata overrides below).
   text, else `CleanTitle` + author) scored by the tag-only `scoreCandidate`, and
   the missing route is remembered for 15 min (`matchUnsupportedUntil`); a 503/5xx
   from works/match is an outage (502), never a fallback; identifiers normalized for
-  the exact lookup; metadata off -> 404 `metadata_off`);
+  the exact lookup; metadata off -> 404 `metadata_off`). Each recording keeps its
+  ASINs' marketplaces (`asin_refs`) and `asins` is ordered by `metadata.region`
+  (`orderASINs`: the preferred store's, then `us`, then the rest; metaserve lists
+  them by region, so without it `au` beat `uk`), `asin_region` names the first's;
+  `meta.DefaultRecording` (identifier's, else closest runtime, the preferred
+  marketplace breaking a tie) sets each candidate's `default_recording_id`, which
+  the dialog starts from (the console has no copy of the rule). **Bulk matching**
+  (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
+  `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
+  `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
+  its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
+  network, and `library` must not import `meta`); 2 workers, `Limit: 2` works
+  expanded per book, 5 failures in a row stop it (`metadata_unavailable`), metadata
+  off stops it (an apply too: back to ready, as a cancel; every endpoint, cancel
+  included, 404s `metadata_off` then). A run only records (`match_run_items`: outcome auto/review/none/error,
+  the best candidate's `catalog.MatchProposal`); apply writes community overrides
+  via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep
+  checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,
+  never a position beside another series, a cover only for a book with none), which
+  also computes each item's `changes` for the review, so the two can't disagree.
+  Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN. A repick only touches an
+  ASIN whose override is `source=community`. `InterruptMatchRuns` (launcher, at
+  start) settles runs a stopped server left: matching -> interrupted, applying ->
+  ready. Newest 10 runs kept. Audited `book.match_run|asin_repick|match_apply|match_stop`;
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
   `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id
   (`meta.Service.WorkIDs`: per distinct normalized identifier, first the cached enrichment's
@@ -681,6 +716,19 @@ admin overrides; see Metadata overrides below).
   paths skip the request timeout, so the cover upload stays bounded.
   Error codes `book_not_found`, `invalid_override` (+ `field`), `too_large`,
   `unsupported_image`. The internal book id appears only inside the opaque cursor.
+  **Community covers** (`api/handlers_community_covers.go`): a match candidate's `cover_url` is
+  an image on its own host (Audible's CDN, Open Library), which the console's CSP can't load, so
+  the server fetches it (`meta.Service.FetchCover`: http(s) only, every connection's resolved
+  address checked public at dial time, redirects included (`publicAddr`; no proxy), <= 3
+  redirects, 15 s, `maxConcurrentCoverFetches`, never holding `coverReads`).
+  `POST /admin/meta/covers` (`{urls, size}`, <= 12) returns thumbnails as `data:` URLs in
+  order (`""` = couldn't be fetched or decoded; cached in the thumbnail cache by URL, a failed
+  fetch not; each holds `communityReads` from its fetch to the end of its decode); `PUT /admin/libraries/{id}/cover/community?path=` (`{url}`) keeps one as the book's
+  custom cover through `saveCustomCover`, the upload's own path, once `keepableCover` has read its
+  header (413 past `media.MaxThumbnailSourcePixels`), re-encoded within 1600 px first when it is
+  over 5 MiB (audited `book.cover_set`, `source: community`); 400 for a URL
+  that isn't http(s), 502 `cover_unavailable`, 413/415 as an upload. Both 404 `metadata_off`
+  while metadata is off (`metadataOff`). Tests swap the fetch through `API.fetchCover`.
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
   covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
   thumbnails as `data:` URLs in request order (`""` = no art), resolved like

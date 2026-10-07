@@ -12,6 +12,15 @@ function numberFormat(lang: string, opts: Intl.NumberFormatOptions = {}): Intl.N
   return f;
 }
 
+const lists = new Map<string, Intl.ListFormat>();
+
+/** "Cover, Narrator, and ASIN": a list joined the language's way. */
+export function formatList(items: string[], lang: string): string {
+  let f = lists.get(lang);
+  if (!f) lists.set(lang, (f = new Intl.ListFormat(lang, { style: 'long', type: 'conjunction' })));
+  return f.format(items);
+}
+
 /** 3,249 / 3.249 / 3 249: thousands separators, tabular in the UI via CSS. */
 export function formatNumber(n: number, lang: string): string {
   return numberFormat(lang).format(n);

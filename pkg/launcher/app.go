@@ -201,6 +201,11 @@ func Run(ctx context.Context, opts Options) error {
 	go backups.Run(ctx)
 
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
+	// Bulk match runs a stopped server left working: matching ones are
+	// interrupted, applying ones go back to ready (what they applied is marked).
+	if err := cat.InterruptMatchRuns(ctx); err != nil {
+		log.Warn("settle interrupted match runs failed", "err", err)
+	}
 	go retention(ctx, cat, authSvc, a.SessionRetention, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})

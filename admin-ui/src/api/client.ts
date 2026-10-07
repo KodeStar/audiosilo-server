@@ -31,6 +31,11 @@ import type {
   ListeningDays,
   ListeningSession,
   MatchCandidate,
+  MatchOutcome,
+  MatchRun,
+  MatchRunItemPage,
+  MatchRunMode,
+  MatchScope,
   ProgressEdit,
   ScanRun,
   ScanRunPage,
@@ -279,6 +284,8 @@ export type MatchBy = { q?: string; asin?: string; isbn?: string };
 /** The cover thumbnail sizes POST /admin/covers renders (handlers_covers.go). */
 export type ThumbSize = 160 | 320 | 640;
 
+/** The server's cap on one POST /admin/meta/covers (handlers_community_covers.go). */
+export const COMMUNITY_COVERS_LIMIT = 12;
 /** The server's cap on one bulk edit (handlers_catalog.go), applied all or nothing. */
 export const BULK_LIMIT = 1000;
 /** The server's cap on the books one POST /admin/books/works resolves (handlers_catalog.go). */
@@ -443,6 +450,20 @@ export const api = {
       'GET',
       `/admin/libraries/${libraryId}/book/match${bookQuery({ path, ...by })}`,
     ),
+  /** Bulk matching: the kept runs, newest first, and the marketplace a new one prefers. */
+  matchRuns: () => request<{ runs: MatchRun[]; region: string }>('GET', '/admin/match-runs'),
+  /** Starts matching every unmatched book (of one library), or a repick, in the background. */
+  startMatchRun: (opts: { library_id?: number; mode?: MatchRunMode }) =>
+    request<MatchRun>('POST', '/admin/match-runs', opts),
+  matchRun: (id: number) => request<MatchRun>('GET', `/admin/match-runs/${id}`),
+  matchRunItems: (id: number, opts: { outcome?: MatchOutcome; after?: number; limit?: number }) =>
+    request<MatchRunItemPage>('GET', `/admin/match-runs/${id}/items${bookQuery(opts)}`),
+  /** Writes the confident matches (less `exclude`, plus `include`) under `scope`, in the background. */
+  applyMatchRun: (
+    id: number,
+    body: { scope: MatchScope; include?: number[]; exclude?: number[] },
+  ) => request<MatchRun>('POST', `/admin/match-runs/${id}/apply`, body),
+  cancelMatchRun: (id: number) => request<void>('POST', `/admin/match-runs/${id}/cancel`),
   /** The book's community metadata (series rails for the Series gaps). */
   bookMeta: (libraryId: number, path: string) =>
     request<BookMeta>('GET', `/libraries/${libraryId}/meta${pathQuery(path)}`),
@@ -458,6 +479,14 @@ export const api = {
       raw: image,
     });
   },
+  /** Thumbnails of community cover images (match candidates' cover_url), as data: URLs or "", in order (at most COMMUNITY_COVERS_LIMIT). */
+  communityCovers: (urls: string[], size: ThumbSize = 160) =>
+    request<{ covers: string[] }>('POST', '/admin/meta/covers', { urls, size }),
+  /** Fetches a community cover on the server and keeps it as the book's custom cover. */
+  setCommunityCover: (libraryId: number, path: string, url: string) =>
+    request<void>('PUT', `/admin/libraries/${libraryId}/cover/community${pathQuery(path)}`, {
+      url,
+    }),
   deleteCover: (libraryId: number, path: string) =>
     request<void>('DELETE', `/admin/libraries/${libraryId}/cover${pathQuery(path)}`),
   /** Reads one book's files again now; answers with its page (404 not_indexable if it's gone). */

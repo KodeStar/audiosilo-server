@@ -227,11 +227,31 @@ describe('settings', () => {
     expect(toggle).not.toBeChecked();
   });
 
+  it('sets the preferred Audible marketplace', async () => {
+    const base = settingsWith();
+    const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));
+    const user = userEvent.setup();
+    renderApp('/server?topic=metadata');
+    const select = await screen.findByRole('combobox', { name: /Audible marketplace/ });
+    expect(select).toHaveValue('');
+    await user.selectOptions(select, 'United Kingdom (audible.co.uk)');
+    await user.click(
+      within(select.closest('section') as HTMLElement).getByRole('button', {
+        name: 'Save changes',
+      }),
+    );
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ metadata: { region: 'uk' } }),
+    );
+  });
+
   it("can't turn metadata on without a configured service, and says how to fix it", async () => {
     mockFetch(
       routes({
         'GET /admin/settings': {
-          body: settingsWith({ metadata: { enabled: false, base_url: '', available: false } }),
+          body: settingsWith({
+            metadata: { enabled: false, base_url: '', region: '', available: false },
+          }),
         },
       }),
     );

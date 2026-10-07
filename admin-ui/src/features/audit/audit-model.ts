@@ -23,7 +23,7 @@ export const AUDIT_AREAS = [
 type Translate = (key: string, opts?: Record<string, unknown>) => string;
 
 /** Details whose values are codes with words of their own (`audit.enum.<key>.<value>`). */
-const ENUMS = new Set(['password', 'mode', 'kind', 'source', 'role', 'error']);
+const ENUMS = new Set(['password', 'mode', 'kind', 'source', 'role', 'error', 'scope']);
 
 /** How numbers and times are written in the console's language. */
 export interface Formatters {

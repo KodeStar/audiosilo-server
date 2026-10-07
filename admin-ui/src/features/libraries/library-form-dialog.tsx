@@ -6,8 +6,15 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Database, FolderSearch } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
-import { invalidateLibraries, noteScanStarted, useDirs, useLibraries } from '@/api/hooks';
-import type { AdminLibrary, Job, Library } from '@/api/types';
+import {
+  invalidateLibraries,
+  invalidateLibraryBooks,
+  keys,
+  noteScanStarted,
+  useDirs,
+  useLibraries,
+} from '@/api/hooks';
+import { METADATA_SOURCES, type AdminLibrary, type Job, type Library } from '@/api/types';
 import { FolderBrowser } from '@/components/folder-browser';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
@@ -37,8 +44,16 @@ const schema = z.object({
   schedule: z.enum(SCHEDULE_CHOICES as [ScheduleChoice, ...ScheduleChoice[]]),
   time: z.string(),
   ignore: z.string(),
+  source: z.enum(METADATA_SOURCES),
 });
 type Values = z.infer<typeof schema>;
+
+/** The field a refused save's error code belongs under (anything else: the folder). */
+const FIELD_BY_CODE: Partial<Record<string, keyof Values>> = {
+  invalid_schedule: 'time',
+  invalid_pattern: 'ignore',
+  invalid_metadata_source: 'source',
+};
 
 /**
  * Add a library, or (with `library`) rename it or point it at another folder.
@@ -87,6 +102,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       schedule: current.choice,
       time: current.time,
       ignore: patternsToText(library?.ignore_patterns ?? []),
+      source: library?.metadata_source ?? 'tags',
     },
   });
   const { errors, isSubmitting } = form.formState;
@@ -98,6 +114,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       root: v.folder,
       scan_schedule: joinSchedule(v.schedule, v.time),
       ignore_patterns: patterns,
+      metadata_source: v.source,
     };
     try {
       // A new library is always scanned; an edit only when the server queued a
@@ -107,6 +124,12 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
         : await api.createLibrary(lib);
       const rescans = !library || !!saved.job;
       invalidateLibraries(qc);
+      // A new source re-resolved every book of the library on the server, and with
+      // their titles and authors the Health issues (duplicates are grouped by them).
+      if (library && v.source !== library.metadata_source) {
+        invalidateLibraryBooks(qc, library.id);
+        void qc.invalidateQueries({ queryKey: keys.issues });
+      }
       if (rescans) noteScanStarted(qc, saved.id);
       toast.add({
         title: t(library ? 'libraries.toast.saved' : 'libraries.toast.added', { name: v.name }),
@@ -117,12 +140,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
       });
       onDone();
     } catch (err) {
-      const field =
-        err instanceof ApiError && err.code === 'invalid_schedule'
-          ? 'time'
-          : err instanceof ApiError && err.code === 'invalid_pattern'
-            ? 'ignore'
-            : 'folder';
+      const field = (err instanceof ApiError && err.code && FIELD_BY_CODE[err.code]) || 'folder';
       form.setError(field, { message: errorMessage(err, t) });
     }
   });
@@ -140,6 +158,7 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
   const folderError = fieldMessage(errors.folder?.message, t);
   const timeError = fieldMessage(errors.time?.message, t);
   const ignoreError = fieldMessage(errors.ignore?.message, t);
+  const sourceError = fieldMessage(errors.source?.message, t);
   const schedule = form.watch('schedule');
 
   return (
@@ -245,6 +264,25 @@ function LibraryForm({ library, onDone }: { library?: AdminLibrary; onDone: () =
             aria-describedby={describedBy('library-ignore', !!ignoreError, true)}
             {...form.register('ignore')}
           />
+        </Field>
+        <Field
+          htmlFor="library-source"
+          label={t('libraries.form.source')}
+          description={t('libraries.form.sourceHint')}
+          error={sourceError}
+        >
+          <NativeSelect
+            id="library-source"
+            aria-invalid={sourceError ? true : undefined}
+            aria-describedby={describedBy('library-source', !!sourceError, true)}
+            {...form.register('source')}
+          >
+            {METADATA_SOURCES.map((s) => (
+              <option key={s} value={s}>
+                {t(`libraries.source.${s}`)}
+              </option>
+            ))}
+          </NativeSelect>
         </Field>
       </DialogBody>
       <DialogFormFooter

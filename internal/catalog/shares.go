@@ -276,7 +276,8 @@ func (c *Catalog) AccessibleLibraries(ctx context.Context, userID int64, isAdmin
 		return c.ListLibraries(ctx)
 	}
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT l.id, l.name, l.root, l.default_view, l.sort_order, l.scan_schedule, l.ignore_patterns
+		`SELECT DISTINCT l.id, l.name, l.root, l.default_view, l.sort_order, l.scan_schedule, l.ignore_patterns,
+		        l.metadata_source
 		   FROM libraries l
 		   JOIN share_paths sp ON sp.library_id = l.id
 		   JOIN user_share_access usa ON usa.share_id = sp.share_id

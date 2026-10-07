@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 )
 
@@ -352,8 +354,7 @@ func (a *API) handleAdminBulkEdit(w http.ResponseWriter, r *http.Request) {
 // Responses: metadata off -> 404 (code metadata_off); no book -> 404; upstream
 // down -> 502; otherwise 200 {"candidates": [...]} (possibly empty).
 func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
-	if !a.metadataOn() {
-		writeErrorCode(w, http.StatusNotFound, codeMetadataOff, "community metadata is turned off")
+	if a.metadataOff(w) {
 		return
 	}
 	lib, p, status, msg := a.authorizedPath(r)
@@ -367,12 +368,9 @@ func (a *API) handleAdminMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	mq := meta.MatchQuery{
-		Text: strings.TrimSpace(query.Get("q")), ASIN: strings.TrimSpace(query.Get("asin")),
-		ISBN: strings.TrimSpace(query.Get("isbn")), Title: book.Title, Series: book.Series,
-		SeriesIndex: book.SeriesIndex, Author: book.Author, Duration: book.Duration,
-		Path: book.RelPath, IsFolder: book.IsFolder, BookASIN: book.ASIN, BookISBN: book.ISBN,
-	}
+	mq := matchrun.QueryFor(book, a.config().Metadata.PreferredRegion())
+	mq.Text, mq.ASIN = strings.TrimSpace(query.Get("q")), strings.TrimSpace(query.Get("asin"))
+	mq.ISBN = strings.TrimSpace(query.Get("isbn"))
 	if utf8.RuneCountInString(mq.Text) > maxMatchQuery || len(mq.ASIN) > maxMatchID || len(mq.ISBN) > maxMatchID {
 		writeError(w, http.StatusBadRequest, "query too long")
 		return
@@ -411,8 +409,7 @@ type bookWork struct {
 // no indexed book is answered with an empty work_id (not failed), like a book
 // without identifiers.
 func (a *API) handleAdminBookWorks(w http.ResponseWriter, r *http.Request) {
-	if !a.metadataOn() {
-		writeErrorCode(w, http.StatusNotFound, codeMetadataOff, "community metadata is turned off")
+	if a.metadataOff(w) {
 		return
 	}
 	var req struct {
@@ -460,14 +457,20 @@ func (a *API) handleAdminSetCover(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, catalog.MaxCoverBytes))
 	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			err = catalog.ErrCoverTooLarge
-		} else {
+		if tooBig := (*http.MaxBytesError)(nil); !errors.As(err, &tooBig) {
 			writeError(w, http.StatusBadRequest, "could not read the image")
 			return
 		}
+		data = nil
+		err = catalog.ErrCoverTooLarge
 	}
+	a.saveCustomCover(w, r, lib, p, data, err, nil)
+}
+
+// saveCustomCover keeps data as the book's custom cover (catalog.SetCover), unless
+// err already says why not, then audits it (bytes, plus details) and answers.
+func (a *API) saveCustomCover(w http.ResponseWriter, r *http.Request, lib *catalog.Library, p string,
+	data []byte, err error, details map[string]any) {
 	if err == nil {
 		err = a.cat.SetCover(r.Context(), lib.ID, p, data, userFrom(r.Context()).ID)
 	}
@@ -475,7 +478,9 @@ func (a *API) handleAdminSetCover(w http.ResponseWriter, r *http.Request) {
 		a.writeBookError(w, err, "set cover failed", "could not save the cover", "library", lib.ID, "path", p)
 		return
 	}
-	a.audit(r, "book.cover_set", lib.Name+": "+p, map[string]any{"bytes": len(data)})
+	audit := map[string]any{"bytes": len(data)}
+	maps.Copy(audit, details)
+	a.audit(r, "book.cover_set", lib.Name+": "+p, audit)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cover set", "path": p})
 }
 

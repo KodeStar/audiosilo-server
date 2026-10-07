@@ -94,3 +94,7 @@ demo:
 metadata:
   enabled: true                          # [AUDIOSILO_METADATA_ENABLED]
   base_url: "https://meta.audiosilo.app" # metaserve base URL [AUDIOSILO_METADATA_BASE_URL]
+  # The Audible marketplace whose ASIN a community match takes when a recording
+  # sells in several: us, uk, ca, au, de, fr, es, it, jp, in or br. Empty takes
+  # the US store's. [AUDIOSILO_METADATA_REGION]
+  region: ""

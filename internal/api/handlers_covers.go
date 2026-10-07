@@ -72,18 +72,7 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	switch {
-	case len(req.Books) == 0:
-		writeError(w, http.StatusBadRequest, "books is required")
-		return
-	case len(req.Books) > maxCoverBatch:
-		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
-			fmt.Sprintf("too many covers in one request (at most %d)", maxCoverBatch))
-		return
-	case req.Size == 0:
-		req.Size = defaultThumbSize
-	case !slices.Contains(thumbSizes, req.Size):
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("size must be one of %v", thumbSizes))
+	if !thumbBatch(w, "books", len(req.Books), maxCoverBatch, &req.Size) {
 		return
 	}
 	ctx := r.Context()
@@ -134,7 +123,7 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 			if err != nil || jpg == nil {
 				return
 			}
-			out[i].Data = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpg)
+			out[i].Data = jpegDataURL(jpg)
 			recs[i] = rec
 		})
 	}
@@ -277,6 +266,13 @@ func (a *API) makeThumbnail(ctx context.Context, lib *catalog.Library, path stri
 	if raw == nil {
 		return nil, nil
 	}
+	return a.decodeThumbnail(ctx, raw, size, "library", lib.ID, "path", path)
+}
+
+// decodeThumbnail scales art to size (media.Thumbnail), one of the decodes thumbSem
+// bounds: nil when the art can't be decoded, an error only when ctx ended. logArgs
+// name the art in the debug log.
+func (a *API) decodeThumbnail(ctx context.Context, raw []byte, size int, logArgs ...any) ([]byte, error) {
 	select {
 	case a.thumbSem <- struct{}{}:
 	case <-ctx.Done():
@@ -285,10 +281,36 @@ func (a *API) makeThumbnail(ctx context.Context, lib *catalog.Library, path stri
 	jpg, err := media.Thumbnail(raw, size)
 	<-a.thumbSem
 	if err != nil {
-		a.log.Debug("cover thumbnail failed", "err", err, "library", lib.ID, "path", path)
+		a.log.Debug("cover thumbnail failed", append([]any{"err", err}, logArgs...)...)
 		return nil, nil
 	}
 	return jpg, nil
+}
+
+// jpegDataURL is a JPEG as the data: URL the console shows it by.
+func jpegDataURL(jpg []byte) string {
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpg)
+}
+
+// thumbBatch checks a thumbnail batch: its list (named field) holds 1 to max
+// entries, and its size is one of thumbSizes, an unset one defaulting to
+// defaultThumbSize; false when it wrote the 400.
+func thumbBatch(w http.ResponseWriter, field string, n, max int, size *int) bool {
+	switch {
+	case n == 0:
+		writeError(w, http.StatusBadRequest, field+" is required")
+		return false
+	case n > max:
+		writeErrorCode(w, http.StatusBadRequest, codeTooLarge,
+			fmt.Sprintf("too many covers in one request (at most %d)", max))
+		return false
+	case *size == 0:
+		*size = defaultThumbSize
+	case !slices.Contains(thumbSizes, *size):
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("size must be one of %v", thumbSizes))
+		return false
+	}
+	return true
 }
 
 // coverColorWriteTimeout bounds recording thumbnails' colours, which runs before
