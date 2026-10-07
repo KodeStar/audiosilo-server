@@ -376,6 +376,62 @@ func TestRepick(t *testing.T) {
 	if run.Total != 1 || len(e.items(t, run, "")) != 0 {
 		t.Fatalf("nothing to repick = %+v", run)
 	}
+
+	// The recording is listed twice in the UK store and the book has the second:
+	// it is the UK store's already, nothing to switch.
+	twice := hit
+	twice.Recordings = slices.Clone(hit.Recordings)
+	twice.Recordings[0].ASINRefs = append(slices.Clone(hit.Recordings[0].ASINRefs), meta.ASINRef{Region: "uk", ASIN: "B0UK000002"})
+	e.matcher.byASIN["B0UK000002"] = []meta.MatchCandidate{twice}
+	if err := e.cat.EditBook(ctx, e.lib, "A/Community", catalog.BookEdit{Set: map[string]string{"asin": "B0UK000002"}, Source: catalog.SourceCommunity}); err != nil {
+		t.Fatal(err)
+	}
+	if run = e.start(t, catalog.MatchModeRepick, "uk"); run.Total != 1 || len(e.items(t, run, "")) != 0 {
+		t.Fatalf("second UK listing = %+v", run)
+	}
+}
+
+// TestApplyStopsWhenMetadataTurnsOff: an apply hands out no more books once
+// community metadata is off (a cover is an outbound fetch, and Stop answers
+// metadata_off then); the run is ready again, the rest still to apply.
+func TestApplyStopsWhenMetadataTurnsOff(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/a", "Book", "", no)
+	e.matcher.byTitle["Book"] = []meta.MatchCandidate{cand("the-martian", 97, "https://c/rec.jpg")}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	e.enabled.Store(false)
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	run, _ = e.cat.GetMatchRun(ctx, run.ID)
+	if run.Status != catalog.MatchReady || run.Counts.Pending != 1 || e.covers.Load() != 0 {
+		t.Fatalf("run = %+v, covers %d; want ready with the book still to apply", run, e.covers.Load())
+	}
+}
+
+// TestCancelledApplyMarksWhatWentIn: a book whose writes all went in before the
+// admin stopped the apply counts as applied, not as one to take again.
+func TestCancelledApplyMarksWhatWentIn(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/a", "Book", "", no)
+	e.matcher.byTitle["Book"] = []meta.MatchCandidate{cand("the-martian", 97, "https://c/rec.jpg")}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	// The cover, the item's last write, lands as the admin presses Stop.
+	e.runner.saveCover = func(context.Context, int64, string, string, int64) error {
+		e.runner.Cancel(run.ID)
+		return nil
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	run, _ = e.cat.GetMatchRun(ctx, run.ID)
+	if run.Status != catalog.MatchReady || run.Counts.Applied != 1 || run.Counts.Pending != 0 {
+		t.Fatalf("run = %+v, want ready with the book marked applied", run)
+	}
 }
 
 func TestApplyCoverFailureAndInterruptedApply(t *testing.T) {

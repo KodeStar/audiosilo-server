@@ -667,7 +667,8 @@ admin overrides; see Metadata overrides below).
   its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
   network, and `library` must not import `meta`); 2 workers, `Limit: 2` works
   expanded per book, 5 failures in a row stop it (`metadata_unavailable`), metadata
-  off stops it. A run only records (`match_run_items`: outcome auto/review/none/error,
+  off stops it (an apply too: back to ready, as a cancel; every endpoint, cancel
+  included, 404s `metadata_off` then). A run only records (`match_run_items`: outcome auto/review/none/error,
   the best candidate's `catalog.MatchProposal`); apply writes community overrides
   via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep
   checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,

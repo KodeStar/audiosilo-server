@@ -94,10 +94,12 @@ export function BulkMatch() {
     seen.current = stamp;
   }, [stamp, active, applied, qc]);
 
-  const start = async (mode: 'match' | 'repick') => {
+  // Start over runs the same books again: the run's library, not the select's
+  // (hidden while a run waits for review, and reset when the page reloads).
+  const start = async (mode: 'match' | 'repick', library = libraryId) => {
     setBusy(true);
     try {
-      await api.startMatchRun({ library_id: libraryId || undefined, mode });
+      await api.startMatchRun({ library_id: library || undefined, mode });
       await qc.invalidateQueries({ queryKey: keys.matchRuns });
     } catch (err) {
       toastError(t('health.bulkMatch.startFailed'), err);
@@ -148,7 +150,11 @@ export function BulkMatch() {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <Summary run={run} lang={lang} />
           <div className="ml-auto flex flex-wrap gap-2">
-            <Button variant="ghost" disabled={busy} onClick={() => void start(run.mode)}>
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => void start(run.mode, run.library_id ?? 0)}
+            >
               {t('health.bulkMatch.startOver')}
             </Button>
             <Button variant="brand" onClick={() => setReviewing(true)}>
@@ -279,12 +285,19 @@ function LastRun({ run, lang }: { run: MatchRun; lang: string }) {
   let text: string;
   switch (run.status) {
     case 'applied':
-    case 'ready':
-      text = t('health.bulkMatch.last.applied', {
-        ...counted(run.counts.applied, lang),
-        when: formatRelative(run.applied_at ?? run.finished_at ?? run.started_at, lang),
-      });
+    case 'ready': {
+      const { applied, skipped, failed } = run.counts;
+      // A ready run shown here has nothing left to apply; one that never applied
+      // anything found nothing (no candidates, or a repick with none to switch).
+      text =
+        run.status === 'ready' && applied + skipped + failed === 0
+          ? t('health.bulkMatch.last.nothing')
+          : t('health.bulkMatch.last.applied', {
+              ...counted(applied, lang),
+              when: formatRelative(run.applied_at ?? run.finished_at ?? run.started_at, lang),
+            });
       break;
+    }
     case 'failed':
       text = t(`health.bulkMatch.last.failed.${run.error || 'internal'}`);
       break;

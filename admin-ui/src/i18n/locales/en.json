@@ -1070,6 +1070,7 @@
   "health.bulkMatch.repickSummary_other": "{{formatted}} books can switch to their {{country}} ASIN",
   "health.bulkMatch.last.applied_one": "Last run applied {{formatted}} match, {{when}}.",
   "health.bulkMatch.last.applied_other": "Last run applied {{formatted}} matches, {{when}}.",
+  "health.bulkMatch.last.nothing": "The last run found nothing to apply.",
   "health.bulkMatch.last.cancelled": "The last run was stopped before it finished. Nothing was changed.",
   "health.bulkMatch.last.interrupted": "The last run stopped when the server did. Nothing was changed; start again to match these books.",
   "health.bulkMatch.last.failed.metadata_off": "The last run stopped: community metadata was turned off.",

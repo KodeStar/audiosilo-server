@@ -1,7 +1,8 @@
 -- Bulk community matching (Health > Not matched > Find matches): a run matches
 -- many books against the community metadata at once and records what it found for
 -- the admin to review; nothing changes until the admin applies it. A record of the
--- index, not durable user state: the newest few runs are kept (catalog.trimMatchRuns).
+-- index, not durable user state: the newest few runs are kept (catalog.StartMatchRun
+-- drops the rest).
 
 -- One run. library_id NULL = every library. mode: match (books with no ASIN or
 -- ISBN) | repick (books whose community ASIN may have one in the preferred

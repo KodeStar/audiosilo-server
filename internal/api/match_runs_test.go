@@ -164,6 +164,11 @@ func TestMatchRunsStartRefusals(t *testing.T) {
 			t.Errorf("repick without a region = %s, want %s", got, codeNoRegion)
 		}
 	}
+	// Every field is optional, the body too: a match over every library.
+	if resp, got := e.do(t, "POST", "/api/v1/admin/match-runs", adminTok, ""); resp.StatusCode != http.StatusAccepted {
+		t.Errorf("no body = %d %s, want 202", resp.StatusCode, got)
+	}
+	e.api.matchRuns.Wait()
 }
 
 // TestMatchRunsAdminOnly: every route refuses a member (403), and all of them

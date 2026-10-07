@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -182,8 +183,6 @@ feed:
 	wg.Wait()
 }
 
-func always() bool { return true }
-
 // match matches each book, a few at a time, recording an item per book, then
 // settles the run.
 func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book) {
@@ -276,8 +275,10 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 	if rec == nil || rec.ID != c.RecordingID {
 		return nil, nil
 	}
+	// Nothing when it sells there under none, or the book already has one of the
+	// ASINs it sells there under (a recording can be listed twice in one store).
 	want := rec.RegionASIN(region)
-	if want == "" || want == b.ASIN {
+	if want == "" || slices.Contains(rec.ASINRefs, meta.ASINRef{Region: region, ASIN: b.ASIN}) {
 		return nil, nil
 	}
 	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
@@ -328,21 +329,35 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 	return r.cat.GetMatchRun(ctx, runID)
 }
 
-// apply applies each item, a few at a time, then settles the run.
+// apply applies each item, a few at a time, then settles the run. Turning
+// community metadata off stops it as a cancel does (taking a community cover is
+// an outbound fetch, and every match run endpoint, Stop included, answers
+// metadata_off then): back to ready, the rest still to apply.
 func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catalog.MatchRunItem, o ApplyOptions) {
-	each(ctx, items, always, func(it *catalog.MatchRunItem) {
+	off := false // only the feeding goroutine (this one) reads and writes it
+	enabled := func() bool {
+		off = off || !r.enabled()
+		return !off
+	}
+	each(ctx, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run.Mode, it, o)
-		if ctx.Err() != nil {
-			return // not marked: the next apply takes it again
+		// Stopped mid-item: what the stop may have cut short (a failure, a cover
+		// not taken) is not marked, so the next apply takes it again; what went in
+		// is, so it counts as applied rather than coming back as nothing to change.
+		if ctx.Err() != nil && (applied == catalog.ItemFailed || detail == "cover_failed") {
+			return
 		}
-		if err := r.cat.MarkMatchItem(ctx, run.ID, it.ID, applied, detail); err != nil {
+		if err := r.cat.MarkMatchItem(context.WithoutCancel(ctx), run.ID, it.ID, applied, detail); err != nil {
 			r.log.Error("mark match item failed", "run", run.ID, "item", it.ID, "err", err)
 		}
 	})
 	if ctx.Err() != nil && !r.stoppedByAdmin() {
 		return // the server is stopping: the next start puts it back to ready
 	}
-	if err := r.cat.FinishApply(context.WithoutCancel(ctx), run.ID, ctx.Err() != nil); err != nil {
+	if off {
+		r.log.Info("match apply stopped: community metadata is off", "run", run.ID)
+	}
+	if err := r.cat.FinishApply(context.WithoutCancel(ctx), run.ID, ctx.Err() != nil || off); err != nil {
 		r.log.Error("finish match apply failed", "run", run.ID, "err", err)
 	}
 }
@@ -355,7 +370,9 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 	case errors.Is(err, catalog.ErrNotFound):
 		return catalog.ItemSkipped, "book_gone"
 	case err != nil:
-		r.log.Warn("load book for match apply failed", "library", it.LibraryID, "path", it.Path, "err", err)
+		if ctx.Err() == nil {
+			r.log.Warn("load book for match apply failed", "library", it.LibraryID, "path", it.Path, "err", err)
+		}
 		return catalog.ItemFailed, "edit_failed"
 	}
 	set, cover := planFor(mode, o.Scope, st, it.Proposal)
@@ -368,7 +385,9 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 			if errors.Is(err, catalog.ErrNotFound) {
 				return catalog.ItemSkipped, "book_gone"
 			}
-			r.log.Warn("match apply edit failed", "library", it.LibraryID, "path", it.Path, "err", err)
+			if ctx.Err() == nil {
+				r.log.Warn("match apply edit failed", "library", it.LibraryID, "path", it.Path, "err", err)
+			}
 			return catalog.ItemFailed, "edit_failed"
 		}
 	}

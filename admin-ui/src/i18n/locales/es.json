@@ -1145,6 +1145,7 @@
   "health.bulkMatch.repickSummary_other": "{{formatted}} libros pueden pasar a su ASIN de {{country}}",
   "health.bulkMatch.last.applied_one": "La última vez se aplicó {{formatted}} coincidencia, {{when}}.",
   "health.bulkMatch.last.applied_other": "La última vez se aplicaron {{formatted}} coincidencias, {{when}}.",
+  "health.bulkMatch.last.nothing": "La última búsqueda no encontró nada que aplicar.",
   "health.bulkMatch.last.cancelled": "La última búsqueda se detuvo antes de terminar. No se cambió nada.",
   "health.bulkMatch.last.interrupted": "La última búsqueda se detuvo con el servidor. No se cambió nada; empieza de nuevo para asociar estos libros.",
   "health.bulkMatch.last.failed.metadata_off": "La última búsqueda se detuvo: los metadatos de la comunidad se desactivaron.",

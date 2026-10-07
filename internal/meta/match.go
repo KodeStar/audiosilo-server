@@ -173,6 +173,24 @@ func orderASINs(refs []ASINRef, region string) []string {
 	return out
 }
 
+// asinRegion is the marketplace to name asin by, as orderASINs put it first: the
+// preferred one when it sells there, else fallbackRegion when it sells there (a
+// publisher-direct ASIN sold worldwide under one id is listed by region, au
+// first), else the first that lists it.
+func asinRegion(refs []ASINRef, asin, region string) string {
+	best := ""
+	for _, r := range refs {
+		switch {
+		case r.ASIN != asin:
+		case region != "" && r.Region == region:
+			return r.Region
+		case best == "" || r.Region == fallbackRegion:
+			best = r.Region
+		}
+	}
+	return best
+}
+
 // RegionASIN is the recording's ASIN in region, "" when it sells there under none.
 func (r MatchRecording) RegionASIN(region string) string {
 	for _, a := range r.ASINRefs {
@@ -540,12 +558,7 @@ func (s *Service) toCandidate(d *upstreamWorkDetail, cover, region string) *Matc
 		}
 		mr.ASINs = orderASINs(mr.ASINRefs, region)
 		if len(mr.ASINs) > 0 {
-			// The preferred region's when the first is sold there too.
-			for _, a := range mr.ASINRefs {
-				if a.ASIN == mr.ASINs[0] && (mr.ASINRegion == "" || a.Region == region) {
-					mr.ASINRegion = a.Region
-				}
-			}
+			mr.ASINRegion = asinRegion(mr.ASINRefs, mr.ASINs[0], region)
 		}
 		mr.ISBNs = append(mr.ISBNs, r.ISBN...)
 		if c.CoverURL == "" {

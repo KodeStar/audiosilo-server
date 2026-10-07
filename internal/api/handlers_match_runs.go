@@ -46,7 +46,7 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 		LibraryID int64  `json:"library_id"`
 		Mode      string `json:"mode"`
 	}
-	if err := decodeJSON(r, &req, 0); err != nil || req.LibraryID < 0 {
+	if err := decodeJSONOptional(r, &req, 0); err != nil || req.LibraryID < 0 {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}

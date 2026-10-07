@@ -145,22 +145,33 @@ func (c *Catalog) StartMatchRun(ctx context.Context, run MatchRun) (int64, error
 }
 
 // RecordMatchItem stores one matched book's item (nil = nothing worth keeping, as
-// a repick that found no better ASIN) and counts the book done.
+// a repick that found no better ASIN) and counts the book done. The item of a book
+// whose library was deleted since the run listed it is left out (the library's
+// items go with it), never failing the run; ErrNotFound when the run itself is
+// gone (its library was deleted).
 func (c *Catalog) RecordMatchItem(ctx context.Context, runID int64, item *MatchRunItem) error {
 	return c.db.WithTx(ctx, "RecordMatchItem", func(tx *sql.Tx) error {
-		if item != nil {
-			raw, err := json.Marshal(item.Proposal)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO match_run_items(run_id, library_id, path, outcome, score, runner_up, proposal, detail)
-				 VALUES(?,?,?,?,?,?,?,?)`,
-				runID, item.LibraryID, item.Path, item.Outcome, item.Score, item.RunnerUp, string(raw), item.Detail); err != nil {
-				return err
-			}
+		res, err := tx.ExecContext(ctx, `UPDATE match_runs SET done = done + 1 WHERE id = ?`, runID)
+		if err != nil {
+			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE match_runs SET done = done + 1 WHERE id = ?`, runID)
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return ErrNotFound
+		}
+		if item == nil {
+			return nil
+		}
+		raw, err := json.Marshal(item.Proposal)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO match_run_items(run_id, library_id, path, outcome, score, runner_up, proposal, detail)
+			 SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM libraries WHERE id = ?)`,
+			runID, item.LibraryID, item.Path, item.Outcome, item.Score, item.RunnerUp, string(raw), item.Detail,
+			item.LibraryID)
 		return err
 	})
 }

@@ -1070,6 +1070,7 @@
   "health.bulkMatch.repickSummary_other": "{{formatted}} Bücher können zur ASIN aus {{country}} wechseln",
   "health.bulkMatch.last.applied_one": "Letzter Lauf: {{formatted}} Treffer übernommen, {{when}}.",
   "health.bulkMatch.last.applied_other": "Letzter Lauf: {{formatted}} Treffer übernommen, {{when}}.",
+  "health.bulkMatch.last.nothing": "Der letzte Lauf hat nichts zum Übernehmen gefunden.",
   "health.bulkMatch.last.cancelled": "Der letzte Lauf wurde vor dem Ende angehalten. Nichts wurde geändert.",
   "health.bulkMatch.last.interrupted": "Der letzte Lauf endete mit dem Server. Nichts wurde geändert; starte neu, um diese Bücher zuzuordnen.",
   "health.bulkMatch.last.failed.metadata_off": "Der letzte Lauf wurde beendet: Community-Metadaten wurden ausgeschaltet.",

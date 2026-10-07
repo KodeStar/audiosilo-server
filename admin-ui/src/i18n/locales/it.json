@@ -1145,6 +1145,7 @@
   "health.bulkMatch.repickSummary_other": "{{formatted}} libri possono passare all'ASIN di {{country}}",
   "health.bulkMatch.last.applied_one": "Ultima passata: {{formatted}} corrispondenza applicata, {{when}}.",
   "health.bulkMatch.last.applied_other": "Ultima passata: {{formatted}} corrispondenze applicate, {{when}}.",
+  "health.bulkMatch.last.nothing": "L'ultima passata non ha trovato nulla da applicare.",
   "health.bulkMatch.last.cancelled": "L'ultima passata è stata fermata prima della fine. Non è cambiato nulla.",
   "health.bulkMatch.last.interrupted": "L'ultima passata si è fermata con il server. Non è cambiato nulla; ricomincia per associare questi libri.",
   "health.bulkMatch.last.failed.metadata_off": "L'ultima passata si è fermata: i metadati della community sono stati disattivati.",

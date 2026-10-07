@@ -208,4 +208,29 @@ describe('bulk matching', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Find matches' })).toBeEnabled();
   });
+
+  it('says a run that found nothing found nothing, not that it applied none', async () => {
+    const empty = run();
+    empty.counts = { ...empty.counts, auto: 0, pending: 0, review: 0, none: 4 };
+    mockFetch(routes([empty]));
+    renderApp('/health?issue=unmatched');
+    expect(await screen.findByText('The last run found nothing to apply.')).toBeInTheDocument();
+    expect(screen.queryByText(/Last run applied/)).not.toBeInTheDocument();
+  });
+
+  it("starts over on the run's own library", async () => {
+    const calls = mockFetch(
+      routes([run({ library_id: 3, library_name: 'Fiction' })], {
+        'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Start over' }));
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs')?.body,
+      ).toEqual({ library_id: 3, mode: 'match' }),
+    );
+  });
 });

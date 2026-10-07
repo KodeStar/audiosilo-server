@@ -33,6 +33,26 @@ func TestOrderASINs(t *testing.T) {
 	}
 }
 
+// TestASINRegion: the first ASIN is named by the marketplace that put it first,
+// not by the first region listing it (a worldwide id is listed au first).
+func TestASINRegion(t *testing.T) {
+	world := []ASINRef{{"au", "0008460639"}, {"uk", "0008460639"}, {"us", "0008460639"}}
+	for name, tc := range map[string]struct {
+		refs         []ASINRef
+		region, want string
+	}{
+		"preferred":         {world, "uk", "uk"},
+		"no preference: us": {world, "", "us"},
+		"preferred missing": {world, "de", "us"},
+		"neither":           {[]ASINRef{{"au", "B0AU000001"}, {"ca", "B0AU000001"}}, "uk", "au"},
+	} {
+		asins := orderASINs(tc.refs, tc.region)
+		if got := asinRegion(tc.refs, asins[0], tc.region); got != tc.want {
+			t.Errorf("%s: %s, want %s", name, got, tc.want)
+		}
+	}
+}
+
 func TestDefaultRecording(t *testing.T) {
 	c := &MatchCandidate{Recordings: []MatchRecording{
 		{ID: "us-only", RuntimeMin: 600, ASINRefs: []ASINRef{{"us", "B0US000001"}}},

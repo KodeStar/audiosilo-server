@@ -1145,6 +1145,7 @@
   "health.bulkMatch.repickSummary_other": "{{formatted}} livres peuvent passer à leur ASIN {{country}}",
   "health.bulkMatch.last.applied_one": "Dernière passe : {{formatted}} correspondance appliquée, {{when}}.",
   "health.bulkMatch.last.applied_other": "Dernière passe : {{formatted}} correspondances appliquées, {{when}}.",
+  "health.bulkMatch.last.nothing": "La dernière passe n'a rien trouvé à appliquer.",
   "health.bulkMatch.last.cancelled": "La dernière passe a été arrêtée avant la fin. Rien n'a été modifié.",
   "health.bulkMatch.last.interrupted": "La dernière passe s'est arrêtée avec le serveur. Rien n'a été modifié ; relancez-la pour associer ces livres.",
   "health.bulkMatch.last.failed.metadata_off": "La dernière passe s'est arrêtée : les métadonnées communautaires ont été désactivées.",

@@ -25,11 +25,15 @@ export const STORES: Record<(typeof MATCH_REGIONS)[number], string> = {
   br: 'audible.com.br',
 };
 
+const names = new Map<string, Intl.DisplayNames>();
+
 /** A marketplace in words: its country in the console's language ("United Kingdom"). */
 export function regionName(region: string, lang: string): string {
   const code = COUNTRY[region] ?? region.toUpperCase();
   try {
-    return new Intl.DisplayNames([lang], { type: 'region' }).of(code) ?? code;
+    let f = names.get(lang);
+    if (!f) names.set(lang, (f = new Intl.DisplayNames([lang], { type: 'region' })));
+    return f.of(code) ?? code;
   } catch {
     return code;
   }
