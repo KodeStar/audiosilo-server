@@ -178,6 +178,9 @@ describe('bulk matching', () => {
       'title',
       '/mnt/tank/fiction/Andy Weir/The Martian',
     );
+    expect(
+      within(row).getByRole('checkbox', { name: 'Apply to The Martian' }),
+    ).toHaveAccessibleDescription('Andy Weir/The Martian');
     expect(within(row).getByText('Series: Mars #1')).toBeInTheDocument();
     expect(within(row).getByText('96% match')).toBeInTheDocument();
     // ASIN and ISBN only writes less.
@@ -204,6 +207,30 @@ describe('bulk matching', () => {
     // Once it's done the books it matched leave the list: the Health summary is asked again.
     expect(await screen.findByText(/Last run applied/)).toBeInTheDocument();
     await waitFor(() => expect(issuesAsked()).toBeGreaterThan(before));
+  });
+
+  it("shows a gone book's path once, as its title", async () => {
+    const gone: MatchRunItem = {
+      ...confident,
+      id: 12,
+      path: 'Andy Weir/Project Hail Mary',
+      book: { title: '', author: '' },
+      gone: true,
+      changes: {},
+    };
+    mockFetch(
+      routes([run()], {
+        'GET /admin/match-runs/5/items': { body: { items: [gone], next_after: 0 } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Review matches' });
+    expect(await within(dialog).findByText('Andy Weir/Project Hail Mary')).toHaveAttribute(
+      'title',
+      '/mnt/tank/fiction/Andy Weir/Project Hail Mary',
+    );
   });
 
   it('says how the last run ended', async () => {

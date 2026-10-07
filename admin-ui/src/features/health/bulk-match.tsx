@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -562,6 +562,11 @@ function ItemRow({
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
   // The community's series and the book's place in it ("Mars #2").
   const series = seriesLabel(p.values.series, Number(p.values.series_index), lang, t);
+  // The path tells two books of one title apart, read out with the row's controls
+  // too. A book with no title (or one gone) already shows its path as the title.
+  const pathId = useId();
+  const pathLine = item.book.title ? pathId : undefined;
+  const where = joinLibraryPath(root, item.path);
 
   return (
     <li
@@ -576,6 +581,7 @@ function ItemRow({
             checked={chosen}
             onCheckedChange={onToggle}
             aria-label={t('health.bulkMatch.pick', { title })}
+            aria-describedby={pathLine}
           />
         ) : item.applied === 'applied' ? (
           <Check className="size-4 text-success" aria-label={t('health.bulkMatch.item.applied')} />
@@ -591,14 +597,19 @@ function ItemRow({
         />
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate font-semibold">{title}</span>
-        {/* The path in its library, which tells two books apart; the whole one on hover. */}
-        <span
-          className="font-mono text-[11.5px] text-subtle-foreground [overflow-wrap:anywhere]"
-          title={joinLibraryPath(root, item.path)}
-        >
-          {item.path}
+        <span className="truncate font-semibold" title={pathLine ? undefined : where}>
+          {title}
         </span>
+        {/* The path in its library, which tells two books apart; the whole one on hover. */}
+        {pathLine ? (
+          <span
+            id={pathLine}
+            className="font-mono text-[11.5px] text-subtle-foreground [overflow-wrap:anywhere]"
+            title={where}
+          >
+            {item.path}
+          </span>
+        ) : null}
         {candidate ? (
           <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
             <ArrowRight className="mr-1 inline size-3.5 align-[-2px]" aria-hidden="true" />
@@ -662,6 +673,7 @@ function ItemRow({
             search={{ library: item.library_id, path: item.path, match: true }}
             className={buttonVariants({ variant: 'ghost', size: 'sm' })}
             aria-label={t('health.bulkMatch.matchByHand', { title })}
+            aria-describedby={pathLine}
           >
             <span className="max-md:hidden">{t('health.bulkMatch.matchByHandShort')}</span>
             <ArrowRight aria-hidden="true" className="md:hidden" />
