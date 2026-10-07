@@ -181,7 +181,11 @@ shape, `^[a-z][a-z0-9_]{0,31}$`, never the player's set of keys) and `0031` the 
 ended_at)` behind the `annotations` capability's lists (`catalog/annotations.go`: `GET /me/bookmarks`,
 `/me/notes`, `/me/history` newest first, keyset-paged on (timestamp, id) after the access filter, an
 opaque `next_cursor`, each row's `book` attached per page; `PATCH /bookmarks/{id}`, `/notes/{id}` are
-the owner's edits, one writer transaction, 404 for another user's id or a path outside current access). Sharing:
+the owner's edits, one writer transaction, 404 for another user's id or a path outside current access;
+an edit checks only the fields it sets). Their `created_at`, a note's `updated_at` and a listening span's
+`started_at`/`ended_at` are fixed-width UTC milliseconds (`c.stamp`; a client's span times are
+normalised, an unparsable one replaced by the server's), since the lists order by them as text. The
+per-book `GET /libraries/{id}/bookmarks|notes|history` answer `[]` when empty (`null` before). Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
 
