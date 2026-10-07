@@ -1534,6 +1534,8 @@
   "settings.general.nameBody": "Shown in the apps when someone connects, on invites and in this console. Leave it empty for AudioSilo.",
   "settings.general.public_url": "Public address",
   "settings.general.public_urlBody": "The address people use from outside your home, used in invite links and QR codes. Leave it empty to use whatever address the browser used.",
+  "settings.general.lan_url": "Home address",
+  "settings.general.lan_urlBody": "The address devices use on your home network, e.g. http://192.168.1.20:8080. The apps switch to it by themselves when they can reach it. Leave it empty to use the address the browser used when it is a home-network address.",
   "settings.general.history": "Listening history",
   "settings.general.historyBody": "Each listening session records the device and app it was on and the time of day. After this many days that detail is dropped and the session is added into daily totals per person and book, which the Activity pages keep.",
   "settings.general.session_days": "Days to keep sessions",

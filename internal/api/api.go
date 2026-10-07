@@ -225,6 +225,8 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/auth/tokens", a.requireAuth(http.HandlerFunc(a.handleListAPITokens)))
 	mux.Handle("DELETE /api/v1/auth/tokens/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeAPIToken)))
 	mux.Handle("GET /api/v1/me", a.requireAuth(http.HandlerFunc(a.handleMe)))
+	// The server's home and away addresses, for a device paired before one was set.
+	mux.Handle("GET /api/v1/addresses", a.requireAuth(http.HandlerFunc(a.handleAddresses)))
 
 	// Content is addressed by (library, path) via ?path= - the path is the
 	// identity. The filesystem view is filtered to the caller's share scope.

@@ -1644,6 +1644,8 @@
   "settings.general.nameBody": "Mostrato nelle app quando qualcuno si connette, negli inviti e in questa console. Lascialo vuoto per AudioSilo.",
   "settings.general.public_url": "Indirizzo pubblico",
   "settings.general.public_urlBody": "L'indirizzo che le persone usano da fuori casa, usato nei link di invito e nei codici QR. Lascialo vuoto per usare l'indirizzo con cui è entrato il browser.",
+  "settings.general.lan_url": "Indirizzo di casa",
+  "settings.general.lan_urlBody": "L'indirizzo che i dispositivi usano sulla rete di casa, ad esempio http://192.168.1.20:8080. Le app passano a questo indirizzo da sole quando riescono a raggiungerlo. Lascialo vuoto per usare l'indirizzo con cui è entrato il browser, se è un indirizzo della rete di casa.",
   "settings.general.history": "Cronologia di ascolto",
   "settings.general.historyBody": "Ogni sessione di ascolto registra dispositivo, app e ora del giorno. Dopo questi giorni quei dettagli vengono eliminati e la sessione confluisce nei totali giornalieri per persona e libro, che le pagine Attività conservano.",
   "settings.general.session_days": "Giorni di conservazione delle sessioni",

@@ -89,6 +89,48 @@ describe('settings', () => {
     });
   });
 
+  it('saves the home address under the public one, and locks it to its variable', async () => {
+    const base = settingsWith();
+    const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));
+    renderApp('/server');
+    const user = userEvent.setup();
+    const home = await screen.findByRole('textbox', { name: 'Home address' });
+    expect(home).toHaveAttribute('placeholder', 'http://192.168.1.20:8080');
+    expect(home.closest('section')).toBe(
+      screen.getByRole('textbox', { name: 'Public address' }).closest('section'),
+    );
+    await user.type(home, 'http://192.168.1.20:8080');
+    await user.click(
+      within(home.closest('section') as HTMLElement).getByRole('button', { name: 'Save changes' }),
+    );
+    expect(await screen.findByText('This server saved')).toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+      general: { lan_url: 'http://192.168.1.20:8080' },
+    });
+  });
+
+  it('locks the home address the environment sets', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            general: {
+              name: '',
+              public_url: '',
+              lan_url: 'http://nas.local:8080',
+              update_check: true,
+              session_days: 400,
+            },
+            locked: { 'general.lan_url': 'AUDIOSILO_LAN_URL' },
+          }),
+        },
+      }),
+    );
+    renderApp('/server');
+    expect(await screen.findByRole('textbox', { name: 'Home address' })).toBeDisabled();
+    expect(screen.getByText('Set by AUDIOSILO_LAN_URL')).toBeInTheDocument();
+  });
+
   it('shows a refusal on the field it names and keeps the edit', async () => {
     mockFetch(
       routes({
@@ -122,6 +164,7 @@ describe('settings', () => {
             general: {
               name: '',
               public_url: 'https://env.example.com',
+              lan_url: '',
               update_check: true,
               session_days: 400,
             },

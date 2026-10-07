@@ -167,6 +167,12 @@ function GeneralTopic({ settings }: { settings: AdminSettings }) {
             mono: true,
             placeholder: 'https://books.example.com',
           },
+          {
+            name: 'lan_url',
+            kind: 'text',
+            mono: true,
+            placeholder: 'http://192.168.1.20:8080',
+          },
         ]}
       />
       <SettingsForm

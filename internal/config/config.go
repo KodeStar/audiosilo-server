@@ -207,6 +207,7 @@ type Config struct {
 
 	Bind           string         `yaml:"bind"`       // host:port to listen on
 	PublicURL      string         `yaml:"public_url"` // externally reachable base URL, used in QR payloads
+	LANURL         string         `yaml:"lan_url"`    // the server's home-network address, the apps' home address ("" = derived per request; see Addresses)
 	TLS            TLSConfig      `yaml:"tls"`
 	TrustedProxies []string       `yaml:"trusted_proxies"`  // CIDRs whose X-Forwarded-For is trusted
 	CORSOrigins    []string       `yaml:"cors_origins"`     // allowed web origins ("*" to disable check)
