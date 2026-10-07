@@ -282,6 +282,13 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/me/devices", a.requireAuth(http.HandlerFunc(a.handleListMyDevices)))
 	mux.Handle("DELETE /api/v1/me/devices/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeMyDevice)))
 
+	// Phase 4: annotations (bookmark labels, owner edits, the all-books lists;
+	// GET /me/history above gained paging and books).
+	mux.Handle("PATCH /api/v1/bookmarks/{id}", a.requireAuth(http.HandlerFunc(a.handleEditBookmark)))
+	mux.Handle("PATCH /api/v1/notes/{id}", a.requireAuth(http.HandlerFunc(a.handleEditNote)))
+	mux.Handle("GET /api/v1/me/bookmarks", a.requireAuth(http.HandlerFunc(a.handleListMyBookmarks)))
+	mux.Handle("GET /api/v1/me/notes", a.requireAuth(http.HandlerFunc(a.handleListMyNotes)))
+
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
 	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))

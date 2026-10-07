@@ -192,6 +192,11 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeError(w, http.StatusBadRequest, catalog.ErrInvalidRating.Error())
 	case errors.Is(err, catalog.ErrRatingNoteTooLong):
 		writeError(w, http.StatusBadRequest, catalog.ErrRatingNoteTooLong.Error())
+	// Annotations (Phase 4): bookmark and note checks, an edit naming nothing.
+	case errors.Is(err, catalog.ErrInvalidLabel), errors.Is(err, catalog.ErrBookmarkNoteTooLong),
+		errors.Is(err, catalog.ErrNoteBodyTooLong), errors.Is(err, catalog.ErrInvalidPosition),
+		errors.Is(err, catalog.ErrNothingToChange):
+		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		a.log.Warn(op, append([]any{"err", err}, logKV...)...)
 		writeError(w, http.StatusInternalServerError, genericMsg)

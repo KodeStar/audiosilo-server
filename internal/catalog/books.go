@@ -705,13 +705,15 @@ func decodeCursor(s string) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	parts := strings.SplitN(string(raw), "\x00", 2)
-	if len(parts) != 2 {
+	// Split at the LAST NUL: the id never holds one, while a sort value may (a
+	// listening span's ended_at is the client's text).
+	i := strings.LastIndexByte(string(raw), 0)
+	if i < 0 {
 		return "", 0, errors.New("malformed cursor")
 	}
-	id, err := strconv.ParseInt(parts[1], 10, 64)
+	id, err := strconv.ParseInt(string(raw[i+1:]), 10, 64)
 	if err != nil {
 		return "", 0, err
 	}
-	return parts[0], id, nil
+	return string(raw[:i]), id, nil
 }

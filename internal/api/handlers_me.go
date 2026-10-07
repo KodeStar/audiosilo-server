@@ -131,7 +131,7 @@ func (a *API) handleAddBookmark(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	saved, err := a.cat.AddBookmark(r.Context(), u.ID, bm)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save bookmark")
+		a.writeCatalogError(w, err, "add bookmark failed", "could not save bookmark", "library", lib.ID, "path", path)
 		return
 	}
 	writeJSON(w, http.StatusCreated, saved)
@@ -181,7 +181,7 @@ func (a *API) handleAddNote(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	saved, err := a.cat.AddNote(r.Context(), u.ID, n)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save note")
+		a.writeCatalogError(w, err, "add note failed", "could not save note", "library", lib.ID, "path", path)
 		return
 	}
 	writeJSON(w, http.StatusCreated, saved)
@@ -199,23 +199,6 @@ func (a *API) handleDeleteNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleListAllHistory returns the caller's recent listening history across
-// books, filtered to paths the caller can still access.
-func (a *API) handleListAllHistory(w http.ResponseWriter, r *http.Request) {
-	u := userFrom(r.Context())
-	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load history")
-		return
-	}
-	items, err := a.cat.ListAllHistory(r.Context(), u.ID, scopes, queryInt(r, "limit", 100))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load history")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"history": items})
 }
 
 func (a *API) handleListHistory(w http.ResponseWriter, r *http.Request) {
