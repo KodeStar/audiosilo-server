@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,6 +25,12 @@ const (
 	cradlePart   = "Will Wight/Cradle/01 - Unsouled.m4b"
 	mistbornBook = "Brandon Sanderson/Mistborn"
 )
+
+// bookURL is a path-addressed route of a library (endpoint "rating",
+// "progress", "bookmarks", ...) at path.
+func bookURL(libID int64, endpoint, path string) string {
+	return "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/" + endpoint + "?path=" + url.QueryEscape(path)
+}
 
 // newFixtureLibrary creates the "Main" library over testdata/library and scans it.
 func newFixtureLibrary(t *testing.T, e *testEnv) *catalog.Library {

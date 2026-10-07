@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -11,14 +12,10 @@ import (
 	"time"
 )
 
-// annotationFixture is a catalog with a controllable clock, one library with two
-// indexed books, and two users.
+// annotationFixture is the user-state fixture with two indexed books.
 type annotationFixture struct {
-	c        *Catalog
-	clock    time.Time
-	lib      int64
-	ann, bob int64
-	all      []Scope // the whole library
+	*userStateFixture
+	all []Scope // the whole library
 }
 
 const (
@@ -29,25 +26,15 @@ const (
 
 func newAnnotationFixture(t *testing.T) *annotationFixture {
 	t.Helper()
-	c, ctx := newTestCatalog(t)
-	f := &annotationFixture{c: c, clock: time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)}
-	c.now = func() time.Time { return f.clock }
-	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.lib = lib.ID
-	f.all = []Scope{{LibraryID: lib.ID, AllowAll: true}}
+	f := &annotationFixture{userStateFixture: newUserStateFixture(t, time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC))}
+	f.all = []Scope{{LibraryID: f.lib, AllowAll: true}}
 	for _, p := range []string{annBookA, annBookB} {
-		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, IsFolder: true, Title: p}); err != nil {
+		if _, err := f.c.UpsertBook(t.Context(), &Book{LibraryID: f.lib, RelPath: p, IsFolder: true, Title: p}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	f.ann, f.bob = seedNamedUser(t, c, "ann"), seedNamedUser(t, c, "bob")
 	return f
 }
-
-func (f *annotationFixture) ref(p string) Ref { return Ref{LibraryID: f.lib, Path: p} }
 
 func (f *annotationFixture) bookmark(t *testing.T, user int64, p string, pos float64, note, label string) *Bookmark {
 	t.Helper()
@@ -249,11 +236,59 @@ func TestEditNote(t *testing.T) {
 	}
 }
 
-// pageAll walks a list a page at a time (limit rows each), returning every row's
-// id in order and the number of pages.
-func pageAll(t *testing.T, limit int, page func(PageOptions) ([]int64, string, error)) ([]int64, int) {
+// annRow is a row of one of the all-books lists, as the tests compare them.
+type annRow struct {
+	id      int64
+	path    string
+	hasBook bool // its book is attached, and is the one at its path
+}
+
+// rowsOf turns a page's items into annRows.
+func rowsOf[T any](items []T, row func(*T) (int64, Ref, *Book)) []annRow {
+	out := make([]annRow, len(items))
+	for i := range items {
+		id, ref, b := row(&items[i])
+		out[i] = annRow{id: id, path: ref.Path, hasBook: b != nil && b.RelPath == ref.Path}
+	}
+	return out
+}
+
+// annPager reads a page of one list for a user within scopes.
+type annPager func(f *annotationFixture, user int64, scopes []Scope, o PageOptions) ([]annRow, string, error)
+
+// annLists are the three all-books lists, each read through one adapter.
+var annLists = []struct {
+	name string
+	page annPager
+}{
+	{"bookmarks", func(f *annotationFixture, user int64, scopes []Scope, o PageOptions) ([]annRow, string, error) {
+		p, err := f.c.ListMyBookmarks(context.Background(), user, scopes, o)
+		if err != nil {
+			return nil, "", err
+		}
+		return rowsOf(p.Bookmarks, func(b *MyBookmark) (int64, Ref, *Book) { return b.ID, b.Ref, b.Book }), p.NextCursor, nil
+	}},
+	{"notes", func(f *annotationFixture, user int64, scopes []Scope, o PageOptions) ([]annRow, string, error) {
+		p, err := f.c.ListMyNotes(context.Background(), user, scopes, o)
+		if err != nil {
+			return nil, "", err
+		}
+		return rowsOf(p.Notes, func(n *MyNote) (int64, Ref, *Book) { return n.ID, n.Ref, n.Book }), p.NextCursor, nil
+	}},
+	{"history", func(f *annotationFixture, user int64, scopes []Scope, o PageOptions) ([]annRow, string, error) {
+		p, err := f.c.ListAllHistory(context.Background(), user, scopes, o)
+		if err != nil {
+			return nil, "", err
+		}
+		return rowsOf(p.History, func(h *HistoryEntry) (int64, Ref, *Book) { return h.ID, h.Ref, h.Book }), p.NextCursor, nil
+	}},
+}
+
+// pageAll walks a list a page at a time (limit rows each), returning every row
+// in order and the number of pages.
+func pageAll(t *testing.T, limit int, page func(PageOptions) ([]annRow, string, error)) ([]annRow, int) {
 	t.Helper()
-	var ids []int64
+	var all []annRow
 	cursor, pages := "", 0
 	for {
 		got, next, err := page(PageOptions{Limit: limit, Cursor: cursor})
@@ -264,15 +299,23 @@ func pageAll(t *testing.T, limit int, page func(PageOptions) ([]int64, string, e
 		if len(got) > limit || (next != "" && len(got) != limit) {
 			t.Fatalf("page %d: %d rows for limit %d (next %q)", pages, len(got), limit, next)
 		}
-		ids = append(ids, got...)
+		all = append(all, got...)
 		if next == "" {
-			return ids, pages
+			return all, pages
 		}
 		if pages > 100 {
 			t.Fatal("paging does not end")
 		}
 		cursor = next
 	}
+}
+
+func annIDs(rows []annRow) []int64 {
+	ids := make([]int64, len(rows))
+	for i, r := range rows {
+		ids[i] = r.id
+	}
+	return ids
 }
 
 // The all-books lists, newest first, a page at a time: ties in the timestamp are
@@ -282,206 +325,95 @@ func pageAll(t *testing.T, limit int, page func(PageOptions) ([]int64, string, e
 func TestAnnotationListsPage(t *testing.T) {
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
-	wantBM, wantNote, wantHist := []int64{}, []int64{}, []int64{}
 	paths := []string{annBookA, annBookB, annGhost}
-	// 11 rows each over 4 timestamps (ties), on 3 paths; bob's rows interleaved.
+	// 11 rows of each list over 4 timestamps (ties), on 3 paths; bob's rows
+	// interleaved. Time and id both rise row by row, so newest first is the ids
+	// falling, ties included.
 	for i := range 11 {
 		f.clock = time.Date(2026, 10, 7, 9, i/3, 0, 0, time.UTC)
 		p := paths[i%3]
-		wantBM = append(wantBM, f.bookmark(t, f.ann, p, float64(i), "", "").ID)
-		wantNote = append(wantNote, f.note(t, f.ann, p, float64(i), fmt.Sprint(i)).ID)
-		f.bookmark(t, f.bob, p, 1, "", "")
-		f.note(t, f.bob, p, 1, "bob")
-		ended := fmt.Sprintf("2026-10-07T10:0%d:00Z", i/3)
-		if err := f.c.AddHistory(ctx, f.ann, f.ref(p), 0, 1, ended, ended); err != nil {
-			t.Fatal(err)
-		}
-		if err := f.c.AddHistory(ctx, f.bob, f.ref(p), 0, 1, ended, ended); err != nil {
-			t.Fatal(err)
-		}
-	}
-	hist, err := f.c.ListAllHistory(ctx, f.ann, f.all, PageOptions{Limit: 500})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, h := range hist.History {
-		wantHist = append(wantHist, h.ID)
-	}
-	if len(wantHist) != 11 {
-		t.Fatalf("ann's history = %d rows, want 11", len(wantHist))
-	}
-	newestFirst := func(ids []int64) []int64 { // timestamps rise with the id here
-		out := make([]int64, len(ids))
-		for i, id := range ids {
-			out[len(ids)-1-i] = id
-		}
-		return out
-	}
-
-	lists := []struct {
-		name string
-		want []int64
-		page func(user int64, scopes []Scope) func(PageOptions) ([]int64, string, error)
-		book func(user int64, scopes []Scope) map[string]bool // path -> has a book
-	}{
-		{"bookmarks", newestFirst(wantBM), func(user int64, scopes []Scope) func(PageOptions) ([]int64, string, error) {
-			return func(o PageOptions) ([]int64, string, error) {
-				p, err := f.c.ListMyBookmarks(ctx, user, scopes, o)
-				if err != nil {
-					return nil, "", err
-				}
-				ids := []int64{}
-				for _, b := range p.Bookmarks {
-					ids = append(ids, b.ID)
-				}
-				return ids, p.NextCursor, nil
-			}
-		}, func(user int64, scopes []Scope) map[string]bool {
-			p, err := f.c.ListMyBookmarks(ctx, user, scopes, PageOptions{Limit: 500})
-			if err != nil {
+		ended := f.clock.Add(time.Hour).Format(time.RFC3339)
+		for _, user := range []int64{f.ann, f.bob} {
+			f.bookmark(t, user, p, float64(i), "", "")
+			f.note(t, user, p, float64(i), fmt.Sprint(i))
+			if err := f.c.AddHistory(ctx, user, f.ref(p), 0, 1, ended, ended); err != nil {
 				t.Fatal(err)
 			}
-			out := map[string]bool{}
-			for _, b := range p.Bookmarks {
-				out[b.Path] = b.Book != nil && b.Book.RelPath == b.Path
-			}
-			return out
-		}},
-		{"notes", newestFirst(wantNote), func(user int64, scopes []Scope) func(PageOptions) ([]int64, string, error) {
-			return func(o PageOptions) ([]int64, string, error) {
-				p, err := f.c.ListMyNotes(ctx, user, scopes, o)
-				if err != nil {
-					return nil, "", err
-				}
-				ids := []int64{}
-				for _, n := range p.Notes {
-					ids = append(ids, n.ID)
-				}
-				return ids, p.NextCursor, nil
-			}
-		}, func(user int64, scopes []Scope) map[string]bool {
-			p, err := f.c.ListMyNotes(ctx, user, scopes, PageOptions{Limit: 500})
-			if err != nil {
-				t.Fatal(err)
-			}
-			out := map[string]bool{}
-			for _, n := range p.Notes {
-				out[n.Path] = n.Book != nil && n.Book.RelPath == n.Path
-			}
-			return out
-		}},
-		{"history", wantHist, func(user int64, scopes []Scope) func(PageOptions) ([]int64, string, error) {
-			return func(o PageOptions) ([]int64, string, error) {
-				p, err := f.c.ListAllHistory(ctx, user, scopes, o)
-				if err != nil {
-					return nil, "", err
-				}
-				ids := []int64{}
-				for _, h := range p.History {
-					ids = append(ids, h.ID)
-				}
-				return ids, p.NextCursor, nil
-			}
-		}, func(user int64, scopes []Scope) map[string]bool {
-			p, err := f.c.ListAllHistory(ctx, user, scopes, PageOptions{Limit: 500})
-			if err != nil {
-				t.Fatal(err)
-			}
-			out := map[string]bool{}
-			for _, h := range p.History {
-				out[h.Path] = h.Book != nil && h.Book.RelPath == h.Path
-			}
-			return out
-		}},
+		}
 	}
-	join := func(ids []int64) string { return fmt.Sprint(ids) }
-	for _, l := range lists {
+	for _, l := range annLists {
 		t.Run(l.name, func(t *testing.T) {
-			if l.name == "history" {
-				// Its want came from the list itself: check that order is newest first.
-				for i := 1; i < len(hist.History); i++ {
-					a, b := hist.History[i-1], hist.History[i]
-					if a.EndedAt < b.EndedAt || (a.EndedAt == b.EndedAt && a.ID < b.ID) {
-						t.Fatalf("history out of order at %d: %+v then %+v", i, a, b)
-					}
-				}
+			pager := func(user int64, scopes []Scope) func(PageOptions) ([]annRow, string, error) {
+				return func(o PageOptions) ([]annRow, string, error) { return l.page(f, user, scopes, o) }
+			}
+			full, _ := pageAll(t, 500, pager(f.ann, f.all))
+			ids := annIDs(full)
+			if len(ids) != 11 || !slices.IsSortedFunc(ids, func(a, b int64) int { return int(b - a) }) {
+				t.Fatalf("ann's rows = %v, want 11 newest (highest id) first", ids)
 			}
 			for _, limit := range []int{1, 2, 3, 4, 10, 11, 12} {
-				got, pages := pageAll(t, limit, l.page(f.ann, f.all))
-				if join(got) != join(l.want) {
-					t.Fatalf("limit %d: %v, want %v", limit, got, l.want)
+				got, pages := pageAll(t, limit, pager(f.ann, f.all))
+				if !slices.Equal(annIDs(got), ids) {
+					t.Fatalf("limit %d: %v, want %v", limit, annIDs(got), ids)
 				}
-				if want := (len(l.want) + limit - 1) / limit; pages != want {
+				if want := (len(ids) + limit - 1) / limit; pages != want {
 					t.Fatalf("limit %d: %d pages, want %d", limit, pages, want)
+				}
+			}
+			for _, r := range full {
+				if r.hasBook != (r.path != annGhost) {
+					t.Fatalf("row on %s: has a book %v", r.path, r.hasBook)
 				}
 			}
 
 			// Access "A" only: the rows on B and C are left out, before paging.
-			scoped := []Scope{{LibraryID: f.lib, Paths: []string{"A"}}}
-			all := l.book(f.ann, f.all)
-			if len(all) != 3 || !all[annBookA] || !all[annBookB] || all[annGhost] {
-				t.Fatalf("books by path = %v, want A and B indexed, C not", all)
-			}
-			got, _ := pageAll(t, 2, l.page(f.ann, scoped))
-			full, _ := pageAll(t, 500, l.page(f.ann, f.all))
-			var wantScoped []int64 // got's rows in the full list's order
-			for _, id := range full {
-				if slices.Contains(got, id) {
-					wantScoped = append(wantScoped, id)
+			var onA []int64
+			for _, r := range full {
+				if r.path == annBookA {
+					onA = append(onA, r.id)
 				}
 			}
-			if len(got) != 4 || join(got) != join(wantScoped) {
-				t.Fatalf("scoped to A: %v (from %v), want the 4 rows on A in order", got, full)
+			scoped, _ := pageAll(t, 2, pager(f.ann, []Scope{{LibraryID: f.lib, Paths: []string{"A"}}}))
+			if len(onA) != 4 || !slices.Equal(annIDs(scoped), onA) {
+				t.Fatalf("scoped to A: %v, want %v", annIDs(scoped), onA)
 			}
-			if p := l.book(f.ann, scoped); len(p) != 1 || !p[annBookA] {
-				t.Fatalf("scoped to A: paths %v", p)
-			}
-			if got, _ := pageAll(t, 5, l.page(f.ann, nil)); len(got) != 0 {
+			if got, _ := pageAll(t, 5, pager(f.ann, nil)); len(got) != 0 {
 				t.Fatalf("no access: %v", got)
 			}
-			// Kept: widening the access again shows them.
-			if got, _ := pageAll(t, 500, l.page(f.ann, f.all)); len(got) != 11 {
-				t.Fatalf("after re-granting: %d rows", len(got))
+			// Kept: the whole library's access shows them again.
+			if got, _ := pageAll(t, 4, pager(f.ann, f.all)); !slices.Equal(annIDs(got), ids) {
+				t.Fatalf("after re-granting: %v", annIDs(got))
 			}
 
 			// Bob's own rows, never ann's.
-			bobs, _ := pageAll(t, 3, l.page(f.bob, f.all))
-			for _, id := range bobs {
-				if slices.Contains(l.want, id) {
-					t.Fatalf("bob's list holds ann's row %d", id)
-				}
-			}
-			if len(bobs) != 11 {
-				t.Fatalf("bob's list = %d rows, want 11", len(bobs))
+			bobRows, _ := pageAll(t, 3, pager(f.bob, f.all))
+			bobs := annIDs(bobRows)
+			if len(bobs) != 11 || slices.ContainsFunc(bobs, func(id int64) bool { return slices.Contains(ids, id) }) {
+				t.Fatalf("bob's rows = %v, ann's %v", bobs, ids)
 			}
 		})
 	}
 }
 
-// A cursor that doesn't decode is ErrInvalidCursor; a sort value holding a NUL
-// still round-trips (decodeCursor is encodeCursor's exact inverse).
+// A cursor that doesn't decode is ErrInvalidCursor on every list; a sort value
+// holding a NUL still round-trips (decodeCursor is encodeCursor's exact
+// inverse); an empty list is [], never null.
 func TestAnnotationListsCursor(t *testing.T) {
 	f := newAnnotationFixture(t)
-	ctx := t.Context()
-	for _, c := range []string{"!!!", base64.RawURLEncoding.EncodeToString([]byte("no separator")),
-		base64.RawURLEncoding.EncodeToString([]byte("2026\x00twelve")), "a b"} {
-		if _, err := f.c.ListMyBookmarks(ctx, f.ann, f.all, PageOptions{Cursor: c}); !errors.Is(err, ErrInvalidCursor) {
-			t.Errorf("bookmarks cursor %q = %v, want ErrInvalidCursor", c, err)
+	for _, l := range annLists {
+		for _, c := range []string{"!!!", base64.RawURLEncoding.EncodeToString([]byte("no separator")),
+			base64.RawURLEncoding.EncodeToString([]byte("2026\x00twelve")), "a b"} {
+			if _, _, err := l.page(f, f.ann, f.all, PageOptions{Cursor: c}); !errors.Is(err, ErrInvalidCursor) {
+				t.Errorf("%s cursor %q = %v, want ErrInvalidCursor", l.name, c, err)
+			}
 		}
-		if _, err := f.c.ListMyNotes(ctx, f.ann, f.all, PageOptions{Cursor: c}); !errors.Is(err, ErrInvalidCursor) {
-			t.Errorf("notes cursor %q = %v, want ErrInvalidCursor", c, err)
-		}
-		if _, err := f.c.ListAllHistory(ctx, f.ann, f.all, PageOptions{Cursor: c}); !errors.Is(err, ErrInvalidCursor) {
-			t.Errorf("history cursor %q = %v, want ErrInvalidCursor", c, err)
+		rows, next, err := l.page(f, f.bob, f.all, PageOptions{})
+		if err != nil || rows == nil || len(rows) != 0 || next != "" {
+			t.Errorf("bob's empty %s = %v %q %v", l.name, rows, next, err)
 		}
 	}
 	if v, id, err := decodeCursor(encodeCursor("odd\x00value", 42)); err != nil || v != "odd\x00value" || id != 42 {
 		t.Fatalf("a NUL in the value: %q %d %v", v, id, err)
-	}
-	// Empty lists are [], never null.
-	empty, err := f.c.ListMyBookmarks(ctx, f.bob, f.all, PageOptions{})
-	if err != nil || empty.Bookmarks == nil || len(empty.Bookmarks) != 0 || empty.NextCursor != "" {
-		t.Fatalf("bob's empty bookmarks = %+v %v", empty, err)
 	}
 }
 
@@ -523,38 +455,25 @@ func TestAnnotationsMoveAndPurge(t *testing.T) {
 // the ids run against time, so only the timestamp can order the rows right.
 func TestAnnotationTimestampsSortAsText(t *testing.T) {
 	f := newAnnotationFixture(t)
-	ctx := t.Context()
 	base := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
-	var bms, notes []int64
+	want := map[string][]int64{}
 	for _, frac := range []time.Duration{500 * time.Millisecond, 250 * time.Millisecond, 0} {
 		f.clock = base.Add(frac)
-		bms = append(bms, f.bookmark(t, f.ann, annBookA, 0, "", "").ID)
-		notes = append(notes, f.note(t, f.ann, annBookA, 0, "").ID)
+		want["bookmarks"] = append(want["bookmarks"], f.bookmark(t, f.ann, annBookA, 0, "", "").ID)
+		want["notes"] = append(want["notes"], f.note(t, f.ann, annBookA, 0, "").ID)
 	}
-	gotBM, err := f.c.ListMyBookmarks(ctx, f.ann, f.all, PageOptions{})
-	if err != nil {
-		t.Fatal(err)
+	for _, l := range annLists[:2] { // history: TestAddHistoryNormalisesTimes
+		rows, _, err := l.page(f, f.ann, f.all, PageOptions{})
+		if err != nil || !slices.Equal(annIDs(rows), want[l.name]) {
+			t.Fatalf("%s = %v %v, want %v", l.name, annIDs(rows), err, want[l.name])
+		}
 	}
-	gotNotes, err := f.c.ListMyNotes(ctx, f.ann, f.all, PageOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var bmIDs, noteIDs []int64
-	for _, b := range gotBM.Bookmarks {
-		bmIDs = append(bmIDs, b.ID)
-	}
-	for _, n := range gotNotes.Notes {
-		noteIDs = append(noteIDs, n.ID)
-	}
-	if !slices.Equal(bmIDs, bms) || !slices.Equal(noteIDs, notes) {
-		t.Fatalf("bookmarks %v (want %v), notes %v (want %v)", bmIDs, bms, noteIDs, notes)
-	}
-	if got := gotBM.Bookmarks[2].CreatedAt; got != "2026-10-07T09:00:00.000Z" {
-		t.Fatalf("created_at = %q, want the fixed-width form", got)
+	bms, err := f.c.ListBookmarks(t.Context(), f.ann, f.ref(annBookA))
+	if err != nil || !slices.ContainsFunc(bms, func(b Bookmark) bool { return b.CreatedAt == "2026-10-07T09:00:00.000Z" }) {
+		t.Fatalf("bookmarks = %+v %v, want created_at in the fixed-width form", bms, err)
 	}
 	f.clock = base.Add(time.Minute)
-	pos := 1.0
-	if n, err := f.c.EditNote(ctx, f.ann, notes[0], NoteEdit{Position: &pos}, f.all); err != nil ||
+	if n, err := f.c.EditNote(t.Context(), f.ann, want["notes"][0], NoteEdit{Position: new(1.0)}, f.all); err != nil ||
 		n.UpdatedAt != "2026-10-07T09:01:00.000Z" {
 		t.Fatalf("edited note = %+v %v, want updated_at in the fixed-width form", n, err)
 	}

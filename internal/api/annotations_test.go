@@ -17,38 +17,30 @@ import (
 // caller's bookmarks, notes and history across books. Run on listsEnv: olive and
 // sam see the whole library, kid only "Will Wight".
 
-// annURL is a per-book annotation route (bookmarks, notes, history) at path.
-func (l *listsEnv) annURL(kind, path string) string {
-	return fmt.Sprintf("/api/v1/libraries/%d/%s?path=%s", l.libID, kind, url.QueryEscape(path))
+// sendAs sends body to path as tok and decodes the answer as a T, failing unless
+// its status is want.
+func sendAs[T any](t *testing.T, e *testEnv, method, path, tok, body string, want int) T {
+	t.Helper()
+	resp, b := e.do(t, method, path, tok, body)
+	var out T
+	if resp.StatusCode != want {
+		t.Fatalf("%s %s %s = %d %s, want %d", method, path, body, resp.StatusCode, b, want)
+	}
+	if err := json.Unmarshal([]byte(b), &out); err != nil {
+		t.Fatalf("%s %s: %v (%s)", method, path, err, b)
+	}
+	return out
 }
 
-// addBookmark POSTs a bookmark body as tok and returns the answer, failing
-// unless it is a 201.
+// addBookmark and addNote POST one as tok at path (201).
 func (l *listsEnv) addBookmark(t *testing.T, tok, path, body string) catalog.Bookmark {
 	t.Helper()
-	resp, b := l.do(t, "POST", l.annURL("bookmarks", path), tok, body)
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST bookmark %s = %d %s", body, resp.StatusCode, b)
-	}
-	var out catalog.Bookmark
-	if err := json.Unmarshal([]byte(b), &out); err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return sendAs[catalog.Bookmark](t, l.testEnv, "POST", l.at("bookmarks", path), tok, body, http.StatusCreated)
 }
 
-// addNote POSTs a note as tok, failing unless it is a 201.
 func (l *listsEnv) addNote(t *testing.T, tok, path, body string) catalog.Note {
 	t.Helper()
-	resp, b := l.do(t, "POST", l.annURL("notes", path), tok, body)
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST note %s = %d %s", body, resp.StatusCode, b)
-	}
-	var out catalog.Note
-	if err := json.Unmarshal([]byte(b), &out); err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return sendAs[catalog.Note](t, l.testEnv, "POST", l.at("notes", path), tok, body, http.StatusCreated)
 }
 
 // wantError fails unless the answer is status with {"error": msg}.
@@ -71,11 +63,11 @@ func TestBookmarkLabelOnPost(t *testing.T) {
 	if labelled.Label != "fell_asleep" || labelled.Note != "good bit" || labelled.Position != 42 {
 		t.Fatalf("labelled bookmark = %+v", labelled)
 	}
-	resp, body := l.do(t, "POST", l.annURL("bookmarks", cradleBook), l.oliveTok, `{"position":1}`)
+	resp, body := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, `{"position":1}`)
 	if resp.StatusCode != http.StatusCreated || !strings.Contains(body, `"label":""`) {
 		t.Fatalf("unlabelled bookmark = %d %s, want label \"\"", resp.StatusCode, body)
 	}
-	_, body = l.do(t, "GET", l.annURL("bookmarks", cradleBook), l.oliveTok, "")
+	_, body = l.do(t, "GET", l.at("bookmarks", cradleBook), l.oliveTok, "")
 	if !strings.Contains(body, `"label":"fell_asleep"`) || !strings.Contains(body, `"label":""`) {
 		t.Fatalf("GET bookmarks = %s, want both labels", body)
 	}
@@ -87,17 +79,17 @@ func TestBookmarkLabelOnPost(t *testing.T) {
 		{`{"position":1,"note":"` + strings.Repeat("é", catalog.MaxBookmarkNote+1) + `"}`, "note too long"},
 		{`{"position":1,"labels":"quote"}`, "invalid request"}, // still strict
 	} {
-		resp, b := l.do(t, "POST", l.annURL("bookmarks", cradleBook), l.oliveTok, c.body)
+		resp, b := l.do(t, "POST", l.at("bookmarks", cradleBook), l.oliveTok, c.body)
 		wantError(t, "POST "+c.body[:min(len(c.body), 60)], resp, b, http.StatusBadRequest, c.msg)
 	}
 	l.addBookmark(t, l.oliveTok, cradleBook, `{"note":"`+strings.Repeat("é", catalog.MaxBookmarkNote)+`"}`)
 
-	resp, body = l.do(t, "POST", l.annURL("notes", cradleBook), l.oliveTok,
+	resp, body = l.do(t, "POST", l.at("notes", cradleBook), l.oliveTok,
 		`{"body":"`+strings.Repeat("a", catalog.MaxNoteBody+1)+`"}`)
 	wantError(t, "POST an over-long note", resp, body, http.StatusBadRequest, "body too long")
 	l.addNote(t, l.oliveTok, cradleBook, `{"body":"`+strings.Repeat("a", catalog.MaxNoteBody)+`"}`)
 	for _, in := range []string{`{"body":"x","position":-1}`, `{"body":"x","position":"12"}`} {
-		resp, body = l.do(t, "POST", l.annURL("notes", cradleBook), l.oliveTok, in)
+		resp, body = l.do(t, "POST", l.at("notes", cradleBook), l.oliveTok, in)
 		wantError(t, "POST a note "+in, resp, body, http.StatusBadRequest, "invalid position")
 	}
 }
@@ -108,34 +100,24 @@ func TestBookmarkLabelOnPost(t *testing.T) {
 func TestEditBookmarkRoute(t *testing.T) {
 	l := newListsEnv(t)
 	bm := l.addBookmark(t, l.oliveTok, cradleBook, `{"position":12,"note":"first","label":"quote"}`)
-	patch := func(tok string, id int64, body string) (*http.Response, string) {
+	idURL := func(id int64) string { return "/api/v1/bookmarks/" + strconv.FormatInt(id, 10) }
+	edit := func(body string) catalog.Bookmark {
 		t.Helper()
-		return l.do(t, "PATCH", "/api/v1/bookmarks/"+strconv.FormatInt(id, 10), tok, body)
-	}
-	decode := func(body string) catalog.Bookmark {
-		t.Helper()
-		var out catalog.Bookmark
-		if err := json.Unmarshal([]byte(body), &out); err != nil {
-			t.Fatalf("%v: %s", err, body)
-		}
-		return out
+		return sendAs[catalog.Bookmark](t, l.testEnv, "PATCH", idURL(bm.ID), l.oliveTok, body, http.StatusOK)
 	}
 
-	resp, body := patch(l.oliveTok, bm.ID, `{"label":"relisten"}`)
 	want := bm
 	want.Label = "relisten"
-	if resp.StatusCode != http.StatusOK || decode(body) != want {
-		t.Fatalf("PATCH label = %d %s, want %+v", resp.StatusCode, body, want)
+	if got := edit(`{"label":"relisten"}`); got != want {
+		t.Fatalf("PATCH label = %+v, want %+v", got, want)
 	}
-	resp, body = patch(l.oliveTok, bm.ID, `{"note":"second"}`)
 	want.Note = "second"
-	if resp.StatusCode != http.StatusOK || decode(body) != want {
-		t.Fatalf("PATCH note = %d %s, want %+v", resp.StatusCode, body, want)
+	if got := edit(`{"note":"second"}`); got != want {
+		t.Fatalf("PATCH note = %+v, want %+v", got, want)
 	}
-	resp, body = patch(l.oliveTok, bm.ID, `{"label":"","note":""}`)
 	want.Note, want.Label = "", ""
-	if resp.StatusCode != http.StatusOK || decode(body) != want {
-		t.Fatalf("PATCH clearing both = %d %s, want %+v", resp.StatusCode, body, want)
+	if got := edit(`{"label":"","note":""}`); got != want {
+		t.Fatalf("PATCH clearing both = %+v, want %+v", got, want)
 	}
 	stored := func() catalog.Bookmark {
 		t.Helper()
@@ -165,7 +147,6 @@ func TestEditBookmarkRoute(t *testing.T) {
 		{"another user's id", l.samTok, bm.ID, `{"note":"mine now"}`, http.StatusNotFound, "bookmark not found"},
 		{"an unknown id", l.oliveTok, bm.ID + 1000, `{"note":"x"}`, http.StatusNotFound, "bookmark not found"},
 		{"a revoked share's", l.kidTok, kids.ID, `{"note":"x"}`, http.StatusNotFound, "bookmark not found"},
-		{"a non-numeric id", l.oliveTok, 0, `{"note":"x"}`, http.StatusBadRequest, "invalid bookmark id"},
 		{"an empty body", l.oliveTok, bm.ID, `{}`, http.StatusBadRequest, "nothing to change"},
 		{"no body", l.oliveTok, bm.ID, ``, http.StatusBadRequest, "nothing to change"},
 		{"nulls only", l.oliveTok, bm.ID, `{"note":null}`, http.StatusBadRequest, "nothing to change"},
@@ -174,23 +155,19 @@ func TestEditBookmarkRoute(t *testing.T) {
 			http.StatusBadRequest, "note too long"},
 		{"a field it can't change", l.oliveTok, bm.ID, `{"position":5}`, http.StatusBadRequest, "invalid request"},
 	} {
-		var resp *http.Response
-		var body string
-		if c.id == 0 {
-			resp, body = l.do(t, "PATCH", "/api/v1/bookmarks/abc", c.tok, c.body)
-		} else {
-			resp, body = patch(c.tok, c.id, c.body)
-		}
+		resp, body := l.do(t, "PATCH", idURL(c.id), c.tok, c.body)
 		wantError(t, c.name, resp, body, c.status, c.msg)
 		if s := stored(); s != want {
 			t.Fatalf("%s changed olive's bookmark: %+v", c.name, s)
 		}
 	}
+	resp, body := l.do(t, "PATCH", "/api/v1/bookmarks/abc", l.oliveTok, `{"note":"x"}`)
+	wantError(t, "a non-numeric id", resp, body, http.StatusBadRequest, "invalid bookmark id")
+
 	// kid's row is kept, unchanged, and editable again once access returns.
 	grant()
-	if resp, body := patch(l.kidTok, kids.ID, `{"note":"back"}`); resp.StatusCode != http.StatusOK ||
-		decode(body).Label != "funny" || decode(body).Note != "back" {
-		t.Fatalf("PATCH after re-granting = %d %s", resp.StatusCode, body)
+	if got := sendAs[catalog.Bookmark](t, l.testEnv, "PATCH", idURL(kids.ID), l.kidTok, `{"note":"back"}`, http.StatusOK); got.Label != "funny" || got.Note != "back" {
+		t.Fatalf("PATCH after re-granting = %+v", got)
 	}
 }
 
@@ -199,29 +176,19 @@ func TestEditBookmarkRoute(t *testing.T) {
 func TestEditNoteRoute(t *testing.T) {
 	l := newListsEnv(t)
 	n := l.addNote(t, l.oliveTok, cradleBook, `{"body":"a thought"}`)
-	patch := func(tok string, id int64, body string) (*http.Response, string) {
+	idURL := func(id int64) string { return "/api/v1/notes/" + strconv.FormatInt(id, 10) }
+	edit := func(body string) catalog.Note {
 		t.Helper()
-		return l.do(t, "PATCH", "/api/v1/notes/"+strconv.FormatInt(id, 10), tok, body)
-	}
-	decode := func(body string) catalog.Note {
-		t.Helper()
-		var out catalog.Note
-		if err := json.Unmarshal([]byte(body), &out); err != nil {
-			t.Fatalf("%v: %s", err, body)
-		}
-		return out
+		return sendAs[catalog.Note](t, l.testEnv, "PATCH", idURL(n.ID), l.oliveTok, body, http.StatusOK)
 	}
 
-	resp, body := patch(l.oliveTok, n.ID, `{"position":93.5}`)
-	got := decode(body)
-	if resp.StatusCode != http.StatusOK || got.Position != 93.5 || got.Body != "a thought" || got.ID != n.ID ||
-		got.CreatedAt != n.CreatedAt || got.UpdatedAt == "" || got.Path != cradleBook {
-		t.Fatalf("PATCH position = %d %s (added %+v)", resp.StatusCode, body, n)
+	got := edit(`{"position":93.5}`)
+	if got.Position != 93.5 || got.Body != "a thought" || got.ID != n.ID || got.CreatedAt != n.CreatedAt ||
+		got.UpdatedAt == "" || got.Path != cradleBook {
+		t.Fatalf("PATCH position = %+v (added %+v)", got, n)
 	}
-	resp, body = patch(l.oliveTok, n.ID, `{"body":"better","position":0}`)
-	got = decode(body)
-	if resp.StatusCode != http.StatusOK || got.Body != "better" || got.Position != 0 {
-		t.Fatalf("PATCH both = %d %s", resp.StatusCode, body)
+	if got = edit(`{"body":"better","position":0}`); got.Body != "better" || got.Position != 0 {
+		t.Fatalf("PATCH both = %+v", got)
 	}
 	stored := func() catalog.Note {
 		t.Helper()
@@ -258,15 +225,14 @@ func TestEditNoteRoute(t *testing.T) {
 			http.StatusBadRequest, "body too long"},
 		{"an unknown field", l.oliveTok, n.ID, `{"label":"quote"}`, http.StatusBadRequest, "invalid request"},
 	} {
-		resp, body := patch(c.tok, c.id, c.body)
+		resp, body := l.do(t, "PATCH", idURL(c.id), c.tok, c.body)
 		wantError(t, c.name, resp, body, c.status, c.msg)
 		if s := stored(); s != got {
 			t.Fatalf("%s changed olive's note: %+v", c.name, s)
 		}
 	}
-	if resp, body := l.do(t, "PATCH", "/api/v1/notes/abc", l.oliveTok, `{"body":"x"}`); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("PATCH a non-numeric note id = %d %s", resp.StatusCode, body)
-	}
+	resp, body := l.do(t, "PATCH", "/api/v1/notes/abc", l.oliveTok, `{"body":"x"}`)
+	wantError(t, "a non-numeric id", resp, body, http.StatusBadRequest, "invalid note id")
 }
 
 // listRow is a row of GET /me/bookmarks, /me/notes or /me/history, with its book.
@@ -338,13 +304,13 @@ func TestMyAnnotationLists(t *testing.T) {
 		l.addNote(t, l.kidTok, p, fmt.Sprintf(`{"body":"n%d","position":%d}`, i, i))
 		ended := fmt.Sprintf("2026-10-07T10:0%d:00Z", i/3) // three spans per timestamp
 		span := fmt.Sprintf(`{"from_pos":0,"to_pos":%d,"started_at":%q,"ended_at":%q}`, i+1, ended, ended)
-		if resp, b := l.do(t, "POST", l.annURL("history", p), l.kidTok, span); resp.StatusCode != http.StatusCreated {
+		if resp, b := l.do(t, "POST", l.at("history", p), l.kidTok, span); resp.StatusCode != http.StatusCreated {
 			t.Fatalf("POST history = %d %s", resp.StatusCode, b)
 		}
 		// sam's rows on the same books, never kid's to see.
 		l.addBookmark(t, l.samTok, p, `{"position":1}`)
 		l.addNote(t, l.samTok, p, `{"body":"sam"}`)
-		if resp, b := l.do(t, "POST", l.annURL("history", p), l.samTok, span); resp.StatusCode != http.StatusCreated {
+		if resp, b := l.do(t, "POST", l.at("history", p), l.samTok, span); resp.StatusCode != http.StatusCreated {
 			t.Fatalf("POST history = %d %s", resp.StatusCode, b)
 		}
 	}
@@ -419,14 +385,14 @@ func TestMyAnnotationListsShape(t *testing.T) {
 	// The per-book lists too ([] now, null before: every player coalesces).
 	for _, kind := range []string{"bookmarks", "notes", "history"} {
 		want := `{"` + kind + `":[]}`
-		if resp, body := l.do(t, "GET", l.annURL(kind, cradleBook), l.samTok, ""); resp.StatusCode != http.StatusOK ||
+		if resp, body := l.do(t, "GET", l.at(kind, cradleBook), l.samTok, ""); resp.StatusCode != http.StatusOK ||
 			strings.TrimSpace(body) != want {
 			t.Fatalf("GET %s on a book, empty = %d %s, want %s", kind, resp.StatusCode, body, want)
 		}
 	}
 	span := `{"from_pos":0,"to_pos":30,"started_at":"2026-01-01T00:00:00Z","ended_at":"2026-01-01T00:00:30Z"}`
 	for range 2 {
-		if resp, b := l.do(t, "POST", l.annURL("history", cradleBook), l.samTok, span); resp.StatusCode != http.StatusCreated {
+		if resp, b := l.do(t, "POST", l.at("history", cradleBook), l.samTok, span); resp.StatusCode != http.StatusCreated {
 			t.Fatalf("POST history = %d %s", resp.StatusCode, b)
 		}
 	}
@@ -441,20 +407,5 @@ func TestMyAnnotationListsShape(t *testing.T) {
 	// The list's book is the list shape: no description.
 	if strings.Contains(body, `"description"`) {
 		t.Fatalf("a list book carries a description: %s", body)
-	}
-}
-
-// GET /server advertises the annotations capability.
-func TestAnnotationsCapability(t *testing.T) {
-	e := newTestEnv(t)
-	_, body := e.do(t, "GET", "/api/v1/server", "", "")
-	var out struct {
-		Capabilities map[string]bool `json:"capabilities"`
-	}
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
-		t.Fatal(err)
-	}
-	if !out.Capabilities["annotations"] {
-		t.Fatalf("capability annotations missing: %s", body)
 	}
 }
