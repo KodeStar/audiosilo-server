@@ -50,7 +50,7 @@ func scanProgress(row interface{ Scan(...any) error }, p *Progress) error {
 }
 
 // Bookmark is a saved position with an optional note and label (a machine key
-// the player maps to its own text, "" for none; see CheckBookmark).
+// the player maps to its own text, "" for none; see checkBookmark).
 type Bookmark struct {
 	ID int64 `json:"id"`
 	Ref
@@ -550,9 +550,9 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 }
 
 // AddBookmark stores a bookmark and returns it with its ID. ErrInvalidLabel or
-// ErrBookmarkNoteTooLong for a bookmark CheckBookmark refuses.
+// ErrBookmarkNoteTooLong for a bookmark checkBookmark refuses.
 func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*Bookmark, error) {
-	if err := CheckBookmark(b.Note, b.Label); err != nil {
+	if err := checkBookmark(&b.Note, &b.Label); err != nil {
 		return nil, err
 	}
 	b.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text

@@ -41,14 +41,15 @@ var (
 // can add one without a server change.
 var labelPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 
-// CheckBookmark validates a bookmark's note and label: ErrBookmarkNoteTooLong
-// for a note over MaxBookmarkNote characters, ErrInvalidLabel for a label that
-// is neither "" nor a machine key.
-func CheckBookmark(note, label string) error {
-	if utf8.RuneCountInString(note) > MaxBookmarkNote {
+// checkBookmark validates the bookmark fields an add or an edit sets (nil: not
+// set, so an edit never re-checks a stored value an older server let in):
+// ErrBookmarkNoteTooLong for a note over MaxBookmarkNote characters,
+// ErrInvalidLabel for a label that is neither "" nor a machine key.
+func checkBookmark(note, label *string) error {
+	if note != nil && utf8.RuneCountInString(*note) > MaxBookmarkNote {
 		return ErrBookmarkNoteTooLong
 	}
-	if label != "" && !labelPattern.MatchString(label) {
+	if label != nil && *label != "" && !labelPattern.MatchString(*label) {
 		return ErrInvalidLabel
 	}
 	return nil
@@ -78,7 +79,8 @@ type NoteEdit struct {
 // bookmark. ErrNotFound for an unknown id, another user's, or one whose path the
 // caller's current access (scopes, see UserScopes) no longer reaches, so a
 // revoked share's bookmark can't be changed through an old id; then
-// ErrNothingToChange for an empty edit and CheckBookmark's errors for bad values.
+// ErrNothingToChange for an empty edit and checkBookmark's errors for a bad value
+// it sets.
 // The read, the checks and the write are one writer transaction.
 func (c *Catalog) EditBookmark(ctx context.Context, userID, id int64, edit BookmarkEdit, scopes []Scope) (*Bookmark, error) {
 	var b Bookmark
@@ -91,14 +93,14 @@ func (c *Catalog) EditBookmark(ctx context.Context, userID, id int64, edit Bookm
 		if edit.Note == nil && edit.Label == nil {
 			return ErrNothingToChange
 		}
+		if err := checkBookmark(edit.Note, edit.Label); err != nil {
+			return err
+		}
 		if edit.Note != nil {
 			b.Note = *edit.Note
 		}
 		if edit.Label != nil {
 			b.Label = *edit.Label
-		}
-		if err := CheckBookmark(b.Note, b.Label); err != nil {
-			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE bookmarks SET note = ?, label = ? WHERE id = ?`, b.Note, b.Label, id)
 		return err

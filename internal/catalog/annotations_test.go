@@ -71,20 +71,20 @@ func (f *annotationFixture) note(t *testing.T, user int64, p string, pos float64
 // MaxBookmarkNote characters (runes, not bytes), a note body MaxNoteBody.
 func TestCheckBookmarkAndNoteBounds(t *testing.T) {
 	for _, l := range []string{"", "quote", "fell_asleep", "a", "q2", "a" + strings.Repeat("b", 31)} {
-		if err := CheckBookmark("", l); err != nil {
+		if err := checkBookmark(nil, &l); err != nil {
 			t.Errorf("label %q refused: %v", l, err)
 		}
 	}
 	for _, l := range []string{"Quote", "1quote", "_quote", "fell-asleep", " quote", "quote ", "quoté",
 		"a" + strings.Repeat("b", 32), "fell asleep"} {
-		if err := CheckBookmark("", l); !errors.Is(err, ErrInvalidLabel) {
+		if err := checkBookmark(nil, &l); !errors.Is(err, ErrInvalidLabel) {
 			t.Errorf("label %q = %v, want ErrInvalidLabel", l, err)
 		}
 	}
-	if err := CheckBookmark(strings.Repeat("é", MaxBookmarkNote), ""); err != nil {
+	if err := checkBookmark(new(strings.Repeat("é", MaxBookmarkNote)), nil); err != nil {
 		t.Errorf("a note of %d two-byte characters refused: %v", MaxBookmarkNote, err)
 	}
-	if err := CheckBookmark(strings.Repeat("a", MaxBookmarkNote+1), ""); !errors.Is(err, ErrBookmarkNoteTooLong) {
+	if err := checkBookmark(new(strings.Repeat("a", MaxBookmarkNote+1)), nil); !errors.Is(err, ErrBookmarkNoteTooLong) {
 		t.Errorf("an over-long note = %v, want ErrBookmarkNoteTooLong", err)
 	}
 	if err := checkNoteBody(strings.Repeat("é", MaxNoteBody)); err != nil {
@@ -590,5 +590,41 @@ func TestAddHistoryNormalisesTimes(t *testing.T) {
 		"2026-10-07T10:00:00.250Z", "2026-10-07T10:00:00.000Z"}
 	if !slices.Equal(ended, want) {
 		t.Fatalf("history newest first = %v, want %v", ended, want)
+	}
+}
+
+// An edit checks only the fields it sets: a bookmark stored before the note bound
+// (a legacy note over MaxBookmarkNote) can still take a label, and a note's body
+// edit doesn't re-check its stored position.
+func TestEditChecksOnlyTheFieldsItSets(t *testing.T) {
+	f := newAnnotationFixture(t)
+	ctx := t.Context()
+	long := strings.Repeat("a", MaxBookmarkNote+1)
+	res, err := f.c.db.ExecContext(ctx,
+		`INSERT INTO bookmarks(user_id, library_id, rel_path, position, note, created_at) VALUES(?,?,?,?,?,?)`,
+		f.ann, f.lib, annBookA, 5, long, "2026-01-01T00:00:00.000Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	label := "quote"
+	got, err := f.c.EditBookmark(ctx, f.ann, id, BookmarkEdit{Label: &label}, f.all)
+	if err != nil || got.Label != "quote" || got.Note != long {
+		t.Fatalf("labelling a legacy long-note bookmark = %+v %v", got, err)
+	}
+	if _, err := f.c.EditBookmark(ctx, f.ann, id, BookmarkEdit{Note: &long}, f.all); !errors.Is(err, ErrBookmarkNoteTooLong) {
+		t.Fatalf("setting a long note = %v, want ErrBookmarkNoteTooLong", err)
+	}
+
+	res, err = f.c.db.ExecContext(ctx,
+		`INSERT INTO notes(user_id, library_id, rel_path, position, body, created_at, updated_at) VALUES(?,?,?,?,?,?,?)`,
+		f.ann, f.lib, annBookA, -3, strings.Repeat("b", MaxNoteBody+1), "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nid, _ := res.LastInsertId()
+	body := "short now"
+	if n, err := f.c.EditNote(ctx, f.ann, nid, NoteEdit{Body: &body}, f.all); err != nil || n.Body != body || n.Position != -3 {
+		t.Fatalf("a body edit on a legacy note = %+v %v", n, err)
 	}
 }

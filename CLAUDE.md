@@ -175,7 +175,7 @@ retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `cl
 redesign Phase 1b `0028` adds `listening_goals` (`user_id` PK → users CASCADE, `books_per_year`
 1-1000: a person's yearly goal; names no book, so nothing moves it) and `0029` the index
 `listening_sessions(user_id, last_at)` (a person's own stats read their sessions by it). Phase 4
-`0030` adds `bookmarks.label` (a machine key, `''` for none: `catalog.CheckBookmark` checks only its
+`0030` adds `bookmarks.label` (a machine key, `''` for none: `catalog.checkBookmark` checks only its
 shape, `^[a-z][a-z0-9_]{0,31}$`, never the player's set of keys) and `0031` the indexes
 `bookmarks(user_id, created_at)`, `notes(user_id, created_at)` and `listening_history(user_id,
 ended_at)` behind the `annotations` capability's lists (`catalog/annotations.go`: `GET /me/bookmarks`,
