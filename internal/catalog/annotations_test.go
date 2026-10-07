@@ -58,20 +58,20 @@ func (f *annotationFixture) note(t *testing.T, user int64, p string, pos float64
 // MaxBookmarkNote characters (runes, not bytes), a note body MaxNoteBody.
 func TestCheckBookmarkAndNoteBounds(t *testing.T) {
 	for _, l := range []string{"", "quote", "fell_asleep", "a", "q2", "a" + strings.Repeat("b", 31)} {
-		if err := checkBookmark(nil, &l); err != nil {
+		if err := checkBookmark(nil, nil, &l); err != nil {
 			t.Errorf("label %q refused: %v", l, err)
 		}
 	}
 	for _, l := range []string{"Quote", "1quote", "_quote", "fell-asleep", " quote", "quote ", "quoté",
 		"a" + strings.Repeat("b", 32), "fell asleep"} {
-		if err := checkBookmark(nil, &l); !errors.Is(err, ErrInvalidLabel) {
+		if err := checkBookmark(nil, nil, &l); !errors.Is(err, ErrInvalidLabel) {
 			t.Errorf("label %q = %v, want ErrInvalidLabel", l, err)
 		}
 	}
-	if err := checkBookmark(new(strings.Repeat("é", MaxBookmarkNote)), nil); err != nil {
+	if err := checkBookmark(nil, new(strings.Repeat("é", MaxBookmarkNote)), nil); err != nil {
 		t.Errorf("a note of %d two-byte characters refused: %v", MaxBookmarkNote, err)
 	}
-	if err := checkBookmark(new(strings.Repeat("a", MaxBookmarkNote+1)), nil); !errors.Is(err, ErrBookmarkNoteTooLong) {
+	if err := checkBookmark(nil, new(strings.Repeat("a", MaxBookmarkNote+1)), nil); !errors.Is(err, ErrBookmarkNoteTooLong) {
 		t.Errorf("an over-long note = %v, want ErrBookmarkNoteTooLong", err)
 	}
 	if err := checkNote(new(strings.Repeat("é", MaxNoteBody)), new(0.0)); err != nil {
@@ -556,5 +556,55 @@ func TestEditChecksOnlyTheFieldsItSets(t *testing.T) {
 	body := "short now"
 	if n, err := f.c.EditNote(ctx, f.ann, nid, NoteEdit{Body: &body}, f.all); err != nil || n.Body != body || n.Position != -3 {
 		t.Fatalf("a body edit on a legacy note = %+v %v", n, err)
+	}
+}
+
+// A bookmark's position follows a note's rule: finite and >= 0.
+func TestBookmarkPositionRule(t *testing.T) {
+	f := newAnnotationFixture(t)
+	for _, p := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if _, err := f.c.AddBookmark(t.Context(), f.ann, Bookmark{Ref: f.ref(annBookA), Position: p}); !errors.Is(err, ErrInvalidPosition) {
+			t.Errorf("AddBookmark at %v = %v, want ErrInvalidPosition", p, err)
+		}
+	}
+	if bms, _ := f.c.ListBookmarks(t.Context(), f.ann, f.ref(annBookA)); len(bms) != 0 {
+		t.Fatalf("a refused bookmark was stored: %+v", bms)
+	}
+	f.bookmark(t, f.ann, annBookA, 0, "", "")
+}
+
+// A span with one unparsable time takes the other for both (a zero-length span
+// there), so it never starts after it ends; with neither parsable both are now.
+func TestAddHistoryOneSideUnparsable(t *testing.T) {
+	f := newAnnotationFixture(t)
+	ctx := t.Context()
+	f.clock = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct{ start, end, want string }{
+		{"garbage", "2026-10-07T10:00:00Z", "2026-10-07T10:00:00.000Z"},
+		{"2026-10-07T09:00:00Z", "", "2026-10-07T09:00:00.000Z"},
+		{"", "nope", "2026-10-07T12:00:00.000Z"},
+	} {
+		if err := f.c.AddHistory(ctx, f.bob, f.ref(annGhost), 0, 1, c.start, c.end); err != nil {
+			t.Fatal(err)
+		}
+		got, err := f.c.ListHistory(ctx, f.bob, f.ref(annGhost), 1)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("history = %+v %v", got, err)
+		}
+		if h := got[0]; h.StartedAt != c.want || h.EndedAt != c.want {
+			t.Errorf("AddHistory(%q, %q) stored %q..%q, want both %q", c.start, c.end, h.StartedAt, h.EndedAt, c.want)
+		}
+		if _, err := f.c.db.ExecContext(ctx, `DELETE FROM listening_history`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A page holds at most 500 rows; absent or non-positive is the default 100.
+func TestClampPageLimit(t *testing.T) {
+	for in, want := range map[int]int{0: 100, -5: 100, 1: 1, 100: 100, 500: 500, 501: 500, 1 << 20: 500} {
+		if got := clampPageLimit(in); got != want {
+			t.Errorf("clampPageLimit(%d) = %d, want %d", in, got, want)
+		}
 	}
 }

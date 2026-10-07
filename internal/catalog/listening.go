@@ -549,10 +549,10 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	return refreshCoverArt(ctx, tx, libraryID, newPath)
 }
 
-// AddBookmark stores a bookmark and returns it with its ID. ErrInvalidLabel or
-// ErrBookmarkNoteTooLong for a bookmark checkBookmark refuses.
+// AddBookmark stores a bookmark and returns it with its ID. ErrInvalidPosition,
+// ErrBookmarkNoteTooLong or ErrInvalidLabel for a bookmark checkBookmark refuses.
 func (c *Catalog) AddBookmark(ctx context.Context, userID int64, b Bookmark) (*Bookmark, error) {
-	if err := checkBookmark(&b.Note, &b.Label); err != nil {
+	if err := checkBookmark(&b.Position, &b.Note, &b.Label); err != nil {
 		return nil, err
 	}
 	b.CreatedAt = c.stamp() // fixed width: the all-books list orders by it as text
@@ -617,23 +617,33 @@ func (c *Catalog) DeleteNote(ctx context.Context, userID, id int64) error {
 
 // AddHistory records a listening-history span. The client's start and end are
 // stored in the fixed-width UTC millisecond form (c.stamp), since the all-books
-// history orders by ended_at as text; an empty or unparsable one is the server's
-// time instead (never refused: shipped players send what they send).
+// history orders by ended_at as text (historySpan; never refused: shipped players
+// send what they send).
 func (c *Catalog) AddHistory(ctx context.Context, userID int64, ref Ref, from, to float64, startedAt, endedAt string) error {
-	startedAt, endedAt = c.historyTime(startedAt), c.historyTime(endedAt)
+	startedAt, endedAt = c.historySpan(startedAt, endedAt)
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO listening_history(user_id, library_id, rel_path, from_pos, to_pos, started_at, ended_at)
 		 VALUES(?,?,?,?,?,?,?)`, userID, ref.LibraryID, ref.Path, from, to, startedAt, endedAt)
 	return err
 }
 
-// historyTime is AddHistory's normalisation of a client time: RFC3339 (any
-// fraction, any offset) to c.stamp's form, else the server's time now.
-func (c *Catalog) historyTime(v string) string {
-	if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
-		return formatSessionTime(t)
+// historySpan is AddHistory's normalisation of a client's span times: RFC3339
+// (any fraction, any offset) to c.stamp's form. When only one side parses, the
+// other takes it (a zero-length span there), so the span never starts after it
+// ends; when neither does, both are the server's time now.
+func (c *Catalog) historySpan(startedAt, endedAt string) (string, string) {
+	start, startErr := time.Parse(time.RFC3339Nano, startedAt)
+	end, endErr := time.Parse(time.RFC3339Nano, endedAt)
+	switch {
+	case startErr == nil && endErr == nil:
+		return formatSessionTime(start), formatSessionTime(end)
+	case startErr == nil:
+		return formatSessionTime(start), formatSessionTime(start)
+	case endErr == nil:
+		return formatSessionTime(end), formatSessionTime(end)
 	}
-	return c.stamp()
+	now := c.stamp()
+	return now, now
 }
 
 // History is a recorded listening span.
@@ -646,13 +656,13 @@ type History struct {
 	EndedAt   string  `json:"ended_at"`
 }
 
-// clampPageLimit is a list's page size: limit, or 100 when it is absent (0),
-// negative or over 500.
+// clampPageLimit is a list's page size: limit, at most 500; 100 when it is
+// absent (0) or negative.
 func clampPageLimit(limit int) int {
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 {
 		return 100
 	}
-	return limit
+	return min(limit, 500)
 }
 
 // historyColumns are the columns of a History, in scanHistory's order.

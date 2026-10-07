@@ -30,7 +30,7 @@ var (
 	ErrBookmarkNoteTooLong = errors.New("note too long")
 	// ErrNoteBodyTooLong is a note body over MaxNoteBody characters.
 	ErrNoteBodyTooLong = errors.New("body too long")
-	// ErrInvalidPosition is a note position that is negative or not finite.
+	// ErrInvalidPosition is a bookmark or note position that is negative or not finite.
 	ErrInvalidPosition = errors.New("invalid position")
 	// ErrNothingToChange is an edit that names no field.
 	ErrNothingToChange = errors.New("nothing to change")
@@ -43,9 +43,13 @@ var labelPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 
 // checkBookmark validates the bookmark fields an add or an edit sets (nil: not
 // set, so an edit never re-checks a stored value an older server let in):
-// ErrBookmarkNoteTooLong for a note over MaxBookmarkNote characters,
-// ErrInvalidLabel for a label that is neither "" nor a machine key.
-func checkBookmark(note, label *string) error {
+// ErrInvalidPosition as checkPosition, ErrBookmarkNoteTooLong for a note over
+// MaxBookmarkNote characters, ErrInvalidLabel for a label that is neither "" nor
+// a machine key.
+func checkBookmark(position *float64, note, label *string) error {
+	if err := checkPosition(position); err != nil {
+		return err
+	}
 	if note != nil && utf8.RuneCountInString(*note) > MaxBookmarkNote {
 		return ErrBookmarkNoteTooLong
 	}
@@ -57,11 +61,17 @@ func checkBookmark(note, label *string) error {
 
 // checkNote validates the note fields an add or an edit sets (nil: not set):
 // ErrNoteBodyTooLong for a body over MaxNoteBody characters, ErrInvalidPosition
-// for a position that is negative or not finite.
+// as checkPosition.
 func checkNote(body *string, position *float64) error {
 	if body != nil && utf8.RuneCountInString(*body) > MaxNoteBody {
 		return ErrNoteBodyTooLong
 	}
+	return checkPosition(position)
+}
+
+// checkPosition is ErrInvalidPosition for a bookmark or note position (when set)
+// that is negative or not finite.
+func checkPosition(position *float64) error {
 	if position != nil && (*position < 0 || math.IsNaN(*position) || math.IsInf(*position, 0)) {
 		return ErrInvalidPosition
 	}
@@ -98,7 +108,7 @@ func (c *Catalog) EditBookmark(ctx context.Context, userID, id int64, edit Bookm
 		if edit.Note == nil && edit.Label == nil {
 			return ErrNothingToChange
 		}
-		if err := checkBookmark(edit.Note, edit.Label); err != nil {
+		if err := checkBookmark(nil, edit.Note, edit.Label); err != nil {
 			return err
 		}
 		if edit.Note != nil {

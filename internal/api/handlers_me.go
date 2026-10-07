@@ -123,8 +123,7 @@ func (a *API) handleAddBookmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var bm catalog.Bookmark
-	if err := decodeJSON(r, &bm, 0); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request")
+	if !decodePositioned(w, decodeJSON(r, &bm, 0)) {
 		return
 	}
 	bm.Ref = catalog.Ref{LibraryID: lib.ID, Path: path}
@@ -173,7 +172,7 @@ func (a *API) handleAddNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var n catalog.Note
-	if !decodeNoteJSON(w, decodeJSON(r, &n, 0)) {
+	if !decodePositioned(w, decodeJSON(r, &n, 0)) {
 		return
 	}
 	n.Ref = catalog.Ref{LibraryID: lib.ID, Path: path}

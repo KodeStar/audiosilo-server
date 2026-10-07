@@ -88,9 +88,11 @@ func TestBookmarkLabelOnPost(t *testing.T) {
 		`{"body":"`+strings.Repeat("a", catalog.MaxNoteBody+1)+`"}`)
 	wantError(t, "POST an over-long note", resp, body, http.StatusBadRequest, "body too long")
 	l.addNote(t, l.oliveTok, cradleBook, `{"body":"`+strings.Repeat("a", catalog.MaxNoteBody)+`"}`)
-	for _, in := range []string{`{"body":"x","position":-1}`, `{"body":"x","position":"12"}`} {
-		resp, body = l.do(t, "POST", l.at("notes", cradleBook), l.oliveTok, in)
-		wantError(t, "POST a note "+in, resp, body, http.StatusBadRequest, "invalid position")
+	for _, kind := range []string{"notes", "bookmarks"} {
+		for _, in := range []string{`{"position":-1}`, `{"position":"12"}`} {
+			resp, body = l.do(t, "POST", l.at(kind, cradleBook), l.oliveTok, in)
+			wantError(t, "POST "+kind+" "+in, resp, body, http.StatusBadRequest, "invalid position")
+		}
 	}
 }
 
