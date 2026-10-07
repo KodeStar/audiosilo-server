@@ -10,6 +10,7 @@ import {
   keys,
   matchRunActive,
   useLibraries,
+  useLibraryRoots,
   useMatchRunItems,
   useMatchRuns,
 } from '@/api/hooks';
@@ -40,7 +41,15 @@ import { scoreTone } from '@/features/book/match-model';
 import { bookRoute } from '@/lib/book-route';
 import { regionName, regionTag, storeOf } from '@/lib/regions';
 import { toastError } from '@/lib/errors';
-import { counted, formatDuration, formatList, formatNumber, formatRelative } from '@/lib/format';
+import {
+  counted,
+  formatDuration,
+  formatList,
+  formatNumber,
+  formatRelative,
+  seriesIndexLabel,
+} from '@/lib/format';
+import { joinLibraryPath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -465,6 +474,7 @@ function ItemList({
 }) {
   const { t } = useTranslation();
   const list = useMatchRunItems(run.id, outcome);
+  const roots = useLibraryRoots();
   const items = list.data?.pages.flatMap((p) => p.items ?? []) ?? [];
   if (list.isError) {
     return (
@@ -501,6 +511,7 @@ function ItemList({
           <ItemRow
             key={item.id}
             item={item}
+            root={roots[item.library_id]}
             scope={scope}
             chosen={isChosen(item, picks)}
             onToggle={() => onToggle(item)}
@@ -524,11 +535,14 @@ function ItemList({
 /** A book, the match the run found for it, and what applying writes. */
 function ItemRow({
   item,
+  root,
   scope,
   chosen,
   onToggle,
 }: {
   item: MatchRunItem;
+  /** The library's folder: the book's whole path is the path's tooltip. */
+  root: string | undefined;
   scope: MatchScope;
   chosen: boolean;
   onToggle: () => void;
@@ -546,6 +560,9 @@ function ItemRow({
     : [];
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
+  // The community's series and the book's place in it, as the book page words a position.
+  const position = seriesIndexLabel(Number(p.values.series_index ?? 0), lang, t);
+  const series = p.values.series ? [p.values.series, position].filter(Boolean).join(' ') : '';
 
   return (
     <li
@@ -576,6 +593,13 @@ function ItemRow({
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate font-semibold">{title}</span>
+        {/* The path in its library, which tells two books apart; the whole one on hover. */}
+        <span
+          className="font-mono text-[11.5px] text-subtle-foreground [overflow-wrap:anywhere]"
+          title={joinLibraryPath(root, item.path)}
+        >
+          {item.path}
+        </span>
         {candidate ? (
           <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
             <ArrowRight className="mr-1 inline size-3.5 align-[-2px]" aria-hidden="true" />
@@ -595,6 +619,11 @@ function ItemRow({
               : t('health.bulkMatch.item.error')}
           </span>
         )}
+        {candidate && series ? (
+          <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
+            {t('health.bulkMatch.inSeries', { series })}
+          </span>
+        ) : null}
         {asin ? (
           <span className="font-mono text-[11.5px] text-subtle-foreground">
             {asin}

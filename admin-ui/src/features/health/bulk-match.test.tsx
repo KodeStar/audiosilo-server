@@ -55,7 +55,7 @@ const confident: MatchRunItem = {
     narrators: 'R. C. Bray',
     asin_region: 'uk',
     cover_url: 'https://c/1.jpg',
-    values: { asin: 'B0UK000001', narrator: 'R. C. Bray' },
+    values: { asin: 'B0UK000001', narrator: 'R. C. Bray', series: 'Mars', series_index: '1' },
   },
   applied: '',
   book: { title: 'The Martian', author: 'Andy Weir' },
@@ -173,6 +173,12 @@ describe('bulk matching', () => {
     const row = (await within(dialog).findByText('B0UK000001 · UK')).closest('li')!;
     expect(within(row).getByRole('checkbox', { name: 'Apply to The Martian' })).toBeChecked();
     expect(within(row).getByText('Sets Cover, Narrator, and ASIN')).toBeInTheDocument();
+    // Where the book is, and where the match sits in its series, to tell them apart.
+    expect(within(row).getByText('Andy Weir/The Martian')).toHaveAttribute(
+      'title',
+      '/mnt/tank/fiction/Andy Weir/The Martian',
+    );
+    expect(within(row).getByText('Series: Mars #1')).toBeInTheDocument();
     expect(within(row).getByText('96% match')).toBeInTheDocument();
     // ASIN and ISBN only writes less.
     await user.click(within(dialog).getByRole('radio', { name: /ASIN and ISBN only/ }));
