@@ -10,6 +10,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/pool"
 )
 
 // Bounds on what a run asks of the community service, which is shared: a few
@@ -171,33 +172,6 @@ func (r *Runner) Clear(ctx context.Context, libraryID int64) (*catalog.ClearedMa
 // Wait blocks until no run is working (tests, shutdown).
 func (r *Runner) Wait() { r.wg.Wait() }
 
-// each runs fn on every item, workers at a time, handing items out while ctx
-// lasts and more says to go on (asked before each one). fn checks ctx itself.
-func each[T any](ctx context.Context, items []T, more func() bool, fn func(*T)) {
-	jobs := make(chan *T)
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Go(func() {
-			for it := range jobs {
-				fn(it)
-			}
-		})
-	}
-feed:
-	for i := range items {
-		if !more() {
-			break
-		}
-		select {
-		case jobs <- &items[i]:
-		case <-ctx.Done():
-			break feed
-		}
-	}
-	close(jobs)
-	wg.Wait()
-}
-
 // match matches each book, a few at a time, recording an item per book, then
 // settles the run.
 func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books []catalog.Book) {
@@ -221,7 +195,7 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 		stop(ErrCodeMetadataOff, nil)
 		return false
 	}
-	each(work, books, enabled, func(b *catalog.Book) {
+	pool.Each(work, workers, books, enabled, func(b *catalog.Book) {
 		item, err := r.matchBook(work, o, b)
 		switch {
 		case work.Err() != nil:
@@ -354,7 +328,7 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 		off = off || !r.enabled()
 		return !off
 	}
-	each(ctx, items, enabled, func(it *catalog.MatchRunItem) {
+	pool.Each(ctx, workers, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run.Mode, it, o)
 		// Stopped mid-item: what the stop may have cut short (a failure, a cover
 		// not taken) is not marked, so the next apply takes it again; what went in

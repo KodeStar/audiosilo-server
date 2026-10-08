@@ -223,12 +223,37 @@ func (a *API) handleAdminBook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, libID int64, p string) {
+	// Asked before the page is read: a check that ends in between is then in the
+	// page, rather than missing from a page that says none is running.
+	ref := catalog.Ref{LibraryID: libID, Path: catalog.CleanRelPath(p)}
+	checking := a.chapterChecks != nil && a.chapterChecks.Checking(ref)
 	d, err := a.cat.AdminBookDetail(r.Context(), libID, p)
 	if err != nil {
 		a.writeBookError(w, err, "admin book detail failed", "could not load book", "library", libID, "path", p)
 		return
 	}
+	d.CommunityChecking = checking
+	d.CommunityCheckFailed = !checking && a.chapterChecks != nil && a.chapterChecks.Failed(ref)
 	writeJSON(w, http.StatusOK, d)
+}
+
+// handleCheckCommunityChapters serves POST
+// /admin/libraries/{id}/book/community-chapters?path=: check the book against the
+// community's chapter list now, in the background (a long book's pauses take a
+// while to find), and return the book page, community_checking set until the
+// check is recorded. Metadata off -> 404 metadata_off; no book -> 404.
+func (a *API) handleCheckCommunityChapters(w http.ResponseWriter, r *http.Request) {
+	if a.metadataOff(w) {
+		return
+	}
+	lib, p, status, msg := a.authorizedPath(r)
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	// No book there: the check finds none and stops, and the page answers 404.
+	a.chapterChecks.Start(a.baseCtx, catalog.Ref{LibraryID: lib.ID, Path: p})
+	a.writeBookDetail(w, r, lib.ID, p)
 }
 
 // editRequest is the body of a book edit (PATCH) and, without chapters, of a bulk
@@ -241,10 +266,13 @@ type editRequest struct {
 		Set    map[int]string `json:"set"`
 		Revert []int          `json:"revert"`
 	} `json:"chapters"`
+	// ChapterSource picks where the chapters come from: "files", "community"
+	// or "auto" (catalog.BookEdit.ChapterSource).
+	ChapterSource string `json:"chapter_source"`
 }
 
 func (e editRequest) toEdit(userID int64) catalog.BookEdit {
-	edit := catalog.BookEdit{Set: e.Set, Revert: e.Revert, Source: e.Source, UserID: userID}
+	edit := catalog.BookEdit{Set: e.Set, Revert: e.Revert, Source: e.Source, ChapterSource: e.ChapterSource, UserID: userID}
 	if e.Chapters != nil {
 		edit.ChapterSet, edit.ChapterRevert = e.Chapters.Set, e.Chapters.Revert
 	}
@@ -276,11 +304,14 @@ func (e editRequest) details() map[string]any {
 			d["chapters"] = n
 		}
 	}
+	if e.ChapterSource != "" {
+		d["chapter_source"] = e.ChapterSource
+	}
 	return d
 }
 
 func (e editRequest) empty() bool {
-	return len(e.Set) == 0 && len(e.Revert) == 0 &&
+	return len(e.Set) == 0 && len(e.Revert) == 0 && e.ChapterSource == "" &&
 		(e.Chapters == nil || (len(e.Chapters.Set) == 0 && len(e.Chapters.Revert) == 0))
 }
 

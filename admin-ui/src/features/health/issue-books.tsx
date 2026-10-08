@@ -15,6 +15,7 @@ import { AllClear } from './all-clear';
 import {
   FIXES,
   FIX_LOOK,
+  chaptersCheckNote,
   issueReason,
   say,
   type BookIssueKind,
@@ -93,62 +94,70 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         </Button>
       </div>
       <ul className="divide-y rounded-xl border bg-card" aria-label={t(`health.kind.${kind}`)}>
-        {books.map((b) => (
-          <li key={refKey(b)} className="flex items-center gap-3.5 px-3.5 py-3 md:px-[18px]">
-            <Checkbox
-              checked={selection.isSelected(b)}
-              onCheckedChange={() => selection.toggle(b)}
-              aria-label={t('health.select', { title: b.title || b.path })}
-            />
-            <Link
-              {...bookRoute(b.library_id, b.path)}
-              className="w-12 shrink-0"
-              aria-label={t('health.open', { title: b.title || b.path })}
-            >
-              <BookCover
-                libraryId={b.library_id}
-                path={b.path}
-                title={b.title}
-                author={b.author}
-                size={160}
+        {books.map((b) => {
+          const checkNote = chaptersCheckNote(kind, b);
+          return (
+            <li key={refKey(b)} className="flex items-center gap-3.5 px-3.5 py-3 md:px-[18px]">
+              <Checkbox
+                checked={selection.isSelected(b)}
+                onCheckedChange={() => selection.toggle(b)}
+                aria-label={t('health.select', { title: b.title || b.path })}
               />
-            </Link>
-            <div className="flex min-w-0 flex-1 flex-col">
               <Link
                 {...bookRoute(b.library_id, b.path)}
-                className="truncate font-semibold hover:underline"
+                className="w-12 shrink-0"
+                aria-label={t('health.open', { title: b.title || b.path })}
               >
-                {b.title || b.path}
-              </Link>
-              <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
-                {say(t, issueReason(kind, b), lang)}
-              </span>
-              <span className="truncate font-mono text-[11.5px] text-subtle-foreground max-md:hidden">
-                {joinLibraryPath(roots[b.library_id], b.path)}
-              </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              {ignored ? (
-                <Button variant="outline" size="sm" onClick={() => void actions.unignore([b])}>
-                  <Eye aria-hidden="true" />
-                  <span className="max-md:sr-only">{t('health.unignore')}</span>
-                </Button>
-              ) : (
-                <Button variant="ghost" size="sm" onClick={() => void actions.ignore([b])}>
-                  <EyeOff aria-hidden="true" className="md:hidden" />
-                  <span className="max-md:sr-only">{t('health.ignore')}</span>
-                </Button>
-              )}
-              {fix ? (
-                <FixButton
-                  fix={fix}
-                  disabled={actions.fixing(b)}
-                  onClick={() => void actions.fix(b)}
+                <BookCover
+                  libraryId={b.library_id}
+                  path={b.path}
+                  title={b.title}
+                  author={b.author}
+                  size={160}
                 />
-              ) : null}
-            </div>
-          </li>
-        ))}
+              </Link>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <Link
+                  {...bookRoute(b.library_id, b.path)}
+                  className="truncate font-semibold hover:underline"
+                >
+                  {b.title || b.path}
+                </Link>
+                <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
+                  {say(t, issueReason(kind, b), lang)}
+                </span>
+                {checkNote ? (
+                  <span className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">
+                    {t(checkNote)}
+                  </span>
+                ) : null}
+                <span className="truncate font-mono text-[11.5px] text-subtle-foreground max-md:hidden">
+                  {joinLibraryPath(roots[b.library_id], b.path)}
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {ignored ? (
+                  <Button variant="outline" size="sm" onClick={() => void actions.unignore([b])}>
+                    <Eye aria-hidden="true" />
+                    <span className="max-md:sr-only">{t('health.unignore')}</span>
+                  </Button>
+                ) : (
+                  <Button variant="ghost" size="sm" onClick={() => void actions.ignore([b])}>
+                    <EyeOff aria-hidden="true" className="md:hidden" />
+                    <span className="max-md:sr-only">{t('health.ignore')}</span>
+                  </Button>
+                )}
+                {fix ? (
+                  <FixButton
+                    fix={fix}
+                    disabled={actions.fixing(b)}
+                    onClick={() => void actions.fix(b)}
+                  />
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
       </ul>
       {list.hasNextPage ? (
         <div className="mt-3 flex justify-center">
@@ -175,6 +184,13 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
             icon={FIX_LOOK.rescan.icon}
             label={t(FIX_LOOK.rescan.label)}
             onClick={() => void actions.rescanMany(chosenBooks())}
+          />
+        ) : null}
+        {fix === 'chapters' ? (
+          <BulkAction
+            icon={FIX_LOOK.chapters.icon}
+            label={t(FIX_LOOK.chapters.label)}
+            onClick={() => void actions.takeDetailed(chosenBooks())}
           />
         ) : null}
         <BulkAction

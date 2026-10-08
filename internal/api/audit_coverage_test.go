@@ -14,18 +14,19 @@ import (
 // notAudited are the admin routes that change something yet write no audit event,
 // each with why. Every other non-GET /api/v1/admin route must reach a.audit.
 var notAudited = map[string]string{
-	"handleScanLibrary":      "scans are recorded in scan_runs (Health > Jobs), with who asked",
-	"handleScanAll":          "scans are recorded in scan_runs",
-	"handleRescanBook":       "re-reads files; changes nothing an admin chose",
-	"handleCancelJob":        "a cancelled scan is recorded in scan_runs",
-	"handleUpdateCheck":      "asks GitHub; changes nothing",
-	"handleAdminCovers":      "a read (a POST only for its batch body)",
-	"handleAdminBookWorks":   "a read (a POST only for its batch body)",
-	"handleCommunityCovers":  "a read (a POST only for its batch body)",
-	"handleTestNotifyTarget": "sends a test message; its outcome is recorded on the destination",
-	"handleImportUsers":      "connects to Audiobookshelf and lists its users; changes nothing",
-	"handleUpdateImport":     "changes only an unapplied import's review (its cutoff)",
-	"handleDeleteImport":     "drops an unapplied import's record; it wrote nothing (or an undo took it out, audited)",
+	"handleScanLibrary":            "scans are recorded in scan_runs (Health > Jobs), with who asked",
+	"handleScanAll":                "scans are recorded in scan_runs",
+	"handleRescanBook":             "re-reads files; changes nothing an admin chose",
+	"handleCancelJob":              "a cancelled scan is recorded in scan_runs",
+	"handleUpdateCheck":            "asks GitHub; changes nothing",
+	"handleAdminCovers":            "a read (a POST only for its batch body)",
+	"handleAdminBookWorks":         "a read (a POST only for its batch body)",
+	"handleCommunityCovers":        "a read (a POST only for its batch body)",
+	"handleTestNotifyTarget":       "sends a test message; its outcome is recorded on the destination",
+	"handleImportUsers":            "connects to Audiobookshelf and lists its users; changes nothing",
+	"handleUpdateImport":           "changes only an unapplied import's review (its cutoff)",
+	"handleDeleteImport":           "drops an unapplied import's record; it wrote nothing (or an undo took it out, audited)",
+	"handleCheckCommunityChapters": "re-checks the community chapter list; changes nothing an admin chose (picking a chapter source is a book.edit)",
 }
 
 // TestAdminChangesAreAudited reads the route table and the package's call graph: a

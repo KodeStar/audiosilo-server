@@ -23,17 +23,20 @@ import (
 const (
 	IssueNoCover    = "no_cover"
 	IssueNoChapters = "no_chapters"
-	IssueUnmatched  = "unmatched"
-	IssueTranscode  = "transcode"
-	IssueSuspect    = "suspect"
-	IssueSplitDiscs = "split_discs"
-	IssueScanError  = "scan_error"
-	IssueDuplicate  = "duplicate"
+	// IssueDetailedChapters: the book's own chapters are coarse, and the
+	// community's fit with more of them (a refine the admin hasn't decided on).
+	IssueDetailedChapters = "detailed_chapters"
+	IssueUnmatched        = "unmatched"
+	IssueTranscode        = "transcode"
+	IssueSuspect          = "suspect"
+	IssueSplitDiscs       = "split_discs"
+	IssueScanError        = "scan_error"
+	IssueDuplicate        = "duplicate"
 )
 
 // IssueKinds are the kinds an issue can be ignored for, in the Health page's order.
 var IssueKinds = []string{IssueScanError, IssueSuspect, IssueSplitDiscs, IssueDuplicate, IssueNoCover,
-	IssueUnmatched, IssueNoChapters, IssueTranscode}
+	IssueUnmatched, IssueNoChapters, IssueDetailedChapters, IssueTranscode}
 
 // ErrUnknownIssue marks an issue kind that isn't one of IssueKinds.
 var ErrUnknownIssue = errors.New("unknown issue kind")
@@ -47,8 +50,14 @@ var issuePredicates = map[string]string{
 	// Only books a scan has checked: has_cover is NULL until then.
 	IssueNoCover:    `(b.has_cover IS NOT NULL AND NOT ` + hasCoverExpr + `)`,
 	IssueNoChapters: fmt.Sprintf(`(b.duration > %d AND NOT %s)`, longWithoutChapters, hasChaptersExpr),
-	IssueUnmatched:  `(NOT ` + matchedExpr + `)`,
-	IssueTranscode:  `(NOT ` + directPlayableExpr + `)`,
+	// A current check only (a stale one is never used, so choosing it would change
+	// nothing); settled by picking either source (a chapter_choices row).
+	IssueDetailedChapters: `(EXISTS(SELECT 1 FROM community_chapters cc
+		WHERE cc.library_id = b.library_id AND cc.path = b.rel_path AND cc.status = 'refine'
+		  AND cc.basis = ` + chapterBasisExpr + `)
+		AND NOT EXISTS(SELECT 1 FROM chapter_choices ch WHERE ch.library_id = b.library_id AND ch.path = b.rel_path))`,
+	IssueUnmatched: `(NOT ` + matchedExpr + `)`,
+	IssueTranscode: `(NOT ` + directPlayableExpr + `)`,
 	// A folder an admin set to "one book" (the category's own fix) is settled.
 	IssueSuspect: `(COALESCE(b.suspect_parts, 0) >= 2 AND NOT EXISTS(SELECT 1 FROM folder_overrides fo
 		WHERE fo.library_id = b.library_id AND fo.path = b.rel_path AND fo.mode = '` + OverrideBook + `'))`,

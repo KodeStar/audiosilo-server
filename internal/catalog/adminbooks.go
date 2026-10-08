@@ -64,6 +64,12 @@ type AdminBook struct {
 	ScanErrorFile   string `json:"scan_error_file,omitempty"`
 	ScanErrorDetail string `json:"scan_error_detail,omitempty"`
 	SuspectParts    int    `json:"suspect_parts,omitempty"`
+	// ChaptersSource is where the chapters come from (ChaptersFromFiles or
+	// ChaptersFromCommunity) and ChaptersCheck the status of the book's last
+	// community chapter check ("" = none), so a list can say why a book has no
+	// community chapters.
+	ChaptersSource string `json:"chapters_source"`
+	ChaptersCheck  string `json:"chapters_check,omitempty"`
 }
 
 // fieldList scans a comma-separated SQL list (group_concat) into field names,
@@ -97,6 +103,12 @@ const (
 	// custom cover counts too.
 	hasCoverExpr     = `(COALESCE(b.has_cover, 0) = 1 OR ` + customCoverExpr + `)`
 	chapterCountExpr = `(SELECT COUNT(*) FROM chapters ch WHERE ch.book_id = b.id)`
+	// chaptersCheckExpr is the status of the book's last community chapter check,
+	// '' when it has none.
+	chaptersCheckExpr = `COALESCE((SELECT cc.status FROM community_chapters cc
+		WHERE cc.library_id = b.library_id AND cc.path = b.rel_path), '')`
+	// chaptersSourceExpr is books.chapters_source with the scan's own named.
+	chaptersSourceExpr = `CASE WHEN b.chapters_source = '' THEN '` + ChaptersFromFiles + `' ELSE b.chapters_source END`
 	// A single-file book has no book_files rows; it is one file.
 	fileCountExpr = `MAX(1, (SELECT COUNT(*) FROM book_files bf WHERE bf.book_id = b.id))`
 	matchedExpr   = `(b.asin <> '' OR b.isbn <> '')`
@@ -121,7 +133,8 @@ var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.titl
 	b.narrator, b.series, b.series_index, b.published, b.released, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
 	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
-	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0)`
+	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0), ` +
+	chaptersSourceExpr + `, ` + chaptersCheckExpr
 
 // adminBookDest returns the scan destinations for adminBookCols, in order.
 func adminBookDest(b *AdminBook) []any {
@@ -129,7 +142,7 @@ func adminBookDest(b *AdminBook) []any {
 		&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
 		&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
 		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
-		&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts}
+		&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck}
 }
 
 // BookFilter narrows the admin book list (and its facet counts). Zero values

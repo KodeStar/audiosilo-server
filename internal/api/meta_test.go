@@ -27,7 +27,10 @@ type mockMetaserve struct {
 	workCode   int // non-zero overrides the works/{id} response status
 	// match serves works/match (a current metaserve); without it the route
 	// falls through to works/{id} and 404s, as on a metaserve that predates it.
-	match    bool
+	match bool
+	// chapters, when set, is the body of the recordings' chapters route
+	// (without it the route 404s, as on a metaserve that predates it).
+	chapters string
 	mu       sync.Mutex
 	gotMatch url.Values
 }
@@ -40,6 +43,11 @@ func (m *mockMetaserve) handler() http.Handler {
 			m.gotMatch = r.URL.Query()
 			m.mu.Unlock()
 			_, _ = w.Write([]byte(`{"results":[{"kind":"work","id":"the-martian","title":"The Martian","cover_url":"https://c/w.jpg","score":88,"reasons":{"title":1,"author":"full"}}]}`))
+		})
+	}
+	if m.chapters != "" {
+		mux.HandleFunc("GET /api/v1/works/{id}/recordings/{rid}/chapters", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(m.chapters))
 		})
 	}
 	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {

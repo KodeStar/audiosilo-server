@@ -883,6 +883,7 @@ export const ISSUE_KINDS = [
   'no_cover',
   'unmatched',
   'no_chapters',
+  'detailed_chapters',
   'transcode',
 ] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
@@ -1151,6 +1152,10 @@ export interface AdminBook {
   scan_error_detail?: string;
   /** How many books its parts look like (>= 2: the folder may hold several). */
   suspect_parts?: number;
+  /** Where its chapters come from now. */
+  chapters_source: ChapterSource;
+  /** Its last community chapter check's status (absent: never checked). */
+  chapters_check?: CommunityChaptersStatus;
 }
 
 /** GET /admin/books (catalog.AdminPage). */
@@ -1335,6 +1340,72 @@ export interface AdminBookDetail {
   /** The folder whose detection decides the book's shape, and its override ("" = automatic). */
   folder: { path: string; override: FolderMode | '' };
   indexed_at: string;
+  /** Where `chapters` come from now, and the admin's choice of it ("" = automatic). */
+  chapter_source: ChapterSource;
+  chapter_choice: ChapterSource | '';
+  /** The last community chapter check (null: never checked), and whether one is running. */
+  community_chapters: CommunityChapters | null;
+  community_checking: boolean;
+  /** The last check failed (the community service, or it ran out of time): `community_chapters` is the one before. */
+  community_check_failed?: boolean;
+}
+
+/** Where a book's chapters come from: its own files, or a community list fitted onto them. */
+export type ChapterSource = 'files' | 'community';
+
+/**
+ * A community chapter check's outcome (catalog.CommunityChapters, chapteralign.Status):
+ * the fitted ones carry chapters, the rest say why not.
+ */
+export type CommunityChaptersStatus =
+  | 'fill'
+  | 'titles'
+  | 'refine'
+  | 'restructure'
+  | 'same'
+  | 'length_mismatch'
+  | 'structure_mismatch'
+  | 'crosses_files'
+  | 'no_match'
+  | 'unavailable';
+
+/** The statuses that carry chapters. */
+export const FITTED_STATUSES: readonly CommunityChaptersStatus[] = [
+  'fill',
+  'titles',
+  'refine',
+  'restructure',
+  'same',
+];
+
+/** GET /admin/libraries/{id}/book's community_chapters (catalog.CommunityChapters). */
+export interface CommunityChapters {
+  status: CommunityChaptersStatus;
+  work_id?: string;
+  recording_id?: string;
+  detail?: CommunityChaptersDetail;
+  checked_at: string;
+  /** The book changed since (other audio or identifiers): not used until checked again. */
+  stale?: boolean;
+}
+
+/** What a check found (chapteralign.Detail). Seconds. */
+export interface CommunityChaptersDetail {
+  local_duration: number;
+  community_duration: number;
+  ratio?: number;
+  worst?: number;
+  local_chapters: number;
+  community_chapters: number;
+  anchors: number;
+  snapped: number;
+  approximate: number;
+  /** Community chapters this copy lacks (a preview, end credits). */
+  omitted?: string[];
+  /** The book's chapters (by index) the community titles differently. */
+  title_diffs?: { index: number; current: string; community: string }[];
+  /** The community chapter a file boundary falls inside. */
+  straddle?: { title: string; at: number; from: string; to: string };
 }
 
 /** The body of PATCH /admin/libraries/{id}/book (handlers_catalog.go editRequest). */
@@ -1344,6 +1415,8 @@ export interface BookEditRequest {
   /** "community" when the values were accepted from a match; default "edited". */
   source?: 'edited' | 'community';
   chapters?: { set?: Record<number, string>; revert?: number[] };
+  /** Where the chapters come from: the files, the community's, or "auto" (the default). */
+  chapter_source?: ChapterSource | 'auto';
 }
 
 /** catalog.Ref: a book by its identity. */

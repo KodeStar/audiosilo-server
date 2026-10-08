@@ -1,0 +1,311 @@
+{
+"duration": 55545.938,
+"chapters": [
+{
+"index": 0,
+"title": "Intro",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 0.0,
+"end": 1.533,
+"book_offset": 0.0
+},
+{
+"index": 1,
+"title": "Part One: The Beginning",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 1.533,
+"end": 2.033,
+"book_offset": 1.533
+},
+{
+"index": 2,
+"title": "Out of Chaos",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 2.033,
+"end": 281.519,
+"book_offset": 2.033
+},
+{
+"index": 3,
+"title": "The First Order",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 281.519,
+"end": 487.201,
+"book_offset": 281.519
+},
+{
+"index": 4,
+"title": "The Second Order",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 487.201,
+"end": 5216.965,
+"book_offset": 487.201
+},
+{
+"index": 5,
+"title": "Clash of the Titans",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 5216.965,
+"end": 7194.423,
+"book_offset": 5216.965
+},
+{
+"index": 6,
+"title": "The Third Order",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 7194.423,
+"end": 15063.063,
+"book_offset": 7194.423
+},
+{
+"index": 7,
+"title": "Part Two: The Toys of Zeus",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 15063.063,
+"end": 15063.563,
+"book_offset": 15063.063
+},
+{
+"index": 8,
+"title": "Prometheus",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 15063.563,
+"end": 17250.011,
+"book_offset": 15063.563
+},
+{
+"index": 9,
+"title": "The Punishments",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 17250.011,
+"end": 19905.723,
+"book_offset": 17250.011
+},
+{
+"index": 10,
+"title": "Persephone and the Chariot",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 19905.723,
+"end": 21009.786,
+"book_offset": 19905.723
+},
+{
+"index": 11,
+"title": "Cupid and Psyche",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 21009.786,
+"end": 25305.599,
+"book_offset": 21009.786
+},
+{
+"index": 12,
+"title": "Mortals",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 25305.599,
+"end": 26235.066,
+"book_offset": 25305.599
+},
+{
+"index": 13,
+"title": "Phaeton",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 26235.066,
+"end": 28186.936,
+"book_offset": 26235.066
+},
+{
+"index": 14,
+"title": "Cadmus",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 28186.936,
+"end": 30989.817,
+"book_offset": 28186.936
+},
+{
+"index": 15,
+"title": "Twice Born",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 30989.817,
+"end": 32913.079,
+"book_offset": 30989.817
+},
+{
+"index": 16,
+"title": "The Beautiful and the Damned",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 32913.079,
+"end": 33711.613,
+"book_offset": 32913.079
+},
+{
+"index": 17,
+"title": "The Doctor and the Crow",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 33711.613,
+"end": 34549.25,
+"book_offset": 33711.613
+},
+{
+"index": 18,
+"title": "Crime and Punishment",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 34549.25,
+"end": 35647.322,
+"book_offset": 34549.25
+},
+{
+"index": 19,
+"title": "Sisyphus",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 35647.322,
+"end": 38217.724,
+"book_offset": 35647.322
+},
+{
+"index": 20,
+"title": "Hubris",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 38217.724,
+"end": 39493.103,
+"book_offset": 38217.724
+},
+{
+"index": 21,
+"title": "Arachne",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 39493.103,
+"end": 40658.327,
+"book_offset": 39493.103
+},
+{
+"index": 22,
+"title": "More Metamorphoses",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 40658.327,
+"end": 42897.892,
+"book_offset": 40658.327
+},
+{
+"index": 23,
+"title": "Eos and Tithonus",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 42897.892,
+"end": 43878.099,
+"book_offset": 42897.892
+},
+{
+"index": 24,
+"title": "The Bloom of Youth",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 43878.099,
+"end": 44610.967,
+"book_offset": 43878.099
+},
+{
+"index": 25,
+"title": "Echo and Narcissus",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 44610.967,
+"end": 46670.205,
+"book_offset": 44610.967
+},
+{
+"index": 26,
+"title": "Lovers",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 46670.205,
+"end": 47156.756,
+"book_offset": 46670.205
+},
+{
+"index": 27,
+"title": "Galateas",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 47156.756,
+"end": 49217.527,
+"book_offset": 47156.756
+},
+{
+"index": 28,
+"title": "Arion and the Dolphin",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 49217.527,
+"end": 50578.449,
+"book_offset": 49217.527
+},
+{
+"index": 29,
+"title": "Philemon and Baucis, or Hospitality Rewarded",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 50578.449,
+"end": 51592.046,
+"book_offset": 50578.449
+},
+{
+"index": 30,
+"title": "Phrygia and the Gordian Knot",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 51592.046,
+"end": 51981.538,
+"book_offset": 51592.046
+},
+{
+"index": 31,
+"title": "Midas",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 51981.538,
+"end": 53529.055,
+"book_offset": 51981.538
+},
+{
+"index": 32,
+"title": "Afterword",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 53529.055,
+"end": 55542.734,
+"book_offset": 53529.055
+},
+{
+"index": 33,
+"title": "Outro",
+"file_index": 0,
+"file_path": "Mythos/Mythos.m4b",
+"start": 55542.734,
+"end": 55545.938,
+"book_offset": 55542.734
+}
+]
+}

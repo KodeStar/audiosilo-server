@@ -480,6 +480,12 @@ export const api = {
   /** Sets or reverts overrides; answers with the updated book page. */
   editBook: (libraryId: number, path: string, edit: BookEditRequest) =>
     request<AdminBookDetail>('PATCH', `/admin/libraries/${libraryId}/book${pathQuery(path)}`, edit),
+  /** Checks the book against the community's chapter list, in the background; answers with the page. */
+  checkCommunityChapters: (libraryId: number, path: string) =>
+    request<AdminBookDetail>(
+      'POST',
+      `/admin/libraries/${libraryId}/book/community-chapters${pathQuery(path)}`,
+    ),
   /** Community works the book might be: by its own facts, or by `q` / an ASIN / an ISBN. */
   matchBook: (libraryId: number, path: string, by: MatchBy = {}) =>
     request<{ candidates: MatchCandidate[] }>(

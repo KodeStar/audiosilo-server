@@ -169,6 +169,48 @@ describe('library health', () => {
     );
   });
 
+  it('switches a selection to the community’s detailed chapters', async () => {
+    const coarse = [
+      adminBook({
+        path: 'Fry/Mythos',
+        title: 'Mythos',
+        chapter_count: 34,
+        chapters_check: 'refine',
+      }),
+      adminBook({
+        path: 'Fry/Heroes',
+        title: 'Heroes',
+        chapter_count: 20,
+        chapters_check: 'refine',
+      }),
+    ];
+    const summary = issuesSummary();
+    summary.categories.push({ kind: 'detailed_chapters', count: 2, ignored: 0, samples: [] });
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues': { body: summary },
+        'GET /admin/books': (req) => ({
+          body: { books: req.query.get('issue') === 'detailed_chapters' ? coarse : [] },
+        }),
+        'POST /admin/books/bulk': { body: { updated: 2 } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=detailed_chapters');
+    expect(
+      await screen.findByText('Has 34 chapters; the community’s finer ones fit this copy'),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Select all' }));
+    const bar = await screen.findByRole('toolbar');
+    await user.click(within(bar).getByRole('button', { name: 'Use detailed chapters' }));
+    expect(await screen.findByText('Using detailed chapters for 2 books')).toBeInTheDocument();
+    const bulk = calls.find((c) => c.path === '/admin/books/bulk');
+    expect(bulk?.body).toEqual({
+      books: coarse.map((b) => ({ library_id: b.library_id, path: b.path })),
+      chapter_source: 'community',
+    });
+  });
+
   it('joins a book split across disc folders into one', async () => {
     const calls = mockFetch(
       routes({

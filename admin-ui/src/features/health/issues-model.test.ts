@@ -1,6 +1,6 @@
 import { adminBook } from '@/test/library-fixtures';
 import { issuesSummary } from '@/test/fixtures';
-import { attentionTotal, issueReason, pickCategory } from './issues-model';
+import { attentionTotal, chaptersCheckNote, issueReason, pickCategory } from './issues-model';
 
 it('says why a book is listed, per category', () => {
   const broken = adminBook({
@@ -32,6 +32,20 @@ it('says why a book is listed, per category', () => {
     'health.reason.no_chapters',
   );
   expect(issueReason('transcode', adminBook({ codec: 'ac3' })).values).toEqual({ codec: 'AC3' });
+  expect(issueReason('detailed_chapters', adminBook({ chapter_count: 34 }))).toEqual({
+    key: 'health.reason.detailed_chapters',
+    values: { count: 34 },
+  });
+});
+
+it('says why a book without chapters got none from the community', () => {
+  expect(chaptersCheckNote('no_chapters', adminBook({ chapters_check: 'crosses_files' }))).toBe(
+    'health.chaptersCheck.crosses_files',
+  );
+  // Not checked, or a fit (it would have chapters now): nothing to say.
+  expect(chaptersCheckNote('no_chapters', adminBook())).toBeUndefined();
+  expect(chaptersCheckNote('no_chapters', adminBook({ chapters_check: 'fill' }))).toBeUndefined();
+  expect(chaptersCheckNote('no_cover', adminBook({ chapters_check: 'no_match' }))).toBeUndefined();
 });
 
 it('opens the category the link names, else the first needing attention', () => {

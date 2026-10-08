@@ -7,6 +7,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -120,6 +121,10 @@ type Book struct {
 	SplitParent     string             `json:"-"`
 	Files           []BookFile         `json:"files,omitempty"`
 	Chapters        []metadata.Chapter `json:"chapters,omitempty"`
+	// ChaptersSource is "community" when Chapters are a community chapter list
+	// fitted onto the audio rather than the files' own (books.chapters_source);
+	// omitted otherwise. Set by GetBook (single-book reads).
+	ChaptersSource string `json:"chapters_source,omitempty"`
 
 	// DirectPlayable, when set, reports whether the audio codec plays natively in
 	// browsers (so the client knows when to request ?transcode=1). Computed by the
@@ -172,6 +177,29 @@ type BookFile struct {
 type Catalog struct {
 	db  *store.DB
 	now func() time.Time
+	// onChange hears that a book's index row was written (OnBookChange).
+	onChange atomic.Pointer[func()]
+}
+
+// OnBookChange registers f to hear, after the fact and without blocking, that a
+// book was indexed or edited (UpsertBook, EditBook, EditBooks, SetEnrichment,
+// ClearCommunityMatches, a library's new metadata source re-resolving its books
+// in UpdateLibrary):
+// what a background check of the books may want to look at again. f must return
+// at once. Safe to call while the catalog is in use; nil stops it.
+func (c *Catalog) OnBookChange(f func()) {
+	if f == nil {
+		c.onChange.Store(nil)
+		return
+	}
+	c.onChange.Store(&f)
+}
+
+// changed tells the OnBookChange listener, if any.
+func (c *Catalog) changed() {
+	if f := c.onChange.Load(); f != nil {
+		(*f)()
+	}
 }
 
 // New returns a Catalog. now may be nil to use time.Now.

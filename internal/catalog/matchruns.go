@@ -498,5 +498,8 @@ func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*
 	if err != nil {
 		return nil, err
 	}
+	if out.Books > 0 {
+		c.changed() // the books' identifiers may now be their tags' or enrichment's
+	}
 	return &out, nil
 }

@@ -1,13 +1,17 @@
 import {
+  FITTED_STATUSES,
   OVERRIDE_FIELDS,
+  type AdminBookDetail,
   type AdminChapter,
   type AdminFile,
   type BookEditRequest,
+  type CommunityChaptersDetail,
   type FieldSource,
   type FieldValue,
   type FolderMode,
   type OverrideField,
 } from '@/api/types';
+import type { Phrase } from '@/lib/phrase';
 
 // The book page's logic, kept out of the components so it is unit-tested: field
 // validation (the server's normalizeOverride rules, so a value is refused here
@@ -211,6 +215,112 @@ export function chapterProblem(
   if (chapters.length === 0) return 'none';
   if (chapters.length === 1 && duration > 2 * 3600) return 'single';
   return undefined;
+}
+
+// ---- community chapters ----
+
+/** What the Chapters card says about the community's chapters, and the one thing it offers. */
+export interface CommunityState {
+  /** The status line. */
+  line: Phrase;
+  /** The edit its button makes (a chapter_source), if any, and the button's label key. */
+  action?: { source: NonNullable<BookEditRequest['chapter_source']>; label: string };
+  /** The chapters the community titles differently (a titles status). */
+  titles: NonNullable<CommunityChaptersDetail['title_diffs']>;
+  /** Notes under the line: chapters this copy lacks, starts that may be off, a merge hint. */
+  notes: Phrase[];
+}
+
+/**
+ * The community chapters of a book page, in words (null when there is nothing to
+ * say: a book with no ASIN or ISBN is never checked). Durations are formatted by
+ * the caller's `duration`.
+ */
+export function communityState(
+  d: AdminBookDetail,
+  duration: (seconds: number) => string,
+): CommunityState | null {
+  const cc = d.community_chapters;
+  if (!cc) {
+    return d.book.matched
+      ? { line: { key: 'book.community.unchecked' }, titles: [], notes: [] }
+      : null;
+  }
+  const det = cc.detail;
+  const count = det?.community_chapters ?? 0;
+  const local = det?.local_chapters ?? 0;
+  const out: CommunityState = {
+    line: { key: `book.community.why.${cc.status}` },
+    titles: [],
+    notes: [],
+  };
+  const using = d.chapter_source === 'community';
+  if (cc.stale) {
+    out.line = { key: 'book.community.stale' };
+    return out;
+  }
+  if (using) {
+    const key =
+      cc.status === 'fill'
+        ? 'book.community.usingFill'
+        : cc.status === 'refine'
+          ? 'book.community.usingRefine'
+          : 'book.community.using';
+    out.line = { key, values: { count, local } };
+    out.action = { source: 'files', label: 'book.community.useFiles' };
+  } else {
+    switch (cc.status) {
+      case 'fill':
+        // Only the admin's choice keeps a fill out: back to automatic uses it.
+        out.line = { key: 'book.community.offFill', values: { count } };
+        out.action = { source: 'auto', label: 'book.community.use' };
+        break;
+      case 'refine':
+        out.line = { key: 'book.community.refine', values: { count, local } };
+        out.action = { source: 'community', label: 'book.community.useDetailed' };
+        break;
+      case 'restructure':
+        out.line = { key: 'book.community.restructure', values: { count, local } };
+        out.action = { source: 'community', label: 'book.community.use' };
+        break;
+      case 'titles': {
+        // Only the differences still standing: a title the admin took is done.
+        const now = new Map(d.chapters.map((c) => [c.index, c.title]));
+        out.titles = (det?.title_diffs ?? []).filter((t) => now.get(t.index) !== t.community);
+        out.line = out.titles.length
+          ? { key: 'book.community.titles', values: { count: out.titles.length } }
+          : { key: 'book.community.same' };
+        break;
+      }
+      case 'same':
+        out.line = { key: 'book.community.same' };
+        break;
+      case 'length_mismatch':
+        out.line.values = {
+          local: duration(det?.local_duration ?? 0),
+          community: duration(det?.community_duration ?? 0),
+        };
+        break;
+      case 'crosses_files':
+        out.line.values = {
+          title: det?.straddle?.title ?? '',
+          from: fileName(det?.straddle?.from ?? '', d.book.path),
+          to: fileName(det?.straddle?.to ?? '', d.book.path),
+        };
+        out.notes.push({ key: 'book.community.mergeHint' });
+        break;
+    }
+  }
+  if (d.community_check_failed) out.notes.unshift({ key: 'book.community.lastFailed' });
+  if (FITTED_STATUSES.includes(cc.status)) {
+    if (det?.omitted?.length) {
+      out.notes.push({ key: 'book.community.omitted', values: { titles: det.omitted.join(', ') } });
+    }
+    if (using && det?.approximate) {
+      out.notes.push({ key: 'book.community.approximate', values: { count: det.approximate } });
+    }
+  }
+  return out;
 }
 
 // ---- the rest of the page ----

@@ -116,6 +116,7 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 	if err := checkMetadataSource(existing); err != nil {
 		return nil, false, err
 	}
+	resolved := false // the books were re-resolved (their identifiers may differ)
 	err = c.db.WithTx(ctx, "UpdateLibrary", func(tx *sql.Tx) error {
 		var stored string
 		if err := tx.QueryRowContext(ctx, `SELECT metadata_source FROM libraries WHERE id = ?`, id).
@@ -135,6 +136,7 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 		if existing.MetadataSource == stored {
 			return nil
 		}
+		resolved = true
 		return refreshLibrary(ctx, tx, id)
 	})
 	if err != nil {
@@ -142,6 +144,9 @@ func (c *Catalog) UpdateLibrary(ctx context.Context, id int64, in LibraryPatch) 
 			return nil, false, ErrNameTaken
 		}
 		return nil, false, err
+	}
+	if resolved {
+		c.changed()
 	}
 	stale := existing.Root != before.Root || !slices.Equal(existing.IgnorePatterns, before.IgnorePatterns)
 	return existing, stale, nil

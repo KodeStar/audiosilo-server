@@ -213,6 +213,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	go retention(ctx, cat, authSvc, a.SessionRetention, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
+	a.StartChapterChecks(ctx)
 	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
 	ntf.Run(ctx)
 	if setupToken != "" {
