@@ -663,7 +663,8 @@ func bookNarrator(b *bookAcc) string { return b.narrator }
 func bookSeries(b *bookAcc) string   { return b.series }
 
 // topPeople ranks an author, narrator or series (name picks which; the whole
-// field value, as the Library aggregates count them) by the listening of its
+// field value, unlike the Library's people lists, which split co-credits: shipped
+// players match these names to books by the whole value) by the listening of its
 // books, counting only the books keep allows (nil: all of them).
 func (a *listenAcc) topPeople(name func(*bookAcc) string, keep func(Ref) bool) []TopPerson {
 	people := map[string]*TopPerson{}

@@ -227,7 +227,10 @@ export interface BookFilter {
   /** Full text over title, author, series and narrator. */
   q?: string;
   library_id?: number;
-  /** Exact effective values (an author tile, a series card). */
+  /**
+   * An author tile, a series card: series is the exact effective value; author and
+   * narrator also find the co-credits naming that person.
+   */
   author?: string;
   series?: string;
   narrator?: string;

@@ -50,17 +50,35 @@ beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('book page', () => {
+  it('leaves a credit naming nobody out of the byline', async () => {
+    const detail = bookDetail();
+    detail.book = { ...detail.book, narrator: ',', narrators: [] };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'The Stormlight Archive' }).closest('p'),
+    ).toHaveTextContent(/^by Brandon Sanderson · book 1 in The Stormlight Archive$/);
+  });
+
   it('shows the book with where each value came from', async () => {
     mockFetch(routes(bookDetail()));
     renderApp(URL);
     expect(
       await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' }),
     ).toBeInTheDocument();
-    // The byline: each name and the series link to their books, in this library.
+    // The byline: each person (a co-credit's each) and the series link to their
+    // books, in this library.
     const byline = (name: string) => linkTarget(screen.getByRole('link', { name }));
-    expect(byline('Michael Kramer & Kate Reading')).toEqual([
+    expect(byline('Michael Kramer')).toEqual([
       '/admin/library',
-      { library: '1', narrator: 'Michael Kramer & Kate Reading' },
+      { library: '1', narrator: 'Michael Kramer' },
+    ]);
+    expect(byline('Kate Reading')).toEqual([
+      '/admin/library',
+      { library: '1', narrator: 'Kate Reading' },
     ]);
     expect(byline('The Stormlight Archive')).toEqual([
       '/admin/library',
@@ -69,7 +87,7 @@ describe('book page', () => {
     expect(
       screen.getByRole('link', { name: 'The Stormlight Archive' }).closest('p'),
     ).toHaveTextContent(
-      'by Brandon Sanderson · read by Michael Kramer & Kate Reading · book 1 in The Stormlight Archive',
+      'by Brandon Sanderson · read by Michael Kramer and Kate Reading · book 1 in The Stormlight Archive',
     );
     expect(within(row('Title')).getByText('File tag')).toBeInTheDocument();
     expect(within(row('Series')).getByText('Path')).toBeInTheDocument();

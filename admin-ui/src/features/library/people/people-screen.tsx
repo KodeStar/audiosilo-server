@@ -19,10 +19,10 @@ import { MergeSuggestions } from './merge-suggestions';
 import { PAGE_STEP, filterPeople, sortByBooks, sortByDuration } from './people-model';
 
 /**
- * Library > Authors and Library > Narrators: one person per whole field value,
- * spellings that look alike offered for a merge first, then a tile per person
- * (authors by books, narrators by hours) that opens the Books list filtered to
- * them. Long lists render a page of tiles at a time.
+ * Library > Authors and Library > Narrators: spellings that look alike offered
+ * for a merge first (whole credits), then a tile per person a credit names (a
+ * co-credit counts for each; authors by books, narrators by hours) that opens
+ * the Books list filtered to them. Long lists render a page of tiles at a time.
  */
 export function PeopleScreen({ field }: { field: PersonField }) {
   const { t, i18n } = useTranslation();
@@ -89,7 +89,6 @@ export function PeopleScreen({ field }: { field: PersonField }) {
           <MergeSuggestions
             field={field}
             suggestions={data.merge_suggestions}
-            people={data.people}
             libraryId={library}
           />
           <div className="mb-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">

@@ -101,6 +101,7 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 	if err != nil {
 		return nil, err
 	}
+	d.Book.splitCredits()
 	bookID := d.Book.id
 
 	layers, err := loadLayers(ctx, c.db, bookID)

@@ -25,7 +25,10 @@ export interface LibrarySearch {
   view?: 'table';
   /** Books, Authors, Series, Narrators, Folders: one library (absent = all). */
   library?: number;
-  /** Books: exact effective values (from an author tile, a series card). */
+  /**
+   * Books: from an author tile, a series card. Series is the exact effective
+   * value; author and narrator also find the co-credits naming that person.
+   */
   author?: string;
   series?: string;
   narrator?: string;

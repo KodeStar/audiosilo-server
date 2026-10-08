@@ -2,7 +2,6 @@ import { adminBook, authors } from '@/test/library-fixtures';
 import {
   filterPeople,
   mergeSteps,
-  otherSpellingBooks,
   otherSpellings,
   sortByBooks,
   sortByDuration,
@@ -42,12 +41,6 @@ describe('merge suggestions', () => {
 
   it('rewrites every spelling but the suggested one', () => {
     expect(otherSpellings(s)).toEqual(['Sanderson, Brandon']);
-  });
-
-  it('counts the books of the other spellings, not the whole suggestion', () => {
-    expect(otherSpellingBooks(s, authors.authors)).toBe(1);
-    // Spellings the list doesn't name: fall back to the suggestion's count.
-    expect(otherSpellingBooks(s, [])).toBe(3);
   });
 });
 

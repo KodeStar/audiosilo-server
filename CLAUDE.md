@@ -668,8 +668,10 @@ admin overrides; see Metadata overrides below).
   `DirectPlayable` in SQL) + `/admin/books/facets` (each dimension counted without its
   own filter, the unfiltered yes/no ones in one pass);
   `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
-  `GET /admin/authors|narrators` (whole field values + `merge_suggestions` from
-  `personKey`, keyed by `match.Fold`, which keeps every script's letters) and
+  `GET /admin/authors|narrators` (each person a credit names, `catalog.creditNames`
+  over `names.Split`, so a co-credit counts for both; `merge_suggestions` stay over
+  WHOLE credits, from `personKey`, keyed by `match.Fold`, which keeps every script's
+  letters, with `other_books` = the books a merge rewrites) and
   `/admin/series` (`catalog.People`/`Series` with a nil scope; the player's
   `/libraries/{id}/authors|narrators|series` take the same aggregates within the
   caller's scope, without `merge_suggestions`); `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
@@ -1239,7 +1241,9 @@ The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}
 `/narrators` (`{narrators, unknown}`) and `/series` (`{series}`) (authed,
 `libraryScope`: 403 no access, 404 unknown library; counts only the caller's
 granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
-by exact `author=`, `series=` and `narrator=`.
+by exact `series=`, and by `author=` / `narrator=` matching the whole credit or exactly
+one person it names (`catalog.creditFilter`: an FTS5 phrase narrows the candidates,
+the `credit_has` SQL function keeps the exact ones; `/admin/books` filters the same way).
 Player redesign Phase 1b (`api/handlers_ratings.go`, `handlers_mydevices.go`): **ratings**
 are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null}`; `Rating =
 {library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a

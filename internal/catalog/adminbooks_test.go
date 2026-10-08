@@ -114,7 +114,7 @@ func TestListAdminBooksRowShape(t *testing.T) {
 	got := page.Books[0]
 	got.id = 0
 	want := AdminBook{LibraryID: libA, LibraryName: "Fiction", Path: "Herbert/Dune", Title: "Dune", Author: "Frank Herbert",
-		Narrator: "Scott Brick", Duration: 9000, Format: "flac", Codec: "ac3", AddedAt: "2023-06-01T00:00:00Z",
+		Narrator: "Scott Brick", Authors: []string{"Frank Herbert"}, Narrators: []string{"Scott Brick"}, Duration: 9000, Format: "flac", Codec: "ac3", AddedAt: "2023-06-01T00:00:00Z",
 		HasCover: true, FileCount: 1, Edited: true, EditedFields: fieldList{FieldNarrator}, ChaptersSource: ChaptersFromFiles}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("row = %+v\nwant  %+v", got, want)
@@ -216,6 +216,153 @@ func TestListAdminBooksSurnameAndPublished(t *testing.T) {
 	}
 }
 
+// TestSplitCredits: a co-credit counts for each person it names - in the people
+// lists, the author=/narrator= filters (admin and player) and a row's
+// authors/narrators - while the whole credit still finds its books, names stay
+// exact (a case variant is another spelling, for a merge), a comma inside one
+// name ("Alexandre Dumas, pere") splits nothing, and the merge suggestions stay
+// over whole credits.
+func TestSplitCredits(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
+	for _, b := range []*Book{
+		{RelPath: "wok", Title: "The Way of Kings", Author: "Brandon Sanderson", Narrator: "Michael Kramer, Kate Reading", Duration: 100},
+		{RelPath: "fe", Title: "The Final Empire", Author: "Brandon Sanderson", Narrator: "Michael Kramer", Duration: 10},
+		{RelPath: "sl", Title: "Starsight", Author: "Sanderson, Brandon & Janci Patterson", Narrator: "kate reading", Duration: 1},
+		{RelPath: "mc", Title: "Monte Cristo", Author: "Alexandre Dumas, pere", Narrator: "Bill Homewood", Duration: 1000},
+	} {
+		b.LibraryID, b.Format = lib.ID, "m4b"
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	people := func(field string) map[string][2]float64 {
+		t.Helper()
+		agg, err := c.People(ctx, field, lib.ID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string][2]float64{}
+		for _, p := range agg.People {
+			out[p.Name] = [2]float64{float64(p.Books), p.Duration}
+		}
+		return out
+	}
+	if got, want := people(PeopleNarrators), map[string][2]float64{
+		"Michael Kramer": {2, 110}, "Kate Reading": {1, 100}, "kate reading": {1, 1}, "Bill Homewood": {1, 1000},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("narrators = %v, want %v", got, want)
+	}
+	if got, want := people(PeopleAuthors), map[string][2]float64{
+		"Brandon Sanderson": {2, 110}, "Sanderson, Brandon": {1, 1}, "Janci Patterson": {1, 1},
+		"Alexandre Dumas, pere": {1, 1000},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("authors = %v, want %v", got, want)
+	}
+	// "Sanderson, Brandon" alone is no whole credit, so it isn't offered to merge:
+	// rewriting the co-credit's whole field would drop Janci Patterson.
+	agg, err := c.People(ctx, PeopleAuthors, lib.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range agg.Suggestions {
+		for _, n := range s.Names {
+			if n == "Sanderson, Brandon" {
+				t.Errorf("suggestion %+v offers a name only a co-credit carries", s)
+			}
+		}
+	}
+
+	filter := func(f BookFilter) []string {
+		t.Helper()
+		page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: f})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return paths(page.Books)
+	}
+	for name, tc := range map[string]struct {
+		f    BookFilter
+		want []string
+	}{
+		"one of two":          {BookFilter{Narrator: "Kate Reading"}, []string{"wok"}},
+		"exact, case and all": {BookFilter{Narrator: "kate reading"}, []string{"sl"}},
+		"whole credit":        {BookFilter{Narrator: "Michael Kramer, Kate Reading"}, []string{"wok"}},
+		"named alone, too":    {BookFilter{Narrator: "Michael Kramer"}, []string{"fe", "wok"}},
+		"comma in one name":   {BookFilter{Author: "Alexandre Dumas"}, []string{}},
+		"reversed co-name":    {BookFilter{Author: "Janci Patterson"}, []string{"sl"}},
+	} {
+		if got := filter(tc.f); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
+		}
+	}
+	page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Query: "kings"}})
+	if err != nil || len(page.Books) != 1 {
+		t.Fatalf("kings: %v, %v", page, err)
+	}
+	if b := page.Books[0]; !reflect.DeepEqual(b.Narrators, []string{"Michael Kramer", "Kate Reading"}) ||
+		!reflect.DeepEqual(b.Authors, []string{"Brandon Sanderson"}) {
+		t.Errorf("row people = %q / %q", b.Authors, b.Narrators)
+	}
+	// The player's list filters the same way.
+	pl, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Narrator: "Michael Kramer", Sort: "title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := relPaths(pl.Books), []string{"fe", "wok"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("player narrator list = %v, want %v", got, want)
+	}
+}
+
+// TestSplitCreditsEdges: a name given twice in one credit is one book of
+// theirs, a credit naming nobody (only a joiner) is unknown rather than lost, a
+// name with no letter or digit is found in a co-credit too (no phrase to match),
+// and a row's people are [] rather than null for a blank credit.
+func TestSplitCreditsEdges(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
+	for _, b := range []*Book{
+		{RelPath: "dup", Title: "Twice", Author: "Jane Doe; Jane Doe", Narrator: ",", Duration: 5},
+		{RelPath: "punct", Title: "Marks", Author: "Joe Bloggs; ???", Duration: 7},
+	} {
+		b.LibraryID, b.Format = lib.ID, "m4b"
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	authors, err := c.People(ctx, PeopleAuthors, lib.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []PersonCount{{Name: "???", Books: 1, Duration: 7}, {Name: "Jane Doe", Books: 1, Duration: 5}, {Name: "Joe Bloggs", Books: 1, Duration: 7}}
+	if !reflect.DeepEqual(authors.People, want) || authors.Unknown != 0 {
+		t.Errorf("authors = %+v unknown=%d", authors.People, authors.Unknown)
+	}
+	narrators, err := c.People(ctx, PeopleNarrators, lib.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(narrators.People) != 0 || narrators.Unknown != 2 {
+		t.Errorf("narrators = %+v unknown=%d, want none and 2 unknown", narrators.People, narrators.Unknown)
+	}
+	for value, want := range map[string][]string{"???": {"punct"}, "Jane Doe": {"dup"}} {
+		page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Author: value}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := paths(page.Books); !reflect.DeepEqual(got, want) {
+			t.Errorf("author=%q: %v, want %v", value, got, want)
+		}
+	}
+	page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Query: "twice"}})
+	if err != nil || len(page.Books) != 1 {
+		t.Fatalf("twice: %v, %v", page, err)
+	}
+	if b := page.Books[0]; !reflect.DeepEqual(b.Authors, []string{"Jane Doe"}) || b.Narrators == nil || len(b.Narrators) != 0 {
+		t.Errorf("row people = %#v / %#v", b.Authors, b.Narrators)
+	}
+}
+
 func TestListAdminBooksBadCursor(t *testing.T) {
 	c, ctx, _, _ := seedAdminLibrary(t)
 	page, _ := c.ListAdminBooks(ctx, AdminListOptions{Sort: "title", Limit: 1})
@@ -276,7 +423,7 @@ func TestPeopleAggregate(t *testing.T) {
 	if !reflect.DeepEqual(agg.People, want) || agg.Unknown != 1 {
 		t.Fatalf("authors = %+v unknown=%d", agg.People, agg.Unknown)
 	}
-	wantS := []MergeSuggestion{{Names: []string{"Brandon Sanderson", "Sanderson, Brandon"}, Suggested: "Brandon Sanderson", Books: 3}}
+	wantS := []MergeSuggestion{{Names: []string{"Brandon Sanderson", "Sanderson, Brandon"}, Suggested: "Brandon Sanderson", Books: 3, OtherBooks: 1}}
 	if !reflect.DeepEqual(agg.Suggestions, wantS) {
 		t.Fatalf("suggestions = %+v", agg.Suggestions)
 	}

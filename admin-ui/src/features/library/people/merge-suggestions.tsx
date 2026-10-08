@@ -1,10 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import { Loader2, Merge } from 'lucide-react';
-import type { MergeSuggestion, PersonCount, PersonField } from '@/api/types';
+import type { MergeSuggestion, PersonField } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Button } from '@/components/ui/button';
-import { counted } from '@/lib/format';
-import { otherSpellingBooks, otherSpellings } from './people-model';
+import { counted, formatList } from '@/lib/format';
+import { otherSpellings } from './people-model';
 import { useMerge } from './use-merge';
 
 /**
@@ -14,12 +14,10 @@ import { useMerge } from './use-merge';
 export function MergeSuggestions({
   field,
   suggestions,
-  people,
   libraryId,
 }: {
   field: PersonField;
   suggestions: MergeSuggestion[];
-  people: PersonCount[];
   libraryId?: number;
 }) {
   const { t, i18n } = useTranslation();
@@ -27,12 +25,11 @@ export function MergeSuggestions({
   const { merging, merge } = useMerge(field, libraryId);
   if (suggestions.length === 0) return null;
 
-  const list = new Intl.ListFormat(lang, { type: 'conjunction' });
   return (
     <div className="mb-6 flex flex-col gap-3">
       {suggestions.map((s) => {
         const others = otherSpellings(s);
-        const books = otherSpellingBooks(s, people);
+        const books = s.other_books;
         const busy = merging === s.suggested;
         return (
           <Notice
@@ -41,7 +38,10 @@ export function MergeSuggestions({
             icon={Merge}
             title={t('people-merge.title', {
               count: others.length,
-              names: list.format(others.map((name) => t('people-merge.quoted', { name }))),
+              names: formatList(
+                others.map((name) => t('people-merge.quoted', { name })),
+                lang,
+              ),
               suggested: s.suggested,
             })}
             actions={

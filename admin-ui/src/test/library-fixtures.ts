@@ -12,15 +12,27 @@ import type {
 // Admin catalog fixtures for the Library and Book screens' tests. Library 1 is
 // "Fiction" and 2 "Kids", as in fixtures.ts.
 
+/** The server's names.Split for fixtures: its unambiguous joiners only (no comma rule). */
+const people = (credit: string) =>
+  credit
+    .split(/;|\s+&\s+|\s+and\s+/)
+    .map((n) => n.trim())
+    .filter(Boolean);
+
 export function adminBook(over: Partial<AdminBook> = {}): AdminBook {
+  const author = over.author ?? 'Brandon Sanderson';
+  const narrator = over.narrator ?? 'Michael Kramer & Kate Reading';
   const book = {
     library_id: 1,
     library_name: 'Fiction',
     path: 'Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings',
     is_folder: true,
     title: 'The Way of Kings',
-    author: 'Brandon Sanderson',
-    narrator: 'Michael Kramer & Kate Reading',
+    author,
+    narrator,
+    // The people the credits name, unless a test says otherwise.
+    authors: people(author),
+    narrators: people(narrator),
     series: 'The Stormlight Archive',
     series_index: 1,
     published: '2010',
@@ -120,6 +132,7 @@ export const authors: AuthorsResponse = {
       names: ['Brandon Sanderson', 'Sanderson, Brandon'],
       suggested: 'Brandon Sanderson',
       books: 3,
+      other_books: 1,
     },
   ],
   unknown: 0,
