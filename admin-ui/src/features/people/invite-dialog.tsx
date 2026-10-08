@@ -67,7 +67,9 @@ export function InviteDialog({
         <DialogContent
           icon={UserPlus}
           title={user ? t('invite.titleFor', { name: user.username }) : t('invite.title')}
-          description={user ? t('invite.descriptionFor') : t('invite.description')}
+          description={
+            user ? t('invite.descriptionFor', { name: user.username }) : t('invite.description')
+          }
         >
           {open ? <InviteForm user={user} codes={codes} onCreated={setShown} /> : null}
         </DialogContent>
