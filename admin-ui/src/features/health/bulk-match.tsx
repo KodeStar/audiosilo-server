@@ -5,11 +5,9 @@ import { useTranslation } from 'react-i18next';
 import { ArrowRight, Check, LoaderCircle, Sparkles } from 'lucide-react';
 import { api } from '@/api/client';
 import {
-  invalidateBooks,
-  invalidateIssues,
+  invalidateMatches,
   keys,
   matchRunActive,
-  useLibraries,
   useLibraryRoots,
   useMatchRunItems,
   useMatchRuns,
@@ -22,6 +20,7 @@ import {
   type MatchScope,
 } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
+import { LibrarySelect } from '@/components/library-select';
 import { ProgressBar } from '@/components/progress-bar';
 import { QueryError } from '@/components/query-error';
 import { Badge } from '@/components/ui/badge';
@@ -34,7 +33,6 @@ import {
   DialogContent,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { NativeSelect } from '@/components/ui/native-select';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { scoreTone } from '@/features/book/match-model';
@@ -77,7 +75,6 @@ export function BulkMatch() {
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const runs = useMatchRuns();
-  const libraries = useLibraries().data ?? [];
   const run = runs.data?.runs[0];
   const region = runs.data?.region ?? '';
   const phase = bulkPhase(run);
@@ -95,10 +92,7 @@ export function BulkMatch() {
   const seen = useRef(stamp);
   useEffect(() => {
     if (seen.current && stamp !== seen.current && !active && applied) {
-      invalidateBooks(qc);
-      invalidateIssues(qc);
-      void qc.invalidateQueries({ queryKey: keys.allBookPages });
-      void qc.invalidateQueries({ queryKey: keys.thumbs });
+      invalidateMatches(qc);
     }
     seen.current = stamp;
   }, [stamp, active, applied, qc]);
@@ -176,21 +170,11 @@ export function BulkMatch() {
         <>
           {run ? <LastRun run={run} lang={lang} /> : null}
           <div className="flex flex-wrap items-center gap-2">
-            {libraries.length > 1 ? (
-              <NativeSelect
-                aria-label={t('health.bulkMatch.library')}
-                className="w-auto max-w-full"
-                value={String(libraryId)}
-                onChange={(e) => setLibraryId(Number(e.target.value))}
-              >
-                <option value="0">{t('health.bulkMatch.allLibraries')}</option>
-                {libraries.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name}
-                  </option>
-                ))}
-              </NativeSelect>
-            ) : null}
+            <LibrarySelect
+              value={libraryId}
+              onChange={setLibraryId}
+              label={t('health.bulkMatch.library')}
+            />
             <Button disabled={busy} onClick={() => void start('match')}>
               {busy ? (
                 <LoaderCircle className="animate-spin" aria-hidden="true" />

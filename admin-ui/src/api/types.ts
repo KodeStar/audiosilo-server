@@ -1588,6 +1588,15 @@ export interface MatchRun {
   };
 }
 
+/** catalog.ClearedMatches (DELETE /admin/community-matches): what a clear removed. */
+export interface ClearedMatches {
+  /** Books that had a community value or cover. */
+  books: number;
+  covers: number;
+  /** Match runs, with their reviews. */
+  runs: number;
+}
+
 /** catalog.MatchProposal: what the best community candidate offers a book. */
 export interface MatchProposal {
   work_id?: string;

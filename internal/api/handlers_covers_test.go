@@ -71,7 +71,7 @@ func seedCovers(t *testing.T, e *testEnv) (libID int64, root string) {
 			t.Fatal(err)
 		}
 	}
-	if err := e.cat.SetCover(ctx, lib.ID, "Custom", testImage(t, 1000, 500, true), e.adminID); err != nil {
+	if err := e.cat.SetCover(ctx, lib.ID, "Custom", testImage(t, 1000, 500, true), e.adminID, catalog.SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	return lib.ID, root
@@ -194,7 +194,7 @@ func TestAdminCoversFollowChangedArt(t *testing.T) {
 	if err := os.Chtimes(sidecar, later, later); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.cat.SetCover(context.Background(), libID, "Custom", testImage(t, 200, 400, true), e.adminID); err != nil {
+	if err := e.cat.SetCover(context.Background(), libID, "Custom", testImage(t, 200, 400, true), e.adminID, catalog.SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	second := postCovers(t, e, adminTok, body)

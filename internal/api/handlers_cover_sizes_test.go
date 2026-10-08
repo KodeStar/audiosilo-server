@@ -212,7 +212,7 @@ func TestCoverSizeETag(t *testing.T) {
 	// A replaced custom cover no longer matches the old validator.
 	resp, _ := e.do(t, "GET", coverURL(libID, "Custom", "320"), adminTok, "")
 	old := resp.Header.Get("ETag")
-	if err := e.cat.SetCover(context.Background(), libID, "Custom", bandedPNG(t, 300, 300), e.adminID); err != nil {
+	if err := e.cat.SetCover(context.Background(), libID, "Custom", bandedPNG(t, 300, 300), e.adminID, catalog.SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	resp, _ = e.doHeaders(t, "GET", coverURL(libID, "Custom", "320"), adminTok, "", map[string]string{"If-None-Match": old})

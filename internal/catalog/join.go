@@ -139,8 +139,8 @@ func joinBookState(ctx context.Context, tx *sql.Tx, libraryID int64, into string
 			         start_ms, title, updated_by, updated_at
 			    FROM chapter_overrides WHERE library_id = ?3 AND path = ?4`,
 				[]any{into, sub, libraryID, p.Path}},
-			{`INSERT OR IGNORE INTO book_covers(library_id, path, mime, updated_by, updated_at, data)
-			  SELECT library_id, ?1, mime, updated_by, updated_at, data
+			{`INSERT OR IGNORE INTO book_covers(library_id, path, mime, updated_by, updated_at, data, source)
+			  SELECT library_id, ?1, mime, updated_by, updated_at, data, source
 			    FROM book_covers WHERE library_id = ?2 AND path = ?3`,
 				[]any{into, libraryID, p.Path}},
 			// ASIN and ISBN each fill only where the joined book has none yet, so one

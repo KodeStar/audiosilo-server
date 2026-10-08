@@ -29,9 +29,16 @@ var coverTypes = map[string]bool{"image/jpeg": true, "image/png": true, "image/w
 // SetCover stores a custom cover for an indexed book, replacing any earlier one,
 // and moves the book's cover art (and so its cover_version) to it at once, so a
 // client sees the change on its next book fetch rather than when a cached cover
-// expires. ErrNotFound when no book is indexed at the path; ErrUnsupportedImage or
+// expires. source says where the image came from: SourceEdited (an upload, also
+// for "") or SourceCommunity (a community match's, which ClearCommunityMatches
+// removes).
+// ErrNotFound when no book is indexed at the path; ErrUnsupportedImage or
 // ErrCoverTooLarge when the image is refused.
-func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, data []byte, userID int64) error {
+func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, data []byte, userID int64, source string) error {
+	source, err := normalizeSource(source)
+	if err != nil {
+		return err
+	}
 	if len(data) > MaxCoverBytes {
 		return ErrCoverTooLarge
 	}
@@ -45,11 +52,11 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 	}
 	return c.db.WithTx(ctx, "SetCover", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO book_covers(library_id, path, mime, data, updated_by, updated_at) VALUES(?,?,?,?,?,?)
+			`INSERT INTO book_covers(library_id, path, mime, data, updated_by, updated_at, source) VALUES(?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, path) DO UPDATE SET
-			     mime = excluded.mime, data = excluded.data,
-			     updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
-			libraryID, path, mime, data, nullableID(userID), c.ts()); err != nil {
+			     mime = excluded.mime, data = excluded.data, updated_by = excluded.updated_by,
+			     updated_at = excluded.updated_at, source = excluded.source`,
+			libraryID, path, mime, data, nullableID(userID), c.ts(), source); err != nil {
 			return err
 		}
 		return refreshCoverArt(ctx, tx, libraryID, path)

@@ -290,6 +290,9 @@ func TestCancelAndBusy(t *testing.T) {
 	if _, err := e.runner.Start(ctx, ctx, StartOptions{Mode: catalog.MatchModeMatch}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second start = %v, want ErrBusy", err)
 	}
+	if _, err := e.runner.Clear(ctx, 0); !errors.Is(err, ErrBusy) {
+		t.Fatalf("clear while matching = %v, want ErrBusy", err)
+	}
 	if e.runner.Cancel(run.ID + 1) {
 		t.Fatal("cancelled a run that isn't working")
 	}
@@ -308,6 +311,10 @@ func TestCancelAndBusy(t *testing.T) {
 	close(e.matcher.block)
 	if got := e.start(t, catalog.MatchModeMatch, ""); got.Status != catalog.MatchReady {
 		t.Fatalf("next run = %+v", got)
+	}
+	// Free again, a clear goes through and takes the runs with it.
+	if cleared, err := e.runner.Clear(ctx, 0); err != nil || cleared.Runs != 2 {
+		t.Fatalf("clear = %+v %v, want both runs dropped", cleared, err)
 	}
 }
 

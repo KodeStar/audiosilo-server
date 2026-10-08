@@ -168,7 +168,7 @@ func TestMoveCarriesOverridesAndCover(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetCover(ctx, lib.ID, "old/Book", pngBytes, 0); err != nil {
+	if err := c.SetCover(ctx, lib.ID, "old/Book", pngBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	// A stale override left at the destination by an earlier book there, on a field
@@ -488,10 +488,10 @@ func TestCoverStore(t *testing.T) {
 	if _, err := c.Cover(ctx, lib.ID, "A/B"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("no cover yet = %v", err)
 	}
-	if err := c.SetCover(ctx, lib.ID, "A/B", pngBytes, 0); err != nil {
+	if err := c.SetCover(ctx, lib.ID, "A/B", pngBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetCover(ctx, lib.ID, "A/./B", jpegBytes, 0); err != nil {
+	if err := c.SetCover(ctx, lib.ID, "A/./B", jpegBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	cv, err := c.Cover(ctx, lib.ID, "A/B")
@@ -511,7 +511,7 @@ func TestCoverStore(t *testing.T) {
 		"too large": {"A/B", append(pngBytes, make([]byte, MaxCoverBytes)...), ErrCoverTooLarge},
 		"no book":   {"A/Nope", pngBytes, ErrNotFound},
 	} {
-		if err := c.SetCover(ctx, lib.ID, tc.path, tc.data, 0); !errors.Is(err, tc.want) {
+		if err := c.SetCover(ctx, lib.ID, tc.path, tc.data, 0, SourceEdited); !errors.Is(err, tc.want) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
 		}
 	}
@@ -532,7 +532,7 @@ func TestCustomCoverNeedsAnIndexedBook(t *testing.T) {
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "A/B")); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetCover(ctx, lib.ID, "A/B", pngBytes, 0); err != nil {
+	if err := c.SetCover(ctx, lib.ID, "A/B", pngBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.DeleteBooksNotIn(ctx, lib.ID, map[string]bool{}); err != nil {
@@ -641,7 +641,7 @@ func TestMoveMergesAListenerCollision(t *testing.T) {
 	if err := c.EditBook(ctx, lib.ID, "old/Book", BookEdit{Set: map[string]string{FieldTitle: "Kept"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetCover(ctx, lib.ID, "old/Book", pngBytes, 0); err != nil {
+	if err := c.SetCover(ctx, lib.ID, "old/Book", pngBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	for _, s := range []struct {

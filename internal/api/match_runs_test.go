@@ -227,3 +227,78 @@ func TestMetadataRegionSetting(t *testing.T) {
 		t.Fatalf("uk preferred = %s", body)
 	}
 }
+
+// TestClearCommunityMatchesAPI: DELETE /admin/community-matches undoes an applied
+// run's matches (the book is unmatched again, the run gone) and is audited; it
+// works with community metadata off; a bad or unknown library is refused; and it is
+// admin-only.
+func TestClearCommunityMatchesAPI(t *testing.T) {
+	e, adminTok, memberTok, libID := newMatchRunEnv(t, "uk")
+	lib := strconv.FormatInt(libID, 10)
+	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", adminTok, `{"library_id":`+lib+`}`)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("start = %d %s", resp.StatusCode, body)
+	}
+	run := decodeRun(t, body)
+	e.api.matchRuns.Wait()
+	if resp, body := e.do(t, "POST", "/api/v1/admin/match-runs/"+strconv.FormatInt(run.ID, 10)+"/apply", adminTok,
+		`{"scope":"fill"}`); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("apply = %d %s", resp.StatusCode, body)
+	}
+	e.api.matchRuns.Wait()
+
+	clearURL := "/api/v1/admin/community-matches"
+	for _, tok := range []string{memberTok, ""} {
+		want := http.StatusForbidden
+		if tok == "" {
+			want = http.StatusUnauthorized
+		}
+		if resp, _ := e.do(t, "DELETE", clearURL, tok, ""); resp.StatusCode != want {
+			t.Errorf("clear as %q = %d, want %d", tok, resp.StatusCode, want)
+		}
+	}
+	for q, want := range map[string]int{"?library_id=x": http.StatusBadRequest, "?library_id=-1": http.StatusBadRequest,
+		"?library_id=999": http.StatusNotFound} {
+		if resp, _ := e.do(t, "DELETE", clearURL+q, adminTok, ""); resp.StatusCode != want {
+			t.Errorf("clear%s = %d, want %d", q, resp.StatusCode, want)
+		}
+	}
+	if book, _ := e.cat.GetBookByPath(context.Background(), libID, "Andy Weir/The Martian"); book.ASIN == "" {
+		t.Fatal("a refused clear changed the book")
+	}
+
+	// Metadata off: the clear sends nothing out, so it still works.
+	if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"enabled":false}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("turn metadata off = %d %s", resp.StatusCode, body)
+	}
+	resp, body = e.do(t, "DELETE", clearURL+"?library_id="+lib, adminTok, "")
+	var cleared catalog.ClearedMatches
+	if err := json.Unmarshal([]byte(body), &cleared); err != nil || resp.StatusCode != http.StatusOK ||
+		cleared != (catalog.ClearedMatches{Books: 1, Covers: 0, Runs: 1}) {
+		t.Fatalf("clear = %d %s", resp.StatusCode, body)
+	}
+	book, err := e.cat.GetBookByPath(context.Background(), libID, "Andy Weir/The Martian")
+	if err != nil || book.ASIN != "" || book.Narrator != "" {
+		t.Fatalf("book after clear = %+v %v, want the community values gone", book, err)
+	}
+	if runs, err := e.cat.ListMatchRuns(context.Background()); err != nil || len(runs) != 0 {
+		t.Fatalf("runs after clear = %d %v", len(runs), err)
+	}
+	if _, body := e.do(t, "GET", "/api/v1/admin/audit", adminTok, ""); !strings.Contains(body, "book.match_clear") {
+		t.Fatalf("audit = %s", body)
+	}
+}
+
+// TestClearCommunityMatchesNoService: with no metadata service configured there
+// are no runs, but a clear still works (community values outlive the service).
+func TestClearCommunityMatchesNoService(t *testing.T) {
+	e := newTestEnvWith(t, func(c *config.Config) { c.Metadata.BaseURL = "" })
+	adminTok, _, _ := adminAndMember(t, e)
+	if e.api.meta != nil {
+		t.Fatal("the test env has a metadata service")
+	}
+	if resp, body := e.do(t, "DELETE", "/api/v1/admin/community-matches", adminTok, ""); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(body, `"books":0`) {
+		t.Fatalf("clear = %d %s", resp.StatusCode, body)
+	}
+}

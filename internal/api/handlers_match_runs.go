@@ -9,8 +9,9 @@ import (
 )
 
 // Bulk community matching (Health > Not matched > Find matches): transport only;
-// the runs are internal/matchrun's. Every endpoint is admin-only and 404s
-// metadata_off while community metadata is off, as every outbound call stops.
+// the runs are internal/matchrun's. Every endpoint is admin-only, and every one
+// but clearing the matches (which sends nothing out) 404s metadata_off while
+// community metadata is off, as every outbound call stops.
 
 // Bounds on the bulk match endpoints.
 const (
@@ -64,18 +65,9 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `mode must be "match" or "repick"`)
 		return
 	}
-	libName := ""
-	if req.LibraryID != 0 {
-		lib, err := a.cat.GetLibrary(r.Context(), req.LibraryID)
-		if err != nil {
-			if errors.Is(err, catalog.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "library not found")
-				return
-			}
-			a.writeCatalogError(w, err, "load library for match run failed", "could not start the match run")
-			return
-		}
-		libName = lib.Name
+	libName, ok := a.optionalLibraryName(w, r, req.LibraryID, "could not start the match run")
+	if !ok {
+		return
 	}
 	run, err := a.matchRuns.Start(r.Context(), a.baseCtx, matchrun.StartOptions{
 		LibraryID: req.LibraryID, Mode: req.Mode, Region: region, UserID: userFrom(r.Context()).ID,
@@ -94,6 +86,25 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, action, libName, map[string]any{"run": run.ID, "books": run.Total, "region": region})
 	writeJSON(w, http.StatusAccepted, run)
+}
+
+// optionalLibraryName is the name of library id for an audit target ("" for 0,
+// every library), answering 404 (or 500 with failed) itself when it can't (ok
+// false then).
+func (a *API) optionalLibraryName(w http.ResponseWriter, r *http.Request, id int64, failed string) (string, bool) {
+	if id == 0 {
+		return "", true
+	}
+	lib, err := a.cat.GetLibrary(r.Context(), id)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "library not found")
+		return "", false
+	}
+	if err != nil {
+		a.writeCatalogError(w, err, "load library failed", failed, "library", id)
+		return "", false
+	}
+	return lib.Name, true
 }
 
 // matchRunFor loads the run named by the {id} path value, answering 400/404 itself
@@ -164,8 +175,9 @@ func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 // handleApplyMatchRun serves POST /admin/match-runs/{id}/apply {"scope",
 // "include"?, "exclude"?}: write the run's confident matches (less exclude, plus
 // the include items, which may be ones that needed review) in the background,
-// under scope ids | fill | overwrite. 202 with the run; 409 match_run_busy while
-// a run is working, match_run_not_ready unless this one is ready.
+// under scope ids | fill | overwrite. 202 with the run; 404 for a run that isn't
+// there (or was cleared meanwhile); 409 match_run_busy while a run is working,
+// match_run_not_ready unless this one is ready.
 func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return
@@ -201,6 +213,9 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, catalog.ErrRunNotReady):
 		writeErrorCode(w, http.StatusConflict, codeMatchRunNotReady, "the match run is not ready to apply")
 		return
+	case errors.Is(err, catalog.ErrNotFound): // cleared since matchRunFor loaded it
+		writeError(w, http.StatusNotFound, "no such match run")
+		return
 	case err != nil:
 		a.writeCatalogError(w, err, "apply match run failed", "could not apply the match run", "run", run.ID)
 		return
@@ -231,4 +246,33 @@ func (a *API) handleCancelMatchRun(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, "book.match_stop", run.LibraryName, map[string]any{"run": run.ID})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleClearCommunityMatches serves DELETE /admin/community-matches
+// (?library_id=, else every library): undo the community matches so the books
+// can be matched from fresh (matchrun.Runner.Clear). It sends nothing out, so it
+// works with community metadata off, or no service configured, too. 200 with what it removed; 404 for an
+// unknown library; 409 match_run_busy while a run is working.
+func (a *API) handleClearCommunityMatches(w http.ResponseWriter, r *http.Request) {
+	libraryID, ok := parseOptionalID(r.URL.Query().Get("library_id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library_id")
+		return
+	}
+	libName, ok := a.optionalLibraryName(w, r, libraryID, "could not clear the matches")
+	if !ok {
+		return
+	}
+	cleared, err := a.matchRuns.Clear(r.Context(), libraryID)
+	if errors.Is(err, matchrun.ErrBusy) {
+		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is already working")
+		return
+	}
+	if err != nil {
+		a.writeCatalogError(w, err, "clear community matches failed", "could not clear the matches")
+		return
+	}
+	a.audit(r, "book.match_clear", libName,
+		map[string]any{"books": cleared.Books, "covers": cleared.Covers, "runs": cleared.Runs})
+	writeJSON(w, http.StatusOK, cleared)
 }

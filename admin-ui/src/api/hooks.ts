@@ -572,6 +572,18 @@ export function invalidateIssues(qc: QueryClient) {
 }
 
 /**
+ * Refetches what writing or clearing community matches changes, across many books
+ * at once: every book list and page, the Health issues ("Not matched"), and the
+ * covers.
+ */
+export function invalidateMatches(qc: QueryClient) {
+  invalidateBooks(qc);
+  invalidateIssues(qc);
+  void qc.invalidateQueries({ queryKey: keys.allBookPages });
+  void qc.invalidateQueries({ queryKey: keys.thumbs });
+}
+
+/**
  * Reads a book's files again now (POST .../book/rescan) and writes the fresh page
  * everywhere it shows and its cover, then refetches the Health issues (a book the
  * re-read fixed leaves its issue lists) unless `refreshIssues` is false (a batch

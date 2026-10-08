@@ -564,14 +564,25 @@ type BookEdit struct {
 	UserID        int64
 }
 
+// normalizeSource is where an edit or a custom cover came from, as stored:
+// SourceEdited (also for "") or SourceCommunity.
+func normalizeSource(source string) (string, error) {
+	switch source {
+	case "", SourceEdited:
+		return SourceEdited, nil
+	case SourceCommunity:
+		return source, nil
+	}
+	return "", invalid("source", `must be "edited" or "community"`)
+}
+
 // normalize validates the edit and returns it with stored-form values.
 func (e BookEdit) normalize() (BookEdit, error) {
-	if e.Source == "" {
-		e.Source = SourceEdited
+	src, err := normalizeSource(e.Source)
+	if err != nil {
+		return e, err
 	}
-	if e.Source != SourceEdited && e.Source != SourceCommunity {
-		return e, invalid("source", `must be "edited" or "community"`)
-	}
+	e.Source = src
 	set := make(map[string]string, len(e.Set))
 	for field, v := range e.Set {
 		nv, err := normalizeOverride(field, v)

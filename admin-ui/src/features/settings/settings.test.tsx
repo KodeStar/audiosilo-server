@@ -304,6 +304,57 @@ describe('settings', () => {
     expect(screen.getByText('No metadata service is configured')).toBeInTheDocument();
   });
 
+  it('clears the community matches of one library once the word is typed', async () => {
+    const calls = mockFetch(
+      routes({
+        'DELETE /admin/community-matches': { body: { books: 12, covers: 3, runs: 1 } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/server?topic=metadata');
+    const zone = await screen.findByRole('region', { name: 'Danger zone' });
+    await user.selectOptions(
+      await within(zone).findByRole('combobox', { name: 'Library to clear' }),
+      'Kids',
+    );
+    await user.click(within(zone).getByRole('button', { name: 'Clear matches' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Clear the community matches in Kids?',
+    });
+    const confirm = within(dialog).getByRole('button', { name: 'Clear matches' });
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByRole('textbox'), 'clear');
+    await user.click(confirm);
+    expect(await screen.findByText('12 books are back to their own metadata.')).toBeInTheDocument();
+    const sent = calls.find((c) => c.method === 'DELETE');
+    expect(sent?.query.get('library_id')).toBe('2');
+  });
+
+  it('says to wait while a match run is working', async () => {
+    mockFetch(
+      routes({
+        'DELETE /admin/community-matches': {
+          status: 409,
+          body: { error: 'a match run is already working', code: 'match_run_busy' },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/server?topic=metadata');
+    const zone = await screen.findByRole('region', { name: 'Danger zone' });
+    await user.click(within(zone).getByRole('button', { name: 'Clear matches' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Clear the community matches in every library?',
+    });
+    await user.type(within(dialog).getByRole('textbox'), 'clear');
+    await user.click(within(dialog).getByRole('button', { name: 'Clear matches' }));
+    expect(
+      await within(dialog).findByText(
+        'A match run is working. Wait for it to finish, or stop it, then try again.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('restores the switch when the change fails', async () => {
     mockFetch(
       routes({

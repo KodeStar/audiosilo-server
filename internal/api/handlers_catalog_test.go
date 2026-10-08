@@ -530,6 +530,10 @@ func TestCustomCoverFollowsTheBook(t *testing.T) {
 	if resp, body := e.do(t, "PUT", "/api/v1/admin/libraries/"+id+"/cover?path="+escape("Will Wight/Cradle"), adminTok, png); resp.StatusCode != 200 {
 		t.Fatalf("upload = %d %s", resp.StatusCode, body)
 	}
+	// An upload is the admin's own: clearing the community matches keeps it.
+	if cleared, err := e.cat.ClearCommunityMatches(ctx, lib.ID); err != nil || cleared.Covers != 0 {
+		t.Fatalf("clear = %+v %v, want the upload kept", cleared, err)
+	}
 	for _, p := range []string{"Will Wight/Cradle", "Will Wight/Cradle/01 - Unsouled.m4b"} {
 		if resp, body := e.do(t, "GET", cover(p), adminTok, ""); resp.StatusCode != 200 || body != png {
 			t.Errorf("cover by %q = %d %s, want the custom cover", p, resp.StatusCode, resp.Header.Get("Content-Type"))

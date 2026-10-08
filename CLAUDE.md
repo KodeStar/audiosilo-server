@@ -158,7 +158,8 @@ the index. The admin console's metadata edits are likewise durable and path-keye
 (`0016`): `book_overrides` (`library_id, path, field, value, source, updated_by`),
 `chapter_overrides` (keyed by the chapter's book-relative file + start in ms, not its
 index, so a shifted chapter list can't move a rename; the API still sends indexes) and
-`book_covers` (custom cover blobs). Phase 3 (`0017`) adds `scan_runs` (the job queue's scan
+`book_covers` (custom cover blobs; `0036` adds `source`, `edited` for an upload or `community` for a
+match's, backfilled from the audit log and match runs). Phase 3 (`0017`) adds `scan_runs` (the job queue's scan
 history, per library, bounded), `issue_ignores` (`library_id, path, kind`: an admin's "ignore this"
 on a Health issue; path-keyed, moves with the book), `libraries.scan_schedule` / `ignore_patterns`
 (per-library settings, off the player wire) and, on `books`, `scan_error` / `scan_error_file` /
@@ -710,7 +711,12 @@ admin overrides; see Metadata overrides below).
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN. A repick only touches an
   ASIN whose override is `source=community`. `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
-  ready. Newest 10 runs kept. Audited `book.match_run|asin_repick|match_apply|match_stop`;
+  ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
+  409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
+  books can be matched from fresh: `catalog.ClearCommunityMatches` drops the `source=community`
+  overrides and covers, rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
+  runs (a library's clear: its runs, and its items in runs over every library), one transaction;
+  edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_apply|match_stop|match_clear`;
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
   `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id
   (`meta.Service.WorkIDs`: per distinct normalized identifier, first the cached enrichment's
