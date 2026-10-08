@@ -16,6 +16,11 @@ import { cn } from '@/lib/utils';
 //
 // A form wraps both in <form className="contents"> so its submit button can sit
 // in the footer.
+//
+// A dialog that switches between two DialogContents (a form, then its result)
+// switches back in the root's onOpenChangeComplete, never in onOpenChange, and
+// never switches forward once closed (a reply landing after Cancel): a
+// DialogContent mounted while the root animates out is never unmounted.
 
 const TONES = {
   brand: 'bg-brand-soft text-brand-ink',
