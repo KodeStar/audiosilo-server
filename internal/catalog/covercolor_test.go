@@ -322,6 +322,10 @@ func TestCoverColorsDue(t *testing.T) {
 	if cc, _ := coverState(t, c, lib.ID, "artless.m4b"); cc != nil {
 		t.Fatalf("artless book colour = %+v, want none", cc)
 	}
+	// Read, but not coloured: a thumbnail that does decode still records its colour.
+	if src := coverSource(t, c, lib.ID, "artless.m4b"); src.Colored || !src.ColorRead {
+		t.Fatalf("artless cover source = %+v, want read and not coloured", src)
+	}
 
 	var got []string
 	var after int64
@@ -350,12 +354,14 @@ func TestCoverColorsDue(t *testing.T) {
 }
 
 // TestOnBookChangeListeners: every listener hears a change, a custom cover set
-// or removed included; removing a cover that isn't there is no change.
+// or removed included; removing a cover that isn't there is no change; a nil
+// listener is ignored.
 func TestOnBookChangeListeners(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	var a, b atomic.Int32
 	c.OnBookChange(func() { a.Add(1) })
+	c.OnBookChange(nil)
 	c.OnBookChange(func() { b.Add(1) })
 	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "a.m4b", Title: "A", MTime: 1}); err != nil {
 		t.Fatal(err)

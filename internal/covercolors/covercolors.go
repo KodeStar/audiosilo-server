@@ -41,9 +41,17 @@ const (
 )
 
 // Colorer reads the colour of a due book's cover, in lib, from a thumbnail of its
-// art: a record with a zero Color when it has no art, or none that decodes; an
-// error when the art couldn't be read and is worth trying again.
+// art: a record with a zero Color when it has no art, or none that decodes;
+// ErrArtMissing when the files its art is read from aren't there; another error
+// when the art couldn't be read and is worth trying again.
 type Colorer func(ctx context.Context, lib *catalog.Library, due catalog.CoverColorDue) (catalog.CoverColorRecord, error)
+
+// ErrArtMissing is a Colorer's answer for a book whose art files aren't there: an
+// unmounted share (the scan keeps its books indexed) or a book not pruned yet.
+// Recording "no colour" would stick once the share is back (its books aren't
+// re-indexed), so the book is left due and read again next pass; it isn't a
+// failure either, so a library of them never stops the pass for the others.
+var ErrArtMissing = errors.New("the book's art files are missing")
 
 // Runner reads cover colours in the background.
 type Runner struct {
@@ -146,12 +154,18 @@ func (r *Runner) pass(ctx context.Context) bool {
 		}
 		var recs []catalog.CoverColorRecord
 		for _, d := range due {
+			if ctx.Err() != nil || streak >= maxFailStreak {
+				break
+			}
 			lib := byID[d.LibraryID]
-			if lib == nil || ctx.Err() != nil || streak >= maxFailStreak {
+			if lib == nil {
 				continue // a library added since the pass began waits for the next
 			}
 			rec, err := r.color(ctx, lib, d)
-			if err != nil {
+			switch {
+			case errors.Is(err, ErrArtMissing):
+				continue // left due: read again next pass
+			case err != nil:
 				if ctx.Err() == nil {
 					streak++
 					r.log.Debug("cover colours: read art failed", "library", d.LibraryID, "path", d.Path, "err", err)
@@ -179,14 +193,19 @@ func (r *Runner) pass(ctx context.Context) bool {
 }
 
 // record stores a batch's colours. A failure costs only the colours, read again
-// next pass, so it is logged.
+// next pass, so it is logged: at debug when the writer stayed busy past
+// recordTimeout (a scan) or the server is stopping, which are expected.
 func (r *Runner) record(ctx context.Context, recs []catalog.CoverColorRecord) {
 	if len(recs) == 0 {
 		return
 	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
-	if err := r.cat.RecordCoverColors(wctx, recs); err != nil && !errors.Is(err, context.Canceled) {
+	switch err := r.cat.RecordCoverColors(wctx, recs); {
+	case err == nil:
+	case wctx.Err() != nil || ctx.Err() != nil:
+		r.log.Debug("cover colours: record failed (the writer is busy, or the server is stopping)", "err", err)
+	default:
 		r.log.Warn("cover colours: record failed", "err", err)
 	}
 }

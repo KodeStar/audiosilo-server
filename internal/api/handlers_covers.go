@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/covercolors"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 )
@@ -257,15 +258,15 @@ func (a *API) colorRecord(libraryID int64, path string, src catalog.CoverSource,
 // the cache is used as it is; otherwise one of the smallest size is made and not
 // cached, so a pass over a library never pushes out the thumbnails people are
 // looking at. A book with no art, or none that decodes, gets a record of that (a
-// zero Color). The record is compare-and-set like a thumbnail's, so art that has
-// moved on since the book was listed keeps what it has.
+// zero Color); one whose art files aren't there is covercolors.ErrArtMissing, not
+// "no colour" (an unmounted share). The record is compare-and-set like a
+// thumbnail's, so art that has moved on since the book was listed keeps what it has.
 func (a *API) colorCover(ctx context.Context, lib *catalog.Library, due catalog.CoverColorDue) (catalog.CoverColorRecord, error) {
-	none := catalog.CoverColorRecord{LibraryID: lib.ID, Path: due.Path, Art: due.Source.Art}
 	art := a.coverArt(ctx, lib, due.Path, due.Source)
 	if art == nil {
-		return none, nil
+		return catalog.CoverColorRecord{}, covercolors.ErrArtMissing
 	}
-	none.Version = art.version
+	none := catalog.CoverColorRecord{LibraryID: lib.ID, Path: due.Path, Art: due.Source.Art, Version: art.version}
 	var jpg []byte
 	cached := false
 	for _, size := range thumbSizes {

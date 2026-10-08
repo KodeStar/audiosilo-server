@@ -14,12 +14,13 @@ import (
 )
 
 // fakeColorer answers a book by its path: a colour for the paths in colors,
-// an error for those in failing, else no colour (a zero record). It counts the
-// calls per path.
+// an error for those in failing, ErrArtMissing for those in missing, else no
+// colour (a zero record). It counts the calls per path.
 type fakeColorer struct {
 	mu      sync.Mutex
 	colors  map[string]string
 	failing map[string]bool
+	missing map[string]bool
 	calls   map[string]int
 }
 
@@ -30,6 +31,9 @@ func (f *fakeColorer) color(_ context.Context, lib *catalog.Library, d catalog.C
 	rec := catalog.CoverColorRecord{LibraryID: lib.ID, Path: d.Path, Art: d.Source.Art}
 	if f.failing[d.Path] {
 		return rec, errors.New("unreadable")
+	}
+	if f.missing[d.Path] {
+		return catalog.CoverColorRecord{}, ErrArtMissing
 	}
 	rec.Color.Bg = f.colors[d.Path]
 	return rec, nil
@@ -68,7 +72,8 @@ func newEnv(t *testing.T, paths ...string) *env {
 			t.Fatal(err)
 		}
 	}
-	fc := &fakeColorer{colors: map[string]string{}, failing: map[string]bool{}, calls: map[string]int{}}
+	fc := &fakeColorer{colors: map[string]string{}, failing: map[string]bool{}, missing: map[string]bool{},
+		calls: map[string]int{}}
 	return &env{cat: cat, lib: lib, fc: fc, r: New(cat, fc.color, nil)}
 }
 
@@ -87,11 +92,12 @@ func (e *env) colour(t *testing.T, path string) string {
 // TestPass: a pass records the colours it reads; a book with no colour to read
 // is recorded as such and not read again while its art is the same, by this
 // runner or a new one (a restart), and is once its art changes; a book whose art
-// failed to read is tried again next pass.
+// failed to read, or whose art files are missing, is tried again next pass.
 func TestPass(t *testing.T) {
-	e := newEnv(t, "a.m4b", "none.m4b", "broken.m4b")
+	e := newEnv(t, "a.m4b", "none.m4b", "broken.m4b", "gone.m4b")
 	e.fc.colors["a.m4b"] = "#112233"
 	e.fc.failing["broken.m4b"] = true
+	e.fc.missing["gone.m4b"] = true
 	ctx := context.Background()
 	if e.r.pass(ctx) {
 		t.Fatal("pass reported failing on one bad book")
@@ -100,7 +106,7 @@ func TestPass(t *testing.T) {
 		t.Fatalf("a.m4b colour = %q, want #112233", got)
 	}
 	New(e.cat, e.fc.color, nil).pass(ctx)
-	for path, want := range map[string]int{"a.m4b": 1, "none.m4b": 1, "broken.m4b": 2} {
+	for path, want := range map[string]int{"a.m4b": 1, "none.m4b": 1, "broken.m4b": 2, "gone.m4b": 2} {
 		if got := e.fc.count(path); got != want {
 			t.Errorf("%s read %d times over two passes, want %d", path, got, want)
 		}
@@ -155,6 +161,28 @@ func TestPassStopsOnFailures(t *testing.T) {
 	}
 	if total != maxFailStreak {
 		t.Fatalf("read %d books before stopping, want %d", total, maxFailStreak)
+	}
+}
+
+// TestPassMissingArtIsNoFailure: books whose art files are missing (an unmounted
+// share) don't end the pass, so the books after them are still read.
+func TestPassMissingArtIsNoFailure(t *testing.T) {
+	var paths []string
+	for i := range maxFailStreak * 2 {
+		p := fmt.Sprintf("b%02d.m4b", i)
+		paths = append(paths, p)
+	}
+	paths = append(paths, "last.m4b")
+	e := newEnv(t, paths...)
+	for _, p := range paths[:len(paths)-1] {
+		e.fc.missing[p] = true
+	}
+	e.fc.colors["last.m4b"] = "#445566"
+	if e.r.pass(context.Background()) {
+		t.Fatal("pass reported failing on missing art")
+	}
+	if got := e.colour(t, "last.m4b"); got != "#445566" {
+		t.Fatalf("last.m4b colour = %q, want #445566", got)
 	}
 }
 

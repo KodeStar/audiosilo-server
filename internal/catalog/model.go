@@ -189,8 +189,11 @@ type Catalog struct {
 // SetEnrichment, ClearCommunityMatches, a library's new metadata source
 // re-resolving its books in UpdateLibrary) or its custom cover set or removed:
 // what a background check of the books may want to look at again. f must return
-// at once. Safe to call while the catalog is in use.
+// at once; nil is ignored. Safe to call while the catalog is in use.
 func (c *Catalog) OnBookChange(f func()) {
+	if f == nil {
+		return
+	}
 	c.onChangeMu.Lock()
 	defer c.onChangeMu.Unlock()
 	var fs []func()

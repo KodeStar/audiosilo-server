@@ -3,10 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/covercolors"
 )
 
 // TestColorCover: the background pass's Colorer reads the colour of a book's
@@ -56,6 +60,75 @@ func TestColorCover(t *testing.T) {
 	}
 	if colored != 2 {
 		t.Fatalf("read %d colours, want 2 (Sidecar, Custom)", colored)
+	}
+}
+
+// TestColorCoverMissingFiles: a book whose art files aren't there (an unmounted
+// share the scan kept indexed) is ErrArtMissing, not a record of no colour that
+// would outlast the share coming back.
+func TestColorCoverMissingFiles(t *testing.T) {
+	e := newTestEnv(t)
+	libID, root := seedCovers(t, e)
+	ctx := context.Background()
+	if err := os.Remove(filepath.Join(root, "Sidecar", "cover.jpg")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "Bare", "book.m4b")); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := e.cat.GetLibrary(ctx, libID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	due, _, err := e.cat.CoverColorsDue(ctx, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := 0
+	for _, d := range due {
+		if d.Path != "Sidecar" && d.Path != "Bare" {
+			continue
+		}
+		if _, err := e.api.colorCover(ctx, lib, d); !errors.Is(err, covercolors.ErrArtMissing) {
+			t.Fatalf("%s (files gone): err %v, want ErrArtMissing", d.Path, err)
+		}
+		missing++
+	}
+	if missing != 2 {
+		t.Fatalf("checked %d books with missing files, want 2", missing)
+	}
+}
+
+// TestThumbnailColorsOverNone: a book recorded as having no colour for its art
+// (the background pass's read failed in passing) takes the colour of a thumbnail
+// of that art that does decode.
+func TestThumbnailColorsOverNone(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, _ := seedCovers(t, e)
+	ctx := context.Background()
+	lib, err := e.cat.GetLibrary(ctx, libID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcs, err := e.cat.CoverSources(ctx, libID, []string{"Sidecar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := srcs["Sidecar"]
+	art := e.api.coverArt(ctx, lib, "Sidecar", src)
+	if err := e.cat.RecordCoverColors(ctx, []catalog.CoverColorRecord{{
+		LibraryID: libID, Path: "Sidecar", Art: src.Art, Version: art.version}}); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := e.cat.GetBookByPath(ctx, libID, "Sidecar"); err != nil || b.CoverColor != nil {
+		t.Fatalf("recorded none: book %+v, %v; want no colour", b, err)
+	}
+	if resp, _ := e.do(t, "GET", coverURL(libID, "Sidecar", "160"), adminTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("thumbnail = %d", resp.StatusCode)
+	}
+	if b, err := e.cat.GetBookByPath(ctx, libID, "Sidecar"); err != nil || b.CoverColor == nil {
+		t.Fatalf("after a thumbnail: book %+v, %v; want its colour", b, err)
 	}
 }
 
