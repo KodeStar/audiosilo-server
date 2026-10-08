@@ -58,7 +58,9 @@ type Runner struct {
 	wg        sync.WaitGroup
 }
 
-// New returns a Runner.
+// New returns a Runner. matcher is nil with no community service configured:
+// then only Clear and the reads may be used (enabled must say off, as the api's
+// metadataOn does, so nothing starts or applies a run).
 func New(cat *catalog.Catalog, matcher Matcher, saveCover CoverSaver, enabled func() bool, log *slog.Logger) *Runner {
 	if log == nil {
 		log = slog.Default()
@@ -151,6 +153,19 @@ func (r *Runner) Cancel(id int64) bool {
 	r.cancelled = true
 	r.cancel()
 	return true
+}
+
+// Clear undoes the community matches of one library (0 = every library) and
+// drops the runs (catalog.ClearCommunityMatches), holding off any run meanwhile.
+// ErrBusy while a run is working: it would write matches back, or apply a review
+// the clear removes.
+func (r *Runner) Clear(ctx context.Context, libraryID int64) (*catalog.ClearedMatches, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != 0 {
+		return nil, ErrBusy
+	}
+	return r.cat.ClearCommunityMatches(ctx, libraryID)
 }
 
 // Wait blocks until no run is working (tests, shutdown).

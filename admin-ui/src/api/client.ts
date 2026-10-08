@@ -21,6 +21,7 @@ import type {
   BookMeta,
   BookRef,
   BookWorks,
+  ClearedMatches,
   CoverThumb,
   Device,
   DuplicateGroup,
@@ -499,6 +500,12 @@ export const api = {
     body: { scope: MatchScope; include?: number[]; exclude?: number[] },
   ) => request<MatchRun>('POST', `/admin/match-runs/${id}/apply`, body),
   cancelMatchRun: (id: number) => request<void>('POST', `/admin/match-runs/${id}/cancel`),
+  /** Undoes the community matches of one library (none = every library), runs and all. */
+  clearCommunityMatches: (libraryId?: number) =>
+    request<ClearedMatches>(
+      'DELETE',
+      `/admin/community-matches${libraryId ? `?library_id=${libraryId}` : ''}`,
+    ),
   /** The book's community metadata (series rails for the Series gaps). */
   bookMeta: (libraryId: number, path: string) =>
     request<BookMeta>('GET', `/libraries/${libraryId}/meta${pathQuery(path)}`),

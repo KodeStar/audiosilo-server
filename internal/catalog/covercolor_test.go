@@ -166,7 +166,7 @@ func TestCustomCoverVersion(t *testing.T) {
 	fileColor := CoverColor{Bg: "#102030"}
 	recordCover(t, c, lib.ID, "A/B", before, fileColor)
 
-	if err := c.SetCover(ctx, lib.ID, "A/B", pngBytes, 0); err != nil {
+	if err := c.SetCover(ctx, lib.ID, "A/B", pngBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	info, err := c.CoverInfo(ctx, lib.ID, "A/B")
@@ -229,7 +229,7 @@ func TestMovedCustomCoverVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.SetCover(ctx, lib.ID, "old.m4b", pngBytes, 0); err != nil {
+	if err := c.SetCover(ctx, lib.ID, "old.m4b", pngBytes, 0, SourceEdited); err != nil {
 		t.Fatal(err)
 	}
 	_, custom := coverState(t, c, lib.ID, "old.m4b")

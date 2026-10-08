@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -464,23 +463,22 @@ func (a *API) handleAdminSetCover(w http.ResponseWriter, r *http.Request) {
 		data = nil
 		err = catalog.ErrCoverTooLarge
 	}
-	a.saveCustomCover(w, r, lib, p, data, err, nil)
+	a.saveCustomCover(w, r, lib, p, data, err, catalog.SourceEdited)
 }
 
-// saveCustomCover keeps data as the book's custom cover (catalog.SetCover), unless
-// err already says why not, then audits it (bytes, plus details) and answers.
+// saveCustomCover keeps data as the book's custom cover from source
+// (catalog.SetCover), unless err already says why not, then audits it (bytes and
+// source) and answers.
 func (a *API) saveCustomCover(w http.ResponseWriter, r *http.Request, lib *catalog.Library, p string,
-	data []byte, err error, details map[string]any) {
+	data []byte, err error, source string) {
 	if err == nil {
-		err = a.cat.SetCover(r.Context(), lib.ID, p, data, userFrom(r.Context()).ID)
+		err = a.cat.SetCover(r.Context(), lib.ID, p, data, userFrom(r.Context()).ID, source)
 	}
 	if err != nil {
 		a.writeBookError(w, err, "set cover failed", "could not save the cover", "library", lib.ID, "path", p)
 		return
 	}
-	audit := map[string]any{"bytes": len(data)}
-	maps.Copy(audit, details)
-	a.audit(r, "book.cover_set", lib.Name+": "+p, audit)
+	a.audit(r, "book.cover_set", lib.Name+": "+p, map[string]any{"bytes": len(data), "source": source})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cover set", "path": p})
 }
 

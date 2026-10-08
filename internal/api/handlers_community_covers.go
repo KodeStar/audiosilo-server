@@ -149,7 +149,7 @@ func (a *API) handleAdminSetCommunityCover(w http.ResponseWriter, r *http.Reques
 		writeErrorCode(w, http.StatusBadGateway, codeCoverUnavailable, "could not fetch the cover")
 		return
 	}
-	a.saveCustomCover(w, r, lib, p, data, err, map[string]any{"source": catalog.SourceCommunity})
+	a.saveCustomCover(w, r, lib, p, data, err, catalog.SourceCommunity)
 }
 
 // communityCover fetches a community cover as it may be kept (keepableCover):
@@ -173,7 +173,7 @@ func (a *API) saveMatchCover(ctx context.Context, libraryID int64, path, rawURL 
 	if err != nil {
 		return err
 	}
-	return a.cat.SetCover(ctx, libraryID, path, data, userID)
+	return a.cat.SetCover(ctx, libraryID, path, data, userID, catalog.SourceCommunity)
 }
 
 // keepableCover is a fetched community cover as it may be kept: refused

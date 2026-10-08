@@ -53,7 +53,7 @@ type API struct {
 	// config's metadata.enabled is the on/off switch: the handler and the
 	// `metadata` capability flag gate on meta != nil AND it (metadataOn).
 	meta *meta.Service
-	// matchRuns runs bulk community matching (Health > Not matched); nil with meta.
+	// matchRuns runs bulk community matching (Health > Not matched).
 	matchRuns *matchrun.Runner
 	// imports runs listening imports from Audiobookshelf (handlers_import.go).
 	imports *importer.Service
@@ -169,10 +169,14 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		streams:        catalog.NewStreamMarks(),
 	}
 	a.imports = importer.New(cat, authUsers{authSvc}, time.Local, a.SessionRetention, log)
+	// The runner exists without a service too, for clearing matches: its runs
+	// are refused first (metadataOff).
+	var matcher matchrun.Matcher
 	if metaSvc != nil {
 		a.fetchCover = metaSvc.FetchCover
-		a.matchRuns = matchrun.New(cat, metaSvc, a.saveMatchCover, a.metadataOn, log)
+		matcher = metaSvc
 	}
+	a.matchRuns = matchrun.New(cat, matcher, a.saveMatchCover, a.metadataOn, log)
 	a.live.Store(newLiveConfig(cfg, cfg))
 	a.playerSource = web.PlayerSource(cfg.WebDir)
 	a.rt.StartedAt = time.Now()
@@ -404,6 +408,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/match-runs/{id}/items", a.requireAdmin(http.HandlerFunc(a.handleMatchRunItems)))
 	mux.Handle("POST /api/v1/admin/match-runs/{id}/apply", a.requireAdmin(http.HandlerFunc(a.handleApplyMatchRun)))
 	mux.Handle("POST /api/v1/admin/match-runs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleCancelMatchRun)))
+	mux.Handle("DELETE /api/v1/admin/community-matches", a.requireAdmin(http.HandlerFunc(a.handleClearCommunityMatches)))
 	// Listening imports from Audiobookshelf: fetched in the background, reviewed,
 	// then applied (and undoable) as one transaction (handlers_import.go).
 	mux.Handle("POST /api/v1/admin/imports/abs/users", a.requireAdmin(http.HandlerFunc(a.handleImportUsers)))

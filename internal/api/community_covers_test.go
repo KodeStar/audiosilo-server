@@ -205,6 +205,10 @@ func TestSetCommunityCover(t *testing.T) {
 	if cv, err := e.cat.Cover(ctx, libID, p); err != nil || !bytes.Equal(cv.Data, small) {
 		t.Fatalf("stored cover = %v, want the fetched image", err)
 	}
+	// Kept as a community cover: clearing the community matches takes it.
+	if cleared, err := e.cat.ClearCommunityMatches(ctx, libID); err != nil || cleared.Covers != 1 {
+		t.Fatalf("clear = %+v %v, want the community cover removed", cleared, err)
+	}
 	// One larger than an upload may be is kept re-encoded, within storedCoverSide.
 	if code, body := set(adminTok, url, host.URL+"/big.png"); code != http.StatusOK {
 		t.Fatalf("set big = %d %s", code, body)

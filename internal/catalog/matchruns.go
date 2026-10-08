@@ -421,3 +421,82 @@ func CleanOverride(field, value string) string {
 	}
 	return v
 }
+
+// ClearedMatches is what ClearCommunityMatches removed.
+type ClearedMatches struct {
+	Books  int `json:"books"`  // books that had a community value or cover
+	Covers int `json:"covers"` // community covers
+	Runs   int `json:"runs"`   // match runs, with their reviews
+}
+
+// ClearCommunityMatches undoes the community matches of one library (0 = every
+// library), so its books can be matched from fresh: its community overrides and
+// covers go (an admin's own edits and uploads, the tags and the manager's
+// enrichment stay), each book's effective metadata and cover art are rebuilt, and
+// the match runs go with their reviews (a run over every library loses only this
+// library's books). One transaction. The caller makes sure no match run is
+// working meanwhile (matchrun.Runner.Clear).
+func (c *Catalog) ClearCommunityMatches(ctx context.Context, libraryID int64) (*ClearedMatches, error) {
+	var out ClearedMatches
+	err := c.db.WithTx(ctx, "ClearCommunityMatches", func(tx *sql.Tx) error {
+		scanRef := func(r *sql.Rows, ref *Ref) error { return r.Scan(&ref.LibraryID, &ref.Path) }
+		fields, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_overrides
+		     WHERE source = 'community' AND (?1 = 0 OR library_id = ?1) RETURNING library_id, path`, libraryID)
+		if err != nil {
+			return err
+		}
+		// 'community' written out (SourceCommunity), as the covers' partial index,
+		// which lists them without reading an image, can't match a bound value.
+		covers, err := queryRows(ctx, tx, scanRef, `DELETE FROM book_covers
+		     WHERE source = 'community' AND (?1 = 0 OR library_id = ?1) RETURNING library_id, path`, libraryID)
+		if err != nil {
+			return err
+		}
+		books := map[Ref]bool{}
+		for _, ref := range fields {
+			if books[ref] {
+				continue // one row per field
+			}
+			books[ref] = true
+			id, err := bookIDByPath(ctx, tx, ref.LibraryID, ref.Path)
+			if errors.Is(err, ErrNotFound) {
+				continue // not indexed now: nothing to rebuild
+			}
+			if err != nil {
+				return err
+			}
+			if err := refreshEffective(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		for _, ref := range covers {
+			books[ref] = true
+			if err := refreshCoverArt(ctx, tx, ref.LibraryID, ref.Path); err != nil {
+				return err
+			}
+		}
+		out.Books, out.Covers = len(books), len(covers)
+
+		// The runs: every one (their items cascade), or this library's and its
+		// books' items in the runs over every library.
+		res, err := tx.ExecContext(ctx, `DELETE FROM match_runs WHERE ?1 = 0 OR library_id = ?1`, libraryID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		out.Runs = int(n)
+		if libraryID == 0 {
+			return nil
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM match_run_items WHERE library_id = ?
+		     AND run_id IN (SELECT id FROM match_runs WHERE library_id IS NULL)`, libraryID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

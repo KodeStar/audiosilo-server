@@ -11,13 +11,13 @@ import {
   Share2,
   ShieldCheck,
   Smartphone,
-  TriangleAlert,
   UserX,
 } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import { invalidatePeople, useDevices, useLibraries, useUser } from '@/api/hooks';
 import type { User, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
+import { DangerZone } from '@/components/danger-zone';
 import { EmptyState } from '@/components/empty-state';
 import { SettingRow } from '@/components/setting-row';
 import { Monogram } from '@/components/monogram';
@@ -454,60 +454,48 @@ function AccountTab({ user: u }: { user: User }) {
         </SettingRow>
       </Card>
 
-      <section
-        aria-labelledby="danger-title"
-        className="overflow-hidden rounded-xl border border-[color-mix(in_oklab,var(--destructive)_35%,var(--border))] bg-card"
-      >
-        <h2
-          id="danger-title"
-          className="flex items-center gap-2 border-b border-[color-mix(in_oklab,var(--destructive)_25%,var(--border))] bg-destructive-soft px-5 py-3 text-[14px] font-[650] text-destructive"
+      <DangerZone>
+        <SettingRow
+          title={u.disabled ? t('user.danger.enable') : t('user.danger.disable')}
+          description={
+            self
+              ? t('user.danger.disableSelf')
+              : u.disabled
+                ? t('user.danger.enableBody')
+                : t('user.danger.disableBody')
+          }
         >
-          <TriangleAlert className="size-4" aria-hidden="true" />
-          {t('user.danger.title')}
-        </h2>
-        <div className="divide-y px-5">
-          <SettingRow
-            title={u.disabled ? t('user.danger.enable') : t('user.danger.disable')}
-            description={
-              self
-                ? t('user.danger.disableSelf')
-                : u.disabled
-                  ? t('user.danger.enableBody')
-                  : t('user.danger.disableBody')
-            }
-          >
-            {u.disabled ? (
-              <Button
-                variant="outline"
-                onClick={() =>
-                  void patch({ disabled: false }, t('user.danger.enabled', { name: u.username }))
-                }
-              >
-                {t('user.danger.enableAction')}
-              </Button>
-            ) : (
-              <Button
-                variant="destructive-outline"
-                disabled={self}
-                onClick={() => setDisabling(true)}
-              >
-                {t('user.danger.disableAction')}
-              </Button>
-            )}
-          </SettingRow>
-          <SettingRow
-            title={t('user.danger.delete')}
-            description={
-              self ? t('user.danger.deleteSelf') : t('user.danger.deleteBody', { name: u.username })
-            }
-          >
-            <Button variant="destructive" disabled={self} onClick={() => setDeleting(true)}>
-              <UserX aria-hidden="true" />
-              {t('user.danger.deleteAction')}
+          {u.disabled ? (
+            <Button
+              variant="outline"
+              onClick={() =>
+                void patch({ disabled: false }, t('user.danger.enabled', { name: u.username }))
+              }
+            >
+              {t('user.danger.enableAction')}
             </Button>
-          </SettingRow>
-        </div>
-      </section>
+          ) : (
+            <Button
+              variant="destructive-outline"
+              disabled={self}
+              onClick={() => setDisabling(true)}
+            >
+              {t('user.danger.disableAction')}
+            </Button>
+          )}
+        </SettingRow>
+        <SettingRow
+          title={t('user.danger.delete')}
+          description={
+            self ? t('user.danger.deleteSelf') : t('user.danger.deleteBody', { name: u.username })
+          }
+        >
+          <Button variant="destructive" disabled={self} onClick={() => setDeleting(true)}>
+            <UserX aria-hidden="true" />
+            {t('user.danger.deleteAction')}
+          </Button>
+        </SettingRow>
+      </DangerZone>
 
       <PasswordDialog open={promoting} onOpenChange={setPromoting} user={u} promote />
       <ConfirmDialog

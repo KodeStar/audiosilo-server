@@ -34,6 +34,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
+import { ClearMatchesZone } from './clear-matches';
 import { NotificationsTopic } from './notifications-topic';
 import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
 import {
@@ -432,6 +433,7 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
           { name: 'base_url', kind: 'text', mono: true, placeholder: 'https://meta.audiosilo.app' },
         ]}
       />
+      <ClearMatchesZone />
     </>
   );
 }
