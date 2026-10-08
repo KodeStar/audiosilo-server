@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/names"
@@ -25,16 +27,20 @@ import (
 // AdminBook is one row of the admin book list.
 type AdminBook struct {
 	id          int64
-	LibraryID   int64   `json:"library_id"`
-	LibraryName string  `json:"library_name"`
-	Path        string  `json:"path"`
-	IsFolder    bool    `json:"is_folder"`
-	Title       string  `json:"title"`
-	Author      string  `json:"author"`
-	Narrator    string  `json:"narrator"`
-	Series      string  `json:"series"`
-	SeriesIndex float64 `json:"series_index"`
-	Published   string  `json:"published"`
+	LibraryID   int64  `json:"library_id"`
+	LibraryName string `json:"library_name"`
+	Path        string `json:"path"`
+	IsFolder    bool   `json:"is_folder"`
+	Title       string `json:"title"`
+	Author      string `json:"author"`
+	Narrator    string `json:"narrator"`
+	// Authors and Narrators are the people Author and Narrator name (creditNames;
+	// see creditFilter).
+	Authors     []string `json:"authors"`
+	Narrators   []string `json:"narrators"`
+	Series      string   `json:"series"`
+	SeriesIndex float64  `json:"series_index"`
+	Published   string   `json:"published"`
 	// Released is the tags' date (Book.Released), for the release-date sort.
 	Released       string  `json:"-"`
 	Duration       float64 `json:"duration"`
@@ -136,6 +142,41 @@ var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.titl
 	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0), ` +
 	chaptersSourceExpr + `, ` + chaptersCheckExpr
 
+// scanAdminBook reads one row of adminBookCols into b.
+func scanAdminBook(rows *sql.Rows, b *AdminBook) error {
+	if err := rows.Scan(adminBookDest(b)...); err != nil {
+		return err
+	}
+	b.splitCredits()
+	return nil
+}
+
+// splitCredits fills Authors and Narrators from Author and Narrator (never nil,
+// so the wire carries [] for a blank credit).
+func (b *AdminBook) splitCredits() {
+	b.Authors = append([]string{}, creditNames(b.Author)...)
+	b.Narrators = append([]string{}, creditNames(b.Narrator)...)
+}
+
+// creditFilter is the WHERE condition, and its args, for an author= or
+// narrator= filter (field) on the books row whose columns carry prefix: the
+// books whose credit is value or names it as one of its people (credit_has).
+// The full-text index finds the candidates (a phrase match is a superset of
+// both, case and accents aside), so the filter reads only those rows rather
+// than every book of the library; credit_has then keeps the exact ones. A value
+// with no letter or digit has no phrase to match, so (rarely) credit_has reads
+// every row the other conditions leave: the people lists count such a name in a
+// co-credit ("Jane Doe; ???") too, so its filter must find it there.
+func creditFilter(prefix, field, value string) (string, []any) {
+	col := prefix + field
+	if !strings.ContainsFunc(value, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		return "credit_has(" + col + ", ?)", []any{value}
+	}
+	phrase := `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+	return prefix + "id IN (SELECT rowid FROM books_fts WHERE " + field + " MATCH ?) AND credit_has(" + col + ", ?)",
+		[]any{phrase, value}
+}
+
 // adminBookDest returns the scan destinations for adminBookCols, in order.
 func adminBookDest(b *AdminBook) []any {
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
@@ -150,9 +191,9 @@ func adminBookDest(b *AdminBook) []any {
 type BookFilter struct {
 	LibraryID      int64
 	Query          string // full-text, over title/author/series/narrator
-	Author         string // exact effective value
-	Series         string
-	Narrator       string
+	Author         string // the whole effective value, or exactly one person it names (creditFilter)
+	Series         string // exact effective value
+	Narrator       string // as Author
 	Formats        []string
 	Codecs         []string
 	DirectPlayable *bool
@@ -220,13 +261,15 @@ func (f BookFilter) where(skip string) (string, []any) {
 		}
 	}
 	if f.Author != "" {
-		add("b.author = ?", f.Author)
+		cond, a := creditFilter("b.", "author", f.Author)
+		add(cond, a...)
 	}
 	if f.Series != "" {
 		add("b.series = ?", f.Series)
 	}
 	if f.Narrator != "" {
-		add("b.narrator = ?", f.Narrator)
+		cond, a := creditFilter("b.", "narrator", f.Narrator)
+		add(cond, a...)
 	}
 	if len(f.Formats) > 0 && skip != facetFormat {
 		in("b.format", f.Formats)
@@ -411,9 +454,7 @@ func (c *Catalog) ListAdminBooks(ctx context.Context, opt AdminListOptions) (*Ad
 		JOIN books b ON b.id = page.id JOIN libraries l ON l.id = b.library_id
 		ORDER BY ` + orderBy
 	args = append(args, opt.Limit+1)
-	books, err := queryRows(ctx, c.db, func(rows *sql.Rows, b *AdminBook) error {
-		return rows.Scan(adminBookDest(b)...)
-	}, q, args...)
+	books, err := queryRows(ctx, c.db, scanAdminBook, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -594,6 +635,9 @@ type MergeSuggestion struct {
 	Names     []string `json:"names"`
 	Suggested string   `json:"suggested"`
 	Books     int      `json:"books"`
+	// OtherBooks is how many books a merge rewrites: those whose whole credit is
+	// one of the other spellings (Books counts the suggested one's too).
+	OtherBooks int `json:"other_books"`
 }
 
 // PeopleAggregate lists the distinct values of a people field with counts, plus
@@ -601,7 +645,7 @@ type MergeSuggestion struct {
 type PeopleAggregate struct {
 	People      []PersonCount
 	Suggestions []MergeSuggestion
-	Unknown     int // books with the field blank
+	Unknown     int // books whose field names nobody (blank, or only joiners)
 }
 
 // The people fields an aggregate can be taken over; constant queries per field,
@@ -631,8 +675,10 @@ func aggregateScope(scope *Scope) (string, []any) {
 
 // People aggregates the authors or narrators (field = PeopleAuthors/PeopleNarrators)
 // of one library, or all of them (libraryID 0), within scope (nil = every book).
-// Names are the whole effective field value: a "Kramer & Reading" narrator credit
-// is one entry, matching the exact filter and the bulk edit that act on it.
+// A credit counts for each person it names (names.Split): a "Michael Kramer, Kate
+// Reading" book counts for both, and the author=/narrator= filter finds it by
+// either. The merge suggestions stay over whole credits, since a merge rewrites
+// the whole field of every book carrying a spelling.
 func (c *Catalog) People(ctx context.Context, field string, libraryID int64, scope *Scope) (*PeopleAggregate, error) {
 	q, ok := peopleQueries[field]
 	if !ok {
@@ -645,33 +691,50 @@ func (c *Catalog) People(ctx context.Context, field string, libraryID int64, sco
 	}
 	defer rows.Close()
 	out := &PeopleAggregate{People: []PersonCount{}, Suggestions: []MergeSuggestion{}}
+	var credits []PersonCount
 	for rows.Next() {
 		var p PersonCount
 		if err := rows.Scan(&p.Name, &p.Books, &p.Duration); err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(p.Name) == "" {
+		// A credit naming nobody (blank, or only joiners such as ",") is unknown,
+		// so the people and the unknown still account for every book.
+		if len(creditNames(p.Name)) == 0 {
 			out.Unknown += p.Books
 			continue
 		}
-		out.People = append(out.People, p)
+		credits = append(credits, p)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	sort.Slice(out.People, func(i, j int) bool {
-		return lessFold(out.People[i].Name, out.People[j].Name)
-	})
-	out.Suggestions = mergeSuggestions(out.People)
+	people := map[string]int{} // name -> index in out.People
+	for _, cr := range credits {
+		for _, name := range creditNames(cr.Name) {
+			i, seen := people[name]
+			if !seen {
+				i = len(out.People)
+				people[name] = i
+				out.People = append(out.People, PersonCount{Name: name})
+			}
+			out.People[i].Books += cr.Books
+			out.People[i].Duration += cr.Duration
+		}
+	}
+	byName := func(a, b PersonCount) int { return compareFold(a.Name, b.Name) }
+	slices.SortFunc(out.People, byName)
+	slices.SortFunc(credits, byName)
+	out.Suggestions = mergeSuggestions(credits)
 	return out, nil
 }
 
-func lessFold(a, b string) bool {
-	if la, lb := strings.ToLower(a), strings.ToLower(b); la != lb {
-		return la < lb
-	}
-	return a < b
+// compareFold orders names case-insensitively, then exactly (so only equal
+// names compare equal).
+func compareFold(a, b string) int {
+	return cmp.Or(strings.Compare(strings.ToLower(a), strings.ToLower(b)), strings.Compare(a, b))
 }
+
+func lessFold(a, b string) bool { return compareFold(a, b) < 0 }
 
 // personKey reduces a name to a comparison key: "Surname, Given" is turned round
 // (only when the part before the comma is one word, so "Alexandre Dumas, pere"
@@ -717,6 +780,7 @@ func mergeSuggestions(people []PersonCount) []MergeSuggestion {
 			}
 		}
 		s.Suggested = best.Name
+		s.OtherBooks = s.Books - best.Books // the names in a group are distinct
 		out = append(out, s)
 	}
 	return out

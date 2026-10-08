@@ -146,7 +146,7 @@ func TestAdminAggregatesAPI(t *testing.T) {
 	seedCatalog(t, e)
 	_, body := e.do(t, "GET", "/api/v1/admin/authors", adminTok, "")
 	if !strings.Contains(body, `"authors":[{"name":"Andy Weir","books":1`) ||
-		!strings.Contains(body, `"merge_suggestions":[{"names":["Andy Weir","Weir, Andy"],"suggested":"Andy Weir","books":2}]`) {
+		!strings.Contains(body, `"merge_suggestions":[{"names":["Andy Weir","Weir, Andy"],"suggested":"Andy Weir","books":2,"other_books":1}]`) {
 		t.Fatalf("authors = %s", body)
 	}
 	if _, body := e.do(t, "GET", "/api/v1/admin/narrators", adminTok, ""); !strings.Contains(body, `"narrators":[]`) || !strings.Contains(body, `"unknown":2`) {

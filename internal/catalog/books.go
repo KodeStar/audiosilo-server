@@ -552,9 +552,9 @@ func (c *Catalog) loadChapters(ctx context.Context, b *Book) error {
 // ListOptions controls book listing.
 type ListOptions struct {
 	LibraryID int64
-	Author    string // optional exact-match filter
+	Author    string // optional: the whole credit, or exactly one person it names (creditFilter)
 	Series    string // optional exact-match filter
-	Narrator  string // optional exact-match filter
+	Narrator  string // optional, as Author
 	Sort      string // "author" (default) | "title" | "recent"
 	Limit     int
 	Cursor    string // opaque keyset cursor from a previous page
@@ -613,16 +613,16 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 	where := []string{"library_id = ?"}
 	args := []any{opt.LibraryID}
 	if opt.Author != "" {
-		where = append(where, "author = ?")
-		args = append(args, opt.Author)
+		cond, a := creditFilter("", "author", opt.Author)
+		where, args = append(where, cond), append(args, a...)
 	}
 	if opt.Series != "" {
 		where = append(where, "series = ?")
 		args = append(args, opt.Series)
 	}
 	if opt.Narrator != "" {
-		where = append(where, "narrator = ?")
-		args = append(args, opt.Narrator)
+		cond, a := creditFilter("", "narrator", opt.Narrator)
+		where, args = append(where, cond), append(args, a...)
 	}
 	// Restrict to the caller's access scope (share path rules), if provided.
 	if opt.Scope != nil {

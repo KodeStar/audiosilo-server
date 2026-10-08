@@ -11,9 +11,10 @@ import { refOf } from '@/lib/book-route';
 import { chunk, fold } from '@/lib/utils';
 
 // The Authors and Narrators screens' pure parts: ordering and filtering the
-// people aggregate, and the bulk edits a merge (and its undo) send. A person is
-// a whole field value ("Michael Kramer & Kate Reading" is one narrator), so a
-// merge rewrites the field, never part of it.
+// people aggregate, and the bulk edits a merge (and its undo) send. The list
+// counts each person a co-credit names, but a merge rewrites whole fields: only
+// the books whose whole credit is a spelling ("Michael Kramer & Kate Reading"
+// stays as it is when "Michael Kramer" is merged).
 
 /** How many tiles render at first, and how many more each "Show more" adds. */
 export const PAGE_STEP = 120;
@@ -39,17 +40,6 @@ export function sortByDuration(people: PersonCount[]): PersonCount[] {
 /** The spellings a merge rewrites: every name but the suggested one. */
 export function otherSpellings(s: MergeSuggestion): string[] {
   return s.names.filter((n) => n !== s.suggested);
-}
-
-/**
- * How many books carry the other spellings. The suggestion's own count covers
- * every spelling (the suggested one too), so this sums the people list; it falls
- * back to that count when the list doesn't name them.
- */
-export function otherSpellingBooks(s: MergeSuggestion, people: PersonCount[]): number {
-  const others = new Set(otherSpellings(s));
-  const n = people.filter((p) => others.has(p.name)).reduce((sum, p) => sum + p.books, 0);
-  return n || s.books;
 }
 
 /** One POST /admin/books/bulk request. */

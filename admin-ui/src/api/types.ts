@@ -1125,6 +1125,13 @@ export interface AdminBook {
   title: string;
   author: string;
   narrator: string;
+  /**
+   * The people `author` and `narrator` name (catalog names.Split: "Michael
+   * Kramer, Kate Reading" is two), each a value the author= / narrator= filters
+   * find the book by.
+   */
+  authors: string[];
+  narrators: string[];
   series: string;
   series_index: number;
   published: string;
@@ -1203,7 +1210,10 @@ export interface BookFacets {
   edited: BoolFacet;
 }
 
-/** catalog.PersonCount: one author or narrator (a whole field value). */
+/**
+ * catalog.PersonCount: one author or narrator, counting every book whose credit
+ * names them ("Michael Kramer, Kate Reading" counts for both).
+ */
 export interface PersonCount {
   name: string;
   books: number;
@@ -1216,6 +1226,8 @@ export interface MergeSuggestion {
   names: string[];
   suggested: string;
   books: number;
+  /** The books a merge rewrites: those carrying one of the other spellings. */
+  other_books: number;
 }
 
 /** GET /admin/authors (handlers_catalog.go handleAdminPeople). */
@@ -1233,7 +1245,7 @@ export interface NarratorsResponse {
   unknown: number;
 }
 
-/** The two people aggregates (a whole field value is one person). */
+/** The two people aggregates (each person a credit names is one; see PersonCount). */
 export type PersonField = 'author' | 'narrator';
 
 /** Either people aggregate as the console reads it (api.people; not a wire shape). */

@@ -9,7 +9,11 @@ import { counted } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { mergeSteps, otherSpellings, undoSteps, type BulkStep } from './people-model';
 
-/** Every book whose `field` is exactly `name` (in one library, or all), page by page. */
+/**
+ * Every book whose `field` is exactly `name` (in one library, or all), page by
+ * page. The filter also finds the co-credits naming `name` ("A, B" for B); a merge
+ * rewrites the whole field, so those are left out, keeping their other people.
+ */
 async function booksTagged(field: PersonField, name: string, libraryId?: number) {
   const out: AdminBook[] = [];
   let cursor: string | undefined;
@@ -20,7 +24,7 @@ async function booksTagged(field: PersonField, name: string, libraryId?: number)
       limit: 200,
       cursor,
     });
-    out.push(...page.books);
+    out.push(...page.books.filter((b) => b[field] === name));
     cursor = page.next_cursor || undefined;
   } while (cursor);
   return out;
@@ -65,8 +69,8 @@ export function useMerge(field: PersonField, libraryId?: number) {
       const tagged = await Promise.all(
         otherSpellings(s).map((name) => booksTagged(field, name, libraryId)),
       );
-      // The filter is exact, but a book that already carries the suggested
-      // spelling has nothing to merge (and nothing to undo).
+      // A book that already carries the suggested spelling has nothing to merge
+      // (and nothing to undo).
       books = tagged.flat().filter((b) => b[field] !== s.suggested);
       if (books.length === 0) {
         toast.add({ title: t('people-merge.nothing'), type: 'info' });

@@ -24,6 +24,7 @@ import { invalidateBookCover, rescanBook, useLibraries, useServerInfo } from '@/
 import type { AdminBook, AdminBookDetail } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { BooksLink } from '@/components/books-link';
+import type { BooksField } from '@/lib/book-route';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -35,7 +36,13 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { copyText } from '@/lib/clipboard';
 import { toastError } from '@/lib/errors';
-import { formatBytes, formatDuration, formatNumber, formatRelative } from '@/lib/format';
+import {
+  formatBytes,
+  formatDuration,
+  formatListParts,
+  formatNumber,
+  formatRelative,
+} from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -152,29 +159,29 @@ export function BookHero({
   );
 }
 
-/** "by <author> · read by <narrator> · book n in <series>", each name a link to its books. */
+/**
+ * "by <author> · read by <narrator> · book n in <series>", each person (a
+ * co-credit's too) and the series a link to their books.
+ */
 function Byline({ book: b, lang }: { book: AdminBook; lang: string }) {
   const credits = [
-    ['author', 'book.hero.by'],
-    ['narrator', 'book.hero.readBy'],
-    ['series', b.series_index > 0 ? 'book.hero.inSeriesBook' : 'book.hero.inSeries'],
+    ['author', 'book.hero.by', b.authors],
+    ['narrator', 'book.hero.readBy', b.narrators],
+    [
+      'series',
+      b.series_index > 0 ? 'book.hero.inSeriesBook' : 'book.hero.inSeries',
+      b.series ? [b.series] : [],
+    ],
   ] as const;
+  // A credit naming nobody (blank, or only a joiner such as ",") says nothing.
   const parts = credits
-    .filter(([field]) => b[field])
-    .map(([field, key]) => (
+    .filter(([, , names]) => names.length > 0)
+    .map(([field, key, names]) => (
       <Trans
         key={field}
         i18nKey={key}
         values={{ [field]: b[field], n: formatNumber(b.series_index, lang) }}
-        components={{
-          b: (
-            <BooksLink
-              field={field}
-              value={b[field]}
-              className="font-[650] text-foreground underline-offset-3 hover:underline"
-            />
-          ),
-        }}
+        components={{ b: <NameLinks field={field} names={names} lang={lang} /> }}
       />
     ));
   if (!parts.length) return null;
@@ -182,6 +189,36 @@ function Byline({ book: b, lang }: { book: AdminBook; lang: string }) {
     <p className="text-[15px] text-muted-foreground md:text-[17px]">
       {parts.map((part, i) => (i ? [' · ', part] : part))}
     </p>
+  );
+}
+
+/**
+ * Names as the language lists them ("Michael Kramer and Kate Reading"), each a
+ * link to its books, standing in for the byline string's <b> (its text, the
+ * whole credit, is ignored).
+ */
+function NameLinks({
+  field,
+  names,
+  lang,
+}: {
+  field: BooksField;
+  names: readonly string[];
+  lang: string;
+}) {
+  return formatListParts(names, lang).map((p, i) =>
+    p.type === 'element' ? (
+      <BooksLink
+        key={i}
+        field={field}
+        value={p.value}
+        className="font-[650] text-foreground underline-offset-3 hover:underline"
+      >
+        {p.value}
+      </BooksLink>
+    ) : (
+      p.value
+    ),
   );
 }
 

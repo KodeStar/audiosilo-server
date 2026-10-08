@@ -386,9 +386,7 @@ func (c *Catalog) adminBooksByID(ctx context.Context, ids []int64) (map[int64]Ad
 		for i, id := range part {
 			args[i] = id
 		}
-		books, err := queryRows(ctx, c.db, func(rows *sql.Rows, b *AdminBook) error {
-			return rows.Scan(adminBookDest(b)...)
-		}, `SELECT `+adminBookCols+` FROM books b JOIN libraries l ON l.id = b.library_id
+		books, err := queryRows(ctx, c.db, scanAdminBook, `SELECT `+adminBookCols+` FROM books b JOIN libraries l ON l.id = b.library_id
 		     WHERE b.id IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err

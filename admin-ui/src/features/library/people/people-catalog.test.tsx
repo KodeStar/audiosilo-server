@@ -75,12 +75,18 @@ describe('authors', () => {
       edited: true,
       edited_fields: ['author'],
     });
+    // The filter finds co-credits naming the spelling too; a merge, which rewrites
+    // the whole field, must leave those alone (Janci Patterson stays).
+    const coCredit = adminBook({
+      path: 'Sanderson/Starsight',
+      author: 'Sanderson, Brandon & Janci Patterson',
+    });
     const calls = mockFetch(
       routes({
         'GET /admin/books': (req) => {
           if (req.query.get('author') !== 'Sanderson, Brandon') return { body: { books } };
           return req.query.get('cursor')
-            ? { body: { books: [edited] } }
+            ? { body: { books: [edited, coCredit] } }
             : { body: { books: [fresh], next_cursor: 'p2' } };
         },
         'POST /admin/books/bulk': (req) => ({
@@ -195,6 +201,7 @@ describe('narrators', () => {
                 names: ['Kramer, Michael & Reading, Kate', 'Michael Kramer & Kate Reading'],
                 suggested: 'Michael Kramer & Kate Reading',
                 books: 3,
+                other_books: 1,
               },
             ],
           },

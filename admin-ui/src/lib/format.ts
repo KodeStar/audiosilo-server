@@ -14,11 +14,20 @@ function numberFormat(lang: string, opts: Intl.NumberFormatOptions = {}): Intl.N
 
 const lists = new Map<string, Intl.ListFormat>();
 
-/** "Cover, Narrator, and ASIN": a list joined the language's way. */
-export function formatList(items: string[], lang: string): string {
+function listFormat(lang: string): Intl.ListFormat {
   let f = lists.get(lang);
   if (!f) lists.set(lang, (f = new Intl.ListFormat(lang, { style: 'long', type: 'conjunction' })));
-  return f.format(items);
+  return f;
+}
+
+/** "Cover, Narrator, and ASIN": a list joined the language's way. */
+export function formatList(items: readonly string[], lang: string): string {
+  return listFormat(lang).format(items);
+}
+
+/** formatList as parts (each item, and the joiners between), to render items as elements. */
+export function formatListParts(items: readonly string[], lang: string) {
+  return listFormat(lang).formatToParts(items);
 }
 
 /** 3,249 / 3.249 / 3 249: thousands separators, tabular in the UI via CSS. */
