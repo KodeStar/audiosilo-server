@@ -18,7 +18,8 @@ import { cn } from '@/lib/utils';
 // in the footer.
 //
 // A dialog that switches between two DialogContents (a form, then its result)
-// switches back in the root's onOpenChangeComplete, never in onOpenChange: a
+// switches back in the root's onOpenChangeComplete, never in onOpenChange, and
+// never switches forward once closed (a reply landing after Cancel): a
 // DialogContent mounted while the root animates out is never unmounted.
 
 const TONES = {

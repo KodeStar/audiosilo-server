@@ -222,6 +222,35 @@ describe('a person', () => {
     }
   });
 
+  it('cancelled while the invite is being made, it opens on the form next time', async () => {
+    let answer = () => {};
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    mockFetch(
+      routes({
+        'POST /admin/users/2/authcode': async () => {
+          await answered;
+          return { status: 201, body: created };
+        },
+      }),
+    );
+    renderApp('/people/user/2?tab=invites');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Pair a device' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Pair a device for sam' });
+    await user.click(within(dialog).getByRole('button', { name: 'Create invite' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    answer();
+    // The invite that lands after Cancel neither brings the dialog back...
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // ...nor greets the next open in place of the form.
+    await user.click(screen.getByRole('button', { name: 'Pair a device' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Pair a device for sam' }),
+    ).toBeInTheDocument();
+  });
+
   it("doesn't let an admin demote, disable or delete themselves", async () => {
     mockFetch(routes());
     renderApp('/people/user/1?tab=account');

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -156,6 +156,16 @@ function InviteForm({
   // A new person's account, once created: retrying after a failed invite reuses
   // it instead of tripping over its own username.
   const createdUser = useRef<User>(undefined);
+  // Closing the dialog unmounts the form, but a submit already under way carries
+  // on: an invite that lands after that stays in the list and is not shown, since
+  // switching to the card once the dialog is closing would mount a stray popup.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const { errors, isSubmitting } = form.formState;
   const access = form.watch('access') || accessOptions[0].value;
   const hasActive = (codes ?? []).some((c) => inviteStatus(c, Date.now()) === 'active');
@@ -187,7 +197,7 @@ function InviteForm({
     try {
       const created = await api.createInvite(target.id, { max_uses: maxUses, ttl_days: ttlDays });
       invalidatePeople(qc);
-      onCreated({ ...created, name: target.username });
+      if (mounted.current) onCreated({ ...created, name: target.username });
     } catch (err) {
       invalidatePeople(qc);
       form.setError('root', { message: errorMessage(err, t) });
