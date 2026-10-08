@@ -38,6 +38,7 @@ export function adminBook(over: Partial<AdminBook> = {}): AdminBook {
     isbn: '',
     edited: false,
     edited_fields: [],
+    chapters_source: 'files' as const,
     ...over,
   };
   // The server's rule (an ASIN or ISBN set), unless a test says otherwise.
@@ -224,6 +225,10 @@ export function bookDetail(over: Partial<AdminBookDetail> = {}): AdminBookDetail
     shares: [{ share_id: 7, name: 'Cosy mysteries', path: 'Brandon Sanderson' }],
     folder: { path: book.path, override: '' },
     indexed_at: '2026-10-01T10:00:00Z',
+    chapter_source: 'files',
+    chapter_choice: '',
+    community_chapters: null,
+    community_checking: false,
     ...over,
   };
 }

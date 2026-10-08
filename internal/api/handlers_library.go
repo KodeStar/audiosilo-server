@@ -366,7 +366,7 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 	if book.Chapters == nil {
 		book.Chapters = []metadata.Chapter{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"library_id":      lib.ID,
 		"path":            book.RelPath,
 		"duration":        book.Duration,
@@ -375,7 +375,13 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		"chapters":        book.Chapters,
 		"codec":           book.Codec,
 		"direct_playable": media.DirectPlayable(book.Codec),
-	})
+	}
+	// Additive: present only when the chapters are a community list fitted onto
+	// the audio, so the player can say where they came from.
+	if book.ChaptersSource != "" {
+		out["chapters_source"] = book.ChaptersSource
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // serveCustomCover answers a cover request from a custom cover uploaded in the

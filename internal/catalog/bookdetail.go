@@ -19,6 +19,18 @@ type AdminBookDetail struct {
 	Shares      []BookShare           `json:"shares"`
 	Folder      BookFolder            `json:"folder"`
 	IndexedAt   string                `json:"indexed_at"`
+	// ChapterSource is where Chapters come from now (ChaptersFromFiles or
+	// ChaptersFromCommunity); ChapterChoice is the admin's choice of it, "" when
+	// it is left automatic.
+	ChapterSource string `json:"chapter_source"`
+	ChapterChoice string `json:"chapter_choice"`
+	// CommunityChapters is the book's last community chapter check, null when it
+	// has none; CommunityChecking is set (by the api) while one is running.
+	CommunityChapters *CommunityChapters `json:"community_chapters"`
+	CommunityChecking bool               `json:"community_checking"`
+	// CommunityCheckFailed is set (by the api) when the book's last check
+	// failed: community_chapters is then the one before.
+	CommunityCheckFailed bool `json:"community_check_failed,omitempty"`
 }
 
 // AdminChapter is a chapter with its edit state.
@@ -96,6 +108,13 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 		return nil, err
 	}
 	d.Fields = layers.resolve()
+	d.ChapterSource = d.Book.ChaptersSource
+	if d.ChapterChoice, err = chapterChoice(ctx, c.db, libraryID, relPath); err != nil {
+		return nil, err
+	}
+	if d.CommunityChapters, err = c.GetCommunityChapters(ctx, libraryID, relPath); err != nil {
+		return nil, err
+	}
 	if d.Chapters, err = queryRows(ctx, c.db, func(rows *sql.Rows, ch *AdminChapter) error {
 		return rows.Scan(&ch.Index, &ch.Title, &ch.ScannedTitle, &ch.Edited, &ch.FilePath,
 			&ch.Start, &ch.End, &ch.BookOffset)

@@ -7,15 +7,21 @@ import {
   ImageOff,
   ImageUp,
   List,
+  ListTree,
   RefreshCw,
   Repeat,
   Sparkles,
   Split,
   type LucideIcon,
 } from 'lucide-react';
-import type { TFunction } from 'i18next';
-import type { AdminBook, IssueCount, IssueKind, IssuesSummary } from '@/api/types';
-import { formatNumber } from '@/lib/format';
+import {
+  FITTED_STATUSES,
+  type AdminBook,
+  type IssueCount,
+  type IssueKind,
+  type IssuesSummary,
+} from '@/api/types';
+import type { Phrase } from '@/lib/phrase';
 import { relBaseName, relParent } from '@/lib/paths';
 
 // The Health page's categories (STYLEGUIDE.md "Health triage"): how each looks,
@@ -31,16 +37,17 @@ export const CATEGORY_LOOK: Record<IssueKind, { icon: LucideIcon; tile: string }
   no_cover: { icon: ImageOff, tile: 'bg-warning-soft text-warning' },
   unmatched: { icon: Globe, tile: 'bg-prov-community-soft text-prov-community' },
   no_chapters: { icon: List, tile: 'bg-muted text-muted-foreground' },
+  detailed_chapters: { icon: ListTree, tile: 'bg-prov-community-soft text-prov-community' },
   transcode: { icon: Repeat, tile: 'bg-warning-soft text-warning' },
 };
 
 /**
  * What fixing a book under a category does: open its page (a cover upload, or the
  * match dialog), open its folder's detection, read its files again, join its
- * folder's disc folders into one book, or nothing the console can do (the row
- * only offers Ignore).
+ * folder's disc folders into one book, use the community's detailed chapters, or
+ * nothing the console can do (the row only offers Ignore).
  */
-export type IssueFix = 'cover' | 'match' | 'folder' | 'rescan' | 'join' | null;
+export type IssueFix = 'cover' | 'match' | 'folder' | 'rescan' | 'join' | 'chapters' | null;
 
 export const FIXES: Record<IssueKind, IssueFix> = {
   scan_error: 'rescan',
@@ -50,6 +57,7 @@ export const FIXES: Record<IssueKind, IssueFix> = {
   no_cover: 'cover',
   unmatched: 'match',
   no_chapters: null,
+  detailed_chapters: 'chapters',
   transcode: null,
 };
 
@@ -60,25 +68,10 @@ export const FIX_LOOK: Record<NonNullable<IssueFix>, { icon: LucideIcon; label: 
   folder: { icon: Split, label: 'health.fix.folder' },
   rescan: { icon: RefreshCw, label: 'health.fix.rescan' },
   join: { icon: Combine, label: 'health.fix.join' },
+  chapters: { icon: ListTree, label: 'health.fix.chapters' },
 };
 
-/** An i18n key and its values: a row's reason, worded where it's shown. */
-export interface Phrase {
-  key: string;
-  values?: Record<string, string | number>;
-}
-
-/**
- * A phrase in words: its values plus `formatted`, the count with the language's
- * separators (the count itself picks the plural form).
- */
-export function say(t: TFunction, p: Phrase, lang: string): string {
-  const count = p.values?.count;
-  return t(
-    p.key,
-    typeof count === 'number' ? { ...p.values, formatted: formatNumber(count, lang) } : p.values,
-  );
-}
+export { say, type Phrase } from '@/lib/phrase';
 
 /** Hours, rounded down, for "one chapter over N hours". */
 const hours = (seconds: number) => Math.floor(seconds / 3600);
@@ -111,6 +104,8 @@ export function issueReason(kind: IssueKind, b: AdminBook): Phrase {
         key: b.chapter_count ? 'health.reason.one_chapter' : 'health.reason.no_chapters',
         values: { hours: hours(b.duration) },
       };
+    case 'detailed_chapters':
+      return { key: 'health.reason.detailed_chapters', values: { count: b.chapter_count } };
     case 'transcode':
       return { key: 'health.reason.transcode', values: { codec: (b.codec || '?').toUpperCase() } };
     case 'duplicate':
@@ -140,6 +135,17 @@ export function attentionTotal(summary: IssuesSummary): number {
 
 /** The kinds that list books (all but duplicates, which come as groups). */
 export type BookIssueKind = Exclude<IssueKind, 'duplicate'>;
+
+/**
+ * Why a book without chapters didn't get the community's (the i18n key), or
+ * undefined: not checked, or a check that fitted.
+ */
+export function chaptersCheckNote(kind: IssueKind, b: AdminBook): string | undefined {
+  if (kind !== 'no_chapters' || !b.chapters_check || FITTED_STATUSES.includes(b.chapters_check)) {
+    return undefined;
+  }
+  return `health.chaptersCheck.${b.chapters_check}`;
+}
 
 export function isBookKind(kind: IssueKind): kind is BookIssueKind {
   return kind !== 'duplicate';

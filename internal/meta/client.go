@@ -158,6 +158,20 @@ func (c *client) series(ctx context.Context, id string) (*upstreamSeriesDetail, 
 	return &out, nil
 }
 
+// recordingChapters fetches a recording's chapter list via GET
+// /api/v1/works/{id}/recordings/{rid}/chapters. metaserve answers an unknown work
+// or recording with an empty list, and an older metaserve without the route with
+// a 404 (ErrNotFound).
+func (c *client) recordingChapters(ctx context.Context, workID, recordingID string) ([]Chapter, error) {
+	var out struct {
+		Chapters []Chapter `json:"chapters"`
+	}
+	if err := c.getJSON(ctx, "/api/v1/works/"+url.PathEscape(workID)+"/recordings/"+url.PathEscape(recordingID)+"/chapters", &out); err != nil {
+		return nil, err
+	}
+	return out.Chapters, nil
+}
+
 // ---- upstream shapes (mirror metaserve's internal/serve JSON exactly) --------
 
 type upstreamPersonRef struct {

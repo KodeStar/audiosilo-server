@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -27,6 +28,16 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// The scan's own chapters, kept as found (books.scanned_chapters): what a
+	// community chapter check fits against, and what the chapters go back to.
+	ownChapters := b.Chapters
+	if ownChapters == nil {
+		ownChapters = []metadata.Chapter{}
+	}
+	scannedChapters, err := json.Marshal(ownChapters)
+	if err != nil {
+		return 0, err
+	}
 	// has_cover holds whenever there is a sibling cover; the scanner reports
 	// embedded art. Unknown (nil) stays NULL until a scan checks.
 	hasCover := b.HasCover
@@ -41,8 +52,9 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
 			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
 			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
-			     released, released_checked)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+			     released, released_checked,
+			     scanned_chapters, chapters_hash, chapters_source, chapters_fit)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,'','')
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -55,7 +67,11 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
 			     scan_error_detail=excluded.scan_error_detail,
 			     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent,
-			     released=excluded.released, released_checked=1
+			     released=excluded.released, released_checked=1,
+			     -- The rows below are the scan's: refreshEffective puts a community
+			     -- list back over them when it should.
+			     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
+			     chapters_source='', chapters_fit=''
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -64,7 +80,7 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
 			b.Published, b.Description, hasCover, scanned,
 			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
-			b.Released).Scan(&id); err != nil {
+			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters))).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -83,22 +99,15 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			}
 		}
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM chapters WHERE book_id = ?`, id); err != nil {
+		if err := replaceChapters(ctx, tx, id, b.Chapters); err != nil {
 			return err
-		}
-		for _, ch := range b.Chapters {
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO chapters(book_id, idx, title, scanned_title, file_index, file_path, start, "end", book_offset)
-				 VALUES(?,?,?,?,?,?,?,?,?)`,
-				id, ch.Index, ch.Title, ch.Title, ch.FileIndex, ch.FilePath, ch.Start, ch.End, ch.BookOffset); err != nil {
-				return err
-			}
 		}
 		return refreshEffective(ctx, tx, id)
 	})
 	if err != nil {
 		return 0, err
 	}
+	c.changed()
 	return id, nil
 }
 
@@ -487,8 +496,8 @@ func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath s
 func (c *Catalog) GetBook(ctx context.Context, id int64) (*Book, error) {
 	var b Book
 	dest, finish := bookDest(&b)
-	err := c.db.QueryRowContext(ctx, `SELECT `+bookCols+`, description FROM books WHERE id = ?`, id).
-		Scan(append(dest, &b.Description)...)
+	err := c.db.QueryRowContext(ctx, `SELECT `+bookCols+`, description, chapters_source FROM books WHERE id = ?`, id).
+		Scan(append(dest, &b.Description, &b.ChaptersSource)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

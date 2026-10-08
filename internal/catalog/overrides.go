@@ -472,7 +472,8 @@ func pathFields(m *metadata.Metadata) bookFields {
 }
 
 // refreshEffective rebuilds a book's effective metadata (bookLayers.resolve) into
-// its books row and chapter titles, then refreshes its FTS row. UpsertBook,
+// its books row, its chapters (their source: applyChapterSource; then their
+// titles), then refreshes its FTS row. UpsertBook,
 // SetEnrichment and every edit call it, so the books row can never disagree with
 // what the durable tables say.
 func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
@@ -508,6 +509,9 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 		return err
 	}
 
+	if err := applyChapterSource(ctx, tx, bookID, l.libID, l.path); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE chapters SET title = scanned_title WHERE book_id = ? AND title <> scanned_title`, bookID); err != nil {
 		return err
@@ -560,6 +564,10 @@ type BookEdit struct {
 	Revert        []string
 	ChapterSet    map[int]string
 	ChapterRevert []int
+	// ChapterSource picks where the chapters come from: ChaptersFromFiles,
+	// ChaptersFromCommunity, or ChapterSourceAuto to leave it to the default;
+	// "" changes nothing.
+	ChapterSource string
 	Source        string
 	UserID        int64
 }
@@ -615,6 +623,11 @@ func (e BookEdit) normalize() (BookEdit, error) {
 			return e, invalid("chapters", "a chapter cannot be renamed and reverted at once")
 		}
 	}
+	switch e.ChapterSource {
+	case "", ChapterSourceAuto, ChaptersFromFiles, ChaptersFromCommunity:
+	default:
+		return e, invalid("chapter_source", `must be "auto", "files" or "community"`)
+	}
 	e.Set, e.ChapterSet = set, chSet
 	return e, nil
 }
@@ -627,9 +640,13 @@ func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, ed
 	if err != nil {
 		return err
 	}
-	return c.db.WithTx(ctx, "EditBook", func(tx *sql.Tx) error {
+	err = c.db.WithTx(ctx, "EditBook", func(tx *sql.Tx) error {
 		return c.editTx(ctx, tx, Ref{LibraryID: libraryID, Path: path}, edit, c.ts())
 	})
+	if err == nil {
+		c.changed()
+	}
+	return err
 }
 
 // EditBooks applies the same field edit to many books in one transaction: every
@@ -643,7 +660,7 @@ func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) erro
 	if err != nil {
 		return err
 	}
-	return c.db.WithTx(ctx, "EditBooks", func(tx *sql.Tx) error {
+	err = c.db.WithTx(ctx, "EditBooks", func(tx *sql.Tx) error {
 		now := c.ts()
 		for _, ref := range refs {
 			if err := c.editTx(ctx, tx, ref, edit, now); err != nil {
@@ -652,6 +669,10 @@ func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) erro
 		}
 		return nil
 	})
+	if err == nil {
+		c.changed()
+	}
+	return err
 }
 
 // editTx writes one book's share of a normalized edit and rebuilds its row.
@@ -680,6 +701,11 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM book_overrides WHERE library_id = ? AND path = ? AND field = ?`,
 			ref.LibraryID, path, field); err != nil {
+			return err
+		}
+	}
+	if edit.ChapterSource != "" {
+		if err := setChapterChoice(ctx, tx, Ref{LibraryID: ref.LibraryID, Path: path}, edit.ChapterSource, editor, now); err != nil {
 			return err
 		}
 	}

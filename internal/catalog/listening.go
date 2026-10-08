@@ -506,6 +506,12 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 		newPath, libraryID, oldPath); err != nil {
 		return err
 	}
+	// So does its community chapter check (the same audio, so the same fit).
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE OR REPLACE community_chapters SET path = ? WHERE library_id = ? AND path = ?`,
+		newPath, libraryID, oldPath); err != nil {
+		return err
+	}
 	// So do the Health issues an admin ignored for it.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE OR REPLACE issue_ignores SET path = ? WHERE library_id = ? AND path = ?`,
@@ -521,6 +527,7 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	if err := tx.QueryRowContext(ctx, `SELECT
 		    EXISTS(SELECT 1 FROM book_overrides WHERE library_id = ?1 AND path = ?2)
 		 OR EXISTS(SELECT 1 FROM chapter_overrides WHERE library_id = ?1 AND path = ?2)
+		 OR EXISTS(SELECT 1 FROM chapter_choices WHERE library_id = ?1 AND path = ?2)
 		 OR EXISTS(SELECT 1 FROM book_covers WHERE library_id = ?1 AND path = ?2)`,
 		libraryID, oldPath).Scan(&hasEdits); err != nil {
 		return err
@@ -531,6 +538,7 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	for _, stmt := range []string{
 		`DELETE FROM book_overrides WHERE library_id = ? AND path = ?`,
 		`DELETE FROM chapter_overrides WHERE library_id = ? AND path = ?`,
+		`DELETE FROM chapter_choices WHERE library_id = ? AND path = ?`,
 		`DELETE FROM book_covers WHERE library_id = ? AND path = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, libraryID, newPath); err != nil {
@@ -540,6 +548,7 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 	for _, stmt := range []string{
 		`UPDATE book_overrides SET path = ? WHERE library_id = ? AND path = ?`,
 		`UPDATE chapter_overrides SET path = ? WHERE library_id = ? AND path = ?`,
+		`UPDATE chapter_choices SET path = ? WHERE library_id = ? AND path = ?`,
 		`UPDATE book_covers SET path = ? WHERE library_id = ? AND path = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, newPath, libraryID, oldPath); err != nil {

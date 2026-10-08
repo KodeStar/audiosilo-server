@@ -14,6 +14,7 @@ import { formatClock, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { chapterProblem, fileStrip, ribbonSegments } from './book-model';
+import { CommunityChapters } from './community-chapters';
 
 /** Rows shown before "Show all". */
 const FIRST_ROWS = 10;
@@ -41,6 +42,8 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const shown = all ? chapters : chapters.slice(0, FIRST_ROWS);
   const hovered = chapters.find((c) => c.index === active);
   const withHours = b.duration >= 3600;
+  // A rename's "before" is the community's title when the chapters are theirs.
+  const fromCommunity = detail.chapter_source === 'community';
 
   const edit = async (req: BookEditRequest, done: () => void) => {
     try {
@@ -63,9 +66,11 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
     void edit({ chapters: { set: { [c.index]: title } } }, () =>
       toast.add({
         title: t('book.chapters.renamed'),
-        description: c.scanned_title
-          ? t('book.chapters.renamedBody', { title: c.scanned_title })
-          : t('book.chapters.renamedNoTag'),
+        description: !c.scanned_title
+          ? t('book.chapters.renamedNoTag')
+          : t(fromCommunity ? 'book.chapters.renamedCommunity' : 'book.chapters.renamedBody', {
+              title: c.scanned_title,
+            }),
         type: 'success',
       }),
     );
@@ -92,6 +97,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
         })}
       />
       <div className="flex flex-col gap-3.5 p-5">
+        <CommunityChapters detail={detail} />
         {problem ? (
           <p className="flex items-start gap-2 text-[13.5px] text-muted-foreground">
             <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -173,6 +179,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
                 onCancel={() => setEditing(null)}
                 onRename={(title) => rename(c, title)}
                 onRevert={() => revert(c)}
+                fromCommunity={fromCommunity}
               />
             ))}
           </ol>
@@ -202,6 +209,7 @@ function ChapterRow({
   onCancel,
   onRename,
   onRevert,
+  fromCommunity,
 }: {
   chapter: AdminChapter;
   n: number;
@@ -214,6 +222,7 @@ function ChapterRow({
   onCancel: () => void;
   onRename: (title: string) => void;
   onRevert: () => void;
+  fromCommunity: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const row = useRef<HTMLLIElement>(null);
@@ -255,7 +264,10 @@ function ChapterRow({
               <button
                 type="button"
                 onClick={onRevert}
-                title={t('book.chapters.revertHint', { title: c.scanned_title })}
+                title={t(
+                  fromCommunity ? 'book.chapters.revertHintCommunity' : 'book.chapters.revertHint',
+                  { title: c.scanned_title },
+                )}
                 aria-label={t('book.chapters.revert', { title: c.title })}
                 className="grid size-6 shrink-0 place-items-center rounded-[6px] text-muted-foreground hover:bg-accent hover:text-foreground"
               >

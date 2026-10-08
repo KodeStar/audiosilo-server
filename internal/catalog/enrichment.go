@@ -24,7 +24,7 @@ func (c *Catalog) SetEnrichment(ctx context.Context, libraryID int64, path, asin
 	// One transaction so the durable row and the live index row never diverge: a
 	// failure after the upsert would otherwise store the enrichment but leave the
 	// books row stale until the next scan.
-	return c.db.WithTx(ctx, "SetEnrichment", func(tx *sql.Tx) error {
+	err := c.db.WithTx(ctx, "SetEnrichment", func(tx *sql.Tx) error {
 		// CASE WHEN keeps an existing stored value when the incoming one is blank.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO book_enrichment(library_id, path, asin, isbn, updated_at) VALUES(?,?,?,?,?)
@@ -47,4 +47,8 @@ func (c *Catalog) SetEnrichment(ctx context.Context, libraryID int64, path, asin
 		}
 		return refreshEffective(ctx, tx, bookID)
 	})
+	if err == nil {
+		c.changed()
+	}
+	return err
 }

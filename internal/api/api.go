@@ -13,6 +13,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/chaptercheck"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/importer"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -57,6 +58,9 @@ type API struct {
 	matchRuns *matchrun.Runner
 	// imports runs listening imports from Audiobookshelf (handlers_import.go).
 	imports *importer.Service
+	// chapterChecks fits community chapter lists onto books in the background
+	// (StartChapterChecks) and on request; nil with meta.
+	chapterChecks *chaptercheck.Runner
 	// settingsMu serializes settings saves (read, change, write config.yaml, swap).
 	settingsMu sync.Mutex
 	log        *slog.Logger
@@ -175,6 +179,10 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 	if metaSvc != nil {
 		a.fetchCover = metaSvc.FetchCover
 		matcher = metaSvc
+		a.chapterChecks = chaptercheck.New(cat, metaSvc, ffmpeg, a.metadataOn, log)
+		// Every book indexed or edited (a scan, a match applied, an ASIN typed) may
+		// be due a chapter check now: wake the background pass.
+		cat.OnBookChange(a.chapterChecks.Kick)
 	}
 	a.matchRuns = matchrun.New(cat, matcher, a.saveMatchCover, a.metadataOn, log)
 	a.live.Store(newLiveConfig(cfg, cfg))
@@ -194,6 +202,14 @@ func (a *API) EnableSetup(token string) { a.setupToken = token }
 // SetBaseContext sets the server lifecycle context that detached background work
 // derives from, so it's cancelled on shutdown. Call before Handler().
 func (a *API) SetBaseContext(ctx context.Context) { a.baseCtx = ctx }
+
+// StartChapterChecks starts the background community chapter checks
+// (chaptercheck.Runner.Run) for ctx's lifetime; nothing without metadata.
+func (a *API) StartChapterChecks(ctx context.Context) {
+	if a.chapterChecks != nil {
+		go a.chapterChecks.Run(ctx)
+	}
+}
 
 // Handler returns the root http.Handler with all routes and global middleware.
 func (a *API) Handler() http.Handler {
@@ -400,6 +416,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminBook)))
 	mux.Handle("PATCH /api/v1/admin/libraries/{id}/book", a.requireAdmin(http.HandlerFunc(a.handleAdminEditBook)))
 	mux.Handle("GET /api/v1/admin/libraries/{id}/book/match", a.requireAdmin(http.HandlerFunc(a.handleAdminMatch)))
+	mux.Handle("POST /api/v1/admin/libraries/{id}/book/community-chapters", a.requireAdmin(http.HandlerFunc(a.handleCheckCommunityChapters)))
 	// Bulk community matching: a background run over the unmatched books, reviewed
 	// before it is applied (handlers_match_runs.go).
 	mux.Handle("GET /api/v1/admin/match-runs", a.requireAdmin(http.HandlerFunc(a.handleListMatchRuns)))

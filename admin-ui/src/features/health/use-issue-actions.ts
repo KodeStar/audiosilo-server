@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BULK_LIMIT, api } from '@/api/client';
-import { invalidateIssues, rescanBook, setFolderMode } from '@/api/hooks';
+import { invalidateBooks, invalidateIssues, rescanBook, setFolderMode } from '@/api/hooks';
 import type { AdminBook, BookRef, IssueKind } from '@/api/types';
 import { bookRoute, refKey, refOf } from '@/lib/book-route';
 import { toastError } from '@/lib/errors';
@@ -19,7 +19,8 @@ const RESCAN_CONCURRENCY = 2;
 /**
  * What the Health page does to books: ignore them under a category (with Undo),
  * show them again, and each category's fix (open the book, its match dialog or
- * its folder's detection, read its files again, or join its disc folders).
+ * its folder's detection, read its files again, join its disc folders, or use the
+ * community's detailed chapters).
  */
 export function useIssueActions(kind: IssueKind) {
   const { t, i18n } = useTranslation();
@@ -131,6 +132,27 @@ export function useIssueActions(kind: IssueKind) {
     }
   };
 
+  /**
+   * Switches books to the community's detailed chapters: their chapter source
+   * becomes "community" (one bulk edit per batch), which also settles the category.
+   */
+  const takeDetailed = async (books: BookRef[]) => {
+    try {
+      for (const part of chunk(books.map(refOf), BULK_LIMIT)) {
+        await api.bulkEdit(part, { chapter_source: 'community' });
+      }
+      toast.add({
+        title: t('health.toast.chaptersUsed', counted(books.length, lang)),
+        type: 'success',
+      });
+    } catch (err) {
+      toastError(t('health.toast.chaptersFailed'), err);
+    } finally {
+      invalidateBooks(qc, books.map(refOf));
+      invalidateIssues(qc);
+    }
+  };
+
   /** Runs a book's async fix once at a time: a click while it is in flight does nothing. */
   const once = async (b: AdminBook, run: () => Promise<void>) => {
     const key = refKey(b);
@@ -162,13 +184,15 @@ export function useIssueActions(kind: IssueKind) {
         return once(b, () => rescan(b));
       case 'join':
         return once(b, () => join(b));
+      case 'chapters':
+        return once(b, () => takeDetailed([b]));
     }
   };
 
   /** Whether a book's fix is in flight (its fix button is disabled meanwhile). */
   const fixing = (b: BookRef) => busy.has(refKey(b));
 
-  return { ignore, unignore, fix, fixing, rescan, rescanMany };
+  return { ignore, unignore, fix, fixing, rescan, rescanMany, takeDetailed };
 }
 
 export type IssueActions = ReturnType<typeof useIssueActions>;

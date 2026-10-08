@@ -674,8 +674,13 @@ export function useAdminBook(libraryId: number, path: string) {
   return useQuery({
     queryKey: keys.book(libraryId, path),
     queryFn: () => api.adminBook(libraryId, path),
+    // A community chapter check runs in the background: follow it to the end.
+    refetchInterval: (q) => (q.state.data?.community_checking ? CHECK_POLL_MS : false),
   });
 }
+
+/** How often a book page asks again while its community chapters are being checked. */
+const CHECK_POLL_MS = 3000;
 
 /**
  * Community works a book might be. Searched only when asked (the match dialog is

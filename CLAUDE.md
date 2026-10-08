@@ -109,6 +109,9 @@ internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a dat
 internal/media/       Range streaming, download, embedded cover extraction
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
+internal/chapteralign/ fits a community recording's chapter list onto a book's own audio (pure, no I/O): anchors by title + time, places the rest in proportion, snaps each to its pause (an injected Prober); classifies fill/titles/refine/restructure/same or why not (length_mismatch, structure_mismatch, crosses_files). testdata/mythos is a real 34-vs-174-chapter golden case
+internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
+internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
@@ -169,7 +172,8 @@ folder holding a disc of a book split across disc folders, else `''`); `0023` ad
 `books.cover_art` (the cover art identity whose short hash is the wire `cover_version`) and
 `books.cover_color` (read from a thumbnail, tagged with the version it was read for; both derived, see below) and `0024`
 `meta_cache` (the community metadata cache's persistent level: derived, keyed by identifier,
-not user state; see Phase 1.5 below). `0027` adds `ratings` (a listener's 1-5 stars + note per
+not user state; see Phase 1.5 below). `0035` adds `community_chapters`, `chapter_choices` and `books.chapters_source` /
+`chapters_fit` / `scanned_chapters` / `chapters_hash` (see Community chapters below). `0027` adds `ratings` (a listener's 1-5 stars + note per
 book: durable, path-keyed, no FK to the index, purged with its user or library). Phase 4a (`0018`) adds
 `listening_sessions` (server-derived listening sessions, path-keyed, no FK to the index, bounded
 retention), `listening_daily` (their per-day roll-up), `tokens.client_app` / `client_version` /
@@ -1116,6 +1120,57 @@ admin overrides; see Metadata overrides below).
   becomes one chapter. `GET /libraries/{id}/chapters?path=` returns
   `{chapters, files, duration}`; a player renders single- and multi-file books
   identically.
+- **Community chapters** (`0035`; `internal/chapteralign`, `internal/chaptercheck`,
+  `catalog/communitychapters.go`): a book with an ASIN/ISBN is checked against its
+  EXACT community recording's chapter list (`meta.Service.RecordingChapters`: the
+  lookup's `recording_id`, never `pickRecording`'s first-recording fallback; metaserve
+  `works/{id}/recordings/{rid}/chapters`, 404 = none known). The fit is anchored and
+  piecewise (see the package doc): local chapter starts pair with community ones by
+  title (numbering stripped, word containment, one-letter typos) within
+  `max(120 s, 1%)`, file boundaries and untitled starts by time within 5 s of the
+  neighbouring anchors' offset; the audio's end pins to the community end or to a
+  community boundary near it (what follows, at most `min(20 min, 10%)`, is listed as
+  omitted: a preview, credits); stretches between anchors must agree (weighted median
+  within 1%, any >= 120 s on either timeline within 10%) or it is another edition; every file boundary
+  must be anchored (else `crosses_files`, with the straddling chapter); then each
+  placed boundary snaps to the longest pause (>= 0.4 s at -40 dB) within
+  `4 s + drift`, starting 0.3 s before the speech. Outcome per book in
+  `community_chapters` (path-keyed cache, no FK, moved by `MoveDurableState`; `basis` =
+  asin|isbn|duration ms|`books.chapters_hash` (the scan's chapters)|the files in
+  play order relative to the book ('' for a single-file book), a different one makes
+  it due; a month makes it stale; a check whose basis isn't the book's current one is
+  never applied, and the admin page marks it `stale`, so a rescan of other audio,
+  re-tagged chapters, files renamed in place or a removed match never brings back
+  chapters fitted to the old files. The fit stores its files relative to the book
+  too, so a moved book (the same audio) keeps its check and its chapters; `list_hash` names the community list, so a background recheck
+  finding the same list for the same audio only renews `checked_at`, while a check
+  asked for fits again). A pass the service keeps failing (5 in a row) waits for the
+  next tick whatever kicks it, and a book a check failed for waits an hour, so it
+  can't hold up the books behind it. A kick waits 5 s for the kicks behind it (a
+  scan kicks once per book), so a burst is one pass. The book page's
+  `community_check_failed` says the last check failed (the service, or the 4-minute
+  pause budget of a 5-minute check: past it, the rest are left unsnapped).
+  `refreshEffective` -> `applyChapterSource` puts the community chapters in the
+  `chapters` rows when a current check fitted and either the admin chose them
+  (`chapter_choices`: `files`|`community`, durable, path-keyed, moved with the book's
+  edits by `MoveDurableState`, never copied onto a joined book) or, with no choice,
+  the status is `fill` (no chapters of its own: none, or one per file); else the
+  scan's own, which `UpsertBook` always keeps in `books.scanned_chapters` (as
+  `books.scanned` keeps the metadata; `''` on a row from before 0035, whose rows are
+  the scan's). `books.chapters_fit` (a hash of the fit in the rows) keeps an
+  unchanged fit from being written again. Chapter renames (`chapter_overrides`, by
+  file + start) work on community chapters too. `Catalog.OnBookChange` (fired after
+  `UpsertBook`, `EditBook(s)`, `SetEnrichment` commit, and a library's new metadata
+  source re-resolving its books) wakes the background pass, so a
+  scan, an applied match or a typed ASIN is checked without waiting for the
+  10-minute tick. Wire (additive): `chapters_source: "community"` on `/chapters` and
+  the book JSON; admin book page `chapter_source`, `chapter_choice`,
+  `community_chapters` (status, detail, `stale`; not the fitted list),
+  `community_checking`; `PATCH .../book {chapter_source}` (bulk too); `POST
+  /admin/libraries/{id}/book/community-chapters?path=` (check now, in the
+  background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
+  choice made); admin rows carry `chapters_source` + `chapters_check`. Note the scan
+  reads no ASIN from tags: a book is checked once matched.
 - ffprobe is optional; code paths must degrade gracefully when it is absent
   (path-derived metadata still works; codec is left unknown → `direct_playable`
   defaults to true). ffmpeg is likewise optional (transcoding off without it).
