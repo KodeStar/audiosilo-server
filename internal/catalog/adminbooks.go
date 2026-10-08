@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -22,17 +24,19 @@ import (
 
 // AdminBook is one row of the admin book list.
 type AdminBook struct {
-	id             int64
-	LibraryID      int64   `json:"library_id"`
-	LibraryName    string  `json:"library_name"`
-	Path           string  `json:"path"`
-	IsFolder       bool    `json:"is_folder"`
-	Title          string  `json:"title"`
-	Author         string  `json:"author"`
-	Narrator       string  `json:"narrator"`
-	Series         string  `json:"series"`
-	SeriesIndex    float64 `json:"series_index"`
-	Published      string  `json:"published"`
+	id          int64
+	LibraryID   int64   `json:"library_id"`
+	LibraryName string  `json:"library_name"`
+	Path        string  `json:"path"`
+	IsFolder    bool    `json:"is_folder"`
+	Title       string  `json:"title"`
+	Author      string  `json:"author"`
+	Narrator    string  `json:"narrator"`
+	Series      string  `json:"series"`
+	SeriesIndex float64 `json:"series_index"`
+	Published   string  `json:"published"`
+	// Released is the tags' date (Book.Released), for the release-date sort.
+	Released       string  `json:"-"`
 	Duration       float64 `json:"duration"`
 	Format         string  `json:"format"`
 	Codec          string  `json:"codec"`
@@ -114,7 +118,7 @@ const (
 var directPlayableExpr = media.DirectPlayableSQL("b.codec")
 
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.author,
-	b.narrator, b.series, b.series_index, b.published, b.duration, b.format, b.codec, ` +
+	b.narrator, b.series, b.series_index, b.published, b.released, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
 	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
 	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0)`
@@ -122,7 +126,7 @@ var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.titl
 // adminBookDest returns the scan destinations for adminBookCols, in order.
 func adminBookDest(b *AdminBook) []any {
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
-		&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Duration, &b.Format, &b.Codec,
+		&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
 		&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
 		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
 		&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts}
@@ -296,7 +300,17 @@ var (
 	getSer   = func(b AdminBook) string { return b.Series }
 	getAuth  = func(b AdminBook) string { return b.Author }
 	getNarr  = func(b AdminBook) string { return b.Narrator }
+	// getDate is a book's release date for the sort: when the work came out (an
+	// edit or a community match), else the date its tags give (usually the
+	// recording's) - dateExpr in SQL.
+	getDate = func(b AdminBook) string { return cmp.Or(b.Published, b.Released) }
+	// keySurname orders by the author's surname first (nameSortKey, registered as
+	// the SQL function name_sort, so the SQL and the cursor agree).
+	keySurname = sortKey{expr: "name_sort(b.author)", val: func(b AdminBook) any { return nameSortKey(b.Author) }}
 )
+
+// dateExpr is getDate in SQL.
+const dateExpr = "COALESCE(NULLIF(b.published, ''), b.released)"
 
 // ErrUnknownSort marks an admin list ordering that isn't one of adminSorts.
 var ErrUnknownSort = errors.New("unknown sort")
@@ -307,16 +321,19 @@ var adminSorts = map[string][]sortKey{
 	"title":    {keyTitle},
 	"author":   {blankLast("b.author", getAuth), textKey("b.author", getAuth), textKey("b.series", getSer), keyIndex, keyTitle},
 	"series":   {blankLast("b.series", getSer), textKey("b.series", getSer), keyIndex, keyTitle},
+	"surname":  {blankLast("b.author", getAuth), keySurname, textKey("b.author", getAuth), textKey("b.series", getSer), keyIndex, keyTitle},
 	"narrator": {blankLast("b.narrator", getNarr), textKey("b.narrator", getNarr), keyTitle},
-	"added":    {{expr: "b.added_at", val: func(b AdminBook) any { return b.AddedAt }}},
-	"duration": {{expr: "b.duration", num: true, val: func(b AdminBook) any { return b.Duration }}},
-	"size":     {{expr: "b.size", num: true, val: func(b AdminBook) any { return b.Size }}},
+	// YYYY[-MM[-DD]] text orders by date, a bare year before that year's dates.
+	"published": {blankLast(dateExpr, getDate), textKey(dateExpr, getDate), textKey("b.series", getSer), keyIndex, keyTitle},
+	"added":     {{expr: "b.added_at", val: func(b AdminBook) any { return b.AddedAt }}},
+	"duration":  {{expr: "b.duration", num: true, val: func(b AdminBook) any { return b.Duration }}},
+	"size":      {{expr: "b.size", num: true, val: func(b AdminBook) any { return b.Size }}},
 }
 
 // AdminListOptions is one page request of the admin book list.
 type AdminListOptions struct {
 	Filter BookFilter
-	Sort   string // title | author | series | narrator | added | duration | size; "" = title
+	Sort   string // title | author | surname | series | narrator | published | added | duration | size; "" = title
 	Desc   bool
 	Limit  int
 	Cursor string
@@ -352,9 +369,9 @@ func (c *Catalog) ListAdminBooks(ctx context.Context, opt AdminListOptions) (*Ad
 		opt.Limit = 60
 	}
 	where, args := opt.Filter.where("")
-	dir, cmp := "ASC", ">"
+	dir, op := "ASC", ">"
 	if opt.Desc {
-		dir, cmp = "DESC", "<"
+		dir, op = "DESC", "<"
 	}
 	exprs := make([]string, 0, len(keys)+1)
 	order := make([]string, 0, len(keys)+1)
@@ -371,7 +388,7 @@ func (c *Catalog) ListAdminBooks(ctx context.Context, opt AdminListOptions) (*Ad
 		if err != nil {
 			return nil, err
 		}
-		where += " AND (" + strings.Join(exprs, ", ") + ") " + cmp + " (" + placeholders(len(vals)) + ")"
+		where += " AND (" + strings.Join(exprs, ", ") + ") " + op + " (" + placeholders(len(vals)) + ")"
 		args = append(args, vals...)
 	}
 	// Sort and page on ids alone, then compute the row's columns (several of them
@@ -649,24 +666,10 @@ func lessFold(a, b string) bool {
 // keeps the letters of every script), which also equates "J.R.R." with "J. R. R.".
 // "" when no letter or digit is left.
 func personKey(name string) string {
-	if given, surname, ok := reversedName(name); ok {
+	if given, surname, ok := names.Reversed(name); ok {
 		name = given + " " + surname
 	}
 	return match.Fold(name)
-}
-
-// reversedName reports whether name is written "Surname, Given" (one word before
-// a single comma, so "Alexandre Dumas, pere" is not), with its two parts.
-func reversedName(name string) (given, surname string, ok bool) {
-	before, after, found := strings.Cut(name, ",")
-	if !found || strings.Contains(after, ",") {
-		return "", "", false
-	}
-	b, a := strings.TrimSpace(before), strings.TrimSpace(after)
-	if a == "" || strings.ContainsAny(b, " \t") {
-		return "", "", false
-	}
-	return a, b, true
 }
 
 // mergeSuggestions groups people whose names share a personKey. The suggested
@@ -712,8 +715,8 @@ func betterSpelling(p, best PersonCount) bool {
 	if p.Books != best.Books {
 		return p.Books > best.Books
 	}
-	_, _, pRev := reversedName(p.Name)
-	_, _, bestRev := reversedName(best.Name)
+	_, _, pRev := names.Reversed(p.Name)
+	_, _, bestRev := names.Reversed(best.Name)
 	if pRev != bestRev {
 		return !pRev
 	}

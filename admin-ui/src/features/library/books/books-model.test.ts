@@ -116,9 +116,11 @@ describe('listParams', () => {
     });
   });
 
-  it('opens one series in reading order', () => {
+  it('opens one series in reading order and one author in release order', () => {
     expect(defaultSort({ series: 'Mistborn' })).toBe('series');
-    expect(defaultSort({ author: 'Brandon Sanderson' })).toBe('title');
+    expect(defaultSort({ author: 'Brandon Sanderson' })).toBe('published');
+    expect(defaultSort({ author: 'Brandon Sanderson', series: 'Mistborn' })).toBe('series');
+    expect(defaultSort({ narrator: 'Michael Kramer' })).toBe('title');
     expect(listParams({ series: 'Mistborn' }, NOW)).toMatchObject({ sort: 'series', order: 'asc' });
     expect(listParams({ series: 'Mistborn', sort: 'added' }, NOW)).toMatchObject({
       sort: 'added',

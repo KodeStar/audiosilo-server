@@ -91,6 +91,10 @@ type Book struct {
 	// loads it, leaving list, search and recent pages small.
 	Published   string `json:"published,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Released is the date the file's tags give (metadata.ReleaseDate), usually
+	// the recording's: scanned, never edited, and only the admin list's
+	// release-date sort reads it (where a book has no Published).
+	Released string `json:"-"`
 	// HasCover reports cover art (a sibling image or embedded art); nil until a
 	// scan has checked. Set by the scanner; read by the admin catalog.
 	HasCover *bool `json:"-"`

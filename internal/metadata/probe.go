@@ -141,6 +141,9 @@ func applyProbe(m *Metadata, p *probeResult) {
 	if v := firstNonEmpty(t["series"], t["show"], t["grouping"]); v != "" {
 		m.Series = v
 	}
+	if v := firstReleaseDate(t["date"], t["year"]); v != "" {
+		m.Released = v
+	}
 	if v := t["series-part"]; v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			m.SeriesIndex = f

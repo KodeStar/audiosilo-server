@@ -1163,8 +1163,10 @@ export interface AdminBookPage {
 export const ADMIN_BOOK_SORTS = [
   'title',
   'author',
+  'surname',
   'series',
   'narrator',
+  'published',
   'added',
   'duration',
   'size',

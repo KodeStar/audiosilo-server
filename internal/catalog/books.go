@@ -40,8 +40,9 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			`INSERT INTO books(library_id, rel_path, is_folder, title, author, series,
 			     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
 			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
-			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
+			     released, released_checked)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -53,7 +54,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     has_cover=excluded.has_cover, scanned=excluded.scanned,
 			     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
 			     scan_error_detail=excluded.scan_error_detail,
-			     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent
+			     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent,
+			     released=excluded.released, released_checked=1
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -61,7 +63,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.SeriesIndex, b.Narrator, b.Duration, b.ASIN, b.ISBN, b.CoverPath,
 			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
 			b.Published, b.Description, hasCover, scanned,
-			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent).Scan(&id); err != nil {
+			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
+			b.Released).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -218,6 +221,10 @@ type Signature struct {
 	// SuspectUnchecked: a folder book whose parts haven't been checked for holding
 	// several books (indexed before migration 0017; see books.suspect_parts).
 	SuspectUnchecked bool
+	// ReleasedUnchecked: a book whose tags haven't been read for a release date
+	// (indexed before migration 0037; see books.released_checked), which the next
+	// scan reads (SetReleased).
+	ReleasedUnchecked bool
 	// ScanError and ScanErrorFile are the read problem the last indexing recorded
 	// (books.scan_error), so a scan can look at that file again.
 	ScanError, ScanErrorFile string
@@ -231,7 +238,8 @@ type Signature struct {
 func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]Signature, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
-		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent
+		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
+		        released_checked = 0
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -243,7 +251,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var sig Signature
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
-			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent); err != nil {
+			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked); err != nil {
 			return nil, err
 		}
 		out[rel] = sig
@@ -301,6 +309,25 @@ func (c *Catalog) SetSplitParent(ctx context.Context, libraryID int64, parents m
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE books SET split_parent = ? WHERE library_id = ? AND rel_path = ?`,
 				parent, libraryID, relPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// SetReleased records, by path, the release date a read of each book's primary
+// file found (the scanner's backfill for rows indexed before migration 0037),
+// marking it checked, in one transaction.
+func (c *Catalog) SetReleased(ctx context.Context, libraryID int64, dates map[string]string) error {
+	if len(dates) == 0 {
+		return nil
+	}
+	return c.db.WithTx(ctx, "SetReleased", func(tx *sql.Tx) error {
+		for relPath, date := range dates {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET released = ?, released_checked = 1 WHERE library_id = ? AND rel_path = ?`,
+				date, libraryID, relPath); err != nil {
 				return err
 			}
 		}

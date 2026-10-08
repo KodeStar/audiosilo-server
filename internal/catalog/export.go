@@ -3,11 +3,12 @@ package catalog
 import (
 	"context"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/kodestar/audiosilo-server/internal/names"
 )
 
 // Library export: a portable, filesystem-free list of the books a library holds.
@@ -148,8 +149,8 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 func exportBook(b *Book, chapters int) ExportBook {
 	return ExportBook{
 		Title:          strings.TrimSpace(b.Title),
-		Authors:        splitNames(b.Author),
-		Narrators:      splitNames(b.Narrator),
+		Authors:        names.Split(b.Author),
+		Narrators:      names.Split(b.Narrator),
 		Series:         strings.TrimSpace(b.Series),
 		SeriesPosition: formatSeriesPosition(b.SeriesIndex),
 		ASIN:           strings.TrimSpace(b.ASIN),
@@ -237,60 +238,6 @@ func formatSeriesPosition(idx float64) string {
 		return ""
 	}
 	return strconv.FormatFloat(idx, 'f', -1, 64)
-}
-
-// nameSeparatorRE matches the joiners that unambiguously separate two
-// contributors in the single Author/Narrator string the index stores. A comma is
-// NOT here: it is ambiguous ("Alexandre Dumas, pere") and is handled separately
-// by splitOnCommas.
-var nameSeparatorRE = regexp.MustCompile(`;|\s+&\s+|\s+and\s+`)
-
-// splitNames turns the catalogue's single Author (or Narrator) string into a list
-// of names, splitting ONLY where the string clearly holds several. Tag data is
-// messy and a wrong split invents a person, so the rule is deliberately shy:
-// unambiguous joiners always split; a comma splits only when every resulting part
-// still looks like a full name (at least two words), which keeps suffixed names
-// such as "Alexandre Dumas, pere" whole. Returns nil for a blank string.
-func splitNames(s string) []string {
-	var out []string
-	for _, chunk := range cleanNameParts(nameSeparatorRE.Split(s, -1)) {
-		out = append(out, splitOnCommas(chunk)...)
-	}
-	return out // nil when the string named nobody
-}
-
-// splitOnCommas splits one already-cleaned chunk on commas, but only when every
-// piece has at least two words - otherwise the comma is part of a single name
-// ("Dumas, pere"; "Doe, John") and the chunk is returned whole.
-func splitOnCommas(p string) []string {
-	pieces := cleanNameParts(strings.Split(p, ","))
-	if len(pieces) < 2 {
-		return []string{p}
-	}
-	for _, piece := range pieces {
-		if len(strings.Fields(piece)) < 2 {
-			return []string{p}
-		}
-	}
-	return pieces
-}
-
-// cleanNameParts trims whitespace and dangling separator punctuation from BOTH
-// ends of each part and drops the empties. Trailing: an "A, B, and C" split
-// leaves a trailing comma. Leading: a half-empty "Last, First" tag arrives as
-// ", Jane Doe", and splitOnCommas keeps such a chunk whole, so an untrimmed
-// leading comma would otherwise be exported as part of the name.
-func cleanNameParts(parts []string) []string {
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimFunc(p, func(r rune) bool {
-			return unicode.IsSpace(r) || r == ';' || r == '&' || r == ','
-		})
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // slugify reduces a library name to a filename-safe slug: lowercase ASCII words
