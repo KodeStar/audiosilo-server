@@ -49,7 +49,11 @@ describe('books: browsing', () => {
 
     const curate = await screen.findByRole('region', { name: 'Continue curating' });
     expect(within(curate).getByText(/a minute of your attention/)).toBeInTheDocument();
-    expect(await within(curate).findByText('No cover')).toBeInTheDocument();
+    // The issue is part of the book's link: a click on it opens the book.
+    expect((await within(curate).findByText('No cover')).closest('a')).toHaveAttribute(
+      'href',
+      expect.stringContaining('/library/book?'),
+    );
     expect(within(curate).getAllByRole('listitem')).toHaveLength(1);
 
     expect(screen.getByRole('heading', { name: 'All books' })).toBeInTheDocument();
@@ -234,6 +238,61 @@ describe('books: search, filters and sort', () => {
     );
   });
 
+  it('opens a series filter in reading order, and keeps a title sort chosen over it', async () => {
+    const calls = mockFetch(bookRoutes());
+    const { router } = renderApp('/library?series=The%20Stormlight%20Archive');
+    const sort = await screen.findByRole('combobox', { name: 'Sort' });
+    expect(sort).toHaveValue('series');
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => isList(c) && c.query.get('sort') === 'series' && c.query.get('order') === 'asc',
+        ),
+      ).toBe(true),
+    );
+    const user = userEvent.setup();
+    // Series chosen over a series filter is kept when the filter goes.
+    await user.selectOptions(sort, 'Recently added');
+    await user.selectOptions(sort, 'Series');
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({
+        series: 'The Stormlight Archive',
+        sort: 'series',
+      }),
+    );
+    await user.selectOptions(sort, 'Title');
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({
+        series: 'The Stormlight Archive',
+        sort: 'title',
+      }),
+    );
+  });
+
+  it("links a tile's author to their books, keeping the library", async () => {
+    mockFetch(bookRoutes());
+    const { router } = renderApp('/library?library=1&q=a');
+    const list = await allBooks();
+    await userEvent.setup().click(await within(list).findByRole('link', { name: 'Martha Wells' }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({ library: 1, author: 'Martha Wells' }),
+    );
+    expect(router.state.location.pathname).toBe('/library');
+  });
+
+  it('toggles the book from its author link while selecting', async () => {
+    mockFetch(bookRoutes());
+    const { router } = renderApp('/library?q=a');
+    const user = userEvent.setup();
+    const list = await allBooks();
+    await user.click(
+      await within(list).findByRole('checkbox', { name: 'Select The Way of Kings' }),
+    );
+    await user.click(within(list).getByRole('link', { name: 'Martha Wells' }));
+    expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('2 selected');
+    expect(router.state.location.search).toEqual({ q: 'a' });
+  });
+
   it('loads the next page when the end of the list is near', async () => {
     const calls = mockFetch(
       bookRoutes(books, {
@@ -271,12 +330,25 @@ describe('books: table', () => {
     expect(within(kings).getByText('m4b ×4')).toBeInTheDocument();
     expect(within(kings).getByText('#1')).toBeInTheDocument();
 
-    // The header checkbox selects every loaded row.
     const user = userEvent.setup();
+    // The author, narrator and series cells link to their books, not to the book.
+    await user.click(within(row).getByRole('link', { name: 'Kevin R. Free' }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({ view: 'table', narrator: 'Kevin R. Free' }),
+    );
+    expect(router.state.location.pathname).toBe('/library');
+    await user.click(screen.getByRole('button', { name: 'Remove Narrator: Kevin R. Free' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ view: 'table' }));
+
+    // The header checkbox selects every loaded row.
     await user.click(within(table).getByRole('checkbox', { name: 'Select all loaded books' }));
     expect(await screen.findByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent(
       '4 selected',
     );
+    // While selecting, a cell's link toggles its row instead of filtering.
+    await user.click(within(row).getByRole('link', { name: 'Kevin R. Free' }));
+    expect(screen.getByRole('toolbar', { name: 'Bulk actions' })).toHaveTextContent('3 selected');
+    expect(router.state.location.search).toEqual({ view: 'table' });
 
     // Grid again, from the view switch.
     await user.click(screen.getByRole('button', { name: 'Cover grid' }));

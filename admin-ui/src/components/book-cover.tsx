@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useCover } from '@/api/hooks';
 import type { ThumbSize } from '@/api/client';
 import { cn } from '@/lib/utils';
@@ -40,7 +41,8 @@ export function BookCover({
 /**
  * A cover from a thumbnail data: URL: a skeleton while `pending`, the procedural
  * cover without one. BookCover feeds it a book's art; the match dialog a
- * community cover the server fetched.
+ * community cover the server fetched. Art that isn't square is shown whole,
+ * over a blurred copy of itself that fills the square.
  */
 export function CoverArt({
   src,
@@ -59,9 +61,26 @@ export function CoverArt({
     return <div className={cn('cover skel', className)} role="img" aria-label={title} />;
   }
   if (!src) return <GeneratedCover title={title} author={author} className={className} />;
+  return <Art key={src} src={src} title={title} className={className} />;
+}
+
+/** Most art is square; only art that isn't gets the blurred fill (a filter layer per cover). */
+function Art({ src, title, className }: { src: string; title: string; className?: string }) {
+  const [letterbox, setLetterbox] = useState(false);
   return (
     <div className={cn('cover', className)}>
-      <img src={src} alt={title} decoding="async" />
+      {letterbox ? (
+        <img className="cover-fill" src={src} alt="" aria-hidden="true" decoding="async" />
+      ) : null}
+      <img
+        src={src}
+        alt={title}
+        decoding="async"
+        onLoad={(e) => {
+          const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+          setLetterbox(Math.abs(w - h) > Math.max(w, h) * 0.02);
+        }}
+      />
     </div>
   );
 }

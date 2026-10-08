@@ -11,11 +11,12 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import type { AdminBook } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
+import { BooksLink } from '@/components/books-link';
 import { PlaybackStatus } from '@/components/playback-status';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { bookRoute, refKey } from '@/lib/book-route';
+import { bookRoute, isBooksField, refKey } from '@/lib/book-route';
 import { formatDuration, formatRelative, seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { LoadingMore, type BookViewProps } from './book-grid';
@@ -273,9 +274,11 @@ const BookRow = memo(function BookRow({
                 aria-label={t('books.tile.select', { title: b.title })}
               />
             ) : id === 'title' ? (
-              <TitleCell book={b} selecting={selecting} onToggle={onToggle} />
+              <TitleCell book={b} selecting={selecting} />
             ) : (
-              <FlexRender cell={cell} />
+              <FilterCell book={b} column={id} selecting={selecting}>
+                <FlexRender cell={cell} />
+              </FilterCell>
             )}
           </td>
         );
@@ -284,16 +287,45 @@ const BookRow = memo(function BookRow({
   );
 });
 
-/** The cover and the title (a link, for the keyboard); on a phone, author and length under it. */
-function TitleCell({
+/**
+ * A link in a row follows itself, not the row's click; while a selection is
+ * active it doesn't, and the click goes on to the row, which toggles the book.
+ */
+function rowLinkClick(e: React.MouseEvent, selecting: boolean) {
+  if (selecting) e.preventDefault();
+  else e.stopPropagation();
+}
+
+/**
+ * A cell's content, as a link to the books it names in the author, narrator
+ * and series columns (none when blank).
+ */
+function FilterCell({
   book: b,
+  column,
   selecting,
-  onToggle,
+  children,
 }: {
   book: AdminBook;
+  column: string;
   selecting: boolean;
-  onToggle: (b: AdminBook) => void;
+  children: React.ReactNode;
 }) {
+  if (!isBooksField(column) || !b[column]) return children;
+  return (
+    <BooksLink
+      field={column}
+      value={b[column]}
+      onClick={(e) => rowLinkClick(e, selecting)}
+      className="hover:text-foreground hover:underline hover:underline-offset-3"
+    >
+      {children}
+    </BooksLink>
+  );
+}
+
+/** The cover and the title (a link, for the keyboard); on a phone, author and length under it. */
+function TitleCell({ book: b, selecting }: { book: AdminBook; selecting: boolean }) {
   const { i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const length = formatDuration(b.duration, lang);
@@ -311,12 +343,7 @@ function TitleCell({
       <span className="flex min-w-0 flex-col">
         <Link
           {...bookRoute(b.library_id, b.path)}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!selecting) return;
-            e.preventDefault();
-            onToggle(b);
-          }}
+          onClick={(e) => rowLinkClick(e, selecting)}
           className="max-w-[320px] truncate font-semibold hover:underline hover:underline-offset-3"
         >
           {b.title}

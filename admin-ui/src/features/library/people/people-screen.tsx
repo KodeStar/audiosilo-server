@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { BookUser, Mic, Search } from 'lucide-react';
 import { usePeople } from '@/api/hooks';
 import type { PersonCount, PersonField } from '@/api/types';
+import { BooksLink } from '@/components/books-link';
 import { EmptyState } from '@/components/empty-state';
 import { Monogram } from '@/components/monogram';
 import { Page } from '@/components/page';
@@ -122,7 +123,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
           ) : field === 'author' ? (
             <ul className="shelf-grid" aria-label={t(`${ns}.title`)}>
               {shown.map((p) => (
-                <AuthorTile key={p.name} person={p} library={library} />
+                <AuthorTile key={p.name} person={p} />
               ))}
             </ul>
           ) : (
@@ -131,7 +132,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
               aria-label={t(`${ns}.title`)}
             >
               {shown.map((p) => (
-                <NarratorCard key={p.name} person={p} library={library} />
+                <NarratorCard key={p.name} person={p} />
               ))}
             </ul>
           )}
@@ -158,16 +159,11 @@ function useStats(p: PersonCount, narrated: boolean) {
   return t(narrated ? 'credits.statsNarrated' : 'credits.stats', { books, time });
 }
 
-function AuthorTile({ person: p, library }: { person: PersonCount; library?: number }) {
+function AuthorTile({ person: p }: { person: PersonCount }) {
   const stats = useStats(p, false);
   return (
     <li className="min-w-0">
-      <Link
-        to="/library/{-$section}"
-        params={{ section: undefined }}
-        search={{ author: p.name, library }}
-        className="tile items-center rounded-xl text-center"
-      >
+      <BooksLink field="author" value={p.name} className="tile items-center rounded-xl text-center">
         <span className="cover-wrap w-full max-w-[148px] rounded-full">
           <Monogram
             name={p.name}
@@ -181,19 +177,18 @@ function AuthorTile({ person: p, library }: { person: PersonCount; library?: num
           </span>
           <span className="text-[12.5px] text-muted-foreground tabular-nums">{stats}</span>
         </span>
-      </Link>
+      </BooksLink>
     </li>
   );
 }
 
-function NarratorCard({ person: p, library }: { person: PersonCount; library?: number }) {
+function NarratorCard({ person: p }: { person: PersonCount }) {
   const stats = useStats(p, true);
   return (
     <li className="min-w-0">
-      <Link
-        to="/library/{-$section}"
-        params={{ section: undefined }}
-        search={{ narrator: p.name, library }}
+      <BooksLink
+        field="narrator"
+        value={p.name}
         className="flex h-full items-center gap-3.5 rounded-xl border bg-card p-4 text-left transition-colors duration-(--dur-1) hover:border-border-strong md:px-5"
       >
         <span
@@ -208,7 +203,7 @@ function NarratorCard({ person: p, library }: { person: PersonCount; library?: n
           </b>
           <span className="text-[12.5px] text-muted-foreground tabular-nums">{stats}</span>
         </span>
-      </Link>
+      </BooksLink>
     </li>
   );
 }

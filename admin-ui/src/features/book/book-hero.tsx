@@ -21,8 +21,9 @@ import {
 } from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidateBookCover, rescanBook, useLibraries, useServerInfo } from '@/api/hooks';
-import type { AdminBookDetail } from '@/api/types';
+import type { AdminBook, AdminBookDetail } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
+import { BooksLink } from '@/components/books-link';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -34,7 +35,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { copyText } from '@/lib/clipboard';
 import { toastError } from '@/lib/errors';
-import { formatBytes, formatDuration, formatRelative } from '@/lib/format';
+import { formatBytes, formatDuration, formatNumber, formatRelative } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -66,13 +67,6 @@ export function BookHero({
   const caps = server.data?.capabilities;
   const library = useLibraries().data?.find((l) => l.id === b.library_id);
   const tint = useHeroTint(b.library_id, b.path, b.title, b.author);
-  // The eyebrow: the series and position, else the library.
-  const eyebrow = !b.series
-    ? b.library_name
-    : b.series_index > 0
-      ? t('book.hero.seriesBook', { series: b.series, n: String(b.series_index) })
-      : b.series;
-
   const style = tint
     ? ({ '--tint1': tint.tint1, '--tint2': tint.tint2, '--glow': tint.glow } as React.CSSProperties)
     : undefined;
@@ -114,7 +108,7 @@ export function BookHero({
         </div>
         <div className="flex min-w-0 flex-col">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="eyebrow">{eyebrow}</span>
+            <span className="eyebrow">{b.library_name}</span>
             {library && !library.available ? (
               <Badge variant="destructive">
                 <Unplug aria-hidden="true" />
@@ -128,7 +122,7 @@ export function BookHero({
           >
             {b.title}
           </h1>
-          <Byline author={b.author} narrator={b.narrator} />
+          <Byline book={b} lang={lang} />
           <ul className="mt-4 flex flex-wrap gap-x-[18px] gap-y-1.5 text-[13px] text-muted-foreground tabular-nums">
             {facts.map(({ icon: Icon, label, tone }) => (
               <li key={label} className={cn('inline-flex items-center gap-1.5', tone)}>
@@ -158,18 +152,35 @@ export function BookHero({
   );
 }
 
-function Byline({ author, narrator }: { author: string; narrator: string }) {
-  const name = <b className="font-[650] text-foreground" />;
-  if (!author && !narrator) return null;
+/** "by <author> · read by <narrator> · book n in <series>", each name a link to its books. */
+function Byline({ book: b, lang }: { book: AdminBook; lang: string }) {
+  const credits = [
+    ['author', 'book.hero.by'],
+    ['narrator', 'book.hero.readBy'],
+    ['series', b.series_index > 0 ? 'book.hero.inSeriesBook' : 'book.hero.inSeries'],
+  ] as const;
+  const parts = credits
+    .filter(([field]) => b[field])
+    .map(([field, key]) => (
+      <Trans
+        key={field}
+        i18nKey={key}
+        values={{ [field]: b[field], n: formatNumber(b.series_index, lang) }}
+        components={{
+          b: (
+            <BooksLink
+              field={field}
+              value={b[field]}
+              className="font-[650] text-foreground underline-offset-3 hover:underline"
+            />
+          ),
+        }}
+      />
+    ));
+  if (!parts.length) return null;
   return (
     <p className="text-[15px] text-muted-foreground md:text-[17px]">
-      {author ? (
-        <Trans i18nKey="book.hero.by" values={{ author }} components={{ b: name }} />
-      ) : null}
-      {author && narrator ? ' · ' : null}
-      {narrator ? (
-        <Trans i18nKey="book.hero.readBy" values={{ narrator }} components={{ b: name }} />
-      ) : null}
+      {parts.map((part, i) => (i ? [' · ', part] : part))}
     </p>
   );
 }

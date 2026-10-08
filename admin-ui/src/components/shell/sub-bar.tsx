@@ -3,6 +3,7 @@ import { Link, useMatch, useParams, useRouterState } from '@tanstack/react-route
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useAdminBook, useLibraries, useUser } from '@/api/hooks';
+import { BooksLink } from '@/components/books-link';
 import { buttonVariants } from '@/components/ui/button';
 import { segmentClass, segmentTrack } from '@/components/ui/segment-classes';
 import { cn } from '@/lib/utils';
@@ -164,14 +165,9 @@ function BookTrail({ libraryId, path }: { libraryId: number; path: string }) {
         <>
           {sep(false)}
           <li className="hidden min-w-0 md:block">
-            <Link
-              to="/library/{-$section}"
-              params={{ section: undefined }}
-              search={{ author: book.author }}
-              className={crumb}
-            >
+            <BooksLink field="author" value={book.author} className={crumb}>
               {book.author}
-            </Link>
+            </BooksLink>
           </li>
         </>
       ) : null}

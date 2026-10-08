@@ -461,11 +461,18 @@
     background: var(--muted);
     box-shadow: var(--shadow-cover);
   }
+  /* The art whole (not every cover is square), over a blurred copy filling the square. */
   .cover > img {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
+    object-fit: contain;
+  }
+  .cover > img.cover-fill {
     object-fit: cover;
-    display: block;
+    filter: blur(6cqw) saturate(1.2);
+    transform: scale(1.2);
   }
   /* Spine crease + gloss over real and generated art (not skeletons). */
   .cover:not(.skel)::before {
@@ -730,6 +737,13 @@
     aspect-ratio: auto;
     border-radius: 0;
     box-shadow: none;
+  }
+  /* Blurred to a wash anyway: the art fills it, with no letterbox. */
+  .hero-backdrop .cover > img {
+    object-fit: cover;
+  }
+  .hero-backdrop .cover > img.cover-fill {
+    display: none;
   }
   .hero::before {
     content: '';
