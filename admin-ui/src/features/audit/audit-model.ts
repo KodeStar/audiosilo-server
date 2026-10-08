@@ -1,4 +1,5 @@
 import type { AuditEvent } from '@/api/types';
+import { moreSeriesText } from '@/features/book/more-series';
 import { describeSchedule } from '@/features/settings/backups-model';
 
 // Server > Audit log: an admin action's code and facts (catalog.AuditEvent) as
@@ -96,7 +97,11 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
       for (const [field, value] of Object.entries(v as Record<string, unknown>)) {
         out.push({
           label: t(`book.field.${field}`, { defaultValue: field }),
-          value: valueText(value, t, fmt),
+          // more_series is stored as JSON: shown as the line it is edited as.
+          value:
+            field === 'more_series' && typeof value === 'string'
+              ? valueText(moreSeriesText(value), t, fmt)
+              : valueText(value, t, fmt),
         });
       }
       continue;

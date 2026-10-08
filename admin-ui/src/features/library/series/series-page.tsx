@@ -8,11 +8,13 @@ import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
 import { QueryError } from '@/components/query-error';
 import { Button, buttonVariants } from '@/components/ui/button';
+import type { SeriesCount } from '@/api/types';
 import { counted } from '@/lib/format';
 import { LibraryFilter } from '../library-filter';
 import { useLibraryBookCount, useLibraryParam } from '../library-param';
 import { SeriesCard } from './series-card';
 import { CARD_STEP, groupSeriesPages } from './series-model';
+import { useInView } from './use-in-view';
 
 /**
  * Library > Series: one card per series with its books as spines. The books
@@ -41,7 +43,10 @@ export function SeriesPage() {
   const list = series.data ?? [];
   const shown = list.slice(0, limit);
   const has = (name: string) => bySeries.get(name)?.length ?? 0;
-  const needMore = loaded && !done && shown.some((s) => has(s.name) < s.books);
+  // The series-sorted list holds each book under its main series only, so a
+  // series some books are in beyond it loads its own (MembersCard).
+  const needMore =
+    loaded && !done && shown.some((s) => s.extra_books === 0 && has(s.name) < s.books);
 
   const { fetchNextPage, isFetchingNextPage, isError: booksFailed } = books;
   useEffect(() => {
@@ -116,15 +121,19 @@ export function SeriesPage() {
               onRetry={() => void books.refetch()}
             />
           ) : null}
-          {shown.map((s) => (
-            <SeriesCard
-              key={s.name}
-              series={s}
-              books={bySeries.get(s.name) ?? []}
-              complete={loaded && (done || has(s.name) >= s.books)}
-              metadata={metadata}
-            />
-          ))}
+          {shown.map((s) =>
+            s.extra_books > 0 ? (
+              <MembersCard key={s.name} series={s} library={library} metadata={metadata} />
+            ) : (
+              <SeriesCard
+                key={s.name}
+                series={s}
+                books={bySeries.get(s.name) ?? []}
+                complete={loaded && (done || has(s.name) >= s.books)}
+                metadata={metadata}
+              />
+            ),
+          )}
           {rest > 0 ? (
             <div className="mt-4 flex justify-center">
               <Button variant="outline" onClick={() => setLimit((n) => n + CARD_STEP)}>
@@ -135,5 +144,54 @@ export function SeriesPage() {
         </div>
       )}
     </Page>
+  );
+}
+
+/**
+ * A series some books are in beyond their main series: its card, with the books
+ * the series= filter finds (every member, in their order in this series), paged
+ * in full.
+ */
+function MembersCard({
+  series: s,
+  library,
+  metadata,
+}: {
+  series: SeriesCount;
+  library: number | undefined;
+  metadata: boolean;
+}) {
+  const { t } = useTranslation();
+  // Asked for once the card nears the viewport, like the cards' community rails.
+  const [ref, seen] = useInView<HTMLDivElement>();
+  const query = useAdminBooks(
+    { series: s.name, sort: 'series', limit: 200, library_id: library },
+    seen,
+  );
+  const { hasNextPage, isFetchingNextPage, isError, fetchNextPage } = query;
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage && !isError) void fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, isError, fetchNextPage]);
+  const loaded = !!query.data && !query.isPlaceholderData;
+  // In order already: the server sorts a series filter by position in it.
+  const pages = loaded ? query.data!.pages : undefined;
+  const books = useMemo(() => (pages ?? []).flatMap((p) => p.books), [pages]);
+  return (
+    <div ref={ref}>
+      {isError && !loaded ? (
+        <QueryError
+          title={t('series.booksError')}
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      ) : (
+        <SeriesCard
+          series={s}
+          books={books}
+          complete={loaded && (!hasNextPage || isError)}
+          metadata={metadata}
+        />
+      )}
+    </div>
   );
 }

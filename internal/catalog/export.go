@@ -152,7 +152,7 @@ func exportBook(b *Book, chapters int) ExportBook {
 		Authors:        names.Split(b.Author),
 		Narrators:      names.Split(b.Narrator),
 		Series:         strings.TrimSpace(b.Series),
-		SeriesPosition: formatSeriesPosition(b.SeriesIndex),
+		SeriesPosition: FormatSeriesPosition(b.SeriesIndex),
 		ASIN:           strings.TrimSpace(b.ASIN),
 		ISBN:           strings.TrimSpace(b.ISBN),
 		RuntimeMin:     runtimeMinutes(b.Duration),
@@ -230,10 +230,10 @@ func runtimeMinutes(seconds float64) int {
 	return int(math.Round(seconds / 60))
 }
 
-// formatSeriesPosition renders the float series index the way a reader writes it:
+// FormatSeriesPosition renders the float series index the way a reader writes it:
 // "2" for 2.0, "2.5" for a novella between books. Zero means "no position" and
 // renders as "" so the field is omitted.
-func formatSeriesPosition(idx float64) string {
+func FormatSeriesPosition(idx float64) string {
 	if idx == 0 || math.IsNaN(idx) || math.IsInf(idx, 0) {
 		return ""
 	}

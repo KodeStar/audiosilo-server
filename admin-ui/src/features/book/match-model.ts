@@ -8,6 +8,7 @@ import {
   type OverrideField,
 } from '@/api/types';
 import type { MatchBy } from '@/api/client';
+import { seriesKey } from '@/features/library/series/series-model';
 import { ISBN, checkField } from './book-model';
 
 // The match dialog's logic (STYLEGUIDE.md "Match with community"): what the
@@ -48,12 +49,22 @@ export function candidateAuthors(c: MatchCandidate): string {
   return (c.authors ?? []).map((a) => a.name).join(', ');
 }
 
-/** What the community says for each field, from the work and the chosen recording. */
+/**
+ * What the community says for each field, from the work and the chosen recording.
+ * A work in several series offers one as the main series - the one the book is
+ * filed under (`mainSeries`) when the work is in it, else the work's first - and
+ * the rest as the book's other series (as matchrun.planSeries does).
+ */
 export function communityValues(
   c: MatchCandidate,
   rec: MatchRecording | undefined,
+  mainSeries = '',
 ): Record<OverrideField, string> {
-  const series = c.series?.[0];
+  const all = c.series ?? [];
+  const key = seriesKey(mainSeries);
+  const series = (key && all.find((s) => seriesKey(s.name) === key)) || all[0];
+  // The others: a work listed again in its main series isn't another series.
+  const others = series ? all.filter((s) => seriesKey(s.name) !== seriesKey(series.name)) : [];
   const year = (c.first_published || rec?.release_date || '').match(/^\d{4}/)?.[0];
   return {
     title: clean('title', c.title),
@@ -61,11 +72,19 @@ export function communityValues(
     narrator: clean('narrator', (rec?.narrators ?? []).map((n) => n.name).join(', ')),
     series: clean('series', series?.name),
     series_index: clean('series_index', series?.position),
+    more_series: clean('more_series', otherSeries(others)),
     published: clean('published', year),
     description: clean('description', c.description),
     asin: clean('asin', rec?.asins?.[0]),
     isbn: clean('isbn', rec?.isbns?.[0]),
   };
+}
+
+/** Community series as a more_series value (a position that is no plain number is none). */
+function otherSeries(series: { name: string; position: string }[]): string {
+  return JSON.stringify(
+    series.map((s) => ({ name: s.name, position: Number(clean('series_index', s.position)) || 0 })),
+  );
 }
 
 /** One row of the compare table. */
@@ -85,7 +104,7 @@ export function compareRows(
   c: MatchCandidate,
   rec: MatchRecording | undefined,
 ): CompareRow[] {
-  const theirs = communityValues(c, rec);
+  const theirs = communityValues(c, rec, fields.series.value);
   return OVERRIDE_FIELDS.map((f) => {
     const mine = fields[f].value;
     const same = !!theirs[f] && clean(f, mine) === theirs[f];
@@ -124,10 +143,27 @@ export function defaultTicks(rows: CompareRow[]): Set<OverrideField> {
   return new Set(rows.filter((r) => r.offered && r.source !== 'edited').map((r) => r.field));
 }
 
-/** The PATCH that accepts the ticked fields from the community. */
+/**
+ * The PATCH that accepts the ticked fields from the community. Keeping the book's
+ * own series over the one offered (Series unticked) keeps the series together as
+ * matchrun.planSeries does: the offered position, which numbers the offered
+ * series, isn't taken. The offered series isn't added as another either: a
+ * series the community doesn't list is most likely the offered one spelled the
+ * book's own way. Unticking only a respelling of the book's own series changes
+ * nothing.
+ */
 export function acceptRequest(rows: CompareRow[], ticks: Set<OverrideField>): BookEditRequest {
   const set: Partial<Record<OverrideField, string>> = {};
   for (const r of rows) if (r.offered && ticks.has(r.field)) set[r.field] = r.theirs;
+  const row = (f: OverrideField) => rows.find((r) => r.field === f);
+  const series = row('series');
+  if (
+    series?.offered &&
+    !ticks.has('series') &&
+    seriesKey(series.theirs) !== seriesKey(series.mine)
+  ) {
+    delete set.series_index;
+  }
   return { set, source: 'community' };
 }
 

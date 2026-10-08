@@ -76,11 +76,90 @@ describe('compare', () => {
       narrator: 'Michael Kramer, Kate Reading',
       series: 'The Stormlight Archive',
       series_index: '1',
+      more_series: '',
       published: '2010',
       description: 'Roshar is a world of stone and storms.',
       asin: 'B003P2WO5E',
       isbn: '',
     });
+  });
+
+  it('offers a work in several series as one main series and the rest', () => {
+    const watch = 'Discworld: Ankh-Morpork City Watch';
+    const c = candidate({
+      series: [
+        { name: 'Discworld', position: '8' },
+        { name: watch, position: '1' },
+        { name: 'Omnibus', position: '1-3' },
+      ],
+    });
+    // No main series yet: the work's first.
+    expect(communityValues(c, undefined)).toMatchObject({
+      series: 'Discworld',
+      series_index: '8',
+      more_series: `[{"name":"${watch}","position":1},{"name":"Omnibus","position":0}]`,
+    });
+    // Filed under City Watch: that one, numbered as City Watch numbers it.
+    expect(communityValues(c, undefined, 'discworld: ankh-morpork city watch')).toMatchObject({
+      series: watch,
+      series_index: '1',
+      more_series: '[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]',
+    });
+  });
+
+  it('keeps the book series together when its own series is kept', () => {
+    const detail = bookDetail();
+    detail.fields.series = { ...detail.fields.series, value: 'Red Planet' };
+    detail.fields.series_index = { ...detail.fields.series_index, value: '' };
+    const c = candidate({
+      series: [
+        { name: 'Discworld', position: '8' },
+        { name: 'City Watch', position: '1' },
+      ],
+    });
+    const rows = compareRows(detail.fields, c, recording());
+    const ticks = defaultTicks(rows);
+    ticks.delete('series');
+    // Discworld's #8 isn't put beside Red Planet, nor Discworld itself (Red Planet
+    // may be it, spelled otherwise); the work's other series are still added.
+    const { set } = acceptRequest(rows, ticks);
+    expect(set?.series_index).toBeUndefined();
+    expect(set?.more_series).toBe('[{"name":"City Watch","position":1}]');
+  });
+
+  it("doesn't add the offered series beside the book's own when it is kept", () => {
+    // The book's "Stormlight Archive" is most likely the offered series spelled
+    // its own way: nothing to add beside it.
+    const detail = bookDetail();
+    detail.fields.series = { ...detail.fields.series, value: 'Stormlight Archive' };
+    const rows = compareRows(detail.fields, candidate(), recording());
+    const ticks = defaultTicks(rows);
+    ticks.delete('series');
+    const { set } = acceptRequest(rows, ticks);
+    expect(set?.series_index).toBeUndefined();
+    expect(set?.more_series).toBeUndefined();
+  });
+
+  it('keeps the position when only a respelling of the own series is declined', () => {
+    const detail = bookDetail();
+    detail.fields.series = { ...detail.fields.series, value: 'the stormlight archive' };
+    detail.fields.series_index = { ...detail.fields.series_index, value: '' };
+    const rows = compareRows(detail.fields, candidate(), recording());
+    const ticks = defaultTicks(rows);
+    ticks.delete('series');
+    const { set } = acceptRequest(rows, ticks);
+    expect(set?.series_index).toBe('1');
+    expect(set?.more_series).toBeUndefined();
+  });
+
+  it('lists a work once per series, at its first position', () => {
+    const c = candidate({
+      series: [
+        { name: 'Discworld', position: '8' },
+        { name: 'Discworld', position: '8.5' },
+      ],
+    });
+    expect(communityValues(c, undefined)).toMatchObject({ series_index: '8', more_series: '' });
   });
 
   it('drops values the server would refuse (a range as a series position)', () => {

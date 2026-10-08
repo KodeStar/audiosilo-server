@@ -18,7 +18,7 @@ import {
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { checkField, diffRows, saveRequest, type Drafts } from './book-model';
+import { checkField, diffRows, displayValue, saveRequest, type Drafts } from './book-model';
 
 /**
  * The floating save bar (STYLEGUIDE.md "Save bar"): how many edits are waiting,
@@ -164,8 +164,8 @@ function DiffBody({
                 <ProvenanceMarker source="edited" />
               </span>
             </div>
-            <DiffValue kind="before" value={r.before} />
-            <DiffValue kind="after" value={r.after} />
+            <DiffValue kind="before" value={displayValue(r.field, r.before)} />
+            <DiffValue kind="after" value={displayValue(r.field, r.after)} />
           </div>
         ))}
       </DialogBody>

@@ -12,6 +12,8 @@ import {
   type OverrideField,
 } from '@/api/types';
 import type { Phrase } from '@/lib/phrase';
+import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER } from './field-rules';
+import { moreSeriesText, parseMoreSeries } from './more-series';
 
 // The book page's logic, kept out of the components so it is unit-tested: field
 // validation (the server's normalizeOverride rules, so a value is refused here
@@ -27,16 +29,10 @@ export interface FieldCheck {
   error?: string;
 }
 
-const MAX_SHORT = 500;
 const MAX_DESCRIPTION = 20000;
-const MAX_SERIES_INDEX = 100000;
-// unicode.IsControl: C0, DEL and C1.
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 // A description keeps line breaks and tabs.
 // eslint-disable-next-line no-control-regex
 const CONTROL_IN_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
-const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const PUBLISHED = /^\d{4}(-\d{2}(-\d{2})?)?$/;
 const ASIN = /^[A-Z0-9]{10}$/;
 /** An ISBN-10 or ISBN-13, upper case, without hyphens or spaces. */
@@ -79,6 +75,8 @@ export function checkField(field: OverrideField, raw: string): FieldCheck {
       // formatSeriesPosition: 0 is no position.
       return { value: n === 0 ? '' : String(n) };
     }
+    case 'more_series':
+      return parseMoreSeries(v);
     case 'published':
       if (!v) return { value: '' };
       if (!PUBLISHED.test(v) || !realDate(v)) return { value: v, error: 'book.invalid.published' };
@@ -94,9 +92,15 @@ export function checkField(field: OverrideField, raw: string): FieldCheck {
   }
 }
 
+/** A stored value as it is shown and edited: more_series as its line, the rest as they are. */
+export function displayValue(field: OverrideField, value: string): string {
+  return field === 'more_series' ? moreSeriesText(value) : value;
+}
+
 /**
- * The drafts after a field is committed: typing the saved value back (as the
- * server would store it) drops the draft, so the save bar counts real changes.
+ * The drafts after a field is committed: leaving the value as it was shown, or
+ * typing the saved value back (as the server would store it), drops the draft,
+ * so the save bar counts real changes.
  */
 export function commitDraft(
   drafts: Drafts,
@@ -106,7 +110,11 @@ export function commitDraft(
 ): Drafts {
   const next = { ...drafts };
   const check = checkField(field, raw);
-  if (raw === current || (!check.error && check.value === current)) delete next[field];
+  const unchanged =
+    raw === current ||
+    raw === displayValue(field, current) ||
+    (!check.error && check.value === current);
+  if (unchanged) delete next[field];
   else next[field] = raw;
   return next;
 }

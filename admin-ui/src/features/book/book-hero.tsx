@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { Fragment, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidateBookCover, rescanBook, useLibraries, useServerInfo } from '@/api/hooks';
-import type { AdminBook, AdminBookDetail } from '@/api/types';
+import type { AdminBook, AdminBookDetail, SeriesRef } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { BooksLink } from '@/components/books-link';
 import type { BooksField } from '@/lib/book-route';
@@ -161,34 +161,52 @@ export function BookHero({
 
 /**
  * "by <author> · read by <narrator> · book n in <series>", each person (a
- * co-credit's too) and the series a link to their books.
+ * co-credit's too) and each series (a book can be in several: "book 8 in
+ * Discworld and book 1 in City Watch") a link to their books.
  */
 function Byline({ book: b, lang }: { book: AdminBook; lang: string }) {
-  const credits = [
+  const people = [
     ['author', 'book.hero.by', b.authors],
     ['narrator', 'book.hero.readBy', b.narrators],
-    [
-      'series',
-      b.series_index > 0 ? 'book.hero.inSeriesBook' : 'book.hero.inSeries',
-      b.series ? [b.series] : [],
-    ],
   ] as const;
   // A credit naming nobody (blank, or only a joiner such as ",") says nothing.
-  const parts = credits
+  const parts = people
     .filter(([, , names]) => names.length > 0)
     .map(([field, key, names]) => (
       <Trans
         key={field}
         i18nKey={key}
-        values={{ [field]: b[field], n: formatNumber(b.series_index, lang) }}
+        values={{ [field]: b[field] }}
         components={{ b: <NameLinks field={field} names={names} lang={lang} /> }}
       />
     ));
+  if (b.series_list.length) {
+    parts.push(<SeriesCredits key="series" series={b.series_list} lang={lang} />);
+  }
   if (!parts.length) return null;
   return (
     <p className="text-[15px] text-muted-foreground md:text-[17px]">
       {parts.map((part, i) => (i ? [' · ', part] : part))}
     </p>
+  );
+}
+
+/** "book 8 in Discworld and book 1 in City Watch": each series, listed the language's way. */
+function SeriesCredits({ series, lang }: { series: SeriesRef[]; lang: string }) {
+  const one = (s: SeriesRef) => (
+    <Trans
+      i18nKey={s.position > 0 ? 'book.hero.inSeriesBook' : 'book.hero.inSeries'}
+      values={{ series: s.name, n: formatNumber(s.position, lang) }}
+      components={{ b: <NameLinks field="series" names={[s.name]} lang={lang} /> }}
+    />
+  );
+  // The list's joiners, each item its series' phrase in turn.
+  let i = 0;
+  return formatListParts(
+    series.map((s) => s.name),
+    lang,
+  ).map((p, k) =>
+    p.type === 'element' ? <Fragment key={k}>{one(series[i++])}</Fragment> : p.value,
   );
 }
 

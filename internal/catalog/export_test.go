@@ -24,8 +24,8 @@ func TestFormatSeriesPosition(t *testing.T) {
 		{1.25, "1.25"},
 	}
 	for _, tc := range cases {
-		if got := formatSeriesPosition(tc.in); got != tc.want {
-			t.Errorf("formatSeriesPosition(%v) = %q, want %q", tc.in, got, tc.want)
+		if got := FormatSeriesPosition(tc.in); got != tc.want {
+			t.Errorf("FormatSeriesPosition(%v) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

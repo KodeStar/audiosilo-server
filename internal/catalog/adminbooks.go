@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/names"
@@ -40,7 +39,11 @@ type AdminBook struct {
 	Narrators   []string `json:"narrators"`
 	Series      string   `json:"series"`
 	SeriesIndex float64  `json:"series_index"`
-	Published   string   `json:"published"`
+	// SeriesList is every series the book is in, the main one (Series) first,
+	// with its position in each (see FieldMoreSeries).
+	SeriesList []SeriesRef `json:"series_list"`
+	moreSeries string
+	Published  string `json:"published"`
 	// Released is the tags' date (Book.Released), for the release-date sort.
 	Released       string  `json:"-"`
 	Duration       float64 `json:"duration"`
@@ -139,7 +142,7 @@ const (
 var directPlayableExpr = media.DirectPlayableSQL("b.codec")
 
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.author,
-	b.narrator, b.series, b.series_index, b.published, b.released, b.duration, b.format, b.codec, ` +
+	b.narrator, b.series, b.series_index, b.more_series, b.published, b.released, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
 	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
 	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0), ` +
@@ -166,23 +169,23 @@ func scanAdminBook(rows *sql.Rows, b *AdminBook) error {
 // co-credit ("Jane Doe; ???") too, so its filter must find it there.
 func creditFilter(prefix, field, value string) (string, []any) {
 	col := prefix + field
-	if !strings.ContainsFunc(value, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+	phrase, ok := ftsPhrase(value)
+	if !ok {
 		return "credit_has(" + col + ", ?)", []any{value}
 	}
-	phrase := `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 	return prefix + "id IN (SELECT rowid FROM books_fts WHERE " + field + " MATCH ?) AND credit_has(" + col + ", ?)",
 		[]any{phrase, value}
 }
 
 // adminBookDest returns the scan destinations for adminBookCols, in order;
 // finish, called after the scan, derives what the row carries beyond its
-// columns: Authors and Narrators from Author and Narrator (never nil, so the wire
-// carries [] for a blank credit) and CoverColor, when the stored colour is for
-// the current art.
+// columns: Authors and Narrators from Author and Narrator and SeriesList from the
+// series columns (never nil, so the wire carries [] for none), and CoverColor,
+// when the stored colour is for the current art.
 func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 	var art, color string
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
-			&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
+			&b.Narrator, &b.Series, &b.SeriesIndex, &b.moreSeries, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
 			&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
 			&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
 			&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck,
@@ -190,6 +193,7 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 		func() {
 			b.Authors = append([]string{}, creditNames(b.Author)...)
 			b.Narrators = append([]string{}, creditNames(b.Narrator)...)
+			b.SeriesList = seriesList(b.Series, b.SeriesIndex, b.moreSeries)
 			b.CoverColor, _ = storedCoverColor(art, color)
 		}
 }
@@ -200,7 +204,7 @@ type BookFilter struct {
 	LibraryID      int64
 	Query          string // full-text, over title/author/series/narrator
 	Author         string // the whole effective value, or exactly one person it names (creditFilter)
-	Series         string // exact effective value
+	Series         string // exactly the main series, or one more_series names (seriesFilter)
 	Narrator       string // as Author
 	Formats        []string
 	Codecs         []string
@@ -260,7 +264,16 @@ func (f BookFilter) where(skip string) (string, []any) {
 		}
 	}
 	if f.LibraryID != 0 && skip != facetLibrary {
-		add("b.library_id = ?", f.LibraryID)
+		// With an author, narrator or series filter the full-text index finds a
+		// handful of candidates; a plain library term would have SQLite walk the
+		// whole library by its library index instead (the unary + rules it out).
+		// A value with no phrase to match isn't looked up there, so the library
+		// index stays the way in.
+		if hasFTSPhrase(f.Author) || hasFTSPhrase(f.Narrator) || hasFTSPhrase(f.Series) {
+			add("+b.library_id = ?", f.LibraryID)
+		} else {
+			add("b.library_id = ?", f.LibraryID)
+		}
 	}
 	if f.Query != "" {
 		// Punctuation-only input has no terms; it filters nothing rather than all.
@@ -273,7 +286,8 @@ func (f BookFilter) where(skip string) (string, []any) {
 		add(cond, a...)
 	}
 	if f.Series != "" {
-		add("b.series = ?", f.Series)
+		cond, a := seriesFilter("b.", f.Series)
+		add(cond, a...)
 	}
 	if f.Narrator != "" {
 		cond, a := creditFilter("b.", "narrator", f.Narrator)
@@ -330,16 +344,22 @@ func textKey(col string, val func(AdminBook) string) sortKey {
 // flips every key, so there it keys on the opposite test ("not blank"), which
 // keeps the whole ordering one direction for the keyset comparison.
 func blankLast(col string, val func(AdminBook) string) sortKey {
-	is := func(blank bool) func(AdminBook) any {
+	return lastWhen(col+" = ''", func(b AdminBook) bool { return val(b) == "" })
+}
+
+// lastWhen sorts the rows where test (SQL, isLast in Go) holds after the rest,
+// in either direction (see blankLast).
+func lastWhen(test string, isLast func(AdminBook) bool) sortKey {
+	is := func(last bool) func(AdminBook) any {
 		return func(b AdminBook) any {
-			if (val(b) == "") == blank {
+			if isLast(b) == last {
 				return 1
 			}
 			return 0
 		}
 	}
-	desc := sortKey{expr: "(" + col + " <> '')", num: true, val: is(false)}
-	return sortKey{expr: "(" + col + " = '')", num: true, val: is(true), desc: &desc}
+	desc := sortKey{expr: "(NOT (" + test + "))", num: true, val: is(false)}
+	return sortKey{expr: "(" + test + ")", num: true, val: is(true), desc: &desc}
 }
 
 // directed returns the keys of an ordering for its direction: in a descending
@@ -427,6 +447,10 @@ func (c *Catalog) ListAdminBooks(ctx context.Context, opt AdminListOptions) (*Ad
 	keys, ok := adminSorts[opt.Sort]
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSort, opt.Sort)
+	}
+	if opt.Sort == "series" && opt.Filter.Series != "" {
+		// One series' books, in their order in that series (not their main one's).
+		keys = seriesOrderKeys(opt.Filter.Series)
 	}
 	keys = directed(keys, opt.Desc)
 	if opt.Limit <= 0 || opt.Limit > 200 {
@@ -815,15 +839,28 @@ type SeriesCount struct {
 	Books     int       `json:"books"`
 	Duration  float64   `json:"duration"`
 	Positions []float64 `json:"positions"` // distinct non-zero positions, ascending
+	// ExtraBooks is how many of Books are in it beyond their main series (through
+	// more_series); 0 without memberships.
+	ExtraBooks int `json:"extra_books"`
 }
 
 // Series aggregates the series of one library (or all, libraryID 0) within scope
 // (nil = every book): books, the positions held (so the console can mark gaps
-// against community series data) and the dominant author.
-func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope) ([]SeriesCount, error) {
+// against community series data) and the dominant author. With memberships a book
+// counts in every series it is in (its more_series too), at its position there;
+// without, only in its main series (what a client that places books by
+// series_index can show).
+func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, memberships bool) ([]SeriesCount, error) {
 	frag, fargs := aggregateScope(scope)
-	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(`SELECT series, author, series_index, duration FROM books
-		  WHERE series <> '' AND (? = 0 OR library_id = ?) AND %s`, frag),
+	// Without memberships, only main series: the narrower query of the books
+	// that have one, with no list to read.
+	q := `SELECT series, author, series_index, '[]', duration FROM books
+		  WHERE series <> '' AND (? = 0 OR library_id = ?) AND %s`
+	if memberships {
+		q = `SELECT series, author, series_index, more_series, duration FROM books
+		  WHERE (series <> '' OR more_series <> '[]') AND (? = 0 OR library_id = ?) AND %s`
+	}
+	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(q, frag),
 		append([]any{libraryID, libraryID}, fargs...)...)
 	if err != nil {
 		return nil, err
@@ -836,24 +873,29 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope) ([]
 	}
 	bySeries := map[string]*acc{}
 	for rows.Next() {
-		var name, author string
+		var series, author, more string
 		var idx, dur float64
-		if err := rows.Scan(&name, &author, &idx, &dur); err != nil {
+		if err := rows.Scan(&series, &author, &idx, &more, &dur); err != nil {
 			return nil, err
 		}
-		a := bySeries[name]
-		if a == nil {
-			a = &acc{SeriesCount: SeriesCount{Name: name, Positions: []float64{}}, authors: map[string]int{}, pos: map[float64]bool{}}
-			bySeries[name] = a
-		}
-		a.Books++
-		a.Duration += dur
-		if author != "" {
-			a.authors[author]++
-		}
-		if idx > 0 && !a.pos[idx] {
-			a.pos[idx] = true
-			a.Positions = append(a.Positions, idx)
+		for _, s := range seriesList(series, idx, more) {
+			a := bySeries[s.Name]
+			if a == nil {
+				a = &acc{SeriesCount: SeriesCount{Name: s.Name, Positions: []float64{}}, authors: map[string]int{}, pos: map[float64]bool{}}
+				bySeries[s.Name] = a
+			}
+			a.Books++
+			a.Duration += dur
+			if s.Name != series {
+				a.ExtraBooks++
+			}
+			if author != "" {
+				a.authors[author]++
+			}
+			if s.Position > 0 && !a.pos[s.Position] {
+				a.pos[s.Position] = true
+				a.Positions = append(a.Positions, s.Position)
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {

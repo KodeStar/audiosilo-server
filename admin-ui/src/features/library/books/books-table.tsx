@@ -19,6 +19,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { bookRoute, isBooksField, refKey } from '@/lib/book-route';
 import { formatDuration, formatRelative, seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { positionIn } from '../series/series-model';
 import { LoadingMore, type BookViewProps } from './book-grid';
 import { useIsPhone, useWindowRows } from './use-layout';
 
@@ -46,7 +47,13 @@ const CELL: Record<string, string> = {
   added: 'text-right text-muted-foreground tabular-nums max-md:hidden',
 };
 
-function bookColumns(t: TFunction, lang: string, metadataOn: boolean, now: number) {
+function bookColumns(
+  t: TFunction,
+  lang: string,
+  metadataOn: boolean,
+  now: number,
+  filtered?: string,
+) {
   return column.columns([
     column.display({ id: 'select', header: () => null, cell: () => null }),
     column.accessor('title', {
@@ -60,15 +67,19 @@ function bookColumns(t: TFunction, lang: string, metadataOn: boolean, now: numbe
     }),
     column.accessor('series', {
       header: () => t('books.col.series'),
-      cell: ({ row: { original: b } }) =>
-        b.series ? (
+      // Filtered to one series: the book's place in that one.
+      cell: ({ row: { original: b } }) => {
+        const name = filtered ?? b.series;
+        const position = filtered ? positionIn(b, filtered) : b.series_index;
+        return name ? (
           <>
-            {b.series}
-            {b.series_index > 0 ? (
-              <span className="tabular-nums"> {seriesIndexLabel(b.series_index, lang, t)}</span>
+            {name}
+            {position > 0 ? (
+              <span className="tabular-nums"> {seriesIndexLabel(position, lang, t)}</span>
             ) : null}
           </>
-        ) : null,
+        ) : null;
+      },
     }),
     column.accessor('duration', {
       id: 'length',
@@ -128,6 +139,7 @@ export function BooksTable({
   hasMore,
   loadingMore,
   onLoadMore,
+  series,
 }: BookViewProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -135,7 +147,10 @@ export function BooksTable({
   const ref = useRef<HTMLDivElement>(null);
   const phone = useIsPhone();
   const rowHeight = phone ? ROW_HEIGHT.phone : ROW_HEIGHT.desktop;
-  const columns = useMemo(() => bookColumns(t, lang, metadataOn, now), [t, lang, metadataOn, now]);
+  const columns = useMemo(
+    () => bookColumns(t, lang, metadataOn, now, series),
+    [t, lang, metadataOn, now, series],
+  );
   const table = useTable({ features, columns, data: books, getRowId: refKey });
   const rows = table.getRowModel().rows;
   const { virtualizer, items, margin } = useWindowRows({
@@ -208,6 +223,7 @@ export function BooksTable({
                   key={row.id}
                   row={row}
                   columns={columns}
+                  series={series}
                   height={rowHeight}
                   selected={selection.isSelected(row.original)}
                   selecting={selecting}
@@ -241,6 +257,7 @@ const BookRow = memo(function BookRow({
   selecting,
   onToggle,
   onOpen,
+  series,
 }: {
   row: Row<typeof features, AdminBook>;
   columns: Columns;
@@ -249,6 +266,7 @@ const BookRow = memo(function BookRow({
   selecting: boolean;
   onToggle: (b: AdminBook) => void;
   onOpen: (b: AdminBook) => void;
+  series?: string;
 }) {
   const { t } = useTranslation();
   const b = row.original;
@@ -276,7 +294,7 @@ const BookRow = memo(function BookRow({
             ) : id === 'title' ? (
               <TitleCell book={b} selecting={selecting} />
             ) : (
-              <FilterCell book={b} column={id} selecting={selecting}>
+              <FilterCell book={b} column={id} selecting={selecting} filtered={series}>
                 <FlexRender cell={cell} />
               </FilterCell>
             )}
@@ -304,18 +322,24 @@ function FilterCell({
   book: b,
   column,
   selecting,
+  filtered,
   children,
 }: {
   book: AdminBook;
   column: string;
   selecting: boolean;
+  filtered?: string;
   children: React.ReactNode;
 }) {
-  if (!isBooksField(column) || !b[column]) return children;
+  if (!isBooksField(column)) return children;
+  // A series filter's column shows (and so links) the filtered series, also for
+  // a book in it beyond its main series (or with none).
+  const value = column === 'series' && filtered ? filtered : b[column];
+  if (!value) return children;
   return (
     <BooksLink
       field={column}
-      value={b[column]}
+      value={value}
       onClick={(e) => rowLinkClick(e, selecting)}
       className="hover:text-foreground hover:underline hover:underline-offset-3"
     >

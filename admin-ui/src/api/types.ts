@@ -1145,6 +1145,8 @@ export interface AdminBook {
   narrators: string[];
   series: string;
   series_index: number;
+  /** Every series the book is in, its main one (`series`) first, with its position in each. */
+  series_list: SeriesRef[];
   published: string;
   /** Seconds. */
   duration: number;
@@ -1277,6 +1279,14 @@ export interface SeriesCount {
   duration: number;
   /** Distinct non-zero positions held, ascending. */
   positions: number[];
+  /** How many of `books` are in it beyond their main series (catalog more_series). */
+  extra_books: number;
+}
+
+/** One series a book is in, with its position there (0 = none): catalog.SeriesRef. */
+export interface SeriesRef {
+  name: string;
+  position: number;
 }
 
 /** The overridable book fields (catalog.OverrideFields), in display order. */
@@ -1286,6 +1296,7 @@ export const OVERRIDE_FIELDS = [
   'narrator',
   'series',
   'series_index',
+  'more_series',
   'published',
   'description',
   'asin',

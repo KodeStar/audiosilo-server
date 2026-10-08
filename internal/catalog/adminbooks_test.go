@@ -112,8 +112,8 @@ func TestListAdminBooksRowShape(t *testing.T) {
 		t.Fatalf("%v %v", page, err)
 	}
 	got := page.Books[0]
-	got.id = 0
-	want := AdminBook{LibraryID: libA, LibraryName: "Fiction", Path: "Herbert/Dune", Title: "Dune", Author: "Frank Herbert",
+	got.id, got.moreSeries = 0, ""
+	want := AdminBook{LibraryID: libA, SeriesList: []SeriesRef{}, LibraryName: "Fiction", Path: "Herbert/Dune", Title: "Dune", Author: "Frank Herbert",
 		Narrator: "Scott Brick", Authors: []string{"Frank Herbert"}, Narrators: []string{"Scott Brick"}, Duration: 9000, Format: "flac", Codec: "ac3", AddedAt: "2023-06-01T00:00:00Z",
 		HasCover: true, FileCount: 1, Edited: true, EditedFields: fieldList{FieldNarrator}, ChaptersSource: ChaptersFromFiles}
 	if !reflect.DeepEqual(got, want) {
@@ -468,7 +468,7 @@ func TestPersonKey(t *testing.T) {
 
 func TestSeriesAggregate(t *testing.T) {
 	c, ctx, _, _ := seedAdminLibrary(t)
-	series, err := c.Series(ctx, 0, nil)
+	series, err := c.Series(ctx, 0, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestAggregatesScoped(t *testing.T) {
 		}
 	}
 
-	series, err := c.Series(ctx, libA, &Scope{LibraryID: libA, Paths: []string{"Sanderson/Mistborn/1", "Sanderson/Mistborn/4"}})
+	series, err := c.Series(ctx, libA, &Scope{LibraryID: libA, Paths: []string{"Sanderson/Mistborn/1", "Sanderson/Mistborn/4"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +517,7 @@ func TestAggregatesScoped(t *testing.T) {
 	if !reflect.DeepEqual(series, wantS) {
 		t.Fatalf("scoped series = %+v", series)
 	}
-	series, _ = c.Series(ctx, libA, &Scope{LibraryID: libA, Paths: []string{"Herbert"}})
+	series, _ = c.Series(ctx, libA, &Scope{LibraryID: libA, Paths: []string{"Herbert"}}, false)
 	if series == nil || len(series) != 0 {
 		t.Fatalf("series outside the grant = %#v, want empty", series)
 	}
