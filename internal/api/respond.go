@@ -100,6 +100,14 @@ const (
 	codeMatchRunBusy       = "match_run_busy"
 	codeMatchRunNotReady   = "match_run_not_ready"
 	codeMatchRunNotRunning = "match_run_not_running"
+	// Listening imports (handlers_import.go); the ABS failures carry importer.Code*.
+	codeInvalidURL       = "invalid_url"
+	codeInvalidImport    = "invalid_import"
+	codeImportRunning    = "import_running"
+	codeImportNotFound   = "import_not_found"
+	codeImportNotReady   = "import_not_ready"
+	codeImportNotApplied = "import_not_applied"
+	codeImportApplied    = "import_applied"
 )
 
 // writeErrorCode writes the error envelope with a machine-readable code.

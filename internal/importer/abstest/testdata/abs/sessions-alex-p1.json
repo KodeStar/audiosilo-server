@@ -1,0 +1,546 @@
+{
+ "total": 37,
+ "numPages": 4,
+ "page": 1,
+ "itemsPerPage": 10,
+ "sessions": [
+  {
+   "id": "d5db83d8-452d-4f55-afb4-ced2d6e42817",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "1ddff5ba-787a-4b54-922e-0744e3e5838a",
+   "libraryItemId": "9ab5a9b4-b7db-4877-b098-7bc75d1e8e38",
+   "bookId": "7684f6ef-04f5-488b-aef8-be4e23042f16",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Loose Single File",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "bcb2d2c4-4040-4849-8659-8d3d29d576f2",
+      "name": "Some Author"
+     }
+    ],
+    "narrators": [],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Loose Single File",
+   "displayAuthor": "Some Author",
+   "duration": 60,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-25",
+   "dayOfWeek": "Friday",
+   "timeListening": 45,
+   "startTime": 0,
+   "currentTime": 45,
+   "startedAt": 1790321400000,
+   "updatedAt": 1790321445000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "3d06295a-8e10-4800-ae17-496e6d1d5bbd",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-23",
+   "dayOfWeek": "Wednesday",
+   "timeListening": 320,
+   "startTime": 4260,
+   "currentTime": 4740,
+   "startedAt": 1790193600000,
+   "updatedAt": 1790193994000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "787a0e7a-5bf6-4960-a0d9-ce002131b7bd",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "libraryItemId": "c017dff9-9f27-42cf-992a-ec90bbd6ae62",
+   "bookId": "952ef713-fea3-4220-92aa-78f0358bccef",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Tale of Peter Rabbit",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "2d54129d-1802-4b58-9066-1630fe2563db",
+      "name": "Beatrix Potter"
+     }
+    ],
+    "narrators": [
+     "Molly Ashdown"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "The Tale of Peter Rabbit",
+   "displayAuthor": "Beatrix Potter",
+   "duration": 480,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-22",
+   "dayOfWeek": "Tuesday",
+   "timeListening": 360,
+   "startTime": 0,
+   "currentTime": 360,
+   "startedAt": 1790098200000,
+   "updatedAt": 1790098560000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "aa416b5b-b3ff-4e5a-a36d-239e701c4117",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-19",
+   "dayOfWeek": "Saturday",
+   "timeListening": 440,
+   "startTime": 3600,
+   "currentTime": 4260,
+   "startedAt": 1789836600000,
+   "updatedAt": 1789837077000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "4bcccc36-1471-4830-a808-f404605453f7",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-18",
+   "dayOfWeek": "Friday",
+   "timeListening": 360,
+   "startTime": 3060,
+   "currentTime": 3600,
+   "startedAt": 1789713300000,
+   "updatedAt": 1789713660000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "ffa66d6f-6ba5-4159-a971-3a6b675cb277",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-16",
+   "dayOfWeek": "Wednesday",
+   "timeListening": 560,
+   "startTime": 2220,
+   "currentTime": 3060,
+   "startedAt": 1789578000000,
+   "updatedAt": 1789578708000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "f437b597-5abb-4cee-ac0d-b8dd73ba6f55",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-13",
+   "dayOfWeek": "Sunday",
+   "timeListening": 400,
+   "startTime": 1620,
+   "currentTime": 2220,
+   "startedAt": 1789255200000,
+   "updatedAt": 1789255711000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "a32e53b7-f432-479c-a1ba-64d52890bfe6",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-12",
+   "dayOfWeek": "Saturday",
+   "timeListening": null,
+   "startTime": 1620,
+   "currentTime": 1620,
+   "startedAt": 1789210800000,
+   "updatedAt": 1789210874000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "f89d0861-f5bd-45b3-a0cd-2321e3688656",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-11",
+   "dayOfWeek": "Friday",
+   "timeListening": 600,
+   "startTime": 720,
+   "currentTime": 1620,
+   "startedAt": 1789166400000,
+   "updatedAt": 1789167037000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "2210c760-ed1a-4a08-a30e-b52b32fd74d6",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-10",
+   "dayOfWeek": "Thursday",
+   "timeListening": 480,
+   "startTime": 0,
+   "currentTime": 720,
+   "startedAt": 1789021800000,
+   "updatedAt": 1789022280000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  }
+ ]
+}

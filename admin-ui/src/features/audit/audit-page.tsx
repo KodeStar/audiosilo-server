@@ -11,7 +11,7 @@ import { QueryError } from '@/components/query-error';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
-import { formatDateTime, formatNumber } from '@/lib/format';
+import { formatDateTime, formatDuration, formatNumber } from '@/lib/format';
 import { useDebounced } from '@/lib/use-debounced';
 import { actionText, AUDIT_AREAS, detailLines } from './audit-model';
 
@@ -134,6 +134,7 @@ function AuditRow({ event: e }: { event: AuditEvent }) {
   const lines = detailLines(e, t, {
     number: (n) => formatNumber(n, lang),
     date: (iso) => formatDateTime(iso, lang),
+    duration: (seconds) => formatDuration(seconds, lang),
   });
   const system = e.via === 'system';
   return (

@@ -1,0 +1,582 @@
+{
+ "total": 37,
+ "numPages": 4,
+ "page": 2,
+ "itemsPerPage": 10,
+ "sessions": [
+  {
+   "id": "b981ecc7-3ed1-4b31-ac01-421577523989",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "6877a3e5-50f6-42c2-b9ab-37b2a0f7bb81",
+   "bookId": "ba07cfc2-68d3-4edd-b1ef-9c886c13c1da",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Frankenstein; or, The Modern Prometheus",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "833bea31-0175-4ae8-af74-c6ff4403e0f0",
+      "name": "Mary Shelley"
+     }
+    ],
+    "narrators": [
+     "Dominic Hale"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Frankenstein; or, The Modern Prometheus",
+   "displayAuthor": "Mary Shelley",
+   "duration": 4501.008,
+   "playMethod": 0,
+   "mediaPlayer": "html5",
+   "deviceInfo": {
+    "id": "00589eec-b5eb-4b00-8f5a-fb8f6de36c22",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-firefox-mac",
+    "ipAddress": "127.0.0.1",
+    "browserName": "Firefox",
+    "browserVersion": "131.0",
+    "osName": "Mac OS",
+    "osVersion": "14.6",
+    "clientVersion": "2.37.1",
+    "manufacturer": "",
+    "model": "",
+    "sdkVersion": "",
+    "clientName": "Abs Web",
+    "deviceName": "Mac OS 14.6 Firefox"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-07",
+   "dayOfWeek": "Monday",
+   "timeListening": 841,
+   "startTime": 3660,
+   "currentTime": 4501.008,
+   "startedAt": 1788806400000,
+   "updatedAt": 1788807389000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "0fda655b-465f-4b65-aa2c-eb6a77285568",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "6877a3e5-50f6-42c2-b9ab-37b2a0f7bb81",
+   "bookId": "ba07cfc2-68d3-4edd-b1ef-9c886c13c1da",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Frankenstein; or, The Modern Prometheus",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "833bea31-0175-4ae8-af74-c6ff4403e0f0",
+      "name": "Mary Shelley"
+     }
+    ],
+    "narrators": [
+     "Dominic Hale"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Frankenstein; or, The Modern Prometheus",
+   "displayAuthor": "Mary Shelley",
+   "duration": 4501.008,
+   "playMethod": 0,
+   "mediaPlayer": "html5",
+   "deviceInfo": {
+    "id": "00589eec-b5eb-4b00-8f5a-fb8f6de36c22",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-firefox-mac",
+    "ipAddress": "127.0.0.1",
+    "browserName": "Firefox",
+    "browserVersion": "131.0",
+    "osName": "Mac OS",
+    "osVersion": "14.6",
+    "clientVersion": "2.37.1",
+    "manufacturer": "",
+    "model": "",
+    "sdkVersion": "",
+    "clientName": "Abs Web",
+    "deviceName": "Mac OS 14.6 Firefox"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-05",
+   "dayOfWeek": "Saturday",
+   "timeListening": 960,
+   "startTime": 2700,
+   "currentTime": 3660,
+   "startedAt": 1788635400000,
+   "updatedAt": 1788636471000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "efb7418c-6f59-4be2-a463-0f84bc3ec924",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "e5d808ca-a13b-4812-b261-270f3c9a33f9",
+   "bookId": "cdd21aa2-6ca9-4e55-82df-c7ff5a078e75",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Germinal",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "02ddc13d-e9c7-4c0b-bf9f-cc9ce64f1750",
+      "name": "Émile Zola"
+     }
+    ],
+    "narrators": [
+     "Céline Marchetti"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Germinal",
+   "displayAuthor": "Émile Zola",
+   "duration": 6000,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-04",
+   "dayOfWeek": "Friday",
+   "timeListening": 360,
+   "startTime": 540,
+   "currentTime": 900,
+   "startedAt": 1788505500000,
+   "updatedAt": 1788505897000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "f856cf66-ee17-43d5-a2e4-3ab6c660ca69",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "e5d808ca-a13b-4812-b261-270f3c9a33f9",
+   "bookId": "cdd21aa2-6ca9-4e55-82df-c7ff5a078e75",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Germinal",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "02ddc13d-e9c7-4c0b-bf9f-cc9ce64f1750",
+      "name": "Émile Zola"
+     }
+    ],
+    "narrators": [
+     "Céline Marchetti"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Germinal",
+   "displayAuthor": "Émile Zola",
+   "duration": 6000,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-03",
+   "dayOfWeek": "Thursday",
+   "timeListening": 540,
+   "startTime": 0,
+   "currentTime": 540,
+   "startedAt": 1788418800000,
+   "updatedAt": 1788419340000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "65871b02-d430-4f5d-a4a5-ade2a72b6cd8",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "6877a3e5-50f6-42c2-b9ab-37b2a0f7bb81",
+   "bookId": "ba07cfc2-68d3-4edd-b1ef-9c886c13c1da",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Frankenstein; or, The Modern Prometheus",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "833bea31-0175-4ae8-af74-c6ff4403e0f0",
+      "name": "Mary Shelley"
+     }
+    ],
+    "narrators": [
+     "Dominic Hale"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Frankenstein; or, The Modern Prometheus",
+   "displayAuthor": "Mary Shelley",
+   "duration": 4501.008,
+   "playMethod": 0,
+   "mediaPlayer": "html5",
+   "deviceInfo": {
+    "id": "00589eec-b5eb-4b00-8f5a-fb8f6de36c22",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-firefox-mac",
+    "ipAddress": "127.0.0.1",
+    "browserName": "Firefox",
+    "browserVersion": "131.0",
+    "osName": "Mac OS",
+    "osVersion": "14.6",
+    "clientVersion": "2.37.1",
+    "manufacturer": "",
+    "model": "",
+    "sdkVersion": "",
+    "clientName": "Abs Web",
+    "deviceName": "Mac OS 14.6 Firefox"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-01",
+   "dayOfWeek": "Tuesday",
+   "timeListening": 720,
+   "startTime": 1980,
+   "currentTime": 2700,
+   "startedAt": 1788264300000,
+   "updatedAt": 1788265094000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "306b80cb-2323-4204-a44d-e0221875062a",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "6877a3e5-50f6-42c2-b9ab-37b2a0f7bb81",
+   "bookId": "ba07cfc2-68d3-4edd-b1ef-9c886c13c1da",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Frankenstein; or, The Modern Prometheus",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "833bea31-0175-4ae8-af74-c6ff4403e0f0",
+      "name": "Mary Shelley"
+     }
+    ],
+    "narrators": [
+     "Dominic Hale"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Frankenstein; or, The Modern Prometheus",
+   "displayAuthor": "Mary Shelley",
+   "duration": 4501.008,
+   "playMethod": 0,
+   "mediaPlayer": "html5",
+   "deviceInfo": {
+    "id": "00589eec-b5eb-4b00-8f5a-fb8f6de36c22",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-firefox-mac",
+    "ipAddress": "127.0.0.1",
+    "browserName": "Firefox",
+    "browserVersion": "131.0",
+    "osName": "Mac OS",
+    "osVersion": "14.6",
+    "clientVersion": "2.37.1",
+    "manufacturer": "",
+    "model": "",
+    "sdkVersion": "",
+    "clientName": "Abs Web",
+    "deviceName": "Mac OS 14.6 Firefox"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-31",
+   "dayOfWeek": "Monday",
+   "timeListening": 1080,
+   "startTime": 900,
+   "currentTime": 1980,
+   "startedAt": 1788204600000,
+   "updatedAt": 1788205717000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "1343bfa8-3dd3-4c0a-adcf-b0d642159ce1",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "6877a3e5-50f6-42c2-b9ab-37b2a0f7bb81",
+   "bookId": "ba07cfc2-68d3-4edd-b1ef-9c886c13c1da",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Frankenstein; or, The Modern Prometheus",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "833bea31-0175-4ae8-af74-c6ff4403e0f0",
+      "name": "Mary Shelley"
+     }
+    ],
+    "narrators": [
+     "Dominic Hale"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Frankenstein; or, The Modern Prometheus",
+   "displayAuthor": "Mary Shelley",
+   "duration": 4501.008,
+   "playMethod": 0,
+   "mediaPlayer": "html5",
+   "deviceInfo": {
+    "id": "00589eec-b5eb-4b00-8f5a-fb8f6de36c22",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-firefox-mac",
+    "ipAddress": "127.0.0.1",
+    "browserName": "Firefox",
+    "browserVersion": "131.0",
+    "osName": "Mac OS",
+    "osVersion": "14.6",
+    "clientVersion": "2.37.1",
+    "manufacturer": "",
+    "model": "",
+    "sdkVersion": "",
+    "clientName": "Abs Web",
+    "deviceName": "Mac OS 14.6 Firefox"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-29",
+   "dayOfWeek": "Saturday",
+   "timeListening": 900,
+   "startTime": 0,
+   "currentTime": 900,
+   "startedAt": 1788030000000,
+   "updatedAt": 1788030900000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "73d14c27-9183-478b-a92d-7898df2b5fc3",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "1ddff5ba-787a-4b54-922e-0744e3e5838a",
+   "libraryItemId": "867ec553-2bd0-46cb-b5dc-694e0cddaa1b",
+   "bookId": "ea1d5d0f-80fd-48ea-97a6-7fbd31735e12",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Removed Later",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "bcb2d2c4-4040-4849-8659-8d3d29d576f2",
+      "name": "Some Author"
+     }
+    ],
+    "narrators": [],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Removed Later",
+   "displayAuthor": "Some Author",
+   "duration": 90,
+   "playMethod": 0,
+   "mediaPlayer": "html5",
+   "deviceInfo": {
+    "id": "00589eec-b5eb-4b00-8f5a-fb8f6de36c22",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-firefox-mac",
+    "ipAddress": "127.0.0.1",
+    "browserName": "Firefox",
+    "browserVersion": "131.0",
+    "osName": "Mac OS",
+    "osVersion": "14.6",
+    "clientVersion": "2.37.1",
+    "manufacturer": "",
+    "model": "",
+    "sdkVersion": "",
+    "clientName": "Abs Web",
+    "deviceName": "Mac OS 14.6 Firefox"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-27",
+   "dayOfWeek": "Thursday",
+   "timeListening": 60,
+   "startTime": 0,
+   "currentTime": 60,
+   "startedAt": 1787817600000,
+   "updatedAt": 1787817660000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "ed162d23-a9fe-490a-a373-7f427b41304c",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "1b083bff-a198-404f-a54c-2164bd718e1d",
+   "bookId": "a26538a2-3208-40fe-ae3c-d535565c314c",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Storm Front",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "56762979-947a-4c46-bf2f-76849ae6438b",
+      "name": "Jim Butcher"
+     }
+    ],
+    "narrators": [
+     "James Marsters"
+    ],
+    "series": [
+     {
+      "id": "81d6c0f8-a89b-478f-92d8-84e532a99b5c",
+      "name": "The Dresden Files",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B002V8KYMI"
+   },
+   "displayTitle": "Storm Front",
+   "displayAuthor": "Jim Butcher",
+   "duration": 3900,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-25",
+   "dayOfWeek": "Tuesday",
+   "timeListening": 1200,
+   "startTime": 2700,
+   "currentTime": 3900,
+   "startedAt": 1787691900000,
+   "updatedAt": 1787693174000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "b66a6f58-02d3-43c3-a19b-66727c1221d6",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "1b083bff-a198-404f-a54c-2164bd718e1d",
+   "bookId": "a26538a2-3208-40fe-ae3c-d535565c314c",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Storm Front",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "56762979-947a-4c46-bf2f-76849ae6438b",
+      "name": "Jim Butcher"
+     }
+    ],
+    "narrators": [
+     "James Marsters"
+    ],
+    "series": [
+     {
+      "id": "81d6c0f8-a89b-478f-92d8-84e532a99b5c",
+      "name": "The Dresden Files",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B002V8KYMI"
+   },
+   "displayTitle": "Storm Front",
+   "displayAuthor": "Jim Butcher",
+   "duration": 3900,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-24",
+   "dayOfWeek": "Monday",
+   "timeListening": 1500,
+   "startTime": 1200,
+   "currentTime": 2700,
+   "startedAt": 1787589900000,
+   "updatedAt": 1787591437000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  }
+ ]
+}

@@ -5,6 +5,7 @@ import {
   ArrowRight,
   BellRing,
   Globe,
+  Import,
   Info,
   MonitorSmartphone,
   Repeat2,
@@ -31,6 +32,7 @@ import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
 import { NotificationsTopic } from './notifications-topic';
 import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
@@ -51,6 +53,7 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   demo: Ticket,
   backups: Archive,
   notifications: BellRing,
+  import: Import,
 };
 
 /**
@@ -133,6 +136,8 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
       return <BackupsTopic settings={settings} />;
     case 'notifications':
       return <NotificationsTopic />;
+    case 'import':
+      return <ImportTopic />;
     default:
       return <GeneralTopic settings={settings} />;
   }

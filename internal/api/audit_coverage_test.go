@@ -23,6 +23,9 @@ var notAudited = map[string]string{
 	"handleAdminBookWorks":   "a read (a POST only for its batch body)",
 	"handleCommunityCovers":  "a read (a POST only for its batch body)",
 	"handleTestNotifyTarget": "sends a test message; its outcome is recorded on the destination",
+	"handleImportUsers":      "connects to Audiobookshelf and lists its users; changes nothing",
+	"handleUpdateImport":     "changes only an unapplied import's review (its cutoff)",
+	"handleDeleteImport":     "drops an unapplied import's record; it wrote nothing (or an undo took it out, audited)",
 }
 
 // TestAdminChangesAreAudited reads the route table and the package's call graph: a

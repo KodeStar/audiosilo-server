@@ -1,0 +1,64 @@
+{
+ "libraries": [
+  {
+   "id": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "name": "Books",
+   "folders": [
+    {
+     "id": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+     "fullPath": "/Users/chris/dev/audiosilo-testbed/verify/library/books",
+     "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+     "addedAt": 1791444022383
+    }
+   ],
+   "displayOrder": 1,
+   "icon": "database",
+   "mediaType": "book",
+   "provider": "audible",
+   "lastScan": 1791444025581,
+   "lastScanVersion": "2.37.1",
+   "createdAt": 1791444022381,
+   "lastUpdate": 1791444025581
+  },
+  {
+   "id": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "name": "Kids",
+   "folders": [
+    {
+     "id": "6f68fa20-a93b-4204-a6b2-c6e5112a8b1f",
+     "fullPath": "/Users/chris/dev/audiosilo-testbed/verify/library/kids",
+     "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+     "addedAt": 1791444028466
+    }
+   ],
+   "displayOrder": 2,
+   "icon": "database",
+   "mediaType": "book",
+   "provider": "audible",
+   "lastScan": 1791444028952,
+   "lastScanVersion": "2.37.1",
+   "createdAt": 1791444028464,
+   "lastUpdate": 1791444028952
+  },
+  {
+   "id": "1ddff5ba-787a-4b54-922e-0744e3e5838a",
+   "name": "ABS only",
+   "folders": [
+    {
+     "id": "b0dd1bb4-7215-45ab-af27-d77997246802",
+     "fullPath": "/Users/chris/dev/audiosilo-testbed/abs/abs-only",
+     "libraryId": "1ddff5ba-787a-4b54-922e-0744e3e5838a",
+     "addedAt": 1791444031489
+    }
+   ],
+   "displayOrder": 3,
+   "icon": "database",
+   "mediaType": "book",
+   "provider": "audible",
+   "lastScan": 1791444031697,
+   "lastScanVersion": "2.37.1",
+   "createdAt": 1791444031488,
+   "lastUpdate": 1791444031697
+  }
+ ]
+}

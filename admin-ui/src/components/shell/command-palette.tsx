@@ -13,6 +13,7 @@ import {
   ExternalLink,
   Globe,
   Home,
+  Import,
   Languages,
   LogOut,
   MonitorSmartphone,
@@ -213,6 +214,7 @@ function PaletteBody({ close }: { close: () => void }) {
     topic('demo', Ticket, ['demo', 'guest', 'try']),
     topic('backups', Archive, ['backup', 'restore', 'database', 'export', 'download']),
     topic('notifications', BellRing, ['alert', 'webhook', 'ntfy', 'discord', 'notify', 'push']),
+    topic('import', Import, ['audiobookshelf', 'abs', 'import', 'history', 'migrate', 'listening']),
     {
       id: 'scan-settings',
       title: t('palette.setting.scanSettings'),

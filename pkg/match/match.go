@@ -741,12 +741,27 @@ func personMatch(b Book, q Query) bool {
 // authorMatch is tolerant of multi-author / "and"-joined credits: a normalized
 // equality, or one author string contained in the other. An empty name never
 // matches.
-func authorMatch(a, b string) bool {
-	na, nb := Normalize(a), Normalize(b)
+func authorMatch(a, b string) bool { return NamesMatch(Normalize(a), Normalize(b)) }
+
+// NamesMatch is the person gate over two names already through Normalize: equal,
+// or one contained in the other (multi-author and "and"-joined credits). An
+// empty name never matches. Exported so a caller that indexes normalized authors
+// (the server's listening import) gates candidates exactly as Best does.
+func NamesMatch(na, nb string) bool {
 	if na == "" || nb == "" {
 		return false
 	}
 	return na == nb || strings.Contains(na, nb) || strings.Contains(nb, na)
+}
+
+// NormalizeASIN puts an ASIN in the form exact lookups hold: trimmed and
+// upper-cased.
+func NormalizeASIN(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+
+// NormalizeISBN puts an ISBN in the form exact lookups hold: without the hyphens
+// and spaces it is usually printed with, upper-cased (a trailing check digit X).
+func NormalizeISBN(s string) string {
+	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(s)))
 }
 
 func seqEqual(a, b float64) bool { return a-b > -0.001 && a-b < 0.001 }

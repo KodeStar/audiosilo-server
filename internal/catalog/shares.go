@@ -80,9 +80,9 @@ func (s Scope) Allows(p string) bool {
 	return false
 }
 
-// scopesAllow reports whether one of scopes (a user's per-library scopes, as
+// ScopesAllow reports whether one of scopes (a user's per-library scopes, as
 // UserScopes returns them) grants ref: the Go twin of scopesFilterSQL.
-func scopesAllow(scopes []Scope, ref Ref) bool {
+func ScopesAllow(scopes []Scope, ref Ref) bool {
 	for _, s := range scopes {
 		if s.LibraryID == ref.LibraryID && s.Allows(ref.Path) {
 			return true

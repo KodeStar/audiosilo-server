@@ -137,7 +137,7 @@ func (c *Catalog) SaveProgress(ctx context.Context, userID int64, in Progress) (
 		if err != nil {
 			return err
 		}
-		if existing != nil && !isNewer(in, *existing) {
+		if existing != nil && !IsNewer(in, *existing) {
 			out = existing // incoming update is stale; keep stored value
 			return nil
 		}
@@ -188,9 +188,9 @@ func plausibleUpdatedAt(v string, now time.Time) bool {
 	return err == nil && !t.After(now.Add(maxSkew))
 }
 
-// isNewer reports whether candidate should replace current under last-write-wins
+// IsNewer reports whether candidate should replace current under last-write-wins
 // (newer updated_at wins; version breaks ties for same-timestamp updates).
-func isNewer(candidate, current Progress) bool {
+func IsNewer(candidate, current Progress) bool {
 	ct, err1 := time.Parse(time.RFC3339, candidate.UpdatedAt)
 	pt, err2 := time.Parse(time.RFC3339, current.UpdatedAt)
 	if err1 == nil && err2 == nil && !ct.Equal(pt) {
@@ -341,6 +341,10 @@ func carryListeningState(ctx context.Context, tx *sql.Tx, libraryID int64, part 
 		        finished = finished AND ?6
 		  WHERE library_id = ?4 AND rel_path = ?5`,
 		`UPDATE listening_daily SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		// What an import changed on the path (catalog/imports.go), so an undo still
+		// finds the row; an import that also changed into keeps that entry.
+		`UPDATE OR IGNORE import_progress_prior SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
+		`DELETE FROM import_progress_prior WHERE library_id = ?4 AND rel_path = ?5`,
 		// Lists (orderedList): a list already holding into keeps that entry.
 		`UPDATE OR IGNORE up_next SET rel_path = ?1 WHERE library_id = ?4 AND rel_path = ?5`,
 		`DELETE FROM up_next WHERE library_id = ?4 AND rel_path = ?5`,
@@ -459,13 +463,13 @@ func carryProgress(ctx context.Context, tx *sql.Tx, libraryID int64, part JoinPa
 // a join.
 type progressMerge func(have, carried UserProgress) UserProgress
 
-// mergeNewest is a move's merge: the newer save wins whole (isNewer: updated_at,
+// mergeNewest is a move's merge: the newer save wins whole (IsNewer: updated_at,
 // then version), under a version above both. A row already at a book's new path is
 // another book's, left behind when it was removed; its position, or its finish,
 // says nothing about the moved book, so it can't win by being further on.
 func mergeNewest(have, carried UserProgress) UserProgress {
 	out := have
-	if isNewer(carried.Progress, have.Progress) {
+	if IsNewer(carried.Progress, have.Progress) {
 		out = carried
 	}
 	out.Version = max(have.Version, carried.Version) + 1
@@ -475,14 +479,14 @@ func mergeNewest(have, carried UserProgress) UserProgress {
 // mergeFurthest is a join's merge (the rows are parts of one book, on its
 // timeline): the furthest position wins (finished over not, at the same place),
 // with its speed, device and finish date; the result takes the newer save
-// (isNewer), the earlier start, and a version above both, so it is not older than
+// (IsNewer), the earlier start, and a version above both, so it is not older than
 // either save it replaces.
 func mergeFurthest(a, b UserProgress) UserProgress {
 	out, other := a, b
 	if b.Position > a.Position || (b.Position == a.Position && b.Finished && !a.Finished) {
 		out, other = b, a
 	}
-	if isNewer(other.Progress, out.Progress) {
+	if IsNewer(other.Progress, out.Progress) {
 		out.UpdatedAt = other.UpdatedAt
 	}
 	out.Version = max(a.Version, b.Version) + 1

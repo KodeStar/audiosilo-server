@@ -1,0 +1,548 @@
+{
+ "total": 10,
+ "numPages": 1,
+ "page": 0,
+ "itemsPerPage": 10,
+ "sessions": [
+  {
+   "id": "5319db8f-d270-4725-a1d6-58b60ccb873e",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "libraryItemId": "461e7654-0560-45b5-b7fa-4221ee1a40fd",
+   "bookId": "b639fab3-ace6-4155-9976-68e68465c27b",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Winnie-the-Pooh",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "ad26805e-7033-4a13-a389-a70dae9e562e",
+      "name": "A. A. Milne"
+     }
+    ],
+    "narrators": [
+     "Rupert Ellingham"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Winnie-the-Pooh",
+   "displayAuthor": "A. A. Milne",
+   "duration": 2700,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-06",
+   "dayOfWeek": "Tuesday",
+   "timeListening": 360,
+   "startTime": 1440,
+   "currentTime": 1800,
+   "startedAt": 1791309600000,
+   "updatedAt": 1791310071000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "b27e5bdc-6741-4ccd-abe4-630fd64205f3",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "libraryItemId": "461e7654-0560-45b5-b7fa-4221ee1a40fd",
+   "bookId": "b639fab3-ace6-4155-9976-68e68465c27b",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Winnie-the-Pooh",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "ad26805e-7033-4a13-a389-a70dae9e562e",
+      "name": "A. A. Milne"
+     }
+    ],
+    "narrators": [
+     "Rupert Ellingham"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Winnie-the-Pooh",
+   "displayAuthor": "A. A. Milne",
+   "duration": 2700,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-04",
+   "dayOfWeek": "Sunday",
+   "timeListening": 540,
+   "startTime": 900,
+   "currentTime": 1440,
+   "startedAt": 1791137400000,
+   "updatedAt": 1791138014000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "ba707bb4-4b10-48c9-a26e-4351ff9cc3ad",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "libraryItemId": "461e7654-0560-45b5-b7fa-4221ee1a40fd",
+   "bookId": "b639fab3-ace6-4155-9976-68e68465c27b",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Winnie-the-Pooh",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "ad26805e-7033-4a13-a389-a70dae9e562e",
+      "name": "A. A. Milne"
+     }
+    ],
+    "narrators": [
+     "Rupert Ellingham"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Winnie-the-Pooh",
+   "displayAuthor": "A. A. Milne",
+   "duration": 2700,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-01",
+   "dayOfWeek": "Thursday",
+   "timeListening": 420,
+   "startTime": 480,
+   "currentTime": 900,
+   "startedAt": 1790877900000,
+   "updatedAt": 1790878357000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "e4d0f38f-29b8-4b95-a769-d99615bc226d",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "libraryItemId": "461e7654-0560-45b5-b7fa-4221ee1a40fd",
+   "bookId": "b639fab3-ace6-4155-9976-68e68465c27b",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Winnie-the-Pooh",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "ad26805e-7033-4a13-a389-a70dae9e562e",
+      "name": "A. A. Milne"
+     }
+    ],
+    "narrators": [
+     "Rupert Ellingham"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Winnie-the-Pooh",
+   "displayAuthor": "A. A. Milne",
+   "duration": 2700,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-29",
+   "dayOfWeek": "Tuesday",
+   "timeListening": 480,
+   "startTime": 0,
+   "currentTime": 480,
+   "startedAt": 1790704800000,
+   "updatedAt": 1790705280000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "1ca61e0e-cfd6-47fd-a57e-705e22c2c285",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "358a0b37-63d9-4a9c-b7ea-8726ba3a5f69",
+   "bookId": "a50b6a4f-1b7b-4e29-a067-bb6ed6b60ce3",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Pride and Prejudice",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "d7f048a3-f580-4dc6-8da5-09b1bd7a5cd7",
+      "name": "Jane Austen"
+     }
+    ],
+    "narrators": [
+     "Harriet Lowe"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Pride and Prejudice",
+   "displayAuthor": "Jane Austen",
+   "duration": 7200,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-17",
+   "dayOfWeek": "Thursday",
+   "timeListening": 1200,
+   "startTime": 6000,
+   "currentTime": 7200,
+   "startedAt": 1789674600000,
+   "updatedAt": 1789675800000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "0034e519-3578-4dbc-afeb-cf64e15b991c",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "358a0b37-63d9-4a9c-b7ea-8726ba3a5f69",
+   "bookId": "a50b6a4f-1b7b-4e29-a067-bb6ed6b60ce3",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Pride and Prejudice",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "d7f048a3-f580-4dc6-8da5-09b1bd7a5cd7",
+      "name": "Jane Austen"
+     }
+    ],
+    "narrators": [
+     "Harriet Lowe"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Pride and Prejudice",
+   "displayAuthor": "Jane Austen",
+   "duration": 7200,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-14",
+   "dayOfWeek": "Monday",
+   "timeListening": 900,
+   "startTime": 5100,
+   "currentTime": 6000,
+   "startedAt": 1789416300000,
+   "updatedAt": 1789417348000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "838c597c-48b9-4936-a142-df69c68bcd66",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "358a0b37-63d9-4a9c-b7ea-8726ba3a5f69",
+   "bookId": "a50b6a4f-1b7b-4e29-a067-bb6ed6b60ce3",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Pride and Prejudice",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "d7f048a3-f580-4dc6-8da5-09b1bd7a5cd7",
+      "name": "Jane Austen"
+     }
+    ],
+    "narrators": [
+     "Harriet Lowe"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Pride and Prejudice",
+   "displayAuthor": "Jane Austen",
+   "duration": 7200,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-13",
+   "dayOfWeek": "Sunday",
+   "timeListening": 1500,
+   "startTime": 3600,
+   "currentTime": 5100,
+   "startedAt": 1789331400000,
+   "updatedAt": 1789333011000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "63eb6492-cc61-4ae3-a1a4-a2c337c0aa9b",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "358a0b37-63d9-4a9c-b7ea-8726ba3a5f69",
+   "bookId": "a50b6a4f-1b7b-4e29-a067-bb6ed6b60ce3",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Pride and Prejudice",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "d7f048a3-f580-4dc6-8da5-09b1bd7a5cd7",
+      "name": "Jane Austen"
+     }
+    ],
+    "narrators": [
+     "Harriet Lowe"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Pride and Prejudice",
+   "displayAuthor": "Jane Austen",
+   "duration": 7200,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-11",
+   "dayOfWeek": "Friday",
+   "timeListening": 1080,
+   "startTime": 2520,
+   "currentTime": 3600,
+   "startedAt": 1789155900000,
+   "updatedAt": 1789157054000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "a608a0f7-a14f-4455-a1e7-4bb233b7be63",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "358a0b37-63d9-4a9c-b7ea-8726ba3a5f69",
+   "bookId": "a50b6a4f-1b7b-4e29-a067-bb6ed6b60ce3",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Pride and Prejudice",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "d7f048a3-f580-4dc6-8da5-09b1bd7a5cd7",
+      "name": "Jane Austen"
+     }
+    ],
+    "narrators": [
+     "Harriet Lowe"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Pride and Prejudice",
+   "displayAuthor": "Jane Austen",
+   "duration": 7200,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-09",
+   "dayOfWeek": "Wednesday",
+   "timeListening": 1320,
+   "startTime": 1200,
+   "currentTime": 2520,
+   "startedAt": 1788984600000,
+   "updatedAt": 1788985957000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  },
+  {
+   "id": "b864a010-6a0c-432f-ab21-cb75fcf8850c",
+   "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "358a0b37-63d9-4a9c-b7ea-8726ba3a5f69",
+   "bookId": "a50b6a4f-1b7b-4e29-a067-bb6ed6b60ce3",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Pride and Prejudice",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "d7f048a3-f580-4dc6-8da5-09b1bd7a5cd7",
+      "name": "Jane Austen"
+     }
+    ],
+    "narrators": [
+     "Harriet Lowe"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Pride and Prejudice",
+   "displayAuthor": "Jane Austen",
+   "duration": 7200,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "2c613fb4-f9fe-4f50-b9c1-1eaa77db6c24",
+    "userId": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "deviceId": "jo-ipad-air",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPad Air",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPad Air"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-08",
+   "dayOfWeek": "Tuesday",
+   "timeListening": 1200,
+   "startTime": 0,
+   "currentTime": 1200,
+   "startedAt": 1788897600000,
+   "updatedAt": 1788898800000,
+   "user": {
+    "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+    "username": "jo"
+   }
+  }
+ ]
+}

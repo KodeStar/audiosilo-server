@@ -11,6 +11,7 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { finishedCount, longestStreak, monthTotals } from '@/features/activity/activity-model';
 import { MonthBars } from '@/features/activity/charts';
 import { SessionTable } from '@/features/activity/sessions-page';
+import { UserImports } from '@/features/imports/user-imports';
 import { bookRoute } from '@/lib/book-route';
 import {
   formatDate,
@@ -26,7 +27,10 @@ import type { ProgressTarget } from './use-edit-progress';
 /** How many recent sessions the person page shows before "All sessions". */
 const RECENT_SESSIONS = 8;
 
-/** A person's listening: their year, what they're in the middle of, what they finished, recent sessions. */
+/**
+ * A person's listening: their year, what they're in the middle of, what they
+ * finished, recent sessions, and any history imported from another server.
+ */
 export function ListeningTab({ user }: { user: User }) {
   const { t } = useTranslation();
   const progress = useUserProgress(user.id);
@@ -62,6 +66,7 @@ export function ListeningTab({ user }: { user: User }) {
         </div>
       )}
       <RecentSessions user={user} />
+      <UserImports user={user} />
     </div>
   );
 }

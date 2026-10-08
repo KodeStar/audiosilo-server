@@ -114,6 +114,7 @@ export function liveSession(over: Partial<ListeningSession> = {}): ListeningSess
     transcoded: false,
     finished: false,
     backfilled: false,
+    imported: false,
     state: 'playing',
     chapter: 'Chapter 12',
     ip: '192.168.1.24',

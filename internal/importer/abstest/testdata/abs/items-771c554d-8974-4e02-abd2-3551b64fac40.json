@@ -1,0 +1,167 @@
+{
+ "results": [
+  {
+   "id": "0e08f846-e11a-4d91-a66a-a597b82ba940",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "folderId": "6f68fa20-a93b-4204-a6b2-c6e5112a8b1f",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/kids/Pippa Fenwick/Moon Otter/02 - Moon Otter and the Lost Kite",
+   "relPath": "Pippa Fenwick/Moon Otter/02 - Moon Otter and the Lost Kite",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "4d2c0442-7b9d-4cd5-b5a6-e4d45e46781a",
+    "metadata": {
+     "title": "Moon Otter and the Lost Kite",
+     "subtitle": null,
+     "authorName": "Pippa Fenwick",
+     "narratorName": "Pippa Fenwick",
+     "seriesName": "Moon Otter #2",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 900
+   }
+  },
+  {
+   "id": "e31f2b43-febf-442c-b633-5c6513dcfd45",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "folderId": "6f68fa20-a93b-4204-a6b2-c6e5112a8b1f",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/kids/Pippa Fenwick/Moon Otter/01 - Moon Otter Goes Sailing",
+   "relPath": "Pippa Fenwick/Moon Otter/01 - Moon Otter Goes Sailing",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "7d333817-d381-46cf-bf38-11681d211177",
+    "metadata": {
+     "title": "Moon Otter Goes Sailing",
+     "subtitle": null,
+     "authorName": "Pippa Fenwick",
+     "narratorName": "Pippa Fenwick",
+     "seriesName": "Moon Otter #1",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 900
+   }
+  },
+  {
+   "id": "9391d598-5d44-4353-8f60-0835168f6fa1",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "folderId": "6f68fa20-a93b-4204-a6b2-c6e5112a8b1f",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/kids/Kenneth Grahame/The Wind in the Willows",
+   "relPath": "Kenneth Grahame/The Wind in the Willows",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "68379ea1-90c7-4019-8b27-0e0e566b853a",
+    "metadata": {
+     "title": "The Wind in the Willows",
+     "subtitle": null,
+     "authorName": "Kenneth Grahame",
+     "narratorName": "Rupert Ellingham",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 4200
+   }
+  },
+  {
+   "id": "461e7654-0560-45b5-b7fa-4221ee1a40fd",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "folderId": "6f68fa20-a93b-4204-a6b2-c6e5112a8b1f",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/kids/A. A. Milne/Winnie-the-Pooh",
+   "relPath": "A. A. Milne/Winnie-the-Pooh",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "b639fab3-ace6-4155-9976-68e68465c27b",
+    "metadata": {
+     "title": "Winnie-the-Pooh",
+     "subtitle": null,
+     "authorName": "A. A. Milne",
+     "narratorName": "Rupert Ellingham",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 2700
+   }
+  },
+  {
+   "id": "c017dff9-9f27-42cf-992a-ec90bbd6ae62",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "folderId": "6f68fa20-a93b-4204-a6b2-c6e5112a8b1f",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/kids/Beatrix Potter/The Tale of Peter Rabbit",
+   "relPath": "Beatrix Potter/The Tale of Peter Rabbit",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "952ef713-fea3-4220-92aa-78f0358bccef",
+    "metadata": {
+     "title": "The Tale of Peter Rabbit",
+     "subtitle": null,
+     "authorName": "Beatrix Potter",
+     "narratorName": "Molly Ashdown",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 480
+   }
+  },
+  {
+   "id": "d8d62d3c-f5e8-4db7-bd5c-89950e0e446b",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "folderId": "6f68fa20-a93b-4204-a6b2-c6e5112a8b1f",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/kids/J.K. Rowling/Harry Potter/03 - Harry Potter and the Prisoner of Azkaban",
+   "relPath": "J.K. Rowling/Harry Potter/03 - Harry Potter and the Prisoner of Azkaban",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "9b130f73-498d-4058-94e5-9a72cbf2d5f1",
+    "metadata": {
+     "title": "Harry Potter and the Prisoner of Azkaban",
+     "subtitle": null,
+     "authorName": "J.K. Rowling",
+     "narratorName": "Stephen Fry",
+     "seriesName": "Harry Potter #3",
+     "isbn": null,
+     "asin": "B017WGLLXO"
+    },
+    "duration": 5700
+   }
+  },
+  {
+   "id": "ce07c0e5-32e2-4c32-95ee-86b6a03afb5b",
+   "libraryId": "771c554d-8974-4e02-abd2-3551b64fac40",
+   "folderId": "6f68fa20-a93b-4204-a6b2-c6e5112a8b1f",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/kids/J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone",
+   "relPath": "J.K. Rowling/Harry Potter/01 - Harry Potter and the Philosopher's Stone",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "0ba4e828-3f9e-4ba0-979e-603329f487ae",
+    "metadata": {
+     "title": "Harry Potter and the Philosopher's Stone",
+     "subtitle": null,
+     "authorName": "J.K. Rowling",
+     "narratorName": "Stephen Fry",
+     "seriesName": "Harry Potter #1",
+     "isbn": null,
+     "asin": "B017V568SY"
+    },
+    "duration": 4800
+   }
+  }
+ ],
+ "total": 7,
+ "limit": 0,
+ "page": 0,
+ "sortDesc": false,
+ "mediaType": "book",
+ "minified": true,
+ "collapseseries": false,
+ "include": "",
+ "offset": 0
+}

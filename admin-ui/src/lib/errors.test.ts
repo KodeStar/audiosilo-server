@@ -18,6 +18,28 @@ describe('errorMessage', () => {
     );
   });
 
+  it('words every import code the server sends', () => {
+    const codes = [
+      'invalid_url',
+      'invalid_import',
+      'import_running',
+      'import_not_found',
+      'import_not_ready',
+      'import_not_applied',
+      'import_applied',
+      'abs_unreachable',
+      'abs_unauthorized',
+      'not_abs',
+      'fetch_failed',
+    ];
+    for (const code of codes) {
+      expect(errorMessage(new ApiError(400, 'server words', code), t)).not.toBe('server words');
+    }
+    expect(errorMessage(new ApiError(400, 'cutoff must be "auto"', 'invalid_import'), t)).toMatch(
+      /^This server couldn't start the import/,
+    );
+  });
+
   it('passes other server messages through and explains network failures', () => {
     expect(errorMessage(new ApiError(500, 'could not list shares'), t)).toBe(
       'could not list shares',

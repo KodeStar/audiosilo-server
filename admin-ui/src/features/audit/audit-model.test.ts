@@ -18,6 +18,7 @@ const t = (key: string, opts?: Record<string, unknown>) => {
 const fmt = {
   number: (n: number) => n.toLocaleString('en'),
   date: (iso: string) => `date(${iso})`,
+  duration: (s: number) => (s > 0 ? `${s}s` : ''),
 };
 
 const ev = (action: string, details: Record<string, unknown>): AuditEvent => ({
@@ -125,5 +126,26 @@ describe('audit model', () => {
       { label: 'Books', value: '412' },
       { label: 'What to write', value: "Fill in what's missing" },
     ]);
+  });
+
+  it('words imports: the source by name and listening as a length', () => {
+    const tr = i18n.getFixedT('en');
+    const start = ev('import.start', { import: 7, source: 'abs' });
+    expect(actionText(start, tr)).toBe('Started an import');
+    expect(detailLines(start, tr, fmt)).toEqual([
+      { label: 'Import', value: '7' },
+      { label: 'From', value: 'Audiobookshelf' },
+    ]);
+    const apply = ev('import.apply', { import: 7, sessions: 1204, listened: 98_280 });
+    expect(actionText(apply, tr)).toBe('Applied an import');
+    expect(detailLines(apply, tr, fmt)).toEqual([
+      { label: 'Import', value: '7' },
+      { label: 'Sessions', value: '1,204' },
+      { label: 'Listened', value: '98280s' },
+    ]);
+    expect(detailLines(ev('import.apply', { listened: 0 }), tr, fmt)).toEqual([
+      { label: 'Listened', value: 'none' },
+    ]);
+    expect(actionText(ev('import.undo', { import: 7 }), tr)).toBe('Undid an import');
   });
 });

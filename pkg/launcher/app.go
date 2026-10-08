@@ -206,6 +206,11 @@ func Run(ctx context.Context, opts Options) error {
 	if err := cat.InterruptMatchRuns(ctx); err != nil {
 		log.Warn("settle interrupted match runs failed", "err", err)
 	}
+	// Listening imports a stopped server left: a fetch fails (its token died with
+	// the process), an apply goes back to review (it is one transaction).
+	if err := cat.InterruptImports(ctx); err != nil {
+		log.Warn("settle interrupted imports failed", "err", err)
+	}
 	go retention(ctx, cat, authSvc, a.SessionRetention, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})

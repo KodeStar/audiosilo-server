@@ -11,6 +11,7 @@ export const AUDIT_AREAS = [
   'device',
   'share',
   'progress',
+  'import',
   'library',
   'book',
   'issue',
@@ -25,11 +26,16 @@ type Translate = (key: string, opts?: Record<string, unknown>) => string;
 /** Details whose values are codes with words of their own (`audit.enum.<key>.<value>`). */
 const ENUMS = new Set(['password', 'mode', 'kind', 'source', 'role', 'error', 'scope']);
 
+/** Details whose values are seconds of listening, written as a length. */
+const DURATIONS = new Set(['listened']);
+
 /** How numbers and times are written in the console's language. */
 export interface Formatters {
   number: (n: number) => string;
   /** An ISO time as a date and time. */
   date: (iso: string) => string;
+  /** Seconds as a length ("27h 18m"), "" for none. */
+  duration: (seconds: number) => string;
 }
 
 /** One fact of an event as a label and a value, both already in words. */
@@ -118,6 +124,8 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
         ? v.map((k) => t(`notify.event.${String(k)}`, { defaultValue: String(k) })).join(', ')
         : t('audit.value.none');
     else if (key.endsWith('_at') && typeof v === 'string') value = fmt.date(v) || v;
+    else if (DURATIONS.has(key) && typeof v === 'number')
+      value = fmt.duration(v) || t('audit.value.none');
     else value = valueText(v, t, fmt);
     out.push({ label: label(key), value });
   }
