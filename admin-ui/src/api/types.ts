@@ -1116,6 +1116,17 @@ export interface ErrorEnvelope {
 
 // ---- Admin catalog (Phase 2a API, consumed by the Library and Book screens) ----
 
+/**
+ * A cover's colours (catalog.CoverColor): `bg` its dominant colour, `accent` its most
+ * vibrant one nudged to 4.5:1 against `bg` (absent when the art has none), `on_accent`
+ * the type colour on the accent. Each lowercase `#rrggbb`.
+ */
+export interface CoverColor {
+  bg: string;
+  accent?: string;
+  on_accent?: string;
+}
+
 /** One row of GET /admin/books (catalog.AdminBook, internal/catalog/adminbooks.go). */
 export interface AdminBook {
   library_id: number;
@@ -1144,6 +1155,8 @@ export interface AdminBook {
   added_at: string;
   has_cover: boolean;
   custom_cover: boolean;
+  /** Colours read from the cover art. Absent until the server has read the current art's colour. */
+  cover_color?: CoverColor;
   chapter_count: number;
   file_count: number;
   asin: string;

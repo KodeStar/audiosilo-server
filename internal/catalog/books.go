@@ -435,7 +435,7 @@ func bookDest(b *Book) (dest []any, finish func()) {
 			&b.Published, &b.HasCover, &art, &color},
 		func() {
 			b.CoverVersion = CoverVersion(art)
-			b.CoverColor, _ = decodeCoverColor(color, b.CoverVersion)
+			b.CoverColor, _ = storedCoverColor(art, color)
 		}
 }
 

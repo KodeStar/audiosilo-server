@@ -135,6 +135,21 @@ describe('series', () => {
     await waitFor(() => expect(card).toHaveTextContent('You have 1, 2 of 5; missing 3-5'));
   });
 
+  it("draws a spine in its cover's colours, as tall as the book is long", async () => {
+    const coloured = [
+      { ...books[0], duration: 45 * 3600, cover_color: { bg: '#1e2a50', accent: '#f0a020' } },
+      { ...books[1], duration: 4 * 3600 },
+      ...books.slice(2),
+    ];
+    mockFetch(routes({ 'GET /admin/books': { body: { books: coloured } } }));
+    renderApp('/library/series');
+    const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+    const first = within(card).getByRole('button', { name: '#1 The Way of Kings' });
+    expect(first.style.getPropertyValue('--c1')).toBe('#1e2a50');
+    const second = within(card).getByRole('button', { name: '#2 Words of Radiance' });
+    expect(parseFloat(first.style.height)).toBeGreaterThan(parseFloat(second.style.height));
+  });
+
   it('opens a book from its spine', async () => {
     mockFetch(routes());
     const { router } = renderApp('/library/series');

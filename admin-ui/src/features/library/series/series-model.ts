@@ -1,5 +1,6 @@
 import type { AdminBook, AdminBookPage, MetaSeries, MetaSeriesWork } from '@/api/types';
 import { refKey } from '@/lib/book-route';
+import { coverModel } from '@/lib/cover-model';
 import { hashString } from '@/lib/monogram';
 
 // The Series screen's pure parts: grouping the series-sorted book list into
@@ -205,7 +206,62 @@ export function metaCandidate(owned: AdminBook[]): AdminBook | undefined {
   return owned.find((b) => b.matched);
 }
 
-/** A spine's height as a share of the shelf (80-95%), varied but stable per title. */
-export function spineHeight(key: string): number {
-  return 80 + (hashString(key) % 16);
+/** Book lengths, in hours, at the shortest and tallest spines. */
+const SHORT_HOURS = 3;
+const LONG_HOURS = 30;
+
+/**
+ * A spine's height as a share of the shelf. A book's length sets it, on a log scale
+ * from 72% (3 h or less) to 98% (30 h or more), so a long book stands taller than a
+ * short one on every shelf. Without a length (`seconds` 0, or a missing entry), it
+ * is varied but stable per key (80-95%).
+ */
+export function spineHeight(seconds: number, key: string): number {
+  if (!(seconds > 0)) return 80 + (hashString(key) % 16);
+  const t = Math.log(seconds / 3600 / SHORT_HOURS) / Math.log(LONG_HOURS / SHORT_HOURS);
+  return Math.round(72 + 26 * Math.min(1, Math.max(0, t)));
+}
+
+/** A spine's colours: its body, its two bands and its type. */
+export interface SpineColors {
+  body: string;
+  band: string;
+  ink: string;
+}
+
+const INK = '#121c36';
+const WHITE = '#ffffff';
+
+/** WCAG relative luminance of `#rrggbb`. */
+function luminance(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const lin = (c: number) => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+}
+
+/** WCAG contrast ratio between two `#rrggbb` colours. */
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * A spine in its cover's colours, as the player's shelf draws one (its
+ * `spinePalette`, components/series/spine-colors.ts): the body is the cover's
+ * dominant colour, the bands its vibrant one (the server only sends one that reads
+ * on the body), else the type colour, and the type whichever of ink or white reads
+ * best on the body. A book whose cover colour the server hasn't read takes its
+ * procedural cover's palette instead, so it still keeps its colours between visits.
+ */
+export function spineColors(b: Pick<AdminBook, 'title' | 'author' | 'cover_color'>): SpineColors {
+  const cc = b.cover_color;
+  if (!cc) {
+    const [body, band, , ink] = coverModel(b.title, b.author).palette;
+    return { body, band, ink };
+  }
+  const ink = contrast(cc.bg, WHITE) >= contrast(cc.bg, INK) ? WHITE : INK;
+  return { body: cc.bg, band: cc.accent ?? ink, ink };
 }

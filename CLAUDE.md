@@ -111,6 +111,7 @@ internal/names/       reading people in an Author/Narrator credit: Split (the de
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
 internal/chapteralign/ fits a community recording's chapter list onto a book's own audio (pure, no I/O): anchors by title + time, places the rest in proportion, snaps each to its pause (an injected Prober); classifies fill/titles/refine/restructure/same or why not (length_mismatch, structure_mismatch, crosses_files). testdata/mythos is a real 34-vs-174-chapter golden case
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
+internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
@@ -789,8 +790,8 @@ admin overrides; see Metadata overrides below).
   own version as `cover_art`, so `cover_version` follows a sidecar replaced in place
   and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
   compare-and-set on the identity it was read under and bounded (250 ms, detached
-  from the request). Both are on the player `Book` JSON (`omitempty`). Admin book rows
-  carry `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
+  from the request). Both are on the player `Book` JSON (`omitempty`). Admin book rows (list and book page) also carry
+  `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
   `api/ratelimit.go`), read off the handler `mux.Handler` picks: static files
@@ -1161,9 +1162,9 @@ admin overrides; see Metadata overrides below).
   `books.scanned` keeps the metadata; `''` on a row from before 0035, whose rows are
   the scan's). `books.chapters_fit` (a hash of the fit in the rows) keeps an
   unchanged fit from being written again. Chapter renames (`chapter_overrides`, by
-  file + start) work on community chapters too. `Catalog.OnBookChange` (fired after
-  `UpsertBook`, `EditBook(s)`, `SetEnrichment` commit, and a library's new metadata
-  source re-resolving its books) wakes the background pass, so a
+  file + start) work on community chapters too. `Catalog.OnBookChange` (fired to every
+  listener after `UpsertBook`, `EditBook(s)`, `SetEnrichment`, `SetCover`/`DeleteCover` commit,
+  and a library's new metadata source re-resolving its books) wakes the background pass, so a
   scan, an applied match or a typed ASIN is checked without waiting for the
   10-minute tick. Wire (additive): `chapters_source: "community"` on `/chapters` and
   the book JSON; admin book page `chapter_source`, `chapter_choice`,
