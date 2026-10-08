@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,28 +12,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
-
-// doHost is e.do with the request's Host set, as a device on the home network
-// (or the internet) would address the server; "" keeps the test server's own.
-func (e *testEnv) doHost(t *testing.T, method, path, host, token, body string) (*http.Response, string) {
-	t.Helper()
-	var r io.Reader
-	if body != "" {
-		r = strings.NewReader(body)
-	}
-	req, _ := http.NewRequest(method, e.srv.URL+path, r)
-	req.Host = host
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	return resp, string(b)
-}
 
 type pairingWire struct {
 	BaseURL      string     `json:"base_url"`
@@ -97,7 +74,7 @@ func TestPairingCarriesAddresses(t *testing.T) {
 // device that address as home; with no public_url there is no away.
 func TestPairingAddressesDerivedFromLANRequest(t *testing.T) {
 	e := newTestEnv(t)
-	resp, body := e.doHost(t, "POST", "/api/v1/auth/redeem", "192.168.1.20:8080", "", `{"code":"`+e.authCode+`"}`)
+	resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, map[string]string{"Host": "192.168.1.20:8080"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("redeem = %d %s", resp.StatusCode, body)
 	}
@@ -119,7 +96,7 @@ func TestPairingAddressesDerivedFromLANRequest(t *testing.T) {
 func TestPairingWithoutAddresses(t *testing.T) {
 	e := newTestEnv(t)
 	for _, host := range []string{"", "books.example.com", "100.64.1.2:8080", "localhost:8080"} {
-		resp, body := e.doHost(t, "POST", "/api/v1/auth/redeem", host, "", `{"code":"`+e.authCode+`"}`)
+		resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, map[string]string{"Host": host})
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%q: redeem = %d %s", host, resp.StatusCode, body)
 		}
@@ -141,7 +118,7 @@ func TestPairingWithoutAddresses(t *testing.T) {
 func TestAuthPairCarriesAddresses(t *testing.T) {
 	e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "https://books.example.com" })
 	_, memberTok := opsTokens(t, e)
-	resp, body := e.doHost(t, "POST", "/api/v1/auth/pair", "nas.local:8080", memberTok, "")
+	resp, body := e.doHeaders(t, "POST", "/api/v1/auth/pair", memberTok, "", map[string]string{"Host": "nas.local:8080"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pair = %d %s", resp.StatusCode, body)
 	}
@@ -199,7 +176,7 @@ func TestDemoSessionCarriesAddresses(t *testing.T) {
 	e.cfg.Demo.Library = "Demo"
 	e.cfg.PublicURL = "https://demo.example.com"
 
-	resp, body := e.doHost(t, "POST", "/api/v1/demo/session", "192.168.1.20:8080", "", "")
+	resp, body := e.doHeaders(t, "POST", "/api/v1/demo/session", "", "", map[string]string{"Host": "192.168.1.20:8080"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("demo = %d %s", resp.StatusCode, body)
 	}
@@ -242,7 +219,7 @@ func TestGetAddresses(t *testing.T) {
 
 	// Allowed, from the home network: both addresses.
 	for _, tok := range []string{memberTok, adminTok, key} {
-		resp, body := e.doHost(t, "GET", "/api/v1/addresses", "192.168.1.20:8080", tok, "")
+		resp, body := e.doHeaders(t, "GET", "/api/v1/addresses", tok, "", map[string]string{"Host": "192.168.1.20:8080"})
 		var got Addresses
 		_ = json.Unmarshal([]byte(body), &got)
 		if resp.StatusCode != http.StatusOK || got != (Addresses{Home: "http://192.168.1.20:8080", Away: "https://books.example.com"}) {
@@ -250,7 +227,7 @@ func TestGetAddresses(t *testing.T) {
 		}
 	}
 	// From outside: the away address only.
-	if _, body := e.doHost(t, "GET", "/api/v1/addresses", "books.example.com", memberTok, ""); body != `{"away":"https://books.example.com"}`+"\n" {
+	if _, body := e.doHeaders(t, "GET", "/api/v1/addresses", memberTok, "", map[string]string{"Host": "books.example.com"}); body != `{"away":"https://books.example.com"}`+"\n" {
 		t.Fatalf("public request = %q", body)
 	}
 	// Nothing known: {}.

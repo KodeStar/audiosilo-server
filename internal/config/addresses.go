@@ -16,7 +16,7 @@ import (
 func (c *Config) Addresses(scheme, host string) (home, away string) {
 	away = strings.TrimRight(c.PublicURL, "/")
 	home = strings.TrimRight(c.LANURL, "/")
-	if home == "" && IsHomeNetworkHost(host) {
+	if home == "" && isHomeNetworkHost(host) {
 		home = scheme + "://" + host
 	}
 	if strings.EqualFold(home, away) {
@@ -25,14 +25,14 @@ func (c *Config) Addresses(scheme, host string) (home, away string) {
 	return home, away
 }
 
-// IsHomeNetworkHost reports whether a request's Host ("host" or "host:port", an
+// isHomeNetworkHost reports whether a request's Host ("host" or "host:port", an
 // IPv6 address in brackets) names this server on a home network: a private IP
 // (RFC 1918, IPv6 ULA fc00::/7), a link-local one, or a name ending in .local,
 // .lan or .home.arpa, or a single-label name. Loopback (127.0.0.0/8, ::1,
 // localhost) is not: no other device can reach it. Nor is carrier-grade NAT
 // space (100.64.0.0/10), which Go's IsPrivate leaves out: it is the ISP's
 // network, not the household's.
-func IsHomeNetworkHost(hostport string) bool {
+func isHomeNetworkHost(hostport string) bool {
 	host := hostport
 	if h, port, err := net.SplitHostPort(hostport); err == nil {
 		if !isPort(port) {

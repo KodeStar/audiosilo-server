@@ -253,17 +253,16 @@ admin overrides; see Metadata overrides below).
   `/auth/pair` + demo tokens stay unlinked/single-use. Invite codes minted via
   the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
   `handlers_admin.go`); explicit values override.
-- **Home and away addresses (`addresses` capability, player redesign Phase 5)**: a server
+- **Home and away addresses (`addresses` capability)**: a server
   has an **away** address (`public_url`, works from anywhere) and may have a **home** one
   (`lan_url` / `AUDIOSILO_LAN_URL` / console `general.lan_url`, live; else derived from the
   request's own `Host` when that is a home-network host). The pure core is
-  `config.Addresses(scheme, host)` + `config.IsHomeNetworkHost` (private RFC 1918 / ULA
+  `config.Addresses(scheme, host)` + `config.isHomeNetworkHost` (private RFC 1918 / ULA
   `fc00::/7` / link-local IPs, `.local` / `.lan` / `.home.arpa` names, single-label names;
   NOT loopback, `localhost` or CGNAT `100.64.0.0/10`); a home equal to the away is dropped;
   `X-Forwarded-*` is not trusted (like `baseURL`). `api.addresses(r)` wraps it. It rides on
   every pairing payload (`addresses`, nil when both empty) and as `home=`/`away=` params
-  APPENDED after the existing ones on `uri` and `web_url` (only when non-empty, so a link
-  without them is byte-identical to before), on the exchange / login / demo session
+  APPENDED after the existing ones on `uri` and `web_url` (only when non-empty), on the exchange / login / demo session
   envelopes (`sessionEnvelope`), and at `GET /addresses` (any signed-in user, `{}` when
   neither) so an already-paired device learns a newly set address. Native apps probe the
   home address and check its `server_id` before sending a token there.

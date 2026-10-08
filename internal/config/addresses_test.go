@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestIsHomeNetworkHost(t *testing.T) {
+func TestHomeNetworkHost(t *testing.T) {
 	cases := []struct {
 		host string
 		want bool
@@ -75,8 +75,8 @@ func TestIsHomeNetworkHost(t *testing.T) {
 		{"[nas]:8080", false},
 	}
 	for _, tc := range cases {
-		if got := IsHomeNetworkHost(tc.host); got != tc.want {
-			t.Errorf("IsHomeNetworkHost(%q) = %v, want %v", tc.host, got, tc.want)
+		if got := isHomeNetworkHost(tc.host); got != tc.want {
+			t.Errorf("isHomeNetworkHost(%q) = %v, want %v", tc.host, got, tc.want)
 		}
 	}
 }

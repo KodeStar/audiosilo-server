@@ -106,7 +106,8 @@ func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Resp
 	return e.doHeaders(t, method, path, token, body, nil)
 }
 
-// doHeaders is do with extra request headers.
+// doHeaders is do with extra request headers. A "Host" entry sets the request's
+// Host (as a device on the home network would address the server).
 func (e *testEnv) doHeaders(t *testing.T, method, path, token, body string, headers map[string]string) (*http.Response, string) {
 	t.Helper()
 	var r io.Reader
@@ -118,6 +119,10 @@ func (e *testEnv) doHeaders(t *testing.T, method, path, token, body string, head
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	for k, v := range headers {
+		if k == "Host" {
+			req.Host = v
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	resp, err := http.DefaultClient.Do(req)
