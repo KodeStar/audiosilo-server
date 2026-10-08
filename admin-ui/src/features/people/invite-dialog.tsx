@@ -55,12 +55,14 @@ export function InviteDialog({
 }) {
   const { t } = useTranslation();
   const [shown, setShown] = useState<ShownInvite>();
-  const change = (o: boolean) => {
-    onOpenChange(o);
-    if (!o) setShown(undefined);
-  };
+  // Back to the form only once the close has finished: swapping the content while
+  // the dialog animates out mounts a fresh popup that Base UI never unmounts.
   return (
-    <Dialog open={open} onOpenChange={change}>
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={(o) => !o && setShown(undefined)}
+    >
       {shown ? (
         <InviteResultContent invite={shown} />
       ) : (

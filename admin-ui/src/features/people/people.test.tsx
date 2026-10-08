@@ -206,6 +206,22 @@ describe('a person', () => {
     });
   });
 
+  it('pairs another device, and closing the invite card leaves no dialog behind', async () => {
+    mockFetch(routes({ 'POST /admin/users/2/authcode': { status: 201, body: created } }));
+    renderApp('/people/user/2?tab=invites');
+    const user = userEvent.setup();
+    for (const close of ['Done', 'Close']) {
+      await user.click(await screen.findByRole('button', { name: 'Pair a device' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Pair a device for sam' });
+      expect(within(dialog).getByText(/for sam's next phone/)).toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Create invite' }));
+      const ready = await screen.findByRole('dialog', { name: 'Invite ready for sam' });
+      await user.click(within(ready).getByRole('button', { name: close }));
+      // The form must not come back as a stray popup while the dialog closes.
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    }
+  });
+
   it("doesn't let an admin demote, disable or delete themselves", async () => {
     mockFetch(routes());
     renderApp('/people/user/1?tab=account');
