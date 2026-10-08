@@ -10,7 +10,14 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useDebounced } from '@/lib/use-debounced';
 import { cn } from '@/lib/utils';
 import type { LibrarySearch, Update } from '../library-search';
-import { activeFilters, sheetFilterCount, withoutFilter, withoutFilters } from './books-model';
+import {
+  activeFilters,
+  defaultSort,
+  sheetFilterCount,
+  sortOf,
+  withoutFilter,
+  withoutFilters,
+} from './books-model';
 import { chipClass } from './chip-class';
 import { chipLabel } from './filter-labels';
 
@@ -34,7 +41,7 @@ export function BooksToolbar({
 }) {
   const { t } = useTranslation();
   const count = sheetFilterCount(search);
-  const sort = search.sort ?? 'title';
+  const sort = sortOf(search);
 
   return (
     // Sticks under the sticky header: both its rows, and their hairlines.
@@ -62,9 +69,11 @@ export function BooksToolbar({
           value={sort}
           onChange={(e) => {
             const next = e.target.value as AdminBookSort;
+            // A chosen sort is kept, so it survives a filter changing the default;
+            // only the plain list's own default (title) is left out of the URL.
             update((prev) => ({
               ...prev,
-              sort: next === 'title' ? undefined : next,
+              sort: next === 'title' && defaultSort(prev) === 'title' ? undefined : next,
               order: undefined,
             }));
           }}

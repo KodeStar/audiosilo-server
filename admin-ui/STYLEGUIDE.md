@@ -469,7 +469,7 @@ bold, muted subtitle; `↵` hint on the active row; footer with key hints and re
 
 ### Cover _custom, signature_
 
-Square (audiobook covers are square), radius 5, `--shadow-cover`, a faint spine crease + gloss overlay
+Square (audiobook covers are square; art that isn't is shown whole over a blurred copy of itself), radius 5, `--shadow-cover`, a faint spine crease + gloss overlay
 and a noise texture. Real art when present. Otherwise a **procedural cover**: deterministic from
 `title|author`; layout by genre (sci-fi planet, epic gold-frame sigil, literary colour field + serif
 italic, crime black band + condensed type, non-fiction bold grotesk + rule, kids hills + rounded type,
@@ -481,9 +481,9 @@ component (not an innerHTML string) so it stays CSP-clean; set `--c1..--c3`, `--
 
 ### Cover tile, shelf row, cover grid _custom_
 
-Tile = cover + 2-line title + muted author/series. Hover lifts the cover; a checkbox appears top-left
-(always visible once anything is selected); up to two flag chips top-right (no cover, unmatched,
-transcode, suspect, duplicate). Selected = cover scales to 94% inside a 2.5px pink ring.
+Tile = cover + 2-line title + muted author/series (the author links to their books). Hover lifts
+the cover; a checkbox appears top-left (always visible once anything is selected); up to two flag
+chips top-right (no cover, unmatched, transcode, suspect, duplicate). Selected = cover scales to 94% inside a 2.5px pink ring.
 Shelf rows scroll horizontally with snap; the grid is `repeat(auto-fill, minmax(158px, 1fr))`
 (2 columns on mobile), virtualized in production.
 

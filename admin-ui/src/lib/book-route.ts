@@ -1,4 +1,5 @@
 import type { BookRef } from '@/api/types';
+import type { LibrarySearch } from '@/features/library/library-search';
 
 /**
  * Link props for a book's page (`<Link {...bookRoute(…)}>`, `navigate(bookRoute(…))`).
@@ -28,3 +29,29 @@ export const refOf = (b: { library_id: number; path: string }): BookRef => ({
 
 /** A book's identity as one string, for Map keys and React keys (library + path, never an id). */
 export const refKey = (b: BookRef) => `${b.library_id}\0${b.path}`;
+
+/** The exact-value filters a name or series links to the Books list with. */
+export type BooksField = 'author' | 'narrator' | 'series';
+
+/** Whether a field (a table column's id, say) is one the Books list filters on exactly. */
+export const isBooksField = (f: string): f is BooksField =>
+  f === 'author' || f === 'narrator' || f === 'series';
+
+/**
+ * Link props for the Books list filtered to one author, narrator or series
+ * (an exact effective value), keeping the library the current page is scoped
+ * to and, from the list itself, its view. Components link with BooksLink,
+ * which keeps these props stable.
+ */
+export function booksRoute(field: BooksField, value: string) {
+  const filter: Pick<LibrarySearch, BooksField> = { [field]: value };
+  return {
+    to: '/library/{-$section}',
+    params: { section: undefined },
+    search: (prev: Pick<LibrarySearch, 'library' | 'view'>) => ({
+      library: prev.library,
+      view: prev.view,
+      ...filter,
+    }),
+  } as const;
+}

@@ -146,6 +146,17 @@ describe('series', () => {
     expect(router.state.location.search).toEqual({ library: 1, path: books[1].path });
   });
 
+  it('links the series name to its books', async () => {
+    mockFetch(routes());
+    const { router } = renderApp('/library/series?library=1');
+    const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+    await userEvent
+      .setup()
+      .click(within(card).getByRole('link', { name: 'The Stormlight Archive' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/library'));
+    expect(router.state.location.search).toEqual({ library: 1, series: 'The Stormlight Archive' });
+  });
+
   it('says a complete series is complete', async () => {
     mockFetch(
       routes({

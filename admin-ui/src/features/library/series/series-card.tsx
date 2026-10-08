@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
 import { useBookMeta, useBookWorks } from '@/api/hooks';
 import type { AdminBook, SeriesCount } from '@/api/types';
+import { BooksLink } from '@/components/books-link';
 import { BookCover } from '@/components/book-cover';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
@@ -24,11 +25,11 @@ import {
 import { useInView } from './use-in-view';
 
 /**
- * One series: its name, author and what the server holds, then the books as
- * spines on a shelf (missing entries as dashed ghosts, from the community rail
- * of one of its books, fetched once the card nears the viewport). The matched
- * books are then resolved to their community works, so each lands on its own
- * entry whatever its series index says.
+ * One series: its name (a link to its books), author and what the server
+ * holds, then the books as spines on a shelf (missing entries as dashed ghosts,
+ * from the community rail of one of its books, fetched once the card nears the
+ * viewport). The matched books are then resolved to their community works, so
+ * each lands on its own entry whatever its series index says.
  */
 export function SeriesCard({
   series: s,
@@ -80,7 +81,9 @@ export function SeriesCard({
       <div className="mb-[18px] flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-[3px]">
           <h2 id={headingId} className="h2 [overflow-wrap:anywhere]">
-            {s.name}
+            <BooksLink field="series" value={s.name} className="underline-offset-3 hover:underline">
+              {s.name}
+            </BooksLink>
           </h2>
           <span className="text-muted-foreground tabular-nums">
             {s.author ? `${s.author} · ` : null}

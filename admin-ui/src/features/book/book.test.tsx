@@ -35,6 +35,12 @@ function routes(detail: AdminBookDetail, over: Record<string, MockRoute> = {}) {
   });
 }
 
+/** A link's path and search params. */
+function linkTarget(link: HTMLElement) {
+  const url = new window.URL(link.getAttribute('href') ?? '', 'http://admin.test');
+  return [url.pathname, Object.fromEntries(url.searchParams)];
+}
+
 const patches = (calls: MockRequest[]) =>
   calls.filter((c) => c.method === 'PATCH' && c.path === '/admin/libraries/1/book');
 
@@ -50,7 +56,21 @@ describe('book page', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('The Stormlight Archive · Book 1')).toBeInTheDocument();
+    // The byline: each name and the series link to their books, in this library.
+    const byline = (name: string) => linkTarget(screen.getByRole('link', { name }));
+    expect(byline('Michael Kramer & Kate Reading')).toEqual([
+      '/admin/library',
+      { library: '1', narrator: 'Michael Kramer & Kate Reading' },
+    ]);
+    expect(byline('The Stormlight Archive')).toEqual([
+      '/admin/library',
+      { library: '1', series: 'The Stormlight Archive' },
+    ]);
+    expect(
+      screen.getByRole('link', { name: 'The Stormlight Archive' }).closest('p'),
+    ).toHaveTextContent(
+      'by Brandon Sanderson · read by Michael Kramer & Kate Reading · book 1 in The Stormlight Archive',
+    );
     expect(within(row('Title')).getByText('File tag')).toBeInTheDocument();
     expect(within(row('Series')).getByText('Path')).toBeInTheDocument();
     expect(within(row('ASIN')).getByText('Community')).toBeInTheDocument();
@@ -58,7 +78,10 @@ describe('book page', () => {
     // Breadcrumb, chapters, listeners, access and the disk section.
     const crumbs = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(within(crumbs).getByText('Fiction')).toBeInTheDocument();
-    expect(within(crumbs).getByText('Brandon Sanderson')).toBeInTheDocument();
+    expect(linkTarget(within(crumbs).getByRole('link', { name: 'Brandon Sanderson' }))).toEqual([
+      '/admin/library',
+      { library: '1', author: 'Brandon Sanderson' },
+    ]);
     expect(screen.getByText('2 chapters across 1 file · 45h 30m')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'sam' })).toHaveAttribute(
       'href',

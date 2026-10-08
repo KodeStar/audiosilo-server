@@ -61,9 +61,17 @@ export function bookFilter(s: LibrarySearch, now: number): BookFilter {
   });
 }
 
+/** The ordering a list opens in: one series in reading order, else by title. */
+export function defaultSort(s: LibrarySearch): AdminBookSort {
+  return s.series ? 'series' : 'title';
+}
+
+/** The list's ordering: the chosen one, else the filter's default. */
+export const sortOf = (s: LibrarySearch): AdminBookSort => s.sort ?? defaultSort(s);
+
 /** One page request of the full list (the cursor is added per page). */
 export function listParams(s: LibrarySearch, now: number): Omit<BookListParams, 'cursor'> {
-  const sort = s.sort ?? 'title';
+  const sort = sortOf(s);
   return { ...bookFilter(s, now), sort, order: s.order ?? defaultOrder(sort), limit: PAGE_SIZE };
 }
 

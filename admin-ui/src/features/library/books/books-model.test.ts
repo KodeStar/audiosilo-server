@@ -7,6 +7,7 @@ import {
   curatingShelf,
   daysAgo,
   defaultOrder,
+  defaultSort,
   facetOptions,
   gridLayout,
   isBrowsing,
@@ -112,6 +113,15 @@ describe('listParams', () => {
       sort: 'duration',
       order: 'desc',
       limit: 60,
+    });
+  });
+
+  it('opens one series in reading order', () => {
+    expect(defaultSort({ series: 'Mistborn' })).toBe('series');
+    expect(defaultSort({ author: 'Brandon Sanderson' })).toBe('title');
+    expect(listParams({ series: 'Mistborn' }, NOW)).toMatchObject({ sort: 'series', order: 'asc' });
+    expect(listParams({ series: 'Mistborn', sort: 'added' }, NOW)).toMatchObject({
+      sort: 'added',
     });
   });
 
