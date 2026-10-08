@@ -260,6 +260,20 @@ admin overrides; see Metadata overrides below).
   `/auth/pair` + demo tokens stay unlinked/single-use. Invite codes minted via
   the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
   `handlers_admin.go`); explicit values override.
+- **Home and away addresses (`addresses` capability)**: a server
+  has an **away** address (`public_url`, works from anywhere) and may have a **home** one
+  (`lan_url` / `AUDIOSILO_LAN_URL` / console `general.lan_url`, live; else derived from the
+  request's own `Host` when that is a home-network host). The pure core is
+  `config.Addresses(scheme, host)` + `config.isHomeNetworkHost` (private RFC 1918 / ULA
+  `fc00::/7` / link-local IPs, `.local` / `.lan` / `.home.arpa` / `.internal` names, single-label names;
+  NOT loopback, `localhost` or CGNAT `100.64.0.0/10`); a home equal to the away is dropped;
+  `X-Forwarded-*` is not trusted (like `baseURL`), and a proxied request (any forwarding
+  header) derives no home (its Host is the proxy's upstream). `api.addresses(r)` wraps it. It rides on
+  every pairing payload (`addresses`, nil when both empty) and as `home=`/`away=` params
+  APPENDED after the existing ones on `uri` and `web_url` (only when non-empty), on the exchange / login / demo session
+  envelopes (`sessionEnvelope`), and at `GET /addresses` (any signed-in user, `{}` when
+  neither) so an already-paired device learns a newly set address. Native apps probe the
+  home address and check its `server_id` before sending a token there.
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
   `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
   expires). Both pair through the same `ResolveAuthCode` → `IssuePairingToken` →
@@ -975,7 +989,7 @@ admin overrides; see Metadata overrides below).
   `setting_locked` + `field`). The API never mutates a config: `API.boot` is the config the server started
   with (restart-only settings read it: bind, TLS, web_dir, metadata.base_url, demo on/off + idle_ttl) and
   `API.live` (`liveConfig`, read via `a.config()`) is swapped whole by a save, carrying the parsed trusted
-  proxies and CORS origins, so name, public URL, CORS, proxies, app links, metadata on/off and the demo
+  proxies and CORS origins, so name, public URL, home address (`lan_url`), CORS, proxies, app links, metadata on/off and the demo
   library/cap apply on the next request. `restart_pending` lists restart settings whose saved value differs
   from `boot`. New keys: `name` (`DisplayName`: GET /server `name`, pairing `server_name`; default
   "AudioSilo") and `update_check` (default true, `AUDIOSILO_UPDATE_CHECK`). `GET /admin/system`
@@ -1135,7 +1149,9 @@ admin overrides; see Metadata overrides below).
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
 `export`, `browse_people`, `cover_sizes`, `next_book`, `queue`, `collections`,
-`user_stats`, `ratings`, `progress_edit`, `my_devices`); flip them on as phases land.
+`user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`); flip them on
+as phases land. `addresses` is true (home/away addresses on pairing, exchange and login, and
+`GET /addresses`; see Home and away addresses above).
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
 (`GET /libraries/{id}/next`). `queue`, `collections`, `user_stats`, `ratings`,

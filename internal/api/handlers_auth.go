@@ -47,6 +47,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"progress_edit": true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
 			"my_devices":    true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
 			"annotations":   true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
+			"addresses":     true,                 // home/away addresses on pairing, exchange and login; GET /addresses
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
@@ -160,11 +161,25 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.reportSignIn(r, full, req.DeviceName, codeKind == auth.CodeInvite)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"token":     session,
-		"user":      full,
-		"server_id": a.config().ServerID, // so the client keys its per-server state at pairing time
-	})
+	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session, full))
+}
+
+// sessionEnvelope is the answer to a sign-in (exchange, login, demo): the session
+// token, the account, the server's stable id (so the client keys its per-server
+// state at pairing time) and, when any is known, its home/away addresses.
+func (a *API) sessionEnvelope(r *http.Request, token string, user *auth.User) map[string]any {
+	out := map[string]any{"token": token, "user": user, "server_id": a.config().ServerID}
+	if ad := a.pairingAddresses(r); ad != nil {
+		out["addresses"] = ad
+	}
+	return out
+}
+
+// handleAddresses reports the server's home and away addresses as seen from this
+// request, so an already-paired device learns an address configured since it
+// paired. Any signed-in user, demo included; {} when neither is known.
+func (a *API) handleAddresses(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.addresses(r))
 }
 
 // handleLogin authenticates username/password and issues a session token.
@@ -206,7 +221,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !knownBrowser {
 		a.reportSignIn(r, full, req.DeviceName, false)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"token": session, "user": full, "server_id": a.config().ServerID})
+	writeJSON(w, http.StatusOK, a.sessionEnvelope(r, session, full))
 }
 
 // handlePair issues a fresh pairing QR for the already-authenticated user, e.g.

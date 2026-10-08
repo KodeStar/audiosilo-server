@@ -1645,6 +1645,8 @@
   "settings.general.nameBody": "Affiché dans les applications à la connexion, dans les invitations et dans cette console. Laissez vide pour AudioSilo.",
   "settings.general.public_url": "Adresse publique",
   "settings.general.public_urlBody": "L'adresse que les gens utilisent depuis l'extérieur de chez vous, employée dans les liens d'invitation et les QR codes. Laissez vide pour utiliser l'adresse utilisée par le navigateur.",
+  "settings.general.lan_url": "Adresse locale",
+  "settings.general.lan_urlBody": "L'adresse que les appareils utilisent sur votre réseau domestique, par exemple http://192.168.1.20:8080. Les applications y basculent d'elles-mêmes quand elles peuvent la joindre. Laissez vide pour utiliser l'adresse utilisée par le navigateur lorsqu'il s'agit d'une adresse du réseau domestique.",
   "settings.general.history": "Historique d'écoute",
   "settings.general.historyBody": "Chaque session d'écoute note l'appareil, l'application et l'heure. Passé ce nombre de jours, ces détails sont supprimés et la session est ajoutée aux totaux quotidiens par personne et par livre, que les pages Activité conservent.",
   "settings.general.session_days": "Jours de conservation des sessions",

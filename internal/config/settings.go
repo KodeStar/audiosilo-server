@@ -42,6 +42,8 @@ var fields = []field{
 	{key: "name", setting: "general.name", ptr: func(c *Config) any { return &c.Name }, fix: fixName},
 	{key: "public_url", env: "AUDIOSILO_PUBLIC_URL", setting: "general.public_url",
 		ptr: func(c *Config) any { return &c.PublicURL }, fix: fixPublicURL},
+	{key: "lan_url", env: "AUDIOSILO_LAN_URL", setting: "general.lan_url",
+		ptr: func(c *Config) any { return &c.LANURL }, fix: fixLANURL},
 	{key: "update_check", env: "AUDIOSILO_UPDATE_CHECK", setting: "general.update_check",
 		ptr: func(c *Config) any { return &c.UpdateCheck }},
 	{key: "activity.session_days", env: "AUDIOSILO_SESSION_DAYS", setting: "general.session_days",
@@ -428,6 +430,11 @@ func httpURL(raw string) (string, error) {
 
 func fixPublicURL(c *Config) (err error) {
 	c.PublicURL, err = httpURL(c.PublicURL)
+	return err
+}
+
+func fixLANURL(c *Config) (err error) {
+	c.LANURL, err = httpURL(c.LANURL)
 	return err
 }
 

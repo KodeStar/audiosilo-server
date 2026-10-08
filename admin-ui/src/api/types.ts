@@ -401,6 +401,8 @@ export interface AdminSettings {
     name: string;
     /** "" = derived from each request's host. */
     public_url: string;
+    /** The home-network address; "" = derived from a request on a home-network host. */
+    lan_url: string;
     update_check: boolean;
     /** Days raw listening sessions are kept before they become daily totals (30-3650). */
     session_days: number;

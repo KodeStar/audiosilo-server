@@ -92,12 +92,9 @@ func (a *API) handleDemoSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"token":     session,
-		"user":      u,
-		"pairing":   payload,
-		"server_id": a.config().ServerID,
-	})
+	out := a.sessionEnvelope(r, session, u)
+	out["pairing"] = payload
+	writeJSON(w, http.StatusOK, out)
 }
 
 // randomDemoSuffix returns a short random, username-safe suffix for demo accounts.

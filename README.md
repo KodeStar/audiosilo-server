@@ -154,7 +154,9 @@ docker compose logs            # first run prints the admin password + auth code
 ```
 
 Edit `docker-compose.yml` to mount your audiobooks read-only, persist `./data`, and
-set `AUDIOSILO_PUBLIC_URL` (used to build QR/invite links). Set **`PUID`/`PGID`** to
+set `AUDIOSILO_PUBLIC_URL` (used to build QR/invite links) and, optionally,
+`AUDIOSILO_LAN_URL` (the server's home-network address, e.g. `http://192.168.1.20:8080`,
+which the apps switch to when they can reach it). Set **`PUID`/`PGID`** to
 the user that should own `/data` (Unraid: `99`/`100`; generic Linux: your `id -u`/
 `id -g`) - the entrypoint chowns the data dir and runs the server as that user, so
 it works regardless of how the mounted volume is owned. Update - server or the

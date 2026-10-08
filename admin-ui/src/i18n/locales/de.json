@@ -1535,6 +1535,8 @@
   "settings.general.nameBody": "Wird in den Apps beim Verbinden, in Einladungen und in dieser Konsole angezeigt. Leer lassen für AudioSilo.",
   "settings.general.public_url": "Öffentliche Adresse",
   "settings.general.public_urlBody": "Die Adresse, die Leute von außerhalb deines Zuhauses nutzen, verwendet in Einladungslinks und QR-Codes. Leer lassen, um die Adresse zu nutzen, die der Browser verwendet hat.",
+  "settings.general.lan_url": "Heimadresse",
+  "settings.general.lan_urlBody": "Die Adresse, die Geräte in deinem Heimnetz nutzen, z. B. http://192.168.1.20:8080. Die Apps wechseln von selbst dorthin, wenn sie sie erreichen. Leer lassen, um die Adresse zu nutzen, die der Browser verwendet hat, wenn es eine Adresse im Heimnetz ist.",
   "settings.general.history": "Hörverlauf",
   "settings.general.historyBody": "Jede Hörsitzung hält Gerät, App und Tageszeit fest. Nach so vielen Tagen fallen diese Details weg und die Sitzung geht in die Tagessummen pro Person und Buch ein, die die Aktivitätsseiten behalten.",
   "settings.general.session_days": "Tage, die Sitzungen behalten werden",

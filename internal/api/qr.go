@@ -33,6 +33,73 @@ type PairingPayload struct {
 	// for recovery codes, /auth/pair and demo tokens (and nil = unlimited).
 	CodeExpiresAt string `json:"code_expires_at,omitempty"`
 	UsesRemaining *int   `json:"uses_remaining,omitempty"`
+	// Addresses is the server's home and away addresses (the `addresses`
+	// capability), also carried by URI and WebURL as home=/away= params; nil when
+	// neither is known.
+	Addresses *Addresses `json:"addresses,omitempty"`
+}
+
+// Addresses is the server's address on the household network (Home) and the one
+// that works from anywhere (Away, the public_url). A native app pairs with either
+// and switches to Home when it can reach it. Either may be empty.
+type Addresses struct {
+	Home string `json:"home,omitempty"`
+	Away string `json:"away,omitempty"`
+}
+
+// addresses is the server's home and away addresses as seen from r: the
+// configured lan_url and public_url, else a home address derived from the
+// request's own Host when that is a home-network one (config.Addresses). Like
+// baseURL it does not trust X-Forwarded-*, and a proxied request (one carrying
+// any forwarding header) derives no home address: its Host and scheme are the
+// proxy's upstream (a container name, a bridge IP, plain http behind TLS), not
+// an address a device can use.
+func (a *API) addresses(r *http.Request) Addresses {
+	host := r.Host
+	if proxied(r) {
+		host = ""
+	}
+	home, away := a.config().Addresses(requestScheme(r), host)
+	return Addresses{Home: home, Away: away}
+}
+
+// proxied reports whether r passed through a reverse proxy: it carries a
+// forwarding header. A device on the home network talking to the server
+// directly sends none.
+func proxied(r *http.Request) bool {
+	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// pairingAddresses is addresses for a pairing payload: nil when both are empty.
+func (a *API) pairingAddresses(r *http.Request) *Addresses {
+	if ad := a.addresses(r); ad != (Addresses{}) {
+		return &ad
+	}
+	return nil
+}
+
+// query is the addresses as link params (home=, away=), only those set; "" for
+// none, else a leading "&" so it appends to a link's existing query.
+func (ad *Addresses) query() string {
+	if ad == nil {
+		return ""
+	}
+	v := url.Values{}
+	if ad.Home != "" {
+		v.Set("home", ad.Home)
+	}
+	if ad.Away != "" {
+		v.Set("away", ad.Away)
+	}
+	if len(v) == 0 {
+		return ""
+	}
+	return "&" + v.Encode()
 }
 
 // AppLinks points clients at the ways to connect. Mobile app stores are
@@ -57,20 +124,27 @@ func (a *API) baseURL(r *http.Request) string {
 	if u := a.config().PublicURL; u != "" {
 		return strings.TrimRight(u, "/")
 	}
-	scheme := "http"
+	return requestScheme(r) + "://" + r.Host
+}
+
+// requestScheme is the scheme r arrived over: https on a TLS connection, else http.
+func requestScheme(r *http.Request) string {
 	if r.TLS != nil {
-		scheme = "https"
+		return "https"
 	}
-	return scheme + "://" + r.Host
+	return "http"
 }
 
 // buildPairing constructs the pairing payload (and QR PNG) for a token.
 func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, error) {
 	base := a.baseURL(r)
+	addrs := a.pairingAddresses(r)
 	// HTTPS handoff encoded in the QR: scanning it opens the native app when the
 	// app claims this domain (iOS Universal / Android App Link), otherwise it opens
 	// the embedded web player's connect route, which exchanges the pairing token.
-	webURL := base + "/web/connect?" + url.Values{"token": {token}}.Encode()
+	// The home/away params come after the existing ones, so a link without them
+	// reads exactly as before (older clients ignore params they don't know).
+	webURL := base + "/web/connect?" + url.Values{"token": {token}}.Encode() + addrs.query()
 	// Custom-scheme deep link for an explicit "Open in app" button. Custom schemes
 	// are not domain-bound, so this launches an installed app on any self-hosted
 	// domain. How many devices can exchange the token is governed by its origin
@@ -78,7 +152,7 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	appURI := "audiosilo://connect?" + url.Values{
 		"server": {base},
 		"token":  {token},
-	}.Encode()
+	}.Encode() + addrs.query()
 
 	png, err := qrcode.Encode(webURL, qrcode.Medium, 512)
 	if err != nil {
@@ -91,6 +165,7 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 		URI:          appURI,
 		WebURL:       webURL,
 		PNGDataURI:   "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
+		Addresses:    addrs,
 		Links: AppLinks{
 			Web:   base + "/web",
 			Admin: base + "/admin",
