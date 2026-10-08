@@ -94,6 +94,8 @@ func TestAddresses(t *testing.T) {
 		{"derived from a LAN request", "https://books.example.com", "", "http", "192.168.1.20:8080",
 			"http://192.168.1.20:8080", "https://books.example.com"},
 		{"derived keeps the request's scheme", "", "", "https", "nas.local:8443", "https://nas.local:8443", ""},
+		{"a bare IPv6 host is bracketed", "", "", "http", "fd12:3456::20", "http://[fd12:3456::20]", ""},
+		{"a bracketed IPv6 host is kept", "", "", "http", "[fd12:3456::20]:8080", "http://[fd12:3456::20]:8080", ""},
 		{"configured lan wins over the request", "https://books.example.com", "http://10.0.0.2:8080/", "http", "192.168.1.20:8080",
 			"http://10.0.0.2:8080", "https://books.example.com"},
 		{"configured lan on a public request", "https://books.example.com", "http://10.0.0.2:8080", "https", "books.example.com",

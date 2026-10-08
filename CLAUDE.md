@@ -260,7 +260,8 @@ admin overrides; see Metadata overrides below).
   `config.Addresses(scheme, host)` + `config.isHomeNetworkHost` (private RFC 1918 / ULA
   `fc00::/7` / link-local IPs, `.local` / `.lan` / `.home.arpa` names, single-label names;
   NOT loopback, `localhost` or CGNAT `100.64.0.0/10`); a home equal to the away is dropped;
-  `X-Forwarded-*` is not trusted (like `baseURL`). `api.addresses(r)` wraps it. It rides on
+  `X-Forwarded-*` is not trusted (like `baseURL`), and a proxied request (any forwarding
+  header) derives no home (its Host is the proxy's upstream). `api.addresses(r)` wraps it. It rides on
   every pairing payload (`addresses`, nil when both empty) and as `home=`/`away=` params
   APPENDED after the existing ones on `uri` and `web_url` (only when non-empty), on the exchange / login / demo session
   envelopes (`sessionEnvelope`), and at `GET /addresses` (any signed-in user, `{}` when

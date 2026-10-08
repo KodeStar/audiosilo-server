@@ -114,6 +114,29 @@ func TestPairingWithoutAddresses(t *testing.T) {
 	}
 }
 
+// A request through a reverse proxy derives no home address from its Host (the
+// proxy's upstream, e.g. a container name or bridge IP); a configured lan_url
+// still applies.
+func TestProxiedRequestDerivesNoHome(t *testing.T) {
+	e := newTestEnv(t)
+	_, memberTok := opsTokens(t, e)
+	for _, fwd := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		for _, host := range []string{"audiosilo:8080", "172.18.0.5:8080"} {
+			_, body := e.doHeaders(t, "GET", "/api/v1/addresses", memberTok, "", map[string]string{"Host": host, fwd: "x"})
+			if body != "{}\n" {
+				t.Fatalf("%s via %s = %q, want {}", host, fwd, body)
+			}
+		}
+	}
+
+	set := newTestEnvWith(t, func(c *config.Config) { c.LANURL = "http://192.168.1.20:8080" })
+	_, setMember := opsTokens(t, set)
+	_, body := set.doHeaders(t, "GET", "/api/v1/addresses", setMember, "", map[string]string{"Host": "audiosilo:8080", "X-Forwarded-For": "203.0.113.9"})
+	if body != `{"home":"http://192.168.1.20:8080"}`+"\n" {
+		t.Fatalf("configured lan_url behind a proxy = %q", body)
+	}
+}
+
 // /auth/pair (an existing session adding a device) carries them too.
 func TestAuthPairCarriesAddresses(t *testing.T) {
 	e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "https://books.example.com" })

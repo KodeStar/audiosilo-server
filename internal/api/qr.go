@@ -50,10 +50,29 @@ type Addresses struct {
 // addresses is the server's home and away addresses as seen from r: the
 // configured lan_url and public_url, else a home address derived from the
 // request's own Host when that is a home-network one (config.Addresses). Like
-// baseURL it does not trust X-Forwarded-*.
+// baseURL it does not trust X-Forwarded-*, and a proxied request (one carrying
+// any forwarding header) derives no home address: its Host and scheme are the
+// proxy's upstream (a container name, a bridge IP, plain http behind TLS), not
+// an address a device can use.
 func (a *API) addresses(r *http.Request) Addresses {
-	home, away := a.config().Addresses(requestScheme(r), r.Host)
+	host := r.Host
+	if proxied(r) {
+		host = ""
+	}
+	home, away := a.config().Addresses(requestScheme(r), host)
 	return Addresses{Home: home, Away: away}
+}
+
+// proxied reports whether r passed through a reverse proxy: it carries a
+// forwarding header. A device on the home network talking to the server
+// directly sends none.
+func proxied(r *http.Request) bool {
+	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // pairingAddresses is addresses for a pairing payload: nil when both are empty.

@@ -17,6 +17,9 @@ func (c *Config) Addresses(scheme, host string) (home, away string) {
 	away = strings.TrimRight(c.PublicURL, "/")
 	home = strings.TrimRight(c.LANURL, "/")
 	if home == "" && isHomeNetworkHost(host) {
+		if ip, err := netip.ParseAddr(host); err == nil && ip.Is6() {
+			host = "[" + host + "]" // a bare IPv6 Host: a URL needs it bracketed
+		}
 		home = scheme + "://" + host
 	}
 	if strings.EqualFold(home, away) {
