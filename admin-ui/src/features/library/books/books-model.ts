@@ -61,9 +61,12 @@ export function bookFilter(s: LibrarySearch, now: number): BookFilter {
   });
 }
 
-/** The ordering a list opens in: one series in reading order, else by title. */
+/**
+ * The ordering a list opens in: one series in reading order, one author's books
+ * in the order they came out, else by title.
+ */
 export function defaultSort(s: LibrarySearch): AdminBookSort {
-  return s.series ? 'series' : 'title';
+  return s.series ? 'series' : s.author ? 'published' : 'title';
 }
 
 /** The list's ordering: the chosen one, else the filter's default. */

@@ -206,16 +206,23 @@ describe('books: search, filters and sort', () => {
     await waitFor(() => expect(router.state.location.search).toEqual({}));
   });
 
-  it('takes the exact author filter other screens link with', async () => {
+  it('takes the exact author filter other screens link with, in release order', async () => {
     const calls = mockFetch(bookRoutes());
     const { router } = renderApp('/library?author=Brandon%20Sanderson');
     const chips = await screen.findByRole('list', { name: 'Active filters' });
     expect(within(chips).getByText('Author: Brandon Sanderson')).toBeInTheDocument();
     await waitFor(() =>
-      expect(calls.some((c) => isList(c) && c.query.get('author') === 'Brandon Sanderson')).toBe(
-        true,
-      ),
+      expect(
+        calls.some(
+          (c) =>
+            isList(c) &&
+            c.query.get('author') === 'Brandon Sanderson' &&
+            c.query.get('sort') === 'published' &&
+            c.query.get('order') === 'asc',
+        ),
+      ).toBe(true),
     );
+    expect(screen.getByRole('combobox', { name: 'Sort' })).toHaveValue('published');
     await userEvent
       .setup()
       .click(within(chips).getByRole('button', { name: 'Remove Author: Brandon Sanderson' }));

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -37,16 +38,20 @@ type Chapter struct {
 
 // Metadata is the extracted view of a book file.
 type Metadata struct {
-	Title       string    `json:"title"`
-	Author      string    `json:"author"`
-	Series      string    `json:"series"`
-	SeriesIndex float64   `json:"series_index"`
-	Narrator    string    `json:"narrator"`
-	Duration    float64   `json:"duration"`
-	Format      string    `json:"format"`
-	Codec       string    `json:"codec"` // audio codec from ffprobe (e.g. aac, mp3, ac3)
-	HasCover    bool      `json:"has_cover"`
-	Chapters    []Chapter `json:"chapters,omitempty"`
+	Title       string  `json:"title"`
+	Author      string  `json:"author"`
+	Series      string  `json:"series"`
+	SeriesIndex float64 `json:"series_index"`
+	Narrator    string  `json:"narrator"`
+	// Released is the date a tag gives, as YYYY[-MM[-DD]] ("" when none or not a
+	// real date; see ReleaseDate): usually the recording's release, not the work's
+	// first publication.
+	Released string    `json:"released,omitempty"`
+	Duration float64   `json:"duration"`
+	Format   string    `json:"format"`
+	Codec    string    `json:"codec"` // audio codec from ffprobe (e.g. aac, mp3, ac3)
+	HasCover bool      `json:"has_cover"`
+	Chapters []Chapter `json:"chapters,omitempty"`
 	// What went wrong reading the file. Extraction is best-effort, so these don't
 	// make Extract fail; the scanner records them for the Health page.
 	OpenErr  error `json:"-"` // the file couldn't be opened
@@ -118,6 +123,10 @@ func applyTags(m *Metadata, md tag.Metadata) {
 		if v := rawString(raw, "narrator", "©nrt", "----:com.apple.iTunes:NARRATOR"); v != "" {
 			m.Narrator = strings.TrimSpace(v)
 		}
+		// The date where the format keeps one (MP4 \xa9day, ID3 TDRC/TYER, Vorbis
+		// date): the same tags tag.Metadata.Year reads, but with month and day.
+		m.Released = firstReleaseDate(rawString(raw, "\xa9day"), rawString(raw, "TDRC"), rawString(raw, "TYER"),
+			rawString(raw, "TYE"), rawString(raw, "date"), rawString(raw, "year"))
 	}
 	if md.Picture() != nil {
 		m.HasCover = true
@@ -180,6 +189,50 @@ func rawString(raw map[string]interface{}, keys ...string) string {
 			if s, ok := v.(string); ok && s != "" {
 				return s
 			}
+		}
+	}
+	return ""
+}
+
+// dateRE is the date a tag leads with: a year, then optionally the month and day,
+// as an ISO date or timestamp writes them ("2010", "2010-08", "2010-08-31",
+// "2010-08-31T07:00:00Z"), and then no further digit, so a longer number
+// ("1283212800") is not read as its first four.
+var dateRE = regexp.MustCompile(`^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?(?:\D|$)`)
+
+// ReleaseDate reads a date tag as YYYY[-MM[-DD]], the form the catalogue's dates
+// take: the leading date of an ISO date or
+// timestamp, cut to the year or month when the rest isn't a real date. "" when it
+// names no plausible year (before 1000 or after 2100, so "0000" and other
+// placeholders are dropped).
+func ReleaseDate(v string) string {
+	m := dateRE.FindStringSubmatch(strings.TrimSpace(v))
+	if m == nil {
+		return ""
+	}
+	if y, _ := strconv.Atoi(m[1]); y < 1000 || y > 2100 {
+		return ""
+	}
+	out := m[1]
+	for i, layout := range []string{"2006-01", "2006-01-02"} {
+		part := m[i+2]
+		if part == "" {
+			break
+		}
+		if _, err := time.Parse(layout, out+"-"+part); err != nil {
+			break
+		}
+		out += "-" + part
+	}
+	return out
+}
+
+// firstReleaseDate is the first of vals that reads as a date (ReleaseDate), so a
+// placeholder in one tag ("0000") doesn't hide a real date in the next.
+func firstReleaseDate(vals ...string) string {
+	for _, v := range vals {
+		if d := ReleaseDate(v); d != "" {
+			return d
 		}
 	}
 	return ""

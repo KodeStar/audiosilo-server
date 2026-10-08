@@ -639,8 +639,9 @@ func TestJoinKeepsDiscFileOrder(t *testing.T) {
 	}
 }
 
-// silence writes secs seconds of silent MP3 at rel, or skips the test without ffmpeg.
-func silence(t *testing.T, root, rel string, secs float64) {
+// silence writes secs seconds of silent MP3 at rel, tagged with any meta
+// ("key=value" pairs), or skips the test without ffmpeg.
+func silence(t *testing.T, root, rel string, secs float64, meta ...string) {
 	t.Helper()
 	if !media.HasFFmpeg("ffmpeg") {
 		t.Skip("ffmpeg not available")
@@ -649,8 +650,12 @@ func silence(t *testing.T, root, rel string, secs float64) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command("ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi",
-		"-i", "anullsrc=r=22050:cl=mono", "-t", fmt.Sprint(secs), "-c:a", "libmp3lame", "-q:a", "9", "-y", dst).CombinedOutput()
+	args := []string{"-nostdin", "-loglevel", "error", "-f", "lavfi",
+		"-i", "anullsrc=r=22050:cl=mono", "-t", fmt.Sprint(secs), "-c:a", "libmp3lame", "-q:a", "9"}
+	for _, m := range meta {
+		args = append(args, "-metadata", m)
+	}
+	out, err := exec.Command("ffmpeg", append(args, "-y", dst)...).CombinedOutput()
 	if err != nil {
 		t.Skipf("ffmpeg could not write silence: %v\n%s", err, out)
 	}

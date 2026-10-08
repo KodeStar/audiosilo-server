@@ -247,6 +247,7 @@ func TestEditValidation(t *testing.T) {
 		"bad index":          {Set: map[string]string{FieldSeriesIndex: "two"}},
 		"negative index":     {Set: map[string]string{FieldSeriesIndex: "-1"}},
 		"bad date":           {Set: map[string]string{FieldPublished: "2021-02-30"}},
+		"timestamp date":     {Set: map[string]string{FieldPublished: "2021-02-03T10:00:00Z"}},
 		"bad asin":           {Set: map[string]string{FieldASIN: "short"}},
 		"bad isbn":           {Set: map[string]string{FieldISBN: "12345"}},
 		"control chars":      {Set: map[string]string{FieldAuthor: "a\x00b"}},

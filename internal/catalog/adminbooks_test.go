@@ -173,6 +173,49 @@ func TestListAdminBooksKeyset(t *testing.T) {
 	}
 }
 
+// TestListAdminBooksSurnameAndPublished: "surname" files authors by surname
+// (either spelling, Le Guin under L) and "published" runs oldest first by the
+// work's date, else the tags' release date, a bare year before that year's dates
+// and undated books last; both page exactly.
+func TestListAdminBooksSurnameAndPublished(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
+	for _, b := range []*Book{
+		{RelPath: "a", Title: "Alloy", Author: "Brandon Sanderson", Series: "Mistborn", SeriesIndex: 4, Published: "2011-11-08"},
+		{RelPath: "b", Title: "Empire", Author: "Sanderson, Brandon", Series: "Mistborn", SeriesIndex: 1, Published: "2006-07-17"},
+		{RelPath: "c", Title: "Earthsea", Author: "Ursula K. Le Guin", Published: "1968"},
+		// No published date: the tags' release date stands in.
+		{RelPath: "d", Title: "Ancillary", Author: "Ann Leckie", Released: "2013"},
+		// The work's date wins over the recording's.
+		{RelPath: "e", Title: "Dune", Author: "Frank Herbert", Published: "1965-08-01", Released: "2007"},
+		{RelPath: "f", Title: "Dune Messiah", Author: "Frank Herbert", Published: "1965"},
+		{RelPath: "g", Title: "Anonymous", Author: ""},
+		{RelPath: "h", Title: "Undated", Author: "Zed Smith"},
+	} {
+		b.LibraryID, b.Format = lib.ID, "m4b"
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		sort string
+		desc bool
+		want []string
+	}{
+		// One surname key: its spellings then sort as written (merge them on Authors).
+		{"surname", false, []string{"e", "f", "d", "c", "a", "b", "h", "g"}},
+		{"surname", true, []string{"h", "b", "a", "c", "d", "f", "e", "g"}},
+		{"published", false, []string{"f", "e", "c", "b", "a", "d", "g", "h"}},
+		// Newest first, undated books still last.
+		{"published", true, []string{"d", "a", "b", "c", "e", "f", "h", "g"}},
+	} {
+		got := listAll(t, c, ctx, AdminListOptions{Sort: tc.sort, Desc: tc.desc, Limit: 3})
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s desc=%v = %v, want %v", tc.sort, tc.desc, got, tc.want)
+		}
+	}
+}
+
 func TestListAdminBooksBadCursor(t *testing.T) {
 	c, ctx, _, _ := seedAdminLibrary(t)
 	page, _ := c.ListAdminBooks(ctx, AdminListOptions{Sort: "title", Limit: 1})

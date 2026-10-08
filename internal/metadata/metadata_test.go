@@ -305,3 +305,55 @@ func TestIsGenericTitle(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyTagsReleased: the date a raw tag keeps, month and day included, and
+// nothing for a placeholder.
+func TestApplyTagsReleased(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tags fakeTags
+		want string
+	}{
+		{"mp4 day", fakeTags{raw: map[string]interface{}{"\xa9day": "2010-08-31T07:00:00Z"}}, "2010-08-31"},
+		{"id3 TDRC", fakeTags{raw: map[string]interface{}{"TDRC": "2014-03-04"}}, "2014-03-04"},
+		{"id3 year", fakeTags{raw: map[string]interface{}{"TYER": "1968"}}, "1968"},
+		{"placeholder", fakeTags{raw: map[string]interface{}{"TYER": "0000"}}, ""},
+		{"placeholder then year", fakeTags{raw: map[string]interface{}{"date": "0000", "year": "1999"}}, "1999"},
+	} {
+		m := &Metadata{}
+		applyTags(m, tc.tags)
+		if m.Released != tc.want {
+			t.Errorf("%s: released = %q, want %q", tc.name, m.Released, tc.want)
+		}
+	}
+}
+
+// TestReleaseDate pins how a date tag becomes the catalogue's YYYY[-MM[-DD]]:
+// the leading date of an ISO date or timestamp, cut back to what is a real date,
+// and nothing for placeholders.
+func TestReleaseDate(t *testing.T) {
+	cases := map[string]string{
+		"2010":                 "2010",
+		" 2010 ":               "2010",
+		"2010-08":              "2010-08",
+		"2010-08-31":           "2010-08-31",
+		"2010-08-31T07:00:00Z": "2010-08-31",
+		"2010-13-01":           "2010",
+		"2010-02-30":           "2010-02",
+		"2010/08/31":           "2010",
+		"2010-08-31 07:00":     "2010-08-31",
+		"12345":                "",
+		"1283212800":           "",
+		"0000":                 "",
+		"0999":                 "",
+		"9999-01-01":           "",
+		"":                     "",
+		"unknown":              "",
+		"Aug 2010":             "",
+	}
+	for in, want := range cases {
+		if got := ReleaseDate(in); got != want {
+			t.Errorf("ReleaseDate(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

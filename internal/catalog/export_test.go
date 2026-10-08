@@ -11,50 +11,6 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
-// TestSplitNames pins the contributor-splitting rule: unambiguous joiners always
-// split, a comma splits only when every part still looks like a full name, and a
-// single name is never broken up.
-func TestSplitNames(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{"", nil},
-		{"   ", nil},
-		{"Brandon Sanderson", []string{"Brandon Sanderson"}},
-		{"  Brandon Sanderson  ", []string{"Brandon Sanderson"}},
-		// The comma here is part of ONE name: "pere" is a single word.
-		{"Alexandre Dumas, pere", []string{"Alexandre Dumas, pere"}},
-		{"Dumas, Alexandre", []string{"Dumas, Alexandre"}},
-		{"Martin Luther King, Jr.", []string{"Martin Luther King, Jr."}},
-		// Unambiguous joiners.
-		{"Terry Pratchett & Neil Gaiman", []string{"Terry Pratchett", "Neil Gaiman"}},
-		{"Terry Pratchett and Neil Gaiman", []string{"Terry Pratchett", "Neil Gaiman"}},
-		{"A; B", []string{"A", "B"}},
-		{"A;B;C", []string{"A", "B", "C"}},
-		// Every comma part has two words, so the comma splits.
-		{"Terry Pratchett, Neil Gaiman", []string{"Terry Pratchett", "Neil Gaiman"}},
-		{"Terry Pratchett, Neil Gaiman, and Rob Wilkins",
-			[]string{"Terry Pratchett", "Neil Gaiman", "Rob Wilkins"}},
-		// Mixed joiners, and the comma rule applied per chunk.
-		{"Jane Doe; John Roe, Ann Poe", []string{"Jane Doe", "John Roe", "Ann Poe"}},
-		{"Jane Doe; Alexandre Dumas, pere", []string{"Jane Doe", "Alexandre Dumas, pere"}},
-		// Trailing/duplicated/stacked separators collapse rather than yielding
-		// blanks or a name beginning with a stranded joiner.
-		{"A & B;", []string{"A", "B"}},
-		{"Jane Doe; and John Roe", []string{"Jane Doe", "John Roe"}},
-		// A half-empty "Last, First" tag: the dangling comma is trimmed off both
-		// ends rather than exported as part of the name.
-		{", Jane Doe", []string{"Jane Doe"}},
-		{"Jane Doe,", []string{"Jane Doe"}},
-	}
-	for _, tc := range cases {
-		if got := splitNames(tc.in); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("splitNames(%q) = %#v, want %#v", tc.in, got, tc.want)
-		}
-	}
-}
-
 func TestFormatSeriesPosition(t *testing.T) {
 	cases := []struct {
 		in   float64

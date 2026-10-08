@@ -254,6 +254,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	coverBackfill := map[string]bool{}
 	suspectBackfill := map[string]int{}
 	splitBackfill := map[string]string{}
+	releasedBackfill := map[string]string{}
 	lastLog := time.Now()
 	report := func(done int) {
 		s.updateProgress(lib.ID, func(p *ScanProgress) {
@@ -298,6 +299,14 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				if old.SuspectUnchecked && b.IsFolder {
 					if n, ok := suspectFromTags(lib, b); ok {
 						suspectBackfill[b.RelPath] = n
+					}
+				}
+				// Rows indexed before 0037 haven't had their date read: one read of the
+				// primary file (tags and ffprobe, as enrich reads it) does it, not a
+				// re-index probing every part. Unopenable now, it waits for the next scan.
+				if old.ReleasedUnchecked {
+					if md, _ := metadata.Extract(primary, s.ffprobePath); md.OpenErr == nil {
+						releasedBackfill[b.RelPath] = md.Released
 					}
 				}
 				continue
@@ -349,6 +358,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	if err := s.cat.SetSplitParent(ctx, lib.ID, splitBackfill); err != nil {
 		s.log.Warn("record split discs failed", "library", lib.Name, "err", err)
+	}
+	if err := s.cat.SetReleased(ctx, lib.ID, releasedBackfill); err != nil {
+		s.log.Warn("record release dates failed", "library", lib.Name, "err", err)
 	}
 
 	// Only prune when discovery saw the whole tree. If a subtree was unreadable
@@ -471,6 +483,7 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 			b.SeriesIndex = md.SeriesIndex
 		}
 		b.Narrator = md.Narrator
+		b.Released = md.Released
 		b.Codec = md.Codec
 	}
 
