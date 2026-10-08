@@ -114,8 +114,16 @@ export interface ListeningSession {
   codec: string;
   transcoded: boolean;
   finished: boolean;
-  /** Made at the upgrade from the player's own listening history: no device, app or playback mode. */
+  /**
+   * Not recorded live: made at the upgrade from the player's own listening
+   * history (no device, app or playback mode), or imported (`imported`).
+   */
   backfilled: boolean;
+  /**
+   * Imported from another server (Settings > Import): `client` names it (e.g.
+   * Audiobookshelf) and the device is the one it recorded.
+   */
+  imported: boolean;
   state: SessionState;
   /** Live sessions only: the chapter at the position and the device's newest address. */
   chapter?: string;
@@ -129,10 +137,20 @@ export interface SessionFilter {
   path?: string;
 }
 
-/** GET /admin/sessions: newest first; `next_before` asks for the next page (null at the end). */
+/**
+ * GET /admin/sessions: newest first by when each session started (an imported
+ * session is old but has a new id); `next_before` is the last session's id and
+ * asks for the next page (null at the end).
+ */
 export interface SessionPage {
   sessions: ListeningSession[];
   next_before: number | null;
+}
+
+/** Where GET /admin/sessions continues: the last session's id and, so a gone one doesn't matter, its start. */
+export interface SessionCursor {
+  before?: number;
+  before_at?: string;
 }
 
 /** auth.Device: a signed-in token (a paired phone, a browser) or a personal API key. */
@@ -1612,3 +1630,103 @@ export interface MatchRunItemPage {
   items: MatchRunItem[];
   next_after: number;
 }
+
+// Listening import (Settings > Import): another server's listening history copied
+// into a person's own. v1 reads Audiobookshelf (internal/importer); admin only.
+
+/** Where an import is: fetched in the background, reviewed, then applied (or undone). */
+export type ImportStatus = 'fetching' | 'review' | 'applying' | 'applied' | 'failed' | 'undone';
+
+/** What an import adds, counted when it was planned (recounted when the cutoff changes). */
+export interface ImportSummary {
+  /** Audiobookshelf books this person has any history for. */
+  items: number;
+  /** Books matched, by how: the same file path, then ASIN, ISBN, title and author. */
+  matched: { path: number; asin: number; isbn: number; title: number };
+  /** Not matched, matched twice (contested), or matched to a book the person can't see. */
+  unmatched: number;
+  /** Sessions it imports (matched books, before the cutoff). */
+  sessions: number;
+  skipped_after_cutoff: number;
+  /** Seconds of listening the sessions add. */
+  listened: number;
+  /** Seconds added as estimates: progress beyond what the sessions cover. */
+  estimated: number;
+  /** Progress rows created or moved forward. */
+  progress: number;
+  /** Books marked finished with Audiobookshelf's date. */
+  finished: number;
+  bookmarks: number;
+  /** The earliest and latest imported session start. */
+  first_listen: string | null;
+  last_listen: string | null;
+}
+
+/** One import: one Audiobookshelf user's history into one AudioSilo user. */
+export interface Import {
+  id: number;
+  user_id: number;
+  username: string;
+  source: 'abs';
+  /** The Audiobookshelf address as entered (never the token). */
+  source_url: string;
+  /** The Audiobookshelf username the history came from. */
+  source_user: string;
+  status: ImportStatus;
+  /** Sessions starting at or after this are skipped; null = none are. */
+  cutoff: string | null;
+  /**
+   * The server's offset from UTC at the cutoff, in minutes (null without one):
+   * read the cutoff in server time, where a chosen day starts at midnight.
+   */
+  cutoff_utc_offset: number | null;
+  created_at: string;
+  applied_at: string | null;
+  /** "" unless failed: a safe English sentence. */
+  error: string;
+  /** "" unless failed: abs_unreachable | abs_unauthorized | not_abs | interrupted | fetch_failed. */
+  error_code: string;
+  /** null while fetching, or when it failed before planning. */
+  summary: ImportSummary | null;
+}
+
+/** An Audiobookshelf book with history that matched nothing here. */
+export interface UnmatchedItem {
+  title: string;
+  author: string;
+  /** Seconds of Audiobookshelf listening. */
+  listened: number;
+  sessions: number;
+  reason: 'no_match' | 'contested' | 'no_access' | 'split_discs';
+}
+
+/** GET /admin/imports/{id}: the import and its unmatched books (most listened first, at most 500). */
+export interface ImportDetail extends Import {
+  unmatched_items: UnmatchedItem[];
+}
+
+/** An Audiobookshelf account, with the AudioSilo user of the same name (if any). */
+export interface AbsUser {
+  abs_id: string;
+  username: string;
+  /** root | admin | user | guest */
+  type: string;
+  suggested_user_id: number | null;
+}
+
+/**
+ * One account's history going to one person (POST /admin/imports/abs).
+ * abs_username names the import while it is fetched (or if it fails).
+ */
+export interface ImportMapping {
+  abs_user_id: string;
+  abs_username?: string;
+  user_id: number;
+}
+
+/**
+ * Which sessions an import keeps: "auto" (before each person's first AudioSilo
+ * listening), null (all), or before a day (YYYY-MM-DD, the start of that day in
+ * the server's time) or a moment (RFC 3339).
+ */
+export type ImportCutoff = 'auto' | null | string;

@@ -1,0 +1,57 @@
+{
+ "results": [
+  {
+   "id": "9ab5a9b4-b7db-4877-b098-7bc75d1e8e38",
+   "libraryId": "1ddff5ba-787a-4b54-922e-0744e3e5838a",
+   "folderId": "b0dd1bb4-7215-45ab-af27-d77997246802",
+   "path": "/Users/chris/dev/audiosilo-testbed/abs/abs-only/Loose Single File.m4b",
+   "relPath": "Loose Single File.m4b",
+   "isFile": true,
+   "mediaType": "book",
+   "media": {
+    "id": "7684f6ef-04f5-488b-aef8-be4e23042f16",
+    "metadata": {
+     "title": "Loose Single File",
+     "subtitle": null,
+     "authorName": "Some Author",
+     "narratorName": "",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 60
+   }
+  },
+  {
+   "id": "fc70c070-0782-41f5-8fa7-436d0dc389a3",
+   "libraryId": "1ddff5ba-787a-4b54-922e-0744e3e5838a",
+   "folderId": "b0dd1bb4-7215-45ab-af27-d77997246802",
+   "path": "/Users/chris/dev/audiosilo-testbed/abs/abs-only/Some Author/Only In ABS",
+   "relPath": "Some Author/Only In ABS",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "df05af7f-d350-44bf-99e6-c2cd9e2e8971",
+    "metadata": {
+     "title": "Only In ABS",
+     "subtitle": null,
+     "authorName": "Some Author",
+     "narratorName": "",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 120
+   }
+  }
+ ],
+ "total": 2,
+ "limit": 0,
+ "page": 0,
+ "sortDesc": false,
+ "mediaType": "book",
+ "minified": true,
+ "collapseseries": false,
+ "include": "",
+ "offset": 0
+}

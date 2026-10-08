@@ -454,3 +454,36 @@ func TestNormalizeSeries(t *testing.T) {
 		}
 	}
 }
+
+func TestNamesMatch(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"brandonsanderson", "brandonsanderson", true},
+		{"brandonsandersonandjanedoe", "brandonsanderson", true}, // a joint credit
+		{"brandonsanderson", "brandonsandersonandjanedoe", true},
+		{"brandonsanderson", "janedoe", false},
+		{"", "janedoe", false},
+		{"", "", false},
+	} {
+		if got := NamesMatch(tc.a, tc.b); got != tc.want {
+			t.Errorf("NamesMatch(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestNormalizeIdentifiers(t *testing.T) {
+	if got := NormalizeASIN("  b00p9xdqfy "); got != "B00P9XDQFY" {
+		t.Errorf("ASIN = %q", got)
+	}
+	for in, want := range map[string]string{
+		"978-0-00-000000-1":  "9780000000001",
+		" 0 306 40615 x ":    "030640615X",
+		"ISBN 9780000000001": "ISBN9780000000001", // only hyphens and spaces go
+	} {
+		if got := NormalizeISBN(in); got != want {
+			t.Errorf("NormalizeISBN(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

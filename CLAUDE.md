@@ -109,6 +109,7 @@ internal/metadata/    dhowden/tag + ffprobe extraction; DeriveFromPath (structur
 internal/media/       Range streaming, download, embedded cover extraction
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
+internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
@@ -187,7 +188,13 @@ an edit checks only the fields it sets). Their `created_at`, a note's `updated_a
 `started_at`/`ended_at` are fixed-width UTC milliseconds (`c.stamp`; a client's span times are
 normalised, an unparsable one replaced by the server's; `0031` rewrites the rows stored before it),
 since the lists order by them as text. The
-per-book `GET /libraries/{id}/bookmarks|notes|history` answer `[]` when empty (`null` before). Sharing:
+per-book `GET /libraries/{id}/bookmarks|notes|history` answer `[]` when empty (`null` before). `0034` adds listening imports
+(`internal/importer`, `catalog/imports.go`): `imports` (one per source user and AudioSilo user; status,
+cutoff, the gzipped fetched payload, the review's summary and unmatched list; never a credential),
+`import_id` on `listening_sessions`, `listening_daily`, `bookmarks` and `listening_history` (0 = recorded
+here), `bookmarks.import_note` (the note the import wrote: an undo keeps an edited one) and
+`import_progress_prior` (the progress row before an import and the row it wrote, path-keyed, carried by
+`carryListeningState`; an undo restores only rows still as the import left them). Sharing:
 `shares` (named), `share_paths` (`library_id`, `path`; `""` = whole library),
 `user_share_access`.
 
@@ -888,6 +895,59 @@ admin overrides; see Metadata overrides below).
   or one person, and nothing else: the year calendar and a person's listening year). Book-page
   listeners carry `started_at`/`finished_at`. Sessions and roll-ups move
   with the book (`MoveDurableState`).
+- **Listening imports from Audiobookshelf (admin only, `internal/importer`, `catalog/imports.go`,
+  `api/handlers_import.go`, migration `0034`)**: `POST /admin/imports/abs/users {url, token}` checks the
+  server (`GET /status` must say `audiobookshelf`, sent without the token) and lists its users (a
+  non-admin token: just its own, via `/api/me`) with `suggested_user_id` (same username, any case);
+  `POST /admin/imports/abs {url, token, users:[{abs_user_id, abs_username?, user_id}], cutoff?}` records one import per
+  mapping (`abs_username` names its source until the fetch reads ABS's own) (status `fetching`; 409 `import_running` while that user has one fetching or applying) and
+  fetches in the background on `baseCtx`; then `review` (or `failed` with `error_code`
+  abs_unreachable | abs_unauthorized | not_abs | fetch_failed | interrupted). `GET /admin/imports?user_id=` (each import with `cutoff_utc_offset`: the server's offset at the
+  cutoff, so the console shows and compares it in server time),
+  `GET /admin/imports/{id}` (+ `unmatched_items`, most listened first, <= 500), `PATCH` `{cutoff}` (re-plans
+  from the stored payload, `import_payloads`, gzipped and versioned; deleted once applied), `POST .../apply` (one transaction: the person's previous applied ABS import is
+  undone first, so a re-import never double counts), `POST .../undo`, `DELETE` (not while applied: 409
+  `import_applied`). The token lives only in the fetch's memory (never stored, logged or answered); `Connect` and
+  `Start` refuse an empty one, one over 8 KiB or one with CR/LF/NUL alike (400 `invalid_import`,
+  `checkToken`). The ABS client: GETs only, http/https only, no credentials, query or fragment in the
+  URL, `/status` (sent without the token) must identify ABS before the token goes anywhere, redirects
+  only to the same host (at most 5, never https -> http), every response size-capped, header and
+  whole-request timeouts, every error a fixed sentence (never an ABS body). It does NOT block private
+  or loopback addresses (an ABS on the LAN is the normal case); acceptable because every import route
+  is admin-only. Matching
+  (`match.go`): path components from the end (same relative path, or a unique suffix either way; the
+  ABS side uses its absolute path; a folder vs the lone file in it), then ASIN, ISBN, then
+  `pkg/match.Best` among a matching author's books, every non-identifier tier with the length check
+  (5% + 2 min); only books the target user can access (`no_access` otherwise); two items still in ABS
+  on one book are both `contested` (each has progress), while gone items (deleted in ABS: sessions only;
+  `buildPayload` drops any progress/bookmarks left on them) match it with the one present item, if any,
+  their sessions merging; an ABS item at a folder this server splits into disc books is `split_discs`
+  (join the discs first). Applying writes sessions with `backfilled=1` and `client_app` `Audiobookshelf`
+  (`imported: true` on the wire; never in `LiveSessions`), except a session already past the session
+  retention (`activity.session_days`, read at apply via `importer.New`'s retention func, the zone as the
+  prune's), which goes straight into the `listening_daily` rows `PruneSessions` would make of it
+  (`ImportWrite.RollUpBefore`/`Zone`, `catalog.daySums` shared with the prune; summary counts unchanged),
+  plus one `listening_history` span per session
+  (start/end position over its start and clamped end, `import_id` set) so the book's History tab and
+  `/me/history` (the Journal) show it; their ids are ordinary, so
+  `ListSessions` orders by `started_at` (then id; indexes `idx_sessions_started` /
+  `idx_sessions_user_started`) and resolves its `before` session-id cursor to that pair (the console also sends
+  `before_at`, the session's start, so a gone cursor continues in place; without it a gone cursor
+  continues from its nearest recorded neighbour, `goneCursor`), only sessions starting before the cutoff (default: the user's first
+  listening here, `catalog.ListeningStart`; null = none), long-open sessions clamped (`last_at` =
+  start + listened when the span is over 3x it); progress fill-only (`importer.mergeProgress`: never
+  rewound or un-finished, moved on only when ABS's last update is newer, earliest start); one estimated
+  `listening_daily` row per book where ABS's position outruns its sessions (0021's rules; none for a
+  book finished in ABS with no listening session there, whose position ABS puts at the end); bookmarks
+  deduplicated (same text within 2 s); an undo deletes only the imported bookmarks still as written
+  (`note = import_note`, no label: `bookmarkUntouched`) and hands the edited ones to the person
+  (`import_id` 0). A re-import's undo of the previous import restores its progress rows exactly
+  (their own updated_at, version bumped: `progressPrior.restored`, what the review's `importState`
+  simulates), so the new import moves them on again like a first one; a row it leaves where the old
+  import had moved it is then stamped now (`keepRewound`), as a standalone undo stamps it, so a
+  device holding the old import's row adopts the rewind. `catalog.InterruptImports` (launcher, at start): fetching ->
+  failed `interrupted`, applying -> review. `PruneSessions` rolls imported sessions up per import.
+  Audited `import.start|apply|undo`.
 - **Your listening (player redesign Phase 1b, capability `user_stats`, `catalog/userstats.go`,
   `goals.go`, `api/handlers_userstats.go`)**: the caller's own stats, from the same accumulator as the
   Activity page, built for one user by `newUserListenAcc` (the one user-id guard; its reads take the
@@ -897,7 +957,7 @@ admin overrides; see Metadata overrides below).
   ≤ 100, playback, clients; none of the admin-only steps run). **Privacy**: the types have no field that
   can carry another user, user 0 is refused (`errNoUser`: 0 is "everyone" to the
   accumulator), and the rows naming a book pass the caller's CURRENT access (`UserScopes` +
-  `scopesAllow` / `scopesFilterSQL`): a revoked share's book leaves `top_books`/`finished_books` and the
+  `ScopesAllow` / `scopesFilterSQL`): a revoked share's book leaves `top_books`/`finished_books` and the
   authors/narrators/series (ranked from in-scope books only, `listenAcc.topPeople`), while the totals,
   days and hours keep all the caller's time. `GET /me/listening?range=` → `catalog.UserListening`
   (period + `days`, no `by_user`). `GET /me/goal` → `{goal: {books_per_year, updated_at (ms UTC)} | null, year,

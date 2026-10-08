@@ -265,11 +265,11 @@ func TestScopesAllow(t *testing.T) {
 		{Ref{1, "Other/Book"}, false},
 		{Ref{3, "Author/Book"}, false}, // the granted path, in a library not granted
 	} {
-		if got := scopesAllow(scopes, c.ref); got != c.want {
-			t.Errorf("scopesAllow(%+v) = %v, want %v", c.ref, got, c.want)
+		if got := ScopesAllow(scopes, c.ref); got != c.want {
+			t.Errorf("ScopesAllow(%+v) = %v, want %v", c.ref, got, c.want)
 		}
 	}
-	if scopesAllow(nil, Ref{1, "Author/Book"}) {
+	if ScopesAllow(nil, Ref{1, "Author/Book"}) {
 		t.Error("no scopes granted a path")
 	}
 }

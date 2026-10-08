@@ -1,6 +1,7 @@
 import { browserId } from '@/lib/browser-id';
 import { clearToken, getToken } from './token';
 import type {
+  AbsUser,
   Activity,
   AdminBookDetail,
   AdminBookPage,
@@ -39,6 +40,7 @@ import type {
   ProgressEdit,
   ScanRun,
   ScanRunPage,
+  SessionCursor,
   SessionFilter,
   SessionPage,
   NarratorsResponse,
@@ -58,6 +60,10 @@ import type {
   ErrorEnvelope,
   FolderMode,
   FsListing,
+  Import,
+  ImportCutoff,
+  ImportDetail,
+  ImportMapping,
   Invite,
   InviteCreated,
   Library,
@@ -345,6 +351,35 @@ export const api = {
   serverEvents: (opts: { before?: number; limit?: number; kind?: ServerEventKind } = {}) =>
     request<ServerEventPage>('GET', `/admin/events${bookQuery(opts)}`),
 
+  // Listening import (Settings > Import). The Audiobookshelf token rides in the
+  // request body only; the server never stores or returns it.
+  /** Connects to Audiobookshelf and lists its accounts (400 invalid_url; 502 abs_unreachable / not_abs / abs_unauthorized). */
+  absUsers: (url: string, token: string) =>
+    request<{ version: string; users: AbsUser[] }>('POST', '/admin/imports/abs/users', {
+      url,
+      token,
+    }),
+  /** Starts fetching each mapped account's history in the background (202; 409 import_running). */
+  startAbsImport: (body: {
+    url: string;
+    token: string;
+    users: ImportMapping[];
+    cutoff: ImportCutoff;
+  }) => request<{ imports: Import[] }>('POST', '/admin/imports/abs', body),
+  /** Every import (of one person), newest first. */
+  imports: (userId?: number) =>
+    request<{ imports: Import[] }>('GET', `/admin/imports${bookQuery({ user_id: userId })}`),
+  importDetail: (id: number) => request<ImportDetail>('GET', `/admin/imports/${id}`),
+  /** Changes the cutoff of an import in review; answers with it recounted (409 import_not_ready). */
+  setImportCutoff: (id: number, cutoff: ImportCutoff) =>
+    request<ImportDetail>('PATCH', `/admin/imports/${id}`, { cutoff }),
+  /** Writes the history (replacing the person's previous Audiobookshelf import). */
+  applyImport: (id: number) => request<Import>('POST', `/admin/imports/${id}/apply`),
+  /** Removes what an applied import added and puts progress back (409 import_not_applied). */
+  undoImport: (id: number) => request<Import>('POST', `/admin/imports/${id}/undo`),
+  /** Discards an import that isn't applied (409 import_applied: undo it first). */
+  deleteImport: (id: number) => request<void>('DELETE', `/admin/imports/${id}`),
+
   /** The audit log, newest first; `before` is the previous page's next_before. */
   audit: (opts: AuditFilter & { before?: number; limit?: number } = {}) =>
     request<AuditPage>('GET', `/admin/audit${bookQuery(opts)}`),
@@ -522,8 +557,8 @@ export const api = {
     request<ListeningDays>('GET', `/admin/listening${bookQuery({ range, user_id: userId })}`),
   /** Who is listening now: one session per device, with chapter and address. */
   liveSessions: () => request<{ sessions: ListeningSession[] }>('GET', '/admin/sessions/live'),
-  /** Sessions newest first; `before` is the previous page's next_before (1-200 a page). */
-  sessions: (opts: SessionFilter & { before?: number; limit?: number } = {}) =>
+  /** Sessions newest first; the cursor is the previous page's next_before and last start (1-200 a page). */
+  sessions: (opts: SessionFilter & SessionCursor & { limit?: number } = {}) =>
     request<SessionPage>('GET', `/admin/sessions${bookQuery(opts)}`),
   /** Signed-in devices and API keys, of one person or everyone. */
   devices: (userId?: number) =>

@@ -42,6 +42,9 @@ describe('format', () => {
     expect(formatDateTime(new Date(2026, 9, 10, 19, 52).toISOString(), 'en')).toBe(
       'Oct 10, 7:52 PM',
     );
+    expect(formatDateTime(new Date(2025, 2, 4, 9, 5).toISOString(), 'en', true)).toBe(
+      'Mar 4, 2025, 9:05 AM',
+    );
     expect(formatDateTime('nope', 'en')).toBe('');
   });
 

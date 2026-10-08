@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Work ids for the admin console's Series cards. A card draws the community rail
@@ -61,7 +63,7 @@ func (s *Service) WorkIDs(ctx context.Context, books []BookIDs) []WorkID {
 	}
 	misses := map[string]*miss{}
 	for i, b := range books {
-		asin, isbn := normalizeASIN(b.ASIN), normalizeISBN(b.ISBN)
+		asin, isbn := match.NormalizeASIN(b.ASIN), match.NormalizeISBN(b.ISBN)
 		key := cacheKey(asin, isbn)
 		if key == "" {
 			continue
@@ -241,7 +243,7 @@ func workIDOf(l *upstreamLookup, err error) WorkID {
 // entries. ok is true when the cache holds an answer: the work id, or "" for a
 // cached "no match"; a miss, a cached failure and no identifier are ("", false).
 func (s *Service) CachedWorkID(ctx context.Context, asin, isbn string) (id string, ok bool) {
-	key := cacheKey(normalizeASIN(asin), normalizeISBN(isbn))
+	key := cacheKey(match.NormalizeASIN(asin), match.NormalizeISBN(isbn))
 	if key == "" {
 		return "", false
 	}

@@ -88,6 +88,11 @@ func TestSessionsFromProgressSaves(t *testing.T) {
 	if resp, body := e.do(t, "GET", "/api/v1/admin/sessions?path=x", e.console, ""); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("path without library_id = %d %s, want 400", resp.StatusCode, body)
 	}
+	for _, q := range []string{"before=5&before_at=yesterday", "before_at=2026-01-02T03:04:05.000Z"} {
+		if resp, body := e.do(t, "GET", "/api/v1/admin/sessions?"+q, e.console, ""); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s = %d %s, want 400", q, resp.StatusCode, body)
+		}
+	}
 
 	// Denied: a member can't see anyone's sessions.
 	for _, p := range []string{"/api/v1/admin/sessions/live", "/api/v1/admin/sessions"} {

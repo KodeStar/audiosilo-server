@@ -13,6 +13,7 @@ export const SETTINGS_PAGES = [
   'demo',
   'backups',
   'notifications',
+  'import',
 ] as const;
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 

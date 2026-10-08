@@ -149,15 +149,26 @@ export function formatRelative(iso: string, lang: string, now: number = Date.now
   return rtf.format(0, 'second');
 }
 
-/** A moment as a record ("Oct 10, 7:52 PM"): absolute, unlike recency. "" if unparsable. */
-export function formatDateTime(iso: string, lang: string): string {
+/**
+ * A moment as a record ("Oct 10, 7:52 PM"): absolute, unlike recency. withYear
+ * adds the year ("Oct 10, 2026, 7:52 PM") for a moment that may be long past.
+ * timeZone is the zone to read it in (default: the browser's). "" if unparsable.
+ */
+export function formatDateTime(
+  iso: string,
+  lang: string,
+  withYear = false,
+  timeZone?: string,
+): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return '';
   return new Intl.DateTimeFormat(lang, {
+    year: withYear ? 'numeric' : undefined,
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    timeZone,
   }).format(t);
 }
 

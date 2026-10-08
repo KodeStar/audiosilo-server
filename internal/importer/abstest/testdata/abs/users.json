@@ -1,0 +1,82 @@
+{
+ "users": [
+  {
+   "id": "016cd1cd-770c-4b67-aeb9-2f70203625fc",
+   "username": "root",
+   "email": null,
+   "type": "root",
+   "token": "REDACTED",
+   "seriesHideFromContinueListening": [],
+   "isActive": true,
+   "isLocked": false,
+   "lastSeen": null,
+   "createdAt": 1791444022324,
+   "permissions": {
+    "download": true,
+    "update": true,
+    "delete": true,
+    "upload": true,
+    "createEreader": true,
+    "accessAllLibraries": true,
+    "accessAllTags": true,
+    "accessExplicitContent": true,
+    "selectedTagsNotAccessible": false
+   },
+   "librariesAccessible": [],
+   "itemTagsSelected": [],
+   "hasOpenIDLink": false
+  },
+  {
+   "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "username": "alex",
+   "email": null,
+   "type": "user",
+   "token": "REDACTED",
+   "seriesHideFromContinueListening": [],
+   "isActive": true,
+   "isLocked": false,
+   "lastSeen": null,
+   "createdAt": 1791444034530,
+   "permissions": {
+    "download": true,
+    "update": false,
+    "delete": false,
+    "upload": false,
+    "createEreader": false,
+    "accessAllLibraries": true,
+    "accessAllTags": true,
+    "accessExplicitContent": true,
+    "selectedTagsNotAccessible": false
+   },
+   "librariesAccessible": [],
+   "itemTagsSelected": [],
+   "hasOpenIDLink": false
+  },
+  {
+   "id": "cbd5d53e-282b-4b18-82b6-93b0b404f9d4",
+   "username": "jo",
+   "email": null,
+   "type": "user",
+   "token": "REDACTED",
+   "seriesHideFromContinueListening": [],
+   "isActive": true,
+   "isLocked": false,
+   "lastSeen": null,
+   "createdAt": 1791444034552,
+   "permissions": {
+    "download": true,
+    "update": false,
+    "delete": false,
+    "upload": false,
+    "createEreader": false,
+    "accessAllLibraries": true,
+    "accessAllTags": true,
+    "accessExplicitContent": true,
+    "selectedTagsNotAccessible": false
+   },
+   "librariesAccessible": [],
+   "itemTagsSelected": [],
+   "hasOpenIDLink": false
+  }
+ ]
+}

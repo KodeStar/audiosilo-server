@@ -164,6 +164,7 @@ describe('live now', () => {
 
 describe('sessions', () => {
   it('lists sessions, filters by person and book, and pages back', async () => {
+    const newest = liveSession({ id: 9 });
     const calls = mockFetch(
       routes({
         'GET /admin/sessions': (req) =>
@@ -174,7 +175,7 @@ describe('sessions', () => {
                   next_before: null,
                 },
               }
-            : { body: { sessions: [liveSession({ id: 9 })], next_before: 9 } },
+            : { body: { sessions: [newest], next_before: 9 } },
       }),
     );
     const { router } = renderApp(
@@ -189,9 +190,9 @@ describe('sessions', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Show older sessions' }));
     expect((await screen.findAllByText('Older book')).length).toBeGreaterThan(0);
-    expect(calls.some((c) => c.path === '/admin/sessions' && c.query.get('before') === '9')).toBe(
-      true,
-    );
+    const older = calls.find((c) => c.path === '/admin/sessions' && c.query.get('before') === '9');
+    // The last session's start rides along, so a gone cursor session can't restart the list.
+    expect(older?.query.get('before_at')).toBe(newest.started_at);
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'Whose sessions' }), 'sam');
     await waitFor(() => expect(router.state.location.search).toMatchObject({ person: 2 }));
@@ -261,7 +262,9 @@ describe('listening from before sessions were recorded', () => {
     );
     renderApp('/activity');
     expect(
-      await screen.findByText(/Includes about 5\W*h\w* estimated from before this server recorded/),
+      await screen.findByText(
+        /Includes about 5\W*h\w* estimated where no session was recorded \(from before this server recorded/,
+      ),
     ).toBeInTheDocument();
     // 9 h listened, 5 h of it estimated, 12 sessions: the chart's total and the
     // sessions' average are the 4 h the sessions recorded.
@@ -284,5 +287,30 @@ describe('listening from before sessions were recorded', () => {
     expect(await screen.findByText('Listening history')).toBeInTheDocument();
     expect(screen.getByText('From the app, before sessions were recorded')).toBeInTheDocument();
     expect(screen.queryByText('Unknown app')).not.toBeInTheDocument();
+  });
+
+  it('shows a session imported from Audiobookshelf with the device it recorded', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/sessions': {
+          body: {
+            sessions: [
+              liveSession({
+                id: 4,
+                backfilled: true,
+                imported: true,
+                device_name: 'Pixel 8',
+                client: { app: 'Audiobookshelf', version: '', platform: '' },
+              }),
+            ],
+            next_before: null,
+          },
+        },
+      }),
+    );
+    renderApp('/activity/sessions');
+    expect(await screen.findByText('Imported from Audiobookshelf')).toBeInTheDocument();
+    expect(screen.getByText('Pixel 8')).toBeInTheDocument();
+    expect(screen.queryByText('Listening history')).not.toBeInTheDocument();
   });
 });

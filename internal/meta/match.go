@@ -274,11 +274,11 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 	ctx, cancel := context.WithTimeout(ctx, s.composeBudget)
 	defer cancel()
 
-	text, asin, isbn := strings.TrimSpace(q.Text), normalizeASIN(q.ASIN), normalizeISBN(q.ISBN)
+	text, asin, isbn := strings.TrimSpace(q.Text), match.NormalizeASIN(q.ASIN), match.NormalizeISBN(q.ISBN)
 	// An identifier the admin typed (with no text) asks for that record alone.
 	identifierOnly := text == "" && (asin != "" || isbn != "")
 	if text == "" && asin == "" && isbn == "" {
-		asin, isbn = normalizeASIN(q.BookASIN), normalizeISBN(q.BookISBN)
+		asin, isbn = match.NormalizeASIN(q.BookASIN), match.NormalizeISBN(q.BookISBN)
 	}
 
 	var (
@@ -522,15 +522,6 @@ func hasMatchFacts(v url.Values) bool {
 		}
 	}
 	return false
-}
-
-// normalizeASIN and normalizeISBN put an identifier in the form metaserve's exact
-// lookup holds: an ASIN upper-cased, an ISBN without the hyphens and spaces it is
-// usually printed with.
-func normalizeASIN(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
-
-func normalizeISBN(s string) string {
-	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(s)))
 }
 
 func (s *Service) toCandidate(d *upstreamWorkDetail, cover, region string) *MatchCandidate {

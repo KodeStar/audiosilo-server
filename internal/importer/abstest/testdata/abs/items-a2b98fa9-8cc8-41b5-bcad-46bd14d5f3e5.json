@@ -1,0 +1,981 @@
+{
+ "results": [
+  {
+   "id": "358a0b37-63d9-4a9c-b7ea-8726ba3a5f69",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Jane Austen/Pride and Prejudice",
+   "relPath": "Jane Austen/Pride and Prejudice",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "a50b6a4f-1b7b-4e29-a067-bb6ed6b60ce3",
+    "metadata": {
+     "title": "Pride and Prejudice",
+     "subtitle": null,
+     "authorName": "Jane Austen",
+     "narratorName": "Harriet Lowe",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 7200
+   }
+  },
+  {
+   "id": "8c719292-174e-4478-b62d-c1f75de14d19",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Ursula Brennan/Quiet Hours",
+   "relPath": "Ursula Brennan/Quiet Hours",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "89636954-c7ac-45da-9bc6-a4af303765c5",
+    "metadata": {
+     "title": "Quiet Hours",
+     "subtitle": null,
+     "authorName": "Ursula Brennan",
+     "narratorName": "Ursula Brennan",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 1800
+   }
+  },
+  {
+   "id": "07cbc71f-532d-4569-8178-22491094edae",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Jim Butcher/The Dresden Files/06 - Blood Rites",
+   "relPath": "Jim Butcher/The Dresden Files/06 - Blood Rites",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "0f354cc9-b219-4258-9ec9-d496be5f315d",
+    "metadata": {
+     "title": "Blood Rites",
+     "subtitle": null,
+     "authorName": "Jim Butcher",
+     "narratorName": "James Marsters",
+     "seriesName": "The Dresden Files #6",
+     "isbn": null,
+     "asin": "B003C28QUE"
+    },
+    "duration": 5700
+   }
+  },
+  {
+   "id": "4199a953-2bc3-48a1-ab9e-dbc42b3bea98",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Jim Butcher/The Dresden Files/05 - Death Masks",
+   "relPath": "Jim Butcher/The Dresden Files/05 - Death Masks",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "ba457c81-e667-4cb1-b888-ea5aa10372ab",
+    "metadata": {
+     "title": "Death Masks",
+     "subtitle": null,
+     "authorName": "Jim Butcher",
+     "narratorName": "James Marsters",
+     "seriesName": "The Dresden Files #5",
+     "isbn": null,
+     "asin": "B002V9ZE4A"
+    },
+    "duration": 5100
+   }
+  },
+  {
+   "id": "f9f47a42-5845-4907-bbb9-6b8a50fe1159",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Jim Butcher/The Dresden Files/02 - Fool Moon",
+   "relPath": "Jim Butcher/The Dresden Files/02 - Fool Moon",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "79ca9acf-8084-4155-87ed-128228c336b4",
+    "metadata": {
+     "title": "Fool Moon",
+     "subtitle": null,
+     "authorName": "Jim Butcher",
+     "narratorName": "James Marsters",
+     "seriesName": "The Dresden Files #2",
+     "isbn": null,
+     "asin": "B002V1BII4"
+    },
+    "duration": 4500
+   }
+  },
+  {
+   "id": "1b083bff-a198-404f-a54c-2164bd718e1d",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Jim Butcher/The Dresden Files/01 - Storm Front",
+   "relPath": "Jim Butcher/The Dresden Files/01 - Storm Front",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "a26538a2-3208-40fe-ae3c-d535565c314c",
+    "metadata": {
+     "title": "Storm Front",
+     "subtitle": null,
+     "authorName": "Jim Butcher",
+     "narratorName": "James Marsters",
+     "seriesName": "The Dresden Files #1",
+     "isbn": null,
+     "asin": "B002V8KYMI"
+    },
+    "duration": 3900
+   }
+  },
+  {
+   "id": "3df04327-18e8-4b9e-a543-5f81cbe0a67f",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Jim Butcher/Codex Alera/04 - Captain's Fury",
+   "relPath": "Jim Butcher/Codex Alera/04 - Captain's Fury",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "958fbb01-478b-42d5-b957-3bc5f71ca689",
+    "metadata": {
+     "title": "Captain's Fury",
+     "subtitle": null,
+     "authorName": "Jim Butcher",
+     "narratorName": "Kate Reading",
+     "seriesName": "Codex Alera #4",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 5400
+   }
+  },
+  {
+   "id": "50d10cf5-f798-4b45-b3e5-bb45024f5bdf",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Jim Butcher/Codex Alera/02 - Academ's Fury",
+   "relPath": "Jim Butcher/Codex Alera/02 - Academ's Fury",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "3077c1ad-2ab5-4613-b519-0f5497f6e3f8",
+    "metadata": {
+     "title": "Academ's Fury",
+     "subtitle": null,
+     "authorName": "Jim Butcher",
+     "narratorName": "Kate Reading",
+     "seriesName": "Codex Alera #2",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 5100
+   }
+  },
+  {
+   "id": "81b71b36-206f-4e5d-baaa-29671ddbfd79",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Jim Butcher/Codex Alera/01 - Furies of Calderon",
+   "relPath": "Jim Butcher/Codex Alera/01 - Furies of Calderon",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "c62faefc-da13-46a2-9e40-c2aabcf6be44",
+    "metadata": {
+     "title": "Furies of Calderon",
+     "subtitle": null,
+     "authorName": "Jim Butcher",
+     "narratorName": "Kate Reading",
+     "seriesName": "Codex Alera #1",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 4800
+   }
+  },
+  {
+   "id": "2b61baa1-b068-473e-b8b1-4ef2d0dd594a",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/James S. A. Corey/The Expanse/05 - Nemesis Games",
+   "relPath": "James S. A. Corey/The Expanse/05 - Nemesis Games",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "e7b72224-d09d-44b9-926c-ddfcf0e4d63c",
+    "metadata": {
+     "title": "Nemesis Games",
+     "subtitle": null,
+     "authorName": "James S. A. Corey",
+     "narratorName": "Jefferson Mays",
+     "seriesName": "The Expanse #5",
+     "isbn": null,
+     "asin": "B00XA9CCPO"
+    },
+    "duration": 8100
+   }
+  },
+  {
+   "id": "2c95e293-f268-4f0d-b905-c059b5952215",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/James S. A. Corey/The Expanse/02.5 - Gods of Risk",
+   "relPath": "James S. A. Corey/The Expanse/02.5 - Gods of Risk",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "a49b2215-7bfd-48cf-bd07-c17afef1a239",
+    "metadata": {
+     "title": "Gods of Risk",
+     "subtitle": null,
+     "authorName": "James S. A. Corey",
+     "narratorName": "Erik Davies",
+     "seriesName": "The Expanse #2.5",
+     "isbn": null,
+     "asin": "B00KQQK0MQ"
+    },
+    "duration": 1080
+   }
+  },
+  {
+   "id": "b0a90418-9e1d-4f32-b618-a4f493efb97d",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/James S. A. Corey/The Expanse/02 - Caliban's War",
+   "relPath": "James S. A. Corey/The Expanse/02 - Caliban's War",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "927658f1-ee48-4f9f-8179-344c033b5fe1",
+    "metadata": {
+     "title": "Caliban's War",
+     "subtitle": null,
+     "authorName": "James S. A. Corey",
+     "narratorName": "Jefferson Mays",
+     "seriesName": "The Expanse #2",
+     "isbn": null,
+     "asin": "B008XKUPQ8"
+    },
+    "duration": 9000
+   }
+  },
+  {
+   "id": "851b8e6d-905f-4a38-9520-a14a7ecb4761",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/James S. A. Corey/The Expanse/01 - Leviathan Wakes",
+   "relPath": "James S. A. Corey/The Expanse/01 - Leviathan Wakes",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "ac3cca24-51d3-4f3e-b6f7-9341537f5668",
+    "metadata": {
+     "title": "Leviathan Wakes",
+     "subtitle": null,
+     "authorName": "James S. A. Corey",
+     "narratorName": "Jefferson Mays",
+     "seriesName": "The Expanse #1",
+     "isbn": null,
+     "asin": "B00P9XDQFY"
+    },
+    "duration": 9600
+   }
+  },
+  {
+   "id": "7c3c14b9-2972-4179-ba62-eff3921f552d",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Arthur Conan Doyle/Sherlock Holmes/05 - The Hound of the Baskervilles",
+   "relPath": "Arthur Conan Doyle/Sherlock Holmes/05 - The Hound of the Baskervilles",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "729267b0-13a2-4570-96d0-74500d8b8831",
+    "metadata": {
+     "title": "The Hound of the Baskervilles",
+     "subtitle": null,
+     "authorName": "Arthur Conan Doyle",
+     "narratorName": "Edmund Carrow",
+     "seriesName": "Sherlock Holmes #5",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 5700
+   }
+  },
+  {
+   "id": "4c100278-aec9-49ab-a540-e7e8f1f9cfa6",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Arthur Conan Doyle/Sherlock Holmes/02 - The Sign of the Four",
+   "relPath": "Arthur Conan Doyle/Sherlock Holmes/02 - The Sign of the Four",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "3c2ea016-3d1a-49c7-9547-dd789231c78a",
+    "metadata": {
+     "title": "The Sign of the Four",
+     "subtitle": null,
+     "authorName": "Arthur Conan Doyle",
+     "narratorName": "Edmund Carrow",
+     "seriesName": "Sherlock Holmes #2",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 3900
+   }
+  },
+  {
+   "id": "347a1686-d68c-4ed1-8bb1-cdf18e7b9b02",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Arthur Conan Doyle/Sherlock Holmes/01 - A Study in Scarlet",
+   "relPath": "Arthur Conan Doyle/Sherlock Holmes/01 - A Study in Scarlet",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "82f6da88-fde9-4420-8c77-29c1f48366d6",
+    "metadata": {
+     "title": "A Study in Scarlet",
+     "subtitle": null,
+     "authorName": "Arthur Conan Doyle",
+     "narratorName": "Edmund Carrow",
+     "seriesName": "Sherlock Holmes #1",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 3600
+   }
+  },
+  {
+   "id": "1e8ef94c-b274-4f85-a6f3-6ca4a8d365d9",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Marcus Ellery/The Glass Orchard",
+   "relPath": "Marcus Ellery/The Glass Orchard",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "b9370342-8e71-4872-8d11-25843f7e10d0",
+    "metadata": {
+     "title": "The Glass Orchard",
+     "subtitle": null,
+     "authorName": "Marcus Ellery",
+     "narratorName": "Priya Raman, Tom Okafor",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 6600
+   }
+  },
+  {
+   "id": "a3b58983-3938-4517-8941-d827730821c0",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/F. Scott Fitzgerald/The Great Gatsby",
+   "relPath": "F. Scott Fitzgerald/The Great Gatsby",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "0a5b8a91-9fd9-4764-9af6-f57aa6ca5bd8",
+    "metadata": {
+     "title": "The Great Gatsby",
+     "subtitle": null,
+     "authorName": "F. Scott Fitzgerald",
+     "narratorName": "Callum Reyes",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 3000
+   }
+  },
+  {
+   "id": "500dc40d-8ce8-4058-b693-49674e01835b",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Perrin Halloway/The Short Light/Book 2 - The Long Dark",
+   "relPath": "Perrin Halloway/The Short Light/Book 2 - The Long Dark",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "012bbf6e-410f-4b68-9127-80a2a5613963",
+    "metadata": {
+     "title": "The Long Dark",
+     "subtitle": null,
+     "authorName": "Perrin Halloway",
+     "narratorName": "Imogen Vale",
+     "seriesName": "The Short Light #2",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 300
+   }
+  },
+  {
+   "id": "441f1506-dac3-4b8d-b13f-f0930859f3be",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Perrin Halloway/The Short Light/Book 1 - The Short Light",
+   "relPath": "Perrin Halloway/The Short Light/Book 1 - The Short Light",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "ab946ef0-6646-483e-8a12-af77a479e6ef",
+    "metadata": {
+     "title": "The Short Light",
+     "subtitle": null,
+     "authorName": "Perrin Halloway",
+     "narratorName": "Imogen Vale",
+     "seriesName": "The Short Light #1",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 180
+   }
+  },
+  {
+   "id": "1314c83a-c1c2-4b79-a048-80fff904a378",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/O. Henry/The Gift of the Magi",
+   "relPath": "O. Henry/The Gift of the Magi",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "b72b9430-a5de-45fc-b371-26759b25a3dd",
+    "metadata": {
+     "title": "The Gift of the Magi",
+     "subtitle": null,
+     "authorName": "O. Henry",
+     "narratorName": "Lucille Barrow",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 240.192
+   }
+  },
+  {
+   "id": "7f1efcb9-0c15-4608-b755-cba95d708edc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Vesna Kordic/The Tone Triptych",
+   "relPath": "Vesna Kordic/The Tone Triptych",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "9ff2f8a2-6b4a-4039-adab-c70c2f79a9a2",
+    "metadata": {
+     "title": "The Tone Triptych",
+     "subtitle": null,
+     "authorName": "Vesna Kordic",
+     "narratorName": "Test Tones",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 1440
+   }
+  },
+  {
+   "id": "e0d5688f-a07c-44aa-bc8e-a3f30a457b2d",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Vesna Kordic/The Tone Atlas",
+   "relPath": "Vesna Kordic/The Tone Atlas",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "154c9b7e-f9d8-4af8-88da-9c305a42eebb",
+    "metadata": {
+     "title": "The Tone Atlas",
+     "subtitle": null,
+     "authorName": "Vesna Kordic",
+     "narratorName": "Test Tones",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 1500
+   }
+  },
+  {
+   "id": "5edfed3a-d823-4f9c-9556-1ab082dc2884",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Selma Lagerlöf/Nils Holgerssons underbara resa genom Sverige",
+   "relPath": "Selma Lagerlöf/Nils Holgerssons underbara resa genom Sverige",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "c32c730a-d94a-48d6-918e-ca1f18572eca",
+    "metadata": {
+     "title": "Nils Holgerssons underbara resa genom Sverige",
+     "subtitle": null,
+     "authorName": "Selma Lagerlöf",
+     "narratorName": "Åsa Lindqvist",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 5100
+   }
+  },
+  {
+   "id": "aa03fe60-90c7-4c70-853f-f594a5df85d7",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Ilse Marwood/Winter Notebook",
+   "relPath": "Ilse Marwood/Winter Notebook",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "d0c87d3c-d07c-4cf0-a0fa-f1765bb320ec",
+    "metadata": {
+     "title": "Winter Notebook",
+     "subtitle": null,
+     "authorName": "Ilse Marwood",
+     "narratorName": "Ilse Marwood",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 2100
+   }
+  },
+  {
+   "id": "31588b85-89bf-47e1-ad4f-a3331c04bc0d",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Ilse Marwood/The Salt Road",
+   "relPath": "Ilse Marwood/The Salt Road",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "80724030-5703-4ccd-b76c-edeaf0ed2837",
+    "metadata": {
+     "title": "The Salt Road",
+     "subtitle": null,
+     "authorName": "Ilse Marwood",
+     "narratorName": "Rosalind Achterberg",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 1500
+   }
+  },
+  {
+   "id": "c7c67610-cfae-4997-bb2d-568a11a4e1dc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Ilse Marwood/The Saltmarsh Chronicles/Book 5 - Salt and Iron",
+   "relPath": "Ilse Marwood/The Saltmarsh Chronicles/Book 5 - Salt and Iron",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "552b0073-4287-40fc-b418-de9e9eb81e75",
+    "metadata": {
+     "title": "Salt and Iron",
+     "subtitle": null,
+     "authorName": "Ilse Marwood",
+     "narratorName": "Rosalind Achterberg",
+     "seriesName": "The Saltmarsh Chronicles #5",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 3900
+   }
+  },
+  {
+   "id": "f83b896b-99c3-4997-8031-01983cb32ea8",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Ilse Marwood/The Saltmarsh Chronicles/Book 4 - The Lantern Choir",
+   "relPath": "Ilse Marwood/The Saltmarsh Chronicles/Book 4 - The Lantern Choir",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "9772ec4c-5582-4c5e-9fe1-252c8e934563",
+    "metadata": {
+     "title": "The Lantern Choir",
+     "subtitle": null,
+     "authorName": "Ilse Marwood",
+     "narratorName": "Rosalind Achterberg",
+     "seriesName": "The Saltmarsh Chronicles #4",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 3000
+   }
+  },
+  {
+   "id": "e0d538ee-764a-4c40-85e5-ee2b5880e9bb",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Ilse Marwood/The Saltmarsh Chronicles/Book 2 - Tidewrack",
+   "relPath": "Ilse Marwood/The Saltmarsh Chronicles/Book 2 - Tidewrack",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "1a3ed2b3-cdb0-47b7-9190-9f21270d3299",
+    "metadata": {
+     "title": "Tidewrack",
+     "subtitle": null,
+     "authorName": "Ilse Marwood",
+     "narratorName": "Rosalind Achterberg",
+     "seriesName": "The Saltmarsh Chronicles #2",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 3600
+   }
+  },
+  {
+   "id": "8eea1f17-7dc2-4e22-bd6e-8240e38d7403",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Ilse Marwood/The Saltmarsh Chronicles/Book 1 - The Drowned Bell",
+   "relPath": "Ilse Marwood/The Saltmarsh Chronicles/Book 1 - The Drowned Bell",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "ed50444e-ade5-4cdf-837c-500cc5d8cb51",
+    "metadata": {
+     "title": "The Drowned Bell",
+     "subtitle": null,
+     "authorName": "Ilse Marwood",
+     "narratorName": "Rosalind Achterberg",
+     "seriesName": "The Saltmarsh Chronicles #1",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 3300
+   }
+  },
+  {
+   "id": "9d3e123b-dee8-4561-9892-f1d720a4c005",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Herman Melville/Moby-Dick",
+   "relPath": "Herman Melville/Moby-Dick",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "0fa6ec3b-f29e-4bd5-b7d0-e25ac31cd575",
+    "metadata": {
+     "title": "Moby-Dick; or, The Whale",
+     "subtitle": null,
+     "authorName": "Herman Melville",
+     "narratorName": "Gideon Marsh",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 9900
+   }
+  },
+  {
+   "id": "e7dfe67b-b741-4272-9394-d3b6a255efc9",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Wendeline Okafor-Brandt/The Remarkably Long Account of a Lighthouse Keeper",
+   "relPath": "Wendeline Okafor-Brandt/The Remarkably Long Account of a Lighthouse Keeper",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "3161011f-25e0-407c-adb4-02d32fc074a4",
+    "metadata": {
+     "title": "The Remarkably Long and Occasionally Tedious Account of a Lighthouse Keeper's Seventeen Winters on the Northern Coast, Including Several Digressions on Weather, Gulls, and the Proper Brewing of Tea",
+     "subtitle": null,
+     "authorName": "Wendeline Okafor-Brandt",
+     "narratorName": "Barnaby Quist",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 6600
+   }
+  },
+  {
+   "id": "52b50548-f8df-4bb2-8cae-b502b0942e88",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Nadia Rahimi/Ember & Ash",
+   "relPath": "Nadia Rahimi/Ember & Ash",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "2bcbaafc-1078-461e-9d27-714c5f34baaf",
+    "metadata": {
+     "title": "Ember & Ash",
+     "subtitle": null,
+     "authorName": "Nadia Rahimi",
+     "narratorName": "Leila Farouk",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 5400
+   }
+  },
+  {
+   "id": "822d9d0a-5c15-48aa-80fe-bdeeaf7a64b0",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Brandon Sanderson/The Stormlight Archive/03 - Oathbringer",
+   "relPath": "Brandon Sanderson/The Stormlight Archive/03 - Oathbringer",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "567fc03c-2835-4a2f-9f2e-120fed77d393",
+    "metadata": {
+     "title": "Oathbringer",
+     "subtitle": null,
+     "authorName": "Brandon Sanderson",
+     "narratorName": "Michael Kramer, Kate Reading",
+     "seriesName": "The Stormlight Archive #3",
+     "isbn": null,
+     "asin": "B01N4VBIPG"
+    },
+    "duration": 10200
+   }
+  },
+  {
+   "id": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings",
+   "relPath": "Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+    "metadata": {
+     "title": "The Way of Kings",
+     "subtitle": null,
+     "authorName": "Brandon Sanderson",
+     "narratorName": "Michael Kramer, Kate Reading",
+     "seriesName": "The Stormlight Archive #1",
+     "isbn": null,
+     "asin": "B003ZWFO7E"
+    },
+    "duration": 10800
+   }
+  },
+  {
+   "id": "a3f3b69c-9643-4de5-b324-aff0413633a3",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Teodor Sandvik/Signal & Static/03.5 - Interference",
+   "relPath": "Teodor Sandvik/Signal & Static/03.5 - Interference",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "59b390e6-1bad-42a7-ba79-0b350f88eb71",
+    "metadata": {
+     "title": "Interference",
+     "subtitle": null,
+     "authorName": "Teodor Sandvik",
+     "narratorName": "Jonah Whitfield",
+     "seriesName": "Signal & Static #3.5",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 720
+   }
+  },
+  {
+   "id": "813de0cf-6151-4d25-adc2-98f5264cc426",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Teodor Sandvik/Signal & Static/03 - Dead Air",
+   "relPath": "Teodor Sandvik/Signal & Static/03 - Dead Air",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "f04c37ba-45fd-46e0-baac-253cee4e7e3b",
+    "metadata": {
+     "title": "Dead Air",
+     "subtitle": null,
+     "authorName": "Teodor Sandvik",
+     "narratorName": "Mira Castellanos, Jonah Whitfield",
+     "seriesName": "Signal & Static #3",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 2400
+   }
+  },
+  {
+   "id": "aea33004-c881-4257-98e4-2ef3ce2ccf5b",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Teodor Sandvik/Signal & Static/01 - Carrier Wave",
+   "relPath": "Teodor Sandvik/Signal & Static/01 - Carrier Wave",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "b04ff8b3-d2a9-4c72-9924-0277c9869a9d",
+    "metadata": {
+     "title": "Carrier Wave",
+     "subtitle": null,
+     "authorName": "Teodor Sandvik",
+     "narratorName": "Mira Castellanos, Jonah Whitfield",
+     "seriesName": "Signal & Static #1",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 2700
+   }
+  },
+  {
+   "id": "6877a3e5-50f6-42c2-b9ab-37b2a0f7bb81",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Mary Shelley/Frankenstein",
+   "relPath": "Mary Shelley/Frankenstein",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "ba07cfc2-68d3-4edd-b1ef-9c886c13c1da",
+    "metadata": {
+     "title": "Frankenstein; or, The Modern Prometheus",
+     "subtitle": null,
+     "authorName": "Mary Shelley",
+     "narratorName": "Dominic Hale",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 4501.008
+   }
+  },
+  {
+   "id": "7bf04cc5-c26b-4595-abd2-f9c68363518b",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Natsume Sōseki/吾輩は猫である",
+   "relPath": "Natsume Sōseki/吾輩は猫である",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "22775d79-3ab5-44a2-a476-b61d4021104c",
+    "metadata": {
+     "title": "吾輩は猫である",
+     "subtitle": null,
+     "authorName": "Natsume Sōseki",
+     "narratorName": "田中 晴美",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 4200
+   }
+  },
+  {
+   "id": "98184137-977c-4b78-84ed-5aa1cb9bdaed",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Leo Tolstoy/War and Peace",
+   "relPath": "Leo Tolstoy/War and Peace",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "92cb2c3d-9fd8-45a1-bb58-70dc35485ba2",
+    "metadata": {
+     "title": "War and Peace",
+     "subtitle": null,
+     "authorName": "Leo Tolstoy",
+     "narratorName": "Thandiwe Mokoena",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 10500
+   }
+  },
+  {
+   "id": "39ad7d4e-20f4-4ff4-a6fb-09114139a018",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Hollis Varga/The Cartographer's Daughter",
+   "relPath": "Hollis Varga/The Cartographer's Daughter",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "922fa484-517d-4239-9a3b-338a42877013",
+    "metadata": {
+     "title": "The Cartographer's Daughter",
+     "subtitle": null,
+     "authorName": "Hollis Varga",
+     "narratorName": "Annika Strand",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 5400.8640000000005
+   }
+  },
+  {
+   "id": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Andy Weir/Project Hail Mary",
+   "relPath": "Andy Weir/Project Hail Mary",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+    "metadata": {
+     "title": "Project Hail Mary",
+     "subtitle": null,
+     "authorName": "Andy Weir",
+     "narratorName": "Ray Porter",
+     "seriesName": "",
+     "isbn": null,
+     "asin": "B08G9PRS1K"
+    },
+    "duration": 8400
+   }
+  },
+  {
+   "id": "e5d808ca-a13b-4812-b261-270f3c9a33f9",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "folderId": "0a39c600-7b41-47d5-bdd9-6ea8baa8b1ef",
+   "path": "/Users/chris/dev/audiosilo-testbed/verify/library/books/Émile Zola/Germinal",
+   "relPath": "Émile Zola/Germinal",
+   "isFile": false,
+   "mediaType": "book",
+   "media": {
+    "id": "cdd21aa2-6ca9-4e55-82df-c7ff5a078e75",
+    "metadata": {
+     "title": "Germinal",
+     "subtitle": null,
+     "authorName": "Émile Zola",
+     "narratorName": "Céline Marchetti",
+     "seriesName": "",
+     "isbn": null,
+     "asin": null
+    },
+    "duration": 6000
+   }
+  }
+ ],
+ "total": 44,
+ "limit": 0,
+ "page": 0,
+ "sortDesc": false,
+ "mediaType": "book",
+ "minified": true,
+ "collapseseries": false,
+ "include": "",
+ "offset": 0
+}

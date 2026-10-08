@@ -1,0 +1,428 @@
+{
+ "total": 37,
+ "numPages": 4,
+ "page": 3,
+ "itemsPerPage": 10,
+ "sessions": [
+  {
+   "id": "8fb2dabd-914e-4068-a82e-dfb74172768d",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "1b083bff-a198-404f-a54c-2164bd718e1d",
+   "bookId": "a26538a2-3208-40fe-ae3c-d535565c314c",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Storm Front",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "56762979-947a-4c46-bf2f-76849ae6438b",
+      "name": "Jim Butcher"
+     }
+    ],
+    "narrators": [
+     "James Marsters"
+    ],
+    "series": [
+     {
+      "id": "81d6c0f8-a89b-478f-92d8-84e532a99b5c",
+      "name": "The Dresden Files",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B002V8KYMI"
+   },
+   "displayTitle": "Storm Front",
+   "displayAuthor": "Jim Butcher",
+   "duration": 3900,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-22",
+   "dayOfWeek": "Saturday",
+   "timeListening": 1200,
+   "startTime": 0,
+   "currentTime": 1200,
+   "startedAt": 1787398200000,
+   "updatedAt": 1787399400000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "a025710e-534b-4803-a690-b80effa2479e",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "851b8e6d-905f-4a38-9520-a14a7ecb4761",
+   "bookId": "ac3cca24-51d3-4f3e-b6f7-9341537f5668",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Leviathan Wakes",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "e31bc9eb-6eff-48ec-ad93-5b69e1d46b86",
+      "name": "James S. A. Corey"
+     }
+    ],
+    "narrators": [
+     "Jefferson Mays"
+    ],
+    "series": [
+     {
+      "id": "24f2d393-a947-4eb6-b3b3-a7eca652cdcc",
+      "name": "The Expanse",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B00P9XDQFY"
+   },
+   "displayTitle": "Leviathan Wakes",
+   "displayAuthor": "James S. A. Corey",
+   "duration": 9600,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-19",
+   "dayOfWeek": "Wednesday",
+   "timeListening": 1152,
+   "startTime": 8160,
+   "currentTime": 9600,
+   "startedAt": 1787164200000,
+   "updatedAt": 1787165352000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "4f29743f-4393-42a3-a893-cf94cb3ed99d",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "851b8e6d-905f-4a38-9520-a14a7ecb4761",
+   "bookId": "ac3cca24-51d3-4f3e-b6f7-9341537f5668",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Leviathan Wakes",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "e31bc9eb-6eff-48ec-ad93-5b69e1d46b86",
+      "name": "James S. A. Corey"
+     }
+    ],
+    "narrators": [
+     "Jefferson Mays"
+    ],
+    "series": [
+     {
+      "id": "24f2d393-a947-4eb6-b3b3-a7eca652cdcc",
+      "name": "The Expanse",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B00P9XDQFY"
+   },
+   "displayTitle": "Leviathan Wakes",
+   "displayAuthor": "James S. A. Corey",
+   "duration": 9600,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-17",
+   "dayOfWeek": "Monday",
+   "timeListening": 1296,
+   "startTime": 6540,
+   "currentTime": 8160,
+   "startedAt": 1786997700000,
+   "updatedAt": 1786999144000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "d15d447d-ffd3-4e36-ad84-63e16066cd9a",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "851b8e6d-905f-4a38-9520-a14a7ecb4761",
+   "bookId": "ac3cca24-51d3-4f3e-b6f7-9341537f5668",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Leviathan Wakes",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "e31bc9eb-6eff-48ec-ad93-5b69e1d46b86",
+      "name": "James S. A. Corey"
+     }
+    ],
+    "narrators": [
+     "Jefferson Mays"
+    ],
+    "series": [
+     {
+      "id": "24f2d393-a947-4eb6-b3b3-a7eca652cdcc",
+      "name": "The Expanse",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B00P9XDQFY"
+   },
+   "displayTitle": "Leviathan Wakes",
+   "displayAuthor": "James S. A. Corey",
+   "duration": 9600,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-15",
+   "dayOfWeek": "Saturday",
+   "timeListening": 1200,
+   "startTime": 5040,
+   "currentTime": 6540,
+   "startedAt": 1786776000000,
+   "updatedAt": 1786777311000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "e6d354bd-b511-40cb-acf6-0f6ec5fa9643",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "851b8e6d-905f-4a38-9520-a14a7ecb4761",
+   "bookId": "ac3cca24-51d3-4f3e-b6f7-9341537f5668",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Leviathan Wakes",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "e31bc9eb-6eff-48ec-ad93-5b69e1d46b86",
+      "name": "James S. A. Corey"
+     }
+    ],
+    "narrators": [
+     "Jefferson Mays"
+    ],
+    "series": [
+     {
+      "id": "24f2d393-a947-4eb6-b3b3-a7eca652cdcc",
+      "name": "The Expanse",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B00P9XDQFY"
+   },
+   "displayTitle": "Leviathan Wakes",
+   "displayAuthor": "James S. A. Corey",
+   "duration": 9600,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-14",
+   "dayOfWeek": "Friday",
+   "timeListening": 1344,
+   "startTime": 3360,
+   "currentTime": 5040,
+   "startedAt": 1786727400000,
+   "updatedAt": 1786728818000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "18fe076d-9e46-40c8-a2b8-5fd47aae483a",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "851b8e6d-905f-4a38-9520-a14a7ecb4761",
+   "bookId": "ac3cca24-51d3-4f3e-b6f7-9341537f5668",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Leviathan Wakes",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "e31bc9eb-6eff-48ec-ad93-5b69e1d46b86",
+      "name": "James S. A. Corey"
+     }
+    ],
+    "narrators": [
+     "Jefferson Mays"
+    ],
+    "series": [
+     {
+      "id": "24f2d393-a947-4eb6-b3b3-a7eca652cdcc",
+      "name": "The Expanse",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B00P9XDQFY"
+   },
+   "displayTitle": "Leviathan Wakes",
+   "displayAuthor": "James S. A. Corey",
+   "duration": 9600,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-12",
+   "dayOfWeek": "Wednesday",
+   "timeListening": 1440,
+   "startTime": 1560,
+   "currentTime": 3360,
+   "startedAt": 1786517400000,
+   "updatedAt": 1786518877000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "f9ddb9ed-42b5-4935-a7e0-9bc332458d47",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "851b8e6d-905f-4a38-9520-a14a7ecb4761",
+   "bookId": "ac3cca24-51d3-4f3e-b6f7-9341537f5668",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Leviathan Wakes",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "e31bc9eb-6eff-48ec-ad93-5b69e1d46b86",
+      "name": "James S. A. Corey"
+     }
+    ],
+    "narrators": [
+     "Jefferson Mays"
+    ],
+    "series": [
+     {
+      "id": "24f2d393-a947-4eb6-b3b3-a7eca652cdcc",
+      "name": "The Expanse",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B00P9XDQFY"
+   },
+   "displayTitle": "Leviathan Wakes",
+   "displayAuthor": "James S. A. Corey",
+   "duration": 9600,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-08-11",
+   "dayOfWeek": "Tuesday",
+   "timeListening": 1248,
+   "startTime": 0,
+   "currentTime": 1560,
+   "startedAt": 1786430700000,
+   "updatedAt": 1786431948000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  }
+ ]
+}

@@ -203,10 +203,15 @@ type Session struct {
 	Codec      string  `json:"codec"`
 	Transcoded bool    `json:"transcoded"`
 	Finished   bool    `json:"finished"`
-	// Backfilled: made at the upgrade from the players' listening spans
-	// (migration 0021), so the device, app and playback mode are unknown.
-	Backfilled bool   `json:"backfilled"`
-	State      string `json:"state"`
+	// Backfilled: not recorded from this server's progress saves, so it stays
+	// out of the device and playback breakdowns: made at the upgrade from the
+	// players' listening spans (migration 0021: device, app and playback mode
+	// unknown), or imported from another server (Imported: the device and app
+	// are known, the playback mode is not).
+	Backfilled bool `json:"backfilled"`
+	// Imported: written by a listening import (catalog/imports.go).
+	Imported bool   `json:"imported"`
+	State    string `json:"state"`
 	// Chapter (the chapter at the position) and IP (the device's newest address)
 	// are filled for live sessions only.
 	Chapter string `json:"chapter,omitempty"`
@@ -216,7 +221,8 @@ type Session struct {
 const sessionColumns = `s.id, s.user_id, u.username, s.library_id, s.rel_path,
 	COALESCE(b.title, ''), COALESCE(b.author, ''), s.token_id, s.device_name,
 	s.client_app, s.client_version, s.client_platform, s.started_at, s.last_at,
-	s.start_pos, s.end_pos, s.duration, s.speed, s.listened, s.codec, s.transcoded, s.finished, s.backfilled`
+	s.start_pos, s.end_pos, s.duration, s.speed, s.listened, s.codec, s.transcoded, s.finished, s.backfilled,
+	s.import_id`
 
 // listenedSQL keeps a session out of every list and total until it has recorded
 // some listening: a single save (a player's "mark finished", another app syncing
@@ -230,14 +236,18 @@ const sessionFrom = ` FROM listening_sessions s
 // scanSession scans sessionColumns (plus extra destinations after them) and
 // derives the client and the state.
 func (c *Catalog) scanSession(rows *sql.Rows, s *Session, extra ...any) error {
-	var cl Client
+	var (
+		cl       Client
+		importID int64
+	)
 	dest := []any{&s.ID, &s.UserID, &s.Username, &s.LibraryID, &s.Path, &s.Title, &s.Author,
 		&s.DeviceID, &s.DeviceName, &cl.App, &cl.Version, &cl.Platform, &s.StartedAt, &s.LastAt,
 		&s.StartPos, &s.EndPos, &s.Duration, &s.Speed, &s.Listened, &s.Codec, &s.Transcoded, &s.Finished,
-		&s.Backfilled}
+		&s.Backfilled, &importID}
 	if err := rows.Scan(append(dest, extra...)...); err != nil {
 		return err
 	}
+	s.Imported = importID > 0
 	if cl.App != "" {
 		s.Client = &cl
 	}
@@ -258,7 +268,8 @@ func sessionState(age time.Duration) string {
 // LiveSessions returns the open sessions (a save within SessionGap), newest
 // first, at most one per device: a device that moved on to another book shows
 // only the book it is on now. Each carries the chapter at its position and the
-// device's newest address.
+// device's newest address. An imported session is never live, even one whose
+// last save is recent.
 func (c *Catalog) LiveSessions(ctx context.Context) ([]Session, error) {
 	type live struct {
 		Session
@@ -268,7 +279,7 @@ func (c *Catalog) LiveSessions(ctx context.Context) ([]Session, error) {
 		return c.scanSession(rows, &l.Session, &l.IP, &l.bookID)
 	}, `SELECT `+sessionColumns+`, COALESCE(t.last_ip, ''), COALESCE(b.id, 0)`+sessionFrom+`
 	      LEFT JOIN tokens t ON t.id = s.token_id
-	     WHERE s.last_at >= ? ORDER BY s.last_at DESC, s.id DESC`,
+	     WHERE s.last_at >= ? AND s.import_id = 0 ORDER BY s.last_at DESC, s.id DESC`,
 		formatSessionTime(c.now().Add(-SessionGap)))
 	if err != nil {
 		return nil, err
@@ -323,32 +334,108 @@ func chapterAt(chapters []metadata.Chapter, pos float64) int {
 }
 
 // SessionFilter narrows ListSessions. Zero values mean "any". Before is a keyset
-// cursor: only sessions with a smaller id (older) are listed.
+// cursor, the id of the last session of the previous page: only the sessions
+// after it in the list's order are listed. BeforeAt, when set, is that
+// session's started_at as the page listed it, so the page continues from
+// (BeforeAt, Before) even when the session is gone since (no goneCursor guess).
 type SessionFilter struct {
 	UserID    int64
 	LibraryID int64
 	Path      string // with LibraryID: one book's sessions
 	Before    int64
+	BeforeAt  time.Time
 	Limit     int
 }
 
-// ListSessions returns sessions newest first (open ones included), and the cursor
-// for the next page (0 when this is the last).
+// ListSessions returns sessions newest first by when they started (open ones
+// included; ties by id), and the cursor for the next page (0 when this is the
+// last). Not by id: an imported session is old but newer than every live one.
+// The cursor is a session id, so the page continues after that session's
+// (started_at, id), or after where it was when it is gone since (goneCursor).
 func (c *Catalog) ListSessions(ctx context.Context, f SessionFilter) ([]Session, int64, error) {
 	if f.Limit <= 0 || f.Limit > 200 {
 		f.Limit = 50
 	}
+	where, args := []string{listenedSQL}, []any{}
+	add := func(cond string, vals ...any) {
+		where = append(where, cond)
+		args = append(args, vals...)
+	}
+	if f.UserID != 0 {
+		add(`s.user_id = ?`, f.UserID)
+	}
+	if f.LibraryID != 0 {
+		add(`s.library_id = ?`, f.LibraryID)
+	}
+	if f.Path != "" {
+		add(`s.rel_path = ?`, f.Path)
+	}
+	switch {
+	case f.Before != 0 && !f.BeforeAt.IsZero():
+		at := formatSessionTime(f.BeforeAt)
+		add(`(s.started_at < ? OR (s.started_at = ? AND s.id < ?))`, at, at, f.Before)
+	case f.Before != 0:
+		var started string
+		err := c.db.QueryRowContext(ctx, `SELECT started_at FROM listening_sessions WHERE id = ?`, f.Before).Scan(&started)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			cond, vals, err := c.goneCursor(ctx, f.Before)
+			if err != nil {
+				return nil, 0, err
+			}
+			add(cond, vals...)
+		case err != nil:
+			return nil, 0, err
+		default:
+			add(`(s.started_at < ? OR (s.started_at = ? AND s.id < ?))`, started, started, f.Before)
+		}
+	}
 	out, err := queryRows(ctx, c.db, func(rows *sql.Rows, s *Session) error { return c.scanSession(rows, s) },
 		`SELECT `+sessionColumns+sessionFrom+`
-		  WHERE `+listenedSQL+` AND (?1 = 0 OR s.user_id = ?1) AND (?2 = 0 OR s.library_id = ?2)
-		    AND (?3 = '' OR s.rel_path = ?3) AND (?4 = 0 OR s.id < ?4)
-		  ORDER BY s.id DESC LIMIT ?5`,
-		f.UserID, f.LibraryID, f.Path, f.Before, f.Limit+1)
+		  WHERE `+strings.Join(where, " AND ")+`
+		  ORDER BY s.started_at DESC, s.id DESC LIMIT ?`,
+		append(args, f.Limit+1)...)
 	if err != nil {
 		return nil, 0, err
 	}
 	out, next := pageBefore(out, f.Limit, func(s Session) int64 { return s.ID })
 	return out, next, nil
+}
+
+// goneCursor is where a page continues when its cursor session no longer exists
+// and the request didn't say when it started (a client that sends no before_at)
+// (retention rolled it up, an undo took it out, its user was deleted). A session
+// recorded here gets its id as it starts, so among those (import_id 0) ids follow
+// the list's order: the page continues from the recorded session with the
+// greatest id below the cursor (itself included), so no recorded session is
+// skipped or repeated. Without one, every recorded session left was listed
+// already, and the page continues below the recorded one with the smallest id
+// above the cursor (imported sessions dated between it and the gone cursor are
+// listed again rather than skipped). Only an imported session dated between the
+// gone cursor and its recorded neighbour can be missed. With no recorded session
+// at all, ids are all there is to go by.
+func (c *Catalog) goneCursor(ctx context.Context, before int64) (string, []any, error) {
+	var (
+		started string
+		id      int64
+	)
+	err := c.db.QueryRowContext(ctx, `SELECT started_at, id FROM listening_sessions
+	     WHERE import_id = 0 AND id < ? ORDER BY id DESC LIMIT 1`, before).Scan(&started, &id)
+	if err == nil {
+		return `(s.started_at < ? OR (s.started_at = ? AND s.id <= ?))`, []any{started, started, id}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", nil, err
+	}
+	err = c.db.QueryRowContext(ctx, `SELECT started_at, id FROM listening_sessions
+	     WHERE import_id = 0 AND id > ? ORDER BY id LIMIT 1`, before).Scan(&started, &id)
+	if err == nil {
+		return `(s.started_at < ? OR (s.started_at = ? AND s.id < ?))`, []any{started, started, id}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", nil, err
+	}
+	return `s.id < ?`, []any{before}, nil
 }
 
 // PruneSessions sums raw sessions whose last save is older than cutoff into
@@ -382,12 +469,8 @@ func (c *Catalog) pruneSessionBatch(ctx context.Context, cutoff string, loc *tim
 		if err != nil || count == 0 {
 			return err
 		}
-		for k, v := range sums {
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO listening_daily(day, user_id, library_id, rel_path, listened, sessions)
-				 VALUES(?,?,?,?,?,?)`, k.day, k.user, k.lib, k.path, v.listened, v.sessions); err != nil {
-				return err
-			}
+		if err := sums.insert(ctx, tx); err != nil {
+			return err
 		}
 		// The batch is the lowest ids before the cutoff, so this deletes exactly it.
 		if _, err := tx.ExecContext(ctx,
@@ -400,11 +483,14 @@ func (c *Catalog) pruneSessionBatch(ctx context.Context, cutoff string, loc *tim
 	return n, err
 }
 
-// dayKey and daySum are one listening_daily row being built.
+// dayKey and daySum are one listening_daily row being built. Imported sessions
+// roll up apart from the rest, keeping their import's id, so undoing the import
+// still finds its listening once retention has summed it.
 type dayKey struct {
 	day       string
 	user, lib int64
 	path      string
+	importID  int64
 }
 
 type daySum struct {
@@ -412,45 +498,69 @@ type daySum struct {
 	sessions int
 }
 
+// daySums is the listening_daily rows being built from sessions: PruneSessions'
+// roll-up, and an import's sessions already past the retention (writeImport).
+type daySums map[dayKey]*daySum
+
+// add sums one session (k without its day) per local day in loc: it counts on
+// the day it started, and its listening is shared over the hours its span covers
+// (spreadListening).
+func (d daySums) add(k dayKey, start, last time.Time, listened float64, loc *time.Location) {
+	first := true
+	spreadListening(start, last, listened, loc, func(hour time.Time, secs float64) {
+		k.day = hour.Format(time.DateOnly)
+		if d[k] == nil {
+			d[k] = &daySum{}
+		}
+		d[k].listened += secs
+		if first {
+			d[k].sessions++
+			first = false
+		}
+	})
+}
+
+// insert writes d's rows in tx.
+func (d daySums) insert(ctx context.Context, tx *sql.Tx) error {
+	for k, v := range d {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO listening_daily(day, user_id, library_id, rel_path, listened, sessions, import_id)
+			 VALUES(?,?,?,?,?,?,?)`, k.day, k.user, k.lib, k.path, v.listened, v.sessions, k.importID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // expiredSessions reads the up to limit lowest-id sessions whose last save is
 // before cutoff and sums them per local day, listener and book (a session counts
 // on the day it started; its listening is shared over the days it spans). It
 // returns how many it read and the highest id among them.
-func expiredSessions(ctx context.Context, tx *sql.Tx, cutoff string, loc *time.Location, limit int) (int, int64, map[dayKey]*daySum, error) {
+func expiredSessions(ctx context.Context, tx *sql.Tx, cutoff string, loc *time.Location, limit int) (int, int64, daySums, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, user_id, library_id, rel_path, started_at, last_at, listened
+		`SELECT id, user_id, library_id, rel_path, started_at, last_at, listened, import_id
 		   FROM listening_sessions WHERE last_at < ? ORDER BY id LIMIT ?`, cutoff, limit)
 	if err != nil {
 		return 0, 0, nil, err
 	}
 	defer rows.Close()
-	sums := map[dayKey]*daySum{}
+	sums := daySums{}
 	var (
 		count int
 		maxID int64
 	)
 	for rows.Next() {
 		var (
-			user, lib         int64
+			user, lib, imp    int64
 			path, start, last string
 			listened          float64
 		)
-		if err := rows.Scan(&maxID, &user, &lib, &path, &start, &last, &listened); err != nil {
+		if err := rows.Scan(&maxID, &user, &lib, &path, &start, &last, &listened, &imp); err != nil {
 			return 0, 0, nil, err
 		}
 		count++
-		first := true
-		spreadListening(parseSessionTime(start), parseSessionTime(last), listened, loc, func(hour time.Time, secs float64) {
-			k := dayKey{hour.Format(time.DateOnly), user, lib, path}
-			if sums[k] == nil {
-				sums[k] = &daySum{}
-			}
-			sums[k].listened += secs
-			if first {
-				sums[k].sessions++
-				first = false
-			}
-		})
+		sums.add(dayKey{user: user, lib: lib, path: path, importID: imp}, parseSessionTime(start),
+			parseSessionTime(last), listened, loc)
 	}
 	return count, maxID, sums, rows.Err()
 }

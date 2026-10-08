@@ -220,10 +220,16 @@ export function SessionTable({
                 <td className="px-4 py-2.5 max-lg:hidden">
                   <span className="flex flex-col">
                     <span className="truncate">
-                      {s.backfilled ? t('sessions.history') : s.device_name || t('live.unnamed')}
+                      {s.backfilled && !s.imported
+                        ? t('sessions.history')
+                        : s.device_name || t('live.unnamed')}
                     </span>
                     <span className="truncate text-[12px] text-muted-foreground">
-                      {s.backfilled ? t('sessions.historyBody') : clientName(s.client)}
+                      {s.imported
+                        ? t('sessions.imported', { app: s.client?.app })
+                        : s.backfilled
+                          ? t('sessions.historyBody')
+                          : clientName(s.client)}
                     </span>
                   </span>
                 </td>

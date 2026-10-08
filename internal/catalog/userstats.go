@@ -107,7 +107,7 @@ func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.
 	if err != nil {
 		return nil, err
 	}
-	keep := func(ref Ref) bool { return scopesAllow(scopes, ref) }
+	keep := func(ref Ref) bool { return ScopesAllow(scopes, ref) }
 	out := &UserStats{
 		Period:   periodOf(label, from, to, loc),
 		Totals:   userTotals(cur, finished),

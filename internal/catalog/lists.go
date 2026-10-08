@@ -184,7 +184,7 @@ func (l orderedList) add(ctx context.Context, tx listTx, owner int64, ref Ref, p
 func (l orderedList) makeRoom(ctx context.Context, tx listTx, owner int64, rows []listRow, scopes []Scope) ([]listRow, error) {
 	var hidden []int // indexes into rows, in stored order
 	for i, r := range rows {
-		if !scopesAllow(scopes, r.Ref) {
+		if !ScopesAllow(scopes, r.Ref) {
 			hidden = append(hidden, i)
 		}
 	}
@@ -219,7 +219,7 @@ func (l orderedList) makeRoom(ctx context.Context, tx listTx, owner int64, rows 
 func visibleAt(rest []listRow, position *int, scopes []Scope) int {
 	at, seen := len(rest), 0
 	for i, r := range rest {
-		if !scopesAllow(scopes, r.Ref) {
+		if !ScopesAllow(scopes, r.Ref) {
 			continue
 		}
 		if position != nil && seen == max(*position, 0) {
@@ -420,7 +420,7 @@ func (c *Catalog) listableRefs(ctx context.Context, refs []Ref, scopes []Scope) 
 	var cands []Ref
 	for _, r := range refs {
 		r.Path = CleanRelPath(r.Path)
-		if r.Path == "" || seen[r] || !scopesAllow(scopes, r) {
+		if r.Path == "" || seen[r] || !ScopesAllow(scopes, r) {
 			continue
 		}
 		seen[r] = true

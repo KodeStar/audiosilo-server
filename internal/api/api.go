@@ -14,6 +14,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/importer"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/media"
@@ -54,6 +55,8 @@ type API struct {
 	meta *meta.Service
 	// matchRuns runs bulk community matching (Health > Not matched); nil with meta.
 	matchRuns *matchrun.Runner
+	// imports runs listening imports from Audiobookshelf (handlers_import.go).
+	imports *importer.Service
 	// settingsMu serializes settings saves (read, change, write config.yaml, swap).
 	settingsMu sync.Mutex
 	log        *slog.Logger
@@ -165,6 +168,7 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		communityReads: make(chan struct{}, maxCommunityCoverReads),
 		streams:        catalog.NewStreamMarks(),
 	}
+	a.imports = importer.New(cat, authUsers{authSvc}, time.Local, a.SessionRetention, log)
 	if metaSvc != nil {
 		a.fetchCover = metaSvc.FetchCover
 		a.matchRuns = matchrun.New(cat, metaSvc, a.saveMatchCover, a.metadataOn, log)
@@ -398,6 +402,16 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/match-runs/{id}/items", a.requireAdmin(http.HandlerFunc(a.handleMatchRunItems)))
 	mux.Handle("POST /api/v1/admin/match-runs/{id}/apply", a.requireAdmin(http.HandlerFunc(a.handleApplyMatchRun)))
 	mux.Handle("POST /api/v1/admin/match-runs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleCancelMatchRun)))
+	// Listening imports from Audiobookshelf: fetched in the background, reviewed,
+	// then applied (and undoable) as one transaction (handlers_import.go).
+	mux.Handle("POST /api/v1/admin/imports/abs/users", a.requireAdmin(http.HandlerFunc(a.handleImportUsers)))
+	mux.Handle("POST /api/v1/admin/imports/abs", a.requireAdmin(http.HandlerFunc(a.handleStartImport)))
+	mux.Handle("GET /api/v1/admin/imports", a.requireAdmin(http.HandlerFunc(a.handleListImports)))
+	mux.Handle("GET /api/v1/admin/imports/{id}", a.requireAdmin(http.HandlerFunc(a.handleGetImport)))
+	mux.Handle("PATCH /api/v1/admin/imports/{id}", a.requireAdmin(http.HandlerFunc(a.handleUpdateImport)))
+	mux.Handle("POST /api/v1/admin/imports/{id}/apply", a.requireAdmin(http.HandlerFunc(a.handleApplyImport)))
+	mux.Handle("POST /api/v1/admin/imports/{id}/undo", a.requireAdmin(http.HandlerFunc(a.handleUndoImport)))
+	mux.Handle("DELETE /api/v1/admin/imports/{id}", a.requireAdmin(http.HandlerFunc(a.handleDeleteImport)))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/cover", a.requireAdmin(http.HandlerFunc(a.handleAdminSetCover)))
 	mux.Handle("PUT /api/v1/admin/libraries/{id}/cover/community", a.requireAdmin(http.HandlerFunc(a.handleAdminSetCommunityCover)))
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/cover", a.requireAdmin(http.HandlerFunc(a.handleAdminDeleteCover)))

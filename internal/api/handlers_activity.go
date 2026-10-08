@@ -43,7 +43,9 @@ func (a *API) handleLiveSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListSessions lists sessions newest first, optionally for one user and/or
-// one book (?library_id=&path=), a page at a time (?before= is next_before).
+// one book (?library_id=&path=), a page at a time (?before= is next_before, and
+// the optional ?before_at= that session's started_at, so the page continues in
+// place even if that session is gone since).
 func (a *API) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := catalog.SessionFilter{Limit: queryInt(r, "limit", 50)}
@@ -56,6 +58,14 @@ func (a *API) handleListSessions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid "+p.name)
 			return
 		}
+	}
+	if v := q.Get("before_at"); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil || f.Before == 0 {
+			writeError(w, http.StatusBadRequest, "invalid before_at")
+			return
+		}
+		f.BeforeAt = t
 	}
 	if v := q.Get("path"); v != "" {
 		if f.LibraryID == 0 {

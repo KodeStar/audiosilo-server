@@ -1,0 +1,606 @@
+{
+ "total": 37,
+ "numPages": 4,
+ "page": 0,
+ "itemsPerPage": 10,
+ "sessions": [
+  {
+   "id": "00076b7e-19e1-44bb-aeff-db58d0f4032e",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "bookId": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Way of Kings",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "6db57934-bf4e-4365-8006-1aaab0cbdb6a",
+      "name": "Brandon Sanderson"
+     }
+    ],
+    "narrators": [
+     "Michael Kramer",
+     "Kate Reading"
+    ],
+    "series": [
+     {
+      "id": "85c7752f-1acc-4519-b444-b073b0bf59c4",
+      "name": "The Stormlight Archive",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B003ZWFO7E"
+   },
+   "displayTitle": "The Way of Kings",
+   "displayAuthor": "Brandon Sanderson",
+   "duration": 10800,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-08",
+   "dayOfWeek": "Thursday",
+   "timeListening": 144,
+   "startTime": 3300,
+   "currentTime": 3480,
+   "startedAt": 1791438900000,
+   "updatedAt": 1791439118000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "0a03ebca-d931-4f26-aedd-235d73f87402",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "bookId": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Way of Kings",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "6db57934-bf4e-4365-8006-1aaab0cbdb6a",
+      "name": "Brandon Sanderson"
+     }
+    ],
+    "narrators": [
+     "Michael Kramer",
+     "Kate Reading"
+    ],
+    "series": [
+     {
+      "id": "85c7752f-1acc-4519-b444-b073b0bf59c4",
+      "name": "The Stormlight Archive",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B003ZWFO7E"
+   },
+   "displayTitle": "The Way of Kings",
+   "displayAuthor": "Brandon Sanderson",
+   "duration": 10800,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-07",
+   "dayOfWeek": "Wednesday",
+   "timeListening": 192,
+   "startTime": 3060,
+   "currentTime": 3300,
+   "startedAt": 1791407400000,
+   "updatedAt": 1791407629000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "10caaa06-19bf-4f3a-afd9-3b9ce883c1c6",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "bookId": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Way of Kings",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "6db57934-bf4e-4365-8006-1aaab0cbdb6a",
+      "name": "Brandon Sanderson"
+     }
+    ],
+    "narrators": [
+     "Michael Kramer",
+     "Kate Reading"
+    ],
+    "series": [
+     {
+      "id": "85c7752f-1acc-4519-b444-b073b0bf59c4",
+      "name": "The Stormlight Archive",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B003ZWFO7E"
+   },
+   "displayTitle": "The Way of Kings",
+   "displayAuthor": "Brandon Sanderson",
+   "duration": 10800,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-05",
+   "dayOfWeek": "Monday",
+   "timeListening": 240,
+   "startTime": 2760,
+   "currentTime": 3060,
+   "startedAt": 1791182100000,
+   "updatedAt": 1791182340000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "82c76cdd-16a7-4d91-af47-98bbf3139eb2",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "bookId": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Way of Kings",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "6db57934-bf4e-4365-8006-1aaab0cbdb6a",
+      "name": "Brandon Sanderson"
+     }
+    ],
+    "narrators": [
+     "Michael Kramer",
+     "Kate Reading"
+    ],
+    "series": [
+     {
+      "id": "85c7752f-1acc-4519-b444-b073b0bf59c4",
+      "name": "The Stormlight Archive",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B003ZWFO7E"
+   },
+   "displayTitle": "The Way of Kings",
+   "displayAuthor": "Brandon Sanderson",
+   "duration": 10800,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-04",
+   "dayOfWeek": "Sunday",
+   "timeListening": 288,
+   "startTime": 2400,
+   "currentTime": 2760,
+   "startedAt": 1791134400000,
+   "updatedAt": 1791134836000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "326eb5e0-f75c-4d54-a624-5616e9fbf1c7",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "1ddff5ba-787a-4b54-922e-0744e3e5838a",
+   "libraryItemId": "fc70c070-0782-41f5-8fa7-436d0dc389a3",
+   "bookId": "df05af7f-d350-44bf-99e6-c2cd9e2e8971",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Only In ABS",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "bcb2d2c4-4040-4849-8659-8d3d29d576f2",
+      "name": "Some Author"
+     }
+    ],
+    "narrators": [],
+    "series": [],
+    "isbn": null,
+    "asin": null
+   },
+   "displayTitle": "Only In ABS",
+   "displayAuthor": "Some Author",
+   "duration": 120,
+   "playMethod": 0,
+   "mediaPlayer": "html5",
+   "deviceInfo": {
+    "id": "00589eec-b5eb-4b00-8f5a-fb8f6de36c22",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-firefox-mac",
+    "ipAddress": "127.0.0.1",
+    "browserName": "Firefox",
+    "browserVersion": "131.0",
+    "osName": "Mac OS",
+    "osVersion": "14.6",
+    "clientVersion": "2.37.1",
+    "manufacturer": "",
+    "model": "",
+    "sdkVersion": "",
+    "clientName": "Abs Web",
+    "deviceName": "Mac OS 14.6 Firefox"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-03",
+   "dayOfWeek": "Saturday",
+   "timeListening": 90,
+   "startTime": 0,
+   "currentTime": 90,
+   "startedAt": 1791026100000,
+   "updatedAt": 1791026190000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "df5b3b06-b240-417c-a2a5-971b9a5244d9",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "bookId": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Way of Kings",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "6db57934-bf4e-4365-8006-1aaab0cbdb6a",
+      "name": "Brandon Sanderson"
+     }
+    ],
+    "narrators": [
+     "Michael Kramer",
+     "Kate Reading"
+    ],
+    "series": [
+     {
+      "id": "85c7752f-1acc-4519-b444-b073b0bf59c4",
+      "name": "The Stormlight Archive",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B003ZWFO7E"
+   },
+   "displayTitle": "The Way of Kings",
+   "displayAuthor": "Brandon Sanderson",
+   "duration": 10800,
+   "playMethod": 3,
+   "mediaPlayer": "exo-player",
+   "deviceInfo": {
+    "id": "5dc465aa-1446-41f0-a95f-6143e57ee596",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-pixel-8",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.81-beta",
+    "manufacturer": "Google",
+    "model": "Pixel 8",
+    "sdkVersion": "34",
+    "clientName": "Abs Android",
+    "deviceName": "Google Pixel 8"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-10-02",
+   "dayOfWeek": "Friday",
+   "timeListening": 600,
+   "startTime": 1800,
+   "currentTime": 2400,
+   "startedAt": 1790942400000,
+   "updatedAt": 1790965800000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "65a6db31-cadb-4fdb-aef3-061e453fe779",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "bookId": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Way of Kings",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "6db57934-bf4e-4365-8006-1aaab0cbdb6a",
+      "name": "Brandon Sanderson"
+     }
+    ],
+    "narrators": [
+     "Michael Kramer",
+     "Kate Reading"
+    ],
+    "series": [
+     {
+      "id": "85c7752f-1acc-4519-b444-b073b0bf59c4",
+      "name": "The Stormlight Archive",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B003ZWFO7E"
+   },
+   "displayTitle": "The Way of Kings",
+   "displayAuthor": "Brandon Sanderson",
+   "duration": 10800,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-30",
+   "dayOfWeek": "Wednesday",
+   "timeListening": 336,
+   "startTime": 1380,
+   "currentTime": 1800,
+   "startedAt": 1790750700000,
+   "updatedAt": 1790751110000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "f4164617-60da-4ae0-ae8a-9dea459c5fef",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "bookId": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Way of Kings",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "6db57934-bf4e-4365-8006-1aaab0cbdb6a",
+      "name": "Brandon Sanderson"
+     }
+    ],
+    "narrators": [
+     "Michael Kramer",
+     "Kate Reading"
+    ],
+    "series": [
+     {
+      "id": "85c7752f-1acc-4519-b444-b073b0bf59c4",
+      "name": "The Stormlight Archive",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B003ZWFO7E"
+   },
+   "displayTitle": "The Way of Kings",
+   "displayAuthor": "Brandon Sanderson",
+   "duration": 10800,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-29",
+   "dayOfWeek": "Tuesday",
+   "timeListening": 900,
+   "startTime": 480,
+   "currentTime": 1380,
+   "startedAt": 1790713800000,
+   "updatedAt": 1790743500000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "0f4b91aa-14f3-47c8-afae-c941340c9407",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "349f291f-3bfc-49e9-8714-f4582f17d40a",
+   "bookId": "a8a570a5-842d-41c5-9bb3-4390ef0de034",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "The Way of Kings",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "6db57934-bf4e-4365-8006-1aaab0cbdb6a",
+      "name": "Brandon Sanderson"
+     }
+    ],
+    "narrators": [
+     "Michael Kramer",
+     "Kate Reading"
+    ],
+    "series": [
+     {
+      "id": "85c7752f-1acc-4519-b444-b073b0bf59c4",
+      "name": "The Stormlight Archive",
+      "sequence": "1"
+     }
+    ],
+    "isbn": null,
+    "asin": "B003ZWFO7E"
+   },
+   "displayTitle": "The Way of Kings",
+   "displayAuthor": "Brandon Sanderson",
+   "duration": 10800,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-28",
+   "dayOfWeek": "Monday",
+   "timeListening": 384,
+   "startTime": 0,
+   "currentTime": 480,
+   "startedAt": 1790577600000,
+   "updatedAt": 1790577984000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  },
+  {
+   "id": "5ba3f4c8-000e-4600-a0fd-9ac4459ac48f",
+   "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+   "libraryId": "a2b98fa9-8cc8-41b5-bcad-46bd14d5f3e5",
+   "libraryItemId": "aad9f54c-a57a-479e-bacf-917c015d6339",
+   "bookId": "b02731f4-4db3-4cf9-8eba-a074ea3cc06a",
+   "episodeId": null,
+   "mediaType": "book",
+   "mediaMetadata": {
+    "title": "Project Hail Mary",
+    "subtitle": null,
+    "authors": [
+     {
+      "id": "7ebf3658-08f0-4219-ad2b-6f2e212892db",
+      "name": "Andy Weir"
+     }
+    ],
+    "narrators": [
+     "Ray Porter"
+    ],
+    "series": [],
+    "isbn": null,
+    "asin": "B08G9PRS1K"
+   },
+   "displayTitle": "Project Hail Mary",
+   "displayAuthor": "Andy Weir",
+   "duration": 8400,
+   "playMethod": 3,
+   "mediaPlayer": "AVPlayer",
+   "deviceInfo": {
+    "id": "fdd2149e-05d7-4623-b276-e42a5b635039",
+    "userId": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "deviceId": "alex-iphone-15",
+    "ipAddress": "127.0.0.1",
+    "clientVersion": "0.9.79-beta",
+    "manufacturer": "Apple",
+    "model": "iPhone 15",
+    "sdkVersion": "",
+    "clientName": "Abs iOS",
+    "deviceName": "Apple iPhone 15"
+   },
+   "serverVersion": "2.37.1",
+   "date": "2026-09-26",
+   "dayOfWeek": "Saturday",
+   "timeListening": 520,
+   "startTime": 4740,
+   "currentTime": 5520,
+   "startedAt": 1790404200000,
+   "updatedAt": 1790404831000,
+   "user": {
+    "id": "6e3d250f-691e-4fdb-9a6f-d8556ae2e5bc",
+    "username": "alex"
+   }
+  }
+ ]
+}

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // maxSeriesRails caps how many series a work's enrichment fetches. A work is
@@ -300,8 +302,9 @@ func NewService(baseURL string, now func() time.Time) *Service {
 // It returns ErrNotFound when there is no match, and a non-nil, non-ErrNotFound
 // error when the upstream is unreachable. Results (including "not found" and
 // transport errors) are cached so a hot path or a down upstream is not re-hit.
-// The identifiers are normalized (normalizeASIN, normalizeISBN) first, so the
-// spellings of one identifier share one cache entry and one upstream lookup.
+// The identifiers are normalized (match.NormalizeASIN, match.NormalizeISBN)
+// first, so the spellings of one identifier share one cache entry and one
+// upstream lookup.
 //
 // With a Store (SetStore) the cache has a persistent second level: answers
 // survive a restart, and a positive one is served past its TTL when the
@@ -310,7 +313,7 @@ func NewService(baseURL string, now func() time.Time) *Service {
 // The returned *Enrichment is shared with the cache and other callers - treat
 // it as immutable; never modify it (or anything it points to) after the call.
 func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, error) {
-	asin, isbn = normalizeASIN(asin), normalizeISBN(isbn)
+	asin, isbn = match.NormalizeASIN(asin), match.NormalizeISBN(isbn)
 	key := cacheKey(asin, isbn)
 	if key == "" {
 		return nil, ErrNotFound

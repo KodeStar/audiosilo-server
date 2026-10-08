@@ -170,7 +170,7 @@ func ownRow(scanErr error, scopes []Scope, ref *Ref) error {
 		return ErrNotFound
 	case scanErr != nil:
 		return scanErr
-	case !scopesAllow(scopes, *ref):
+	case !ScopesAllow(scopes, *ref):
 		return ErrNotFound
 	}
 	return nil

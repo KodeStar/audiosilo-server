@@ -31,6 +31,19 @@ const BY_CODE: Record<string, string> = {
   invalid_backup: 'errors.invalidBackup',
   backup_too_new: 'errors.backupTooNew',
   too_many_targets: 'errors.tooManyTargets',
+  // Settings > Import: connecting to Audiobookshelf, and an import's state.
+  // (interrupted is only ever a failed import's reason: imports.failure.*.)
+  invalid_url: 'errors.invalidUrl',
+  invalid_import: 'errors.invalidImport',
+  abs_unreachable: 'errors.absUnreachable',
+  not_abs: 'errors.notAbs',
+  abs_unauthorized: 'errors.absUnauthorized',
+  fetch_failed: 'errors.fetchFailed',
+  import_running: 'errors.importRunning',
+  import_not_found: 'errors.importNotFound',
+  import_not_ready: 'errors.importNotReady',
+  import_not_applied: 'errors.importNotApplied',
+  import_applied: 'errors.importApplied',
 };
 
 /** A failure as one sentence for a toast or a field. */

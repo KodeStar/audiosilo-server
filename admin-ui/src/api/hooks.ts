@@ -22,11 +22,13 @@ import type {
   AdminLibrary,
   AuditFilter,
   BookRef,
+  Import,
   FolderMode,
   MatchOutcome,
   MatchRun,
   PersonField,
   ServerEventKind,
+  SessionCursor,
   SessionFilter,
 } from './types';
 
@@ -105,6 +107,10 @@ export const keys = {
   devices: ['admin', 'devices'] as const,
   userDevices: (userId: number) => ['admin', 'devices', userId] as const,
   userProgress: (userId: number) => ['admin', 'user', userId, 'progress'] as const,
+  /** Every import list: everyone's (0) and each person's (a prefix). */
+  importLists: ['admin', 'imports', 'list'] as const,
+  importList: (userId: number) => ['admin', 'imports', 'list', userId] as const,
+  importDetail: (id: number) => ['admin', 'imports', 'detail', id] as const,
 };
 
 /**
@@ -797,9 +803,14 @@ export function useListeningDays(range: string, userId = 0, enabled = true) {
 export function useSessions(filter: SessionFilter, limit = 50) {
   return useInfiniteQuery({
     queryKey: keys.sessionList(filter, limit),
-    queryFn: ({ pageParam }) => api.sessions({ ...filter, before: pageParam, limit }),
-    initialPageParam: undefined as number | undefined,
-    getNextPageParam: (last) => last.next_before ?? undefined,
+    queryFn: ({ pageParam }) => api.sessions({ ...filter, ...pageParam, limit }),
+    initialPageParam: undefined as SessionCursor | undefined,
+    // The last session's start rides along (before_at), so the next page continues
+    // in place even if that session is gone by then (an undone import, a roll-up).
+    getNextPageParam: (last): SessionCursor | undefined =>
+      last.next_before == null
+        ? undefined
+        : { before: last.next_before, before_at: last.sessions.at(-1)?.started_at },
   });
 }
 
@@ -839,4 +850,73 @@ export function invalidateProgress(qc: QueryClient, userId: number, ref: BookRef
 export function invalidateDevices(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: keys.devices });
   void qc.invalidateQueries({ queryKey: keys.sessions });
+}
+
+/** The import statuses with work under way: polled until they settle. */
+export function importBusy(imp: Pick<Import, 'status'> | undefined): boolean {
+  return imp?.status === 'fetching' || imp?.status === 'applying';
+}
+
+/** How often a list with an import being fetched or applied is asked about. */
+export const IMPORT_POLL_MS = 1500;
+
+/**
+ * Every import, or one person's (`userId`), newest first. Polled while any of
+ * them is being fetched or applied: one request however many there are.
+ */
+export function useImports(userId = 0) {
+  return useQuery({
+    queryKey: keys.importList(userId),
+    queryFn: () => api.imports(userId || undefined).then((r) => r.imports ?? []),
+    refetchInterval: (q) => (q.state.data?.some(importBusy) ? IMPORT_POLL_MS : false),
+  });
+}
+
+/** One import with its unmatched books (asked for only while `enabled`). */
+export function useImportDetail(id: number, enabled = true) {
+  return useQuery({
+    queryKey: keys.importDetail(id),
+    queryFn: () => api.importDetail(id),
+    enabled,
+  });
+}
+
+/**
+ * Shows an import's new state (an apply's or a cutoff change's answer) in every
+ * list holding it at once, until the lists are refetched.
+ */
+export function setImportRow(qc: QueryClient, imp: Import) {
+  qc.setQueriesData<Import[]>({ queryKey: keys.importLists }, (old) =>
+    old?.map((o) =>
+      o.id === imp.id
+        ? {
+            ...o,
+            status: imp.status,
+            cutoff: imp.cutoff,
+            cutoff_utc_offset: imp.cutoff_utc_offset,
+            applied_at: imp.applied_at,
+            summary: imp.summary,
+          }
+        : o,
+    ),
+  );
+}
+
+/**
+ * Refetches what applying or undoing an import changes: the import lists and
+ * that import, the person's progress and page, every book page (listeners),
+ * sessions, the overview and the Activity stats.
+ */
+export function invalidateImported(qc: QueryClient, imp: Pick<Import, 'id' | 'user_id'>) {
+  for (const key of [
+    keys.importLists,
+    keys.importDetail(imp.id),
+    keys.user(imp.user_id),
+    keys.allBookPages,
+    keys.sessions,
+    keys.stats,
+    keys.activityAll,
+  ]) {
+    void qc.invalidateQueries({ queryKey: key });
+  }
 }
