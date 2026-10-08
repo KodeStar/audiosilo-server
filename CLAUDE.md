@@ -258,7 +258,7 @@ admin overrides; see Metadata overrides below).
   (`lan_url` / `AUDIOSILO_LAN_URL` / console `general.lan_url`, live; else derived from the
   request's own `Host` when that is a home-network host). The pure core is
   `config.Addresses(scheme, host)` + `config.isHomeNetworkHost` (private RFC 1918 / ULA
-  `fc00::/7` / link-local IPs, `.local` / `.lan` / `.home.arpa` names, single-label names;
+  `fc00::/7` / link-local IPs, `.local` / `.lan` / `.home.arpa` / `.internal` names, single-label names;
   NOT loopback, `localhost` or CGNAT `100.64.0.0/10`); a home equal to the away is dropped;
   `X-Forwarded-*` is not trusted (like `baseURL`), and a proxied request (any forwarding
   header) derives no home (its Host is the proxy's upstream). `api.addresses(r)` wraps it. It rides on

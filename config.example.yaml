@@ -30,7 +30,7 @@ public_url: ""
 # The apps learn it when they pair (and from GET /api/v1/addresses afterwards) and
 # switch to it by themselves when they can reach it, using public_url when away.
 # If empty, the address a request arrived on is used when it is a home-network
-# one (a private or link-local IP, a .local/.lan/.home.arpa or single-label
+# one (a private or link-local IP, a .local/.lan/.home.arpa/.internal or single-label
 # name; never localhost).                             [AUDIOSILO_LAN_URL]
 lan_url: ""
 
