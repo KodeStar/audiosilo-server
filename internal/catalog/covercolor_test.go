@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"slices"
+	"sync/atomic"
 	"testing"
 )
 
@@ -248,5 +250,126 @@ func TestCoverVersionIsShortAndStable(t *testing.T) {
 	}
 	if v := CoverVersion(""); v != "" {
 		t.Fatalf("CoverVersion(\"\") = %q, want \"\"", v)
+	}
+}
+
+// TestAdminBookCoverColor: the admin book list and book page carry a book's
+// cover colour once one is recorded for its current art, and drop it when the
+// art moves on.
+func TestAdminBookCoverColor(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "a.m4b", Title: "Alpha", MTime: 1}); err != nil {
+		t.Fatal(err)
+	}
+	listed := func() *CoverColor {
+		t.Helper()
+		page, err := c.ListAdminBooks(ctx, AdminListOptions{})
+		if err != nil || len(page.Books) != 1 {
+			t.Fatalf("list = %+v, %v", page, err)
+		}
+		d, err := c.AdminBookDetail(ctx, lib.ID, "a.m4b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (page.Books[0].CoverColor == nil) != (d.Book.CoverColor == nil) {
+			t.Fatalf("list colour %+v, book page colour %+v: want the same", page.Books[0].CoverColor, d.Book.CoverColor)
+		}
+		return page.Books[0].CoverColor
+	}
+	if cc := listed(); cc != nil {
+		t.Fatalf("uncoloured book lists colour %+v", cc)
+	}
+	want := CoverColor{Bg: "#203040", Accent: "#e0a010", OnAccent: "#000000"}
+	recordCover(t, c, lib.ID, "a.m4b", coverSource(t, c, lib.ID, "a.m4b"), want)
+	if cc := listed(); cc == nil || *cc != want {
+		t.Fatalf("listed colour = %+v, want %+v", cc, want)
+	}
+	if err := c.SetCover(ctx, lib.ID, "a.m4b", pngBytes, 0, SourceEdited); err != nil {
+		t.Fatal(err)
+	}
+	if cc := listed(); cc != nil {
+		t.Fatalf("after a new cover the old colour still lists: %+v", cc)
+	}
+}
+
+// TestCoverColorsDue: the books that may have art (a scan saw some or hasn't
+// checked, or a custom cover) and hold no colour for it are due, in pages that
+// carry on from next; a coloured book and one a scan found without art are not.
+func TestCoverColorsDue(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	yes, no := true, false
+	for _, b := range []Book{
+		{RelPath: "art.m4b", HasCover: &yes},
+		{RelPath: "unchecked.m4b"},
+		{RelPath: "none.m4b", HasCover: &no},
+		{RelPath: "custom.m4b", HasCover: &no},
+		{RelPath: "colored.m4b", HasCover: &yes},
+		{RelPath: "artless.m4b", HasCover: &yes},
+	} {
+		b.LibraryID, b.Title, b.MTime = lib.ID, b.RelPath, 1
+		if _, err := c.UpsertBook(ctx, &b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.SetCover(ctx, lib.ID, "custom.m4b", pngBytes, 0, SourceEdited); err != nil {
+		t.Fatal(err)
+	}
+	recordCover(t, c, lib.ID, "colored.m4b", coverSource(t, c, lib.ID, "colored.m4b"), CoverColor{Bg: "#101010"})
+	// Read and found to have no colour: not due, and no colour on the book.
+	recordCover(t, c, lib.ID, "artless.m4b", coverSource(t, c, lib.ID, "artless.m4b"), CoverColor{})
+	if cc, _ := coverState(t, c, lib.ID, "artless.m4b"); cc != nil {
+		t.Fatalf("artless book colour = %+v, want none", cc)
+	}
+
+	var got []string
+	var after int64
+	pages := 0
+	for {
+		due, next, err := c.CoverColorsDue(ctx, after, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range due {
+			if d.LibraryID != lib.ID || d.Source != coverSource(t, c, lib.ID, d.Path) {
+				t.Fatalf("due %+v: want the library and the book's current art", d)
+			}
+			got = append(got, d.Path)
+		}
+		pages++
+		if next == 0 {
+			break
+		}
+		after = next
+	}
+	want := []string{"art.m4b", "unchecked.m4b", "custom.m4b"}
+	if !slices.Equal(got, want) || pages != 3 {
+		t.Fatalf("due = %v over %d pages, want %v over 3", got, pages, want)
+	}
+}
+
+// TestOnBookChangeListeners: every listener hears a change, a custom cover set
+// or removed included; removing a cover that isn't there is no change.
+func TestOnBookChangeListeners(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	var a, b atomic.Int32
+	c.OnBookChange(func() { a.Add(1) })
+	c.OnBookChange(func() { b.Add(1) })
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "a.m4b", Title: "A", MTime: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetCover(ctx, lib.ID, "a.m4b", pngBytes, 0, SourceEdited); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteCover(ctx, lib.ID, "a.m4b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteCover(ctx, lib.ID, "a.m4b"); err != nil {
+		t.Fatal(err)
+	}
+	if a.Load() != 3 || b.Load() != 3 {
+		t.Fatalf("listeners heard %d and %d changes, want 3 each (index, cover set, cover removed)", a.Load(), b.Load())
 	}
 }

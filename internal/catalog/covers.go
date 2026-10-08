@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -50,7 +51,7 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 	if _, err := bookIDByPath(ctx, c.db, libraryID, path); err != nil {
 		return err
 	}
-	return c.db.WithTx(ctx, "SetCover", func(tx *sql.Tx) error {
+	if err := c.db.WithTx(ctx, "SetCover", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO book_covers(library_id, path, mime, data, updated_by, updated_at, source) VALUES(?,?,?,?,?,?,?)
 			 ON CONFLICT(library_id, path) DO UPDATE SET
@@ -60,7 +61,11 @@ func (c *Catalog) SetCover(ctx context.Context, libraryID int64, path string, da
 			return err
 		}
 		return refreshCoverArt(ctx, tx, libraryID, path)
-	})
+	}); err != nil {
+		return err
+	}
+	c.changed()
+	return nil
 }
 
 // coverArtSQL is a books row's cover art identity from index data alone: "c" and
@@ -133,7 +138,8 @@ func (c *Catalog) Cover(ctx context.Context, libraryID int64, path string) (*Cus
 // error.
 func (c *Catalog) DeleteCover(ctx context.Context, libraryID int64, path string) error {
 	path = CleanRelPath(path)
-	return c.db.WithTx(ctx, "DeleteCover", func(tx *sql.Tx) error {
+	removed := false
+	if err := c.db.WithTx(ctx, "DeleteCover", func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM book_covers WHERE library_id = ? AND path = ?`, libraryID, path)
 		if err != nil {
@@ -145,8 +151,15 @@ func (c *Catalog) DeleteCover(ctx context.Context, libraryID int64, path string)
 		if n, err := res.RowsAffected(); err != nil || n == 0 {
 			return err
 		}
+		removed = true
 		return refreshCoverArt(ctx, tx, libraryID, path)
-	})
+	}); err != nil {
+		return err
+	}
+	if removed {
+		c.changed()
+	}
+	return nil
 }
 
 // CoverSource is where an indexed book's cover is read from, without reading it:
@@ -159,8 +172,8 @@ type CoverSource struct {
 	AudioPath string // the audio file whose embedded art is the fallback
 	// Art is the book's cover art identity (books.cover_art), what a colour read
 	// from a thumbnail is recorded against (CoverColorRecord); Colored is whether
-	// the book holds a colour for that identity already (a thumbnail also checks
-	// the identity is still its art's version).
+	// the book holds a colour for that identity already, or a record that its art
+	// has none (a thumbnail also checks the identity is still its art's version).
 	Art     string
 	Colored bool
 }
@@ -189,28 +202,45 @@ func (c *Catalog) CoverSources(ctx context.Context, libraryID int64, paths []str
 		args = append(args, p)
 	}
 	rows, err := c.db.QueryContext(ctx, `
-		SELECT b.rel_path, COALESCE(cv.updated_at, ''), b.cover_path,
-		       CASE WHEN b.is_folder THEN COALESCE(
-		         (SELECT bf.rel_path FROM book_files bf WHERE bf.book_id = b.id ORDER BY bf.seq LIMIT 1),
-		         b.rel_path) ELSE b.rel_path END,
-		       b.cover_art, b.cover_color
-		  FROM books b
-		  LEFT JOIN book_covers cv ON cv.library_id = b.library_id AND cv.path = b.rel_path
+		SELECT b.rel_path, `+coverSourceCols+coverSourceFrom+`
 		 WHERE b.library_id = ? AND b.rel_path IN (`+placeholders(len(paths))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var path, color string
+		var path string
 		var src CoverSource
-		if err := rows.Scan(&path, &src.CustomAt, &src.CoverPath, &src.AudioPath, &src.Art, &color); err != nil {
+		dest, finish := coverSourceDest(&src)
+		if err := rows.Scan(append([]any{&path}, dest...)...); err != nil {
 			return nil, err
 		}
-		_, src.Colored = decodeCoverColor(color, CoverVersion(src.Art))
+		finish()
 		out[path] = src
 	}
 	return out, rows.Err()
+}
+
+// coverSourceCols are a book's CoverSource columns over coverSourceFrom
+// (coverSourceDest scans them): the custom cover's stamp, the sidecar, the audio
+// file embedded art is read from (a folder book's first), the art identity and
+// the stored colour.
+const coverSourceCols = `COALESCE(cv.updated_at, ''), b.cover_path,
+		       CASE WHEN b.is_folder THEN COALESCE(
+		         (SELECT bf.rel_path FROM book_files bf WHERE bf.book_id = b.id ORDER BY bf.seq LIMIT 1),
+		         b.rel_path) ELSE b.rel_path END,
+		       b.cover_art, b.cover_color`
+
+const coverSourceFrom = `
+		  FROM books b
+		  LEFT JOIN book_covers cv ON cv.library_id = b.library_id AND cv.path = b.rel_path`
+
+// coverSourceDest returns the scan destinations for coverSourceCols; finish,
+// called after the scan, sets Colored.
+func coverSourceDest(src *CoverSource) (dest []any, finish func()) {
+	var color string
+	return []any{&src.CustomAt, &src.CoverPath, &src.AudioPath, &src.Art, &color},
+		func() { _, src.Colored = storedCoverColor(src.Art, color) }
 }
 
 // CustomArtVersion is the art version of a custom cover stored at stamp (its
@@ -247,7 +277,9 @@ type CoverColorRecord struct {
 // read (so its cover_version moves with an image replaced in place). Each is
 // compare-and-set on the identity it was read under: a book whose art has moved
 // on since (a custom cover set or removed, a re-index) keeps what it has, so a
-// slow thumbnail of old art never lands on new art.
+// slow thumbnail of old art never lands on new art. A zero Color records that
+// the art has no colour to read (no art, or none that decodes), so the background
+// pass doesn't read it again until it changes.
 func (c *Catalog) RecordCoverColors(ctx context.Context, recs []CoverColorRecord) error {
 	if len(recs) == 0 {
 		return nil
@@ -265,26 +297,67 @@ func (c *Catalog) RecordCoverColors(ctx context.Context, recs []CoverColorRecord
 	})
 }
 
+// CoverColorDue is a book that may have cover art but holds no colour for it
+// (CoverColorsDue), with where its cover comes from.
+type CoverColorDue struct {
+	Ref
+	Source CoverSource
+	id     int64
+}
+
+// CoverColorsDue lists the books after afterID (by the index's own order) that
+// may have cover art, a custom cover or art a scan saw or hasn't checked for, but
+// hold no colour for their current art, nor a record that it has none: what the
+// background colour pass reads thumbnails of. It reads up to limit books and
+// returns those due among them, and next, the id to continue after (0 once there
+// are no more). The ids stay inside the catalog; a caller only hands next back.
+func (c *Catalog) CoverColorsDue(ctx context.Context, afterID int64, limit int) (due []CoverColorDue, next int64, err error) {
+	rows, err := queryRows(ctx, c.db, func(rows *sql.Rows, d *CoverColorDue) error {
+		dest, finish := coverSourceDest(&d.Source)
+		if err := rows.Scan(append([]any{&d.id, &d.LibraryID, &d.Path}, dest...)...); err != nil {
+			return err
+		}
+		finish()
+		return nil
+	}, `SELECT b.id, b.library_id, b.rel_path, `+coverSourceCols+coverSourceFrom+`
+		 WHERE b.id > ? AND (COALESCE(b.has_cover, 1) = 1 OR cv.path IS NOT NULL)
+		 ORDER BY b.id LIMIT ?`, afterID, limit+1)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, next = pageBefore(rows, limit, func(d CoverColorDue) int64 { return d.id })
+	return slices.DeleteFunc(rows, func(d CoverColorDue) bool { return d.Source.Colored }), next, nil
+}
+
 // encodeCoverColor is a colour as books.cover_color stores it, tagged with the
 // cover_version it was read for: "version bg" or "version bg accent on_accent"
-// (space-separated).
+// (space-separated), or "version" alone for art read and found to have no colour
+// (a zero cc: no art, or none that decodes).
 func encodeCoverColor(version string, cc CoverColor) string {
-	s := version + " " + cc.Bg
+	s := version
+	if cc.Bg != "" {
+		s += " " + cc.Bg
+	}
 	if cc.Accent != "" {
 		s += " " + cc.Accent + " " + cc.OnAccent
 	}
 	return s
 }
 
-// decodeCoverColor reads books.cover_color (encodeCoverColor) for a book whose
-// cover_version is version: false when there is none, or it was read for other
-// art.
-func decodeCoverColor(s, version string) (*CoverColor, bool) {
-	parts := strings.Fields(s)
-	if version == "" || len(parts) < 2 || parts[0] != version {
+// storedCoverColor reads a book's stored colour (books.cover_color, as
+// encodeCoverColor writes it) for its cover art identity (books.cover_art): ok
+// when one was read for that art, with the colour, or nil when the art has none;
+// not ok when nothing was read for it (a colour read for other art doesn't count).
+func storedCoverColor(art, color string) (cc *CoverColor, ok bool) {
+	version := CoverVersion(art)
+	parts := strings.Fields(color)
+	if version == "" || len(parts) == 0 || parts[0] != version {
 		return nil, false
 	}
-	cc := &CoverColor{Bg: parts[1]}
+	if len(parts) == 1 {
+		return nil, true
+	}
+	cc = &CoverColor{Bg: parts[1]}
 	if len(parts) == 4 {
 		cc.Accent, cc.OnAccent = parts[2], parts[3]
 	}

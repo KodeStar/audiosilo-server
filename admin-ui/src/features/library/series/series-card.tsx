@@ -8,7 +8,6 @@ import { BookCover } from '@/components/book-cover';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
 import { bookRoute, refKey } from '@/lib/book-route';
-import { coverModel } from '@/lib/cover-model';
 import { counted, formatNumber } from '@/lib/format';
 import { useMediaQuery } from '@/lib/use-media-query';
 import {
@@ -17,6 +16,7 @@ import {
   pickRail,
   placeBooks,
   seriesStatus,
+  spineColors,
   spineHeight,
   spineRow,
   type Placed,
@@ -180,7 +180,7 @@ function Shelf({
                   role="img"
                   aria-label={label}
                   title={label}
-                  style={{ height: `${spineHeight(sp.entry.title)}%` }}
+                  style={{ height: `${spineHeight(0, sp.entry.title)}%` }}
                 >
                   <span className="spine-idx">{fmt(sp.entry.position)}</span>
                   {sp.entry.title}
@@ -189,7 +189,7 @@ function Shelf({
             );
           }
           const b = sp.book;
-          const [c1, c3, , ink] = coverModel(b.title, b.author).palette;
+          const { body, band, ink } = spineColors(b);
           const label =
             sp.position > 0
               ? t('series.spine', { index: fmt(sp.position), title: b.title })
@@ -204,10 +204,10 @@ function Shelf({
                 onClick={() => void navigate(bookRoute(b.library_id, b.path))}
                 style={
                   {
-                    '--c1': c1,
-                    '--c3': c3,
+                    '--c1': body,
+                    '--c3': band,
                     '--ink': ink,
-                    height: `${spineHeight(b.path)}%`,
+                    height: `${spineHeight(b.duration, b.path)}%`,
                   } as React.CSSProperties
                 }
               >

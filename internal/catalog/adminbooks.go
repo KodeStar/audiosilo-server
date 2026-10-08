@@ -51,10 +51,13 @@ type AdminBook struct {
 	AddedAt        string  `json:"added_at"`
 	HasCover       bool    `json:"has_cover"`
 	CustomCover    bool    `json:"custom_cover"`
-	ChapterCount   int     `json:"chapter_count"`
-	FileCount      int     `json:"file_count"`
-	ASIN           string  `json:"asin"`
-	ISBN           string  `json:"isbn"`
+	// CoverColor is the cover's colour (Book.CoverColor), for the Series shelf's
+	// spines; absent until the server has read the current art's colour.
+	CoverColor   *CoverColor `json:"cover_color,omitempty"`
+	ChapterCount int         `json:"chapter_count"`
+	FileCount    int         `json:"file_count"`
+	ASIN         string      `json:"asin"`
+	ISBN         string      `json:"isbn"`
 	// Matched is the matched= filter's rule (an ASIN or ISBN), so the console never
 	// restates it.
 	Matched bool `json:"matched"`
@@ -140,22 +143,16 @@ var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.titl
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
 	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
 	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0), ` +
-	chaptersSourceExpr + `, ` + chaptersCheckExpr
+	chaptersSourceExpr + `, ` + chaptersCheckExpr + `, b.cover_art, b.cover_color`
 
 // scanAdminBook reads one row of adminBookCols into b.
 func scanAdminBook(rows *sql.Rows, b *AdminBook) error {
-	if err := rows.Scan(adminBookDest(b)...); err != nil {
+	dest, finish := adminBookDest(b)
+	if err := rows.Scan(dest...); err != nil {
 		return err
 	}
-	b.splitCredits()
+	finish()
 	return nil
-}
-
-// splitCredits fills Authors and Narrators from Author and Narrator (never nil,
-// so the wire carries [] for a blank credit).
-func (b *AdminBook) splitCredits() {
-	b.Authors = append([]string{}, creditNames(b.Author)...)
-	b.Narrators = append([]string{}, creditNames(b.Narrator)...)
 }
 
 // creditFilter is the WHERE condition, and its args, for an author= or
@@ -177,13 +174,24 @@ func creditFilter(prefix, field, value string) (string, []any) {
 		[]any{phrase, value}
 }
 
-// adminBookDest returns the scan destinations for adminBookCols, in order.
-func adminBookDest(b *AdminBook) []any {
+// adminBookDest returns the scan destinations for adminBookCols, in order;
+// finish, called after the scan, derives what the row carries beyond its
+// columns: Authors and Narrators from Author and Narrator (never nil, so the wire
+// carries [] for a blank credit) and CoverColor, when the stored colour is for
+// the current art.
+func adminBookDest(b *AdminBook) (dest []any, finish func()) {
+	var art, color string
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
-		&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
-		&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
-		&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
-		&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck}
+			&b.Narrator, &b.Series, &b.SeriesIndex, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
+			&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
+			&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
+			&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck,
+			&art, &color},
+		func() {
+			b.Authors = append([]string{}, creditNames(b.Author)...)
+			b.Narrators = append([]string{}, creditNames(b.Narrator)...)
+			b.CoverColor, _ = storedCoverColor(art, color)
+		}
 }
 
 // BookFilter narrows the admin book list (and its facet counts). Zero values

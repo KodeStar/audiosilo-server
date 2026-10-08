@@ -1,5 +1,6 @@
 import type { AdminBook, MetaSeries } from '@/api/types';
 import { refKey } from '@/lib/book-route';
+import { coverModel } from '@/lib/cover-model';
 import { adminBook } from '@/test/library-fixtures';
 import {
   formatPositions,
@@ -10,6 +11,7 @@ import {
   railEntries,
   seriesKey,
   seriesStatus,
+  spineColors,
   spineHeight,
   spineRow,
 } from './series-model';
@@ -313,10 +315,45 @@ describe('metaCandidate and spineHeight', () => {
     expect(metaCandidate([a])).toBeUndefined();
   });
 
-  it('varies heights within the shelf, stably', () => {
-    const h = spineHeight('Words of Radiance');
-    expect(h).toBe(spineHeight('Words of Radiance'));
+  it('sizes a spine by the book length, on a log scale within the shelf', () => {
+    const hours = (h: number) => spineHeight(h * 3600, 'x');
+    expect(hours(1)).toBe(72);
+    expect(hours(3)).toBe(72);
+    expect(hours(30)).toBe(98);
+    expect(hours(55)).toBe(98);
+    expect(hours(7)).toBeLessThan(hours(12));
+    expect(hours(12)).toBeLessThan(hours(45));
+  });
+
+  it('varies a spine without a length, stably', () => {
+    const h = spineHeight(0, 'Words of Radiance');
+    expect(h).toBe(spineHeight(0, 'Words of Radiance'));
     expect(h).toBeGreaterThanOrEqual(80);
     expect(h).toBeLessThanOrEqual(95);
+  });
+});
+
+describe('spineColors', () => {
+  const b = { title: 'Mort', author: 'Terry Pratchett' };
+
+  it('takes the cover colour, white type on a dark body, the accent as bands', () => {
+    expect(spineColors({ ...b, cover_color: { bg: '#1e2a50', accent: '#f0a020' } })).toEqual({
+      body: '#1e2a50',
+      band: '#f0a020',
+      ink: '#ffffff',
+    });
+  });
+
+  it('sets ink type on a light body, and bands in the type colour without an accent', () => {
+    expect(spineColors({ ...b, cover_color: { bg: '#f4e8c8' } })).toEqual({
+      body: '#f4e8c8',
+      band: '#121c36',
+      ink: '#121c36',
+    });
+  });
+
+  it('falls back to the procedural cover palette without a cover colour', () => {
+    const [body, band, , ink] = coverModel(b.title, b.author).palette;
+    expect(spineColors(b)).toEqual({ body, band, ink });
   });
 });

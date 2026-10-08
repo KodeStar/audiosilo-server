@@ -15,6 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/chaptercheck"
 	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/covercolors"
 	"github.com/kodestar/audiosilo-server/internal/importer"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
@@ -61,6 +62,9 @@ type API struct {
 	// chapterChecks fits community chapter lists onto books in the background
 	// (StartChapterChecks) and on request; nil with meta.
 	chapterChecks *chaptercheck.Runner
+	// coverColors reads books' cover colours in the background
+	// (StartCoverColors), so a book has one before anyone looks at its cover.
+	coverColors *covercolors.Runner
 	// settingsMu serializes settings saves (read, change, write config.yaml, swap).
 	settingsMu sync.Mutex
 	log        *slog.Logger
@@ -184,6 +188,9 @@ func New(cfg *config.Config, authSvc *auth.Service, cat *catalog.Catalog, scanne
 		// be due a chapter check now: wake the background pass.
 		cat.OnBookChange(a.chapterChecks.Kick)
 	}
+	// And a cover colour (a new book, a new cover).
+	a.coverColors = covercolors.New(cat, a.colorCover, log)
+	cat.OnBookChange(a.coverColors.Kick)
 	a.matchRuns = matchrun.New(cat, matcher, a.saveMatchCover, a.metadataOn, log)
 	a.live.Store(newLiveConfig(cfg, cfg))
 	a.playerSource = web.PlayerSource(cfg.WebDir)
@@ -209,6 +216,12 @@ func (a *API) StartChapterChecks(ctx context.Context) {
 	if a.chapterChecks != nil {
 		go a.chapterChecks.Run(ctx)
 	}
+}
+
+// StartCoverColors starts the background cover colour pass
+// (covercolors.Runner.Run) for ctx's lifetime.
+func (a *API) StartCoverColors(ctx context.Context) {
+	go a.coverColors.Run(ctx)
 }
 
 // Handler returns the root http.Handler with all routes and global middleware.

@@ -91,17 +91,18 @@ type BookFolder struct {
 func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath string) (*AdminBookDetail, error) {
 	relPath = CleanRelPath(relPath)
 	d := &AdminBookDetail{}
+	dest, finish := adminBookDest(&d.Book)
 	err := c.db.QueryRowContext(ctx, `SELECT `+adminBookCols+`, b.description, b.indexed_at
 		FROM books b JOIN libraries l ON l.id = b.library_id
 		WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, relPath).
-		Scan(append(adminBookDest(&d.Book), &d.Description, &d.IndexedAt)...)
+		Scan(append(dest, &d.Description, &d.IndexedAt)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	d.Book.splitCredits()
+	finish()
 	bookID := d.Book.id
 
 	layers, err := loadLayers(ctx, c.db, bookID)

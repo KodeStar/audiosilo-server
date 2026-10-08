@@ -222,7 +222,7 @@ type artSource struct {
 // index change shows.
 func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path string, src catalog.CoverSource,
 	art *artSource, size int) (jpg []byte, rec *catalog.CoverColorRecord, err error) {
-	key := strconv.FormatInt(lib.ID, 10) + "\x00" + path + "\x00" + strconv.Itoa(size) + "\x00" + art.version
+	key := thumbKey(lib.ID, path, size, art.version)
 	jpg, ok := a.thumbs.Get(key)
 	if !ok {
 		if jpg, err = a.makeThumbnail(ctx, lib, path, art, size); err != nil {
@@ -233,12 +233,59 @@ func (a *API) coverThumbnail(ctx context.Context, lib *catalog.Library, path str
 	if jpg == nil || (src.Colored && src.Art == art.version) {
 		return jpg, nil, nil
 	}
+	return jpg, a.colorRecord(lib.ID, path, src, art, jpg), nil
+}
+
+// thumbKey is the thumbnail cache's key for a book's art at size.
+func thumbKey(libraryID int64, path string, size int, version string) string {
+	return strconv.FormatInt(libraryID, 10) + "\x00" + path + "\x00" + strconv.Itoa(size) + "\x00" + version
+}
+
+// colorRecord is the colour read from jpg, a thumbnail of the book's art, to
+// record against the art src was read under; nil when no palette could be read.
+func (a *API) colorRecord(libraryID int64, path string, src catalog.CoverSource, art *artSource, jpg []byte) *catalog.CoverColorRecord {
 	palette, err := media.PaletteOf(jpg)
 	if err != nil {
-		a.log.Debug("cover palette failed", "err", err, "library", lib.ID, "path", path)
-		return jpg, nil, nil
+		a.log.Debug("cover palette failed", "err", err, "library", libraryID, "path", path)
+		return nil
 	}
-	return jpg, &catalog.CoverColorRecord{LibraryID: lib.ID, Path: path, Art: src.Art, Version: art.version, Color: palette}, nil
+	return &catalog.CoverColorRecord{LibraryID: libraryID, Path: path, Art: src.Art, Version: art.version, Color: palette}
+}
+
+// colorCover is the background colour pass's Colorer (covercolors): the colour of
+// a due book's cover, read like a thumbnail's. A thumbnail of the art already in
+// the cache is used as it is; otherwise one of the smallest size is made and not
+// cached, so a pass over a library never pushes out the thumbnails people are
+// looking at. A book with no art, or none that decodes, gets a record of that (a
+// zero Color). The record is compare-and-set like a thumbnail's, so art that has
+// moved on since the book was listed keeps what it has.
+func (a *API) colorCover(ctx context.Context, lib *catalog.Library, due catalog.CoverColorDue) (catalog.CoverColorRecord, error) {
+	none := catalog.CoverColorRecord{LibraryID: lib.ID, Path: due.Path, Art: due.Source.Art}
+	art := a.coverArt(ctx, lib, due.Path, due.Source)
+	if art == nil {
+		return none, nil
+	}
+	none.Version = art.version
+	var jpg []byte
+	cached := false
+	for _, size := range thumbSizes {
+		if jpg, cached = a.thumbs.Get(thumbKey(lib.ID, due.Path, size, art.version)); cached {
+			break
+		}
+	}
+	if !cached {
+		var err error
+		if jpg, err = a.makeThumbnail(ctx, lib, due.Path, art, thumbSizes[0]); err != nil {
+			return none, err
+		}
+	}
+	if jpg == nil {
+		return none, nil
+	}
+	if rec := a.colorRecord(lib.ID, due.Path, due.Source, art, jpg); rec != nil {
+		return *rec, nil
+	}
+	return none, nil
 }
 
 // makeThumbnail reads the art and scales it to size: nil when there is no art or

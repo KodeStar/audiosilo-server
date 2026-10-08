@@ -7,6 +7,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -177,28 +178,35 @@ type BookFile struct {
 type Catalog struct {
 	db  *store.DB
 	now func() time.Time
-	// onChange hears that a book's index row was written (OnBookChange).
-	onChange atomic.Pointer[func()]
+	// onChange hears that a book's index row was written (OnBookChange): the
+	// listeners, replaced whole (copy-on-write) by each registration.
+	onChange   atomic.Pointer[[]func()]
+	onChangeMu sync.Mutex
 }
 
-// OnBookChange registers f to hear, after the fact and without blocking, that a
-// book was indexed or edited (UpsertBook, EditBook, EditBooks, SetEnrichment,
-// ClearCommunityMatches, a library's new metadata source re-resolving its books
-// in UpdateLibrary):
+// OnBookChange adds f to the listeners that hear, after the fact and without
+// blocking, that a book was indexed or edited (UpsertBook, EditBook, EditBooks,
+// SetEnrichment, ClearCommunityMatches, a library's new metadata source
+// re-resolving its books in UpdateLibrary) or its custom cover set or removed:
 // what a background check of the books may want to look at again. f must return
-// at once. Safe to call while the catalog is in use; nil stops it.
+// at once. Safe to call while the catalog is in use.
 func (c *Catalog) OnBookChange(f func()) {
-	if f == nil {
-		c.onChange.Store(nil)
-		return
+	c.onChangeMu.Lock()
+	defer c.onChangeMu.Unlock()
+	var fs []func()
+	if old := c.onChange.Load(); old != nil {
+		fs = append(fs, *old...)
 	}
-	c.onChange.Store(&f)
+	fs = append(fs, f)
+	c.onChange.Store(&fs)
 }
 
-// changed tells the OnBookChange listener, if any.
+// changed tells the OnBookChange listeners.
 func (c *Catalog) changed() {
-	if f := c.onChange.Load(); f != nil {
-		(*f)()
+	if fs := c.onChange.Load(); fs != nil {
+		for _, f := range *fs {
+			f()
+		}
 	}
 }
 
