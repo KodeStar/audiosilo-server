@@ -1104,6 +1104,7 @@
   "health.bulkMatch.changes": "Setzt {{fields}}",
   "health.bulkMatch.nothingToChange": "Mit dieser Auswahl ändert sich nichts",
   "health.bulkMatch.runnerUp": "nächster {{score}} %",
+  "health.bulkMatch.inSeries": "Reihe: {{series}}",
   "health.bulkMatch.item.applied": "Übernommen",
   "health.bulkMatch.item.skipped": "Übersprungen: nichts zu ändern",
   "health.bulkMatch.item.failed": "Konnte nicht übernommen werden",

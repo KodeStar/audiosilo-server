@@ -1179,6 +1179,7 @@
   "health.bulkMatch.changes": "Écrit {{fields}}",
   "health.bulkMatch.nothingToChange": "Rien à changer avec ce choix",
   "health.bulkMatch.runnerUp": "suivante {{score}} %",
+  "health.bulkMatch.inSeries": "Série : {{series}}",
   "health.bulkMatch.item.applied": "Appliquée",
   "health.bulkMatch.item.skipped": "Ignorée : rien à changer",
   "health.bulkMatch.item.failed": "N'a pas pu être appliquée",

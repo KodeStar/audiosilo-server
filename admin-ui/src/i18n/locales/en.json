@@ -1104,6 +1104,7 @@
   "health.bulkMatch.changes": "Sets {{fields}}",
   "health.bulkMatch.nothingToChange": "Nothing to change with this choice",
   "health.bulkMatch.runnerUp": "next {{score}}%",
+  "health.bulkMatch.inSeries": "Series: {{series}}",
   "health.bulkMatch.item.applied": "Applied",
   "health.bulkMatch.item.skipped": "Skipped: nothing to change",
   "health.bulkMatch.item.failed": "Couldn't be applied",
