@@ -53,8 +53,14 @@ export function adminBook(over: Partial<AdminBook> = {}): AdminBook {
     chapters_source: 'files' as const,
     ...over,
   };
-  // The server's rule (an ASIN or ISBN set), unless a test says otherwise.
-  return { ...book, matched: over.matched ?? !!(book.asin || book.isbn) };
+  // The server's rules (an ASIN or ISBN set; the main series first), unless a
+  // test says otherwise.
+  return {
+    ...book,
+    series_list:
+      over.series_list ?? (book.series ? [{ name: book.series, position: book.series_index }] : []),
+    matched: over.matched ?? !!(book.asin || book.isbn),
+  };
 }
 
 /** A small library: a series run, a book without cover or match, an opus book. */
@@ -155,6 +161,7 @@ export const series: SeriesCount[] = [
     books: 1,
     duration: 11880,
     positions: [1],
+    extra_books: 0,
   },
   {
     name: 'The Stormlight Archive',
@@ -162,6 +169,7 @@ export const series: SeriesCount[] = [
     books: 2,
     duration: 327600,
     positions: [1, 2],
+    extra_books: 0,
   },
 ];
 
@@ -181,6 +189,7 @@ export function bookDetail(over: Partial<AdminBookDetail> = {}): AdminBookDetail
     narrator: field(book.narrator),
     series: field(book.series, { source: 'path' }),
     series_index: field(String(book.series_index), { source: 'path' }),
+    more_series: field(''),
     published: field(''),
     description: field(''),
     asin: field(book.asin, { source: 'community' }),

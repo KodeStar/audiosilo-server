@@ -36,6 +36,7 @@ import {
 import { RadioCards } from '@/components/ui/radio-cards';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { scoreTone } from '@/features/book/match-model';
+import { moreSeriesRefs } from '@/features/book/more-series';
 import { bookRoute } from '@/lib/book-route';
 import { regionName, regionTag, storeOf } from '@/lib/regions';
 import { toastError } from '@/lib/errors';
@@ -544,8 +545,14 @@ function ItemRow({
     : [];
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
-  // The community's series and the book's place in it ("Mars #2").
-  const series = seriesLabel(p.values.series, Number(p.values.series_index), lang, t);
+  // The community's main series, then any others the work is in ("Discworld #8; City Watch #1").
+  const series = [
+    { name: p.values.series ?? '', position: Number(p.values.series_index) },
+    ...moreSeriesRefs(p.values.more_series ?? ''),
+  ]
+    .map((s) => seriesLabel(s.name, s.position, lang, t))
+    .filter(Boolean)
+    .join('; ');
   // The path tells two books of one title apart, read out with the row's controls
   // too. A book with no title (or one gone) already shows its path as the title.
   const pathId = useId();

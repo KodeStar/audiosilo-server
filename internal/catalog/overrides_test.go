@@ -791,7 +791,7 @@ func TestNonFiniteSeriesIndexIsNoPosition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	series, err := c.Series(ctx, 0, nil)
+	series, err := c.Series(ctx, 0, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

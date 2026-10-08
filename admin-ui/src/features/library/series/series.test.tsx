@@ -161,6 +161,46 @@ describe('series', () => {
     expect(router.state.location.search).toEqual({ library: 1, path: books[1].path });
   });
 
+  it('loads its own books for a series some are in beyond their main one', async () => {
+    const elantris = adminBook({
+      title: 'Elantris',
+      path: 'Brandon Sanderson/Elantris',
+      series: '',
+      series_index: 0,
+      series_list: [{ name: 'Cosmere', position: 1 }],
+      asin: '',
+    });
+    const calls = mockFetch(
+      routes({
+        'GET /admin/series': {
+          body: {
+            series: [
+              ...series,
+              {
+                name: 'Cosmere',
+                author: 'Brandon Sanderson',
+                books: 1,
+                duration: 1,
+                positions: [1],
+                extra_books: 1,
+              },
+            ],
+          },
+        },
+        'GET /admin/books': (req) =>
+          req.query.get('series') === 'Cosmere'
+            ? { body: { books: [elantris] } }
+            : { body: { books } },
+      }),
+    );
+    renderApp('/library/series');
+    const card = await screen.findByRole('region', { name: 'Cosmere' });
+    expect(await within(card).findByRole('button', { name: '#1 Elantris' })).toBeInTheDocument();
+    expect(
+      calls.some((c) => c.query.get('series') === 'Cosmere' && c.query.get('sort') === 'series'),
+    ).toBe(true);
+  });
+
   it('links the series name to its books', async () => {
     mockFetch(routes());
     const { router } = renderApp('/library/series?library=1');

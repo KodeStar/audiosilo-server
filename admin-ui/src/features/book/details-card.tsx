@@ -17,7 +17,7 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { undoRevertRequest, type Drafts } from './book-model';
+import { displayValue, undoRevertRequest, type Drafts } from './book-model';
 
 /** How much of a value a toast quotes. */
 const QUOTE = 60;
@@ -64,7 +64,7 @@ export function DetailsCard({
     try {
       const next = await api.editBook(b.library_id, b.path, { revert: [field] });
       settleBookEdit(qc, next);
-      const now = next.fields[field]?.value ?? '';
+      const now = displayValue(field, next.fields[field]?.value ?? '');
       toast.add({
         title: t('book.revert.done', { field: label }),
         description: now
@@ -136,7 +136,8 @@ function FieldRow({
   const button = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
   const dirty = draft !== undefined;
-  const shown = draft ?? value.value;
+  // A draft is what was typed; a saved value is shown as it is edited.
+  const shown = draft ?? displayValue(field, value.value);
   const empty = !shown.trim();
   const label = t(`book.field.${field}`);
   const id = `field-${field}`;
@@ -216,7 +217,7 @@ function FieldRow({
             onClick={onRevert}
             title={
               value.scanned
-                ? t('book.revert.tagHint', { value: quote(value.scanned) })
+                ? t('book.revert.tagHint', { value: quote(displayValue(field, value.scanned)) })
                 : t('book.revert.noTag')
             }
             aria-label={t('book.revert.aria', { field: label })}

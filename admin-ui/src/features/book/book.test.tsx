@@ -63,6 +63,27 @@ describe('book page', () => {
     ).toHaveTextContent(/^by Brandon Sanderson · book 1 in The Stormlight Archive$/);
   });
 
+  it('lists every series the book is in, each a link', async () => {
+    const detail = bookDetail();
+    detail.book = {
+      ...detail.book,
+      series_list: [
+        { name: 'The Stormlight Archive', position: 1 },
+        { name: 'The Cosmere', position: 0 },
+      ],
+    };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    const cosmere = await screen.findByRole('link', { name: 'The Cosmere' });
+    expect(linkTarget(cosmere)).toEqual([
+      '/admin/library',
+      { library: '1', series: 'The Cosmere' },
+    ]);
+    expect(cosmere.closest('p')).toHaveTextContent(
+      /· book 1 in The Stormlight Archive and in The Cosmere$/,
+    );
+  });
+
   it('shows the book with where each value came from', async () => {
     mockFetch(routes(bookDetail()));
     renderApp(URL);

@@ -3,8 +3,10 @@ package catalog
 import (
 	"database/sql/driver"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 
 	"modernc.org/sqlite"
 
@@ -95,4 +97,20 @@ func sqlText(v driver.Value) string {
 		return string(s)
 	}
 	return ""
+}
+
+// ftsPhrase quotes value as one FTS5 phrase (a MATCH argument); ok is false when
+// it has no letter or digit, so no phrase to match.
+func ftsPhrase(value string) (phrase string, ok bool) {
+	if !strings.ContainsFunc(value, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		return "", false
+	}
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`, true
+}
+
+// hasFTSPhrase reports whether a filter on value is looked up in the full-text
+// index (ftsPhrase finds a phrase in it).
+func hasFTSPhrase(value string) bool {
+	_, ok := ftsPhrase(value)
+	return ok
 }

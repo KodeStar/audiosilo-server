@@ -111,6 +111,7 @@ export function BooksPage() {
           hasMore={!!list.hasNextPage}
           loadingMore={list.isFetchingNextPage}
           onLoadMore={loadMore}
+          series={search.series}
         />
       </Suspense>
     );

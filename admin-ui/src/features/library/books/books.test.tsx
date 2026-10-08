@@ -276,6 +276,26 @@ describe('books: search, filters and sort', () => {
     );
   });
 
+  it('numbers each book by its place in the series a list is filtered to', async () => {
+    const guards = adminBook({
+      path: 'Pratchett/Guards',
+      title: 'Guards! Guards!',
+      author: 'Terry Pratchett',
+      series: 'Discworld',
+      series_index: 8,
+      series_list: [
+        { name: 'Discworld', position: 8 },
+        { name: 'City Watch', position: 1 },
+      ],
+    });
+    mockFetch(bookRoutes([guards]));
+    renderApp('/library?series=City%20Watch');
+    const list = await allBooks();
+    const tile = (await within(list).findByRole('link', { name: 'Terry Pratchett' }))
+      .parentElement!;
+    expect(tile).toHaveTextContent('Terry Pratchett · #1');
+  });
+
   it("links a tile's author to their books, keeping the library", async () => {
     mockFetch(bookRoutes());
     const { router } = renderApp('/library?library=1&q=a');

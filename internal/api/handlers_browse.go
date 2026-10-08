@@ -30,7 +30,7 @@ func (a *API) handleBrowseSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	series, err := a.cat.Series(r.Context(), lib.ID, &scope)
+	series, err := a.cat.Series(r.Context(), lib.ID, &scope, false)
 	if err != nil {
 		a.writeCatalogError(w, err, "browse series failed", "could not list series", "library", lib.ID)
 		return

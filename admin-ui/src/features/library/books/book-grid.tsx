@@ -18,6 +18,8 @@ export interface BookViewProps {
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+  /** The series the list is filtered to: books show their place in it, not in their main one. */
+  series?: string;
 }
 
 /**
@@ -33,6 +35,7 @@ export function BookGrid({
   hasMore,
   loadingMore,
   onLoadMore,
+  series,
 }: BookViewProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
@@ -77,6 +80,7 @@ export function BookGrid({
               <div key={refKey(b)} role="listitem" className="min-w-0">
                 <BookTile
                   book={b}
+                  series={series}
                   metadataOn={metadataOn}
                   selected={selection.isSelected(b)}
                   selecting={selecting}

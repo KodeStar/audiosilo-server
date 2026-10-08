@@ -64,8 +64,8 @@ export function SeriesCard({
   // lookup answers too (unresolved: the book falls back to its series index).
   const placedOn = rail && !works.pending ? rail : undefined;
   const placed = useMemo(
-    () => placeBooks(books, placedOn, works.ids),
-    [books, placedOn, works.ids],
+    () => placeBooks(books, placedOn, works.ids, s.name),
+    [books, placedOn, works.ids, s.name],
   );
   const status = useMemo(() => placedOn && seriesStatus(placedOn, placed), [placedOn, placed]);
   const known = status && status.total > 0 ? status : undefined;

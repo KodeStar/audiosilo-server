@@ -191,7 +191,7 @@ func (a *API) handleAdminSeries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid library_id")
 		return
 	}
-	series, err := a.cat.Series(r.Context(), libID, nil)
+	series, err := a.cat.Series(r.Context(), libID, nil, true)
 	if err != nil {
 		a.writeCatalogError(w, err, "admin series aggregate failed", "could not list series")
 		return

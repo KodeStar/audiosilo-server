@@ -8,6 +8,7 @@ import {
   metaCandidate,
   pickRail,
   placeBooks,
+  positionIn,
   railEntries,
   seriesKey,
   seriesStatus,
@@ -273,6 +274,38 @@ describe('spineRow', () => {
       'gap Oathbringer',
       'Edgedancer',
     ]);
+  });
+});
+
+describe('a book in several series', () => {
+  const guards = adminBook({
+    title: 'Guards! Guards!',
+    path: 'gg',
+    series: 'Discworld',
+    series_index: 8,
+    series_list: [
+      { name: 'Discworld', position: 8 },
+      { name: 'City Watch', position: 1 },
+    ],
+  });
+  const arms = adminBook({
+    title: 'Men at Arms',
+    path: 'maa',
+    series: 'City Watch',
+    series_index: 2,
+  });
+
+  it('has its own position in each', () => {
+    expect(positionIn(guards)).toBe(8);
+    expect(positionIn(guards, 'Discworld')).toBe(8);
+    expect(positionIn(guards, 'City Watch')).toBe(1);
+    expect(positionIn(guards, 'Mort')).toBe(0);
+  });
+
+  it("sits on a series' shelf at its place there", () => {
+    expect(
+      placeBooks([arms, guards], undefined, undefined, 'City Watch').map((p) => p.position),
+    ).toEqual([2, 1]);
   });
 });
 

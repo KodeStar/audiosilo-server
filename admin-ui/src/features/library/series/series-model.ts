@@ -78,18 +78,32 @@ export function railEntries(rail: MetaSeries): RailEntry[] {
 }
 
 /**
- * Where each owned book sits. A book whose community work is on the rail holds
- * that work's position, whatever its series index says (local numbering is often
- * missing or different). A book known to be another work holds none and goes to
- * the end; one that didn't resolve (no identifier, no match, or no rail yet) falls
- * back to its series index, and without one goes to the end.
+ * A book's position in the named series (its main series' index without a name):
+ * a book in several series has its own position in each (series_list).
  */
-export function placeBooks(owned: AdminBook[], rail?: MetaSeries, works?: WorkIds): Placed[] {
-  const byIndex = (book: AdminBook): Placed => ({
-    book,
-    slot: book.series_index > 0 ? 'rail' : 'end',
-    position: book.series_index,
-  });
+export function positionIn(book: AdminBook, series?: string): number {
+  if (series === undefined) return book.series_index;
+  return book.series_list.find((s) => s.name === series)?.position ?? 0;
+}
+
+/**
+ * Where each owned book sits on the shelf of `series` (the books' main one when
+ * absent). A book whose community work is on the rail holds that work's position,
+ * whatever its own position says (local numbering is often missing or
+ * different). A book known to be another work holds none and goes to the end;
+ * one that didn't resolve (no identifier, no match, or no rail yet) falls back to
+ * its position in the series, and without one goes to the end.
+ */
+export function placeBooks(
+  owned: AdminBook[],
+  rail?: MetaSeries,
+  works?: WorkIds,
+  series?: string,
+): Placed[] {
+  const byIndex = (book: AdminBook): Placed => {
+    const position = positionIn(book, series);
+    return { book, slot: position > 0 ? 'rail' : 'end', position };
+  };
   if (!rail) return owned.map(byIndex);
   // Each work's position on the rail: its first numbered one.
   const positions = new Map<string, number>();
@@ -102,7 +116,7 @@ export function placeBooks(owned: AdminBook[], rail?: MetaSeries, works?: WorkId
     if (work === undefined) return byIndex(book);
     const position = positions.get(work);
     return position === undefined
-      ? { book, slot: 'end', position: book.series_index }
+      ? { book, slot: 'end', position: positionIn(book, series) }
       : { book, slot: 'rail', position };
   });
 }

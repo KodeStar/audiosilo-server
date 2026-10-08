@@ -184,3 +184,78 @@ func TestClassify(t *testing.T) {
 		t.Fatalf("scores = %d %d", score, runnerUp)
 	}
 }
+
+// TestPlanSeries: a work in several series (Guards! Guards! is Discworld #8 and
+// City Watch #1). The book keeps one main series and gets the others as
+// more_series; its position is the community's in the series it keeps.
+func TestPlanSeries(t *testing.T) {
+	const watch = "Discworld: Ankh-Morpork City Watch"
+	guards := meta.MatchCandidate{
+		WorkID: "guards-guards", Title: "Guards! Guards!",
+		Series: []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: watch, Position: "1"}, {Name: "Omnibus", Position: "1-3"}},
+	}
+	p := Propose(&guards, nil)
+	if got := p.Values["more_series"]; got != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
+		t.Fatalf("proposed more_series = %s", got)
+	}
+
+	// No series yet: the work's main one, and the rest beside it.
+	set, _ := Plan(ScopeFill, state(map[string]string{"title": "Guards! Guards!"}, nil, false), p)
+	if set["series"] != "Discworld" || set["series_index"] != "8" ||
+		set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
+		t.Fatalf("fill on no series = %v", set)
+	}
+
+	// Filed under City Watch by its folder: fill keeps that, numbers it as City
+	// Watch numbers it (not Discworld's 8), and adds Discworld beside it.
+	st := state(map[string]string{"title": "Guards! Guards!", "series": watch}, nil, false)
+	set, _ = Plan(ScopeFill, st, p)
+	if _, ok := set["series"]; ok || set["series_index"] != "1" ||
+		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]` {
+		t.Fatalf("fill on City Watch = %v", set)
+	}
+
+	// Overwrite keeps it too (the work is in City Watch, as the match dialog
+	// offers it), numbered there.
+	st = state(map[string]string{"title": "Guards! Guards!", "series": watch, "series_index": "8"}, nil, false)
+	if set, _ := Plan(ScopeOverwrite, st, p); set["series"] != "" || set["series_index"] != "1" ||
+		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]` {
+		t.Fatalf("overwrite on City Watch = %v", set)
+	}
+
+	// A work listed twice in one series (an omnibus counted again) takes its
+	// first position there, and the series isn't listed again beside it.
+	twice := Propose(&meta.MatchCandidate{WorkID: "gg", Title: "Guards! Guards!",
+		Series: []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "Discworld", Position: "8.5"}}}, nil)
+	st = state(map[string]string{"title": "Guards! Guards!", "series": "Discworld"}, nil, false)
+	if set, _ := Plan(ScopeFill, st, twice); set["series_index"] != "8" || set["more_series"] != "" {
+		t.Fatalf("fill from a work listed twice = %v", set)
+	}
+
+	// The admin's own City Watch stays under overwrite, and its position becomes
+	// City Watch's, though the tags' 8 happens to be Discworld's.
+	st = state(map[string]string{"title": "Guards! Guards!", "series": watch, "series_index": "8"}, []string{"series"}, false)
+	if set, _ := Plan(ScopeOverwrite, st, p); set["series_index"] != "1" || set["series"] != "" {
+		t.Fatalf("overwrite beside an edited City Watch = %v", set)
+	}
+
+	// Filed under a series the community doesn't list ("Watch" for City Watch,
+	// say): most likely the main one spelled otherwise, so only the work's other
+	// series go beside it.
+	st = state(map[string]string{"title": "Guards! Guards!", "series": "Pratchett Discworld"}, nil, false)
+	if set, _ := Plan(ScopeFill, st, p); set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
+		t.Fatalf("fill beside an unlisted series = %v", set)
+	}
+
+	// The admin's own list stays, under any scope.
+	st = state(map[string]string{"title": "Guards! Guards!", "more_series": `[{"name":"Mine","position":2}]`}, []string{"more_series"}, false)
+	if set, _ := Plan(ScopeOverwrite, st, p); set["more_series"] != "" {
+		t.Fatalf("overwrite replaced the admin's list: %v", set)
+	}
+	// A list the book already has isn't "set".
+	st = state(map[string]string{"title": "Guards! Guards!", "series": "Discworld", "series_index": "8",
+		"more_series": `[{"name":"` + watch + `","position":1},{"name":"Omnibus","position":0}]`}, nil, false)
+	if set, _ := Plan(ScopeOverwrite, st, p); len(set) != 0 {
+		t.Fatalf("overwrite on a book that has it all = %v", set)
+	}
+}

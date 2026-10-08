@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -43,7 +44,7 @@ const (
 
 // OverrideFields lists every overridable field, in display order.
 var OverrideFields = []string{
-	FieldTitle, FieldAuthor, FieldNarrator, FieldSeries, FieldSeriesIndex,
+	FieldTitle, FieldAuthor, FieldNarrator, FieldSeries, FieldSeriesIndex, FieldMoreSeries,
 	FieldPublished, FieldDescription, FieldASIN, FieldISBN,
 }
 
@@ -124,7 +125,9 @@ func normalizeOverride(field, value string) (string, error) {
 		if err != nil || math.IsNaN(f) || f < 0 || f > maxSeriesIndex {
 			return "", invalid(field, "must be a number from 0 to 100000")
 		}
-		return formatSeriesPosition(f), nil
+		return FormatSeriesPosition(f), nil
+	case FieldMoreSeries:
+		return normalizeMoreSeries(v)
 	case FieldPublished:
 		if v == "" {
 			return "", nil
@@ -169,7 +172,7 @@ func validDatePrefix(v string) bool {
 
 // bookFields is the overridable slice of a book, keyed by field name, with every
 // value in its wire form (series_index included) so one map serves every field.
-// A series index is rendered by formatSeriesPosition ("" for none, and for a
+// A series index is rendered by FormatSeriesPosition ("" for none, and for a
 // non-finite value a tag can carry, which is no position either).
 type bookFields map[string]string
 
@@ -177,13 +180,13 @@ type bookFields map[string]string
 func fieldsOf(b *Book) bookFields {
 	return bookFields{
 		FieldTitle: b.Title, FieldAuthor: b.Author, FieldNarrator: b.Narrator,
-		FieldSeries: b.Series, FieldSeriesIndex: formatSeriesPosition(b.SeriesIndex),
+		FieldSeries: b.Series, FieldSeriesIndex: FormatSeriesPosition(b.SeriesIndex),
 		FieldPublished: b.Published, FieldDescription: b.Description,
 		FieldASIN: b.ASIN, FieldISBN: b.ISBN,
 	}
 }
 
-func parseSeriesIndex(s string) float64 {
+func ParseSeriesIndex(s string) float64 {
 	v, _ := strconv.ParseFloat(s, 64)
 	return v
 }
@@ -221,7 +224,7 @@ func parseScanned(raw string) (bookFields, string, error) {
 	// Rows backfilled by migration 0016 cast series_index with SQL ("2.0", "0.0");
 	// normalize so a revert writes the same form a scan would.
 	if si, ok := out[FieldSeriesIndex]; ok {
-		out[FieldSeriesIndex] = formatSeriesPosition(parseSeriesIndex(si))
+		out[FieldSeriesIndex] = FormatSeriesPosition(ParseSeriesIndex(si))
 	}
 	return out, stamp, nil
 }
@@ -467,7 +470,7 @@ func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
 func pathFields(m *metadata.Metadata) bookFields {
 	return bookFields{
 		FieldTitle: m.Title, FieldAuthor: m.Author, FieldSeries: m.Series,
-		FieldSeriesIndex: formatSeriesPosition(m.SeriesIndex),
+		FieldSeriesIndex: FormatSeriesPosition(m.SeriesIndex),
 	}
 }
 
@@ -502,10 +505,10 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	v := func(field string) string { return fields[field].Value }
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE books SET title = ?, author = ?, narrator = ?, series = ?, series_index = ?,
-		     published = ?, description = ?, asin = ?, isbn = ?
+		     more_series = ?, published = ?, description = ?, asin = ?, isbn = ?
 		 WHERE id = ?`,
-		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), parseSeriesIndex(v(FieldSeriesIndex)),
-		v(FieldPublished), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
+		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), ParseSeriesIndex(v(FieldSeriesIndex)),
+		cmp.Or(v(FieldMoreSeries), "[]"), v(FieldPublished), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
 		return err
 	}
 
@@ -526,13 +529,14 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	}
 
 	// Refresh FTS: delete-then-insert keyed by rowid = book id, from the effective
-	// values just written.
+	// values just written. The series column holds every series the book is in,
+	// so a search (and the series= filter's candidates) find it by any.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, bookID); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO books_fts(rowid, title, author, series, narrator) VALUES(?,?,?,?,?)`,
-		bookID, v(FieldTitle), v(FieldAuthor), v(FieldSeries), v(FieldNarrator))
+		bookID, v(FieldTitle), v(FieldAuthor), ftsSeries(v(FieldSeries), v(FieldMoreSeries)), v(FieldNarrator))
 	return err
 }
 
