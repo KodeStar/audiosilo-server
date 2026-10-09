@@ -44,9 +44,9 @@ func loopbackFetch(ctx context.Context, url string, limit int64) ([]byte, error)
 	return media.ReadLimited(resp.Body, limit)
 }
 
-// coverHost serves community cover images: a small JPEG, a PNG larger than an
-// upload may be, a page that isn't an image, a decompression bomb, and a 404.
-func coverHost(t *testing.T) (*httptest.Server, []byte) {
+// coverMux serves the cheap community cover fixtures: a small JPEG (returned), a
+// page that isn't an image and a decompression bomb; anything else is a 404.
+func coverMux(t *testing.T) (*http.ServeMux, []byte) {
 	t.Helper()
 	var small bytes.Buffer
 	img := image.NewRGBA(image.Rect(0, 0, 40, 60))
@@ -56,6 +56,20 @@ func coverHost(t *testing.T) (*httptest.Server, []byte) {
 	if err := jpeg.Encode(&small, img, nil); err != nil {
 		t.Fatal(err)
 	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/small.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(small.Bytes()) })
+	mux.HandleFunc("/page.html", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html><body>not a cover</body></html>"))
+	})
+	bomb := pngHeader(20000, 20000)
+	mux.HandleFunc("/bomb.png", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(bomb) })
+	return mux, small.Bytes()
+}
+
+// coverHost serves coverMux's images plus a PNG larger than an upload may be.
+func coverHost(t *testing.T) (*httptest.Server, []byte) {
+	t.Helper()
+	mux, small := coverMux(t)
 	// Noise doesn't compress: 1800 x 1800 is about 13 MB as a PNG.
 	big := image.NewRGBA(image.Rect(0, 0, 1800, 1800))
 	r := rand.New(rand.NewPCG(1, 2))
@@ -73,17 +87,10 @@ func coverHost(t *testing.T) (*httptest.Server, []byte) {
 	if bigPNG.Len() <= catalog.MaxCoverBytes || bigPNG.Len() > maxCommunityCoverBytes {
 		t.Fatalf("big cover is %d bytes, want between the upload cap and the fetch cap", bigPNG.Len())
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/small.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(small.Bytes()) })
 	mux.HandleFunc("/big.png", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(bigPNG.Bytes()) })
-	mux.HandleFunc("/page.html", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("<html><body>not a cover</body></html>"))
-	})
-	bomb := pngHeader(20000, 20000)
-	mux.HandleFunc("/bomb.png", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(bomb) })
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, small.Bytes()
+	return srv, small
 }
 
 // pngHeader is the start of a PNG claiming w x h pixels: its signature and IHDR,
@@ -99,6 +106,7 @@ func pngHeader(w, h uint32) []byte {
 }
 
 func TestCommunityCovers(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	host, _ := coverHost(t)
@@ -126,7 +134,8 @@ func TestCommunityCovers(t *testing.T) {
 	}
 
 	// Allowed (loopback standing in for the internet): a thumbnail per cover, in
-	// order, "" for what isn't one.
+	// order, "" for what isn't one. small.jpg's failure above is remembered, but
+	// the console's batch always tries again.
 	e.api.fetchCover = loopbackFetch
 	got := thumbs(adminTok, batch(host.URL+"/missing.jpg", host.URL+"/big.png", "ftp://x/c.jpg",
 		host.URL+"/page.html", host.URL+"/small.jpg"))
@@ -155,6 +164,7 @@ func TestCommunityCovers(t *testing.T) {
 }
 
 func TestSetCommunityCover(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	host, small := coverHost(t)
@@ -225,6 +235,7 @@ func TestSetCommunityCover(t *testing.T) {
 
 // Metadata off stops every outbound call: neither endpoint fetches anything.
 func TestCommunityCoversNeedMetadata(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, false, 0)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID := seedBook(t, e, "Andy Weir/The Martian", "")

@@ -45,12 +45,16 @@ export function DetailsCard({
   const qc = useQueryClient();
   const b = detail.book;
 
-  const undo = async (field: OverrideField, before: FieldValue) => {
+  const undo = async (
+    field: OverrideField,
+    before: Record<OverrideField, FieldValue>,
+    after: Record<OverrideField, FieldValue>,
+  ) => {
     const label = t(`book.field.${field}`);
     try {
       settleBookEdit(
         qc,
-        await api.editBook(b.library_id, b.path, undoRevertRequest(field, before)),
+        await api.editBook(b.library_id, b.path, undoRevertRequest(field, before, after)),
       );
       toast.add({ title: t('book.revert.undone', { field: label }), type: 'success' });
     } catch (err) {
@@ -59,7 +63,7 @@ export function DetailsCard({
   };
 
   const revert = async (field: OverrideField) => {
-    const before = detail.fields[field];
+    const before = detail.fields;
     const label = t(`book.field.${field}`);
     try {
       const next = await api.editBook(b.library_id, b.path, { revert: [field] });
@@ -71,7 +75,10 @@ export function DetailsCard({
           ? t('book.revert.doneBody', { value: quote(now) })
           : t('book.revert.doneEmpty'),
         type: 'success',
-        actionProps: { children: t('book.revert.undo'), onClick: () => void undo(field, before) },
+        actionProps: {
+          children: t('book.revert.undo'),
+          onClick: () => void undo(field, before, next.fields),
+        },
       });
     } catch (err) {
       toastError(t('book.revert.failed', { field: label }), err);

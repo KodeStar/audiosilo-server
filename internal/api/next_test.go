@@ -73,7 +73,13 @@ func (e *sagaEnv) url(endpoint, path string) string {
 
 func newSagaEnv(t *testing.T, metadataOn bool, books ...*catalog.Book) *sagaEnv {
 	t.Helper()
-	mock := sagaMetaserve(t)
+	return newLibraryEnv(t, sagaMetaserve(t), metadataOn, books...)
+}
+
+// newLibraryEnv is newSagaEnv's library, member and admin over the metadata
+// site mock.
+func newLibraryEnv(t *testing.T, mock *httptest.Server, metadataOn bool, books ...*catalog.Book) *sagaEnv {
+	t.Helper()
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.Metadata.Enabled = metadataOn
 		c.Metadata.BaseURL = mock.URL
@@ -148,6 +154,7 @@ func railLocals(t *testing.T, e *sagaEnv, path, token string) map[string]string 
 // rule: two callers with different grants get different locals from the SAME
 // cached envelope, and the cached envelope itself is never annotated.
 func TestMetaLocalPerCaller(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, sagaBooks()...)
 
 	// Allowed: the admin owns every entry; Saga/3 is found under its folded
@@ -185,6 +192,7 @@ func TestMetaLocalPerCaller(t *testing.T) {
 // holds), the envelope still goes out, without `local`, rather than failing a
 // lookup that succeeded - a client that never reads `local` included.
 func TestMetaLocalPlacementFailure(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, sagaBooks()...)
 	ctx := context.Background()
 	u, err := e.auth.CreateUser(ctx, "wide", "wide-password", auth.RoleUser)
@@ -225,6 +233,7 @@ func TestMetaLocalPlacementFailure(t *testing.T) {
 // TestMetaLocalCachedWorkID: a book whose enrichment the cache already holds is
 // placed by its work id, beating a book numbered like the entry.
 func TestMetaLocalCachedWorkID(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, append(sagaBooks(),
 		&catalog.Book{RelPath: "Extras/Three", Series: "Saga", ASIN: "B0THREE"})...) // unnumbered locally
 
@@ -278,6 +287,7 @@ func (n nextBody) nextPath() string {
 }
 
 func TestNextCommunity(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, sagaBooks()...)
 
 	// Owned: next + book + work (with its local). The book is the list shape.
@@ -310,6 +320,7 @@ func TestNextCommunity(t *testing.T) {
 // stop the lookup: the series or folder step answers, with the community's next
 // work attached without `local`.
 func TestNextCommunityUnplaced(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true,
 		&catalog.Book{RelPath: "Loose/1", ASIN: "B0ONE", IsFolder: true}, // untagged
 		&catalog.Book{RelPath: "Loose/2", IsFolder: true},
@@ -334,6 +345,7 @@ func TestNextCommunityUnplaced(t *testing.T) {
 // series either - the rail can lag the library - so the local steps answer,
 // with no community work.
 func TestNextCommunityLast(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, append(sagaBooks(),
 		&catalog.Book{RelPath: "Saga/5", Series: "Saga", SeriesIndex: 5},
 		&catalog.Book{RelPath: "Late/4", ASIN: "B0FOUR", IsFolder: true}, // untagged
@@ -359,6 +371,7 @@ func TestNextCommunityLast(t *testing.T) {
 }
 
 func TestNextCommunityFallsThrough(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true,
 		&catalog.Book{RelPath: "Down/1", Series: "Down", SeriesIndex: 1, ASIN: "B0DOWN"},
 		&catalog.Book{RelPath: "Down/2", Series: "Down", SeriesIndex: 2},
@@ -375,6 +388,7 @@ func TestNextCommunityFallsThrough(t *testing.T) {
 }
 
 func TestNextSeries(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, false,
 		&catalog.Book{RelPath: "Saga/1", Series: "Saga", SeriesIndex: 1, ASIN: "B0ONE"},
 		&catalog.Book{RelPath: "Other/1.5", Series: "Saga", SeriesIndex: 1.5},
@@ -410,6 +424,7 @@ func mkdirs(t *testing.T, root string, dirs ...string) {
 }
 
 func TestNextFolder(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, false,
 		&catalog.Book{RelPath: "Saga/1", IsFolder: true},
 		&catalog.Book{RelPath: "Saga/10", IsFolder: true},
@@ -451,6 +466,7 @@ func TestNextFolder(t *testing.T) {
 }
 
 func TestNextErrors(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, false, sagaBooks()...)
 	for name, tc := range map[string]struct {
 		url, token string
@@ -473,8 +489,223 @@ func TestNextErrors(t *testing.T) {
 }
 
 func TestNextBookCapability(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	if _, si := e.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(si, `"next_book":true`) {
 		t.Fatalf("/server missing next_book: %s", si)
+	}
+}
+
+// setMoreSeries gives the book at path its other series (a more_series list).
+func setMoreSeries(t *testing.T, e *sagaEnv, path, list string) {
+	t.Helper()
+	if err := e.cat.EditBook(context.Background(), e.lib.ID, path, catalog.BookEdit{Set: map[string]string{catalog.FieldMoreSeries: list}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNextSeriesMemberships: the local step follows every series a book is in
+// (catalog.NextInSeries, whose policy catalog's tests cover): when the main
+// series has ended a series the book lists answers, and the grant narrows it
+// (allowed and denied).
+func TestNextSeriesMemberships(t *testing.T) {
+	t.Parallel()
+	e := newSagaEnv(t, false,
+		&catalog.Book{RelPath: "Saga/1", Series: "Discworld", SeriesIndex: 8},         // City Watch 1 (list)
+		&catalog.Book{RelPath: "Saga/2/Feet of Clay", Series: "Ankh", SeriesIndex: 1}, // City Watch 3 (list)
+		&catalog.Book{RelPath: "Private/Men at Arms", Series: "City Watch", SeriesIndex: 2},
+	)
+	setMoreSeries(t, e, "Saga/1", `[{"name":"City Watch","position":1}]`)
+	setMoreSeries(t, e, "Saga/2/Feet of Clay", `[{"name":"City Watch","position":3}]`)
+
+	// Allowed: Discworld holds nothing after #8, so City Watch answers: Men at
+	// Arms, #2 by its main series.
+	n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.adminTok)
+	if n.Source != nextSeries || n.nextPath() != "Private/Men at Arms" || n.Book == nil || n.Book.RelPath != "Private/Men at Arms" {
+		t.Fatalf("admin = %s", n.raw)
+	}
+	// Denied: Men at Arms is outside the member's grant; Feet of Clay, City Watch
+	// #3 through its list, is theirs.
+	n = getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok)
+	if n.Source != nextSeries || n.nextPath() != "Saga/2/Feet of Clay" || strings.Contains(n.raw, "Men at Arms") {
+		t.Fatalf("member = %s", n.raw)
+	}
+}
+
+// twoRailMetaserve serves a work "cur" (B0CUR) in two community series, Alpha
+// and Beta (listed in that order), at #1 in each; a2 and b2 are #2 of each.
+func twoRailMetaserve(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("asin") != "B0CUR" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"work":{"id":"cur","title":"Cur","authors":[]},"recording_id":""}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") != "cur" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"cur","title":"Cur","authors":[],"language":"en","series":[` +
+			`{"id":"alpha","name":"Alpha","position":"1"},{"id":"beta","name":"Beta","position":"1"}],"recordings":[]}`))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		name := map[string]string{"alpha": "Alpha", "beta": "Beta"}[id]
+		if name == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"` + id + `","name":"` + name + `","authors":[],"works":[` +
+			`{"position":"1","work":{"id":"cur","title":"Cur","authors":[]}},` +
+			`{"position":"2","work":{"id":"` + id[:1] + `2","title":"Two","authors":[]}}]}`))
+	})
+	mock := httptest.NewServer(mux)
+	t.Cleanup(mock.Close)
+	return mock
+}
+
+// narniaMetaserve serves The Silver Chair ("sc", B0SC) on two community rails:
+// Narnia (chronological, where it is #6 and last) and Narnia (Publication),
+// where it is #4 and The Horse and His Boy (#5), The Magician's Nephew (#6) and
+// The Last Battle (#7) follow; the first two are earlier chronologically.
+func narniaMetaserve(t *testing.T) *httptest.Server {
+	t.Helper()
+	entries := func(works ...string) string {
+		var parts []string
+		for i, w := range works {
+			if w != "" {
+				parts = append(parts, `{"position":"`+strconv.Itoa(i+1)+`","work":{"id":"`+w+`","title":"`+w+`","authors":[]}}`)
+			}
+		}
+		return strings.Join(parts, ",")
+	}
+	rails := map[string]string{
+		"chrono": `{"id":"chrono","name":"Narnia","authors":[],"works":[` + entries("mn", "lww", "hhb", "pc", "vdt", "sc") + `]}`,
+		"pub":    `{"id":"pub","name":"Narnia (Publication)","authors":[],"works":[` + entries("lww", "pc", "vdt", "sc", "hhb", "mn", "lb") + `]}`,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("asin") != "B0SC" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"work":{"id":"sc","title":"The Silver Chair","authors":[]},"recording_id":""}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") != "sc" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"sc","title":"The Silver Chair","authors":[],"language":"en","series":[` +
+			`{"id":"chrono","name":"Narnia","position":"6"},{"id":"pub","name":"Narnia (Publication)","position":"4"}],"recordings":[]}`))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		body, ok := rails[r.PathValue("id")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	})
+	mock := httptest.NewServer(mux)
+	t.Cleanup(mock.Close)
+	return mock
+}
+
+// TestNextCommunityPassesOverStepsBack: the chronological rail has ended, so the
+// publication rail decides, with its first later entry that doesn't loop back
+// chronologically: The Last Battle, passing over The Horse and His Boy, which the
+// caller owns and which is placed. The answer is the entry NextRail chose, read
+// off the placed rails, not that rail's plain next entry (the owned The Horse and
+// His Boy); without The Last Battle owned it rides along unplaced beside the
+// local step, which passes over the same steps back and ends numbered.
+func TestNextCommunityPassesOverStepsBack(t *testing.T) {
+	t.Parallel()
+	for name, ownLast := range map[string]bool{"owned: community": true, "unowned: the local series ends": false} {
+		t.Run(name, func(t *testing.T) {
+			books := []*catalog.Book{
+				{RelPath: "Narnia/6 The Silver Chair", Series: "Narnia", SeriesIndex: 6, ASIN: "B0SC", IsFolder: true},
+				{RelPath: "Narnia/3 The Horse and His Boy", Series: "Narnia", SeriesIndex: 3},
+			}
+			if ownLast {
+				books = append(books, &catalog.Book{RelPath: "Narnia/7 The Last Battle", Series: "Narnia (Publication)", SeriesIndex: 7})
+			}
+			e := newLibraryEnv(t, narniaMetaserve(t), true, books...)
+			mkdirs(t, e.lib.Root, "Narnia/6 The Silver Chair")
+			setMoreSeries(t, e, "Narnia/6 The Silver Chair", `[{"name":"Narnia (Publication)","position":4}]`)
+			setMoreSeries(t, e, "Narnia/3 The Horse and His Boy", `[{"name":"Narnia (Publication)","position":5}]`)
+			n := getNext(t, e.testEnv, e.url("next", "Narnia/6 The Silver Chair"), e.adminTok)
+			if n.Work == nil || n.Work.ID != "lb" {
+				t.Fatalf("work = %s, want lb", n.raw)
+			}
+			if ownLast {
+				if n.Source != nextCommunity || n.nextPath() != "Narnia/7 The Last Battle" || n.Work.Local == nil ||
+					n.Book == nil || n.Book.RelPath != "Narnia/7 The Last Battle" {
+					t.Fatalf("= %s, want community The Last Battle", n.raw)
+				}
+				return
+			}
+			if n.Source != nextSeries || n.Next != nil || n.Work.Local != nil {
+				t.Fatalf("= %s, want the series ended with lb unplaced", n.raw)
+			}
+		})
+	}
+}
+
+// TestNextCommunityRails: the rails of a book in several community series are
+// taken in the book's own order (meta.NextRail, whose policy meta's tests cover;
+// here a rail named like a listed series comes before the envelope's first), and
+// the first with a next entry decides: its entry answers when it is the caller's
+// book, and when it isn't, a later rail's placed entry doesn't jump the series -
+// the local steps answer (the main series continuing locally, Discworld #8 to
+// #10 with #9 unowned) with that entry beside them, without `local`.
+func TestNextCommunityRails(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		series, more string   // the current book's main series (at #1) and list
+		owned        []string // the #2 books held: "Alpha", "Beta"
+		third        bool     // a local Beta #3, on no rail
+		source, next string
+		work         string
+	}{
+		"a listed series' rail first":   {"Gamma", `[{"name":"Beta","position":1}]`, []string{"Alpha", "Beta"}, false, nextCommunity, "B/2", "b2"},
+		"the first placed rail decides": {"Alpha", "", []string{"Alpha", "Beta"}, false, nextCommunity, "A/2", "a2"},
+		// Beta decides with b2, unowned: Alpha's placed a2 doesn't answer; the
+		// main series continues locally at #3.
+		"unplaced: the local series continues": {"Beta", "", []string{"Alpha"}, true, nextSeries, "B/3", "b2"},
+		"none placed: the first's work":        {"Beta", `[{"name":"Alpha","position":1}]`, nil, false, nextNone, "", "b2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			books := []*catalog.Book{{RelPath: "X/cur", Series: tc.series, SeriesIndex: 1, ASIN: "B0CUR", IsFolder: true}}
+			owned := map[string]string{} // series -> the path of its #2
+			for _, s := range tc.owned {
+				owned[s] = s[:1] + "/2"
+				books = append(books, &catalog.Book{RelPath: owned[s], Series: s + " Shelf", SeriesIndex: 2})
+			}
+			if tc.third {
+				books = append(books, &catalog.Book{RelPath: "B/3", Series: tc.series, SeriesIndex: 3})
+			}
+			e := newLibraryEnv(t, twoRailMetaserve(t), true, books...)
+			mkdirs(t, e.lib.Root, "X/cur")
+			if tc.more != "" {
+				setMoreSeries(t, e, "X/cur", tc.more)
+			}
+			// The #2 books are in the rails' series through their lists, so the
+			// rails place them there.
+			for s, path := range owned {
+				setMoreSeries(t, e, path, `[{"name":"`+s+`","position":2}]`)
+			}
+			n := getNext(t, e.testEnv, e.url("next", "X/cur"), e.adminTok)
+			if n.Source != tc.source || n.nextPath() != tc.next || n.Work == nil || n.Work.ID != tc.work {
+				t.Fatalf("= %s, want %s %q with work %s", n.raw, tc.source, tc.next, tc.work)
+			}
+			if (tc.source == nextCommunity) != (n.Work.Local != nil) || (tc.next != "" && (n.Book == nil || n.Book.RelPath != tc.next)) {
+				t.Fatalf("local/book do not match next: %s", n.raw)
+			}
+		})
 	}
 }

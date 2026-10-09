@@ -13,6 +13,7 @@ import (
 // stopped scan had left off its row (the scanner's old end-of-scan pass is gone),
 // and turns an infinite series position, which no JSON reply can carry, into none.
 func TestMigration0016Backfill(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn, exec, closeRaw := openBefore(t, "0016")
 	exec(`INSERT INTO libraries(id, name, root, created_at) VALUES(1, 'L', '/l', 't')`)

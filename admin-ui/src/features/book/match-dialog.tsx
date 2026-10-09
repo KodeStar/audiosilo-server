@@ -122,7 +122,7 @@ function MatchBody({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const b = detail.book;
-  const [query, setQuery] = useState([b.title, b.author].filter(Boolean).join(' '));
+  const [query, setQuery] = useState(detail.match_query);
   const [by, setBy] = useState<MatchBy>({});
   const [pickId, setPickId] = useState<string>();
   const [recId, setRecId] = useState<string>();

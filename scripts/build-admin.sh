@@ -8,14 +8,24 @@
 # Usage:
 #   scripts/build-admin.sh              # npm ci + check + build
 #   scripts/build-admin.sh --build-only # npm ci + build (release/consumer pipelines)
+#   scripts/build-admin.sh --vite-only  # npm ci + vite build, no typecheck (server CI's
+#                                       # Go job: its admin-ui job runs the full recipe)
 #
-# Needs Node 24 (admin-ui/.nvmrc). The build itself fails on any CSP violation.
+# Needs Node 24 (admin-ui/.nvmrc). Every mode fails on any CSP violation (a vite plugin).
 set -euo pipefail
+
+mode="${1:-}"
+case "$mode" in
+  '' | --build-only | --vite-only) ;;
+  *) echo "usage: scripts/build-admin.sh [--build-only | --vite-only]" >&2; exit 2 ;;
+esac
 
 cd "$(dirname "$0")/../admin-ui"
 
 npm ci --no-audit --no-fund
-if [ "${1:-}" != "--build-only" ]; then
-  npm run check
-fi
+case "$mode" in
+  --vite-only) exec npx vite build ;;
+  --build-only) ;;
+  *) npm run check ;;
+esac
 npm run build

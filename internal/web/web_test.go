@@ -78,6 +78,23 @@ func TestHTMLCSP(t *testing.T) {
 	}
 }
 
+// TestHTMLCSPImagesStaySameOrigin: the player loads community covers through the
+// server (GET /libraries/{id}/meta/cover), never from their own hosts, so its
+// img-src admits no other origin. Widening it would let a listener's browser
+// contact third parties.
+func TestHTMLCSPImagesStaySameOrigin(t *testing.T) {
+	csp := htmlCSP([]byte(`<script>1</script>`))
+	var imgSrc string
+	for _, dir := range strings.Split(csp, "; ") {
+		if strings.HasPrefix(dir, "img-src ") {
+			imgSrc = dir
+		}
+	}
+	if imgSrc != "img-src 'self' data: blob:" {
+		t.Fatalf("img-src = %q, want only 'self' data: blob:", imgSrc)
+	}
+}
+
 // TestHTMLCSPScriptSrcExcludesUnsafeInline is the security-load-bearing DENIED
 // direction: hashing inline scripts is pointless if 'unsafe-inline' is also
 // present (a single 'unsafe-inline' makes the browser ignore every hash), so the

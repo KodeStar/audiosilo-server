@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import {
   BookOpen,
   CheckCircle2,
   ExternalLink,
+  HeartHandshake,
   Info,
   Package,
   PowerOff,
@@ -25,6 +26,7 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { uptime, schemaNumber } from '@/features/health/system-model';
 import { toastError } from '@/lib/errors';
 import { formatBytes, formatDate, formatRelative, formatVersion } from '@/lib/format';
+import { SPONSOR_URL } from '@/lib/support';
 import { cn } from '@/lib/utils';
 
 /** Where the project lives; About links to its docs, releases and issues. */
@@ -32,6 +34,7 @@ const PROJECT_LINKS = {
   docs: 'https://docs.audiosilo.app',
   source: 'https://github.com/KodeStar/audiosilo-server',
   issues: 'https://github.com/KodeStar/audiosilo-server/issues',
+  support: SPONSOR_URL,
 };
 
 /**
@@ -129,6 +132,21 @@ function UpdateCard({ update }: { update: UpdateStatus }) {
       >
         {/* Image tags and release files name the version without its v. */}
         {t(`about.how.${update.install}`, { version: latest.version.replace(/^v/, '') })}
+        <span className="mt-1.5 block text-[12.5px]">
+          <Trans
+            i18nKey="support.line"
+            components={{
+              a: (
+                <a
+                  href={SPONSOR_URL}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="font-semibold text-brand-ink underline-offset-2 hover:underline"
+                />
+              ),
+            }}
+          />
+        </span>
       </Notice>
     );
   } else if (update.error) {
@@ -218,11 +236,12 @@ function ServerFacts({ sys }: { sys: SystemStatus }) {
       <div className="flex flex-wrap gap-2 border-t px-5 py-3.5">
         {(
           [
-            ['docs', BookOpen],
-            ['source', Package],
-            ['issues', TriangleAlert],
+            ['docs', BookOpen, 'about.link.docs'],
+            ['source', Package, 'about.link.source'],
+            ['issues', TriangleAlert, 'about.link.issues'],
+            ['support', HeartHandshake, 'support.title'],
           ] as const
-        ).map(([k, Icon]) => (
+        ).map(([k, Icon, label]) => (
           <a
             key={k}
             href={PROJECT_LINKS[k]}
@@ -231,7 +250,7 @@ function ServerFacts({ sys }: { sys: SystemStatus }) {
             className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
           >
             <Icon aria-hidden="true" />
-            {t(`about.link.${k}`)}
+            {t(label)}
           </a>
         ))}
       </div>

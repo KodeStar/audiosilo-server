@@ -251,6 +251,7 @@ export function bookDetail(over: Partial<AdminBookDetail> = {}): AdminBookDetail
     chapter_choice: '',
     community_chapters: null,
     community_checking: false,
+    match_query: [book.title, book.author].filter(Boolean).join(' '),
     ...over,
   };
 }

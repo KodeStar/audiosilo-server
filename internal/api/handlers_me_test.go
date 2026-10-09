@@ -33,6 +33,7 @@ func meEnv(t *testing.T) (e *testEnv, libPath, token string, libID int64) {
 
 // TestBookmarksRoundTrip: a user adds, lists, then deletes a bookmark by id.
 func TestBookmarksRoundTrip(t *testing.T) {
+	t.Parallel()
 	e, libPath, token, _ := meEnv(t)
 	bmURL := libPath + "/bookmarks?path=" + url.QueryEscape(meBookPath)
 
@@ -76,6 +77,7 @@ func TestBookmarksRoundTrip(t *testing.T) {
 
 // TestNotesRoundTrip: a user adds, lists, then deletes a note by id.
 func TestNotesRoundTrip(t *testing.T) {
+	t.Parallel()
 	e, libPath, token, _ := meEnv(t)
 	noteURL := libPath + "/notes?path=" + url.QueryEscape(meBookPath)
 
@@ -118,6 +120,7 @@ func TestNotesRoundTrip(t *testing.T) {
 
 // TestHistoryRoundTrip: a user records a listening span and lists it back.
 func TestHistoryRoundTrip(t *testing.T) {
+	t.Parallel()
 	e, libPath, token, _ := meEnv(t)
 	histURL := libPath + "/history?path=" + url.QueryEscape(meBookPath)
 
@@ -150,6 +153,7 @@ func TestHistoryRoundTrip(t *testing.T) {
 // cannot delete user A's bookmark by id (DeleteBookmark scopes by `AND user_id =
 // ?`), and the same holds for notes.
 func TestBookmarkDeleteOwnershipScoped(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))

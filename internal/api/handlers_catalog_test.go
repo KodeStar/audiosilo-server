@@ -44,6 +44,7 @@ func seedCatalog(t *testing.T, e *testEnv) (int64, string) {
 // TestAdminCatalogEndpointsRequireAdmin: every new admin catalog endpoint refuses
 // a signed-in member (403) and an anonymous caller (401), and answers an admin.
 func TestAdminCatalogEndpointsRequireAdmin(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -84,6 +85,7 @@ func TestAdminCatalogEndpointsRequireAdmin(t *testing.T) {
 }
 
 func TestAdminListBooksAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)
@@ -141,6 +143,7 @@ func TestAdminListBooksAPI(t *testing.T) {
 }
 
 func TestAdminAggregatesAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	seedCatalog(t, e)
@@ -161,6 +164,7 @@ func TestAdminAggregatesAPI(t *testing.T) {
 }
 
 func TestAdminEditBookAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -226,7 +230,119 @@ func TestAdminEditBookAPI(t *testing.T) {
 	}
 }
 
+// TestAdminEditBookSeriesSwap: a PATCH making one of a book's other series its
+// main one swaps the two (catalog.seriesSwap), and the response shows it; one
+// that sends more_series itself keeps what it sent; reverting series to a
+// listed one swaps back, the position it brings back the tag's own (a revert,
+// not an edit); an old main series that can't be listed is a 400
+// (invalid series), for one book and for a bulk edit.
+func TestAdminEditBookSeriesSwap(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, base := seedCatalog(t, e)
+	url := base + "/book?path=" + escape("Andy Weir/Artemis")
+	fields := func(body string) map[string]catalog.FieldValue {
+		t.Helper()
+		var d struct{ Fields map[string]catalog.FieldValue }
+		if err := json.Unmarshal([]byte(body), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.Fields
+	}
+	patch := func(req string) map[string]catalog.FieldValue {
+		t.Helper()
+		resp, body := e.do(t, "PATCH", url, adminTok, req)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("patch %s = %d %s", req, resp.StatusCode, body)
+		}
+		return fields(body)
+	}
+	patch(`{"set":{"series":"Moon","series_index":"1","more_series":"[{\"name\":\"Weirverse\",\"position\":2}]"}}`)
+	f := patch(`{"set":{"series":"Weirverse"}}`)
+	if f["series"].Value != "Weirverse" || f["series_index"].Value != "2" ||
+		f["more_series"].Value != `[{"name":"Moon","position":1}]` || f["more_series"].EditedBy != "admin" {
+		t.Fatalf("after the swap: %+v", f)
+	}
+	f = patch(`{"set":{"series":"Moon","more_series":"[{\"name\":\"Weirverse\",\"position\":3}]"}}`)
+	if f["series"].Value != "Moon" || f["series_index"].Value != "2" || f["more_series"].Value != `[{"name":"Weirverse","position":3}]` {
+		t.Fatalf("with more_series sent: %+v", f)
+	}
+
+	// A book tagged Discworld #8: the swap to City Watch, then a revert of
+	// series, which leaves the listed Discworld and so swaps back.
+	for _, b := range []*catalog.Book{
+		{LibraryID: libID, RelPath: "Terry Pratchett/Guards Guards", IsFolder: true, Title: "Guards! Guards!", Series: "Discworld", SeriesIndex: 8},
+		{LibraryID: libID, RelPath: "Terry Pratchett/Long", IsFolder: true, Title: "Long", Series: strings.Repeat("x", 501), SeriesIndex: 1},
+	} {
+		if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	url = base + "/book?path=" + escape("Terry Pratchett/Guards Guards")
+	patch(`{"set":{"more_series":"[{\"name\":\"City Watch\",\"position\":1}]"}}`)
+	if f = patch(`{"set":{"series":"City Watch"}}`); f["series"].Value != "City Watch" || f["more_series"].Value != `[{"name":"Discworld","position":8}]` {
+		t.Fatalf("after the swap: %+v", f)
+	}
+	f = patch(`{"revert":["series"]}`)
+	if f["series"].Value != "Discworld" || f["series_index"].Value != "8" || f["more_series"].Value != `[{"name":"City Watch","position":1}]` {
+		t.Fatalf("after reverting series: %+v", f)
+	}
+	// #8 is the tag's own position, so the swap back reverts series_index (read
+	// off the file again, unlocked) rather than editing it; the list was an edit
+	// before the swap and stays one.
+	if si, ms := f["series_index"], f["more_series"]; si.Source != catalog.SourceTag || si.Locked ||
+		ms.Source != catalog.SourceEdited || !ms.Locked {
+		t.Fatalf("provenance after reverting series: series_index %+v, more_series %+v", si, ms)
+	}
+
+	// Denied: the long tag can't be listed, so the swap is refused.
+	url = base + "/book?path=" + escape("Terry Pratchett/Long")
+	patch(`{"set":{"more_series":"[{\"name\":\"City Watch\",\"position\":1}]"}}`)
+	resp, body := e.do(t, "PATCH", url, adminTok, `{"set":{"series":"City Watch"}}`)
+	var env struct{ Code, Field string }
+	_ = json.Unmarshal([]byte(body), &env)
+	if resp.StatusCode != http.StatusBadRequest || env.Code != codeInvalidOverride || env.Field != "series" {
+		t.Fatalf("unlistable old main = %d %s, want 400 invalid series", resp.StatusCode, body)
+	}
+	lib := strconv.FormatInt(libID, 10)
+	books := `[{"library_id":` + lib + `,"path":"Terry Pratchett/Guards Guards"},{"library_id":` + lib + `,"path":"Terry Pratchett/Long"}]`
+	if resp, body := e.do(t, "POST", "/api/v1/admin/books/bulk", adminTok, `{"books":`+books+`,"set":{"series":"City Watch"}}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bulk with an unlistable book = %d %s, want 400", resp.StatusCode, body)
+	}
+	if b, _ := e.cat.GetBookByPath(context.Background(), libID, "Terry Pratchett/Guards Guards"); b.Series != "Discworld" {
+		t.Fatalf("a refused bulk edit changed a book: %+v", b)
+	}
+}
+
+// The book page names the match dialog's search text: the title and author, or
+// the folders' when the tags are swapped.
+func TestAdminBookMatchQuery(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, base := seedCatalog(t, e)
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID,
+		RelPath: "Andy Weir/Project Hail Mary", IsFolder: true, Title: "Andy Weir", Author: "Project Hail Mary",
+		AddedAt: "2024-03-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"Andy Weir/The Martian":       "The Martian Andy Weir",
+		"Andy Weir/Project Hail Mary": "Project Hail Mary Andy Weir",
+	} {
+		resp, body := e.do(t, "GET", base+"/book?path="+escape(path), adminTok, "")
+		var d struct {
+			MatchQuery string `json:"match_query"`
+		}
+		if err := json.Unmarshal([]byte(body), &d); err != nil || resp.StatusCode != 200 || d.MatchQuery != want {
+			t.Errorf("%s: %d match_query = %q, want %q", path, resp.StatusCode, d.MatchQuery, want)
+		}
+	}
+}
+
 func TestAdminBulkEditAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)
@@ -280,6 +396,7 @@ func TestAdminBulkEditAPI(t *testing.T) {
 // match, the handler hands it the book's tags AND its library path, and the
 // console gets metaserve's score and reasons in the unchanged envelope.
 func TestAdminMatchSendsTheBookFacts(t *testing.T) {
+	t.Parallel()
 	m := &mockMetaserve{lookupCode: http.StatusNotFound, match: true}
 	e := newMetaEnvMock(t, true, m)
 	adminTok, _, _ := adminAndMember(t, e)
@@ -313,6 +430,7 @@ func TestAdminMatchSendsTheBookFacts(t *testing.T) {
 }
 
 func TestAdminMatchAPI(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _, _ := adminAndMember(t, e)
 	_, base := seedCatalog(t, e)
@@ -361,6 +479,7 @@ func TestAdminMatchAPI(t *testing.T) {
 // failed, a down upstream marks only the books it couldn't look up as failed, and
 // metadata off is a 404 like the match.
 func TestAdminBookWorksAPI(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)
@@ -430,6 +549,7 @@ func TestAdminBookWorksAPI(t *testing.T) {
 // ahead of the book's own art, still behind the caller's scope; bad uploads are
 // refused.
 func TestCustomCoverAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -488,6 +608,7 @@ func TestCustomCoverAPI(t *testing.T) {
 // only while the book is there. A sidecar image is served with a bounded lifetime,
 // so a custom cover set later shows within a day rather than by heuristic.
 func TestCustomCoverFollowsTheBook(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	ctx := context.Background()

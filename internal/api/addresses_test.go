@@ -35,6 +35,7 @@ func linkQuery(t *testing.T, link string) url.Values {
 // home=/away= params that round-trip through url.Parse, after the existing
 // params (which are unchanged).
 func TestPairingCarriesAddresses(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.PublicURL = "https://books.example.com"
 		c.LANURL = "http://192.168.1.20:8080"
@@ -73,6 +74,7 @@ func TestPairingCarriesAddresses(t *testing.T) {
 // With no lan_url, a request that arrived on a home-network address teaches the
 // device that address as home; with no public_url there is no away.
 func TestPairingAddressesDerivedFromLANRequest(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, map[string]string{"Host": "192.168.1.20:8080"})
 	if resp.StatusCode != http.StatusOK {
@@ -94,6 +96,7 @@ func TestPairingAddressesDerivedFromLANRequest(t *testing.T) {
 // Neither address known (no config; a loopback, public or CGNAT request): no
 // addresses field and links exactly as before.
 func TestPairingWithoutAddresses(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	for _, host := range []string{"", "books.example.com", "100.64.1.2:8080", "localhost:8080"} {
 		resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, map[string]string{"Host": host})
@@ -118,6 +121,7 @@ func TestPairingWithoutAddresses(t *testing.T) {
 // proxy's upstream, e.g. a container name or bridge IP); a configured lan_url
 // still applies.
 func TestProxiedRequestDerivesNoHome(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	_, memberTok := opsTokens(t, e)
 	for _, fwd := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
@@ -139,6 +143,7 @@ func TestProxiedRequestDerivesNoHome(t *testing.T) {
 
 // /auth/pair (an existing session adding a device) carries them too.
 func TestAuthPairCarriesAddresses(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "https://books.example.com" })
 	_, memberTok := opsTokens(t, e)
 	resp, body := e.doHeaders(t, "POST", "/api/v1/auth/pair", memberTok, "", map[string]string{"Host": "nas.local:8080"})
@@ -156,6 +161,7 @@ func TestAuthPairCarriesAddresses(t *testing.T) {
 // The exchange and login answers carry the addresses; without any, the field is
 // absent and the envelope is as before.
 func TestExchangeAndLoginCarryAddresses(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.PublicURL = "https://books.example.com"
 		c.LANURL = "http://10.0.0.2:8080"
@@ -191,6 +197,7 @@ func TestExchangeAndLoginCarryAddresses(t *testing.T) {
 
 // The demo session answer and its pairing payload carry them as well.
 func TestDemoSessionCarriesAddresses(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	if _, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Demo", Root: t.TempDir()}); err != nil {
 		t.Fatal(err)
@@ -225,6 +232,7 @@ func TestDemoSessionCarriesAddresses(t *testing.T) {
 // GET /addresses: any signed-in caller (member, admin, API key) is answered; no
 // token is 401.
 func TestGetAddresses(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.PublicURL = "https://books.example.com/" })
 	adminTok, memberTok := opsTokens(t, e)
 	key, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindAPI, "script", 0)
@@ -298,6 +306,7 @@ func TestLANURLSettingLive(t *testing.T) {
 }
 
 func TestServerAdvertisesAddresses(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
 	var info struct {

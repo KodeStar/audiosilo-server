@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // fakeColorer answers a book by its path: a colour for the paths in colors,
@@ -55,11 +54,7 @@ type env struct {
 func newEnv(t *testing.T, paths ...string) *env {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir()})
 	if err != nil {
@@ -94,6 +89,7 @@ func (e *env) colour(t *testing.T, path string) string {
 // runner or a new one (a restart), and is once its art changes; a book whose art
 // failed to read, or whose art files are missing, is tried again next pass.
 func TestPass(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, "a.m4b", "none.m4b", "broken.m4b", "gone.m4b")
 	e.fc.colors["a.m4b"] = "#112233"
 	e.fc.failing["broken.m4b"] = true
@@ -124,6 +120,7 @@ func TestPass(t *testing.T) {
 
 // TestPassPages: a pass reads every due book, across the index's pages.
 func TestPassPages(t *testing.T) {
+	t.Parallel()
 	var paths []string
 	for i := range batch*2 + 5 {
 		paths = append(paths, fmt.Sprintf("b%03d.m4b", i))
@@ -143,6 +140,7 @@ func TestPassPages(t *testing.T) {
 // TestPassStopsOnFailures: art that keeps failing to read ends the pass early,
 // reported, rather than reading the whole library.
 func TestPassStopsOnFailures(t *testing.T) {
+	t.Parallel()
 	var paths []string
 	for i := range 40 {
 		p := fmt.Sprintf("b%02d.m4b", i)
@@ -167,6 +165,7 @@ func TestPassStopsOnFailures(t *testing.T) {
 // TestPassMissingArtIsNoFailure: books whose art files are missing (an unmounted
 // share) don't end the pass, so the books after them are still read.
 func TestPassMissingArtIsNoFailure(t *testing.T) {
+	t.Parallel()
 	var paths []string
 	for i := range maxFailStreak * 2 {
 		p := fmt.Sprintf("b%02d.m4b", i)
@@ -189,6 +188,7 @@ func TestPassMissingArtIsNoFailure(t *testing.T) {
 // TestRunKick: Run's first pass comes once the start settles; kicks hold the
 // next pass back until they stop coming (a scan), then bring it.
 func TestRunKick(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, "a.m4b")
 	e.fc.failing["a.m4b"] = true // read again on every pass
 	e.r.settle = 200 * time.Millisecond

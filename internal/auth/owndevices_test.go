@@ -10,6 +10,7 @@ import (
 // another user's token (or an unknown, revoked or pairing one) is ErrNotFound and
 // left signed in.
 func TestRevokeOwnDevice(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	sam, _ := s.CreateUser(ctx, "sam", "", RoleUser)
 	kim, _ := s.CreateUser(ctx, "kim", "", RoleUser)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"syscall"
 	"time"
 
@@ -154,4 +155,29 @@ func (s *Service) FetchCover(ctx context.Context, rawURL string, limit int64) ([
 		return nil, media.ErrImageTooLarge
 	}
 	return media.ReadLimited(resp.Body, limit)
+}
+
+// HandsOutCover reports whether rawURL is a cover URL this envelope hands to a
+// client: the recording's, or a rail entry's in any view of any rail. The player's
+// cover proxy (GET /libraries/{id}/meta/cover) serves only such a URL, so it
+// fetches nothing a caller could not already see in the book's own envelope.
+func (e *Enrichment) HandsOutCover(rawURL string) bool {
+	if rawURL == "" || e == nil {
+		return false
+	}
+	if e.Recording != nil && e.Recording.CoverURL == rawURL {
+		return true
+	}
+	hasCover := func(w MetaSeriesWork) bool { return w.CoverURL == rawURL }
+	for _, s := range e.Series {
+		if slices.ContainsFunc(s.Works, hasCover) {
+			return true
+		}
+		for _, o := range s.Orderings {
+			if slices.ContainsFunc(o.Works, hasCover) {
+				return true
+			}
+		}
+	}
+	return false
 }

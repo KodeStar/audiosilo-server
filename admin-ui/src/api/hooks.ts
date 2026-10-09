@@ -49,6 +49,7 @@ export const keys = {
   system: ['admin', 'system'] as const,
   metaMirror: ['admin', 'meta-mirror'] as const,
   update: ['admin', 'update'] as const,
+  support: ['admin', 'support'] as const,
   logs: (level: string, q: string) => ['admin', 'logs', level, q] as const,
   backups: ['admin', 'backups'] as const,
   notifyTargets: ['admin', 'notifications'] as const,
@@ -305,6 +306,11 @@ export function useAudit(filter: AuditFilter) {
     getNextPageParam: (last) => last.next_before || undefined,
     placeholderData: keepPreviousData,
   });
+}
+
+/** Whether the Overview's support card shows (it changes only by days, or an answer). */
+export function useSupportStatus() {
+  return useQuery({ queryKey: keys.support, queryFn: api.support, staleTime: 60 * 60_000 });
 }
 
 /** The update check's state (Overview's server card, About). */

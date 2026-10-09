@@ -132,6 +132,9 @@ type API struct {
 	// decoded for thumbnails, across requests (handlers_community_covers.go), as
 	// coverReads does the library's own art.
 	communityReads chan struct{}
+	// community shares a community cover's fetch between the asks for it at
+	// once, and remembers the ones that failed recently (communityThumbnail).
+	community communityFlights
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
@@ -277,6 +280,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/authors", a.requireAuth(a.handleBrowsePeople(catalog.PeopleAuthors, "authors")))
 	mux.Handle("GET /api/v1/libraries/{id}/narrators", a.requireAuth(a.handleBrowsePeople(catalog.PeopleNarrators, "narrators")))
 	mux.Handle("GET /api/v1/libraries/{id}/series", a.requireAuth(http.HandlerFunc(a.handleBrowseSeries)))
+	mux.Handle("GET /api/v1/libraries/{id}/series/books", a.requireAuth(http.HandlerFunc(a.handleSeriesBooks)))
 	mux.Handle("GET /api/v1/libraries/{id}/item", a.requireAuth(http.HandlerFunc(a.handleItem)))
 	mux.Handle("GET /api/v1/libraries/{id}/next", a.requireAuth(http.HandlerFunc(a.handleNext)))
 	mux.Handle("GET /api/v1/libraries/{id}/chapters", a.requireAuth(http.HandlerFunc(a.handleChapters)))
@@ -289,6 +293,9 @@ func (a *API) Handler() http.Handler {
 	// <img>/<audio> can't set headers); other routes do not (see requireMediaAuth).
 	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireMediaAuth(http.HandlerFunc(a.handleCover)))
 	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireMediaAuth(http.HandlerFunc(a.handleStream)))
+	// A community cover the book's /meta envelope hands out, as a thumbnail from
+	// this server (the web player's CSP takes images only from it).
+	mux.Handle("GET /api/v1/libraries/{id}/meta/cover", a.requireMediaAuth(http.HandlerFunc(a.handleMetaCover)))
 	mux.Handle("GET /api/v1/search", a.requireAuth(http.HandlerFunc(a.handleSearch)))
 	mux.Handle("GET /api/v1/books/recent", a.requireAuth(http.HandlerFunc(a.handleRecentBooks)))
 
@@ -361,6 +368,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(http.HandlerFunc(a.handleLogs)))
 	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(http.HandlerFunc(a.handleAudit)))
 	mux.Handle("GET /api/v1/admin/events", a.requireAdmin(http.HandlerFunc(a.handleServerEvents)))
+	// The Overview's support card: whether it shows, and an admin's answer (server-wide).
+	mux.Handle("GET /api/v1/admin/support", a.requireAdmin(http.HandlerFunc(a.handleSupport)))
+	mux.Handle("POST /api/v1/admin/support", a.requireAdmin(http.HandlerFunc(a.handleSupportChoice)))
 
 	// Backups: the database copied into the backups folder; a restore applies at the
 	// next start. Downloads stream (see isStreamingPath).

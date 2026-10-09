@@ -37,6 +37,7 @@ func intp(n int) *int { return &n }
 // queued book stays put unless a position is given, then moves; a remove is
 // idempotent and the order holds after it.
 func TestQueueAddMoveRemove(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	user := seedUser(t, c, ctx)
@@ -83,6 +84,7 @@ func TestQueueAddMoveRemove(t *testing.T) {
 
 // A full queue refuses a new book (ErrListFull) but still moves a queued one.
 func TestQueueFull(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	user := seedUser(t, c, ctx)
@@ -107,6 +109,7 @@ func TestQueueFull(t *testing.T) {
 // deletes everything else stored (hidden rows included), keeps a kept entry's
 // added_at, and refuses more than MaxQueue refs.
 func TestSetQueueSkipRule(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	other, _ := c.CreateLibrary(ctx, Library{Name: "O", Root: "/tmp/o"})
@@ -167,6 +170,7 @@ func TestSetQueueSkipRule(t *testing.T) {
 // A queued book outside the reader's current access is kept but not returned,
 // and comes back with access; no scopes at all shows nothing.
 func TestQueueVisibility(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	user := seedUser(t, c, ctx)

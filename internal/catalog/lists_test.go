@@ -33,6 +33,7 @@ func countRows(t *testing.T, c *Catalog, query string, args ...any) int {
 // their positions; where a list already holds the new path, that entry (and its
 // position) stays and the moved one goes.
 func TestMoveCarriesLists(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	ann, bob := seedNamedUser(t, c, "ann"), seedNamedUser(t, c, "bob")
@@ -80,6 +81,7 @@ func TestMoveCarriesLists(t *testing.T) {
 // book: the first part's entry keeps its place, a later part's collides with it
 // and goes; an unplaced part's stays on its own path.
 func TestJoinCarriesLists(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	ann := seedNamedUser(t, c, "ann")
@@ -110,6 +112,7 @@ func TestJoinCarriesLists(t *testing.T) {
 // them) and their share rows on other users' collections; deleting a library
 // purges its queue entries and collection items (the collections stay).
 func TestListsPurgedWithUserAndLibrary(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	keep, _ := c.CreateLibrary(ctx, Library{Name: "K", Root: "/tmp/k"})

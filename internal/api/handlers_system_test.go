@@ -30,6 +30,7 @@ func opsTokens(t *testing.T, e *testEnv) (adminTok, memberTok string) {
 
 // Every Phase 5a endpoint is admin-only: a member is refused (403), an admin served.
 func TestServerOpsEndpointsRequireAdmin(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotModified) }))
 	defer gh.Close()
@@ -56,6 +57,7 @@ func TestServerOpsEndpointsRequireAdmin(t *testing.T) {
 }
 
 func TestSettingsEnvelope(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	_, body := e.do(t, "GET", "/api/v1/admin/settings", adminTok, "")
@@ -88,6 +90,7 @@ func TestSettingsEnvelope(t *testing.T) {
 // Settings that apply at once do so for the very next request; a restart
 // setting is saved, listed as pending, and the running server keeps the old value.
 func TestSettingsApplyLiveOrAfterRestart(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 
@@ -122,6 +125,7 @@ func TestSettingsApplyLiveOrAfterRestart(t *testing.T) {
 }
 
 func TestSettingsRefused(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	cases := []struct {
@@ -177,6 +181,7 @@ func TestSettingsLockedByEnvironment(t *testing.T) {
 // The update switch drives the checker: off refuses Check now and makes no
 // request; on lets it ask.
 func TestUpdateCheckSwitch(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	hits := 0
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -204,6 +209,7 @@ func TestUpdateCheckSwitch(t *testing.T) {
 }
 
 func TestSystemStatus(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.Metadata.Enabled = false })
 	adminTok, _ := opsTokens(t, e)
 	root := t.TempDir()
@@ -248,6 +254,7 @@ func TestSystemStatus(t *testing.T) {
 }
 
 func TestLogsEndpoint(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ring := logring.NewRing(100)
 	e.api.SetRuntime(Runtime{Logs: ring})

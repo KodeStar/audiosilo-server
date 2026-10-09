@@ -13,6 +13,7 @@ import (
 // A fresh server, where nobody has listened yet, sends an empty listening list,
 // never null (the console iterates it).
 func TestAdminStatsListsAreNeverNull(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	resp, body := e.do(t, "GET", "/api/v1/admin/stats", adminTok, "")
@@ -23,6 +24,7 @@ func TestAdminStatsListsAreNeverNull(t *testing.T) {
 
 // Admin book rows say whether a book is matched, by the matched= filter's rule.
 func TestAdminBooksCarryMatched(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -42,6 +44,7 @@ func TestAdminBooksCarryMatched(t *testing.T) {
 // admin's batch adds them all (allowed); a member is refused, an oversized batch
 // is refused, and a batch with one bad rule adds nothing (denied).
 func TestAddSharePathsBatch(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)

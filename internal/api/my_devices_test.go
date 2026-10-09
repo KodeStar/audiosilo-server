@@ -29,6 +29,7 @@ func myDevicesOf(t *testing.T, e *testEnv, tok string) ([]myDevice, string) {
 }
 
 func TestMyDevices(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	sam, err := e.auth.CreateUser(ctx, "sam", "sam-password", auth.RoleUser)

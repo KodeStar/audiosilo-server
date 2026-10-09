@@ -14,7 +14,7 @@ import { QueryError } from '@/components/query-error';
 import { SessionState } from '@/components/session-state';
 import { bookRoute } from '@/lib/book-route';
 import { formatClock, formatDuration, formatRelative, progressFraction } from '@/lib/format';
-import { liveSummary, sortLive } from './live-model';
+import { chapterLabel, liveSummary, sortLive } from './live-model';
 import { useClientName } from './use-client-name';
 
 /** Activity > Live now: every device playing or paused in the last ten minutes. */
@@ -79,6 +79,7 @@ function LiveSession({ s }: { s: ListeningSession }) {
   const clientName = useClientName();
   const frac = progressFraction(s.position, s.duration);
   const title = s.title || s.path;
+  const chapter = chapterLabel(s, t);
   const rows: [string, React.ReactNode][] = [
     [t('live.device'), s.device_name || t('live.unnamed')],
     [t('live.app'), clientName(s.client)],
@@ -111,7 +112,7 @@ function LiveSession({ s }: { s: ListeningSession }) {
         >
           {title}
         </Link>
-        {s.chapter ? <span className="text-muted-foreground">{s.chapter}</span> : null}
+        {chapter ? <span className="text-muted-foreground">{chapter}</span> : null}
         <div className="flex max-w-[480px] items-center gap-2.5">
           <ProgressBar
             fraction={frac}

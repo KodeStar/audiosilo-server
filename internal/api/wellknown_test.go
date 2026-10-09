@@ -11,6 +11,7 @@ import (
 // TestWellKnownUnsetReturns404: with no AppLinks configured (the secure default),
 // both association endpoints 404 so clients fall back to the embedded web player.
 func TestWellKnownUnsetReturns404(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	if resp, body := e.do(t, "GET", "/.well-known/apple-app-site-association", "", ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("apple-app-site-association unset = %d %s, want 404", resp.StatusCode, body)
@@ -23,6 +24,7 @@ func TestWellKnownUnsetReturns404(t *testing.T) {
 // TestAppleAppSiteAssociationConfigured: with apple_app_ids set, the file is
 // served with the appIDs and the path components clients deep-link against.
 func TestAppleAppSiteAssociationConfigured(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.AppLinks.AppleAppIDs = []string{"ABCDE12345.com.anonymous.audiosilo"}
 	})
@@ -67,6 +69,7 @@ func TestAppleAppSiteAssociationConfigured(t *testing.T) {
 // TestAssetLinksConfigured: with android_package + android_sha256 set, the file
 // is served with the package name and cert fingerprints Android verifies.
 func TestAssetLinksConfigured(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.AppLinks.AndroidPackage = "com.anonymous.audiosilo"
 		c.AppLinks.AndroidSHA256 = []string{"AA:BB:CC:DD"}

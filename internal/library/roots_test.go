@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func TestStatRoot(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if st := statRoot(dir); !st.readable || !st.empty {
 		t.Errorf("empty dir = %+v, want readable and empty", st)
@@ -35,6 +36,7 @@ func TestStatRoot(t *testing.T) {
 // rootProbeTimeout, starts no second probe while the first is stuck, and uses the
 // late answer once it arrives.
 func TestRootProberNeverBlocksTheCaller(t *testing.T) {
+	t.Parallel()
 	release := make(chan struct{})
 	calls := 0
 	p := newRootProber()
@@ -64,12 +66,9 @@ func TestRootProberNeverBlocksTheCaller(t *testing.T) {
 }
 
 func TestRootAvailable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
@@ -114,13 +113,10 @@ func TestRootAvailable(t *testing.T) {
 // A queued scan reads as queued before Enqueue returns, the queue runs it, and the
 // run is recorded with what it found.
 func TestEnqueueRunsAndRecords(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
@@ -167,6 +163,7 @@ func waitIdle(t *testing.T, s *Scanner, libID int64) {
 
 // RootsAvailable probes in parallel: two dead roots cost one timeout, not two.
 func TestRootsAvailableInParallel(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{progress: map[int64]ScanProgress{}, roots: newRootProber()}
 	release := make(chan struct{})
 	defer close(release)
@@ -196,12 +193,8 @@ func TestRootsAvailableInParallel(t *testing.T) {
 // The root probe also reads the space on the root's filesystem, so Health >
 // System shows it without another (unbounded) filesystem call.
 func TestRootDisk(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	t.Parallel()
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	scanner := NewScanner(cat, "", slog.Default())
 

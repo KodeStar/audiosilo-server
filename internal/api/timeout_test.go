@@ -13,6 +13,7 @@ import (
 // "self-recovering" fix. (The request context is also cancelled, which in
 // production aborts the stuck DB call.)
 func TestTimeoutMiddlewareFiresOnSlowRequest(t *testing.T) {
+	t.Parallel()
 	a := &API{timeoutDur: 50 * time.Millisecond}
 	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -40,6 +41,7 @@ func TestTimeoutMiddlewareFiresOnSlowRequest(t *testing.T) {
 // a /stream handler that runs past the deadline still completes (audio playback
 // must not be cut off - there is deliberately no WriteTimeout either).
 func TestTimeoutMiddlewareExemptsStreaming(t *testing.T) {
+	t.Parallel()
 	a := &API{timeoutDur: 50 * time.Millisecond}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(150 * time.Millisecond) // exceeds timeoutDur
@@ -64,6 +66,7 @@ func TestTimeoutMiddlewareExemptsStreaming(t *testing.T) {
 // TestHealthzPublicOK asserts the health probe is public and returns 200 with the
 // database reachable.
 func TestHealthzPublicOK(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	for _, path := range []string{"/healthz", "/api/v1/healthz"} {
 		resp, body := e.do(t, http.MethodGet, path, "", "")
@@ -77,6 +80,7 @@ func TestHealthzPublicOK(t *testing.T) {
 // an upload to one (the admin's PUT .../cover) is still cut off at the deadline,
 // so a slow client can't hold it open.
 func TestTimeoutMiddlewareBoundsUploads(t *testing.T) {
+	t.Parallel()
 	a := &API{timeoutDur: 50 * time.Millisecond}
 	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -90,5 +94,24 @@ func TestTimeoutMiddlewareBoundsUploads(t *testing.T) {
 	a.timeout(slow).ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("slow cover upload = %d, want 503", rec.Code)
+	}
+}
+
+// Only a book's own media and a backup's download outlive the request timeout:
+// a community cover is a bounded thumbnail, and an admin route ending in /cover
+// or /stream is no media.
+func TestStreamingPaths(t *testing.T) {
+	t.Parallel()
+	for p, want := range map[string]bool{
+		"/api/v1/libraries/1/cover":       true,
+		"/api/v1/libraries/1/stream":      true,
+		"/api/v1/libraries/1/meta/cover":  false,
+		"/api/v1/libraries//cover":        false,
+		"/api/v1/admin/libraries/1/cover": false,
+		"/api/v1/libraries/1/books":       false,
+	} {
+		if got := isStreamingPath(p); got != want {
+			t.Errorf("isStreamingPath(%q) = %v, want %v", p, got, want)
+		}
 	}
 }

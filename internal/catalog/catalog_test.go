@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // newTestCatalog opens a catalog on a FILE-backed database: reads go to the
@@ -19,13 +18,7 @@ import (
 // where :memory: (reader == writer, one pool) would hide it.
 func newTestCatalog(t *testing.T) (*Catalog, context.Context) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return New(db, time.Now), ctx
+	return New(storetest.Open(t), time.Now), context.Background()
 }
 
 func seedUser(t *testing.T, c *Catalog, ctx context.Context) int64 {
@@ -41,6 +34,7 @@ func seedUser(t *testing.T, c *Catalog, ctx context.Context) int64 {
 }
 
 func TestCountBooksByLibrary(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
 	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/tmp/b"})
@@ -61,6 +55,7 @@ func TestCountBooksByLibrary(t *testing.T) {
 // the cleaned path); refs naming no indexed book (or no library) are the zero
 // value.
 func TestBooksByRefs(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
 	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/tmp/b"})
@@ -88,6 +83,7 @@ func TestBooksByRefs(t *testing.T) {
 }
 
 func TestListeningOverview(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	uid := seedUser(t, c, ctx)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
@@ -113,6 +109,7 @@ func TestListeningOverview(t *testing.T) {
 }
 
 func TestUpsertAndGetBook(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	id, err := c.UpsertBook(ctx, &Book{
@@ -135,6 +132,7 @@ func TestUpsertAndGetBook(t *testing.T) {
 }
 
 func TestKeysetPaginationStable(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	for i := 0; i < 10; i++ {
@@ -174,6 +172,7 @@ func TestKeysetPaginationStable(t *testing.T) {
 }
 
 func TestSearchFTS(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "1.m4b", Title: "Unsouled", Author: "Will Wight", Series: "Cradle"})
@@ -210,6 +209,7 @@ func TestSearchFTS(t *testing.T) {
 }
 
 func TestRecentBooksCrossLibrary(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
 	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/tmp/b"})
@@ -245,6 +245,7 @@ func TestRecentBooksCrossLibrary(t *testing.T) {
 }
 
 func TestRecentSortUsesAddedAt(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	// Insert in an order that differs from added_at order to prove the sort key.
@@ -268,6 +269,7 @@ func TestRecentSortUsesAddedAt(t *testing.T) {
 }
 
 func TestProgressLastWriteWins(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	uid := seedUser(t, c, ctx)
@@ -296,6 +298,7 @@ func TestProgressLastWriteWins(t *testing.T) {
 // a broken clock (or a garbage updated_at) must not be able to store a far-future
 // timestamp that then makes every subsequent legitimate save look stale forever.
 func TestProgressRejectsFutureTimestamp(t *testing.T) {
+	t.Parallel()
 	// Pin the server clock so "future" is deterministic.
 	fixed := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	c, ctx := newTestCatalog(t)
@@ -333,6 +336,7 @@ func TestProgressRejectsFutureTimestamp(t *testing.T) {
 }
 
 func TestMoveDurableState(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	uid := seedUser(t, c, ctx)
@@ -372,6 +376,7 @@ func TestMoveDurableState(t *testing.T) {
 }
 
 func TestFavouritesCRUDAndScope(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	uid := seedUser(t, c, ctx)
 	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
@@ -437,6 +442,7 @@ func TestFavouritesCRUDAndScope(t *testing.T) {
 // A renamed folder's favourite is re-keyed to the new path, landing once where it
 // is already favourited; a same-path call leaves it be.
 func TestMoveFolderFavourites(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	uid := seedUser(t, c, ctx)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/tmp/a"})
@@ -465,6 +471,7 @@ func TestMoveFolderFavourites(t *testing.T) {
 }
 
 func TestUpdateLibrary(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	// Patch only the root; other fields are preserved.
@@ -482,6 +489,7 @@ func TestUpdateLibrary(t *testing.T) {
 }
 
 func TestFolderOverridesCRUD(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 
@@ -519,6 +527,7 @@ func TestFolderOverridesCRUD(t *testing.T) {
 // surfaces as the typed ErrNameTaken sentinel (which the API maps to 409), not a
 // raw SQLite constraint error that leaked through as an opaque 500.
 func TestUniqueNameReturnsErrNameTaken(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 
 	if _, err := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp"}); err != nil {
@@ -548,6 +557,7 @@ func TestUniqueNameReturnsErrNameTaken(t *testing.T) {
 // TestUpdateSharePreservesOmittedFields verifies a partial PATCH (nil fields) does
 // not wipe the share's description or read_only flag.
 func TestUpdateSharePreservesOmittedFields(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	created, err := c.CreateShare(ctx, Share{Name: "Kids", Description: "family listening", ReadOnly: true})
 	if err != nil {
@@ -574,6 +584,7 @@ func TestUpdateSharePreservesOmittedFields(t *testing.T) {
 // the FK insert and rolls back the whole share, leaving nothing behind (the
 // orphan the old transport-layer compensating delete tried to clean up by hand).
 func TestCreateShareWithPathsIsAtomic(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp"})
 
@@ -609,6 +620,7 @@ func TestCreateShareWithPathsIsAtomic(t *testing.T) {
 // two ever diverge (e.g. a future change to segment-boundary or escape handling
 // applied to only one), this fails. Covers wildcard, boundary, and exact cases.
 func TestPathFilterMatchesScopeAllows(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 
@@ -651,6 +663,7 @@ func TestPathFilterMatchesScopeAllows(t *testing.T) {
 }
 
 func TestDeleteLibraryRemovesBooksAndFTS(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "1.m4b", Title: "Unsouled", Author: "Will Wight"})
@@ -668,6 +681,7 @@ func TestDeleteLibraryRemovesBooksAndFTS(t *testing.T) {
 }
 
 func TestDeleteBooksNotIn(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "keep.m4b", Title: "Keep"})
@@ -683,6 +697,7 @@ func TestDeleteBooksNotIn(t *testing.T) {
 }
 
 func TestDatabaseInfo(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	info, err := c.DatabaseInfo(ctx)
 	if err != nil {
@@ -697,6 +712,7 @@ func TestDatabaseInfo(t *testing.T) {
 // unpaged) are read in chunks, so no number of paths can exceed SQLite's
 // bound-parameter limit, and every indexed one comes back whichever chunk it is in.
 func TestBooksByPathsManyPaths(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	paths := make([]string, 40000)
@@ -720,5 +736,55 @@ func TestBooksByPathsManyPaths(t *testing.T) {
 		if b, ok := got[p]; !ok || b.RelPath != p {
 			t.Fatalf("BooksByPaths is missing %q", p)
 		}
+	}
+}
+
+// TestListSeriesBooks: one page per name in the order given, each the ListBooks
+// page for that series with memberships (a book in two series in both), an
+// empty series as an empty list (not nil) without a cursor, and an empty name
+// skipped (not the whole library).
+func TestListSeriesBooks(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	for _, b := range []*Book{
+		{RelPath: "a", Title: "A", Author: "Ann", Series: "Saga", SeriesIndex: 1},
+		{RelPath: "b", Title: "B", Author: "Bea", Series: "Saga", SeriesIndex: 2},
+		{RelPath: "c", Title: "C", Author: "Cat", Series: "Side", SeriesIndex: 1},
+	} {
+		b.LibraryID = lib.ID
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "b", BookEdit{Set: map[string]string{
+		FieldMoreSeries: `[{"name":"Side","position":2}]`}}); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := c.ListSeriesBooks(ctx, lib.ID, []string{"Side", "", "Nope", "Saga"}, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := func(p SeriesPage) []string {
+		out := []string{}
+		for _, b := range p.Books {
+			out = append(out, b.RelPath)
+		}
+		return out
+	}
+	if len(pages) != 3 || pages[0].Name != "Side" || pages[1].Name != "Nope" || pages[2].Name != "Saga" {
+		t.Fatalf("pages = %+v, want Side, Nope, Saga", pages)
+	}
+	for i, want := range [][]string{{"b"}, {}, {"a"}} {
+		if got := paths(pages[i]); !slices.Equal(got, want) {
+			t.Errorf("%s = %v, want %v", pages[i].Name, got, want)
+		}
+	}
+	if pages[1].Books == nil || pages[1].NextCursor != "" {
+		t.Errorf("empty series = %+v, want an empty list and no cursor", pages[1])
+	}
+	next, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Series: "Side", Memberships: true, Limit: 1, Cursor: pages[0].NextCursor})
+	if err != nil || len(next.Books) != 1 || next.Books[0].RelPath != "c" {
+		t.Fatalf("Side page 2 = %+v, %v; want c", next, err)
 	}
 }

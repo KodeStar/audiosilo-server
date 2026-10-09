@@ -11,6 +11,7 @@ import (
 // A backup holds the player's up-next queue and collections (Phase 1b durable
 // user state) with their rows.
 func TestBackupHoldsQueueAndCollections(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	for _, q := range []string{

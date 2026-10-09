@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -186,30 +188,41 @@ func TestPlaceLocalDoesNotMutate(t *testing.T) {
 	}
 }
 
-func TestNextOnRail(t *testing.T) {
+// TestNextEntry: the entry after the current work, by position, passing over
+// the entries skip reports (the smallest position left, ties in rail order).
+func TestNextEntry(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
-		rail   MetaSeries
-		want   string // "" = the last
-		wantOK bool
+		rail    MetaSeries
+		skipped string // the work ids skip reports, "|"-separated
+		want    string // "" = none left
+		wantOK  bool
 	}{
-		"next by position":       {rail("2", "c@3", "a@1", "cur@2", "d@4"), "c", true},
-		"a novella counts":       {rail("1", "a@1", "b@2", "half@1.5"), "half", true},
-		"unnumbered skipped":     {rail("1", "cur@1", "omni@1-3", "x@", "b@2"), "b", true},
-		"last":                   {rail("3", "a@1", "b@2", "cur@3"), "", true},
-		"ties keep rail order":   {rail("1", "cur@1", "b@2", "b2@2"), "b", true},
-		"own entry when blank":   {rail("", "a@1", "cur@2", "c@3"), "c", true},
-		"unreadable position":    {rail("1-3", "cur@1-3", "b@4"), "", false},
-		"current work skipped":   {rail("1", "cur@1", "cur@2", "b@3"), "b", true},
-		"equal position skipped": {rail("2", "a@2", "cur@2", "b@3"), "b", true},
+		"next by position":       {rail("2", "c@3", "a@1", "cur@2", "d@4"), "", "c", true},
+		"a novella counts":       {rail("1", "a@1", "b@2", "half@1.5"), "", "half", true},
+		"unnumbered skipped":     {rail("1", "cur@1", "omni@1-3", "x@", "b@2"), "", "b", true},
+		"last":                   {rail("3", "a@1", "b@2", "cur@3"), "", "", true},
+		"ties keep rail order":   {rail("1", "cur@1", "b@2", "b2@2"), "", "b", true},
+		"own entry when blank":   {rail("", "a@1", "cur@2", "c@3"), "", "c", true},
+		"unreadable position":    {rail("1-3", "cur@1-3", "b@4"), "", "", false},
+		"current work skipped":   {rail("1", "cur@1", "cur@2", "b@3"), "", "b", true},
+		"equal position skipped": {rail("2", "a@2", "cur@2", "b@3"), "", "b", true},
+		"skip passes over":       {rail("1", "cur@1", "d@4", "b@2", "c@3"), "b", "c", true},
+		"skip within a tie":      {rail("1", "cur@1", "b@2", "b2@2", "c@3"), "b", "b2", true},
+		"every later one skips":  {rail("1", "cur@1", "b@2", "c@3"), "b|c", "", true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, ok := NextOnRail(tc.rail, "cur")
+			var skip func(MetaSeriesWork) bool
+			if tc.skipped != "" {
+				skip = func(w MetaSeriesWork) bool { return slices.Contains(strings.Split(tc.skipped, "|"), w.ID) }
+			}
+			i, ok := nextEntry(tc.rail, "cur", skip)
 			got := ""
-			if next != nil {
-				got = next.ID
+			if i >= 0 {
+				got = tc.rail.Works[i].ID
 			}
 			if got != tc.want || ok != tc.wantOK {
-				t.Fatalf("NextOnRail = %q, %v; want %q, %v", got, ok, tc.want, tc.wantOK)
+				t.Fatalf("nextEntry = %q, %v; want %q, %v", got, ok, tc.want, tc.wantOK)
 			}
 		})
 	}
@@ -253,5 +266,93 @@ func TestPlaceOwned(t *testing.T) {
 	got = locals(restarted.PlaceOwned(context.Background(), env, MetaLocal{LibraryID: 1, Path: "S/1"}, books)[0].Works)
 	if want := []string{"S/1", "S/2", "S/novella"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("placed after a restart = %q, want %q", got, want)
+	}
+}
+
+func TestRailOrder(t *testing.T) {
+	t.Parallel()
+	watch := named("City Watch", "1")
+	watch.Orderings = []MetaSeriesOrdering{{Name: "Watch (Chronological)"}}
+	rails := []MetaSeries{named("Ankh-Morpork", "3"), watch, named("Discworld", "8"), named("Other", "2")}
+	for name, tc := range map[string]struct {
+		names []string
+		want  []int
+	}{
+		"main series first, then the others in list order": {[]string{"discworld!", "City Watch"}, []int{2, 1, 0, 3}},
+		"the list order, not the envelope's":               {[]string{"City Watch", "Discworld"}, []int{1, 2, 0, 3}},
+		"an ordering's name":                               {[]string{"Watch (chronological)"}, []int{1, 0, 2, 3}},
+		"no series: envelope order":                        {nil, []int{0, 1, 2, 3}},
+		"no rail matches: envelope order":                  {[]string{"Unknown", "!!"}, []int{0, 1, 2, 3}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := railOrder(rails, tc.names); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("railOrder = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNextRail: the rail that decides is the first, in the book's own order
+// (railOrder), with an entry after the current work that doesn't step back, and
+// the entry is that rail's first such one; an ended rail or an unreadable
+// position is passed over. A step back is an entry at or before the current work
+// on a rail ranked above it (both numbered), and it passes over that entry, not
+// the rail: after The Silver Chair (chronological 6, publication 4) the
+// publication order's next, The Horse and His Boy, is chronological 3 and The
+// Magician's Nephew chronological 1, so The Last Battle decides. Nothing
+// deciding is -1.
+func TestNextRail(t *testing.T) {
+	t.Parallel()
+	rails := []MetaSeries{
+		named("Alpha", "1", "cur@1", "a2@2"),
+		named("Ended", "2", "x@1", "cur@2"),
+		named("Beta", "1", "cur@1", "b2@2"),
+		named("Odd", "1-3", "cur@1-3", "z@4"),
+	}
+	chrono := named("Narnia", "6", "mn@1", "lww@2", "hhb@3", "pc@4", "vdt@5", "cur@6", "lb@7")
+	ended := named("Narnia", "6", "mn@1", "lww@2", "hhb@3", "pc@4", "vdt@5", "cur@6")
+	publication := named("Narnia (Publication)", "4", "lww@1", "pc@2", "vdt@3", "cur@4", "hhb@5", "mn@6", "lb@7")
+	loops := named("Narnia (Publication)", "4", "lww@1", "pc@2", "vdt@3", "cur@4", "hhb@5", "mn@6")
+	for name, tc := range map[string]struct {
+		rails []MetaSeries
+		names []string
+		want  int
+		entry string // the deciding entry's work, when want >= 0
+	}{
+		"main series' rail first":  {rails, []string{"Beta"}, 2, "b2"},
+		"envelope order otherwise": {rails, []string{"Gamma"}, 0, "a2"},
+		"a listed series next":     {rails, []string{"Gamma", "Beta"}, 2, "b2"},
+		"an ended rail passed":     {rails[1:3], []string{"Ended", "Beta"}, 1, "b2"},
+		"every rail ended":         {rails[1:2], []string{"Ended"}, -1, ""},
+		"no current position":      {rails[3:], nil, -1, ""},
+		// The publication order's next two loop back chronologically, so they
+		// are passed over and The Last Battle (on no rail above) decides.
+		"steps back on a rail above: the next later entry": {[]MetaSeries{publication, ended}, []string{"Narnia", "Narnia (Publication)"}, 0, "lb"},
+		// Denied: every later entry loops back.
+		"denied: every later entry steps back": {[]MetaSeries{loops, ended}, []string{"Narnia", "Narnia (Publication)"}, -1, ""},
+		// Allowed: the publication order ranked first has no rail above to step
+		// back on, so it decides with The Horse and His Boy though the
+		// chronological rail below it continues.
+		"allowed: ranked first over a continuing rail": {[]MetaSeries{publication, chrono}, []string{"Narnia (Publication)", "Narnia"}, 0, "hhb"},
+		// The chronological rail decides itself when it continues.
+		"the main series decides": {[]MetaSeries{publication, chrono}, []string{"Narnia", "Narnia (Publication)"}, 1, "lb"},
+		// A step back judged only on rails ranked above: ranked first, the
+		// publication order decides with The Horse and His Boy.
+		"no rail above": {[]MetaSeries{publication, ended}, []string{"Narnia (Publication)", "Narnia"}, 0, "hhb"},
+		// Unnumbered on the rail above: no step back to judge.
+		"unnumbered on the rail above": {[]MetaSeries{named("Beta", "1", "cur@1", "b2@2"), named("Alpha", "", "cur@", "b2@")}, []string{"Alpha", "Beta"}, 0, "b2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, entry := NextRail(tc.rails, "cur", tc.names)
+			gotEntry := ""
+			if got >= 0 {
+				gotEntry = tc.rails[got].Works[entry].ID
+			} else if entry != -1 {
+				t.Fatalf("NextRail entry = %d with no rail, want -1", entry)
+			}
+			if got != tc.want || gotEntry != tc.entry {
+				t.Fatalf("NextRail = %d (%q), want %d (%q)", got, gotEntry, tc.want, tc.entry)
+			}
+		})
 	}
 }

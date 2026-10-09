@@ -123,7 +123,7 @@ function DiffBody({
   const save = async () => {
     setBusy(true);
     try {
-      const next = await api.editBook(b.library_id, b.path, saveRequest(drafts));
+      const next = await api.editBook(b.library_id, b.path, saveRequest(drafts, detail.fields));
       settleBookEdit(qc, next);
       onSaved();
       onDone();

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -82,6 +84,7 @@ func (f *sessionFixture) sessions(t *testing.T) []Session {
 }
 
 func TestListenedBetween(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		wall     time.Duration
@@ -105,6 +108,7 @@ func TestListenedBetween(t *testing.T) {
 }
 
 func TestRecordHeartbeatBuildsSessions(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	f.beat(t, 1, 100)
 	for i := 0; i < 4; i++ {
@@ -139,6 +143,7 @@ func TestRecordHeartbeatBuildsSessions(t *testing.T) {
 }
 
 func TestRecordHeartbeatContinuesAcrossALockedScreen(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	f.beat(t, 1, 100)
 	f.clock = f.clock.Add(15 * time.Second)
@@ -165,6 +170,7 @@ func TestRecordHeartbeatContinuesAcrossALockedScreen(t *testing.T) {
 // far ahead) hours after the last save moves the position much further than the
 // time that passed; it must not resume the old session as hours of listening.
 func TestRecordHeartbeatJumpAfterLongGapIsNotListening(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	f.listen(t, 1, f.book, 100)
 	f.clock = f.clock.Add(5 * time.Hour)
@@ -176,6 +182,7 @@ func TestRecordHeartbeatJumpAfterLongGapIsNotListening(t *testing.T) {
 }
 
 func TestSessionsWithoutListeningAreHidden(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	f.beat(t, 1, 7200) // a single save: "mark finished", or another app syncing
 	if s := f.sessions(t); len(s) != 0 {
@@ -201,6 +208,7 @@ func TestSessionsWithoutListeningAreHidden(t *testing.T) {
 }
 
 func TestRecordHeartbeatTranscodedIsSticky(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	f.beatRef(t, 1, f.book, 10, true)
 	f.clock = f.clock.Add(15 * time.Second)
@@ -210,7 +218,48 @@ func TestRecordHeartbeatTranscodedIsSticky(t *testing.T) {
 	}
 }
 
+// A live session names its chapter as the console shows it: a real title as
+// it is, a raw number ("024") as nothing plus its place (the console's "Chapter
+// N"), and no chapter at all for a book whose one chapter is the whole book.
+func TestLiveSessionsChapterTitles(t *testing.T) {
+	t.Parallel()
+	f := newSessionFixture(t)
+	numbered := Ref{LibraryID: f.lib, Path: "Numbered"}
+	single := Ref{LibraryID: f.lib, Path: "Single"}
+	for _, b := range []*Book{
+		{LibraryID: f.lib, RelPath: numbered.Path, IsFolder: true, Title: "Numbered", Duration: 7200,
+			Chapters: []metadata.Chapter{{Index: 0, Title: "001"}, {Index: 1, Title: "002", BookOffset: 600},
+				{Index: 2, Title: "003", BookOffset: 1200}}},
+		{LibraryID: f.lib, RelPath: single.Path, IsFolder: true, Title: "Single", Duration: 7200,
+			Chapters: []metadata.Chapter{{Index: 0, Title: "Bk 8 - Single"}}},
+	} {
+		if _, err := f.c.UpsertBook(f.ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.listen(t, 1, f.book, 3700)
+	f.listen(t, 2, numbered, 700)
+	f.listen(t, 3, single, 100)
+	live, err := f.c.LiveSessions(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]string{}
+	for _, s := range live {
+		idx := "-"
+		if s.ChapterIndex != nil {
+			idx = strconv.Itoa(*s.ChapterIndex)
+		}
+		got[s.DeviceID] = s.Chapter + "@" + idx
+	}
+	want := map[int64]string{1: "Middle@1", 2: "@1", 3: "@-"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("live chapters = %v, want %v", got, want)
+	}
+}
+
 func TestLiveSessionsStatesAndOnePerDevice(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	other := Ref{LibraryID: f.lib, Path: "Other.m4b"}
 	f.listen(t, 1, f.book, 3700) // device 1 on the book, in chapter "Middle"
@@ -261,6 +310,7 @@ func TestLiveSessionsStatesAndOnePerDevice(t *testing.T) {
 }
 
 func TestListSessionsFiltersAndPages(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	other := Ref{LibraryID: f.lib, Path: "Other.m4b"}
 	for i := 0; i < 5; i++ {
@@ -290,6 +340,7 @@ func TestListSessionsFiltersAndPages(t *testing.T) {
 }
 
 func TestSessionsMoveWithTheBook(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	f.listen(t, 1, f.book, 10)
 	if _, err := f.c.db.ExecContext(f.ctx,
@@ -311,6 +362,7 @@ func TestSessionsMoveWithTheBook(t *testing.T) {
 }
 
 func TestPruneSessionsRollsUpByLocalDay(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	// A session from 23:30 to 00:30 UTC: 30 listened minutes each side of midnight.
 	f.clock = time.Date(2025, 3, 1, 23, 30, 0, 0, time.UTC)
@@ -358,6 +410,7 @@ func TestPruneSessionsRollsUpByLocalDay(t *testing.T) {
 // TestSpreadListeningAcrossFallBack: the repeated hour of a daylight-saving
 // fall-back once looped forever (time.Date maps the second 01:xx to the first).
 func TestSpreadListeningAcrossFallBack(t *testing.T) {
+	t.Parallel()
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("no tz data:", err)
@@ -389,6 +442,7 @@ func TestSpreadListeningAcrossFallBack(t *testing.T) {
 }
 
 func TestSpreadListeningAcrossHours(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 1, 1, 10, 45, 0, 0, time.UTC)
 	got := map[int]float64{}
 	spreadListening(start, start.Add(time.Hour), 600, time.UTC, func(h time.Time, s float64) { got[h.Hour()] += s })
@@ -403,6 +457,7 @@ func TestSpreadListeningAcrossHours(t *testing.T) {
 }
 
 func TestStreamMarks(t *testing.T) {
+	t.Parallel()
 	m := NewStreamMarks()
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	m.Note(1, 1, "Author/Book/part2.flac", at)
@@ -428,6 +483,7 @@ func TestStreamMarks(t *testing.T) {
 }
 
 func TestSaveProgressStampsStartAndFinish(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	save := func(pos float64, finished bool) {
 		t.Helper()
@@ -483,6 +539,7 @@ func TestSaveProgressStampsStartAndFinish(t *testing.T) {
 }
 
 func TestEditProgress(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	yes, no := true, false
 	all := Scope{LibraryID: f.lib, AllowAll: true}
@@ -538,6 +595,7 @@ func TestEditProgress(t *testing.T) {
 // An admin's edit can't start progress on a book the user can't see, but can
 // still change progress the user already has (access taken away since).
 func TestEditProgressNeedsTheUsersAccess(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	yes := true
 	elsewhere := Scope{LibraryID: f.lib, Paths: []string{"Other"}}

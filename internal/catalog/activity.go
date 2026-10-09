@@ -64,7 +64,11 @@ func periodOf(label string, from, to time.Time, loc *time.Location) Period {
 }
 
 // ActivityTotals sums a period. Listened is wall-clock seconds; Sessions counts
-// the sessions that started in the period; Finished counts books finished in it.
+// the sessions that started in the period; Finished counts the books finished in
+// it (a book two people finished counts once); Books counts the books listened to
+// or finished in it. A finish with no listening recorded in the period (marked
+// finished, imported, synced) still counts as a book, so Finished is never more
+// than Books.
 type ActivityTotals struct {
 	Listened  float64 `json:"listened"`
 	Sessions  int     `json:"sessions"`
@@ -125,8 +129,9 @@ type Funnel struct {
 }
 
 // DropOff is a chapter where several people stopped the same book: unfinished,
-// with no save for dropOffIdle. ScanError says the book has a read problem the
-// Health page lists, which is often why.
+// with no save for dropOffIdle. Chapter is its title as metadata.ChapterTitle
+// shows it ("" when it names nothing: the console says "chapter N"). ScanError
+// says the book has a read problem the Health page lists, which is often why.
 type DropOff struct {
 	LibraryID    int64  `json:"library_id"`
 	Path         string `json:"path"`
@@ -275,11 +280,11 @@ func (c *Catalog) ActivityFor(ctx context.Context, label string, from, to time.T
 	if err != nil {
 		return nil, err
 	}
-	finished, err := c.finishedByUser(ctx, from, to)
+	finished, err := c.finishedIn(ctx, 0, from, to)
 	if err != nil {
 		return nil, err
 	}
-	prevFinished, err := c.finishedByUser(ctx, prev.from, prev.to)
+	prevFinished, err := c.finishedIn(ctx, 0, prev.from, prev.to)
 	if err != nil {
 		return nil, err
 	}
@@ -612,16 +617,27 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 	return rows.Err()
 }
 
-func (a *listenAcc) totals(finished map[int64]int) ActivityTotals {
-	t := ActivityTotals{Listened: a.listened, Sessions: a.sessions, Listeners: len(a.listeners), Books: len(a.books)}
-	for _, n := range finished {
-		t.Finished += n
-	}
+// totals is the period's totals with the books finished in it.
+func (a *listenAcc) totals(finished finishedSet) ActivityTotals {
+	t := ActivityTotals{Listened: a.listened, Sessions: a.sessions, Listeners: len(a.listeners)}
+	t.Books, t.Finished = bookCounts(a.books, finished.all())
 	return t
 }
 
+// bookCounts counts the books listened to (listened) or finished in a period,
+// and the finished ones.
+func bookCounts[V any](listened map[Ref]V, finished map[Ref]bool) (books, done int) {
+	books = len(listened)
+	for ref := range finished {
+		if _, ok := listened[ref]; !ok {
+			books++
+		}
+	}
+	return books, len(finished)
+}
+
 // result writes the accumulated listening into out.
-func (a *listenAcc) result(out *Activity, finished map[int64]int) {
+func (a *listenAcc) result(out *Activity, finished finishedSet) {
 	out.Totals = a.totals(finished)
 	out.Estimated = a.estimated
 	out.HourWeekday = a.hw
@@ -631,8 +647,9 @@ func (a *listenAcc) result(out *Activity, finished map[int64]int) {
 	out.TopNarrators = a.topPeople(bookNarrator, nil)
 	out.TopUsers = []TopUser{}
 	for id, u := range a.users {
+		books, done := bookCounts(u.books, finished[id])
 		out.TopUsers = append(out.TopUsers, TopUser{UserID: id, Username: u.name, Listened: u.listened,
-			Sessions: u.sessions, Books: len(u.books), Finished: finished[id]})
+			Sessions: u.sessions, Books: books, Finished: done})
 	}
 	out.TopUsers = topN(out.TopUsers, func(x, y TopUser) int {
 		return cmp.Or(cmp.Compare(y.Listened, x.Listened), cmp.Compare(x.Username, y.Username))
@@ -764,26 +781,48 @@ func minTime(a, b time.Time) time.Time {
 	return b
 }
 
-// finishedByUser counts the books each user finished in [from, to).
-func (c *Catalog) finishedByUser(ctx context.Context, from, to time.Time) (map[int64]int, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT user_id, COUNT(*) FROM progress
-		  WHERE finished = 1 AND finished_at >= ? AND finished_at < ? GROUP BY user_id`,
-		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
+// finishedSet is the books each user finished in a period.
+type finishedSet map[int64]map[Ref]bool
+
+// all is the books anyone finished, each once (a book two people finished is one).
+func (f finishedSet) all() map[Ref]bool {
+	out := map[Ref]bool{}
+	for _, refs := range f {
+		for ref := range refs {
+			out[ref] = true
+		}
+	}
+	return out
+}
+
+// finishedIn reads the books each user finished in [from, to), of everyone or
+// one user (userID 0: everyone; for one user the progress primary key serves
+// it: user_id leads).
+func (c *Catalog) finishedIn(ctx context.Context, userID int64, from, to time.Time) (finishedSet, error) {
+	q := `SELECT user_id, library_id, rel_path FROM progress
+	  WHERE finished = 1 AND finished_at >= ? AND finished_at < ?`
+	args := []any{from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)}
+	if userID != 0 {
+		q, args = q+` AND user_id = ?`, append(args, userID)
+	}
+	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[int64]int{}
+	out := finishedSet{}
 	for rows.Next() {
 		var (
-			id int64
-			n  int
+			id  int64
+			ref Ref
 		)
-		if err := rows.Scan(&id, &n); err != nil {
+		if err := rows.Scan(&id, &ref.LibraryID, &ref.Path); err != nil {
 			return nil, err
 		}
-		out[id] = n
+		if out[id] == nil {
+			out[id] = map[Ref]bool{}
+		}
+		out[id][ref] = true
 	}
 	return out, rows.Err()
 }
@@ -853,7 +892,7 @@ func (c *Catalog) activityDropOffs(ctx context.Context, out *Activity, _, _ time
 			d := s.drop
 			d.ChapterIndex, d.Listeners = idx, n
 			if idx < len(chs) {
-				d.Chapter = chs[idx].Title
+				d.Chapter = metadata.ChapterTitle(chs[idx].Title)
 			}
 			out.DropOffs = append(out.DropOffs, d)
 		}

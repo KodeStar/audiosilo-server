@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { checkField, commitDraft, displayValue } from './book-model';
+import type { FieldValue, OverrideField } from '@/api/types';
+import { bookDetail } from '@/test/library-fixtures';
+import {
+  checkField,
+  commitDraft,
+  commitField,
+  diffRows,
+  displayValue,
+  saveRequest,
+  seriesSwap,
+  undoRevertRequest,
+} from './book-model';
 
 describe('more_series', () => {
   it('reads the edited line into the canonical list the server stores', () => {
@@ -50,5 +61,158 @@ describe('more_series', () => {
       ),
     ).toBe('Discworld #8; Omnibus');
     expect(displayValue('series', 'Discworld')).toBe('Discworld');
+  });
+});
+
+// A book in Discworld at 8 that is also City Watch #1 and in an Omnibus.
+const LIST = '[{"name":"Omnibus","position":0},{"name":"City Watch","position":1}]';
+function swapFields(
+  series = 'Discworld',
+  index = '8',
+  more = LIST,
+): Record<OverrideField, FieldValue> {
+  const f = bookDetail().fields;
+  return {
+    ...f,
+    series: { ...f.series, value: series },
+    series_index: { ...f.series_index, value: index },
+    more_series: { ...f.more_series, value: more, source: more ? 'edited' : '' },
+  };
+}
+
+describe('seriesSwap', () => {
+  it('trades the main series for an other series, as the server does', () => {
+    expect(seriesSwap(swapFields(), 'City Watch')).toEqual({
+      more_series: '[{"name":"Omnibus","position":0},{"name":"Discworld","position":8}]',
+      series_index: '1',
+    });
+    // No position there is none here; no main series before just leaves the list.
+    expect(seriesSwap(swapFields(), 'Omnibus')?.series_index).toBe('');
+    expect(seriesSwap(swapFields('', ''), 'City Watch')).toEqual({
+      more_series: '[{"name":"Omnibus","position":0}]',
+      series_index: '1',
+    });
+    // An entry already naming the old main series gives way to it.
+    const shadowed = '[{"name":"Discworld","position":3},{"name":"City Watch","position":1}]';
+    expect(seriesSwap(swapFields('Discworld', '8', shadowed), 'City Watch')?.more_series).toBe(
+      '[{"name":"Discworld","position":8}]',
+    );
+  });
+
+  it('swaps nothing for a series the list lacks, the same series, or another spelling', () => {
+    expect(seriesSwap(swapFields(), 'Rincewind')).toBeUndefined();
+    expect(seriesSwap(swapFields(), 'city watch')).toBeUndefined();
+    expect(seriesSwap(swapFields(), '')).toBeUndefined();
+    expect(seriesSwap(swapFields('City Watch', '1'), 'City Watch')).toBeUndefined();
+  });
+});
+
+describe('committing the series', () => {
+  const fields = swapFields();
+
+  it('drafts the swap beside it, shown in the diff and sent in the save', () => {
+    const d = commitField({}, 'series', 'City Watch', fields);
+    expect(d).toEqual({
+      series: 'City Watch',
+      series_index: '1',
+      more_series: 'Omnibus; Discworld #8',
+    });
+    expect(diffRows(d, fields).map((r) => [r.field, r.after])).toEqual([
+      ['series', 'City Watch'],
+      ['series_index', '1'],
+      ['more_series', '[{"name":"Omnibus","position":0},{"name":"Discworld","position":8}]'],
+    ]);
+    expect(saveRequest(d, fields).set).toEqual({
+      series: 'City Watch',
+      series_index: '1',
+      more_series: '[{"name":"Omnibus","position":0},{"name":"Discworld","position":8}]',
+    });
+  });
+
+  it('takes the swap back when the old name is committed again', () => {
+    const d = commitField({}, 'series', 'City Watch', fields);
+    expect(commitField(d, 'series', 'Discworld', fields)).toEqual({});
+    // Or swaps to another of the saved list instead, from the saved values.
+    expect(commitField(d, 'series', 'Omnibus', fields)).toEqual({
+      series: 'Omnibus',
+      series_index: '',
+      more_series: 'Discworld #8; City Watch #1',
+    });
+    // A series the list lacks: just the series.
+    expect(commitField(d, 'series', 'Rincewind', fields)).toEqual({ series: 'Rincewind' });
+  });
+
+  it("leaves the admin's own other series and position be", () => {
+    const own = commitField({}, 'more_series', 'Omnibus; City Watch #1; Extra', fields);
+    expect(commitField(own, 'series', 'City Watch', fields)).toEqual({
+      more_series: 'Omnibus; City Watch #1; Extra',
+      series: 'City Watch',
+    });
+    const typed = commitField({}, 'series_index', '9', fields);
+    expect(commitField(typed, 'series', 'City Watch', fields)).toEqual({
+      series_index: '9',
+      series: 'City Watch',
+      more_series: 'Omnibus; Discworld #8',
+    });
+    expect(
+      commitField(
+        commitField(typed, 'series', 'City Watch', fields),
+        'series',
+        'Discworld',
+        fields,
+      ),
+    ).toEqual({ series_index: '9' });
+    // A list the admin changed after a swap is theirs: going back keeps it.
+    let d = commitField({}, 'series', 'City Watch', fields);
+    d = commitField(d, 'more_series', 'Discworld #8', fields);
+    expect(commitField(d, 'series', 'Discworld', fields)).toEqual({ more_series: 'Discworld #8' });
+  });
+
+  it('sends the saved list when the admin took the drafted swap back, so the server swaps nothing', () => {
+    let d = commitField({}, 'series', 'City Watch', fields);
+    d = commitField(d, 'more_series', 'Omnibus; City Watch #1', fields);
+    expect(d.more_series).toBeUndefined();
+    expect(saveRequest(d, fields).set).toEqual({
+      series: 'City Watch',
+      series_index: '1',
+      more_series: LIST,
+    });
+    // A series the saved list lacks, or the list drafted, sends what was drafted.
+    expect(saveRequest({ series: 'Rincewind' }, fields).set).toEqual({ series: 'Rincewind' });
+    expect(saveRequest({ series: 'City Watch', more_series: 'Extra' }, fields).set).toEqual({
+      series: 'City Watch',
+      more_series: '[{"name":"Extra","position":0}]',
+    });
+    // An old main series that can't be listed: no swap was drafted, and the
+    // saved list isn't sent either, so the server refuses the edit instead of
+    // the old main series being dropped.
+    const long = swapFields('x'.repeat(501));
+    expect(commitField({}, 'series', 'City Watch', long)).toEqual({ series: 'City Watch' });
+    expect(saveRequest({ series: 'City Watch' }, long).set).toEqual({ series: 'City Watch' });
+  });
+
+  it('undoes a series revert the server swapped with the list and position it had', () => {
+    // City Watch #1 listing Discworld #8; the revert left Discworld, which the
+    // server swapped back in.
+    const before = swapFields('City Watch', '1', '[{"name":"Discworld","position":8}]');
+    const after = swapFields('Discworld', '8', '[{"name":"City Watch","position":1}]');
+    expect(undoRevertRequest('series', before, after)).toEqual({
+      set: {
+        series: 'City Watch',
+        more_series: '[{"name":"Discworld","position":8}]',
+        series_index: '1',
+      },
+      source: 'edited',
+    });
+    // A revert that swapped nothing: just the series.
+    const plain = swapFields('Rincewind');
+    expect(undoRevertRequest('series', plain, swapFields()).set).toEqual({ series: 'Rincewind' });
+  });
+
+  it('drafts the list itself when its line would read back differently', () => {
+    const odd = swapFields('Tom; Jerry', '2');
+    expect(commitField({}, 'series', 'City Watch', odd).more_series).toBe(
+      '[{"name":"Omnibus","position":0},{"name":"Tom; Jerry","position":2}]',
+    );
   });
 });

@@ -8,17 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func newTestService(t *testing.T) (*Service, context.Context) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	return New(db, time.Now), ctx
 }
 
@@ -27,16 +23,13 @@ func newTestService(t *testing.T) (*Service, context.Context) {
 func newTestServiceWithClock(t *testing.T) (*Service, context.Context, *time.Time) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	now := time.Now()
 	return New(db, func() time.Time { return now }), ctx, &now
 }
 
 func TestPasswordHashRoundTrip(t *testing.T) {
+	t.Parallel()
 	hash, err := HashPassword("correct horse battery staple")
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +44,7 @@ func TestPasswordHashRoundTrip(t *testing.T) {
 }
 
 func TestNormalizeCodeForgiving(t *testing.T) {
+	t.Parallel()
 	// O/I/L look-alikes and formatting must normalize to the same canonical form.
 	a := normalizeCode("o1il-23ab")
 	b := normalizeCode("0 1 1 1 2 3 A B")
@@ -60,6 +54,7 @@ func TestNormalizeCodeForgiving(t *testing.T) {
 }
 
 func TestDeleteUser(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	admin, err := s.CreateUser(ctx, "admin", "s3cret-pass", RoleAdmin)
 	if err != nil {
@@ -99,6 +94,7 @@ func TestDeleteUser(t *testing.T) {
 }
 
 func TestCreateAuthenticateUser(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	if _, err := s.CreateUser(ctx, "admin", "s3cret-pass", RoleAdmin); err != nil {
 		t.Fatal(err)
@@ -122,6 +118,7 @@ func TestCreateAuthenticateUser(t *testing.T) {
 // CreateUser and SetPassword: a 7-char password is rejected, an 8-char one is
 // accepted, and an empty password is allowed (password-less non-admin).
 func TestPasswordLengthBoundary(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 
 	// CreateUser: 7 chars (one below the minimum) is rejected.
@@ -156,6 +153,7 @@ func TestPasswordLengthBoundary(t *testing.T) {
 // password matches, a wrong one and a password-less account both report
 // ErrInvalidCreds, and a missing user reports ErrNotFound.
 func TestCheckPassword(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 
 	u, err := s.CreateUser(ctx, "alice", "correct-pw", RoleUser)
@@ -185,6 +183,7 @@ func TestCheckPassword(t *testing.T) {
 }
 
 func TestTokenLifecycle(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
 	secret, err := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
@@ -209,6 +208,7 @@ func TestTokenLifecycle(t *testing.T) {
 }
 
 func TestExpiredTokenRejected(t *testing.T) {
+	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
 	secret, _ := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
@@ -219,6 +219,7 @@ func TestExpiredTokenRejected(t *testing.T) {
 }
 
 func TestOptionalPasswordForNonAdmins(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	// A non-admin may be created without a password (auth-code pairing only).
 	u, err := s.CreateUser(ctx, "kid", "", RoleUser)
@@ -242,6 +243,7 @@ func TestOptionalPasswordForNonAdmins(t *testing.T) {
 }
 
 func TestSetRoleGuards(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
 	kid, _ := s.CreateUser(ctx, "kid", "", RoleUser)
@@ -271,6 +273,7 @@ func TestSetRoleGuards(t *testing.T) {
 }
 
 func TestClearingAdminPasswordRefused(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
 	if err := s.SetPassword(ctx, admin.ID, ""); err != ErrAdminNeedsPassword {
@@ -279,6 +282,7 @@ func TestClearingAdminPasswordRefused(t *testing.T) {
 }
 
 func TestListAndRevokeAuthCodes(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
 	if _, err := s.CreateAuthCode(ctx, admin.ID, "invite", 1, time.Hour); err != nil {
@@ -300,6 +304,7 @@ func TestListAndRevokeAuthCodes(t *testing.T) {
 }
 
 func TestLastSeenTracksTokenActivity(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "pw-pw-pw-pw", RoleUser)
 	if got, _ := s.GetUser(ctx, u.ID); got.LastSeenAt != "" {
@@ -331,6 +336,7 @@ func pairThrough(t *testing.T, s *Service, ctx context.Context, code string) str
 }
 
 func TestResolveAuthCode(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
 	code, err := s.CreateAuthCode(ctx, admin.ID, "test", 1, 0)
@@ -370,6 +376,7 @@ func TestResolveAuthCode(t *testing.T) {
 // TestConsumePairingClaimsUse: the invite use is claimed at exchange, not
 // at redeem, and a failed claim burns nothing (allowed + denied).
 func TestConsumePairingClaimsUse(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, _ := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
@@ -397,6 +404,7 @@ func TestConsumePairingClaimsUse(t *testing.T) {
 // of the same linked token may succeed (the WHERE-guarded UPDATE is the single
 // atomic claim point).
 func TestPairingClaimConcurrent(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	admin, _ := s.CreateUser(ctx, "admin", "pw-pw-pw-pw", RoleAdmin)
 	code, err := s.CreateAuthCode(ctx, admin.ID, "test", 2, 0)
@@ -425,6 +433,7 @@ func TestPairingClaimConcurrent(t *testing.T) {
 // TestUnlinkedPairingTokenSingleUse: tokens minted without a parent code
 // (/auth/pair, demo) stay strictly single-use (allowed + denied).
 func TestUnlinkedPairingTokenSingleUse(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	tok, err := s.IssueToken(ctx, u.ID, KindPairing, "", time.Minute)
@@ -441,6 +450,7 @@ func TestUnlinkedPairingTokenSingleUse(t *testing.T) {
 }
 
 func TestExchangeStampsRedeemedAt(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
@@ -469,6 +479,7 @@ func TestExchangeStampsRedeemedAt(t *testing.T) {
 // TestExpiredInviteRefusesExchange: an invite-derived token dies with the
 // invite's expiry - the claim rejects it with ErrCodeExpired and burns nothing.
 func TestExpiredInviteRefusesExchange(t *testing.T) {
+	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, time.Hour)
@@ -489,6 +500,7 @@ func TestExpiredInviteRefusesExchange(t *testing.T) {
 // TTL, not the code's (infinite) lifetime - otherwise pasting a recovery code
 // into the connect page would mint an eternal QR.
 func TestRecoveryPairingTokenTTL(t *testing.T) {
+	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, err := s.GenerateRecoveryCode(ctx, u.ID)
@@ -513,6 +525,7 @@ func TestRecoveryPairingTokenTTL(t *testing.T) {
 // TestRevokeAuthCodeKillsLinkedTokens: deleting an invite cascades to its
 // pairing tokens - a revoked invite's QR must not keep pairing devices.
 func TestRevokeAuthCodeKillsLinkedTokens(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	code, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
@@ -526,6 +539,7 @@ func TestRevokeAuthCodeKillsLinkedTokens(t *testing.T) {
 }
 
 func TestRotateAuthCode(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	old, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)
@@ -564,6 +578,7 @@ func TestRotateAuthCode(t *testing.T) {
 // TestRotatePreservesLifetime: rotating ("Resend") keeps the invite's max_uses
 // and renews its expiry window, rather than silently resetting to defaults.
 func TestRotatePreservesLifetime(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	if _, err := s.CreateAuthCode(ctx, u.ID, "invite", 50, 30*24*time.Hour); err != nil {
@@ -586,6 +601,7 @@ func TestRotatePreservesLifetime(t *testing.T) {
 }
 
 func TestRotateRefusesRecoveryCode(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	if _, err := s.GenerateRecoveryCode(ctx, u.ID); err != nil {
@@ -603,6 +619,7 @@ func TestRotateRefusesRecoveryCode(t *testing.T) {
 // invites (so there is one active invite), but leaves spent/used-up ones as
 // history. A partially-redeemed multi-use invite counts as active and is replaced.
 func TestCreateInviteSupersedesActive(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	// A spent (used-up) invite is history and must survive a new mint. Spending
@@ -638,6 +655,7 @@ func TestCreateInviteSupersedesActive(t *testing.T) {
 // TestRecoveryRedeemReturnsOwner: a recovery code redeems as its owner, never
 // another account - guards the user binding (account-takeover class).
 func TestRecoveryRedeemReturnsOwner(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	alice, _ := s.CreateUser(ctx, "alice", "", RoleUser)
 	if _, err := s.CreateUser(ctx, "bob", "", RoleUser); err != nil {
@@ -671,6 +689,7 @@ func TestRecoveryRedeemReturnsOwner(t *testing.T) {
 // is marked accepted, and access is restored on re-enable. Covers invites and
 // recovery codes (security-critical: both an allowed and a denied path).
 func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	invite, _ := s.CreateAuthCode(ctx, u.ID, "invite", 1, 0)
@@ -712,6 +731,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 }
 
 func TestRecoveryCodeLifecycle(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	if got, _ := s.GetUser(ctx, u.ID); got.HasRecovery {
@@ -771,6 +791,7 @@ func mustOneInviteID(t *testing.T, s *Service, ctx context.Context, userID int64
 // personal API key at the auth layer: an api key resolves as kind=api (and not
 // as a session), lists as metadata only, and stops resolving once revoked.
 func TestAPITokenLifecycle(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	user, err := s.CreateUser(ctx, "user", "", RoleUser)
 	if err != nil {
@@ -828,6 +849,7 @@ func TestAPITokenLifecycle(t *testing.T) {
 // missing id, another user's key, or a session-token id all return ErrNotFound
 // (never touching a token they should not).
 func TestRevokeTokenByIDScoping(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	owner, err := s.CreateUser(ctx, "owner", "", RoleUser)
 	if err != nil {
@@ -871,6 +893,7 @@ func TestRevokeTokenByIDScoping(t *testing.T) {
 
 // ListInvites spans every account, newest first, and never lists recovery codes.
 func TestListInvites(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	sam, _ := s.CreateUser(ctx, "sam", "", RoleUser)
 	maya, _ := s.CreateUser(ctx, "maya", "", RoleUser)
@@ -901,6 +924,7 @@ func TestListInvites(t *testing.T) {
 // Rotating an old invite revives it as the user's one active invite: any other
 // still-redeemable invite is retired, so two links never work at once.
 func TestRotateKeepsOneActiveInvite(t *testing.T) {
+	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	u, _ := s.CreateUser(ctx, "sam", "", RoleUser)
 	if _, err := s.CreateInvite(ctx, u.ID, "invite", 5, 24*time.Hour); err != nil {
@@ -927,6 +951,7 @@ func TestRotateKeepsOneActiveInvite(t *testing.T) {
 // TestConsumePairingKind: an exchange says which kind of code it came from, so
 // the server can report an invite being used (and nothing for /auth/pair).
 func TestConsumePairingKind(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "u", "", RoleUser)
 	invite, _ := s.CreateAuthCode(ctx, u.ID, "invite", 5, 0)

@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Menu } from '@base-ui/react/menu';
-import { ExternalLink, Languages, LogOut, Moon, Sun } from 'lucide-react';
+import { ExternalLink, HeartHandshake, Languages, LogOut, Moon, Sun } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
 import {
   DropdownMenu,
@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { LANGUAGES, setLanguage, type Language } from '@/i18n';
 import { useCurrentUser, useSession } from '@/lib/session';
+import { SPONSOR_URL } from '@/lib/support';
 import type { ThemePref } from '@/lib/theme';
 import { THEME_OPTIONS, useTheme } from '@/lib/theme-context';
 import { Monogram } from '@/components/monogram';
@@ -110,6 +111,15 @@ export function UserMenu() {
             {t('shell.account.webPlayer')}
           </Menu.LinkItem>
         ) : null}
+        <Menu.LinkItem
+          href={SPONSOR_URL}
+          target="_blank"
+          rel="noreferrer noopener"
+          className={linkItemClass}
+        >
+          <HeartHandshake aria-hidden="true" />
+          {t('support.title')}
+        </Menu.LinkItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => void signOut()}>
           <LogOut aria-hidden="true" />

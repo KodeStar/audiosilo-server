@@ -10,6 +10,7 @@ import (
 // library works leaves its books' items out instead of failing the run, and a run
 // whose own library was deleted (and the run with it) answers ErrNotFound.
 func TestRecordMatchItemDeletedLibrary(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	keep, _ := c.CreateLibrary(ctx, Library{Name: "Keep", Root: "/tmp/keep"})
 	gone, _ := c.CreateLibrary(ctx, Library{Name: "Gone", Root: "/tmp/gone"})
@@ -48,6 +49,7 @@ func TestRecordMatchItemDeletedLibrary(t *testing.T) {
 // items in a run over every library, and leaves the other library alone; clearing
 // every library then takes the rest.
 func TestClearCommunityMatches(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	one, _ := c.CreateLibrary(ctx, Library{Name: "One", Root: "/tmp/one"})
 	two, _ := c.CreateLibrary(ctx, Library{Name: "Two", Root: "/tmp/two"})

@@ -51,7 +51,10 @@ The same `v*` tag also triggers `.github/workflows/release.yml` (GoReleaser,
 don't want Docker. It embeds the web player (`-tags embedplayer`, populated from
 the pinned web image by `scripts/fetch-web-player.sh`), producing `.tar.gz`/`.zip`
 archives, `.deb`/`.rpm` packages and `checksums.txt` as a **draft** GitHub Release
-to review and publish. ffmpeg/ffprobe are not bundled - the server uses a local
+to review and publish. The notes end with GoReleaser's `release.footer`, which
+also carries the one sponsor line ("AudioSilo is free; sponsors keep it going",
+linking GitHub Sponsors); keep it when you rewrite the notes by hand, and add
+nothing more (no tiers, no rewards). ffmpeg/ffprobe are not bundled - the server uses a local
 copy or auto-downloads one into `<data>/tools` on first run (see DISTRIBUTION.md).
 Publish the web image first (step 1) so the embedded player matches. The full
 distribution strategy (and the deferred desktop installers/tray) lives in the

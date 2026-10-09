@@ -57,6 +57,7 @@ func (f *annotationFixture) note(t *testing.T, user int64, p string, pos float64
 // A label is "" or a lowercase machine key; a bookmark note is at most
 // MaxBookmarkNote characters (runes, not bytes), a note body MaxNoteBody.
 func TestCheckBookmarkAndNoteBounds(t *testing.T) {
+	t.Parallel()
 	for _, l := range []string{"", "quote", "fell_asleep", "a", "q2", "a" + strings.Repeat("b", 31)} {
 		if err := checkBookmark(nil, nil, &l); err != nil {
 			t.Errorf("label %q refused: %v", l, err)
@@ -115,6 +116,7 @@ func TestCheckBookmarkAndNoteBounds(t *testing.T) {
 // change nothing. The catalog is file-backed, so a write sent through the
 // read-only reader pool would fail here.
 func TestEditBookmark(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
 	b := f.bookmark(t, f.ann, annBookA, 12, "first", "quote")
@@ -178,6 +180,7 @@ func TestEditBookmark(t *testing.T) {
 }
 
 func TestEditNote(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
 	n := f.note(t, f.ann, annBookA, 0, "a thought")
@@ -323,6 +326,7 @@ func annIDs(rows []annRow) []int64 {
 // caller's current access are left out in the query (pages stay full) but kept;
 // another user's rows never appear; each row carries its book when one is indexed.
 func TestAnnotationListsPage(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
 	paths := []string{annBookA, annBookB, annGhost}
@@ -399,6 +403,7 @@ func TestAnnotationListsPage(t *testing.T) {
 // holding a NUL still round-trips (decodeCursor is encodeCursor's exact
 // inverse); an empty list is [], never null.
 func TestAnnotationListsCursor(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	for _, l := range annLists {
 		for _, c := range []string{"!!!", base64.RawURLEncoding.EncodeToString([]byte("no separator")),
@@ -420,6 +425,7 @@ func TestAnnotationListsCursor(t *testing.T) {
 // A label rides along when its book moves (the row moves, carryListeningState),
 // and a user's bookmarks and notes go with them (FK cascade).
 func TestAnnotationsMoveAndPurge(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
 	b := f.bookmark(t, f.ann, "old/Book", 7, "kept", "fell_asleep")
@@ -454,6 +460,7 @@ func TestAnnotationsMoveAndPurge(t *testing.T) {
 // RFC3339Nano's trimmed form ("...:00Z" after "...:00.5Z") would get wrong. Here
 // the ids run against time, so only the timestamp can order the rows right.
 func TestAnnotationTimestampsSortAsText(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	base := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
 	want := map[string][]int64{}
@@ -483,6 +490,7 @@ func TestAnnotationTimestampsSortAsText(t *testing.T) {
 // any offset), so the history orders by them as text; an empty or unparsable one
 // is the server's time, never a refusal.
 func TestAddHistoryNormalisesTimes(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
 	f.clock = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
@@ -527,6 +535,7 @@ func TestAddHistoryNormalisesTimes(t *testing.T) {
 // (a legacy note over MaxBookmarkNote) can still take a label, and a note's body
 // edit doesn't re-check its stored position.
 func TestEditChecksOnlyTheFieldsItSets(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
 	long := strings.Repeat("a", MaxBookmarkNote+1)
@@ -561,6 +570,7 @@ func TestEditChecksOnlyTheFieldsItSets(t *testing.T) {
 
 // A bookmark's position follows a note's rule: finite and >= 0.
 func TestBookmarkPositionRule(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	for _, p := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
 		if _, err := f.c.AddBookmark(t.Context(), f.ann, Bookmark{Ref: f.ref(annBookA), Position: p}); !errors.Is(err, ErrInvalidPosition) {
@@ -576,6 +586,7 @@ func TestBookmarkPositionRule(t *testing.T) {
 // A span with one unparsable time takes the other for both (a zero-length span
 // there), so it never starts after it ends; with neither parsable both are now.
 func TestAddHistoryOneSideUnparsable(t *testing.T) {
+	t.Parallel()
 	f := newAnnotationFixture(t)
 	ctx := t.Context()
 	f.clock = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
@@ -602,6 +613,7 @@ func TestAddHistoryOneSideUnparsable(t *testing.T) {
 
 // A page holds at most 500 rows; absent or non-positive is the default 100.
 func TestClampPageLimit(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[int]int{0: 100, -5: 100, 1: 1, 100: 100, 500: 500, 501: 500, 1 << 20: 500} {
 		if got := clampPageLimit(in); got != want {
 			t.Errorf("clampPageLimit(%d) = %d, want %d", in, got, want)
