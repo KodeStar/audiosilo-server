@@ -797,15 +797,22 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 // one (by its exact name) writes besides, so the old main series isn't lost and
 // the new one isn't listed twice: the old main series takes the entry's place in
 // more_series, at its position, and series_index becomes the entry's position
-// unless the edit names series_index. They are ordinary overrides of the edit,
-// so provenance, revert and undo treat them like any other, and reverting series
-// later doesn't swap back. An edit naming more_series swaps nothing, and neither
-// does a community edit: the match plan (matchrun.planSeries) lays out series
-// itself. nil when there is nothing to swap.
+// unless the edit names series_index. The new main series is the one the edit
+// sets, or, for an edit reverting series, the one the revert leaves (newMainSeries),
+// so reverting a swap swaps back. The writes are ordinary overrides of the edit,
+// so provenance, revert and undo treat them like any other. An edit naming
+// more_series swaps nothing, and neither does a community edit: the match plan
+// (matchrun.planSeries) lays out series itself. nil when there is nothing to
+// swap; an invalid(FieldSeries) error when the old main series can't be listed
+// (a name too long for an entry, a position out of range), so the edit is
+// refused rather than losing it.
 func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (map[string]string, error) {
-	name, ok := edit.Set[FieldSeries]
-	if !ok || name == "" || edit.Source == SourceCommunity || touches(edit, FieldMoreSeries) {
+	if edit.Source == SourceCommunity || touches(edit, FieldMoreSeries) {
 		return nil, nil
+	}
+	name, err := newMainSeries(ctx, tx, bookID, edit)
+	if err != nil || name == "" {
+		return nil, err
 	}
 	var old, stored string
 	var index float64
@@ -830,15 +837,36 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (m
 	}
 	more, err := normalizeOverride(FieldMoreSeries, EncodeMoreSeries(swapped))
 	if err != nil {
-		// The old main series can't be listed (a tag too long for an entry): the
-		// edit goes ahead as it would without the swap.
-		return nil, nil
+		reason := err.Error()
+		if oe, ok := errors.AsType[*OverrideError](err); ok {
+			reason = oe.Reason
+		}
+		return nil, invalid(FieldSeries, "the current series can't move to the other series: "+reason)
 	}
 	out := map[string]string{FieldMoreSeries: more}
 	if !touches(edit, FieldSeriesIndex) {
 		out[FieldSeriesIndex] = FormatSeriesPosition(list[at].Position)
 	}
 	return out, nil
+}
+
+// newMainSeries is the main series edit leaves the book with when it sets or
+// reverts series ("" when it does neither): the value it sets, or the series the
+// book's layers resolve to without its series override (what the scan or the
+// folder layout found).
+func newMainSeries(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (string, error) {
+	if name, ok := edit.Set[FieldSeries]; ok {
+		return name, nil
+	}
+	if !slices.Contains(edit.Revert, FieldSeries) {
+		return "", nil
+	}
+	l, err := loadLayers(ctx, tx, bookID)
+	if err != nil {
+		return "", err
+	}
+	delete(l.overrides, FieldSeries)
+	return l.resolve()[FieldSeries].Value, nil
 }
 
 // touches reports whether an edit sets or reverts field.

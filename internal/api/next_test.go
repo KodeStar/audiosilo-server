@@ -556,22 +556,27 @@ func twoRailMetaserve(t *testing.T) *httptest.Server {
 	return mock
 }
 
-// TestNextCommunityRails: every rail of a book in several community series is
-// followed, in the book's own order (meta.RailsWithNext and NextAcrossRails,
-// whose policy meta's tests cover; here a rail named like a listed series comes
-// before the envelope's first): the first rail whose next entry is the caller's
-// book answers, and when none is, the first rail's next work goes beside the
-// local answer, without `local`.
+// TestNextCommunityRails: the rails of a book in several community series are
+// taken in the book's own order (meta.NextRail, whose policy meta's tests cover;
+// here a rail named like a listed series comes before the envelope's first), and
+// the first with a next entry decides: its entry answers when it is the caller's
+// book, and when it isn't, a later rail's placed entry doesn't jump the series -
+// the local steps answer (the main series continuing locally, Discworld #8 to
+// #10 with #9 unowned) with that entry beside them, without `local`.
 func TestNextCommunityRails(t *testing.T) {
 	for name, tc := range map[string]struct {
 		series, more string   // the current book's main series (at #1) and list
 		owned        []string // the #2 books held: "Alpha", "Beta"
+		third        bool     // a local Beta #3, on no rail
 		source, next string
 		work         string
 	}{
-		"a listed series' rail first":   {"Gamma", `[{"name":"Beta","position":1}]`, []string{"Alpha", "Beta"}, nextCommunity, "B/2", "b2"},
-		"the first placed rail wins":    {"Beta", "", []string{"Alpha"}, nextCommunity, "A/2", "a2"},
-		"none placed: the first's work": {"Beta", `[{"name":"Alpha","position":1}]`, nil, nextNone, "", "b2"},
+		"a listed series' rail first":   {"Gamma", `[{"name":"Beta","position":1}]`, []string{"Alpha", "Beta"}, false, nextCommunity, "B/2", "b2"},
+		"the first placed rail decides": {"Alpha", "", []string{"Alpha", "Beta"}, false, nextCommunity, "A/2", "a2"},
+		// Beta decides with b2, unowned: Alpha's placed a2 doesn't answer; the
+		// main series continues locally at #3.
+		"unplaced: the local series continues": {"Beta", "", []string{"Alpha"}, true, nextSeries, "B/3", "b2"},
+		"none placed: the first's work":        {"Beta", `[{"name":"Alpha","position":1}]`, nil, false, nextNone, "", "b2"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			books := []*catalog.Book{{RelPath: "X/cur", Series: tc.series, SeriesIndex: 1, ASIN: "B0CUR", IsFolder: true}}
@@ -579,6 +584,9 @@ func TestNextCommunityRails(t *testing.T) {
 			for _, s := range tc.owned {
 				owned[s] = s[:1] + "/2"
 				books = append(books, &catalog.Book{RelPath: owned[s], Series: s + " Shelf", SeriesIndex: 2})
+			}
+			if tc.third {
+				books = append(books, &catalog.Book{RelPath: "B/3", Series: tc.series, SeriesIndex: 3})
 			}
 			e := newLibraryEnv(t, twoRailMetaserve(t), true, books...)
 			mkdirs(t, e.lib.Root, "X/cur")
@@ -594,7 +602,7 @@ func TestNextCommunityRails(t *testing.T) {
 			if n.Source != tc.source || n.nextPath() != tc.next || n.Work == nil || n.Work.ID != tc.work {
 				t.Fatalf("= %s, want %s %q with work %s", n.raw, tc.source, tc.next, tc.work)
 			}
-			if (tc.next != "") != (n.Work.Local != nil) || (tc.next != "" && (n.Book == nil || n.Book.RelPath != tc.next)) {
+			if (tc.source == nextCommunity) != (n.Work.Local != nil) || (tc.next != "" && (n.Book == nil || n.Book.RelPath != tc.next)) {
 				t.Fatalf("local/book do not match next: %s", n.raw)
 			}
 		})

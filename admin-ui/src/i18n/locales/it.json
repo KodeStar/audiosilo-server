@@ -903,7 +903,7 @@
   "books.edit.title_one": "Modifica {{formatted}} libro",
   "books.edit.title_many": "Modifica {{formatted}} libri",
   "books.edit.title_other": "Modifica {{formatted}} libri",
-  "books.edit.description": "Cambiano solo i campi che compili. Ogni modifica viene salvata come una modifica protetta dalle nuove scansioni. I file audio non vengono toccati.",
+  "books.edit.description": "Cambiano solo i campi che compili. Ogni modifica viene salvata come una modifica protetta dalle nuove scansioni. I file audio non vengono toccati. Impostare come Serie una delle altre serie di un libro scambia le due per quel libro.",
   "books.edit.field.author": "Autore",
   "books.edit.field.narrator": "Narratore",
   "books.edit.field.series": "Serie",

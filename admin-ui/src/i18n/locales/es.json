@@ -903,7 +903,7 @@
   "books.edit.title_one": "Editar {{formatted}} libro",
   "books.edit.title_many": "Editar {{formatted}} libros",
   "books.edit.title_other": "Editar {{formatted}} libros",
-  "books.edit.description": "Solo cambian los campos que rellenes. Cada cambio se guarda como una edición, bloqueada frente a los reescaneos. Los archivos de audio no se tocan.",
+  "books.edit.description": "Solo cambian los campos que rellenes. Cada cambio se guarda como una edición, bloqueada frente a los reescaneos. Los archivos de audio no se tocan. Si pones como Serie una de las otras series de un libro, las dos se intercambian en ese libro.",
   "books.edit.field.author": "Autor",
   "books.edit.field.narrator": "Narrador",
   "books.edit.field.series": "Serie",

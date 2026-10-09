@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -298,6 +299,91 @@ func TestNextInSeries(t *testing.T) {
 	add("Saga/9", "Discworld", 9, "")
 	if got, _ := next("Saga/1", all); got != "Saga/9" {
 		t.Fatalf("main continuing = %q, want Saga/9", got)
+	}
+}
+
+// TestNextInSeriesNeverStepsBack: a later book in a lower-ranked series that sits
+// at or before the book in a series ranked above it is no next book. Narnia
+// owned 1-6 (not The Last Battle), its main series chronological, its listed
+// one the publication order: after The Silver Chair (chronological #6,
+// publication #4) the publication order's next, The Horse and His Boy
+// (publication #5), is chronological #3, so the series skips and the book is
+// numbered-ended. A later book in a third series that is later in the second
+// too is followed (allowed), one earlier in it is not (denied).
+func TestNextInSeriesNeverStepsBack(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Narnia", Root: "/tmp/n"})
+	add := func(path, series string, idx float64, more string) {
+		t.Helper()
+		b := &Book{LibraryID: lib.ID, RelPath: path, Title: path, Series: series, SeriesIndex: idx, AddedAt: "2024-01-01T00:00:00Z"}
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		if more != "" {
+			if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldMoreSeries: more}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	pub := func(pos int) string {
+		return `[{"name":"Narnia (Publication)","position":` + strconv.Itoa(pos) + `}]`
+	}
+	add("Narnia/1 The Magician's Nephew", "Narnia", 1, pub(6))
+	add("Narnia/2 The Lion, the Witch and the Wardrobe", "Narnia", 2, pub(1))
+	add("Narnia/3 The Horse and His Boy", "Narnia", 3, pub(5))
+	add("Narnia/4 Prince Caspian", "Narnia", 4, pub(2))
+	add("Narnia/5 The Voyage of the Dawn Treader", "Narnia", 5, pub(3))
+	add("Narnia/6 The Silver Chair", "Narnia", 6, pub(4))
+	// Three series: A ended after #5; B's next (X, B #2) is A #2, a step back;
+	// C's next (Y, C #2) is B #3, later than the current book's B #1.
+	add("Three/Current", "A", 5, `[{"name":"B","position":1},{"name":"C","position":1}]`)
+	add("Three/X", "A", 2, `[{"name":"B","position":2}]`)
+	add("Three/Y", "B", 3, `[{"name":"C","position":2}]`)
+	all := Scope{LibraryID: lib.ID, AllowAll: true}
+	for name, tc := range map[string]struct {
+		path, want   string
+		wantNumbered bool
+	}{
+		"Silver Chair: no loop back":    {"Narnia/6 The Silver Chair", "", true},
+		"main series continues":         {"Narnia/2 The Lion, the Witch and the Wardrobe", "Narnia/3 The Horse and His Boy", true},
+		"allowed: later in both series": {"Three/Current", "Three/Y", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			book, err := c.GetBookByPath(ctx, lib.ID, tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next, numbered, err := c.NextInSeries(ctx, lib.ID, book, all)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := ""
+			if next != nil {
+				got = next.RelPath
+			}
+			if got != tc.want || numbered != tc.wantNumbered {
+				t.Fatalf("next = %q, numbered = %v; want %q, %v", got, numbered, tc.want, tc.wantNumbered)
+			}
+		})
+	}
+	// stepsBack itself: a candidate later in the earlier series is a step
+	// forward, one at or before it (or numbered in no shared series) is judged
+	// only where both are numbered.
+	earlier := []SeriesRef{{Name: "Narnia", Position: 2}, {Name: "Unnumbered", Position: 0}}
+	for name, tc := range map[string]struct {
+		theirs []SeriesRef
+		want   bool
+	}{
+		"allowed: later in the earlier series": {[]SeriesRef{{Name: "Narnia", Position: 4}, {Name: "P", Position: 2}}, false},
+		"denied: before":                       {[]SeriesRef{{Name: "Narnia", Position: 1}, {Name: "P", Position: 2}}, true},
+		"denied: the same position":            {[]SeriesRef{{Name: "Narnia", Position: 2}, {Name: "P", Position: 2}}, true},
+		"unnumbered in the shared series":      {[]SeriesRef{{Name: "Narnia", Position: 0}, {Name: "P", Position: 2}}, false},
+		"the current book unnumbered there":    {[]SeriesRef{{Name: "Unnumbered", Position: 1}, {Name: "P", Position: 2}}, false},
+		"no shared series":                     {[]SeriesRef{{Name: "P", Position: 2}, {Name: "Q", Position: 1}}, false},
+	} {
+		if got := stepsBack(earlier, &Book{SeriesList: tc.theirs}); got != tc.want {
+			t.Errorf("%s: stepsBack = %v, want %v", name, got, tc.want)
+		}
 	}
 }
 

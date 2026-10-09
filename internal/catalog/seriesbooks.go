@@ -201,23 +201,45 @@ func (c *Catalog) seriesSpellings(ctx context.Context, scopes []Scope, want map[
 // NextInSeries returns the book after book in the series it is in within one
 // library and scope, list shape: every series of book.AllSeries() it has a
 // position in, its main series first, then its others in list order; the first
-// holding a later book answers with it (nextInOneSeries). When none does,
+// holding a later book that doesn't step back answers with it (nextInOneSeries,
+// stepsBack). A later book in one series that sits at or before book in a series
+// ranked above it is no step forward - in a series numbered two ways (Narnia's
+// chronological main series, its publication order listed) following the other
+// numbering would loop back - so that series is skipped. When none answers,
 // numbered reports whether any of them holds another numbered book in scope -
 // the end of a numbered series - and false means its series give no order to
 // follow at all (the book unnumbered, or alone in its series). numbered is true
 // whenever next is found.
 func (c *Catalog) NextInSeries(ctx context.Context, libraryID int64, book *Book, scope Scope) (next *Book, numbered bool, err error) {
-	for _, s := range book.AllSeries() {
+	all := book.AllSeries()
+	for k, s := range all {
 		if s.Position <= 0 {
 			continue
 		}
 		next, num, err := c.nextInOneSeries(ctx, libraryID, book.RelPath, s.Name, s.Position, scope)
-		if err != nil || next != nil {
-			return next, next != nil, err
+		if err != nil {
+			return nil, false, err
 		}
 		numbered = numbered || num
+		if next != nil && !stepsBack(all[:k], next) {
+			return next, true, nil
+		}
 	}
 	return nil, numbered, nil
+}
+
+// stepsBack reports whether candidate, a later book in one of the current book's
+// series, sits at or before the current book in one of earlier (the current
+// book's series ranked above that one, with its positions): a series both are
+// numbered in where candidate's position is not above the current book's.
+func stepsBack(earlier []SeriesRef, candidate *Book) bool {
+	theirs := candidate.AllSeries()
+	for _, s := range earlier {
+		if p := positionIn(theirs, s.Name); s.Position > 0 && p > 0 && p <= s.Position {
+			return true
+		}
+	}
+	return false
 }
 
 // nextInOneSeries returns the book after the one at relPath in series within one

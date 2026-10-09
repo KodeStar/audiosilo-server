@@ -83,18 +83,22 @@ describe('drafts', () => {
       { field: 'series_index', before: '1', after: '2', source: 'path' },
       { field: 'asin', before: 'B003P2WO5E', after: 'B0000000AA', source: 'community' },
     ]);
-    expect(saveRequest(drafts)).toEqual({
+    expect(saveRequest(drafts, detail.fields)).toEqual({
       set: { narrator: '', series_index: '2', asin: 'B0000000AA' },
     });
   });
 
   it('undoes a revert with the value and source the field had', () => {
-    const before = { value: 'Dune', source: 'community' as const, scanned: 'x', locked: true };
-    expect(undoRevertRequest('title', before)).toEqual({
+    const f = bookDetail().fields;
+    const title = { value: 'Dune', source: 'community' as const, scanned: 'x', locked: true };
+    const before = { ...f, title };
+    expect(undoRevertRequest('title', before, f)).toEqual({
       set: { title: 'Dune' },
       source: 'community',
     });
-    expect(undoRevertRequest('title', { ...before, source: 'edited' }).source).toBe('edited');
+    expect(
+      undoRevertRequest('title', { ...f, title: { ...title, source: 'edited' } }, f).source,
+    ).toBe('edited');
   });
 });
 

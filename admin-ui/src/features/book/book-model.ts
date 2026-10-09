@@ -241,22 +241,52 @@ export function diffRows(drafts: Drafts, fields: Record<OverrideField, FieldValu
   }));
 }
 
-/** The PATCH that saves the drafts (an emptied optional field sets ""). */
-export function saveRequest(drafts: Drafts): BookEditRequest {
+/**
+ * The PATCH that saves the drafts against the saved fields (an emptied optional
+ * field sets ""). A series the saved other series list, sent without them, also
+ * sends them as saved: the admin took back the swap commitField drafted (typed
+ * the list back), so the server's swap (catalog.seriesSwap, which an edit naming
+ * more_series skips) mustn't make it behind the dialog's back.
+ */
+export function saveRequest(
+  drafts: Drafts,
+  fields: Record<OverrideField, FieldValue>,
+): BookEditRequest {
   const set: Partial<Record<OverrideField, string>> = {};
   for (const f of OVERRIDE_FIELDS) {
     const raw = drafts[f];
     if (raw !== undefined) set[f] = checkField(f, raw).value;
   }
+  const series = set.series;
+  if (
+    series &&
+    set.more_series === undefined &&
+    series !== fields.series.value &&
+    moreSeriesRefs(fields.more_series.value).some((s) => s.name === series)
+  ) {
+    set.more_series = fields.more_series.value;
+  }
   return { set };
 }
 
-/** The PATCH that undoes a revert: the value it had, from the source it had. */
-export function undoRevertRequest(field: OverrideField, before: FieldValue): BookEditRequest {
-  return {
-    set: { [field]: before.value },
-    source: before.source === 'community' ? 'community' : 'edited',
-  };
+/**
+ * The PATCH that undoes a revert: the value it had, from the source it had.
+ * before and after are the fields either side of the revert. A series revert
+ * that left a series the book listed swapped them on the server (seriesSwap),
+ * so its undo sends the other series and position as they were too: an edit
+ * naming more_series swaps nothing, so the three come back exactly.
+ */
+export function undoRevertRequest(
+  field: OverrideField,
+  before: Record<OverrideField, FieldValue>,
+  after: Record<OverrideField, FieldValue>,
+): BookEditRequest {
+  const set: Partial<Record<OverrideField, string>> = { [field]: before[field].value };
+  if (field === 'series' && after.more_series.value !== before.more_series.value) {
+    set.more_series = before.more_series.value;
+    set.series_index = before.series_index.value;
+  }
+  return { set, source: before[field].source === 'community' ? 'community' : 'edited' };
 }
 
 // ---- files and chapters ----

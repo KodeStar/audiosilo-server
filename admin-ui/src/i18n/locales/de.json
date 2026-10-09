@@ -855,7 +855,7 @@
   "books.bulk.clear": "Auswahl aufheben",
   "books.edit.title_one": "{{formatted}} Buch bearbeiten",
   "books.edit.title_other": "{{formatted}} Bücher bearbeiten",
-  "books.edit.description": "Nur die Felder, die du ausfüllst, ändern sich. Jede Änderung wird als Bearbeitung gespeichert und ist vor erneuten Scans geschützt. Die Audiodateien bleiben unberührt.",
+  "books.edit.description": "Nur die Felder, die du ausfüllst, ändern sich. Jede Änderung wird als Bearbeitung gespeichert und ist vor erneuten Scans geschützt. Die Audiodateien bleiben unberührt. Wird als Reihe eine der weiteren Reihen eines Buchs gesetzt, tauschen die beiden bei diesem Buch die Plätze.",
   "books.edit.field.author": "Autor",
   "books.edit.field.narrator": "Sprecher",
   "books.edit.field.series": "Reihe",

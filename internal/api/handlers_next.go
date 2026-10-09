@@ -22,10 +22,9 @@ const (
 // Source names the step that produced Next (or decided there is none). Next is
 // set only for a book the caller can open; Book is its indexed metadata in the
 // list shape (no files, chapters or description). Work is the community work
-// that comes next: with `local` beside a community Next (the entry of the rail
-// that placed it), or without it beside a series/folder/none answer when no next
-// entry could be placed on the caller's books (the next entry of the first rail,
-// in the book's series order, that has one).
+// that comes next (the next entry of the rail that decides, meta.NextRail): with
+// `local` beside a community Next, or without it beside a series/folder/none
+// answer when the caller's copy could not be placed.
 type nextBook struct {
 	Source string               `json:"source"`
 	Next   *catalog.Ref         `json:"next,omitempty"`
@@ -83,16 +82,16 @@ func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catal
 	return next, nil
 }
 
-// communityNext is the entry after the current work on the envelope's rails,
-// placed for the caller as the /meta envelope places it (localRails). The rails
-// with a next entry, in the book's own order (meta.RailsWithNext), are read off
-// the shared envelope, so localRails runs only when one has; the first whose
-// next entry is one of the caller's books answers (meta.NextAcrossRails):
-// work.Local is set, and placed is then that book's indexed metadata (when
-// found). work is nil when there is no community answer: metadata off, the book
-// unmatched or without rails, the upstream failing, or no rail with a next
-// entry. When no next entry can be placed, work is the first rail's next entry
-// without `local`, as /meta degrades.
+// communityNext is the entry after the current work on the rail that decides
+// (meta.NextRail: in the book's own series order, the first rail with a next
+// entry that doesn't step back), placed for the caller as the /meta envelope
+// places it (localRails). The deciding rail is read off the shared envelope, so
+// localRails runs only when there is one. work.Local is set when its entry is
+// one of the caller's books, and placed is then that book's indexed metadata
+// (when found); a later rail's placed entry never answers instead. work is nil
+// when there is no community answer: metadata off, the book unmatched or without
+// rails, the upstream failing, or no rail deciding. When the entry can't be
+// placed, work is it without `local`, as /meta degrades.
 func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.Book) (work *meta.MetaSeriesWork, placed *catalog.Book) {
 	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
 		return nil, nil
@@ -111,8 +110,8 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 	for _, s := range book.AllSeries() {
 		names = append(names, s.Name)
 	}
-	order := meta.RailsWithNext(env.Series, env.Work.ID, names)
-	if len(order) == 0 {
+	at := meta.NextRail(env.Series, env.Work.ID, names)
+	if at < 0 {
 		return nil, nil
 	}
 	rails, books, err := a.localRails(ctx, catalog.Ref{LibraryID: libraryID, Path: book.RelPath}, env)
@@ -120,9 +119,10 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 		if ctx.Err() == nil {
 			a.log.Warn("place owned books for next book failed", "err", err, "library", libraryID, "path", book.RelPath)
 		}
-		return meta.NextAcrossRails(env.Series, order, env.Work.ID), nil
+		work, _ = meta.NextOnRail(env.Series[at], env.Work.ID)
+		return work, nil
 	}
-	work = meta.NextAcrossRails(rails, order, env.Work.ID)
+	work, _ = meta.NextOnRail(rails[at], env.Work.ID) // the same entry, with the caller's local
 	if work.Local != nil {
 		for i := range books {
 			if books[i].LibraryID == work.Local.LibraryID && books[i].RelPath == work.Local.Path {

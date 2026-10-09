@@ -228,11 +228,13 @@ func TestAdminEditBookAPI(t *testing.T) {
 
 // TestAdminEditBookSeriesSwap: a PATCH making one of a book's other series its
 // main one swaps the two (catalog.seriesSwap), and the response shows it; one
-// that sends more_series itself keeps what it sent.
+// that sends more_series itself keeps what it sent; reverting series to a
+// listed one swaps back; an old main series that can't be listed is a 400
+// (invalid series), for one book and for a bulk edit.
 func TestAdminEditBookSeriesSwap(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
-	_, base := seedCatalog(t, e)
+	libID, base := seedCatalog(t, e)
 	url := base + "/book?path=" + escape("Andy Weir/Artemis")
 	fields := func(body string) map[string]catalog.FieldValue {
 		t.Helper()
@@ -259,6 +261,44 @@ func TestAdminEditBookSeriesSwap(t *testing.T) {
 	f = patch(`{"set":{"series":"Moon","more_series":"[{\"name\":\"Weirverse\",\"position\":3}]"}}`)
 	if f["series"].Value != "Moon" || f["series_index"].Value != "2" || f["more_series"].Value != `[{"name":"Weirverse","position":3}]` {
 		t.Fatalf("with more_series sent: %+v", f)
+	}
+
+	// A book tagged Discworld #8: the swap to City Watch, then a revert of
+	// series, which leaves the listed Discworld and so swaps back.
+	for _, b := range []*catalog.Book{
+		{LibraryID: libID, RelPath: "Terry Pratchett/Guards Guards", IsFolder: true, Title: "Guards! Guards!", Series: "Discworld", SeriesIndex: 8},
+		{LibraryID: libID, RelPath: "Terry Pratchett/Long", IsFolder: true, Title: "Long", Series: strings.Repeat("x", 501), SeriesIndex: 1},
+	} {
+		if _, err := e.cat.UpsertBook(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	url = base + "/book?path=" + escape("Terry Pratchett/Guards Guards")
+	patch(`{"set":{"more_series":"[{\"name\":\"City Watch\",\"position\":1}]"}}`)
+	if f = patch(`{"set":{"series":"City Watch"}}`); f["series"].Value != "City Watch" || f["more_series"].Value != `[{"name":"Discworld","position":8}]` {
+		t.Fatalf("after the swap: %+v", f)
+	}
+	f = patch(`{"revert":["series"]}`)
+	if f["series"].Value != "Discworld" || f["series_index"].Value != "8" || f["more_series"].Value != `[{"name":"City Watch","position":1}]` {
+		t.Fatalf("after reverting series: %+v", f)
+	}
+
+	// Denied: the long tag can't be listed, so the swap is refused.
+	url = base + "/book?path=" + escape("Terry Pratchett/Long")
+	patch(`{"set":{"more_series":"[{\"name\":\"City Watch\",\"position\":1}]"}}`)
+	resp, body := e.do(t, "PATCH", url, adminTok, `{"set":{"series":"City Watch"}}`)
+	var env struct{ Code, Field string }
+	_ = json.Unmarshal([]byte(body), &env)
+	if resp.StatusCode != http.StatusBadRequest || env.Code != codeInvalidOverride || env.Field != "series" {
+		t.Fatalf("unlistable old main = %d %s, want 400 invalid series", resp.StatusCode, body)
+	}
+	lib := strconv.FormatInt(libID, 10)
+	books := `[{"library_id":` + lib + `,"path":"Terry Pratchett/Guards Guards"},{"library_id":` + lib + `,"path":"Terry Pratchett/Long"}]`
+	if resp, body := e.do(t, "POST", "/api/v1/admin/books/bulk", adminTok, `{"books":`+books+`,"set":{"series":"City Watch"}}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bulk with an unlistable book = %d %s, want 400", resp.StatusCode, body)
+	}
+	if b, _ := e.cat.GetBookByPath(context.Background(), libID, "Terry Pratchett/Guards Guards"); b.Series != "Discworld" {
+		t.Fatalf("a refused bulk edit changed a book: %+v", b)
 	}
 }
 

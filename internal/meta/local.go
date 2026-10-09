@@ -217,12 +217,7 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 // Pass the rail's MAIN view (MetaSeries.Works): an alternate reading order's
 // "next" is a different book, and the main view is the order a listener is in.
 func NextOnRail(rail MetaSeries, currentWork string) (next *MetaSeriesWork, ok bool) {
-	at, ok := parsePosition(rail.Position)
-	for i := 0; !ok && i < len(rail.Works); i++ {
-		if rail.Works[i].ID == currentWork {
-			at, ok = parsePosition(rail.Works[i].Position)
-		}
-	}
+	at, ok := currentPosition(rail, currentWork)
 	if !ok {
 		return nil, false
 	}
@@ -240,14 +235,26 @@ func NextOnRail(rail MetaSeries, currentWork string) (next *MetaSeriesWork, ok b
 	return next, true
 }
 
-// RailOrder is the order to follow rails in for a book in the local series names
+// currentPosition is the current work's numeric position on rail: the rail's
+// Position, else its own entry's. ok is false when neither is a number.
+func currentPosition(rail MetaSeries, currentWork string) (at float64, ok bool) {
+	at, ok = parsePosition(rail.Position)
+	for i := 0; !ok && i < len(rail.Works); i++ {
+		if rail.Works[i].ID == currentWork {
+			at, ok = parsePosition(rail.Works[i].Position)
+		}
+	}
+	return at, ok
+}
+
+// railOrder is the order to follow rails in for a book in the local series names
 // (its main series first, then its others): the indexes of rails, first a rail
 // going by the book's first series (its name or one of its orderings', folded by
 // match.SeriesKey), then a rail going by its second, and so on, then every rail
 // going by none of them, each group in rails order. So a book that is Discworld
 // #8 and City Watch #1 follows Discworld first whatever order the envelope lists
 // the two rails in.
-func RailOrder(rails []MetaSeries, names []string) []int {
+func railOrder(rails []MetaSeries, names []string) []int {
 	rank := map[string]int{}
 	for i, n := range names {
 		if k := match.SeriesKey(n); k != "" {
@@ -274,36 +281,47 @@ func RailOrder(rails []MetaSeries, names []string) []int {
 	return order
 }
 
-// RailsWithNext is the rails to follow from currentWork for a book in the local
-// series names (its main series first, then its others): the indexes, in
-// RailOrder, of the rails with an entry after it (NextOnRail on each MAIN view).
-// Empty when every series has ended or no current position is a number - read
-// off the shared rails, since placing the caller's books moves no entry, so a
-// caller learns there is no next entry without looking up what they own.
-func RailsWithNext(rails []MetaSeries, currentWork string, names []string) []int {
-	var out []int
-	for _, i := range RailOrder(rails, names) {
-		if next, ok := NextOnRail(rails[i], currentWork); ok && next != nil {
-			out = append(out, i)
+// NextRail is the rail that decides what follows currentWork for a book in the
+// local series names (its main series first, then its others): in railOrder,
+// the first rail with an entry after the current work (NextOnRail on its MAIN
+// view) that doesn't step back (railStepsBack). Its next entry is THE next work:
+// the caller follows it when it is one of their books, and otherwise the local
+// steps answer with it alongside - a later rail's placed entry never jumps the
+// series the book is read in. -1 when no rail decides: every series has ended,
+// no current position is a number, or each next entry steps back. Read off the
+// shared rails, since placing the caller's books moves no entry, so a caller
+// learns there is no next entry without looking up what they own.
+func NextRail(rails []MetaSeries, currentWork string, names []string) int {
+	order := railOrder(rails, names)
+	for k, i := range order {
+		next, ok := NextOnRail(rails[i], currentWork)
+		if ok && next != nil && !railStepsBack(rails, order[:k], currentWork, next.ID) {
+			return i
 		}
 	}
-	return out
+	return -1
 }
 
-// NextAcrossRails is the entry to follow from currentWork across rails (the
-// envelope's rails, placed or not) taken in order (RailsWithNext's indexes): the
-// first rail's next entry that is one of the caller's books (Local set), else
-// the first rail's next entry, unplaced. nil when order is empty.
-func NextAcrossRails(rails []MetaSeries, order []int, currentWork string) *MetaSeriesWork {
-	var first *MetaSeriesWork
-	for _, i := range order {
-		next, _ := NextOnRail(rails[i], currentWork)
-		if next != nil && next.Local != nil {
-			return next
+// railStepsBack reports whether the work nextWork, the next entry on a rail,
+// sits at or before currentWork on one of the rails ranked above it (earlier,
+// indexes into rails), where both positions are numbers: in a series read in two
+// orders (Narnia's chronological and publication rails) following the second
+// order's next would loop back through the first's. An entry with no id is
+// judged on no other rail.
+func railStepsBack(rails []MetaSeries, earlier []int, currentWork, nextWork string) bool {
+	if nextWork == "" {
+		return false
+	}
+	for _, j := range earlier {
+		at, ok := currentPosition(rails[j], currentWork)
+		if !ok {
+			continue
 		}
-		if first == nil {
-			first = next
+		for _, w := range rails[j].Works {
+			if p, numbered := parsePosition(w.Position); w.ID == nextWork && numbered && (p < at || samePosition(p, at)) {
+				return true
+			}
 		}
 	}
-	return first
+	return false
 }

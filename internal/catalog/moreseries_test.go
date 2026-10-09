@@ -3,6 +3,7 @@ package catalog
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -200,10 +201,12 @@ func TestMoreSeriesPlayer(t *testing.T) {
 }
 
 // TestSeriesSwap: an edit that makes one of a book's other series its main one
-// swaps the two (seriesSwap) - on one book, and per book in a bulk edit - with
-// the derived values written as the edit's own overrides; an edit that names
-// more_series, a series the list doesn't hold, or a community source swaps
-// nothing, and one that names series_index keeps its own position.
+// swaps the two (seriesSwap) - on one book, and per book in a bulk edit, by
+// setting series or by reverting it to a listed one - with the derived values
+// written as the edit's own overrides; an edit that names more_series, a series
+// the list doesn't hold, or a community source swaps nothing, one that names
+// series_index keeps its own position, and an old main series that can't be
+// listed refuses the edit.
 func TestSeriesSwap(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
@@ -263,14 +266,36 @@ func TestSeriesSwap(t *testing.T) {
 	// Back again swaps back.
 	edit("gg", BookEdit{Set: setSeries(disc)})
 	check("gg", disc, "8", `[{"name":"Omnibus","position":0},{"name":"City Watch","position":1},{"name":"Extra","position":2}]`)
-	// Reverting series alone doesn't swap back: the book is back to its scanned
-	// series with the list and position as they were.
+	// Reverting series swaps back too: the scanned Discworld is listed, so it
+	// is the main series again at its position there, City Watch back in the
+	// list. Setting City Watch again (the revert's undo) swaps again: a round
+	// trip.
 	edit("gg", BookEdit{Set: setSeries(watch)})
-	edit("gg", BookEdit{Revert: []string{FieldSeries}})
-	check("gg", disc, "1", `[{"name":"Omnibus","position":0},{"name":"Discworld","position":8},{"name":"Extra","position":2}]`)
-	if got, want := detail("gg").Book.SeriesList, []SeriesRef{{disc, 1}, {"Omnibus", 0}, {"Extra", 2}}; !reflect.DeepEqual(got, want) {
+	edit("gg", BookEdit{Revert: []string{FieldSeries}, UserID: uid})
+	check("gg", disc, "8", `[{"name":"Omnibus","position":0},{"name":"City Watch","position":1},{"name":"Extra","position":2}]`)
+	if f := fields("gg")[FieldSeries]; f.Locked || f.Source != SourceTag {
+		t.Errorf("series after the revert = %+v, want the scanned tag", f)
+	}
+	if got, want := detail("gg").Book.SeriesList, []SeriesRef{{disc, 8}, {"Omnibus", 0}, {watch, 1}, {"Extra", 2}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("series_list after reverting series = %+v, want %+v", got, want)
 	}
+	edit("gg", BookEdit{Set: setSeries(watch)})
+	check("gg", watch, "1", `[{"name":"Omnibus","position":0},{"name":"Discworld","position":8},{"name":"Extra","position":2}]`)
+	// A revert follows a set's rules: leaving a series the list doesn't hold, or
+	// reverting more_series too, swaps nothing; naming series_index keeps the
+	// edit's own position.
+	add("revplain", disc, 8, `[{"name":"City Watch","position":1}]`)
+	edit("revplain", BookEdit{Set: setSeries("Ankh")})
+	edit("revplain", BookEdit{Revert: []string{FieldSeries}})
+	check("revplain", disc, "8", `[{"name":"City Watch","position":1}]`)
+	add("revmore", disc, 8, `[{"name":"City Watch","position":1}]`)
+	edit("revmore", BookEdit{Set: setSeries(watch)})
+	edit("revmore", BookEdit{Revert: []string{FieldSeries, FieldMoreSeries}})
+	check("revmore", disc, "1", "")
+	add("revidx", disc, 8, `[{"name":"City Watch","position":1}]`)
+	edit("revidx", BookEdit{Set: setSeries(watch)})
+	edit("revidx", BookEdit{Set: map[string]string{FieldSeriesIndex: "5"}, Revert: []string{FieldSeries}})
+	check("revidx", disc, "5", `[{"name":"City Watch","position":1}]`)
 
 	// A bulk edit swaps each book that lists the series, and only those.
 	add("b1", disc, 3, `[{"name":"City Watch","position":4}]`)
@@ -330,4 +355,24 @@ func TestSeriesSwap(t *testing.T) {
 	add("comm", disc, 8, `[{"name":"City Watch","position":1}]`)
 	edit("comm", BookEdit{Set: setSeries(watch), Source: SourceCommunity})
 	check("comm", watch, "8", `[{"name":"City Watch","position":1}]`)
+
+	// An old main series that can't be listed (a tag name too long for an
+	// entry, a position out of range) refuses the edit as an invalid series,
+	// and a bulk edit holding such a book changes none.
+	long := strings.Repeat("x", maxShortField+1)
+	add("long", long, 8, `[{"name":"City Watch","position":1}]`)
+	add("far", disc, maxSeriesIndex+1, `[{"name":"City Watch","position":1}]`)
+	add("fine", disc, 8, `[{"name":"City Watch","position":1}]`)
+	for _, path := range []string{"long", "far"} {
+		err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: setSeries(watch)})
+		var oe *OverrideError
+		if !errors.As(err, &oe) || oe.Field != FieldSeries || !strings.Contains(oe.Reason, "can't move to the other series") {
+			t.Errorf("%s: unlistable old main = %v, want an invalid series", path, err)
+		}
+	}
+	check("long", long, "8", `[{"name":"City Watch","position":1}]`)
+	if err := c.EditBooks(ctx, []Ref{{lib.ID, "fine"}, {lib.ID, "far"}}, BookEdit{Set: setSeries(watch)}); !errors.Is(err, ErrInvalidOverride) {
+		t.Errorf("bulk edit with an unlistable book = %v, want ErrInvalidOverride", err)
+	}
+	check("fine", disc, "8", `[{"name":"City Watch","position":1}]`)
 }

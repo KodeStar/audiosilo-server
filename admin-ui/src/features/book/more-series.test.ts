@@ -9,6 +9,7 @@ import {
   displayValue,
   saveRequest,
   seriesSwap,
+  undoRevertRequest,
 } from './book-model';
 
 describe('more_series', () => {
@@ -121,7 +122,7 @@ describe('committing the series', () => {
       ['series_index', '1'],
       ['more_series', '[{"name":"Omnibus","position":0},{"name":"Discworld","position":8}]'],
     ]);
-    expect(saveRequest(d).set).toEqual({
+    expect(saveRequest(d, fields).set).toEqual({
       series: 'City Watch',
       series_index: '1',
       more_series: '[{"name":"Omnibus","position":0},{"name":"Discworld","position":8}]',
@@ -165,6 +166,41 @@ describe('committing the series', () => {
     let d = commitField({}, 'series', 'City Watch', fields);
     d = commitField(d, 'more_series', 'Discworld #8', fields);
     expect(commitField(d, 'series', 'Discworld', fields)).toEqual({ more_series: 'Discworld #8' });
+  });
+
+  it('sends the saved list when the admin took the drafted swap back, so the server swaps nothing', () => {
+    let d = commitField({}, 'series', 'City Watch', fields);
+    d = commitField(d, 'more_series', 'Omnibus; City Watch #1', fields);
+    expect(d.more_series).toBeUndefined();
+    expect(saveRequest(d, fields).set).toEqual({
+      series: 'City Watch',
+      series_index: '1',
+      more_series: LIST,
+    });
+    // A series the saved list lacks, or the list drafted, sends what was drafted.
+    expect(saveRequest({ series: 'Rincewind' }, fields).set).toEqual({ series: 'Rincewind' });
+    expect(saveRequest({ series: 'City Watch', more_series: 'Extra' }, fields).set).toEqual({
+      series: 'City Watch',
+      more_series: '[{"name":"Extra","position":0}]',
+    });
+  });
+
+  it('undoes a series revert the server swapped with the list and position it had', () => {
+    // City Watch #1 listing Discworld #8; the revert left Discworld, which the
+    // server swapped back in.
+    const before = swapFields('City Watch', '1', '[{"name":"Discworld","position":8}]');
+    const after = swapFields('Discworld', '8', '[{"name":"City Watch","position":1}]');
+    expect(undoRevertRequest('series', before, after)).toEqual({
+      set: {
+        series: 'City Watch',
+        more_series: '[{"name":"Discworld","position":8}]',
+        series_index: '1',
+      },
+      source: 'edited',
+    });
+    // A revert that swapped nothing: just the series.
+    const plain = swapFields('Rincewind');
+    expect(undoRevertRequest('series', plain, swapFields()).set).toEqual({ series: 'Rincewind' });
   });
 
   it('drafts the list itself when its line would read back differently', () => {

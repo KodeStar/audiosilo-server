@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
-	"slices"
 	"testing"
 	"time"
 )
@@ -272,77 +271,55 @@ func TestRailOrder(t *testing.T) {
 		"no rail matches: envelope order":                  {[]string{"Unknown", "!!"}, []int{0, 1, 2, 3}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := RailOrder(rails, tc.names); !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("RailOrder = %v, want %v", got, tc.want)
+			if got := railOrder(rails, tc.names); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("railOrder = %v, want %v", got, tc.want)
 			}
 		})
 	}
 }
 
-// TestRailsWithNext: the rails with an entry after the current work, in the
-// book's own order (RailOrder); an ended rail or an unreadable position is left
-// out, so nothing continuing is an empty answer.
-func TestRailsWithNext(t *testing.T) {
+// TestNextRail: the rail that decides is the first, in the book's own order
+// (railOrder), with an entry after the current work; an ended rail or an
+// unreadable position is passed over, and so is a rail whose next entry sits at
+// or before the current work on a rail ranked above it (both numbered): after
+// The Silver Chair (chronological 6, publication 4) the publication order's next,
+// The Horse and His Boy, is chronological 3. Nothing deciding is -1.
+func TestNextRail(t *testing.T) {
 	rails := []MetaSeries{
 		named("Alpha", "1", "cur@1", "a2@2"),
 		named("Ended", "2", "x@1", "cur@2"),
 		named("Beta", "1", "cur@1", "b2@2"),
 		named("Odd", "1-3", "cur@1-3", "z@4"),
 	}
+	chrono := named("Narnia", "6", "mn@1", "lww@2", "hhb@3", "pc@4", "vdt@5", "cur@6", "lb@7")
+	ended := named("Narnia", "6", "mn@1", "lww@2", "hhb@3", "pc@4", "vdt@5", "cur@6")
+	publication := named("Narnia (Publication)", "4", "lww@1", "pc@2", "vdt@3", "cur@4", "hhb@5", "mn@6", "lb@7")
 	for name, tc := range map[string]struct {
 		rails []MetaSeries
 		names []string
-		want  []int
+		want  int
 	}{
-		"main series' rail first":  {rails, []string{"Beta"}, []int{2, 0}},
-		"envelope order otherwise": {rails, []string{"Gamma"}, []int{0, 2}},
-		"a listed series next":     {rails, []string{"Gamma", "Beta"}, []int{2, 0}},
-		"every rail ended":         {rails[1:2], []string{"Ended"}, nil},
-		"no current position":      {rails[3:], nil, nil},
+		"main series' rail first":  {rails, []string{"Beta"}, 2},
+		"envelope order otherwise": {rails, []string{"Gamma"}, 0},
+		"a listed series next":     {rails, []string{"Gamma", "Beta"}, 2},
+		"an ended rail passed":     {rails[1:3], []string{"Ended", "Beta"}, 1},
+		"every rail ended":         {rails[1:2], []string{"Ended"}, -1},
+		"no current position":      {rails[3:], nil, -1},
+		// Denied: the publication order's next loops back chronologically.
+		"denied: steps back on a rail above": {[]MetaSeries{publication, ended}, []string{"Narnia", "Narnia (Publication)"}, -1},
+		// Allowed: The Last Battle is later in both orders.
+		"allowed: later on the rail above too": {[]MetaSeries{publication, chrono}, []string{"Narnia (Publication)", "Narnia"}, 0},
+		// The chronological rail decides itself when it continues.
+		"the main series decides": {[]MetaSeries{publication, chrono}, []string{"Narnia", "Narnia (Publication)"}, 1},
+		// A step back judged only on rails ranked above: ranked first, the
+		// publication order decides with The Horse and His Boy.
+		"no rail above": {[]MetaSeries{publication, ended}, []string{"Narnia (Publication)", "Narnia"}, 0},
+		// Unnumbered on the rail above: no step back to judge.
+		"unnumbered on the rail above": {[]MetaSeries{named("Beta", "1", "cur@1", "b2@2"), named("Alpha", "", "cur@", "b2@")}, []string{"Alpha", "Beta"}, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := RailsWithNext(tc.rails, "cur", tc.names); !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("RailsWithNext = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestNextAcrossRails: the first rail, in the order given, whose next entry is
-// one of the caller's books answers; when none is, the first rail's next entry
-// does, unplaced; no rails to follow is nil.
-func TestNextAcrossRails(t *testing.T) {
-	// placedRails is Alpha and Beta with the caller's copy of the named #2s.
-	placedRails := func(owned ...string) []MetaSeries {
-		rails := []MetaSeries{named("Alpha", "1", "cur@1", "a2@2"), named("Beta", "1", "cur@1", "b2@2")}
-		for r := range rails {
-			for w := range rails[r].Works {
-				if slices.Contains(owned, rails[r].Works[w].ID) {
-					rails[r].Works[w].Local = &MetaLocal{LibraryID: 1, Path: rails[r].Works[w].ID}
-				}
-			}
-		}
-		return rails
-	}
-	for name, tc := range map[string]struct {
-		rails      []MetaSeries
-		order      []int
-		want       string
-		wantPlaced bool
-	}{
-		"the first rail placed":      {placedRails("a2", "b2"), []int{1, 0}, "b2", true},
-		"the first placed rail wins": {placedRails("a2"), []int{1, 0}, "a2", true},
-		"none placed: the first's":   {placedRails(), []int{1, 0}, "b2", false},
-		"no rails to follow":         {placedRails("a2"), nil, "", false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			next := NextAcrossRails(tc.rails, tc.order, "cur")
-			got := ""
-			if next != nil {
-				got = next.ID
-			}
-			if got != tc.want || (next != nil && next.Local != nil) != tc.wantPlaced {
-				t.Fatalf("NextAcrossRails = %+v, want %q placed %v", next, tc.want, tc.wantPlaced)
+			if got := NextRail(tc.rails, "cur", tc.names); got != tc.want {
+				t.Fatalf("NextRail = %d, want %d", got, tc.want)
 			}
 		})
 	}

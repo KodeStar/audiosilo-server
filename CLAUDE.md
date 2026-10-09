@@ -492,18 +492,21 @@ admin overrides; see Metadata overrides below).
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
   `{source, next?, book?, work?}`; `source` names the step that produced `next`
   (or decided there is none): `community` (metadata on + matched + a rail:
-  `meta.RailsWithNext` reads, off the shared envelope, the rails with an entry after
-  the current work (`meta.NextOnRail` on each MAIN view) in the book's own order
-  (`meta.RailOrder`: the rail named, by `match.SeriesKey`, like its main series
-  or one of that rail's orderings, then like its more_series entries in list
-  order, then the rest as listed); `localRails` runs once, only when some rail has
-  a next entry; `meta.NextAcrossRails` picks the first rail whose next entry is
-  placed -> next + book + work. Otherwise the steps below answer: the first rail's
-  unplaced next entry rides along as `work` without `local`, since failing to place
-  (untagged, series named unlike the rail) proves nothing; current work last on
-  every rail (they can lag the library), upstream error/unmatched/no
-  rails/unnumbered -> no `work`), `series` (`catalog.NextInSeries`: every series of
-  `Book.AllSeries()` with a position, main first; per series one query
+  `meta.NextRail` reads, off the shared envelope, the rail that decides: in the
+  book's own order (`railOrder`: the rail named, by `match.SeriesKey`, like its main
+  series or one of that rail's orderings, then like its more_series entries in list
+  order, then the rest as listed) the first with an entry after the current work
+  (`meta.NextOnRail` on its MAIN view) that doesn't step back (`railStepsBack`: the
+  entry's work at or before the current work's position on an earlier-ranked rail,
+  both numeric - Narnia's publication order after The Silver Chair would loop back
+  through the chronological one); `localRails` runs once, only when a rail decides;
+  its entry placed -> next + book + work. A later rail's placed entry never answers
+  instead: an unplaced deciding entry rides along as `work` without `local` beside
+  the steps below, since failing to place (untagged, series named unlike the rail)
+  proves nothing; current work last on every rail (they can lag the library),
+  upstream error/unmatched/no rails/unnumbered -> no `work`), `series`
+  (`catalog.NextInSeries`: every series of `Book.AllSeries()` with a position, main
+  first; per series one query
   (`firstSeriesMember`) over its numbered members in scope - same library, books in
   exactly that series by their main series or a more_series entry, at their
   position IN THAT SERIES - those above the book's position first, then by
@@ -511,8 +514,11 @@ admin overrides; see Metadata overrides below).
   numbered with none later; a UNION ALL of an `idx_books_series` branch and a list
   branch narrowed by the full-text index's series column (`books_fts`, every series
   name; `idx_books_more_series` alone for a name with no phrase) + `json_each` for
-  the exact name; the first series with a later book answers; numbered books in
-  some series but none later in any -> `{source:"series"}`), `folder`
+  the exact name; the first series with a later book answers, unless that book
+  steps back (`stepsBack`: it sits at or before the current book in an
+  earlier-ranked series of the current book's, both numbered there), which skips
+  that series; numbered books in some series but none later in any ->
+  `{source:"series"}`), `folder`
   (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
   ignore-filtered, annotated by `BooksByPaths`, which reads any number of paths in
   chunks; the player's `findNextSibling`: names compared as its `localeCompare`
@@ -666,13 +672,21 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
-  An admin edit that sets `series` to a name its `more_series` lists (exactly), without
-  setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`, per book in
-  `editTx`, from the book's effective row): the old main series takes the entry's place in
-  the list and `series_index` becomes the entry's position (unless the edit names
-  `series_index`), written as the edit's own overrides. A community edit never swaps:
-  `matchrun.planSeries` is the one statement of how a match lays out series. The console drafts the same swap before saving (`book-model.ts` `commitField`), so its
-  save sends the values and the server's swap doesn't fire. `MoveDurableState` carries overrides and custom covers as one set: when the moved book
+  An admin edit that makes the main series a name its `more_series` lists (exactly) -
+  by setting `series`, or by reverting it when the series the revert leaves
+  (`newMainSeries`: `loadLayers` + `resolve` without the series override) is listed -
+  without setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`,
+  per book in `editTx`, from the book's effective row): the old main series takes the
+  entry's place in the list and `series_index` becomes the entry's position (unless the
+  edit names `series_index`), written as the edit's own overrides; so reverting a swap
+  swaps back. An old main series that can't be listed (name too long, position out of
+  range) refuses the edit: `invalid(series)`, a 400, failing a bulk edit whole. A
+  community edit never swaps: `matchrun.planSeries` is the one statement of how a match
+  lays out series. The console drafts the same swap before saving (`book-model.ts`
+  `commitField`), so its save sends the values and the server's swap doesn't fire;
+  `saveRequest` sends the saved `more_series` when the admin took the drafted swap back,
+  and the undo of a series revert that swapped (`undoRevertRequest`) sends the list and
+  position it had. `MoveDurableState` carries overrides and custom covers as one set: when the moved book
   has any, the new path's own rows in all three tables are dropped first; it moves
   them (with enrichment) in a transaction of their own, so a failure carrying the per-user
   state can't strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
