@@ -134,7 +134,15 @@ describe('live now', () => {
         'GET /admin/sessions/live': {
           body: {
             sessions: [
-              liveSession({ id: 1, state: 'paused', username: 'chris', user_id: 1 }),
+              // A title that names nothing ("024") comes without one: its place names it.
+              liveSession({
+                id: 1,
+                state: 'paused',
+                username: 'chris',
+                user_id: 1,
+                chapter: undefined,
+                chapter_index: 23,
+              }),
               liveSession({ id: 2, transcoded: true, codec: 'opus' }),
             ],
           },
@@ -153,6 +161,7 @@ describe('live now', () => {
     expect(within(items[0]).getByText('Transcode · OPUS')).toBeInTheDocument();
     expect(within(items[0]).getByText('192.168.1.24')).toBeInTheDocument();
     expect(within(items[1]).getByText('Paused')).toBeInTheDocument();
+    expect(within(items[1]).getByText('Chapter 24')).toBeInTheDocument();
   });
 
   it('says when nobody is listening', async () => {

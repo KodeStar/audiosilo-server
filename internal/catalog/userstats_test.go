@@ -104,6 +104,7 @@ func (f *statsFixture) allLibrary() []Scope { return []Scope{{LibraryID: f.lib, 
 // listening (raw sessions and rolled-up days, on the same books and on others,
 // and their finishes) never changes them.
 func TestUserStatsOnlyTheCaller(t *testing.T) {
+	t.Parallel()
 	f := newStatsFixture(t)
 	f.seedAnn(t)
 	alone := f.annStats(t, f.allLibrary())
@@ -170,6 +171,7 @@ func TestUserStatsOnlyTheCaller(t *testing.T) {
 // naming books - top books, finished books and the authors, narrators and series
 // ranked from them - while the caller's totals, days and hours keep its time.
 func TestUserStatsDropRevokedBooks(t *testing.T) {
+	t.Parallel()
 	f := newStatsFixture(t)
 	f.seedAnn(t)
 	f.seedBob(t)
@@ -213,9 +215,54 @@ func TestUserStatsDropRevokedBooks(t *testing.T) {
 	}
 }
 
+// A book finished in the period counts as a book of the period even with no
+// listening recorded in it (marked finished, imported), and a book two people
+// finished is one book finished: the server's year and a person's own never say
+// more books finished than listened to.
+func TestFinishedBooksAreBooksOfThePeriod(t *testing.T) {
+	t.Parallel()
+	f := newStatsFixture(t)
+	in := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	f.addSession(t, f.user, 1, f.book, in.Add(-time.Hour), 30*time.Minute, 1800, "opus", false)
+	f.finish(t, f.user, f.book, in)
+	f.finish(t, f.user, f.saga, in) // marked finished: no listening recorded
+	f.finish(t, f.bob, f.book, in)  // bob only marked it finished too
+	from := f.clock.AddDate(0, 0, -7)
+
+	a, err := f.c.ActivityFor(f.ctx, "7d", from, f.clock, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Totals.Books != 2 || a.Totals.Finished != 2 || a.Totals.Listeners != 1 {
+		t.Fatalf("server totals = %+v, want 2 books, 2 finished, 1 listener", a.Totals)
+	}
+	if len(a.TopUsers) != 1 || a.TopUsers[0].Books != 2 || a.TopUsers[0].Finished != 2 {
+		t.Fatalf("top users = %+v, want ann with 2 books, 2 finished", a.TopUsers)
+	}
+	if len(a.TopBooks) != 1 || a.TopBooks[0].Path != f.book.Path {
+		t.Fatalf("top books = %+v, want only the book listened to", a.TopBooks)
+	}
+
+	s := f.annStats(t, f.allLibrary())
+	if s.Totals != (UserTotals{Listened: 1800, Sessions: 1, Books: 2, Finished: 2}) {
+		t.Fatalf("ann's totals = %+v", s.Totals)
+	}
+	b, err := f.c.UserStatsFor(f.ctx, "7d", from, f.clock, time.UTC, f.bob, f.allLibrary())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Totals != (UserTotals{Books: 1, Finished: 1}) {
+		t.Fatalf("bob's totals = %+v", b.Totals)
+	}
+	if s.Previous.Books != 0 || a.Previous.Finished != 0 {
+		t.Fatalf("previous = %+v / %+v, want nothing", s.Previous, a.Previous)
+	}
+}
+
 // The per-user entry points refuse user 0, which the accumulator reads as
 // "everyone".
 func TestUserStatsNeedAUser(t *testing.T) {
+	t.Parallel()
 	f := newStatsFixture(t)
 	f.seedBob(t)
 	from := f.clock.AddDate(0, 0, -7)
@@ -232,6 +279,7 @@ func TestUserStatsNeedAUser(t *testing.T) {
 
 // UserListeningFor is the caller's days only: the same as their stats' days.
 func TestUserListeningFor(t *testing.T) {
+	t.Parallel()
 	f := newStatsFixture(t)
 	f.seedAnn(t)
 	f.seedBob(t)
@@ -253,6 +301,7 @@ func TestUserListeningFor(t *testing.T) {
 }
 
 func TestScopesAllow(t *testing.T) {
+	t.Parallel()
 	scopes := []Scope{{LibraryID: 1, Paths: []string{"Author"}}, {LibraryID: 2, AllowAll: true}}
 	for _, c := range []struct {
 		ref  Ref
@@ -277,6 +326,7 @@ func TestScopesAllow(t *testing.T) {
 // A goal is per user: set, read, cleared, validated, with this calendar year's
 // finishes (server time) of that user only; deleting the user purges it.
 func TestListeningGoal(t *testing.T) {
+	t.Parallel()
 	f := newStatsFixture(t) // clock 2026-10-01
 	g, err := f.c.GoalStatusFor(f.ctx, f.user, f.clock, time.UTC)
 	if err != nil || g.Goal != nil || g.Year != "2026" || g.Finished != 0 {
@@ -336,6 +386,7 @@ func TestListeningGoal(t *testing.T) {
 // listening counted twice) and in one that skipped a whole date (the list never
 // got past it).
 func TestDayListEveryDateOnce(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		zone     string
 		from, to [3]int // y, m, d (local midnight)

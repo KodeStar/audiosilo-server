@@ -10,6 +10,7 @@ import (
 // for the path backfill however they were written, and putting them right keeps
 // what they hold.
 func TestPathCheckOlderSnapshots(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	exec := func(q string, args ...any) int64 {
@@ -99,6 +100,7 @@ func TestPathCheckOlderSnapshots(t *testing.T) {
 // when a lone folder was the series resolves as it did then: in a library that
 // prefers its folders the folder is no series, and its leaf's number goes with it.
 func TestPreferPathOlderSnapshot(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l", MetadataSource: MetadataFromPath})
 	const p = "Frank Herbert/01 - Dune"

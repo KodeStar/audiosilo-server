@@ -50,6 +50,7 @@ func searchTitles(t *testing.T, c *Catalog, ctx context.Context, libID int64, q 
 // for every reader, a rescan that rewrites the scanned values keeps it, and so does
 // a full index rebuild (the books row deleted and re-created).
 func TestOverrideSurvivesRescanAndRebuild(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)
@@ -100,6 +101,7 @@ func TestOverrideSurvivesRescanAndRebuild(t *testing.T) {
 }
 
 func TestRevertRestoresScannedValues(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "Author/Series/01 - Title"
@@ -131,6 +133,7 @@ func TestRevertRestoresScannedValues(t *testing.T) {
 // TestMoveReplacesStaleEnrichment: a leftover enrichment row at the destination
 // (an earlier book there) must not abort the move; the moved book's wins.
 func TestMoveReplacesStaleEnrichment(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)
@@ -158,6 +161,7 @@ func TestMoveReplacesStaleEnrichment(t *testing.T) {
 }
 
 func TestMoveCarriesOverridesAndCover(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "old/Book")); err != nil {
@@ -203,6 +207,7 @@ func TestMoveCarriesOverridesAndCover(t *testing.T) {
 // TestEditBooksIsAtomic: a bulk edit naming a path that isn't indexed writes
 // nothing at all, and a good one edits every book.
 func TestEditBooksIsAtomic(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	for _, p := range []string{"A/One", "A/Two"} {
@@ -234,6 +239,7 @@ func TestEditBooksIsAtomic(t *testing.T) {
 }
 
 func TestEditValidation(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Book"
@@ -271,6 +277,7 @@ func TestEditValidation(t *testing.T) {
 }
 
 func TestNormalizeOverride(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ field, in, want string }{
 		{FieldTitle, "  Dune  ", "Dune"},
 		{FieldAuthor, "", ""},
@@ -295,6 +302,7 @@ func TestNormalizeOverride(t *testing.T) {
 // TestOverrideBeatsEnrichment: an admin's ASIN edit wins over one the manager
 // attached, before and after the enrichment is (re)set, and survives a rescan.
 func TestOverrideBeatsEnrichment(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Book"
@@ -327,6 +335,7 @@ func TestOverrideBeatsEnrichment(t *testing.T) {
 }
 
 func TestBookDetailProvenance(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)
@@ -382,6 +391,7 @@ func TestBookDetailProvenance(t *testing.T) {
 // TestLegacyRowProvenance: a row backfilled by migration 0016 reads the same way
 // as a fresh scan: a value the path yields is path, anything else tag.
 func TestLegacyRowProvenance(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "Will Wight/Cradle/01 - Unsouled"
@@ -425,6 +435,7 @@ func TestLegacyRowProvenance(t *testing.T) {
 }
 
 func TestBookDetailRelations(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)
@@ -481,6 +492,7 @@ var (
 )
 
 func TestCoverStore(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "A/B")); err != nil {
@@ -528,6 +540,7 @@ func TestCoverStore(t *testing.T) {
 // its book being pruned and returns with it, but it is served only while a book is
 // indexed at the path.
 func TestCustomCoverNeedsAnIndexedBook(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "A/B")); err != nil {
@@ -575,6 +588,7 @@ func stageStale(t *testing.T, c *Catalog, ctx context.Context, libID int64, path
 // none of it merges into the moved book. A moved book with no state keeps the
 // path's own rows, as any book appearing there would; a self-move is a no-op.
 func TestMoveDropsStaleStateForAnEditedBook(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "old/Book")); err != nil {
@@ -632,6 +646,7 @@ func TestMoveDropsStaleStateForAnEditedBook(t *testing.T) {
 // finish there must not mark the moved book finished), under a version above both,
 // and the favourite once; the book's own edits and cover move as ever.
 func TestMoveMergesAListenerCollision(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)
@@ -713,6 +728,7 @@ func TestMoveMergesAListenerCollision(t *testing.T) {
 // it re-indexed), and its chapters without scanned_title. Layering the durable
 // tables back on must neither blank those values nor roll them back.
 func TestRowsFromAnOlderServerKeepTheirValues(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	exec := func(q string, args ...any) int64 {
@@ -773,6 +789,7 @@ func TestRowsFromAnOlderServerKeepTheirValues(t *testing.T) {
 // infinite position, which no JSON reply can carry; the upsert records no position
 // instead, so the admin list, book page and series aggregate still answer.
 func TestNonFiniteSeriesIndexIsNoPosition(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	b := scannedBook(lib.ID, "A/Book")
@@ -807,6 +824,7 @@ func TestNonFiniteSeriesIndexIsNoPosition(t *testing.T) {
 // returns, but it shows nowhere on the book page, so it must not mark the book
 // edited; it counts again once the chapter is back.
 func TestDormantChapterOverrideIsNotAnEdit(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Book"
@@ -850,6 +868,7 @@ func TestDormantChapterOverrideIsNotAnEdit(t *testing.T) {
 // gone (the file re-encoded with new marks) leaves the rename dormant rather than
 // moving it onto whatever now sits at that position.
 func TestChapterRenameFollowsTheChapter(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "Author/Book"

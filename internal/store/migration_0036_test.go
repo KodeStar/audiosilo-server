@@ -13,6 +13,7 @@ import (
 // upload moved onto a path an older community save names, a run that took no
 // cover) stays an upload.
 func TestMigration0036CoverSource(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn, exec, closeRaw := openBefore(t, "0036")
 	exec(`INSERT INTO libraries(id, name, root, created_at) VALUES(1, 'Books', '/l', 't')`)

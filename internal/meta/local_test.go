@@ -191,6 +191,7 @@ func TestPlaceLocalDoesNotMutate(t *testing.T) {
 // TestNextEntry: the entry after the current work, by position, passing over
 // the entries skip reports (the smallest position left, ties in rail order).
 func TestNextEntry(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		rail    MetaSeries
 		skipped string // the work ids skip reports, "|"-separated
@@ -269,6 +270,7 @@ func TestPlaceOwned(t *testing.T) {
 }
 
 func TestRailOrder(t *testing.T) {
+	t.Parallel()
 	watch := named("City Watch", "1")
 	watch.Orderings = []MetaSeriesOrdering{{Name: "Watch (Chronological)"}}
 	rails := []MetaSeries{named("Ankh-Morpork", "3"), watch, named("Discworld", "8"), named("Other", "2")}
@@ -300,6 +302,7 @@ func TestRailOrder(t *testing.T) {
 // Magician's Nephew chronological 1, so The Last Battle decides. Nothing
 // deciding is -1.
 func TestNextRail(t *testing.T) {
+	t.Parallel()
 	rails := []MetaSeries{
 		named("Alpha", "1", "cur@1", "a2@2"),
 		named("Ended", "2", "x@1", "cur@2"),

@@ -104,3 +104,6 @@ release:
     Native builds embed the web player; ffmpeg/ffprobe are found locally or
     auto-downloaded on first use. Prefer Docker for advanced / multi-user
     setups: `ghcr.io/kodestar/audiosilo-server`.
+
+    AudioSilo is free; sponsors keep it going:
+    [GitHub Sponsors](https://github.com/sponsors/KodeStar).

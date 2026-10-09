@@ -26,13 +26,24 @@ import (
 const requestTimeout = 30 * time.Second
 
 // isStreamingPath reports whether a request path serves a long-lived or large
-// body that must NOT be bounded by requestTimeout: audio streaming/transcoding
-// (cover/stream), a backup's download and the web player's static asset mount.
+// body that must NOT be bounded by requestTimeout: a book's media (cover/stream,
+// incl. transcoding), a backup's download and the web player's static asset mount.
 func isStreamingPath(p string) bool {
-	return strings.HasSuffix(p, "/stream") ||
-		strings.HasSuffix(p, "/cover") ||
+	return isLibraryMedia(p) ||
 		isBackupDownload(p) ||
 		p == "/web" || strings.HasPrefix(p, "/web/")
+}
+
+// isLibraryMedia reports whether p is GET /libraries/{id}/cover or /stream, and
+// nothing deeper: a community cover (/libraries/{id}/meta/cover) is a bounded
+// thumbnail fetched upstream, so it stays under the timeout.
+func isLibraryMedia(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/libraries/")
+	if !ok {
+		return false
+	}
+	id, leaf, ok := strings.Cut(rest, "/")
+	return ok && id != "" && (leaf == "cover" || leaf == "stream")
 }
 
 // isBackupDownload reports whether p is GET /admin/backups/{name} (a backup's

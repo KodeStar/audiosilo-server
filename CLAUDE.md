@@ -61,7 +61,8 @@ in-process, can open a browser).
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
 typecheck + eslint + prettier + vitest, then the build) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-gates all of them on every PR/push, building the console first so the embed tests in
+gates all of them on every PR/push in three parallel jobs (Go tests, lint with govet, admin console),
+the Go job building the console first (`--vite-only`) so the embed tests in
 `internal/web/adminui` run against a real build (locally they skip without one). A few scanner tests need `ffmpeg` (ffprobe);
 without it they `t.Skip` (CI installs it). The linter is adopted at a **green
 baseline** - its suppressions in `.golangci.yml` are documented and intentional;
@@ -243,7 +244,11 @@ admin overrides; see Metadata overrides below).
   migrates once per test binary and copies the file per test (file-backed, so reads use the reader pool).
   A package creating many password users calls `auth.UseCheapHashingForTests()` from `TestMain`
   (`internal/api`, `internal/auth` and `internal/matchrun`'s `main_test.go`; a real-cost argon2id hash is ~0.25 s under `-race`; it panics outside a test
-  binary). Pure-logic tests sit next to the code (see
+  binary). A new top-level test starts with `t.Parallel()` (each has its own database and
+  temp dirs; the only thing tests share is the read-only `testdata/` fixtures, so copy one into
+  `t.TempDir()` before changing it, as `TestCustomCoverFollowsTheBook` does) unless it calls `t.Setenv` or `t.Chdir`
+  (which panic in a parallel test) or writes a package-level var (pass the value in instead, as
+  `hashWithCost` does for `TestHashCost`). Pure-logic tests sit next to the code (see
   `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,
@@ -748,7 +753,12 @@ admin overrides; see Metadata overrides below).
   `/admin/series` (`catalog.People`/`Series` with a nil scope; the player's
   `/libraries/{id}/authors|narrators|series` take the same aggregates within the
   caller's scope, without `merge_suggestions`); `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
-  page: per-field provenance, chapters, files, listeners, shares, folder override);
+  page: per-field provenance, chapters, files, listeners, shares, folder override, and
+  `match_query`, the match dialog's search box prefill set by the api: `meta.SearchPrefill`, the
+  title + author, except that swapped tags (the title is the author folder, or the cleaned author
+  is the path's title; never a tag that matches its own path fact, "Dune/Dune") or a junk title/author
+  (`metadata.NamesNothing`, "Unknown", "Various Artists")
+  take the folders' facts, `metadata.FromPathLayout`);
   `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
   STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
   `workSem` via `fetchWork`. The match gets the book's facts separately
@@ -830,12 +840,32 @@ admin overrides; see Metadata overrides below).
   redirects, 15 s, `maxConcurrentCoverFetches`, never holding `coverReads`).
   `POST /admin/meta/covers` (`{urls, size}`, <= 12) returns thumbnails as `data:` URLs in
   order (`""` = couldn't be fetched or decoded; cached in the thumbnail cache by URL, a failed
-  fetch not; each holds `communityReads` from its fetch to the end of its decode); `PUT /admin/libraries/{id}/cover/community?path=` (`{url}`) keeps one as the book's
+  fetch not; each holds `communityReads` from its fetch to the end of its decode; asks for the
+  same thumbnail at once share one fetch, `communityFlights`); `PUT /admin/libraries/{id}/cover/community?path=` (`{url}`) keeps one as the book's
   custom cover through `saveCustomCover`, the upload's own path, once `keepableCover` has read its
   header (413 past `media.MaxThumbnailSourcePixels`), re-encoded within 1600 px first when it is
   over 5 MiB (audited `book.cover_set`, `source: community`); 400 for a URL
   that isn't http(s), 502 `cover_unavailable`, 413/415 as an upload. Both 404 `metadata_off`
   while metadata is off (`metadataOff`). Tests swap the fetch through `API.fetchCover`.
+  **The player's community covers** (rail entries, "Previous books", the recording) come
+  through `GET /libraries/{id}/meta/cover?path=&url=&size=160|320|640` (`handleMetaCover`,
+  capability `meta_covers` = `metadataOn()`; media auth, so `?token=`): the web player's
+  CSP takes images only from the server, which stays so (`TestHTMLCSPImagesStaySameOrigin`),
+  and a listener's device never contacts a cover host. Not an open proxy: the path is
+  scope-checked like `/meta` (the same `bookEnvelope` lookup), and `url` must be one the book's cached envelope hands out
+  (`meta.Enrichment.HandsOutCover`: the recording's or any rail view's entry, exact match),
+  else 404 before any fetch. That beats a remembered-URL set (lost on restart, needs a
+  bound) and a signed URL (a new wire field on every cover, a key to keep): the envelope
+  is already cached in memory and in `meta_cache`, so the check is a lookup. Served only as
+  a JPEG thumbnail through `communityThumbnail` (same cache key as the console's batch,
+  `FetchCover`'s guards, `communityReads`), so upstream bytes and content types never
+  reach the client; ETag `"community-<size>-<CoverVersion(url)>"`, `coverCache` (a day).
+  404 `no such cover` (unmatched, untagged, URL not handed out), 502 metadata unavailable,
+  502 `cover_unavailable` (fetch failed, not cached but remembered per URL for
+  `communityRetryAfter`, 1 min, so a broken or hung host isn't fetched on every render; the
+  console's batch ignores that and always retries), 404 `no cover` (not an image, over
+  the pixel bound). It stays under the request timeout (`isStreamingPath` matches
+  only `/libraries/{id}/cover|stream` exactly, `isLibraryMedia`).
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
   covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
   thumbnails as `data:` URLs in request order (`""` = no art), resolved like
@@ -966,7 +996,11 @@ admin overrides; see Metadata overrides below).
   recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
   device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
   (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
-  how much). `SaveProgress` stamps `progress.started_at` on insert and
+  how much). Book counts (`totals.books`/`finished`, a top user's, a person's own `/me/stats` totals):
+  `finished` is the distinct books finished in the period (`finishedIn`; a book two people finished
+  counts once on the Activity page) and `books` the books listened to OR finished in it
+  (`bookCounts`), so a book marked finished or imported with no listening recorded still counts and
+  finished is never more than books. `SaveProgress` stamps `progress.started_at` on insert and
   `finished_at` when `finished` turns on (cleared when it turns off), both from the save's own
   `updated_at`; a save's own `started_at`/`finished_at` are ignored. The player's progress JSON
   carries them as `started_at`/`finished_at` (`omitempty`; `catalog.Progress`, player redesign
@@ -979,7 +1013,7 @@ admin overrides; see Metadata overrides below).
   nothing writes nothing, answering the row as it is or 404 with none; no listening session
   recorded). An edit's `updated_at` keeps its sub-second time, and `SaveProgress` compares and
   writes in one writer transaction, so an older device save never overwrites a newer edit. Endpoints
-  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP), `GET
+  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.NamesNothing`, IsGenericTitle for any script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
   /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET
@@ -1138,6 +1172,26 @@ admin overrides; see Metadata overrides below).
   the browser's `device_id` (`auth.IssueSession`, hashed in `tokens.sign_in_key`, migration 0020) matches
   an earlier session of that person; an admin's `RevokeDevice`, a new password or disabling the account
   forgets it.
+- **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):
+  a quiet Overview card pointing at GitHub Sponsors (`admin-ui/src/lib/support.ts` `SPONSOR_URL`, also the
+  account menu's "Support AudioSilo" item, About's link row and the update notice's one line; the
+  release footer in `.goreleaser.yml` carries the same line). Admin console only, never the player and no
+  capability flag. `GET /admin/support` → `{show}`; `POST /admin/support` `{action: "donated"|"snoozed"}`
+  (the same words storage and audit use) → `{show: false, until?}` without recomputing, `until` (RFC 3339)
+  only when a snooze was stored; the console's toast words that date. 400 for any other action
+  (`catalog.ErrInvalidSupportChoice` in `writeCatalogError`); admin only; audited `settings.support` with
+  `choice` and a snooze's `returns_at`, not when nothing changed. The answer is server-wide and **taken
+  on trust**: nothing is checked, nothing is sent anywhere, and it unlocks nothing (a donation stays a
+  gift). Stored in `server_state` (migration 0040: key/value server facts that are not config.yaml
+  settings) through the generic `catalog/server_state.go` accessors `getServerState` (an unreadable value
+  counts as none) and `putServerState`; key `support_card`, value `{"choice":"donated"}` or
+  `{"choice":"snoozed","until":<formatSessionTime>}`. `SetSupportChoice` reads and writes in one
+  transaction so a donation is never downgraded by a later snooze. Due when not donated, no snooze
+  running, and the server's age (the earliest non-demo `users.created_at`, so a restored backup keeps its
+  age) is >= `SupportAfterDays` (30), or >= `SupportMinDays` (7) with >= `SupportAfterFinished` (10) books
+  finished here (finishes dated before that first account, e.g. an Audiobookshelf import's, and demo
+  accounts' don't count; the count stops at 10). `SupportSnoozeMonths` 6. Console strings live in one
+  `support.*` i18n group (menu, About, card).
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
@@ -1284,7 +1338,7 @@ admin overrides; see Metadata overrides below).
   See the plan file.
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
-`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
+`upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`); flip them on
 as phases land. `series_memberships` is true (books in several series: `memberships=1` on
@@ -1301,7 +1355,8 @@ below and Your listening). `transcode` already reflects whether ffmpeg is config
 `metadata` reflects whether the Phase 1.5 metadata lookup is live
 (`metadataOn()`: a valid `metadata.base_url` at start AND the live
 `metadata.enabled`, which the admin can toggle at `PATCH /admin/settings`);
-`meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`) tracks `metadata`.
+`meta_bundle` (`/meta`'s `include=previous` / `spoilers=hide`) and `meta_covers`
+(`GET /libraries/{id}/meta/cover`) track `metadata`.
 
 ## API surface
 
@@ -1312,7 +1367,9 @@ session bearer token; `/admin/*` additionally requires the admin role. The
 metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
 the other `?path=` content endpoints; 404 when metadata is disabled), plus
 `GET /meta/work?id=<work id>` (authed, no library scope - global community data;
-404 when metadata is disabled or the work id is unknown).
+404 when metadata is disabled or the work id is unknown). The player's community
+covers come through `GET /libraries/{id}/meta/cover?path=&url=&size=` (`meta_covers`;
+see Community covers).
 The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}`),
 `/narrators` (`{narrators, unknown}`) and `/series` (`{series}`) (authed,
 `libraryScope`: 403 no access, 404 unknown library; counts only the caller's

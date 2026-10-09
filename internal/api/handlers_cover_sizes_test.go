@@ -83,6 +83,7 @@ func itemCover(t *testing.T, e *testEnv, tok string, libID int64, path string) (
 // as the full cover (sidecar, custom, by a part path too), with cache headers by
 // source; no art is a 404; no size is the full art, unchanged.
 func TestCoverSizeThumbnail(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -127,6 +128,7 @@ func TestCoverSizeThumbnail(t *testing.T) {
 }
 
 func TestCoverSizeValidation(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -145,6 +147,7 @@ func TestCoverSizeValidation(t *testing.T) {
 // media ?token= too) and the out-of-scope 403 outside it, with no art, including
 // for a granted part path whose book lies outside the grant.
 func TestCoverSizeScope(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	libID, _ := seedCovers(t, e)
@@ -188,6 +191,7 @@ func TestCoverSizeScope(t *testing.T) {
 // TestCoverSizeETag: a matching If-None-Match is a 304 with the same validator
 // and cache headers; each size and each art version has its own ETag.
 func TestCoverSizeETag(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -260,6 +264,7 @@ func listCovers(t *testing.T, e *testEnv, tok string, libID int64) map[string]st
 // removal reverts it to the file art's; a thumbnail (GET ?size= or the console's
 // batch) records the colour, which stops showing once the version moves on.
 func TestCoverColorAndVersion(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -345,6 +350,7 @@ func TestCoverColorAndVersion(t *testing.T) {
 // re-index moves the book's cover; its next thumbnail does - a new ETag, the new
 // art's colour, and a cover_version that moves with them.
 func TestCoverSidecarReplacedInPlace(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, root := seedCovers(t, e)
@@ -398,6 +404,7 @@ func id3WithCover(img []byte) []byte {
 // (here an audio file that won't open, as on a mount in trouble) is a 500 the
 // next request retries, not "no art" cached for that art's version.
 func TestCoverEmbeddedReadFailureRetried(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root opens any file")
 	}
@@ -438,6 +445,7 @@ func TestCoverEmbeddedReadFailureRetried(t *testing.T) {
 }
 
 func TestServerInfoCoverSizes(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
 	if !strings.Contains(body, `"cover_sizes":true`) {

@@ -28,6 +28,7 @@ func (e *rateEnv) patchProgress(t *testing.T, tok, path, body string) (int, cata
 }
 
 func TestEditMyProgress(t *testing.T) {
+	t.Parallel()
 	e := newRateEnv(t)
 	ctx := context.Background()
 	ref := catalog.Ref{LibraryID: e.libID, Path: cradleBook}
@@ -134,6 +135,7 @@ func TestEditMyProgress(t *testing.T) {
 
 // A device can't set the dates through a save; the echo carries the server's.
 func TestPutProgressIgnoresClientDates(t *testing.T) {
+	t.Parallel()
 	e := newRateEnv(t)
 	forged := "2001-01-01T00:00:00Z"
 	resp, body := e.do(t, "PUT", e.at("progress", cradlePart), e.kidTok,
@@ -150,6 +152,7 @@ func TestPutProgressIgnoresClientDates(t *testing.T) {
 // The caller's edit wins over an older device save (last-write-wins, server time,
 // a higher version), and a newer device save wins over it.
 func TestEditMyProgressLastWriteWins(t *testing.T) {
+	t.Parallel()
 	e := newRateEnv(t)
 	save := func(pos float64, at time.Time) catalog.Progress {
 		t.Helper()
@@ -186,6 +189,7 @@ func TestEditMyProgressLastWriteWins(t *testing.T) {
 // (the client's today can be the server's tomorrow). A future finish would
 // otherwise sit outside this year's finished books until it came.
 func TestEditMyProgressFutureDates(t *testing.T) {
+	t.Parallel()
 	e := newRateEnv(t)
 	at := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(time.RFC3339) }
 	for _, bad := range []string{
@@ -217,6 +221,7 @@ func TestEditMyProgressFutureDates(t *testing.T) {
 // (no row: 404) or re-stamp an existing row, which would make a device's pending
 // older save lose to it.
 func TestEditMyProgressEmptyEditWritesNothing(t *testing.T) {
+	t.Parallel()
 	e := newRateEnv(t)
 	ctx := context.Background()
 	ref := catalog.Ref{LibraryID: e.libID, Path: cradleBook}

@@ -44,6 +44,7 @@ func hiddenLists(t *testing.T, e *collectionsEnv) []hiddenList {
 // visible row when the position is absent or past the visible end; hidden rows
 // stay where they are.
 func TestListAddAtVisibleIndex(t *testing.T) {
+	t.Parallel()
 	e := newCollectionsEnv(t)
 	for _, list := range hiddenLists(t, e) {
 		t.Run(list.name, func(t *testing.T) {
@@ -95,6 +96,7 @@ func TestListAddAtVisibleIndex(t *testing.T) {
 // visible rows alone are at the cap is the full error, and a move within it
 // still works.
 func TestListCapEvictsOldestHidden(t *testing.T) {
+	t.Parallel()
 	e := newCollectionsEnv(t)
 	ctx := t.Context()
 	for _, list := range hiddenLists(t, e) {

@@ -71,6 +71,7 @@ func users(t *testing.T, path string) []string {
 func (e *env) tick(d time.Duration) { e.clock = e.clock.Add(d) }
 
 func TestCreateListAndPrune(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	e.svc.SetSettings("daily:03:00", 2)
@@ -124,6 +125,7 @@ func TestCreateListAndPrune(t *testing.T) {
 }
 
 func TestListIgnoresOtherFiles(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	if err := os.MkdirAll(e.svc.dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -147,6 +149,7 @@ func TestListIgnoresOtherFiles(t *testing.T) {
 }
 
 func TestNamesNeverLeaveTheFolder(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	secret := filepath.Join(e.dataDir, "audiosilo-secret.db")
 	if err := os.WriteFile(secret, []byte("x"), 0o600); err != nil {
@@ -178,6 +181,7 @@ func TestNamesNeverLeaveTheFolder(t *testing.T) {
 }
 
 func TestCreateBusyAndFailure(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.mu.Lock()
 	e.svc.running = true
@@ -213,6 +217,7 @@ func TestCreateBusyAndFailure(t *testing.T) {
 // A backup stopped by the server stopping (its context ended) is not announced as
 // a failure.
 func TestStoppedBackupIsNotAFailure(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	heard := false
 	e.svc.OnFailure = func(Result) { heard = true }
@@ -227,6 +232,7 @@ func TestStoppedBackupIsNotAFailure(t *testing.T) {
 }
 
 func TestScheduleDue(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.clock = time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)
 	e.svc.anchor = e.clock
@@ -273,6 +279,7 @@ func TestScheduleDue(t *testing.T) {
 // After a restart (Run starting now), a slot missed while the server was off is
 // counted from the newest scheduled backup, not from the restart.
 func TestScheduleCatchesUpAfterRestart(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.svc.SetSettings("daily:03:00", 7)
 	if _, err := e.svc.Create(context.Background(), KindScheduled); err != nil {
@@ -301,6 +308,7 @@ func TestScheduleCatchesUpAfterRestart(t *testing.T) {
 // each): it is read once, and the schedule then counts from this process's own
 // attempts.
 func TestScheduleTicksDontListTheFolder(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	lists := 0
 	e.svc.readDir = func(dir string) ([]os.DirEntry, error) {
@@ -352,6 +360,7 @@ func TestScheduleTicksDontListTheFolder(t *testing.T) {
 
 // Start reads as running as soon as it returns, so the request's answer says so.
 func TestStartRunsAtOnce(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	if err := e.svc.Start(context.Background(), KindManual); err != nil {
 		t.Fatal(err)
@@ -373,6 +382,7 @@ func TestStartRunsAtOnce(t *testing.T) {
 
 // Retention never removes the backup a restore is waiting for.
 func TestPruneKeepsPendingRestore(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	e.svc.SetSettings("daily:03:00", 1)
@@ -406,6 +416,7 @@ func TestPruneKeepsPendingRestore(t *testing.T) {
 // An unreadable restore marker is reported once and dropped, not left to stop
 // every start.
 func TestUnreadableMarkerIsDropped(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	marker := filepath.Join(e.dataDir, markerFile)
 	if err := os.WriteFile(marker, []byte("{not json"), 0o600); err != nil {
@@ -424,6 +435,7 @@ func TestUnreadableMarkerIsDropped(t *testing.T) {
 }
 
 func TestRestoreRoundTrip(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	b, err := e.svc.Create(ctx, KindManual)
@@ -472,6 +484,7 @@ func TestRestoreRoundTrip(t *testing.T) {
 }
 
 func TestRestoreRefusedLeavesDatabase(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	b, err := e.svc.Create(ctx, KindManual)
@@ -512,6 +525,7 @@ func TestRestoreRefusedLeavesDatabase(t *testing.T) {
 }
 
 func TestRequestRestoreChecksTheFile(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	_ = os.MkdirAll(e.svc.dir, 0o700)
 	if err := os.WriteFile(filepath.Join(e.svc.dir, "audiosilo-junk.db"), []byte("junk"), 0o600); err != nil {
@@ -526,6 +540,7 @@ func TestRequestRestoreChecksTheFile(t *testing.T) {
 }
 
 func TestDeleteCancelsItsRestore(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	b, err := e.svc.Create(ctx, KindManual)

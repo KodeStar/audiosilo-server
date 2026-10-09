@@ -22,6 +22,8 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     'GET /admin/settings': { body: settings },
     // The Overview's server card: up to date.
     'GET /admin/update': { body: updateStatus() },
+    // The Overview's support card: not due, by default.
+    'GET /admin/support': { body: { show: false } },
     'GET /admin/libraries': { body: { libraries: libraries() } },
     // The overview's "needs attention" card.
     'GET /admin/issues': { body: issuesSummary() },

@@ -37,6 +37,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"export":             true,                 // admin library export (GET /admin/libraries/{id}/export)
 			"metadata":           a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
 			"meta_bundle":        a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
+			"meta_covers":        a.metadataOn(),       // community covers from this server (GET /libraries/{id}/meta/cover)
 			"browse_people":      true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
 			"series_memberships": true,                 // books in several series: memberships=1 on /books?series= and /series, Book.series_list
 			"series_books":       true,                 // the first page of several series' books in one request (GET /libraries/{id}/series/books)

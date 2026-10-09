@@ -565,6 +565,19 @@ describe('match with community metadata', () => {
     expect(screen.getByRole('dialog', { name: 'Compare with community metadata' })).toBeVisible();
   });
 
+  it("opens with the server's search text (the folders' when the tags are swapped)", async () => {
+    mockFetch(
+      matchRoutes(bookDetail({ match_query: "Sharpe - 08 - Sharpe's Eagle Bernard Cornwell" })),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByRole('textbox', { name: 'Search the community database' }),
+    ).toHaveValue("Sharpe - 08 - Sharpe's Eagle Bernard Cornwell");
+  });
+
   it('searches by an ASIN pasted into the box', async () => {
     const calls = mockFetch(matchRoutes(bookDetail()));
     renderApp(URL);

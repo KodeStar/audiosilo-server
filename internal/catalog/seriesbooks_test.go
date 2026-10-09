@@ -47,6 +47,7 @@ func relPaths(books []Book) []string {
 // every book of the folded series across libraries, in library sort order then
 // path; a caller granted one folder never gets a book outside it.
 func TestSeriesBooksScope(t *testing.T) {
+	t.Parallel()
 	c, ctx, first, second := seedSeries(t)
 	names := []string{"The Expanse", "Unrelated"}
 
@@ -86,6 +87,7 @@ func TestSeriesBooksScope(t *testing.T) {
 }
 
 func TestNextInOneSeries(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/a"})
 	for _, b := range []Book{
@@ -152,6 +154,7 @@ func TestNextInOneSeries(t *testing.T) {
 // the end of a membership series is numbered; the scope narrows both branches;
 // and a list repeating the main series counts the book once.
 func TestNextInOneSeriesMemberships(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Disc", Root: "/tmp/d"})
 	for _, b := range []Book{
@@ -239,6 +242,7 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 // grant narrows a series reached through a list like any other (allowed and
 // denied).
 func TestNextInSeries(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Disc", Root: "/tmp/d"})
 	add := func(path, series string, idx float64, more string) {
@@ -325,6 +329,7 @@ func TestNextInSeries(t *testing.T) {
 // book in a third series that is later in the second too is followed (allowed),
 // one earlier in it is not (denied).
 func TestNextInSeriesNeverStepsBack(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Narnia", Root: "/tmp/n"})
 	withLast, _ := c.CreateLibrary(ctx, Library{Name: "Narnia with The Last Battle", Root: "/tmp/n7"})
@@ -419,6 +424,7 @@ func TestNextInSeriesNeverStepsBack(t *testing.T) {
 // candidate looked up by rowid in the partial idx_books_more_series (a name with
 // no phrase to match reads that partial index alone).
 func TestNextInSeriesPlan(t *testing.T) {
+	t.Parallel()
 	c, _ := newTestCatalog(t)
 	for _, scope := range []Scope{{LibraryID: 1, AllowAll: true}, {LibraryID: 1, Paths: []string{"A", "B"}}} {
 		for series, lists := range map[string][]string{

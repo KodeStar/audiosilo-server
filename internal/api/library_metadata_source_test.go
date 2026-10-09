@@ -14,6 +14,7 @@ import (
 // admin list (not the player's), and a change re-resolves the books at once with no
 // rescan queued.
 func TestLibraryMetadataSourceEndpoint(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	ctx := context.Background()

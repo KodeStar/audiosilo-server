@@ -65,6 +65,7 @@ func checkPalette(t *testing.T, p Palette) {
 }
 
 func TestCoverPaletteSolidColour(t *testing.T) {
+	t.Parallel()
 	blue := color.NRGBA{30, 90, 200, 255}
 	p := coverPalette(bands(300, 300, []color.NRGBA{blue}, []float64{1}))
 	if p.Bg != "#1e5ac8" {
@@ -83,6 +84,7 @@ func TestCoverPaletteSolidColour(t *testing.T) {
 }
 
 func TestCoverPaletteTwoColours(t *testing.T) {
+	t.Parallel()
 	navy, orange := color.NRGBA{20, 30, 80, 255}, color.NRGBA{240, 140, 20, 255}
 	p := coverPalette(bands(100, 100, []color.NRGBA{navy, orange}, []float64{0.7, 0.3}))
 	// Navy is the most populous; orange is the vibrant one and already reads on it.
@@ -93,6 +95,7 @@ func TestCoverPaletteTwoColours(t *testing.T) {
 }
 
 func TestCoverPaletteGreyscaleHasNoAccent(t *testing.T) {
+	t.Parallel()
 	img := image.NewGray(image.Rect(0, 0, 256, 256))
 	for y := range 256 {
 		for x := range 256 {
@@ -109,6 +112,7 @@ func TestCoverPaletteGreyscaleHasNoAccent(t *testing.T) {
 // A vibrant colour too close in luminance to the background is nudged lighter or
 // darker, keeping its hue and saturation, until it reaches the contrast bar.
 func TestCoverPaletteNudgesLowContrastAccent(t *testing.T) {
+	t.Parallel()
 	slate, red := color.NRGBA{50, 50, 60, 255}, color.NRGBA{200, 60, 60, 255}
 	p := coverPalette(bands(100, 100, []color.NRGBA{slate, red}, []float64{0.7, 0.3}))
 	if p.Bg != "#32323c" {
@@ -131,6 +135,7 @@ func TestCoverPaletteNudgesLowContrastAccent(t *testing.T) {
 // On a mid-grey background no lightness of a vivid red reaches the bar within the
 // nudge bounds: the accent is left out rather than turned black or white.
 func TestCoverPaletteOmitsUnreadableAccent(t *testing.T) {
+	t.Parallel()
 	grey, red := color.NRGBA{117, 117, 117, 255}, color.NRGBA{220, 30, 30, 255}
 	p := coverPalette(bands(100, 100, []color.NRGBA{grey, red}, []float64{0.7, 0.3}))
 	if p != (Palette{Bg: "#757575"}) {
@@ -139,6 +144,7 @@ func TestCoverPaletteOmitsUnreadableAccent(t *testing.T) {
 }
 
 func TestCoverPaletteTransparentIsWhite(t *testing.T) {
+	t.Parallel()
 	p := coverPalette(image.NewNRGBA(image.Rect(0, 0, 10, 10)))
 	if p.Bg != "#ffffff" {
 		t.Fatalf("bg = %s, want #ffffff (flattened onto white)", p.Bg)
@@ -150,6 +156,7 @@ func TestCoverPaletteTransparentIsWhite(t *testing.T) {
 
 // The contrast guarantee holds for any art: random blocks of random colours.
 func TestCoverPaletteContrastProperty(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewPCG(1, 2))
 	accents := 0
 	for range 300 {
@@ -174,6 +181,7 @@ func TestCoverPaletteContrastProperty(t *testing.T) {
 // PaletteOf reads the palette from a thumbnail's JPEG, and refuses what is not
 // one.
 func TestPaletteOf(t *testing.T) {
+	t.Parallel()
 	thumb, err := Thumbnail(encodePNG(t, 1200, 900, color.NRGBA{200, 30, 90, 255}), 320)
 	if err != nil {
 		t.Fatal(err)

@@ -16,6 +16,7 @@ import (
 // restores both. It uses a mock metaserve so the meta lookup provably works
 // before the flip and again after.
 func TestAdminSettingsMetadataToggle(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
@@ -69,6 +70,7 @@ func TestAdminSettingsMetadataToggle(t *testing.T) {
 // configured (the service was never constructed) is a 400, and the envelope
 // reports it as unavailable.
 func TestAdminSettingsEnableWithoutBaseURL(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.Metadata.Enabled = false
 		c.Metadata.BaseURL = ""
@@ -91,6 +93,7 @@ func TestAdminSettingsEnableWithoutBaseURL(t *testing.T) {
 // TestAdminSettingsRequiresAdmin is the required allowed+denied security pair:
 // both endpoints refuse a non-admin (403) and serve an admin (200).
 func TestAdminSettingsRequiresAdmin(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "member-password", auth.RoleUser)
@@ -113,6 +116,7 @@ func TestAdminSettingsRequiresAdmin(t *testing.T) {
 // TestAdminSettingsPersisted: a PATCH writes config.yaml, so re-Loading the config
 // from the data dir reflects the new value (survives a restart).
 func TestAdminSettingsPersisted(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 

@@ -124,6 +124,7 @@ func (l *listsEnv) queueOf(t *testing.T, tok string) []wireItem {
 
 // The capabilities advertise the queue and collections.
 func TestListCapabilities(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
 	if !strings.Contains(body, `"queue":true`) || !strings.Contains(body, `"collections":true`) {
@@ -134,6 +135,7 @@ func TestListCapabilities(t *testing.T) {
 // Add (end, at a position, a move, an idempotent re-add), read with the book
 // attached in its list shape, remove (idempotent), and the request errors.
 func TestQueueRoundTrip(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	post := func(body string) (int, string) {
 		t.Helper()
@@ -206,6 +208,7 @@ func TestQueueRoundTrip(t *testing.T) {
 // A queue is its owner's alone: another user never sees it, and their remove or
 // replace touches only their own.
 func TestQueueIsPrivate(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(cradleBook, mistbornBook)); resp.StatusCode != http.StatusOK {
 		t.Fatalf("olive's replace = %d %s", resp.StatusCode, b)
@@ -229,6 +232,7 @@ func TestQueueIsPrivate(t *testing.T) {
 // stored, a replace skips what is out of scope or not exactly a book, and a
 // revoked share hides a queued book without deleting it (re-granting shows it).
 func TestQueueScope(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	ctx := context.Background()
 	// Denied: Mistborn is outside kid's share.
@@ -267,6 +271,7 @@ func TestQueueScope(t *testing.T) {
 // The queue holds MaxQueue books: a replace of more is 400, an add to a full
 // queue 409 queue_full, a move within it still works.
 func TestQueueLimits(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	ctx := context.Background()
 	many := make([]string, catalog.MaxQueue+1)
@@ -301,6 +306,7 @@ func TestQueueLimits(t *testing.T) {
 // user_ids) is a 400 that changes nothing, never "empty it" (a client's {} would
 // otherwise wipe the list, hidden entries included); an explicit [] clears.
 func TestListReplaceNeedsTheList(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	if resp, b := l.do(t, "PUT", "/api/v1/me/queue", l.oliveTok, l.itemsJSON(cradleBook, mistbornBook)); resp.StatusCode != http.StatusOK {
 		t.Fatalf("queue = %d %s", resp.StatusCode, b)

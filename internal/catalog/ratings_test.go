@@ -36,6 +36,7 @@ func (f *ratingFixture) get(t *testing.T, user int64, p string) *Rating {
 }
 
 func TestRatingsSetGetDelete(t *testing.T) {
+	t.Parallel()
 	f := newRatingFixture(t)
 	ctx := t.Context()
 	if r := f.get(t, f.ann, "A/Book"); r != nil {
@@ -88,6 +89,7 @@ func TestRatingsSetGetDelete(t *testing.T) {
 }
 
 func TestListRatingsScopedNewestFirstWithBooks(t *testing.T) {
+	t.Parallel()
 	f := newRatingFixture(t)
 	ctx := t.Context()
 	if _, err := f.c.UpsertBook(ctx, &Book{LibraryID: f.lib, RelPath: "A/Indexed", IsFolder: true, Title: "Indexed",
@@ -135,6 +137,7 @@ func TestListRatingsScopedNewestFirstWithBooks(t *testing.T) {
 // A rating follows its book's move; where the listener already rated the new path,
 // the newer rating wins whole.
 func TestRatingsMoveWithTheBook(t *testing.T) {
+	t.Parallel()
 	f := newRatingFixture(t)
 	ctx := t.Context()
 	f.rate(t, f.ann, "old/Book", 4, "moved")
@@ -172,6 +175,7 @@ func TestRatingsMoveWithTheBook(t *testing.T) {
 // Joining disc books carries their ratings onto the joined book, the newest
 // winning per listener; an unplaced part keeps its own.
 func TestRatingsJoin(t *testing.T) {
+	t.Parallel()
 	f := newRatingFixture(t)
 	const into = "Author/Book"
 	f.rate(t, f.ann, into+"/CD1", 2, "disc one")
@@ -194,6 +198,7 @@ func TestRatingsJoin(t *testing.T) {
 
 // Ratings are purged with their user and with their library (FK cascade).
 func TestRatingsPurgedWithUserAndLibrary(t *testing.T) {
+	t.Parallel()
 	f := newRatingFixture(t)
 	ctx := t.Context()
 	f.rate(t, f.ann, "A/Book", 4, "")

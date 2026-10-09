@@ -87,6 +87,7 @@ func sameAsBooksPage(t *testing.T, e *browseEnv, tok string, entry map[string]an
 // shape, series_list included, next_cursor), and a book in two series through
 // more_series is in both entries.
 func TestSeriesBooksMatchesBooksPage(t *testing.T) {
+	t.Parallel()
 	e := newSeriesBooksEnv(t)
 	base := e.libPath(e.libID)
 	var got seriesBooksBody
@@ -114,6 +115,7 @@ func TestSeriesBooksMatchesBooksPage(t *testing.T) {
 // occurrence), a repeated name once, an empty name not at all, and a series with
 // no books as an empty list without a cursor.
 func TestSeriesBooksOrderAndDedupe(t *testing.T) {
+	t.Parallel()
 	e := newSeriesBooksEnv(t)
 	q := seriesBooksQuery([]string{"Spin-off", "Nope", "", "Saga", "Spin-off", "Nope"}, "")
 	var got seriesBooksBody
@@ -138,6 +140,7 @@ func TestSeriesBooksOrderAndDedupe(t *testing.T) {
 // next_cursor continues on /books?series=<name>&memberships=1 with that limit;
 // an exhausted series omits it.
 func TestSeriesBooksLimitAndCursor(t *testing.T) {
+	t.Parallel()
 	e := newSeriesBooksEnv(t)
 	base := e.libPath(e.libID)
 	var got seriesBooksBody
@@ -167,6 +170,7 @@ func TestSeriesBooksLimitAndCursor(t *testing.T) {
 // TestSeriesBooksNames: no (non-empty) names and more than maxSeriesBatch
 // distinct ones are 400; exactly maxSeriesBatch, or many repeats of one, is fine.
 func TestSeriesBooksNames(t *testing.T) {
+	t.Parallel()
 	e := newSeriesBooksEnv(t)
 	path := e.libPath(e.libID) + "/series/books"
 	distinct := func(n int) []string {
@@ -198,6 +202,7 @@ func TestSeriesBooksNames(t *testing.T) {
 // folder sharing the prefix, and Out/B1 even through more_series), each entry
 // still equal to the member's own /books page; the admin sees every book.
 func TestSeriesBooksScoped(t *testing.T) {
+	t.Parallel()
 	e := newSeriesBooksEnv(t)
 	base := e.libPath(e.libID)
 	names := []string{"Saga", "Spin-off", "Other"}
@@ -227,6 +232,7 @@ func TestSeriesBooksScoped(t *testing.T) {
 // a session, 403 for a library the caller has no share in (and a non-admin's
 // unknown id), 404 for an admin's unknown library, 400 for a bad id.
 func TestSeriesBooksAccess(t *testing.T) {
+	t.Parallel()
 	e := newSeriesBooksEnv(t)
 	for _, c := range []struct {
 		lib, tok string
@@ -250,6 +256,7 @@ func TestSeriesBooksAccess(t *testing.T) {
 
 // TestSeriesBooksCapability: /server advertises series_books.
 func TestSeriesBooksCapability(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	var info struct {
 		Capabilities map[string]bool `json:"capabilities"`

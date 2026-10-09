@@ -9,6 +9,7 @@ import (
 )
 
 func TestParseClient(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in   string
 		want ClientInfo
@@ -36,6 +37,7 @@ func TestParseClient(t *testing.T) {
 }
 
 func TestResolveRequestRecordsPresence(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "sam", "", RoleUser)
 	secret, err := s.IssueToken(ctx, u.ID, KindSession, "Pixel 8", 0)
@@ -74,6 +76,7 @@ func TestResolveRequestRecordsPresence(t *testing.T) {
 }
 
 func TestListDevicesAndRevoke(t *testing.T) {
+	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	sam, _ := s.CreateUser(ctx, "sam", "", RoleUser)
 	jo, _ := s.CreateUser(ctx, "jo", "", RoleUser)
@@ -124,6 +127,7 @@ func TestListDevicesAndRevoke(t *testing.T) {
 }
 
 func TestForgetRevokedAddresses(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "sam", "", RoleUser)
 	live, _ := s.IssueToken(ctx, u.ID, KindSession, "live", 0)
@@ -160,6 +164,7 @@ func TestForgetRevokedAddresses(t *testing.T) {
 // cover or stream) racing one that names a new build must not write the old app
 // back. The decision is made in SQL, so the race can't revert it.
 func TestResolveRequestHeaderlessDoesNotRevertApp(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	u, _ := s.CreateUser(ctx, "sam", "", RoleUser)
 	tok, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
@@ -181,6 +186,7 @@ func TestResolveRequestHeaderlessDoesNotRevertApp(t *testing.T) {
 // keeps it known, an admin's "sign out this device" forgets it, and the key is
 // per person (another account signing in from the same browser is new to it).
 func TestIssueSessionKnowsTheBrowser(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 	ann, _ := s.CreateUser(ctx, "ann", "a-long-password", RoleAdmin)
 	bob, _ := s.CreateUser(ctx, "bob", "a-long-password", RoleUser)
@@ -265,6 +271,7 @@ func TestIssueSessionKnowsTheBrowser(t *testing.T) {
 // write, reporting nothing new, don't write the token row; a new app, a new
 // address or a minute passing does. Validity is still checked on every request.
 func TestResolveRequestSkipsUnchangedTouch(t *testing.T) {
+	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
 	*now = now.Truncate(time.Second) // last_seen is stored to the second
 	u, _ := s.CreateUser(ctx, "sam", "", RoleUser)

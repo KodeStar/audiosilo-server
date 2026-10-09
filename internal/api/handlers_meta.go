@@ -40,28 +40,12 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "metadata lookup not enabled")
 		return
 	}
-	lib, path, scope, status, msg := a.authorizedScope(r)
-	if status != 0 {
-		writeError(w, status, msg)
-		return
-	}
-	book, ok := a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book")
+	lib, path, book, env, ok := a.bookEnvelope(w, r)
 	if !ok {
 		return
 	}
-	if book.ASIN == "" && book.ISBN == "" {
+	if env == nil {
 		writeJSON(w, http.StatusOK, map[string]bool{"matched": false})
-		return
-	}
-
-	env, err := a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
-	switch {
-	case errors.Is(err, meta.ErrNotFound):
-		writeJSON(w, http.StatusOK, map[string]bool{"matched": false})
-		return
-	case err != nil:
-		a.log.Warn("meta lookup failed", "err", err, "library", lib.ID, "path", path)
-		writeError(w, http.StatusBadGateway, "metadata service unavailable")
 		return
 	}
 
@@ -73,6 +57,7 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	var (
 		chapter  int
 		finished bool
+		err      error
 	)
 	if hide {
 		if chapter, finished, err = a.listeningChapter(r.Context(), lib.ID, book); err != nil {
@@ -105,6 +90,37 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		out = meta.HideSpoilers(out, chapter, finished)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// bookEnvelope is the shared start of the routes over a book's /meta envelope
+// (handleMeta, handleMetaCover): the ?path= in the caller's scope, the book at it,
+// and its envelope from the shared cache (meta.Service.Enrich). env is nil when
+// the book can't be matched (no ASIN or ISBN, or none upstream); ok is false when
+// it wrote the error (403/404 for the path, 502 when the lookup failed).
+func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog.Library, path string, book *catalog.Book, env *meta.Enrichment, ok bool) {
+	lib, path, scope, status, msg := a.authorizedScope(r)
+	if status != 0 {
+		writeError(w, status, msg)
+		return nil, "", nil, nil, false
+	}
+	if book, ok = a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book"); !ok {
+		return nil, "", nil, nil, false
+	}
+	if book.ASIN == "" && book.ISBN == "" {
+		return lib, path, book, nil, true
+	}
+	env, err := a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
+	switch {
+	case errors.Is(err, meta.ErrNotFound):
+		return lib, path, book, nil, true
+	case err != nil:
+		if r.Context().Err() == nil {
+			a.log.Warn("meta lookup failed", "err", err, "library", lib.ID, "path", path)
+		}
+		writeError(w, http.StatusBadGateway, "metadata service unavailable")
+		return nil, "", nil, nil, false
+	}
+	return lib, path, book, env, true
 }
 
 // localRails is env's rails placed for the caller (meta.Service.PlaceOwned), and

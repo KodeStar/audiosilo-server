@@ -54,6 +54,8 @@ import type {
   LogPage,
   SettingsPatch,
   SystemStatus,
+  SupportAction,
+  SupportStatus,
   UpdateStatus,
   AdminStats,
   BookPage,
@@ -327,6 +329,11 @@ export const api = {
   system: () => request<SystemStatus>('GET', '/admin/system'),
   updateStatus: () => request<UpdateStatus>('GET', '/admin/update'),
   checkForUpdate: () => request<UpdateStatus>('POST', '/admin/update/check'),
+  /** Whether the Overview's support card shows (the server decides when). */
+  support: () => request<SupportStatus>('GET', '/admin/support'),
+  /** An admin's answer to the support card, for the whole server; taken on trust. */
+  answerSupport: (action: SupportAction) =>
+    request<SupportStatus>('POST', '/admin/support', { action }),
   /** The newest log lines; `after` (a previous page's last_seq) asks only for newer ones. */
   logs: (q: LogQuery = {}) => request<LogPage>('GET', `/admin/logs${bookQuery(q)}`),
 

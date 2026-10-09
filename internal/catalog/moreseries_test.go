@@ -12,6 +12,7 @@ import (
 // found by the series= filter and search, ordered by its position in the series
 // a list is filtered to, and counted in the series aggregate (as extra books).
 func TestMoreSeries(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	const watch = "City Watch"
@@ -112,6 +113,7 @@ func TestMoreSeries(t *testing.T) {
 // rail's series only through its more_series too, in placement order and within
 // the grant (allowed and denied).
 func TestMoreSeriesPlayer(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	for _, b := range []*Book{
@@ -208,6 +210,7 @@ func TestMoreSeriesPlayer(t *testing.T) {
 // series_index keeps its own position, and an old main series that can't be
 // listed refuses the edit.
 func TestSeriesSwap(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	uid := seedUser(t, c, ctx)
@@ -388,6 +391,7 @@ func TestSeriesSwap(t *testing.T) {
 // path's but in another series is still an edit. A derived list as empty as the
 // unedited one is a revert too.
 func TestSeriesSwapUneditedValues(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	uid := seedUser(t, c, ctx)

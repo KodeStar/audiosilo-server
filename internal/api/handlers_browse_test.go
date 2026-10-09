@@ -83,6 +83,7 @@ type peopleBody struct {
 // sibling folder sharing the prefix, contributes nothing), and an admin's count
 // every book (allowed). No merge suggestions on the player route.
 func TestBrowsePeopleScoped(t *testing.T) {
+	t.Parallel()
 	e := newBrowseEnv(t)
 	base := e.libPath(e.libID)
 
@@ -115,6 +116,7 @@ func TestBrowsePeopleScoped(t *testing.T) {
 // TestBrowseSeriesScoped: the member's series hold only their granted books'
 // counts and positions; the admin's hold every book's.
 func TestBrowseSeriesScoped(t *testing.T) {
+	t.Parallel()
 	e := newBrowseEnv(t)
 	base := e.libPath(e.libID)
 	var got struct {
@@ -138,6 +140,7 @@ func TestBrowseSeriesScoped(t *testing.T) {
 
 // TestBrowseEmptyArrays: a grant holding no books gives empty arrays, never null.
 func TestBrowseEmptyArrays(t *testing.T) {
+	t.Parallel()
 	e := newBrowseEnv(t)
 	ctx := context.Background()
 	u, _ := e.auth.CreateUser(ctx, "empty", "empty-password", auth.RoleUser)
@@ -161,6 +164,7 @@ func TestBrowseEmptyArrays(t *testing.T) {
 // has no share in (403, also for an unknown id: it says nothing about which ids
 // exist) and answer an admin's unknown library with 404.
 func TestBrowseAccess(t *testing.T) {
+	t.Parallel()
 	e := newBrowseEnv(t)
 	for _, p := range []string{"/authors", "/narrators", "/series"} {
 		if resp, _ := e.do(t, "GET", e.libPath(e.libID)+p, "", ""); resp.StatusCode != http.StatusUnauthorized {
@@ -187,6 +191,7 @@ func TestBrowseAccess(t *testing.T) {
 // TestListBooksNarratorFilter: ?narrator= is an exact match, within the caller's
 // scope like the other filters.
 func TestListBooksNarratorFilter(t *testing.T) {
+	t.Parallel()
 	e := newBrowseEnv(t)
 	base := e.libPath(e.libID)
 	paths := func(tok, q string) []string {
@@ -218,6 +223,7 @@ func TestListBooksNarratorFilter(t *testing.T) {
 // description only on the item endpoint, never on a list page (books, search,
 // recent).
 func TestBookPublishedAndDescription(t *testing.T) {
+	t.Parallel()
 	e := newBrowseEnv(t)
 	base := e.libPath(e.libID)
 	edit := `{"set":{"published":"2011-03","description":"A long blurb about the saga."}}`
@@ -269,6 +275,7 @@ func TestBookPublishedAndDescription(t *testing.T) {
 
 // TestBrowsePeopleCapability: /server advertises the browse lists.
 func TestBrowsePeopleCapability(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	var info struct {
 		Capabilities map[string]bool `json:"capabilities"`
@@ -283,6 +290,7 @@ func TestBrowsePeopleCapability(t *testing.T) {
 // there (and counted) only for a client that asks with memberships=1, still
 // within the caller's scope; /server advertises series_memberships.
 func TestSeriesMemberships(t *testing.T) {
+	t.Parallel()
 	e := newSeriesBooksEnv(t) // Saga Two and the out-of-grant Other One are also Spin-off #1
 	base := e.libPath(e.libID)
 	books := func(tok, q string) []string {

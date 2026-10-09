@@ -20,6 +20,7 @@ import (
 // Every Phase 5b endpoint is admin-only: signed out is 401, a member 403, an admin
 // served.
 func TestPhase5bEndpointsRequireAdmin(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok := opsTokens(t, e)
 	b, err := e.backups.Create(context.Background(), "manual")
@@ -100,6 +101,7 @@ func (e *testEnv) backupList(t *testing.T, tok string) backupsEnv {
 }
 
 func TestBackupLifecycle(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 
@@ -192,6 +194,7 @@ func TestBackupLifecycle(t *testing.T) {
 }
 
 func TestBackupSettings(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	_, body := e.do(t, "GET", "/api/v1/admin/settings", adminTok, "")
@@ -235,6 +238,7 @@ func TestBackupSettings(t *testing.T) {
 }
 
 func TestNotificationTargetsNeverEchoCredentials(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	var got []string
@@ -320,6 +324,7 @@ func TestNotificationTargetsNeverEchoCredentials(t *testing.T) {
 }
 
 func TestNotificationTargetLimit(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	for i := range catalog.MaxNotifyTargets {
@@ -336,6 +341,7 @@ func TestNotificationTargetLimit(t *testing.T) {
 }
 
 func TestSignInsReachTheFeed(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	resp, _ := e.doHeaders(t, "POST", "/api/v1/auth/login", "", `{"username":"member","password":"member-password","device_name":"Sam's Mac"}`,
@@ -392,6 +398,7 @@ func TestSignInsReachTheFeed(t *testing.T) {
 // device; one without a browser id always is, and so is a browser an admin signed
 // out (it may be someone else's who had the password).
 func TestSignInFromAKnownBrowserIsNotANewDevice(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	login := func(body string) string {
@@ -455,6 +462,7 @@ func TestSignInFromAKnownBrowserIsNotANewDevice(t *testing.T) {
 }
 
 func TestAuditLogRecordsAdminActions(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	resp, body := e.do(t, "POST", "/api/v1/admin/users", adminTok, `{"username":"jo","password":"a-long-password","role":"user"}`)
@@ -530,6 +538,7 @@ func TestAuditLogRecordsAdminActions(t *testing.T) {
 
 // An API key's actions are recorded as made with a key.
 func TestAuditViaAPIKey(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	_, key := e.mintAPIKey(t, adminTok, "script")
@@ -543,6 +552,7 @@ func TestAuditViaAPIKey(t *testing.T) {
 }
 
 func TestBackupDownloadOutlivesRequestTimeout(t *testing.T) {
+	t.Parallel()
 	if !isStreamingPath("/api/v1/admin/backups/audiosilo-x.db") {
 		t.Fatal("backup downloads are bound by the request timeout")
 	}
@@ -556,6 +566,7 @@ func TestBackupDownloadOutlivesRequestTimeout(t *testing.T) {
 // A saved secret stays with the server it was given for: moving the address to
 // another server needs it again (or cleared), a path change on the same one doesn't.
 func TestNotificationSecretStaysWithItsServer(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	resp, body := e.do(t, "POST", "/api/v1/admin/notifications", adminTok,
@@ -590,6 +601,7 @@ func TestNotificationSecretStaysWithItsServer(t *testing.T) {
 
 // A save that changes nothing isn't an admin change.
 func TestNoOpSettingsSaveIsNotAudited(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"backups":{"keep":7}}`); resp.StatusCode != 200 {

@@ -12,6 +12,7 @@ import (
 )
 
 func TestFormatSeriesPosition(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   float64
 		want string
@@ -31,6 +32,7 @@ func TestFormatSeriesPosition(t *testing.T) {
 }
 
 func TestRuntimeMinutes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   float64
 		want int
@@ -49,6 +51,7 @@ func TestRuntimeMinutes(t *testing.T) {
 }
 
 func TestSlugifyAndFilename(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ in, want string }{
 		{"Main", "main"},
 		{"My Audiobooks", "my-audiobooks"},
@@ -76,6 +79,7 @@ func TestSlugifyAndFilename(t *testing.T) {
 // fields, the per-book projection, chapter counts, multi-file books counting
 // once, and de-duplication of a second copy of the same book.
 func TestExportLibraryBooks(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/main"})
 
@@ -169,6 +173,7 @@ func TestExportLibraryBooks(t *testing.T) {
 // the sparsely-tagged rip; the kept entry must still carry every fact the library
 // holds for that book, not just the ones the first-sorting row happened to have.
 func TestExportLibraryBooksMergesDuplicateCopies(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/main"})
 
@@ -215,6 +220,7 @@ func TestExportLibraryBooksMergesDuplicateCopies(t *testing.T) {
 // TestExportLibraryBooksLeaksNoFilesystem is the guard that matters most: the
 // file leaves the server, so no path, size, codec or format may appear in it.
 func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/srv/secret-root"})
 	if _, err := c.UpsertBook(ctx, &Book{
@@ -283,6 +289,7 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 // TestExportLibraryBooksPagesEveryBook checks the keyset paging loop drains a
 // library larger than one page (exportPageSize) without repeating or dropping.
 func TestExportLibraryBooksPagesEveryBook(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Big", Root: "/tmp/big"})
 	const n = exportPageSize + 25
@@ -311,6 +318,7 @@ func TestExportLibraryBooksPagesEveryBook(t *testing.T) {
 }
 
 func TestExportLibraryBooksUnknownLibrary(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	if _, err := c.ExportLibraryBooks(ctx, 999, "dev"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)

@@ -10,6 +10,7 @@ import (
 
 // A backup carries a bookmark's label (migration 0030) with the bookmark.
 func TestBackupHoldsBookmarkLabels(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	for _, q := range []string{

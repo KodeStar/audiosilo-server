@@ -9,6 +9,7 @@ import (
 // limiter is the brute-force lockout behind login + auth-code redemption. The
 // injectable now() makes the window deterministic.
 func TestLimiterLockoutAndWindowExpiry(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	l := newLimiter(3, time.Minute)
 	l.now = func() time.Time { return now }
@@ -34,6 +35,7 @@ func TestLimiterLockoutAndWindowExpiry(t *testing.T) {
 // Acquire gates the demo-session endpoint: it must meter every admitted attempt
 // (so the Nth call within the window is denied) and recover after the window.
 func TestLimiterAcquire(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	l := newLimiter(5, 15*time.Minute) // mirrors the demoLimiter config
 	l.now = func() time.Time { return now }
@@ -55,6 +57,7 @@ func TestLimiterAcquire(t *testing.T) {
 }
 
 func TestLimiterReset(t *testing.T) {
+	t.Parallel()
 	l := newLimiter(2, time.Minute)
 	l.Fail("k")
 	l.Fail("k")
@@ -69,6 +72,7 @@ func TestLimiterReset(t *testing.T) {
 
 // rateLimiter is the token bucket on request rate (per IP, or per credential for media).
 func TestRateLimiterBucket(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	r := newRateLimiter(10, 2) // 10 tokens/sec, burst of 2
 	r.now = func() time.Time { return now }
@@ -93,6 +97,7 @@ func TestRateLimiterBucket(t *testing.T) {
 // Ready reports whether a token is left without spending it: media checks it
 // before authenticating, so a throttled address can't run token lookups.
 func TestRateLimiterReady(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	r := newRateLimiter(10, 2)
 	r.now = func() time.Time { return now }
@@ -123,6 +128,7 @@ func TestRateLimiterReady(t *testing.T) {
 // Ready together each pay, so the bucket goes into debt (down to -burst) and
 // stays not ready until the debt is repaid.
 func TestRateLimiterCharge(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	r := newRateLimiter(10, 2)
 	r.now = func() time.Time { return now }
@@ -161,6 +167,7 @@ func TestRateLimiterCharge(t *testing.T) {
 
 // A flood of distinct IPs must not grow the bucket map without bound.
 func TestRateLimiterEviction(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	r := newRateLimiter(20, 40)
 	r.now = func() time.Time { return now }
@@ -180,6 +187,7 @@ func TestRateLimiterEviction(t *testing.T) {
 
 // The login/redeem failure limiter must likewise evict stale, unlocked entries.
 func TestLimiterEviction(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	l := newLimiter(3, time.Minute)
 	l.now = func() time.Time { return now }

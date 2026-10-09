@@ -31,6 +31,8 @@ type mockMetaserve struct {
 	// chapters, when set, is the body of the recordings' chapters route
 	// (without it the route 404s, as on a metaserve that predates it).
 	chapters string
+	// series, when set, is the body of series/{id} (else the two-book Mars rail).
+	series   string
 	mu       sync.Mutex
 	gotMatch url.Values
 }
@@ -82,6 +84,10 @@ func (m *mockMetaserve) handler() http.Handler {
 		}
 	})
 	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		if m.series != "" {
+			_, _ = w.Write([]byte(m.series))
+			return
+		}
 		_, _ = w.Write([]byte(`{"id":"mars","name":"Mars","authors":[{"id":"andy-weir","name":"Andy Weir"}],"works":[{"position":"1","work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}},{"position":"2","work":{"id":"artemis","title":"Artemis","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}}]}`))
 	})
 	return mux
@@ -121,6 +127,7 @@ func seedBook(t *testing.T, e *testEnv, path, asin string) int64 {
 }
 
 func TestMetaMatch(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
@@ -144,6 +151,7 @@ func TestMetaMatch(t *testing.T) {
 }
 
 func TestMetaNoIDs(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	libID := seedBook(t, e, "Author/No IDs", "") // neither asin nor isbn
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
@@ -156,6 +164,7 @@ func TestMetaNoIDs(t *testing.T) {
 }
 
 func TestMetaUpstreamNotFound(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, http.StatusNotFound)
 	libID := seedBook(t, e, "Author/Unknown", "B0UNKNOWN")
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
@@ -168,6 +177,7 @@ func TestMetaUpstreamNotFound(t *testing.T) {
 }
 
 func TestMetaUpstreamDown(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, http.StatusInternalServerError)
 	libID := seedBook(t, e, "Author/Book", "B0DOWN")
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
@@ -180,6 +190,7 @@ func TestMetaUpstreamDown(t *testing.T) {
 }
 
 func TestMetaDisabled(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, false, 0)
 	libID := seedBook(t, e, "Author/Book", "B0OFF")
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
@@ -198,6 +209,7 @@ func TestMetaDisabled(t *testing.T) {
 // may probe a book inside their grant but must be refused (403) for a path
 // outside it, exactly like the other content handlers.
 func TestMetaScopeSecurity(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	// Two books under distinct top-level folders in one library.
 	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Main", Root: t.TempDir()})
@@ -243,6 +255,7 @@ const metaWorkPath = "/api/v1/meta/work?id="
 // itself is the gate - a signed-in user gets the work, an unauthenticated
 // caller is refused before any upstream call.
 func TestMetaWorkAuth(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 
@@ -271,6 +284,7 @@ func TestMetaWorkAuth(t *testing.T) {
 // a share-scoped non-admin may read any community work (it discloses nothing
 // about this server's content), matching how the data is public upstream.
 func TestMetaWorkScopedUserAllowed(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	kid, err := e.auth.CreateUser(context.Background(), "kid", "kid-password", auth.RoleUser)
 	if err != nil {
@@ -285,6 +299,7 @@ func TestMetaWorkScopedUserAllowed(t *testing.T) {
 }
 
 func TestMetaWorkMissingID(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 
@@ -302,6 +317,7 @@ func TestMetaWorkMissingID(t *testing.T) {
 // would otherwise burn a cache entry and an outbound upstream GET each; a
 // control character would reach the log line verbatim.
 func TestMetaWorkMalformedID(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 
@@ -328,6 +344,7 @@ func TestMetaWorkMalformedID(t *testing.T) {
 }
 
 func TestMetaWorkUnknownID(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 
@@ -338,6 +355,7 @@ func TestMetaWorkUnknownID(t *testing.T) {
 }
 
 func TestMetaWorkUpstreamDown(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnvMock(t, true, &mockMetaserve{workCode: http.StatusInternalServerError})
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 
@@ -348,6 +366,7 @@ func TestMetaWorkUpstreamDown(t *testing.T) {
 }
 
 func TestMetaWorkDisabled(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, false, 0)
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 
@@ -363,6 +382,7 @@ func TestMetaWorkDisabled(t *testing.T) {
 // shipped player that ignores `orderings` renders the publication order alone,
 // and the variant as an additive alternate carrying the work's position in it.
 func TestMetaSeriesOrderingEnvelope(t *testing.T) {
+	t.Parallel()
 	const family = `[{"id":"narnia","name":"Narnia","ordering":"publication"},{"id":"narnia-chrono","name":"Narnia (Chronological)","ordering":"chronological"}]`
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, _ *http.Request) {
@@ -536,6 +556,7 @@ func characterIDsOf(b bundleBody) []string {
 // the envelope is unchanged, and the cached envelope never carries a previous
 // list into a later plain request.
 func TestMetaIncludePrevious(t *testing.T) {
+	t.Parallel()
 	e, base := bundleEnv(t)
 	lib := seedChapteredBook(t, e, "A/Two", "B0TWO")
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
@@ -569,6 +590,7 @@ func TestMetaIncludePrevious(t *testing.T) {
 // caller's OWN saved progress gates the current work, and another user's
 // progress on the same book never leaks into it.
 func TestMetaSpoilersHide(t *testing.T) {
+	t.Parallel()
 	e, _ := bundleEnv(t)
 	ctx := context.Background()
 	lib := seedChapteredBook(t, e, "A/Two", "B0TWO")
@@ -632,11 +654,14 @@ func TestMetaSpoilersHide(t *testing.T) {
 
 // TestMetaBundleCapability: meta_bundle follows the metadata switch.
 func TestMetaBundleCapability(t *testing.T) {
+	t.Parallel()
 	for _, enabled := range []bool{true, false} {
 		e := newMetaEnv(t, enabled, 0)
 		_, si := e.do(t, "GET", "/api/v1/server", "", "")
-		if want := `"meta_bundle":` + strconv.FormatBool(enabled); !strings.Contains(si, want) {
-			t.Fatalf("enabled=%v: /server missing %s: %s", enabled, want, si)
+		for _, flag := range []string{"meta_bundle", "meta_covers"} {
+			if want := `"` + flag + `":` + strconv.FormatBool(enabled); !strings.Contains(si, want) {
+				t.Fatalf("enabled=%v: /server missing %s: %s", enabled, want, si)
+			}
 		}
 	}
 }
@@ -644,6 +669,7 @@ func TestMetaBundleCapability(t *testing.T) {
 // TestMetaPersistentCache: the api wires the catalog's meta_cache behind the
 // service, so a lookup leaves a row a restarted server reads.
 func TestMetaPersistentCache(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
 	adminTok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)

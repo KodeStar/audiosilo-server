@@ -12,6 +12,7 @@ import (
 // Names are trimmed and must be 1-100 characters without control characters;
 // descriptions at most 1000, line breaks allowed.
 func TestCollectionNameAndDescription(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in   string
 		want string
@@ -85,6 +86,7 @@ func (e *collectionsEnv) ref(p string) Ref { return Ref{LibraryID: e.lib.ID, Pat
 // allows (count and preview included), sees no share list, gets ErrNotOwner on
 // every write and can leave; a stranger gets ErrNotFound for everything.
 func TestCollectionRoles(t *testing.T) {
+	t.Parallel()
 	e := newCollectionsEnv(t)
 	c, ctx := e.c, t.Context()
 	col, err := c.CreateCollection(ctx, e.owner, " Bedtime ", "")
@@ -186,6 +188,7 @@ func TestCollectionRoles(t *testing.T) {
 // a rename, a description change and an item change move updated_at, a no-op
 // add does not.
 func TestCollectionsOrderAndUpdatedAt(t *testing.T) {
+	t.Parallel()
 	e := newCollectionsEnv(t)
 	c, ctx := e.c, t.Context()
 	mk := func(owner int64, name string) *Collection {
@@ -263,6 +266,7 @@ func TestCollectionsOrderAndUpdatedAt(t *testing.T) {
 // The caps: MaxCollections owned, MaxCollectionItems items (an add and a
 // replace), MaxCollectionShares share users.
 func TestCollectionLimits(t *testing.T) {
+	t.Parallel()
 	e := newCollectionsEnv(t)
 	c, ctx := e.c, t.Context()
 	var first *Collection
@@ -320,6 +324,7 @@ func TestCollectionLimits(t *testing.T) {
 // Shares name only existing, enabled, non-demo users other than the owner; one
 // bad id rejects the whole request. Share targets list exactly those users.
 func TestCollectionSharesAndTargets(t *testing.T) {
+	t.Parallel()
 	e := newCollectionsEnv(t)
 	c, ctx := e.c, t.Context()
 	demo := seedNamedUser(t, c, "demo_1")

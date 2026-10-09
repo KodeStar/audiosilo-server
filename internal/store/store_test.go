@@ -22,6 +22,7 @@ func countMigrations(t *testing.T, db *DB) int {
 // TestOpenAppliesMigrations opens a file-backed DB and asserts every embedded
 // migration lands in schema_migrations.
 func TestOpenAppliesMigrations(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db")
 
@@ -39,6 +40,7 @@ func TestOpenAppliesMigrations(t *testing.T) {
 // TestMigrationsIdempotent re-opens the same file and re-runs migrate(),
 // asserting no error and no change to the recorded migration count.
 func TestMigrationsIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db")
 
@@ -73,6 +75,7 @@ func TestMigrationsIdempotent(t *testing.T) {
 // TestForeignKeysEnabled asserts the foreign_keys pragma is ON after Open - the
 // schema relies on ON DELETE CASCADE rules that silently no-op when it is off.
 func TestForeignKeysEnabled(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db")
 
@@ -100,6 +103,7 @@ func TestForeignKeysEnabled(t *testing.T) {
 // migrate() uses (apply a body in a tx; on error, Rollback) with a body whose
 // second statement is invalid.
 func TestMigrationRunnerRollsBackOnBadBody(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn := filepath.Join(t.TempDir(), "test.db")
 

@@ -33,6 +33,7 @@ var notAudited = map[string]string{
 // handler counts as audited when it calls a.audit, directly or through another
 // method of the API (applyIgnore).
 func TestAdminChangesAreAudited(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("api.go")
 	if err != nil {
 		t.Fatal(err)

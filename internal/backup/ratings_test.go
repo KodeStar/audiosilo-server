@@ -11,6 +11,7 @@ import (
 // A backup carries the player's ratings (durable user state, player redesign
 // Phase 1b): the table and its rows.
 func TestBackupHoldsRatings(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	for _, q := range []string{

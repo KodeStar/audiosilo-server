@@ -154,6 +154,7 @@ func railLocals(t *testing.T, e *sagaEnv, path, token string) map[string]string 
 // rule: two callers with different grants get different locals from the SAME
 // cached envelope, and the cached envelope itself is never annotated.
 func TestMetaLocalPerCaller(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, sagaBooks()...)
 
 	// Allowed: the admin owns every entry; Saga/3 is found under its folded
@@ -191,6 +192,7 @@ func TestMetaLocalPerCaller(t *testing.T) {
 // holds), the envelope still goes out, without `local`, rather than failing a
 // lookup that succeeded - a client that never reads `local` included.
 func TestMetaLocalPlacementFailure(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, sagaBooks()...)
 	ctx := context.Background()
 	u, err := e.auth.CreateUser(ctx, "wide", "wide-password", auth.RoleUser)
@@ -231,6 +233,7 @@ func TestMetaLocalPlacementFailure(t *testing.T) {
 // TestMetaLocalCachedWorkID: a book whose enrichment the cache already holds is
 // placed by its work id, beating a book numbered like the entry.
 func TestMetaLocalCachedWorkID(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, append(sagaBooks(),
 		&catalog.Book{RelPath: "Extras/Three", Series: "Saga", ASIN: "B0THREE"})...) // unnumbered locally
 
@@ -284,6 +287,7 @@ func (n nextBody) nextPath() string {
 }
 
 func TestNextCommunity(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, sagaBooks()...)
 
 	// Owned: next + book + work (with its local). The book is the list shape.
@@ -316,6 +320,7 @@ func TestNextCommunity(t *testing.T) {
 // stop the lookup: the series or folder step answers, with the community's next
 // work attached without `local`.
 func TestNextCommunityUnplaced(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true,
 		&catalog.Book{RelPath: "Loose/1", ASIN: "B0ONE", IsFolder: true}, // untagged
 		&catalog.Book{RelPath: "Loose/2", IsFolder: true},
@@ -340,6 +345,7 @@ func TestNextCommunityUnplaced(t *testing.T) {
 // series either - the rail can lag the library - so the local steps answer,
 // with no community work.
 func TestNextCommunityLast(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true, append(sagaBooks(),
 		&catalog.Book{RelPath: "Saga/5", Series: "Saga", SeriesIndex: 5},
 		&catalog.Book{RelPath: "Late/4", ASIN: "B0FOUR", IsFolder: true}, // untagged
@@ -365,6 +371,7 @@ func TestNextCommunityLast(t *testing.T) {
 }
 
 func TestNextCommunityFallsThrough(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, true,
 		&catalog.Book{RelPath: "Down/1", Series: "Down", SeriesIndex: 1, ASIN: "B0DOWN"},
 		&catalog.Book{RelPath: "Down/2", Series: "Down", SeriesIndex: 2},
@@ -381,6 +388,7 @@ func TestNextCommunityFallsThrough(t *testing.T) {
 }
 
 func TestNextSeries(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, false,
 		&catalog.Book{RelPath: "Saga/1", Series: "Saga", SeriesIndex: 1, ASIN: "B0ONE"},
 		&catalog.Book{RelPath: "Other/1.5", Series: "Saga", SeriesIndex: 1.5},
@@ -416,6 +424,7 @@ func mkdirs(t *testing.T, root string, dirs ...string) {
 }
 
 func TestNextFolder(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, false,
 		&catalog.Book{RelPath: "Saga/1", IsFolder: true},
 		&catalog.Book{RelPath: "Saga/10", IsFolder: true},
@@ -457,6 +466,7 @@ func TestNextFolder(t *testing.T) {
 }
 
 func TestNextErrors(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, false, sagaBooks()...)
 	for name, tc := range map[string]struct {
 		url, token string
@@ -479,6 +489,7 @@ func TestNextErrors(t *testing.T) {
 }
 
 func TestNextBookCapability(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	if _, si := e.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(si, `"next_book":true`) {
 		t.Fatalf("/server missing next_book: %s", si)
@@ -498,6 +509,7 @@ func setMoreSeries(t *testing.T, e *sagaEnv, path, list string) {
 // series has ended a series the book lists answers, and the grant narrows it
 // (allowed and denied).
 func TestNextSeriesMemberships(t *testing.T) {
+	t.Parallel()
 	e := newSagaEnv(t, false,
 		&catalog.Book{RelPath: "Saga/1", Series: "Discworld", SeriesIndex: 8},         // City Watch 1 (list)
 		&catalog.Book{RelPath: "Saga/2/Feet of Clay", Series: "Ankh", SeriesIndex: 1}, // City Watch 3 (list)
@@ -612,6 +624,7 @@ func narniaMetaserve(t *testing.T) *httptest.Server {
 // His Boy); without The Last Battle owned it rides along unplaced beside the
 // local step, which passes over the same steps back and ends numbered.
 func TestNextCommunityPassesOverStepsBack(t *testing.T) {
+	t.Parallel()
 	for name, ownLast := range map[string]bool{"owned: community": true, "unowned: the local series ends": false} {
 		t.Run(name, func(t *testing.T) {
 			books := []*catalog.Book{
@@ -651,6 +664,7 @@ func TestNextCommunityPassesOverStepsBack(t *testing.T) {
 // the local steps answer (the main series continuing locally, Discworld #8 to
 // #10 with #9 unowned) with that entry beside them, without `local`.
 func TestNextCommunityRails(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		series, more string   // the current book's main series (at #1) and list
 		owned        []string // the #2 books held: "Alpha", "Beta"

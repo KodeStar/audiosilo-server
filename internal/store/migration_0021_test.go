@@ -14,6 +14,7 @@ import (
 // before 0018 becomes one estimated day; a book first saved since, and a demo
 // account's, get none.
 func TestMigration0021Backfill(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn, exec, closeRaw := openBefore(t, "0021")
 	exec(`INSERT INTO users(id, username, password_hash, created_at, updated_at) VALUES(1, 'ann', '', 't', 't')`)

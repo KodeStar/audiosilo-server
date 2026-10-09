@@ -9,6 +9,7 @@ import (
 )
 
 func TestListDirs(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	for _, d := range []string{"fiction", "Kids", ".hidden", "audio drama"} {
 		if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
@@ -64,6 +65,7 @@ func TestListDirs(t *testing.T) {
 }
 
 func TestListDirsRejects(t *testing.T) {
+	t.Parallel()
 	if _, err := ListDirs("relative/path", 0); !errors.Is(err, ErrNotAbsolute) {
 		t.Errorf("relative path: err = %v, want ErrNotAbsolute", err)
 	}
@@ -73,6 +75,7 @@ func TestListDirsRejects(t *testing.T) {
 }
 
 func TestListDirsRoot(t *testing.T) {
+	t.Parallel()
 	got, err := ListDirs("", 0)
 	if err != nil {
 		t.Fatal(err)

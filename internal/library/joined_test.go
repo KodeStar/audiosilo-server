@@ -23,6 +23,7 @@ import (
 // Disc folders join in natural order, ties broken by path, so folders whose names
 // read alike never interleave their files.
 func TestDiscOrder(t *testing.T) {
+	t.Parallel()
 	want := []string{
 		"Book/CD01", // reads as "CD1"; the path breaks the tie
 		"Book/CD1",
@@ -53,6 +54,7 @@ func TestDiscOrder(t *testing.T) {
 }
 
 func TestJoinedPartTitle(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ book, file, want string }{
 		{"A/Book", "A/Book/CD2/03 - The Dragon.mp3", "CD2 - The Dragon"},
 		{"A/Book", "A/Book/01 - Intro.mp3", "Intro"}, // a plain folder book is unchanged
@@ -93,6 +95,7 @@ func filePaths(b *catalog.Book) []string {
 // length is known, so only the first disc's offset is (0): its listening state
 // carries over, and the later discs' stays on their own paths, logged as such.
 func TestJoinedDiscFolders(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -258,6 +261,7 @@ func TestJoinedDiscFolders(t *testing.T) {
 // again; its first disc shares the joined book's fingerprint but is no move of it,
 // so the joined book's whole-book progress doesn't land on that one disc.
 func TestRenamedJoinedFolderIsNoMoveToADisc(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -306,6 +310,7 @@ func TestRenamedJoinedFolderIsNoMoveToADisc(t *testing.T) {
 // the books in its disc folders beside them stay as they were and the folder's
 // book is removed, not split.
 func TestRemovedFolderWithDiscsIsNoSplit(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	root := t.TempDir()
 	audio := testAudio(t)
@@ -343,6 +348,7 @@ func TestRemovedFolderWithDiscsIsNoSplit(t *testing.T) {
 // after one of no known length has no known offset: it is unplaced, and the book's
 // length is unknown.
 func TestJoinParts(t *testing.T) {
+	t.Parallel()
 	joined := &catalog.Book{Files: []catalog.BookFile{
 		{RelPath: "B/CD1/01.mp3", Duration: 10},
 		{RelPath: "B/CD1/02.mp3", Duration: 5},
@@ -411,6 +417,7 @@ func TestJoinParts(t *testing.T) {
 
 // The joined book's cover is its folder's own image first, then the first disc's.
 func TestJoinedCover(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	root := t.TempDir()
 	audio := testAudio(t)
@@ -445,6 +452,7 @@ func TestJoinedCover(t *testing.T) {
 // dialog reads as nothing; a folder with its own audio is its own files), so the
 // upgrade re-shapes no books and carries no listener's state.
 func TestJoinOnlyDiscSets(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -554,6 +562,7 @@ func TestJoinOnlyDiscSets(t *testing.T) {
 // scanner's name order: 1, 10, 2), so a position on the disc book, offset onto the
 // joined book, lands in the same file; only the disc folders go in natural order.
 func TestJoinKeepsDiscFileOrder(t *testing.T) {
+	t.Parallel()
 	ffprobe := lookFFprobe(t)
 	ctx := t.Context()
 	db := storetest.Open(t)
@@ -652,6 +661,7 @@ func silence(t *testing.T, root, rel string, secs float64, meta ...string) {
 // the override splits the discs out again and keeps the joined book's state on the
 // folder's path.
 func TestJoinCarriesListeningState(t *testing.T) {
+	t.Parallel()
 	ffprobe := lookFFprobe(t)
 	ctx := t.Context()
 	db := storetest.Open(t)
@@ -801,6 +811,7 @@ func namedUser(t *testing.T, db *store.DB, name string) int64 {
 // discSets finds the folders whose audio is only in disc folders directly in them,
 // at least two, and nothing else; markSplitDiscs marks those discs.
 func TestDiscSets(t *testing.T) {
+	t.Parallel()
 	folders := []string{
 		// A disc set: disc names as isDiscFolder reads them.
 		"Cowell/Dragonese/CD 1", "Cowell/Dragonese/CD 2", "Cowell/Dragonese/cd-10",
@@ -861,6 +872,7 @@ func splitParents(t *testing.T, cat *catalog.Catalog, libID int64) map[string]st
 // unchanged and not re-indexed; a row from before the column (or a rebuilt index)
 // gets it from the next scan. IndexPath agrees with the scan.
 func TestSplitDiscsScanned(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	root := t.TempDir()
 	audio := testAudio(t)
@@ -925,6 +937,7 @@ func TestSplitDiscsScanned(t *testing.T) {
 // files, in the same order, with hidden, non-audio and ignored files and hidden or
 // ignored folders left out, so reading them in the walk changes nothing.
 func TestWalkReadsWhatAudioEntriesReads(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for _, p := range []string{
 		"A/Book/01.mp3",

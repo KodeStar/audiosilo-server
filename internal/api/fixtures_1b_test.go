@@ -93,6 +93,7 @@ func grantWightOnly(t *testing.T, e *testEnv, libID, userID int64) int64 {
 // Every list the 1b routes answer is [] when it is empty, never null: the
 // player relies on it (no null-normalising on the client).
 func TestEmptyListsAreArrays(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	body := func(method, path, tok, in string) string {
 		t.Helper()
