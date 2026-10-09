@@ -141,3 +141,29 @@ func TestFetchCover(t *testing.T) {
 		}
 	}
 }
+
+func TestHandsOutCover(t *testing.T) {
+	e := &Enrichment{
+		Recording: &MetaRecording{CoverURL: "https://img/rec.jpg"},
+		Series: []MetaSeries{{
+			Works: []MetaSeriesWork{{CoverURL: "https://img/1.jpg"}, {}},
+			Orderings: []MetaSeriesOrdering{{
+				Works: []MetaSeriesWork{{CoverURL: "https://img/chrono.jpg"}},
+			}},
+		}},
+	}
+	for _, u := range []string{"https://img/rec.jpg", "https://img/1.jpg", "https://img/chrono.jpg"} {
+		if !e.HandsOutCover(u) {
+			t.Errorf("HandsOutCover(%q) = false, want true", u)
+		}
+	}
+	for _, u := range []string{"", "https://img/2.jpg", "https://img/1.jpg?x", "https://IMG/1.jpg"} {
+		if e.HandsOutCover(u) {
+			t.Errorf("HandsOutCover(%q) = true, want false", u)
+		}
+	}
+	var none *Enrichment
+	if none.HandsOutCover("https://img/rec.jpg") || (&Enrichment{}).HandsOutCover("https://img/rec.jpg") {
+		t.Error("an empty envelope hands out a cover")
+	}
+}

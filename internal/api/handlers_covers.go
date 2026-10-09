@@ -141,9 +141,8 @@ func (a *API) handleAdminCovers(w http.ResponseWriter, r *http.Request) {
 // is a 304 with nothing read; a custom cover is revalidated each time (it can be
 // replaced at any moment), file art is fresh for a day like full art.
 func (a *API) handleCoverThumbnail(w http.ResponseWriter, r *http.Request, lib *catalog.Library, path string, scope catalog.Scope) {
-	size, err := strconv.Atoi(r.URL.Query().Get("size"))
-	if err != nil || !slices.Contains(thumbSizes, size) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("size must be one of %v", thumbSizes))
+	size, ok := thumbSizeParam(w, r.URL.Query().Get("size"))
+	if !ok {
 		return
 	}
 	ctx := r.Context()
@@ -176,7 +175,7 @@ func (a *API) handleCoverThumbnail(w http.ResponseWriter, r *http.Request, lib *
 		return
 	}
 	cond := conditional{etag: `"thumb-` + strconv.Itoa(size) + "-" + catalog.CoverVersion(art.version) + `"`,
-		cacheControl: "private, max-age=86400"}
+		cacheControl: coverCache}
 	if src.CustomAt != "" {
 		cond.cacheControl = customCoverCache
 	}
@@ -338,6 +337,17 @@ func (a *API) decodeThumbnail(ctx context.Context, raw []byte, size int, logArgs
 // jpegDataURL is a JPEG as the data: URL the console shows it by.
 func jpegDataURL(jpg []byte) string {
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpg)
+}
+
+// thumbSizeParam is a thumbnail route's ?size=, one of thumbSizes; false when it
+// wrote the 400.
+func thumbSizeParam(w http.ResponseWriter, raw string) (int, bool) {
+	n, err := strconv.Atoi(raw)
+	if err != nil || !slices.Contains(thumbSizes, n) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("size must be one of %v", thumbSizes))
+		return 0, false
+	}
+	return n, true
 }
 
 // thumbBatch checks a thumbnail batch: its list (named field) holds 1 to max
