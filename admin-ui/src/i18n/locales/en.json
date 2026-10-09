@@ -855,7 +855,7 @@
   "books.bulk.clear": "Clear selection",
   "books.edit.title_one": "Edit {{formatted}} book",
   "books.edit.title_other": "Edit {{formatted}} books",
-  "books.edit.description": "Only the fields you fill in change. Each change is saved as an edit, locked against rescans. The audio files are not touched.",
+  "books.edit.description": "Only the fields you fill in change. Each change is saved as an edit, locked against rescans. The audio files are not touched. Setting Series to one of a book's other series swaps the two for that book.",
   "books.edit.field.author": "Author",
   "books.edit.field.narrator": "Narrator",
   "books.edit.field.series": "Series",

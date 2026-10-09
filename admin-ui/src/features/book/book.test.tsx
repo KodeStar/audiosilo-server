@@ -165,6 +165,55 @@ describe('book page', () => {
     expect(within(row('Title')).getByText('Edited')).toBeInTheDocument();
   });
 
+  it('shows making an other series the main one as a swap before saving', async () => {
+    const detail = bookDetail();
+    detail.fields.more_series = {
+      value: '[{"name":"The Cosmere","position":3}]',
+      source: 'edited',
+      scanned: '',
+      locked: true,
+    };
+    const calls = mockFetch(routes(detail));
+    renderApp(URL);
+    const user = userEvent.setup();
+    // Opens the Series field and commits name in it.
+    const setSeries = async (name: string) => {
+      await user.click(
+        await within(await screen.findByRole('group', { name: 'Series' })).findByRole('button'),
+      );
+      const input = within(row('Series')).getByRole('textbox');
+      await user.clear(input);
+      await user.type(input, `${name}{Enter}`);
+    };
+    await setSeries('The Cosmere');
+    // The old main series takes its place among the others, at its number.
+    expect(within(row('Other series')).getByText('The Stormlight Archive #1')).toBeInTheDocument();
+    expect(within(row('Series number')).getByText('3')).toBeInTheDocument();
+    expect(within(row('Other series')).getByText('Unsaved')).toBeInTheDocument();
+    expect(screen.getByText('3 unsaved changes')).toBeInTheDocument();
+
+    // Back to the old name: nothing left to save.
+    await setSeries('The Stormlight Archive');
+    expect(screen.queryByRole('toolbar', { name: 'Unsaved changes' })).not.toBeInTheDocument();
+    expect(within(row('Other series')).getByText('The Cosmere #3')).toBeInTheDocument();
+
+    await setSeries('The Cosmere');
+    await user.click(screen.getByRole('button', { name: 'Review and save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Save these changes?' });
+    expect(within(dialog).getByText('The Stormlight Archive #1')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Save 3 changes' }));
+    await screen.findByText('Saved 3 changes to The Way of Kings');
+    expect(patches(calls).map((c) => c.body)).toEqual([
+      {
+        set: {
+          series: 'The Cosmere',
+          series_index: '3',
+          more_series: '[{"name":"The Stormlight Archive","position":1}]',
+        },
+      },
+    ]);
+  });
+
   it('says how to fix a value before saving, and maps a refusal onto its field', async () => {
     const calls = mockFetch(
       routes(bookDetail(), {

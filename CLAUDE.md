@@ -497,14 +497,41 @@ admin overrides; see Metadata overrides below).
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
   `{source, next?, book?, work?}`; `source` names the step that produced `next`
   (or decided there is none): `community` (metadata on + matched + a rail:
-  `meta.NextOnRail` on the first rail's MAIN view, placed by the same
-  `localRails`; answers only when the next entry is placed -> next + book + work.
-  Otherwise the steps below answer: an unplaced next entry rides along as `work`
-  without `local`, since failing to place (untagged, series named unlike the rail)
-  proves nothing; current work last on the rail (it can lag the library),
+  `meta.NextRail` reads, off the shared envelope, the rail that decides: in the
+  book's own order (`railOrder`: the rail named, by `match.SeriesKey`, like its main
+  series or one of that rail's orderings, then like its more_series entries in list
+  order, then the rest as listed) the first with an entry after the current work
+  that doesn't step back decides, with its first such entry (`nextEntry`: on its
+  MAIN view, the smallest numeric position above the current work's, ties in rail
+  order, passing over each entry that steps back,
+  `railStepsBack`: the entry's work at or before the current work's position on an
+  earlier-ranked rail, both numeric - after The Silver Chair the publication order
+  passes over The Horse and His Boy and The Magician's Nephew, earlier
+  chronologically, and decides with The Last Battle); `NextRail` returns the rail
+  and entry indexes, and `communityNext` reads that same entry off the placed rails
+  by them (`PlaceLocal` keeps every rail and entry at its index; the placed rail's
+  plain next entry could be a passed-over one); `localRails` runs once, only when a rail
+  decides; its entry placed -> next + book + work. A later rail's placed entry never answers
+  instead: an unplaced deciding entry rides along as `work` without `local` beside
+  the steps below, since failing to place (untagged, series named unlike the rail)
+  proves nothing; current work last on every rail (they can lag the library),
   upstream error/unmatched/no rails/unnumbered -> no `work`), `series`
-  (`catalog.NextInSeries`: same library, exact series, smallest higher index in
-  scope; numbered books but none later -> `{source:"series"}`), `folder`
+  (`catalog.NextInSeries`: every series of `Book.AllSeries()` with a position, main
+  first; per series one query
+  (`laterSeriesMembers`) over its numbered members in scope - same library, books in
+  exactly that series by their main series or a more_series entry, at their
+  position IN THAT SERIES - those above the book's position first, then by
+  position, ties by path (unbounded: SQLite sorts every member first anyway):
+  read in that order, the first row above that doesn't step back is the next book,
+  and any row at all means numbered (the first at or below ends the walk); a UNION
+  ALL of an `idx_books_series` branch and a list branch narrowed by the full-text index's series column (`books_fts`, every series
+  name; `idx_books_more_series` alone for a name with no phrase) + `json_each` for
+  the exact name; the first series with a later book that doesn't step back
+  answers with the first such book (`stepsBack`: it sits at or before the current
+  book in an earlier-ranked series of the current book's, both numbered there; a
+  book that steps back is passed over, not the whole series); numbered books in
+  some series but none later (or every later one stepping back) in any ->
+  `{source:"series"}`), `folder`
   (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
   ignore-filtered, annotated by `BooksByPaths`, which reads any number of paths in
   chunks; the player's `findNextSibling`: names compared as its `localeCompare`
@@ -658,7 +685,32 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
-  `MoveDurableState` carries overrides and custom covers as one set: when the moved book
+  An admin edit that makes the main series a name its `more_series` lists (exactly) -
+  by setting `series`, or by reverting it when the series the revert leaves
+  (`newMainSeries`: `loadLayers` + `resolve` without the series override) is listed -
+  without setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`,
+  per book in `editTx`, from the book's effective row): the old main series takes the
+  entry's place in the list and `series_index` becomes the entry's position (unless the
+  edit names `series_index`), written as the edit's own overrides; so reverting a swap
+  swaps back. A derived value equal to what its field resolves to without an override
+  (`bookLayers.unedited`: the scan's or folder layout's value; layers loaded only when a
+  swap happens; a position only when the new main series is the series it numbers, by
+  any case) is written as a revert of that field instead (`seriesSwap` returns sets
+  and reverts, disjoint, never a field the edit names), so swapping back to a
+  path-derived Sherlock Holmes #5 leaves `series_index` read off the path (unlocked,
+  source `path`), while a list that was an edit before the swap stays one, and a
+  listed Other #5 made main on that path-numbered #5 is still an edited 5. An old main
+  series that can't be listed (name too long, position out of range) refuses the edit:
+  `invalid(series)`, a 400, failing a bulk edit whole (`EditBooks` names the refusing
+  book's path in the reason). A community edit never swaps: `matchrun.planSeries` is
+  the one statement of how a match lays out series. The console drafts the same swap before saving (`book-model.ts`
+  `commitField`), so its save sends the values and the server's swap doesn't fire;
+  `saveRequest` sends the saved `more_series` when the admin took the drafted swap back
+  (only for a swap `seriesSwap` can make, so an unlistable old main still gets the 400);
+  as that save names `more_series`, a swap the console drafts writes its values as
+  edits even where one equals the file's (the values shown are the same),
+  and the undo of a series revert that swapped (`undoRevertRequest`) sends the list and
+  position it had. `MoveDurableState` carries overrides and custom covers as one set: when the moved book
   has any, the new path's own rows in all three tables are dropped first; it moves
   them (with enrichment) in a transaction of their own, so a failure carrying the per-user
   state can't strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
@@ -1287,11 +1339,12 @@ admin overrides; see Metadata overrides below).
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
-`export`, `browse_people`, `series_memberships`, `cover_sizes`, `next_book`, `queue`, `collections`,
+`export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`); flip them on
 as phases land. `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
-`Book` in more than one series; see API surface below). `addresses` is true (home/away addresses on pairing, exchange and login, and
+`Book` in more than one series; see API surface below). `series_books` is true (the first page of several
+series' books in one request, `GET /libraries/{id}/series/books`; see API surface below). `addresses` is true (home/away addresses on pairing, exchange and login, and
 `GET /addresses`; see Home and away addresses above).
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
@@ -1330,6 +1383,14 @@ as `/admin/books`) and `/series` counts a book in every series it is in (`extra_
 without it both see main series only, as a client that places books by `series_index`
 needs. A player `Book` in more than one series carries `series_list` (every series, the
 main one first, with its position in each; omitted otherwise).
+The first page of several series' books in one request (capability `series_books`, the
+player's Series cards) is `GET /libraries/{id}/series/books?name=A&name=B[&limit=N]` ->
+`{"series": [{name, books, next_cursor?}]}` (authed, `browseScope` like `/books`; 400 for no
+names or over `maxSeriesBatch` = 50 distinct ones). Names are verbatim, empty ones ignored
+(`catalog.ListSeriesBooks` skips them too), duplicates answered once, entries in request
+order; each entry is exactly the page `/books?series=<name>&memberships=1&limit=N` returns
+(`ListSeriesBooks`: one `ListBooks` per name), so its `next_cursor` continues there, with
+`books: []` for a series with no books in scope.
 Player redesign Phase 1b (`api/handlers_ratings.go`, `handlers_mydevices.go`): **ratings**
 are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null}`; `Rating =
 {library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a

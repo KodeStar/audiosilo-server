@@ -14,7 +14,7 @@ import { AddToShareDialog } from '@/features/library/add-to-share-dialog';
 import { refKey } from '@/lib/book-route';
 import { BookAside } from './book-aside';
 import { BookHero } from './book-hero';
-import { commitDraft, draftErrors, type Drafts } from './book-model';
+import { commitField, draftErrors, type Drafts } from './book-model';
 import { ChaptersCard } from './chapters-card';
 import { DetailsCard } from './details-card';
 import { DiskSection, FilesCard } from './files-card';
@@ -142,7 +142,7 @@ function BookView({ detail, matchOnOpen }: { detail: AdminBookDetail; matchOnOpe
   for (const [f, key] of Object.entries(local)) errors[f as OverrideField] = t(key);
 
   const commit = (field: OverrideField, raw: string) => {
-    setDrafts((d) => commitDraft(d, field, raw, detail.fields[field].value));
+    setDrafts((d) => commitField(d, field, raw, detail.fields));
     setRefused((r) => {
       const next = { ...r };
       delete next[field];

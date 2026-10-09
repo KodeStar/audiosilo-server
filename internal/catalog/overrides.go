@@ -691,7 +691,9 @@ func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, ed
 
 // EditBooks applies the same field edit to many books in one transaction: every
 // book is edited or none is. Chapter edits are refused (chapter indexes are per
-// book). ErrNotFound (wrapped with the path) when any of the books isn't indexed.
+// book). ErrNotFound (wrapped with the path) when any of the books isn't indexed;
+// an edit one of the books refuses (a series swap that can't be made) is an
+// invalid override naming that book's path, so the admin can find it.
 func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) error {
 	if len(edit.ChapterSet) > 0 || len(edit.ChapterRevert) > 0 {
 		return invalid("chapters", "chapter titles can only be edited one book at a time")
@@ -704,6 +706,9 @@ func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) erro
 		now := c.ts()
 		for _, ref := range refs {
 			if err := c.editTx(ctx, tx, ref, edit, now); err != nil {
+				if oe, ok := errors.AsType[*OverrideError](err); ok {
+					return invalid(oe.Field, oe.Reason+" ("+CleanRelPath(ref.Path)+")")
+				}
 				return err
 			}
 		}
@@ -726,7 +731,22 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		return err
 	}
 	editor := nullableID(edit.UserID)
-	for field, v := range edit.Set {
+	set, revert := edit.Set, edit.Revert
+	swapSet, swapRevert, err := seriesSwap(ctx, tx, bookID, edit)
+	if err != nil {
+		return err
+	}
+	// This book's own copies: EditBooks shares the edit across books. The swap
+	// writes only fields the edit leaves alone, each either set or reverted, so
+	// no field is both.
+	if len(swapSet) > 0 {
+		set = maps.Clone(edit.Set)
+		maps.Copy(set, swapSet)
+	}
+	if len(swapRevert) > 0 {
+		revert = slices.Concat(edit.Revert, swapRevert)
+	}
+	for field, v := range set {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_by, updated_at)
 			 VALUES(?,?,?,?,?,?,?)
@@ -737,7 +757,7 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 			return err
 		}
 	}
-	for _, field := range edit.Revert {
+	for _, field := range revert {
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM book_overrides WHERE library_id = ? AND path = ? AND field = ?`,
 			ref.LibraryID, path, field); err != nil {
@@ -781,4 +801,151 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		}
 	}
 	return refreshEffective(ctx, tx, bookID)
+}
+
+// seriesSwap is what an admin edit making one of a book's other series its main
+// one (by its exact name) writes besides, so the old main series isn't lost and
+// the new one isn't listed twice: the old main series takes the entry's place in
+// more_series, at its position, and series_index becomes the entry's position
+// unless the edit names series_index. The new main series is the one the edit
+// sets, or, for an edit reverting series, the one the revert leaves (newMainSeries),
+// so reverting a swap swaps back. The writes are ordinary overrides of the edit,
+// so provenance, revert and undo treat them like any other; but a derived value
+// equal to what its field resolves to without an override (the scan's or the
+// folder layout's value; for series_index, only when the new main series is the
+// series that value numbers) is a revert of that field, not an edit, so swapping
+// back to a path-derived series #5 leaves series_index read off the path again
+// (unlocked, source path) rather than an edited 5, while making a listed Other #5
+// the main series of a book the path numbers Sherlock Holmes #5 still edits it.
+// set and revert never share a field and never name one the edit sets or reverts
+// itself. An edit naming more_series swaps nothing, and neither does a community
+// edit: the match plan (matchrun.planSeries) lays out series itself. Both nil
+// when there is nothing to swap; an invalid(FieldSeries) error when the old main
+// series can't be listed (a name too long for an entry, a position out of range),
+// so the edit is refused rather than losing it.
+func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (set map[string]string, revert []string, err error) {
+	if edit.Source == SourceCommunity || touches(edit, FieldMoreSeries) || !touches(edit, FieldSeries) {
+		return nil, nil, nil
+	}
+	var old, stored string
+	var index float64
+	if err := tx.QueryRowContext(ctx, `SELECT series, series_index, more_series FROM books WHERE id = ?`, bookID).
+		Scan(&old, &index, &stored); err != nil {
+		return nil, nil, err
+	}
+	list := ParseMoreSeries(stored)
+	if len(list) == 0 {
+		return nil, nil, nil // nothing listed to swap in: no need to resolve the layers
+	}
+	var layers *bookLayers // loaded once, and only when needed
+	load := func() (*bookLayers, error) {
+		var err error
+		if layers == nil {
+			layers, err = loadLayers(ctx, tx, bookID)
+		}
+		return layers, err
+	}
+	name, err := newMainSeries(edit, load)
+	if err != nil {
+		return nil, nil, err
+	}
+	at := slices.IndexFunc(list, func(s SeriesRef) bool { return s.Name == name })
+	if name == "" || name == old || at < 0 {
+		return nil, nil, nil
+	}
+	swapped := make([]SeriesRef, 0, len(list))
+	for i, s := range list {
+		switch {
+		case i == at && old != "":
+			swapped = append(swapped, SeriesRef{Name: old, Position: index})
+		case i == at, s.Name == old:
+		default:
+			swapped = append(swapped, s)
+		}
+	}
+	more, err := normalizeOverride(FieldMoreSeries, EncodeMoreSeries(swapped))
+	if err != nil {
+		reason := err.Error()
+		if oe, ok := errors.AsType[*OverrideError](err); ok {
+			reason = oe.Reason
+		}
+		return nil, nil, invalid(FieldSeries, "the current series can't move to the other series: "+reason)
+	}
+	derived := map[string]string{FieldMoreSeries: more}
+	if !touches(edit, FieldSeriesIndex) {
+		derived[FieldSeriesIndex] = FormatSeriesPosition(list[at].Position)
+	}
+	l, err := load()
+	if err != nil {
+		return nil, nil, err
+	}
+	unedited := l.unedited(FieldSeries, FieldMoreSeries, FieldSeriesIndex)
+	set = map[string]string{}
+	for field, v := range derived {
+		same := sameFieldValue(field, v, unedited[field].Value)
+		if field == FieldSeriesIndex {
+			// The unedited position numbers the unedited series: it is the
+			// file's own for the new main series only when that is the same
+			// series (by any case, as scannedFields pairs them), not another
+			// series that happens to share the number.
+			same = same && strings.EqualFold(name, unedited[FieldSeries].Value)
+		}
+		if same {
+			revert = append(revert, field)
+		} else {
+			set[field] = v
+		}
+	}
+	slices.Sort(revert) // map order: keep the writes deterministic
+	return set, revert, nil
+}
+
+// sameFieldValue reports whether a and b, two values of field, say the same: a
+// series position or an other series list compared as read (so "" and an empty
+// list, or "5" and "5.0", agree), anything else exactly.
+func sameFieldValue(field, a, b string) bool {
+	switch field {
+	case FieldSeriesIndex:
+		return ParseSeriesIndex(a) == ParseSeriesIndex(b)
+	case FieldMoreSeries:
+		return slices.Equal(ParseMoreSeries(a), ParseMoreSeries(b))
+	}
+	return a == b
+}
+
+// newMainSeries is the main series edit leaves the book with when it sets or
+// reverts series ("" when it does neither): the value it sets, or the series the
+// book's layers (load) resolve to without its series override (what the scan or
+// the folder layout found).
+func newMainSeries(edit BookEdit, load func() (*bookLayers, error)) (string, error) {
+	if name, ok := edit.Set[FieldSeries]; ok {
+		return name, nil
+	}
+	if !slices.Contains(edit.Revert, FieldSeries) {
+		return "", nil
+	}
+	l, err := load()
+	if err != nil {
+		return "", err
+	}
+	return l.unedited(FieldSeries)[FieldSeries].Value, nil
+}
+
+// unedited is what l resolves to with the overrides of fields left out: each
+// such field's value as the scan, the folder layout or the enrichment has it.
+// l itself is not changed. resolve reads each field's override on its own, so
+// leaving several out at once gives each the value it has without its own.
+func (l *bookLayers) unedited(fields ...string) map[string]FieldValue {
+	c := *l
+	c.overrides = maps.Clone(l.overrides)
+	for _, f := range fields {
+		delete(c.overrides, f)
+	}
+	return c.resolve()
+}
+
+// touches reports whether an edit sets or reverts field.
+func touches(edit BookEdit, field string) bool {
+	_, set := edit.Set[field]
+	return set || slices.Contains(edit.Revert, field)
 }

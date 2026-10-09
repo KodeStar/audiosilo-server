@@ -13,7 +13,7 @@ import {
 } from '@/api/types';
 import type { Phrase } from '@/lib/phrase';
 import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER } from './field-rules';
-import { moreSeriesText, parseMoreSeries } from './more-series';
+import { moreSeriesRefs, moreSeriesText, parseMoreSeries } from './more-series';
 
 // The book page's logic, kept out of the components so it is unit-tested: field
 // validation (the server's normalizeOverride rules, so a value is refused here
@@ -119,6 +119,98 @@ export function commitDraft(
   return next;
 }
 
+/**
+ * The drafts after a field is committed against the saved fields: commitDraft,
+ * and for the series the swap the server would make (commitSeriesDraft).
+ */
+export function commitField(
+  drafts: Drafts,
+  field: OverrideField,
+  raw: string,
+  fields: Record<OverrideField, FieldValue>,
+): Drafts {
+  return field === 'series'
+    ? commitSeriesDraft(drafts, raw, fields)
+    : commitDraft(drafts, field, raw, fields[field].value);
+}
+
+/** The other series and position a series swap writes, in stored form. */
+export interface SeriesSwap {
+  more_series: string;
+  series_index: string;
+}
+
+/**
+ * What making `name` the main series does to the saved other series, as the
+ * server's catalog.seriesSwap does it: when name is one of them (by its exact
+ * name) and not the saved main series, the list with its entry replaced by the
+ * old main series at its saved position (left out when there was none; an entry
+ * already naming it gives way), and name's position there as the series_index.
+ * undefined when there is nothing to swap (or the old main can't be listed).
+ */
+export function seriesSwap(
+  fields: Record<OverrideField, FieldValue>,
+  name: string,
+): SeriesSwap | undefined {
+  const old = fields.series.value;
+  const list = moreSeriesRefs(fields.more_series.value);
+  const at = list.findIndex((s) => s.name === name);
+  if (!name || name === old || at < 0) return undefined;
+  const oldMain = old ? [{ name: old, position: Number(fields.series_index.value) || 0 }] : [];
+  const swapped = list.flatMap((s, i) => (i === at ? oldMain : s.name === old ? [] : [s]));
+  const more = parseMoreSeries(JSON.stringify(swapped));
+  if (more.error) return undefined;
+  return {
+    more_series: more.value,
+    series_index: checkField('series_index', String(list[at].position)).value,
+  };
+}
+
+/**
+ * The series committed, with the swap the server would make drafted beside it
+ * (seriesSwap), so the fields and the save dialog show it before saving and the
+ * save sends it: the other series and the position follow the series, unless the
+ * admin drafted the other series themselves (as the server swaps nothing for an
+ * edit that sets them). A swap an earlier commit drafted is taken back first, so
+ * committing the old name back leaves no drafts; a position the admin typed stays.
+ */
+function commitSeriesDraft(
+  drafts: Drafts,
+  raw: string,
+  fields: Record<OverrideField, FieldValue>,
+): Drafts {
+  const swapFor = (d: Drafts) => {
+    if (d.series === undefined) return undefined;
+    const series = checkField('series', d.series);
+    return series.error ? undefined : seriesSwap(fields, series.value);
+  };
+  const drafted = (field: 'more_series' | 'series_index', value: string | undefined) =>
+    drafts[field] !== undefined && checkField(field, drafts[field]).value === value;
+  const before = swapFor(drafts);
+  let next = commitDraft(drafts, 'series', raw, fields.series.value);
+  if (drafted('more_series', before?.more_series)) delete next.more_series;
+  if (drafted('series_index', before?.series_index)) delete next.series_index;
+  if (next.more_series !== undefined) return next; // the admin's own list
+  const swap = swapFor(next);
+  if (!swap) return next;
+  next = commitDraft(
+    next,
+    'more_series',
+    moreSeriesDraft(swap.more_series),
+    fields.more_series.value,
+  );
+  if (next.series_index === undefined) {
+    next = commitDraft(next, 'series_index', swap.series_index, fields.series_index.value);
+  }
+  return next;
+}
+
+/** A stored other-series list as a draft: its line, or the list itself when the line can't say it. */
+function moreSeriesDraft(stored: string): string {
+  const line = moreSeriesText(stored);
+  return parseMoreSeries(line).value === stored ? line : stored;
+}
+
 /** The fields whose draft the server would refuse, with the message key for each. */
 export function draftErrors(drafts: Drafts): Partial<Record<OverrideField, string>> {
   const out: Partial<Record<OverrideField, string>> = {};
@@ -149,22 +241,49 @@ export function diffRows(drafts: Drafts, fields: Record<OverrideField, FieldValu
   }));
 }
 
-/** The PATCH that saves the drafts (an emptied optional field sets ""). */
-export function saveRequest(drafts: Drafts): BookEditRequest {
+/**
+ * The PATCH that saves the drafts against the saved fields (an emptied optional
+ * field sets ""). A series the server would swap in (seriesSwap), sent without
+ * the other series, also sends them as saved: the admin took back the swap
+ * commitField drafted (typed the list back), so the server's swap
+ * (catalog.seriesSwap, which an edit naming more_series skips) mustn't make it
+ * behind the dialog's back. A swap that can't be made (the old main series can't
+ * be listed) sends nothing extra, so the server refuses it rather than the
+ * saved list dropping the old main series.
+ */
+export function saveRequest(
+  drafts: Drafts,
+  fields: Record<OverrideField, FieldValue>,
+): BookEditRequest {
   const set: Partial<Record<OverrideField, string>> = {};
   for (const f of OVERRIDE_FIELDS) {
     const raw = drafts[f];
     if (raw !== undefined) set[f] = checkField(f, raw).value;
   }
+  if (set.series !== undefined && set.more_series === undefined && seriesSwap(fields, set.series)) {
+    set.more_series = fields.more_series.value;
+  }
   return { set };
 }
 
-/** The PATCH that undoes a revert: the value it had, from the source it had. */
-export function undoRevertRequest(field: OverrideField, before: FieldValue): BookEditRequest {
-  return {
-    set: { [field]: before.value },
-    source: before.source === 'community' ? 'community' : 'edited',
-  };
+/**
+ * The PATCH that undoes a revert: the value it had, from the source it had.
+ * before and after are the fields either side of the revert. A series revert
+ * that left a series the book listed swapped them on the server (seriesSwap),
+ * so its undo sends the other series and position as they were too: an edit
+ * naming more_series swaps nothing, so the three come back exactly.
+ */
+export function undoRevertRequest(
+  field: OverrideField,
+  before: Record<OverrideField, FieldValue>,
+  after: Record<OverrideField, FieldValue>,
+): BookEditRequest {
+  const set: Partial<Record<OverrideField, string>> = { [field]: before[field].value };
+  if (field === 'series' && after.more_series.value !== before.more_series.value) {
+    set.more_series = before.more_series.value;
+    set.series_index = before.series_index.value;
+  }
+  return { set, source: before[field].source === 'community' ? 'community' : 'edited' };
 }
 
 // ---- files and chapters ----
