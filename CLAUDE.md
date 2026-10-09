@@ -492,14 +492,22 @@ admin overrides; see Metadata overrides below).
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
   `{source, next?, book?, work?}`; `source` names the step that produced `next`
   (or decided there is none): `community` (metadata on + matched + a rail:
-  `meta.NextOnRail` on the first rail's MAIN view, placed by the same
-  `localRails`; answers only when the next entry is placed -> next + book + work.
-  Otherwise the steps below answer: an unplaced next entry rides along as `work`
-  without `local`, since failing to place (untagged, series named unlike the rail)
-  proves nothing; current work last on the rail (it can lag the library),
-  upstream error/unmatched/no rails/unnumbered -> no `work`), `series`
-  (`catalog.NextInSeries`: same library, exact series, smallest higher index in
-  scope; numbered books but none later -> `{source:"series"}`), `folder`
+  `meta.NextOnRail` on every rail's MAIN view, the rails in the book's own order
+  (`meta.RailOrder`: the rail named, by `match.SeriesKey`, like its main series
+  or one of that rail's orderings, then like its more_series entries in list
+  order, then the rest as listed); `localRails` runs once, only when some rail has
+  a next entry; the first rail whose next entry is placed answers -> next + book +
+  work. Otherwise the steps below answer: the first rail's unplaced next entry
+  rides along as `work` without `local`, since failing to place (untagged, series
+  named unlike the rail) proves nothing; current work last on every rail (they can
+  lag the library), upstream error/unmatched/no rails/unnumbered -> no `work`),
+  `series` (every series of `Book.AllSeries()` with a position, main first:
+  `catalog.NextInSeries` per series - same library, books in exactly that series
+  by their main series or a more_series entry, smallest higher position IN THAT
+  SERIES in scope, ties by path; a UNION ALL of an `idx_books_series` branch and an
+  `idx_books_more_series` + `json_each` branch; the first series with a later book
+  answers; numbered books in some series but none later in any ->
+  `{source:"series"}`), `folder`
   (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
   ignore-filtered, annotated by `BooksByPaths`, which reads any number of paths in
   chunks; the player's `findNextSibling`: names compared as its `localeCompare`

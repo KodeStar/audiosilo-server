@@ -255,3 +255,25 @@ func TestPlaceOwned(t *testing.T) {
 		t.Fatalf("placed after a restart = %q, want %q", got, want)
 	}
 }
+
+func TestRailOrder(t *testing.T) {
+	watch := named("City Watch", "1")
+	watch.Orderings = []MetaSeriesOrdering{{Name: "Watch (Chronological)"}}
+	rails := []MetaSeries{named("Ankh-Morpork", "3"), watch, named("Discworld", "8"), named("Other", "2")}
+	for name, tc := range map[string]struct {
+		names []string
+		want  []int
+	}{
+		"main series first, then the others in list order": {[]string{"discworld!", "City Watch"}, []int{2, 1, 0, 3}},
+		"the list order, not the envelope's":               {[]string{"City Watch", "Discworld"}, []int{1, 2, 0, 3}},
+		"an ordering's name":                               {[]string{"Watch (chronological)"}, []int{1, 0, 2, 3}},
+		"no series: envelope order":                        {nil, []int{0, 1, 2, 3}},
+		"no rail matches: envelope order":                  {[]string{"Unknown", "!!"}, []int{0, 1, 2, 3}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := RailOrder(rails, tc.names); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("RailOrder = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

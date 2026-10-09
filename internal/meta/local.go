@@ -239,3 +239,37 @@ func NextOnRail(rail MetaSeries, currentWork string) (next *MetaSeriesWork, ok b
 	}
 	return next, true
 }
+
+// RailOrder is the order to follow rails in for a book in the local series names
+// (its main series first, then its others): the indexes of rails, first a rail
+// going by the book's first series (its name or one of its orderings', folded by
+// match.SeriesKey), then a rail going by its second, and so on, then every rail
+// going by none of them, each group in rails order. So a book that is Discworld
+// #8 and City Watch #1 follows Discworld first whatever order the envelope lists
+// the two rails in.
+func RailOrder(rails []MetaSeries, names []string) []int {
+	rank := map[string]int{}
+	for i, n := range names {
+		if k := match.SeriesKey(n); k != "" {
+			if _, seen := rank[k]; !seen {
+				rank[k] = i
+			}
+		}
+	}
+	ranks := make([]int, len(rails))
+	order := make([]int, len(rails))
+	for i, r := range rails {
+		order[i], ranks[i] = i, len(names)
+		goesBy := func(n string) {
+			if at, ok := rank[match.SeriesKey(n)]; ok && at < ranks[i] {
+				ranks[i] = at
+			}
+		}
+		goesBy(r.Name)
+		for _, o := range r.Orderings {
+			goesBy(o.Name)
+		}
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return cmp.Compare(ranks[a], ranks[b]) })
+	return order
+}

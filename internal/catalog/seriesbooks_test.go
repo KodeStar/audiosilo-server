@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -132,4 +133,137 @@ func TestNextInSeries(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNextInSeriesMemberships: a book is in a series through its main series or
+// an entry of its more_series, at its position in THAT series, both ways round;
+// the end of a membership series is numbered; the scope narrows both branches;
+// and a list repeating the main series counts the book once.
+func TestNextInSeriesMemberships(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Disc", Root: "/tmp/d"})
+	for _, b := range []Book{
+		{RelPath: "gg", Series: "Discworld", SeriesIndex: 8},            // City Watch 1 (list)
+		{RelPath: "maa", Series: "City Watch", SeriesIndex: 2},          // main
+		{RelPath: "foc", Series: "Discworld", SeriesIndex: 19},          // City Watch 3 (list)
+		{RelPath: "foc b", Series: "Discworld", SeriesIndex: 1},         // City Watch 3 (list): tie with foc
+		{RelPath: "nw", Series: "City Watch", SeriesIndex: 6},           // main, also lists City Watch 0.5
+		{RelPath: "Hidden/jingo", Series: "Discworld", SeriesIndex: 21}, // City Watch 2.5 (list)
+	} {
+		b.LibraryID, b.Title, b.AddedAt = lib.ID, b.RelPath, "2024-01-01T00:00:00Z"
+		if _, err := c.UpsertBook(ctx, &b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, list := range map[string]string{
+		"gg":           `[{"name":"City Watch","position":1}]`,
+		"foc":          `[{"name":"City Watch","position":3}]`,
+		"foc b":        `[{"name":"Other","position":9},{"name":"City Watch","position":3}]`,
+		"nw":           `[{"name":"City Watch","position":0.5}]`,
+		"Hidden/jingo": `[{"name":"City Watch","position":2.5}]`,
+	} {
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldMoreSeries: list}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all := Scope{LibraryID: lib.ID, AllowAll: true}
+	granted := Scope{LibraryID: lib.ID, Paths: []string{"gg", "maa", "foc", "foc b", "nw"}}
+	for name, tc := range map[string]struct {
+		path         string
+		series       string
+		index        float64
+		scope        Scope
+		want         string
+		wantNumbered bool
+	}{
+		// gg is City Watch 1 only through its list; maa is #2 by its main series.
+		"list to main": {"gg", "City Watch", 1, all, "maa", true},
+		// Positions within City Watch, not series_index: Jingo (Discworld 21) is
+		// City Watch 2.5, before Feet of Clay (Discworld 19, City Watch 3).
+		"main to list":              {"maa", "City Watch", 2, all, "Hidden/jingo", true},
+		"denied: outside the grant": {"maa", "City Watch", 2, granted, "foc", true},
+		// foc and foc b are both City Watch 3: ties by path.
+		"ties by path": {"Hidden/jingo", "City Watch", 2.5, all, "foc", true},
+		// nw is City Watch 6 by its main series; its list's 0.5 is never read.
+		"list after a tie": {"foc b", "City Watch", 3, all, "nw", true},
+		"end of a series":  {"nw", "City Watch", 6, all, "", true},
+		// The main series of the list books, the same query.
+		"main series": {"foc b", "Discworld", 1, all, "gg", true},
+		// Allowed: a grant on gg and Hidden reaches Jingo through its list. Denied:
+		// a grant on gg alone reaches no other member, so City Watch gives gg no
+		// order to follow (not numbered).
+		"allowed: a list book in the grant": {"gg", "City Watch", 1, Scope{LibraryID: lib.ID, Paths: []string{"gg", "Hidden"}}, "Hidden/jingo", true},
+		"denied: alone in scope":            {"gg", "City Watch", 1, Scope{LibraryID: lib.ID, Paths: []string{"gg"}}, "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			next, numbered, err := c.NextInSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := ""
+			if next != nil {
+				got = next.RelPath
+			}
+			if got != tc.want || numbered != tc.wantNumbered {
+				t.Fatalf("next = %q, numbered = %v; want %q, %v", got, numbered, tc.want, tc.wantNumbered)
+			}
+			if next != nil && next.RelPath == "gg" && len(next.SeriesList) != 2 {
+				t.Fatalf("next scanned without its series list: %+v", next)
+			}
+		})
+	}
+	// nw, in City Watch by its main series and again in its list, is one member.
+	q, args := seriesMembersAbove(lib.ID, "", "City Watch", 3, all)
+	var n int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (`+q+`) WHERE rel_path = 'nw'`, args...).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("nw counted %d times (%v)", n, err)
+	}
+}
+
+// TestNextInSeriesPlan: both branches of the membership query are index
+// searches, the main series by idx_books_series and the lists by the partial
+// idx_books_more_series, never a walk of the library's books.
+func TestNextInSeriesPlan(t *testing.T) {
+	c, _ := newTestCatalog(t)
+	for _, scope := range []Scope{{LibraryID: 1, AllowAll: true}, {LibraryID: 1, Paths: []string{"A", "B"}}} {
+		q, args := seriesMembersAbove(1, "x", "S", 1, scope)
+		// The next book's query and the numbered check's.
+		for _, query := range []string{`SELECT ` + bookCols + ` FROM (` + q + `) ORDER BY pos, rel_path LIMIT 1`, `SELECT EXISTS (` + q + `)`} {
+			plan := queryPlan(t, c, query, args)
+			joined := strings.Join(plan, "\n")
+			for _, want := range []string{"idx_books_series", "idx_books_more_series"} {
+				if !strings.Contains(joined, want) {
+					t.Errorf("plan does not use %s:\n%s", want, joined)
+				}
+			}
+			for _, line := range plan {
+				if strings.HasPrefix(line, "SCAN b") && !strings.Contains(line, "INDEX") {
+					t.Errorf("plan walks the books table: %q", line)
+				}
+			}
+		}
+	}
+}
+
+// queryPlan is the detail lines of q's EXPLAIN QUERY PLAN.
+func queryPlan(t *testing.T, c *Catalog, q string, args []any) []string {
+	t.Helper()
+	rows, err := c.db.QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+q, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return plan
 }

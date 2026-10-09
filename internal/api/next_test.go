@@ -73,7 +73,13 @@ func (e *sagaEnv) url(endpoint, path string) string {
 
 func newSagaEnv(t *testing.T, metadataOn bool, books ...*catalog.Book) *sagaEnv {
 	t.Helper()
-	mock := sagaMetaserve(t)
+	return newLibraryEnv(t, sagaMetaserve(t), metadataOn, books...)
+}
+
+// newLibraryEnv is newSagaEnv's library, member and admin over the metadata
+// site mock.
+func newLibraryEnv(t *testing.T, mock *httptest.Server, metadataOn bool, books ...*catalog.Book) *sagaEnv {
+	t.Helper()
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.Metadata.Enabled = metadataOn
 		c.Metadata.BaseURL = mock.URL
@@ -476,5 +482,144 @@ func TestNextBookCapability(t *testing.T) {
 	e := newTestEnv(t)
 	if _, si := e.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(si, `"next_book":true`) {
 		t.Fatalf("/server missing next_book: %s", si)
+	}
+}
+
+// setMoreSeries gives the book at path its other series (a more_series list).
+func setMoreSeries(t *testing.T, e *sagaEnv, path, list string) {
+	t.Helper()
+	if err := e.cat.EditBook(context.Background(), e.lib.ID, path, catalog.BookEdit{Set: map[string]string{catalog.FieldMoreSeries: list}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNextSeriesMemberships: the local step follows every series a book is in,
+// its main series first: when the main series has ended another series it is in
+// answers, a later book in the main series wins over one in another, and the
+// grant narrows a series reached through a list like any other (allowed and
+// denied).
+func TestNextSeriesMemberships(t *testing.T) {
+	e := newSagaEnv(t, false,
+		&catalog.Book{RelPath: "Saga/1", Series: "Discworld", SeriesIndex: 8}, // City Watch 1 (list)
+		&catalog.Book{RelPath: "Saga/2", Series: "Discworld", SeriesIndex: 3},
+		&catalog.Book{RelPath: "Saga/2/Feet of Clay", Series: "Ankh", SeriesIndex: 1}, // City Watch 3 (list)
+		&catalog.Book{RelPath: "Private/Men at Arms", Series: "City Watch", SeriesIndex: 2},
+		&catalog.Book{RelPath: "Lone/Mort", Series: "Discworld", SeriesIndex: 0}, // Death 1 (list)
+		&catalog.Book{RelPath: "Lone/Reaper Man", Series: "Death", SeriesIndex: 2},
+	)
+	setMoreSeries(t, e, "Saga/1", `[{"name":"City Watch","position":1}]`)
+	setMoreSeries(t, e, "Saga/2/Feet of Clay", `[{"name":"City Watch","position":3}]`)
+	setMoreSeries(t, e, "Lone/Mort", `[{"name":"Death","position":1}]`)
+
+	// Allowed: Discworld holds nothing after #8 here (Saga/2 is #3), so City
+	// Watch answers: Men at Arms, #2 by its main series.
+	n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.adminTok)
+	if n.Source != nextSeries || n.nextPath() != "Private/Men at Arms" || n.Book == nil || n.Book.RelPath != "Private/Men at Arms" {
+		t.Fatalf("admin = %s", n.raw)
+	}
+	// Denied: Men at Arms is outside the member's grant; Feet of Clay, City Watch
+	// #3 through its list, is theirs.
+	n = getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok)
+	if n.Source != nextSeries || n.nextPath() != "Saga/2/Feet of Clay" || strings.Contains(n.raw, "Men at Arms") {
+		t.Fatalf("member = %s", n.raw)
+	}
+	// A book unnumbered in its main series follows the series it is numbered in.
+	if n := getNext(t, e.testEnv, e.url("next", "Lone/Mort"), e.adminTok); n.Source != nextSeries || n.nextPath() != "Lone/Reaper Man" {
+		t.Fatalf("Mort = %s", n.raw)
+	}
+	// Every series ended (nothing else is in Ankh, and Feet of Clay is City
+	// Watch's last here): the end of the series.
+	if n := getNext(t, e.testEnv, e.url("next", "Saga/2/Feet of Clay"), e.adminTok); n.Source != nextSeries || n.Next != nil {
+		t.Fatalf("Feet of Clay = %s", n.raw)
+	}
+
+	// The main series continuing wins, though City Watch continues too.
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib.ID, RelPath: "Saga/9", Series: "Discworld", SeriesIndex: 9,
+		Title: "Saga/9", Format: "m4b", AddedAt: "2024-01-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.adminTok); n.Source != nextSeries || n.nextPath() != "Saga/9" {
+		t.Fatalf("main continuing = %s", n.raw)
+	}
+}
+
+// twoRailMetaserve serves a work "cur" (B0CUR) in two community series, Alpha
+// and Beta (listed in that order), at #1 in each; a2 and b2 are #2 of each.
+func twoRailMetaserve(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("asin") != "B0CUR" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"work":{"id":"cur","title":"Cur","authors":[]},"recording_id":""}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") != "cur" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"cur","title":"Cur","authors":[],"language":"en","series":[` +
+			`{"id":"alpha","name":"Alpha","position":"1"},{"id":"beta","name":"Beta","position":"1"}],"recordings":[]}`))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		name := map[string]string{"alpha": "Alpha", "beta": "Beta"}[id]
+		if name == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"` + id + `","name":"` + name + `","authors":[],"works":[` +
+			`{"position":"1","work":{"id":"cur","title":"Cur","authors":[]}},` +
+			`{"position":"2","work":{"id":"` + id[:1] + `2","title":"Two","authors":[]}}]}`))
+	})
+	mock := httptest.NewServer(mux)
+	t.Cleanup(mock.Close)
+	return mock
+}
+
+// TestNextCommunityRails: every rail of a book in several community series is
+// followed, in the book's own order (its main series' rail first, then its other
+// series', then the rest as the envelope lists them): the first rail whose next
+// entry is the caller's book answers, and when none is, the first rail's next
+// work goes beside the local answer, without `local`.
+func TestNextCommunityRails(t *testing.T) {
+	for name, tc := range map[string]struct {
+		series, more string   // the current book's main series (at #1) and list
+		owned        []string // the #2 books held: "Alpha", "Beta"
+		source, next string
+		work         string
+	}{
+		"main series' rail first":        {"Beta", "", []string{"Alpha", "Beta"}, nextCommunity, "B/2", "b2"},
+		"the envelope's order otherwise": {"Gamma", "", []string{"Alpha", "Beta"}, nextCommunity, "A/2", "a2"},
+		"a listed series' rail next":     {"Gamma", `[{"name":"Beta","position":1}]`, []string{"Alpha", "Beta"}, nextCommunity, "B/2", "b2"},
+		"the first placed rail wins":     {"Beta", "", []string{"Alpha"}, nextCommunity, "A/2", "a2"},
+		"none placed: the first's work":  {"Beta", `[{"name":"Alpha","position":1}]`, nil, nextNone, "", "b2"},
+		"none placed, main Alpha":        {"Alpha", `[{"name":"Beta","position":1}]`, nil, nextNone, "", "a2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			books := []*catalog.Book{{RelPath: "X/cur", Series: tc.series, SeriesIndex: 1, ASIN: "B0CUR", IsFolder: true}}
+			for _, s := range tc.owned {
+				books = append(books, &catalog.Book{RelPath: s[:1] + "/2", Series: s + " Shelf", SeriesIndex: 2})
+			}
+			e := newLibraryEnv(t, twoRailMetaserve(t), true, books...)
+			mkdirs(t, e.lib.Root, "X/cur")
+			if tc.more != "" {
+				setMoreSeries(t, e, "X/cur", tc.more)
+			}
+			// The #2 books are in the rails' series through their lists, so the
+			// rails place them there.
+			for _, s := range tc.owned {
+				setMoreSeries(t, e, s[:1]+"/2", `[{"name":"`+s+`","position":2}]`)
+			}
+			n := getNext(t, e.testEnv, e.url("next", "X/cur"), e.adminTok)
+			if n.Source != tc.source || n.nextPath() != tc.next || n.Work == nil || n.Work.ID != tc.work {
+				t.Fatalf("= %s, want %s %q with work %s", n.raw, tc.source, tc.next, tc.work)
+			}
+			if (tc.next != "") != (n.Work.Local != nil) || (tc.next != "" && (n.Book == nil || n.Book.RelPath != tc.next)) {
+				t.Fatalf("local/book do not match next: %s", n.raw)
+			}
+		})
 	}
 }

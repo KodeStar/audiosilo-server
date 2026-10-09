@@ -198,27 +198,49 @@ func (c *Catalog) seriesSpellings(ctx context.Context, scopes []Scope, want map[
 	return out, rows.Err()
 }
 
-// NextInSeries returns the book after the one at relPath in its series within
-// one library and scope: the book of exactly that series with the smallest
-// series_index above index (ties by path), list shape. When there is none,
-// numbered reports whether the series holds any other numbered book in scope -
-// the end of a numbered series - and false means the series gives no order to
-// follow at all. numbered is true whenever next is found.
+// NextInSeries returns the book after the one at relPath in series within one
+// library and scope: of the books in exactly that series, the one with the
+// smallest position in it above index (ties by path), list shape. A book is in
+// the series through its main series (at its series_index) or through an entry
+// of its more_series (at that entry's position), so the book after Guards!
+// Guards! in City Watch is found whichever way each book names City Watch. When
+// there is none, numbered reports whether the series holds any other numbered
+// book in scope - the end of a numbered series - and false means the series
+// gives no order to follow at all. numbered is true whenever next is found.
 func (c *Catalog) NextInSeries(ctx context.Context, libraryID int64, relPath, series string, index float64, scope Scope) (next *Book, numbered bool, err error) {
-	frag, fargs := pathFilterSQL("rel_path", scope)
-	args := append([]any{libraryID, series, index, relPath}, fargs...)
-	next, err = scanBook(c.db.QueryRowContext(ctx, `SELECT `+bookCols+` FROM books
-		 WHERE library_id = ? AND series = ? AND series_index > ? AND rel_path <> ? AND `+frag+`
-		 ORDER BY series_index, rel_path LIMIT 1`, args...))
+	q, args := seriesMembersAbove(libraryID, relPath, series, index, scope)
+	next, err = scanBook(c.db.QueryRowContext(ctx, `SELECT `+bookCols+` FROM (`+q+`) ORDER BY pos, rel_path LIMIT 1`, args...))
 	switch {
 	case err == nil:
 		return next, true, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return nil, false, err
 	}
-	args = append([]any{libraryID, series, relPath}, fargs...)
-	err = c.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM books
-		 WHERE library_id = ? AND series = ? AND series_index > 0 AND rel_path <> ? AND `+frag+`)`,
-		args...).Scan(&numbered)
+	q, args = seriesMembersAbove(libraryID, relPath, series, 0, scope)
+	err = c.db.QueryRowContext(ctx, `SELECT EXISTS (`+q+`)`, args...).Scan(&numbered)
 	return nil, numbered, err
+}
+
+// seriesMembersAbove is the query, and its args, of the books in exactly series
+// within one library and scope, other than relPath, whose position in it is above
+// above: bookCols, then pos, their position. Its two branches are each found by
+// an index: the books whose main series it is by idx_books_series (library_id,
+// series, series_index), and the books in it only through their more_series (a
+// main series named so wins, so a list repeating it counts once) by the partial
+// index of the books with a list (idx_books_more_series), each list read with
+// json_each. Both are narrowed by the scope's paths, so a book outside the grant
+// is never a member. The columns carry the books prefix: json_each has an id, a
+// key and a value of its own.
+func seriesMembersAbove(libraryID int64, relPath, series string, above float64, scope Scope) (string, []any) {
+	frag, fargs := pathFilterSQL("b.rel_path", scope)
+	const pos = "json_extract(j.value, '$.position')"
+	q := `SELECT ` + prefixCols("b.") + `, b.series_index AS pos FROM books b
+		 WHERE b.library_id = ? AND b.series = ? AND b.series_index > ? AND b.rel_path <> ? AND ` + frag + `
+		UNION ALL
+		SELECT ` + prefixCols("b.") + `, ` + pos + ` AS pos FROM books b, json_each(b.more_series) j
+		 WHERE b.more_series <> '[]' AND b.library_id = ? AND b.series <> ? AND b.rel_path <> ? AND ` + frag + `
+		   AND json_extract(j.value, '$.name') = ? AND ` + pos + ` > ?`
+	args := append([]any{libraryID, series, above, relPath}, fargs...)
+	args = append(append(append(args, libraryID, series, relPath), fargs...), series, above)
+	return q, args
 }
