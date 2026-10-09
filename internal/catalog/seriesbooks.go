@@ -198,49 +198,91 @@ func (c *Catalog) seriesSpellings(ctx context.Context, scopes []Scope, want map[
 	return out, rows.Err()
 }
 
-// NextInSeries returns the book after the one at relPath in series within one
+// NextInSeries returns the book after book in the series it is in within one
+// library and scope, list shape: every series of book.AllSeries() it has a
+// position in, its main series first, then its others in list order; the first
+// holding a later book answers with it (nextInOneSeries). When none does,
+// numbered reports whether any of them holds another numbered book in scope -
+// the end of a numbered series - and false means its series give no order to
+// follow at all (the book unnumbered, or alone in its series). numbered is true
+// whenever next is found.
+func (c *Catalog) NextInSeries(ctx context.Context, libraryID int64, book *Book, scope Scope) (next *Book, numbered bool, err error) {
+	for _, s := range book.AllSeries() {
+		if s.Position <= 0 {
+			continue
+		}
+		next, num, err := c.nextInOneSeries(ctx, libraryID, book.RelPath, s.Name, s.Position, scope)
+		if err != nil || next != nil {
+			return next, next != nil, err
+		}
+		numbered = numbered || num
+	}
+	return nil, numbered, nil
+}
+
+// nextInOneSeries returns the book after the one at relPath in series within one
 // library and scope: of the books in exactly that series, the one with the
 // smallest position in it above index (ties by path), list shape. A book is in
 // the series through its main series (at its series_index) or through an entry
 // of its more_series (at that entry's position), so the book after Guards!
 // Guards! in City Watch is found whichever way each book names City Watch. When
 // there is none, numbered reports whether the series holds any other numbered
-// book in scope - the end of a numbered series - and false means the series
-// gives no order to follow at all. numbered is true whenever next is found.
-func (c *Catalog) NextInSeries(ctx context.Context, libraryID int64, relPath, series string, index float64, scope Scope) (next *Book, numbered bool, err error) {
-	q, args := seriesMembersAbove(libraryID, relPath, series, index, scope)
-	next, err = scanBook(c.db.QueryRowContext(ctx, `SELECT `+bookCols+` FROM (`+q+`) ORDER BY pos, rel_path LIMIT 1`, args...))
+// book in scope. One query: the numbered members, those above index first, so
+// the first row is the next book when it is above index, and otherwise proves
+// the series numbered without one.
+func (c *Catalog) nextInOneSeries(ctx context.Context, libraryID int64, relPath, series string, index float64, scope Scope) (next *Book, numbered bool, err error) {
+	var b Book
+	var pos float64
+	dest, finish := bookDest(&b)
+	q, args := firstSeriesMember(libraryID, relPath, series, index, scope)
+	err = c.db.QueryRowContext(ctx, q, args...).Scan(append(dest, &pos)...)
 	switch {
-	case err == nil:
-		return next, true, nil
-	case !errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, false, nil
+	case err != nil:
 		return nil, false, err
+	case pos <= index:
+		return nil, true, nil
 	}
-	q, args = seriesMembersAbove(libraryID, relPath, series, 0, scope)
-	err = c.db.QueryRowContext(ctx, `SELECT EXISTS (`+q+`)`, args...).Scan(&numbered)
-	return nil, numbered, err
+	finish()
+	return &b, true, nil
 }
 
-// seriesMembersAbove is the query, and its args, of the books in exactly series
-// within one library and scope, other than relPath, whose position in it is above
-// above: bookCols, then pos, their position. Its two branches are each found by
-// an index: the books whose main series it is by idx_books_series (library_id,
-// series, series_index), and the books in it only through their more_series (a
-// main series named so wins, so a list repeating it counts once) by the partial
-// index of the books with a list (idx_books_more_series), each list read with
-// json_each. Both are narrowed by the scope's paths, so a book outside the grant
-// is never a member. The columns carry the books prefix: json_each has an id, a
-// key and a value of its own.
-func seriesMembersAbove(libraryID int64, relPath, series string, above float64, scope Scope) (string, []any) {
+// firstSeriesMember is nextInOneSeries' query, and its args: the numbered
+// members of series (numberedSeriesMembers), those above index first, each group
+// by position then path, the first one only.
+func firstSeriesMember(libraryID int64, relPath, series string, index float64, scope Scope) (string, []any) {
+	q, args := numberedSeriesMembers(libraryID, relPath, series, scope)
+	return `SELECT ` + bookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, rel_path LIMIT 1`, append(args, index)
+}
+
+// numberedSeriesMembers is the query, and its args, of the books in exactly
+// series within one library and scope, other than relPath, with a position in it
+// (above 0): bookCols, then pos, their position. Its two branches are each found
+// by an index: the books whose main series it is by idx_books_series
+// (library_id, series, series_index), and the books in it only through their
+// more_series (a main series named so wins, so a list repeating it counts once)
+// by the full-text index's series column, which holds every series name, when
+// the name has a phrase to match (else by the partial index of the books with a
+// list, idx_books_more_series), each list read with json_each for the exact
+// name. Both are narrowed by the scope's paths, so a book outside the grant is
+// never a member. The columns carry the books prefix: json_each has an id, a key
+// and a value of its own.
+func numberedSeriesMembers(libraryID int64, relPath, series string, scope Scope) (string, []any) {
 	frag, fargs := pathFilterSQL("b.rel_path", scope)
 	const pos = "json_extract(j.value, '$.position')"
+	fts, ftsArgs := "", []any{}
+	if phrase, ok := ftsPhrase(series); ok {
+		fts, ftsArgs = "b.id IN (SELECT rowid FROM books_fts WHERE series MATCH ?) AND ", []any{phrase}
+	}
 	q := `SELECT ` + prefixCols("b.") + `, b.series_index AS pos FROM books b
-		 WHERE b.library_id = ? AND b.series = ? AND b.series_index > ? AND b.rel_path <> ? AND ` + frag + `
+		 WHERE b.library_id = ? AND b.series = ? AND b.series_index > 0 AND b.rel_path <> ? AND ` + frag + `
 		UNION ALL
 		SELECT ` + prefixCols("b.") + `, ` + pos + ` AS pos FROM books b, json_each(b.more_series) j
-		 WHERE b.more_series <> '[]' AND b.library_id = ? AND b.series <> ? AND b.rel_path <> ? AND ` + frag + `
-		   AND json_extract(j.value, '$.name') = ? AND ` + pos + ` > ?`
-	args := append([]any{libraryID, series, above, relPath}, fargs...)
-	args = append(append(append(args, libraryID, series, relPath), fargs...), series, above)
-	return q, args
+		 WHERE b.more_series <> '[]' AND b.library_id = ? AND ` + fts + `b.series <> ? AND b.rel_path <> ? AND ` + frag + `
+		   AND json_extract(j.value, '$.name') = ? AND ` + pos + ` > 0`
+	return q, slices.Concat(
+		[]any{libraryID, series, relPath}, fargs,
+		[]any{libraryID}, ftsArgs, []any{series, relPath}, fargs,
+		[]any{series})
 }

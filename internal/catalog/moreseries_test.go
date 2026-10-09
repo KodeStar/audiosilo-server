@@ -202,8 +202,8 @@ func TestMoreSeriesPlayer(t *testing.T) {
 // TestSeriesSwap: an edit that makes one of a book's other series its main one
 // swaps the two (seriesSwap) - on one book, and per book in a bulk edit - with
 // the derived values written as the edit's own overrides; an edit that names
-// more_series, or a series the list doesn't hold, swaps nothing, and one that
-// names series_index keeps its own position.
+// more_series, a series the list doesn't hold, or a community source swaps
+// nothing, and one that names series_index keeps its own position.
 func TestSeriesSwap(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
@@ -221,14 +221,15 @@ func TestSeriesSwap(t *testing.T) {
 			}
 		}
 	}
-	fields := func(path string) map[string]FieldValue {
+	detail := func(path string) *AdminBookDetail {
 		t.Helper()
 		d, err := c.AdminBookDetail(ctx, lib.ID, path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return d.Fields
+		return d
 	}
+	fields := func(path string) map[string]FieldValue { t.Helper(); return detail(path).Fields }
 	// check asserts a book's main series, position and other series.
 	check := func(path, series, idx, more string) {
 		t.Helper()
@@ -256,9 +257,8 @@ func TestSeriesSwap(t *testing.T) {
 			t.Errorf("derived %s = %+v, want an edit by u", field, f)
 		}
 	}
-	d, _ := c.AdminBookDetail(ctx, lib.ID, "gg")
-	if want := []SeriesRef{{watch, 1}, {"Omnibus", 0}, {disc, 8}, {"Extra", 2}}; !reflect.DeepEqual(d.Book.SeriesList, want) {
-		t.Errorf("series_list = %+v, want %+v", d.Book.SeriesList, want)
+	if got, want := detail("gg").Book.SeriesList, []SeriesRef{{watch, 1}, {"Omnibus", 0}, {disc, 8}, {"Extra", 2}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("series_list = %+v, want %+v", got, want)
 	}
 	// Back again swaps back.
 	edit("gg", BookEdit{Set: setSeries(disc)})
@@ -268,9 +268,8 @@ func TestSeriesSwap(t *testing.T) {
 	edit("gg", BookEdit{Set: setSeries(watch)})
 	edit("gg", BookEdit{Revert: []string{FieldSeries}})
 	check("gg", disc, "1", `[{"name":"Omnibus","position":0},{"name":"Discworld","position":8},{"name":"Extra","position":2}]`)
-	d, _ = c.AdminBookDetail(ctx, lib.ID, "gg")
-	if want := []SeriesRef{{disc, 1}, {"Omnibus", 0}, {"Extra", 2}}; !reflect.DeepEqual(d.Book.SeriesList, want) {
-		t.Errorf("series_list after reverting series = %+v, want %+v", d.Book.SeriesList, want)
+	if got, want := detail("gg").Book.SeriesList, []SeriesRef{{disc, 1}, {"Omnibus", 0}, {"Extra", 2}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("series_list after reverting series = %+v, want %+v", got, want)
 	}
 
 	// A bulk edit swaps each book that lists the series, and only those.
@@ -326,27 +325,9 @@ func TestSeriesSwap(t *testing.T) {
 	edit("blank", BookEdit{Set: setSeries("")})
 	check("blank", "", "8", `[{"name":"City Watch","position":1}]`)
 
-	// A community edit swaps as its own source; over an admin's own list it swaps
-	// nothing, and an admin's own position stays.
-	add("comm", disc, 8, "")
-	edit("comm", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"City Watch","position":1}]`}, Source: SourceCommunity})
+	// A community edit (a match apply) never swaps: the match plan lays out
+	// series itself.
+	add("comm", disc, 8, `[{"name":"City Watch","position":1}]`)
 	edit("comm", BookEdit{Set: setSeries(watch), Source: SourceCommunity})
-	check("comm", watch, "1", `[{"name":"Discworld","position":8}]`)
-	if f := fields("comm"); f[FieldMoreSeries].Source != SourceCommunity || f[FieldSeriesIndex].Source != SourceCommunity {
-		t.Errorf("derived sources = %q, %q, want community", f[FieldMoreSeries].Source, f[FieldSeriesIndex].Source)
-	}
-	add("commpos", disc, 8, "")
-	edit("commpos", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"City Watch","position":1}]`}, Source: SourceCommunity})
-	edit("commpos", BookEdit{Set: map[string]string{FieldSeriesIndex: "8"}})
-	edit("commpos", BookEdit{Set: setSeries(watch), Source: SourceCommunity})
-	check("commpos", watch, "8", `[{"name":"Discworld","position":8}]`)
-	if f := fields("commpos")[FieldSeriesIndex]; f.Source != SourceEdited {
-		t.Errorf("an admin's position became %+v", f)
-	}
-	add("commlist", disc, 8, `[{"name":"City Watch","position":1}]`)
-	edit("commlist", BookEdit{Set: setSeries(watch), Source: SourceCommunity})
-	check("commlist", watch, "8", `[{"name":"City Watch","position":1}]`)
-	if f := fields("commlist")[FieldMoreSeries]; f.Source != SourceEdited {
-		t.Errorf("an admin's list became %+v", f)
-	}
+	check("comm", watch, "8", `[{"name":"City Watch","position":1}]`)
 }

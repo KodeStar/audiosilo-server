@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -273,6 +274,75 @@ func TestRailOrder(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if got := RailOrder(rails, tc.names); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("RailOrder = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRailsWithNext: the rails with an entry after the current work, in the
+// book's own order (RailOrder); an ended rail or an unreadable position is left
+// out, so nothing continuing is an empty answer.
+func TestRailsWithNext(t *testing.T) {
+	rails := []MetaSeries{
+		named("Alpha", "1", "cur@1", "a2@2"),
+		named("Ended", "2", "x@1", "cur@2"),
+		named("Beta", "1", "cur@1", "b2@2"),
+		named("Odd", "1-3", "cur@1-3", "z@4"),
+	}
+	for name, tc := range map[string]struct {
+		rails []MetaSeries
+		names []string
+		want  []int
+	}{
+		"main series' rail first":  {rails, []string{"Beta"}, []int{2, 0}},
+		"envelope order otherwise": {rails, []string{"Gamma"}, []int{0, 2}},
+		"a listed series next":     {rails, []string{"Gamma", "Beta"}, []int{2, 0}},
+		"every rail ended":         {rails[1:2], []string{"Ended"}, nil},
+		"no current position":      {rails[3:], nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := RailsWithNext(tc.rails, "cur", tc.names); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("RailsWithNext = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNextAcrossRails: the first rail, in the order given, whose next entry is
+// one of the caller's books answers; when none is, the first rail's next entry
+// does, unplaced; no rails to follow is nil.
+func TestNextAcrossRails(t *testing.T) {
+	// placedRails is Alpha and Beta with the caller's copy of the named #2s.
+	placedRails := func(owned ...string) []MetaSeries {
+		rails := []MetaSeries{named("Alpha", "1", "cur@1", "a2@2"), named("Beta", "1", "cur@1", "b2@2")}
+		for r := range rails {
+			for w := range rails[r].Works {
+				if slices.Contains(owned, rails[r].Works[w].ID) {
+					rails[r].Works[w].Local = &MetaLocal{LibraryID: 1, Path: rails[r].Works[w].ID}
+				}
+			}
+		}
+		return rails
+	}
+	for name, tc := range map[string]struct {
+		rails      []MetaSeries
+		order      []int
+		want       string
+		wantPlaced bool
+	}{
+		"the first rail placed":      {placedRails("a2", "b2"), []int{1, 0}, "b2", true},
+		"the first placed rail wins": {placedRails("a2"), []int{1, 0}, "a2", true},
+		"none placed: the first's":   {placedRails(), []int{1, 0}, "b2", false},
+		"no rails to follow":         {placedRails("a2"), nil, "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			next := NextAcrossRails(tc.rails, tc.order, "cur")
+			got := ""
+			if next != nil {
+				got = next.ID
+			}
+			if got != tc.want || (next != nil && next.Local != nil) != tc.wantPlaced {
+				t.Fatalf("NextAcrossRails = %+v, want %q placed %v", next, tc.want, tc.wantPlaced)
 			}
 		})
 	}

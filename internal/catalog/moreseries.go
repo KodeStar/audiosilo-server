@@ -11,7 +11,7 @@ import (
 // book's position in each, which only an edit or a community match supplies (tags
 // name one series). It is an override field like any other - provenance, revert,
 // undo and clearing community values work on it unchanged - whose value is the
-// list as canonical JSON ("" for none). An edit that makes one of the other
+// list as canonical JSON ("" for none). An admin edit that makes one of the other
 // series the main one swaps the two (seriesSwap, overrides.go): the old main
 // series takes its place in the list.
 

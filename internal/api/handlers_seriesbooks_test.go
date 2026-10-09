@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,7 +22,7 @@ type seriesBooksBody struct {
 }
 
 // newSeriesBooksEnv is the browse env with Saga Two and the out-of-grant Other
-// One also book 1 of "Spin-off" (through more_series), as TestSeriesMemberships.
+// One also book 1 of "Spin-off" (through more_series).
 func newSeriesBooksEnv(t *testing.T) *browseEnv {
 	t.Helper()
 	e := newBrowseEnv(t)
@@ -66,6 +68,20 @@ func entryPaths(t *testing.T, entry map[string]any) []string {
 	return out
 }
 
+// sameAsBooksPage asserts that entry, without its name, is exactly the page
+// /books?series=<name>&memberships=1[&extra] returns to tok.
+func sameAsBooksPage(t *testing.T, e *browseEnv, tok string, entry map[string]any, extra string) {
+	t.Helper()
+	name, _ := entry["name"].(string)
+	var want map[string]any
+	e.get(t, e.libPath(e.libID)+"/books?series="+url.QueryEscape(name)+"&memberships=1"+extra, tok, &want)
+	got := maps.Clone(entry)
+	delete(got, "name")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%s entry = %v, want the /books page %v", name, got, want)
+	}
+}
+
 // TestSeriesBooksMatchesBooksPage: each entry is exactly the page
 // /books?series=<name>&memberships=1 returns (books in order with the list
 // shape, series_list included, next_cursor), and a book in two series through
@@ -79,13 +95,7 @@ func TestSeriesBooksMatchesBooksPage(t *testing.T) {
 		t.Fatalf("names = %v", names)
 	}
 	for _, entry := range got.Series {
-		name := entry["name"].(string)
-		var want map[string]any
-		e.get(t, base+"/books?series="+url.QueryEscape(name)+"&memberships=1", e.adminTok, &want)
-		delete(entry, "name")
-		if !reflect.DeepEqual(entry, want) {
-			t.Errorf("%s entry = %v, want the /books page %v", name, entry, want)
-		}
+		sameAsBooksPage(t, e, e.adminTok, entry, "")
 	}
 	if paths := entryPaths(t, got.Series[0]); !reflect.DeepEqual(paths, []string{"In/A1", "In/A2", "Inner/C"}) {
 		t.Errorf("Saga = %v", paths)
@@ -143,12 +153,7 @@ func TestSeriesBooksLimitAndCursor(t *testing.T) {
 	if _, ok := other["next_cursor"]; ok {
 		t.Errorf("Other is exhausted but has a next_cursor: %v", other)
 	}
-	var want map[string]any
-	e.get(t, base+"/books?series=Saga&memberships=1&limit=2", e.adminTok, &want)
-	delete(saga, "name")
-	if !reflect.DeepEqual(saga, want) {
-		t.Errorf("Saga entry = %v, want the /books limit=2 page %v", saga, want)
-	}
+	sameAsBooksPage(t, e, e.adminTok, saga, "&limit=2")
 	var next struct {
 		Books      []catalog.Book `json:"books"`
 		NextCursor string         `json:"next_cursor"`
@@ -171,10 +176,6 @@ func TestSeriesBooksNames(t *testing.T) {
 		}
 		return out
 	}
-	repeats := make([]string, maxSeriesBatch+10)
-	for i := range repeats {
-		repeats[i] = "Saga"
-	}
 	for _, c := range []struct {
 		q    string
 		want int
@@ -184,7 +185,7 @@ func TestSeriesBooksNames(t *testing.T) {
 		{seriesBooksQuery([]string{"", ""}, ""), http.StatusBadRequest},
 		{seriesBooksQuery(distinct(maxSeriesBatch+1), ""), http.StatusBadRequest},
 		{seriesBooksQuery(distinct(maxSeriesBatch), ""), http.StatusOK},
-		{seriesBooksQuery(repeats, ""), http.StatusOK},
+		{seriesBooksQuery(slices.Repeat([]string{"Saga"}, maxSeriesBatch+10), ""), http.StatusOK},
 	} {
 		if resp, body := e.do(t, "GET", path+c.q, e.adminTok, ""); resp.StatusCode != c.want {
 			t.Errorf("%.60s = %d %s, want %d", c.q, resp.StatusCode, body, c.want)
@@ -210,12 +211,7 @@ func TestSeriesBooksScoped(t *testing.T) {
 		if len(want[i]) == 0 {
 			continue // /books answers an empty page with books:null; this entry is []
 		}
-		var page map[string]any
-		e.get(t, base+"/books?series="+url.QueryEscape(names[i])+"&memberships=1", e.memberTok, &page)
-		delete(entry, "name")
-		if !reflect.DeepEqual(entry, page) {
-			t.Errorf("member %s entry = %v, want the member's /books page %v", names[i], entry, page)
-		}
+		sameAsBooksPage(t, e, e.memberTok, entry, "")
 	}
 	got = seriesBooksBody{}
 	e.get(t, base+"/series/books"+seriesBooksQuery(names, ""), e.adminTok, &got)

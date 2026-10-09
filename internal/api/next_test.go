@@ -493,26 +493,21 @@ func setMoreSeries(t *testing.T, e *sagaEnv, path, list string) {
 	}
 }
 
-// TestNextSeriesMemberships: the local step follows every series a book is in,
-// its main series first: when the main series has ended another series it is in
-// answers, a later book in the main series wins over one in another, and the
-// grant narrows a series reached through a list like any other (allowed and
-// denied).
+// TestNextSeriesMemberships: the local step follows every series a book is in
+// (catalog.NextInSeries, whose policy catalog's tests cover): when the main
+// series has ended a series the book lists answers, and the grant narrows it
+// (allowed and denied).
 func TestNextSeriesMemberships(t *testing.T) {
 	e := newSagaEnv(t, false,
-		&catalog.Book{RelPath: "Saga/1", Series: "Discworld", SeriesIndex: 8}, // City Watch 1 (list)
-		&catalog.Book{RelPath: "Saga/2", Series: "Discworld", SeriesIndex: 3},
+		&catalog.Book{RelPath: "Saga/1", Series: "Discworld", SeriesIndex: 8},         // City Watch 1 (list)
 		&catalog.Book{RelPath: "Saga/2/Feet of Clay", Series: "Ankh", SeriesIndex: 1}, // City Watch 3 (list)
 		&catalog.Book{RelPath: "Private/Men at Arms", Series: "City Watch", SeriesIndex: 2},
-		&catalog.Book{RelPath: "Lone/Mort", Series: "Discworld", SeriesIndex: 0}, // Death 1 (list)
-		&catalog.Book{RelPath: "Lone/Reaper Man", Series: "Death", SeriesIndex: 2},
 	)
 	setMoreSeries(t, e, "Saga/1", `[{"name":"City Watch","position":1}]`)
 	setMoreSeries(t, e, "Saga/2/Feet of Clay", `[{"name":"City Watch","position":3}]`)
-	setMoreSeries(t, e, "Lone/Mort", `[{"name":"Death","position":1}]`)
 
-	// Allowed: Discworld holds nothing after #8 here (Saga/2 is #3), so City
-	// Watch answers: Men at Arms, #2 by its main series.
+	// Allowed: Discworld holds nothing after #8, so City Watch answers: Men at
+	// Arms, #2 by its main series.
 	n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.adminTok)
 	if n.Source != nextSeries || n.nextPath() != "Private/Men at Arms" || n.Book == nil || n.Book.RelPath != "Private/Men at Arms" {
 		t.Fatalf("admin = %s", n.raw)
@@ -522,24 +517,6 @@ func TestNextSeriesMemberships(t *testing.T) {
 	n = getNext(t, e.testEnv, e.url("next", "Saga/1"), e.memberTok)
 	if n.Source != nextSeries || n.nextPath() != "Saga/2/Feet of Clay" || strings.Contains(n.raw, "Men at Arms") {
 		t.Fatalf("member = %s", n.raw)
-	}
-	// A book unnumbered in its main series follows the series it is numbered in.
-	if n := getNext(t, e.testEnv, e.url("next", "Lone/Mort"), e.adminTok); n.Source != nextSeries || n.nextPath() != "Lone/Reaper Man" {
-		t.Fatalf("Mort = %s", n.raw)
-	}
-	// Every series ended (nothing else is in Ankh, and Feet of Clay is City
-	// Watch's last here): the end of the series.
-	if n := getNext(t, e.testEnv, e.url("next", "Saga/2/Feet of Clay"), e.adminTok); n.Source != nextSeries || n.Next != nil {
-		t.Fatalf("Feet of Clay = %s", n.raw)
-	}
-
-	// The main series continuing wins, though City Watch continues too.
-	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: e.lib.ID, RelPath: "Saga/9", Series: "Discworld", SeriesIndex: 9,
-		Title: "Saga/9", Format: "m4b", AddedAt: "2024-01-01T00:00:00Z"}); err != nil {
-		t.Fatal(err)
-	}
-	if n := getNext(t, e.testEnv, e.url("next", "Saga/1"), e.adminTok); n.Source != nextSeries || n.nextPath() != "Saga/9" {
-		t.Fatalf("main continuing = %s", n.raw)
 	}
 }
 
@@ -580,10 +557,11 @@ func twoRailMetaserve(t *testing.T) *httptest.Server {
 }
 
 // TestNextCommunityRails: every rail of a book in several community series is
-// followed, in the book's own order (its main series' rail first, then its other
-// series', then the rest as the envelope lists them): the first rail whose next
-// entry is the caller's book answers, and when none is, the first rail's next
-// work goes beside the local answer, without `local`.
+// followed, in the book's own order (meta.RailsWithNext and NextAcrossRails,
+// whose policy meta's tests cover; here a rail named like a listed series comes
+// before the envelope's first): the first rail whose next entry is the caller's
+// book answers, and when none is, the first rail's next work goes beside the
+// local answer, without `local`.
 func TestNextCommunityRails(t *testing.T) {
 	for name, tc := range map[string]struct {
 		series, more string   // the current book's main series (at #1) and list
@@ -591,17 +569,16 @@ func TestNextCommunityRails(t *testing.T) {
 		source, next string
 		work         string
 	}{
-		"main series' rail first":        {"Beta", "", []string{"Alpha", "Beta"}, nextCommunity, "B/2", "b2"},
-		"the envelope's order otherwise": {"Gamma", "", []string{"Alpha", "Beta"}, nextCommunity, "A/2", "a2"},
-		"a listed series' rail next":     {"Gamma", `[{"name":"Beta","position":1}]`, []string{"Alpha", "Beta"}, nextCommunity, "B/2", "b2"},
-		"the first placed rail wins":     {"Beta", "", []string{"Alpha"}, nextCommunity, "A/2", "a2"},
-		"none placed: the first's work":  {"Beta", `[{"name":"Alpha","position":1}]`, nil, nextNone, "", "b2"},
-		"none placed, main Alpha":        {"Alpha", `[{"name":"Beta","position":1}]`, nil, nextNone, "", "a2"},
+		"a listed series' rail first":   {"Gamma", `[{"name":"Beta","position":1}]`, []string{"Alpha", "Beta"}, nextCommunity, "B/2", "b2"},
+		"the first placed rail wins":    {"Beta", "", []string{"Alpha"}, nextCommunity, "A/2", "a2"},
+		"none placed: the first's work": {"Beta", `[{"name":"Alpha","position":1}]`, nil, nextNone, "", "b2"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			books := []*catalog.Book{{RelPath: "X/cur", Series: tc.series, SeriesIndex: 1, ASIN: "B0CUR", IsFolder: true}}
+			owned := map[string]string{} // series -> the path of its #2
 			for _, s := range tc.owned {
-				books = append(books, &catalog.Book{RelPath: s[:1] + "/2", Series: s + " Shelf", SeriesIndex: 2})
+				owned[s] = s[:1] + "/2"
+				books = append(books, &catalog.Book{RelPath: owned[s], Series: s + " Shelf", SeriesIndex: 2})
 			}
 			e := newLibraryEnv(t, twoRailMetaserve(t), true, books...)
 			mkdirs(t, e.lib.Root, "X/cur")
@@ -610,8 +587,8 @@ func TestNextCommunityRails(t *testing.T) {
 			}
 			// The #2 books are in the rails' series through their lists, so the
 			// rails place them there.
-			for _, s := range tc.owned {
-				setMoreSeries(t, e, s[:1]+"/2", `[{"name":"`+s+`","position":2}]`)
+			for s, path := range owned {
+				setMoreSeries(t, e, path, `[{"name":"`+s+`","position":2}]`)
 			}
 			n := getNext(t, e.testEnv, e.url("next", "X/cur"), e.adminTok)
 			if n.Source != tc.source || n.nextPath() != tc.next || n.Work == nil || n.Work.ID != tc.work {

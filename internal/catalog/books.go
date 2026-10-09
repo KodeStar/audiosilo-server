@@ -714,11 +714,14 @@ type SeriesPage struct {
 // name with Memberships (the default author sort, limit clamped the same way),
 // so each NextCursor continues on /books?series=<name>&memberships=1 with the
 // same limit. Books is an empty list, never nil, for a series with no books in
-// scope. One indexed query per name; the caller dedupes and bounds the names and
-// drops an empty one (an empty Series filters nothing: the whole library).
+// scope. An empty name is skipped (an empty Series filters nothing: it would be
+// the whole library). One indexed query per name; the caller bounds the names.
 func (c *Catalog) ListSeriesBooks(ctx context.Context, libraryID int64, names []string, limit int, scope *Scope) ([]SeriesPage, error) {
 	out := make([]SeriesPage, 0, len(names))
 	for _, name := range names {
+		if name == "" {
+			continue
+		}
 		page, err := c.ListBooks(ctx, ListOptions{
 			LibraryID:   libraryID,
 			Series:      name,

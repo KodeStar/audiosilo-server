@@ -47,12 +47,10 @@ func (a *API) handleBrowseSeries(w http.ResponseWriter, r *http.Request) {
 const maxSeriesBatch = 50
 
 // handleSeriesBooks serves GET /libraries/{id}/series/books?name=A&name=B[&limit=N]
-// (the `series_books` capability): the first page of several series' books in
-// one request, each entry exactly the page /books?series=<name>&memberships=1
-// &limit=N returns, so its next_cursor continues there. Names are verbatim;
-// empty ones are ignored and duplicates answered once, in first-occurrence
-// order. 400 for no names or more than maxSeriesBatch distinct ones; scope and
-// library errors as /books.
+// (the `series_books` capability; the pages are catalog.ListSeriesBooks'). Names
+// are verbatim, empty ones ignored and duplicates answered once, in
+// first-occurrence order; 400 for no names or more than maxSeriesBatch distinct
+// ones. Scope and library errors as /books.
 func (a *API) handleSeriesBooks(w http.ResponseWriter, r *http.Request) {
 	lib, scope, ok := a.browseScope(w, r)
 	if !ok {

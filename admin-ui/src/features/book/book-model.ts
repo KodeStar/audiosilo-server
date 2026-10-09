@@ -160,8 +160,10 @@ export function seriesSwap(
   const swapped = list.flatMap((s, i) => (i === at ? oldMain : s.name === old ? [] : [s]));
   const more = parseMoreSeries(JSON.stringify(swapped));
   if (more.error) return undefined;
-  const position = list[at].position;
-  return { more_series: more.value, series_index: position > 0 ? String(position) : '' };
+  return {
+    more_series: more.value,
+    series_index: checkField('series_index', String(list[at].position)).value,
+  };
 }
 
 /**
@@ -182,14 +184,12 @@ function commitSeriesDraft(
     const series = checkField('series', d.series);
     return series.error ? undefined : seriesSwap(fields, series.value);
   };
-  const drafted = (d: Drafts, field: 'more_series' | 'series_index', value: string | undefined) =>
-    d[field] !== undefined && checkField(field, d[field]).value === value;
+  const drafted = (field: 'more_series' | 'series_index', value: string | undefined) =>
+    drafts[field] !== undefined && checkField(field, drafts[field]).value === value;
   const before = swapFor(drafts);
-  const swapMore = drafted(drafts, 'more_series', before?.more_series);
-  const swapIndex = drafted(drafts, 'series_index', before?.series_index);
   let next = commitDraft(drafts, 'series', raw, fields.series.value);
-  if (swapMore) delete next.more_series;
-  if (swapIndex) delete next.series_index;
+  if (drafted('more_series', before?.more_series)) delete next.more_series;
+  if (drafted('series_index', before?.series_index)) delete next.series_index;
   if (next.more_series !== undefined) return next; // the admin's own list
   const swap = swapFor(next);
   if (!swap) return next;

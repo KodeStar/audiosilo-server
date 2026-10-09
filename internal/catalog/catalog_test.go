@@ -718,7 +718,8 @@ func TestBooksByPathsManyPaths(t *testing.T) {
 
 // TestListSeriesBooks: one page per name in the order given, each the ListBooks
 // page for that series with memberships (a book in two series in both), an
-// empty series as an empty list (not nil) without a cursor.
+// empty series as an empty list (not nil) without a cursor, and an empty name
+// skipped (not the whole library).
 func TestListSeriesBooks(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
@@ -736,7 +737,7 @@ func TestListSeriesBooks(t *testing.T) {
 		FieldMoreSeries: `[{"name":"Side","position":2}]`}}); err != nil {
 		t.Fatal(err)
 	}
-	pages, err := c.ListSeriesBooks(ctx, lib.ID, []string{"Side", "Nope", "Saga"}, 1, nil)
+	pages, err := c.ListSeriesBooks(ctx, lib.ID, []string{"Side", "", "Nope", "Saga"}, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

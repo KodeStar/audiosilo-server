@@ -83,7 +83,7 @@ func TestSeriesBooksScope(t *testing.T) {
 	}
 }
 
-func TestNextInSeries(t *testing.T) {
+func TestNextInOneSeries(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/a"})
 	for _, b := range []Book{
@@ -120,7 +120,7 @@ func TestNextInSeries(t *testing.T) {
 		"unnumbered series":         {"U/a", "U", 1, all, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, numbered, err := c.NextInSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope)
+			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -135,11 +135,11 @@ func TestNextInSeries(t *testing.T) {
 	}
 }
 
-// TestNextInSeriesMemberships: a book is in a series through its main series or
+// TestNextInOneSeriesMemberships: a book is in a series through its main series or
 // an entry of its more_series, at its position in THAT series, both ways round;
 // the end of a membership series is numbered; the scope narrows both branches;
 // and a list repeating the main series counts the book once.
-func TestNextInSeriesMemberships(t *testing.T) {
+func TestNextInOneSeriesMemberships(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Disc", Root: "/tmp/d"})
 	for _, b := range []Book{
@@ -196,7 +196,7 @@ func TestNextInSeriesMemberships(t *testing.T) {
 		"denied: alone in scope":            {"gg", "City Watch", 1, Scope{LibraryID: lib.ID, Paths: []string{"gg"}}, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, numbered, err := c.NextInSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope)
+			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -213,32 +213,117 @@ func TestNextInSeriesMemberships(t *testing.T) {
 		})
 	}
 	// nw, in City Watch by its main series and again in its list, is one member.
-	q, args := seriesMembersAbove(lib.ID, "", "City Watch", 3, all)
+	q, args := numberedSeriesMembers(lib.ID, "", "City Watch", all)
 	var n int
 	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (`+q+`) WHERE rel_path = 'nw'`, args...).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("nw counted %d times (%v)", n, err)
 	}
 }
 
+// TestNextInSeries: the next book follows every series a book is in, its main
+// series first: when the main series has ended another series it is in answers,
+// a later book in the main series wins over one in another, a series the book
+// has no position in is skipped, the end of every series is numbered, and the
+// grant narrows a series reached through a list like any other (allowed and
+// denied).
+func TestNextInSeries(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Disc", Root: "/tmp/d"})
+	add := func(path, series string, idx float64, more string) {
+		t.Helper()
+		b := &Book{LibraryID: lib.ID, RelPath: path, Title: path, Series: series, SeriesIndex: idx, AddedAt: "2024-01-01T00:00:00Z"}
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		if more != "" {
+			if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldMoreSeries: more}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	add("Saga/1", "Discworld", 8, `[{"name":"City Watch","position":1}]`)
+	add("Saga/2", "Discworld", 3, "")
+	add("Saga/2/Feet of Clay", "Ankh", 1, `[{"name":"City Watch","position":3}]`)
+	add("Private/Men at Arms", "City Watch", 2, "")
+	add("Lone/Mort", "Discworld", 0, `[{"name":"Death","position":1}]`)
+	add("Lone/Reaper Man", "Death", 2, "")
+	add("Loose/One", "Loose", 0, "")
+	add("Loose/Two", "Loose", 0, "")
+	all := Scope{LibraryID: lib.ID, AllowAll: true}
+	granted := Scope{LibraryID: lib.ID, Paths: []string{"Saga", "Lone"}}
+	next := func(path string, scope Scope) (string, bool) {
+		t.Helper()
+		book, err := c.GetBookByPath(ctx, lib.ID, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, numbered, err := c.NextInSeries(ctx, lib.ID, book, scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == nil {
+			return "", numbered
+		}
+		if !numbered {
+			t.Errorf("%s: next %s found but not numbered", path, n.RelPath)
+		}
+		return n.RelPath, numbered
+	}
+	for name, tc := range map[string]struct {
+		path         string
+		scope        Scope
+		want         string
+		wantNumbered bool
+	}{
+		// Discworld holds nothing after #8 (Saga/2 is #3), so City Watch answers:
+		// Men at Arms, #2 by its main series.
+		"main ended: a listed series": {"Saga/1", all, "Private/Men at Arms", true},
+		// Men at Arms is outside the grant; Feet of Clay, City Watch #3 through
+		// its list, is inside it.
+		"denied: outside the grant": {"Saga/1", granted, "Saga/2/Feet of Clay", true},
+		// Unnumbered in its main series: the series it is numbered in.
+		"unnumbered main series skipped": {"Lone/Mort", all, "Lone/Reaper Man", true},
+		// Nothing else in Ankh, and Feet of Clay is City Watch's last.
+		"every series ended":  {"Saga/2/Feet of Clay", all, "", true},
+		"no numbered series":  {"Loose/One", all, "", false},
+		"alone in its series": {"Lone/Reaper Man", Scope{LibraryID: lib.ID, Paths: []string{"Lone/Reaper Man"}}, "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, numbered := next(tc.path, tc.scope); got != tc.want || numbered != tc.wantNumbered {
+				t.Fatalf("next = %q, numbered = %v; want %q, %v", got, numbered, tc.want, tc.wantNumbered)
+			}
+		})
+	}
+	// The main series continuing wins, though City Watch continues too.
+	add("Saga/9", "Discworld", 9, "")
+	if got, _ := next("Saga/1", all); got != "Saga/9" {
+		t.Fatalf("main continuing = %q, want Saga/9", got)
+	}
+}
+
 // TestNextInSeriesPlan: both branches of the membership query are index
-// searches, the main series by idx_books_series and the lists by the partial
-// idx_books_more_series, never a walk of the library's books.
+// searches, never a walk of the library's books: the main series by
+// idx_books_series, the lists by the full-text index's series column, each
+// candidate looked up by rowid in the partial idx_books_more_series (a name with
+// no phrase to match reads that partial index alone).
 func TestNextInSeriesPlan(t *testing.T) {
 	c, _ := newTestCatalog(t)
 	for _, scope := range []Scope{{LibraryID: 1, AllowAll: true}, {LibraryID: 1, Paths: []string{"A", "B"}}} {
-		q, args := seriesMembersAbove(1, "x", "S", 1, scope)
-		// The next book's query and the numbered check's.
-		for _, query := range []string{`SELECT ` + bookCols + ` FROM (` + q + `) ORDER BY pos, rel_path LIMIT 1`, `SELECT EXISTS (` + q + `)`} {
-			plan := queryPlan(t, c, query, args)
+		for series, lists := range map[string][]string{
+			"S":  {"SCAN books_fts VIRTUAL TABLE", "SEARCH b USING INDEX idx_books_more_series (library_id=? AND rowid=?)"},
+			"!!": {"SEARCH b USING INDEX idx_books_more_series (library_id=?)"},
+		} {
+			q, args := firstSeriesMember(1, "x", series, 1, scope)
+			plan := queryPlan(t, c, q, args)
 			joined := strings.Join(plan, "\n")
-			for _, want := range []string{"idx_books_series", "idx_books_more_series"} {
+			for _, want := range append([]string{"SEARCH b USING INDEX idx_books_series"}, lists...) {
 				if !strings.Contains(joined, want) {
-					t.Errorf("plan does not use %s:\n%s", want, joined)
+					t.Errorf("%s: plan does not use %s:\n%s", series, want, joined)
 				}
 			}
 			for _, line := range plan {
 				if strings.HasPrefix(line, "SCAN b") && !strings.Contains(line, "INDEX") {
-					t.Errorf("plan walks the books table: %q", line)
+					t.Errorf("%s: plan walks the books table: %q", series, line)
 				}
 			}
 		}

@@ -273,3 +273,37 @@ func RailOrder(rails []MetaSeries, names []string) []int {
 	slices.SortStableFunc(order, func(a, b int) int { return cmp.Compare(ranks[a], ranks[b]) })
 	return order
 }
+
+// RailsWithNext is the rails to follow from currentWork for a book in the local
+// series names (its main series first, then its others): the indexes, in
+// RailOrder, of the rails with an entry after it (NextOnRail on each MAIN view).
+// Empty when every series has ended or no current position is a number - read
+// off the shared rails, since placing the caller's books moves no entry, so a
+// caller learns there is no next entry without looking up what they own.
+func RailsWithNext(rails []MetaSeries, currentWork string, names []string) []int {
+	var out []int
+	for _, i := range RailOrder(rails, names) {
+		if next, ok := NextOnRail(rails[i], currentWork); ok && next != nil {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// NextAcrossRails is the entry to follow from currentWork across rails (the
+// envelope's rails, placed or not) taken in order (RailsWithNext's indexes): the
+// first rail's next entry that is one of the caller's books (Local set), else
+// the first rail's next entry, unplaced. nil when order is empty.
+func NextAcrossRails(rails []MetaSeries, order []int, currentWork string) *MetaSeriesWork {
+	var first *MetaSeriesWork
+	for _, i := range order {
+		next, _ := NextOnRail(rails[i], currentWork)
+		if next != nil && next.Local != nil {
+			return next
+		}
+		if first == nil {
+			first = next
+		}
+	}
+	return first
+}

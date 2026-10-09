@@ -283,15 +283,7 @@ func TestBrowsePeopleCapability(t *testing.T) {
 // there (and counted) only for a client that asks with memberships=1, still
 // within the caller's scope; /server advertises series_memberships.
 func TestSeriesMemberships(t *testing.T) {
-	e := newBrowseEnv(t)
-	ctx := context.Background()
-	// Saga Two is also book 1 of "Spin-off"; so is the out-of-grant Other One.
-	for _, p := range []string{"In/A2", "Out/B1"} {
-		if err := e.cat.EditBook(ctx, e.libID, p, catalog.BookEdit{Set: map[string]string{
-			catalog.FieldMoreSeries: `[{"name":"Spin-off","position":1}]`}}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	e := newSeriesBooksEnv(t) // Saga Two and the out-of-grant Other One are also Spin-off #1
 	base := e.libPath(e.libID)
 	books := func(tok, q string) []string {
 		var page struct {

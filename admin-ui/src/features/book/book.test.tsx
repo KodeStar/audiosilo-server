@@ -176,12 +176,16 @@ describe('book page', () => {
     const calls = mockFetch(routes(detail));
     renderApp(URL);
     const user = userEvent.setup();
-    await user.click(
-      await within(await screen.findByRole('group', { name: 'Series' })).findByRole('button'),
-    );
-    const input = within(row('Series')).getByRole('textbox');
-    await user.clear(input);
-    await user.type(input, 'The Cosmere{Enter}');
+    // Opens the Series field and commits name in it.
+    const setSeries = async (name: string) => {
+      await user.click(
+        await within(await screen.findByRole('group', { name: 'Series' })).findByRole('button'),
+      );
+      const input = within(row('Series')).getByRole('textbox');
+      await user.clear(input);
+      await user.type(input, `${name}{Enter}`);
+    };
+    await setSeries('The Cosmere');
     // The old main series takes its place among the others, at its number.
     expect(within(row('Other series')).getByText('The Stormlight Archive #1')).toBeInTheDocument();
     expect(within(row('Series number')).getByText('3')).toBeInTheDocument();
@@ -189,15 +193,11 @@ describe('book page', () => {
     expect(screen.getByText('3 unsaved changes')).toBeInTheDocument();
 
     // Back to the old name: nothing left to save.
-    await user.click(within(row('Series')).getByRole('button'));
-    await user.clear(within(row('Series')).getByRole('textbox'));
-    await user.type(within(row('Series')).getByRole('textbox'), 'The Stormlight Archive{Enter}');
+    await setSeries('The Stormlight Archive');
     expect(screen.queryByRole('toolbar', { name: 'Unsaved changes' })).not.toBeInTheDocument();
     expect(within(row('Other series')).getByText('The Cosmere #3')).toBeInTheDocument();
 
-    await user.click(within(row('Series')).getByRole('button'));
-    await user.clear(within(row('Series')).getByRole('textbox'));
-    await user.type(within(row('Series')).getByRole('textbox'), 'The Cosmere{Enter}');
+    await setSeries('The Cosmere');
     await user.click(screen.getByRole('button', { name: 'Review and save' }));
     const dialog = await screen.findByRole('dialog', { name: 'Save these changes?' });
     expect(within(dialog).getByText('The Stormlight Archive #1')).toBeInTheDocument();

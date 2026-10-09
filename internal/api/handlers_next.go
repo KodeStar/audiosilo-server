@@ -83,18 +83,16 @@ func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catal
 	return next, nil
 }
 
-// communityNext is the entry after the current work on the envelope's rails'
-// main views (meta.NextOnRail), placed for the caller as the /meta envelope
-// places it (localRails). A book in several series has a rail for each; they are
-// followed in the book's own order (meta.RailOrder: the rail of its main series
-// first, then of its others in list order, then the rest as listed), and the
-// first whose next entry is one of the caller's books answers: work.Local is
-// set, and placed is then that book's indexed metadata (when found). work is nil
-// when there is no community answer: metadata off, the book unmatched or without
-// rails, the upstream failing, or no rail with a next entry (the current
-// position not a number, or the current work last). When no next entry can be
-// placed, work is the first rail's next entry (in that order) without `local`,
-// as /meta degrades.
+// communityNext is the entry after the current work on the envelope's rails,
+// placed for the caller as the /meta envelope places it (localRails). The rails
+// with a next entry, in the book's own order (meta.RailsWithNext), are read off
+// the shared envelope, so localRails runs only when one has; the first whose
+// next entry is one of the caller's books answers (meta.NextAcrossRails):
+// work.Local is set, and placed is then that book's indexed metadata (when
+// found). work is nil when there is no community answer: metadata off, the book
+// unmatched or without rails, the upstream failing, or no rail with a next
+// entry. When no next entry can be placed, work is the first rail's next entry
+// without `local`, as /meta degrades.
 func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.Book) (work *meta.MetaSeriesWork, placed *catalog.Book) {
 	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
 		return nil, nil
@@ -109,23 +107,12 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 	if env.Work == nil || len(env.Series) == 0 {
 		return nil, nil
 	}
-	// The next entries are read off the shared rails first: placing the caller's
-	// books moves no entry, so the end of every series and unreadable positions
-	// are answered without looking up what the caller owns.
 	var names []string
 	for _, s := range book.AllSeries() {
 		names = append(names, s.Name)
 	}
-	var withNext []int // the rails with a next entry, in the book's order
-	for _, i := range meta.RailOrder(env.Series, names) {
-		if w, ok := meta.NextOnRail(env.Series[i], env.Work.ID); ok && w != nil {
-			if work == nil {
-				work = w
-			}
-			withNext = append(withNext, i)
-		}
-	}
-	if work == nil {
+	order := meta.RailsWithNext(env.Series, env.Work.ID, names)
+	if len(order) == 0 {
 		return nil, nil
 	}
 	rails, books, err := a.localRails(ctx, catalog.Ref{LibraryID: libraryID, Path: book.RelPath}, env)
@@ -133,47 +120,31 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 		if ctx.Err() == nil {
 			a.log.Warn("place owned books for next book failed", "err", err, "library", libraryID, "path", book.RelPath)
 		}
-		return work, nil
+		return meta.NextAcrossRails(env.Series, order, env.Work.ID), nil
 	}
-	for _, i := range withNext {
-		w, _ := meta.NextOnRail(rails[i], env.Work.ID) // the same entry, with the caller's local
-		if w == nil || w.Local == nil {
-			continue
-		}
-		for j := range books {
-			if books[j].LibraryID == w.Local.LibraryID && books[j].RelPath == w.Local.Path {
-				return w, &books[j]
+	work = meta.NextAcrossRails(rails, order, env.Work.ID)
+	if work.Local != nil {
+		for i := range books {
+			if books[i].LibraryID == work.Local.LibraryID && books[i].RelPath == work.Local.Path {
+				return work, &books[i]
 			}
 		}
-		return w, nil
 	}
 	return work, nil
 }
 
-// seriesNext reads the next book off the local series numbering of every series
-// the book is in (Book.AllSeries: its main series first, then its others in list
-// order), skipping those it has no position in: the first series holding a later
-// book in scope answers with it (catalog.NextInSeries: the caller's book in the
-// same library and exact series with the smallest higher position in it). Other
-// numbered books in a series but none later in any is the end of the series
-// ({source: series}). nil (fall through) when the book is not numbered in a
-// series, or nothing else in its series is.
+// seriesNext reads the next book off the local numbering of every series the
+// book is in (catalog.NextInSeries). Numbered books but none later is the end of
+// the series ({source: series}); nil (fall through) when the book is not
+// numbered in a series, or nothing else in its series is.
 func (a *API) seriesNext(ctx context.Context, libraryID int64, scope catalog.Scope, book *catalog.Book) (*nextBook, error) {
-	ended := false
-	for _, s := range book.AllSeries() {
-		if s.Position <= 0 {
-			continue
-		}
-		next, numbered, err := a.cat.NextInSeries(ctx, libraryID, book.RelPath, s.Name, s.Position, scope)
-		if err != nil {
-			return nil, err
-		}
-		if next != nil {
-			return &nextBook{Source: nextSeries, Next: &catalog.Ref{LibraryID: libraryID, Path: next.RelPath}, Book: next}, nil
-		}
-		ended = ended || numbered
-	}
-	if ended {
+	next, numbered, err := a.cat.NextInSeries(ctx, libraryID, book, scope)
+	switch {
+	case err != nil:
+		return nil, err
+	case next != nil:
+		return &nextBook{Source: nextSeries, Next: &catalog.Ref{LibraryID: libraryID, Path: next.RelPath}, Book: next}, nil
+	case numbered:
 		return &nextBook{Source: nextSeries}, nil
 	}
 	return nil, nil
