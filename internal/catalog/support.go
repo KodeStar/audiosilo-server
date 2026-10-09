@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"time"
 )
@@ -47,7 +46,7 @@ const supportKey = "support_card"
 // supportState is server_state's value for supportKey.
 type supportState struct {
 	Choice SupportChoice `json:"choice"`
-	// Until is when a snooze ends (RFC 3339, UTC); empty for a donation.
+	// Until is when a snooze ends (formatSessionTime); empty for a donation.
 	Until string `json:"until,omitempty"`
 }
 
@@ -59,16 +58,16 @@ type supportState struct {
 // finished) has none.
 func (c *Catalog) SupportCardDue(ctx context.Context) (bool, error) {
 	now := c.now()
-	st, err := c.supportState(ctx)
-	if err != nil {
+	var st supportState
+	if _, err := getServerState(ctx, c.db, supportKey, &st); err != nil {
 		return false, err
 	}
 	switch st.Choice {
 	case SupportDonated:
 		return false, nil
 	case SupportSnoozed:
-		// A snooze whose end can't be read has ended: the card is one click from gone.
-		if until, err := time.Parse(time.RFC3339Nano, st.Until); err == nil && now.Before(until) {
+		// A snooze whose end can't be read (zero) has ended: the card is one click from gone.
+		if now.Before(parseSessionTime(st.Until)) {
 			return false, nil
 		}
 	}
@@ -93,12 +92,13 @@ func (c *Catalog) SupportCardDue(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 	// Books finished here: an import's finishes from before the server existed
-	// don't count.
+	// don't count. Counting stops at SupportAfterFinished.
 	var finished int
 	if err := c.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM progress p JOIN users u ON u.id = p.user_id
-		 WHERE p.finished = 1 AND u.is_demo = 0 AND unixepoch(p.finished_at) >= ?`,
-		since.Unix()).Scan(&finished); err != nil {
+		`SELECT COUNT(*) FROM (
+		   SELECT 1 FROM progress p JOIN users u ON u.id = p.user_id
+		    WHERE p.finished = 1 AND u.is_demo = 0 AND p.finished_at >= ? LIMIT ?)`,
+		since.UTC().Format(time.RFC3339), SupportAfterFinished).Scan(&finished); err != nil {
 		return false, err
 	}
 	return finished >= SupportAfterFinished, nil
@@ -107,9 +107,9 @@ func (c *Catalog) SupportCardDue(ctx context.Context) (bool, error) {
 // SupportChoiceResult is what SetSupportChoice stored.
 type SupportChoiceResult struct {
 	// Changed is false when the server already held a donation: a later "Not now"
-	// never turns "for good" into six months.
+	// never turns "for good" into a snooze.
 	Changed bool
-	// Until is when a snooze ends (zero for a donation).
+	// Until is when a stored snooze ends (zero for a donation, or when nothing changed).
 	Until time.Time
 }
 
@@ -117,52 +117,29 @@ type SupportChoiceResult struct {
 // server.
 func (c *Catalog) SetSupportChoice(ctx context.Context, choice SupportChoice) (SupportChoiceResult, error) {
 	st := supportState{Choice: choice}
-	var res SupportChoiceResult
+	var until time.Time
 	switch choice {
 	case SupportDonated:
 	case SupportSnoozed:
-		res.Until = c.now().UTC().AddDate(0, SupportSnoozeMonths, 0)
-		st.Until = res.Until.Format(time.RFC3339)
+		until = c.now().UTC().AddDate(0, SupportSnoozeMonths, 0)
+		st.Until = formatSessionTime(until)
 	default:
-		return res, ErrInvalidSupportChoice
+		return SupportChoiceResult{}, ErrInvalidSupportChoice
 	}
-	value, err := json.Marshal(st)
-	if err != nil {
-		return res, err
+	changed := false
+	err := c.db.WithTx(ctx, "SetSupportChoice", func(tx *sql.Tx) error {
+		var cur supportState
+		if _, err := getServerState(ctx, tx, supportKey, &cur); err != nil {
+			return err
+		}
+		if cur.Choice == SupportDonated {
+			return nil
+		}
+		changed = true
+		return putServerState(ctx, tx, supportKey, st, c.stamp())
+	})
+	if err != nil || !changed {
+		return SupportChoiceResult{}, err
 	}
-	r, err := c.db.ExecContext(ctx,
-		`INSERT INTO server_state(key, value, updated_at) VALUES(?, ?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-		 WHERE json_extract(server_state.value, '$.choice') IS NOT ?`,
-		supportKey, string(value), c.stamp(), string(SupportDonated))
-	if err != nil {
-		return res, err
-	}
-	n, err := r.RowsAffected()
-	if err != nil {
-		return res, err
-	}
-	res.Changed = n > 0
-	if !res.Changed {
-		res.Until = time.Time{}
-	}
-	return res, nil
-}
-
-// supportState reads the card's stored answer; none (or one that isn't JSON) is
-// the zero state.
-func (c *Catalog) supportState(ctx context.Context) (supportState, error) {
-	var raw string
-	err := c.db.QueryRowContext(ctx, `SELECT value FROM server_state WHERE key = ?`, supportKey).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return supportState{}, nil
-	}
-	if err != nil {
-		return supportState{}, err
-	}
-	var st supportState
-	if json.Unmarshal([]byte(raw), &st) != nil {
-		return supportState{}, nil
-	}
-	return st, nil
+	return SupportChoiceResult{Changed: true, Until: until}, nil
 }

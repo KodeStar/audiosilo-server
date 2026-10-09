@@ -49,10 +49,15 @@ describe('support card', () => {
   });
 
   it.each([
-    ['Not now', 'snooze', 'Hidden for six months'],
-    ["I've donated", 'donated', 'Thank you'],
-  ])('"%s" sends %s and hides the card', async (button, action, toast) => {
-    const calls = mockFetch(dueRoutes());
+    [
+      'Not now',
+      'snoozed',
+      { show: false, until: '2027-04-09T10:00:00Z' },
+      'Hidden until Apr 9, 2027',
+    ],
+    ["I've donated", 'donated', { show: false }, 'Thank you'],
+  ])('"%s" sends %s and hides the card', async (button, action, answer, toast) => {
+    const calls = mockFetch(dueRoutes({ 'POST /admin/support': { body: answer } }));
     renderApp();
     const card = await screen.findByRole('region', { name: 'Support AudioSilo' });
     await userEvent.setup().click(within(card).getByRole('button', { name: button }));
@@ -62,6 +67,14 @@ describe('support card', () => {
     expect(await screen.findByText(toast)).toBeInTheDocument();
     const post = calls.find((c) => c.method === 'POST' && c.path === '/admin/support');
     expect(post?.body).toEqual({ action });
+  });
+
+  it('thanks rather than dates a "Not now" that a donation already outranks', async () => {
+    mockFetch(dueRoutes());
+    renderApp();
+    const card = await screen.findByRole('region', { name: 'Support AudioSilo' });
+    await userEvent.setup().click(within(card).getByRole('button', { name: 'Not now' }));
+    expect(await screen.findByText('Thank you')).toBeInTheDocument();
   });
 
   it('stays, with a message, when the answer is not saved', async () => {

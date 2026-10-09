@@ -7,6 +7,7 @@ import { keys, useSupportStatus } from '@/api/hooks';
 import type { SupportAction, SupportStatus } from '@/api/types';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { toastError } from '@/lib/errors';
+import { formatDate } from '@/lib/format';
 import { SPONSOR_URL } from '@/lib/support';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -14,11 +15,13 @@ import { cn } from '@/lib/utils';
 /**
  * The Overview's support card: AudioSilo is free, and here is where to sponsor
  * it. The server says when it shows (never on a new server; GET /admin/support).
- * "I've donated" hides it for good and "Not now" for six months, for every admin
- * on the server; both are taken on trust. Opening GitHub Sponsors hides nothing.
+ * "I've donated" hides it for good and "Not now" until the date the server
+ * answers, for every admin on the server; both are taken on trust. Opening
+ * GitHub Sponsors hides nothing.
  */
 export function SupportCard() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const support = useSupportStatus();
   const [busy, setBusy] = useState(false);
@@ -27,10 +30,14 @@ export function SupportCard() {
   const answer = async (action: SupportAction) => {
     setBusy(true);
     try {
-      qc.setQueryData<SupportStatus>(keys.support, await api.answerSupport(action));
+      const res = await api.answerSupport(action);
+      qc.setQueryData<SupportStatus>(keys.support, res);
+      // The answer, not the button, picks the words: a "Not now" after another
+      // admin's donation stores nothing and comes back without an end date.
+      const done = res.until ? 'snoozed' : 'donated';
       toast.add({
-        title: t(`support.done.${action}`),
-        description: t(`support.done.${action}Body`),
+        title: t(`support.done.${done}`, { date: formatDate(res.until, lang) }),
+        description: t(`support.done.${done}Body`),
         type: 'success',
       });
     } catch (err) {
@@ -65,7 +72,7 @@ export function SupportCard() {
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => void answer('donated')}>
             {t('support.donated')}
           </Button>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void answer('snooze')}>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void answer('snoozed')}>
             {t('support.notNow')}
           </Button>
         </div>

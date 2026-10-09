@@ -13,23 +13,26 @@ import (
 // supportEnvelope is GET /admin/support's answer, and POST's.
 type supportEnvelope struct {
 	Show bool `json:"show"`
+	// Until is when a snooze POST just stored ends (RFC 3339); absent otherwise.
+	Until string `json:"until,omitempty"`
 }
 
 // handleSupport says whether the support card shows now: GET /admin/support →
 // {"show": bool}.
 func (a *API) handleSupport(w http.ResponseWriter, r *http.Request) {
-	a.writeSupport(w, r)
-}
-
-// supportActions maps POST /admin/support's action to the choice it stores.
-var supportActions = map[string]catalog.SupportChoice{
-	"donated": catalog.SupportDonated,
-	"snooze":  catalog.SupportSnoozed,
+	show, err := a.cat.SupportCardDue(r.Context())
+	if err != nil {
+		a.writeCatalogError(w, err, "support: read", "could not read the support card")
+		return
+	}
+	writeJSON(w, http.StatusOK, supportEnvelope{Show: show})
 }
 
 // handleSupportChoice records an admin's answer for the whole server: POST
-// /admin/support {"action": "donated" | "snooze"} → {"show": false}. Taken on
-// trust: nothing is checked and nothing leaves the server. 400 for any other action.
+// /admin/support {"action": "donated" | "snoozed"} → {"show": false, "until"?},
+// with until only when a snooze was stored. After an answer the card is hidden
+// either way, so nothing is recomputed. Taken on trust: nothing is checked and
+// nothing leaves the server. 400 for any other action.
 func (a *API) handleSupportChoice(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Action string `json:"action"`
@@ -38,33 +41,20 @@ func (a *API) handleSupportChoice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	choice, ok := supportActions[body.Action]
-	if !ok {
-		writeError(w, http.StatusBadRequest, `action must be "donated" or "snooze"`)
-		return
-	}
+	choice := catalog.SupportChoice(body.Action)
 	res, err := a.cat.SetSupportChoice(r.Context(), choice)
 	if err != nil {
-		a.log.Error("support: save choice failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not save the choice")
+		a.writeCatalogError(w, err, "support: save choice", "could not save the choice")
 		return
 	}
+	out := supportEnvelope{}
 	if res.Changed {
 		details := map[string]any{"choice": string(choice)}
 		if !res.Until.IsZero() {
-			details["returns_at"] = res.Until.Format(time.RFC3339)
+			out.Until = res.Until.Format(time.RFC3339)
+			details["returns_at"] = out.Until
 		}
 		a.audit(r, "settings.support", "", details)
 	}
-	a.writeSupport(w, r)
-}
-
-func (a *API) writeSupport(w http.ResponseWriter, r *http.Request) {
-	show, err := a.cat.SupportCardDue(r.Context())
-	if err != nil {
-		a.log.Error("support: read failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not read the support card")
-		return
-	}
-	writeJSON(w, http.StatusOK, supportEnvelope{Show: show})
+	writeJSON(w, http.StatusOK, out)
 }

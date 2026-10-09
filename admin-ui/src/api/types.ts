@@ -510,13 +510,18 @@ export interface UpdateStatus {
   install: 'docker' | 'binary' | 'source';
 }
 
-/** GET/POST /api/v1/admin/support (handlers_support.go): whether the Overview's support card shows. */
+/**
+ * GET/POST /api/v1/admin/support (handlers_support.go): whether the Overview's
+ * support card shows. POST answers `show: false`, with `until` (RFC 3339) only
+ * when it stored a snooze.
+ */
 export interface SupportStatus {
   show: boolean;
+  until?: string;
 }
 
-/** POST /api/v1/admin/support's action: hide the card for good, or for six months. */
-export type SupportAction = 'donated' | 'snooze';
+/** POST /api/v1/admin/support's action: hide the card for good, or for a while. */
+export type SupportAction = 'donated' | 'snoozed';
 
 /** GET /api/v1/admin/system (handlers_system.go handleSystem). */
 export interface SystemStatus {

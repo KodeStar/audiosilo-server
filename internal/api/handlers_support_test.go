@@ -67,16 +67,8 @@ func TestSupportCardAdminOnly(t *testing.T) {
 	}
 }
 
-func TestSupportCardFirstRunHidden(t *testing.T) {
-	e := newTestEnv(t)
-	adminTok, _ := opsTokens(t, e)
-	if supportShows(t, e, adminTok) {
-		t.Fatal("the card shows on a new server")
-	}
-}
-
-// "I've donated" hides the card for every admin on the server, for good, and is
-// audited; a later "Not now" doesn't bring it back in six months.
+// "I've donated" hides the card for every admin on the server and is audited
+// once; a later "Not now" changes nothing, so it isn't audited.
 func TestSupportCardDonated(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
@@ -104,43 +96,47 @@ func TestSupportCardDonated(t *testing.T) {
 	}
 
 	// Not now after a donation changes nothing (and so audits nothing).
-	if resp, body := e.do(t, "POST", "/api/v1/admin/support", otherTok, `{"action":"snooze"}`); resp.StatusCode != http.StatusOK {
-		t.Fatalf("snooze = %d %s", resp.StatusCode, body)
+	if resp, body := e.do(t, "POST", "/api/v1/admin/support", otherTok, `{"action":"snoozed"}`); resp.StatusCode != http.StatusOK || body != "{\"show\":false}\n" {
+		t.Fatalf("snoozed after donating = %d %s", resp.StatusCode, body)
 	}
 	if events := settingsAudit(t, e); len(events) != 1 {
 		t.Fatalf("a no-op snooze was audited: %+v", events)
 	}
 }
 
-func TestSupportCardSnooze(t *testing.T) {
+// "Not now" answers with the snooze's end, and audits it as returns_at.
+func TestSupportCardSnoozed(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	backdateServer(t, e, (catalog.SupportAfterDays+1)*24*time.Hour)
-	if resp, body := e.do(t, "POST", "/api/v1/admin/support", adminTok, `{"action":"snooze"}`); resp.StatusCode != http.StatusOK {
-		t.Fatalf("snooze = %d %s", resp.StatusCode, body)
+	resp, body := e.do(t, "POST", "/api/v1/admin/support", adminTok, `{"action":"snoozed"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("snoozed = %d %s", resp.StatusCode, body)
+	}
+	var env struct {
+		Show  bool   `json:"show"`
+		Until string `json:"until"`
+	}
+	if err := json.Unmarshal([]byte(body), &env); err != nil {
+		t.Fatal(err)
+	}
+	until, err := time.Parse(time.RFC3339, env.Until)
+	if err != nil || env.Show || until.Before(time.Now().AddDate(0, catalog.SupportSnoozeMonths, -1)) {
+		t.Fatalf("snoozed = %s", body)
 	}
 	if supportShows(t, e, adminTok) {
 		t.Fatal("the card shows while snoozed")
 	}
 	if events := settingsAudit(t, e); len(events) != 1 || events[0].Details["choice"] != "snoozed" ||
-		events[0].Details["returns_at"] == nil {
+		events[0].Details["returns_at"] != env.Until {
 		t.Fatalf("audit = %+v", events)
-	}
-
-	// The snooze's end moved into the past: the card is back.
-	if _, err := e.db.ExecContext(context.Background(),
-		`UPDATE server_state SET value = json_set(value, '$.until', '2020-01-01T00:00:00Z') WHERE key = 'support_card'`); err != nil {
-		t.Fatal(err)
-	}
-	if !supportShows(t, e, adminTok) {
-		t.Fatal("the card didn't come back after the snooze")
 	}
 }
 
 func TestSupportCardBadAction(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
-	for _, body := range []string{`{"action":"later"}`, `{}`, `{"action":"donated","extra":1}`, `nope`} {
+	for _, body := range []string{`{"action":"later"}`, `{"action":"snooze"}`, `{}`, `{"action":"donated","extra":1}`, `nope`} {
 		if resp, _ := e.do(t, "POST", "/api/v1/admin/support", adminTok, body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("POST %s = %d, want 400", body, resp.StatusCode)
 		}

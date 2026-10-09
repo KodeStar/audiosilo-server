@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import {
   BookOpen,
   CheckCircle2,
@@ -133,15 +133,19 @@ function UpdateCard({ update }: { update: UpdateStatus }) {
         {/* Image tags and release files name the version without its v. */}
         {t(`about.how.${update.install}`, { version: latest.version.replace(/^v/, '') })}
         <span className="mt-1.5 block text-[12.5px]">
-          {t('about.available.sponsors')}{' '}
-          <a
-            href={SPONSOR_URL}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="font-medium text-foreground underline underline-offset-2 hover:no-underline"
-          >
-            {t('about.available.sponsorLink')}
-          </a>
+          <Trans
+            i18nKey="support.line"
+            components={{
+              a: (
+                <a
+                  href={SPONSOR_URL}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="font-semibold text-brand-ink underline-offset-2 hover:underline"
+                />
+              ),
+            }}
+          />
         </span>
       </Notice>
     );
@@ -232,12 +236,12 @@ function ServerFacts({ sys }: { sys: SystemStatus }) {
       <div className="flex flex-wrap gap-2 border-t px-5 py-3.5">
         {(
           [
-            ['docs', BookOpen],
-            ['source', Package],
-            ['issues', TriangleAlert],
-            ['support', HeartHandshake],
+            ['docs', BookOpen, 'about.link.docs'],
+            ['source', Package, 'about.link.source'],
+            ['issues', TriangleAlert, 'about.link.issues'],
+            ['support', HeartHandshake, 'support.title'],
           ] as const
-        ).map(([k, Icon]) => (
+        ).map(([k, Icon, label]) => (
           <a
             key={k}
             href={PROJECT_LINKS[k]}
@@ -246,7 +250,7 @@ function ServerFacts({ sys }: { sys: SystemStatus }) {
             className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
           >
             <Icon aria-hidden="true" />
-            {t(`about.link.${k}`)}
+            {t(label)}
           </a>
         ))}
       </div>

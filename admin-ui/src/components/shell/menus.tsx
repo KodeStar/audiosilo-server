@@ -118,7 +118,7 @@ export function UserMenu() {
           className={linkItemClass}
         >
           <HeartHandshake aria-hidden="true" />
-          {t('shell.account.support')}
+          {t('support.title')}
         </Menu.LinkItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => void signOut()}>
