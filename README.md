@@ -9,8 +9,10 @@ configurable TLS.
 The audiobook **player frontend** lives in a separate project
 (`audiosilo-frontend`, an Expo app that ships as native iOS/Android **and** a web
 build). The server does **not** vendor it: the Docker image bakes a pinned web
-build in at `/app/web`, served from `web_dir`. A metadata-enrichment site is
-planned separately.
+build in at `/app/web`, served from `web_dir`. Book details, series and the
+community recaps come from the community metadata service (meta.audiosilo.app),
+asked per book or, with `metadata.mode: mirror`, answered from a local copy of
+its database that the server downloads once a day (see `config.example.yaml`).
 
 ## Features (this iteration)
 
