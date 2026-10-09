@@ -2331,7 +2331,7 @@
   "settings.metadata.sourceCardBody": "Where the server looks up a book's community metadata. Covers come from their own sites (Audible, Open Library, publishers) either way.",
   "settings.metadata.mode": "Metadata source",
   "settings.metadata.mode.remote": "Ask the metadata service for each book",
-  "settings.metadata.mode.remoteBody": "Nothing to store. Each lookup sends the book's ASIN or ISBN to the service; matching also sends its title and author.",
+  "settings.metadata.mode.remoteBody": "Nothing to store. Each lookup sends the book's ASIN or ISBN to the service; a match sends what it needs, such as the title, author, series and folder names.",
   "settings.metadata.mode.mirror": "Keep a local copy",
   "settings.metadata.mode.mirrorBody": "No book is looked up over the internet: the server answers from its own copy, downloaded from GitHub and updated once a day. About 1.8 GB on disk (up to twice that during an update) and about 450 MB downloaded a day.",
   "settings.metadata.mirror.ready": "Local copy ready",

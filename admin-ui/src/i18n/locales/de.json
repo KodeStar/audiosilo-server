@@ -2331,7 +2331,7 @@
   "settings.metadata.sourceCardBody": "Wo der Server die Community-Metadaten eines Buchs nachschlägt. Cover kommen in beiden Fällen von ihren eigenen Seiten (Audible, Open Library, Verlage).",
   "settings.metadata.mode": "Metadatenquelle",
   "settings.metadata.mode.remote": "Den Metadatendienst für jedes Buch fragen",
-  "settings.metadata.mode.remoteBody": "Nichts zu speichern. Jede Abfrage schickt die ASIN oder ISBN des Buchs an den Dienst; beim Zuordnen gehen auch Titel und Autor mit.",
+  "settings.metadata.mode.remoteBody": "Nichts zu speichern. Jede Abfrage schickt die ASIN oder ISBN des Buchs an den Dienst; eine Zuordnung schickt, was sie braucht, etwa Titel, Autor, Reihe und Ordnernamen.",
   "settings.metadata.mode.mirror": "Eine lokale Kopie behalten",
   "settings.metadata.mode.mirrorBody": "Kein Buch wird über das Internet nachgeschlagen: Der Server antwortet aus seiner eigenen Kopie, die er von GitHub lädt und einmal am Tag aktualisiert. Etwa 1,8 GB auf der Festplatte (während eines Updates bis zum Doppelten) und etwa 450 MB Download am Tag.",
   "settings.metadata.mirror.ready": "Lokale Kopie bereit",

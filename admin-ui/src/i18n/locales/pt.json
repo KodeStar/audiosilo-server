@@ -2469,7 +2469,7 @@
   "settings.metadata.sourceCardBody": "Onde o servidor procura os metadados da comunidade de um livro. As capas vêm dos próprios sites (Audible, Open Library, editoras) em ambos os casos.",
   "settings.metadata.mode": "Origem dos metadados",
   "settings.metadata.mode.remote": "Perguntar ao serviço de metadados por cada livro",
-  "settings.metadata.mode.remoteBody": "Nada a guardar. Cada consulta envia o ASIN ou o ISBN do livro ao serviço; a associação envia também o título e o autor.",
+  "settings.metadata.mode.remoteBody": "Nada a guardar. Cada consulta envia o ASIN ou o ISBN do livro ao serviço; uma associação envia o que precisa, como o título, o autor, a série e os nomes das pastas.",
   "settings.metadata.mode.mirror": "Manter uma cópia local",
   "settings.metadata.mode.mirrorBody": "Nenhum livro é consultado pela internet: o servidor responde a partir da sua própria cópia, transferida do GitHub e atualizada uma vez por dia. Cerca de 1,8 GB em disco (até ao dobro durante uma atualização) e cerca de 450 MB transferidos por dia.",
   "settings.metadata.mirror.ready": "Cópia local pronta",
