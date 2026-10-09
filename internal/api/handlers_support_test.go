@@ -44,11 +44,16 @@ func supportShows(t *testing.T, e *testEnv, token string) bool {
 	return *env.Show
 }
 
-// The support card is the console's: a member and a signed-out caller can neither
-// read nor answer it, and their tries change nothing.
+// The support card is the console's: a member, a demo visitor and a signed-out
+// caller can neither read nor answer it, and their tries change nothing.
 func TestSupportCardAdminOnly(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, memberTok := opsTokens(t, e)
+	demo, err := e.auth.CreateDemoUser(context.Background(), "demo_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	demoTok, _ := e.auth.IssueToken(context.Background(), demo.ID, auth.KindSession, "t", 0)
 	backdateServer(t, e, (catalog.SupportAfterDays+1)*24*time.Hour)
 
 	for _, tc := range []struct{ method, body string }{
@@ -57,6 +62,9 @@ func TestSupportCardAdminOnly(t *testing.T) {
 	} {
 		if resp, _ := e.do(t, tc.method, "/api/v1/admin/support", memberTok, tc.body); resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s as a member = %d, want 403", tc.method, resp.StatusCode)
+		}
+		if resp, _ := e.do(t, tc.method, "/api/v1/admin/support", demoTok, tc.body); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s as a demo visitor = %d, want 403", tc.method, resp.StatusCode)
 		}
 		if resp, _ := e.do(t, tc.method, "/api/v1/admin/support", "", tc.body); resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("%s signed out = %d, want 401", tc.method, resp.StatusCode)

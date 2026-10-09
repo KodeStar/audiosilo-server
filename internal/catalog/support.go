@@ -58,8 +58,8 @@ type supportState struct {
 // finished) has none.
 func (c *Catalog) SupportCardDue(ctx context.Context) (bool, error) {
 	now := c.now()
-	var st supportState
-	if _, err := getServerState(ctx, c.db, supportKey, &st); err != nil {
+	st, err := getServerState[supportState](ctx, c.db, supportKey)
+	if err != nil {
 		return false, err
 	}
 	switch st.Choice {
@@ -98,7 +98,7 @@ func (c *Catalog) SupportCardDue(ctx context.Context) (bool, error) {
 		`SELECT COUNT(*) FROM (
 		   SELECT 1 FROM progress p JOIN users u ON u.id = p.user_id
 		    WHERE p.finished = 1 AND u.is_demo = 0 AND p.finished_at >= ? LIMIT ?)`,
-		since.UTC().Format(time.RFC3339), SupportAfterFinished).Scan(&finished); err != nil {
+		formatSessionTime(since), SupportAfterFinished).Scan(&finished); err != nil {
 		return false, err
 	}
 	return finished >= SupportAfterFinished, nil
@@ -128,8 +128,8 @@ func (c *Catalog) SetSupportChoice(ctx context.Context, choice SupportChoice) (S
 	}
 	changed := false
 	err := c.db.WithTx(ctx, "SetSupportChoice", func(tx *sql.Tx) error {
-		var cur supportState
-		if _, err := getServerState(ctx, tx, supportKey, &cur); err != nil {
+		cur, err := getServerState[supportState](ctx, tx, supportKey)
+		if err != nil {
 			return err
 		}
 		if cur.Choice == SupportDonated {

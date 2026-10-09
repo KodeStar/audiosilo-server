@@ -16,18 +16,24 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// getServerState reads key's value into v. found is false when the key has no
-// row, or when its value can't be read into v: an unreadable value counts as none.
-func getServerState(ctx context.Context, q querier, key string, v any) (found bool, err error) {
+// getServerState reads key's value as a T: the zero T when the key has no row,
+// or when its value can't be read as a T (an unreadable value counts as none,
+// never as the fields it got through before failing).
+func getServerState[T any](ctx context.Context, q querier, key string) (T, error) {
+	var v T
 	var raw string
-	err = q.QueryRowContext(ctx, `SELECT value FROM server_state WHERE key = ?`, key).Scan(&raw)
+	err := q.QueryRowContext(ctx, `SELECT value FROM server_state WHERE key = ?`, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return v, nil
 	}
 	if err != nil {
-		return false, err
+		return v, err
 	}
-	return json.Unmarshal([]byte(raw), v) == nil, nil
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		var none T
+		return none, nil
+	}
+	return v, nil
 }
 
 // putServerState stores v as key's value, stamped at (formatSessionTime).

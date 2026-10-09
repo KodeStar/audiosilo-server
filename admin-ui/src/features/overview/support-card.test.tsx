@@ -41,7 +41,7 @@ describe('support card', () => {
     const link = within(card).getByRole('link', { name: /Sponsor on GitHub/ });
     expect(link).toHaveAttribute('href', SPONSORS);
     expect(link).toHaveAttribute('target', '_blank');
-    expect(link.getAttribute('rel')).toContain('noopener');
+    expect(link).toHaveAttribute('rel', 'noreferrer noopener');
     link.addEventListener('click', (e) => e.preventDefault()); // jsdom can't open tabs
     await userEvent.setup().click(link);
     expect(screen.getByRole('region', { name: 'Support AudioSilo' })).toBeInTheDocument();
@@ -95,7 +95,7 @@ it('keeps Support AudioSilo in the account menu', async () => {
   const item = await screen.findByRole('menuitem', { name: 'Support AudioSilo' });
   expect(item).toHaveAttribute('href', SPONSORS);
   expect(item).toHaveAttribute('target', '_blank');
-  expect(item.getAttribute('rel')).toContain('noopener');
+  expect(item).toHaveAttribute('rel', 'noreferrer noopener');
 });
 
 describe('about', () => {
@@ -116,14 +116,13 @@ describe('about', () => {
     renderApp('/server/about');
     expect(await screen.findByText('AudioSilo v1.16.0 is available')).toBeInTheDocument();
     expect(screen.getByText(/AudioSilo is free; sponsors keep it going\./)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Sponsor on GitHub' })).toHaveAttribute(
-      'href',
-      SPONSORS,
-    );
-    expect(screen.getByRole('link', { name: 'Support AudioSilo' })).toHaveAttribute(
-      'href',
-      SPONSORS,
-    );
+    // Both open GitHub in a new tab without telling it which server sent them.
+    for (const name of ['Sponsor on GitHub', 'Support AudioSilo']) {
+      const link = screen.getByRole('link', { name });
+      expect(link).toHaveAttribute('href', SPONSORS);
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noreferrer noopener');
+    }
   });
 
   it('has no sponsor line while up to date', async () => {

@@ -177,3 +177,39 @@ func TestSupportCardOddStoredState(t *testing.T) {
 		t.Fatalf("unknown choice: err = %v", err)
 	}
 }
+
+// A stored value that fails to decode part-way counts as none: the fields read
+// before the failure (here a donation) must not hide the card for good, nor stop a
+// later answer from replacing it.
+func TestSupportCardHalfReadStateCountsAsNone(t *testing.T) {
+	c, now, ctx, _ := supportServer(t, supportStart)
+	*now = now.Add(SupportAfterDays * aDay)
+	if _, err := c.db.ExecContext(ctx,
+		`INSERT INTO server_state(key, value, updated_at) VALUES(?, ?, 't')`,
+		supportKey, `{"choice":"donated","until":5}`); err != nil {
+		t.Fatal(err)
+	}
+	wantDue(t, c, ctx, true, "a donation that can't be read")
+	res, err := c.SetSupportChoice(ctx, SupportSnoozed)
+	if err != nil || !res.Changed {
+		t.Fatalf("snooze over an unreadable value = %+v, %v", res, err)
+	}
+	wantDue(t, c, ctx, false, "snoozed")
+}
+
+// Finishes are stamped fixed-width with milliseconds (formatSessionTime) and
+// compared as text, so the cut-off must be written the same way: a finish later in
+// the same second as the first account still counts.
+func TestSupportCardFinishInTheFirstSecondCounts(t *testing.T) {
+	c, now, ctx, admin := supportServer(t, supportStart)
+	at := formatSessionTime(supportStart.Truncate(time.Second).Add(700 * time.Millisecond))
+	for i := range SupportAfterFinished {
+		if _, err := c.db.ExecContext(ctx,
+			`INSERT INTO progress(user_id, library_id, rel_path, position, duration, finished, updated_at, finished_at)
+			 VALUES(?, 1, ?, 0, 100, 1, ?, ?)`, admin, fmt.Sprintf("early-%d", i), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	*now = now.Add(SupportMinDays * aDay)
+	wantDue(t, c, ctx, true, "finishes in the server's first second")
+}
