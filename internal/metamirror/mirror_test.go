@@ -1,12 +1,7 @@
 package metamirror
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -22,188 +17,16 @@ import (
 	"github.com/kodestar/audiosilo-meta/pkg/query"
 	"github.com/kodestar/audiosilo-meta/pkg/query/querytest"
 	"github.com/kodestar/audiosilo-meta/pkg/release"
-	_ "modernc.org/sqlite"
+
+	"github.com/kodestar/audiosilo-server/internal/metamirror/ghfake"
 )
-
-// artifact is one data release's assets: the gzipped artifact and its digest.
-type artifact struct {
-	gz     []byte
-	digest string // the sha256sum line, as release.yml writes it
-}
-
-// fixtureArtifact gzips the querytest artifact; schema, when non-zero, first
-// rewrites the copy's meta(schema_version) (an artifact newer than this code).
-func fixtureArtifact(t *testing.T, schema int) artifact {
-	t.Helper()
-	path := querytest.Build(t, t.TempDir())
-	if schema != 0 {
-		db, err := sql.Open("sqlite", path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(`UPDATE meta SET value=? WHERE key='schema_version'`, schema); err != nil {
-			t.Fatal(err)
-		}
-		if err := db.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return gzArtifact(t, raw)
-}
-
-func gzArtifact(t *testing.T, raw []byte) artifact {
-	t.Helper()
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(raw); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(buf.Bytes())
-	return artifact{gz: buf.Bytes(), digest: hex.EncodeToString(sum[:]) + "  meta.sqlite.gz\n"}
-}
-
-// fakeRelease is one release on the fake: a data release when art is set, a
-// code release (no data assets, like the repo's v* releases) otherwise.
-type fakeRelease struct {
-	tag       string
-	published time.Time
-	art       *artifact
-}
-
-// fakeGitHub serves the releases list (with ETag/304) and the data assets. It
-// counts the full list answers, the 304s and the artifact downloads.
-type fakeGitHub struct {
-	srv *httptest.Server
-
-	mu        sync.Mutex
-	rels      []fakeRelease
-	etag      string
-	lists     int
-	notMod    int
-	downloads int
-	agents    []string
-	// hold, when set, stops each artifact download halfway until it is closed.
-	hold chan struct{}
-}
-
-func newFakeGitHub(t *testing.T, rels ...fakeRelease) *fakeGitHub {
-	t.Helper()
-	f := &fakeGitHub{}
-	f.publish(rels...)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /repos/"+release.DefaultRepo+"/releases", func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.agents = append(f.agents, r.Header.Get("User-Agent"))
-		if inm := r.Header.Get("If-None-Match"); inm != "" && inm == f.etag {
-			f.notMod++
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		f.lists++
-		type asset struct {
-			Name string `json:"name"`
-			Size int64  `json:"size"`
-			URL  string `json:"browser_download_url"`
-		}
-		type rel struct {
-			Tag       string    `json:"tag_name"`
-			Published time.Time `json:"published_at"`
-			Assets    []asset   `json:"assets"`
-		}
-		list := []rel{}
-		for _, fr := range f.rels {
-			r := rel{Tag: fr.tag, Published: fr.published, Assets: []asset{}}
-			if fr.art != nil {
-				base := f.srv.URL + "/dl/" + fr.tag + "/"
-				r.Assets = append(r.Assets,
-					asset{Name: release.DataAsset, Size: int64(len(fr.art.gz)), URL: base + release.DataAsset},
-					asset{Name: release.DataDigestAsset, Size: int64(len(fr.art.digest)), URL: base + release.DataDigestAsset})
-			}
-			list = append(list, r)
-		}
-		w.Header().Set("ETag", f.etag)
-		_ = json.NewEncoder(w).Encode(list)
-	})
-	mux.HandleFunc("GET /dl/{tag}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		var art *artifact
-		for _, fr := range f.rels {
-			if fr.tag == r.PathValue("tag") {
-				art = fr.art
-			}
-		}
-		if art != nil && r.PathValue("name") == release.DataAsset {
-			f.downloads++
-		}
-		hold := f.hold
-		f.mu.Unlock()
-		switch {
-		case art == nil:
-			http.NotFound(w, r)
-		case r.PathValue("name") == release.DataAsset && hold != nil:
-			half := len(art.gz) / 2
-			_, _ = w.Write(art.gz[:half])
-			w.(http.Flusher).Flush()
-			<-hold
-			_, _ = w.Write(art.gz[half:])
-		case r.PathValue("name") == release.DataAsset:
-			_, _ = w.Write(art.gz)
-		default:
-			_, _ = io.WriteString(w, art.digest)
-		}
-	})
-	f.srv = httptest.NewServer(mux)
-	t.Cleanup(f.srv.Close)
-	return f
-}
-
-// publish replaces the release list (a new ETag, so the next request is a 200).
-func (f *fakeGitHub) publish(rels ...fakeRelease) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.rels = rels
-	tags := make([]string, len(rels))
-	for i, r := range rels {
-		tags[i] = r.tag
-	}
-	f.etag = `"` + strings.Join(tags, "+") + `"`
-}
-
-func (f *fakeGitHub) counts() (lists, notMod, downloads int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.lists, f.notMod, f.downloads
-}
-
-// releases is a realistic list: a data release between code releases (v*),
-// listed out of publish order, the newest data release not first.
-func releases(art artifact, tags ...string) []fakeRelease {
-	t0 := time.Date(2026, 10, 9, 6, 0, 0, 0, time.UTC)
-	out := []fakeRelease{{tag: "v0.21.0", published: t0.Add(5 * time.Hour)}}
-	for i, tag := range tags {
-		out = append(out, fakeRelease{tag: tag, published: t0.Add(time.Duration(i) * time.Hour), art: &art})
-	}
-	return append(out, fakeRelease{tag: "v0.20.0", published: t0.Add(-time.Hour)})
-}
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // lots of room: the real reading would make the tests depend on the machine.
 func roomy(string) (uint64, error) { return 1 << 40, nil }
 
-func (f *fakeGitHub) client() *release.Client {
-	return release.New("", "", release.WithAPIBase(f.srv.URL), release.WithUserAgent("AudioSilo/test"))
-}
-
-func newMirror(t *testing.T, dir string, gh *fakeGitHub, opts Options) *Mirror {
+func newMirror(t *testing.T, dir string, gh *ghfake.Server, opts Options) *Mirror {
 	t.Helper()
 	if opts.FreeBytes == nil {
 		opts.FreeBytes = roomy
@@ -211,7 +34,7 @@ func newMirror(t *testing.T, dir string, gh *fakeGitHub, opts Options) *Mirror {
 	if opts.Logger == nil {
 		opts.Logger = quiet()
 	}
-	m, err := New(dir, gh.client(), opts)
+	m, err := New(dir, gh.Client(release.WithUserAgent("AudioSilo/test")), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,8 +69,8 @@ func eventually(t *testing.T, what string, cond func() bool) {
 }
 
 func TestMirrorDownloadsAndSwaps(t *testing.T) {
-	art := fixtureArtifact(t, 0)
-	gh := newFakeGitHub(t, releases(art, "data-v2026.10.08-aaaaaaa-bbbbbbb", "data-v2026.10.09-ccccccc-ddddddd")...)
+	art := ghfake.Fixture(t, 0)
+	gh := ghfake.New(t, ghfake.Releases(art, "data-v2026.10.08-aaaaaaa-bbbbbbb", "data-v2026.10.09-ccccccc-ddddddd")...)
 	dir := filepath.Join(t.TempDir(), DirName)
 	m := newMirror(t, dir, gh, Options{})
 
@@ -281,10 +104,7 @@ func TestMirrorDownloadsAndSwaps(t *testing.T) {
 	if m.SizeBytes() != st.SizeBytes {
 		t.Fatalf("SizeBytes = %d, want %d", m.SizeBytes(), st.SizeBytes)
 	}
-	gh.mu.Lock()
-	ua := gh.agents[0]
-	gh.mu.Unlock()
-	if ua != "AudioSilo/test" {
+	if ua := gh.UserAgents()[0]; ua != "AudioSilo/test" {
 		t.Fatalf("User-Agent = %q", ua)
 	}
 
@@ -299,7 +119,7 @@ func TestMirrorDownloadsAndSwaps(t *testing.T) {
 	// deleted after the grace.
 	old := m.Current()
 	const next = "data-v2026.10.10-eeeeeee-fffffff"
-	gh.publish(releases(art, tag, next)...)
+	gh.Publish(ghfake.Releases(art, tag, next)...)
 	m.check(context.Background())
 	if st := m.Status(); st.State != StateReady || st.Tag != next || m.Current() == old {
 		t.Fatalf("after an update = %+v", st)
@@ -308,7 +128,7 @@ func TestMirrorDownloadsAndSwaps(t *testing.T) {
 	if got := copies(t, dir); got[0] != "meta-"+next+".sqlite" {
 		t.Fatalf("copies = %v", got)
 	}
-	if _, _, downloads := gh.counts(); downloads != 2 {
+	if _, _, downloads := gh.Counts(); downloads != 2 {
 		t.Fatalf("downloads = %d, want 2", downloads)
 	}
 }
@@ -316,9 +136,9 @@ func TestMirrorDownloadsAndSwaps(t *testing.T) {
 // While a download runs the status says so, with its progress in compressed
 // bytes, and lookups go to the remote service until the copy is ready.
 func TestMirrorProgress(t *testing.T) {
-	art := fixtureArtifact(t, 0)
-	gh := newFakeGitHub(t, releases(art, "data-v2026.10.09-ccccccc-ddddddd")...)
-	gh.hold = make(chan struct{})
+	art := ghfake.Fixture(t, 0)
+	gh := ghfake.New(t, ghfake.Releases(art, "data-v2026.10.09-ccccccc-ddddddd")...)
+	unhold := gh.Hold()
 	m := newMirror(t, t.TempDir(), gh, Options{})
 	done := make(chan struct{})
 	go func() { m.check(context.Background()); close(done) }()
@@ -327,11 +147,11 @@ func TestMirrorProgress(t *testing.T) {
 		return st.State == StateDownloading && st.Progress != nil && st.Progress.Done > 0
 	})
 	st := m.Status()
-	if !st.Fallback || st.Progress.Total != int64(len(art.gz)) || st.Progress.Done >= st.Progress.Total {
+	if !st.Fallback || st.Progress.Total != int64(len(art.GZ)) || st.Progress.Done >= st.Progress.Total {
 		t.Fatalf("while downloading = %+v (%+v)", st, st.Progress)
 	}
 	m.CheckNow() // a check is running: this one is dropped, not queued
-	close(gh.hold)
+	unhold()
 	<-done
 	if st := m.Status(); st.State != StateReady || st.Progress != nil {
 		t.Fatalf("after the download = %+v", st)
@@ -346,18 +166,18 @@ func TestMirrorProgress(t *testing.T) {
 // An unchanged release list is a 304 and downloads nothing; the same release
 // listed again (a new ETag) downloads nothing either.
 func TestMirrorNotModified(t *testing.T) {
-	art := fixtureArtifact(t, 0)
-	rels := releases(art, "data-v2026.10.09-ccccccc-ddddddd")
-	gh := newFakeGitHub(t, rels...)
+	art := ghfake.Fixture(t, 0)
+	rels := ghfake.Releases(art, "data-v2026.10.09-ccccccc-ddddddd")
+	gh := ghfake.New(t, rels...)
 	m := newMirror(t, t.TempDir(), gh, Options{})
 	m.check(context.Background())
 	m.check(context.Background())
-	if lists, notMod, downloads := gh.counts(); lists != 1 || notMod != 1 || downloads != 1 {
+	if lists, notMod, downloads := gh.Counts(); lists != 1 || notMod != 1 || downloads != 1 {
 		t.Fatalf("lists %d, 304s %d, downloads %d; want 1, 1, 1", lists, notMod, downloads)
 	}
-	gh.publish(append(rels, fakeRelease{tag: "v0.22.0"})...)
+	gh.Publish(append(rels, ghfake.Release{Tag: "v0.22.0"})...)
 	m.check(context.Background())
-	if _, _, downloads := gh.counts(); downloads != 1 {
+	if _, _, downloads := gh.Counts(); downloads != 1 {
 		t.Fatalf("the same data release must not download again, downloads = %d", downloads)
 	}
 	if st := m.Status(); st.State != StateReady || st.Error != "" {
@@ -369,12 +189,12 @@ func TestMirrorNotModified(t *testing.T) {
 // the ETag (so the next check lists again) and leaves no temp file; without a
 // copy it is the error state, and lookups keep going to the remote service.
 func TestMirrorBadDigestKeepsCopy(t *testing.T) {
-	good := fixtureArtifact(t, 0)
+	good := ghfake.Fixture(t, 0)
 	bad := good
-	bad.digest = strings.Repeat("0", 64) + "  meta.sqlite.gz\n"
+	bad.Digest = strings.Repeat("0", 64) + "  meta.sqlite.gz\n"
 
 	dir := t.TempDir()
-	gh := newFakeGitHub(t, releases(bad, "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh := ghfake.New(t, ghfake.Releases(bad, "data-v2026.10.09-ccccccc-ddddddd")...)
 	m := newMirror(t, dir, gh, Options{})
 	m.check(context.Background())
 	st := m.Status()
@@ -385,12 +205,12 @@ func TestMirrorBadDigestKeepsCopy(t *testing.T) {
 		t.Fatalf("a failed check retries after %v, want an hour", got)
 	}
 
-	gh.publish(releases(good, "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh.Publish(ghfake.Releases(good, "data-v2026.10.09-ccccccc-ddddddd")...)
 	m.check(context.Background())
 	if st := m.Status(); st.State != StateReady || st.Error != "" {
 		t.Fatalf("after a good download = %+v", st)
 	}
-	gh.publish(releases(bad, "data-v2026.10.10-eeeeeee-fffffff")...)
+	gh.Publish(ghfake.Releases(bad, "data-v2026.10.10-eeeeeee-fffffff")...)
 	m.check(context.Background())
 	st = m.Status()
 	if st.State != StateReady || st.Tag != "data-v2026.10.09-ccccccc-ddddddd" || st.Error == "" || st.Fallback {
@@ -413,7 +233,7 @@ func TestMirrorBadDigestKeepsCopy(t *testing.T) {
 // A downloaded file that is not an artifact (right digest, wrong content) is
 // deleted, and the failure recorded.
 func TestMirrorCopyThatDoesNotOpen(t *testing.T) {
-	gh := newFakeGitHub(t, releases(gzArtifact(t, []byte("not a database")), "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh := ghfake.New(t, ghfake.Releases(ghfake.Gzip(t, []byte("not a database")), "data-v2026.10.09-ccccccc-ddddddd")...)
 	dir := t.TempDir()
 	m := newMirror(t, dir, gh, Options{})
 	m.check(context.Background())
@@ -427,7 +247,7 @@ func TestMirrorCopyThatDoesNotOpen(t *testing.T) {
 
 // An artifact schema newer than this code still opens and answers, flagged.
 func TestMirrorSchemaNewer(t *testing.T) {
-	gh := newFakeGitHub(t, releases(fixtureArtifact(t, query.MaxSchemaVersion+1), "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh := ghfake.New(t, ghfake.Releases(ghfake.Fixture(t, query.MaxSchemaVersion+1), "data-v2026.10.09-ccccccc-ddddddd")...)
 	m := newMirror(t, t.TempDir(), gh, Options{})
 	m.check(context.Background())
 	st := m.Status()
@@ -443,14 +263,14 @@ func TestMirrorSchemaNewer(t *testing.T) {
 // The disk guard refuses a download the volume has no room for, before any
 // byte is fetched.
 func TestMirrorDiskGuard(t *testing.T) {
-	gh := newFakeGitHub(t, releases(fixtureArtifact(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh := ghfake.New(t, ghfake.Releases(ghfake.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
 	m := newMirror(t, t.TempDir(), gh, Options{FreeBytes: func(string) (uint64, error) { return 1 << 20, nil }})
 	m.check(context.Background())
 	st := m.Status()
 	if st.State != StateError || !strings.HasPrefix(st.Error, "not enough disk space: need ") || !strings.HasSuffix(st.Error, "have 1.0 MB") {
 		t.Fatalf("status = %+v", st)
 	}
-	if _, _, downloads := gh.counts(); downloads != 0 {
+	if _, _, downloads := gh.Counts(); downloads != 0 {
 		t.Fatalf("downloads = %d, want none", downloads)
 	}
 }
@@ -458,7 +278,7 @@ func TestMirrorDiskGuard(t *testing.T) {
 // The state outlives a restart: the copy opens at once, nothing is fetched, and
 // the next check is a day after the last one, not shortly after start.
 func TestMirrorStateSurvivesRestart(t *testing.T) {
-	gh := newFakeGitHub(t, releases(fixtureArtifact(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh := ghfake.New(t, ghfake.Releases(ghfake.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
 	dir := t.TempDir()
 	m := newMirror(t, dir, gh, Options{})
 	m.check(context.Background())
@@ -475,12 +295,12 @@ func TestMirrorStateSurvivesRestart(t *testing.T) {
 	if due := m2.untilDue(); due < checkInterval-time.Minute {
 		t.Fatalf("a restart must not check again within the day, due in %v", due)
 	}
-	if lists, notMod, downloads := gh.counts(); lists != 1 || notMod != 0 || downloads != 1 {
+	if lists, notMod, downloads := gh.Counts(); lists != 1 || notMod != 0 || downloads != 1 {
 		t.Fatalf("lists %d, 304s %d, downloads %d", lists, notMod, downloads)
 	}
 	// The check it does run is conditional on the stored ETag.
 	m2.check(context.Background())
-	if _, notMod, _ := gh.counts(); notMod != 1 {
+	if _, notMod, _ := gh.Counts(); notMod != 1 {
 		t.Fatalf("the restarted mirror's check must be a 304, got %d", notMod)
 	}
 
@@ -503,7 +323,7 @@ func TestMirrorStateSurvivesRestart(t *testing.T) {
 // Leftovers of a stopped process are deleted at start: download temp files, a
 // half-written state, a copy that isn't the current one.
 func TestMirrorCleansLeftovers(t *testing.T) {
-	gh := newFakeGitHub(t, releases(fixtureArtifact(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh := ghfake.New(t, ghfake.Releases(ghfake.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
 	dir := t.TempDir()
 	m := newMirror(t, dir, gh, Options{})
 	m.check(context.Background())
@@ -530,7 +350,7 @@ func TestMirrorCleansLeftovers(t *testing.T) {
 // Run checks shortly after start without a copy and when woken; it checks
 // nothing while metadata is off.
 func TestMirrorRun(t *testing.T) {
-	gh := newFakeGitHub(t, releases(fixtureArtifact(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh := ghfake.New(t, ghfake.Releases(ghfake.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
 
 	var mu sync.Mutex
 	on := false
@@ -545,7 +365,7 @@ func TestMirrorRun(t *testing.T) {
 
 	m.CheckNow()
 	time.Sleep(50 * time.Millisecond)
-	if lists, notMod, _ := gh.counts(); lists+notMod != 0 || m.Ready() {
+	if lists, notMod, _ := gh.Counts(); lists+notMod != 0 || m.Ready() {
 		t.Fatal("nothing may be checked while metadata is off")
 	}
 
@@ -555,7 +375,7 @@ func TestMirrorRun(t *testing.T) {
 	m.CheckNow()
 	eventually(t, "the first download", m.Ready)
 	m.CheckNow()
-	eventually(t, "a check on request", func() bool { _, notMod, _ := gh.counts(); return notMod == 1 })
+	eventually(t, "a check on request", func() bool { _, notMod, _ := gh.Counts(); return notMod == 1 })
 }
 
 // The status on the wire, as the console reads it: no empty facts, fallback
@@ -577,13 +397,13 @@ func TestStatusJSON(t *testing.T) {
 
 // A tag that can't name a file is refused before anything is downloaded.
 func TestMirrorRefusesBadTag(t *testing.T) {
-	gh := newFakeGitHub(t, releases(fixtureArtifact(t, 0), "../escape")...)
+	gh := ghfake.New(t, ghfake.Releases(ghfake.Fixture(t, 0), "../escape")...)
 	m := newMirror(t, t.TempDir(), gh, Options{})
 	m.check(context.Background())
 	if st := m.Status(); st.State != StateError || !strings.Contains(st.Error, "can't name a file") {
 		t.Fatalf("status = %+v", st)
 	}
-	if _, _, downloads := gh.counts(); downloads != 0 {
+	if _, _, downloads := gh.Counts(); downloads != 0 {
 		t.Fatalf("downloads = %d", downloads)
 	}
 }
