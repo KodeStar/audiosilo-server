@@ -32,6 +32,7 @@ import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { mirrorLook } from '@/features/health/system-model';
 import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
@@ -40,6 +41,7 @@ import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
 import {
   certificateLook,
   lockOf,
+  METADATA_MODES,
   SETTINGS_PAGES,
   type CertStatus,
   type SettingsPage,
@@ -412,6 +414,24 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
       <SettingsForm
         settings={settings}
         section="metadata"
+        title={t('settings.metadata.sourceCard')}
+        description={t('settings.metadata.sourceCardBody')}
+        fields={[
+          {
+            name: 'mode',
+            kind: 'radio',
+            columns: 2,
+            options: METADATA_MODES.map((mode) => ({
+              value: mode,
+              title: t(`settings.metadata.mode.${mode}`),
+              description: t(`settings.metadata.mode.${mode}Body`),
+            })),
+          },
+        ]}
+      />
+      <SettingsForm
+        settings={settings}
+        section="metadata"
         title={t('settings.metadata.matchingCard')}
         description={t('settings.metadata.matchingCardBody')}
         fields={[
@@ -438,10 +458,37 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
   );
 }
 
+/**
+ * How lookups are going: the service's health, or in mirror mode the local
+ * copy's state with a link to its details (Health > System).
+ */
 function MetadataStatusRow() {
   const { t, i18n } = useTranslation();
   const system = useSystem();
-  const h = system.data?.metadata.health;
+  const meta = system.data?.metadata;
+  const h = meta?.health;
+  const mirror = meta?.mode === 'mirror' ? meta.mirror : undefined;
+  if (mirror) {
+    const look = mirrorLook(mirror);
+    return (
+      <SettingRow
+        title={t('settings.metadata.status')}
+        description={
+          <Link
+            to="/health/{-$section}"
+            params={{ section: 'system' }}
+            className="font-semibold text-brand-ink hover:underline"
+          >
+            {t('settings.metadata.mirrorDetails')}
+          </Link>
+        }
+      >
+        <StatusText tone={look.status} colored className="font-semibold">
+          {t(`settings.metadata.mirror.${look.state}`)}
+        </StatusText>
+      </SettingRow>
+    );
+  }
   return (
     <SettingRow title={t('settings.metadata.status')}>
       {!h ? (

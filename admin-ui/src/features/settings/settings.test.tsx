@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminSettings } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { settingsWith, systemStatus } from '@/test/fixtures';
+import { mirrorStatus, mirrorSystem, settingsWith, systemStatus } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -285,6 +285,57 @@ describe('settings', () => {
     );
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ metadata: { region: 'uk' } }),
+    );
+  });
+
+  it('switches to a local copy, applied at the next restart', async () => {
+    const base = settingsWith();
+    const calls = mockFetch(
+      routes({
+        'PATCH /admin/settings': patchEcho(base, { restart_pending: ['metadata.mode'] }),
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    const user = userEvent.setup();
+    const remote = await screen.findByRole('radio', {
+      name: /Ask the metadata service for each book/,
+    });
+    expect(remote).toBeChecked();
+    const mirror = screen.getByRole('radio', { name: /Keep a local copy/ });
+    // The cost and the privacy gain are on the choice itself.
+    expect(mirror).toHaveAccessibleName(/About 1\.7 GB on disk/);
+    expect(mirror).toHaveAccessibleName(/No book is looked up over the internet/);
+    await user.click(mirror);
+    const card = mirror.closest('section') as HTMLElement;
+    expect(within(card).getByText('Restart to apply')).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: 'Save changes' }));
+    expect(
+      await screen.findByText('Restart AudioSilo to finish applying your changes'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/next start: Metadata source\. Until then/)).toBeInTheDocument();
+    expect(within(card).getByText('Waiting for a restart')).toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+      metadata: { mode: 'mirror' },
+    });
+  });
+
+  it("shows the local copy's state as the status in mirror mode", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({ metadata: { ...settingsWith().metadata, mode: 'mirror' } }),
+        },
+        'GET /admin/system': {
+          body: mirrorSystem(mirrorStatus({ state: 'downloading', fallback: true })),
+        },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    expect(await screen.findByText('Local copy downloading')).toBeInTheDocument();
+    expect(screen.queryByText(/Responding/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Details in Health > System' })).toHaveAttribute(
+      'href',
+      '/admin/health/system',
     );
   });
 

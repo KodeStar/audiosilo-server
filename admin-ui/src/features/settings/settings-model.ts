@@ -1,4 +1,10 @@
-import type { AdminSettings, SettingsPatch, SettingsSection, SystemStatus } from '@/api/types';
+import type {
+  AdminSettings,
+  MetadataMode,
+  SettingsPatch,
+  SettingsSection,
+  SystemStatus,
+} from '@/api/types';
 
 // Server > Settings: which sections exist, what each setting id is called, and
 // the small rules the forms share (locked, restart, list editing, diffs). Each
@@ -16,6 +22,9 @@ export const SETTINGS_PAGES = [
   'import',
 ] as const;
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
+
+/** Settings > Community metadata's source choices, the default (the service) first. */
+export const METADATA_MODES = ['remote', 'mirror'] as const satisfies readonly MetadataMode[];
 
 /** A setting's id: "<section>.<name>", as the server names it. */
 export type SettingId = {

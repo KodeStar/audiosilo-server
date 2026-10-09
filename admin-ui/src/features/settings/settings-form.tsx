@@ -66,7 +66,8 @@ export type FieldSpec =
   /** A backup schedule: how often, which day, what time (backups-model). */
   | { name: string; kind: 'schedule' }
   | { name: string; kind: 'select'; options: { value: string; label: string }[] }
-  | { name: string; kind: 'radio'; options: RadioCardOption<string>[] };
+  /** Radio cards, three to a row from `md` unless `columns` says two (longer descriptions). */
+  | { name: string; kind: 'radio'; options: RadioCardOption<string>[]; columns?: 2 | 3 };
 
 /** The draft of one field: lists are edited as text (one entry per line). */
 type DraftValue = string | boolean;
@@ -333,7 +334,11 @@ function FieldRow({
           value={value as string}
           onValueChange={(v) => onChange(v)}
           options={spec.options.map((o) => ({ ...o, disabled: locked || o.disabled }))}
-          className="grid grid-cols-1 gap-2 md:grid-cols-3"
+          className={
+            spec.columns === 2
+              ? 'grid grid-cols-1 gap-2 md:grid-cols-2'
+              : 'grid grid-cols-1 gap-2 md:grid-cols-3'
+          }
         />
       );
       break;
