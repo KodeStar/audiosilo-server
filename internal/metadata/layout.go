@@ -43,9 +43,10 @@ type PathLayout struct {
 //     deep ("George Orwell/1984"), and the folder holding the book is the series
 //     only when there is an author folder above it.
 //
-// Unlike DeriveFromPath (the scan's baseline under the tags), one folder above
-// the book is its author, not its series: "Author/Title" is the commonest
-// layout of all.
+// DeriveFromPath (the scan's baseline under the tags) also reads a book one
+// folder deep's folder as its author, though it keeps the leaf's number as a
+// position with no series; deeper, it takes the two folders nearest the book,
+// disc and track folders included.
 func ReadPathLayout(relPath string, isFolder bool) PathLayout {
 	segs := strings.Split(strings.Trim(filepath.ToSlash(relPath), "/"), "/")
 	if !isFolder {

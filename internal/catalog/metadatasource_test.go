@@ -164,19 +164,20 @@ func TestPreferPathKeepsWhatThePathDoesNotSay(t *testing.T) {
 			},
 		},
 		{
-			// Untagged, the scan's baseline took the author folder for a series;
-			// the layout reads none, and that wins.
+			// Untagged, one folder deep: the scan's baseline and the layout both
+			// read the folder as the author, and no series.
 			name: "untagged author folder", path: "George Orwell/Nineteen Eighty-Four", isFolder: true,
-			title: "Nineteen Eighty-Four", series: "George Orwell",
+			title: "Nineteen Eighty-Four", author: "George Orwell",
 			want: map[string][2]string{
 				FieldTitle: {"Nineteen Eighty-Four", SourcePath}, FieldAuthor: {"George Orwell", SourcePath},
 				FieldSeries: {"", ""}, FieldSeriesIndex: {"", ""},
 			},
 		},
 		{
-			// ... and its leaf's number numbered that misread series: gone with it.
-			name: "untagged numbered leaf", path: "Frank Herbert/01 - Dune", isFolder: true,
-			title: "Dune", series: "Frank Herbert", idx: 1,
+			// A disc folder: the baseline takes the book's folder for a series, the
+			// layout reads it as the book and no series, and that wins.
+			name: "untagged disc folder", path: "Frank Herbert/Dune/CD1", isFolder: true,
+			title: "CD1", author: "Frank Herbert", series: "Dune",
 			want: map[string][2]string{
 				FieldTitle: {"Dune", SourcePath}, FieldAuthor: {"Frank Herbert", SourcePath},
 				FieldSeries: {"", ""}, FieldSeriesIndex: {"", ""},

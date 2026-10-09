@@ -57,6 +57,17 @@ func TestDeriveFromPath(t *testing.T) {
 			want:     Metadata{Title: "The Well of Ascension", Series: "Mistborn", Author: "Brandon Sanderson", SeriesIndex: 2},
 		},
 		{
+			name: "one folder is the author, not a series",
+			rel:  "Charles Dickens/Great Expectations.m4b",
+			want: Metadata{Title: "Great Expectations", Author: "Charles Dickens"},
+		},
+		{
+			name:     "one folder above a folder book",
+			rel:      "George Orwell/1984",
+			isFolder: true,
+			want:     Metadata{Title: "1984", Author: "George Orwell"},
+		},
+		{
 			name: "root file carries no hierarchy",
 			rel:  "01 - Unsouled.m4b",
 			want: Metadata{Title: "Unsouled", SeriesIndex: 1},
