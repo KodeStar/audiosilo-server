@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -186,30 +188,40 @@ func TestPlaceLocalDoesNotMutate(t *testing.T) {
 	}
 }
 
-func TestNextOnRail(t *testing.T) {
+// TestNextEntry: the entry after the current work, by position, passing over
+// the entries skip reports (the smallest position left, ties in rail order).
+func TestNextEntry(t *testing.T) {
 	for name, tc := range map[string]struct {
-		rail   MetaSeries
-		want   string // "" = the last
-		wantOK bool
+		rail    MetaSeries
+		skipped string // the work ids skip reports, "|"-separated
+		want    string // "" = none left
+		wantOK  bool
 	}{
-		"next by position":       {rail("2", "c@3", "a@1", "cur@2", "d@4"), "c", true},
-		"a novella counts":       {rail("1", "a@1", "b@2", "half@1.5"), "half", true},
-		"unnumbered skipped":     {rail("1", "cur@1", "omni@1-3", "x@", "b@2"), "b", true},
-		"last":                   {rail("3", "a@1", "b@2", "cur@3"), "", true},
-		"ties keep rail order":   {rail("1", "cur@1", "b@2", "b2@2"), "b", true},
-		"own entry when blank":   {rail("", "a@1", "cur@2", "c@3"), "c", true},
-		"unreadable position":    {rail("1-3", "cur@1-3", "b@4"), "", false},
-		"current work skipped":   {rail("1", "cur@1", "cur@2", "b@3"), "b", true},
-		"equal position skipped": {rail("2", "a@2", "cur@2", "b@3"), "b", true},
+		"next by position":       {rail("2", "c@3", "a@1", "cur@2", "d@4"), "", "c", true},
+		"a novella counts":       {rail("1", "a@1", "b@2", "half@1.5"), "", "half", true},
+		"unnumbered skipped":     {rail("1", "cur@1", "omni@1-3", "x@", "b@2"), "", "b", true},
+		"last":                   {rail("3", "a@1", "b@2", "cur@3"), "", "", true},
+		"ties keep rail order":   {rail("1", "cur@1", "b@2", "b2@2"), "", "b", true},
+		"own entry when blank":   {rail("", "a@1", "cur@2", "c@3"), "", "c", true},
+		"unreadable position":    {rail("1-3", "cur@1-3", "b@4"), "", "", false},
+		"current work skipped":   {rail("1", "cur@1", "cur@2", "b@3"), "", "b", true},
+		"equal position skipped": {rail("2", "a@2", "cur@2", "b@3"), "", "b", true},
+		"skip passes over":       {rail("1", "cur@1", "d@4", "b@2", "c@3"), "b", "c", true},
+		"skip within a tie":      {rail("1", "cur@1", "b@2", "b2@2", "c@3"), "b", "b2", true},
+		"every later one skips":  {rail("1", "cur@1", "b@2", "c@3"), "b|c", "", true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, ok := NextOnRail(tc.rail, "cur")
+			var skip func(MetaSeriesWork) bool
+			if tc.skipped != "" {
+				skip = func(w MetaSeriesWork) bool { return slices.Contains(strings.Split(tc.skipped, "|"), w.ID) }
+			}
+			i, ok := nextEntry(tc.rail, "cur", skip)
 			got := ""
-			if next != nil {
-				got = next.ID
+			if i >= 0 {
+				got = tc.rail.Works[i].ID
 			}
 			if got != tc.want || ok != tc.wantOK {
-				t.Fatalf("NextOnRail = %q, %v; want %q, %v", got, ok, tc.want, tc.wantOK)
+				t.Fatalf("nextEntry = %q, %v; want %q, %v", got, ok, tc.want, tc.wantOK)
 			}
 		})
 	}
@@ -315,8 +327,10 @@ func TestNextRail(t *testing.T) {
 		"steps back on a rail above: the next later entry": {[]MetaSeries{publication, ended}, []string{"Narnia", "Narnia (Publication)"}, 0, "lb"},
 		// Denied: every later entry loops back.
 		"denied: every later entry steps back": {[]MetaSeries{loops, ended}, []string{"Narnia", "Narnia (Publication)"}, -1, ""},
-		// Allowed: The Last Battle is later in both orders.
-		"allowed: later on the rail above too": {[]MetaSeries{publication, chrono}, []string{"Narnia (Publication)", "Narnia"}, 0, "hhb"},
+		// Allowed: the publication order ranked first has no rail above to step
+		// back on, so it decides with The Horse and His Boy though the
+		// chronological rail below it continues.
+		"allowed: ranked first over a continuing rail": {[]MetaSeries{publication, chrono}, []string{"Narnia (Publication)", "Narnia"}, 0, "hhb"},
 		// The chronological rail decides itself when it continues.
 		"the main series decides": {[]MetaSeries{publication, chrono}, []string{"Narnia", "Narnia (Publication)"}, 1, "lb"},
 		// A step back judged only on rails ranked above: ranked first, the

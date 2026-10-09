@@ -812,15 +812,17 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 // so reverting a swap swaps back. The writes are ordinary overrides of the edit,
 // so provenance, revert and undo treat them like any other; but a derived value
 // equal to what its field resolves to without an override (the scan's or the
-// folder layout's value) is a revert of that field, not an edit, so swapping back
-// to a path-derived series #5 leaves series_index read off the path again
-// (unlocked, source path) rather than an edited 5. set and revert never share a
-// field and never name one the edit sets or reverts itself. An edit naming
-// more_series swaps nothing, and neither does a community edit: the match plan
-// (matchrun.planSeries) lays out series itself. Both nil when there is nothing to
-// swap; an invalid(FieldSeries) error when the old main series can't be listed
-// (a name too long for an entry, a position out of range), so the edit is
-// refused rather than losing it.
+// folder layout's value; for series_index, only when the new main series is the
+// series that value numbers) is a revert of that field, not an edit, so swapping
+// back to a path-derived series #5 leaves series_index read off the path again
+// (unlocked, source path) rather than an edited 5, while making a listed Other #5
+// the main series of a book the path numbers Sherlock Holmes #5 still edits it.
+// set and revert never share a field and never name one the edit sets or reverts
+// itself. An edit naming more_series swaps nothing, and neither does a community
+// edit: the match plan (matchrun.planSeries) lays out series itself. Both nil
+// when there is nothing to swap; an invalid(FieldSeries) error when the old main
+// series can't be listed (a name too long for an entry, a position out of range),
+// so the edit is refused rather than losing it.
 func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (set map[string]string, revert []string, err error) {
 	if edit.Source == SourceCommunity || touches(edit, FieldMoreSeries) || !touches(edit, FieldSeries) {
 		return nil, nil, nil
@@ -877,10 +879,18 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 	if err != nil {
 		return nil, nil, err
 	}
-	unedited := l.unedited(FieldMoreSeries, FieldSeriesIndex)
+	unedited := l.unedited(FieldSeries, FieldMoreSeries, FieldSeriesIndex)
 	set = map[string]string{}
 	for field, v := range derived {
-		if sameFieldValue(field, v, unedited[field].Value) {
+		same := sameFieldValue(field, v, unedited[field].Value)
+		if field == FieldSeriesIndex {
+			// The unedited position numbers the unedited series: it is the
+			// file's own for the new main series only when that is the same
+			// series (by any case, as scannedFields pairs them), not another
+			// series that happens to share the number.
+			same = same && strings.EqualFold(name, unedited[FieldSeries].Value)
+		}
+		if same {
 			revert = append(revert, field)
 		} else {
 			set[field] = v

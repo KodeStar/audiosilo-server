@@ -245,12 +245,6 @@ func stepsBack(earlier []SeriesRef, candidate *Book) bool {
 	return false
 }
 
-// maxLaterMembers bounds the later books nextInOneSeries reads of one series to
-// find one that skip doesn't pass over. A series holds tens of books at most, so
-// every later book of a real series is read; a series with more later books than
-// this, every one of them stepping back, reads as numbered with none later.
-const maxLaterMembers = 50
-
 // nextInOneSeries returns the book after the one at relPath in series within one
 // library and scope: of the books in exactly that series, the one with the
 // smallest position in it above index (ties by path) that skip doesn't report
@@ -290,10 +284,11 @@ func (c *Catalog) nextInOneSeries(ctx context.Context, libraryID int64, relPath,
 
 // laterSeriesMembers is nextInOneSeries' query, and its args: the numbered
 // members of series (numberedSeriesMembers), those above index first, each group
-// by position then path, at most maxLaterMembers.
+// by position then path. Unbounded: SQLite sorts every member before the first
+// row anyway, and nextInOneSeries stops reading at the first book it takes.
 func laterSeriesMembers(libraryID int64, relPath, series string, index float64, scope Scope) (string, []any) {
 	q, args := numberedSeriesMembers(libraryID, relPath, series, scope)
-	return `SELECT ` + bookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, rel_path LIMIT ?`, append(args, index, maxLaterMembers)
+	return `SELECT ` + bookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, rel_path`, append(args, index)
 }
 
 // numberedSeriesMembers is the query, and its args, of the books in exactly

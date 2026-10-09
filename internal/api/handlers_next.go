@@ -124,7 +124,7 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 		return &w, nil
 	}
 	// The deciding entry by its indexes: placing keeps every rail and entry where
-	// it was, and NextOnRail on the placed rail could read a different entry (one
+	// it was, and the placed rail's plain next entry could be a different one (one
 	// NextRail passed over as stepping back).
 	w := rails[at].Works[entry]
 	if w.Local != nil {

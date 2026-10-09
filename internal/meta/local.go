@@ -206,29 +206,17 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 	return MetaLocal{}, false
 }
 
-// NextOnRail is the entry after the current work on rail, read as the series
-// reads: the entry with the smallest numeric position above the current work's
-// (the rail's Position, else the current work's own entry), ties in rail order.
-// Unnumbered entries ("1-3", blank) and currentWork's own entries are skipped.
-// ok is false when the current position is not a number, so there is nothing to
-// count from; next is nil with ok true when the current work is the last. The
-// returned entry is a copy.
+// nextEntry is the entry after the current work on rail, read as the series
+// reads, as an index into rail.Works: of the entries skip doesn't report (nil
+// skips none), the one with the smallest numeric position above the current
+// work's (the rail's Position, else the current work's own entry), ties in rail
+// order. Unnumbered entries ("1-3", blank) and currentWork's own entries are
+// passed over. ok is false when the current position is not a number, so there
+// is nothing to count from; next is -1 with ok true when no entry is left after
+// the current work.
 //
 // Pass the rail's MAIN view (MetaSeries.Works): an alternate reading order's
 // "next" is a different book, and the main view is the order a listener is in.
-func NextOnRail(rail MetaSeries, currentWork string) (next *MetaSeriesWork, ok bool) {
-	i, ok := nextEntry(rail, currentWork, nil)
-	if i < 0 {
-		return nil, ok
-	}
-	c := rail.Works[i]
-	return &c, true
-}
-
-// nextEntry is NextOnRail's walk, as an index into rail.Works (-1 when there is
-// none), passing over every entry skip reports (nil skips none): of the entries
-// left, the smallest numeric position above the current work's, ties in rail
-// order. ok is NextOnRail's.
 func nextEntry(rail MetaSeries, currentWork string, skip func(MetaSeriesWork) bool) (next int, ok bool) {
 	at, ok := currentPosition(rail, currentWork)
 	if !ok {
@@ -297,9 +285,9 @@ func railOrder(rails []MetaSeries, names []string) []int {
 // NextRail is the entry that decides what follows currentWork for a book in the
 // local series names (its main series first, then its others): rail, an index
 // into rails, and entry, an index into that rail's MAIN view (Works). On each
-// rail in railOrder the deciding entry is the one NextOnRail would read with
-// every entry that steps back passed over (railStepsBack: at or before the
-// current work on a rail ranked above), and the first rail that has one decides.
+// rail in railOrder the deciding entry is the next entry (nextEntry) with every
+// entry that steps back passed over (railStepsBack: at or before the current
+// work on a rail ranked above), and the first rail that has one decides.
 // So after The Silver Chair the publication order passes over The Horse and His
 // Boy and The Magician's Nephew (earlier chronologically) and decides with The
 // Last Battle. That entry is THE next work: the caller follows it when it is one

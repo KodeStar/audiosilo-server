@@ -384,8 +384,9 @@ func TestSeriesSwap(t *testing.T) {
 // making Other the main series edits both (Other #1 is no path value, and the
 // list now holds Sherlock Holmes #5); reverting series swaps back, and #5 is the
 // path's own position again, so series_index comes back unlocked from the path
-// while the list, an edit before the swap, stays one. A derived list as empty as
-// the unedited one is a revert too.
+// while the list, an edit before the swap, stays one. A position equal to the
+// path's but in another series is still an edit. A derived list as empty as the
+// unedited one is a revert too.
 func TestSeriesSwapUneditedValues(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
@@ -452,6 +453,18 @@ func TestSeriesSwapUneditedValues(t *testing.T) {
 		FieldSeries:      {"Sherlock Holmes", SourceEdited, true},
 		FieldSeriesIndex: {"5", SourcePath, false},
 		FieldMoreSeries:  {`[{"name":"Other","position":1}]`, SourceEdited, true},
+	})
+
+	// The same number in another series is no file value: the path's 5 numbers
+	// Sherlock Holmes, so making a listed Other #5 the main series edits the
+	// position (locked), as the path says nothing of Other.
+	const same = "Arthur Conan Doyle/Sherlock Holmes/05 - The Valley of Fear"
+	add(same, "Sherlock Holmes", 5, `[{"name":"Other","position":5}]`)
+	edit(same, BookEdit{Set: map[string]string{FieldSeries: "Other"}})
+	check(same, "another series' equal number", map[string]want{
+		FieldSeries:      {"Other", SourceEdited, true},
+		FieldSeriesIndex: {"5", SourceEdited, true},
+		FieldMoreSeries:  {`[{"name":"Sherlock Holmes","position":5}]`, SourceEdited, true},
 	})
 
 	// No main series before, one entry: the swap empties the list, as the
