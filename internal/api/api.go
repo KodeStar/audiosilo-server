@@ -352,6 +352,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/system", a.requireAdmin(http.HandlerFunc(a.handleSystem)))
 	mux.Handle("GET /api/v1/admin/update", a.requireAdmin(http.HandlerFunc(a.handleUpdateStatus)))
 	mux.Handle("POST /api/v1/admin/update/check", a.requireAdmin(http.HandlerFunc(a.handleUpdateCheck)))
+	mux.Handle("POST /api/v1/admin/meta/mirror/check", a.requireAdmin(http.HandlerFunc(a.handleMetaMirrorCheck)))
 	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(http.HandlerFunc(a.handleLogs)))
 	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(http.HandlerFunc(a.handleAudit)))
 	mux.Handle("GET /api/v1/admin/events", a.requireAdmin(http.HandlerFunc(a.handleServerEvents)))

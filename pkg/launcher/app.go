@@ -200,7 +200,17 @@ func Run(ctx context.Context, opts Options) error {
 	backups.OnFailure = func(r backup.Result) { ntf.BackupFailed(ctx, r.Trigger, r.Error) }
 	go backups.Run(ctx)
 
+	// Mirror mode's local copy of the community metadata (nil in remote mode).
+	// Its checks read the live metadata.enabled through a, set just below and
+	// before they start.
+	mirror := metaMirror(cfg, abs, func() bool { return a.MetadataOn() }, log)
+
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
+	// Before the background jobs below: it puts the mirror in front of the
+	// metadata service they use.
+	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf, MetaMirror: mirror})
+	stopMirror := runMetaMirror(ctx, mirror, log)
+	defer stopMirror()
 	// Bulk match runs a stopped server left working: matching ones are
 	// interrupted, applying ones go back to ready (what they applied is marked).
 	if err := cat.InterruptMatchRuns(ctx); err != nil {
@@ -215,7 +225,6 @@ func Run(ctx context.Context, opts Options) error {
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	a.StartChapterChecks(ctx)
 	a.StartCoverColors(ctx)
-	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
 	ntf.Run(ctx)
 	if setupToken != "" {
 		a.EnableSetup(setupToken)

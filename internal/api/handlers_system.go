@@ -16,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/toolfetch"
@@ -31,19 +32,36 @@ type Runtime struct {
 	Updates   *updates.Checker // the update check (nil: none)
 	Backups   *backup.Service  // the database backups (nil: none)
 	Notify    *notify.Service  // the event feed's notifications (nil: none, which records nothing)
+	// MetaMirror is the local copy of the community metadata in mirror mode
+	// (nil in remote mode, or without a metadata service): SetRuntime puts it in
+	// front of the remote service.
+	MetaMirror *metamirror.Mirror
 }
 
 // SessionRetention is how long raw listening sessions are kept, as the live
 // settings have it (Settings > General), for the launcher's daily retention job.
 func (a *API) SessionRetention() time.Duration { return a.config().Activity.SessionRetention() }
 
-// SetRuntime sets what the launcher reports about the process. Call before Handler().
+// SetRuntime sets what the launcher reports about the process. Call before
+// Handler() and before the background jobs start (StartChapterChecks): it is
+// also where mirror mode's local copy goes in front of the metadata service.
 func (a *API) SetRuntime(rt Runtime) {
 	if rt.StartedAt.IsZero() {
 		rt.StartedAt = a.rt.StartedAt
 	}
+	if rt.MetaMirror != nil && a.meta == nil {
+		rt.MetaMirror = nil // no service to answer for (the launcher never builds one then)
+	}
+	if rt.MetaMirror != nil {
+		a.meta.SetMirror(rt.MetaMirror)
+	}
 	a.rt = rt
 }
+
+// MetadataOn reports whether the community metadata lookup is live (see
+// metadataOn), for the launcher's background jobs that must stop with it (the
+// metadata mirror's downloads).
+func (a *API) MetadataOn() bool { return a.metadataOn() }
 
 // Install kinds, for how the console says to update.
 const (
@@ -108,10 +126,17 @@ func (a *API) tool(name, path string) Tool {
 
 // MetadataStatus is the community metadata service on Health > System.
 type MetadataStatus struct {
-	Enabled   bool         `json:"enabled"`
-	Available bool         `json:"available"` // the service exists (base_url valid at start)
-	BaseURL   string       `json:"base_url"`
-	Health    *meta.Health `json:"health"` // nil while off: nothing is asked
+	Enabled   bool   `json:"enabled"`
+	Available bool   `json:"available"` // the service exists (base_url valid at start)
+	BaseURL   string `json:"base_url"`
+	// Health is nil while off (nothing is asked); in mirror mode it describes
+	// the local copy (meta.Service.Ping).
+	Health *meta.Health `json:"health"`
+	// Mode is the metadata.mode the server runs with (a saved change waits for a
+	// restart).
+	Mode string `json:"mode"`
+	// Mirror is the local copy, in mirror mode only.
+	Mirror *metamirror.Status `json:"mirror,omitempty"`
 }
 
 // LibraryStatus is a library root on Health > System.
@@ -208,16 +233,44 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"data_dir":   a.config().DataDir,
 		"database":   db,
 		"tools":      []Tool{ffmpeg, ffprobe},
-		"metadata": MetadataStatus{
-			Enabled: a.config().Metadata.Enabled, Available: a.meta != nil,
-			BaseURL: a.config().Metadata.BaseURL, Health: metaHealth,
-		},
+		"metadata":   a.metadataStatus(metaHealth),
 		"tls":        tlsStatus,
 		"libraries":  roots,
 		"web_player": a.playerSource,
 		"update":     a.updateStatus(),
 		"backups":    a.backupStatus(),
 	})
+}
+
+// metadataStatus is Health > System's community metadata row.
+func (a *API) metadataStatus(health *meta.Health) MetadataStatus {
+	st := MetadataStatus{
+		Enabled: a.config().Metadata.Enabled, Available: a.meta != nil,
+		BaseURL: a.config().Metadata.BaseURL, Health: health,
+		Mode: a.boot.Metadata.ModeName(),
+	}
+	if a.rt.MetaMirror != nil {
+		ms := a.rt.MetaMirror.Status()
+		st.Mirror = &ms
+	}
+	return st
+}
+
+// handleMetaMirrorCheck asks the metadata mirror to look for a newer copy now
+// (admin only): POST /admin/meta/mirror/check, 202 with the copy's status (the
+// check runs in the background; the status then shows it). 404 metadata_off
+// while the lookup is off, 409 not_mirror_mode when the server isn't keeping a
+// copy (remote mode, or mirror mode saved but not restarted into).
+func (a *API) handleMetaMirrorCheck(w http.ResponseWriter, _ *http.Request) {
+	if a.metadataOff(w) {
+		return
+	}
+	if a.rt.MetaMirror == nil {
+		writeErrorCode(w, http.StatusConflict, codeNotMirrorMode, "this server isn't keeping a local copy of the community metadata")
+		return
+	}
+	a.rt.MetaMirror.CheckNow()
+	writeJSON(w, http.StatusAccepted, a.rt.MetaMirror.Status())
 }
 
 // UpdateStatus is the update check's state, with the install kind the console
