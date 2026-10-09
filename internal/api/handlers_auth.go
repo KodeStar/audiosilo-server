@@ -28,26 +28,27 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"version":   Version,
 		"api":       "v1",
 		"capabilities": map[string]bool{
-			"admin_ui":      true,                 // baked-in admin console at /admin
-			"web_player":    a.playerSource != "", // web player served at /web (when web_dir is populated)
-			"transcode":     a.ffmpeg != "",       // on-the-fly MP3 transcoding via ffmpeg
-			"upload":        false,                // Phase B
-			"websocket":     false,                // Phase C
-			"api_keys":      true,                 // user-minted personal access tokens (POST /auth/tokens)
-			"export":        true,                 // admin library export (GET /admin/libraries/{id}/export)
-			"metadata":      a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
-			"meta_bundle":   a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
-			"browse_people": true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
-			"cover_sizes":   true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
-			"next_book":     true,                 // what to play after a book (GET /libraries/{id}/next)
-			"queue":         true,                 // the up-next queue (/me/queue)
-			"collections":   true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
-			"user_stats":    true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
-			"ratings":       true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
-			"progress_edit": true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
-			"my_devices":    true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
-			"annotations":   true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
-			"addresses":     true,                 // home/away addresses on pairing, exchange and login; GET /addresses
+			"admin_ui":           true,                 // baked-in admin console at /admin
+			"web_player":         a.playerSource != "", // web player served at /web (when web_dir is populated)
+			"transcode":          a.ffmpeg != "",       // on-the-fly MP3 transcoding via ffmpeg
+			"upload":             false,                // Phase B
+			"websocket":          false,                // Phase C
+			"api_keys":           true,                 // user-minted personal access tokens (POST /auth/tokens)
+			"export":             true,                 // admin library export (GET /admin/libraries/{id}/export)
+			"metadata":           a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
+			"meta_bundle":        a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
+			"browse_people":      true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
+			"series_memberships": true,                 // books in several series: memberships=1 on /books?series= and /series, Book.series_list
+			"cover_sizes":        true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
+			"next_book":          true,                 // what to play after a book (GET /libraries/{id}/next)
+			"queue":              true,                 // the up-next queue (/me/queue)
+			"collections":        true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
+			"user_stats":         true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
+			"ratings":            true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
+			"progress_edit":      true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
+			"my_devices":         true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
+			"annotations":        true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
+			"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},

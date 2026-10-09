@@ -421,21 +421,29 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 }
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
-	series_index, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
+	series_index, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash, published, has_cover, cover_art, cover_color`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
 // selecting bookCols (plain or prefixed) scans it the same way; finish, called
-// after the scan, derives the cover fields from the columns behind them.
+// after the scan, derives the cover fields and the series list from the columns
+// behind them.
 func bookDest(b *Book) (dest []any, finish func()) {
-	var art, color string
+	var more, art, color string
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
-			&b.Series, &b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
+			&b.Series, &b.SeriesIndex, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
 			&b.Published, &b.HasCover, &art, &color},
 		func() {
 			b.CoverVersion = CoverVersion(art)
 			b.CoverColor, _ = storedCoverColor(art, color)
+			if more != "[]" && more != "" { // most books have no list: no parse
+				// In a series beyond its main one: the whole list. A list that only
+				// repeats the main series (or can't be read) adds none.
+				if l := seriesList(b.Series, b.SeriesIndex, more); len(l) > 1 || (len(l) == 1 && b.Series == "") {
+					b.SeriesList = l
+				}
+			}
 		}
 }
 
@@ -553,12 +561,15 @@ func (c *Catalog) loadChapters(ctx context.Context, b *Book) error {
 type ListOptions struct {
 	LibraryID int64
 	Author    string // optional: the whole credit, or exactly one person it names (creditFilter)
-	Series    string // optional exact-match filter
-	Narrator  string // optional, as Author
-	Sort      string // "author" (default) | "title" | "recent"
-	Limit     int
-	Cursor    string // opaque keyset cursor from a previous page
-	Scope     *Scope // optional access scope; nil = unrestricted (admin/internal)
+	Series    string // optional: exactly the main series, or with Memberships one more_series names
+	// Memberships widens Series to every series a book is in (seriesFilter); a
+	// client that places books by series_index alone leaves it off.
+	Memberships bool
+	Narrator    string // optional, as Author
+	Sort        string // "author" (default) | "title" | "recent"
+	Limit       int
+	Cursor      string // opaque keyset cursor from a previous page
+	Scope       *Scope // optional access scope; nil = unrestricted (admin/internal)
 }
 
 // Page is a page of books plus the cursor for the next page ("" when exhausted).
@@ -612,13 +623,23 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 
 	where := []string{"library_id = ?"}
 	args := []any{opt.LibraryID}
+	if hasFTSPhrase(opt.Author) || hasFTSPhrase(opt.Narrator) || (opt.Memberships && hasFTSPhrase(opt.Series)) {
+		// The full-text candidates drive these filters, not the library index (as
+		// in BookFilter.where).
+		where[0] = "+library_id = ?"
+	}
 	if opt.Author != "" {
 		cond, a := creditFilter("", "author", opt.Author)
 		where, args = append(where, cond), append(args, a...)
 	}
 	if opt.Series != "" {
-		where = append(where, "series = ?")
-		args = append(args, opt.Series)
+		if opt.Memberships {
+			cond, a := seriesFilter("", opt.Series)
+			where, args = append(where, cond), append(args, a...)
+		} else {
+			where = append(where, "series = ?")
+			args = append(args, opt.Series)
+		}
 	}
 	if opt.Narrator != "" {
 		cond, a := creditFilter("", "narrator", opt.Narrator)

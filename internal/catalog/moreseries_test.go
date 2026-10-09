@@ -104,3 +104,97 @@ func TestMoreSeries(t *testing.T) {
 		t.Errorf("City Watch after the revert = %v", got)
 	}
 }
+
+// TestMoreSeriesPlayer: the player's list matches a book's other series only when
+// the client asks (memberships), a player book carries series_list only when it
+// is in more than one series, and SeriesBooks (rail placement) finds a book in a
+// rail's series only through its more_series too, in placement order and within
+// the grant (allowed and denied).
+func TestMoreSeriesPlayer(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
+	for _, b := range []*Book{
+		{RelPath: "gg", Title: "Guards! Guards!", Series: "Discworld", SeriesIndex: 8},
+		{RelPath: "maa", Title: "Men at Arms", Series: "City Watch", SeriesIndex: 2},
+	} {
+		b.LibraryID, b.Format = lib.ID, "m4b"
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "gg", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"City Watch","position":1}]`}}); err != nil {
+		t.Fatal(err)
+	}
+	list := func(memberships bool) []string {
+		t.Helper()
+		page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Series: "City Watch", Memberships: memberships, Sort: "title"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return relPaths(page.Books)
+	}
+	if got := list(false); !reflect.DeepEqual(got, []string{"maa"}) {
+		t.Errorf("main series only = %v", got)
+	}
+	if got := list(true); !reflect.DeepEqual(got, []string{"gg", "maa"}) {
+		t.Errorf("with memberships = %v", got)
+	}
+	// A list that only repeats the main series adds no series_list.
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "foc", Title: "Feet of Clay", Series: "City Watch", SeriesIndex: 3, Format: "m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, lib.ID, "foc", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"City Watch","position":3}]`}}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Sort: "title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range page.Books {
+		switch b.RelPath {
+		case "gg":
+			if want := []SeriesRef{{"Discworld", 8}, {"City Watch", 1}}; !reflect.DeepEqual(b.SeriesList, want) {
+				t.Errorf("gg series_list = %+v", b.SeriesList)
+			}
+		case "maa", "foc":
+			if b.SeriesList != nil {
+				t.Errorf("%s, in one series, carries series_list %+v", b.RelPath, b.SeriesList)
+			}
+		}
+	}
+	// City Watch's rail finds its books by their main series and gg through its
+	// other series, all in placement order: library sort order, then path - so
+	// Night Watch, in City Watch only through its list but in the library sorted
+	// first, comes before every book of the other.
+	attic, _ := c.CreateLibrary(ctx, Library{Name: "Attic", Root: "/tmp/a"})
+	if err := c.ReorderLibraries(ctx, []int64{attic.ID, lib.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: attic.ID, RelPath: "nw", Title: "Night Watch", Series: "Discworld", SeriesIndex: 29, Format: "m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, attic.ID, "nw", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"City Watch","position":6}]`}}); err != nil {
+		t.Fatal(err)
+	}
+	rail := func(scopes []Scope, name string) []string {
+		t.Helper()
+		found, err := c.SeriesBooks(ctx, scopes, []string{name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return relPaths(found)
+	}
+	all := []Scope{{LibraryID: lib.ID, AllowAll: true}, {LibraryID: attic.ID, AllowAll: true}}
+	if got, want := rail(all, "City Watch"), []string{"nw", "foc", "gg", "maa"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("City Watch rail books = %v, want %v", got, want)
+	}
+	// Denied: a caller granted only maa (and nothing of the attic) never gets a
+	// book outside the grant through its more_series.
+	granted := []Scope{{LibraryID: lib.ID, Paths: []string{"maa"}}, {LibraryID: attic.ID, Paths: []string{"elsewhere"}}}
+	if got, want := rail(granted, "city  watch!"), []string{"maa"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("granted maa only: City Watch rail books = %v, want %v", got, want)
+	}
+	if got := rail(all, "Unknown"); len(got) != 0 {
+		t.Errorf("no series named so, found %v", got)
+	}
+}

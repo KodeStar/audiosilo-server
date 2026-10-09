@@ -275,14 +275,15 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, err := a.cat.ListBooks(r.Context(), catalog.ListOptions{
-		LibraryID: lib.ID,
-		Author:    r.URL.Query().Get("author"),
-		Series:    r.URL.Query().Get("series"),
-		Narrator:  r.URL.Query().Get("narrator"),
-		Sort:      r.URL.Query().Get("sort"),
-		Limit:     queryInt(r, "limit", 50),
-		Cursor:    r.URL.Query().Get("cursor"),
-		Scope:     &scope,
+		LibraryID:   lib.ID,
+		Author:      r.URL.Query().Get("author"),
+		Series:      r.URL.Query().Get("series"),
+		Narrator:    r.URL.Query().Get("narrator"),
+		Memberships: r.URL.Query().Get("memberships") == "1",
+		Sort:        r.URL.Query().Get("sort"),
+		Limit:       queryInt(r, "limit", 50),
+		Cursor:      r.URL.Query().Get("cursor"),
+		Scope:       &scope,
 	})
 	if err != nil {
 		a.writeCatalogError(w, err, "list books failed", "could not load books", "library", lib.ID)

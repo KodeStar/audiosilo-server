@@ -85,6 +85,15 @@ func ParseMoreSeries(v string) []SeriesRef {
 	return out
 }
 
+// AllSeries is every series the book is in, its main one first: SeriesList, which
+// the scan sets for a book in more than one, else its main series alone.
+func (b *Book) AllSeries() []SeriesRef {
+	if b.SeriesList != nil {
+		return b.SeriesList
+	}
+	return seriesList(b.Series, b.SeriesIndex, "")
+}
+
 // seriesList is every series a book belongs to: the main one first (when it has
 // one), then the others, each name once.
 func seriesList(series string, index float64, more string) []SeriesRef {

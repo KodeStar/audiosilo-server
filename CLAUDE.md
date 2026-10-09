@@ -472,11 +472,14 @@ admin overrides; see Metadata overrides below).
   that work. Resolved per request AFTER the cache, on a copy of the rails (never
   stored: the cached envelope is shared): `api.localRails` fetches the caller's
   candidates (`catalog.SeriesBooks` over their `UserScopes`, scope-filtered: books
-  whose series folds to a rail/ordering name by `match.SeriesKey`, the console's
-  `seriesKey` - NFKD, case, punctuation and spacing ignored) and `meta.PlaceLocal`
+  whose series - the main one, or one their `more_series` names (`seriesMembers`,
+  over the partial index `idx_books_more_series`, migration 0039) - folds to a
+  rail/ordering name by `match.SeriesKey`, the console's `seriesKey` - NFKD, case,
+  punctuation and spacing ignored; a book in several series is a candidate in each,
+  at its position there) and `meta.PlaceLocal`
   places them: the current work's entry -> the requested book; else the book whose
   work id `CachedWorkID` knows; else (orderings) the main view's book for that work;
-  else `series_index` == the entry's numeric position on a series named like that
+  else the series position == the entry's numeric position on a series named like that
   view. A book with a known work id is never placed by index; one book per entry;
   ties: the requested book's library, then library sort order, then path.
   **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
@@ -1213,9 +1216,11 @@ admin overrides; see Metadata overrides below).
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
-`export`, `browse_people`, `cover_sizes`, `next_book`, `queue`, `collections`,
+`export`, `browse_people`, `series_memberships`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`); flip them on
-as phases land. `addresses` is true (home/away addresses on pairing, exchange and login, and
+as phases land. `series_memberships` is true (books in several series: `memberships=1` on
+`/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
+`Book` in more than one series; see API surface below). `addresses` is true (home/away addresses on pairing, exchange and login, and
 `GET /addresses`; see Home and away addresses above).
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
@@ -1245,6 +1250,12 @@ granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filter
 by exact `series=`, and by `author=` / `narrator=` matching the whole credit or exactly
 one person it names (`catalog.creditFilter`: an FTS5 phrase narrows the candidates,
 the `credit_has` SQL function keeps the exact ones; `/admin/books` filters the same way).
+Books in several series (capability `series_memberships`): with `memberships=1`,
+`/books?series=` also matches a book whose `more_series` names it (`catalog.seriesFilter`,
+as `/admin/books`) and `/series` counts a book in every series it is in (`extra_books`);
+without it both see main series only, as a client that places books by `series_index`
+needs. A player `Book` in more than one series carries `series_list` (every series, the
+main one first, with its position in each; omitted otherwise).
 Player redesign Phase 1b (`api/handlers_ratings.go`, `handlers_mydevices.go`): **ratings**
 are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null}`; `Rating =
 {library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a

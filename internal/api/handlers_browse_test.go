@@ -278,3 +278,63 @@ func TestBrowsePeopleCapability(t *testing.T) {
 		t.Fatalf("browse_people capability missing: %d %s", resp.StatusCode, body)
 	}
 }
+
+// TestSeriesMemberships: a book in another series through more_series is listed
+// there (and counted) only for a client that asks with memberships=1, still
+// within the caller's scope; /server advertises series_memberships.
+func TestSeriesMemberships(t *testing.T) {
+	e := newBrowseEnv(t)
+	ctx := context.Background()
+	// Saga Two is also book 1 of "Spin-off"; so is the out-of-grant Other One.
+	for _, p := range []string{"In/A2", "Out/B1"} {
+		if err := e.cat.EditBook(ctx, e.libID, p, catalog.BookEdit{Set: map[string]string{
+			catalog.FieldMoreSeries: `[{"name":"Spin-off","position":1}]`}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := e.libPath(e.libID)
+	books := func(tok, q string) []string {
+		var page struct {
+			Books []catalog.Book `json:"books"`
+		}
+		e.get(t, base+"/books?sort=title&"+q, tok, &page)
+		out := []string{}
+		for _, b := range page.Books {
+			out = append(out, b.RelPath)
+		}
+		return out
+	}
+	if got := books(e.memberTok, "series=Spin-off"); len(got) != 0 {
+		t.Errorf("without memberships = %v, want none (no book's main series)", got)
+	}
+	if got, want := books(e.memberTok, "series=Spin-off&memberships=1"), []string{"In/A2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("member, memberships = %v, want %v", got, want)
+	}
+	if got, want := books(e.adminTok, "series=Spin-off&memberships=1"), []string{"Out/B1", "In/A2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("admin, memberships = %v, want %v", got, want)
+	}
+	count := func(q string) int {
+		var out struct {
+			Series []catalog.SeriesCount `json:"series"`
+		}
+		e.get(t, base+"/series"+q, e.memberTok, &out)
+		for _, s := range out.Series {
+			if s.Name == "Spin-off" {
+				return s.Books
+			}
+		}
+		return 0
+	}
+	if n := count(""); n != 0 {
+		t.Errorf("Spin-off without memberships counts %d", n)
+	}
+	if n := count("?memberships=1"); n != 1 {
+		t.Errorf("Spin-off with memberships counts %d, want 1 (the grant's book)", n)
+	}
+	var info struct {
+		Capabilities map[string]bool `json:"capabilities"`
+	}
+	if _, body := e.do(t, "GET", "/api/v1/server", "", ""); json.Unmarshal([]byte(body), &info) != nil || !info.Capabilities["series_memberships"] {
+		t.Fatalf("series_memberships capability missing: %s", body)
+	}
+}
