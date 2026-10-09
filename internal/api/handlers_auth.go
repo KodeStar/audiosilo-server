@@ -52,6 +52,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"annotations":        true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
 			"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
 			"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
+			"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},

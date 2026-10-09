@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -236,6 +235,18 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 // Both payments are Charge, not Allow: requests that passed Ready together each
 // pay, even past empty, so concurrency can't buy lookups the bucket never paid for.
 func (a *API) requireMediaAuth(next http.Handler) http.Handler {
+	return a.mediaAuth(next, false)
+}
+
+// requireBookMediaAuth is requireMediaAuth that also accepts a cast token as the
+// ?token= (castAuthenticate: never as a header, only for the token's own book).
+// Only a book's own media use it: GET /libraries/{id}/cover and /stream, the
+// URLs a Chromecast receiver plays.
+func (a *API) requireBookMediaAuth(next http.Handler) http.Handler {
+	return a.mediaAuth(next, true)
+}
+
+func (a *API) mediaAuth(next http.Handler, castable bool) http.Handler {
 	return mediaHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !a.ipLimiter.Ready(ip) {
@@ -243,12 +254,22 @@ func (a *API) requireMediaAuth(next http.Handler) http.Handler {
 			return
 		}
 		ctx, failure := a.authenticate(r, true)
+		if failure != "" && castable {
+			if castCtx, ok := a.castAuthenticate(r); ok {
+				ctx, failure = castCtx, ""
+				// The receiver is a web app on another site (gstatic.com) loading
+				// these as <audio>/<img>, no-cors requests that secureHeaders'
+				// same-site resource policy would make the browser block. Only a
+				// cast token's answers, which reach one book's media, opt out.
+				w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+			}
+		}
 		if failure != "" {
 			a.ipLimiter.Charge(ip)
 			writeError(w, http.StatusUnauthorized, failure)
 			return
 		}
-		if !a.mediaLimiter.Allow(strconv.FormatInt(credentialFrom(ctx).ID, 10)) {
+		if !a.mediaLimiter.Allow(mediaBucket(credentialFrom(ctx))) {
 			a.ipLimiter.Charge(ip)
 			rateLimited(w)
 			return
