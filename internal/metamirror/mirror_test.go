@@ -553,6 +553,47 @@ func TestMirrorStopsWhenDisabled(t *testing.T) {
 	})
 }
 
+// A Check now that metadata turned off stops stays due: once metadata is back
+// on, Wake runs it, though the copy held is not a day old.
+func TestMirrorCheckNowSurvivesDisable(t *testing.T) {
+	art := mirrortest.Fixture(t, 0)
+	const first, next = "data-v2026.10.09-ccccccc-ddddddd", "data-v2026.10.10-eeeeeee-fffffff"
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(art, first)...)
+	var on atomic.Bool
+	on.Store(true)
+	m := newMirror(t, t.TempDir(), gh, Options{Enabled: on.Load})
+	m.enabledPoll = 10 * time.Millisecond
+	m.check(context.Background()) // a fresh copy: no check due for a day
+
+	gh.SetReleases(mirrortest.Releases(art, first, next)...)
+	gh.Throttle(len(art[release.DataAsset])/20+1, 200*time.Millisecond) // about four seconds
+	m.CheckNow()
+	<-m.wake // Run is not running here: the check is started by hand
+	done := make(chan struct{})
+	go func() { m.checkWhileEnabled(context.Background()); close(done) }()
+	eventually(t, "the download to start", func() bool {
+		st := m.Status()
+		return st.State == StateDownloading && st.Progress != nil && st.Progress.Done > 0
+	})
+	on.Store(false)
+	<-done
+	if due := m.untilDue(); due != 0 {
+		t.Fatalf("a Check now stopped by metadata off must stay due, due in %v", due)
+	}
+
+	gh.Throttle(0, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() { m.Run(ctx); close(runDone) }()
+	t.Cleanup(func() { cancel(); <-runDone })
+	on.Store(true)
+	m.Wake()
+	eventually(t, "the Check now once metadata is back on", func() bool {
+		st := m.Status()
+		return st.State == StateReady && st.Tag == next && !st.NextCheckAt.IsZero()
+	})
+}
+
 // A release swapped back in while the copy it replaced is still in its grace
 // (the newer release withdrawn) has the same file name: retiring the old handle
 // must not delete the file the current copy is.

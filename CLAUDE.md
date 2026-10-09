@@ -501,7 +501,8 @@ admin overrides; see Metadata overrides below).
   day from the `checked_at` on disk (a restart does not re-download), 30 s after start without a
   copy, an hour after a failed check, and on `CheckNow` (which makes `next_check_at` now; a running
   check shows none until it ends); never while `metadata.enabled` is off (a check in flight, its download
-  included, stops when it is turned off and records nothing: `checkWhileEnabled`; while off `Run`
+  included, stops when it is turned off and records nothing: `checkWhileEnabled`, and a Check now it was
+  answering stays due; while off `Run`
   looks again each minute, and the settings PATCH that turns metadata back on calls `Wake`, which
   re-reads the schedule at once but makes nothing due: only a due check runs). The release-list request is conditional (the ETag is sent only while a
   copy is held, and dropped after any failure following a 200, so a 304 can't hide a release that

@@ -386,7 +386,8 @@ func (m *Mirror) Run(ctx context.Context) {
 
 // checkWhileEnabled runs one check that stops when metadata is turned off while
 // it runs: a download in flight ends with it, and (like a server stopping) the
-// check records nothing, so it is due again once metadata is back on.
+// check records nothing, so it is due again once metadata is back on - a Check
+// now included (check keeps it due).
 func (m *Mirror) checkWhileEnabled(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -465,9 +466,12 @@ func (m *Mirror) nextLocked() time.Time {
 }
 
 // check runs one check and records its outcome on disk. A check that ends
-// because ctx did (the server stopping) records nothing.
+// because ctx did (the server stopping, metadata turned off) records nothing,
+// and a Check now it was answering stays due: metadata turned back on (Wake)
+// runs it then.
 func (m *Mirror) check(ctx context.Context) {
 	m.mu.Lock()
+	wasDue := m.due
 	m.checking, m.checked, m.due = true, true, false
 	etag := ""
 	// Only a server holding a copy may ask "changed since?": one without has to
@@ -483,6 +487,7 @@ func (m *Mirror) check(ctx context.Context) {
 	defer m.mu.Unlock()
 	m.checking, m.downloading, m.openingNew = false, false, false
 	if ctx.Err() != nil {
+		m.due = m.due || wasDue
 		return
 	}
 	m.st.CheckedAt = m.now()
