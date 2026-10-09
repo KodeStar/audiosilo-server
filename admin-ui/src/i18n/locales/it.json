@@ -1550,6 +1550,7 @@
   "activity.coverage.chapters": "Con capitoli",
   "activity.coverage.cover": "Con copertina",
   "live.title": "In ascolto ora",
+  "live.chapter": "Capitolo {{n}}",
   "live.description_one": "{{count}} stream in riproduzione · {{direct}} diretti, {{transcoding}} in transcodifica",
   "live.description_other": "{{count}} stream in riproduzione · {{direct}} diretti, {{transcoding}} in transcodifica",
   "live.description_many": "{{count}} stream in riproduzione · {{direct}} diretti, {{transcoding}} in transcodifica",

@@ -420,6 +420,11 @@ func (a *API) serveCustomCover(w http.ResponseWriter, r *http.Request, libID int
 // be replaced at any moment, so it is revalidated every time.
 const customCoverCache = "private, no-cache"
 
+// coverCache is the Cache-Control of a cover that is not custom: file art and its
+// thumbnails, and a community cover's thumbnail (the image behind a community
+// cover URL does not change; a new cover is a new URL).
+const coverCache = "private, max-age=86400"
+
 // conditional is a response revalidated by its ETag alone: no Last-Modified (a
 // zero modtime), so a validator never matches another source's file dates.
 type conditional struct {
@@ -552,7 +557,7 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 				// a sidecar image fresh by heuristic (a tenth of the file's age), so a
 				// custom cover uploaded later would go unseen for weeks, not a day. Set
 				// only for a file that is there, so a 404 is never cached.
-				w.Header().Set("Cache-Control", "private, max-age=86400")
+				w.Header().Set("Cache-Control", coverCache)
 			}
 			media.ServeFile(w, r, abs, false)
 			return
@@ -569,6 +574,6 @@ func (a *API) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", mime)
-	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Header().Set("Cache-Control", coverCache)
 	_, _ = w.Write(data)
 }
