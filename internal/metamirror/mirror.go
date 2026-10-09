@@ -78,10 +78,15 @@ const (
 	diskHeadroom      = 512 << 20
 )
 
-// The copy's states (Status.State).
+// The copy's states (Status.State). Opening covers the seconds query.Open's
+// integrity checks take over a 1.8 GB copy: the one on disk at Run's start, or a
+// finished download before it is swapped in. Lookups go where they went
+// meanwhile: the remote service (fallback) without a copy answering, the current
+// copy over an update.
 const (
 	StateEmpty       = "empty"       // no copy and no failed attempt yet
 	StateDownloading = "downloading" // a download is running (over a copy or not)
+	StateOpening     = "opening"     // a copy is being opened
 	StateReady       = "ready"       // a usable copy answers
 	StateError       = "error"       // no usable copy, and the last attempt failed
 )
@@ -153,6 +158,8 @@ type Mirror struct {
 
 	cur  atomic.Pointer[query.DB]
 	wake chan struct{}
+	// openDB opens a copy: query.Open (tests: one that waits, to watch the opening).
+	openDB func(path, tag string) (*query.DB, error)
 
 	// The schedule's lengths: the constants above, fields only so tests can
 	// shrink them.
@@ -171,6 +178,7 @@ type Mirror struct {
 	checking    bool
 	due         bool // CheckNow asked for a check that hasn't started yet
 	downloading bool
+	openingNew  bool               // a downloaded copy is being opened, not swapped in yet
 	retiring    map[*query.DB]bool // replaced copies inside their grace
 	closed      bool
 }
@@ -191,6 +199,7 @@ func New(dir string, opts Options) (*Mirror, error) {
 		interval: checkInterval, retry: retryInterval, startAfter: startDelay, grace: swapGrace,
 		enabledPoll: enabledPoll,
 		retiring:    map[*query.DB]bool{},
+		openDB:      query.Open,
 	}
 	if m.enabled == nil {
 		m.enabled = func() bool { return true }
@@ -289,7 +298,7 @@ func (m *Mirror) openFile(tag string, size int64) (db *query.DB, actual int64, w
 	case size > 0 && fi.Size() != size:
 		return nil, 0, "size changed", nil
 	}
-	if db, err = query.Open(path, tag); err != nil {
+	if db, err = m.openDB(path, tag); err != nil {
 		return nil, 0, "does not open", err
 	}
 	db.SetLogger(m.qlog)
@@ -347,7 +356,8 @@ func (m *Mirror) sizeBytes() int64 {
 // Run opens the copy the state names, then checks for a new copy on the
 // schedule until ctx ends: shortly after start when there is no copy, then once
 // a day from the last check recorded on disk, an hour after a failed one, and
-// whenever CheckNow asks. Nothing is checked while metadata is off.
+// whenever CheckNow asks. Nothing is checked while metadata is off; Wake (metadata
+// turned back on) makes it look again at once, but only a check that is due runs.
 func (m *Mirror) Run(ctx context.Context) {
 	m.open()
 	for {
@@ -364,7 +374,9 @@ func (m *Mirror) Run(ctx context.Context) {
 		case <-m.wake:
 			timer.Stop()
 		}
-		if !m.enabled() {
+		// A wake or the disabled poll can come before the check is due: it
+		// re-reads the schedule (CheckNow made it due now).
+		if !m.enabled() || m.untilDue() > 0 {
 			continue
 		}
 		m.checkWhileEnabled(ctx)
@@ -407,6 +419,16 @@ func (m *Mirror) CheckNow() {
 	if busy {
 		return
 	}
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Wake makes Run look at the schedule again now (metadata turned back on: its
+// disabled poll would otherwise wait up to a minute). Unlike CheckNow it makes
+// nothing due: a check runs only if one already is. It never blocks.
+func (m *Mirror) Wake() {
 	select {
 	case m.wake <- struct{}{}:
 	default:
@@ -458,7 +480,7 @@ func (m *Mirror) check(ctx context.Context) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.checking, m.downloading = false, false
+	m.checking, m.downloading, m.openingNew = false, false, false
 	if ctx.Err() != nil {
 		return
 	}
@@ -528,7 +550,12 @@ func (m *Mirror) install(ctx context.Context, rel *release.Release) error {
 	if err != nil {
 		return fmt.Errorf("couldn't download %s: %w", rel.Tag, err)
 	}
-	db, err := query.Open(path, rel.Tag)
+	// The download is done; opening it takes seconds more, which the status
+	// says (not a bar stuck at 100%).
+	m.mu.Lock()
+	m.downloading, m.openingNew = false, true
+	m.mu.Unlock()
+	db, err := m.openDB(path, rel.Tag)
 	if err != nil {
 		if rmErr := os.Remove(path); rmErr != nil {
 			m.log.Warn("metadata mirror: delete a copy that doesn't open", "err", rmErr)
@@ -563,6 +590,7 @@ func (m *Mirror) swap(db *query.DB, rel *release.Release, res release.Result) {
 	info := db.Info()
 	m.mu.Lock()
 	old := m.cur.Swap(db)
+	m.openingNew = false
 	m.st.Tag = rel.Tag
 	m.st.PublishedAt = rel.PublishedAt
 	m.st.BuiltAt = info.BuiltAt
@@ -635,12 +663,12 @@ func (m *Mirror) Status() Status {
 	case m.downloading:
 		s.State = StateDownloading
 		s.Progress = &Progress{Done: m.done.Load(), Total: m.total.Load()}
+	case m.openingNew || (!m.opened && m.st.Tag != ""):
+		// A new download being opened, or the copy the state names at Run's
+		// start: no failure, and (at start) no copy answering yet either.
+		s.State = StateOpening
 	case ready:
 		s.State = StateReady
-	case !m.opened && m.st.Tag != "":
-		// The copy the state names is still opening (Run's start): not ready
-		// yet, and no failure either.
-		s.State = StateEmpty
 	case m.st.LastError != "":
 		s.State = StateError
 	default:

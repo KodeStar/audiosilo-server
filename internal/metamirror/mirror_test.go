@@ -456,9 +456,10 @@ func TestRemove(t *testing.T) {
 	}
 }
 
-// The copy is opened by Run, not New: until then the status names no copy and
-// lookups go to the remote service, though the next check is the copy's (a day
-// after the last), not a first download's.
+// The copy is opened by Run, not New: until then the status says it is opening
+// (not "no copy yet"), names no copy and lookups go to the remote service,
+// though the next check is the copy's (a day after the last), not a first
+// download's.
 func TestMirrorOpensInRun(t *testing.T) {
 	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
 	dir := t.TempDir()
@@ -471,7 +472,7 @@ func TestMirrorOpensInRun(t *testing.T) {
 
 	m2 := newUnopened(t, dir, gh, Options{})
 	st := m2.Status()
-	if m2.Ready() || st.State != StateEmpty || !st.Fallback || st.Tag != "" || st.Error != "" ||
+	if m2.Ready() || st.State != StateOpening || !st.Fallback || st.Tag != "" || st.Error != "" ||
 		!st.NextCheckAt.Equal(checked.Add(checkInterval)) {
 		t.Fatalf("before Run opens the copy = %+v", st)
 	}
@@ -580,5 +581,107 @@ func TestMirrorSwapBackKeepsFile(t *testing.T) {
 	}
 	if got := copies(t, dir); len(got) != 1 || got[0] != "meta-"+a+".sqlite" {
 		t.Fatalf("after Close = %v, want the current copy only", got)
+	}
+}
+
+// gatedOpen makes m's copies open only once release is closed, and reports on
+// opening when an open is waiting: the seconds query.Open takes over a real copy.
+func gatedOpen(m *Mirror) (opening <-chan struct{}, release chan<- struct{}) {
+	waiting, gate := make(chan struct{}, 4), make(chan struct{})
+	m.openDB = func(path, tag string) (*query.DB, error) {
+		waiting <- struct{}{}
+		<-gate
+		return query.Open(path, tag)
+	}
+	return waiting, gate
+}
+
+// While Run opens the copy on disk the status says opening, with lookups going
+// to the remote service; then ready. The console polls while it does.
+func TestMirrorStatusOpeningAtStart(t *testing.T) {
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	dir := t.TempDir()
+	m := newMirror(t, dir, gh, Options{})
+	m.check(context.Background())
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m2 := newUnopened(t, dir, gh, Options{})
+	opening, release := gatedOpen(m2)
+	done := make(chan struct{})
+	go func() { m2.open(); close(done) }()
+	<-opening
+	if st := m2.Status(); st.State != StateOpening || !st.Fallback || st.Progress != nil || st.Error != "" {
+		t.Fatalf("while opening = %+v", st)
+	}
+	close(release)
+	<-done
+	if st := m2.Status(); st.State != StateReady || st.Fallback {
+		t.Fatalf("once open = %+v", st)
+	}
+}
+
+// A finished download is opened before it answers: the status says opening
+// (no progress bar stuck at 100%), with lookups where they were: the remote
+// service for a first copy, the current copy over an update.
+func TestMirrorStatusOpeningAfterDownload(t *testing.T) {
+	art := mirrortest.Fixture(t, 0)
+	const first, next = "data-v2026.10.09-ccccccc-ddddddd", "data-v2026.10.10-eeeeeee-fffffff"
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(art, first)...)
+	m := newMirror(t, t.TempDir(), gh, Options{})
+	opening, release := gatedOpen(m)
+
+	done := make(chan struct{})
+	go func() { m.check(context.Background()); close(done) }()
+	<-opening
+	if st := m.Status(); st.State != StateOpening || !st.Fallback || st.Progress != nil || st.Tag != "" {
+		t.Fatalf("opening a first copy = %+v", st)
+	}
+	release <- struct{}{}
+	<-done
+	if st := m.Status(); st.State != StateReady || st.Tag != first {
+		t.Fatalf("after the first copy = %+v", st)
+	}
+
+	gh.SetReleases(mirrortest.Releases(art, first, next)...)
+	done = make(chan struct{})
+	go func() { m.check(context.Background()); close(done) }()
+	<-opening
+	if st := m.Status(); st.State != StateOpening || st.Fallback || st.Tag != first || st.Progress != nil {
+		t.Fatalf("opening an update over a copy = %+v", st)
+	}
+	close(release)
+	<-done
+	if st := m.Status(); st.State != StateReady || st.Tag != next {
+		t.Fatalf("after the update = %+v", st)
+	}
+}
+
+// Metadata turned back on wakes Run (Wake): a check that came due while it was
+// off runs at once, not after the disabled poll's minute; a wake with nothing
+// due checks nothing.
+func TestMirrorWake(t *testing.T) {
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	var on atomic.Bool
+	m := newMirror(t, t.TempDir(), gh, Options{Enabled: on.Load})
+	m.startAfter = 0
+	m.first = time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { m.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	time.Sleep(50 * time.Millisecond) // Run is in its disabled poll
+	on.Store(true)
+	m.Wake()
+	eventually(t, "the due check after a wake", func() bool { return m.Ready() && !m.Status().NextCheckAt.IsZero() })
+
+	// The copy is fresh: the next check is a day away, and waking checks nothing.
+	lists := gh.Lists() + gh.NotModified()
+	m.Wake()
+	time.Sleep(100 * time.Millisecond)
+	if got := gh.Lists() + gh.NotModified(); got != lists {
+		t.Fatalf("a wake with no check due listed the releases (%d -> %d)", lists, got)
 	}
 }

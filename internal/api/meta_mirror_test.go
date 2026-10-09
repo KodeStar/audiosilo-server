@@ -246,3 +246,25 @@ func TestMetaMirrorRoutesRemoteMode(t *testing.T) {
 		}
 	}
 }
+
+// Turning metadata back on wakes the mirror: a check that came due while it was
+// off runs at once, not after the runner's minute-long disabled poll.
+func TestMetaMirrorWakesWhenMetadataTurnsOn(t *testing.T) {
+	e := newMirrorEnv(t)
+	checked := e.mirror.Status().CheckedAt
+	if resp, b := e.do(t, "PATCH", "/api/v1/admin/settings", e.adminTok, `{"metadata":{"enabled":false}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("turn off = %d %s", resp.StatusCode, b)
+	}
+	// Due now, but off: the runner looks, skips it, and sleeps its disabled poll.
+	e.mirror.CheckNow()
+	time.Sleep(100 * time.Millisecond)
+	if !e.mirror.Status().CheckedAt.Equal(checked) {
+		t.Fatal("nothing may be checked while metadata is off")
+	}
+	if resp, b := e.do(t, "PATCH", "/api/v1/admin/settings", e.adminTok, `{"metadata":{"enabled":true}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("turn on = %d %s", resp.StatusCode, b)
+	}
+	mirrortest.Eventually(t, "the due check once metadata is on", 5*time.Second, func() bool {
+		return e.mirror.Status().CheckedAt.After(checked)
+	})
+}

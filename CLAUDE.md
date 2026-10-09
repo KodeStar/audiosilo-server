@@ -488,18 +488,22 @@ admin overrides; see Metadata overrides below).
   ready and the remote service until then (parity by construction; cached a minute as before). The
   runner is `internal/metamirror.Mirror` (`New(dir, Options{Enabled, Now, FreeBytes, Logger,
   SiteURL, Repo, Release})` - it builds the release client itself, adding
-  `release.WithBaseSize` - then `Run`, `CheckNow`, `Current`, `Ready`, `Handler`, `Status`,
+  `release.WithBaseSize` - then `Run`, `CheckNow`, `Wake`, `Current`, `Ready`, `Handler`, `Status`,
   `Close`; `Remove(dataDir)`): `<data>/meta-mirror/` (0700; not in backups, which hold the
   database only) holds exactly one `meta-<tag>.sqlite` (0600) and `state.json` (`jsonfile`: tag,
   built_at, schema_version, size_bytes, downloaded_at - the one record of the copy's facts,
   Status reads them there -, etag, checked_at, last_error, and published_at + sha256 as on-disk
   diagnostics only). `New` is cheap (state + folder): `Run` opens the copy first (`query.Open`'s
   integrity checks take seconds over 1.8 GB, which must not hold up the listener), so until then
-  the status says `empty` with `fallback` and lookups go remote. Schedule: durable, at most once a
+  the status says `opening` with `fallback` and lookups go remote (a finished download is
+  `opening` too while `query.Open` runs, before the swap: over a working copy that copy still
+  answers, so no `fallback`). Schedule: durable, at most once a
   day from the `checked_at` on disk (a restart does not re-download), 30 s after start without a
   copy, an hour after a failed check, and on `CheckNow` (which makes `next_check_at` now; a running
   check shows none until it ends); never while `metadata.enabled` is off (a check in flight, its download
-  included, stops when it is turned off and records nothing: `checkWhileEnabled`). The release-list request is conditional (the ETag is sent only while a
+  included, stops when it is turned off and records nothing: `checkWhileEnabled`; while off `Run`
+  looks again each minute, and the settings PATCH that turns metadata back on calls `Wake`, which
+  re-reads the schedule at once but makes nothing due: only a due check runs). The release-list request is conditional (the ETag is sent only while a
   copy is held, and dropped after any failure following a 200, so a 304 can't hide a release that
   failed). `update` is list then `install` (tag check, disk guard, download, open, swap) with one
   ETag reset on its error. A tag that can't name a file is refused (`validTag`); the disk guard
@@ -1087,8 +1091,8 @@ admin overrides; see Metadata overrides below).
   (`handlers_system.go`): tools + versions (`toolfetch.Version`, cached), metadata health (`meta.Service.Ping`:
   metaserve `/healthz`, cached a minute, **only while metadata is on**; in mirror mode through the same
   client as lookups: the copy once ready, the remote service until then) plus `metadata.mode` (the running mode, both modes) and, in mirror mode only,
-  `metadata.mirror` (`metamirror.Status`: `state` empty|downloading|ready|error - `error` only without a
-  usable copy -, tag, built_at, schema_version, schema_newer, size_bytes, checked_at, next_check_at,
+  `metadata.mirror` (`metamirror.Status`: `state` empty|downloading|opening|ready|error - `opening` while
+  a copy is opened (at start, or a download before its swap), `error` only without a usable copy -, tag, built_at, schema_version, schema_newer, size_bytes, checked_at, next_check_at,
   downloaded_at, `progress` {done, total: compressed bytes, total 0 = unknown} while downloading, the last
   `error` kept over a working copy, `fallback` = no usable copy so lookups go to `base_url`).
   `GET /admin/meta/mirror` is the copy's status alone (200 + `metamirror.Status`); `POST
