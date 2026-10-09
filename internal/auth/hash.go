@@ -25,15 +25,28 @@ const (
 	argonSaltLen = 16
 )
 
+type argonCost struct {
+	time, memory uint32
+	threads      uint8
+}
+
+// realCost is the cost above; hashCost is what HashPassword spends, lowered only
+// by UseCheapHashingForTests. VerifyPassword reads the cost from the hash itself.
+var (
+	realCost = argonCost{argonTime, argonMemory, argonThreads}
+	hashCost = realCost
+)
+
 // HashPassword returns an argon2id PHC-style encoded hash.
 func HashPassword(password string) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	c := hashCost
+	key := argon2.IDKey([]byte(password), salt, c.time, c.memory, c.threads, argonKeyLen)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argonMemory, argonTime, argonThreads,
+		argon2.Version, c.memory, c.time, c.threads,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
 	), nil

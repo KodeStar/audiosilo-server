@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // A scan reads a book's date tag into Released and leaves Published (the work's
@@ -14,11 +14,7 @@ import (
 // migration 0037 has its date read once by the next scan, without a re-index.
 func TestScanReadsReleaseDate(t *testing.T) {
 	ctx := t.Context()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	silence(t, root, "Herbert/Dune/01.mp3", 1, "date=2007-03-06")

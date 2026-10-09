@@ -37,3 +37,36 @@ func TestDummyHashMatchesParams(t *testing.T) {
 		t.Fatal("dummyHash must not match any known password")
 	}
 }
+
+// A server hashes at the real cost; the test-only cheap cost (this package's
+// TestMain sets it) still makes hashes that verify (VerifyPassword reads the cost
+// from the hash).
+func TestHashCost(t *testing.T) {
+	saved := hashCost
+	t.Cleanup(func() { hashCost = saved })
+	hashCost = realCost
+	full, err := HashPassword("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("$m=%d,t=%d,p=%d$", argonMemory, argonTime, argonThreads); !strings.Contains(full, want) {
+		t.Fatalf("hash %q lacks the real cost %s", full, want)
+	}
+
+	UseCheapHashingForTests()
+	cheap, err := HashPassword("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("$m=%d,t=%d,p=%d$", cheapCost.memory, cheapCost.time, cheapCost.threads); !strings.Contains(cheap, want) {
+		t.Fatalf("cheap hash %q lacks the cheap cost %s", cheap, want)
+	}
+	for _, h := range []string{full, cheap} {
+		if ok, err := VerifyPassword("pw", h); err != nil || !ok {
+			t.Fatalf("VerifyPassword(%q) = %v, %v", h, ok, err)
+		}
+		if ok, _ := VerifyPassword("other", h); ok {
+			t.Fatalf("a wrong password verified against %q", h)
+		}
+	}
+}

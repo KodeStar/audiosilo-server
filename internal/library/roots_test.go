@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func TestStatRoot(t *testing.T) {
@@ -65,11 +65,7 @@ func TestRootProberNeverBlocksTheCaller(t *testing.T) {
 
 func TestRootAvailable(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
@@ -116,11 +112,7 @@ func TestRootAvailable(t *testing.T) {
 func TestEnqueueRunsAndRecords(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
@@ -196,12 +188,7 @@ func TestRootsAvailableInParallel(t *testing.T) {
 // The root probe also reads the space on the root's filesystem, so Health >
 // System shows it without another (unbounded) filesystem call.
 func TestRootDisk(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	scanner := NewScanner(cat, "", slog.Default())
 

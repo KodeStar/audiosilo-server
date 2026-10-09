@@ -17,6 +17,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // Disc folders join in natural order, ties broken by path, so folders whose names
@@ -93,11 +94,7 @@ func filePaths(b *catalog.Book) []string {
 // carries over, and the later discs' stays on their own paths, logged as such.
 func TestJoinedDiscFolders(t *testing.T) {
 	ctx := t.Context()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	audio := testAudio(t)
@@ -262,11 +259,7 @@ func TestJoinedDiscFolders(t *testing.T) {
 // so the joined book's whole-book progress doesn't land on that one disc.
 func TestRenamedJoinedFolderIsNoMoveToADisc(t *testing.T) {
 	ctx := t.Context()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	audio := testAudio(t)
@@ -453,11 +446,7 @@ func TestJoinedCover(t *testing.T) {
 // upgrade re-shapes no books and carries no listener's state.
 func TestJoinOnlyDiscSets(t *testing.T) {
 	ctx := t.Context()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	audio := testAudio(t)
@@ -567,11 +556,7 @@ func TestJoinOnlyDiscSets(t *testing.T) {
 func TestJoinKeepsDiscFileOrder(t *testing.T) {
 	ffprobe := lookFFprobe(t)
 	ctx := t.Context()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	for _, disc := range []string{"CD1", "CD2"} {
@@ -669,11 +654,7 @@ func silence(t *testing.T, root, rel string, secs float64, meta ...string) {
 func TestJoinCarriesListeningState(t *testing.T) {
 	ffprobe := lookFFprobe(t)
 	ctx := t.Context()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	silence(t, root, "A/Book/CD1/01.mp3", 2)

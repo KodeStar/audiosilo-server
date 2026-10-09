@@ -8,17 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func newTestService(t *testing.T) (*Service, context.Context) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	return New(db, time.Now), ctx
 }
 
@@ -27,11 +23,7 @@ func newTestService(t *testing.T) (*Service, context.Context) {
 func newTestServiceWithClock(t *testing.T) (*Service, context.Context, *time.Time) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	now := time.Now()
 	return New(db, func() time.Time { return now }), ctx, &now
 }

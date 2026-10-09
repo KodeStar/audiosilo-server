@@ -16,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // fakeSource answers RecordingChapters from a map by ASIN; err, when set,
@@ -51,11 +52,7 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir()})
 	if err != nil {

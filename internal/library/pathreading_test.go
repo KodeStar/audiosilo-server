@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // A book one folder deep takes that folder for its author, not its series. One
@@ -20,11 +20,7 @@ func TestScanReadsLoneFolderAsAuthor(t *testing.T) {
 	ctx := t.Context()
 	// ffprobe reads the MP3's series tag (TXXX), which the tag library doesn't.
 	ffprobe := lookFFprobe(t)
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	silence(t, root, "Charles Dickens/Great Expectations/01.mp3", 1, "artist=Charles Dickens")

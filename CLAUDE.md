@@ -237,7 +237,13 @@ admin overrides; see Metadata overrides below).
   `newTestEnv` harness in `internal/api/api_test.go` (a temp-file SQLite, so reads
   go through the read-only reader pool as in production and a write sent through a
   read method fails the test, + `testdata/library` fixtures; `catalog`'s
-  `newTestCatalog` is file-backed for the same reason); pure-logic tests sit next to the code (see
+  `newTestCatalog` is file-backed for the same reason). Never migrate per test: open a test database with
+  `storetest.Open(t)` (`internal/store/storetest`; `storetest.Path(t)` for a file a test opens itself), not
+  `store.Open` on a new file or `:memory:`. Under `-race` running every migration costs about a second, so it
+  migrates once per test binary and copies the file per test (file-backed, so reads use the reader pool).
+  A package creating many password users calls `auth.UseCheapHashingForTests()` from `TestMain`
+  (`internal/api`, `internal/auth` and `internal/matchrun`'s `main_test.go`; a real-cost argon2id hash is ~0.25 s under `-race`; it panics outside a test
+  binary). Pure-logic tests sit next to the code (see
   `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,

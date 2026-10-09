@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // env is a data folder with a database holding one account named name.
@@ -22,8 +23,9 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	dir := t.TempDir()
-	e := &env{dataDir: dir, dbPath: filepath.Join(dir, "audiosilo.db"), clock: time.Date(2026, 10, 4, 3, 0, 0, 0, time.UTC)}
+	path := storetest.Path(t)
+	dir := filepath.Dir(path)
+	e := &env{dataDir: dir, dbPath: path, clock: time.Date(2026, 10, 4, 3, 0, 0, 0, time.UTC)}
 	db, err := store.Open(context.Background(), e.dbPath)
 	if err != nil {
 		t.Fatal(err)
