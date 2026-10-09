@@ -36,6 +36,13 @@ const localTimeout = 15 * time.Second
 // be a fault, answered by the remote service instead.
 const maxLocalBody = 32 << 20
 
+// localAnswerHeader marks a response the local copy answered: set by
+// fallbackTransport on the response it builds (and stripped from the remote
+// service's, which can't claim to be the copy), read by getJSON to tell the
+// copy's 404 from the remote service's. It lives on the client's own
+// *http.Response only: no answer is passed on to a client.
+const localAnswerHeader = "X-Audiosilo-Mirror"
+
 // fallbackLogEvery spaces the warnings about requests the copy failed: one
 // tells the admin, a busy hour of them is noise.
 const fallbackLogEvery = 10 * time.Minute
@@ -50,11 +57,10 @@ const fallbackLogEvery = 10 * time.Minute
 // is ready, else by the remote service. log receives a warning (at most every
 // ten minutes) when a request the copy failed goes to the remote service.
 //
-// Mirror mode also changes one thing above the client: a "no match" never
-// replaces a stored positive answer (see Enrich and Work). Call it once, right
+// Mirror mode also changes one thing above the client: the copy's "no match"
+// never replaces a stored positive answer (see Enrich, Work and keepStored). Call it once, right
 // after NewService and before the Service is used.
 func (s *Service) SetMirror(m Mirror, log *slog.Logger) {
-	s.mirror = m
 	// A base_url with a path (metaserve behind a proxy at https://host/meta)
 	// puts that path before every request's /api/v1/...; the copy's handler
 	// serves the API at the root, so the prefix is stripped on the way in and
@@ -74,7 +80,7 @@ func (s *Service) SetMirror(m Mirror, log *slog.Logger) {
 
 // fallbackTransport answers from the local copy when it can and from the remote
 // service otherwise (no copy or a failed answer -> the remote service; a 404 is
-// the copy's answer).
+// the copy's answer). The copy's answers carry localAnswerHeader.
 type fallbackTransport struct {
 	local http.Handler
 	// prefix is base_url's path ("" for none), put back on a local redirect.
@@ -93,6 +99,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 			if loc := resp.Header.Get("Location"); t.prefix != "" && strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") {
 				resp.Header.Set("Location", t.prefix+loc)
 			}
+			resp.Header.Set(localAnswerHeader, "local")
 			return resp, nil
 		}
 		// A caller that went away is not the copy failing: the remote service
@@ -108,6 +115,9 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		// The outer client wraps it again: unwrapped, the error reads as remote
 		// mode's does.
 		return nil, ue.Err
+	}
+	if resp != nil {
+		resp.Header.Del(localAnswerHeader)
 	}
 	return resp, err
 }

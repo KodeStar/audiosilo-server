@@ -481,9 +481,14 @@ admin overrides; see Metadata overrides below).
   on the same host, so it resolves locally. A `base_url` with a path is stripped before the copy's
   handler and put back on a root-relative `Location`; a caller gone mid-answer is not a fallback. Everything above the client (compose, rails, match, the
   caches) is unchanged and `meta_cache` rows keep `Source = base_url` (switching modes keeps the
-  cache warm). Two rules differ in mirror mode: a "no match" never replaces a stored POSITIVE row
-  in `Enrich` or `Work` (`keepStored`, only while the copy is ready: the stored answer is served stale, held in memory for
-  errorTTL, the row untouched; a lagging or broken copy must not blank a companion that worked).
+  cache warm). Two rules differ in mirror mode: the COPY's "no match" never replaces a stored POSITIVE
+  row in `Enrich` or `Work` (`keepStored`: the stored answer is served stale, held in memory for
+  errorTTL, the row untouched; a lagging or broken copy must not blank a companion that worked). It
+  asks whether the copy answered, not whether one is ready: `fallbackTransport` marks the responses
+  it builds with the internal `X-Audiosilo-Mirror` header (`localAnswerHeader`; stripped from remote
+  answers, never sent to any client) and `getJSON` turns such a 404 into `errLocalNotFound`, which
+  wraps `ErrNotFound` (so `errors.Is(err, ErrNotFound)` holds everywhere else). The remote service's
+  "no match" (no ready copy, or a request the copy failed) replaces the row as in remote mode.
   `Ping` is unchanged: its `/healthz` goes through the same client, so the copy answers it once
   ready and the remote service until then (parity by construction; cached a minute as before). The
   runner is `internal/metamirror.Mirror` (`New(dir, Options{Enabled, Now, FreeBytes, Logger,

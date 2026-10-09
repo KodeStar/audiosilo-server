@@ -377,6 +377,53 @@ func TestMirrorNotReadyNotFoundReplacesStored(t *testing.T) {
 	}
 }
 
+// A ready copy that failed a request (a 5xx) sent it to the remote service, so
+// that service's "no match" is authoritative and replaces the stored answer, as
+// in remote mode: keepStored asks whether the copy answered, not whether one is
+// ready. A remote answer claiming the copy's mark is not taken for the copy's.
+func TestMirrorRemoteNotFoundReplacesStoredWhileReady(t *testing.T) {
+	mock := fullMock()
+	mock.lookupCode = http.StatusNotFound
+	mock.workCode = http.StatusNotFound
+	upstream := mock.handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(localAnswerHeader, "local")
+		upstream.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	clk := &clock{t: time.Unix(1_700_000_000, 0)}
+	st := newMemStore()
+	s := NewService(srv.URL, clk.now)
+	s.SetStore(st)
+	m := newFakeMirror(t)
+	m.fail.Store(true) // ready, but every answer is a 500
+	s.SetMirror(m, nil)
+	ctx := context.Background()
+
+	stale := clk.now().Add(-48 * time.Hour)
+	enrKey := nsASIN.key("B00B5HZGUG")
+	st.put(StoredEntry{Key: enrKey, Version: storeVersion, Source: s.baseURL, Expires: stale,
+		Payload: []byte(`{"matched":true,"work":{"id":"gone-work","title":"Gone","authors":[],"language":"en"},"web_url":"x"}`)})
+	workKey := nsWork.key("gone-work")
+	st.put(StoredEntry{Key: workKey, Version: storeVersion, Source: s.baseURL, Expires: stale,
+		Payload: []byte(`{"id":"gone-work","title":"Gone","authors":[],"language":"en"}`)})
+
+	if _, err := s.Enrich(ctx, "B00B5HZGUG", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Enrich = %v, want the remote service's ErrNotFound", err)
+	}
+	if _, err := s.Work(ctx, "gone-work"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Work = %v, want the remote service's ErrNotFound", err)
+	}
+	for _, key := range []string{enrKey, workKey} {
+		if row, _ := st.row(key); row.Payload != nil {
+			t.Fatalf("the remote service's no match must replace %s's row, got %+v", key, row)
+		}
+	}
+	if m.hits.Load() == 0 || mock.lookupHits.Load() != 1 {
+		t.Fatalf("local requests %d, remote lookups %d; want the copy asked first, then the remote service", m.hits.Load(), mock.lookupHits.Load())
+	}
+}
+
 // A caller that went away is not the copy failing: the remote service is not
 // asked and nothing is logged.
 func TestMirrorCallerGoneSkipsRemote(t *testing.T) {

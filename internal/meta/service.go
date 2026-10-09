@@ -275,9 +275,6 @@ type Service struct {
 	// matchUnsupportedUntil (unix nanoseconds) is when works/match is next
 	// tried after metaserve answered it as an unknown route (Candidates).
 	matchUnsupportedUntil atomic.Int64
-	// mirror is the local copy answering in front of the remote service (mirror
-	// mode, SetMirror); nil in remote mode.
-	mirror Mirror
 }
 
 // NewService builds a Service for the given metaserve base URL. now may be nil
@@ -347,7 +344,7 @@ func (s *Service) Enrich(ctx context.Context, asin, isbn string) (*Enrichment, e
 	result, complete, err := s.compose(cctx, asin, isbn)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		if keepStored(s, key, stored) {
+		if keepStored(s, key, stored, err) {
 			return stored, nil
 		}
 		s.cache.putMiss(key, notFoundTTL)
@@ -513,9 +510,9 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 		// miss would let any signed-in user grow the table (see Store). Except
 		// over a stored answer for the id, which it replaces (no new row): left
 		// alone, that row would bring the work upstream no longer has back as
-		// the fallback of every later outage. In mirror mode the stored answer
-		// is kept and served instead (keepStored).
-		if keepStored(s, key, stored) {
+		// the fallback of every later outage. When the local copy answered it
+		// (mirror mode) the stored answer is kept and served instead (keepStored).
+		if keepStored(s, key, stored, err) {
 			return stored, nil
 		}
 		s.cache.putMiss(key, notFoundTTL)
@@ -544,17 +541,18 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 	return work, nil
 }
 
-// keepStored is the mirror-mode rule for a "no match" over a stored positive
-// answer: the answer is served (stale), held in memory for errorTTL so the copy is
-// asked again soon, and its row is left as it was; it reports whether it applied.
-// In remote mode a "no match" from the service is authoritative and replaces the
-// row (the callers' own branch). A local copy is not: one that lags, or a release
-// that dropped a record by mistake, must not erase what the cache knew and blank
-// a companion that worked, so the stored answer outlives it as it outlives an
-// outage. While no copy is ready the remote service answered, so its "no match"
-// is authoritative there too.
-func keepStored[T any](s *Service, key string, stored *T) bool {
-	if s.mirror == nil || stored == nil || !s.mirror.Ready() {
+// keepStored is the mirror-mode rule for a "no match" (err) over a stored
+// positive answer: when the local copy answered it (errLocalNotFound) the answer
+// is served (stale), held in memory for errorTTL so the copy is asked again soon,
+// and its row is left as it was; it reports whether it applied. The remote
+// service's "no match" is authoritative and replaces the row (the callers' own
+// branch), in remote mode and in mirror mode alike: without a ready copy, or for
+// a request the copy failed (a 5xx, a timeout) and the remote service answered.
+// A local copy's is not: one that lags, or a release that dropped a record by
+// mistake, must not erase what the cache knew and blank a companion that worked,
+// so the stored answer outlives it as it outlives an outage.
+func keepStored[T any](s *Service, key string, stored *T, err error) bool {
+	if stored == nil || !errors.Is(err, errLocalNotFound) {
 		return false
 	}
 	cachePut(s.cache, key, stored, errorTTL)
