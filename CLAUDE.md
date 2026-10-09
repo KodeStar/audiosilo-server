@@ -478,10 +478,11 @@ admin overrides; see Metadata overrides below).
   large; a timeout; a panic), sends the request to `base_url` unchanged through remote mode's own
   `*http.Client` (its `clientTimeout` covers the body); a failed answer is logged there, at most
   every 10 min (`SetMirror(m, log)`). A 404 is the copy's answer; a retired slug's 301 is followed
-  on the same host, so it resolves locally. Everything above the client (compose, rails, match, the
+  on the same host, so it resolves locally. A `base_url` with a path is stripped before the copy's
+  handler and put back on a root-relative `Location`; a caller gone mid-answer is not a fallback. Everything above the client (compose, rails, match, the
   caches) is unchanged and `meta_cache` rows keep `Source = base_url` (switching modes keeps the
   cache warm). Two rules differ in mirror mode: a "no match" never replaces a stored POSITIVE row
-  in `Enrich` or `Work` (`keepStored`: the stored answer is served stale, held in memory for
+  in `Enrich` or `Work` (`keepStored`, only while the copy is ready: the stored answer is served stale, held in memory for
   errorTTL, the row untouched; a lagging or broken copy must not blank a companion that worked).
   `Ping` is unchanged: its `/healthz` goes through the same client, so the copy answers it once
   ready and the remote service until then (parity by construction; cached a minute as before). The
@@ -497,7 +498,8 @@ admin overrides; see Metadata overrides below).
   the status says `empty` with `fallback` and lookups go remote. Schedule: durable, at most once a
   day from the `checked_at` on disk (a restart does not re-download), 30 s after start without a
   copy, an hour after a failed check, and on `CheckNow` (which makes `next_check_at` now; a running
-  check shows none until it ends); never while `metadata.enabled` is off. The release-list request is conditional (the ETag is sent only while a
+  check shows none until it ends); never while `metadata.enabled` is off (a check in flight, its download
+  included, stops when it is turned off and records nothing: `checkWhileEnabled`). The release-list request is conditional (the ETag is sent only while a
   copy is held, and dropped after any failure following a 200, so a 304 can't hide a release that
   failed). `update` is list then `install` (tag check, disk guard, download, open, swap) with one
   ETag reset on its error. A tag that can't name a file is refused (`validTag`); the disk guard
@@ -505,7 +507,8 @@ admin overrides; see Metadata overrides below).
   have Y`, decimal units as the console's `formatBytes`); the download goes through `release.DownloadData` (temp `.meta-*.tmp` in the folder,
   `release.WithBaseSize` = the current copy's size), is opened with `query.Open` (integrity checks;
   a file that doesn't open is deleted), then swapped in atomically; the replaced copy is closed and
-  deleted after a 60 s grace. Any failure keeps the current copy. At its start `Run` deletes temp
+  deleted after a 60 s grace (its file is kept when a release swapped back in within the grace
+  reused the name). Any failure keeps the current copy. At its start `Run` deletes temp
   files, a half-written state and any copy but the current one, and forgets a copy that is missing,
   changed size or doesn't open. A copy newer than `MaxSchemaVersion` still opens and answers (flagged
   `schema_newer`); artifact schema changes must stay additive (CROSS-REPO §17). The launcher

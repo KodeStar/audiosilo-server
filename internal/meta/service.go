@@ -551,9 +551,10 @@ func (s *Service) Work(ctx context.Context, id string) (*MetaWork, error) {
 // row (the callers' own branch). A local copy is not: one that lags, or a release
 // that dropped a record by mistake, must not erase what the cache knew and blank
 // a companion that worked, so the stored answer outlives it as it outlives an
-// outage.
+// outage. While no copy is ready the remote service answered, so its "no match"
+// is authoritative there too.
 func keepStored[T any](s *Service, key string, stored *T) bool {
-	if s.mirror == nil || stored == nil {
+	if s.mirror == nil || stored == nil || !s.mirror.Ready() {
 		return false
 	}
 	cachePut(s.cache, key, stored, errorTTL)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -54,11 +55,20 @@ const fallbackLogEvery = 10 * time.Minute
 // after NewService and before the Service is used.
 func (s *Service) SetMirror(m Mirror, log *slog.Logger) {
 	s.mirror = m
+	// A base_url with a path (metaserve behind a proxy at https://host/meta)
+	// puts that path before every request's /api/v1/...; the copy's handler
+	// serves the API at the root, so the prefix is stripped on the way in and
+	// put back on a redirect's root-relative Location on the way out (a retired
+	// slug's 301 then still resolves locally).
+	local, prefix := m.Handler(), ""
+	if u, err := url.Parse(s.baseURL); err == nil && u.Path != "" {
+		local, prefix = http.StripPrefix(u.Path, local), u.EscapedPath()
+	}
 	// The remote leg is remote mode's own client, whose Timeout (clientTimeout)
 	// covers the body too; only the local leg has its own bound (localTimeout),
 	// so the outer client has none.
 	s.client.http = &http.Client{Transport: &fallbackTransport{
-		local: m.Handler(), ready: m.Ready, remote: s.client.http, log: log,
+		local: local, prefix: prefix, ready: m.Ready, remote: s.client.http, log: log,
 	}}
 }
 
@@ -66,7 +76,9 @@ func (s *Service) SetMirror(m Mirror, log *slog.Logger) {
 // service otherwise (no copy or a failed answer -> the remote service; a 404 is
 // the copy's answer).
 type fallbackTransport struct {
-	local  http.Handler
+	local http.Handler
+	// prefix is base_url's path ("" for none), put back on a local redirect.
+	prefix string
 	ready  func() bool
 	remote *http.Client
 	log    *slog.Logger
@@ -78,7 +90,15 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if t.ready() {
 		resp, failed := serveLocal(t.local, req)
 		if resp != nil {
+			if loc := resp.Header.Get("Location"); t.prefix != "" && strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") {
+				resp.Header.Set("Location", t.prefix+loc)
+			}
 			return resp, nil
+		}
+		// A caller that went away is not the copy failing: the remote service
+		// isn't asked (it would fail the same way) and nothing is logged.
+		if err := req.Context().Err(); err != nil {
+			return nil, err
 		}
 		t.logFallback(req.URL.Path, failed)
 	}

@@ -61,6 +61,9 @@ const (
 	// disabledPoll is how often a due check looks again while metadata is off
 	// (no lookups and no downloads then).
 	disabledPoll = time.Minute
+	// enabledPoll is how often a running check looks whether metadata was
+	// turned off meanwhile (it then stops, its download with it).
+	enabledPoll = time.Second
 	// swapGrace is how long a replaced copy stays open for the queries that
 	// started on it before it is closed and deleted.
 	swapGrace = 60 * time.Second
@@ -153,7 +156,7 @@ type Mirror struct {
 
 	// The schedule's lengths: the constants above, fields only so tests can
 	// shrink them.
-	interval, retry, startAfter, grace time.Duration
+	interval, retry, startAfter, grace, enabledPoll time.Duration
 
 	// done and total are the running download's progress (compressed bytes).
 	done, total atomic.Int64
@@ -186,7 +189,8 @@ func New(dir string, opts Options) (*Mirror, error) {
 		enabled: opts.Enabled, now: opts.Now, freeBytes: opts.FreeBytes, log: opts.Logger,
 		wake:     make(chan struct{}, 1),
 		interval: checkInterval, retry: retryInterval, startAfter: startDelay, grace: swapGrace,
-		retiring: map[*query.DB]bool{},
+		enabledPoll: enabledPoll,
+		retiring:    map[*query.DB]bool{},
 	}
 	if m.enabled == nil {
 		m.enabled = func() bool { return true }
@@ -363,8 +367,33 @@ func (m *Mirror) Run(ctx context.Context) {
 		if !m.enabled() {
 			continue
 		}
-		m.check(ctx)
+		m.checkWhileEnabled(ctx)
 	}
+}
+
+// checkWhileEnabled runs one check that stops when metadata is turned off while
+// it runs: a download in flight ends with it, and (like a server stopping) the
+// check records nothing, so it is due again once metadata is back on.
+func (m *Mirror) checkWhileEnabled(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		t := time.NewTicker(m.enabledPoll)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if !m.enabled() {
+					m.log.Info("metadata mirror: metadata was turned off; the check in flight stops")
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	m.check(ctx)
 }
 
 // CheckNow wakes Run for a check now ("Check now" in the console): from here
@@ -561,13 +590,20 @@ func (m *Mirror) retire(db *query.DB) {
 	delete(m.retiring, db)
 	m.mu.Unlock()
 	if ok {
-		m.closeAndDelete(db)
+		m.closeAndDelete(db, m.cur.Load())
 	}
 }
 
-func (m *Mirror) closeAndDelete(db *query.DB) {
+// closeAndDelete closes a replaced copy and deletes its file, unless that file
+// is now cur's: a release swapped back in within the grace (the newest one
+// withdrawn) is downloaded to the same name, and deleting it would leave the
+// copy in use without a file for the next start.
+func (m *Mirror) closeAndDelete(db, cur *query.DB) {
 	if err := db.Close(); err != nil {
 		m.log.Warn("metadata mirror: close a replaced copy", "err", err)
+	}
+	if cur != nil && cur.Path() == db.Path() {
+		return
 	}
 	if err := os.Remove(db.Path()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		m.log.Warn("metadata mirror: delete a replaced copy", "err", err)
@@ -635,7 +671,7 @@ func (m *Mirror) Close() error {
 	cur := m.cur.Swap(nil)
 	m.mu.Unlock()
 	for db := range retiring {
-		m.closeAndDelete(db)
+		m.closeAndDelete(db, cur)
 	}
 	return cur.Close()
 }

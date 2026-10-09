@@ -324,3 +324,72 @@ func TestServeLocal(t *testing.T) {
 		t.Errorf("a request out of time = %v, %q", resp, failed)
 	}
 }
+
+// A base_url with a path (metaserve behind a proxy at /meta) is answered by the
+// copy too: the prefix is stripped on the way in, and a retired slug's redirect
+// comes back under it, so it resolves locally as well.
+func TestMirrorBaseURLWithPath(t *testing.T) {
+	remote, remoteHits := mirrortest.Remote(t)
+	s := NewService(remote.URL+"/meta/", nil)
+	m := newFakeMirror(t)
+	s.SetMirror(m, nil)
+	ctx := context.Background()
+
+	env, err := s.Enrich(ctx, querytest.ASIN, "")
+	if err != nil || env.Work.ID != querytest.ASINWork {
+		t.Fatalf("Enrich under a path = %+v, %v", env, err)
+	}
+	retired, err := s.Work(ctx, querytest.RetiredWork)
+	if err != nil || retired.ID != querytest.RetiredWorkTarget {
+		t.Fatalf("a retired slug under a path = %+v, %v", retired, err)
+	}
+	if h := s.Ping(); !h.Reachable {
+		t.Fatalf("Ping under a path = %+v", h)
+	}
+	if n := remoteHits.Load(); n != 0 {
+		t.Fatalf("the remote service was asked %d times", n)
+	}
+}
+
+// While no copy is ready the remote service answers, so its "no match" replaces
+// a stored answer as in remote mode (keepStored applies to the copy's only).
+func TestMirrorNotReadyNotFoundReplacesStored(t *testing.T) {
+	mock := fullMock()
+	mock.lookupCode = http.StatusNotFound
+	srv := httptest.NewServer(mock.handler())
+	t.Cleanup(srv.Close)
+	clk := &clock{t: time.Unix(1_700_000_000, 0)}
+	st := newMemStore()
+	s := NewService(srv.URL, clk.now)
+	s.SetStore(st)
+	m := newFakeMirror(t)
+	m.ready.Store(false)
+	s.SetMirror(m, nil)
+
+	key := nsASIN.key("B00B5HZGUG")
+	st.put(StoredEntry{Key: key, Version: storeVersion, Source: s.baseURL, Expires: clk.now().Add(-48 * time.Hour),
+		Payload: []byte(`{"matched":true,"work":{"id":"gone-work","title":"Gone","authors":[],"language":"en"},"web_url":"x"}`)})
+	if _, err := s.Enrich(context.Background(), "B00B5HZGUG", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Enrich = %v, want the remote service's ErrNotFound", err)
+	}
+	if row, _ := st.row(key); row.Payload != nil {
+		t.Fatalf("the remote service's no match must replace the row, got %+v", row)
+	}
+}
+
+// A caller that went away is not the copy failing: the remote service is not
+// asked and nothing is logged.
+func TestMirrorCallerGoneSkipsRemote(t *testing.T) {
+	remote, remoteHits := mirrortest.Remote(t)
+	var logs bytes.Buffer
+	s := NewService(remote.URL, nil)
+	s.SetMirror(newFakeMirror(t), slog.New(slog.NewTextHandler(&logs, nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.Work(ctx, querytest.CommunityWork); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Work with a gone caller = %v, want context.Canceled", err)
+	}
+	if remoteHits.Load() != 0 || logs.Len() != 0 {
+		t.Fatalf("remote hits %d, logs %q", remoteHits.Load(), logs.String())
+	}
+}

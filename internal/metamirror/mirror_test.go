@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -509,5 +511,74 @@ func TestFormatBytes(t *testing.T) {
 		if got := formatBytes(n); got != want {
 			t.Errorf("formatBytes(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+// Metadata turned off while a download runs stops it: no copy, nothing left in
+// the folder, and nothing recorded (the check is due again once it is back on).
+func TestMirrorStopsWhenDisabled(t *testing.T) {
+	art := mirrortest.Fixture(t, 0)
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(art, "data-v2026.10.09-ccccccc-ddddddd")...)
+	gh.Throttle(len(art[release.DataAsset])/20+1, 200*time.Millisecond) // about four seconds
+	var on atomic.Bool
+	on.Store(true)
+	dir := t.TempDir()
+	m := newMirror(t, dir, gh, Options{Enabled: on.Load})
+	m.enabledPoll = 10 * time.Millisecond
+	done := make(chan struct{})
+	go func() { m.checkWhileEnabled(context.Background()); close(done) }()
+	eventually(t, "the download to start", func() bool {
+		st := m.Status()
+		return st.State == StateDownloading && st.Progress != nil && st.Progress.Done > 0
+	})
+	on.Store(false)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turning metadata off must stop the download")
+	}
+	st := m.Status()
+	if m.Ready() || st.State != StateEmpty || !st.CheckedAt.IsZero() || st.Error != "" {
+		t.Fatalf("after a stopped download = %+v", st)
+	}
+	eventually(t, "no copy or temp file", func() bool {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Name() != stateFile {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// A release swapped back in while the copy it replaced is still in its grace
+// (the newer release withdrawn) has the same file name: retiring the old handle
+// must not delete the file the current copy is.
+func TestMirrorSwapBackKeepsFile(t *testing.T) {
+	art := mirrortest.Fixture(t, 0)
+	const a, b = "data-v2026.10.08-aaaaaaa-bbbbbbb", "data-v2026.10.09-ccccccc-ddddddd"
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(art, a)...)
+	dir := t.TempDir()
+	m := newMirror(t, dir, gh, Options{})
+	m.grace = time.Hour // the replaced copies stay in their grace until Close
+	m.check(context.Background())
+	first := m.Current()
+	gh.SetReleases(mirrortest.Releases(art, a, b)...)
+	m.check(context.Background())
+	gh.SetReleases(mirrortest.Releases(art, a)...)
+	m.check(context.Background())
+	if st := m.Status(); st.Tag != a || m.Current() == first {
+		t.Fatalf("after the swap back = %+v", st)
+	}
+	m.retire(first)
+	if got := copies(t, dir); len(got) != 2 || !slices.Contains(got, "meta-"+a+".sqlite") {
+		t.Fatalf("retiring the old handle deleted the current copy: %v", got)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := copies(t, dir); len(got) != 1 || got[0] != "meta-"+a+".sqlite" {
+		t.Fatalf("after Close = %v, want the current copy only", got)
 	}
 }

@@ -160,12 +160,23 @@ export function useSystem({ poll = false } = {}) {
 }
 
 /**
+ * How far the browser's clock may lag the server's and still see a check the
+ * server made due "now" (Check now answers with next_check_at = the server's now)
+ * as due: without it, a browser a second behind would never follow the check.
+ */
+export const MIRROR_CLOCK_SKEW_MS = 60_000;
+
+/**
  * The local metadata copy is busy: downloading, its check running (no next check
  * yet), or a check due now (Check now was pressed). Its progress is worth following.
  */
 export function mirrorBusy(m: MetaMirrorStatus | undefined, now: number = Date.now()): boolean {
   if (!m) return false;
-  return m.state === 'downloading' || !m.next_check_at || Date.parse(m.next_check_at) <= now;
+  return (
+    m.state === 'downloading' ||
+    !m.next_check_at ||
+    Date.parse(m.next_check_at) <= now + MIRROR_CLOCK_SKEW_MS
+  );
 }
 
 /** Puts the local copy's status into the cached system status. */
