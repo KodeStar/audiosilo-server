@@ -1,6 +1,6 @@
 import type { ListeningSession } from '@/api/types';
 import type { TFunction } from 'i18next';
-import { liveChapter, liveSummary, sortLive } from './live-model';
+import { chapterLabel, liveSummary, sortLive } from './live-model';
 
 describe('live sessions', () => {
   const s = (
@@ -23,9 +23,12 @@ describe('live sessions', () => {
 
   it('names the chapter by its title, else by its place, else not at all', () => {
     const t = ((key: string, o: { n: number }) => `${key}:${o.n}`) as unknown as TFunction;
-    expect(liveChapter({ chapter: 'The Wedding', chapter_index: 4 }, t)).toBe('The Wedding');
-    expect(liveChapter({ chapter_index: 23 }, t)).toBe('live.chapter:24');
-    expect(liveChapter({ chapter_index: 0 }, t)).toBe('live.chapter:1');
-    expect(liveChapter({}, t)).toBe('');
+    expect(chapterLabel({ chapter: 'The Wedding', chapter_index: 4 }, t)).toBe('The Wedding');
+    expect(chapterLabel({ chapter_index: 23 }, t)).toBe('live.chapter:24');
+    expect(chapterLabel({ chapter_index: 0 }, t)).toBe('live.chapter:1');
+    expect(chapterLabel({}, t)).toBe('');
+    expect(chapterLabel({ chapter: '', chapter_index: 2 }, t, 'activity.dropOff.chapter')).toBe(
+      'activity.dropOff.chapter:3',
+    );
   });
 });

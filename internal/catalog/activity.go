@@ -620,26 +620,20 @@ func (c *Catalog) collectDays(ctx context.Context, a *listenAcc) error {
 // totals is the period's totals with the books finished in it.
 func (a *listenAcc) totals(finished finishedSet) ActivityTotals {
 	t := ActivityTotals{Listened: a.listened, Sessions: a.sessions, Listeners: len(a.listeners)}
-	t.Books, t.Finished = bookCounts(a.books, finished)
+	t.Books, t.Finished = bookCounts(a.books, finished.all())
 	return t
 }
 
 // bookCounts counts the books listened to (listened) or finished in a period,
-// and the finished ones, each book once.
-func bookCounts[V any](listened map[Ref]V, finished finishedSet) (books, done int) {
-	seen := map[Ref]bool{}
-	for _, refs := range finished {
-		for ref := range refs {
-			if seen[ref] {
-				continue
-			}
-			seen[ref] = true
-			if _, ok := listened[ref]; !ok {
-				books++
-			}
+// and the finished ones.
+func bookCounts[V any](listened map[Ref]V, finished map[Ref]bool) (books, done int) {
+	books = len(listened)
+	for ref := range finished {
+		if _, ok := listened[ref]; !ok {
+			books++
 		}
 	}
-	return len(listened) + books, len(seen)
+	return books, len(finished)
 }
 
 // result writes the accumulated listening into out.
@@ -653,7 +647,7 @@ func (a *listenAcc) result(out *Activity, finished finishedSet) {
 	out.TopNarrators = a.topPeople(bookNarrator, nil)
 	out.TopUsers = []TopUser{}
 	for id, u := range a.users {
-		books, done := bookCounts(u.books, finishedSet{id: finished[id]})
+		books, done := bookCounts(u.books, finished[id])
 		out.TopUsers = append(out.TopUsers, TopUser{UserID: id, Username: u.name, Listened: u.listened,
 			Sessions: u.sessions, Books: books, Finished: done})
 	}
@@ -790,20 +784,26 @@ func minTime(a, b time.Time) time.Time {
 // finishedSet is the books each user finished in a period.
 type finishedSet map[int64]map[Ref]bool
 
-// The users of finishedIn: everyone's finishes, or one user's (the progress
-// primary key serves it: user_id leads).
-const (
-	finishedOfEveryone = `SELECT user_id, library_id, rel_path FROM progress
-	  WHERE finished = 1 AND finished_at >= ? AND finished_at < ?`
-	finishedOfUser = finishedOfEveryone + ` AND user_id = ?`
-)
+// all is the books anyone finished, each once (a book two people finished is one).
+func (f finishedSet) all() map[Ref]bool {
+	out := map[Ref]bool{}
+	for _, refs := range f {
+		for ref := range refs {
+			out[ref] = true
+		}
+	}
+	return out
+}
 
 // finishedIn reads the books each user finished in [from, to), of everyone or
-// one user (userID 0: everyone).
+// one user (userID 0: everyone; for one user the progress primary key serves
+// it: user_id leads).
 func (c *Catalog) finishedIn(ctx context.Context, userID int64, from, to time.Time) (finishedSet, error) {
-	q, args := finishedOfEveryone, []any{from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)}
+	q := `SELECT user_id, library_id, rel_path FROM progress
+	  WHERE finished = 1 AND finished_at >= ? AND finished_at < ?`
+	args := []any{from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)}
 	if userID != 0 {
-		q, args = finishedOfUser, append(args, userID)
+		q, args = q+` AND user_id = ?`, append(args, userID)
 	}
 	rows, err := c.db.QueryContext(ctx, q, args...)
 	if err != nil {

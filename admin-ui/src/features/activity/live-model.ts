@@ -24,11 +24,15 @@ export function liveSummary(sessions: readonly ListeningSession[]) {
 }
 
 /**
- * The chapter a live session is in: its title as the server tidied it, else "Chapter N" by
- * its place (the server sends no title for one that names nothing, like "024" or "Track 01"),
- * else "" (no chapters, or a book whose one chapter is the whole book).
+ * The chapter a session or drop-off is in: its title as the server tidied it, else "Chapter N"
+ * by its place under key (the server sends no title for one that names nothing, like "024" or
+ * "Track 01"), else "" (no chapters, or a book whose one chapter is the whole book).
  */
-export function liveChapter(s: Pick<ListeningSession, 'chapter' | 'chapter_index'>, t: TFunction) {
+export function chapterLabel(
+  s: Pick<ListeningSession, 'chapter' | 'chapter_index'>,
+  t: TFunction,
+  key = 'live.chapter',
+) {
   if (s.chapter) return s.chapter;
-  return s.chapter_index != null ? t('live.chapter', { n: s.chapter_index + 1 }) : '';
+  return s.chapter_index != null ? t(key, { n: s.chapter_index + 1 }) : '';
 }

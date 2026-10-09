@@ -935,7 +935,7 @@ admin overrides; see Metadata overrides below).
   nothing writes nothing, answering the row as it is or 404 with none; no listening session
   recorded). An edit's `updated_at` keeps its sub-second time, and `SaveProgress` compares and
   writes in one writer transaction, so an older device save never overwrites a newer edit. Endpoints
-  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `IsGenericTitle`, but "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`liveChapter`); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
+  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `IsGenericTitle`, but "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
   /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET

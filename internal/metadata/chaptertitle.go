@@ -43,7 +43,6 @@ var (
 	chapterAudioExt = regexp.MustCompile(`(?i)\.(mp3|m4a|m4b|mp4|aac|ogg|oga|opus|flac|wav|wma|alac|aif|aiff)$`)
 	// A trailing encoder bitrate tag left from a rip's filename ("64kb", "128 kbps").
 	chapterBitrateTail = regexp.MustCompile(`(?i)(^|\s)\d{2,3}\s?(k|kb|kbps)$`)
-	spaceRun           = regexp.MustCompile(`\s+`)
 )
 
 // prettifyChapterTitle mirrors the player's prettifyChapterTitle: a title with an
@@ -58,7 +57,7 @@ func prettifyChapterTitle(raw string) string {
 		return raw
 	}
 	cleaned := chapterAudioExt.ReplaceAllString(trimmed, "")
-	cleaned = strings.TrimSpace(spaceRun.ReplaceAllString(strings.ReplaceAll(cleaned, "_", " "), " "))
+	cleaned = strings.Join(strings.Fields(strings.ReplaceAll(cleaned, "_", " ")), " ")
 	if d := strings.TrimSpace(chapterBitrateTail.ReplaceAllString(cleaned, "")); d != "" {
 		cleaned = d
 	}
