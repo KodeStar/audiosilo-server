@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/diskspace"
 )
 
 // Root availability, for the admin console's "root unavailable" state.
@@ -78,7 +79,7 @@ func statRoot(root string) rootState {
 	default: // no permission, a dead mount
 		return rootState{}
 	}
-	st.diskTotal, st.diskFree, st.hasDisk = diskSpace(root)
+	st.diskTotal, st.diskFree, st.hasDisk = diskspace.Of(root)
 	return st
 }
 
