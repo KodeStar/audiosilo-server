@@ -47,14 +47,24 @@ func SeriesNames(rails []MetaSeries) []string {
 
 // PlaceOwned is PlaceLocal over env's rails for the caller's books, each book's
 // work id read from the cache by its identifiers (CachedWorkID: memory, else the
-// store; never upstream). requested is the book env is for. env and books are
-// never modified.
+// store; never upstream), once per identifiers: a book in several series is a
+// candidate in each. requested is the book env is for. env and books are never
+// modified.
 func (s *Service) PlaceOwned(ctx context.Context, env *Enrichment, requested MetaLocal, books []LocalBook) []MetaSeries {
 	cands := slices.Clone(books)
+	type idents struct{ asin, isbn string }
+	works := map[idents]string{}
 	for i := range cands {
-		if cands[i].WorkID == "" {
-			cands[i].WorkID, _ = s.CachedWorkID(ctx, cands[i].ASIN, cands[i].ISBN)
+		if cands[i].WorkID != "" {
+			continue
 		}
+		k := idents{cands[i].ASIN, cands[i].ISBN}
+		id, seen := works[k]
+		if !seen {
+			id, _ = s.CachedWorkID(ctx, k.asin, k.isbn)
+			works[k] = id
+		}
+		cands[i].WorkID = id
 	}
 	current := ""
 	if env.Work != nil {

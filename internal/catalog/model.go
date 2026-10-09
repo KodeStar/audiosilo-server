@@ -76,17 +76,21 @@ type Book struct {
 	Author      string  `json:"author"`
 	Series      string  `json:"series"`
 	SeriesIndex float64 `json:"series_index"`
-	Narrator    string  `json:"narrator"`
-	Duration    float64 `json:"duration"`
-	ASIN        string  `json:"asin,omitempty"`
-	ISBN        string  `json:"isbn,omitempty"`
-	CoverPath   string  `json:"-"`
-	Format      string  `json:"format"`
-	Codec       string  `json:"codec,omitempty"` // audio codec (ffprobe); "" when unknown
-	Size        int64   `json:"size"`
-	MTime       int64   `json:"-"`
-	AddedAt     string  `json:"added_at,omitempty"` // RFC3339; filesystem birth time (scanner)
-	ContentHash string  `json:"-"`
+	// SeriesList is every series the book is in, its main one (Series) first,
+	// with its position in each - present only for a book in more than one (see
+	// FieldMoreSeries); a client otherwise reads Series/SeriesIndex.
+	SeriesList  []SeriesRef `json:"series_list,omitempty"`
+	Narrator    string      `json:"narrator"`
+	Duration    float64     `json:"duration"`
+	ASIN        string      `json:"asin,omitempty"`
+	ISBN        string      `json:"isbn,omitempty"`
+	CoverPath   string      `json:"-"`
+	Format      string      `json:"format"`
+	Codec       string      `json:"codec,omitempty"` // audio codec (ffprobe); "" when unknown
+	Size        int64       `json:"size"`
+	MTime       int64       `json:"-"`
+	AddedAt     string      `json:"added_at,omitempty"` // RFC3339; filesystem birth time (scanner)
+	ContentHash string      `json:"-"`
 	// Published (YYYY[-MM[-DD]]) and Description come only from an edit or a
 	// community match today. Published rides on every player book; Description can
 	// be long, so only GetBook (the single-book read behind the item endpoint)

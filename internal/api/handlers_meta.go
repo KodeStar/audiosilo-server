@@ -109,7 +109,8 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 
 // localRails is env's rails placed for the caller (meta.Service.PlaceOwned), and
 // the books it placed them from: the caller's books in every library they reach
-// whose series is named like a rail (catalog.SeriesBooks over their UserScopes).
+// in a series named like a rail, their main one or another (catalog.SeriesBooks
+// over their UserScopes).
 // requested is the book env is for. env is shared and never modified.
 func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.Enrichment) ([]meta.MetaSeries, []catalog.Book, error) {
 	if len(env.Series) == 0 {
@@ -124,10 +125,13 @@ func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.E
 	if err != nil {
 		return nil, nil, err
 	}
-	cands := make([]meta.LocalBook, len(books))
-	for i, b := range books {
-		cands[i] = meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
-			Series: b.Series, SeriesIndex: b.SeriesIndex, ASIN: b.ASIN, ISBN: b.ISBN}
+	// A book in several series is a candidate in each, at its position there.
+	cands := make([]meta.LocalBook, 0, len(books))
+	for _, b := range books {
+		for _, s := range b.AllSeries() {
+			cands = append(cands, meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
+				Series: s.Name, SeriesIndex: s.Position, ASIN: b.ASIN, ISBN: b.ISBN})
+		}
 	}
 	return a.meta.PlaceOwned(ctx, env, meta.MetaLocal(requested), cands), books, nil
 }
