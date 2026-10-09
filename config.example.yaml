@@ -96,9 +96,11 @@ demo:
 # Community metadata lookup (Phase 1.5). When enabled, the server resolves a
 # book's ASIN/ISBN against the community metadata API and exposes a composed
 # enrichment envelope at GET /libraries/{id}/meta (author/narrator, description,
-# series rail); results are cached in memory. Disabling it stops all outbound
-# calls with one key, and the `metadata` capability then reports false so clients
-# hide the UI. base_url must be an absolute http(s) URL when enabled.
+# series rail); answers are cached in memory and in the server's database (so a
+# restarted server answers warm, and a known book keeps its details while the
+# service is down). Disabling it stops all outbound calls (lookups and the mirror
+# download alike) with one key, and the `metadata` capability then reports false
+# so clients hide the UI. base_url must be an absolute http(s) URL when enabled.
 metadata:
   enabled: true                          # [AUDIOSILO_METADATA_ENABLED]
   base_url: "https://meta.audiosilo.app" # metaserve base URL [AUDIOSILO_METADATA_BASE_URL]
@@ -106,3 +108,15 @@ metadata:
   # sells in several: us, uk, ca, au, de, fr, es, it, jp, in or br. Empty takes
   # the US store's. [AUDIOSILO_METADATA_REGION]
   region: ""
+  # Where the lookups are answered (applies after a restart):
+  #   remote - ask the service at base_url for each book (the default).
+  #   mirror - keep a local copy of the service's database in <data>/meta-mirror/
+  #            and answer from it, so no book is looked up over the internet. The
+  #            copy comes from the audiosilo-meta releases on GitHub, checked once
+  #            a day: about 450 MB downloaded per update and about 1.7 GB on disk
+  #            (up to twice that while an update is swapped in). Until the first
+  #            copy is ready, and for any question the copy can't answer, the
+  #            server asks base_url as in remote mode. Switching back to remote
+  #            deletes the copy at the next start.
+  # [AUDIOSILO_METADATA_MODE]
+  mode: remote
