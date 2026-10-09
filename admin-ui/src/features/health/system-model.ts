@@ -1,4 +1,5 @@
-import type { SystemStatus } from '@/api/types';
+import { ApiError } from '@/api/client';
+import type { MetaMirrorState, MetaMirrorStatus, SystemStatus } from '@/api/types';
 import { certificateLook } from '@/features/settings/settings-model';
 import { backupHealth } from '@/features/settings/backups-model';
 import { hostOf } from '@/lib/format';
@@ -37,6 +38,8 @@ export interface SystemRow {
   status: RowStatus;
   /** The status word's i18n key: the status's own word unless the row says better. */
   statusKey: string;
+  /** The metadata row in mirror mode: the local copy, shown under the row. */
+  mirror?: MirrorLook;
 }
 
 /** The word for each status, unless a row has a more specific one. */
@@ -76,24 +79,7 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
     }),
   );
 
-  const m = sys.metadata;
-  const h = m.enabled && m.available ? m.health : null;
-  rows.push(
-    row({
-      kind: 'metadata',
-      id: 'metadata',
-      title: { key: 'system.row.metadata' },
-      detail: !m.available
-        ? { key: 'system.detail.metadataUnavailable' }
-        : !h
-          ? { key: 'system.detail.metadataOff' }
-          : h.reachable
-            ? { key: 'system.detail.metadataOk', values: { ms: h.latency_ms } }
-            : { key: 'system.detail.metadataDown' },
-      value: hostOf(m.base_url),
-      status: !h ? 'off' : h.reachable ? 'ok' : 'bad',
-    }),
-  );
+  rows.push(metadataRow(sys));
 
   const look = certificateLook(sys.tls, now);
   rows.push(
@@ -237,6 +223,174 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
   );
 
   return rows;
+}
+
+/** The local metadata copy in use: mirror mode, with metadata on and a copy status to show. */
+function liveMirror(sys: SystemStatus): MetaMirrorStatus | undefined {
+  const m = sys.metadata;
+  return m.mode === 'mirror' && m.enabled && m.available ? m.mirror : undefined;
+}
+
+/**
+ * The community metadata row. In remote mode it is the service's health; in
+ * mirror mode the local copy's state (the health check describes the copy
+ * then, which the copy's own status says better).
+ */
+function metadataRow(sys: SystemStatus): SystemRow {
+  const m = sys.metadata;
+  const base = {
+    kind: 'metadata',
+    id: 'metadata',
+    title: { key: 'system.row.metadata' },
+  } as const;
+  const mirror = liveMirror(sys);
+  if (mirror) {
+    const look = mirrorLook(mirror);
+    return row({
+      ...base,
+      detail: look.detail,
+      status: look.status,
+      statusKey: look.statusKey,
+      mirror: look,
+    });
+  }
+  const h = m.enabled && m.available ? m.health : null;
+  return row({
+    ...base,
+    detail: !m.available
+      ? { key: 'system.detail.metadataUnavailable' }
+      : !h
+        ? { key: 'system.detail.metadataOff' }
+        : h.reachable
+          ? { key: 'system.detail.metadataOk', values: { ms: h.latency_ms } }
+          : { key: 'system.detail.metadataDown' },
+    value: hostOf(m.base_url),
+    status: !h ? 'off' : h.reachable ? 'ok' : 'bad',
+  });
+}
+
+/**
+ * The "service isn't responding" notice applies: remote mode only (in mirror
+ * mode the local copy's row and panel say what's wrong, and a missing copy is
+ * covered by the service).
+ */
+export function metadataDown(sys: SystemStatus): boolean {
+  const h = sys.metadata.health;
+  return sys.metadata.mode !== 'mirror' && !!h && !h.reachable;
+}
+
+/** One fact about the local copy: its label's i18n key and how the page formats the value. */
+export interface MirrorFact {
+  key: string;
+  kind: 'mono' | 'number' | 'bytes' | 'date' | 'relative';
+  value: string | number;
+}
+
+/** How the local metadata copy reads (Health > System's panel, Settings' status line). */
+export interface MirrorLook {
+  state: MetaMirrorState;
+  status: RowStatus;
+  statusKey: string;
+  /** The row's one-line detail. */
+  detail: Text;
+  /** Only the facts the server sent, in reading order. */
+  facts: MirrorFact[];
+  /** While downloading: compressed bytes, and the share done (undefined while the size isn't known). */
+  progress: { done: number; total: number; fraction: number | undefined } | null;
+  /** The last failure: its headline's i18n key and the server's sentence. */
+  error: { key: string; text: string } | null;
+  /** Lookups are going to the online service. */
+  fallback: boolean;
+  /** The copy's schema is newer than this server reads: update the server. */
+  schemaNewer: boolean;
+  /** "Check now" makes sense (not while a download runs). */
+  canCheck: boolean;
+}
+
+/**
+ * Reads the local copy's status. The worst thing wins the row: a failed first
+ * download, then no copy yet, a first download, a copy newer than this server,
+ * a failed update, lookups going online, then an update downloading over a
+ * working copy, then ready. A copy still answering is never shown as down.
+ */
+export function mirrorLook(m: MetaMirrorStatus): MirrorLook {
+  const downloading = m.state === 'downloading';
+  const schemaNewer = !!m.schema_newer;
+  const error = m.error
+    ? {
+        key: m.state === 'error' ? 'system.mirror.failed' : 'system.mirror.updateFailed',
+        text: m.error,
+      }
+    : null;
+
+  let status: RowStatus;
+  let statusKey: string | undefined;
+  let detail: string;
+  if (m.state === 'error') {
+    [status, statusKey, detail] = ['bad', 'system.status.failed', 'mirrorFailed'];
+  } else if (m.state === 'empty') {
+    [status, statusKey, detail] = ['off', 'system.status.waiting', 'mirrorEmpty'];
+  } else if (downloading && m.fallback) {
+    [status, statusKey, detail] = ['off', 'system.status.downloading', 'mirrorFirstDownload'];
+  } else if (schemaNewer) {
+    [status, detail] = ['warn', 'mirrorNewer'];
+  } else if (error) {
+    [status, detail] = ['warn', 'mirrorUpdateFailed'];
+  } else if (m.fallback) {
+    [status, detail] = ['warn', 'mirrorFallback'];
+  } else if (downloading) {
+    [status, statusKey, detail] = ['ok', 'system.status.downloading', 'mirrorUpdating'];
+  } else {
+    [status, detail] = ['ok', 'mirrorReady'];
+  }
+
+  const facts: MirrorFact[] = [];
+  const fact = (key: string, kind: MirrorFact['kind'], value: string | number | undefined) => {
+    if (value !== undefined && value !== '')
+      facts.push({ key: `system.mirror.fact.${key}`, kind, value });
+  };
+  fact('version', 'mono', m.tag);
+  fact('built', 'date', m.built_at);
+  fact('schema', 'number', m.schema_version);
+  fact('size', 'bytes', m.size_bytes);
+  fact('downloaded', 'relative', m.downloaded_at);
+  fact('checked', 'relative', m.checked_at);
+  fact('next', 'relative', m.next_check_at);
+
+  const p = downloading ? m.progress : undefined;
+  return {
+    state: m.state,
+    status,
+    statusKey: statusKey ?? STATUS_WORD[status],
+    detail: { key: `system.detail.${detail}` },
+    facts,
+    progress: p
+      ? {
+          done: p.done,
+          total: p.total,
+          fraction: p.total > 0 ? Math.min(1, p.done / p.total) : undefined,
+        }
+      : null,
+    error,
+    fallback: m.fallback,
+    schemaNewer,
+    canCheck: !downloading,
+  };
+}
+
+/**
+ * The i18n key for a refused "Check now": metadata turned off since the page
+ * loaded (404 metadata_off), or the server not keeping a copy (409
+ * not_mirror_mode: mirror mode saved but not restarted into, or left). Any
+ * other failure is undefined, for errorMessage to word.
+ */
+export function mirrorCheckRefusal(err: unknown): string | undefined {
+  if (!(err instanceof ApiError)) return undefined;
+  if (err.code === 'metadata_off' || err.status === 404) return 'system.mirror.checkOff';
+  if (err.code === 'not_mirror_mode' || err.message === 'not_mirror_mode' || err.status === 409) {
+    return 'system.mirror.checkNotMirror';
+  }
+  return undefined;
 }
 
 /** "0018_sessions.sql" -> 18. */

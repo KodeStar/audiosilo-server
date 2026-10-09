@@ -293,7 +293,13 @@ describe('settings', () => {
       routes({
         'GET /admin/settings': {
           body: settingsWith({
-            metadata: { enabled: false, base_url: '', region: '', available: false },
+            metadata: {
+              enabled: false,
+              base_url: '',
+              region: '',
+              mode: 'remote',
+              available: false,
+            },
           }),
         },
       }),

@@ -26,10 +26,12 @@ import type {
   FolderMode,
   MatchOutcome,
   MatchRun,
+  MetaMirrorStatus,
   PersonField,
   ServerEventKind,
   SessionCursor,
   SessionFilter,
+  SystemStatus,
 } from './types';
 
 // Query keys live here so invalidation and the hooks can't drift apart.
@@ -143,17 +145,37 @@ export function useSettings() {
   return useQuery({ queryKey: keys.settings, queryFn: api.settings, staleTime: 5 * 60_000 });
 }
 
+/** The local metadata copy is downloading (its progress is worth following). */
+export function mirrorDownloading(sys: SystemStatus | undefined) {
+  return sys?.metadata.mirror?.state === 'downloading';
+}
+
 /**
  * What the server depends on (Health > System; Settings and About read parts).
- * Health > System polls it (`poll`); elsewhere it's fresh for a minute.
+ * Health > System polls it (`poll`): every 2 seconds while the local metadata
+ * copy downloads, every 30 otherwise; elsewhere it's fresh for a minute.
  */
 export function useSystem({ poll = false } = {}) {
   return useQuery({
     queryKey: keys.system,
     queryFn: api.system,
     staleTime: 60_000,
-    refetchInterval: poll ? 30_000 : false,
+    refetchInterval: (q) => (!poll ? false : mirrorDownloading(q.state.data) ? 2000 : 30_000),
   });
+}
+
+/**
+ * Asks the server to check for a newer copy of the metadata now: its answer
+ * goes into the system status at once, then the status is fetched again.
+ * Throws the ApiError (metadata_off, not_mirror_mode) for the caller to show.
+ */
+export async function checkMetaMirror(qc: QueryClient): Promise<MetaMirrorStatus> {
+  const mirror = await api.checkMetaMirror();
+  qc.setQueryData<SystemStatus>(keys.system, (s) =>
+    s ? { ...s, metadata: { ...s.metadata, mirror } } : s,
+  );
+  void qc.invalidateQueries({ queryKey: keys.system });
+  return mirror;
 }
 
 /** The backups, their state and any restore waiting; polled each second while one is made. */

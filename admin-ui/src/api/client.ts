@@ -69,6 +69,7 @@ import type {
   InviteCreated,
   Library,
   LoginResponse,
+  MetaMirrorStatus,
   PathRule,
   ServerInfo,
   Share,
@@ -327,6 +328,11 @@ export const api = {
   system: () => request<SystemStatus>('GET', '/admin/system'),
   updateStatus: () => request<UpdateStatus>('GET', '/admin/update'),
   checkForUpdate: () => request<UpdateStatus>('POST', '/admin/update/check'),
+  /**
+   * Wakes the local copy's check (202, answering with its status; 404 metadata_off
+   * while metadata is off, 409 not_mirror_mode while the server isn't keeping a copy).
+   */
+  checkMetaMirror: () => request<MetaMirrorStatus>('POST', '/admin/meta/mirror/check'),
   /** The newest log lines; `after` (a previous page's last_seq) asks only for newer ones. */
   logs: (q: LogQuery = {}) => request<LogPage>('GET', `/admin/logs${bookQuery(q)}`),
 

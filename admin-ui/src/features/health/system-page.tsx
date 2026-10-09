@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   Archive,
@@ -8,22 +10,43 @@ import {
   HardDrive,
   MonitorSmartphone,
   Package,
+  RotateCw,
   ShieldCheck,
+  TriangleAlert,
   Unplug,
   type LucideIcon,
 } from 'lucide-react';
-import { useSystem } from '@/api/hooks';
+import { checkMetaMirror, useSystem } from '@/api/hooks';
 import type { SystemStatus } from '@/api/types';
+import { FactList } from '@/components/fact-list';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
+import { ProgressBar } from '@/components/progress-bar';
 import { QueryError } from '@/components/query-error';
 import { StatusText } from '@/components/status-text';
-import { buttonVariants } from '@/components/ui/button';
-import { formatBytes, formatDateTime, formatNumber } from '@/lib/format';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { toastError } from '@/lib/errors';
+import {
+  formatBytes,
+  formatDate,
+  formatDateTime,
+  formatNumber,
+  formatPercent,
+  formatRelative,
+  hostOf,
+} from '@/lib/format';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
+import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { systemRows, type SystemRow } from './system-model';
+import {
+  metadataDown,
+  mirrorCheckRefusal,
+  systemRows,
+  type MirrorFact,
+  type MirrorLook,
+  type SystemRow,
+} from './system-model';
 
 const ICONS: Record<SystemRow['kind'], LucideIcon> = {
   ffmpeg: Cpu,
@@ -72,7 +95,7 @@ function SystemList({ sys }: { sys: SystemStatus }) {
   const lang = i18n.resolvedLanguage ?? 'en';
   const rows = systemRows(sys);
   const offline = sys.libraries.filter((l) => !l.available);
-  const metaDown = sys.metadata.health && !sys.metadata.health.reachable;
+  const metaDown = metadataDown(sys);
 
   const values = (v?: Record<string, string | number>) =>
     v &&
@@ -157,11 +180,115 @@ function SystemList({ sys }: { sys: SystemStatus }) {
                 >
                   {t(r.statusKey)}
                 </StatusText>
+                {r.mirror ? <MirrorPanel look={r.mirror} baseUrl={sys.metadata.base_url} /> : null}
               </li>
             );
           })}
         </ul>
       </section>
+    </div>
+  );
+}
+
+/**
+ * The local metadata copy under its row (mirror mode): a download's progress,
+ * what the copy is, why lookups go online, a copy newer than this server, the
+ * last failure, and "Check now" (not while a download runs).
+ */
+function MirrorPanel({ look, baseUrl }: { look: MirrorLook; baseUrl: string }) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const qc = useQueryClient();
+  const [checking, setChecking] = useState(false);
+
+  const check = async () => {
+    setChecking(true);
+    try {
+      await checkMetaMirror(qc);
+      toast.add({ title: t('system.mirror.checkStarted'), type: 'success' });
+    } catch (err) {
+      const refusal = mirrorCheckRefusal(err);
+      if (refusal)
+        toast.add({
+          title: t('system.mirror.checkFailed'),
+          description: t(refusal),
+          type: 'error',
+        });
+      else toastError(t('system.mirror.checkFailed'), err);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const show = (f: MirrorFact): React.ReactNode => {
+    switch (f.kind) {
+      case 'mono':
+        return <span className="font-mono text-[12.5px]">{f.value}</span>;
+      case 'number':
+        return formatNumber(Number(f.value), lang);
+      case 'bytes':
+        return formatBytes(Number(f.value), lang);
+      case 'date':
+        return formatDate(String(f.value), lang);
+      default:
+        return (
+          <time dateTime={String(f.value)} title={formatDateTime(String(f.value), lang, true)}>
+            {formatRelative(String(f.value), lang)}
+          </time>
+        );
+    }
+  };
+
+  const p = look.progress;
+  return (
+    <div className="flex basis-full flex-col gap-3 pt-1 md:pl-[48.5px]">
+      {p ? (
+        <div className="flex flex-col gap-1.5">
+          <ProgressBar fraction={p.fraction} label={t('system.mirror.progressLabel')} />
+          <span className="text-[12.5px] text-muted-foreground tabular-nums">
+            {p.fraction === undefined
+              ? t('system.mirror.progressUnknown', { done: formatBytes(p.done, lang) })
+              : t('system.mirror.progress', {
+                  done: formatBytes(p.done, lang),
+                  total: formatBytes(p.total, lang),
+                  percent: formatPercent(p.fraction, lang),
+                })}
+          </span>
+        </div>
+      ) : null}
+      {look.facts.length ? (
+        <FactList layout="flow" rows={look.facts.map((f) => [t(f.key), show(f)])} />
+      ) : null}
+      {look.schemaNewer ? (
+        <Notice tone="warn" icon={TriangleAlert} title={t('system.mirror.newer.title')}>
+          {t('system.mirror.newer.body')}
+        </Notice>
+      ) : null}
+      {look.error ? (
+        <Notice
+          tone={look.state === 'error' ? 'bad' : 'warn'}
+          icon={TriangleAlert}
+          title={t(look.error.key)}
+        >
+          <span className="[overflow-wrap:anywhere]">{look.error.text}</span>
+        </Notice>
+      ) : null}
+      {look.fallback ? (
+        <Notice tone="info" icon={Globe} title={t('system.mirror.fallback.title')}>
+          {t('system.mirror.fallback.body', { host: hostOf(baseUrl) })}
+        </Notice>
+      ) : null}
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void check()}
+          disabled={!look.canCheck || checking}
+        >
+          <RotateCw className={cn(checking && 'animate-spin')} aria-hidden="true" />
+          {checking ? t('system.mirror.checking') : t('system.mirror.check')}
+        </Button>
+      </div>
     </div>
   );
 }

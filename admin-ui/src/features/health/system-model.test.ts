@@ -1,5 +1,13 @@
-import { systemStatus, updateStatus } from '@/test/fixtures';
-import { schemaNumber, systemRows, uptime } from './system-model';
+import { ApiError } from '@/api/client';
+import { mirrorStatus, mirrorSystem, systemStatus, updateStatus } from '@/test/fixtures';
+import {
+  metadataDown,
+  mirrorCheckRefusal,
+  mirrorLook,
+  schemaNumber,
+  systemRows,
+  uptime,
+} from './system-model';
 
 const NOW = Date.parse('2026-10-04T12:00:00Z');
 
@@ -58,7 +66,13 @@ describe('systemRows', () => {
   it('never calls metadata a problem while it is off, and says when it is down', () => {
     const off = systemRows(
       systemStatus({
-        metadata: { enabled: false, available: true, base_url: 'https://m.example', health: null },
+        metadata: {
+          enabled: false,
+          available: true,
+          base_url: 'https://m.example',
+          mode: 'remote',
+          health: null,
+        },
       }),
       NOW,
     );
@@ -69,6 +83,7 @@ describe('systemRows', () => {
           enabled: true,
           available: true,
           base_url: 'https://m.example',
+          mode: 'remote',
           health: {
             reachable: false,
             latency_ms: 0,
@@ -133,6 +148,170 @@ describe('systemRows', () => {
       status: 'warn',
       statusKey: 'system.status.update',
     });
+  });
+});
+
+describe('the local metadata copy (mirror mode)', () => {
+  it('reads a ready copy as healthy, with its facts in order', () => {
+    const look = mirrorLook(mirrorStatus());
+    expect(look).toMatchObject({
+      state: 'ready',
+      status: 'ok',
+      statusKey: 'system.status.ok',
+      detail: { key: 'system.detail.mirrorReady' },
+      progress: null,
+      error: null,
+      fallback: false,
+      schemaNewer: false,
+      canCheck: true,
+    });
+    expect(look.facts.map((f) => [f.key, f.kind])).toEqual([
+      ['system.mirror.fact.version', 'mono'],
+      ['system.mirror.fact.built', 'date'],
+      ['system.mirror.fact.schema', 'number'],
+      ['system.mirror.fact.size', 'bytes'],
+      ['system.mirror.fact.downloaded', 'relative'],
+      ['system.mirror.fact.checked', 'relative'],
+      ['system.mirror.fact.next', 'relative'],
+    ]);
+  });
+
+  it('lists only the facts the server sent', () => {
+    expect(mirrorLook({ state: 'empty', fallback: true }).facts).toEqual([]);
+    expect(
+      mirrorLook({ state: 'empty', fallback: true, checked_at: '2026-10-09T06:00:00Z' }).facts,
+    ).toEqual([
+      { key: 'system.mirror.fact.checked', kind: 'relative', value: '2026-10-09T06:00:00Z' },
+    ]);
+  });
+
+  it('waits without a copy, then downloads the first one', () => {
+    expect(mirrorLook({ state: 'empty', fallback: true })).toMatchObject({
+      status: 'off',
+      statusKey: 'system.status.waiting',
+      detail: { key: 'system.detail.mirrorEmpty' },
+      fallback: true,
+      canCheck: true,
+    });
+    const first = mirrorLook({
+      state: 'downloading',
+      fallback: true,
+      progress: { done: 110_000_000, total: 440_000_000 },
+    });
+    expect(first).toMatchObject({
+      status: 'off',
+      statusKey: 'system.status.downloading',
+      detail: { key: 'system.detail.mirrorFirstDownload' },
+      progress: { done: 110_000_000, total: 440_000_000, fraction: 0.25 },
+      canCheck: false,
+    });
+  });
+
+  it("shows a download's size as unknown until the server knows it", () => {
+    expect(
+      mirrorLook({ state: 'downloading', fallback: true, progress: { done: 5, total: 0 } })
+        .progress,
+    ).toEqual({ done: 5, total: 0, fraction: undefined });
+    // Progress only counts while downloading.
+    expect(mirrorLook(mirrorStatus({ progress: { done: 1, total: 2 } })).progress).toBeNull();
+  });
+
+  it('keeps a working copy healthy while an update downloads', () => {
+    expect(
+      mirrorLook(mirrorStatus({ state: 'downloading', progress: { done: 1, total: 4 } })),
+    ).toMatchObject({
+      status: 'ok',
+      statusKey: 'system.status.downloading',
+      detail: { key: 'system.detail.mirrorUpdating' },
+      canCheck: false,
+    });
+  });
+
+  it('fails only without a usable copy; a failed update over one needs attention', () => {
+    expect(
+      mirrorLook({ state: 'error', fallback: true, error: 'not enough disk space' }),
+    ).toMatchObject({
+      status: 'bad',
+      statusKey: 'system.status.failed',
+      detail: { key: 'system.detail.mirrorFailed' },
+      error: { key: 'system.mirror.failed', text: 'not enough disk space' },
+      canCheck: true,
+    });
+    expect(mirrorLook(mirrorStatus({ error: 'digest mismatch' }))).toMatchObject({
+      status: 'warn',
+      statusKey: 'system.status.attention',
+      detail: { key: 'system.detail.mirrorUpdateFailed' },
+      error: { key: 'system.mirror.updateFailed', text: 'digest mismatch' },
+    });
+  });
+
+  it('flags a copy newer than this server, ahead of a failed update', () => {
+    expect(
+      mirrorLook(mirrorStatus({ schema_newer: true, schema_version: 8, error: 'x' })),
+    ).toMatchObject({
+      status: 'warn',
+      detail: { key: 'system.detail.mirrorNewer' },
+      schemaNewer: true,
+      error: { key: 'system.mirror.updateFailed' },
+    });
+  });
+
+  it('says when lookups go to the online service with a copy on disk', () => {
+    expect(mirrorLook(mirrorStatus({ fallback: true }))).toMatchObject({
+      status: 'warn',
+      detail: { key: 'system.detail.mirrorFallback' },
+      fallback: true,
+    });
+  });
+
+  it('makes the metadata row the local copy in mirror mode', () => {
+    const r = row(systemRows(mirrorSystem(), NOW), 'metadata');
+    expect(r).toMatchObject({
+      status: 'ok',
+      value: '',
+      detail: { key: 'system.detail.mirrorReady' },
+      mirror: { state: 'ready' },
+    });
+    const failed = row(
+      systemRows(mirrorSystem({ state: 'error', fallback: true, error: 'x' }), NOW),
+      'metadata',
+    );
+    expect(failed).toMatchObject({ status: 'bad', statusKey: 'system.status.failed' });
+  });
+
+  it('reads mirror mode with metadata off as off, and remote mode as before', () => {
+    const sys = mirrorSystem();
+    const off = row(
+      systemRows({ ...sys, metadata: { ...sys.metadata, enabled: false, health: null } }, NOW),
+      'metadata',
+    );
+    expect(off).toMatchObject({ status: 'off', detail: { key: 'system.detail.metadataOff' } });
+    expect(off.mirror).toBeUndefined();
+    expect(row(systemRows(systemStatus(), NOW), 'metadata').mirror).toBeUndefined();
+  });
+
+  it('calls the service down only in remote mode', () => {
+    const down = { reachable: false, latency_ms: 0, checked_at: '' };
+    const remote = systemStatus();
+    expect(metadataDown(remote)).toBe(false);
+    expect(metadataDown({ ...remote, metadata: { ...remote.metadata, health: down } })).toBe(true);
+    const mirror = mirrorSystem(mirrorStatus({ state: 'empty', fallback: true }));
+    expect(metadataDown({ ...mirror, metadata: { ...mirror.metadata, health: down } })).toBe(false);
+  });
+
+  it('words a refused Check now', () => {
+    expect(
+      mirrorCheckRefusal(new ApiError(404, 'community metadata is turned off', 'metadata_off')),
+    ).toBe('system.mirror.checkOff');
+    expect(mirrorCheckRefusal(new ApiError(409, 'not in mirror mode', 'not_mirror_mode'))).toBe(
+      'system.mirror.checkNotMirror',
+    );
+    // The bare {"error":"not_mirror_mode"} envelope reads the same.
+    expect(mirrorCheckRefusal(new ApiError(409, 'not_mirror_mode'))).toBe(
+      'system.mirror.checkNotMirror',
+    );
+    expect(mirrorCheckRefusal(new ApiError(500, 'boom'))).toBeUndefined();
+    expect(mirrorCheckRefusal(new TypeError('Failed to fetch'))).toBeUndefined();
   });
 });
 
