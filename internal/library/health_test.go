@@ -12,7 +12,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // Phase 3: ignore rules, scan schedules, read problems, suspect folders and the
@@ -21,11 +21,7 @@ import (
 func newHealthCatalog(t *testing.T) (*catalog.Catalog, context.Context) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	return catalog.New(db, time.Now), ctx
 }
 
@@ -357,11 +353,7 @@ func TestQueueDue(t *testing.T) {
 // a tag read, without re-indexing it.
 func TestSuspectBackfill(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	// Two untagged parts named like two books.
@@ -573,11 +565,7 @@ func TestFixedReadProblemClears(t *testing.T) {
 // coming back on the next tick.
 func TestDroppedScheduleSlotIsNotRequeued(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir(), ScanSchedule: "every:1h"})
 	id, err := cat.StartScanRun(ctx, lib.ID, TriggerManual, nil)

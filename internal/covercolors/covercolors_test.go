@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // fakeColorer answers a book by its path: a colour for the paths in colors,
@@ -55,11 +54,7 @@ type env struct {
 func newEnv(t *testing.T, paths ...string) *env {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	lib, err := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir()})
 	if err != nil {

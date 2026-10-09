@@ -17,18 +17,8 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
-
-func testDB(t *testing.T) *store.DB {
-	t.Helper()
-	db, err := store.Open(context.Background(), ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
 
 func discardLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -39,11 +29,7 @@ func discardLog() *slog.Logger {
 // first-run admin creation - and it must be idempotent on later starts.
 func TestEnsureAdminKeysOffDatabase(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	authSvc := auth.New(db, time.Now)
 	cfg := config.Default(t.TempDir())
 
@@ -194,7 +180,7 @@ func TestApplyOverridesRejectedByValidate(t *testing.T) {
 // name, so re-running it doesn't duplicate libraries.
 func TestSyncLibraries(t *testing.T) {
 	ctx := context.Background()
-	cat := catalog.New(testDB(t), time.Now)
+	cat := catalog.New(storetest.Open(t), time.Now)
 
 	cfg := &config.Config{Libraries: []config.Library{{Name: "Main", Root: filepath.Join("rel", "audiobooks")}}}
 	if err := syncLibraries(ctx, cfg, cat); err != nil {
@@ -227,7 +213,7 @@ func TestSyncLibraries(t *testing.T) {
 func TestStartupScansWarnAndContinue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cat := catalog.New(testDB(t), time.Now)
+	cat := catalog.New(storetest.Open(t), time.Now)
 	scanner := library.NewScanner(cat, "", discardLog())
 
 	good, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -270,7 +256,7 @@ func TestStartupScansWarnAndContinue(t *testing.T) {
 func TestDemoReaperSweepsThenExits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	authSvc := auth.New(testDB(t), time.Now)
+	authSvc := auth.New(storetest.Open(t), time.Now)
 
 	demo, err := authSvc.CreateDemoUser(ctx, auth.DemoUsernamePrefix+"throwaway")
 	if err != nil {
@@ -309,11 +295,7 @@ func TestDemoReaperSweepsThenExits(t *testing.T) {
 // as the server's own act; a refused one too, with why.
 func TestRecordRestore(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	recordRestore(ctx, cat, &backup.RestoreResult{Name: "audiosilo-a.db", RequestedBy: "chris", OK: true, SafetyCopy: "audiosilo-b.db"}, slog.Default())
 	recordRestore(ctx, cat, &backup.RestoreResult{Name: "audiosilo-c.db", RequestedBy: "chris", Error: "newer"}, slog.Default())

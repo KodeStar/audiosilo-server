@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // TestMetaCacheRows: a row round-trips (a "no match" as an empty payload), a
@@ -14,11 +14,7 @@ import (
 // time, however they were keyed.
 func TestMetaCacheRows(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := storetest.Open(t)
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 	c := New(db, func() time.Time { return now })
 
@@ -75,11 +71,7 @@ func TestMetaCacheRows(t *testing.T) {
 // enrichments out, however recently they were written.
 func TestMetaCacheWorksShare(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := storetest.Open(t)
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 	c := New(db, func() time.Time { return now })
 	put := func(key string) {

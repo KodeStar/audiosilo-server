@@ -3,7 +3,6 @@ package matchrun
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -13,7 +12,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // fakeMatcher answers Candidates by the book's title (or, for a repick, its ASIN).
@@ -60,11 +59,7 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	e := &env{cat: catalog.New(db, time.Now), matcher: &fakeMatcher{byTitle: map[string][]meta.MatchCandidate{}, byASIN: map[string][]meta.MatchCandidate{}}}
 	e.enabled.Store(true)
 	admin, err := auth.New(db, time.Now).CreateUser(ctx, "admin", "correct horse battery", "admin")

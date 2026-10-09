@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // newTestCatalog opens a catalog on a FILE-backed database: reads go to the
@@ -19,13 +18,7 @@ import (
 // where :memory: (reader == writer, one pool) would hide it.
 func newTestCatalog(t *testing.T) (*Catalog, context.Context) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return New(db, time.Now), ctx
+	return New(storetest.Open(t), time.Now), context.Background()
 }
 
 func seedUser(t *testing.T, c *Catalog, ctx context.Context) int64 {

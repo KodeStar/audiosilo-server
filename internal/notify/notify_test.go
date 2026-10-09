@@ -14,7 +14,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func TestClean(t *testing.T) {
@@ -139,11 +139,7 @@ func newService(t *testing.T) (*Service, *catalog.Catalog, context.Context) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	s := New(cat, "1.2.3", func() Server { return Server{Name: "Hearthside", PublicURL: "https://books.example.com"} },
 		slog.New(slog.DiscardHandler))

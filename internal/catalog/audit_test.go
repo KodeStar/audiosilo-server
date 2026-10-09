@@ -5,16 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func TestAuditRetention(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := storetest.Open(t)
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	c := New(db, func() time.Time { return now })
 
@@ -53,11 +49,7 @@ func TestAuditRetention(t *testing.T) {
 
 func TestPageSizesClamp(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := storetest.Open(t)
 	c := New(db, time.Now)
 	for range 120 {
 		if _, err := c.RecordServerEvent(ctx, "book_added", nil, ""); err != nil {

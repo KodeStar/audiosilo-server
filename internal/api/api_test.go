@@ -22,7 +22,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/notify"
-	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 type testEnv struct {
@@ -73,11 +73,7 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	// A file-backed database, as in production: reads go to the read-only reader
 	// pool, so a write routed through a read method fails here instead of passing
 	// on :memory: (reader == writer) and failing in production.
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "audiosilo.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 
 	authSvc := auth.New(db, time.Now)
 	cat := catalog.New(db, distinctMillis())
@@ -1223,11 +1219,7 @@ func TestDeleteUserHandler(t *testing.T) {
 // the wizard exposes no /setup surface (404).
 func TestSetupWizard(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	authSvc := auth.New(db, time.Now)
 	cat := catalog.New(db, time.Now)
 	cfg := config.Default(t.TempDir())

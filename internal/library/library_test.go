@@ -15,6 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 func TestSafeJoinRejectsTraversal(t *testing.T) {
@@ -64,11 +65,7 @@ func TestBrowseFSInstant(t *testing.T) {
 
 func TestScannerIndexesFixtures(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: root})
@@ -123,11 +120,7 @@ func TestScannerMultiFileChapters(t *testing.T) {
 		t.Skip("ffprobe not available; multi-file durations require it")
 	}
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "multifile"))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
@@ -169,11 +162,7 @@ func TestScannerFolderBookExpandsEmbeddedChapters(t *testing.T) {
 		t.Skip("ffprobe not available; embedded chapters require it")
 	}
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	// A single chaptered m4b living in its own book folder - the common
 	// "books in their own folders" layout. The tree is built at runtime (the
@@ -219,11 +208,7 @@ func TestScannerFolderBookExpandsEmbeddedChapters(t *testing.T) {
 
 func TestScannerMoveTracking(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 
 	// A library we can mutate: a book lives in its own folder (folder = one book),
@@ -278,11 +263,7 @@ func seedUserID(t *testing.T, db *store.DB) int64 {
 
 func TestIndexPathOnDemand(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
@@ -322,11 +303,7 @@ func TestIndexPathOnDemand(t *testing.T) {
 // rel_path, not a "../"-laden one computed against the unresolved root.
 func TestIndexPathSymlinkedRoot(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 
 	real, _ := filepath.Abs(testdataRoot(t))
@@ -401,11 +378,7 @@ func TestScanSymlinkedRoot(t *testing.T) {
 
 func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{
@@ -451,11 +424,7 @@ func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
 func newScanEnv(t *testing.T) (*catalog.Catalog, *Scanner, context.Context) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	return cat, NewScanner(cat, "", slog.Default()), ctx
 }
@@ -729,11 +698,7 @@ func TestScannerBackfillsMissingCodec(t *testing.T) {
 		t.Skip("ffprobe required to read codec")
 	}
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	root := t.TempDir()
 	copyFixtureM4B(t, filepath.Join(root, "Book Folder", "audio.m4b"))
@@ -813,11 +778,7 @@ func TestBrowseFSHidesNonAudio(t *testing.T) {
 // and a book indexed before the cover flag existed gets it backfilled cheaply.
 func TestScannerKeepsOverridesAndRecordsSources(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
 	scanner := NewScanner(cat, "", slog.Default())
 	root := t.TempDir()
@@ -974,11 +935,7 @@ func TestFolderFavouriteFollowsRename(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			db, err := store.Open(ctx, ":memory:")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { db.Close() })
+			db := storetest.Open(t)
 			cat := catalog.New(db, time.Now)
 			root := t.TempDir()
 			for _, b := range tc.books {
