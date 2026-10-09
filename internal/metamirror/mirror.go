@@ -174,7 +174,7 @@ type Mirror struct {
 
 // New prepares the mirror in dir (created 0700 when missing) and reads its
 // state. It is cheap: the copy the state names is opened by Run (query.Open's
-// integrity checks read the whole 1.7 GB copy, seconds a server's start must not
+// integrity checks read the whole 1.8 GB copy, seconds a server's start must not
 // wait for), and until then lookups go to the remote service. It does not touch
 // the network either; Run does.
 func New(dir string, opts Options) (*Mirror, error) {

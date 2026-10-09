@@ -464,7 +464,7 @@ admin overrides; see Metadata overrides below).
   **Mirror mode** (`metadata.mode: mirror`, env `AUDIOSILO_METADATA_MODE`, `remote` the default; read
   at start, a `restart` setting): the server keeps a local copy of metaserve's own database and
   answers the SAME questions in-process with metaserve's own code, so no book is looked up over the
-  internet. The copy is audiosilo-meta's data release artifact (`meta.sqlite.gz`, ~450 MB, ~1.7 GB
+  internet. The copy is audiosilo-meta's data release artifact (`meta.sqlite.gz`, ~450 MB, ~1.8 GB
   decompressed; the CC0 core and the CC BY-SA community layer in one file), and the module
   `github.com/kodestar/audiosilo-meta` is a dependency: `pkg/release` (the ONE implementation of
   the release asset contract: newest non-draft release carrying the asset, allowlisted GitHub hosts,
@@ -493,7 +493,7 @@ admin overrides; see Metadata overrides below).
   built_at, schema_version, size_bytes, downloaded_at - the one record of the copy's facts,
   Status reads them there -, etag, checked_at, last_error, and published_at + sha256 as on-disk
   diagnostics only). `New` is cheap (state + folder): `Run` opens the copy first (`query.Open`'s
-  integrity checks take seconds over 1.7 GB, which must not hold up the listener), so until then
+  integrity checks take seconds over 1.8 GB, which must not hold up the listener), so until then
   the status says `empty` with `fallback` and lookups go remote. Schedule: durable, at most once a
   day from the `checked_at` on disk (a restart does not re-download), 30 s after start without a
   copy, an hour after a failed check, and on `CheckNow` (which makes `next_check_at` now; a running

@@ -303,7 +303,7 @@ describe('settings', () => {
     expect(remote).toBeChecked();
     const mirror = screen.getByRole('radio', { name: /Keep a local copy/ });
     // The cost and the privacy gain are on the choice itself.
-    expect(mirror).toHaveAccessibleName(/About 1\.7 GB on disk/);
+    expect(mirror).toHaveAccessibleName(/About 1\.8 GB on disk/);
     expect(mirror).toHaveAccessibleName(/No book is looked up over the internet/);
     await user.click(mirror);
     const card = mirror.closest('section') as HTMLElement;

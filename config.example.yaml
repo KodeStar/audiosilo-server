@@ -113,7 +113,7 @@ metadata:
   #   mirror - keep a local copy of the service's database in <data>/meta-mirror/
   #            and answer from it, so no book is looked up over the internet. The
   #            copy comes from the audiosilo-meta releases on GitHub, checked once
-  #            a day: about 450 MB downloaded per update and about 1.7 GB on disk
+  #            a day: about 450 MB downloaded per update and about 1.8 GB on disk
   #            (up to twice that while an update is swapped in). Until the first
   #            copy is ready, and for any question the copy can't answer, the
   #            server asks base_url as in remote mode. Switching back to remote

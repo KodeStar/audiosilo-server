@@ -2333,7 +2333,7 @@
   "settings.metadata.mode.remote": "Ask the metadata service for each book",
   "settings.metadata.mode.remoteBody": "Nothing to store. Each lookup sends the book's ASIN or ISBN to the service; matching also sends its title and author.",
   "settings.metadata.mode.mirror": "Keep a local copy",
-  "settings.metadata.mode.mirrorBody": "No book is looked up over the internet: the server answers from its own copy, downloaded from GitHub and updated once a day. About 1.7 GB on disk (up to twice that during an update) and about 450 MB downloaded a day.",
+  "settings.metadata.mode.mirrorBody": "No book is looked up over the internet: the server answers from its own copy, downloaded from GitHub and updated once a day. About 1.8 GB on disk (up to twice that during an update) and about 450 MB downloaded a day.",
   "settings.metadata.mirror.ready": "Local copy ready",
   "settings.metadata.mirror.downloading": "Local copy downloading",
   "settings.metadata.mirror.empty": "No local copy yet",

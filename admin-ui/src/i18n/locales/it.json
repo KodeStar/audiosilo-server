@@ -2471,7 +2471,7 @@
   "settings.metadata.mode.remote": "Chiedi al servizio di metadati per ogni libro",
   "settings.metadata.mode.remoteBody": "Niente da salvare. Ogni ricerca invia l'ASIN o l'ISBN del libro al servizio; l'associazione invia anche titolo e autore.",
   "settings.metadata.mode.mirror": "Tieni una copia locale",
-  "settings.metadata.mode.mirrorBody": "Nessun libro viene cercato su internet: il server risponde dalla propria copia, scaricata da GitHub e aggiornata una volta al giorno. Circa 1,7 GB su disco (fino al doppio durante un aggiornamento) e circa 450 MB scaricati al giorno.",
+  "settings.metadata.mode.mirrorBody": "Nessun libro viene cercato su internet: il server risponde dalla propria copia, scaricata da GitHub e aggiornata una volta al giorno. Circa 1,8 GB su disco (fino al doppio durante un aggiornamento) e circa 450 MB scaricati al giorno.",
   "settings.metadata.mirror.ready": "Copia locale pronta",
   "settings.metadata.mirror.downloading": "Copia locale in download",
   "settings.metadata.mirror.empty": "Ancora nessuna copia locale",
