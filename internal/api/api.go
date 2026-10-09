@@ -355,6 +355,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(http.HandlerFunc(a.handleLogs)))
 	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(http.HandlerFunc(a.handleAudit)))
 	mux.Handle("GET /api/v1/admin/events", a.requireAdmin(http.HandlerFunc(a.handleServerEvents)))
+	// The Overview's support card: whether it shows, and an admin's answer (server-wide).
+	mux.Handle("GET /api/v1/admin/support", a.requireAdmin(http.HandlerFunc(a.handleSupport)))
+	mux.Handle("POST /api/v1/admin/support", a.requireAdmin(http.HandlerFunc(a.handleSupportChoice)))
 
 	// Backups: the database copied into the backups folder; a restore applies at the
 	// next start. Downloads stream (see isStreamingPath).

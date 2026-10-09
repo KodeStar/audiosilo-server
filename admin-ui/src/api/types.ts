@@ -510,6 +510,14 @@ export interface UpdateStatus {
   install: 'docker' | 'binary' | 'source';
 }
 
+/** GET/POST /api/v1/admin/support (handlers_support.go): whether the Overview's support card shows. */
+export interface SupportStatus {
+  show: boolean;
+}
+
+/** POST /api/v1/admin/support's action: hide the card for good, or for six months. */
+export type SupportAction = 'donated' | 'snooze';
+
 /** GET /api/v1/admin/system (handlers_system.go handleSystem). */
 export interface SystemStatus {
   name: string;

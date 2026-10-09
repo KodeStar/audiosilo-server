@@ -128,6 +128,22 @@ describe('audit model', () => {
     ]);
   });
 
+  it('words an answer to the support card', () => {
+    const tr = i18n.getFixedT('en');
+    const snooze = ev('settings.support', {
+      choice: 'snoozed',
+      returns_at: '2027-04-09T10:00:00Z',
+    });
+    expect(actionText(snooze, tr)).toBe('Answered the support card');
+    expect(detailLines(snooze, tr, fmt)).toEqual([
+      { label: 'Answer', value: 'Not now' },
+      { label: 'Shows again', value: 'date(2027-04-09T10:00:00Z)' },
+    ]);
+    expect(detailLines(ev('settings.support', { choice: 'donated' }), tr, fmt)).toEqual([
+      { label: 'Answer', value: "I've donated" },
+    ]);
+  });
+
   it('words imports: the source by name and listening as a length', () => {
     const tr = i18n.getFixedT('en');
     const start = ev('import.start', { import: 7, source: 'abs' });

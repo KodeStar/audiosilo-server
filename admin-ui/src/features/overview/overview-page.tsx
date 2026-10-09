@@ -50,12 +50,14 @@ import {
 import { useCurrentUser } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { greetingFor, splitListening } from './overview-model';
+import { SupportCard } from './support-card';
 
 /**
  * Home (the mark): a greeting, who is listening right now (the live sessions),
  * catalog totals, recent listening, books per library and a server card. Built on
- * GET /admin/stats, /admin/sessions/live, /admin/settings, /server and
- * /admin/issues (the "needs attention" card).
+ * GET /admin/stats, /admin/sessions/live, /admin/settings, /server,
+ * /admin/issues (the "needs attention" card) and /admin/support (the support
+ * card, shown only when the server says so).
  */
 export function OverviewPage() {
   const { t, i18n } = useTranslation();
@@ -196,6 +198,7 @@ export function OverviewPage() {
           <NeedsAttention lang={lang} />
           <LibrariesCard libraries={stats.data?.libraries} lang={lang} />
           <ServerCard />
+          <SupportCard />
         </aside>
       </div>
     </Page>
