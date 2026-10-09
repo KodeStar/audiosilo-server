@@ -1241,11 +1241,12 @@ admin overrides; see Metadata overrides below).
 
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`,
-`export`, `browse_people`, `series_memberships`, `cover_sizes`, `next_book`, `queue`, `collections`,
+`export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`); flip them on
 as phases land. `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
-`Book` in more than one series; see API surface below). `addresses` is true (home/away addresses on pairing, exchange and login, and
+`Book` in more than one series; see API surface below). `series_books` is true (the first page of several
+series' books in one request, `GET /libraries/{id}/series/books`; see API surface below). `addresses` is true (home/away addresses on pairing, exchange and login, and
 `GET /addresses`; see Home and away addresses above).
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
@@ -1281,6 +1282,14 @@ as `/admin/books`) and `/series` counts a book in every series it is in (`extra_
 without it both see main series only, as a client that places books by `series_index`
 needs. A player `Book` in more than one series carries `series_list` (every series, the
 main one first, with its position in each; omitted otherwise).
+The first page of several series' books in one request (capability `series_books`, the
+player's Series cards) is `GET /libraries/{id}/series/books?name=A&name=B[&limit=N]` ->
+`{"series": [{name, books, next_cursor?}]}` (authed, `browseScope` like `/books`; 400 for no
+names or over `maxSeriesBatch` = 50 distinct ones). Names are verbatim, empty ones ignored,
+duplicates answered once, entries in request order; each entry is exactly the page
+`/books?series=<name>&memberships=1&limit=N` returns (`catalog.ListSeriesBooks`: one
+`ListBooks` per name), so its `next_cursor` continues there, with `books: []` for a series
+with no books in scope.
 Player redesign Phase 1b (`api/handlers_ratings.go`, `handlers_mydevices.go`): **ratings**
 are `GET`/`PUT`/`DELETE /libraries/{id}/rating?path=` (`{"rating": Rating | null}`; `Rating =
 {library_id, path, rating 1-5, note, created_at, updated_at}`; PUT `{rating, note?}` resolves a

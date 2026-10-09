@@ -701,6 +701,42 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 	return page, nil
 }
 
+// SeriesPage is one series' first page of books, as ListSeriesBooks returns it:
+// the series name plus the Page itself (books, next_cursor), flattened into one
+// JSON object.
+type SeriesPage struct {
+	Name string `json:"name"`
+	Page
+}
+
+// ListSeriesBooks returns the first page of each named series' books, in the
+// order given: for every name exactly the page ListBooks returns for Series =
+// name with Memberships (the default author sort, limit clamped the same way),
+// so each NextCursor continues on /books?series=<name>&memberships=1 with the
+// same limit. Books is an empty list, never nil, for a series with no books in
+// scope. One indexed query per name; the caller dedupes and bounds the names and
+// drops an empty one (an empty Series filters nothing: the whole library).
+func (c *Catalog) ListSeriesBooks(ctx context.Context, libraryID int64, names []string, limit int, scope *Scope) ([]SeriesPage, error) {
+	out := make([]SeriesPage, 0, len(names))
+	for _, name := range names {
+		page, err := c.ListBooks(ctx, ListOptions{
+			LibraryID:   libraryID,
+			Series:      name,
+			Memberships: true,
+			Limit:       limit,
+			Scope:       scope,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if page.Books == nil {
+			page.Books = []Book{}
+		}
+		out = append(out, SeriesPage{Name: name, Page: *page})
+	}
+	return out, nil
+}
+
 // RecentBooks returns the most recently added books across the caller's accessible
 // libraries (newest first), each restricted to that library's share path rules.
 // A single cross-library query - unlike per-library ListBooks - so a client can

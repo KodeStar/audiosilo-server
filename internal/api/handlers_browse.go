@@ -1,6 +1,9 @@
 package api
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
 // The player's browse lists (the `browse_people` capability): a library's
 // authors, narrators and series with their counts, the same aggregation as the
@@ -36,4 +39,46 @@ func (a *API) handleBrowseSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"series": series})
+}
+
+// maxSeriesBatch bounds the distinct series one GET /libraries/{id}/series/books
+// answers: a screenful of series cards with room to spare, while one request
+// stays a bounded number of indexed queries (one per name).
+const maxSeriesBatch = 50
+
+// handleSeriesBooks serves GET /libraries/{id}/series/books?name=A&name=B[&limit=N]
+// (the `series_books` capability): the first page of several series' books in
+// one request, each entry exactly the page /books?series=<name>&memberships=1
+// &limit=N returns, so its next_cursor continues there. Names are verbatim;
+// empty ones are ignored and duplicates answered once, in first-occurrence
+// order. 400 for no names or more than maxSeriesBatch distinct ones; scope and
+// library errors as /books.
+func (a *API) handleSeriesBooks(w http.ResponseWriter, r *http.Request) {
+	lib, scope, ok := a.browseScope(w, r)
+	if !ok {
+		return
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, n := range r.URL.Query()["name"] {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+	}
+	switch {
+	case len(names) == 0:
+		writeError(w, http.StatusBadRequest, "at least one series name is required")
+		return
+	case len(names) > maxSeriesBatch:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("at most %d series per request", maxSeriesBatch))
+		return
+	}
+	pages, err := a.cat.ListSeriesBooks(r.Context(), lib.ID, names, queryInt(r, "limit", 50), &scope)
+	if err != nil {
+		a.writeCatalogError(w, err, "series books failed", "could not load books", "library", lib.ID)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"series": pages})
 }

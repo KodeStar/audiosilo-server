@@ -715,3 +715,51 @@ func TestBooksByPathsManyPaths(t *testing.T) {
 		}
 	}
 }
+
+// TestListSeriesBooks: one page per name in the order given, each the ListBooks
+// page for that series with memberships (a book in two series in both), an
+// empty series as an empty list (not nil) without a cursor.
+func TestListSeriesBooks(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
+	for _, b := range []*Book{
+		{RelPath: "a", Title: "A", Author: "Ann", Series: "Saga", SeriesIndex: 1},
+		{RelPath: "b", Title: "B", Author: "Bea", Series: "Saga", SeriesIndex: 2},
+		{RelPath: "c", Title: "C", Author: "Cat", Series: "Side", SeriesIndex: 1},
+	} {
+		b.LibraryID = lib.ID
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "b", BookEdit{Set: map[string]string{
+		FieldMoreSeries: `[{"name":"Side","position":2}]`}}); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := c.ListSeriesBooks(ctx, lib.ID, []string{"Side", "Nope", "Saga"}, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := func(p SeriesPage) []string {
+		out := []string{}
+		for _, b := range p.Books {
+			out = append(out, b.RelPath)
+		}
+		return out
+	}
+	if len(pages) != 3 || pages[0].Name != "Side" || pages[1].Name != "Nope" || pages[2].Name != "Saga" {
+		t.Fatalf("pages = %+v, want Side, Nope, Saga", pages)
+	}
+	for i, want := range [][]string{{"b"}, {}, {"a"}} {
+		if got := paths(pages[i]); !slices.Equal(got, want) {
+			t.Errorf("%s = %v, want %v", pages[i].Name, got, want)
+		}
+	}
+	if pages[1].Books == nil || pages[1].NextCursor != "" {
+		t.Errorf("empty series = %+v, want an empty list and no cursor", pages[1])
+	}
+	next, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Series: "Side", Memberships: true, Limit: 1, Cursor: pages[0].NextCursor})
+	if err != nil || len(next.Books) != 1 || next.Books[0].RelPath != "c" {
+		t.Fatalf("Side page 2 = %+v, %v; want c", next, err)
+	}
+}

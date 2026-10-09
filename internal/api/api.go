@@ -273,6 +273,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/libraries/{id}/authors", a.requireAuth(a.handleBrowsePeople(catalog.PeopleAuthors, "authors")))
 	mux.Handle("GET /api/v1/libraries/{id}/narrators", a.requireAuth(a.handleBrowsePeople(catalog.PeopleNarrators, "narrators")))
 	mux.Handle("GET /api/v1/libraries/{id}/series", a.requireAuth(http.HandlerFunc(a.handleBrowseSeries)))
+	mux.Handle("GET /api/v1/libraries/{id}/series/books", a.requireAuth(http.HandlerFunc(a.handleSeriesBooks)))
 	mux.Handle("GET /api/v1/libraries/{id}/item", a.requireAuth(http.HandlerFunc(a.handleItem)))
 	mux.Handle("GET /api/v1/libraries/{id}/next", a.requireAuth(http.HandlerFunc(a.handleNext)))
 	mux.Handle("GET /api/v1/libraries/{id}/chapters", a.requireAuth(http.HandlerFunc(a.handleChapters)))
