@@ -691,7 +691,9 @@ func (c *Catalog) EditBook(ctx context.Context, libraryID int64, path string, ed
 
 // EditBooks applies the same field edit to many books in one transaction: every
 // book is edited or none is. Chapter edits are refused (chapter indexes are per
-// book). ErrNotFound (wrapped with the path) when any of the books isn't indexed.
+// book). ErrNotFound (wrapped with the path) when any of the books isn't indexed;
+// an edit one of the books refuses (a series swap that can't be made) is an
+// invalid override naming that book's path, so the admin can find it.
 func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) error {
 	if len(edit.ChapterSet) > 0 || len(edit.ChapterRevert) > 0 {
 		return invalid("chapters", "chapter titles can only be edited one book at a time")
@@ -704,6 +706,9 @@ func (c *Catalog) EditBooks(ctx context.Context, refs []Ref, edit BookEdit) erro
 		now := c.ts()
 		for _, ref := range refs {
 			if err := c.editTx(ctx, tx, ref, edit, now); err != nil {
+				if oe, ok := errors.AsType[*OverrideError](err); ok {
+					return invalid(oe.Field, oe.Reason+" ("+CleanRelPath(ref.Path)+")")
+				}
 				return err
 			}
 		}
@@ -807,12 +812,8 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 // (a name too long for an entry, a position out of range), so the edit is
 // refused rather than losing it.
 func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (map[string]string, error) {
-	if edit.Source == SourceCommunity || touches(edit, FieldMoreSeries) {
+	if edit.Source == SourceCommunity || touches(edit, FieldMoreSeries) || !touches(edit, FieldSeries) {
 		return nil, nil
-	}
-	name, err := newMainSeries(ctx, tx, bookID, edit)
-	if err != nil || name == "" {
-		return nil, err
 	}
 	var old, stored string
 	var index float64
@@ -821,8 +822,15 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (m
 		return nil, err
 	}
 	list := ParseMoreSeries(stored)
+	if len(list) == 0 {
+		return nil, nil // nothing listed to swap in: no need to resolve the layers
+	}
+	name, err := newMainSeries(ctx, tx, bookID, edit)
+	if err != nil {
+		return nil, err
+	}
 	at := slices.IndexFunc(list, func(s SeriesRef) bool { return s.Name == name })
-	if name == old || at < 0 {
+	if name == "" || name == old || at < 0 {
 		return nil, nil
 	}
 	swapped := make([]SeriesRef, 0, len(list))

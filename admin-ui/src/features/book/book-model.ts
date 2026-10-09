@@ -243,10 +243,13 @@ export function diffRows(drafts: Drafts, fields: Record<OverrideField, FieldValu
 
 /**
  * The PATCH that saves the drafts against the saved fields (an emptied optional
- * field sets ""). A series the saved other series list, sent without them, also
- * sends them as saved: the admin took back the swap commitField drafted (typed
- * the list back), so the server's swap (catalog.seriesSwap, which an edit naming
- * more_series skips) mustn't make it behind the dialog's back.
+ * field sets ""). A series the server would swap in (seriesSwap), sent without
+ * the other series, also sends them as saved: the admin took back the swap
+ * commitField drafted (typed the list back), so the server's swap
+ * (catalog.seriesSwap, which an edit naming more_series skips) mustn't make it
+ * behind the dialog's back. A swap that can't be made (the old main series can't
+ * be listed) sends nothing extra, so the server refuses it rather than the
+ * saved list dropping the old main series.
  */
 export function saveRequest(
   drafts: Drafts,
@@ -257,13 +260,7 @@ export function saveRequest(
     const raw = drafts[f];
     if (raw !== undefined) set[f] = checkField(f, raw).value;
   }
-  const series = set.series;
-  if (
-    series &&
-    set.more_series === undefined &&
-    series !== fields.series.value &&
-    moreSeriesRefs(fields.more_series.value).some((s) => s.name === series)
-  ) {
+  if (set.series !== undefined && set.more_series === undefined && seriesSwap(fields, set.series)) {
     set.more_series = fields.more_series.value;
   }
   return { set };

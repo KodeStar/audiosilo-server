@@ -680,11 +680,13 @@ admin overrides; see Metadata overrides below).
   entry's place in the list and `series_index` becomes the entry's position (unless the
   edit names `series_index`), written as the edit's own overrides; so reverting a swap
   swaps back. An old main series that can't be listed (name too long, position out of
-  range) refuses the edit: `invalid(series)`, a 400, failing a bulk edit whole. A
+  range) refuses the edit: `invalid(series)`, a 400, failing a bulk edit whole (`EditBooks`
+  names the refusing book's path in the reason). A
   community edit never swaps: `matchrun.planSeries` is the one statement of how a match
   lays out series. The console drafts the same swap before saving (`book-model.ts`
   `commitField`), so its save sends the values and the server's swap doesn't fire;
-  `saveRequest` sends the saved `more_series` when the admin took the drafted swap back,
+  `saveRequest` sends the saved `more_series` when the admin took the drafted swap back
+  (only for a swap `seriesSwap` can make, so an unlistable old main still gets the 400),
   and the undo of a series revert that swapped (`undoRevertRequest`) sends the list and
   position it had. `MoveDurableState` carries overrides and custom covers as one set: when the moved book
   has any, the new path's own rows in all three tables are dropped first; it moves

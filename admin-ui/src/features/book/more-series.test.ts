@@ -183,6 +183,12 @@ describe('committing the series', () => {
       series: 'City Watch',
       more_series: '[{"name":"Extra","position":0}]',
     });
+    // An old main series that can't be listed: no swap was drafted, and the
+    // saved list isn't sent either, so the server refuses the edit instead of
+    // the old main series being dropped.
+    const long = swapFields('x'.repeat(501));
+    expect(commitField({}, 'series', 'City Watch', long)).toEqual({ series: 'City Watch' });
+    expect(saveRequest({ series: 'City Watch' }, long).set).toEqual({ series: 'City Watch' });
   });
 
   it('undoes a series revert the server swapped with the list and position it had', () => {

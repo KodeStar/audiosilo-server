@@ -123,7 +123,7 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 		return work, nil
 	}
 	work, _ = meta.NextOnRail(rails[at], env.Work.ID) // the same entry, with the caller's local
-	if work.Local != nil {
+	if work != nil && work.Local != nil {
 		for i := range books {
 			if books[i].LibraryID == work.Local.LibraryID && books[i].RelPath == work.Local.Path {
 				return work, &books[i]

@@ -371,8 +371,9 @@ func TestSeriesSwap(t *testing.T) {
 		}
 	}
 	check("long", long, "8", `[{"name":"City Watch","position":1}]`)
-	if err := c.EditBooks(ctx, []Ref{{lib.ID, "fine"}, {lib.ID, "far"}}, BookEdit{Set: setSeries(watch)}); !errors.Is(err, ErrInvalidOverride) {
-		t.Errorf("bulk edit with an unlistable book = %v, want ErrInvalidOverride", err)
+	// The bulk refusal names the book that refused, so the admin can find it.
+	if err := c.EditBooks(ctx, []Ref{{lib.ID, "fine"}, {lib.ID, "far"}}, BookEdit{Set: setSeries(watch)}); !errors.Is(err, ErrInvalidOverride) || !strings.Contains(err.Error(), "(far)") {
+		t.Errorf("bulk edit with an unlistable book = %v, want ErrInvalidOverride naming far", err)
 	}
 	check("fine", disc, "8", `[{"name":"City Watch","position":1}]`)
 }
