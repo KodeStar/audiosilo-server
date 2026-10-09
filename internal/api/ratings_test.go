@@ -55,6 +55,7 @@ func (e *rateEnv) myRatings(t *testing.T, tok string) []catalog.RatedBook {
 }
 
 func TestRatingEndpoints(t *testing.T) {
+	t.Parallel()
 	e := newRateEnv(t)
 	if resp, body := e.do(t, "GET", e.at("rating", cradleBook), e.kidTok, ""); resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"rating":null}` {
 		t.Fatalf("no rating yet = %d %s", resp.StatusCode, body)
@@ -130,6 +131,7 @@ func TestRatingEndpoints(t *testing.T) {
 // /me/ratings lists only the caller's own ratings, newest first, with the book in
 // the list shape, and only on paths the caller can still reach.
 func TestMyRatingsOwnAndScoped(t *testing.T) {
+	t.Parallel()
 	e := newRateEnv(t)
 	ctx := context.Background()
 	if resp, _ := e.do(t, "PUT", e.at("rating", cradleBook), e.kidTok, `{"rating":5}`); resp.StatusCode != http.StatusOK {
@@ -200,6 +202,7 @@ func TestMyRatingsOwnAndScoped(t *testing.T) {
 // GET /server advertises the user-state capabilities of the player redesign:
 // ratings, progress_edit and my_devices (1b), annotations (4).
 func TestUserStateCapabilities(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
 	var out struct {

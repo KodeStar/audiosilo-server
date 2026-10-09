@@ -59,6 +59,7 @@ func (e *activityEnv) play(t *testing.T, position float64) {
 }
 
 func TestSessionsFromProgressSaves(t *testing.T) {
+	t.Parallel()
 	e := newActivityEnv(t)
 	e.play(t, 10)
 	e.play(t, 12)
@@ -103,6 +104,7 @@ func TestSessionsFromProgressSaves(t *testing.T) {
 }
 
 func TestDevicesEndpoints(t *testing.T) {
+	t.Parallel()
 	e := newActivityEnv(t)
 	e.play(t, 10) // the player token names its app
 
@@ -161,6 +163,7 @@ func TestDevicesEndpoints(t *testing.T) {
 }
 
 func TestAdminEditProgress(t *testing.T) {
+	t.Parallel()
 	e := newActivityEnv(t)
 	member := strconv.FormatInt(e.memberID, 10)
 	adminLib := "/api/v1/admin/libraries/" + strconv.FormatInt(e.libID, 10)
@@ -227,6 +230,7 @@ func TestAdminEditProgress(t *testing.T) {
 // An admin's edit starts progress only on a book the person can see (409
 // no_access otherwise), and an admin's own scope doesn't count.
 func TestAdminEditProgressNeedsTheUsersAccess(t *testing.T) {
+	t.Parallel()
 	e := newActivityEnv(t)
 	ctx := context.Background()
 	lib, err := e.cat.GetLibrary(ctx, e.libID)
@@ -266,6 +270,7 @@ func TestAdminEditProgressNeedsTheUsersAccess(t *testing.T) {
 }
 
 func TestAdminStatsRange(t *testing.T) {
+	t.Parallel()
 	e := newActivityEnv(t)
 	e.play(t, 10)
 	e.play(t, 20)
@@ -298,6 +303,7 @@ func TestAdminStatsRange(t *testing.T) {
 }
 
 func TestCORSAllowsClientHeader(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.CORSOrigins = []string{"http://localhost:8081"} })
 	resp, _ := e.doHeaders(t, "OPTIONS", "/api/v1/me", "", "", map[string]string{"Origin": "http://localhost:8081"})
 	if got := resp.Header.Get("Access-Control-Allow-Headers"); !strings.Contains(got, auth.ClientHeader) {
@@ -314,6 +320,7 @@ func TestCORSAllowsClientHeader(t *testing.T) {
 // token-kind key, so every signed-in caller shared one self-service bucket per
 // token kind instead of one per address.
 func TestAccountLimiterKeysOnClientIPAfterAuth(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.TrustedProxies = []string{"127.0.0.1/32"} })
 	tok, err := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 	if err != nil {
@@ -340,6 +347,7 @@ func TestAccountLimiterKeysOnClientIPAfterAuth(t *testing.T) {
 }
 
 func TestAdminListeningDays(t *testing.T) {
+	t.Parallel()
 	e := newActivityEnv(t)
 	e.play(t, 10)
 	e.play(t, 20)

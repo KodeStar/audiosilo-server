@@ -53,6 +53,7 @@ func titlesOf(b *Book) []string {
 // A fill is used with no choice made; a rename of a community chapter holds
 // through a rescan; the admin can switch back to the files' (none) and to auto.
 func TestCommunityChaptersFill(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Plain.m4b"
@@ -110,6 +111,7 @@ func TestCommunityChaptersFill(t *testing.T) {
 // A book with chapters of its own keeps them unless the admin picks the
 // community's; switching back restores its own, renames included.
 func TestCommunityChaptersChosen(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "Author/Series/01 - Title"
@@ -163,6 +165,7 @@ func TestCommunityChaptersChosen(t *testing.T) {
 }
 
 func TestDueChapterChecks(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if _, err := c.UpsertBook(ctx, chapterless(lib.ID, "A/One.m4b")); err != nil {
@@ -217,6 +220,7 @@ func TestDueChapterChecks(t *testing.T) {
 // A check of other audio (a rescan changed the files) or other identifiers is
 // stale: its chapters stand down until the book is checked again.
 func TestCommunityChaptersStale(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Plain.m4b"
@@ -254,6 +258,7 @@ func TestCommunityChaptersStale(t *testing.T) {
 // The admin's choice is the book's: it follows a move, and the choice alone (no
 // metadata edit) does not make the book "edited".
 func TestChapterChoiceFollowsAMove(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if _, err := c.UpsertBook(ctx, chapterless(lib.ID, "A/Plain.m4b")); err != nil {
@@ -281,6 +286,7 @@ func TestChapterChoiceFollowsAMove(t *testing.T) {
 // chapters stream from the new path, and files renamed in place make it stale,
 // so no chapter streams from a path that is no longer there.
 func TestCommunityChaptersAfterAMove(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if _, err := c.UpsertBook(ctx, chapterless(lib.ID, "A/Plain.m4b")); err != nil {
@@ -335,6 +341,7 @@ func TestCommunityChaptersAfterAMove(t *testing.T) {
 // A rescan that finds chapters of the book's own (the same audio, now tagged)
 // makes a fill fitted against none stale.
 func TestCommunityChaptersAfterTagging(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Plain.m4b"
@@ -361,6 +368,7 @@ func TestCommunityChaptersAfterTagging(t *testing.T) {
 // A row indexed before the snapshot keeps its check current when the community's
 // chapters first stand in (the snapshot written is what the check fitted).
 func TestCommunityChaptersOnALegacyRow(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "A/Plain.m4b"
@@ -385,6 +393,7 @@ func TestCommunityChaptersOnALegacyRow(t *testing.T) {
 // Health lists a book whose own chapters a current refine check would detail,
 // until the admin picks a source; a stale check lists nothing.
 func TestDetailedChaptersIssue(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	const p = "Author/Series/01 - Title"
@@ -426,6 +435,7 @@ func TestDetailedChaptersIssue(t *testing.T) {
 // A move is the same audio: the check stays current and its chapters follow the
 // book to its new path.
 func TestCommunityChaptersFollowAMove(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if _, err := c.UpsertBook(ctx, chapterless(lib.ID, "A/Plain.m4b")); err != nil {

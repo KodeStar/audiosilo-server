@@ -19,6 +19,7 @@ import (
 // Every Health/Jobs endpoint refuses a signed-in member (403) and an anonymous
 // caller (401), and answers an admin.
 func TestHealthEndpointsRequireAdmin(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -65,6 +66,7 @@ type issuesResp struct {
 // The summary leaves "not matched" out while metadata is off, lists offline
 // libraries with what they keep, and the issue lists honour ignores.
 func TestIssuesSummaryAndIgnore(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.Metadata.Enabled = false })
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)
@@ -152,6 +154,7 @@ func TestIssuesSummaryAndIgnore(t *testing.T) {
 // Library scan settings: validated with codes; a schedule change doesn't rescan,
 // an ignore-rule change does; the admin list carries them, the player's doesn't.
 func TestLibraryScanSettingsEndpoints(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	ctx := context.Background()
@@ -209,6 +212,7 @@ func TestLibraryScanSettingsEndpoints(t *testing.T) {
 
 // POST /admin/scan queues every library, one job each.
 func TestScanAll(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	ctx := context.Background()
@@ -228,6 +232,7 @@ func TestScanAll(t *testing.T) {
 
 // POST .../scan returns the queued job; the job lists, and cancels once.
 func TestJobsEndpoints(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	ctx := context.Background()
@@ -263,6 +268,7 @@ func TestJobsEndpoints(t *testing.T) {
 
 // Scan history pages with next_before; a single run carries its log.
 func TestScanRunsEndpoints(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	ctx := context.Background()
@@ -304,6 +310,7 @@ func TestScanRunsEndpoints(t *testing.T) {
 // Rescanning one book re-reads its files now and returns its page; a path with no
 // book any more is a 404 not_indexable.
 func TestRescanBook(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	ctx := context.Background()

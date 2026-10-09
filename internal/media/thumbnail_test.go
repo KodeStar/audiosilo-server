@@ -53,6 +53,7 @@ func decodedSize(t *testing.T, data []byte) (int, int) {
 }
 
 func TestThumbnailScalesDownKeepingAspect(t *testing.T) {
+	t.Parallel()
 	out, err := Thumbnail(encodePNG(t, 1200, 900, color.NRGBA{200, 30, 90, 255}), 320)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +64,7 @@ func TestThumbnailScalesDownKeepingAspect(t *testing.T) {
 }
 
 func TestThumbnailSmallJPEGReturnedAsIs(t *testing.T) {
+	t.Parallel()
 	src := encodeJPEG(t, 200, 200)
 	out, err := Thumbnail(src, 320)
 	if err != nil {
@@ -74,6 +76,7 @@ func TestThumbnailSmallJPEGReturnedAsIs(t *testing.T) {
 }
 
 func TestThumbnailSmallPNGBecomesJPEGWithoutUpscaling(t *testing.T) {
+	t.Parallel()
 	out, err := Thumbnail(encodePNG(t, 100, 150, color.NRGBA{0, 0, 0, 0}), 320)
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +97,7 @@ func TestThumbnailSmallPNGBecomesJPEGWithoutUpscaling(t *testing.T) {
 // A small file declaring enormous dimensions must be refused from its header,
 // never decoded (a decompression bomb would allocate gigabytes).
 func TestThumbnailRefusesDecompressionBomb(t *testing.T) {
+	t.Parallel()
 	src := encodePNG(t, 1, 1, color.White)
 	// Rewrite the IHDR width/height (bytes 16-23 of a PNG) to 100000 x 100000 and
 	// fix the chunk's CRC (over its type and data, bytes 12-28).
@@ -106,12 +110,14 @@ func TestThumbnailRefusesDecompressionBomb(t *testing.T) {
 }
 
 func TestThumbnailRejectsNonImage(t *testing.T) {
+	t.Parallel()
 	if _, err := Thumbnail([]byte("<svg xmlns='http://www.w3.org/2000/svg'/>"), 320); err == nil {
 		t.Fatal("an SVG (not a raster cover) should be refused")
 	}
 }
 
 func TestReadLimited(t *testing.T) {
+	t.Parallel()
 	if got, err := ReadLimited(strings.NewReader("abc"), 3); err != nil || string(got) != "abc" {
 		t.Fatalf("got %q, %v", got, err)
 	}
@@ -121,6 +127,7 @@ func TestReadLimited(t *testing.T) {
 }
 
 func TestFitWithin(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ w, h, size, ww, wh int }{
 		{1000, 1000, 320, 320, 320},
 		{100, 50, 320, 100, 50},
@@ -136,6 +143,7 @@ func TestFitWithin(t *testing.T) {
 // Every type coverMIME accepts as art must decode: a BMP cover (old ID3 tags)
 // would otherwise have has_cover set yet never a thumbnail.
 func TestThumbnailDecodesBMP(t *testing.T) {
+	t.Parallel()
 	img := image.NewRGBA(image.Rect(0, 0, 400, 200))
 	var buf bytes.Buffer
 	if err := bmp.Encode(&buf, img); err != nil {

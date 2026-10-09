@@ -18,6 +18,7 @@ import (
 // Under the old single-pool model (MaxOpenConns(1)) this read would queue behind
 // the open transaction and time out.
 func TestReaderServesReadsDuringWriteTx(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -55,6 +56,7 @@ func TestReaderServesReadsDuringWriteTx(t *testing.T) {
 // TestWithTxCommitsAndRollsBack verifies WithTx commits on success and rolls back
 // on a returned error (leaving no partial writes).
 func TestWithTxCommitsAndRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -96,6 +98,7 @@ func TestWithTxCommitsAndRollsBack(t *testing.T) {
 
 // TestPing verifies the reader-pool health probe used by /healthz.
 func TestPing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -122,6 +125,7 @@ func TestPing(t *testing.T) {
 //     accidentally routed through QueryContext/QueryRowContext fails loudly here
 //     instead of only in production against the file-backed DB.
 func TestReaderSeesCommittedWritesAndRejectsWrites(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

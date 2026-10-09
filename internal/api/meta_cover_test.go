@@ -72,6 +72,7 @@ func (e *metaCoverEnv) coverPath(path, cover, extra string) string {
 }
 
 func TestMetaCoverServesAHandedOutCover(t *testing.T) {
+	t.Parallel()
 	e := newMetaCoverEnv(t, true)
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 	e.countFetches()
@@ -114,6 +115,7 @@ func TestMetaCoverServesAHandedOutCover(t *testing.T) {
 }
 
 func TestMetaCoverRefusesWhatTheEnvelopeDoesNotHandOut(t *testing.T) {
+	t.Parallel()
 	e := newMetaCoverEnv(t, true)
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 	e.countFetches()
@@ -160,6 +162,7 @@ func TestMetaCoverRefusesWhatTheEnvelopeDoesNotHandOut(t *testing.T) {
 }
 
 func TestMetaCoverAuthAndScope(t *testing.T) {
+	t.Parallel()
 	e := newMetaCoverEnv(t, true)
 	e.countFetches()
 	cover := e.host + "/small.jpg"
@@ -200,6 +203,7 @@ func TestMetaCoverAuthAndScope(t *testing.T) {
 }
 
 func TestMetaCoverUpstreamFailures(t *testing.T) {
+	t.Parallel()
 	e := newMetaCoverEnv(t, true)
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 	const book = "Andy Weir/The Martian"
@@ -252,6 +256,7 @@ func TestMetaCoverUpstreamFailures(t *testing.T) {
 }
 
 func TestMetaCoverMetaUnavailable(t *testing.T) {
+	t.Parallel()
 	// The metadata service is down and nothing is cached: no envelope, no cover.
 	e := newMetaEnv(t, true, http.StatusInternalServerError)
 	libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
@@ -262,6 +267,7 @@ func TestMetaCoverMetaUnavailable(t *testing.T) {
 }
 
 func TestMetaCoverDisabled(t *testing.T) {
+	t.Parallel()
 	e := newMetaCoverEnv(t, false)
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 	if resp, _ := e.do(t, "GET", e.coverPath("Andy Weir/The Martian", e.host+"/small.jpg", ""), tok, ""); resp.StatusCode != http.StatusNotFound {
@@ -293,6 +299,7 @@ func waitForWaiters(t *testing.T, f *communityFlights, key string, n int) {
 
 // Asks for the same thumbnail at once share one fetch.
 func TestCommunityThumbnailSharesAFetch(t *testing.T) {
+	t.Parallel()
 	e := newMetaCoverEnv(t, true)
 	url := e.host + "/small.jpg"
 	release := make(chan struct{})
@@ -328,6 +335,7 @@ func TestCommunityThumbnailSharesAFetch(t *testing.T) {
 // A leading ask that gives up doesn't fail the asks waiting on it, nor mark the
 // cover as failed: the next one fetches under its own request.
 func TestCommunityThumbnailAbandonedLeader(t *testing.T) {
+	t.Parallel()
 	e := newMetaCoverEnv(t, true)
 	url := e.host + "/small.jpg"
 	var fetches atomic.Int32

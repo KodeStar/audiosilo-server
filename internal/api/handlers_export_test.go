@@ -18,6 +18,7 @@ import (
 // download headers; a non-admin and an anonymous caller are refused; an unknown
 // library 404s with the usual {error} envelope.
 func TestExportLibrary(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "My Books", Root: t.TempDir()})
@@ -141,6 +142,7 @@ func TestExportLibrary(t *testing.T) {
 // TestServerInfoExportCapability checks the additive capability flag clients gate
 // the Export affordance on.
 func TestServerInfoExportCapability(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
 	var out struct {

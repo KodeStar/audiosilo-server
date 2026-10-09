@@ -71,6 +71,7 @@ func (l *listsEnv) detail(t *testing.T, tok string, id int64) (collectionDetail,
 // Create, add (a part path stores its book), replace, read, rename, describe,
 // delete: the owner's whole lifecycle, and the request errors.
 func TestCollectionsLifecycle(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	col := l.createCollection(t, l.oliveTok, "  Bedtime  ")
 	if col.Name != "Bedtime" || !col.Owned || string(col.SharedWith) != "[]" || col.ItemCount != 0 ||
@@ -146,6 +147,7 @@ func TestCollectionsLifecycle(t *testing.T) {
 // Another user's collection is 404 on every route (never 403: its existence is
 // not confirmed), never listed, and left unchanged.
 func TestCollectionsStrangerIs404(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	col := l.createCollection(t, l.oliveTok, "Olive's")
 	l.do(t, "POST", colURL(col.ID, "/items"), l.oliveTok, l.addJSON(cradleBook, -1))
@@ -177,6 +179,7 @@ func TestCollectionsStrangerIs404(t *testing.T) {
 // list), sees only the items THEIR access allows (the owner's out-of-reach item
 // and its count never show), gets 403 not_owner on every write, and can leave.
 func TestCollectionsViewer(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	col := l.createCollection(t, l.oliveTok, "Family")
 	l.do(t, "PUT", colURL(col.ID, "/items"), l.oliveTok, l.itemsJSON(mistbornBook, cradleBook, thread))
@@ -250,6 +253,7 @@ func TestCollectionsViewer(t *testing.T) {
 // 400, nothing changed); share targets list exactly those; a demo account may do
 // neither.
 func TestCollectionSharesAndTargets(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	col := l.createCollection(t, l.oliveTok, "Mine")
 	for name, id := range map[string]int64{"unknown": 9999, "disabled": l.dora, "demo": l.demo, "self": l.olive} {
@@ -291,6 +295,7 @@ func TestCollectionSharesAndTargets(t *testing.T) {
 // description lengths, 1000 items (a replace of more is 400; an add to a full
 // one 409 collection_full).
 func TestCollectionLimitsHTTP(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	ctx := context.Background()
 	if resp, _ := l.do(t, "POST", "/api/v1/me/collections", l.oliveTok,
@@ -341,6 +346,7 @@ func TestCollectionLimitsHTTP(t *testing.T) {
 // Who may write is settled before the body is checked: with a body the owner
 // would get a 400 for, a stranger still gets 404 and a viewer 403 not_owner.
 func TestCollectionWritesCheckTheOwnerFirst(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	col := l.createCollection(t, l.oliveTok, "Olive's")
 	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d]}`, l.kid)); resp.StatusCode != http.StatusOK {
@@ -373,6 +379,7 @@ func TestCollectionWritesCheckTheOwnerFirst(t *testing.T) {
 // shared_with, and the owner can send that list back (as it is, or with someone
 // added); a disabled user it isn't shared with yet is still refused.
 func TestCollectionSharesKeepADisabledViewer(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	col := l.createCollection(t, l.oliveTok, "Family")
 	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d]}`, l.kid)); resp.StatusCode != http.StatusOK {

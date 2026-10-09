@@ -9,6 +9,7 @@ import (
 )
 
 func TestParseSilences(t *testing.T) {
+	t.Parallel()
 	log := `[silencedetect @ 0x1] silence_end: 0.5 | silence_duration: 0.5
 [silencedetect @ 0x1] silence_start: 2.25
 [silencedetect @ 0x1] silence_end: 4.75 | silence_duration: 2.5
@@ -26,6 +27,7 @@ func TestParseSilences(t *testing.T) {
 }
 
 func TestDetectSilences(t *testing.T) {
+	t.Parallel()
 	if !HasFFmpeg("ffmpeg") {
 		t.Skip("ffmpeg not available")
 	}

@@ -69,6 +69,7 @@ var supportStart = time.Date(2026, 1, 10, 9, 30, 0, 123456789, time.UTC)
 // The card waits for a month from the earliest real account: a later account, a
 // demo one or a row whose date can't be read doesn't make the server newer or older.
 func TestSupportCardWaitsForAMonth(t *testing.T) {
+	t.Parallel()
 	c, now, ctx, _ := supportServer(t, supportStart)
 	wantDue(t, c, ctx, false, "first run")
 	addSupportUser(t, c, ctx, "late", supportStart.Add(25*aDay), false)
@@ -84,6 +85,7 @@ func TestSupportCardWaitsForAMonth(t *testing.T) {
 }
 
 func TestSupportCardNeverWithoutAccounts(t *testing.T) {
+	t.Parallel()
 	now := supportStart.Add(365 * aDay)
 	c := New(storetest.Open(t), func() time.Time { return now })
 	ctx := context.Background()
@@ -94,6 +96,7 @@ func TestSupportCardNeverWithoutAccounts(t *testing.T) {
 }
 
 func TestSupportCardAfterFinishedBooks(t *testing.T) {
+	t.Parallel()
 	c, now, ctx, admin := supportServer(t, supportStart)
 	finishBooks(t, c, ctx, admin, SupportAfterFinished, supportStart.Add(time.Hour))
 	wantDue(t, c, ctx, false, "first run, however many finishes")
@@ -102,6 +105,7 @@ func TestSupportCardAfterFinishedBooks(t *testing.T) {
 }
 
 func TestSupportCardFinishesCountedHere(t *testing.T) {
+	t.Parallel()
 	c, now, ctx, admin := supportServer(t, supportStart)
 	*now = now.Add(10 * aDay)
 	// Imported from another server: finished before this one existed.
@@ -116,6 +120,7 @@ func TestSupportCardFinishesCountedHere(t *testing.T) {
 }
 
 func TestSupportCardDonatedHidesForGood(t *testing.T) {
+	t.Parallel()
 	c, now, ctx, _ := supportServer(t, supportStart)
 	*now = now.Add(SupportAfterDays * aDay)
 	wantDue(t, c, ctx, true, "due")
@@ -136,6 +141,7 @@ func TestSupportCardDonatedHidesForGood(t *testing.T) {
 }
 
 func TestSupportCardSnoozeReturns(t *testing.T) {
+	t.Parallel()
 	c, now, ctx, _ := supportServer(t, supportStart)
 	*now = now.Add(SupportAfterDays * aDay)
 	res, err := c.SetSupportChoice(ctx, SupportSnoozed)
@@ -163,6 +169,7 @@ func TestSupportCardSnoozeReturns(t *testing.T) {
 }
 
 func TestSupportCardOddStoredState(t *testing.T) {
+	t.Parallel()
 	c, now, ctx, _ := supportServer(t, supportStart)
 	*now = now.Add(SupportAfterDays * aDay)
 	for _, value := range []string{`not json`, `{"choice":"snoozed","until":"soon"}`, `{"choice":"maybe"}`} {
@@ -182,6 +189,7 @@ func TestSupportCardOddStoredState(t *testing.T) {
 // before the failure (here a donation) must not hide the card for good, nor stop a
 // later answer from replacing it.
 func TestSupportCardHalfReadStateCountsAsNone(t *testing.T) {
+	t.Parallel()
 	c, now, ctx, _ := supportServer(t, supportStart)
 	*now = now.Add(SupportAfterDays * aDay)
 	if _, err := c.db.ExecContext(ctx,
@@ -201,6 +209,7 @@ func TestSupportCardHalfReadStateCountsAsNone(t *testing.T) {
 // compared as text, so the cut-off must be written the same way: a finish later in
 // the same second as the first account still counts.
 func TestSupportCardFinishInTheFirstSecondCounts(t *testing.T) {
+	t.Parallel()
 	c, now, ctx, admin := supportServer(t, supportStart)
 	at := formatSessionTime(supportStart.Truncate(time.Second).Add(700 * time.Millisecond))
 	for i := range SupportAfterFinished {

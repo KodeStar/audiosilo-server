@@ -10,6 +10,7 @@ import (
 
 // A backup carries the listening goals (migration 0028), like every other table.
 func TestBackupHoldsListeningGoals(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	if _, err := e.db.ExecContext(ctx,

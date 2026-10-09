@@ -11,6 +11,7 @@ import (
 )
 
 func TestBearerToken(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		authHeader string
@@ -48,6 +49,7 @@ func TestBearerToken(t *testing.T) {
 }
 
 func TestPeerIP(t *testing.T) {
+	t.Parallel()
 	if got := peerIP("1.2.3.4:5678"); got != "1.2.3.4" {
 		t.Fatalf("peerIP host:port = %q, want 1.2.3.4", got)
 	}
@@ -58,6 +60,7 @@ func TestPeerIP(t *testing.T) {
 }
 
 func TestIsTrusted(t *testing.T) {
+	t.Parallel()
 	_, n, _ := net.ParseCIDR("10.0.0.0/8")
 	nets := []*net.IPNet{n}
 	if !isTrusted("10.1.2.3", nets) {
@@ -72,6 +75,7 @@ func TestIsTrusted(t *testing.T) {
 }
 
 func TestSecureHeaders(t *testing.T) {
+	t.Parallel()
 	a := apiWithConfig(&config.Config{TLS: config.TLSConfig{Mode: config.TLSOff}})
 	h := a.secureHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -98,6 +102,7 @@ func TestSecureHeaders(t *testing.T) {
 // HSTS is emitted only with a real public cert (autocert), never selfsigned -
 // pinning HSTS behind a self-signed cert would lock users out (review finding S6).
 func TestSecureHeadersHSTS(t *testing.T) {
+	t.Parallel()
 	serve := func(mode config.TLSMode) string {
 		a := apiWithConfig(&config.Config{TLS: config.TLSConfig{Mode: mode}})
 		rec := httptest.NewRecorder()
@@ -114,6 +119,7 @@ func TestSecureHeadersHSTS(t *testing.T) {
 }
 
 func TestCORSAllowList(t *testing.T) {
+	t.Parallel()
 	a := apiWithConfig(&config.Config{CORSOrigins: []string{"https://app.example.com"}})
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	h := a.cors(next)
@@ -149,6 +155,7 @@ func TestCORSAllowList(t *testing.T) {
 }
 
 func TestCORSWildcard(t *testing.T) {
+	t.Parallel()
 	a := apiWithConfig(&config.Config{CORSOrigins: []string{"*"}})
 	h := a.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	rec := httptest.NewRecorder()
@@ -164,6 +171,7 @@ func TestCORSWildcard(t *testing.T) {
 // trusted proxy, and take the right-most (closest-proxy, spoof-resistant) value.
 // This guards the rate limiter against IP spoofing (review finding S8).
 func TestRealIPTrust(t *testing.T) {
+	t.Parallel()
 	a := apiWithConfig(&config.Config{TrustedProxies: []string{"10.0.0.0/8"}})
 	var captured string
 	h := a.realIP(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

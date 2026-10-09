@@ -13,6 +13,7 @@ import (
 // first publication: an edit or a community match) alone; a book indexed before
 // migration 0037 has its date read once by the next scan, without a re-index.
 func TestScanReadsReleaseDate(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)

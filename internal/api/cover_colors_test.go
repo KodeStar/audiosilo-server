@@ -17,6 +17,7 @@ import (
 // custom cover and its sidecar art without filling the thumbnail cache, and
 // records that a book without art has none.
 func TestColorCover(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	libID, _ := seedCovers(t, e)
 	ctx := context.Background()
@@ -67,6 +68,7 @@ func TestColorCover(t *testing.T) {
 // share the scan kept indexed) is ErrArtMissing, not a record of no colour that
 // would outlast the share coming back.
 func TestColorCoverMissingFiles(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	libID, root := seedCovers(t, e)
 	ctx := context.Background()
@@ -103,6 +105,7 @@ func TestColorCoverMissingFiles(t *testing.T) {
 // (the background pass's read failed in passing) takes the colour of a thumbnail
 // of that art that does decode.
 func TestThumbnailColorsOverNone(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -134,6 +137,7 @@ func TestThumbnailColorsOverNone(t *testing.T) {
 
 // TestAdminBooksCoverColor: an admin book row carries its cover colour on the wire.
 func TestAdminBooksCoverColor(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)

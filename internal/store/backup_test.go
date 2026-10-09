@@ -9,6 +9,7 @@ import (
 )
 
 func TestVacuumIntoAndInspect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	db, err := Open(ctx, filepath.Join(dir, "audiosilo.db"))
@@ -43,6 +44,7 @@ func TestVacuumIntoAndInspect(t *testing.T) {
 }
 
 func TestInspectRefuses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 

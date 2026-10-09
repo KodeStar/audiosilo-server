@@ -69,6 +69,7 @@ func decodeRun(t *testing.T, body string) catalog.MatchRun {
 }
 
 func TestMatchRunsAPI(t *testing.T) {
+	t.Parallel()
 	e, adminTok, _, libID := newMatchRunEnv(t, "uk")
 
 	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", adminTok, `{"library_id":`+strconv.FormatInt(libID, 10)+`}`)
@@ -148,6 +149,7 @@ func TestMatchRunsAPI(t *testing.T) {
 }
 
 func TestMatchRunsStartRefusals(t *testing.T) {
+	t.Parallel()
 	e, adminTok, _, _ := newMatchRunEnv(t, "")
 	for body, want := range map[string]int{
 		`{"mode":"guess"}`:    http.StatusBadRequest,
@@ -174,6 +176,7 @@ func TestMatchRunsStartRefusals(t *testing.T) {
 // TestMatchRunsAdminOnly: every route refuses a member (403), and all of them
 // 404 metadata_off while community metadata is off.
 func TestMatchRunsAdminOnly(t *testing.T) {
+	t.Parallel()
 	routes := []struct{ method, path, body string }{
 		{"GET", "/api/v1/admin/match-runs", ""},
 		{"POST", "/api/v1/admin/match-runs", `{}`},
@@ -206,6 +209,7 @@ func TestMatchRunsAdminOnly(t *testing.T) {
 // stored as the community data names it, refused when it isn't one, and it orders
 // the match dialog's ASINs.
 func TestMetadataRegionSetting(t *testing.T) {
+	t.Parallel()
 	e, adminTok, _, libID := newMatchRunEnv(t, "")
 	if resp, body := e.do(t, "PATCH", "/api/v1/admin/settings", adminTok, `{"metadata":{"region":"xx"}}`); resp.StatusCode != http.StatusBadRequest ||
 		!strings.Contains(body, `"field":"metadata.region"`) {
@@ -233,6 +237,7 @@ func TestMetadataRegionSetting(t *testing.T) {
 // works with community metadata off; a bad or unknown library is refused; and it is
 // admin-only.
 func TestClearCommunityMatchesAPI(t *testing.T) {
+	t.Parallel()
 	e, adminTok, memberTok, libID := newMatchRunEnv(t, "uk")
 	lib := strconv.FormatInt(libID, 10)
 	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", adminTok, `{"library_id":`+lib+`}`)
@@ -292,6 +297,7 @@ func TestClearCommunityMatchesAPI(t *testing.T) {
 // TestClearCommunityMatchesNoService: with no metadata service configured there
 // are no runs, but a clear still works (community values outlive the service).
 func TestClearCommunityMatchesNoService(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.Metadata.BaseURL = "" })
 	adminTok, _, _ := adminAndMember(t, e)
 	if e.api.meta != nil {

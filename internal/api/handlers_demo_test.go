@@ -14,6 +14,7 @@ import (
 )
 
 func TestDemoSessionDisabled(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	if resp, _ := e.do(t, "POST", "/api/v1/demo/session", "", ""); resp.StatusCode != 404 {
 		t.Fatalf("expected 404 when demo mode is off, got %d", resp.StatusCode)
@@ -21,6 +22,7 @@ func TestDemoSessionDisabled(t *testing.T) {
 }
 
 func TestDemoRootRedirect(t *testing.T) {
+	t.Parallel()
 	// A web player must be present for the redirect to register.
 	webDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
@@ -52,6 +54,7 @@ func TestDemoRootRedirect(t *testing.T) {
 }
 
 func TestDemoSessionFlow(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	if _, err := e.cat.CreateLibrary(ctx, catalog.Library{

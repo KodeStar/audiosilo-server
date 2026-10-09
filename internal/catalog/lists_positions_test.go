@@ -43,6 +43,7 @@ func inListTx(t *testing.T, c *Catalog, fn func(tx listTx) error) (reads, execs 
 // most two writes (a range shift and the row), whatever the list's length, and
 // the order holds; a replace that only drops rows writes only the deletes.
 func TestListWritesStayLocal(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	user := seedUser(t, c, ctx)
@@ -108,6 +109,7 @@ func TestListWritesStayLocal(t *testing.T) {
 // Random adds, moves, removes and replaces keep the order a plain slice model
 // says, gaps and all.
 func TestListOrderMatchesModel(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	user := seedUser(t, c, ctx)
@@ -178,6 +180,7 @@ func TestListOrderMatchesModel(t *testing.T) {
 // Equal positions (only a hand-written database has them) order by path, and an
 // add between two of them still lands at its index.
 func TestListAddBetweenEqualPositions(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	user := seedUser(t, c, ctx)

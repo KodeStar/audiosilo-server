@@ -13,6 +13,7 @@ import (
 // second put replaces it, and PruneMetaCache keeps the newest rows by write
 // time, however they were keyed.
 func TestMetaCacheRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
@@ -70,6 +71,7 @@ func TestMetaCacheRows(t *testing.T) {
 // id) keep only their own share, so a run of them never pushes the books'
 // enrichments out, however recently they were written.
 func TestMetaCacheWorksShare(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)

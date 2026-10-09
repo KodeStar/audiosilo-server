@@ -11,6 +11,7 @@ import (
 // SafeJoin is the single security primitive gating every filesystem access
 // derived from user input, so it gets explicit allow + deny coverage.
 func TestSafeJoin(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	rootAbs, _ := filepath.EvalSymlinks(root)
 
@@ -53,6 +54,7 @@ func TestSafeJoin(t *testing.T) {
 // that points outside it must be rejected (not followed), while a symlink that
 // stays inside the root is still allowed.
 func TestSafeJoinSymlinkEscape(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	outside := t.TempDir() // a sibling directory outside the root
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("x"), 0o600); err != nil {
@@ -103,6 +105,7 @@ func writeAudioFiles(t *testing.T, root, rel string, n int) string {
 // pages, an offset past the total yields an empty page, and limit<=0 falls back to
 // the 200 default.
 func TestBrowseFSPagination(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	const total = 25
 	rel := writeAudioFiles(t, root, "Book", total)
@@ -186,6 +189,7 @@ func TestBrowseFSPagination(t *testing.T) {
 // library-relative path AND that filtering happens before pagination - so a page
 // stays full of permitted entries rather than being thinned by denied ones.
 func TestBrowseFSAllowFilter(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	const total = 20
 	rel := writeAudioFiles(t, root, "Book", total) // track-0000.mp3 … track-0019.mp3
@@ -253,6 +257,7 @@ func TestBrowseFSAllowFilter(t *testing.T) {
 // TestListDirIsBrowseFSUnpaged: ListDir is the whole listing BrowseFS pages over
 // (same entries, same order, same filters), without the files' sizes.
 func TestListDirIsBrowseFSUnpaged(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	rel := writeAudioFiles(t, root, "Book", 7)
 	for _, d := range []string{"b-dir", "A-dir", "hidden-by-allow"} {

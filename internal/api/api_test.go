@@ -156,6 +156,7 @@ func (e *testEnv) exchangeToken(t *testing.T, pairingToken, device string) (int,
 }
 
 func TestServerInfoPublic(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	resp, body := e.do(t, "GET", "/api/v1/server", "", "")
 	if resp.StatusCode != 200 || !strings.Contains(body, "AudioSilo") {
@@ -167,6 +168,7 @@ func TestServerInfoPublic(t *testing.T) {
 // on /server AND handed back at pairing (exchange), so a client can key its
 // per-server state the moment it pairs without a second request.
 func TestServerIDInResponses(t *testing.T) {
+	t.Parallel()
 	e := newTestEnvWith(t, func(c *config.Config) { c.ServerID = "srv-test-id" })
 
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
@@ -182,6 +184,7 @@ func TestServerIDInResponses(t *testing.T) {
 }
 
 func TestUnauthenticatedRejected(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	if resp, _ := e.do(t, "GET", "/api/v1/libraries", "", ""); resp.StatusCode != 401 {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
@@ -189,6 +192,7 @@ func TestUnauthenticatedRejected(t *testing.T) {
 }
 
 func TestRedeemExchangeFlow(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	resp, body := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`)
 	if resp.StatusCode != 200 {
@@ -227,6 +231,7 @@ func TestRedeemExchangeFlow(t *testing.T) {
 // existing session) have no parent invite and stay strictly single-use
 // (allowed + denied).
 func TestPairTokenSingleUse(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -258,6 +263,7 @@ func TestPairTokenSingleUse(t *testing.T) {
 }
 
 func TestPathTraversalRejected(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -271,6 +277,7 @@ func TestPathTraversalRejected(t *testing.T) {
 }
 
 func TestBrowseFSAnnotatesIndexedBooks(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -317,6 +324,7 @@ func TestBrowseFSAnnotatesIndexedBooks(t *testing.T) {
 }
 
 func TestItemResolvesOnDemand(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -347,6 +355,7 @@ func TestItemResolvesOnDemand(t *testing.T) {
 }
 
 func TestScopedShareAccess(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -393,6 +402,7 @@ func TestScopedShareAccess(t *testing.T) {
 }
 
 func TestFavourites(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -444,6 +454,7 @@ func TestFavourites(t *testing.T) {
 }
 
 func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -508,6 +519,7 @@ func TestCreateAuthCodeUsesAndExpiry(t *testing.T) {
 // distinct pairing tokens that all draw on the SAME invite budget - the cap
 // binds across tokens, not per token.
 func TestMultipleRedeemsShareCap(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -553,6 +565,7 @@ func TestMultipleRedeemsShareCap(t *testing.T) {
 // outstanding pairing QR at the exchange step without burning an invite use;
 // re-enabling restores it (allowed + denied).
 func TestExchangeDisabledUserRefusedNoBurn(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -590,6 +603,7 @@ func TestExchangeDisabledUserRefusedNoBurn(t *testing.T) {
 // password-length rule: a too-short password on PATCH /admin/users/{id} must be a
 // 400 (validation) carrying the reason, not a generic 500.
 func TestUpdateUserShortPasswordRejected(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -611,6 +625,7 @@ func TestUpdateUserShortPasswordRejected(t *testing.T) {
 }
 
 func TestLoginLockout(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	// Exhaust the failure budget with wrong passwords.
 	var last int
@@ -627,6 +642,7 @@ func TestLoginLockout(t *testing.T) {
 // not return durable state for paths the caller can no longer access (e.g. after
 // a share is narrowed/revoked).
 func TestListProgressScopeFiltered(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -669,6 +685,7 @@ func TestListProgressScopeFiltered(t *testing.T) {
 }
 
 func TestStreamTranscode(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -710,6 +727,7 @@ func TestStreamTranscode(t *testing.T) {
 }
 
 func TestFolderOverrideEndpointRequiresAdmin(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
@@ -741,6 +759,7 @@ func TestFolderOverrideEndpointRequiresAdmin(t *testing.T) {
 }
 
 func TestEnrichmentEndpoint(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Main", Root: t.TempDir()})
@@ -796,6 +815,7 @@ func TestEnrichmentEndpoint(t *testing.T) {
 // 409 Conflict, not the opaque 500 the blanket error->500 mapping produced - and
 // that the leak-free message is returned (no raw "UNIQUE constraint failed").
 func TestDuplicateNameReturnsConflict(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -839,6 +859,7 @@ func TestDuplicateNameReturnsConflict(t *testing.T) {
 // the root. For an admin (AllowAll) the clamped path just doesn't exist → 404; the
 // point is that /etc/passwd is never served and the request never 500s.
 func TestContentPathTraversalIsNeutralized(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -864,6 +885,7 @@ func TestContentPathTraversalIsNeutralized(t *testing.T) {
 // match accepted "AuthorA/../AuthorB/..." under an "AuthorA" grant and SafeJoin then
 // collapsed the "..", streaming the out-of-scope file.
 func TestScopedPathTraversalDenied(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -921,6 +943,7 @@ func (e *testEnv) meFlags(t *testing.T, token string) (hasPassword, hasRecovery 
 // admin, no current-password challenge) and can then password-login. The admin
 // can't clear their own password through the same endpoint (denied path).
 func TestSelfServicePassword(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser) // password-less
@@ -950,6 +973,7 @@ func TestSelfServicePassword(t *testing.T) {
 // TestSelfServiceRecovery: a player mints a durable recovery code, it redeems
 // repeatedly through the normal connect flow, and clearing it removes the flag.
 func TestSelfServiceRecovery(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -986,6 +1010,7 @@ func TestSelfServiceRecovery(t *testing.T) {
 // TestRotateAndSupersedeInvite covers the admin "Resend" (rotate-in-place) and
 // the one-active-invite-per-user supersede on mint.
 func TestRotateAndSupersedeInvite(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -1050,6 +1075,7 @@ func TestRotateAndSupersedeInvite(t *testing.T) {
 // TestAdminClearsRecovery: an admin can revoke a user's durable recovery code
 // (the only lever to kill a leaked one); a non-admin cannot.
 func TestAdminClearsRecovery(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -1080,6 +1106,7 @@ func TestAdminClearsRecovery(t *testing.T) {
 // with no challenge, but changing an existing password requires the correct
 // current one - so a session bearer alone can't silently replace a known password.
 func TestPasswordChangeRequiresCurrent(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser) // password-less
@@ -1116,6 +1143,7 @@ func TestPasswordChangeRequiresCurrent(t *testing.T) {
 // orphan-cleanup rollback, in-place update, validation, not-found, and the admin
 // gate (denied for non-admins).
 func TestShareAdminHandlers(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
@@ -1180,6 +1208,7 @@ func TestShareAdminHandlers(t *testing.T) {
 // cascade), but a non-admin is forbidden (403), an admin cannot delete itself
 // (400), and an unknown id is 404.
 func TestDeleteUserHandler(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -1220,6 +1249,7 @@ func TestDeleteUserHandler(t *testing.T) {
 // self-closes (409 + the page redirects to /admin). A server that never enabled
 // the wizard exposes no /setup surface (404).
 func TestSetupWizard(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	authSvc := auth.New(db, time.Now)
@@ -1306,6 +1336,7 @@ func TestSetupWizard(t *testing.T) {
 // TestDemoCannotSelfRecover: a throwaway demo session may not mint a durable
 // recovery code or set a password (either would outlive the idle reaper).
 func TestDemoCannotSelfRecover(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	demo, err := e.auth.CreateDemoUser(ctx, auth.DemoUsernamePrefix+"abc")

@@ -58,6 +58,7 @@ func wantError(t *testing.T, what string, resp *http.Response, body string, stat
 // POST accepts a label (and still refuses unknown fields), always answers one
 // ("" when none), checks its shape and bounds the note; notes bound their body.
 func TestBookmarkLabelOnPost(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	labelled := l.addBookmark(t, l.oliveTok, cradleBook, `{"position":42,"note":"good bit","label":"fell_asleep"}`)
 	if labelled.Label != "fell_asleep" || labelled.Note != "good bit" || labelled.Position != 42 {
@@ -100,6 +101,7 @@ func TestBookmarkLabelOnPost(t *testing.T) {
 // another user's id, an unknown one and one whose book left the caller's access
 // are 404 and change nothing.
 func TestEditBookmarkRoute(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	bm := l.addBookmark(t, l.oliveTok, cradleBook, `{"position":12,"note":"first","label":"quote"}`)
 	idURL := func(id int64) string { return "/api/v1/bookmarks/" + strconv.FormatInt(id, 10) }
@@ -176,6 +178,7 @@ func TestEditBookmarkRoute(t *testing.T) {
 // PATCH /notes/{id}: body and position, partial, updated_at stamped; the same
 // denials as bookmarks, and a position that is negative or not a number is 400.
 func TestEditNoteRoute(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	n := l.addNote(t, l.oliveTok, cradleBook, `{"body":"a thought"}`)
 	idURL := func(id int64) string { return "/api/v1/notes/" + strconv.FormatInt(id, 10) }
@@ -296,6 +299,7 @@ func rowIDs(rows []listRow) []int64 {
 // first, paged without loss or repeats (history's ended_at ties included), rows a
 // revoked share reached left out but kept, each row's book when indexed.
 func TestMyAnnotationLists(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	grant, revoke := l.sandersonShare(t)
 	grant()
@@ -374,6 +378,7 @@ func TestMyAnnotationLists(t *testing.T) {
 // GET /me/history keeps today's answer without a cursor (now with books, and
 // next_cursor only when more follow), and every list is [] when empty.
 func TestMyAnnotationListsShape(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	for _, c := range []struct{ route, want string }{
 		{"/api/v1/me/bookmarks", `{"bookmarks":[]}`},

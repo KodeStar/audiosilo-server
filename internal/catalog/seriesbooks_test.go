@@ -44,6 +44,7 @@ func relPaths(books []Book) []string {
 // every book of the folded series across libraries, in library sort order then
 // path; a caller granted one folder never gets a book outside it.
 func TestSeriesBooksScope(t *testing.T) {
+	t.Parallel()
 	c, ctx, first, second := seedSeries(t)
 	names := []string{"The Expanse", "Unrelated"}
 
@@ -83,6 +84,7 @@ func TestSeriesBooksScope(t *testing.T) {
 }
 
 func TestNextInSeries(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/a"})
 	for _, b := range []Book{

@@ -23,6 +23,7 @@ func fileCatalogWithBook(t *testing.T) (*Catalog, context.Context, int64, Ref) {
 // SaveProgress and SetRating upsert with RETURNING, a write that reads a row
 // back: on the reader pool it failed with "attempt to write a readonly database".
 func TestSaveProgressOnFileDatabase(t *testing.T) {
+	t.Parallel()
 	c, ctx, uid, ref := fileCatalogWithBook(t)
 	p, err := c.SaveProgress(ctx, uid, Progress{Ref: ref, Position: 10, Duration: 100, Version: 1})
 	if err != nil {
@@ -41,6 +42,7 @@ func TestSaveProgressOnFileDatabase(t *testing.T) {
 }
 
 func TestSetRatingOnFileDatabase(t *testing.T) {
+	t.Parallel()
 	c, ctx, uid, ref := fileCatalogWithBook(t)
 	r, err := c.SetRating(ctx, uid, ref, 4, " good ")
 	if err != nil {
@@ -63,6 +65,7 @@ func TestSetRatingOnFileDatabase(t *testing.T) {
 // (QueryRowContext with INSERT ... RETURNING, say) fails there with "attempt to
 // write a readonly database", which an in-memory test can't see.
 func TestUserStateWritesUseTheWriter(t *testing.T) {
+	t.Parallel()
 	c, ctx, uid, ref := fileCatalogWithBook(t)
 	scopes := []Scope{{LibraryID: ref.LibraryID, AllowAll: true}}
 

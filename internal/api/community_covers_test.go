@@ -106,6 +106,7 @@ func pngHeader(w, h uint32) []byte {
 }
 
 func TestCommunityCovers(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	host, _ := coverHost(t)
@@ -163,6 +164,7 @@ func TestCommunityCovers(t *testing.T) {
 }
 
 func TestSetCommunityCover(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	host, small := coverHost(t)
@@ -233,6 +235,7 @@ func TestSetCommunityCover(t *testing.T) {
 
 // Metadata off stops every outbound call: neither endpoint fetches anything.
 func TestCommunityCoversNeedMetadata(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, false, 0)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID := seedBook(t, e, "Andy Weir/The Martian", "")

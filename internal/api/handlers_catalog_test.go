@@ -44,6 +44,7 @@ func seedCatalog(t *testing.T, e *testEnv) (int64, string) {
 // TestAdminCatalogEndpointsRequireAdmin: every new admin catalog endpoint refuses
 // a signed-in member (403) and an anonymous caller (401), and answers an admin.
 func TestAdminCatalogEndpointsRequireAdmin(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -84,6 +85,7 @@ func TestAdminCatalogEndpointsRequireAdmin(t *testing.T) {
 }
 
 func TestAdminListBooksAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)
@@ -141,6 +143,7 @@ func TestAdminListBooksAPI(t *testing.T) {
 }
 
 func TestAdminAggregatesAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	seedCatalog(t, e)
@@ -161,6 +164,7 @@ func TestAdminAggregatesAPI(t *testing.T) {
 }
 
 func TestAdminEditBookAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -229,6 +233,7 @@ func TestAdminEditBookAPI(t *testing.T) {
 // The book page names the match dialog's search text: the title and author, or
 // the folders' when the tags are swapped.
 func TestAdminBookMatchQuery(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -252,6 +257,7 @@ func TestAdminBookMatchQuery(t *testing.T) {
 }
 
 func TestAdminBulkEditAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)
@@ -305,6 +311,7 @@ func TestAdminBulkEditAPI(t *testing.T) {
 // match, the handler hands it the book's tags AND its library path, and the
 // console gets metaserve's score and reasons in the unchanged envelope.
 func TestAdminMatchSendsTheBookFacts(t *testing.T) {
+	t.Parallel()
 	m := &mockMetaserve{lookupCode: http.StatusNotFound, match: true}
 	e := newMetaEnvMock(t, true, m)
 	adminTok, _, _ := adminAndMember(t, e)
@@ -338,6 +345,7 @@ func TestAdminMatchSendsTheBookFacts(t *testing.T) {
 }
 
 func TestAdminMatchAPI(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _, _ := adminAndMember(t, e)
 	_, base := seedCatalog(t, e)
@@ -386,6 +394,7 @@ func TestAdminMatchAPI(t *testing.T) {
 // failed, a down upstream marks only the books it couldn't look up as failed, and
 // metadata off is a 404 like the match.
 func TestAdminBookWorksAPI(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnv(t, true, 0)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)
@@ -455,6 +464,7 @@ func TestAdminBookWorksAPI(t *testing.T) {
 // ahead of the book's own art, still behind the caller's scope; bad uploads are
 // refused.
 func TestCustomCoverAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	libID, base := seedCatalog(t, e)
@@ -513,6 +523,7 @@ func TestCustomCoverAPI(t *testing.T) {
 // only while the book is there. A sidecar image is served with a bounded lifetime,
 // so a custom cover set later shows within a day rather than by heuristic.
 func TestCustomCoverFollowsTheBook(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	ctx := context.Background()

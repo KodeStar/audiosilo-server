@@ -56,6 +56,7 @@ func (f *sessionFixture) addToken(t *testing.T, user int64, app, version, platfo
 }
 
 func TestActivityFor(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t) // clock: Thu 2026-10-01 09:00 UTC
 	ann := f.user
 	bob := f.addUser(t, "bob", "2025-01-01T00:00:00Z", false)
@@ -118,6 +119,7 @@ func TestActivityFor(t *testing.T) {
 // ListeningDaysFor reports the same days as ActivityFor, for everyone or one
 // person, including rolled-up days.
 func TestListeningDaysFor(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t) // clock: Thu 2026-10-01 09:00 UTC
 	bob := f.addUser(t, "bob", "2025-01-01T00:00:00Z", false)
 	at := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
@@ -159,6 +161,7 @@ func TestListeningDaysFor(t *testing.T) {
 }
 
 func TestActivityYearReadsRolledUpDays(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	if _, err := f.c.db.ExecContext(f.ctx,
 		`INSERT INTO listening_daily(day, user_id, library_id, rel_path, listened, sessions) VALUES('2026-01-05', ?, ?, ?, 900, 2)`,
@@ -188,6 +191,7 @@ func TestActivityYearReadsRolledUpDays(t *testing.T) {
 }
 
 func TestActivityCollectionAndPeople(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t) // clock 2026-10-01 09:00 UTC; "Author/Book" added_at = now-ish
 	yes := true
 	stalled := Ref{LibraryID: f.lib, Path: "Stalled"}
@@ -250,6 +254,7 @@ func TestActivityCollectionAndPeople(t *testing.T) {
 }
 
 func TestParseActivityRange(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 1, 8, 59, 59, 500, time.UTC) // rounds up to 09:00:00
 	end := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
@@ -289,6 +294,7 @@ func TestParseActivityRange(t *testing.T) {
 // hour holding its start belongs to the current period only; the previous
 // period's totals must not count it too.
 func TestActivityBoundaryHourCountedOnce(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t) // clock: 2026-10-01 09:00 UTC
 	from := time.Date(2026, 9, 24, 9, 30, 0, 0, time.UTC)
 	f.addSession(t, f.user, 1, f.book, time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC), 50*time.Minute, 600, "", false)
@@ -307,6 +313,7 @@ func TestActivityBoundaryHourCountedOnce(t *testing.T) {
 // but never as a device or a playback mode; an estimated day counts in the totals
 // and the tops, and is reported as such, but has no day of its own.
 func TestActivityBackfilledAndEstimated(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	start := time.Date(2026, 1, 5, 10, 0, 0, 0, time.UTC)
 	if _, err := f.c.db.ExecContext(f.ctx,

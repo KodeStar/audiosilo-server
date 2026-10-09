@@ -19,6 +19,7 @@ import (
 // files in its disc folders, which stream through the book's scope (allowed) and
 // not outside it (denied).
 func TestJoinedDiscBook(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, memberTok, memberID := adminAndMember(t, e)
@@ -166,6 +167,7 @@ func TestJoinedDiscBook(t *testing.T) {
 // listing of the same folder carries no split_discs key at all (denied), so the
 // player's wire is what it was before joining existed.
 func TestSplitDiscsAdminOnly(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, memberTok, memberID := adminAndMember(t, e)
@@ -225,6 +227,7 @@ func TestSplitDiscsAdminOnly(t *testing.T) {
 // joined book is in it: shipped clients keep asking for it, and each on-demand
 // read would walk and probe every disc again.
 func TestJoinedDiscPathScope(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, memberTok, memberID := adminAndMember(t, e)

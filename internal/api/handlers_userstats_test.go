@@ -106,6 +106,7 @@ func (e *statsEnv) myStats(t *testing.T, token string) (catalog.UserStats, strin
 }
 
 func TestMyStats(t *testing.T) {
+	t.Parallel()
 	e := newStatsEnv(t)
 	e.listenTo(t, e.memberTok, cradleBook)
 
@@ -162,6 +163,7 @@ func TestMyStats(t *testing.T) {
 // TestMyStatsEmptyShape: with no listening, every list is [] (never null) and the
 // envelope has exactly the contract's keys.
 func TestMyStatsEmptyShape(t *testing.T) {
+	t.Parallel()
 	e := newStatsEnv(t)
 	raw, body := e.getJSON(t, "/api/v1/me/stats", e.memberTok) // range defaults to 30d
 	stats, _ := raw["stats"].(map[string]any)
@@ -187,6 +189,7 @@ func TestMyStatsEmptyShape(t *testing.T) {
 }
 
 func TestMyListening(t *testing.T) {
+	t.Parallel()
 	e := newStatsEnv(t)
 	e.listenTo(t, e.playerTok, cradleBook) // the admin listens; the member doesn't
 
@@ -220,6 +223,7 @@ func TestMyListening(t *testing.T) {
 }
 
 func TestMyStatsErrors(t *testing.T) {
+	t.Parallel()
 	e := newStatsEnv(t)
 	for _, p := range []string{"/api/v1/me/stats?range=3w", "/api/v1/me/listening?range=3w", "/api/v1/me/stats?range=1999"} {
 		resp, body := e.do(t, "GET", p, e.memberTok, "")
@@ -242,6 +246,7 @@ func TestMyStatsErrors(t *testing.T) {
 }
 
 func TestMyGoal(t *testing.T) {
+	t.Parallel()
 	e := newStatsEnv(t)
 	year := strconv.Itoa(time.Now().Year())
 	var g catalog.GoalStatus

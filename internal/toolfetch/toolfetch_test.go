@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestSpecFor(t *testing.T) {
+	t.Parallel()
 	for _, p := range []struct{ os, arch string }{
 		{"linux", "amd64"}, {"linux", "arm64"},
 		{"windows", "amd64"}, {"windows", "arm64"},
@@ -29,6 +31,7 @@ func TestSpecFor(t *testing.T) {
 }
 
 func TestCached(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if fm, fp := Cached(dir); fm != "" || fp != "" {
 		t.Fatalf("empty dir: Cached=%q,%q want empty", fm, fp)
@@ -47,9 +50,15 @@ func TestCached(t *testing.T) {
 
 // Ensure must short-circuit (no download) when both tools are already cached.
 func TestEnsureUsesCache(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the cached stubs are shell scripts")
+	}
 	dir := t.TempDir()
+	// Stubs that pass Ensure's `-version` self-check: one that fails it is
+	// discarded and re-downloaded, so the test would fetch a real build.
 	for _, tool := range []string{"ffmpeg", "ffprobe"} {
-		if err := os.WriteFile(filepath.Join(dir, binName(tool)), []byte("x"), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, binName(tool)), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,6 +71,7 @@ func TestEnsureUsesCache(t *testing.T) {
 // extractZip must pull only ffmpeg/ffprobe (by basename, from any subdir) and mark
 // them executable, ignoring everything else - and never escape destDir.
 func TestExtractZip(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	entries := map[string]string{
@@ -106,6 +116,7 @@ func TestExtractZip(t *testing.T) {
 }
 
 func TestParseVersion(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers\nbuilt with gcc": "6.1.1-3ubuntu5",
 		"ffprobe version n7.0 Copyright": "n7.0",

@@ -48,6 +48,7 @@ func (e *testEnv) mintAPIKey(t *testing.T, sessionTok, label string) (int64, str
 // TestAPIKeyMintAndUseOnAdminStats is the acceptance target: an admin mints a key
 // and it authenticates GET /admin/stats as a plain Bearer credential.
 func TestAPIKeyMintAndUseOnAdminStats(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -61,6 +62,7 @@ func TestAPIKeyMintAndUseOnAdminStats(t *testing.T) {
 // TestAPIKeyRevokedRejected: a revoked key no longer authenticates (allowed
 // before, 401 after).
 func TestAPIKeyRevokedRejected(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -85,6 +87,7 @@ func TestAPIKeyRevokedRejected(t *testing.T) {
 // TestPairingTokenNotAcceptedAsAuth: a pairing token is pairing-only and must be
 // rejected on a requireAuth route (it is not a durable credential).
 func TestPairingTokenNotAcceptedAsAuth(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	ptok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindPairing, "", 10*time.Minute)
@@ -96,6 +99,7 @@ func TestPairingTokenNotAcceptedAsAuth(t *testing.T) {
 // TestAPIKeyRejectedOnExchange: an api key must NOT be accepted by /auth/exchange
 // (that path is pairing-only).
 func TestAPIKeyRejectedOnExchange(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -109,6 +113,7 @@ func TestAPIKeyRejectedOnExchange(t *testing.T) {
 // TestAPIKeyNonAdminForbiddenOnAdmin: a non-admin's key authenticates normal
 // routes but the admin role is still enforced (allowed on /me, 403 on /admin).
 func TestAPIKeyNonAdminForbiddenOnAdmin(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	member, _ := e.auth.CreateUser(ctx, "member", "", auth.RoleUser)
@@ -125,6 +130,7 @@ func TestAPIKeyNonAdminForbiddenOnAdmin(t *testing.T) {
 
 // TestAPIKeyRevokeCrossUser404: a user cannot revoke another user's key by id.
 func TestAPIKeyRevokeCrossUser404(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -146,6 +152,7 @@ func TestAPIKeyRevokeCrossUser404(t *testing.T) {
 // TestAPIKeyDemoRefused: demo accounts cannot mint, list, or revoke API keys
 // (403, matching the recovery/password refusal).
 func TestAPIKeyDemoRefused(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	demo, _ := e.auth.CreateDemoUser(ctx, "demo_x")
@@ -165,6 +172,7 @@ func TestAPIKeyDemoRefused(t *testing.T) {
 // TestAPIKeyEmptyLabelRejected: a blank/missing label is a 400 (a key must be
 // named so the owner can tell them apart to revoke one).
 func TestAPIKeyEmptyLabelRejected(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -180,6 +188,7 @@ func TestAPIKeyEmptyLabelRejected(t *testing.T) {
 // TestAPIKeyListScopedAndMetadataOnly: the list returns only the caller's live
 // keys, newest first, and never a secret, hash, or another user's key.
 func TestAPIKeyListScopedAndMetadataOnly(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -230,6 +239,7 @@ func TestAPIKeyListScopedAndMetadataOnly(t *testing.T) {
 // session is allowed on the same routes, and the key may still list/revoke keys
 // (that only reduces access).
 func TestAPIKeyCannotMintDurableCredentials(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _ := e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "t", 0)
@@ -268,6 +278,7 @@ func TestAPIKeyCannotMintDurableCredentials(t *testing.T) {
 // TestServerInfoAdvertisesAPIKeys: the capability flag is advertised so clients
 // can gate the API-keys UI on it.
 func TestServerInfoAdvertisesAPIKeys(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/server", "", "")
 	if !strings.Contains(body, `"api_keys":true`) {
@@ -278,6 +289,7 @@ func TestServerInfoAdvertisesAPIKeys(t *testing.T) {
 // TestAPIKeyWorksAsMediaQueryToken: an api key rides in the media ?token= query
 // param exactly like a session token (browser <audio> can't set headers).
 func TestAPIKeyWorksAsMediaQueryToken(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))

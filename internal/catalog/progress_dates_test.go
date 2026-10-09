@@ -9,6 +9,7 @@ import (
 // The player's progress carries the server's start and finish dates; a client
 // can't set them through a save.
 func TestProgressDatesAreTheServers(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	at := func() string { return f.clock.UTC().Format(time.RFC3339) }
 	forged := "2001-01-01T00:00:00Z"
@@ -53,6 +54,7 @@ func TestProgressDatesAreTheServers(t *testing.T) {
 // Marking a book unfinished keeps its position and start, and clears the finish;
 // AsProgress is the player's shape of the edited row.
 func TestEditProgressMarkUnfinishedKeepsPosition(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 7000, Duration: 7200, Finished: true,
 		UpdatedAt: f.clock.Format(time.RFC3339)}); err != nil {
@@ -75,6 +77,7 @@ func TestEditProgressMarkUnfinishedKeepsPosition(t *testing.T) {
 // second that reaches the server after the edit is older, and loses
 // last-write-wins as an older save must (a whole-second stamp let it win).
 func TestEditProgressBeatsAnOlderSaveInTheSameSecond(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 3000, Duration: 7200,
 		UpdatedAt: f.clock.Format(time.RFC3339)}); err != nil {
@@ -98,6 +101,7 @@ func TestEditProgressBeatsAnOlderSaveInTheSameSecond(t *testing.T) {
 // SaveProgress compares and writes in one transaction: a newer write that
 // commits while an older save waits for the writer is not overwritten by it.
 func TestSaveProgressKeepsANewerWriteItRaced(t *testing.T) {
+	t.Parallel()
 	f := newSessionFixture(t)
 	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.book, Position: 100, Duration: 7200,
 		UpdatedAt: f.clock.Format(time.RFC3339)}); err != nil {

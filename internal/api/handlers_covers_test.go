@@ -121,6 +121,7 @@ func thumbSize(t *testing.T, dataURL string) (int, int) {
 }
 
 func TestAdminCoversRequireAdmin(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -140,6 +141,7 @@ func TestAdminCoversRequireAdmin(t *testing.T) {
 // sidecar and custom art; a book without art, an unknown library and a path no book
 // is at are empty entries, not errors.
 func TestAdminCovers(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -169,6 +171,7 @@ func TestAdminCovers(t *testing.T) {
 // A sidecar path outside the library root (a crafted or stale record) is never
 // read: SafeJoin refuses it, and the book reads as having no art.
 func TestAdminCoversRefuseEscapingSidecar(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -180,6 +183,7 @@ func TestAdminCoversRefuseEscapingSidecar(t *testing.T) {
 // A replaced cover is a new cache key: the next request sees the new art, not the
 // cached thumbnail of the old one.
 func TestAdminCoversFollowChangedArt(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, root := seedCovers(t, e)
@@ -210,6 +214,7 @@ func TestAdminCoversFollowChangedArt(t *testing.T) {
 }
 
 func TestAdminCoversValidation(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, _ := seedCovers(t, e)
@@ -235,6 +240,7 @@ func TestAdminCoversValidation(t *testing.T) {
 // A sidecar over maxSidecarBytes is no art, and that is remembered: it stays
 // oversized, so it must not be re-read on every page of covers.
 func TestAdminCoversOversizedSidecarCached(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	libID, root := seedCovers(t, e)
