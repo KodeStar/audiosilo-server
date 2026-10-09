@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/jsonfile"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -515,7 +516,7 @@ func TestRestoreRefusedLeavesDatabase(t *testing.T) {
 	}
 
 	// A backup that has since been deleted.
-	if err := writeJSONFile(filepath.Join(e.dataDir, markerFile), PendingRestore{Name: "audiosilo-gone.db"}); err != nil {
+	if err := jsonfile.Write(filepath.Join(e.dataDir, markerFile), PendingRestore{Name: "audiosilo-gone.db"}); err != nil {
 		t.Fatal(err)
 	}
 	res, _ = ApplyPendingRestore(ctx, e.dataDir, "", e.dbPath, slogDiscard())

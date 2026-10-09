@@ -159,7 +159,33 @@ type MetadataConfig struct {
 	// Region is the Audible marketplace whose ASIN a match takes when a recording
 	// sells in several (one of Regions; "" = no preference, the US store's first).
 	Region string `yaml:"region"`
+	// Mode is where the lookups are answered (read only at start): MetadataRemote
+	// asks the service at BaseURL for each book; MetadataMirror keeps a local copy
+	// of the service's database (internal/metamirror), downloaded from GitHub once
+	// a day, and asks BaseURL only while that copy can't answer.
+	Mode string `yaml:"mode"`
 }
+
+// The metadata.mode values.
+const (
+	MetadataRemote = "remote"
+	MetadataMirror = "mirror"
+)
+
+// MetadataModes are the values metadata.mode may take.
+var MetadataModes = []string{MetadataRemote, MetadataMirror}
+
+// ModeName is Mode as the server reads it: lower case, "" meaning
+// MetadataRemote (a config.yaml written before the key existed).
+func (m MetadataConfig) ModeName() string {
+	if mode := strings.ToLower(strings.TrimSpace(m.Mode)); mode != "" {
+		return mode
+	}
+	return MetadataRemote
+}
+
+// Mirror reports whether the server keeps a local copy of the metadata service.
+func (m MetadataConfig) Mirror() bool { return m.ModeName() == MetadataMirror }
 
 // Regions are the Audible marketplaces metadata.region may name: the community
 // metadata's own region vocabulary (audiosilo-meta schema/common.schema.json).
@@ -263,7 +289,7 @@ func Default(dataDir string) *Config {
 		CORSOrigins:    nil,
 		MaxUploadBytes: 2 << 30, // 2 GiB
 		Libraries:      nil,
-		Metadata:       MetadataConfig{Enabled: true, BaseURL: DefaultMetadataBaseURL},
+		Metadata:       MetadataConfig{Enabled: true, BaseURL: DefaultMetadataBaseURL, Mode: MetadataRemote},
 		UpdateCheck:    true,
 		Backups:        BackupConfig{Schedule: DefaultBackupSchedule, Keep: DefaultBackupKeep},
 		Activity:       ActivityConfig{SessionDays: DefaultSessionDays},
@@ -494,6 +520,10 @@ func (c *Config) Validate() error {
 	if r := c.Metadata.PreferredRegion(); r != "" && !slices.Contains(Regions, r) {
 		return fieldErr("metadata.region", fmt.Errorf("metadata.region must be one of %s, got %q",
 			strings.Join(Regions, ", "), c.Metadata.Region))
+	}
+	if mode := c.Metadata.ModeName(); !slices.Contains(MetadataModes, mode) {
+		return fieldErr("metadata.mode", fmt.Errorf("metadata.mode must be one of %s, got %q",
+			strings.Join(MetadataModes, ", "), c.Metadata.Mode))
 	}
 	if c.Metadata.Enabled {
 		if c.Metadata.BaseURL == "" {

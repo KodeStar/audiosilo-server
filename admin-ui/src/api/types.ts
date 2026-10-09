@@ -433,6 +433,8 @@ export interface AdminSettings {
     base_url: string;
     /** The Audible marketplace whose ASIN a match takes (one of MATCH_REGIONS; "" = the US store's). */
     region: string;
+    /** Where lookups are answered (a restart setting): the service, or a local copy of its data. */
+    mode: MetadataMode;
     /** The service exists (base_url was valid when the server started), so the switch can turn on. */
     available: boolean;
   };
@@ -459,6 +461,46 @@ export interface AdminSettings {
   restart_settings: string[];
   /** Restart settings saved with a value the running server doesn't use yet. */
   restart_pending: string[];
+}
+
+/**
+ * config.MetadataMode: `remote` asks metadata.base_url for each book; `mirror`
+ * keeps a local copy of the service's data (internal/metamirror) and answers
+ * from it, falling back to the service while the copy can't answer.
+ */
+export type MetadataMode = 'remote' | 'mirror';
+
+/**
+ * metamirror.Status's state: no copy yet, a download running, a copy being opened (the
+ * one on disk at the server's start, or a finished download before it answers), a
+ * usable copy, or a failed first download.
+ */
+export type MetaMirrorState = 'empty' | 'downloading' | 'opening' | 'ready' | 'error';
+
+/**
+ * metamirror.Status (internal/metamirror): the local copy in mirror mode, on
+ * /admin/system's metadata.mirror and the answer of POST /admin/meta/mirror/check.
+ * `state` is `error` only without a usable copy; a failed update over a working
+ * copy stays `ready` with `error` set.
+ */
+export interface MetaMirrorStatus {
+  state: MetaMirrorState;
+  /** The copy's data release, "data-vYYYY.MM.DD-<core>-<community>". */
+  tag?: string;
+  built_at?: string;
+  schema_version?: number;
+  /** The copy's schema is newer than this server's code knows: update the server. */
+  schema_newer?: boolean;
+  size_bytes?: number;
+  checked_at?: string;
+  next_check_at?: string;
+  downloaded_at?: string;
+  /** Compressed bytes so far, only while downloading (total 0 = not known yet). */
+  progress?: { done: number; total: number };
+  /** The last failure (the server's sentence), kept while a working copy is served. */
+  error?: string;
+  /** Lookups are going to the online service (no usable local copy). */
+  fallback: boolean;
 }
 
 /** The sections of AdminSettings that hold settings. */
@@ -545,8 +587,15 @@ export interface SystemStatus {
     enabled: boolean;
     available: boolean;
     base_url: string;
-    /** null while the lookup is off: nothing is asked. */
+    /** The mode the running server uses (a saved change waits for a restart). */
+    mode: MetadataMode;
+    /**
+     * null while the lookup is off: nothing is asked. In mirror mode the check goes where
+     * lookups do: the local copy once it is ready, the service until then.
+     */
     health: MetadataHealth | null;
+    /** The local copy, in mirror mode only. */
+    mirror?: MetaMirrorStatus;
   };
   tls: { mode: TLSMode; hosts: string[]; certificates: Certificate[]; error?: string };
   libraries: {

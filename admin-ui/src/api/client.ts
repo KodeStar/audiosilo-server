@@ -71,6 +71,7 @@ import type {
   InviteCreated,
   Library,
   LoginResponse,
+  MetaMirrorStatus,
   PathRule,
   ServerInfo,
   Share,
@@ -329,6 +330,14 @@ export const api = {
   system: () => request<SystemStatus>('GET', '/admin/system'),
   updateStatus: () => request<UpdateStatus>('GET', '/admin/update'),
   checkForUpdate: () => request<UpdateStatus>('POST', '/admin/update/check'),
+  /**
+   * The local metadata copy's status alone (light: what a download's progress polls).
+   * 404 metadata_off while metadata is off, 409 not_mirror_mode while the server
+   * isn't keeping a copy; checkMetaMirror answers the same way.
+   */
+  metaMirror: () => request<MetaMirrorStatus>('GET', '/admin/meta/mirror'),
+  /** Wakes the local copy's check (202, answering with its status: the next check due now). */
+  checkMetaMirror: () => request<MetaMirrorStatus>('POST', '/admin/meta/mirror/check'),
   /** Whether the Overview's support card shows (the server decides when). */
   support: () => request<SupportStatus>('GET', '/admin/support'),
   /** An admin's answer to the support card, for the whole server; taken on trust. */

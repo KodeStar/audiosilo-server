@@ -80,6 +80,10 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.Metadata.BaseURL }, fix: fixBaseURL},
 	{key: "metadata.region", env: "AUDIOSILO_METADATA_REGION", setting: "metadata.region",
 		ptr: func(c *Config) any { return &c.Metadata.Region }, fix: fixRegion},
+	// The backend is chosen when the server starts (pkg/launcher builds the mirror),
+	// like base_url.
+	{key: "metadata.mode", env: "AUDIOSILO_METADATA_MODE", setting: "metadata.mode", restart: true,
+		ptr: func(c *Config) any { return &c.Metadata.Mode }, fix: fixMode},
 
 	{key: "demo.enabled", env: "AUDIOSILO_DEMO_ENABLED", setting: "demo.enabled", restart: true,
 		ptr: func(c *Config) any { return &c.Demo.Enabled }},
@@ -447,6 +451,13 @@ func fixBaseURL(c *Config) (err error) {
 // "uk"); Validate checks it is one.
 func fixRegion(c *Config) error {
 	c.Metadata.Region = c.Metadata.PreferredRegion()
+	return nil
+}
+
+// fixMode stores the mode as the server reads it ("Mirror " -> "mirror", "" ->
+// "remote"); Validate checks it is one.
+func fixMode(c *Config) error {
+	c.Metadata.Mode = c.Metadata.ModeName()
 	return nil
 }
 

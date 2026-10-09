@@ -117,9 +117,13 @@ internal/pool/        Each: work over a list a few items at a time (the backgrou
 internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
+internal/metamirror/  metadata mirror mode: the runner keeping a local copy of the community metadata database in <data>/meta-mirror/ (audiosilo-meta's pkg/release download, pkg/query handler over it; see "Mirror mode" below)
+internal/mirrortest/  mirror-mode test support (tests only): the data releases published on audiosilo-meta's releasetest GitHub fake (querytest's artifact, a schema_version rewrite, a realistic release list), a remote metadata service that counts and answers 500 (Remote), and Eventually
+internal/diskspace/   a filesystem's size and free space per OS (statfs / GetDiskFreeSpaceEx): Health > System's roots and the mirror's disk guard
 internal/logring/     the admin console's log viewer: an slog handler teeing records into a bounded in-memory ring (secrets redacted)
 internal/updates/     the update check: GitHub Releases' latest release, once a day while on (config update_check)
 internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
+internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file
 internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
@@ -420,10 +424,11 @@ admin overrides; see Metadata overrides below).
   or served as a positive blank work. Degradation: metadata off
   -> 404; missing/blank `id` -> 400; malformed `id` -> 400; unknown work id ->
   404; upstream error -> 502.
-  Config is `metadata.{enabled,base_url,region}` (env `AUDIOSILO_METADATA_ENABLED` /
-  `AUDIOSILO_METADATA_BASE_URL` / `AUDIOSILO_METADATA_REGION`; `base_url` must be an
+  Config is `metadata.{enabled,base_url,region,mode}` (env `AUDIOSILO_METADATA_ENABLED` /
+  `AUDIOSILO_METADATA_BASE_URL` / `AUDIOSILO_METADATA_REGION` / `AUDIOSILO_METADATA_MODE`; `base_url` must be an
   absolute http(s) URL when enabled; `region`, the preferred Audible marketplace, one
-  of `config.Regions` or "", applies live) - one key disables ALL outbound calls. **Runtime toggle**: `meta.Service`
+  of `config.Regions` or "", applies live; `mode` is `remote` or `mirror`, read at start, see Mirror
+  mode below) - one key disables ALL outbound calls (lookups and the mirror's downloads). **Runtime toggle**: `meta.Service`
   is constructed in `api.New` whenever `base_url` is valid (`MetadataConfig.ValidBaseURL`),
   regardless of `enabled`, and the live config's `metadata.enabled` gates it - so an admin
   can flip it on/off without a restart (Server settings, below). The handler and the
@@ -462,10 +467,79 @@ admin overrides; see Metadata overrides below).
   `source`; others are ignored. Derived, rebuildable, not user state; the
   launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000), works
   (`w:`, caller-chosen ids) within a share of their own (`catalog.MetaCacheWorkRows`,
-  2 000) so they never push the books' enrichments out. A work's later 404
+  2 000) so they never push the books' enrichments out. A work's later 404 (remote mode; never in
+  mirror mode, see Mirror mode)
   replaces its stored row (no new row for an unknown id). Writes are bounded by
   `storeWriteTimeout` (250 ms): a busy writer costs the row, not the response. No config
   key: only the service reads or writes it, so `metadata.enabled` off touches nothing.
+  **Mirror mode** (`metadata.mode: mirror`, env `AUDIOSILO_METADATA_MODE`, `remote` the default; read
+  at start, a `restart` setting): the server keeps a local copy of metaserve's own database and
+  answers the SAME questions in-process with metaserve's own code, so no book is looked up over the
+  internet. The copy is audiosilo-meta's data release artifact (`meta.sqlite.gz`, ~450 MB, ~1.8 GB
+  decompressed; the CC0 core and the CC BY-SA community layer in one file), and the module
+  `github.com/kodestar/audiosilo-meta` is a dependency: `pkg/release` (the ONE implementation of
+  the release asset contract: newest non-draft release carrying the asset, allowlisted GitHub hosts,
+  stall watchdog, gz digest verified while streaming, temp file + rename) and `pkg/query` (`Open`,
+  `MaxSchemaVersion`, and `NewHandler`: metaserve's JSON API handler, byte for byte). **Parity by
+  construction**: `meta.Service.SetMirror` swaps the client's transport for `fallbackTransport`
+  (`internal/meta/mirror.go`), which serves each request the client already builds through the local
+  handler (`meta.Mirror.Handler()`; an in-memory ResponseWriter, `localTimeout` 15 s,
+  `maxLocalBody`) while the copy is `Ready`; no copy, or a failed answer (a 5xx, e.g. a query
+  this code can't run on an artifact schema newer than `query.MaxSchemaVersion`; an answer too
+  large; a timeout; a panic), sends the request to `base_url` unchanged through remote mode's own
+  `*http.Client` (its `clientTimeout` covers the body); a failed answer is logged there, at most
+  every 10 min (`SetMirror(m, log)`). A 404 is the copy's answer; a retired slug's 301 is followed
+  on the same host, so it resolves locally. A `base_url` with a path is stripped before the copy's
+  handler and put back on a root-relative `Location`; a caller gone mid-answer is not a fallback. Everything above the client (compose, rails, match, the
+  caches) is unchanged and `meta_cache` rows keep `Source = base_url` (switching modes keeps the
+  cache warm). Two rules differ in mirror mode: the COPY's "no match" never replaces a stored POSITIVE
+  row in `Enrich` or `Work` (`keepStored`: the stored answer is served stale, held in memory for
+  errorTTL, the row untouched; a lagging or broken copy must not blank a companion that worked). It
+  asks whether the copy answered, not whether one is ready: `fallbackTransport` marks the responses
+  it builds with the internal `X-Audiosilo-Mirror` header (`localAnswerHeader`; stripped from remote
+  answers, never sent to any client) and `getJSON` turns such a 404 into `errLocalNotFound`, which
+  wraps `ErrNotFound` (so `errors.Is(err, ErrNotFound)` holds everywhere else). The remote service's
+  "no match" (no ready copy, or a request the copy failed) replaces the row as in remote mode.
+  `Ping` is unchanged: its `/healthz` goes through the same client, so the copy answers it once
+  ready and the remote service until then (parity by construction; cached a minute as before). The
+  runner is `internal/metamirror.Mirror` (`New(dir, Options{Enabled, Now, FreeBytes, Logger,
+  SiteURL, Repo, Release})` - it builds the release client itself, adding
+  `release.WithBaseSize` - then `Run`, `CheckNow`, `Wake`, `Current`, `Ready`, `Handler`, `Status`,
+  `Close`; `Remove(dataDir)`): `<data>/meta-mirror/` (0700; not in backups, which hold the
+  database only) holds exactly one `meta-<tag>.sqlite` (0600) and `state.json` (`jsonfile`: tag,
+  built_at, schema_version, size_bytes, downloaded_at - the one record of the copy's facts,
+  Status reads them there -, etag, checked_at, last_error, and published_at + sha256 as on-disk
+  diagnostics only). `New` is cheap (state + folder): `Run` opens the copy first (`query.Open`'s
+  integrity checks take seconds over 1.8 GB, which must not hold up the listener), so until then
+  the status says `opening` with `fallback` and lookups go remote (a finished download is
+  `opening` too while `query.Open` runs, before the swap: over a working copy that copy still
+  answers, so no `fallback`). Schedule: durable, at most once a
+  day from the `checked_at` on disk (a restart does not re-download), 30 s after start without a
+  copy, an hour after a failed check, and on `CheckNow` (which makes `next_check_at` now; a running
+  check shows none until it ends); never while `metadata.enabled` is off (a check in flight, its download
+  included, stops when it is turned off and records nothing: `checkWhileEnabled`, and a Check now it was
+  answering stays due; while off `Run`
+  looks again each minute, and the settings PATCH that turns metadata back on calls `Wake`, which
+  re-reads the schedule at once but makes nothing due: only a due check runs). The release-list request is conditional (the ETag is sent only while a
+  copy is held, and dropped after any failure following a 200, so a 304 can't hide a release that
+  failed). `update` is list then `install` (tag check, disk guard, download, open, swap) with one
+  ETag reset on its error. A tag that can't name a file is refused (`validTag`); the disk guard
+  needs max(4.5 x the gz size, the current copy) + 512 MiB free (`not enough disk space: need X,
+  have Y`, decimal units as the console's `formatBytes`); the download goes through `release.DownloadData` (temp `.meta-*.tmp` in the folder,
+  `release.WithBaseSize` = the current copy's size), is opened with `query.Open` (integrity checks;
+  a file that doesn't open is deleted), then swapped in atomically; the replaced copy is closed and
+  deleted after a 60 s grace (a release swapped back in within the grace reuses its name: that
+  install closes the retiring handle at once without deleting, and no retire deletes the path an
+  install is writing or the current copy's). Any failure keeps the current copy. At its start `Run` deletes temp
+  files, a half-written state and any copy but the current one, and forgets a copy that is missing,
+  changed size or doesn't open. A copy newer than `MaxSchemaVersion` still opens and answers (flagged
+  `schema_newer`); artifact schema changes must stay additive (CROSS-REPO §17). The launcher
+  (`pkg/launcher/metamirror.go`) builds it only in mirror mode with a metadata service (release
+  client: `release.DefaultRepo`, `User-Agent: AudioSilo/<version>`; tests point it at a fake
+  GitHub through the unexported `Options.metaReleases`), builds it right after `api.New` and hands
+  it over with `API.SetMetaMirror` (which calls `meta.Service.SetMirror`) BEFORE the background
+  jobs start, and a server started in remote mode deletes the folder.
+  Covers are unchanged (their own hosts in both modes). Admin wire below (Server settings).
   **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
   (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one,
   nearest first, max 5, failures left out) and `?spoilers=hide` gates the current
@@ -1107,14 +1181,32 @@ admin overrides; see Metadata overrides below).
   validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting
   id, mapped by `writeCatalogError` to `invalid_setting`/`unknown_setting`/`setting_read_only`/
   `setting_locked` + `field`). The API never mutates a config: `API.boot` is the config the server started
-  with (restart-only settings read it: bind, TLS, web_dir, metadata.base_url, demo on/off + idle_ttl) and
+  with (restart-only settings read it: bind, TLS, web_dir, metadata.base_url, metadata.mode, demo on/off + idle_ttl) and
   `API.live` (`liveConfig`, read via `a.config()`) is swapped whole by a save, carrying the parsed trusted
   proxies and CORS origins, so name, public URL, home address (`lan_url`), CORS, proxies, app links, metadata on/off and the demo
   library/cap apply on the next request. `restart_pending` lists restart settings whose saved value differs
   from `boot`. New keys: `name` (`DisplayName`: GET /server `name`, pairing `server_name`; default
   "AudioSilo") and `update_check` (default true, `AUDIOSILO_UPDATE_CHECK`). `GET /admin/system`
   (`handlers_system.go`): tools + versions (`toolfetch.Version`, cached), metadata health (`meta.Service.Ping`:
-  metaserve `/healthz`, cached a minute, **only while metadata is on**), TLS certificates read from their
+  metaserve `/healthz`, cached a minute, **only while metadata is on**; in mirror mode through the same
+  client as lookups: the copy once ready, the remote service until then) plus `metadata.mode` (the running mode, both modes) and, in mirror mode only,
+  `metadata.mirror` (`metamirror.Status`: `state` empty|downloading|opening|ready|error - `opening` while
+  a copy is opened (at start, or a download before its swap), `error` only without a usable copy -, tag, built_at, schema_version, schema_newer, size_bytes, checked_at, next_check_at,
+  downloaded_at, `progress` {done, total: compressed bytes, total 0 = unknown} while downloading, the last
+  `error` kept over a working copy, `fallback` = no usable copy so lookups go to `base_url`).
+  `GET /admin/meta/mirror` is the copy's status alone (200 + `metamirror.Status`); `POST
+  /admin/meta/mirror/check` wakes the mirror: 202 + its status after the wake (`next_check_at` now).
+  Both: 404 `metadata_off` (`metadataOff`) while off, 409 `not_mirror_mode` (coded) without a mirror
+  (`mirrorRefused`); the POST is not audited (changes nothing an admin chose).
+  The console: Health > System's community metadata row reads `metadata.mirror` while the copy is in
+  use (`activeMirror` in `system-model.ts`, also Settings' status line and `metadataDown`), and
+  `useMirrorPoll` (Health > System and Settings' status line) polls only `GET /admin/meta/mirror`
+  every 2 s while the copy is busy (downloading, opening, checking, or due now), merging it into the
+  cached system status and refetching `/admin/system` once when it settles (that stays at 30 s); a
+  404 `metadata_off` / 409 `not_mirror_mode` answer stops the poll, drops the copy from the cached
+  status and refetches it once. A running check (no `next_check_at`) keeps the Next check fact as
+  "Checking now". Settings > Community
+  metadata's Source card saves `metadata.mode` (restart). TLS certificates read from their
   files (`server.Certificates`; never generates or requests one), database size + schema
   (`catalog.DatabaseInfo`), each root's availability + disk space (`Scanner.RootDisk`: statfs inside the
   same bounded root probe, so a dead mount can't hang it), web player source, update status. The update check

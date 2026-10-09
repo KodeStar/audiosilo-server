@@ -1,12 +1,12 @@
 //go:build windows
 
-package library
+package diskspace
 
 import "golang.org/x/sys/windows"
 
-// diskSpace reports the size and the space free to the server of the volume
-// holding path.
-func diskSpace(path string) (total, free uint64, ok bool) {
+// Of reports the size of the volume holding path and the space free to the
+// server on it.
+func Of(path string) (total, free uint64, ok bool) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return 0, 0, false

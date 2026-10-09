@@ -32,6 +32,9 @@ type healthCache struct {
 // One request at a time: callers meanwhile wait for its answer. It runs on the
 // client's own timeout, not a caller's context, so a caller that goes away
 // can't leave a "not responding" in the cache.
+//
+// In mirror mode it goes through the same client as every lookup (SetMirror):
+// the local copy answers while it is ready, else the remote service does.
 func (s *Service) Ping() Health {
 	s.health.mu.Lock()
 	defer s.health.mu.Unlock()

@@ -20,7 +20,6 @@ package backup
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kodestar/audiosilo-server/internal/jsonfile"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -563,7 +563,7 @@ func (s *Service) RequestRestore(ctx context.Context, name, by string) (PendingR
 		return PendingRestore{}, err
 	}
 	pr := PendingRestore{Name: name, RequestedAt: s.now().UTC(), RequestedBy: by, Schema: info.Schema}
-	return pr, writeJSONFile(filepath.Join(s.dataDir, markerFile), pr)
+	return pr, jsonfile.Write(filepath.Join(s.dataDir, markerFile), pr)
 }
 
 // CancelRestore drops a restore waiting for the next start (nothing waiting is fine).
@@ -577,12 +577,12 @@ func (s *Service) CancelRestore() error {
 
 // PendingRestore returns the restore waiting for the next start, if any.
 func (s *Service) PendingRestore() (*PendingRestore, error) {
-	return readJSONFile[PendingRestore](filepath.Join(s.dataDir, markerFile))
+	return jsonfile.Read[PendingRestore](filepath.Join(s.dataDir, markerFile))
 }
 
 // LastRestore returns how the last restore went, if one was applied or refused.
 func (s *Service) LastRestore() (*RestoreResult, error) {
-	return readJSONFile[RestoreResult](filepath.Join(s.dataDir, resultFile))
+	return jsonfile.Read[RestoreResult](filepath.Join(s.dataDir, resultFile))
 }
 
 // ApplyPendingRestore applies a restore waiting in dataDir to the database at
@@ -594,7 +594,7 @@ func (s *Service) LastRestore() (*RestoreResult, error) {
 // stopping every start; a refused restore leaves the database as it was.
 func ApplyPendingRestore(ctx context.Context, dataDir, dir, dbPath string, log *slog.Logger) (*RestoreResult, error) {
 	marker := filepath.Join(dataDir, markerFile)
-	pending, err := readJSONFile[PendingRestore](marker)
+	pending, err := jsonfile.Read[PendingRestore](marker)
 	if pending == nil && err == nil {
 		return nil, nil
 	}
@@ -614,7 +614,7 @@ func ApplyPendingRestore(ctx context.Context, dataDir, dir, dbPath string, log *
 			log.Warn("restored the database from a backup", "name", pending.Name, "safety_copy", res.SafetyCopy)
 		}
 	}
-	if err := writeJSONFile(filepath.Join(dataDir, resultFile), res); err != nil {
+	if err := jsonfile.Write(filepath.Join(dataDir, resultFile), res); err != nil {
 		log.Warn("recording the restore's outcome failed", "err", err)
 	}
 	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -719,32 +719,4 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
-}
-
-func writeJSONFile(path string, v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// readJSONFile reads a JSON file into a T; nil (no error) when there is none.
-func readJSONFile[T any](path string) (*T, error) {
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var v T
-	if err := json.Unmarshal(b, &v); err != nil {
-		return nil, fmt.Errorf("read %s: %w", filepath.Base(path), err)
-	}
-	return &v, nil
 }

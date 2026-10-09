@@ -16,6 +16,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/toolfetch"
@@ -44,6 +45,24 @@ func (a *API) SetRuntime(rt Runtime) {
 	}
 	a.rt = rt
 }
+
+// SetMetaMirror puts mirror mode's local copy of the community metadata in
+// front of the metadata service (meta.Service.SetMirror) and gives the console
+// its status. Call it once, right after New and before Handler() and the
+// background jobs that use the service; a nil m (remote mode) or a server
+// without a metadata service changes nothing.
+func (a *API) SetMetaMirror(m *metamirror.Mirror) {
+	if m == nil || a.meta == nil {
+		return
+	}
+	a.mirror = m
+	a.meta.SetMirror(m, a.log)
+}
+
+// MetadataOn reports whether the community metadata lookup is live (see
+// metadataOn), for the launcher's background jobs that must stop with it (the
+// metadata mirror's downloads).
+func (a *API) MetadataOn() bool { return a.metadataOn() }
 
 // Install kinds, for how the console says to update.
 const (
@@ -108,10 +127,18 @@ func (a *API) tool(name, path string) Tool {
 
 // MetadataStatus is the community metadata service on Health > System.
 type MetadataStatus struct {
-	Enabled   bool         `json:"enabled"`
-	Available bool         `json:"available"` // the service exists (base_url valid at start)
-	BaseURL   string       `json:"base_url"`
-	Health    *meta.Health `json:"health"` // nil while off: nothing is asked
+	Enabled   bool   `json:"enabled"`
+	Available bool   `json:"available"` // the service exists (base_url valid at start)
+	BaseURL   string `json:"base_url"`
+	// Health is nil while off (nothing is asked). In mirror mode it is the
+	// answer to the same /healthz through the same client as every lookup: the
+	// local copy's when it is ready, else the remote service's.
+	Health *meta.Health `json:"health"`
+	// Mode is the metadata.mode the server runs with (a saved change waits for a
+	// restart).
+	Mode string `json:"mode"`
+	// Mirror is the local copy, in mirror mode only.
+	Mirror *metamirror.Status `json:"mirror,omitempty"`
 }
 
 // LibraryStatus is a library root on Health > System.
@@ -208,16 +235,64 @@ func (a *API) handleSystem(w http.ResponseWriter, r *http.Request) {
 		"data_dir":   a.config().DataDir,
 		"database":   db,
 		"tools":      []Tool{ffmpeg, ffprobe},
-		"metadata": MetadataStatus{
-			Enabled: a.config().Metadata.Enabled, Available: a.meta != nil,
-			BaseURL: a.config().Metadata.BaseURL, Health: metaHealth,
-		},
+		"metadata":   a.metadataStatus(metaHealth),
 		"tls":        tlsStatus,
 		"libraries":  roots,
 		"web_player": a.playerSource,
 		"update":     a.updateStatus(),
 		"backups":    a.backupStatus(),
 	})
+}
+
+// metadataStatus is Health > System's community metadata row.
+func (a *API) metadataStatus(health *meta.Health) MetadataStatus {
+	st := MetadataStatus{
+		Enabled: a.config().Metadata.Enabled, Available: a.meta != nil,
+		BaseURL: a.config().Metadata.BaseURL, Health: health,
+		Mode: a.boot.Metadata.ModeName(),
+	}
+	if a.mirror != nil {
+		ms := a.mirror.Status()
+		st.Mirror = &ms
+	}
+	return st
+}
+
+// mirrorRefused writes why the metadata mirror's routes can't answer, if they
+// can't: 404 metadata_off while the lookup is off, 409 not_mirror_mode when the
+// server isn't keeping a copy (remote mode, or mirror mode saved but not
+// restarted into).
+func (a *API) mirrorRefused(w http.ResponseWriter) bool {
+	if a.metadataOff(w) {
+		return true
+	}
+	if a.mirror == nil {
+		writeErrorCode(w, http.StatusConflict, codeNotMirrorMode, "this server isn't keeping a local copy of the community metadata")
+		return true
+	}
+	return false
+}
+
+// handleMetaMirror is the local copy's status alone (admin only): GET
+// /admin/meta/mirror, what the console polls while a download runs (the whole
+// /admin/system is heavier: tools, disks, a health check).
+func (a *API) handleMetaMirror(w http.ResponseWriter, _ *http.Request) {
+	if a.mirrorRefused(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, a.mirror.Status())
+}
+
+// handleMetaMirrorCheck asks the metadata mirror to look for a newer copy now
+// (admin only): POST /admin/meta/mirror/check, 202 with the copy's status after
+// the wake (its next check due now; the check runs in the background and the
+// status then shows it).
+func (a *API) handleMetaMirrorCheck(w http.ResponseWriter, _ *http.Request) {
+	if a.mirrorRefused(w) {
+		return
+	}
+	a.mirror.CheckNow()
+	writeJSON(w, http.StatusAccepted, a.mirror.Status())
 }
 
 // UpdateStatus is the update check's state, with the install kind the console

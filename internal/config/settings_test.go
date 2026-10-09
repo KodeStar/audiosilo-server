@@ -47,6 +47,7 @@ func TestWithSettingsNormalizes(t *testing.T) {
 		"demo.idle_ttl":           `" 2h "`,
 		"metadata.base_url":       `"https://meta.example.com/"`,
 		"metadata.region":         `" UK "`,
+		"metadata.mode":           `" Mirror "`,
 		"general.update_check":    `false`,
 		"network.bind":            `":9000"`,
 	})
@@ -68,6 +69,7 @@ func TestWithSettingsNormalizes(t *testing.T) {
 		{"idle_ttl", next.Demo.IdleTTL, "2h"},
 		{"base_url", next.Metadata.BaseURL, "https://meta.example.com"},
 		{"region", next.Metadata.Region, "uk"},
+		{"mode", next.Metadata.Mode, "mirror"},
 		{"update_check", next.UpdateCheck, false},
 		{"bind", next.Bind, ":9000"},
 	}
@@ -91,6 +93,7 @@ func TestWithSettingsRefuses(t *testing.T) {
 		{"no scheme", "general.public_url", `"books.example.com"`, ReasonInvalid},
 		{"query in url", "general.public_url", `"https://x.com/?a=1"`, ReasonInvalid},
 		{"unknown marketplace", "metadata.region", `"gb"`, ReasonInvalid},
+		{"unknown metadata mode", "metadata.mode", `"local"`, ReasonInvalid},
 		{"port out of range", "network.bind", `":70000"`, ReasonInvalid},
 		{"no port", "network.bind", `"localhost"`, ReasonInvalid},
 		{"bad tls mode", "network.tls_mode", `"sometimes"`, ReasonInvalid},
@@ -207,7 +210,7 @@ func TestRestartPending(t *testing.T) {
 	if got := running.RestartPending(running); len(got) != 0 {
 		t.Fatalf("nothing pending against itself, got %v", got)
 	}
-	for _, id := range []string{"network.bind", "network.tls_mode", "players.web_dir", "metadata.base_url", "demo.enabled"} {
+	for _, id := range []string{"network.bind", "network.tls_mode", "players.web_dir", "metadata.base_url", "metadata.mode", "demo.enabled"} {
 		if !strings.Contains(strings.Join(RestartSettings(), ","), id) {
 			t.Errorf("%s must be a restart setting", id)
 		}
@@ -424,5 +427,38 @@ func TestSessionDaysSetting(t *testing.T) {
 	c, _, err = Load(dir)
 	if err != nil || c.Activity.SessionDays != 180 || c.Locked()["general.session_days"] != "AUDIOSILO_SESSION_DAYS" {
 		t.Fatalf("from the environment = %+v %v %v", c.Activity, c.Locked(), err)
+	}
+}
+
+// metadata.mode defaults to remote, also for a config.yaml written before it
+// existed; the environment sets it (any case), and an unknown value is a config
+// error naming the allowed ones.
+func TestMetadataMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte("bind: 0.0.0.0:8080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := Load(dir)
+	if err != nil || c.Metadata.Mirror() || c.Metadata.ModeName() != MetadataRemote {
+		t.Fatalf("an old config must read as remote: %v %+v", err, c.Metadata)
+	}
+	if (MetadataConfig{}).ModeName() != MetadataRemote {
+		t.Fatal(`an empty mode must read as remote`)
+	}
+
+	t.Setenv("AUDIOSILO_METADATA_MODE", "Mirror")
+	c, _, err = Load(dir)
+	if err != nil || !c.Metadata.Mirror() {
+		t.Fatalf("AUDIOSILO_METADATA_MODE=Mirror must select mirror mode: %v %+v", err, c.Metadata)
+	}
+	if got := c.Locked()["metadata.mode"]; got != "AUDIOSILO_METADATA_MODE" {
+		t.Fatalf("metadata.mode locked by %q, want the variable", got)
+	}
+
+	t.Setenv("AUDIOSILO_METADATA_MODE", "local")
+	_, _, err = Load(dir)
+	var fe *FieldError
+	if !errors.As(err, &fe) || fe.Key != "metadata.mode" || !strings.Contains(err.Error(), "remote, mirror") {
+		t.Fatalf("an unknown mode must be a metadata.mode error naming the values, got %v", err)
 	}
 }

@@ -11,6 +11,7 @@ import type {
   Device,
   IssuesSummary,
   ListeningSession,
+  MetaMirrorStatus,
   JobsState,
   ScanProgress,
   ServerInfo,
@@ -248,6 +249,7 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
       enabled: true,
       base_url: 'https://meta.audiosilo.app',
       region: '',
+      mode: 'remote',
       available: true,
     },
     demo: { enabled: false, library: '', max_users: null, max_users_default: 200, idle_ttl: '' },
@@ -259,6 +261,7 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
       'network.tls_hosts',
       'players.web_dir',
       'metadata.base_url',
+      'metadata.mode',
       'demo.enabled',
       'demo.idle_ttl',
       'backups.dir',
@@ -309,6 +312,7 @@ export function systemStatus(over: Partial<SystemStatus> = {}): SystemStatus {
       enabled: true,
       available: true,
       base_url: 'https://meta.audiosilo.app',
+      mode: 'remote',
       health: { reachable: true, latency_ms: 84, checked_at: '2026-10-04T09:00:00Z' },
     },
     tls: {
@@ -339,6 +343,43 @@ export function systemStatus(over: Partial<SystemStatus> = {}): SystemStatus {
     web_player: 'dir',
     update: updateStatus(),
     ...over,
+  };
+}
+
+/**
+ * A local metadata copy in use (mirror mode): ready, answering, checked this morning,
+ * its next check a day from now (never past: a due check is a busy copy the page polls).
+ */
+export function mirrorStatus(over: Partial<MetaMirrorStatus> = {}): MetaMirrorStatus {
+  return {
+    state: 'ready',
+    tag: 'data-v2026.10.09-1a2b3c4-5d6e7f8',
+    built_at: '2026-10-09T04:12:00Z',
+    schema_version: 7,
+    size_bytes: 1_712_000_000,
+    checked_at: '2026-10-09T06:00:00Z',
+    next_check_at: new Date(Date.now() + 86_400_000).toISOString(),
+    downloaded_at: '2026-10-09T06:03:00Z',
+    fallback: false,
+    ...over,
+  };
+}
+
+/** The system status of a server in mirror mode, with the local copy as given. */
+export function mirrorSystem(mirror: MetaMirrorStatus = mirrorStatus()): SystemStatus {
+  const base = systemStatus();
+  return {
+    ...base,
+    metadata: {
+      ...base.metadata,
+      mode: 'mirror',
+      health: {
+        reachable: !mirror.fallback,
+        latency_ms: 0,
+        checked_at: '2026-10-09T06:00:00Z',
+      },
+      mirror,
+    },
   };
 }
 

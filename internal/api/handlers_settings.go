@@ -107,6 +107,11 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if a.rt.Backups != nil && next.Backups != cur.Backups {
 		a.rt.Backups.SetSettings(next.Backups.Schedule, next.Backups.Keep)
 	}
+	// Metadata back on: the mirror's runner sleeps a minute between looks while
+	// it is off, so wake it now for a check that came due meanwhile.
+	if a.mirror != nil && next.Metadata.Enabled && !cur.Metadata.Enabled {
+		a.mirror.Wake()
+	}
 	if changes := config.ChangedSettings(cur, next); len(changes) > 0 {
 		a.audit(r, "settings.update", "", map[string]any{"changes": changes})
 	}

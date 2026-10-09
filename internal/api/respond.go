@@ -87,6 +87,7 @@ const (
 	codeUnknownSetting     = "unknown_setting"   // + "field"
 	codeSettingReadOnly    = "setting_read_only" // + "field"
 	codeUpdateCheckOff     = "update_check_off"
+	codeNotMirrorMode      = "not_mirror_mode"
 	codeBackupRunning      = "backup_running"
 	codeBackupNotFound     = "backup_not_found"
 	codeInvalidBackup      = "invalid_backup"

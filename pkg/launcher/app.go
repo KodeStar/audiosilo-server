@@ -65,6 +65,10 @@ type Options struct {
 	TLSMode   string    // "off" | "selfsigned" | "autocert"
 	PublicURL string    // externally reachable base URL (e.g. a Cloudflare Tunnel URL)
 	Libraries []Library // when non-nil, replaces the configured libraries
+
+	// metaReleases, set only by tests, is where the metadata mirror lists and
+	// downloads data releases (a fake GitHub); zero means GitHub's real one.
+	metaReleases releaseSource
 }
 
 // Library mirrors config.Library for the public Options override API (so an
@@ -201,6 +205,13 @@ func Run(ctx context.Context, opts Options) error {
 	go backups.Run(ctx)
 
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
+	// Mirror mode's local copy of the community metadata (nil in remote mode),
+	// in front of the metadata service before the background jobs below use it.
+	// Its checks stop while the live metadata.enabled is off.
+	mirror := metaMirror(cfg, abs, a.MetadataOn, opts.metaReleases, log)
+	a.SetMetaMirror(mirror)
+	stopMirror := runMetaMirror(ctx, mirror, log)
+	defer stopMirror()
 	// Bulk match runs a stopped server left working: matching ones are
 	// interrupted, applying ones go back to ready (what they applied is marked).
 	if err := cat.InterruptMatchRuns(ctx); err != nil {

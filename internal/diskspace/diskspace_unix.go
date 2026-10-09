@@ -1,12 +1,12 @@
 //go:build !windows
 
-package library
+package diskspace
 
 import "golang.org/x/sys/unix"
 
-// diskSpace reports the size and the space free to the server of the
-// filesystem holding path.
-func diskSpace(path string) (total, free uint64, ok bool) {
+// Of reports the size of the filesystem holding path and the space free to the
+// server on it.
+func Of(path string) (total, free uint64, ok bool) {
 	var st unix.Statfs_t
 	if err := unix.Statfs(path, &st); err != nil {
 		return 0, 0, false

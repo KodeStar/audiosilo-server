@@ -22,7 +22,11 @@ const BY_CODE: Record<string, string> = {
   // the one too_large a person can hit is a cover upload.
   too_large: 'book.cover.tooLarge',
   unsupported_image: 'book.cover.unsupported',
-  metadata_off: 'book.match.off',
+  // Any action that needs community metadata (a match, Check now) while it's off.
+  metadata_off: 'errors.metadataOff',
+  // Check now on a server that isn't keeping a local copy (remote mode, or
+  // mirror mode saved but not restarted into).
+  not_mirror_mode: 'system.mirror.checkNotMirror',
   book_not_found: 'errors.bookNotFound',
   no_access: 'errors.noAccess',
   current_device: 'errors.currentDevice',

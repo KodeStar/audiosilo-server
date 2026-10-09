@@ -12,7 +12,14 @@ import {
 } from '@tanstack/react-query';
 import { refKey, refOf } from '@/lib/book-route';
 import { compact } from '@/lib/utils';
-import { api, type BookFilter, type BookListParams, type MatchBy, type ThumbSize } from './client';
+import {
+  api,
+  ApiError,
+  type BookFilter,
+  type BookListParams,
+  type MatchBy,
+  type ThumbSize,
+} from './client';
 import { loadCommunityCover, loadThumb } from './cover-batch';
 import { loadWork, type WorkAnswer } from './work-batch';
 import type {
@@ -26,10 +33,12 @@ import type {
   FolderMode,
   MatchOutcome,
   MatchRun,
+  MetaMirrorStatus,
   PersonField,
   ServerEventKind,
   SessionCursor,
   SessionFilter,
+  SystemStatus,
 } from './types';
 
 // Query keys live here so invalidation and the hooks can't drift apart.
@@ -38,6 +47,7 @@ export const keys = {
   stats: ['admin', 'stats'] as const,
   settings: ['admin', 'settings'] as const,
   system: ['admin', 'system'] as const,
+  metaMirror: ['admin', 'meta-mirror'] as const,
   update: ['admin', 'update'] as const,
   support: ['admin', 'support'] as const,
   logs: (level: string, q: string) => ['admin', 'logs', level, q] as const,
@@ -146,7 +156,7 @@ export function useSettings() {
 
 /**
  * What the server depends on (Health > System; Settings and About read parts).
- * Health > System polls it (`poll`); elsewhere it's fresh for a minute.
+ * Health > System polls it every 30 seconds (`poll`); elsewhere it's fresh for a minute.
  */
 export function useSystem({ poll = false } = {}) {
   return useQuery({
@@ -155,6 +165,97 @@ export function useSystem({ poll = false } = {}) {
     staleTime: 60_000,
     refetchInterval: poll ? 30_000 : false,
   });
+}
+
+/**
+ * How far the browser's clock may lag the server's and still see a check the
+ * server made due "now" (Check now answers with next_check_at = the server's now)
+ * as due: without it, a browser a second behind would never follow the check.
+ */
+export const MIRROR_CLOCK_SKEW_MS = 60_000;
+
+/**
+ * The local metadata copy is busy: downloading, being opened (at the server's start
+ * or after a download), its check running (no next check yet), or a check due now
+ * (Check now was pressed). Its progress is worth following.
+ */
+export function mirrorBusy(m: MetaMirrorStatus | undefined, now: number = Date.now()): boolean {
+  if (!m) return false;
+  return (
+    m.state === 'downloading' ||
+    m.state === 'opening' ||
+    !m.next_check_at ||
+    Date.parse(m.next_check_at) <= now + MIRROR_CLOCK_SKEW_MS
+  );
+}
+
+/** Puts the local copy's status into the cached system status. */
+function mergeMirror(qc: QueryClient, mirror: MetaMirrorStatus) {
+  qc.setQueryData<SystemStatus>(keys.system, (s) =>
+    s ? { ...s, metadata: { ...s.metadata, mirror } } : s,
+  );
+}
+
+/**
+ * The mirror's route refused for good (metadata turned off elsewhere, or no copy kept:
+ * restarted into remote mode): drops the copy from the cached system status, so the
+ * page stops following it at once, and says whether it did.
+ */
+function dropGoneMirror(qc: QueryClient, err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  const off = err.code === 'metadata_off';
+  if (!off && err.code !== 'not_mirror_mode') return false;
+  qc.setQueryData<SystemStatus>(keys.system, (s) =>
+    s
+      ? {
+          ...s,
+          metadata: { ...s.metadata, enabled: off ? false : s.metadata.enabled, mirror: undefined },
+        }
+      : s,
+  );
+  return true;
+}
+
+/**
+ * Follows the local metadata copy while it is busy (Health > System, Settings' status
+ * line): polls only its status (GET /admin/meta/mirror) every 2 seconds, merges each
+ * answer into the system status, and fetches the whole system status once when the
+ * copy is no longer busy. A refusal that won't change by asking again (metadata turned
+ * off elsewhere, no copy kept) stops the poll (null) and fetches the whole system
+ * status once, which shows the state it left. `mirror` is the copy in use (activeMirror), undefined when
+ * there is none.
+ */
+export function useMirrorPoll(mirror: MetaMirrorStatus | undefined) {
+  const qc = useQueryClient();
+  useQuery<MetaMirrorStatus | null>({
+    queryKey: keys.metaMirror,
+    queryFn: async () => {
+      let m: MetaMirrorStatus;
+      try {
+        m = await api.metaMirror();
+      } catch (err) {
+        if (!dropGoneMirror(qc, err)) throw err;
+        void qc.invalidateQueries({ queryKey: keys.system });
+        return null;
+      }
+      mergeMirror(qc, m);
+      if (!mirrorBusy(m)) void qc.invalidateQueries({ queryKey: keys.system });
+      return m;
+    },
+    enabled: mirrorBusy(mirror),
+    refetchInterval: (q) => (q.state.data === null ? false : 2000),
+  });
+}
+
+/**
+ * Asks the server to check for a newer copy of the metadata now. Its answer (the next
+ * check due now) goes into the system status, which makes useMirrorPoll follow the
+ * check. Throws the ApiError (metadata_off, not_mirror_mode) for the caller to show.
+ */
+export async function checkMetaMirror(qc: QueryClient): Promise<MetaMirrorStatus> {
+  const mirror = await api.checkMetaMirror();
+  mergeMirror(qc, mirror);
+  return mirror;
 }
 
 /** The backups, their state and any restore waiting; polled each second while one is made. */

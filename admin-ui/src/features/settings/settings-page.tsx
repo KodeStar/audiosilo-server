@@ -16,7 +16,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from 'lucide-react';
-import { useLibraries, useSettings, useSystem } from '@/api/hooks';
+import { useLibraries, useMirrorPoll, useSettings, useSystem } from '@/api/hooks';
 import type { AdminSettings } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
@@ -32,6 +32,7 @@ import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { activeMirror, mirrorLook } from '@/features/health/system-model';
 import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
@@ -40,6 +41,7 @@ import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
 import {
   certificateLook,
   lockOf,
+  METADATA_MODES,
   SETTINGS_PAGES,
   type CertStatus,
   type SettingsPage,
@@ -412,6 +414,24 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
       <SettingsForm
         settings={settings}
         section="metadata"
+        title={t('settings.metadata.sourceCard')}
+        description={t('settings.metadata.sourceCardBody')}
+        fields={[
+          {
+            name: 'mode',
+            kind: 'radio',
+            columns: 2,
+            options: METADATA_MODES.map((mode) => ({
+              value: mode,
+              title: t(`settings.metadata.mode.${mode}`),
+              description: t(`settings.metadata.mode.${mode}Body`),
+            })),
+          },
+        ]}
+      />
+      <SettingsForm
+        settings={settings}
+        section="metadata"
         title={t('settings.metadata.matchingCard')}
         description={t('settings.metadata.matchingCardBody')}
         fields={[
@@ -438,10 +458,37 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
   );
 }
 
+/**
+ * How lookups are going: the service's health, or in mirror mode the local
+ * copy's state with a link to its details (Health > System), followed while the
+ * copy is busy as Health > System follows it.
+ */
 function MetadataStatusRow() {
   const { t, i18n } = useTranslation();
   const system = useSystem();
   const h = system.data?.metadata.health;
+  const mirror = system.data && activeMirror(system.data);
+  useMirrorPoll(mirror);
+  if (mirror) {
+    return (
+      <SettingRow
+        title={t('settings.metadata.status')}
+        description={
+          <Link
+            to="/health/{-$section}"
+            params={{ section: 'system' }}
+            className="font-semibold text-brand-ink hover:underline"
+          >
+            {t('settings.metadata.mirrorDetails')}
+          </Link>
+        }
+      >
+        <StatusText tone={mirrorLook(mirror).status} colored className="font-semibold">
+          {t(`settings.metadata.mirror.${mirror.state}`)}
+        </StatusText>
+      </SettingRow>
+    );
+  }
   return (
     <SettingRow title={t('settings.metadata.status')}>
       {!h ? (

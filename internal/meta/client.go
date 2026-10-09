@@ -23,6 +23,12 @@ import (
 // 200 {"matched": false} response.
 var ErrNotFound = errors.New("meta: not found")
 
+// errLocalNotFound is a 404 the local copy answered (mirror mode, the
+// fallbackTransport's localAnswerHeader): ErrNotFound to every caller
+// (errors.Is), and to keepStored the copy's own "no match", which never replaces
+// a stored answer the way the remote service's does.
+var errLocalNotFound = fmt.Errorf("%w (the local copy)", ErrNotFound)
+
 // clientTimeout bounds a single upstream HTTP request. Kept short so a slow or
 // unreachable metadata service degrades to a fast 502 rather than tying up the
 // per-request timeout budget.
@@ -45,8 +51,9 @@ func newClient(baseURL string) *client {
 }
 
 // getJSON fetches path (relative to the API root) and decodes the JSON body into
-// out. A 404 becomes ErrNotFound; any other non-2xx (or transport failure) is a
-// plain error the caller treats as an upstream outage.
+// out. A 404 becomes ErrNotFound (errLocalNotFound when the local copy answered
+// it); any other non-2xx (or transport failure) is a plain error the caller
+// treats as an upstream outage.
 func (c *client) getJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
@@ -61,6 +68,9 @@ func (c *client) getJSON(ctx context.Context, path string, out any) error {
 	if resp.StatusCode == http.StatusNotFound {
 		// Drain a little so the connection can be reused.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+		if resp.Header.Get(localAnswerHeader) != "" {
+			return errLocalNotFound
+		}
 		return ErrNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
