@@ -914,7 +914,11 @@ admin overrides; see Metadata overrides below).
   recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
   device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
   (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
-  how much). `SaveProgress` stamps `progress.started_at` on insert and
+  how much). Book counts (`totals.books`/`finished`, a top user's, a person's own `/me/stats` totals):
+  `finished` is the distinct books finished in the period (`finishedIn`; a book two people finished
+  counts once on the Activity page) and `books` the books listened to OR finished in it
+  (`bookCounts`), so a book marked finished or imported with no listening recorded still counts and
+  finished is never more than books. `SaveProgress` stamps `progress.started_at` on insert and
   `finished_at` when `finished` turns on (cleared when it turns off), both from the save's own
   `updated_at`; a save's own `started_at`/`finished_at` are ignored. The player's progress JSON
   carries them as `started_at`/`finished_at` (`omitempty`; `catalog.Progress`, player redesign

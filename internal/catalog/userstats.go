@@ -47,8 +47,9 @@ type UserStats struct {
 }
 
 // UserTotals sums a person's period: Listened is wall-clock seconds, Sessions the
-// sessions started in it, Books the books listened to, Finished the books
-// finished in it.
+// sessions started in it, Books the books listened to or finished in it (a book
+// marked finished with no listening recorded still counts, so Finished is never
+// more than Books), Finished the books finished in it.
 type UserTotals struct {
 	Listened float64 `json:"listened"`
 	Sessions int     `json:"sessions"`
@@ -95,11 +96,11 @@ func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.
 	if err != nil {
 		return nil, err
 	}
-	finished, err := c.finishedCount(ctx, userID, from, to)
+	finished, err := c.finishedIn(ctx, userID, from, to)
 	if err != nil {
 		return nil, err
 	}
-	prevFinished, err := c.finishedCount(ctx, userID, prev.from, prev.to)
+	prevFinished, err := c.finishedIn(ctx, userID, prev.from, prev.to)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +131,9 @@ func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.
 
 // userTotals is a one-user accumulator's totals (no listener count) with the
 // books they finished in its period.
-func userTotals(a *listenAcc, finished int) UserTotals {
-	return UserTotals{Listened: a.listened, Sessions: a.sessions, Books: len(a.books), Finished: finished}
+func userTotals(a *listenAcc, finished finishedSet) UserTotals {
+	t := a.totals(finished)
+	return UserTotals{Listened: t.Listened, Sessions: t.Sessions, Books: t.Books, Finished: t.Finished}
 }
 
 // listeningDayList is days without the per-listener split.
