@@ -1439,6 +1439,7 @@
   "activity.coverage.chapters": "Have chapters",
   "activity.coverage.cover": "Have a cover",
   "live.title": "Listening now",
+  "live.chapter": "Chapter {{n}}",
   "live.description_one": "{{count}} stream playing · {{direct}} direct, {{transcoding}} transcoding",
   "live.description_other": "{{count}} streams playing · {{direct}} direct, {{transcoding}} transcoding",
   "live.paused_one": "{{count}} paused",

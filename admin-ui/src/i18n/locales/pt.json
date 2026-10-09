@@ -1550,6 +1550,7 @@
   "activity.coverage.chapters": "Com capítulos",
   "activity.coverage.cover": "Com capa",
   "live.title": "A ouvir agora",
+  "live.chapter": "Capítulo {{n}}",
   "live.description_one": "{{count}} stream a tocar · {{direct}} diretos, {{transcoding}} a transcodificar",
   "live.description_other": "{{count}} streams a tocar · {{direct}} diretos, {{transcoding}} a transcodificar",
   "live.description_many": "{{count}} streams a tocar · {{direct}} diretos, {{transcoding}} a transcodificar",

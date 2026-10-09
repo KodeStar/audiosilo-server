@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import type { ListeningSession } from '@/api/types';
 
 // Who is listening now, shared by the Overview, People and Activity > Live now (kept apart from
@@ -20,4 +21,18 @@ export function liveSummary(sessions: readonly ListeningSession[]) {
     transcoding: playing.filter((s) => s.transcoded).length,
     listeners: new Set(sessions.map((s) => s.user_id)).size,
   };
+}
+
+/**
+ * The chapter a session or drop-off is in: its title as the server tidied it, else "Chapter N"
+ * by its place under key (the server sends no title for one that names nothing, like "024" or
+ * "Track 01"), else "" (no chapters, or a book whose one chapter is the whole book).
+ */
+export function chapterLabel(
+  s: Pick<ListeningSession, 'chapter' | 'chapter_index'>,
+  t: TFunction,
+  key = 'live.chapter',
+) {
+  if (s.chapter) return s.chapter;
+  return s.chapter_index != null ? t(key, { n: s.chapter_index + 1 }) : '';
 }

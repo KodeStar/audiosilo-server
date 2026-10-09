@@ -226,6 +226,31 @@ func TestAdminEditBookAPI(t *testing.T) {
 	}
 }
 
+// The book page names the match dialog's search text: the title and author, or
+// the folders' when the tags are swapped.
+func TestAdminBookMatchQuery(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	libID, base := seedCatalog(t, e)
+	if _, err := e.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: libID,
+		RelPath: "Andy Weir/Project Hail Mary", IsFolder: true, Title: "Andy Weir", Author: "Project Hail Mary",
+		AddedAt: "2024-03-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"Andy Weir/The Martian":       "The Martian Andy Weir",
+		"Andy Weir/Project Hail Mary": "Project Hail Mary Andy Weir",
+	} {
+		resp, body := e.do(t, "GET", base+"/book?path="+escape(path), adminTok, "")
+		var d struct {
+			MatchQuery string `json:"match_query"`
+		}
+		if err := json.Unmarshal([]byte(body), &d); err != nil || resp.StatusCode != 200 || d.MatchQuery != want {
+			t.Errorf("%s: %d match_query = %q, want %q", path, resp.StatusCode, d.MatchQuery, want)
+		}
+	}
+}
+
 func TestAdminBulkEditAPI(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)

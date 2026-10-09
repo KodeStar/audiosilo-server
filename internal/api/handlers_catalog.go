@@ -234,6 +234,8 @@ func (a *API) writeBookDetail(w http.ResponseWriter, r *http.Request, libID int6
 	}
 	d.CommunityChecking = checking
 	d.CommunityCheckFailed = !checking && a.chapterChecks != nil && a.chapterChecks.Failed(ref)
+	b := d.Book
+	d.MatchQuery = meta.SearchPrefill(b.Title, b.Author, b.Series, b.Path, b.IsFolder)
 	writeJSON(w, http.StatusOK, d)
 }
 

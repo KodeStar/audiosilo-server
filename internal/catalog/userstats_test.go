@@ -213,6 +213,49 @@ func TestUserStatsDropRevokedBooks(t *testing.T) {
 	}
 }
 
+// A book finished in the period counts as a book of the period even with no
+// listening recorded in it (marked finished, imported), and a book two people
+// finished is one book finished: the server's year and a person's own never say
+// more books finished than listened to.
+func TestFinishedBooksAreBooksOfThePeriod(t *testing.T) {
+	f := newStatsFixture(t)
+	in := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	f.addSession(t, f.user, 1, f.book, in.Add(-time.Hour), 30*time.Minute, 1800, "opus", false)
+	f.finish(t, f.user, f.book, in)
+	f.finish(t, f.user, f.saga, in) // marked finished: no listening recorded
+	f.finish(t, f.bob, f.book, in)  // bob only marked it finished too
+	from := f.clock.AddDate(0, 0, -7)
+
+	a, err := f.c.ActivityFor(f.ctx, "7d", from, f.clock, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Totals.Books != 2 || a.Totals.Finished != 2 || a.Totals.Listeners != 1 {
+		t.Fatalf("server totals = %+v, want 2 books, 2 finished, 1 listener", a.Totals)
+	}
+	if len(a.TopUsers) != 1 || a.TopUsers[0].Books != 2 || a.TopUsers[0].Finished != 2 {
+		t.Fatalf("top users = %+v, want ann with 2 books, 2 finished", a.TopUsers)
+	}
+	if len(a.TopBooks) != 1 || a.TopBooks[0].Path != f.book.Path {
+		t.Fatalf("top books = %+v, want only the book listened to", a.TopBooks)
+	}
+
+	s := f.annStats(t, f.allLibrary())
+	if s.Totals != (UserTotals{Listened: 1800, Sessions: 1, Books: 2, Finished: 2}) {
+		t.Fatalf("ann's totals = %+v", s.Totals)
+	}
+	b, err := f.c.UserStatsFor(f.ctx, "7d", from, f.clock, time.UTC, f.bob, f.allLibrary())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Totals != (UserTotals{Books: 1, Finished: 1}) {
+		t.Fatalf("bob's totals = %+v", b.Totals)
+	}
+	if s.Previous.Books != 0 || a.Previous.Finished != 0 {
+		t.Fatalf("previous = %+v / %+v, want nothing", s.Previous, a.Previous)
+	}
+}
+
 // The per-user entry points refuse user 0, which the accumulator reads as
 // "everyone".
 func TestUserStatsNeedAUser(t *testing.T) {
