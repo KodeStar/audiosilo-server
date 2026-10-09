@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -207,6 +209,45 @@ func TestRecordHeartbeatTranscodedIsSticky(t *testing.T) {
 	f.beatRef(t, 1, f.book, 25, false)
 	if s := f.sessions(t); !s[0].Transcoded {
 		t.Fatal("a session that streamed through the transcoder stays marked")
+	}
+}
+
+// A live session names its chapter as the console shows it: a real title as
+// it is, a raw number ("024") as nothing plus its place (the console's "Chapter
+// N"), and no chapter at all for a book whose one chapter is the whole book.
+func TestLiveSessionsChapterTitles(t *testing.T) {
+	f := newSessionFixture(t)
+	numbered := Ref{LibraryID: f.lib, Path: "Numbered"}
+	single := Ref{LibraryID: f.lib, Path: "Single"}
+	for _, b := range []*Book{
+		{LibraryID: f.lib, RelPath: numbered.Path, IsFolder: true, Title: "Numbered", Duration: 7200,
+			Chapters: []metadata.Chapter{{Index: 0, Title: "001"}, {Index: 1, Title: "002", BookOffset: 600},
+				{Index: 2, Title: "003", BookOffset: 1200}}},
+		{LibraryID: f.lib, RelPath: single.Path, IsFolder: true, Title: "Single", Duration: 7200,
+			Chapters: []metadata.Chapter{{Index: 0, Title: "Bk 8 - Single"}}},
+	} {
+		if _, err := f.c.UpsertBook(f.ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.listen(t, 1, f.book, 3700)
+	f.listen(t, 2, numbered, 700)
+	f.listen(t, 3, single, 100)
+	live, err := f.c.LiveSessions(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]string{}
+	for _, s := range live {
+		idx := "-"
+		if s.ChapterIndex != nil {
+			idx = strconv.Itoa(*s.ChapterIndex)
+		}
+		got[s.DeviceID] = s.Chapter + "@" + idx
+	}
+	want := map[int64]string{1: "Middle@1", 2: "@1", 3: "@-"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("live chapters = %v, want %v", got, want)
 	}
 }
 

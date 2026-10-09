@@ -129,8 +129,9 @@ type Funnel struct {
 }
 
 // DropOff is a chapter where several people stopped the same book: unfinished,
-// with no save for dropOffIdle. ScanError says the book has a read problem the
-// Health page lists, which is often why.
+// with no save for dropOffIdle. Chapter is its title as metadata.ChapterTitle
+// shows it ("" when it names nothing: the console says "chapter N"). ScanError
+// says the book has a read problem the Health page lists, which is often why.
 type DropOff struct {
 	LibraryID    int64  `json:"library_id"`
 	Path         string `json:"path"`
@@ -891,7 +892,7 @@ func (c *Catalog) activityDropOffs(ctx context.Context, out *Activity, _, _ time
 			d := s.drop
 			d.ChapterIndex, d.Listeners = idx, n
 			if idx < len(chs) {
-				d.Chapter = chs[idx].Title
+				d.Chapter = metadata.ChapterTitle(chs[idx].Title)
 			}
 			out.DropOffs = append(out.DropOffs, d)
 		}

@@ -125,8 +125,13 @@ export interface ListeningSession {
    */
   imported: boolean;
   state: SessionState;
-  /** Live sessions only: the chapter at the position and the device's newest address. */
+  /**
+   * Live sessions only: the chapter at the position and the device's newest address. The
+   * chapter's title is omitted when it names nothing ("024", "Track 01"): `chapter_index`
+   * places it (`liveChapter`). A book with a single chapter has neither.
+   */
   chapter?: string;
+  chapter_index?: number;
   ip?: string;
 }
 

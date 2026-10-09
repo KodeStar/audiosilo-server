@@ -212,10 +212,14 @@ type Session struct {
 	// Imported: written by a listening import (catalog/imports.go).
 	Imported bool   `json:"imported"`
 	State    string `json:"state"`
-	// Chapter (the chapter at the position) and IP (the device's newest address)
-	// are filled for live sessions only.
-	Chapter string `json:"chapter,omitempty"`
-	IP      string `json:"ip,omitempty"`
+	// Chapter and ChapterIndex (the chapter at the position) and IP (the device's
+	// newest address) are filled for live sessions only. Chapter is the title as
+	// metadata.ChapterTitle shows it: "" for one that names nothing ("024",
+	// "Track 01"), where the console says "Chapter N" from ChapterIndex. A book
+	// with a single chapter has neither: its one chapter is the whole book.
+	Chapter      string `json:"chapter,omitempty"`
+	ChapterIndex *int   `json:"chapter_index,omitempty"`
+	IP           string `json:"ip,omitempty"`
 }
 
 const sessionColumns = `s.id, s.user_id, u.username, s.library_id, s.rel_path,
@@ -307,8 +311,9 @@ func (c *Catalog) LiveSessions(ctx context.Context) ([]Session, error) {
 				}
 				chs, chapters[l.bookID] = b.Chapters, b.Chapters
 			}
-			if i := chapterAt(chs, l.EndPos); i >= 0 {
-				l.Chapter = chs[i].Title
+			if len(chs) > 1 {
+				i := chapterAt(chs, l.EndPos)
+				l.Chapter, l.ChapterIndex = metadata.ChapterTitle(chs[i].Title), &i
 			}
 		}
 		out = append(out, l.Session)

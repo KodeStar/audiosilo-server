@@ -49,6 +49,7 @@ import {
 } from '@/lib/format';
 import { useCurrentUser } from '@/lib/session';
 import { cn } from '@/lib/utils';
+import { liveChapter } from '@/features/activity/live-model';
 import { greetingFor, splitListening } from './overview-model';
 
 /**
@@ -248,7 +249,7 @@ function LiveCard({ session: s, lang }: { session: ListeningSession; lang: strin
         </div>
         <div className="truncate font-semibold">{title}</div>
         <div className="truncate text-[12.5px] text-muted-foreground">
-          {s.chapter || s.author || s.device_name}
+          {liveChapter(s, t) || s.author || s.device_name}
         </div>
         <ProgressBar fraction={frac} label={t('home.progressAria', { title })} />
         <div className="flex justify-between gap-2 text-[11.5px] text-subtle-foreground tabular-nums">
