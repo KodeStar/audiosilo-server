@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 // PathLayout is what a book's library path says about it by its LAYOUT. Tags
@@ -110,14 +109,12 @@ func plainVolume(seg string) string {
 // isPartLabel reports whether a path segment names a part of a book rather
 // than the book: IsGenericTitle ("CD1", "Disc 2", "Track 01", "03"), except a
 // bare number of four or more digits, which is a title ("1984") rather than a
-// volume, a name with no digit at all, and a name with a letter outside ASCII:
-// IsGenericTitle reads only ASCII letters, so it takes a name in any other
-// script for an empty label ("Война и мир") or a bare number ("Метро 2033").
+// volume, a name with no digit at all, and a name with a letter outside ASCII
+// (NamesNothing: "Война и мир", "Метро 2033").
 func isPartLabel(seg string) bool {
 	n := strings.TrimSpace(seg)
-	if !strings.ContainsAny(n, "0123456789") || (len(n) >= 4 && strings.Trim(n, "0123456789") == "") ||
-		strings.ContainsFunc(n, func(r rune) bool { return r > unicode.MaxASCII && unicode.IsLetter(r) }) {
+	if !strings.ContainsAny(n, "0123456789") || (len(n) >= 4 && strings.Trim(n, "0123456789") == "") {
 		return false
 	}
-	return IsGenericTitle(seg)
+	return NamesNothing(seg)
 }

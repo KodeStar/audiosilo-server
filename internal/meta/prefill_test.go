@@ -31,6 +31,11 @@ func TestSearchPrefill(t *testing.T) {
 		{"junk tags with a path that says nothing keep the tags", "Track 01", "Unknown", "",
 			"Track 01.mp3", false, "Track 01 Unknown"},
 		{"no author folder: the title only", "Unknown", "", "", "Sharpe's Eagle", true, "Sharpe's Eagle"},
+		{"swapped in a lone folder: the author tag is the title, the title tag the author", "Bernard Cornwell",
+			"Sharpe's Eagle", "", "Sharpe's Eagle", true, "Sharpe's Eagle Bernard Cornwell"},
+		{"a book named like its author folder is not swapped", "Dune", "Frank Herbert", "", "Dune/Dune", true,
+			"Dune Frank Herbert"},
+		{"a title in another script is a title", "Пролог", "Автор", "", "Автор/Книга", true, "Пролог Автор"},
 	} {
 		if got := SearchPrefill(c.title, c.author, c.series, c.path, c.isFolder); got != c.want {
 			t.Errorf("%s: SearchPrefill(%q, %q) = %q, want %q", c.name, c.title, c.author, got, c.want)

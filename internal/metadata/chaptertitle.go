@@ -13,14 +13,15 @@ import (
 //     (audiosilo-frontend src/playback/prettify-title.ts) tidies it: the audio
 //     extension dropped, underscores made spaces, a trailing bitrate tag removed;
 //   - a title that is empty, only a number ("024", "01."), or a track or disc
-//     number ("Track 2-1", "CD1 Track 03": IsGenericTitle) is "".
+//     number ("Track 2-1", "CD1 Track 03": NamesNothing, so a title in another
+//     script, "Пролог" or "第1章", stays) is "".
 //
 // A numbered chapter or part ("Chapter 10", "Part 7") is kept as written: in a
 // book that opens with a prologue the 11th chapter is titled "Chapter 10", and
 // the player shows that title, so its own number stands.
 func ChapterTitle(raw string) string {
 	t := strings.TrimSpace(prettifyChapterTitle(raw))
-	if IsGenericTitle(t) && !namesChapter(t) {
+	if NamesNothing(t) && !namesChapter(t) {
 		return ""
 	}
 	return t

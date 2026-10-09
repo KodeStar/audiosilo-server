@@ -24,10 +24,11 @@ import (
 //   - both tags when they are swapped: the title is the author folder's name, or
 //     the author, cleaned of series and numbering (match.CleanTitle), is the
 //     path's title ("Bernard Cornwell" by "Sharpe's Eagle (Sharpe 08)");
-//   - a junk title ("Track 01", "03": metadata.IsGenericTitle; "Unknown",
+//   - a junk title ("Track 01", "03": metadata.NamesNothing; "Unknown",
 //     "Untitled") or a junk author ("Unknown", "Various Artists"), each alone.
 //
-// A fact the path doesn't give keeps the tag's value.
+// A fact the path doesn't give keeps the tag's value (for swapped tags, the
+// other tag's).
 func SearchPrefill(title, author, series, relPath string, isFolder bool) string {
 	title, author = strings.TrimSpace(title), strings.TrimSpace(author)
 	p := metadata.FromPathLayout(relPath, isFolder)
@@ -36,8 +37,18 @@ func SearchPrefill(title, author, series, relPath string, isFolder bool) string 
 		// "Brandon Sanderson/Stormlight Archive/03": the series and its volume.
 		pathTitle = p.Series + " " + strconv.FormatFloat(p.SeriesIndex, 'f', -1, 64)
 	}
-	swapped := (p.Author != "" && title != "" && match.Fold(title) == match.Fold(p.Author)) ||
-		(pathTitle != "" && author != "" && match.Fold(match.CleanTitle(author, series)) == match.Fold(pathTitle))
+	// A tag that matches its own path fact is never swapped: "Dune/Dune" by Frank
+	// Herbert has the title of its author folder because the folder is the book's.
+	swapped := (p.Author != "" && title != "" && match.Fold(title) == match.Fold(p.Author) &&
+		match.Fold(title) != match.Fold(pathTitle)) ||
+		(pathTitle != "" && author != "" && match.Fold(match.CleanTitle(author, series)) == match.Fold(pathTitle) &&
+			match.Fold(author) != match.Fold(p.Author))
+	if swapped {
+		// Swap them back first, so a fact the path doesn't give comes from the
+		// other tag: "Bernard Cornwell" by "Sharpe's Eagle" in a lone "Sharpe's
+		// Eagle" folder is Sharpe's Eagle by Bernard Cornwell.
+		title, author = author, title
+	}
 	if pathTitle != "" && (swapped || junkTitle(title)) {
 		title = pathTitle
 	}
@@ -53,7 +64,7 @@ func junkTitle(t string) bool {
 	case "unknown", "untitled", "unknown title", "unknown album", "no title":
 		return true
 	}
-	return metadata.IsGenericTitle(t)
+	return metadata.NamesNothing(t)
 }
 
 // junkAuthor reports whether an author tag names nobody.

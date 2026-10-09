@@ -699,7 +699,8 @@ admin overrides; see Metadata overrides below).
   page: per-field provenance, chapters, files, listeners, shares, folder override, and
   `match_query`, the match dialog's search box prefill set by the api: `meta.SearchPrefill`, the
   title + author, except that swapped tags (the title is the author folder, or the cleaned author
-  is the path's title) or a junk title/author (`IsGenericTitle`, "Unknown", "Various Artists")
+  is the path's title; never a tag that matches its own path fact, "Dune/Dune") or a junk title/author
+  (`metadata.NamesNothing`, "Unknown", "Various Artists")
   take the folders' facts, `metadata.FromPathLayout`);
   `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
   STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
@@ -935,7 +936,7 @@ admin overrides; see Metadata overrides below).
   nothing writes nothing, answering the row as it is or 404 with none; no listening session
   recorded). An edit's `updated_at` keeps its sub-second time, and `SaveProgress` compares and
   writes in one writer transaction, so an older device save never overwrites a newer edit. Endpoints
-  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `IsGenericTitle`, but "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
+  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.NamesNothing`, IsGenericTitle for any script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
   /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
   /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
   /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET
