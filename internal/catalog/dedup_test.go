@@ -3,6 +3,7 @@ package catalog
 import "testing"
 
 func TestNormCollapsesPunctuationAndCase(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"The  Hobbit!!":   "the hobbit",
 		"Tolkien, J.R.R.": "tolkien j r r",
@@ -19,6 +20,7 @@ func TestNormCollapsesPunctuationAndCase(t *testing.T) {
 }
 
 func TestExposedDedupKeyPrecedence(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		book Book
@@ -39,6 +41,7 @@ func TestExposedDedupKeyPrecedence(t *testing.T) {
 }
 
 func TestBetterThanQualityPrecedence(t *testing.T) {
+	t.Parallel()
 	mk := func(format string, files int, size int64, dur float64, sortOrder, rank int) candidate {
 		return candidate{
 			book:      Book{Format: format, Size: size, Duration: dur},
@@ -64,6 +67,7 @@ func TestBetterThanQualityPrecedence(t *testing.T) {
 }
 
 func TestDedupBooksGroupsAndPicksWinner(t *testing.T) {
+	t.Parallel()
 	mk := func(lib int64, libName, path, title, author, format, hash string, files int, size int64, sortOrder, rank int) candidate {
 		return candidate{
 			book: Book{LibraryID: lib, RelPath: path, Title: title, Author: author,
@@ -117,6 +121,7 @@ func TestDedupBooksGroupsAndPicksWinner(t *testing.T) {
 }
 
 func TestDedupGenericTitlesAndDistinctLocations(t *testing.T) {
+	t.Parallel()
 	mk := func(lib int64, libName, title, author, hash string, sortOrder, rank int) candidate {
 		return candidate{
 			book: Book{LibraryID: lib, RelPath: title + "-" + hash + ".mp3", Title: title, Author: author,
@@ -160,6 +165,7 @@ func TestDedupGenericTitlesAndDistinctLocations(t *testing.T) {
 }
 
 func TestSearchDeduplicatesAcrossLibraries(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/a"})
 	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/b"})
@@ -209,6 +215,7 @@ func TestSearchDeduplicatesAcrossLibraries(t *testing.T) {
 }
 
 func TestSearchDedupPrefersQualityOverOrder(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/a"})
 	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/b"})
@@ -242,6 +249,7 @@ func TestSearchDedupPrefersQualityOverOrder(t *testing.T) {
 }
 
 func TestRecentBooksDeduplicates(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	libA, _ := c.CreateLibrary(ctx, Library{Name: "A", Root: "/a"})
 	libB, _ := c.CreateLibrary(ctx, Library{Name: "B", Root: "/b"})

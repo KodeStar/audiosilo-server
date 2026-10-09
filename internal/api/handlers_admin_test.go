@@ -40,6 +40,7 @@ func adminAndMember(t *testing.T, e *testEnv) (adminTok, memberTok string, membe
 // count and whether its root is reachable, so the console can show the "root
 // unavailable" safety state; a non-admin is refused.
 func TestAdminLibrariesAvailability(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, memberTok, _ := adminAndMember(t, e)
@@ -99,6 +100,7 @@ func TestAdminLibrariesAvailability(t *testing.T) {
 // TestScanStatusReportsUnavailableRoot: after a scan stops at the safety guard
 // the status says so, so the console can explain why nothing changed.
 func TestScanStatusReportsUnavailableRoot(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _, _ := adminAndMember(t, e)
@@ -115,6 +117,7 @@ func TestScanStatusReportsUnavailableRoot(t *testing.T) {
 // TestAdminListInvites: every account's invites in one list, metadata only (the
 // code itself is never stored, so it can't be listed); denied to non-admins.
 func TestAdminListInvites(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, memberTok, memberID := adminAndMember(t, e)
@@ -164,6 +167,7 @@ func TestAdminListInvites(t *testing.T) {
 // folders (never files) of an absolute path; relative paths, missing folders and
 // non-admins are refused.
 func TestAdminListDirs(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	dir := t.TempDir()
@@ -205,6 +209,7 @@ func TestAdminListDirs(t *testing.T) {
 
 // TestAdminSharesListMembers: the share list says who each share is granted to.
 func TestAdminSharesListMembers(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, memberTok, memberID := adminAndMember(t, e)
@@ -249,6 +254,7 @@ func TestAdminSharesListMembers(t *testing.T) {
 // TestErrorCodes: failures a person can fix carry a machine-readable code next
 // to the message, so the console doesn't depend on the English wording.
 func TestErrorCodes(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	code := func(method, path, body string) (int, string) {
@@ -290,6 +296,7 @@ func TestErrorCodes(t *testing.T) {
 // TestInviteResponsesCarryLifetime: minting and rotating say how many devices
 // the invite pairs and when it expires, so the console shows the server's values.
 func TestInviteResponsesCarryLifetime(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _, memberID := adminAndMember(t, e)
 	id := strconv.FormatInt(memberID, 10)
@@ -327,6 +334,7 @@ func TestInviteResponsesCarryLifetime(t *testing.T) {
 // TestWholeLibraryGrantsAreMarked: the share a whole-library grant creates
 // carries whole_library_id; a share an admin fills with a whole library doesn't.
 func TestWholeLibraryGrantsAreMarked(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _, memberID := adminAndMember(t, e)
@@ -364,6 +372,7 @@ func TestWholeLibraryGrantsAreMarked(t *testing.T) {
 
 // TestAdminLibrariesCarryScanProgress: one poll of the list shows each scan.
 func TestAdminLibrariesCarryScanProgress(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	adminTok, _, _ := adminAndMember(t, e)

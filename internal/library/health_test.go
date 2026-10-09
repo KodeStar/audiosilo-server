@@ -37,6 +37,7 @@ func writeFile(t *testing.T, root, rel string, data []byte) {
 }
 
 func TestNormalizeIgnore(t *testing.T) {
+	t.Parallel()
 	got, err := NormalizeIgnore([]string{"  *.sample.mp3 ", "", "# extras", "Podcasts/*", "Extras/"})
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +62,7 @@ func TestNormalizeIgnore(t *testing.T) {
 }
 
 func TestIgnoreMatch(t *testing.T) {
+	t.Parallel()
 	ig := ParseIgnore([]string{"*.sample.mp3", "# Extras", "podcasts/*", "Extras/", "[bad"})
 	for _, tc := range []struct {
 		rel   string
@@ -92,6 +94,7 @@ func TestIgnoreMatch(t *testing.T) {
 }
 
 func TestParseSchedule(t *testing.T) {
+	t.Parallel()
 	for _, ok := range []string{"", "every:1h", "every:6h", "every:24h", "daily:03:00", "daily:23:59"} {
 		if _, err := ParseSchedule(ok); err != nil {
 			t.Errorf("ParseSchedule(%q) = %v", ok, err)
@@ -105,6 +108,7 @@ func TestParseSchedule(t *testing.T) {
 }
 
 func TestScheduleNext(t *testing.T) {
+	t.Parallel()
 	loc := time.UTC
 	now := time.Date(2026, 10, 4, 9, 0, 0, 0, loc)
 	every, _ := ParseSchedule("every:6h")
@@ -126,6 +130,7 @@ func TestScheduleNext(t *testing.T) {
 }
 
 func TestSuspectParts(t *testing.T) {
+	t.Parallel()
 	long := float64(minSuspectPart)
 	for _, tc := range []struct {
 		name  string
@@ -148,6 +153,7 @@ func TestSuspectParts(t *testing.T) {
 // A 0-byte part is recorded on the book as a read problem; ignored files and
 // folders are skipped by the scan, the browse view and on-demand indexing.
 func TestScanRecordsProblemsAndHonoursIgnore(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	root := t.TempDir()
 	audio, err := os.ReadFile(filepath.Join(testdataRoot(t), "Brandon Sanderson", "Mistborn", "01 - The Final Empire.m4b"))
@@ -215,6 +221,7 @@ func TestScanRecordsProblemsAndHonoursIgnore(t *testing.T) {
 
 // ffprobe's own message is what a probe failure records (needs ffprobe).
 func TestProbeFailureRecorded(t *testing.T) {
+	t.Parallel()
 	ffprobe := lookFFprobe(t)
 	cat, ctx := newHealthCatalog(t)
 	root := t.TempDir()
@@ -248,6 +255,7 @@ func fileExists(p string) bool {
 
 // noteProblem keeps the first problem and strips the absolute path from an OS error.
 func TestNoteProblem(t *testing.T) {
+	t.Parallel()
 	b := &catalog.Book{}
 	_, openErr := os.Open(filepath.Join(t.TempDir(), "gone.mp3"))
 	noteProblem(b, "A/01.mp3", 10, &metadata.Metadata{OpenErr: openErr})
@@ -261,6 +269,7 @@ func TestNoteProblem(t *testing.T) {
 // nothing; a manual or change ask queues one follow-up; cancelling a queued job
 // drops it.
 func TestEnqueueCoalescing(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir()})
 	other, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "O", Root: t.TempDir()})
@@ -298,6 +307,7 @@ func TestEnqueueCoalescing(t *testing.T) {
 
 // Cancelling the running scan stops it before it prunes, recorded as cancelled.
 func TestCancelRunningScan(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	root, _ := filepath.Abs(testdataRoot(t))
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
@@ -325,6 +335,7 @@ func TestCancelRunningScan(t *testing.T) {
 
 // A due schedule queues a scan; one not yet due doesn't.
 func TestQueueDue(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	due, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Due", Root: t.TempDir(), ScanSchedule: "every:1h"})
 	later, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "Later", Root: t.TempDir(), ScanSchedule: "every:24h"})
@@ -352,6 +363,7 @@ func TestQueueDue(t *testing.T) {
 // A folder book indexed before suspect detection is checked on the next scan with
 // a tag read, without re-indexing it.
 func TestSuspectBackfill(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -394,6 +406,7 @@ func testAudio(t *testing.T) []byte {
 // probe's timeout instead of holding the one worker, so the next library's scan
 // still runs.
 func TestHungRootDoesNotHoldTheQueue(t *testing.T) {
+	t.Parallel()
 	cat, _ := newHealthCatalog(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -427,6 +440,7 @@ func TestHungRootDoesNotHoldTheQueue(t *testing.T) {
 // The startup scan is a library's full index and runs to the end; a scan someone
 // asked for stops at the hour.
 func TestStartupScanHasNoTimeLimit(t *testing.T) {
+	t.Parallel()
 	startup, cancel := jobContext(context.Background(), TriggerStartup)
 	defer cancel()
 	if _, ok := startup.Deadline(); ok {
@@ -442,6 +456,7 @@ func TestStartupScanHasNoTimeLimit(t *testing.T) {
 // Deleting a library drops its queued scans and stops its running one, leaving
 // other libraries' scans alone.
 func TestCancelLibrary(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: t.TempDir()})
 	other, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "O", Root: t.TempDir()})
@@ -462,6 +477,7 @@ func TestCancelLibrary(t *testing.T) {
 
 // A leading "/" anchors a name to the library root, as in .gitignore.
 func TestIgnoreLeadingSlashAnchors(t *testing.T) {
+	t.Parallel()
 	ig := ParseIgnore([]string{"/Extras", "/Samples/"})
 	for _, tc := range []struct {
 		rel       string
@@ -484,6 +500,7 @@ func TestIgnoreLeadingSlashAnchors(t *testing.T) {
 // are pruned and the library isn't reported offline. An empty folder with nothing
 // ignored is still what an unmounted share looks like.
 func TestIgnoringEverythingPrunes(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	audio := testAudio(t)
 	root := t.TempDir()
@@ -520,6 +537,7 @@ func TestIgnoringEverythingPrunes(t *testing.T) {
 // A read problem on a later part goes once the file reads again, though nothing
 // about it changed on disk (a fixed permission), on the next full scan.
 func TestFixedReadProblemClears(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	audio := testAudio(t)
 	root := t.TempDir()
@@ -564,6 +582,7 @@ func TestFixedReadProblemClears(t *testing.T) {
 // folded into a scan of the library already running) skips its slot rather than
 // coming back on the next tick.
 func TestDroppedScheduleSlotIsNotRequeued(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -609,6 +628,7 @@ func TestDroppedScheduleSlotIsNotRequeued(t *testing.T) {
 
 // A renamed book is counted once, as moved: not also as new, nor as removed.
 func TestRenameCountsAsAMove(t *testing.T) {
+	t.Parallel()
 	cat, ctx := newHealthCatalog(t)
 	root := t.TempDir()
 	writeFile(t, root, "Author/Old Name/book.m4b", testAudio(t))
@@ -633,6 +653,7 @@ func TestRenameCountsAsAMove(t *testing.T) {
 
 // Problems take at most half the log, so the removed paths after them still fit.
 func TestRunLogKeepsRoomForRemovals(t *testing.T) {
+	t.Parallel()
 	rl := &runLog{}
 	for range 400 {
 		rl.add("warn", "problem", nil)
@@ -657,6 +678,7 @@ func TestRunLogKeepsRoomForRemovals(t *testing.T) {
 // Review follow-ups: schedules stored canonically, line breaks inside an ignore
 // entry validated, "Part1"/"CD2" read as part markers.
 func TestValidatePatchCanonicalizes(t *testing.T) {
+	t.Parallel()
 	sched, ignore := " every:06h", []string{"Extras/\n[bad"}
 	p := catalog.LibraryPatch{ScanSchedule: &sched, IgnorePatterns: &ignore}
 	if err := ValidatePatch(&p); !errors.Is(err, ErrInvalidIgnore) {
@@ -677,6 +699,7 @@ func TestValidatePatchCanonicalizes(t *testing.T) {
 }
 
 func TestSuspectIgnoresNumberedParts(t *testing.T) {
+	t.Parallel()
 	long := float64(minSuspectPart)
 	if n := suspectParts([]partFacts{{"Part1", long}, {"Part2", long}, {"CD3", long}}); n != 0 {
 		t.Fatalf("untagged numbered parts look like %d books", n)

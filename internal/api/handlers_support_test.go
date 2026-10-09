@@ -47,6 +47,7 @@ func supportShows(t *testing.T, e *testEnv, token string) bool {
 // The support card is the console's: a member, a demo visitor and a signed-out
 // caller can neither read nor answer it, and their tries change nothing.
 func TestSupportCardAdminOnly(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok := opsTokens(t, e)
 	demo, err := e.auth.CreateDemoUser(context.Background(), "demo_x")
@@ -78,6 +79,7 @@ func TestSupportCardAdminOnly(t *testing.T) {
 // "I've donated" hides the card for every admin on the server and is audited
 // once; a later "Not now" changes nothing, so it isn't audited.
 func TestSupportCardDonated(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	other, err := e.auth.CreateUser(context.Background(), "second", "second-password", auth.RoleAdmin)
@@ -114,6 +116,7 @@ func TestSupportCardDonated(t *testing.T) {
 
 // "Not now" answers with the snooze's end, and audits it as returns_at.
 func TestSupportCardSnoozed(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	backdateServer(t, e, (catalog.SupportAfterDays+1)*24*time.Hour)
@@ -142,6 +145,7 @@ func TestSupportCardSnoozed(t *testing.T) {
 }
 
 func TestSupportCardBadAction(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, _ := opsTokens(t, e)
 	for _, body := range []string{`{"action":"later"}`, `{"action":"snooze"}`, `{}`, `{"action":"donated","extra":1}`, `nope`} {

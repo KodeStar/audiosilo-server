@@ -6,6 +6,7 @@ import (
 )
 
 func TestReapIdleDemoUsers(t *testing.T) {
+	t.Parallel()
 	s, ctx := newTestService(t)
 
 	old, _ := s.CreateDemoUser(ctx, DemoUsernamePrefix+"old")

@@ -17,6 +17,7 @@ import (
 // author; a tag's series with no author), else from one read of its tags, which
 // keeps a series tag that names the folder. An edit stays on top.
 func TestScanReadsLoneFolderAsAuthor(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	// ffprobe reads the MP3's series tag (TXXX), which the tag library doesn't.
 	ffprobe := lookFFprobe(t)

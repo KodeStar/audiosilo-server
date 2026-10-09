@@ -12,6 +12,7 @@ func fileEntry(name string, book bool) Entry {
 }
 
 func TestNextSibling(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		entries []Entry
 		current string

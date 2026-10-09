@@ -39,11 +39,14 @@ var (
 
 // HashPassword returns an argon2id PHC-style encoded hash.
 func HashPassword(password string) (string, error) {
+	return hashWithCost(password, hashCost)
+}
+
+func hashWithCost(password string, c argonCost) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	c := hashCost
 	key := argon2.IDKey([]byte(password), salt, c.time, c.memory, c.threads, argonKeyLen)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version, c.memory, c.time, c.threads,

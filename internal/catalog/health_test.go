@@ -9,6 +9,7 @@ import (
 // Phase 3: scan history, Health issues and their ignores.
 
 func TestScanRunsRecordAndRetain(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	other, _ := c.CreateLibrary(ctx, Library{Name: "O", Root: "/tmp/o"})
@@ -96,6 +97,7 @@ func issueBooks(t *testing.T, c *Catalog, libID int64) {
 }
 
 func TestIssueCountsAndIgnores(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	issueBooks(t, c, lib.ID)
@@ -158,6 +160,7 @@ func TestIssueCountsAndIgnores(t *testing.T) {
 }
 
 func TestDuplicateGroups(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	other, _ := c.CreateLibrary(ctx, Library{Name: "O", Root: "/tmp/o"})
@@ -225,6 +228,7 @@ func TestDuplicateGroups(t *testing.T) {
 }
 
 func TestLibraryScanSettings(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l", ScanSchedule: "every:6h", IgnorePatterns: []string{"*.tmp", "Extras/"}})
 	if err != nil {
@@ -252,6 +256,7 @@ func TestLibraryScanSettings(t *testing.T) {
 // A folder an admin set to "one book" (the suspect category's own fix) leaves the
 // suspect count and list.
 func TestSuspectSettledByBookOverride(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	issueBooks(t, c, lib.ID)
@@ -274,6 +279,7 @@ func TestSuspectSettledByBookOverride(t *testing.T) {
 // A copy of unknown length doesn't join an abridged and an unabridged edition,
 // and the ignored view lists only ignored groups.
 func TestDuplicateLengthsAndIgnoredView(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)

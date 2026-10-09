@@ -75,6 +75,7 @@ func listAll(t *testing.T, c *Catalog, ctx context.Context, opt AdminListOptions
 }
 
 func TestListAdminBooksFilters(t *testing.T) {
+	t.Parallel()
 	c, ctx, libA, _ := seedAdminLibrary(t)
 	yes, no := true, false
 	for name, tc := range map[string]struct {
@@ -106,6 +107,7 @@ func TestListAdminBooksFilters(t *testing.T) {
 }
 
 func TestListAdminBooksRowShape(t *testing.T) {
+	t.Parallel()
 	c, ctx, libA, _ := seedAdminLibrary(t)
 	page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{LibraryID: libA, Query: "dune"}})
 	if err != nil || len(page.Books) != 1 {
@@ -124,6 +126,7 @@ func TestListAdminBooksRowShape(t *testing.T) {
 // A row without overrides says so with an empty list, never null (the console
 // iterates it).
 func TestListAdminBooksEditedFieldsNeverNull(t *testing.T) {
+	t.Parallel()
 	c, ctx, libA, _ := seedAdminLibrary(t)
 	page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{LibraryID: libA, Edited: new(bool)}})
 	if err != nil || len(page.Books) == 0 {
@@ -138,6 +141,7 @@ func TestListAdminBooksEditedFieldsNeverNull(t *testing.T) {
 // TestListAdminBooksKeyset: every ordering pages through the whole set exactly
 // once at a page size of 1, in the same order as one big page.
 func TestListAdminBooksKeyset(t *testing.T) {
+	t.Parallel()
 	c, ctx, _, _ := seedAdminLibrary(t)
 	for sortName := range adminSorts {
 		for _, desc := range []bool{false, true} {
@@ -178,6 +182,7 @@ func TestListAdminBooksKeyset(t *testing.T) {
 // work's date, else the tags' release date, a bare year before that year's dates
 // and undated books last; both page exactly.
 func TestListAdminBooksSurnameAndPublished(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	for _, b := range []*Book{
@@ -223,6 +228,7 @@ func TestListAdminBooksSurnameAndPublished(t *testing.T) {
 // name ("Alexandre Dumas, pere") splits nothing, and the merge suggestions stay
 // over whole credits.
 func TestSplitCredits(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	for _, b := range []*Book{
@@ -319,6 +325,7 @@ func TestSplitCredits(t *testing.T) {
 // name with no letter or digit is found in a co-credit too (no phrase to match),
 // and a row's people are [] rather than null for a blank credit.
 func TestSplitCreditsEdges(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	for _, b := range []*Book{
@@ -364,6 +371,7 @@ func TestSplitCreditsEdges(t *testing.T) {
 }
 
 func TestListAdminBooksBadCursor(t *testing.T) {
+	t.Parallel()
 	c, ctx, _, _ := seedAdminLibrary(t)
 	page, _ := c.ListAdminBooks(ctx, AdminListOptions{Sort: "title", Limit: 1})
 	for name, opt := range map[string]AdminListOptions{
@@ -382,6 +390,7 @@ func TestListAdminBooksBadCursor(t *testing.T) {
 }
 
 func TestBookFacets(t *testing.T) {
+	t.Parallel()
 	c, ctx, libA, libB := seedAdminLibrary(t)
 	f, err := c.BookFacets(ctx, BookFilter{LibraryID: libA, Formats: []string{"m4b"}})
 	if err != nil {
@@ -414,6 +423,7 @@ func TestBookFacets(t *testing.T) {
 }
 
 func TestPeopleAggregate(t *testing.T) {
+	t.Parallel()
 	c, ctx, libA, _ := seedAdminLibrary(t)
 	agg, err := c.People(ctx, PeopleAuthors, libA, nil)
 	if err != nil {
@@ -437,6 +447,7 @@ func TestPeopleAggregate(t *testing.T) {
 }
 
 func TestPersonKey(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ a, b string }{
 		{"Brandon Sanderson", "Sanderson, Brandon"},
 		{"J.R.R. Tolkien", "J. R. R. Tolkien"},
@@ -467,6 +478,7 @@ func TestPersonKey(t *testing.T) {
 }
 
 func TestSeriesAggregate(t *testing.T) {
+	t.Parallel()
 	c, ctx, _, _ := seedAdminLibrary(t)
 	series, err := c.Series(ctx, 0, nil, false)
 	if err != nil {
@@ -482,6 +494,7 @@ func TestSeriesAggregate(t *testing.T) {
 // scope grants (denied: one outside it contributes nothing, nor does another
 // library's, even with libraryID 0), and nil counts every book (allowed).
 func TestAggregatesScoped(t *testing.T) {
+	t.Parallel()
 	c, ctx, libA, libB := seedAdminLibrary(t)
 	mistborn := &Scope{LibraryID: libA, Paths: []string{"Sanderson/Mistborn"}}
 	agg, err := c.People(ctx, PeopleAuthors, libA, mistborn)
@@ -526,6 +539,7 @@ func TestAggregatesScoped(t *testing.T) {
 // TestDirectPlayableSQLAgreesWithGo: the list's direct_playable (SQL) answers what
 // /item tells players (media.DirectPlayable) for every kind of codec.
 func TestDirectPlayableSQLAgreesWithGo(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	codecs := []string{"", "aac", "MP3", "flac", "opus", "vorbis", "pcm_s16le", "ac3", "eac3", "wmav2"}
@@ -548,6 +562,7 @@ func TestDirectPlayableSQLAgreesWithGo(t *testing.T) {
 // On a tie the suggested spelling is the natural "Given Surname" one, never the
 // reversed "Surname, Given" (which merely sorts first); more books still wins.
 func TestMergeSuggestionPrefersNaturalOrder(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		people []PersonCount
 		want   string

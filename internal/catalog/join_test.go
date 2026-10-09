@@ -27,6 +27,7 @@ func near(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 // one finishes the book), bookmarks, notes, history and sessions offset, favourites
 // once; the discs' config is copied, the earliest disc winning field by field.
 func TestJoinDurableState(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	ann, bob, cat, dan := seedNamedUser(t, c, "ann"), seedNamedUser(t, c, "bob"), seedNamedUser(t, c, "cat"), seedNamedUser(t, c, "dan")
@@ -192,6 +193,7 @@ func TestJoinDurableState(t *testing.T) {
 // length, or the length its row recorded) as their length, not the disc's own: a
 // position moved onto the joined timeline must never read past 100%.
 func TestJoinUnknownTotalKeepsPositionWithinDuration(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	ann, bob := seedNamedUser(t, c, "ann"), seedNamedUser(t, c, "bob")
@@ -248,6 +250,7 @@ func TestJoinUnknownTotalKeepsPositionWithinDuration(t *testing.T) {
 // An Unplaced part (its offset unknown) keeps its listening state on its own path,
 // while a placed one carries; its config is still copied.
 func TestJoinLeavesUnplacedPartState(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	ann := seedNamedUser(t, c, "ann")
@@ -292,6 +295,7 @@ func TestJoinLeavesUnplacedPartState(t *testing.T) {
 // library.markSplitDiscs) is listed once, by its first disc, until its folder gets
 // an override; its discs are not also offered as duplicates.
 func TestSplitDiscsIssue(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	uid := seedUser(t, c, ctx)
@@ -386,6 +390,7 @@ func TestSplitDiscsIssue(t *testing.T) {
 // sibling whose name only starts like a disc's, and a LIKE wildcard ("CD_") match
 // nothing.
 func TestGetBookHolding(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	other, _ := c.CreateLibrary(ctx, Library{Name: "M", Root: "/tmp/m"})

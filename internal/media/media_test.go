@@ -12,6 +12,7 @@ import (
 )
 
 func TestAudioContentType(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		".m4b":     "audio/mp4",
 		".M4B":     "audio/mp4", // case-insensitive
@@ -32,6 +33,7 @@ func TestAudioContentType(t *testing.T) {
 }
 
 func TestSniffAudioType(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		data []byte
@@ -64,6 +66,7 @@ func TestSniffAudioType(t *testing.T) {
 }
 
 func TestServeFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "song.mp3")
 	body := append([]byte("ID3"), []byte(strings.Repeat("a", 200))...)
@@ -115,6 +118,7 @@ func TestServeFile(t *testing.T) {
 }
 
 func TestDirectPlayable(t *testing.T) {
+	t.Parallel()
 	for _, codec := range []string{"aac", "MP3", "flac", "opus", "vorbis", ""} {
 		if !DirectPlayable(codec) {
 			t.Errorf("DirectPlayable(%q) = false, want true", codec)
@@ -128,6 +132,7 @@ func TestDirectPlayable(t *testing.T) {
 }
 
 func TestTranscode(t *testing.T) {
+	t.Parallel()
 	if !HasFFmpeg("ffmpeg") {
 		t.Skip("ffmpeg not available; transcoding requires it")
 	}
@@ -159,6 +164,7 @@ func TestTranscode(t *testing.T) {
 }
 
 func TestHasFFmpeg(t *testing.T) {
+	t.Parallel()
 	if HasFFmpeg("") {
 		t.Error(`HasFFmpeg("") = true, want false (empty path disables transcoding)`)
 	}
@@ -168,6 +174,7 @@ func TestHasFFmpeg(t *testing.T) {
 }
 
 func TestEmbeddedCover(t *testing.T) {
+	t.Parallel()
 	t.Run("file without embedded art reports ok=false", func(t *testing.T) {
 		// None of the committed fixtures carry embedded art; the plain m4b below is
 		// the no-art case.
@@ -237,6 +244,7 @@ func writeTempFile(t *testing.T, name string, data []byte) *os.File {
 // and HTML or script bytes, whatever the tag claims, are no art (denied), so a
 // crafted audio file can't make the cover endpoint serve a page from this origin.
 func TestCoverMIMESniffsTheBytes(t *testing.T) {
+	t.Parallel()
 	jpeg := []byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00")
 	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR")
 	for name, tc := range map[string]struct {

@@ -71,6 +71,7 @@ func (l *listsEnv) sandersonShare(t *testing.T) (grant, revoke func()) {
 // a visible index lands before the visible row at it, and the hidden row stays
 // where it was.
 func TestListPositionIsAVisibleIndex(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	ghost := "Will Wight/Ghostwater"
 	if _, err := l.cat.UpsertBook(context.Background(), &catalog.Book{LibraryID: l.libID, RelPath: ghost, IsFolder: true,
@@ -119,6 +120,7 @@ func TestListPositionIsAVisibleIndex(t *testing.T) {
 // a new book by evicting the hidden row (gone for good once access returns),
 // and a list whose visible rows alone are at the cap is still 409.
 func TestListCapCountsVisibleRows(t *testing.T) {
+	t.Parallel()
 	l := newListsEnv(t)
 	ctx := context.Background()
 	pad := make([]string, catalog.MaxCollectionItems)

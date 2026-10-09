@@ -66,6 +66,7 @@ func mediaURL(libID int64, kind, path, tok string) string {
 // console page loads more chunks than the burst, and none of them may be refused
 // or use up the budget its API calls need. Everything else is still limited.
 func TestRateLimitSkipsStaticFiles(t *testing.T) {
+	t.Parallel()
 	e := newRouteLimitEnv(t)
 	const ip = "192.0.2.9"
 	for i := range 250 {
@@ -100,6 +101,7 @@ func TestRateLimitSkipsStaticFiles(t *testing.T) {
 // from one address with a valid token, is never refused, and spends none of the
 // general budget the same address's API calls need.
 func TestRateLimitMediaBurstAllowed(t *testing.T) {
+	t.Parallel()
 	e := newRouteLimitEnv(t)
 	libID, _ := seedCovers(t, e.testEnv)
 	tok := e.session(t)
@@ -126,6 +128,7 @@ func TestRateLimitMediaBurstAllowed(t *testing.T) {
 // media is refused before any token lookup, valid token or not. Another address
 // is unaffected.
 func TestRateLimitUnauthenticatedMediaBounded(t *testing.T) {
+	t.Parallel()
 	e := newRouteLimitEnv(t)
 	libID, _ := seedCovers(t, e.testEnv)
 	tok := e.session(t)
@@ -158,6 +161,7 @@ func TestRateLimitUnauthenticatedMediaBounded(t *testing.T) {
 // Authenticated media has a bucket per credential: one token past it is refused,
 // while another token from the same address keeps its own.
 func TestRateLimitMediaPerCredential(t *testing.T) {
+	t.Parallel()
 	e := newRouteLimitEnv(t)
 	e.api.mediaLimiter.burst = 3
 	libID, _ := seedCovers(t, e.testEnv)
@@ -182,6 +186,7 @@ func TestRateLimitMediaPerCredential(t *testing.T) {
 // its media budget soon has its address refused before any lookup, while another
 // address is unaffected.
 func TestRateLimitMediaPastBudgetBounded(t *testing.T) {
+	t.Parallel()
 	e := newRouteLimitEnv(t)
 	e.api.mediaLimiter.burst = 3
 	libID, _ := seedCovers(t, e.testEnv)
@@ -210,6 +215,7 @@ func TestRateLimitMediaPastBudgetBounded(t *testing.T) {
 // The general API allows a burst of 200 per address, then refuses; another
 // address has its own bucket.
 func TestRateLimitGeneralBurst(t *testing.T) {
+	t.Parallel()
 	e := newRouteLimitEnv(t)
 	tok := e.session(t)
 	const ip = "192.0.2.40"
@@ -232,6 +238,7 @@ func TestRateLimitGeneralBurst(t *testing.T) {
 // sign-ins or redemptions lock an address out (the right secret included), and
 // another address is unaffected.
 func TestRateLimitAuthLockoutsUnchanged(t *testing.T) {
+	t.Parallel()
 	e := newRouteLimitEnv(t)
 	for _, tc := range []struct{ name, ip, other, path, bad, good string }{
 		{"login", "192.0.2.50", "192.0.2.51", "/api/v1/auth/login",

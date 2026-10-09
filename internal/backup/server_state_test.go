@@ -11,6 +11,7 @@ import (
 // A backup carries server_state (migration 0040; the support card's answer), so a
 // restored server remembers a donation.
 func TestBackupHoldsServerState(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := context.Background()
 	if _, err := e.db.ExecContext(ctx,

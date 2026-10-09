@@ -139,6 +139,7 @@ func (f *importFixture) count(t *testing.T, query string, args ...any) int {
 // started, so under the live one), the estimate, the bookmark and the progress;
 // an undo takes them all back out, restoring progress nobody changed since.
 func TestApplyAndUndoImport(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	f.listen(t, 7, f.book, 100) // a live session, on 1 October
 	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.other, Position: 600, Duration: 3600,
@@ -242,6 +243,7 @@ func TestApplyAndUndoImport(t *testing.T) {
 // TestUndoRestoresUnchangedProgress: a row the import advanced and nobody
 // touched since goes back to what it was, under a newer version and stamp.
 func TestUndoRestoresUnchangedProgress(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.other, Position: 600, Duration: 3600,
 		UpdatedAt: day(2, 12).Format(time.RFC3339)}); err != nil {
@@ -264,6 +266,7 @@ func TestUndoRestoresUnchangedProgress(t *testing.T) {
 // TestReimportReplaces: applying a second import takes the first back out in
 // the same transaction, so nothing is counted twice.
 func TestReimportReplaces(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	first := f.newImport(t, time.Time{})
 	f.apply(t, first)
@@ -307,6 +310,7 @@ func TestReimportReplaces(t *testing.T) {
 // on again; a row the new import leaves where the old one had moved it is
 // stamped now, as a standalone undo would.
 func TestReimportRestoresProgressExactly(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	own := day(2, 12).Format(time.RFC3339)
 	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.other, Position: 600, Duration: 3600,
@@ -363,6 +367,7 @@ func TestReimportRestoresProgressExactly(t *testing.T) {
 // imported bookmarks still as the import wrote them; one the person relabelled
 // or re-noted is theirs and stays, and the re-import's review counts it.
 func TestUndoKeepsEditedBookmarks(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	marks := func(ImportState) (*ImportWrite, error) {
 		w := &ImportWrite{}
@@ -441,6 +446,7 @@ func TestUndoKeepsEditedBookmarks(t *testing.T) {
 // TestPruneKeepsImportID: imported sessions past the retention roll up with
 // their import's id, so the undo still removes them.
 func TestPruneKeepsImportID(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	f.listen(t, 7, f.book, 100)
 	id := f.newImport(t, time.Time{})
@@ -468,6 +474,7 @@ func TestPruneKeepsImportID(t *testing.T) {
 // a span for each, the stats are the same as with every session raw, and an
 // undo takes both back out.
 func TestApplyRollsUpOldSessions(t *testing.T) {
+	t.Parallel()
 	east := time.FixedZone("east", 5*3600) // 20:00 UTC is 01:00 the next day
 	stats := func(f *importFixture) UserStats {
 		t.Helper()
@@ -532,6 +539,7 @@ func TestApplyRollsUpOldSessions(t *testing.T) {
 // day's, daylight saving included), so the console reads the server's day; none
 // without a cutoff.
 func TestCutoffOffset(t *testing.T) {
+	t.Parallel()
 	if cutoffOffset(time.Time{}, time.UTC) != nil {
 		t.Error("an offset without a cutoff")
 	}
@@ -555,6 +563,7 @@ func TestCutoffOffset(t *testing.T) {
 // TestMoveCarriesImport: a moved book takes its imported sessions with it, and
 // the undo still finds the progress it wrote at the new path.
 func TestMoveCarriesImport(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	if _, err := f.c.SaveProgress(f.ctx, f.user, Progress{Ref: f.other, Position: 600, Duration: 3600,
 		UpdatedAt: day(2, 12).Format(time.RFC3339)}); err != nil {
@@ -581,6 +590,7 @@ func TestMoveCarriesImport(t *testing.T) {
 }
 
 func TestListeningStart(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	loc := time.FixedZone("east", 2*3600)
 	if got, err := f.c.ListeningStart(f.ctx, f.user, loc); err != nil || !got.IsZero() {
@@ -611,6 +621,7 @@ func TestListeningStart(t *testing.T) {
 // fails as interrupted and its apply goes back to review; steps out of turn are
 // refused.
 func TestImportStatuses(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	imps, err := f.c.CreateImports(f.ctx, []Import{{UserID: f.user, Source: ImportSourceABS, SourceURL: "http://x"}})
 	if err != nil {
@@ -665,6 +676,7 @@ func TestImportStatuses(t *testing.T) {
 // by id: imported sessions (new ids) newer than live ones list above them, and
 // two imports applied in either order interleave by time, page by page.
 func TestSessionsOrderByStart(t *testing.T) {
+	t.Parallel()
 	for _, bFirst := range []bool{false, true} {
 		f := newImportFixture(t)
 		f.clock = day(1, 9)
@@ -700,6 +712,7 @@ func TestSessionsOrderByStart(t *testing.T) {
 // TestSessionsCursorGone: a page's cursor session deleted before the next page
 // is read (retention, an undo) neither skips nor repeats a session.
 func TestSessionsCursorGone(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	f.importSessions(t, f.user, day(1, 10), day(2, 10)) // older than every live session
 	for i := range 5 {
@@ -758,6 +771,7 @@ func TestSessionsCursorGone(t *testing.T) {
 // TestLiveSessionsLeaveImports: an imported session whose last save is recent
 // (an import with no cutoff) is never live.
 func TestLiveSessionsLeaveImports(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	f.importSessions(t, f.user, f.clock.Add(-30*time.Minute)) // last save 30 minutes on: now
 	if live, err := f.c.LiveSessions(f.ctx); err != nil || len(live) != 0 {
@@ -772,6 +786,7 @@ func TestLiveSessionsLeaveImports(t *testing.T) {
 // TestCreateImportsReturnsAll: one start for several people answers every
 // import it recorded, in order.
 func TestCreateImportsReturnsAll(t *testing.T) {
+	t.Parallel()
 	f := newImportFixture(t)
 	other := seedUserNamed(t, f.c, f.ctx, "other")
 	imps, err := f.c.CreateImports(f.ctx, []Import{

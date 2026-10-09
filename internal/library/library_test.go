@@ -19,6 +19,7 @@ import (
 )
 
 func TestSafeJoinRejectsTraversal(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for _, bad := range []string{"../etc/passwd", "../../secret", "a/../../b", "/etc/passwd"} {
 		if _, err := SafeJoin(root, bad); err == nil {
@@ -50,6 +51,7 @@ func testdataRoot(t *testing.T) string {
 }
 
 func TestBrowseFSInstant(t *testing.T) {
+	t.Parallel()
 	listing, err := BrowseFS(testdataRoot(t), "", 0, 100, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +66,7 @@ func TestBrowseFSInstant(t *testing.T) {
 }
 
 func TestScannerIndexesFixtures(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -116,6 +119,7 @@ func TestScannerIndexesFixtures(t *testing.T) {
 }
 
 func TestScannerMultiFileChapters(t *testing.T) {
+	t.Parallel()
 	if !metadata.HasFFprobe("ffprobe") {
 		t.Skip("ffprobe not available; multi-file durations require it")
 	}
@@ -158,6 +162,7 @@ func TestScannerMultiFileChapters(t *testing.T) {
 }
 
 func TestScannerFolderBookExpandsEmbeddedChapters(t *testing.T) {
+	t.Parallel()
 	if !metadata.HasFFprobe("ffprobe") {
 		t.Skip("ffprobe not available; embedded chapters require it")
 	}
@@ -207,6 +212,7 @@ func TestScannerFolderBookExpandsEmbeddedChapters(t *testing.T) {
 }
 
 func TestScannerMoveTracking(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -262,6 +268,7 @@ func seedUserID(t *testing.T, db *store.DB) int64 {
 }
 
 func TestIndexPathOnDemand(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -302,6 +309,7 @@ func TestIndexPathOnDemand(t *testing.T) {
 // NAS /data -> /mnt/...), on-demand IndexPath must still record the requested
 // rel_path, not a "../"-laden one computed against the unresolved root.
 func TestIndexPathSymlinkedRoot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -334,6 +342,7 @@ func TestIndexPathSymlinkedRoot(t *testing.T) {
 // the same books, under the same rel paths (book and file), as the folder it
 // points at. WalkDir doesn't follow a symlinked root, so this once indexed 0.
 func TestScanSymlinkedRoot(t *testing.T) {
+	t.Parallel()
 	cat, scanner, ctx := newScanEnv(t)
 	real, _ := filepath.Abs(testdataRoot(t))
 	link := filepath.Join(t.TempDir(), "library-link")
@@ -377,6 +386,7 @@ func TestScanSymlinkedRoot(t *testing.T) {
 }
 
 func TestScannerProtectsIndexWhenRootUnavailable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -465,6 +475,7 @@ func copyFixtureM4B(t *testing.T, dst string) {
 // image in a book folder is used as a fallback, and a loose single-file book picks
 // up a conventionally-named cover beside it.
 func TestScannerFindsFolderCover(t *testing.T) {
+	t.Parallel()
 	cat, scanner, ctx := newScanEnv(t)
 	root := t.TempDir()
 	writeImg := func(p string) {
@@ -520,6 +531,7 @@ func TestScannerFindsFolderCover(t *testing.T) {
 }
 
 func TestChooseTitle(t *testing.T) {
+	t.Parallel()
 	// A meaningful embedded title wins; a missing or generic one falls back to the
 	// path-derived title.
 	cases := []struct{ embedded, path, want string }{
@@ -536,6 +548,7 @@ func TestChooseTitle(t *testing.T) {
 }
 
 func TestIsDiscFolder(t *testing.T) {
+	t.Parallel()
 	for _, s := range []string{"CD1", "CD 1", "cd01", "Disc 2", "disk3", "CD"} {
 		if !isDiscFolder(s) {
 			t.Errorf("isDiscFolder(%q) = false, want true", s)
@@ -553,6 +566,7 @@ func TestIsDiscFolder(t *testing.T) {
 // files are named (distinct chapter titles included), single-file book folders
 // key on the folder, and only audio directly at the library root is per-file.
 func TestScannerFolderIsOneBook(t *testing.T) {
+	t.Parallel()
 	cat, scanner, ctx := newScanEnv(t)
 	root := t.TempDir()
 	// A multi-track book whose chapter files have DISTINCT titles - the case that
@@ -591,6 +605,7 @@ func TestScannerFolderIsOneBook(t *testing.T) {
 // converted .m4b must NOT join the book (it can't be streamed, and indexing it
 // doubled up the chapters), and a folder holding ONLY an .aax yields no book.
 func TestScannerIgnoresAAX(t *testing.T) {
+	t.Parallel()
 	cat, scanner, ctx := newScanEnv(t)
 	root := t.TempDir()
 	// A converted book with the original .aax left alongside it.
@@ -633,6 +648,7 @@ func TestScannerIgnoresAAX(t *testing.T) {
 // a folder into one book per file (the books_in_folder case), and IndexPath
 // honors it; clearing reverts to one folder book.
 func TestScannerFolderOverrides(t *testing.T) {
+	t.Parallel()
 	cat, scanner, ctx := newScanEnv(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, "Will Wight", "Cradle")
@@ -694,6 +710,7 @@ func TestScannerFolderOverrides(t *testing.T) {
 // be re-probed on the next scan so its codec backfills - otherwise direct_playable
 // can't be trusted for already-indexed libraries.
 func TestScannerBackfillsMissingCodec(t *testing.T) {
+	t.Parallel()
 	if !metadata.HasFFprobe("ffprobe") {
 		t.Skip("ffprobe required to read codec")
 	}
@@ -732,6 +749,7 @@ func TestScannerBackfillsMissingCodec(t *testing.T) {
 // TestBrowseFSHidesNonAudio verifies the filesystem view lists audio files and
 // directories only, so a client never opens a .jpg/.nfo as a book.
 func TestBrowseFSHidesNonAudio(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	copyFixtureM4B(t, filepath.Join(root, "Book", "audio.m4b"))
 	for _, name := range []string{"cover.jpg", "notes.nfo", "desc.txt"} {
@@ -777,6 +795,7 @@ func TestBrowseFSHidesNonAudio(t *testing.T) {
 // came from, an admin's edit survives a rescan that re-indexes the (changed) file,
 // and a book indexed before the cover flag existed gets it backfilled cheaply.
 func TestScannerKeepsOverridesAndRecordsSources(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	cat := catalog.New(db, time.Now)
@@ -869,6 +888,7 @@ func TestScannerKeepsOverridesAndRecordsSources(t *testing.T) {
 // (locked there for good); they stay at the folder path and apply again when the
 // folder is a book once more.
 func TestReclassifyingAFolderIsNotAMove(t *testing.T) {
+	t.Parallel()
 	cat, scanner, ctx := newScanEnv(t)
 	root := t.TempDir()
 	const folder = "Author/Box Set"
@@ -918,6 +938,7 @@ func TestReclassifyingAFolderIsNotAMove(t *testing.T) {
 // book moved out of a folder that is still there says nothing about that folder,
 // so its favourite stays put.
 func TestFolderFavouriteFollowsRename(t *testing.T) {
+	t.Parallel()
 	const oldSeries, newSeries = "Shirtaloon/He Who Fights WIth Monsters", "Shirtaloon/He Who Fights With Monsters"
 	for _, tc := range []struct {
 		name     string
@@ -986,6 +1007,7 @@ func TestFolderFavouriteFollowsRename(t *testing.T) {
 // and keeps a pair only when every move out of the folder agrees and the folder is
 // gone from disk.
 func TestRenamedFolders(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		moved map[string]string

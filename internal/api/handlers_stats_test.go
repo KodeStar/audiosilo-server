@@ -17,6 +17,7 @@ import (
 // gets catalog totals + the per-library and cross-user listening arrays; a
 // non-admin is rejected by requireAdmin (403).
 func TestAdminStats(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	root, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))

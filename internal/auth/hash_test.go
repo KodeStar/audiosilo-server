@@ -13,6 +13,7 @@ import (
 // without regenerating the string), the dummy verify would do less work and leak
 // account existence by timing - so this test fails loudly on any mismatch.
 func TestDummyHashMatchesParams(t *testing.T) {
+	t.Parallel()
 	parts := strings.Split(dummyHash, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" {
 		t.Fatalf("dummyHash is malformed: %q", dummyHash)
@@ -42,10 +43,11 @@ func TestDummyHashMatchesParams(t *testing.T) {
 // TestMain sets it) still makes hashes that verify (VerifyPassword reads the cost
 // from the hash).
 func TestHashCost(t *testing.T) {
-	saved := hashCost
-	t.Cleanup(func() { hashCost = saved })
-	hashCost = realCost
-	full, err := HashPassword("pw")
+	t.Parallel()
+	if hashCost != cheapCost {
+		t.Fatalf("hashCost = %+v, want the cheap cost TestMain sets", hashCost)
+	}
+	full, err := hashWithCost("pw", realCost)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +55,6 @@ func TestHashCost(t *testing.T) {
 		t.Fatalf("hash %q lacks the real cost %s", full, want)
 	}
 
-	UseCheapHashingForTests()
 	cheap, err := HashPassword("pw")
 	if err != nil {
 		t.Fatal(err)

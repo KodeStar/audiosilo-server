@@ -45,6 +45,7 @@ func recordCover(t *testing.T, c *Catalog, libID int64, path string, src CoverSo
 // on every book shape (item, list, search, recent), with or without an accent;
 // CoverSources reports them as recorded.
 func TestRecordCoverColors(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "a.m4b", Title: "Alpha", MTime: 1}); err != nil {
@@ -104,6 +105,7 @@ func TestRecordCoverColors(t *testing.T) {
 // version, and the colour read for the old art stops counting without being
 // cleared.
 func TestCoverVersionFollowsArt(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	book := Book{LibraryID: lib.ID, RelPath: "a.m4b", Title: "A", MTime: 1, Size: 10, CoverPath: "a.jpg"}
@@ -158,6 +160,7 @@ func TestCoverVersionFollowsArt(t *testing.T) {
 // on the art); removing the cover reverts the version to the file art's, whose
 // colour counts again.
 func TestCustomCoverVersion(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "A/B", Title: "B", IsFolder: true, MTime: 5}); err != nil {
@@ -198,6 +201,7 @@ func TestCustomCoverVersion(t *testing.T) {
 // have leaves its cover identity alone, including one a thumbnail already moved
 // to the image's own version, and its colour stays exposed.
 func TestDeleteMissingCoverKeepsVersion(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "a.m4b", Title: "A", MTime: 1, Size: 10, CoverPath: "a.jpg"}); err != nil {
@@ -224,6 +228,7 @@ func TestDeleteMissingCoverKeepsVersion(t *testing.T) {
 // TestMovedCustomCoverVersion: a move carrying a custom cover gives the book at
 // the new path the custom cover's version.
 func TestMovedCustomCoverVersion(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	for _, p := range []string{"old.m4b", "new.m4b"} {
@@ -244,6 +249,7 @@ func TestMovedCustomCoverVersion(t *testing.T) {
 }
 
 func TestCoverVersionIsShortAndStable(t *testing.T) {
+	t.Parallel()
 	a, b := CoverVersion("s100-1"), CoverVersion("s100-2")
 	if len(a) != 10 || a == b || a != CoverVersion("s100-1") {
 		t.Fatalf("CoverVersion = %q / %q; want 10 stable, distinct characters", a, b)
@@ -257,6 +263,7 @@ func TestCoverVersionIsShortAndStable(t *testing.T) {
 // cover colour once one is recorded for its current art, and drop it when the
 // art moves on.
 func TestAdminBookCoverColor(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "a.m4b", Title: "Alpha", MTime: 1}); err != nil {
@@ -297,6 +304,7 @@ func TestAdminBookCoverColor(t *testing.T) {
 // checked, or a custom cover) and hold no colour for it are due, in pages that
 // carry on from next; a coloured book and one a scan found without art are not.
 func TestCoverColorsDue(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	yes, no := true, false
@@ -357,6 +365,7 @@ func TestCoverColorsDue(t *testing.T) {
 // or removed included; removing a cover that isn't there is no change; a nil
 // listener is ignored.
 func TestOnBookChangeListeners(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	var a, b atomic.Int32

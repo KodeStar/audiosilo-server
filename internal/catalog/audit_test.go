@@ -9,6 +9,7 @@ import (
 )
 
 func TestAuditRetention(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
@@ -48,6 +49,7 @@ func TestAuditRetention(t *testing.T) {
 }
 
 func TestPageSizesClamp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := storetest.Open(t)
 	c := New(db, time.Now)

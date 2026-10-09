@@ -47,6 +47,7 @@ func assertFields(t *testing.T, got, want map[string][2]string) {
 // what the path doesn't say (the narrator), an edit stays the lock, and switching
 // back restores the tags - all without a rescan.
 func TestPreferPathResolvesFromTheLayout(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, err := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
 	if err != nil {
@@ -127,6 +128,7 @@ func TestPreferPathResolvesFromTheLayout(t *testing.T) {
 // TestPreferPathKeepsWhatThePathDoesNotSay: where the layout names no author or
 // series, the tags' stay; a tag's position stays only beside the same series.
 func TestPreferPathKeepsWhatThePathDoesNotSay(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l", MetadataSource: MetadataFromPath})
 	upsert := func(path string, isFolder bool, title, author, series string, idx float64) {

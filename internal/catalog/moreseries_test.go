@@ -11,6 +11,7 @@ import (
 // found by the series= filter and search, ordered by its position in the series
 // a list is filtered to, and counted in the series aggregate (as extra books).
 func TestMoreSeries(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	const watch = "City Watch"
@@ -111,6 +112,7 @@ func TestMoreSeries(t *testing.T) {
 // rail's series only through its more_series too, in placement order and within
 // the grant (allowed and denied).
 func TestMoreSeriesPlayer(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
 	for _, b := range []*Book{

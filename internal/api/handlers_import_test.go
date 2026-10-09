@@ -123,6 +123,7 @@ func (e *importEnv) call(t *testing.T, method, path, token, body string, want in
 // TestImportFromABS walks the admin flow end to end against the recorded ABS:
 // list its users, start, poll, review, change the cutoff, apply, undo, delete.
 func TestImportFromABS(t *testing.T) {
+	t.Parallel()
 	e := newImportEnv(t)
 	var users struct {
 		Version string             `json:"version"`
@@ -271,6 +272,7 @@ func (e *importEnv) startAlex(t *testing.T) catalog.ImportDetail {
 // it, and the apply writes what the review showed), and the imported sessions
 // show in the player's history (the book's, and /me/history).
 func TestReimportFromABS(t *testing.T) {
+	t.Parallel()
 	e := newImportEnv(t)
 	ctx := context.Background()
 	books, err := e.cat.ImportBooks(ctx)
@@ -331,6 +333,7 @@ func TestReimportFromABS(t *testing.T) {
 // raw, the summary still counts every imported session, and the history has a
 // span for each.
 func TestImportRollsUpPastRetention(t *testing.T) {
+	t.Parallel()
 	e := newImportEnv(t)
 	ctx := context.Background()
 	var stats [2]struct {
@@ -416,6 +419,7 @@ func (e *importEnv) checkNoToken(t *testing.T, token string) {
 // isn't ABS, a refused token (synchronously from the users list, and as a
 // failed import from a start), and a malformed start; the token never shows.
 func TestImportFailures(t *testing.T) {
+	t.Parallel()
 	e := newImportEnv(t)
 	const bad = "not-the-right-token-1234"
 	e.call(t, "POST", "/admin/imports/abs/users", e.adminTok, `{"url":"ftp://abs","token":"x"}`, 400, nil)
@@ -479,6 +483,7 @@ func TestImportFailures(t *testing.T) {
 
 // TestImportRoutesAreAdminOnly: every import route refuses a non-admin.
 func TestImportRoutesAreAdminOnly(t *testing.T) {
+	t.Parallel()
 	e := newImportEnv(t)
 	for _, r := range []struct{ method, path, body string }{
 		{"POST", "/admin/imports/abs/users", fmt.Sprintf(`{"url":%q,"token":%q}`, e.abs.URL, abstest.AdminToken)},
@@ -502,6 +507,7 @@ func TestImportRoutesAreAdminOnly(t *testing.T) {
 }
 
 func TestParseImportCutoff(t *testing.T) {
+	t.Parallel()
 	day, _ := time.ParseInLocation(time.DateOnly, "2026-09-15", time.Local)
 	for raw, want := range map[string]importer.Cutoff{
 		`"auto"`:                 {Auto: true},

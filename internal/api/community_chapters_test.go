@@ -48,6 +48,7 @@ type bookPage struct {
 }
 
 func TestCommunityChaptersCheck(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnvMock(t, true, &mockMetaserve{chapters: fourParts})
 	const p = "Andy Weir/The Martian.m4b"
 	libID := seedChapterless(t, e, p)
@@ -109,6 +110,7 @@ func TestCommunityChaptersCheck(t *testing.T) {
 }
 
 func TestCommunityChaptersCheckMetadataOff(t *testing.T) {
+	t.Parallel()
 	e := newMetaEnvMock(t, false, &mockMetaserve{chapters: fourParts})
 	libID := seedChapterless(t, e, "A/B.m4b")
 	admin, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)

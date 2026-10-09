@@ -10,6 +10,7 @@ import (
 // security-critical ones: ".." must clamp at the root, never escape it, and must
 // collapse before the literal prefix match in pathAllowedBy sees the path.
 func TestCleanRelPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in, want string
 	}{
@@ -35,6 +36,7 @@ func TestCleanRelPath(t *testing.T) {
 }
 
 func TestScopeAllows(t *testing.T) {
+	t.Parallel()
 	s := Scope{Paths: []string{"A. F. Kay/Divine Apostasy", "Other/One Book.m4b"}}
 	cases := []struct {
 		path string
@@ -58,6 +60,7 @@ func TestScopeAllows(t *testing.T) {
 }
 
 func TestScopeVisibleInBrowse(t *testing.T) {
+	t.Parallel()
 	s := Scope{Paths: []string{"A. F. Kay/Divine Apostasy"}}
 	// Ancestors of a rule are navigable; the granted subtree is visible; siblings
 	// are hidden.
@@ -75,6 +78,7 @@ func TestScopeVisibleInBrowse(t *testing.T) {
 }
 
 func TestSharesAndUserScope(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	uid := seedUser(t, c, ctx)
@@ -130,6 +134,7 @@ func TestSharesAndUserScope(t *testing.T) {
 // grants nothing, so re-granting whole-library access must re-add the rule rather
 // than just hand out the rule-less share.
 func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "audiobooks", Root: "/tmp"})
 	uid := seedUser(t, c, ctx)
@@ -163,6 +168,7 @@ func TestGrantWholeLibraryHealsRulelessShare(t *testing.T) {
 }
 
 func TestScopedListBooks(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "Kids/A/Cat.m4b", Title: "Cat", Author: "Seuss"})
@@ -185,6 +191,7 @@ func TestScopedListBooks(t *testing.T) {
 // is a single-char wildcard), keeping the SQL list filter consistent with the
 // authoritative Go gate Scope.Allows.
 func TestScopedListBooksLikeWildcards(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp"})
 	c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: "Sci_Fi/A/Dune.m4b", Title: "Dune", Author: "Herbert"})
@@ -241,6 +248,7 @@ func seedUserNamed(t *testing.T, c *Catalog, ctx context.Context, name string) i
 }
 
 func TestShareMembers(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	kids, _ := c.CreateShare(ctx, Share{Name: "Kids"})
 	empty, _ := c.CreateShare(ctx, Share{Name: "Nobody"})
@@ -266,6 +274,7 @@ func TestShareMembers(t *testing.T) {
 // Deleting a library drops its whole-library grant shares (they grant nothing
 // once it's gone) but leaves the admin's own shares alone.
 func TestDeleteLibraryDropsItsGrantShares(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp"})
 	uid := seedUser(t, c, ctx)
@@ -300,6 +309,7 @@ func TestDeleteLibraryDropsItsGrantShares(t *testing.T) {
 // library to everyone who has the old one), and re-granting a renamed library
 // reuses its own marked share rather than minting a duplicate.
 func TestGrantWholeLibraryFollowsTheMarkNotTheName(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	fiction, _ := c.CreateLibrary(ctx, Library{Name: "Fiction", Root: "/tmp/a"})
 	maya := seedUserNamed(t, c, ctx, "maya")
@@ -333,6 +343,7 @@ func TestGrantWholeLibraryFollowsTheMarkNotTheName(t *testing.T) {
 // Deleting a library keeps a grant share that also holds another library's
 // rules: its members still have that library.
 func TestDeleteLibraryKeepsAGrantShareWithOtherRules(t *testing.T) {
+	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	main, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/tmp/a"})
 	kids, _ := c.CreateLibrary(ctx, Library{Name: "Kids", Root: "/tmp/b"})

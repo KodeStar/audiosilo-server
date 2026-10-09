@@ -61,7 +61,8 @@ in-process, can open a browser).
 **Before a change is done, run `go build ./... && go vet ./... && go test -race ./...
 && golangci-lint run`**, plus **`scripts/build-admin.sh`** (npm ci, then `npm run check` =
 typecheck + eslint + prettier + vitest, then the build) when `admin-ui/` changed - CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-gates all of them on every PR/push, building the console first so the embed tests in
+gates all of them on every PR/push in three parallel jobs (Go tests, lint with govet, admin console),
+the Go job building the console first (`--vite-only`) so the embed tests in
 `internal/web/adminui` run against a real build (locally they skip without one). A few scanner tests need `ffmpeg` (ffprobe);
 without it they `t.Skip` (CI installs it). The linter is adopted at a **green
 baseline** - its suppressions in `.golangci.yml` are documented and intentional;
@@ -243,7 +244,11 @@ admin overrides; see Metadata overrides below).
   migrates once per test binary and copies the file per test (file-backed, so reads use the reader pool).
   A package creating many password users calls `auth.UseCheapHashingForTests()` from `TestMain`
   (`internal/api`, `internal/auth` and `internal/matchrun`'s `main_test.go`; a real-cost argon2id hash is ~0.25 s under `-race`; it panics outside a test
-  binary). Pure-logic tests sit next to the code (see
+  binary). A new top-level test starts with `t.Parallel()` (each has its own database and
+  temp dirs; the only thing tests share is the read-only `testdata/` fixtures, so copy one into
+  `t.TempDir()` before changing it, as `TestCustomCoverFollowsTheBook` does) unless it calls `t.Setenv` or `t.Chdir`
+  (which panic in a parallel test) or writes a package-level var (pass the value in instead, as
+  `hashWithCost` does for `TestHashCost`). Pure-logic tests sit next to the code (see
   `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,

@@ -14,6 +14,7 @@ import (
 // TestReorderLibrariesEndpoint covers the admin reorder route: a non-admin is
 // denied, and an admin's ordering persists (and is what ListLibraries returns).
 func TestReorderLibrariesEndpoint(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	libA, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "A", Root: t.TempDir()})
@@ -47,6 +48,7 @@ func TestReorderLibrariesEndpoint(t *testing.T) {
 // TestSearchDedupWire verifies the de-duplicated search result reaches the client
 // with dedup_key set and the duplicate copy under other_locations.
 func TestSearchDedupWire(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	ctx := context.Background()
 	libA, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "A", Root: t.TempDir()})

@@ -11,6 +11,7 @@ import (
 // books of an upgraded server carry a cover_version before they are re-indexed;
 // no book has a colour yet.
 func TestMigration0023Backfill(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dsn, exec, closeRaw := openBefore(t, "0023")
 	exec(`INSERT INTO libraries(id, name, root, created_at) VALUES(1, 'L', '/l', 't')`)

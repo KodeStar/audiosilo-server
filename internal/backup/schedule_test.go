@@ -6,6 +6,7 @@ import (
 )
 
 func TestParseSchedule(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"":                 "",
 		" daily:03:00 ":    "daily:03:00",
@@ -26,6 +27,7 @@ func TestParseSchedule(t *testing.T) {
 }
 
 func TestScheduleNext(t *testing.T) {
+	t.Parallel()
 	loc := time.UTC
 	at := func(s string) time.Time {
 		v, err := time.ParseInLocation("2006-01-02 15:04", s, loc)
