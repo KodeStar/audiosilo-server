@@ -82,7 +82,7 @@ type orderedList struct {
 // listTx is the transaction an orderedList reads and writes in (a *sql.Tx).
 type listTx interface {
 	rowQuerier
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	execer
 }
 
 // orderBy is the stored order of an ordered list's rows: position, ties (a carry

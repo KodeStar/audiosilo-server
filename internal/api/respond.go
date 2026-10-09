@@ -173,6 +173,8 @@ func (a *API) writeCatalogError(w http.ResponseWriter, err error, op, genericMsg
 		writeError(w, http.StatusBadRequest, "invalid cursor")
 	case errors.Is(err, catalog.ErrInvalidOverrideMode):
 		writeError(w, http.StatusBadRequest, `mode must be "book" or "collection"`)
+	case errors.Is(err, catalog.ErrInvalidSupportChoice):
+		writeError(w, http.StatusBadRequest, `action must be "donated" or "snoozed"`)
 	case errors.Is(err, library.ErrOutsideRoot):
 		writeError(w, http.StatusBadRequest, "invalid path")
 	case errors.Is(err, catalog.ErrInvalidProgressEdit):

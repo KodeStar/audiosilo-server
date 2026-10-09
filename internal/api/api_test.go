@@ -22,6 +22,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/notify"
+	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
@@ -35,6 +36,7 @@ type testEnv struct {
 	authCode string
 	backups  *backup.Service
 	notify   *notify.Service
+	db       *store.DB
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -94,7 +96,7 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
 	return &testEnv{srv: srv, api: a, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code,
-		backups: backups, notify: ntf}
+		backups: backups, notify: ntf, db: db}
 }
 
 func (e *testEnv) do(t *testing.T, method, path, token, body string) (*http.Response, string) {

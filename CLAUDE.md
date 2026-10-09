@@ -1115,6 +1115,26 @@ admin overrides; see Metadata overrides below).
   the browser's `device_id` (`auth.IssueSession`, hashed in `tokens.sign_in_key`, migration 0020) matches
   an earlier session of that person; an admin's `RevokeDevice`, a new password or disabling the account
   forgets it.
+- **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):
+  a quiet Overview card pointing at GitHub Sponsors (`admin-ui/src/lib/support.ts` `SPONSOR_URL`, also the
+  account menu's "Support AudioSilo" item, About's link row and the update notice's one line; the
+  release footer in `.goreleaser.yml` carries the same line). Admin console only, never the player and no
+  capability flag. `GET /admin/support` → `{show}`; `POST /admin/support` `{action: "donated"|"snoozed"}`
+  (the same words storage and audit use) → `{show: false, until?}` without recomputing, `until` (RFC 3339)
+  only when a snooze was stored; the console's toast words that date. 400 for any other action
+  (`catalog.ErrInvalidSupportChoice` in `writeCatalogError`); admin only; audited `settings.support` with
+  `choice` and a snooze's `returns_at`, not when nothing changed. The answer is server-wide and **taken
+  on trust**: nothing is checked, nothing is sent anywhere, and it unlocks nothing (a donation stays a
+  gift). Stored in `server_state` (migration 0040: key/value server facts that are not config.yaml
+  settings) through the generic `catalog/server_state.go` accessors `getServerState` (an unreadable value
+  counts as none) and `putServerState`; key `support_card`, value `{"choice":"donated"}` or
+  `{"choice":"snoozed","until":<formatSessionTime>}`. `SetSupportChoice` reads and writes in one
+  transaction so a donation is never downgraded by a later snooze. Due when not donated, no snooze
+  running, and the server's age (the earliest non-demo `users.created_at`, so a restored backup keeps its
+  age) is >= `SupportAfterDays` (30), or >= `SupportMinDays` (7) with >= `SupportAfterFinished` (10) books
+  finished here (finishes dated before that first account, e.g. an Audiobookshelf import's, and demo
+  accounts' don't count; the count stops at 10). `SupportSnoozeMonths` 6. Console strings live in one
+  `support.*` i18n group (menu, About, card).
 - **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
   `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
