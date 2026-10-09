@@ -689,9 +689,10 @@ func (m *Mirror) Status() Status {
 	case m.downloading:
 		s.State = StateDownloading
 		s.Progress = &Progress{Done: m.done.Load(), Total: m.total.Load()}
-	case m.openingNew || (!m.opened && m.st.Tag != ""):
+	case m.openingNew || (!m.opened && !ready && m.st.Tag != ""):
 		// A new download being opened, or the copy the state names at Run's
-		// start: no failure, and (at start) no copy answering yet either.
+		// start until it answers (not through open's sweep after it does): no
+		// failure, and (at start) no copy answering yet either.
 		s.State = StateOpening
 	case ready:
 		s.State = StateReady

@@ -660,6 +660,25 @@ func TestMirrorStatusOpeningAtStart(t *testing.T) {
 	}
 }
 
+// Once the copy on disk is open it answers, and the status says ready while
+// open still sweeps the folder: not opening, and never the "over a copy"
+// wording of an update (opening without fallback).
+func TestMirrorStatusReadyWhileSweeping(t *testing.T) {
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	dir := t.TempDir()
+	m := newMirror(t, dir, gh, Options{})
+	m.check(context.Background())
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m2 := newUnopened(t, dir, gh, Options{})
+	m2.openCopy() // open's first half: the sweep (and opened) still to come
+	if st := m2.Status(); !m2.Ready() || st.State != StateReady || st.Fallback || st.Tag == "" {
+		t.Fatalf("an open copy before the sweep = %+v", st)
+	}
+}
+
 // A finished download is opened before it answers: the status says opening
 // (no progress bar stuck at 100%), with lookups where they were: the remote
 // service for a first copy, the current copy over an update.
