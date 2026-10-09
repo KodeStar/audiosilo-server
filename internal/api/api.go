@@ -356,6 +356,11 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/me/bookmarks", a.requireAuth(http.HandlerFunc(a.handleListMyBookmarks)))
 	mux.Handle("GET /api/v1/me/notes", a.requireAuth(http.HandlerFunc(a.handleListMyNotes)))
 
+	// Phase 8: listening in the house (household).
+	mux.Handle("GET /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handleGetHousehold)))
+	mux.Handle("PUT /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handlePutHousehold)))
+	mux.Handle("GET /api/v1/household/listening", a.requireAuth(http.HandlerFunc(a.handleHouseListening)))
+
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
 	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))
