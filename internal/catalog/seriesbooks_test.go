@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -121,7 +122,7 @@ func TestNextInOneSeries(t *testing.T) {
 		"unnumbered series":         {"U/a", "U", 1, all, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope)
+			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -133,6 +134,16 @@ func TestNextInOneSeries(t *testing.T) {
 				t.Fatalf("next = %q, numbered = %v; want %q, %v", got, numbered, tc.want, tc.wantNumbered)
 			}
 		})
+	}
+	// A skipped book is passed over for the next later one, in position order
+	// (ties by path); skipping every later one is numbered with none later.
+	for skipped, want := range map[string]string{"Hidden/2": "S/3 a", "Hidden/2|S/3 a": "S/3 b", "Hidden/2|S/3 a|S/3 b|S/5": ""} {
+		next, numbered, err := c.nextInOneSeries(ctx, lib.ID, "S/1", "S", 1, all, func(b *Book) bool {
+			return slices.Contains(strings.Split(skipped, "|"), b.RelPath)
+		})
+		if err != nil || !numbered || (next == nil) != (want == "") || (next != nil && next.RelPath != want) {
+			t.Fatalf("skipping %q: next = %+v, numbered = %v, %v; want %q", skipped, next, numbered, err, want)
+		}
 	}
 }
 
@@ -197,7 +208,7 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 		"denied: alone in scope":            {"gg", "City Watch", 1, Scope{LibraryID: lib.ID, Paths: []string{"gg"}}, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope)
+			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -303,24 +314,29 @@ func TestNextInSeries(t *testing.T) {
 }
 
 // TestNextInSeriesNeverStepsBack: a later book in a lower-ranked series that sits
-// at or before the book in a series ranked above it is no next book. Narnia
-// owned 1-6 (not The Last Battle), its main series chronological, its listed
-// one the publication order: after The Silver Chair (chronological #6,
-// publication #4) the publication order's next, The Horse and His Boy
-// (publication #5), is chronological #3, so the series skips and the book is
-// numbered-ended. A later book in a third series that is later in the second
-// too is followed (allowed), one earlier in it is not (denied).
+// at or before the book in a series ranked above it is no next book; it is passed
+// over and the series' next later book judged. Narnia owned 1-6 (not The Last
+// Battle), its main series chronological, its listed one the publication order:
+// after The Silver Chair (chronological #6, publication #4) the publication
+// order's later books, The Horse and His Boy (publication #5) and The Magician's
+// Nephew (#6), are chronological #3 and #1, so nothing goes forward and the book
+// is numbered-ended. In a second library that also holds The Last Battle, tagged
+// only publication #7, both are passed over and The Last Battle answers. A later
+// book in a third series that is later in the second too is followed (allowed),
+// one earlier in it is not (denied).
 func TestNextInSeriesNeverStepsBack(t *testing.T) {
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Narnia", Root: "/tmp/n"})
+	withLast, _ := c.CreateLibrary(ctx, Library{Name: "Narnia with The Last Battle", Root: "/tmp/n7"})
+	into := lib.ID
 	add := func(path, series string, idx float64, more string) {
 		t.Helper()
-		b := &Book{LibraryID: lib.ID, RelPath: path, Title: path, Series: series, SeriesIndex: idx, AddedAt: "2024-01-01T00:00:00Z"}
+		b := &Book{LibraryID: into, RelPath: path, Title: path, Series: series, SeriesIndex: idx, AddedAt: "2024-01-01T00:00:00Z"}
 		if _, err := c.UpsertBook(ctx, b); err != nil {
 			t.Fatal(err)
 		}
 		if more != "" {
-			if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldMoreSeries: more}}); err != nil {
+			if err := c.EditBook(ctx, into, path, BookEdit{Set: map[string]string{FieldMoreSeries: more}}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -339,21 +355,31 @@ func TestNextInSeriesNeverStepsBack(t *testing.T) {
 	add("Three/Current", "A", 5, `[{"name":"B","position":1},{"name":"C","position":1}]`)
 	add("Three/X", "A", 2, `[{"name":"B","position":2}]`)
 	add("Three/Y", "B", 3, `[{"name":"C","position":2}]`)
-	all := Scope{LibraryID: lib.ID, AllowAll: true}
+	into = withLast.ID
+	add("Narnia/1 The Magician's Nephew", "Narnia", 1, pub(6))
+	add("Narnia/3 The Horse and His Boy", "Narnia", 3, pub(5))
+	add("Narnia/6 The Silver Chair", "Narnia", 6, pub(4))
+	add("Narnia/7 The Last Battle", "Narnia (Publication)", 7, "")
 	for name, tc := range map[string]struct {
-		path, want   string
-		wantNumbered bool
+		lib, path, want string
+		wantNumbered    bool
 	}{
-		"Silver Chair: no loop back":    {"Narnia/6 The Silver Chair", "", true},
-		"main series continues":         {"Narnia/2 The Lion, the Witch and the Wardrobe", "Narnia/3 The Horse and His Boy", true},
-		"allowed: later in both series": {"Three/Current", "Three/Y", true},
+		"Silver Chair: no loop back":          {"", "Narnia/6 The Silver Chair", "", true},
+		"main series continues":               {"", "Narnia/2 The Lion, the Witch and the Wardrobe", "Narnia/3 The Horse and His Boy", true},
+		"allowed: later in both series":       {"", "Three/Current", "Three/Y", true},
+		"the steps back passed over, not all": {"last", "Narnia/6 The Silver Chair", "Narnia/7 The Last Battle", true},
+		"the main series continues there too": {"last", "Narnia/1 The Magician's Nephew", "Narnia/3 The Horse and His Boy", true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			book, err := c.GetBookByPath(ctx, lib.ID, tc.path)
+			id := lib.ID
+			if tc.lib == "last" {
+				id = withLast.ID
+			}
+			book, err := c.GetBookByPath(ctx, id, tc.path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			next, numbered, err := c.NextInSeries(ctx, lib.ID, book, all)
+			next, numbered, err := c.NextInSeries(ctx, id, book, Scope{LibraryID: id, AllowAll: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -399,7 +425,7 @@ func TestNextInSeriesPlan(t *testing.T) {
 			"S":  {"SCAN books_fts VIRTUAL TABLE", "SEARCH b USING INDEX idx_books_more_series (library_id=? AND rowid=?)"},
 			"!!": {"SEARCH b USING INDEX idx_books_more_series (library_id=?)"},
 		} {
-			q, args := firstSeriesMember(1, "x", series, 1, scope)
+			q, args := laterSeriesMembers(1, "x", series, 1, scope)
 			plan := queryPlan(t, c, q, args)
 			joined := strings.Join(plan, "\n")
 			for _, want := range append([]string{"SEARCH b USING INDEX idx_books_series"}, lists...) {

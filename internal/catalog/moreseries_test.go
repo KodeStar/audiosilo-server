@@ -377,3 +377,91 @@ func TestSeriesSwap(t *testing.T) {
 	}
 	check("fine", disc, "8", `[{"name":"City Watch","position":1}]`)
 }
+
+// TestSeriesSwapUneditedValues: a swap's derived value equal to what its field
+// resolves to without an override is written as a revert of that field, not an
+// edit. A path-derived Sherlock Holmes #5 with an edited other series Other #1:
+// making Other the main series edits both (Other #1 is no path value, and the
+// list now holds Sherlock Holmes #5); reverting series swaps back, and #5 is the
+// path's own position again, so series_index comes back unlocked from the path
+// while the list, an edit before the swap, stays one. A derived list as empty as
+// the unedited one is a revert too.
+func TestSeriesSwapUneditedValues(t *testing.T) {
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Shelf", Root: "/tmp/s"})
+	uid := seedUser(t, c, ctx)
+	const p = "Arthur Conan Doyle/Sherlock Holmes/05 - The Hound of the Baskervilles"
+	add := func(path, series string, idx float64, more string) {
+		t.Helper()
+		b := &Book{LibraryID: lib.ID, RelPath: path, IsFolder: true, Title: "The Hound of the Baskervilles",
+			Author: "Arthur Conan Doyle", Series: series, SeriesIndex: idx, AddedAt: "2024-01-01T00:00:00Z"}
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldMoreSeries: more}, UserID: uid}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type want struct {
+		value, source string
+		locked        bool
+	}
+	check := func(path, step string, wants map[string]want) {
+		t.Helper()
+		d, err := c.AdminBookDetail(ctx, lib.ID, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for field, w := range wants {
+			if f := d.Fields[field]; f.Value != w.value || f.Source != w.source || f.Locked != w.locked {
+				t.Errorf("%s: %s = %q (%s, locked %v), want %q (%s, locked %v)", step, field, f.Value, f.Source, f.Locked, w.value, w.source, w.locked)
+			}
+		}
+	}
+	edit := func(path string, e BookEdit) {
+		t.Helper()
+		e.UserID = uid
+		if err := c.EditBook(ctx, lib.ID, path, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	add(p, "Sherlock Holmes", 5, `[{"name":"Other","position":1}]`)
+	check(p, "before", map[string]want{
+		FieldSeries:      {"Sherlock Holmes", SourcePath, false},
+		FieldSeriesIndex: {"5", SourcePath, false},
+		FieldMoreSeries:  {`[{"name":"Other","position":1}]`, SourceEdited, true},
+	})
+	edit(p, BookEdit{Set: map[string]string{FieldSeries: "Other"}})
+	check(p, "swapped", map[string]want{
+		FieldSeries:      {"Other", SourceEdited, true},
+		FieldSeriesIndex: {"1", SourceEdited, true},
+		FieldMoreSeries:  {`[{"name":"Sherlock Holmes","position":5}]`, SourceEdited, true},
+	})
+	edit(p, BookEdit{Revert: []string{FieldSeries}})
+	check(p, "swapped back", map[string]want{
+		FieldSeries:      {"Sherlock Holmes", SourcePath, false},
+		FieldSeriesIndex: {"5", SourcePath, false},
+		FieldMoreSeries:  {`[{"name":"Other","position":1}]`, SourceEdited, true},
+	})
+	// Setting the path's series back (not reverting it) follows the same rule:
+	// series is the edit's own, the position it brings back is the path's.
+	edit(p, BookEdit{Set: map[string]string{FieldSeries: "Other"}})
+	edit(p, BookEdit{Set: map[string]string{FieldSeries: "Sherlock Holmes"}})
+	check(p, "set back", map[string]want{
+		FieldSeries:      {"Sherlock Holmes", SourceEdited, true},
+		FieldSeriesIndex: {"5", SourcePath, false},
+		FieldMoreSeries:  {`[{"name":"Other","position":1}]`, SourceEdited, true},
+	})
+
+	// No main series before, one entry: the swap empties the list, as the
+	// unedited value is, so the list's override is reverted.
+	const lone = "Arthur Conan Doyle/Loose"
+	add(lone, "", 0, `[{"name":"Other","position":2}]`)
+	edit(lone, BookEdit{Set: map[string]string{FieldSeries: "Other"}})
+	check(lone, "lone swapped", map[string]want{
+		FieldSeries:      {"Other", SourceEdited, true},
+		FieldSeriesIndex: {"2", SourceEdited, true},
+		FieldMoreSeries:  {"", "", false},
+	})
+}

@@ -229,7 +229,8 @@ func TestAdminEditBookAPI(t *testing.T) {
 // TestAdminEditBookSeriesSwap: a PATCH making one of a book's other series its
 // main one swaps the two (catalog.seriesSwap), and the response shows it; one
 // that sends more_series itself keeps what it sent; reverting series to a
-// listed one swaps back; an old main series that can't be listed is a 400
+// listed one swaps back, the position it brings back the tag's own (a revert,
+// not an edit); an old main series that can't be listed is a 400
 // (invalid series), for one book and for a bulk edit.
 func TestAdminEditBookSeriesSwap(t *testing.T) {
 	e := newTestEnv(t)
@@ -281,6 +282,13 @@ func TestAdminEditBookSeriesSwap(t *testing.T) {
 	f = patch(`{"revert":["series"]}`)
 	if f["series"].Value != "Discworld" || f["series_index"].Value != "8" || f["more_series"].Value != `[{"name":"City Watch","position":1}]` {
 		t.Fatalf("after reverting series: %+v", f)
+	}
+	// #8 is the tag's own position, so the swap back reverts series_index (read
+	// off the file again, unlocked) rather than editing it; the list was an edit
+	// before the swap and stays one.
+	if si, ms := f["series_index"], f["more_series"]; si.Source != catalog.SourceTag || si.Locked ||
+		ms.Source != catalog.SourceEdited || !ms.Locked {
+		t.Fatalf("provenance after reverting series: series_index %+v, more_series %+v", si, ms)
 	}
 
 	// Denied: the long tag can't be listed, so the swap is refused.

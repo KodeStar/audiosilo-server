@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"errors"
 	"slices"
 	"strings"
 
@@ -201,27 +200,31 @@ func (c *Catalog) seriesSpellings(ctx context.Context, scopes []Scope, want map[
 // NextInSeries returns the book after book in the series it is in within one
 // library and scope, list shape: every series of book.AllSeries() it has a
 // position in, its main series first, then its others in list order; the first
-// holding a later book that doesn't step back answers with it (nextInOneSeries,
-// stepsBack). A later book in one series that sits at or before book in a series
-// ranked above it is no step forward - in a series numbered two ways (Narnia's
-// chronological main series, its publication order listed) following the other
-// numbering would loop back - so that series is skipped. When none answers,
-// numbered reports whether any of them holds another numbered book in scope -
-// the end of a numbered series - and false means its series give no order to
-// follow at all (the book unnumbered, or alone in its series). numbered is true
-// whenever next is found.
+// holding a later book that doesn't step back answers with the first such book
+// (nextInOneSeries, stepsBack). A later book in one series that sits at or before
+// book in a series ranked above it is no step forward - in a series numbered two
+// ways (Narnia's chronological main series, its publication order listed)
+// following the other numbering would loop back - so that book is passed over
+// and the series' next later book is judged, in position order: after The Silver
+// Chair (chronological #6, publication #4) the publication order passes over The
+// Horse and His Boy (chronological #3) and answers with The Last Battle. When
+// none answers, numbered reports whether any of them holds another numbered book
+// in scope - the end of a numbered series - and false means its series give no
+// order to follow at all (the book unnumbered, or alone in its series). numbered
+// is true whenever next is found.
 func (c *Catalog) NextInSeries(ctx context.Context, libraryID int64, book *Book, scope Scope) (next *Book, numbered bool, err error) {
 	all := book.AllSeries()
 	for k, s := range all {
 		if s.Position <= 0 {
 			continue
 		}
-		next, num, err := c.nextInOneSeries(ctx, libraryID, book.RelPath, s.Name, s.Position, scope)
+		next, num, err := c.nextInOneSeries(ctx, libraryID, book.RelPath, s.Name, s.Position, scope,
+			func(b *Book) bool { return stepsBack(all[:k], b) })
 		if err != nil {
 			return nil, false, err
 		}
 		numbered = numbered || num
-		if next != nil && !stepsBack(all[:k], next) {
+		if next != nil {
 			return next, true, nil
 		}
 	}
@@ -242,40 +245,55 @@ func stepsBack(earlier []SeriesRef, candidate *Book) bool {
 	return false
 }
 
+// maxLaterMembers bounds the later books nextInOneSeries reads of one series to
+// find one that skip doesn't pass over. A series holds tens of books at most, so
+// every later book of a real series is read; a series with more later books than
+// this, every one of them stepping back, reads as numbered with none later.
+const maxLaterMembers = 50
+
 // nextInOneSeries returns the book after the one at relPath in series within one
 // library and scope: of the books in exactly that series, the one with the
-// smallest position in it above index (ties by path), list shape. A book is in
-// the series through its main series (at its series_index) or through an entry
-// of its more_series (at that entry's position), so the book after Guards!
-// Guards! in City Watch is found whichever way each book names City Watch. When
-// there is none, numbered reports whether the series holds any other numbered
-// book in scope. One query: the numbered members, those above index first, so
-// the first row is the next book when it is above index, and otherwise proves
-// the series numbered without one.
-func (c *Catalog) nextInOneSeries(ctx context.Context, libraryID int64, relPath, series string, index float64, scope Scope) (next *Book, numbered bool, err error) {
-	var b Book
-	var pos float64
-	dest, finish := bookDest(&b)
-	q, args := firstSeriesMember(libraryID, relPath, series, index, scope)
-	err = c.db.QueryRowContext(ctx, q, args...).Scan(append(dest, &pos)...)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return nil, false, nil
-	case err != nil:
+// smallest position in it above index (ties by path) that skip doesn't report
+// (nil skips none), list shape. A book is in the series through its main series
+// (at its series_index) or through an entry of its more_series (at that entry's
+// position), so the book after Guards! Guards! in City Watch is found whichever
+// way each book names City Watch. When there is none, numbered reports whether
+// the series holds any other numbered book in scope. One query (laterSeriesMembers):
+// the numbered members, those above index first, read in that order until one
+// passes skip or the first at or below index, which proves the series numbered
+// without a later book.
+func (c *Catalog) nextInOneSeries(ctx context.Context, libraryID int64, relPath, series string, index float64, scope Scope, skip func(*Book) bool) (next *Book, numbered bool, err error) {
+	q, args := laterSeriesMembers(libraryID, relPath, series, index, scope)
+	rows, err := c.db.QueryContext(ctx, q, args...)
+	if err != nil {
 		return nil, false, err
-	case pos <= index:
-		return nil, true, nil
 	}
-	finish()
-	return &b, true, nil
+	defer rows.Close()
+	for rows.Next() {
+		var b Book
+		var pos float64
+		dest, finish := bookDest(&b)
+		if err := rows.Scan(append(dest, &pos)...); err != nil {
+			return nil, false, err
+		}
+		numbered = true
+		if pos <= index {
+			break // every member above index has been read
+		}
+		finish()
+		if skip == nil || !skip(&b) {
+			return &b, true, nil
+		}
+	}
+	return nil, numbered, rows.Err()
 }
 
-// firstSeriesMember is nextInOneSeries' query, and its args: the numbered
+// laterSeriesMembers is nextInOneSeries' query, and its args: the numbered
 // members of series (numberedSeriesMembers), those above index first, each group
-// by position then path, the first one only.
-func firstSeriesMember(libraryID int64, relPath, series string, index float64, scope Scope) (string, []any) {
+// by position then path, at most maxLaterMembers.
+func laterSeriesMembers(libraryID int64, relPath, series string, index float64, scope Scope) (string, []any) {
 	q, args := numberedSeriesMembers(libraryID, relPath, series, scope)
-	return `SELECT ` + bookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, rel_path LIMIT 1`, append(args, index)
+	return `SELECT ` + bookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, rel_path LIMIT ?`, append(args, index, maxLaterMembers)
 }
 
 // numberedSeriesMembers is the query, and its args, of the books in exactly

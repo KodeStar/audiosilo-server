@@ -496,28 +496,35 @@ admin overrides; see Metadata overrides below).
   book's own order (`railOrder`: the rail named, by `match.SeriesKey`, like its main
   series or one of that rail's orderings, then like its more_series entries in list
   order, then the rest as listed) the first with an entry after the current work
-  (`meta.NextOnRail` on its MAIN view) that doesn't step back (`railStepsBack`: the
-  entry's work at or before the current work's position on an earlier-ranked rail,
-  both numeric - Narnia's publication order after The Silver Chair would loop back
-  through the chronological one); `localRails` runs once, only when a rail decides;
-  its entry placed -> next + book + work. A later rail's placed entry never answers
+  that doesn't step back decides, with its first such entry (`nextEntry`: the
+  `meta.NextOnRail` walk on its MAIN view, passing over each entry that steps back,
+  `railStepsBack`: the entry's work at or before the current work's position on an
+  earlier-ranked rail, both numeric - after The Silver Chair the publication order
+  passes over The Horse and His Boy and The Magician's Nephew, earlier
+  chronologically, and decides with The Last Battle); `NextRail` returns the rail
+  and entry indexes, and `communityNext` reads that same entry off the placed rails
+  by them (`PlaceLocal` keeps every rail and entry at its index; plain `NextOnRail`
+  there could read a passed-over entry); `localRails` runs once, only when a rail
+  decides; its entry placed -> next + book + work. A later rail's placed entry never answers
   instead: an unplaced deciding entry rides along as `work` without `local` beside
   the steps below, since failing to place (untagged, series named unlike the rail)
   proves nothing; current work last on every rail (they can lag the library),
   upstream error/unmatched/no rails/unnumbered -> no `work`), `series`
   (`catalog.NextInSeries`: every series of `Book.AllSeries()` with a position, main
   first; per series one query
-  (`firstSeriesMember`) over its numbered members in scope - same library, books in
+  (`laterSeriesMembers`) over its numbered members in scope - same library, books in
   exactly that series by their main series or a more_series entry, at their
   position IN THAT SERIES - those above the book's position first, then by
-  position, ties by path, LIMIT 1: a row above is the next book, any other row means
-  numbered with none later; a UNION ALL of an `idx_books_series` branch and a list
+  position, ties by path, LIMIT `maxLaterMembers` (50; a series is tens of books):
+  read in that order, the first row above that doesn't step back is the next book,
+  and any row at all means numbered (the first at or below ends the walk); a UNION ALL of an `idx_books_series` branch and a list
   branch narrowed by the full-text index's series column (`books_fts`, every series
   name; `idx_books_more_series` alone for a name with no phrase) + `json_each` for
-  the exact name; the first series with a later book answers, unless that book
-  steps back (`stepsBack`: it sits at or before the current book in an
-  earlier-ranked series of the current book's, both numbered there), which skips
-  that series; numbered books in some series but none later in any ->
+  the exact name; the first series with a later book that doesn't step back
+  answers with the first such book (`stepsBack`: it sits at or before the current
+  book in an earlier-ranked series of the current book's, both numbered there; a
+  book that steps back is passed over, not the whole series); numbered books in
+  some series but none later (or every later one stepping back) in any ->
   `{source:"series"}`), `folder`
   (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
   ignore-filtered, annotated by `BooksByPaths`, which reads any number of paths in
@@ -679,14 +686,21 @@ admin overrides; see Metadata overrides below).
   per book in `editTx`, from the book's effective row): the old main series takes the
   entry's place in the list and `series_index` becomes the entry's position (unless the
   edit names `series_index`), written as the edit's own overrides; so reverting a swap
-  swaps back. An old main series that can't be listed (name too long, position out of
+  swaps back. A derived value equal to what its field resolves to without an override
+  (`bookLayers.unedited`: the scan's or folder layout's value; layers loaded only when a
+  swap happens) is written as a revert of that field instead (`seriesSwap` returns sets
+  and reverts, disjoint, never a field the edit names), so swapping back to a
+  path-derived Sherlock Holmes #5 leaves `series_index` read off the path (unlocked,
+  source `path`), while a list that was an edit before the swap stays one. An old main series that can't be listed (name too long, position out of
   range) refuses the edit: `invalid(series)`, a 400, failing a bulk edit whole (`EditBooks`
   names the refusing book's path in the reason). A
   community edit never swaps: `matchrun.planSeries` is the one statement of how a match
   lays out series. The console drafts the same swap before saving (`book-model.ts`
   `commitField`), so its save sends the values and the server's swap doesn't fire;
   `saveRequest` sends the saved `more_series` when the admin took the drafted swap back
-  (only for a swap `seriesSwap` can make, so an unlistable old main still gets the 400),
+  (only for a swap `seriesSwap` can make, so an unlistable old main still gets the 400);
+  as that save names `more_series`, a swap the console drafts writes its values as
+  edits even where one equals the file's (the values shown are the same),
   and the undo of a series revert that swapped (`undoRevertRequest`) sends the list and
   position it had. `MoveDurableState` carries overrides and custom covers as one set: when the moved book
   has any, the new path's own rows in all three tables are dropped first; it moves

@@ -556,6 +556,93 @@ func twoRailMetaserve(t *testing.T) *httptest.Server {
 	return mock
 }
 
+// narniaMetaserve serves The Silver Chair ("sc", B0SC) on two community rails:
+// Narnia (chronological, where it is #6 and last) and Narnia (Publication),
+// where it is #4 and The Horse and His Boy (#5), The Magician's Nephew (#6) and
+// The Last Battle (#7) follow; the first two are earlier chronologically.
+func narniaMetaserve(t *testing.T) *httptest.Server {
+	t.Helper()
+	entries := func(works ...string) string {
+		var parts []string
+		for i, w := range works {
+			if w != "" {
+				parts = append(parts, `{"position":"`+strconv.Itoa(i+1)+`","work":{"id":"`+w+`","title":"`+w+`","authors":[]}}`)
+			}
+		}
+		return strings.Join(parts, ",")
+	}
+	rails := map[string]string{
+		"chrono": `{"id":"chrono","name":"Narnia","authors":[],"works":[` + entries("mn", "lww", "hhb", "pc", "vdt", "sc") + `]}`,
+		"pub":    `{"id":"pub","name":"Narnia (Publication)","authors":[],"works":[` + entries("lww", "pc", "vdt", "sc", "hhb", "mn", "lb") + `]}`,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("asin") != "B0SC" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"work":{"id":"sc","title":"The Silver Chair","authors":[]},"recording_id":""}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") != "sc" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"sc","title":"The Silver Chair","authors":[],"language":"en","series":[` +
+			`{"id":"chrono","name":"Narnia","position":"6"},{"id":"pub","name":"Narnia (Publication)","position":"4"}],"recordings":[]}`))
+	})
+	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		body, ok := rails[r.PathValue("id")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	})
+	mock := httptest.NewServer(mux)
+	t.Cleanup(mock.Close)
+	return mock
+}
+
+// TestNextCommunityPassesOverStepsBack: the chronological rail has ended, so the
+// publication rail decides, with its first later entry that doesn't loop back
+// chronologically: The Last Battle, passing over The Horse and His Boy, which the
+// caller owns and which is placed. The answer is the entry NextRail chose, read
+// off the placed rails, not that rail's plain next entry (the owned The Horse and
+// His Boy); without The Last Battle owned it rides along unplaced beside the
+// local step, which passes over the same steps back and ends numbered.
+func TestNextCommunityPassesOverStepsBack(t *testing.T) {
+	for name, ownLast := range map[string]bool{"owned: community": true, "unowned: the local series ends": false} {
+		t.Run(name, func(t *testing.T) {
+			books := []*catalog.Book{
+				{RelPath: "Narnia/6 The Silver Chair", Series: "Narnia", SeriesIndex: 6, ASIN: "B0SC", IsFolder: true},
+				{RelPath: "Narnia/3 The Horse and His Boy", Series: "Narnia", SeriesIndex: 3},
+			}
+			if ownLast {
+				books = append(books, &catalog.Book{RelPath: "Narnia/7 The Last Battle", Series: "Narnia (Publication)", SeriesIndex: 7})
+			}
+			e := newLibraryEnv(t, narniaMetaserve(t), true, books...)
+			mkdirs(t, e.lib.Root, "Narnia/6 The Silver Chair")
+			setMoreSeries(t, e, "Narnia/6 The Silver Chair", `[{"name":"Narnia (Publication)","position":4}]`)
+			setMoreSeries(t, e, "Narnia/3 The Horse and His Boy", `[{"name":"Narnia (Publication)","position":5}]`)
+			n := getNext(t, e.testEnv, e.url("next", "Narnia/6 The Silver Chair"), e.adminTok)
+			if n.Work == nil || n.Work.ID != "lb" {
+				t.Fatalf("work = %s, want lb", n.raw)
+			}
+			if ownLast {
+				if n.Source != nextCommunity || n.nextPath() != "Narnia/7 The Last Battle" || n.Work.Local == nil ||
+					n.Book == nil || n.Book.RelPath != "Narnia/7 The Last Battle" {
+					t.Fatalf("= %s, want community The Last Battle", n.raw)
+				}
+				return
+			}
+			if n.Source != nextSeries || n.Next != nil || n.Work.Local != nil {
+				t.Fatalf("= %s, want the series ended with lb unplaced", n.raw)
+			}
+		})
+	}
+}
+
 // TestNextCommunityRails: the rails of a book in several community series are
 // taken in the book's own order (meta.NextRail, whose policy meta's tests cover;
 // here a rail named like a listed series comes before the envelope's first), and

@@ -217,19 +217,32 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 // Pass the rail's MAIN view (MetaSeries.Works): an alternate reading order's
 // "next" is a different book, and the main view is the order a listener is in.
 func NextOnRail(rail MetaSeries, currentWork string) (next *MetaSeriesWork, ok bool) {
+	i, ok := nextEntry(rail, currentWork, nil)
+	if i < 0 {
+		return nil, ok
+	}
+	c := rail.Works[i]
+	return &c, true
+}
+
+// nextEntry is NextOnRail's walk, as an index into rail.Works (-1 when there is
+// none), passing over every entry skip reports (nil skips none): of the entries
+// left, the smallest numeric position above the current work's, ties in rail
+// order. ok is NextOnRail's.
+func nextEntry(rail MetaSeries, currentWork string, skip func(MetaSeriesWork) bool) (next int, ok bool) {
 	at, ok := currentPosition(rail, currentWork)
 	if !ok {
-		return nil, false
+		return -1, false
 	}
+	next = -1
 	var best float64
-	for _, w := range rail.Works {
+	for i, w := range rail.Works {
 		p, numbered := parsePosition(w.Position)
 		if !numbered || p <= at || samePosition(p, at) || w.ID == currentWork {
 			continue
 		}
-		if next == nil || p < best {
-			c := w
-			next, best = &c, p
+		if (next < 0 || p < best) && (skip == nil || !skip(w)) {
+			next, best = i, p
 		}
 	}
 	return next, true
@@ -281,25 +294,33 @@ func railOrder(rails []MetaSeries, names []string) []int {
 	return order
 }
 
-// NextRail is the rail that decides what follows currentWork for a book in the
-// local series names (its main series first, then its others): in railOrder,
-// the first rail with an entry after the current work (NextOnRail on its MAIN
-// view) that doesn't step back (railStepsBack). Its next entry is THE next work:
-// the caller follows it when it is one of their books, and otherwise the local
-// steps answer with it alongside - a later rail's placed entry never jumps the
-// series the book is read in. -1 when no rail decides: every series has ended,
-// no current position is a number, or each next entry steps back. Read off the
-// shared rails, since placing the caller's books moves no entry, so a caller
-// learns there is no next entry without looking up what they own.
-func NextRail(rails []MetaSeries, currentWork string, names []string) int {
+// NextRail is the entry that decides what follows currentWork for a book in the
+// local series names (its main series first, then its others): rail, an index
+// into rails, and entry, an index into that rail's MAIN view (Works). On each
+// rail in railOrder the deciding entry is the one NextOnRail would read with
+// every entry that steps back passed over (railStepsBack: at or before the
+// current work on a rail ranked above), and the first rail that has one decides.
+// So after The Silver Chair the publication order passes over The Horse and His
+// Boy and The Magician's Nephew (earlier chronologically) and decides with The
+// Last Battle. That entry is THE next work: the caller follows it when it is one
+// of their books, and otherwise the local steps answer with it alongside - a
+// later rail's placed entry never jumps the series the book is read in. Both are
+// -1 when no rail decides: every series has ended, no current position is a
+// number, or every later entry steps back. Read off the shared rails, since
+// placing the caller's books moves no entry (PlaceLocal keeps every rail and
+// entry at its index), so a caller learns there is no next entry without looking
+// up what they own, and reads the same entry off its placed rails by the indexes.
+func NextRail(rails []MetaSeries, currentWork string, names []string) (rail, entry int) {
 	order := railOrder(rails, names)
 	for k, i := range order {
-		next, ok := NextOnRail(rails[i], currentWork)
-		if ok && next != nil && !railStepsBack(rails, order[:k], currentWork, next.ID) {
-			return i
+		at, _ := nextEntry(rails[i], currentWork, func(w MetaSeriesWork) bool {
+			return railStepsBack(rails, order[:k], currentWork, w.ID)
+		})
+		if at >= 0 {
+			return i, at
 		}
 	}
-	return -1
+	return -1, -1
 }
 
 // railStepsBack reports whether the work nextWork, the next entry on a rail,

@@ -279,11 +279,14 @@ func TestRailOrder(t *testing.T) {
 }
 
 // TestNextRail: the rail that decides is the first, in the book's own order
-// (railOrder), with an entry after the current work; an ended rail or an
-// unreadable position is passed over, and so is a rail whose next entry sits at
-// or before the current work on a rail ranked above it (both numbered): after
-// The Silver Chair (chronological 6, publication 4) the publication order's next,
-// The Horse and His Boy, is chronological 3. Nothing deciding is -1.
+// (railOrder), with an entry after the current work that doesn't step back, and
+// the entry is that rail's first such one; an ended rail or an unreadable
+// position is passed over. A step back is an entry at or before the current work
+// on a rail ranked above it (both numbered), and it passes over that entry, not
+// the rail: after The Silver Chair (chronological 6, publication 4) the
+// publication order's next, The Horse and His Boy, is chronological 3 and The
+// Magician's Nephew chronological 1, so The Last Battle decides. Nothing
+// deciding is -1.
 func TestNextRail(t *testing.T) {
 	rails := []MetaSeries{
 		named("Alpha", "1", "cur@1", "a2@2"),
@@ -294,32 +297,44 @@ func TestNextRail(t *testing.T) {
 	chrono := named("Narnia", "6", "mn@1", "lww@2", "hhb@3", "pc@4", "vdt@5", "cur@6", "lb@7")
 	ended := named("Narnia", "6", "mn@1", "lww@2", "hhb@3", "pc@4", "vdt@5", "cur@6")
 	publication := named("Narnia (Publication)", "4", "lww@1", "pc@2", "vdt@3", "cur@4", "hhb@5", "mn@6", "lb@7")
+	loops := named("Narnia (Publication)", "4", "lww@1", "pc@2", "vdt@3", "cur@4", "hhb@5", "mn@6")
 	for name, tc := range map[string]struct {
 		rails []MetaSeries
 		names []string
 		want  int
+		entry string // the deciding entry's work, when want >= 0
 	}{
-		"main series' rail first":  {rails, []string{"Beta"}, 2},
-		"envelope order otherwise": {rails, []string{"Gamma"}, 0},
-		"a listed series next":     {rails, []string{"Gamma", "Beta"}, 2},
-		"an ended rail passed":     {rails[1:3], []string{"Ended", "Beta"}, 1},
-		"every rail ended":         {rails[1:2], []string{"Ended"}, -1},
-		"no current position":      {rails[3:], nil, -1},
-		// Denied: the publication order's next loops back chronologically.
-		"denied: steps back on a rail above": {[]MetaSeries{publication, ended}, []string{"Narnia", "Narnia (Publication)"}, -1},
+		"main series' rail first":  {rails, []string{"Beta"}, 2, "b2"},
+		"envelope order otherwise": {rails, []string{"Gamma"}, 0, "a2"},
+		"a listed series next":     {rails, []string{"Gamma", "Beta"}, 2, "b2"},
+		"an ended rail passed":     {rails[1:3], []string{"Ended", "Beta"}, 1, "b2"},
+		"every rail ended":         {rails[1:2], []string{"Ended"}, -1, ""},
+		"no current position":      {rails[3:], nil, -1, ""},
+		// The publication order's next two loop back chronologically, so they
+		// are passed over and The Last Battle (on no rail above) decides.
+		"steps back on a rail above: the next later entry": {[]MetaSeries{publication, ended}, []string{"Narnia", "Narnia (Publication)"}, 0, "lb"},
+		// Denied: every later entry loops back.
+		"denied: every later entry steps back": {[]MetaSeries{loops, ended}, []string{"Narnia", "Narnia (Publication)"}, -1, ""},
 		// Allowed: The Last Battle is later in both orders.
-		"allowed: later on the rail above too": {[]MetaSeries{publication, chrono}, []string{"Narnia (Publication)", "Narnia"}, 0},
+		"allowed: later on the rail above too": {[]MetaSeries{publication, chrono}, []string{"Narnia (Publication)", "Narnia"}, 0, "hhb"},
 		// The chronological rail decides itself when it continues.
-		"the main series decides": {[]MetaSeries{publication, chrono}, []string{"Narnia", "Narnia (Publication)"}, 1},
+		"the main series decides": {[]MetaSeries{publication, chrono}, []string{"Narnia", "Narnia (Publication)"}, 1, "lb"},
 		// A step back judged only on rails ranked above: ranked first, the
 		// publication order decides with The Horse and His Boy.
-		"no rail above": {[]MetaSeries{publication, ended}, []string{"Narnia (Publication)", "Narnia"}, 0},
+		"no rail above": {[]MetaSeries{publication, ended}, []string{"Narnia (Publication)", "Narnia"}, 0, "hhb"},
 		// Unnumbered on the rail above: no step back to judge.
-		"unnumbered on the rail above": {[]MetaSeries{named("Beta", "1", "cur@1", "b2@2"), named("Alpha", "", "cur@", "b2@")}, []string{"Alpha", "Beta"}, 0},
+		"unnumbered on the rail above": {[]MetaSeries{named("Beta", "1", "cur@1", "b2@2"), named("Alpha", "", "cur@", "b2@")}, []string{"Alpha", "Beta"}, 0, "b2"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := NextRail(tc.rails, "cur", tc.names); got != tc.want {
-				t.Fatalf("NextRail = %d, want %d", got, tc.want)
+			got, entry := NextRail(tc.rails, "cur", tc.names)
+			gotEntry := ""
+			if got >= 0 {
+				gotEntry = tc.rails[got].Works[entry].ID
+			} else if entry != -1 {
+				t.Fatalf("NextRail entry = %d with no rail, want -1", entry)
+			}
+			if got != tc.want || gotEntry != tc.entry {
+				t.Fatalf("NextRail = %d (%q), want %d (%q)", got, gotEntry, tc.want, tc.entry)
 			}
 		})
 	}

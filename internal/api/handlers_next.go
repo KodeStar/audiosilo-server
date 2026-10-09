@@ -22,7 +22,7 @@ const (
 // Source names the step that produced Next (or decided there is none). Next is
 // set only for a book the caller can open; Book is its indexed metadata in the
 // list shape (no files, chapters or description). Work is the community work
-// that comes next (the next entry of the rail that decides, meta.NextRail): with
+// that comes next (the entry that decides, meta.NextRail): with
 // `local` beside a community Next, or without it beside a series/folder/none
 // answer when the caller's copy could not be placed.
 type nextBook struct {
@@ -82,9 +82,10 @@ func (a *API) resolveNext(ctx context.Context, lib *catalog.Library, scope catal
 	return next, nil
 }
 
-// communityNext is the entry after the current work on the rail that decides
-// (meta.NextRail: in the book's own series order, the first rail with a next
-// entry that doesn't step back), placed for the caller as the /meta envelope
+// communityNext is the entry that decides what follows the current work
+// (meta.NextRail: in the book's own series order, the first rail with an entry
+// after the current work that doesn't step back, that rail's first such entry),
+// placed for the caller as the /meta envelope
 // places it (localRails). The deciding rail is read off the shared envelope, so
 // localRails runs only when there is one. work.Local is set when its entry is
 // one of the caller's books, and placed is then that book's indexed metadata
@@ -110,7 +111,7 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 	for _, s := range book.AllSeries() {
 		names = append(names, s.Name)
 	}
-	at := meta.NextRail(env.Series, env.Work.ID, names)
+	at, entry := meta.NextRail(env.Series, env.Work.ID, names)
 	if at < 0 {
 		return nil, nil
 	}
@@ -119,18 +120,21 @@ func (a *API) communityNext(ctx context.Context, libraryID int64, book *catalog.
 		if ctx.Err() == nil {
 			a.log.Warn("place owned books for next book failed", "err", err, "library", libraryID, "path", book.RelPath)
 		}
-		work, _ = meta.NextOnRail(env.Series[at], env.Work.ID)
-		return work, nil
+		w := env.Series[at].Works[entry]
+		return &w, nil
 	}
-	work, _ = meta.NextOnRail(rails[at], env.Work.ID) // the same entry, with the caller's local
-	if work != nil && work.Local != nil {
+	// The deciding entry by its indexes: placing keeps every rail and entry where
+	// it was, and NextOnRail on the placed rail could read a different entry (one
+	// NextRail passed over as stepping back).
+	w := rails[at].Works[entry]
+	if w.Local != nil {
 		for i := range books {
-			if books[i].LibraryID == work.Local.LibraryID && books[i].RelPath == work.Local.Path {
-				return work, &books[i]
+			if books[i].LibraryID == w.Local.LibraryID && books[i].RelPath == w.Local.Path {
+				return &w, &books[i]
 			}
 		}
 	}
-	return work, nil
+	return &w, nil
 }
 
 // seriesNext reads the next book off the local numbering of every series the
