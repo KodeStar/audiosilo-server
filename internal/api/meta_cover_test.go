@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -192,8 +194,8 @@ func TestMetaCoverAuthAndScope(t *testing.T) {
 		t.Fatalf("out of scope = %d, want 403", resp.StatusCode)
 	}
 	// A library the user can't reach at all.
-	if resp, _ := e.do(t, "GET", metaCoverPath(e.lib+100, "x", cover, "token="+kidTok), "", ""); resp.StatusCode == http.StatusOK {
-		t.Fatalf("unknown library = %d", resp.StatusCode)
+	if resp, _ := e.do(t, "GET", metaCoverPath(e.lib+100, "x", cover, "token="+kidTok), "", ""); resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown library = %d, want 403 or 404", resp.StatusCode)
 	}
 }
 
@@ -210,14 +212,31 @@ func TestMetaCoverUpstreamFailures(t *testing.T) {
 	}
 
 	e.countFetches()
-	// The image's host fails: 502, not cached (asked again, fetched again).
-	for range 2 {
-		if resp, body := e.do(t, "GET", e.coverPath(book, e.host+"/missing.jpg", ""), tok, ""); resp.StatusCode != http.StatusBadGateway {
-			t.Fatalf("missing image = %d %s, want 502", resp.StatusCode, body)
+	var now atomic.Int64
+	now.Store(time.Now().UnixNano())
+	e.api.community.now = func() time.Time { return time.Unix(0, now.Load()) }
+	// The image's host fails: 502. Asked again within communityRetryAfter (any
+	// size), still 502 but not fetched again: a broken host isn't hit per render.
+	for _, size := range []string{"", "", "size=160"} {
+		if resp, body := e.do(t, "GET", e.coverPath(book, e.host+"/missing.jpg", size), tok, ""); resp.StatusCode != http.StatusBadGateway ||
+			!strings.Contains(body, codeCoverUnavailable) {
+			t.Fatalf("missing image = %d %s, want 502 cover_unavailable", resp.StatusCode, body)
 		}
 	}
+	if n := e.fetches.Load(); n != 1 {
+		t.Fatalf("fetched %d times within the retry window, want 1", n)
+	}
+	// Not cached: once the window has passed it is fetched again.
+	now.Add(int64(communityRetryAfter + time.Second))
+	if resp, _ := e.do(t, "GET", e.coverPath(book, e.host+"/missing.jpg", ""), tok, ""); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("missing image after the window = %d, want 502", resp.StatusCode)
+	}
 	if n := e.fetches.Load(); n != 2 {
-		t.Fatalf("a failed fetch was cached: %d fetches", n)
+		t.Fatalf("fetched %d times after the retry window, want 2", n)
+	}
+	// Another cover from the same envelope is unaffected by that one's failure.
+	if resp, _ := e.do(t, "GET", e.coverPath(book, e.host+"/small.jpg", ""), tok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("working cover beside a failed one = %d, want 200", resp.StatusCode)
 	}
 	// Not an image, and a decompression bomb (too large to decode): 404, cached
 	// as none.
@@ -247,5 +266,103 @@ func TestMetaCoverDisabled(t *testing.T) {
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 	if resp, _ := e.do(t, "GET", e.coverPath("Andy Weir/The Martian", e.host+"/small.jpg", ""), tok, ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("disabled = %d, want 404", resp.StatusCode)
+	}
+}
+
+// waitForWaiters polls until a fetch for key is in flight with n asks waiting on it.
+func waitForWaiters(t *testing.T, f *communityFlights, key string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f.mu.Lock()
+		c := f.calls[key]
+		got := -1 // none in flight yet
+		if c != nil {
+			got = c.waiters
+		}
+		f.mu.Unlock()
+		if got == n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waiters on %q = %d, want %d", key, got, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Asks for the same thumbnail at once share one fetch.
+func TestCommunityThumbnailSharesAFetch(t *testing.T) {
+	e := newMetaCoverEnv(t, true)
+	url := e.host + "/small.jpg"
+	release := make(chan struct{})
+	var fetches atomic.Int32
+	e.api.fetchCover = func(ctx context.Context, u string, limit int64) ([]byte, error) {
+		fetches.Add(1)
+		<-release
+		return loopbackFetch(ctx, u, limit)
+	}
+	const asks = 5
+	results := make([][]byte, asks)
+	errs := make([]error, asks)
+	var wg sync.WaitGroup
+	wg.Go(func() { results[0], errs[0] = e.api.communityThumbnail(context.Background(), url, 160, false) })
+	key := "r\x00" + url + "\x00160"
+	waitForWaiters(t, &e.api.community, key, 0) // the leader is in flight
+	for i := 1; i < asks; i++ {
+		wg.Go(func() { results[i], errs[i] = e.api.communityThumbnail(context.Background(), url, 160, false) })
+	}
+	waitForWaiters(t, &e.api.community, key, asks-1)
+	close(release)
+	wg.Wait()
+	for i := range asks {
+		if errs[i] != nil || len(results[i]) == 0 {
+			t.Fatalf("ask %d = %d bytes, %v", i, len(results[i]), errs[i])
+		}
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("fetched %d times for %d asks at once, want 1", n, asks)
+	}
+}
+
+// A leading ask that gives up doesn't fail the asks waiting on it, nor mark the
+// cover as failed: the next one fetches under its own request.
+func TestCommunityThumbnailAbandonedLeader(t *testing.T) {
+	e := newMetaCoverEnv(t, true)
+	url := e.host + "/small.jpg"
+	var fetches atomic.Int32
+	e.api.fetchCover = func(ctx context.Context, u string, limit int64) ([]byte, error) {
+		if fetches.Add(1) == 1 {
+			<-ctx.Done() // the first fetch hangs until its request ends
+			return nil, ctx.Err()
+		}
+		return loopbackFetch(ctx, u, limit)
+	}
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	var leaderErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { _, leaderErr = e.api.communityThumbnail(leaderCtx, url, 160, false) })
+	key := "r\x00" + url + "\x00160"
+	waitForWaiters(t, &e.api.community, key, 0)
+	var jpg []byte
+	var err error
+	wg.Go(func() { jpg, err = e.api.communityThumbnail(context.Background(), url, 160, false) })
+	waitForWaiters(t, &e.api.community, key, 1)
+	cancel()
+	wg.Wait()
+	if leaderErr == nil {
+		t.Fatal("the abandoned leader succeeded")
+	}
+	if err != nil || len(jpg) == 0 {
+		t.Fatalf("waiter = %d bytes, %v; want the thumbnail", len(jpg), err)
+	}
+	if n := fetches.Load(); n != 2 {
+		t.Fatalf("fetched %d times, want 2 (the abandoned one, then the waiter's)", n)
+	}
+	e.api.community.mu.Lock()
+	failed := len(e.api.community.failed)
+	e.api.community.mu.Unlock()
+	if failed != 0 {
+		t.Fatalf("an abandoned fetch was remembered as failed (%d)", failed)
 	}
 }

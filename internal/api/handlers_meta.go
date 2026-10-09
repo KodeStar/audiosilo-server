@@ -48,7 +48,6 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"matched": false})
 		return
 	}
-	var err error
 
 	// The caller's place in the book is read first: a failure here fails the
 	// request (hiding was asked for, so the full envelope is not a fallback)
@@ -58,6 +57,7 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	var (
 		chapter  int
 		finished bool
+		err      error
 	)
 	if hide {
 		if chapter, finished, err = a.listeningChapter(r.Context(), lib.ID, book); err != nil {

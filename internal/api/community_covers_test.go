@@ -133,7 +133,8 @@ func TestCommunityCovers(t *testing.T) {
 	}
 
 	// Allowed (loopback standing in for the internet): a thumbnail per cover, in
-	// order, "" for what isn't one.
+	// order, "" for what isn't one. small.jpg's failure above is remembered, but
+	// the console's batch always tries again.
 	e.api.fetchCover = loopbackFetch
 	got := thumbs(adminTok, batch(host.URL+"/missing.jpg", host.URL+"/big.png", "ftp://x/c.jpg",
 		host.URL+"/page.html", host.URL+"/small.jpg"))

@@ -778,7 +778,8 @@ admin overrides; see Metadata overrides below).
   redirects, 15 s, `maxConcurrentCoverFetches`, never holding `coverReads`).
   `POST /admin/meta/covers` (`{urls, size}`, <= 12) returns thumbnails as `data:` URLs in
   order (`""` = couldn't be fetched or decoded; cached in the thumbnail cache by URL, a failed
-  fetch not; each holds `communityReads` from its fetch to the end of its decode); `PUT /admin/libraries/{id}/cover/community?path=` (`{url}`) keeps one as the book's
+  fetch not; each holds `communityReads` from its fetch to the end of its decode; asks for the
+  same thumbnail at once share one fetch, `communityFlights`); `PUT /admin/libraries/{id}/cover/community?path=` (`{url}`) keeps one as the book's
   custom cover through `saveCustomCover`, the upload's own path, once `keepableCover` has read its
   header (413 past `media.MaxThumbnailSourcePixels`), re-encoded within 1600 px first when it is
   over 5 MiB (audited `book.cover_set`, `source: community`); 400 for a URL
@@ -798,7 +799,9 @@ admin overrides; see Metadata overrides below).
   `FetchCover`'s guards, `communityReads`), so upstream bytes and content types never
   reach the client; ETag `"community-<size>-<CoverVersion(url)>"`, `coverCache` (a day).
   404 `no such cover` (unmatched, untagged, URL not handed out), 502 metadata unavailable,
-  502 `cover_unavailable` (fetch failed, not cached), 404 `no cover` (not an image, over
+  502 `cover_unavailable` (fetch failed, not cached but remembered per URL for
+  `communityRetryAfter`, 1 min, so a broken or hung host isn't fetched on every render; the
+  console's batch ignores that and always retries), 404 `no cover` (not an image, over
   the pixel bound). It stays under the request timeout (`isStreamingPath` matches
   only `/libraries/{id}/cover|stream` exactly, `isLibraryMedia`).
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows

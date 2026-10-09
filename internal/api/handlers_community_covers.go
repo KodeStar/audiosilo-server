@@ -70,10 +70,12 @@ func (a *API) handleCommunityCovers(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	for i, u := range req.URLs {
 		wg.Go(func() {
-			jpg, err := a.communityThumbnail(ctx, u, req.Size)
+			jpg, err := a.communityThumbnail(ctx, u, req.Size, true)
 			switch {
 			case err != nil:
-				a.log.Debug("fetch community cover failed", "err", err, "url", u)
+				if ctx.Err() == nil { // not the batch budget or the client giving up
+					a.log.Debug("fetch community cover failed", "err", err, "url", u)
+				}
 			case jpg != nil:
 				out[i] = jpegDataURL(jpg)
 			}
@@ -86,10 +88,47 @@ func (a *API) handleCommunityCovers(w http.ResponseWriter, r *http.Request) {
 // communityThumbnail is a community cover's thumbnail at size through the shared
 // cache (keyed by the URL): nil with no error when there is none (a URL that isn't
 // one, an image too large to read, one that can't be decoded; cached as none), an
-// error when the fetch failed (not cached, so the next ask tries again).
-func (a *API) communityThumbnail(ctx context.Context, rawURL string, size int) ([]byte, error) {
+// error when the fetch failed. A failed fetch is not cached, but it is remembered
+// for communityRetryAfter: unless retryFailed (the admin's dialog, which always
+// tries again), an ask before then is errCoverFailedRecently with no fetch, so a
+// broken or hung cover host isn't asked again on every player render while it
+// holds a communityReads slot each time. The asks for the same thumbnail at once
+// share one fetch (communityFlights).
+func (a *API) communityThumbnail(ctx context.Context, rawURL string, size int, retryFailed bool) ([]byte, error) {
 	key := "r\x00" + rawURL + "\x00" + strconv.Itoa(size)
-	if jpg, ok := a.thumbs.Get(key); ok {
+	for {
+		if jpg, ok := a.thumbs.Get(key); ok {
+			return jpg, nil
+		}
+		c, lead, err := a.community.join(key, rawURL, retryFailed)
+		if err != nil {
+			return nil, err
+		}
+		if lead {
+			c.jpg, c.err = a.fetchCommunityThumbnail(ctx, key, rawURL, size)
+			a.community.finish(key, rawURL, c, ctx.Err() != nil)
+			return c.jpg, c.err
+		}
+		select {
+		case <-c.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if c.err == nil || !c.abandoned {
+			return c.jpg, c.err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// The request that led gave up before its fetch did: ask again under ours.
+	}
+}
+
+// fetchCommunityThumbnail fetches and decodes one community cover for
+// communityThumbnail, holding a communityReads slot, and caches what isn't a
+// failed fetch.
+func (a *API) fetchCommunityThumbnail(ctx context.Context, key, rawURL string, size int) ([]byte, error) {
+	if jpg, ok := a.thumbs.Get(key); ok { // cached by a fetch that just finished
 		return jpg, nil
 	}
 	select {
@@ -111,6 +150,106 @@ func (a *API) communityThumbnail(ctx context.Context, rawURL string, size int) (
 	}
 	a.thumbs.Put(key, jpg)
 	return jpg, nil
+}
+
+const (
+	// communityRetryAfter is how long a community cover whose fetch failed is
+	// answered as failed without being fetched again.
+	communityRetryAfter = time.Minute
+	// maxCommunityFailures bounds the failed cover URLs remembered at once; past
+	// it (after dropping the expired ones) a failure is simply not remembered.
+	maxCommunityFailures = 512
+)
+
+// errCoverFailedRecently is a community cover whose fetch failed less than
+// communityRetryAfter ago: not fetched again yet.
+var errCoverFailedRecently = errors.New("community cover failed recently; not fetched again yet")
+
+// communityFlights is communityThumbnail's bookkeeping: the fetches in flight, by
+// thumbnail key, that later asks for the same one wait on rather than fetch again,
+// and the URLs whose fetch failed recently. The zero value is ready to use.
+type communityFlights struct {
+	mu     sync.Mutex
+	calls  map[string]*communityCall
+	failed map[string]time.Time // URL -> when it may be fetched again
+	now    func() time.Time     // time.Now unless a test sets it
+}
+
+// communityCall is one thumbnail fetch in flight; its fields are set before done
+// is closed and only read after.
+type communityCall struct {
+	done chan struct{}
+	jpg  []byte
+	err  error
+	// abandoned: the leading request ended before the fetch did, so err is that
+	// request's, not the cover's (a waiter fetches again; nothing is remembered).
+	abandoned bool
+	waiters   int // how many asks wait on it (for tests)
+}
+
+func (f *communityFlights) clock() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+	return time.Now()
+}
+
+// join is the call in flight for key, or a new one this ask leads (lead), or
+// errCoverFailedRecently when rawURL failed less than communityRetryAfter ago and
+// the ask doesn't retryFailed.
+func (f *communityFlights) join(key, rawURL string, retryFailed bool) (c *communityCall, lead bool, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if until, ok := f.failed[rawURL]; ok && !retryFailed {
+		if f.clock().Before(until) {
+			return nil, false, errCoverFailedRecently
+		}
+		delete(f.failed, rawURL)
+	}
+	if c = f.calls[key]; c != nil {
+		c.waiters++
+		return c, false, nil
+	}
+	if f.calls == nil {
+		f.calls = map[string]*communityCall{}
+	}
+	c = &communityCall{done: make(chan struct{})}
+	f.calls[key] = c
+	return c, true, nil
+}
+
+// finish ends the leader's call c for key, remembering rawURL as failed when the
+// fetch itself failed (not when its request gave up first), and releases the
+// waiters.
+func (f *communityFlights) finish(key, rawURL string, c *communityCall, abandoned bool) {
+	f.mu.Lock()
+	c.abandoned = abandoned
+	if c.err != nil && !abandoned {
+		f.rememberFailure(rawURL)
+	}
+	delete(f.calls, key)
+	f.mu.Unlock()
+	close(c.done)
+}
+
+// rememberFailure records rawURL as failed until communityRetryAfter from now;
+// f.mu is held.
+func (f *communityFlights) rememberFailure(rawURL string) {
+	now := f.clock()
+	if f.failed == nil {
+		f.failed = map[string]time.Time{}
+	}
+	if len(f.failed) >= maxCommunityFailures {
+		for u, until := range f.failed {
+			if !now.Before(until) {
+				delete(f.failed, u)
+			}
+		}
+		if len(f.failed) >= maxCommunityFailures {
+			return
+		}
+	}
+	f.failed[rawURL] = now.Add(communityRetryAfter)
 }
 
 // handleAdminSetCommunityCover serves PUT /admin/libraries/{id}/cover/community?path=
@@ -222,7 +361,7 @@ func (a *API) keepableCover(ctx context.Context, data []byte, rawURL string) ([]
 // thumbSizes (an unset size is defaultThumbSize); 403/404 as /meta for the path;
 // 404 `no such cover` when the book is unmatched or its envelope hands out no such
 // URL; 502 when the envelope can't be had; 502 cover_unavailable when the image
-// can't be fetched; 404 `no cover` when it isn't a usable image (not an image, too
+// can't be fetched (or failed less than communityRetryAfter ago); 404 `no cover` when it isn't a usable image (not an image, too
 // large); else 200 image/jpeg, ETag by size and URL (a match is a 304 without a
 // fetch).
 func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
@@ -258,10 +397,12 @@ func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
 	if cond.notModified(w, r) {
 		return
 	}
-	jpg, err := a.communityThumbnail(r.Context(), rawURL, size)
+	jpg, err := a.communityThumbnail(r.Context(), rawURL, size, false)
 	switch {
 	case err != nil:
-		if r.Context().Err() == nil {
+		// Logged once per failure: the asks that follow within communityRetryAfter
+		// are errCoverFailedRecently, and a request that gave up is no failure.
+		if r.Context().Err() == nil && !errors.Is(err, errCoverFailedRecently) {
 			a.log.Info("fetch community cover failed", "err", err, "url", rawURL)
 		}
 		writeErrorCode(w, http.StatusBadGateway, codeCoverUnavailable, "could not fetch the cover")

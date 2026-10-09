@@ -128,6 +128,9 @@ type API struct {
 	// decoded for thumbnails, across requests (handlers_community_covers.go), as
 	// coverReads does the library's own art.
 	communityReads chan struct{}
+	// community shares a community cover's fetch between the asks for it at
+	// once, and remembers the ones that failed recently (communityThumbnail).
+	community communityFlights
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
