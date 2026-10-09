@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -20,6 +22,8 @@ import (
 // server), so the server fetches it (meta.Service.FetchCover, bounded there): as
 // thumbnails to show (POST /admin/meta/covers), and whole to keep as the book's
 // custom cover when the admin takes it (PUT /admin/libraries/{id}/cover/community).
+// The player gets the same thumbnails through GET /libraries/{id}/meta/cover
+// (handleMetaCover), for the covers a book's /meta envelope hands out.
 // The fetches never hold coverReads, which is for the library's own art: only the
 // decode is shared (decodeThumbnail). A thumbnail's fetch holds communityReads
 // instead, from the fetch to the end of its decode, so however many dialogs ask,
@@ -68,7 +72,7 @@ func (a *API) handleCommunityCovers(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	for i, u := range req.URLs {
 		wg.Go(func() {
-			if jpg := a.communityThumbnail(ctx, u, req.Size); jpg != nil {
+			if jpg, _ := a.communityThumbnail(ctx, u, req.Size); jpg != nil {
 				out[i] = jpegDataURL(jpg)
 			}
 		})
@@ -78,18 +82,18 @@ func (a *API) handleCommunityCovers(w http.ResponseWriter, r *http.Request) {
 }
 
 // communityThumbnail is a community cover's thumbnail at size through the shared
-// cache (keyed by the URL), nil when there is none. A URL that isn't one, an
-// image too large to read and one that can't be decoded are cached as none; a
-// fetch that failed is not, so the next dialog tries again.
-func (a *API) communityThumbnail(ctx context.Context, rawURL string, size int) []byte {
+// cache (keyed by the URL): nil with no error when there is none (a URL that isn't
+// one, an image too large to read, one that can't be decoded; cached as none), an
+// error when the fetch failed (not cached, so the next ask tries again).
+func (a *API) communityThumbnail(ctx context.Context, rawURL string, size int) ([]byte, error) {
 	key := "r\x00" + rawURL + "\x00" + strconv.Itoa(size)
 	if jpg, ok := a.thumbs.Get(key); ok {
-		return jpg
+		return jpg, nil
 	}
 	select {
 	case a.communityReads <- struct{}{}:
 	case <-ctx.Done():
-		return nil
+		return nil, ctx.Err()
 	}
 	defer func() { <-a.communityReads }()
 	raw, err := a.fetchCover(ctx, rawURL, maxCommunityCoverBytes)
@@ -98,14 +102,14 @@ func (a *API) communityThumbnail(ctx context.Context, rawURL string, size int) [
 	case errors.Is(err, meta.ErrCoverURL) || errors.Is(err, media.ErrImageTooLarge):
 	case err != nil:
 		a.log.Debug("fetch community cover failed", "err", err, "url", rawURL)
-		return nil
+		return nil, err
 	default:
 		if jpg, err = a.decodeThumbnail(ctx, raw, size, "url", rawURL); err != nil {
-			return nil
+			return nil, err
 		}
 	}
 	a.thumbs.Put(key, jpg)
-	return jpg
+	return jpg, nil
 }
 
 // handleAdminSetCommunityCover serves PUT /admin/libraries/{id}/cover/community?path=
@@ -197,4 +201,98 @@ func (a *API) keepableCover(ctx context.Context, data []byte, rawURL string) ([]
 		err = catalog.ErrUnsupportedImage
 	}
 	return jpg, err
+}
+
+// communityCoverCache is how long a client keeps a proxied community cover: the
+// image behind a community cover URL does not change (a new cover is a new URL).
+const communityCoverCache = "private, max-age=86400"
+
+// handleMetaCover serves GET /libraries/{id}/meta/cover?path=&url=&size= (the
+// `meta_covers` capability): a JPEG thumbnail of a community cover the book's
+// /meta envelope hands out (a rail entry's or the recording's cover_url), so the
+// player shows community covers from its own server. The web player's CSP takes
+// images only from the server, and a listener's device never contacts a third
+// party for them.
+//
+// It is not a general image proxy: url must be a cover the caller's own envelope
+// for that book carries (meta.Enrichment.HandsOutCover over the cached envelope),
+// and the book is scope-checked exactly like /meta. Only a thumbnail is served,
+// re-encoded as JPEG, so the upstream's bytes and content type never reach the
+// client. The fetch keeps FetchCover's guards (http(s), public addresses only,
+// redirects re-checked, size and time bounds) and the thumbnail cache.
+//
+// Responses: 404 while metadata is off; 400 without url or with a size outside
+// thumbSizes (an unset size is defaultThumbSize); 403/404 as /meta for the path;
+// 404 `no such cover` when the book is unmatched or its envelope hands out no such
+// URL; 502 when the envelope can't be had; 502 cover_unavailable when the image
+// can't be fetched; 404 `no cover` when it isn't a usable image (not an image, too
+// large); else 200 image/jpeg, ETag by size and URL (a match is a 304 without a
+// fetch).
+func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
+	if !a.metadataOn() {
+		writeError(w, http.StatusNotFound, "metadata lookup not enabled")
+		return
+	}
+	q := r.URL.Query()
+	rawURL := q.Get("url")
+	if rawURL == "" {
+		writeError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+	size := defaultThumbSize
+	if q.Has("size") {
+		n, err := strconv.Atoi(q.Get("size"))
+		if err != nil || !slices.Contains(thumbSizes, n) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("size must be one of %v", thumbSizes))
+			return
+		}
+		size = n
+	}
+	lib, path, scope, status, msg := a.authorizedScope(r)
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	book, ok := a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book")
+	if !ok {
+		return
+	}
+	if book.ASIN == "" && book.ISBN == "" {
+		writeError(w, http.StatusNotFound, "no such cover")
+		return
+	}
+	// The envelope /meta sent for this book, from the same cache: what it hands
+	// out is all this route may fetch.
+	env, err := a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
+	switch {
+	case errors.Is(err, meta.ErrNotFound):
+		writeError(w, http.StatusNotFound, "no such cover")
+		return
+	case err != nil:
+		if r.Context().Err() == nil {
+			a.log.Warn("meta lookup for a cover failed", "err", err, "library", lib.ID, "path", path)
+		}
+		writeError(w, http.StatusBadGateway, "metadata service unavailable")
+		return
+	case !env.HandsOutCover(rawURL):
+		writeError(w, http.StatusNotFound, "no such cover")
+		return
+	}
+	cond := conditional{etag: `"community-` + strconv.Itoa(size) + "-" + catalog.CoverVersion(rawURL) + `"`,
+		cacheControl: communityCoverCache}
+	if cond.notModified(w, r) {
+		return
+	}
+	jpg, err := a.communityThumbnail(r.Context(), rawURL, size)
+	switch {
+	case err != nil:
+		if r.Context().Err() == nil {
+			a.log.Info("fetch community cover failed", "err", err, "url", rawURL)
+		}
+		writeErrorCode(w, http.StatusBadGateway, codeCoverUnavailable, "could not fetch the cover")
+	case jpg == nil:
+		writeError(w, http.StatusNotFound, "no cover")
+	default:
+		cond.serve(w, r, "image/jpeg", jpg)
+	}
 }

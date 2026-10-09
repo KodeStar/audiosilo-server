@@ -28,9 +28,11 @@ const requestTimeout = 30 * time.Second
 // isStreamingPath reports whether a request path serves a long-lived or large
 // body that must NOT be bounded by requestTimeout: audio streaming/transcoding
 // (cover/stream), a backup's download and the web player's static asset mount.
+// A community cover (/meta/cover) is a bounded thumbnail fetched upstream, so it
+// stays under the timeout.
 func isStreamingPath(p string) bool {
 	return strings.HasSuffix(p, "/stream") ||
-		strings.HasSuffix(p, "/cover") ||
+		(strings.HasSuffix(p, "/cover") && !strings.HasSuffix(p, "/meta/cover")) ||
 		isBackupDownload(p) ||
 		p == "/web" || strings.HasPrefix(p, "/web/")
 }

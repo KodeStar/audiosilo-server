@@ -155,3 +155,35 @@ func (s *Service) FetchCover(ctx context.Context, rawURL string, limit int64) ([
 	}
 	return media.ReadLimited(resp.Body, limit)
 }
+
+// HandsOutCover reports whether rawURL is a cover URL this envelope hands to a
+// client: the recording's, or a rail entry's in any view of any rail. The player's
+// cover proxy (GET /libraries/{id}/meta/cover) serves only such a URL, so it
+// fetches nothing a caller could not already see in the book's own envelope.
+func (e *Enrichment) HandsOutCover(rawURL string) bool {
+	if rawURL == "" || e == nil {
+		return false
+	}
+	if e.Recording != nil && e.Recording.CoverURL == rawURL {
+		return true
+	}
+	inWorks := func(works []MetaSeriesWork) bool {
+		for _, w := range works {
+			if w.CoverURL == rawURL {
+				return true
+			}
+		}
+		return false
+	}
+	for _, s := range e.Series {
+		if inWorks(s.Works) {
+			return true
+		}
+		for _, o := range s.Orderings {
+			if inWorks(o.Works) {
+				return true
+			}
+		}
+	}
+	return false
+}

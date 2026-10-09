@@ -285,6 +285,9 @@ func (a *API) Handler() http.Handler {
 	// <img>/<audio> can't set headers); other routes do not (see requireMediaAuth).
 	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireMediaAuth(http.HandlerFunc(a.handleCover)))
 	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireMediaAuth(http.HandlerFunc(a.handleStream)))
+	// A community cover the book's /meta envelope hands out, as a thumbnail from
+	// this server (the web player's CSP takes images only from it).
+	mux.Handle("GET /api/v1/libraries/{id}/meta/cover", a.requireMediaAuth(http.HandlerFunc(a.handleMetaCover)))
 	mux.Handle("GET /api/v1/search", a.requireAuth(http.HandlerFunc(a.handleSearch)))
 	mux.Handle("GET /api/v1/books/recent", a.requireAuth(http.HandlerFunc(a.handleRecentBooks)))
 

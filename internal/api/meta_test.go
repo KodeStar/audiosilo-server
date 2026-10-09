@@ -31,6 +31,8 @@ type mockMetaserve struct {
 	// chapters, when set, is the body of the recordings' chapters route
 	// (without it the route 404s, as on a metaserve that predates it).
 	chapters string
+	// series, when set, is the body of series/{id} (else the two-book Mars rail).
+	series   string
 	mu       sync.Mutex
 	gotMatch url.Values
 }
@@ -82,6 +84,10 @@ func (m *mockMetaserve) handler() http.Handler {
 		}
 	})
 	mux.HandleFunc("GET /api/v1/series/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		if m.series != "" {
+			_, _ = w.Write([]byte(m.series))
+			return
+		}
 		_, _ = w.Write([]byte(`{"id":"mars","name":"Mars","authors":[{"id":"andy-weir","name":"Andy Weir"}],"works":[{"position":"1","work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}},{"position":"2","work":{"id":"artemis","title":"Artemis","authors":[{"id":"andy-weir","name":"Andy Weir"}],"series":null,"cover_url":null,"added_at":null}}]}`))
 	})
 	return mux
