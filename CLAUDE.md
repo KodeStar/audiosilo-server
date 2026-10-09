@@ -696,7 +696,11 @@ admin overrides; see Metadata overrides below).
   `/admin/series` (`catalog.People`/`Series` with a nil scope; the player's
   `/libraries/{id}/authors|narrators|series` take the same aggregates within the
   caller's scope, without `merge_suggestions`); `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
-  page: per-field provenance, chapters, files, listeners, shares, folder override);
+  page: per-field provenance, chapters, files, listeners, shares, folder override, and
+  `match_query`, the match dialog's search box prefill set by the api: `meta.SearchPrefill`, the
+  title + author, except that swapped tags (the title is the author folder, or the cleaned author
+  is the path's title) or a junk title/author (`IsGenericTitle`, "Unknown", "Various Artists")
+  take the folders' facts, `metadata.FromPathLayout`);
   `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
   STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
   `workSem` via `fetchWork`. The match gets the book's facts separately

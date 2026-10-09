@@ -31,6 +31,10 @@ type AdminBookDetail struct {
 	// CommunityCheckFailed is set (by the api) when the book's last check
 	// failed: community_chapters is then the one before.
 	CommunityCheckFailed bool `json:"community_check_failed,omitempty"`
+	// MatchQuery is what the match dialog's search box opens with, set by the api
+	// (meta.SearchPrefill: the title and author, or the folders' when the tags
+	// look swapped or junk).
+	MatchQuery string `json:"match_query"`
 }
 
 // AdminChapter is a chapter with its edit state.
