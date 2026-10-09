@@ -10,7 +10,7 @@ ignore ./admin-ui/node_modules
 
 require (
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
-	github.com/kodestar/audiosilo-meta v0.20.1-0.20261009113133-a4be54ad783b
+	github.com/kodestar/audiosilo-meta v0.21.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.46.0
