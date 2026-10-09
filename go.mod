@@ -10,7 +10,7 @@ ignore ./admin-ui/node_modules
 
 require (
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
-	github.com/kodestar/audiosilo-meta v0.0.0-00010101000000-000000000000
+	github.com/kodestar/audiosilo-meta v0.20.1-0.20261009113133-a4be54ad783b
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.46.0
@@ -32,5 +32,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
-
-replace github.com/kodestar/audiosilo-meta => /private/tmp/claude-501/-Users-chris-dev-audiosilo/e8965070-8cdf-4f6a-b88b-ade18d70d5c0/scratchpad/meta
