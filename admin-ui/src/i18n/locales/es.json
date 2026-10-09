@@ -1941,7 +1941,7 @@
   "logs.note": "El servidor guarda en memoria sus líneas más recientes desde que arrancó. El registro completo está donde va su salida (docker logs, o el terminal). Las contraseñas, los tokens y los códigos de invitación nunca se muestran aquí.",
   "home.server.update": "{{version}} disponible",
   "support.title": "Apoyar AudioSilo",
-  "support.body": "AudioSilo es gratis y sin nada reservado. Si te está siendo útil, puedes apoyar su desarrollo en GitHub Sponsors.",
+  "support.body": "AudioSilo es gratis y sin limitaciones. Si te resulta útil, puedes apoyar su desarrollo en GitHub Sponsors.",
   "support.sponsor": "Patrocinar en GitHub",
   "support.line": "AudioSilo es gratis; los patrocinadores lo mantienen en marcha. <a>Patrocinar en GitHub</a>",
   "support.donated": "Ya he donado",
