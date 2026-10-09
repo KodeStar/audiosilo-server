@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
@@ -84,26 +84,33 @@ describe('system in mirror mode', () => {
   });
 
   it('follows a first download, with lookups online meanwhile', async () => {
-    mockFetch(
+    const downloading = (done: number) =>
+      mirrorStatus({
+        state: 'downloading',
+        fallback: true,
+        progress: { done, total: 440_000_000 },
+        tag: undefined,
+        next_check_at: undefined,
+      });
+    // The light route is what the page polls while the copy downloads.
+    const calls = mockFetch(
       routes({
-        'GET /admin/system': {
-          body: mirrorSystem({
-            state: 'downloading',
-            fallback: true,
-            progress: { done: 110_000_000, total: 440_000_000 },
-          }),
-        },
+        'GET /admin/system': { body: mirrorSystem(downloading(110_000_000)) },
+        'GET /admin/meta/mirror': { body: downloading(220_000_000) },
       }),
     );
     renderApp('/health/system');
     expect(
       await screen.findByText('Downloading the local copy for the first time.'),
     ).toBeInTheDocument();
+    expect(
+      await screen.findByText('220 MB of 440 MB downloaded (50%)', {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
     expect(screen.getByRole('progressbar', { name: 'Download progress' })).toHaveAttribute(
       'aria-valuenow',
-      '25',
+      '50',
     );
-    expect(screen.getByText('110 MB of 440 MB downloaded (25%)')).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === '/admin/system')).toHaveLength(1);
     expect(
       screen.getByText('Using the online service until the local copy is ready'),
     ).toBeInTheDocument();
@@ -134,13 +141,50 @@ describe('system in mirror mode', () => {
     expect(screen.getByText('not enough disk space: need 3.1 GB, have 1.2 GB')).toBeInTheDocument();
   });
 
-  it('checks now and shows the new state', async () => {
+  it('fetches the whole status once when a download ends', async () => {
+    let systemGets = 0;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/system': () => {
+          systemGets++;
+          return {
+            body: mirrorSystem(
+              systemGets === 1
+                ? mirrorStatus({ state: 'downloading', progress: { done: 1, total: 4 } })
+                : mirrorStatus({ tag: 'data-v2026.10.10-aaaaaaa-bbbbbbb' }),
+            ),
+          };
+        },
+        'GET /admin/meta/mirror': {
+          body: mirrorStatus({ tag: 'data-v2026.10.10-aaaaaaa-bbbbbbb' }),
+        },
+      }),
+    );
+    renderApp('/health/system');
+    expect(
+      await screen.findByText('data-v2026.10.10-aaaaaaa-bbbbbbb', {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(systemGets).toBe(2));
+    // Ready again: the light poll stops.
+    const polls = calls.filter((c) => c.path === '/admin/meta/mirror').length;
+    await new Promise((r) => setTimeout(r, 2200));
+    expect(calls.filter((c) => c.path === '/admin/meta/mirror')).toHaveLength(polls);
+  });
+
+  it('checks now and follows the check', async () => {
     const calls = mockFetch(
       routes({
         'GET /admin/system': { body: mirrorSystem() },
         'POST /admin/meta/mirror/check': {
           status: 202,
-          body: mirrorStatus({ state: 'downloading', progress: { done: 0, total: 0 } }),
+          body: mirrorStatus({ next_check_at: new Date().toISOString() }),
+        },
+        'GET /admin/meta/mirror': {
+          body: mirrorStatus({
+            state: 'downloading',
+            next_check_at: undefined,
+            progress: { done: 0, total: 0 },
+          }),
         },
       }),
     );
@@ -150,19 +194,28 @@ describe('system in mirror mode', () => {
     expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/meta/mirror/check')).toBe(
       true,
     );
+    // The answer says a check is due now: the page follows it on the light route,
+    // which finds the download running.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check now' })).toBeDisabled(), {
+      timeout: 3000,
+    });
+    expect(calls.some((c) => c.method === 'GET' && c.path === '/admin/meta/mirror')).toBe(true);
   });
 
-  it('says why a check was refused', async () => {
+  it.each([
+    [409, 'not_mirror_mode', /isn't keeping a local copy/],
+    [404, 'metadata_off', /Community metadata is off/],
+  ])('says why a check was refused (%i %s)', async (status, code, why) => {
     mockFetch(
       routes({
         'GET /admin/system': { body: mirrorSystem() },
-        'POST /admin/meta/mirror/check': { status: 409, body: { error: 'not_mirror_mode' } },
+        'POST /admin/meta/mirror/check': { status, body: { error: 'the server says no', code } },
       }),
     );
     renderApp('/health/system');
     await userEvent.setup().click(await screen.findByRole('button', { name: 'Check now' }));
     expect(await screen.findByText("Couldn't check for a newer copy")).toBeInTheDocument();
-    expect(screen.getByText(/isn't keeping a local copy/)).toBeInTheDocument();
+    expect(screen.getByText(why)).toBeInTheDocument();
   });
 });
 

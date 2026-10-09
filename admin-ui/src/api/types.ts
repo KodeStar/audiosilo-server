@@ -567,7 +567,10 @@ export interface SystemStatus {
     base_url: string;
     /** The mode the running server uses (a saved change waits for a restart). */
     mode: MetadataMode;
-    /** null while the lookup is off: nothing is asked. In mirror mode it describes the local copy. */
+    /**
+     * null while the lookup is off: nothing is asked. In mirror mode the check goes where
+     * lookups do: the local copy once it is ready, the service until then.
+     */
     health: MetadataHealth | null;
     /** The local copy, in mirror mode only. */
     mirror?: MetaMirrorStatus;

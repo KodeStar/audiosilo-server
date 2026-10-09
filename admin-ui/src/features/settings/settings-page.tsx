@@ -32,7 +32,7 @@ import { regionOptions } from '@/lib/regions';
 import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { mirrorLook } from '@/features/health/system-model';
+import { activeMirror, mirrorLook } from '@/features/health/system-model';
 import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
@@ -465,11 +465,9 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
 function MetadataStatusRow() {
   const { t, i18n } = useTranslation();
   const system = useSystem();
-  const meta = system.data?.metadata;
-  const h = meta?.health;
-  const mirror = meta?.mode === 'mirror' ? meta.mirror : undefined;
+  const h = system.data?.metadata.health;
+  const mirror = system.data && activeMirror(system.data);
   if (mirror) {
-    const look = mirrorLook(mirror);
     return (
       <SettingRow
         title={t('settings.metadata.status')}
@@ -483,8 +481,8 @@ function MetadataStatusRow() {
           </Link>
         }
       >
-        <StatusText tone={look.status} colored className="font-semibold">
-          {t(`settings.metadata.mirror.${look.state}`)}
+        <StatusText tone={mirrorLook(mirror).status} colored className="font-semibold">
+          {t(`settings.metadata.mirror.${mirror.state}`)}
         </StatusText>
       </SettingRow>
     );

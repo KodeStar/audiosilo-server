@@ -346,7 +346,10 @@ export function systemStatus(over: Partial<SystemStatus> = {}): SystemStatus {
   };
 }
 
-/** A local metadata copy in use (mirror mode): ready, answering, checked this morning. */
+/**
+ * A local metadata copy in use (mirror mode): ready, answering, checked this morning,
+ * its next check a day from now (never past: a due check is a busy copy the page polls).
+ */
 export function mirrorStatus(over: Partial<MetaMirrorStatus> = {}): MetaMirrorStatus {
   return {
     state: 'ready',
@@ -355,7 +358,7 @@ export function mirrorStatus(over: Partial<MetaMirrorStatus> = {}): MetaMirrorSt
     schema_version: 7,
     size_bytes: 1_712_000_000,
     checked_at: '2026-10-09T06:00:00Z',
-    next_check_at: '2026-10-10T06:00:00Z',
+    next_check_at: new Date(Date.now() + 86_400_000).toISOString(),
     downloaded_at: '2026-10-09T06:03:00Z',
     fallback: false,
     ...over,

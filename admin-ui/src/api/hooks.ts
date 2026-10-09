@@ -40,6 +40,7 @@ export const keys = {
   stats: ['admin', 'stats'] as const,
   settings: ['admin', 'settings'] as const,
   system: ['admin', 'system'] as const,
+  metaMirror: ['admin', 'meta-mirror'] as const,
   update: ['admin', 'update'] as const,
   logs: (level: string, q: string) => ['admin', 'logs', level, q] as const,
   backups: ['admin', 'backups'] as const,
@@ -145,36 +146,64 @@ export function useSettings() {
   return useQuery({ queryKey: keys.settings, queryFn: api.settings, staleTime: 5 * 60_000 });
 }
 
-/** The local metadata copy is downloading (its progress is worth following). */
-export function mirrorDownloading(sys: SystemStatus | undefined) {
-  return sys?.metadata.mirror?.state === 'downloading';
-}
-
 /**
  * What the server depends on (Health > System; Settings and About read parts).
- * Health > System polls it (`poll`): every 2 seconds while the local metadata
- * copy downloads, every 30 otherwise; elsewhere it's fresh for a minute.
+ * Health > System polls it every 30 seconds (`poll`); elsewhere it's fresh for a minute.
  */
 export function useSystem({ poll = false } = {}) {
   return useQuery({
     queryKey: keys.system,
     queryFn: api.system,
     staleTime: 60_000,
-    refetchInterval: (q) => (!poll ? false : mirrorDownloading(q.state.data) ? 2000 : 30_000),
+    refetchInterval: poll ? 30_000 : false,
   });
 }
 
 /**
- * Asks the server to check for a newer copy of the metadata now: its answer
- * goes into the system status at once, then the status is fetched again.
- * Throws the ApiError (metadata_off, not_mirror_mode) for the caller to show.
+ * The local metadata copy is busy: downloading, its check running (no next check
+ * yet), or a check due now (Check now was pressed). Its progress is worth following.
  */
-export async function checkMetaMirror(qc: QueryClient): Promise<MetaMirrorStatus> {
-  const mirror = await api.checkMetaMirror();
+export function mirrorBusy(m: MetaMirrorStatus | undefined, now: number = Date.now()): boolean {
+  if (!m) return false;
+  return m.state === 'downloading' || !m.next_check_at || Date.parse(m.next_check_at) <= now;
+}
+
+/** Puts the local copy's status into the cached system status. */
+function mergeMirror(qc: QueryClient, mirror: MetaMirrorStatus) {
   qc.setQueryData<SystemStatus>(keys.system, (s) =>
     s ? { ...s, metadata: { ...s.metadata, mirror } } : s,
   );
-  void qc.invalidateQueries({ queryKey: keys.system });
+}
+
+/**
+ * Follows the local metadata copy while it is busy (Health > System): polls only its
+ * status (GET /admin/meta/mirror) every 2 seconds, merges each answer into the system
+ * status, and fetches the whole system status once when the copy is no longer busy.
+ * `mirror` is the copy in use (activeMirror), undefined when there is none.
+ */
+export function useMirrorPoll(mirror: MetaMirrorStatus | undefined) {
+  const qc = useQueryClient();
+  useQuery({
+    queryKey: keys.metaMirror,
+    queryFn: async () => {
+      const m = await api.metaMirror();
+      mergeMirror(qc, m);
+      if (!mirrorBusy(m)) void qc.invalidateQueries({ queryKey: keys.system });
+      return m;
+    },
+    enabled: mirrorBusy(mirror),
+    refetchInterval: 2000,
+  });
+}
+
+/**
+ * Asks the server to check for a newer copy of the metadata now. Its answer (the next
+ * check due now) goes into the system status, which makes useMirrorPoll follow the
+ * check. Throws the ApiError (metadata_off, not_mirror_mode) for the caller to show.
+ */
+export async function checkMetaMirror(qc: QueryClient): Promise<MetaMirrorStatus> {
+  const mirror = await api.checkMetaMirror();
+  mergeMirror(qc, mirror);
   return mirror;
 }
 

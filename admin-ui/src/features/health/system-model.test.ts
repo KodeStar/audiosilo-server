@@ -1,8 +1,7 @@
-import { ApiError } from '@/api/client';
 import { mirrorStatus, mirrorSystem, systemStatus, updateStatus } from '@/test/fixtures';
 import {
+  activeMirror,
   metadataDown,
-  mirrorCheckRefusal,
   mirrorLook,
   schemaNumber,
   systemRows,
@@ -154,15 +153,13 @@ describe('systemRows', () => {
 describe('the local metadata copy (mirror mode)', () => {
   it('reads a ready copy as healthy, with its facts in order', () => {
     const look = mirrorLook(mirrorStatus());
-    expect(look).toMatchObject({
-      state: 'ready',
+    expect(look).toEqual({
       status: 'ok',
       statusKey: 'system.status.ok',
       detail: { key: 'system.detail.mirrorReady' },
+      facts: expect.any(Array),
       progress: null,
       error: null,
-      fallback: false,
-      schemaNewer: false,
       canCheck: true,
     });
     expect(look.facts.map((f) => [f.key, f.kind])).toEqual([
@@ -190,7 +187,6 @@ describe('the local metadata copy (mirror mode)', () => {
       status: 'off',
       statusKey: 'system.status.waiting',
       detail: { key: 'system.detail.mirrorEmpty' },
-      fallback: true,
       canCheck: true,
     });
     const first = mirrorLook({
@@ -251,7 +247,6 @@ describe('the local metadata copy (mirror mode)', () => {
     ).toMatchObject({
       status: 'warn',
       detail: { key: 'system.detail.mirrorNewer' },
-      schemaNewer: true,
       error: { key: 'system.mirror.updateFailed' },
     });
   });
@@ -260,7 +255,6 @@ describe('the local metadata copy (mirror mode)', () => {
     expect(mirrorLook(mirrorStatus({ fallback: true }))).toMatchObject({
       status: 'warn',
       detail: { key: 'system.detail.mirrorFallback' },
-      fallback: true,
     });
   });
 
@@ -290,28 +284,28 @@ describe('the local metadata copy (mirror mode)', () => {
     expect(row(systemRows(systemStatus(), NOW), 'metadata').mirror).toBeUndefined();
   });
 
-  it('calls the service down only in remote mode', () => {
+  it('calls the service down while lookups go to it', () => {
     const down = { reachable: false, latency_ms: 0, checked_at: '' };
+    const withHealth = (sys: ReturnType<typeof systemStatus>) => ({
+      ...sys,
+      metadata: { ...sys.metadata, health: down },
+    });
     const remote = systemStatus();
     expect(metadataDown(remote)).toBe(false);
-    expect(metadataDown({ ...remote, metadata: { ...remote.metadata, health: down } })).toBe(true);
-    const mirror = mirrorSystem(mirrorStatus({ state: 'empty', fallback: true }));
-    expect(metadataDown({ ...mirror, metadata: { ...mirror.metadata, health: down } })).toBe(false);
+    expect(metadataDown(withHealth(remote))).toBe(true);
+    // Mirror mode: the check goes where lookups do, so a failed one counts only
+    // while the copy isn't answering.
+    expect(metadataDown(withHealth(mirrorSystem()))).toBe(false);
+    expect(
+      metadataDown(withHealth(mirrorSystem(mirrorStatus({ state: 'empty', fallback: true })))),
+    ).toBe(true);
   });
 
-  it('words a refused Check now', () => {
-    expect(
-      mirrorCheckRefusal(new ApiError(404, 'community metadata is turned off', 'metadata_off')),
-    ).toBe('system.mirror.checkOff');
-    expect(mirrorCheckRefusal(new ApiError(409, 'not in mirror mode', 'not_mirror_mode'))).toBe(
-      'system.mirror.checkNotMirror',
-    );
-    // The bare {"error":"not_mirror_mode"} envelope reads the same.
-    expect(mirrorCheckRefusal(new ApiError(409, 'not_mirror_mode'))).toBe(
-      'system.mirror.checkNotMirror',
-    );
-    expect(mirrorCheckRefusal(new ApiError(500, 'boom'))).toBeUndefined();
-    expect(mirrorCheckRefusal(new TypeError('Failed to fetch'))).toBeUndefined();
+  it('reads the copy as in use only while metadata is on', () => {
+    const sys = mirrorSystem();
+    expect(activeMirror(sys)).toBe(sys.metadata.mirror);
+    expect(activeMirror({ ...sys, metadata: { ...sys.metadata, enabled: false } })).toBeUndefined();
+    expect(activeMirror(systemStatus())).toBeUndefined();
   });
 });
 

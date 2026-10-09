@@ -329,9 +329,12 @@ export const api = {
   updateStatus: () => request<UpdateStatus>('GET', '/admin/update'),
   checkForUpdate: () => request<UpdateStatus>('POST', '/admin/update/check'),
   /**
-   * Wakes the local copy's check (202, answering with its status; 404 metadata_off
-   * while metadata is off, 409 not_mirror_mode while the server isn't keeping a copy).
+   * The local metadata copy's status alone (light: what a download's progress polls).
+   * 404 metadata_off while metadata is off, 409 not_mirror_mode while the server
+   * isn't keeping a copy; checkMetaMirror answers the same way.
    */
+  metaMirror: () => request<MetaMirrorStatus>('GET', '/admin/meta/mirror'),
+  /** Wakes the local copy's check (202, answering with its status: the next check due now). */
   checkMetaMirror: () => request<MetaMirrorStatus>('POST', '/admin/meta/mirror/check'),
   /** The newest log lines; `after` (a previous page's last_seq) asks only for newer ones. */
   logs: (q: LogQuery = {}) => request<LogPage>('GET', `/admin/logs${bookQuery(q)}`),

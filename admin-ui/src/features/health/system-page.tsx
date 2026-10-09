@@ -16,8 +16,8 @@ import {
   Unplug,
   type LucideIcon,
 } from 'lucide-react';
-import { checkMetaMirror, useSystem } from '@/api/hooks';
-import type { SystemStatus } from '@/api/types';
+import { checkMetaMirror, useMirrorPoll, useSystem } from '@/api/hooks';
+import type { MetaMirrorStatus, SystemStatus } from '@/api/types';
 import { FactList } from '@/components/fact-list';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
@@ -40,11 +40,11 @@ import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
+  activeMirror,
   metadataDown,
-  mirrorCheckRefusal,
+  mirrorLook,
   systemRows,
   type MirrorFact,
-  type MirrorLook,
   type SystemRow,
 } from './system-model';
 
@@ -63,12 +63,14 @@ const ICONS: Record<SystemRow['kind'], LucideIcon> = {
 /**
  * Health > System: everything the server depends on in one place (tools, the
  * community metadata service, the certificate, the database, each library's
- * disk, the web player, updates), each with a plain status. Polled every 30 s.
+ * disk, the web player, updates), each with a plain status. Polled every 30 s,
+ * and the local metadata copy every 2 s while it is busy.
  */
 export function SystemPage() {
   const { t } = useTranslation();
   const system = useSystem({ poll: true });
   const sys = system.data;
+  useMirrorPoll(sys && activeMirror(sys));
   return (
     <Page>
       <PageHead
@@ -180,7 +182,9 @@ function SystemList({ sys }: { sys: SystemStatus }) {
                 >
                   {t(r.statusKey)}
                 </StatusText>
-                {r.mirror ? <MirrorPanel look={r.mirror} baseUrl={sys.metadata.base_url} /> : null}
+                {r.mirror ? (
+                  <MirrorPanel mirror={r.mirror} baseUrl={sys.metadata.base_url} />
+                ) : null}
               </li>
             );
           })}
@@ -195,8 +199,9 @@ function SystemList({ sys }: { sys: SystemStatus }) {
  * what the copy is, why lookups go online, a copy newer than this server, the
  * last failure, and "Check now" (not while a download runs).
  */
-function MirrorPanel({ look, baseUrl }: { look: MirrorLook; baseUrl: string }) {
+function MirrorPanel({ mirror, baseUrl }: { mirror: MetaMirrorStatus; baseUrl: string }) {
   const { t, i18n } = useTranslation();
+  const look = mirrorLook(mirror);
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const [checking, setChecking] = useState(false);
@@ -207,14 +212,7 @@ function MirrorPanel({ look, baseUrl }: { look: MirrorLook; baseUrl: string }) {
       await checkMetaMirror(qc);
       toast.add({ title: t('system.mirror.checkStarted'), type: 'success' });
     } catch (err) {
-      const refusal = mirrorCheckRefusal(err);
-      if (refusal)
-        toast.add({
-          title: t('system.mirror.checkFailed'),
-          description: t(refusal),
-          type: 'error',
-        });
-      else toastError(t('system.mirror.checkFailed'), err);
+      toastError(t('system.mirror.checkFailed'), err);
     } finally {
       setChecking(false);
     }
@@ -259,21 +257,21 @@ function MirrorPanel({ look, baseUrl }: { look: MirrorLook; baseUrl: string }) {
       {look.facts.length ? (
         <FactList layout="flow" rows={look.facts.map((f) => [t(f.key), show(f)])} />
       ) : null}
-      {look.schemaNewer ? (
+      {mirror.schema_newer ? (
         <Notice tone="warn" icon={TriangleAlert} title={t('system.mirror.newer.title')}>
           {t('system.mirror.newer.body')}
         </Notice>
       ) : null}
       {look.error ? (
         <Notice
-          tone={look.state === 'error' ? 'bad' : 'warn'}
+          tone={mirror.state === 'error' ? 'bad' : 'warn'}
           icon={TriangleAlert}
           title={t(look.error.key)}
         >
           <span className="[overflow-wrap:anywhere]">{look.error.text}</span>
         </Notice>
       ) : null}
-      {look.fallback ? (
+      {mirror.fallback ? (
         <Notice tone="info" icon={Globe} title={t('system.mirror.fallback.title')}>
           {t('system.mirror.fallback.body', { host: hostOf(baseUrl) })}
         </Notice>
@@ -286,7 +284,7 @@ function MirrorPanel({ look, baseUrl }: { look: MirrorLook; baseUrl: string }) {
           disabled={!look.canCheck || checking}
         >
           <RotateCw className={cn(checking && 'animate-spin')} aria-hidden="true" />
-          {checking ? t('system.mirror.checking') : t('system.mirror.check')}
+          {checking ? t('common.checking') : t('common.checkNow')}
         </Button>
       </div>
     </div>

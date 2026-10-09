@@ -1,5 +1,4 @@
-import { ApiError } from '@/api/client';
-import type { MetaMirrorState, MetaMirrorStatus, SystemStatus } from '@/api/types';
+import type { MetaMirrorStatus, SystemStatus } from '@/api/types';
 import { certificateLook } from '@/features/settings/settings-model';
 import { backupHealth } from '@/features/settings/backups-model';
 import { hostOf } from '@/lib/format';
@@ -38,8 +37,8 @@ export interface SystemRow {
   status: RowStatus;
   /** The status word's i18n key: the status's own word unless the row says better. */
   statusKey: string;
-  /** The metadata row in mirror mode: the local copy, shown under the row. */
-  mirror?: MirrorLook;
+  /** The metadata row in mirror mode: the local copy's status, shown under the row. */
+  mirror?: MetaMirrorStatus;
 }
 
 /** The word for each status, unless a row has a more specific one. */
@@ -225,16 +224,19 @@ export function systemRows(sys: SystemStatus, now: number = Date.now()): SystemR
   return rows;
 }
 
-/** The local metadata copy in use: mirror mode, with metadata on and a copy status to show. */
-function liveMirror(sys: SystemStatus): MetaMirrorStatus | undefined {
-  const m = sys.metadata;
-  return m.mode === 'mirror' && m.enabled && m.available ? m.mirror : undefined;
+/**
+ * The local metadata copy in use: mirror mode (the server sends `mirror` only
+ * then) with metadata on. Health > System's row and Settings' status line both
+ * read the copy exactly when this does.
+ */
+export function activeMirror(sys: SystemStatus): MetaMirrorStatus | undefined {
+  return sys.metadata.enabled ? sys.metadata.mirror : undefined;
 }
 
 /**
  * The community metadata row. In remote mode it is the service's health; in
- * mirror mode the local copy's state (the health check describes the copy
- * then, which the copy's own status says better).
+ * mirror mode the local copy's state, which says more than the health check
+ * (that goes to the copy once it is ready, to the service until then).
  */
 function metadataRow(sys: SystemStatus): SystemRow {
   const m = sys.metadata;
@@ -243,7 +245,7 @@ function metadataRow(sys: SystemStatus): SystemRow {
     id: 'metadata',
     title: { key: 'system.row.metadata' },
   } as const;
-  const mirror = liveMirror(sys);
+  const mirror = activeMirror(sys);
   if (mirror) {
     const look = mirrorLook(mirror);
     return row({
@@ -251,7 +253,7 @@ function metadataRow(sys: SystemStatus): SystemRow {
       detail: look.detail,
       status: look.status,
       statusKey: look.statusKey,
-      mirror: look,
+      mirror,
     });
   }
   const h = m.enabled && m.available ? m.health : null;
@@ -270,13 +272,15 @@ function metadataRow(sys: SystemStatus): SystemRow {
 }
 
 /**
- * The "service isn't responding" notice applies: remote mode only (in mirror
- * mode the local copy's row and panel say what's wrong, and a missing copy is
- * covered by the service).
+ * The "service isn't responding" notice applies: the health check failed while
+ * lookups go to the service. In mirror mode the check goes where lookups do (the
+ * copy once it is ready, the service until then), so it counts only while the
+ * copy isn't answering; with one that is, the copy's own panel says what's wrong.
  */
 export function metadataDown(sys: SystemStatus): boolean {
   const h = sys.metadata.health;
-  return sys.metadata.mode !== 'mirror' && !!h && !h.reachable;
+  const mirror = activeMirror(sys);
+  return !!h && !h.reachable && (!mirror || mirror.fallback);
 }
 
 /** One fact about the local copy: its label's i18n key and how the page formats the value. */
@@ -286,9 +290,11 @@ export interface MirrorFact {
   value: string | number;
 }
 
-/** How the local metadata copy reads (Health > System's panel, Settings' status line). */
+/**
+ * How the local metadata copy reads (Health > System's row and panel, Settings'
+ * status line): what follows from its status, beside the status itself.
+ */
 export interface MirrorLook {
-  state: MetaMirrorState;
   status: RowStatus;
   statusKey: string;
   /** The row's one-line detail. */
@@ -299,10 +305,6 @@ export interface MirrorLook {
   progress: { done: number; total: number; fraction: number | undefined } | null;
   /** The last failure: its headline's i18n key and the server's sentence. */
   error: { key: string; text: string } | null;
-  /** Lookups are going to the online service. */
-  fallback: boolean;
-  /** The copy's schema is newer than this server reads: update the server. */
-  schemaNewer: boolean;
   /** "Check now" makes sense (not while a download runs). */
   canCheck: boolean;
 }
@@ -359,7 +361,6 @@ export function mirrorLook(m: MetaMirrorStatus): MirrorLook {
 
   const p = downloading ? m.progress : undefined;
   return {
-    state: m.state,
     status,
     statusKey: statusKey ?? STATUS_WORD[status],
     detail: { key: `system.detail.${detail}` },
@@ -372,25 +373,8 @@ export function mirrorLook(m: MetaMirrorStatus): MirrorLook {
         }
       : null,
     error,
-    fallback: m.fallback,
-    schemaNewer,
     canCheck: !downloading,
   };
-}
-
-/**
- * The i18n key for a refused "Check now": metadata turned off since the page
- * loaded (404 metadata_off), or the server not keeping a copy (409
- * not_mirror_mode: mirror mode saved but not restarted into, or left). Any
- * other failure is undefined, for errorMessage to word.
- */
-export function mirrorCheckRefusal(err: unknown): string | undefined {
-  if (!(err instanceof ApiError)) return undefined;
-  if (err.code === 'metadata_off' || err.status === 404) return 'system.mirror.checkOff';
-  if (err.code === 'not_mirror_mode' || err.message === 'not_mirror_mode' || err.status === 409) {
-    return 'system.mirror.checkNotMirror';
-  }
-  return undefined;
 }
 
 /** "0018_sessions.sql" -> 18. */

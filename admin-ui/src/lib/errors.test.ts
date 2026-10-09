@@ -16,6 +16,12 @@ describe('errorMessage', () => {
     expect(errorMessage(new ApiError(404, 'no book', 'book_not_found'), t)).toMatch(
       /isn't in the library/,
     );
+    expect(errorMessage(new ApiError(404, 'turned off', 'metadata_off'), t)).toBe(
+      'Community metadata is off. Turn it on in Server settings first.',
+    );
+    expect(errorMessage(new ApiError(409, 'no copy', 'not_mirror_mode'), t)).toMatch(
+      /^This server isn't keeping a local copy/,
+    );
   });
 
   it('words every import code the server sends', () => {

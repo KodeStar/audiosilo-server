@@ -171,7 +171,7 @@ function UpdateCard({ update }: { update: UpdateStatus }) {
           update.enabled ? (
             <Button variant="outline" size="sm" onClick={() => void check()} disabled={checking}>
               <RotateCw className={cn(checking && 'animate-spin')} aria-hidden="true" />
-              {checking ? t('about.checking') : t('about.check')}
+              {checking ? t('common.checking') : t('common.checkNow')}
             </Button>
           ) : null
         }

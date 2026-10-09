@@ -66,8 +66,8 @@ export type FieldSpec =
   /** A backup schedule: how often, which day, what time (backups-model). */
   | { name: string; kind: 'schedule' }
   | { name: string; kind: 'select'; options: { value: string; label: string }[] }
-  /** Radio cards, three to a row from `md` unless `columns` says two (longer descriptions). */
-  | { name: string; kind: 'radio'; options: RadioCardOption<string>[]; columns?: 2 | 3 };
+  /** Radio cards, three to a row from `md`, or two (`columns: 2`, for longer descriptions). */
+  | { name: string; kind: 'radio'; options: RadioCardOption<string>[]; columns?: 2 };
 
 /** The draft of one field: lists are edited as text (one entry per line). */
 type DraftValue = string | boolean;
