@@ -225,6 +225,12 @@ count visible rows: a new book the hidden rows alone would overflow evicts the o
 rows (`added_at`), 409 only when the visible rows are at the cap (a whole-list PUT replaces
 everything, hidden rows included, and its length check is unchanged); a move or join carries them
 (`carryListeningState`, the destination entry kept on a collision).
+Player redesign Phase 8: `household_sharing` (`0041`: `user_id` PK -> users CASCADE,
+`share_listening` 0/1; no row = off; names no book) and `cast_tokens` (`0042`: a cast token's
+SHA-256 hash, user (CASCADE), `library_id` + `rel_path` of the book, fixed-width ms UTC
+`created_at`/`expires_at`; path-keyed, no FK to the index, short-lived, not moved with a book).
+See "Listening in the house" and "Cast tokens" below.
+
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
 `not_owner`, both settled before the body is checked; a whole-list PUT without its
@@ -257,7 +263,8 @@ admin overrides; see Metadata overrides below).
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,
   `Scope.Allows`/`VisibleInBrowse`/`pathFilterSQL`, the rate limiters,
-  `auth.ResolveRequest`/`lookupToken`, or `web.htmlCSP`. Keep business logic in the non-`api`
+  `auth.ResolveRequest`/`lookupToken`, the cast token checks (`auth.CastGrant.Covers`,
+  `ResolveCastToken`, `api.castAuthenticate`), or `web.htmlCSP`. Keep business logic in the non-`api`
   packages so it stays unit-testable (`api` is transport-only).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
@@ -355,7 +362,9 @@ admin overrides; see Metadata overrides below).
   export must be built with `baseUrl=/web` (frontend `app.json experiments.baseUrl`)
   so asset URLs resolve under the subpath. The handler resolves per-route HTML,
   falls back to `index.html` for client-routed deep links, 404s missing assets,
-  and sets a **scoped CSP** per HTML response (strict `script-src` with a sha256
+  and sets a **scoped CSP** per HTML response (strict `script-src`: `'self'`,
+  `https://www.gstatic.com` (the Cast Web Sender, capability `cast`; the ONLY remote origin
+  in the policy, `TestHTMLCSPCastSender` pins the whole string) and a sha256
   hash of that doc's inline scripts; `style-src` allows `'unsafe-inline'` for
   react-native-web's runtime styles). Admin/connect pages keep the stricter
   site-wide CSP. Compatibility is by construction (the image pins a matching web
@@ -1171,6 +1180,57 @@ admin overrides; see Metadata overrides below).
   (period + `days`, no `by_user`). `GET /me/goal` → `{goal: {books_per_year, updated_at (ms UTC)} | null, year,
   finished}` (this calendar year in server time, the caller's finishes, counted like `totals.finished`),
   `PUT /me/goal` `{books_per_year: 1..1000}` (else 400) answers as GET, `DELETE /me/goal` 204, idempotent.
+- **Listening in the house (player redesign Phase 8, capability `household`, `catalog/household.go`,
+  `api/handlers_household.go`)**: people on one server who opt in see what the others who opted in
+  are listening to (the player's Home row and the book page's "In the house" card). `GET /me/household`
+  -> `{"share_listening": bool}` (no row = false); `PUT /me/household` `{"share_listening": bool}`
+  (strict decoder, the field required: `{}` is 400) answers the same shape; demo accounts 403
+  (`nonDemoAccount`; GET stays allowed), an API key may set it (the person's own credential).
+  `GET /household/listening` -> `{"sharing": bool, "listening": [Row]}`, `catalog.HouseListening`.
+  **Privacy rules (all in catalog; each has an allowed and a denied test)**: reciprocal (`listening`
+  is `[]` unless the CALLER shares); other people only (never the caller), enabled, not demo, sharing
+  on; per person ONE row, their newest session with listening in it (`listening_sessions`,
+  `import_id = 0`, `backfilled = 0`, `listened > 0`) within `HouseWindow` (24 h); that book must pass
+  the CALLER's current scopes (`ScopesAllow`), else the person is dropped, never shown on an older
+  in-scope book. A row is `{user_id, username, library_id, path, title, author|null, state, position,
+  duration|null, chapter|null, chapter_index|null, updated_at}` (newest first; `state` `playing`
+  within 60 s, `paused` within `SessionGap`, else `recent`; `title` the index's, else the path's last
+  segment; `duration` the index's, else the session's, null for 0; chapter fields as the live
+  sessions', via the shared `chapterCache`; `updated_at` the newest save, fixed-width ms UTC). It
+  NEVER carries a device, address, app or token: `HouseListeningRow` has no such field, unlike the
+  admin-only `LiveSessions` (never reuse that for anything a non-admin sees). Polling only (the
+  player refetches every 60 s while focused); no realtime channel.
+- **Cast tokens (player redesign Phase 8, capability `cast`, `auth/cast.go`, `api/handlers_cast.go`;
+  security-critical)**: a Chromecast receiver plays from URLs the player hands it, so the player
+  never hands over its session token: `POST /cast/token` `{"library_id", "path"}` (strict) mints a
+  cast token -> `201 {"token", "expires_at"}` (fixed-width ms UTC). The path resolves through
+  `scopedPath` + `bookAt` exactly like the media routes (400 empty path, 403 outside scope, 404 no
+  book; a part path resolves to its book, whose own `rel_path` is stored, so the token covers every
+  file of it); demo accounts may mint (they can play); an API key may not (403, `denyAPIKey`'s
+  containment: a key must not spawn a credential that outlives its revocation). `auth.IssueCastToken`
+  stores only the SHA-256 hash, lives `CastTokenTTL` (24 h), and in one transaction deletes every
+  expired cast token and keeps the person's newest `MaxCastTokens` (20). **Acceptance**
+  (`api.castAuthenticate`, tried by `mediaAuth` only after the session/API-key lookup fails, only
+  on the routes wrapped in `requireBookMediaAuth`: `GET /libraries/{id}/cover` and `/stream`, NOT
+  `/meta/cover`, which keeps `requireMediaAuth`): the request carries NO `Authorization` header (a
+  cast token is never a bearer credential, nor accepted beside one), `?token=` resolves
+  (`auth.ResolveCastToken`: exists, not expired, user enabled; a deleted user's tokens went with the
+  account) and `auth.CastGrant.Covers(id, catalog.CleanRelPath(?path=))`: same library, the book's
+  path itself or below it on a segment boundary (`Book` never reaches `Book 2`, cleaning first stops
+  `Book/../Book 2`). Any refusal is the uniform 401. The context then carries the token's user and a
+  `Credential{Kind: auth.KindCast, ID: cast_tokens.id}`, and the handler's `authorizedPath` checks the
+  person's CURRENT scope as for every request (a revoked share is a 403). Only a cast-authenticated
+  answer sets `Cross-Origin-Resource-Policy: cross-origin` (the receiver, a gstatic.com web app,
+  loads them as no-cors `<audio>`/`<img>`; `secureHeaders`' `same-site` would make the browser block
+  them); the media limiter keys a cast credential as `cast:<id>` (`mediaBucket`: its ids are not
+  token ids). **Transcode**: a cast token authenticates `?transcode=1&t=` like a session (the sender
+  asks for it on codecs the Default Media Receiver can't play: ALAC, WMA, AC-3, or a book the web
+  player would transcode); each such stream holds one of the 4 `transcodeSem` slots while the
+  receiver reads it, and a full semaphore is the usual 503 + `Retry-After` (the receiver reports a
+  load error; the sender should say "busy, try again"); it does NOT mark a session transcoded
+  (`StreamMarks` keys on device tokens; the sender's own progress saves make the session). Known
+  limit: signing the minting device out does not revoke its cast tokens (the table has no token id);
+  they still die with the account, its disabling, its scope and the 24 h expiry.
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
@@ -1432,12 +1492,14 @@ admin overrides; see Metadata overrides below).
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
-`user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`); flip them on
+`user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`); flip them on
 as phases land. `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
 `Book` in more than one series; see API surface below). `series_books` is true (the first page of several
 series' books in one request, `GET /libraries/{id}/series/books`; see API surface below). `addresses` is true (home/away addresses on pairing, exchange and login, and
-`GET /addresses`; see Home and away addresses above).
+`GET /addresses`; see Home and away addresses above). `household` (`/me/household`,
+`/household/listening`) and `cast` (`POST /cast/token` + cast tokens on a book's cover/stream) are
+true (player redesign Phase 8; see Listening in the house and Cast tokens above).
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
 (`GET /libraries/{id}/next`). `queue`, `collections`, `user_stats`, `ratings`,
@@ -1497,6 +1559,8 @@ collision keeps the newer `updated_at`, whole). **My devices** are `GET
 `{"current": bool}`; `auth.RevokeOwnDevice`, owner-scoped: anyone else's, unknown, revoked or
 pairing id is 404 and untouched; revoking the current device is allowed and its token is dead from
 the next request; an API-key caller may revoke).
+Listening in the house is `GET`/`PUT /me/household` and `GET /household/listening`; casting is
+`POST /cast/token` (see the two Phase 8 bullets above).
 What to play after a book is `GET /libraries/{id}/next?path=` (authed, scoped like
 `item`: 400 bad id/missing path, 403 outside the grant, 404 no library/book;
 `{source: community|series|folder|none, next?, book?, work?}`, see Next book above).
