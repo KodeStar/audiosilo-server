@@ -255,6 +255,16 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	suspectBackfill := map[string]int{}
 	splitBackfill := map[string]string{}
 	releasedBackfill := map[string]string{}
+	pathBackfill := map[string]*metadata.Metadata{}
+	// The path backfill is written as it goes: a large one (most of a library
+	// laid out Author/Title) can take a while, and a scan stopped part way keeps
+	// what it read (written past the Stop: at most pathFlushEvery books).
+	flushPaths := func() {
+		if err := s.cat.SetPathReading(context.WithoutCancel(ctx), lib.ID, pathBackfill); err != nil {
+			s.log.Warn("record path readings failed", "library", lib.Name, "err", err)
+		}
+		clear(pathBackfill)
+	}
 	lastLog := time.Now()
 	report := func(done int) {
 		s.updateProgress(lib.ID, func(p *ScanProgress) {
@@ -264,6 +274,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	for i, b := range books {
 		if err := ctx.Err(); err != nil {
+			flushPaths()
 			return res, err
 		}
 		report(i)
@@ -301,13 +312,28 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 						suspectBackfill[b.RelPath] = n
 					}
 				}
-				// Rows indexed before 0037 haven't had their date read: one read of the
-				// primary file (tags and ffprobe, as enrich reads it) does it, not a
-				// re-index probing every part. Unopenable now, it waits for the next scan.
-				if old.ReleasedUnchecked {
+				// Rows indexed before 0037 haven't had their date read, and some books
+				// one folder deep, read when that folder was taken for their series,
+				// need their tags to tell (catalog.PathRead): one read of the primary
+				// file (tags and ffprobe, as enrich reads it) does both, not a re-index
+				// probing every part. Unopenable now, it waits for the next scan; and
+				// the names wait while ffprobe fails where it didn't before, as the
+				// series it alone reads (an MP3's TXXX) would be recorded as none.
+				if old.PathCheck == catalog.PathFromSnapshot {
+					pathBackfill[b.RelPath] = nil
+				}
+				if old.ReleasedUnchecked || old.PathCheck == catalog.PathRead {
 					if md, _ := metadata.Extract(primary, s.ffprobePath); md.OpenErr == nil {
-						releasedBackfill[b.RelPath] = md.Released
+						if old.ReleasedUnchecked {
+							releasedBackfill[b.RelPath] = md.Released
+						}
+						if old.PathCheck == catalog.PathRead && (md.ProbeErr == nil || old.ScanError == problemProbe) {
+							pathBackfill[b.RelPath] = readNames(b.RelPath, b.IsFolder, md)
+						}
 					}
+				}
+				if len(pathBackfill) >= pathFlushEvery {
+					flushPaths()
 				}
 				continue
 			}
@@ -362,6 +388,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	if err := s.cat.SetReleased(ctx, lib.ID, releasedBackfill); err != nil {
 		s.log.Warn("record release dates failed", "library", lib.Name, "err", err)
 	}
+	flushPaths()
 
 	// Only prune when discovery saw the whole tree. If a subtree was unreadable
 	// (partialDiscovery), its books are missing from `keep` through a mount/permission
@@ -456,32 +483,44 @@ func (l *runLog) finish() []catalog.RunEvent {
 	return l.events
 }
 
+// pathFlushEvery is how many path readings a scan gathers before writing them.
+const pathFlushEvery = 500
+
+// readNames is a book's title, author and series: the path's reading
+// (metadata.DeriveFromPath) as the baseline, then md's tags, which are
+// authoritative when present (an unreadable file's md carries none; nil reads
+// the same).
+func readNames(relPath string, isFolder bool, md *metadata.Metadata) *metadata.Metadata {
+	n := metadata.DeriveFromPath(relPath, isFolder)
+	if md == nil {
+		return n
+	}
+	n.Title = chooseTitle(md.Title, n.Title)
+	if strings.TrimSpace(md.Author) != "" {
+		n.Author = md.Author
+	}
+	if strings.TrimSpace(md.Series) != "" {
+		n.Series = md.Series
+	}
+	if md.SeriesIndex != 0 {
+		n.SeriesIndex = md.SeriesIndex
+	}
+	return n
+}
+
 // enrich fills metadata for a book from its primary file (tags + ffprobe) and
 // folder context (path heuristics, sibling cover art).
 func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	primary := primaryPath(b)
-	// Baseline from the path, then overlay embedded tags/probe which are
-	// authoritative when present.
-	base := metadata.DeriveFromPath(b.RelPath, b.IsFolder)
-	b.Title, b.Author, b.Series, b.SeriesIndex = base.Title, base.Author, base.Series, base.SeriesIndex
-
 	abs := absOf(lib, primary)
 	md, _ := metadata.Extract(abs, s.ffprobePath)
 	b.ScanError, b.ScanErrorFile, b.ScanErrorDetail = "", "", ""
 	if !b.IsFolder {
 		noteProblem(b, primary, b.Size, md)
 	}
+	n := readNames(b.RelPath, b.IsFolder, md)
+	b.Title, b.Author, b.Series, b.SeriesIndex = n.Title, n.Author, n.Series, n.SeriesIndex
 	if md != nil {
-		b.Title = chooseTitle(md.Title, b.Title)
-		if strings.TrimSpace(md.Author) != "" {
-			b.Author = md.Author
-		}
-		if strings.TrimSpace(md.Series) != "" {
-			b.Series = md.Series
-		}
-		if md.SeriesIndex != 0 {
-			b.SeriesIndex = md.SeriesIndex
-		}
 		b.Narrator = md.Narrator
 		b.Released = md.Released
 		b.Codec = md.Codec

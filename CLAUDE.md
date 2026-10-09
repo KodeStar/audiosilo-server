@@ -105,7 +105,7 @@ internal/store/       SQLite (modernc, pure Go) open + embedded migrations (inte
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
-internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values)
+internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
@@ -655,8 +655,8 @@ admin overrides; see Metadata overrides below).
   **Metadata source** (`libraries.metadata_source`, `0032`; `catalog.MetadataFromTags`, the
   default, or `MetadataFromPath`; admin-only on the wire as `metadata_source`, PATCH 400
   `invalid_metadata_source`): a path-first library resolves the scanned layer with the folder
-  layout over the tags (`bookLayers.scannedFields`: `metadata.FromPathLayout`, where one folder
-  above the book is its AUTHOR, not its series as `DeriveFromPath` reads it; a layout value goes
+  layout over the tags (`bookLayers.scannedFields`: `metadata.FromPathLayout`, where the top
+  folder is the AUTHOR and disc/track folders are parts, unlike `DeriveFromPath`'s two nearest folders; a layout value goes
   over a tag's wherever it says anything and replaces the baseline's own reading even with
   nothing; the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it; the position goes with the series: the layout's own, else
   the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
@@ -664,7 +664,18 @@ admin overrides; see Metadata overrides below).
   transaction, no rescan (about 1 s per 5,000 books).
   `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
   NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
-  with a tag read (`media.EmbeddedCover`, no ffprobe).
+  with a tag read (`media.EmbeddedCover`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
+  without it (any older server's) was read when a lone folder above the book was its series.
+  `Signatures` classifies such a book one folder deep (`pathCheckExpr`): settled by the snapshot
+  alone (a tag's series and no author, missing or 0016's "": the folder is the author; the folder
+  as series and author: the series was the path's), or only by its tags (the folder as series,
+  another author or none: "Discworld/Mort" may be tagged Discworld; and any stale or blank
+  snapshot, whatever revision it names). The scan reads the latter's primary file once
+  (`readNames`, shared with `enrich`; not while ffprobe newly fails), and `Catalog.SetPathReading`
+  rewrites both kinds' snapshots (skipping one re-indexed meanwhile, keeping an older server's
+  chapter titles) and re-resolves them in batches of 250, flushed every 500 during the scan and
+  on a Stop; no re-index. Until then `bookLayers.pathBaseline` resolves a snapshot against the
+  baseline it was read with, so a path-first library still drops the folder as a series.
 - **Admin catalog API** (`api/handlers_catalog.go`, admin-only, transport-only):
   `GET /admin/books` (keyset over the named orderings in `catalog.adminSorts`, sorted and
   paged on ids before the per-row columns are computed; the cursor names its ordering;

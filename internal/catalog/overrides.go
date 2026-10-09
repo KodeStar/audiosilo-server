@@ -199,34 +199,53 @@ func ParseSeriesIndex(s string) float64 {
 // stale. loadLayers then takes the snapshot from the row, as migration 0016 did.
 const scannedStampKey = "@indexed_at"
 
+// scannedRevKey is the `scanned` key holding the revision of the path baseline
+// (metadata.DeriveFromPath) the snapshot was read with, scannedRev today; a
+// snapshot without it predates revision 1, when a lone folder above the book was
+// read as its series rather than its author (see pathCheckExpr).
+const (
+	scannedRevKey = "@rev"
+	scannedRev    = "1"
+)
+
 // scannedJSON encodes what the scan found for b (its fields before anything is
-// layered on top) for the `scanned` column: field -> value, blanks left out, plus
-// the upsert's indexedAt stamp.
+// layered on top) for the `scanned` column (encodeScanned), read with today's path
+// baseline.
 func scannedJSON(b *Book, indexedAt string) (string, error) {
 	vals := fieldsOf(b)
+	vals[scannedRevKey] = scannedRev
+	return encodeScanned(vals, indexedAt)
+}
+
+// encodeScanned is a `scanned` value: field -> value, blanks left out, plus the
+// stamp of the upsert it records (scannedStampKey).
+func encodeScanned(fields bookFields, stamp string) (string, error) {
+	vals := maps.Clone(fields)
 	maps.DeleteFunc(vals, func(_, v string) bool { return v == "" })
-	vals[scannedStampKey] = indexedAt
+	vals[scannedStampKey] = stamp
 	raw, err := json.Marshal(vals)
 	return string(raw), err
 }
 
-// parseScanned decodes a `scanned` value into its fields and its stamp.
-func parseScanned(raw string) (bookFields, string, error) {
+// parseScanned decodes a `scanned` value into its fields, its stamp and its path
+// baseline's revision (scannedRevKey, "" before revision 1).
+func parseScanned(raw string) (fields bookFields, stamp, rev string, err error) {
 	out := bookFields{}
 	if raw == "" {
-		return out, "", nil
+		return out, "", "", nil
 	}
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, "", fmt.Errorf("decode scanned fields: %w", err)
+		return nil, "", "", fmt.Errorf("decode scanned fields: %w", err)
 	}
-	stamp := out[scannedStampKey]
+	stamp, rev = out[scannedStampKey], out[scannedRevKey]
 	delete(out, scannedStampKey)
+	delete(out, scannedRevKey)
 	// Rows backfilled by migration 0016 cast series_index with SQL ("2.0", "0.0");
 	// normalize so a revert writes the same form a scan would.
 	if si, ok := out[FieldSeriesIndex]; ok {
 		out[FieldSeriesIndex] = FormatSeriesPosition(ParseSeriesIndex(si))
 	}
-	return out, stamp, nil
+	return out, stamp, rev, nil
 }
 
 // FieldValue is one overridable field as the console shows it: the effective
@@ -348,6 +367,10 @@ type bookLayers struct {
 	scanned    bookFields
 	enrichment bookFields // asin/isbn only, blanks left out
 	overrides  map[string]storedOverride
+	indexedAt  string // the row's
+	// pathRev is the revision of the path baseline scanned was read with
+	// (scannedRevKey): "" before revision 1, as for a snapshot read off the row.
+	pathRev string
 	// fromRow is set when the stored snapshot wasn't this row's (see
 	// scannedStampKey), so scanned was read off the row; it holds the row's
 	// indexed_at, for refreshEffective to stamp the snapshot it then records.
@@ -367,7 +390,7 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 		return nil, err
 	}
 	l.preferPath = source == MetadataFromPath
-	scanned, stamp, err := parseScanned(raw)
+	scanned, stamp, rev, err := parseScanned(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -377,9 +400,10 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 		// enrichment, so they stay out, as in migration 0016).
 		scanned = fieldsOf(&row)
 		maps.DeleteFunc(scanned, func(_, v string) bool { return v == "" })
-		l.fromRow = indexedAt
+		l.fromRow, rev = indexedAt, ""
 	}
-	l.scanned = scanned
+	l.pathRev = rev
+	l.scanned, l.indexedAt = scanned, indexedAt
 	var asin, isbn string
 	err = q.QueryRowContext(ctx,
 		`SELECT asin, isbn FROM book_enrichment WHERE library_id = ? AND path = ?`, l.libID, l.path).
@@ -432,16 +456,16 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 // tags over the scan's path baseline (metadata.DeriveFromPath). A library that
 // prefers its folders reads the path with the layout instead
 // (metadata.FromPathLayout): its value goes over a tag's wherever it says anything,
-// and replaces the baseline's own reading even with nothing ("George Orwell/Animal
-// Farm" names no series, where the baseline takes the author folder for one); the
-// title always keeps a value. The position goes with the series: the layout's
+// and replaces the baseline's own reading even with nothing ("Frank Herbert/Dune/CD1"
+// names no series, where the baseline takes the book's folder for one); the title
+// always keeps a value. The position goes with the series: the layout's
 // own, else the scanned one only while the series it numbers stays (the same
 // series, by any case), so a tag's position stays beside the tag's series even
 // when it equals the leaf's number ("Brandon Sanderson/01 - The Way of Kings"
 // tagged The Stormlight Archive #1), and goes with a series the layout replaced
 // or dropped.
 func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
-	baseline = pathFields(metadata.DeriveFromPath(l.path, l.isFolder))
+	baseline = l.pathBaseline()
 	if !l.preferPath {
 		return l.scanned, baseline, nil
 	}
@@ -466,6 +490,19 @@ func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
 	return scanned, baseline, layout
 }
 
+// pathBaseline is the scan's path baseline (metadata.DeriveFromPath) as the
+// snapshot was read with it: before revision 1 (pathRev) a lone folder above the
+// book was its series, not its author. So a snapshot the next scan hasn't put
+// right yet (SetPathReading) still tells the path's values from a tag's, and a
+// library that prefers its folders still drops that folder as a series.
+func (l *bookLayers) pathBaseline() bookFields {
+	b := pathFields(metadata.DeriveFromPath(l.path, l.isFolder))
+	if l.pathRev == "" && strings.Count(l.path, "/") == 1 {
+		b[FieldSeries], b[FieldAuthor] = b[FieldAuthor], ""
+	}
+	return b
+}
+
 // pathFields is the fields a path reading gives, in their stored form.
 func pathFields(m *metadata.Metadata) bookFields {
 	return bookFields{
@@ -488,13 +525,12 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 		// Record the snapshot read off the row, and likewise the chapter titles: the
 		// older server that indexed the row also wrote its chapters, with titles as
 		// scanned and no scanned_title, so the reset below would blank them.
-		snap := maps.Clone(l.scanned)
-		snap[scannedStampKey] = l.fromRow
-		raw, err := json.Marshal(snap)
+		// It was read with the older baseline, so it gets no scannedRevKey.
+		raw, err := encodeScanned(l.scanned, l.fromRow)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE books SET scanned = ? WHERE id = ?`, string(raw), bookID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE books SET scanned = ? WHERE id = ?`, raw, bookID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE chapters SET scanned_title = title WHERE book_id = ?`, bookID); err != nil {

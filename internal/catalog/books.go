@@ -234,6 +234,9 @@ type Signature struct {
 	// (indexed before migration 0037; see books.released_checked), which the next
 	// scan reads (SetReleased).
 	ReleasedUnchecked bool
+	// PathCheck: what a book's snapshot needs from the next scan now that the path
+	// baseline reads a lone folder as the author (pathCheckExpr; SetPathReading).
+	PathCheck PathCheck
 	// ScanError and ScanErrorFile are the read problem the last indexing recorded
 	// (books.scan_error), so a scan can look at that file again.
 	ScanError, ScanErrorFile string
@@ -248,7 +251,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
-		        released_checked = 0
+		        released_checked = 0, `+pathCheckExpr+`
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -260,7 +263,8 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var sig Signature
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
-			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked); err != nil {
+			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked,
+			&sig.PathCheck); err != nil {
 			return nil, err
 		}
 		out[rel] = sig

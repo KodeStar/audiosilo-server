@@ -100,8 +100,8 @@ func TestFromPathLayout(t *testing.T) {
 			want: Metadata{Author: "Will Wight", Series: "Cradle", SeriesIndex: 1, Title: "Unsouled"},
 		},
 		{
-			// One folder deep: the author, and no series (DeriveFromPath would
-			// read the author's name as one).
+			// One folder deep: the author, and no series (as DeriveFromPath
+			// reads it too).
 			path: "George Orwell/Animal Farm", isFolder: true,
 			want: Metadata{Author: "George Orwell", Title: "Animal Farm"},
 		},

@@ -249,11 +249,14 @@ func firstNonEmpty(vals ...string) string {
 
 // DeriveFromPath infers title/series/author/index from a book's relative path.
 // The book identity is the filename (single-file books) or the folder name
-// (multi-file / folder books); the two ancestor directories are treated as
-// series and author respectively:
+// (multi-file / folder books). Of the folders above it, the one holding the book
+// is its series and the one above that its author - except a lone folder, which
+// is the author (as ReadPathLayout reads it: "Author/Title" is the commonest
+// layout of all):
 //
 //	Author/Series/01 - Title.m4b   (single-file book)
 //	Author/Series/01 - Title/      (folder book, isFolder)
+//	Author/Title.m4b               (one folder -> author, no series)
 //	01 - Title.m4b                 (no ancestors -> no series/author)
 //
 // Derivation is purely structural now that libraries auto-detect their shape: a
@@ -273,11 +276,11 @@ func DeriveFromPath(relPath string, isFolder bool) *Metadata {
 	ancestors := segments[:len(segments)-1]
 
 	m.SeriesIndex, m.Title = splitSeriesIndex(name)
-	if n := len(ancestors); n >= 1 {
-		m.Series = ancestors[n-1]
-	}
-	if n := len(ancestors); n >= 2 {
-		m.Author = ancestors[n-2]
+	switch n := len(ancestors); {
+	case n == 1:
+		m.Author = ancestors[0]
+	case n >= 2:
+		m.Series, m.Author = ancestors[n-1], ancestors[n-2]
 	}
 	return m
 }
