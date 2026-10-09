@@ -125,8 +125,13 @@ export interface ListeningSession {
    */
   imported: boolean;
   state: SessionState;
-  /** Live sessions only: the chapter at the position and the device's newest address. */
+  /**
+   * Live sessions only: the chapter at the position and the device's newest address. The
+   * chapter's title is omitted when it names nothing ("024", "Track 01"): `chapter_index`
+   * places it (`chapterLabel`). A book with a single chapter has neither.
+   */
   chapter?: string;
+  chapter_index?: number;
   ip?: string;
 }
 
@@ -1384,6 +1389,11 @@ export interface AdminBookDetail {
   community_checking: boolean;
   /** The last check failed (the community service, or it ran out of time): `community_chapters` is the one before. */
   community_check_failed?: boolean;
+  /**
+   * What the match dialog's search box opens with: the title and author, or the folders' when
+   * the tags look swapped or junk (meta.SearchPrefill).
+   */
+  match_query: string;
 }
 
 /** Where a book's chapters come from: its own files, or a community list fitted onto them. */

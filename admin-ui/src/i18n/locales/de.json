@@ -1439,6 +1439,7 @@
   "activity.coverage.chapters": "Mit Kapiteln",
   "activity.coverage.cover": "Mit Cover",
   "live.title": "Hört gerade",
+  "live.chapter": "Kapitel {{n}}",
   "live.description_one": "{{count}} Stream läuft · {{direct}} direkt, {{transcoding}} transkodiert",
   "live.description_other": "{{count}} Streams laufen · {{direct}} direkt, {{transcoding}} transkodiert",
   "live.paused_one": "{{count}} pausiert",

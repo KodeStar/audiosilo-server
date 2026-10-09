@@ -37,6 +37,7 @@ import {
 } from './activity-model';
 import { OTHERS, SERIES, playbackColor } from './chart-colors';
 import { GrowthChart, HoursChart, PlaybackDonut } from './charts';
+import { chapterLabel } from './live-model';
 import { useClientName } from './use-client-name';
 import { HourWeekdayHeat, YearCalendar } from './heatmaps';
 import { ShareBar } from './parts';
@@ -446,7 +447,7 @@ function FunnelCard({ a }: { a: Activity }) {
                   {': '}
                   {t('activity.dropOff.body', {
                     ...counted(d.listeners, lang),
-                    chapter: d.chapter || t('activity.dropOff.chapter', { n: d.chapter_index + 1 }),
+                    chapter: chapterLabel(d, t, 'activity.dropOff.chapter'),
                   })}
                   {d.scan_error ? (
                     <>

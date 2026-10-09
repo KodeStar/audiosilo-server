@@ -1550,6 +1550,7 @@
   "activity.coverage.chapters": "Avec des chapitres",
   "activity.coverage.cover": "Avec une couverture",
   "live.title": "À l'écoute",
+  "live.chapter": "Chapitre {{n}}",
   "live.description_one": "{{count}} flux en lecture · {{direct}} en direct, {{transcoding}} en transcodage",
   "live.description_other": "{{count}} flux en lecture · {{direct}} en direct, {{transcoding}} en transcodage",
   "live.description_many": "{{count}} flux en lecture · {{direct}} en direct, {{transcoding}} en transcodage",

@@ -47,8 +47,9 @@ type UserStats struct {
 }
 
 // UserTotals sums a person's period: Listened is wall-clock seconds, Sessions the
-// sessions started in it, Books the books listened to, Finished the books
-// finished in it.
+// sessions started in it, Books the books listened to or finished in it (a book
+// marked finished with no listening recorded still counts, so Finished is never
+// more than Books), Finished the books finished in it.
 type UserTotals struct {
 	Listened float64 `json:"listened"`
 	Sessions int     `json:"sessions"`
@@ -95,11 +96,11 @@ func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.
 	if err != nil {
 		return nil, err
 	}
-	finished, err := c.finishedCount(ctx, userID, from, to)
+	finished, err := c.finishedIn(ctx, userID, from, to)
 	if err != nil {
 		return nil, err
 	}
-	prevFinished, err := c.finishedCount(ctx, userID, prev.from, prev.to)
+	prevFinished, err := c.finishedIn(ctx, userID, prev.from, prev.to)
 	if err != nil {
 		return nil, err
 	}
@@ -110,8 +111,8 @@ func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.
 	keep := func(ref Ref) bool { return ScopesAllow(scopes, ref) }
 	out := &UserStats{
 		Period:   periodOf(label, from, to, loc),
-		Totals:   userTotals(cur, finished),
-		Previous: userTotals(prev, prevFinished), Estimated: cur.estimated,
+		Totals:   userTotals(cur, finished[userID]),
+		Previous: userTotals(prev, prevFinished[userID]), Estimated: cur.estimated,
 		Days: listeningDayList(cur.dayList()), HourWeekday: cur.hw,
 		TopBooks:      []UserTopBook{},
 		TopAuthors:    cur.topPeople(bookAuthor, keep),
@@ -130,8 +131,9 @@ func (c *Catalog) UserStatsFor(ctx context.Context, label string, from, to time.
 
 // userTotals is a one-user accumulator's totals (no listener count) with the
 // books they finished in its period.
-func userTotals(a *listenAcc, finished int) UserTotals {
-	return UserTotals{Listened: a.listened, Sessions: a.sessions, Books: len(a.books), Finished: finished}
+func userTotals(a *listenAcc, finished map[Ref]bool) UserTotals {
+	books, done := bookCounts(a.books, finished)
+	return UserTotals{Listened: a.listened, Sessions: a.sessions, Books: books, Finished: done}
 }
 
 // listeningDayList is days without the per-listener split.
@@ -141,16 +143,6 @@ func listeningDayList(days []ActivityDay) []ListeningDay {
 		out[i] = ListeningDay{Date: d.Date, Listened: d.Listened}
 	}
 	return out
-}
-
-// finishedCount counts the books userID finished in [from, to) (the progress
-// primary key serves it: user_id leads).
-func (c *Catalog) finishedCount(ctx context.Context, userID int64, from, to time.Time) (int, error) {
-	var n int
-	err := c.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM progress WHERE user_id = ? AND finished = 1 AND finished_at >= ? AND finished_at < ?`,
-		userID, from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)).Scan(&n)
-	return n, err
 }
 
 // finishedBooks lists the books userID finished in [from, to) that scopes still

@@ -342,6 +342,19 @@ func IsGenericTitle(title string) bool {
 	return hasNumber
 }
 
+// NamesNothing is IsGenericTitle for a label in any script. IsGenericTitle reads
+// only ASCII letters, so it takes a title written in another script for an empty
+// label ("Пролог", "第一章") or a bare number ("Глава 1"); a title with a letter
+// outside ASCII names something.
+func NamesNothing(title string) bool {
+	return !hasNonASCIILetter(title) && IsGenericTitle(title)
+}
+
+// hasNonASCIILetter reports whether s has a letter outside ASCII.
+func hasNonASCIILetter(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r > unicode.MaxASCII && unicode.IsLetter(r) })
+}
+
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false
