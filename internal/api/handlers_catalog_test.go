@@ -226,6 +226,42 @@ func TestAdminEditBookAPI(t *testing.T) {
 	}
 }
 
+// TestAdminEditBookSeriesSwap: a PATCH making one of a book's other series its
+// main one swaps the two (catalog.seriesSwap), and the response shows it; one
+// that sends more_series itself keeps what it sent.
+func TestAdminEditBookSeriesSwap(t *testing.T) {
+	e := newTestEnv(t)
+	adminTok, _, _ := adminAndMember(t, e)
+	_, base := seedCatalog(t, e)
+	url := base + "/book?path=" + escape("Andy Weir/Artemis")
+	fields := func(body string) map[string]catalog.FieldValue {
+		t.Helper()
+		var d struct{ Fields map[string]catalog.FieldValue }
+		if err := json.Unmarshal([]byte(body), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.Fields
+	}
+	patch := func(req string) map[string]catalog.FieldValue {
+		t.Helper()
+		resp, body := e.do(t, "PATCH", url, adminTok, req)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("patch %s = %d %s", req, resp.StatusCode, body)
+		}
+		return fields(body)
+	}
+	patch(`{"set":{"series":"Moon","series_index":"1","more_series":"[{\"name\":\"Weirverse\",\"position\":2}]"}}`)
+	f := patch(`{"set":{"series":"Weirverse"}}`)
+	if f["series"].Value != "Weirverse" || f["series_index"].Value != "2" ||
+		f["more_series"].Value != `[{"name":"Moon","position":1}]` || f["more_series"].EditedBy != "admin" {
+		t.Fatalf("after the swap: %+v", f)
+	}
+	f = patch(`{"set":{"series":"Moon","more_series":"[{\"name\":\"Weirverse\",\"position\":3}]"}}`)
+	if f["series"].Value != "Moon" || f["series_index"].Value != "2" || f["more_series"].Value != `[{"name":"Weirverse","position":3}]` {
+		t.Fatalf("with more_series sent: %+v", f)
+	}
+}
+
 func TestAdminBulkEditAPI(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)

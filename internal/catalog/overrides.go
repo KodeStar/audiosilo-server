@@ -726,7 +726,17 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		return err
 	}
 	editor := nullableID(edit.UserID)
-	for field, v := range edit.Set {
+	set := edit.Set
+	swap, err := seriesSwap(ctx, tx, bookID, edit)
+	if err != nil {
+		return err
+	}
+	if swap != nil {
+		// This book's own copy: EditBooks shares the edit across books.
+		set = maps.Clone(edit.Set)
+		maps.Copy(set, swap)
+	}
+	for field, v := range set {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO book_overrides(library_id, path, field, value, source, updated_by, updated_at)
 			 VALUES(?,?,?,?,?,?,?)
@@ -781,4 +791,69 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 		}
 	}
 	return refreshEffective(ctx, tx, bookID)
+}
+
+// seriesSwap is what an edit making one of a book's other series its main one
+// writes besides: the two series trade places, so the old main series isn't lost
+// and the new one isn't listed twice. When the edit sets series to a name N other
+// than the book's main series, leaves more_series alone (neither sets nor reverts
+// it) and the book's more_series has an entry named exactly N (the exact name, as
+// seriesList and normalizeMoreSeries compare), more_series becomes the list with
+// N's entry replaced by the old main series at its current position (left out when
+// the book had none; an entry already naming it gives way), and series_index
+// becomes N's position, unless the edit sets or reverts series_index itself. The
+// values are read from the book's effective metadata before this edit and written
+// as ordinary overrides with the edit's source and editor, so provenance, revert
+// and undo treat them like any other. A community edit (a match apply) never
+// replaces an admin's own more_series or series_index, as the match plan never
+// does: it swaps nothing over an edited list, and keeps an edited position.
+// Reverting series later doesn't swap back: the two derived overrides stay until
+// reverted themselves. nil when there is nothing to swap.
+func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (map[string]string, error) {
+	name, ok := edit.Set[FieldSeries]
+	if !ok || name == "" || touches(edit, FieldMoreSeries) {
+		return nil, nil
+	}
+	l, err := loadLayers(ctx, tx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	cur := l.resolve()
+	keeps := func(field string) bool { // a community edit leaves an admin's value be
+		return edit.Source == SourceCommunity && cur[field].Source == SourceEdited
+	}
+	old := cur[FieldSeries].Value
+	list := ParseMoreSeries(cur[FieldMoreSeries].Value)
+	at := slices.IndexFunc(list, func(s SeriesRef) bool { return s.Name == name })
+	if name == old || at < 0 || keeps(FieldMoreSeries) {
+		return nil, nil
+	}
+	pos := list[at].Position
+	swapped := make([]SeriesRef, 0, len(list))
+	for i, s := range list {
+		switch {
+		case i == at && old != "":
+			swapped = append(swapped, SeriesRef{Name: old, Position: ParseSeriesIndex(cur[FieldSeriesIndex].Value)})
+		case i == at, s.Name == old:
+		default:
+			swapped = append(swapped, s)
+		}
+	}
+	more, err := normalizeOverride(FieldMoreSeries, EncodeMoreSeries(swapped))
+	if err != nil {
+		// The old main series can't be listed (a tag too long for an entry): the
+		// edit goes ahead as it would without the swap.
+		return nil, nil
+	}
+	out := map[string]string{FieldMoreSeries: more}
+	if !touches(edit, FieldSeriesIndex) && !keeps(FieldSeriesIndex) {
+		out[FieldSeriesIndex] = FormatSeriesPosition(pos)
+	}
+	return out, nil
+}
+
+// touches reports whether an edit sets or reverts field.
+func touches(edit BookEdit, field string) bool {
+	_, set := edit.Set[field]
+	return set || slices.Contains(edit.Revert, field)
 }

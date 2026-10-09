@@ -661,7 +661,13 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
-  `MoveDurableState` carries overrides and custom covers as one set: when the moved book
+  An edit that sets `series` to a name its `more_series` lists (exactly), without
+  setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`, per book in
+  `editTx`): the old main series takes the entry's place in the list and `series_index`
+  becomes the entry's position (unless the edit names `series_index`), written as the
+  edit's own overrides; a community edit swaps nothing over an admin's own list or position.
+  The console drafts the same swap before saving (`book-model.ts` `commitField`), so its
+  save sends the values and the server's swap doesn't fire. `MoveDurableState` carries overrides and custom covers as one set: when the moved book
   has any, the new path's own rows in all three tables are dropped first; it moves
   them (with enrichment) in a transaction of their own, so a failure carrying the per-user
   state can't strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
