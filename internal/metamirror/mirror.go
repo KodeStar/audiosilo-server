@@ -179,6 +179,7 @@ type Mirror struct {
 	due         bool // CheckNow asked for a check that hasn't started yet
 	downloading bool
 	openingNew  bool               // a downloaded copy is being opened, not swapped in yet
+	installing  string             // the path an install is writing and opening ("" when none)
 	retiring    map[*query.DB]bool // replaced copies inside their grace
 	closed      bool
 }
@@ -536,13 +537,34 @@ func (m *Mirror) install(ctx context.Context, rel *release.Release) error {
 		return err
 	}
 
+	path := m.copyPath(rel.Tag)
+	// A release swapped back in within the grace of the copy it once was (A
+	// replaced by B, then A again) downloads to that copy's name: the retiring
+	// handle is closed now, never deleted (its file is about to be this
+	// download), and no retire deletes the path while it is installing.
 	m.mu.Lock()
-	m.downloading = true
+	m.downloading, m.installing = true, path
+	var reused []*query.DB
+	for db := range m.retiring {
+		if db.Path() == path {
+			delete(m.retiring, db)
+			reused = append(reused, db)
+		}
+	}
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.installing = ""
+		m.mu.Unlock()
+	}()
+	for _, db := range reused {
+		if err := db.Close(); err != nil {
+			m.log.Warn("metadata mirror: close a replaced copy", "err", err)
+		}
+	}
 	m.done.Store(0)
 	m.total.Store(asset.Size)
 	m.log.Info("metadata mirror: downloading a new copy", "tag", rel.Tag, "bytes", asset.Size)
-	path := m.copyPath(rel.Tag)
 	res, err := m.client.DownloadData(ctx, rel, path, func(done, total int64) {
 		m.done.Store(done)
 		m.total.Store(total)
@@ -618,22 +640,26 @@ func (m *Mirror) retire(db *query.DB) {
 	delete(m.retiring, db)
 	m.mu.Unlock()
 	if ok {
-		m.closeAndDelete(db, m.cur.Load())
+		m.closeAndDelete(db)
 	}
 }
 
 // closeAndDelete closes a replaced copy and deletes its file, unless that file
-// is now cur's: a release swapped back in within the grace (the newest one
-// withdrawn) is downloaded to the same name, and deleting it would leave the
-// copy in use without a file for the next start.
-func (m *Mirror) closeAndDelete(db, cur *query.DB) {
+// is in use again: the current copy's, or the one an install is writing and
+// opening. A release swapped back in (the newest one withdrawn) is downloaded
+// to the same name, and deleting it would leave the copy without a file. The
+// check and the deletion hold mu, so an install can't start between them.
+func (m *Mirror) closeAndDelete(db *query.DB) {
 	if err := db.Close(); err != nil {
 		m.log.Warn("metadata mirror: close a replaced copy", "err", err)
 	}
-	if cur != nil && cur.Path() == db.Path() {
+	path := db.Path()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur := m.cur.Load(); path == m.installing || (cur != nil && cur.Path() == path) {
 		return
 	}
-	if err := os.Remove(db.Path()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		m.log.Warn("metadata mirror: delete a replaced copy", "err", err)
 	}
 }
@@ -696,12 +722,13 @@ func (m *Mirror) Close() error {
 	m.closed = true
 	retiring := m.retiring
 	m.retiring = map[*query.DB]bool{}
-	cur := m.cur.Swap(nil)
 	m.mu.Unlock()
+	// Before the current copy is let go: its file is kept when a retiring one
+	// shares it.
 	for db := range retiring {
-		m.closeAndDelete(db, cur)
+		m.closeAndDelete(db)
 	}
-	return cur.Close()
+	return m.cur.Swap(nil).Close()
 }
 
 // Remove deletes a data directory's mirror folder, for a server started in

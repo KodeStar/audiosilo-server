@@ -584,6 +584,44 @@ func TestMirrorSwapBackKeepsFile(t *testing.T) {
 	}
 }
 
+// A release swapped back in while the copy it replaced is still in its grace,
+// with that copy's retire timer firing after the new download took its name but
+// before the swap (cur is still the newer release then): the file being opened
+// must not be deleted under the install.
+func TestMirrorSwapBackRetireDuringInstall(t *testing.T) {
+	art := mirrortest.Fixture(t, 0)
+	const a, b = "data-v2026.10.08-aaaaaaa-bbbbbbb", "data-v2026.10.09-ccccccc-ddddddd"
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(art, a)...)
+	dir := t.TempDir()
+	m := newMirror(t, dir, gh, Options{})
+	m.grace = time.Hour // the timer is fired by hand below
+	m.check(context.Background())
+	first := m.Current()
+	gh.SetReleases(mirrortest.Releases(art, a, b)...)
+	m.check(context.Background())
+
+	gh.SetReleases(mirrortest.Releases(art, a)...)
+	opening, release := gatedOpen(m)
+	done := make(chan struct{})
+	go func() { m.check(context.Background()); close(done) }()
+	<-opening // A is downloaded to meta-A.sqlite again; B still answers
+	m.retire(first)
+	if _, err := os.Stat(filepath.Join(dir, "meta-"+a+".sqlite")); err != nil {
+		t.Fatalf("retiring the old handle deleted the copy being installed: %v", err)
+	}
+	close(release)
+	<-done
+	if st := m.Status(); st.State != StateReady || st.Tag != a || st.Error != "" || m.Current() == first {
+		t.Fatalf("after the swap back = %+v", st)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := copies(t, dir); len(got) != 1 || got[0] != "meta-"+a+".sqlite" {
+		t.Fatalf("after Close = %v, want the current copy only", got)
+	}
+}
+
 // gatedOpen makes m's copies open only once release is closed, and reports on
 // opening when an open is waiting: the seconds query.Open takes over a real copy.
 func gatedOpen(m *Mirror) (opening <-chan struct{}, release chan<- struct{}) {

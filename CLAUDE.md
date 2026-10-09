@@ -511,8 +511,9 @@ admin overrides; see Metadata overrides below).
   have Y`, decimal units as the console's `formatBytes`); the download goes through `release.DownloadData` (temp `.meta-*.tmp` in the folder,
   `release.WithBaseSize` = the current copy's size), is opened with `query.Open` (integrity checks;
   a file that doesn't open is deleted), then swapped in atomically; the replaced copy is closed and
-  deleted after a 60 s grace (its file is kept when a release swapped back in within the grace
-  reused the name). Any failure keeps the current copy. At its start `Run` deletes temp
+  deleted after a 60 s grace (a release swapped back in within the grace reuses its name: that
+  install closes the retiring handle at once without deleting, and no retire deletes the path an
+  install is writing or the current copy's). Any failure keeps the current copy. At its start `Run` deletes temp
   files, a half-written state and any copy but the current one, and forgets a copy that is missing,
   changed size or doesn't open. A copy newer than `MaxSchemaVersion` still opens and answers (flagged
   `schema_newer`); artifact schema changes must stay additive (CROSS-REPO §17). The launcher
