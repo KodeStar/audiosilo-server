@@ -33,12 +33,9 @@ type healthCache struct {
 // client's own timeout, not a caller's context, so a caller that goes away
 // can't leave a "not responding" in the cache.
 //
-// In mirror mode (SetMirror) it reports the local copy instead: reachable while
-// a usable copy is loaded, and nothing is asked of the remote service.
+// In mirror mode it goes through the same client as every lookup (SetMirror):
+// the local copy answers while it is ready, else the remote service does.
 func (s *Service) Ping() Health {
-	if s.mirror != nil {
-		return s.mirrorHealth()
-	}
 	s.health.mu.Lock()
 	defer s.health.mu.Unlock()
 	if h := s.health.last; h != nil && time.Since(h.CheckedAt) < healthTTL {

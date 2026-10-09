@@ -7,24 +7,22 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kodestar/audiosilo-meta/pkg/query/querytest"
-	"github.com/kodestar/audiosilo-meta/pkg/release"
+	"github.com/kodestar/audiosilo-meta/pkg/release/releasetest"
 
 	"github.com/kodestar/audiosilo-server/internal/api"
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
-	"github.com/kodestar/audiosilo-server/internal/metamirror/ghfake"
+	"github.com/kodestar/audiosilo-server/internal/mirrortest"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -38,7 +36,7 @@ func TestMetaMirrorRemoteModeDeletesCopy(t *testing.T) {
 	cfg := config.Default(data)
 	cfg.Metadata.BaseURL = ""
 	cfg.Metadata.Mode = config.MetadataRemote
-	if m := metaMirror(cfg, data, nil, discardLog()); m != nil {
+	if m := metaMirror(cfg, data, nil, releaseSource{}, discardLog()); m != nil {
 		t.Fatal("no mirror without a metadata service")
 	}
 	if _, err := os.Stat(metamirror.Dir(data)); err != nil {
@@ -46,7 +44,7 @@ func TestMetaMirrorRemoteModeDeletesCopy(t *testing.T) {
 	}
 
 	cfg = config.Default(data)
-	if m := metaMirror(cfg, data, nil, discardLog()); m != nil {
+	if m := metaMirror(cfg, data, nil, releaseSource{}, discardLog()); m != nil {
 		t.Fatal("no mirror in remote mode")
 	}
 	if _, err := os.Stat(metamirror.Dir(data)); !os.IsNotExist(err) {
@@ -57,18 +55,11 @@ func TestMetaMirrorRemoteModeDeletesCopy(t *testing.T) {
 // The live smoke of mirror mode, through the real launcher: a server started
 // with metadata.mode: mirror downloads the copy from (a fake) GitHub when an
 // admin asks, swaps it in, reports it on /admin/system, and answers a book's
-// /meta from it without a single request to the remote metadata service.
+// /meta from it without a single request to the remote metadata service (before
+// the copy, Health's check is the remote service's to answer).
 func TestRunMirrorMode(t *testing.T) {
-	gh := ghfake.New(t, ghfake.Releases(ghfake.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
-	testReleaseOptions = []release.Option{release.WithAPIBase(gh.URL)}
-	t.Cleanup(func() { testReleaseOptions = nil })
-
-	var remoteHits atomic.Int32
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		remoteHits.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(remote.Close)
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	remote, remoteHits := mirrortest.Remote(t)
 
 	// A library with one book, an admin, and a config in mirror mode.
 	data := t.TempDir()
@@ -114,7 +105,9 @@ metadata:
 
 	runCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- Run(runCtx, Options{DataDir: data, Log: discardLog()}) }()
+	go func() {
+		done <- Run(runCtx, Options{DataDir: data, Log: discardLog(), metaReleases: releaseSource{releasetest.Repo, gh.URL}})
+	}()
 	t.Cleanup(func() {
 		stop()
 		select {
@@ -147,9 +140,6 @@ metadata:
 		Metadata struct {
 			Mode   string             `json:"mode"`
 			Mirror *metamirror.Status `json:"mirror"`
-			Health *struct {
-				Reachable bool `json:"reachable"`
-			} `json:"health"`
 		} `json:"metadata"`
 	}
 	call(t, "GET", base+"/admin/system", tok, "", http.StatusOK, &sys)
@@ -161,10 +151,10 @@ metadata:
 		call(t, "GET", base+"/admin/system", tok, "", http.StatusOK, &sys)
 		return sys.Metadata.Mirror != nil && sys.Metadata.Mirror.State == metamirror.StateReady
 	})
-	if m := sys.Metadata.Mirror; m.Tag != "data-v2026.10.09-ccccccc-ddddddd" || m.Fallback || m.SizeBytes == 0 || m.Error != "" ||
-		sys.Metadata.Health == nil || !sys.Metadata.Health.Reachable {
-		t.Fatalf("after the download: %+v %+v", m, sys.Metadata.Health)
+	if m := sys.Metadata.Mirror; m.Tag != "data-v2026.10.09-ccccccc-ddddddd" || m.Fallback || m.SizeBytes == 0 || m.Error != "" {
+		t.Fatalf("after the download: %+v", m)
 	}
+	asked := remoteHits.Load()
 	if ua := gh.UserAgents(); len(ua) == 0 || ua[0] != "AudioSilo/"+api.Version {
 		t.Fatalf("User-Agent = %v", ua)
 	}
@@ -202,8 +192,8 @@ metadata:
 	if !meta.Matched || meta.Work.ID != querytest.ASINWork {
 		t.Fatalf("meta = %+v", meta)
 	}
-	if n := remoteHits.Load(); n != 0 {
-		t.Fatalf("the remote metadata service was asked %d times", n)
+	if n := remoteHits.Load() - asked; n != 0 {
+		t.Fatalf("the remote metadata service was asked %d times with a copy", n)
 	}
 	entries, err := os.ReadDir(metamirror.Dir(data))
 	if err != nil {
@@ -233,13 +223,7 @@ func freeAddr(t *testing.T) string {
 // waitFor polls cond for up to ten seconds.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	mirrortest.Eventually(t, what, 10*time.Second, cond)
 }
 
 // call sends one API request, checks its status and decodes its answer into out

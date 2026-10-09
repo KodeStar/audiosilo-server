@@ -21,6 +21,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metamirror"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -55,6 +56,9 @@ type API struct {
 	// config's metadata.enabled is the on/off switch: the handler and the
 	// `metadata` capability flag gate on meta != nil AND it (metadataOn).
 	meta *meta.Service
+	// mirror is mirror mode's local copy of the community metadata, in front of
+	// meta (SetMetaMirror); nil in remote mode.
+	mirror *metamirror.Mirror
 	// matchRuns runs bulk community matching (Health > Not matched).
 	matchRuns *matchrun.Runner
 	// imports runs listening imports from Audiobookshelf (handlers_import.go).
@@ -352,6 +356,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/system", a.requireAdmin(http.HandlerFunc(a.handleSystem)))
 	mux.Handle("GET /api/v1/admin/update", a.requireAdmin(http.HandlerFunc(a.handleUpdateStatus)))
 	mux.Handle("POST /api/v1/admin/update/check", a.requireAdmin(http.HandlerFunc(a.handleUpdateCheck)))
+	mux.Handle("GET /api/v1/admin/meta/mirror", a.requireAdmin(http.HandlerFunc(a.handleMetaMirror)))
 	mux.Handle("POST /api/v1/admin/meta/mirror/check", a.requireAdmin(http.HandlerFunc(a.handleMetaMirrorCheck)))
 	mux.Handle("GET /api/v1/admin/logs", a.requireAdmin(http.HandlerFunc(a.handleLogs)))
 	mux.Handle("GET /api/v1/admin/audit", a.requireAdmin(http.HandlerFunc(a.handleAudit)))

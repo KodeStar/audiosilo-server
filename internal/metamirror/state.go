@@ -1,33 +1,35 @@
 package metamirror
 
 import (
-	"encoding/json"
-	"errors"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/jsonfile"
 )
 
-// The state file and the temporary name it is written under.
+// The state file and the temporary name it is written under (jsonfile.Write).
 const (
 	stateFile = "state.json"
-	stateTemp = "state.json.tmp"
+	stateTemp = stateFile + jsonfile.TempSuffix
 )
 
 // state is what the mirror records about its copy and its checks
 // (<data>/meta-mirror/state.json), so a restart neither downloads again within
-// the day nor forgets which copy is current.
+// the day nor forgets which copy is current. It is the one record of those
+// facts: Status reads them here.
 type state struct {
 	// The copy: its release, what the artifact says of itself, and the
-	// decompressed file's digest and size.
+	// decompressed file's size.
 	Tag           string    `json:"tag,omitempty"`
-	PublishedAt   time.Time `json:"published_at,omitzero"`
 	BuiltAt       time.Time `json:"built_at,omitzero"`
 	SchemaVersion int       `json:"schema_version,omitempty"`
-	SHA256        string    `json:"sha256,omitempty"`
 	SizeBytes     int64     `json:"size_bytes,omitempty"`
 	DownloadedAt  time.Time `json:"downloaded_at,omitzero"`
+	// On-disk diagnostics only (nothing reads them back): when the release was
+	// published and the decompressed file's sha256, for an admin comparing the
+	// copy with the release on GitHub.
+	PublishedAt time.Time `json:"published_at,omitzero"`
+	SHA256      string    `json:"sha256,omitempty"`
 	// The checks: the release list's validator, the last check and how it
 	// failed ("" when it didn't).
 	ETag      string    `json:"etag,omitempty"`
@@ -44,35 +46,21 @@ func (s *state) forgetCopy() {
 // loadState reads the state file; none (or one that doesn't parse) is a mirror
 // with no copy and no check yet.
 func (m *Mirror) loadState() state {
-	var st state
-	b, err := os.ReadFile(filepath.Join(m.dir, stateFile))
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return st
-	case err != nil:
-		m.log.Warn("metadata mirror: read its state", "err", err)
-		return st
+	st, err := jsonfile.Read[state](filepath.Join(m.dir, stateFile))
+	if err != nil {
+		m.log.Warn("metadata mirror: its state can't be read; starting afresh", "err", err)
 	}
-	if err := json.Unmarshal(b, &st); err != nil {
-		m.log.Warn("metadata mirror: its state doesn't parse; starting afresh", "err", err)
+	if st == nil {
 		return state{}
 	}
-	return st
+	return *st
 }
 
-// saveState writes the state (owner-only, under a temporary name then renamed,
-// so a crash leaves the old state or the new one, never half of one). A failure
-// is logged: the mirror keeps working, and the next save tries again. Callers
-// hold m.mu.
+// saveState writes the state (owner-only, all or nothing: jsonfile.Write). A
+// failure is logged: the mirror keeps working, and the next save tries again.
+// Callers hold m.mu.
 func (m *Mirror) saveState() {
-	b, err := json.MarshalIndent(m.st, "", "  ")
-	if err == nil {
-		tmp := filepath.Join(m.dir, stateTemp)
-		if err = os.WriteFile(tmp, b, 0o600); err == nil {
-			err = os.Rename(tmp, filepath.Join(m.dir, stateFile))
-		}
-	}
-	if err != nil {
+	if err := jsonfile.Write(filepath.Join(m.dir, stateFile), m.st); err != nil {
 		m.log.Warn("metadata mirror: save its state", "err", err)
 	}
 }

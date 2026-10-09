@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,10 +14,12 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-meta/pkg/query/querytest"
+	"github.com/kodestar/audiosilo-meta/pkg/release"
+	"github.com/kodestar/audiosilo-meta/pkg/release/releasetest"
 
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
-	"github.com/kodestar/audiosilo-server/internal/metamirror/ghfake"
+	"github.com/kodestar/audiosilo-server/internal/mirrortest"
 )
 
 // mirrorEnv is a test env in mirror mode: a real metamirror.Mirror holding the
@@ -35,24 +36,21 @@ type mirrorEnv struct {
 
 func newMirrorEnv(t *testing.T) *mirrorEnv {
 	t.Helper()
-	var hits atomic.Int32
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(remote.Close)
+	remote, hits := mirrortest.Remote(t)
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.Metadata.Enabled = true
 		c.Metadata.BaseURL = remote.URL
 		c.Metadata.Mode = config.MetadataMirror
 	})
 
-	gh := ghfake.New(t, ghfake.Releases(ghfake.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
-	m, err := metamirror.New(filepath.Join(e.cfg.DataDir, metamirror.DirName), gh.Client(), metamirror.Options{
+	gh := releasetest.NewGitHub(t, mirrortest.Releases(mirrortest.Fixture(t, 0), "data-v2026.10.09-ccccccc-ddddddd")...)
+	m, err := metamirror.New(filepath.Join(e.cfg.DataDir, metamirror.DirName), metamirror.Options{
 		Enabled:   e.api.MetadataOn,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		SiteURL:   remote.URL,
 		FreeBytes: func(string) (uint64, error) { return 1 << 40, nil },
+		Repo:      releasetest.Repo,
+		Release:   []release.Option{release.WithAPIBase(gh.URL)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,16 +60,10 @@ func newMirrorEnv(t *testing.T) *mirrorEnv {
 	go func() { defer close(done); m.Run(ctx) }()
 	t.Cleanup(func() { cancel(); <-done; _ = m.Close() })
 	m.CheckNow()
-	deadline := time.Now().Add(5 * time.Second)
-	for !m.Ready() {
-		if time.Now().After(deadline) {
-			t.Fatalf("the mirror never became ready: %+v", m.Status())
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	e.api.SetRuntime(Runtime{Backups: e.backups, Notify: e.notify, MetaMirror: m})
+	mirrortest.Eventually(t, "the mirror's copy", 5*time.Second, m.Ready)
+	e.api.SetMetaMirror(m)
 	adminTok, memberTok := opsTokens(t, e)
-	return &mirrorEnv{testEnv: e, mirror: m, remoteHits: &hits, adminTok: adminTok, memberTok: memberTok, remoteURL: remote.URL}
+	return &mirrorEnv{testEnv: e, mirror: m, remoteHits: hits, adminTok: adminTok, memberTok: memberTok, remoteURL: remote.URL}
 }
 
 // A book's /meta in mirror mode is answered by the local copy: the community
@@ -123,9 +115,9 @@ func TestMetaFromMirror(t *testing.T) {
 	}
 }
 
-// Health > System in mirror mode: the mode, the copy's status, and the health of
-// the local copy (no outbound request); the settings show the mode, a restart
-// setting.
+// Health > System in mirror mode: the mode, the copy's status, and the health
+// check answered by the ready copy (no outbound request); the settings show the
+// mode, a restart setting.
 func TestSystemStatusMirror(t *testing.T) {
 	e := newMirrorEnv(t)
 	_, body := e.do(t, "GET", "/api/v1/admin/system", e.adminTok, "")
@@ -185,39 +177,72 @@ func TestSystemStatusRemoteMode(t *testing.T) {
 	}
 }
 
-// POST /admin/meta/mirror/check: 202 with the copy's status for an admin in
-// mirror mode; 403 for a member and 401 signed out.
-func TestMetaMirrorCheck(t *testing.T) {
+// The mirror's two routes, GET /admin/meta/mirror (its status) and POST
+// /admin/meta/mirror/check (202 with its status after the wake: the next check
+// due now), for an admin in mirror mode; 403 for a member and 401 signed out.
+func TestMetaMirrorRoutes(t *testing.T) {
 	e := newMirrorEnv(t)
-	resp, body := e.do(t, "POST", "/api/v1/admin/meta/mirror/check", e.adminTok, "")
+	resp, body := e.do(t, "GET", "/api/v1/admin/meta/mirror", e.adminTok, "")
 	var st metamirror.Status
+	if err := json.Unmarshal([]byte(body), &st); err != nil || resp.StatusCode != http.StatusOK ||
+		st.State != metamirror.StateReady || st.Tag != "data-v2026.10.09-ccccccc-ddddddd" {
+		t.Fatalf("status = %d %s", resp.StatusCode, body)
+	}
+	if time.Until(st.NextCheckAt) < time.Hour {
+		t.Fatalf("a fresh copy's next check is a day away, got %v", st.NextCheckAt)
+	}
+
+	before := time.Now()
+	resp, body = e.do(t, "POST", "/api/v1/admin/meta/mirror/check", e.adminTok, "")
+	st = metamirror.Status{}
 	if err := json.Unmarshal([]byte(body), &st); err != nil || resp.StatusCode != http.StatusAccepted || st.State == "" {
 		t.Fatalf("check = %d %s", resp.StatusCode, body)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/admin/meta/mirror/check", e.memberTok, ""); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("a member's check = %d, want 403", resp.StatusCode)
+	// Woken: the next check is due now (or, the runner already on it, not set).
+	if n := st.NextCheckAt; !n.IsZero() && (n.Before(before) || n.After(time.Now())) {
+		t.Fatalf("the check's answer must reflect the wake, next_check_at = %v", st.NextCheckAt)
 	}
-	if resp, _ := e.do(t, "POST", "/api/v1/admin/meta/mirror/check", "", ""); resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("a signed-out check = %d, want 401", resp.StatusCode)
+
+	for _, r := range []struct{ method, path string }{
+		{"GET", "/api/v1/admin/meta/mirror"},
+		{"POST", "/api/v1/admin/meta/mirror/check"},
+	} {
+		if resp, _ := e.do(t, r.method, r.path, e.memberTok, ""); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("a member's %s %s = %d, want 403", r.method, r.path, resp.StatusCode)
+		}
+		if resp, _ := e.do(t, r.method, r.path, "", ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("a signed-out %s %s = %d, want 401", r.method, r.path, resp.StatusCode)
+		}
 	}
 
 	// While metadata is off: 404 metadata_off.
 	if resp, b := e.do(t, "PATCH", "/api/v1/admin/settings", e.adminTok, `{"metadata":{"enabled":false}}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("turn off = %d %s", resp.StatusCode, b)
 	}
-	resp, body = e.do(t, "POST", "/api/v1/admin/meta/mirror/check", e.adminTok, "")
-	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"code":"`+codeMetadataOff+`"`) {
-		t.Fatalf("check while off = %d %s", resp.StatusCode, body)
+	for _, method := range []string{"GET", "POST"} {
+		path := "/api/v1/admin/meta/mirror"
+		if method == "POST" {
+			path += "/check"
+		}
+		resp, body = e.do(t, method, path, e.adminTok, "")
+		if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"code":"`+codeMetadataOff+`"`) {
+			t.Fatalf("%s %s while off = %d %s", method, path, resp.StatusCode, body)
+		}
 	}
 }
 
-// In remote mode there is no copy to check: 409 not_mirror_mode, in the coded
-// envelope the console branches on.
-func TestMetaMirrorCheckRemoteMode(t *testing.T) {
+// In remote mode there is no copy: 409 not_mirror_mode on both routes, in the
+// coded envelope the console branches on.
+func TestMetaMirrorRoutesRemoteMode(t *testing.T) {
 	e := newMetaEnv(t, true, 0)
 	adminTok, _ := opsTokens(t, e)
-	resp, body := e.do(t, "POST", "/api/v1/admin/meta/mirror/check", adminTok, "")
-	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"`+codeNotMirrorMode+`"`) {
-		t.Fatalf("check in remote mode = %d %s", resp.StatusCode, body)
+	for _, r := range []struct{ method, path string }{
+		{"GET", "/api/v1/admin/meta/mirror"},
+		{"POST", "/api/v1/admin/meta/mirror/check"},
+	} {
+		resp, body := e.do(t, r.method, r.path, adminTok, "")
+		if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"`+codeNotMirrorMode+`"`) {
+			t.Fatalf("%s %s in remote mode = %d %s", r.method, r.path, resp.StatusCode, body)
+		}
 	}
 }

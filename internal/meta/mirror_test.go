@@ -1,9 +1,11 @@
 package meta
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,8 @@ import (
 
 	"github.com/kodestar/audiosilo-meta/pkg/query"
 	"github.com/kodestar/audiosilo-meta/pkg/query/querytest"
+
+	"github.com/kodestar/audiosilo-server/internal/mirrortest"
 )
 
 // fakeMirror is a local copy for the Service tests: metaserve's own handler over
@@ -39,26 +43,15 @@ func newFakeMirror(t *testing.T) *fakeMirror {
 
 func (m *fakeMirror) Ready() bool { return m.ready.Load() }
 
-func (m *fakeMirror) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	m.hits.Add(1)
-	if m.fail.Load() {
-		http.Error(w, "boom", http.StatusInternalServerError)
-		return
-	}
-	m.h.ServeHTTP(w, r)
-}
-
-// countingRemote is a remote metadata service that counts every request and
-// answers each 500, so a test asserts it is never asked.
-func countingRemote(t *testing.T) (*httptest.Server, *atomic.Int32) {
-	t.Helper()
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &hits
+func (m *fakeMirror) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.hits.Add(1)
+		if m.fail.Load() {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		m.h.ServeHTTP(w, r)
+	})
 }
 
 // In mirror mode every question the server asks is answered by the local copy
@@ -67,10 +60,10 @@ func countingRemote(t *testing.T) (*httptest.Server, *atomic.Int32) {
 // recording's chapters, the console's match and its search fallback - and the
 // remote service is never asked.
 func TestMirrorAnswersLocally(t *testing.T) {
-	remote, remoteHits := countingRemote(t)
+	remote, remoteHits := mirrortest.Remote(t)
 	s := NewService(remote.URL, nil)
 	m := newFakeMirror(t)
-	s.SetMirror(m)
+	s.SetMirror(m, nil)
 	ctx := context.Background()
 
 	env, err := s.Enrich(ctx, querytest.ASIN, "")
@@ -142,7 +135,7 @@ func TestMirrorAnswersLocally(t *testing.T) {
 }
 
 // Without a usable copy the remote service answers, exactly as in remote mode,
-// and Ping says so without asking it.
+// Ping included.
 func TestMirrorNotReadyGoesRemote(t *testing.T) {
 	mock := fullMock()
 	srv := httptest.NewServer(mock.handler())
@@ -150,7 +143,7 @@ func TestMirrorNotReadyGoesRemote(t *testing.T) {
 	s := NewService(srv.URL, nil)
 	m := newFakeMirror(t)
 	m.ready.Store(false)
-	s.SetMirror(m)
+	s.SetMirror(m, nil)
 
 	env, err := s.Enrich(context.Background(), "B00B5HZGUG", "")
 	if err != nil || env.Work.ID != "the-martian" {
@@ -159,13 +152,50 @@ func TestMirrorNotReadyGoesRemote(t *testing.T) {
 	if mock.lookupHits.Load() != 1 || m.hits.Load() != 0 {
 		t.Fatalf("remote lookups %d, local requests %d; want 1 and 0", mock.lookupHits.Load(), m.hits.Load())
 	}
-	if h := s.Ping(); h.Reachable || h.Error == "" {
-		t.Fatalf("Ping without a copy = %+v", h)
-	}
-	if mock.lookupHits.Load() != 1 {
-		t.Fatal("Ping must not ask the remote service in mirror mode")
+	// The mock has no /healthz: its 404 is the remote service answering.
+	if h := s.Ping(); h.Reachable || h.Error != "answered HTTP 404" || m.hits.Load() != 0 {
+		t.Fatalf("Ping without a copy = %+v (local requests %d); want the remote service's answer", h, m.hits.Load())
 	}
 }
+
+// The remote leg is remote mode's own client (its timeout and transport), and a
+// request the copy failed is logged once, not once per request.
+func TestMirrorFallbackUsesRemoteClientAndLogsOnce(t *testing.T) {
+	mock := fullMock()
+	srv := httptest.NewServer(mock.handler())
+	t.Cleanup(srv.Close)
+	s := NewService(srv.URL, nil)
+	var viaRemote atomic.Int32
+	orig := s.client.http
+	orig.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		viaRemote.Add(1)
+		return http.DefaultTransport.RoundTrip(r)
+	})
+	var logs bytes.Buffer
+	m := newFakeMirror(t)
+	m.fail.Store(true)
+	s.SetMirror(m, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	for range 2 {
+		if _, err := s.Work(context.Background(), "the-martian"); err != nil {
+			t.Fatalf("Work = %v", err)
+		}
+		s.cache = newCache(time.Now) // ask again, not the memory cache
+	}
+	if viaRemote.Load() != 2 {
+		t.Fatalf("the remote client carried %d requests, want 2", viaRemote.Load())
+	}
+	if orig.Timeout != clientTimeout {
+		t.Fatalf("the remote client's timeout = %v", orig.Timeout)
+	}
+	if n := strings.Count(logs.String(), "couldn't answer"); n != 1 || !strings.Contains(logs.String(), "reason=\"HTTP 500\"") {
+		t.Fatalf("logged %d fallbacks: %s", n, logs.String())
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // A 5xx from the copy (a query it can't run) sends that request to the remote
 // service.
@@ -176,7 +206,7 @@ func TestMirrorLocalFailureGoesRemote(t *testing.T) {
 	s := NewService(srv.URL, nil)
 	m := newFakeMirror(t)
 	m.fail.Store(true)
-	s.SetMirror(m)
+	s.SetMirror(m, nil)
 
 	env, err := s.Enrich(context.Background(), "B00B5HZGUG", "")
 	if err != nil || env.Work.ID != "the-martian" {
@@ -193,7 +223,7 @@ func TestMirrorLocalNotFoundIsAuthoritative(t *testing.T) {
 	srv := httptest.NewServer(mock.handler())
 	t.Cleanup(srv.Close)
 	s := NewService(srv.URL, nil)
-	s.SetMirror(newFakeMirror(t))
+	s.SetMirror(newFakeMirror(t), nil)
 
 	if _, err := s.Enrich(context.Background(), querytest.MissingASIN, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Enrich = %v, want ErrNotFound", err)
@@ -207,12 +237,12 @@ func TestMirrorLocalNotFoundIsAuthoritative(t *testing.T) {
 // enrichment or a work): the stored one is served, stale, and its row stays as
 // it was. Remote mode's own replacing is covered by the store tests.
 func TestMirrorNotFoundKeepsStoredAnswer(t *testing.T) {
-	remote, remoteHits := countingRemote(t)
+	remote, remoteHits := mirrortest.Remote(t)
 	clk := &clock{t: time.Unix(1_700_000_000, 0)}
 	st := newMemStore()
 	s := NewService(remote.URL, clk.now)
 	s.SetStore(st)
-	s.SetMirror(newFakeMirror(t))
+	s.SetMirror(newFakeMirror(t), nil)
 	ctx := context.Background()
 
 	// What an earlier answer left in the cache, long expired.
@@ -260,7 +290,7 @@ func TestMirrorNotFoundKeepsStoredAnswer(t *testing.T) {
 // large to buffer, panics and 5xx all read as "the copy failed it".
 func TestServeLocal(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://meta.example/api/v1/x?q=1", nil)
-	resp := serveLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	resp, failed := serveLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.RawQuery != "q=1" || r.RequestURI != "/api/v1/x?q=1" {
 			t.Errorf("request = %q %q", r.URL.RawQuery, r.RequestURI)
 		}
@@ -268,23 +298,29 @@ func TestServeLocal(t *testing.T) {
 		w.WriteHeader(http.StatusMovedPermanently)
 		_, _ = w.Write([]byte(`{"redirect":"y"}`))
 	}), req)
-	if resp == nil || resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != "/api/v1/y" {
-		t.Fatalf("serveLocal = %+v", resp)
+	if resp == nil || failed != "" || resp.StatusCode != http.StatusMovedPermanently || resp.Status != "301 Moved Permanently" ||
+		resp.Header.Get("Location") != "/api/v1/y" {
+		t.Fatalf("serveLocal = %+v, %q", resp, failed)
 	}
 	if body, _ := io.ReadAll(resp.Body); string(body) != `{"redirect":"y"}` || resp.ContentLength != int64(len(body)) {
 		t.Fatalf("body = %q (%d)", body, resp.ContentLength)
 	}
-	failed := map[string]http.HandlerFunc{
-		"5xx":   func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) },
-		"panic": func(http.ResponseWriter, *http.Request) { panic("query broke") },
-		"too large": func(w http.ResponseWriter, _ *http.Request) {
+	failures := map[string]http.HandlerFunc{
+		"HTTP 503": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) },
+		"panic":    func(http.ResponseWriter, *http.Request) { panic("query broke") },
+		"answer too large": func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write(make([]byte, maxLocalBody))
 			_, _ = w.Write([]byte("x"))
 		},
 	}
-	for name, h := range failed {
-		if resp := serveLocal(h, req); resp != nil {
-			t.Errorf("%s: serveLocal = %d, want nil", name, resp.StatusCode)
+	for want, h := range failures {
+		if resp, failed := serveLocal(h, req); resp != nil || failed != want {
+			t.Errorf("serveLocal = %v, %q; want nil, %q", resp, failed, want)
 		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if resp, failed := serveLocal(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), req.WithContext(ctx)); resp != nil || failed != "timed out" {
+		t.Errorf("a request out of time = %v, %q", resp, failed)
 	}
 }

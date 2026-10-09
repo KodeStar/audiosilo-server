@@ -32,30 +32,31 @@ type Runtime struct {
 	Updates   *updates.Checker // the update check (nil: none)
 	Backups   *backup.Service  // the database backups (nil: none)
 	Notify    *notify.Service  // the event feed's notifications (nil: none, which records nothing)
-	// MetaMirror is the local copy of the community metadata in mirror mode
-	// (nil in remote mode, or without a metadata service): SetRuntime puts it in
-	// front of the remote service.
-	MetaMirror *metamirror.Mirror
 }
 
 // SessionRetention is how long raw listening sessions are kept, as the live
 // settings have it (Settings > General), for the launcher's daily retention job.
 func (a *API) SessionRetention() time.Duration { return a.config().Activity.SessionRetention() }
 
-// SetRuntime sets what the launcher reports about the process. Call before
-// Handler() and before the background jobs start (StartChapterChecks): it is
-// also where mirror mode's local copy goes in front of the metadata service.
+// SetRuntime sets what the launcher reports about the process. Call before Handler().
 func (a *API) SetRuntime(rt Runtime) {
 	if rt.StartedAt.IsZero() {
 		rt.StartedAt = a.rt.StartedAt
 	}
-	if rt.MetaMirror != nil && a.meta == nil {
-		rt.MetaMirror = nil // no service to answer for (the launcher never builds one then)
-	}
-	if rt.MetaMirror != nil {
-		a.meta.SetMirror(rt.MetaMirror)
-	}
 	a.rt = rt
+}
+
+// SetMetaMirror puts mirror mode's local copy of the community metadata in
+// front of the metadata service (meta.Service.SetMirror) and gives the console
+// its status. Call it once, right after New and before Handler() and the
+// background jobs that use the service; a nil m (remote mode) or a server
+// without a metadata service changes nothing.
+func (a *API) SetMetaMirror(m *metamirror.Mirror) {
+	if m == nil || a.meta == nil {
+		return
+	}
+	a.mirror = m
+	a.meta.SetMirror(m, a.log)
 }
 
 // MetadataOn reports whether the community metadata lookup is live (see
@@ -129,8 +130,9 @@ type MetadataStatus struct {
 	Enabled   bool   `json:"enabled"`
 	Available bool   `json:"available"` // the service exists (base_url valid at start)
 	BaseURL   string `json:"base_url"`
-	// Health is nil while off (nothing is asked); in mirror mode it describes
-	// the local copy (meta.Service.Ping).
+	// Health is nil while off (nothing is asked). In mirror mode it is the
+	// answer to the same /healthz through the same client as every lookup: the
+	// local copy's when it is ready, else the remote service's.
 	Health *meta.Health `json:"health"`
 	// Mode is the metadata.mode the server runs with (a saved change waits for a
 	// restart).
@@ -249,28 +251,48 @@ func (a *API) metadataStatus(health *meta.Health) MetadataStatus {
 		BaseURL: a.config().Metadata.BaseURL, Health: health,
 		Mode: a.boot.Metadata.ModeName(),
 	}
-	if a.rt.MetaMirror != nil {
-		ms := a.rt.MetaMirror.Status()
+	if a.mirror != nil {
+		ms := a.mirror.Status()
 		st.Mirror = &ms
 	}
 	return st
 }
 
-// handleMetaMirrorCheck asks the metadata mirror to look for a newer copy now
-// (admin only): POST /admin/meta/mirror/check, 202 with the copy's status (the
-// check runs in the background; the status then shows it). 404 metadata_off
-// while the lookup is off, 409 not_mirror_mode when the server isn't keeping a
-// copy (remote mode, or mirror mode saved but not restarted into).
-func (a *API) handleMetaMirrorCheck(w http.ResponseWriter, _ *http.Request) {
+// mirrorRefused writes why the metadata mirror's routes can't answer, if they
+// can't: 404 metadata_off while the lookup is off, 409 not_mirror_mode when the
+// server isn't keeping a copy (remote mode, or mirror mode saved but not
+// restarted into).
+func (a *API) mirrorRefused(w http.ResponseWriter) bool {
 	if a.metadataOff(w) {
-		return
+		return true
 	}
-	if a.rt.MetaMirror == nil {
+	if a.mirror == nil {
 		writeErrorCode(w, http.StatusConflict, codeNotMirrorMode, "this server isn't keeping a local copy of the community metadata")
+		return true
+	}
+	return false
+}
+
+// handleMetaMirror is the local copy's status alone (admin only): GET
+// /admin/meta/mirror, what the console polls while a download runs (the whole
+// /admin/system is heavier: tools, disks, a health check).
+func (a *API) handleMetaMirror(w http.ResponseWriter, _ *http.Request) {
+	if a.mirrorRefused(w) {
 		return
 	}
-	a.rt.MetaMirror.CheckNow()
-	writeJSON(w, http.StatusAccepted, a.rt.MetaMirror.Status())
+	writeJSON(w, http.StatusOK, a.mirror.Status())
+}
+
+// handleMetaMirrorCheck asks the metadata mirror to look for a newer copy now
+// (admin only): POST /admin/meta/mirror/check, 202 with the copy's status after
+// the wake (its next check due now; the check runs in the background and the
+// status then shows it).
+func (a *API) handleMetaMirrorCheck(w http.ResponseWriter, _ *http.Request) {
+	if a.mirrorRefused(w) {
+		return
+	}
+	a.mirror.CheckNow()
+	writeJSON(w, http.StatusAccepted, a.mirror.Status())
 }
 
 // UpdateStatus is the update check's state, with the install kind the console

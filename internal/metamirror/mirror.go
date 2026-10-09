@@ -25,6 +25,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -126,6 +128,13 @@ type Options struct {
 	// SiteURL is the metadata site (metadata.base_url): the handler writes it
 	// into the links its answers carry, so they match the remote service's.
 	SiteURL string
+	// Repo is the repository the data releases come from; "" means
+	// release.DefaultRepo (tests: a fake's).
+	Repo string
+	// Release configures the release client (User-Agent, logger; tests: a fake
+	// GitHub's address). New adds release.WithBaseSize itself: the download's
+	// decompression bound follows the copy held.
+	Release []release.Option
 }
 
 // Mirror keeps the local copy and serves metaserve's API over it.
@@ -140,7 +149,6 @@ type Mirror struct {
 	handler   http.Handler
 
 	cur  atomic.Pointer[query.DB]
-	size atomic.Int64 // the current copy's bytes (SizeBytes)
 	wake chan struct{}
 
 	// The schedule's lengths: the constants above, fields only so tests can
@@ -150,28 +158,31 @@ type Mirror struct {
 	// done and total are the running download's progress (compressed bytes).
 	done, total atomic.Int64
 
+	// mu guards what follows. st is the one record of the copy held (its tag,
+	// build, schema and size: Status reads them there) and of the checks.
 	mu          sync.Mutex
 	st          state
 	first       time.Time // when the first check is due without a copy (start + startDelay)
+	opened      bool      // Run has opened the copy the state names (open)
 	checked     bool      // a check ran since start
 	checking    bool
+	due         bool // CheckNow asked for a check that hasn't started yet
 	downloading bool
 	retiring    map[*query.DB]bool // replaced copies inside their grace
 	closed      bool
-	lastLocal   time.Time // the last local failure logged (ServeHTTP)
 }
 
-// New prepares the mirror in dir (created 0700 when missing): it deletes the
-// temporary files a stopped download left, reads the state, opens the copy the
-// state names when it is still there and opens (query.Open's checks), and
-// deletes any other copy (one a stopped swap left behind). It does not touch the
-// network; Run does.
-func New(dir string, client *release.Client, opts Options) (*Mirror, error) {
+// New prepares the mirror in dir (created 0700 when missing) and reads its
+// state. It is cheap: the copy the state names is opened by Run (query.Open's
+// integrity checks read the whole 1.7 GB copy, seconds a server's start must not
+// wait for), and until then lookups go to the remote service. It does not touch
+// the network either; Run does.
+func New(dir string, opts Options) (*Mirror, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	m := &Mirror{
-		dir: dir, client: client,
+		dir:     dir,
 		enabled: opts.Enabled, now: opts.Now, freeBytes: opts.FreeBytes, log: opts.Logger,
 		wake:     make(chan struct{}, 1),
 		interval: checkInterval, retry: retryInterval, startAfter: startDelay, grace: swapGrace,
@@ -191,10 +202,9 @@ func New(dir string, client *release.Client, opts Options) (*Mirror, error) {
 	}
 	m.qlog = slog.NewLogLogger(m.log.Handler(), slog.LevelWarn)
 	m.handler = query.NewHandler(m.Current, query.HandlerOptions{Logger: m.qlog, SiteURL: opts.SiteURL})
+	m.client = release.New(opts.Repo, "", append(slices.Clone(opts.Release), release.WithBaseSize(m.sizeBytes))...)
 
 	m.st = m.loadState()
-	m.openCopy()
-	m.sweep()
 	m.first = m.now().Add(m.startAfter)
 	return m, nil
 }
@@ -217,43 +227,69 @@ func (m *Mirror) copyPath(tag string) string {
 	return filepath.Join(m.dir, "meta-"+tag+".sqlite")
 }
 
+// open opens the copy the state names and deletes what a stopped process left
+// in the folder. Run calls it first; it does its work once.
+func (m *Mirror) open() {
+	m.mu.Lock()
+	done := m.opened
+	m.mu.Unlock()
+	if done {
+		return
+	}
+	m.openCopy()
+	m.sweep()
+	m.mu.Lock()
+	m.opened = true
+	m.mu.Unlock()
+}
+
 // openCopy opens the copy the state names. A copy that is missing, of another
 // size than the state recorded, or that query.Open refuses is forgotten (the
 // state keeps its last check, so the schedule still holds, but no ETag: the next
 // check must list the releases to download one again).
 func (m *Mirror) openCopy() {
-	tag := m.st.Tag
+	m.mu.Lock()
+	tag, size := m.st.Tag, m.st.SizeBytes
+	m.mu.Unlock()
 	if tag == "" {
 		return
 	}
-	forget := func(why string, err error) {
+	db, size, why, err := m.openFile(tag, size)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if db == nil {
 		m.log.Warn("metadata mirror: the local copy can't be used; a new one will be downloaded",
 			"tag", tag, "reason", why, "err", err)
 		m.st.forgetCopy()
 		m.saveState()
-	}
-	if !validTag.MatchString(tag) {
-		forget("bad tag", nil)
 		return
+	}
+	// The state's facts about the copy come from the copy itself.
+	info := db.Info()
+	m.st.BuiltAt, m.st.SchemaVersion, m.st.SizeBytes = info.BuiltAt, info.SchemaVersion, size
+	m.cur.Store(db)
+}
+
+// openFile opens the copy of tag, checked against the size the state recorded
+// (0: not recorded). Without a usable one it says why.
+func (m *Mirror) openFile(tag string, size int64) (db *query.DB, actual int64, why string, err error) {
+	if !validTag.MatchString(tag) {
+		return nil, 0, "bad tag", nil
 	}
 	path := m.copyPath(tag)
 	fi, err := os.Stat(path)
 	switch {
 	case err != nil:
-		forget("missing", err)
-		return
-	case m.st.SizeBytes > 0 && fi.Size() != m.st.SizeBytes:
-		forget("size changed", nil)
-		return
+		return nil, 0, "missing", err
+	case size > 0 && fi.Size() != size:
+		return nil, 0, "size changed", nil
 	}
-	db, err := query.Open(path, tag)
-	if err != nil {
-		forget("does not open", err)
-		return
+	if db, err = query.Open(path, tag); err != nil {
+		return nil, 0, "does not open", err
 	}
 	db.SetLogger(m.qlog)
-	m.cur.Store(db)
-	m.size.Store(fi.Size())
+	return db, fi.Size(), "", nil
 }
 
 // sweep deletes what a stopped process left in the folder: download temp files
@@ -290,61 +326,26 @@ func (m *Mirror) Current() *query.DB { return m.cur.Load() }
 // Ready reports whether a usable copy is loaded (meta.Mirror).
 func (m *Mirror) Ready() bool { return m.cur.Load() != nil }
 
-// SizeBytes is the current copy's size, 0 without one: the download's
+// Handler is metaserve's API over the copy (meta.Mirror): it answers 503 while
+// there is none, and internal/meta's transport sends a 5xx to the remote
+// service.
+func (m *Mirror) Handler() http.Handler { return m.handler }
+
+// sizeBytes is the current copy's size, 0 without one: the download's
 // decompression bound never falls below twice it (release.WithBaseSize), so the
 // bound follows a growing catalogue.
-func (m *Mirror) SizeBytes() int64 { return m.size.Load() }
-
-// localFailureLogEvery spaces the log lines about a request the copy couldn't
-// answer: one is enough to tell the admin, a busy hour of them is noise.
-const localFailureLogEvery = 10 * time.Minute
-
-// ServeHTTP answers a metaserve API request from the copy (meta.Mirror). A 5xx
-// answer sends the request to the remote service (internal/meta's transport);
-// it is logged here, at most once every ten minutes, so the admin can tell.
-func (m *Mirror) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	sw := &statusWriter{ResponseWriter: w}
-	m.handler.ServeHTTP(sw, r)
-	if sw.code < 500 {
-		return
-	}
+func (m *Mirror) sizeBytes() int64 {
 	m.mu.Lock()
-	logIt := m.now().Sub(m.lastLocal) >= localFailureLogEvery
-	if logIt {
-		m.lastLocal = m.now()
-	}
-	m.mu.Unlock()
-	if logIt {
-		m.log.Warn("metadata mirror: the local copy couldn't answer; asked the online service instead",
-			"path", r.URL.Path, "status", sw.code)
-	}
+	defer m.mu.Unlock()
+	return m.st.SizeBytes
 }
 
-// statusWriter records the status a handler answered.
-type statusWriter struct {
-	http.ResponseWriter
-	code int
-}
-
-func (w *statusWriter) WriteHeader(code int) {
-	if w.code == 0 {
-		w.code = code
-	}
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *statusWriter) Write(p []byte) (int, error) {
-	if w.code == 0 {
-		w.code = http.StatusOK
-	}
-	return w.ResponseWriter.Write(p)
-}
-
-// Run checks for a new copy on the schedule until ctx ends: shortly after start
-// when there is no copy, then once a day from the last check recorded on disk,
-// an hour after a failed one, and whenever CheckNow asks. Nothing is checked
-// while metadata is off.
+// Run opens the copy the state names, then checks for a new copy on the
+// schedule until ctx ends: shortly after start when there is no copy, then once
+// a day from the last check recorded on disk, an hour after a failed one, and
+// whenever CheckNow asks. Nothing is checked while metadata is off.
 func (m *Mirror) Run(ctx context.Context) {
+	m.open()
 	for {
 		wait := m.untilDue()
 		if !m.enabled() {
@@ -366,11 +367,13 @@ func (m *Mirror) Run(ctx context.Context) {
 	}
 }
 
-// CheckNow wakes Run for a check now ("Check now" in the console). It never
-// blocks; while a check is running it does nothing (that check is the answer).
+// CheckNow wakes Run for a check now ("Check now" in the console): from here
+// the status says the next check is due now. It never blocks; while a check is
+// running it does nothing (that check is the answer).
 func (m *Mirror) CheckNow() {
 	m.mu.Lock()
 	busy := m.checking
+	m.due = m.due || !busy
 	m.mu.Unlock()
 	if busy {
 		return
@@ -388,12 +391,15 @@ func (m *Mirror) untilDue() time.Duration {
 	return max(m.nextLocked().Sub(m.now()), 0)
 }
 
-// nextLocked is when the next check is due: without a copy, shortly after start
-// for the first one; else a day after the last check, or an hour after it when
-// it failed.
+// nextLocked is when the next check is due: now when CheckNow asked; without a
+// copy, shortly after start for the first one; else a day after the last check,
+// or an hour after it when it failed.
 func (m *Mirror) nextLocked() time.Time {
+	if m.due {
+		return m.now()
+	}
 	last := m.st.CheckedAt
-	if (!m.checked && m.cur.Load() == nil) || last.IsZero() {
+	if (!m.checked && m.st.Tag == "") || last.IsZero() {
 		return m.first
 	}
 	// A clock set back must not push the schedule out by the difference.
@@ -410,7 +416,7 @@ func (m *Mirror) nextLocked() time.Time {
 // because ctx did (the server stopping) records nothing.
 func (m *Mirror) check(ctx context.Context) {
 	m.mu.Lock()
-	m.checking, m.checked = true, true
+	m.checking, m.checked, m.due = true, true, false
 	etag := ""
 	// Only a server holding a copy may ask "changed since?": one without has to
 	// see the list to download anything, whatever it saw last time.
@@ -431,13 +437,17 @@ func (m *Mirror) check(ctx context.Context) {
 	m.st.LastError = ""
 	if err != nil {
 		m.st.LastError = err.Error()
-		m.log.Warn("metadata mirror: check failed; the current copy stays in use", "err", err)
+		if m.cur.Load() != nil {
+			m.log.Warn("metadata mirror: check failed; the current copy stays in use", "err", err)
+		} else {
+			m.log.Warn("metadata mirror: check failed; lookups go to the online service until a copy is downloaded", "err", err)
+		}
 	}
 	m.saveState()
 }
 
 // update asks for the newest data release and, when it is not the copy held,
-// downloads, opens and swaps to it.
+// installs it.
 func (m *Mirror) update(ctx context.Context, etag string) error {
 	rel, newETag, notModified, err := m.client.LatestData(ctx, etag)
 	// Stored even alongside an error: a list with no data release is a cheap 304
@@ -449,18 +459,29 @@ func (m *Mirror) update(ctx context.Context, etag string) error {
 	case notModified:
 		return nil
 	}
-	if cur := m.cur.Load(); cur != nil && cur.Info().Tag == rel.Tag {
+	m.mu.Lock()
+	held := m.st.Tag == rel.Tag
+	m.mu.Unlock()
+	if held {
 		return nil
 	}
-	// From here a failure must forget the ETag: the next check has to see the
-	// list again, or it would answer 304 and never retry this release.
-	if !validTag.MatchString(rel.Tag) {
+	if err := m.install(ctx, rel); err != nil {
+		// A failure past the list forgets the ETag: the next check has to see
+		// the list again, or it would answer 304 and never retry this release.
 		m.setETag("")
+		return err
+	}
+	return nil
+}
+
+// install downloads rel's copy, opens it and swaps it in, after checking its
+// tag can name a file and the disk has room for it.
+func (m *Mirror) install(ctx context.Context, rel *release.Release) error {
+	if !validTag.MatchString(rel.Tag) {
 		return fmt.Errorf("the release tag %q can't name a file", rel.Tag)
 	}
 	asset, _ := rel.Asset(release.DataAsset) // LatestData only returns releases carrying it
 	if err := m.guardDisk(asset.Size); err != nil {
-		m.setETag("")
 		return err
 	}
 
@@ -476,12 +497,10 @@ func (m *Mirror) update(ctx context.Context, etag string) error {
 		m.total.Store(total)
 	})
 	if err != nil {
-		m.setETag("")
 		return fmt.Errorf("couldn't download %s: %w", rel.Tag, err)
 	}
 	db, err := query.Open(path, rel.Tag)
 	if err != nil {
-		m.setETag("")
 		if rmErr := os.Remove(path); rmErr != nil {
 			m.log.Warn("metadata mirror: delete a copy that doesn't open", "err", rmErr)
 		}
@@ -494,7 +513,7 @@ func (m *Mirror) update(ctx context.Context, etag string) error {
 
 // guardDisk refuses a download the mirror's volume has no room for.
 func (m *Mirror) guardDisk(declared int64) error {
-	need := max(declared/2*expansionTimesTwo, m.size.Load()) + diskHeadroom
+	need := max(declared/2*expansionTimesTwo, m.sizeBytes()) + diskHeadroom
 	free, err := m.freeBytes(m.dir)
 	if err != nil {
 		// Not knowing is not a reason to refuse: the download's own bound and a
@@ -515,7 +534,6 @@ func (m *Mirror) swap(db *query.DB, rel *release.Release, res release.Result) {
 	info := db.Info()
 	m.mu.Lock()
 	old := m.cur.Swap(db)
-	m.size.Store(res.Bytes)
 	m.st.Tag = rel.Tag
 	m.st.PublishedAt = rel.PublishedAt
 	m.st.BuiltAt = info.BuiltAt
@@ -562,35 +580,42 @@ func (m *Mirror) setETag(etag string) {
 	m.mu.Unlock()
 }
 
-// Status reports the copy for the console.
+// Status reports the copy for the console. The copy's facts are the state's
+// (openCopy and swap keep them), shown while that copy answers.
 func (m *Mirror) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cur := m.cur.Load()
+	ready := m.cur.Load() != nil
 	s := Status{
-		CheckedAt:   m.st.CheckedAt,
-		NextCheckAt: m.nextLocked(),
-		Error:       m.st.LastError,
-		Fallback:    cur == nil,
+		CheckedAt: m.st.CheckedAt,
+		Error:     m.st.LastError,
+		Fallback:  !ready,
+	}
+	// A running check has no next one yet: it is set when this one ends.
+	if !m.checking {
+		s.NextCheckAt = m.nextLocked()
 	}
 	switch {
 	case m.downloading:
 		s.State = StateDownloading
 		s.Progress = &Progress{Done: m.done.Load(), Total: m.total.Load()}
-	case cur != nil:
+	case ready:
 		s.State = StateReady
+	case !m.opened && m.st.Tag != "":
+		// The copy the state names is still opening (Run's start): not ready
+		// yet, and no failure either.
+		s.State = StateEmpty
 	case m.st.LastError != "":
 		s.State = StateError
 	default:
 		s.State = StateEmpty
 	}
-	if cur != nil {
-		info := cur.Info()
-		s.Tag = info.Tag
-		s.BuiltAt = info.BuiltAt
-		s.SchemaVersion = info.SchemaVersion
-		s.SchemaNewer = info.SchemaVersion > query.MaxSchemaVersion
-		s.SizeBytes = m.size.Load()
+	if ready {
+		s.Tag = m.st.Tag
+		s.BuiltAt = m.st.BuiltAt
+		s.SchemaVersion = m.st.SchemaVersion
+		s.SchemaNewer = m.st.SchemaVersion > query.MaxSchemaVersion
+		s.SizeBytes = m.st.SizeBytes
 		s.DownloadedAt = m.st.DownloadedAt
 	}
 	return s
@@ -626,11 +651,18 @@ func Remove(dataDir string) (bool, error) {
 	return true, os.RemoveAll(dir)
 }
 
-// formatBytes writes a size the way the console reads it (GB/MB, one decimal).
+// formatBytes writes a size in decimal units, as the console does (1 kB =
+// 1000 B; one decimal below 10).
 func formatBytes(n uint64) string {
-	const mb, gb = 1 << 20, 1 << 30
-	if n >= gb {
-		return fmt.Sprintf("%.1f GB", float64(n)/gb)
+	units := [...]string{"B", "kB", "MB", "GB", "TB"}
+	v, i := float64(n), 0
+	for v >= 1000 && i < len(units)-1 {
+		v /= 1000
+		i++
 	}
-	return fmt.Sprintf("%.1f MB", float64(n)/mb)
+	digits := 0
+	if v < 10 && i > 0 {
+		digits = 1
+	}
+	return strings.TrimSuffix(strconv.FormatFloat(v, 'f', digits, 64), ".0") + " " + units[i]
 }

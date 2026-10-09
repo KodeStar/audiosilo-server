@@ -65,6 +65,10 @@ type Options struct {
 	TLSMode   string    // "off" | "selfsigned" | "autocert"
 	PublicURL string    // externally reachable base URL (e.g. a Cloudflare Tunnel URL)
 	Libraries []Library // when non-nil, replaces the configured libraries
+
+	// metaReleases, set only by tests, is where the metadata mirror lists and
+	// downloads data releases (a fake GitHub); zero means GitHub's real one.
+	metaReleases releaseSource
 }
 
 // Library mirrors config.Library for the public Options override API (so an
@@ -200,15 +204,12 @@ func Run(ctx context.Context, opts Options) error {
 	backups.OnFailure = func(r backup.Result) { ntf.BackupFailed(ctx, r.Trigger, r.Error) }
 	go backups.Run(ctx)
 
-	// Mirror mode's local copy of the community metadata (nil in remote mode).
-	// Its checks read the live metadata.enabled through a, set just below and
-	// before they start.
-	mirror := metaMirror(cfg, abs, func() bool { return a.MetadataOn() }, log)
-
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
-	// Before the background jobs below: it puts the mirror in front of the
-	// metadata service they use.
-	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf, MetaMirror: mirror})
+	// Mirror mode's local copy of the community metadata (nil in remote mode),
+	// in front of the metadata service before the background jobs below use it.
+	// Its checks stop while the live metadata.enabled is off.
+	mirror := metaMirror(cfg, abs, a.MetadataOn, opts.metaReleases, log)
+	a.SetMetaMirror(mirror)
 	stopMirror := runMetaMirror(ctx, mirror, log)
 	defer stopMirror()
 	// Bulk match runs a stopped server left working: matching ones are
@@ -225,6 +226,7 @@ func Run(ctx context.Context, opts Options) error {
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	a.StartChapterChecks(ctx)
 	a.StartCoverColors(ctx)
+	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
 	ntf.Run(ctx)
 	if setupToken != "" {
 		a.EnableSetup(setupToken)
