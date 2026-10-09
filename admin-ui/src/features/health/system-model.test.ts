@@ -174,12 +174,50 @@ describe('the local metadata copy (mirror mode)', () => {
   });
 
   it('lists only the facts the server sent', () => {
-    expect(mirrorLook({ state: 'empty', fallback: true }).facts).toEqual([]);
+    const next = '2026-10-10T06:00:00Z';
+    expect(mirrorLook({ state: 'empty', fallback: true, next_check_at: next }).facts).toEqual([
+      { key: 'system.mirror.fact.next', kind: 'relative', value: next },
+    ]);
     expect(
-      mirrorLook({ state: 'empty', fallback: true, checked_at: '2026-10-09T06:00:00Z' }).facts,
+      mirrorLook({
+        state: 'empty',
+        fallback: true,
+        checked_at: '2026-10-09T06:00:00Z',
+        next_check_at: next,
+      }).facts,
     ).toEqual([
       { key: 'system.mirror.fact.checked', kind: 'relative', value: '2026-10-09T06:00:00Z' },
+      { key: 'system.mirror.fact.next', kind: 'relative', value: next },
     ]);
+  });
+
+  it('keeps the next check while one runs (no next_check_at), saying it is checking now', () => {
+    const facts = mirrorLook(
+      mirrorStatus({ state: 'downloading', next_check_at: undefined }),
+    ).facts;
+    expect(facts.at(-1)).toEqual({
+      key: 'system.mirror.fact.next',
+      kind: 'text',
+      value: 'system.mirror.checkingNow',
+    });
+  });
+
+  it('opens a copy: lookups online at start, the current copy over an update', () => {
+    // The copy on disk opening at the server's start: nothing answers locally yet.
+    expect(mirrorLook({ state: 'opening', fallback: true })).toMatchObject({
+      status: 'off',
+      statusKey: 'system.status.opening',
+      detail: { key: 'system.detail.mirrorOpening' },
+      progress: null,
+      canCheck: false,
+    });
+    // A finished update opening while the current copy still answers.
+    expect(mirrorLook(mirrorStatus({ state: 'opening', next_check_at: undefined }))).toMatchObject({
+      status: 'ok',
+      statusKey: 'system.status.opening',
+      detail: { key: 'system.detail.mirrorOpeningUpdate' },
+      canCheck: false,
+    });
   });
 
   it('waits without a copy, then downloads the first one', () => {

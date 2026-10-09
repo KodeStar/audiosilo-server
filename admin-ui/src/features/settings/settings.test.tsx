@@ -328,6 +328,9 @@ describe('settings', () => {
         'GET /admin/system': {
           body: mirrorSystem(mirrorStatus({ state: 'downloading', fallback: true })),
         },
+        'GET /admin/meta/mirror': {
+          body: mirrorStatus({ state: 'downloading', fallback: true }),
+        },
       }),
     );
     renderApp('/server?topic=metadata');
@@ -337,6 +340,29 @@ describe('settings', () => {
       'href',
       '/admin/health/system',
     );
+  });
+
+  it('follows the local copy while it opens, as Health > System does', async () => {
+    let systemGets = 0;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({ metadata: { ...settingsWith().metadata, mode: 'mirror' } }),
+        },
+        'GET /admin/system': () => ({
+          body: mirrorSystem(
+            ++systemGets === 1
+              ? mirrorStatus({ state: 'opening', fallback: true, tag: undefined })
+              : mirrorStatus(),
+          ),
+        }),
+        'GET /admin/meta/mirror': { body: mirrorStatus() },
+      }),
+    );
+    renderApp('/server?topic=metadata');
+    expect(await screen.findByText('Opening the local copy')).toBeInTheDocument();
+    expect(await screen.findByText('Local copy ready', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === '/admin/meta/mirror')).toBe(true);
   });
 
   it("can't turn metadata on without a configured service, and says how to fix it", async () => {

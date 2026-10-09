@@ -202,6 +202,110 @@ describe('system in mirror mode', () => {
     expect(calls.some((c) => c.method === 'GET' && c.path === '/admin/meta/mirror')).toBe(true);
   });
 
+  it('follows the copy opening at the start, not "no copy yet"', async () => {
+    // Just after a restart: the copy on disk is opening, its next check a day away.
+    const opening = mirrorStatus({
+      state: 'opening',
+      fallback: true,
+      tag: undefined,
+      size_bytes: undefined,
+      built_at: undefined,
+      downloaded_at: undefined,
+    });
+    let systemGets = 0;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/system': () => ({
+          body: mirrorSystem(++systemGets === 1 ? opening : mirrorStatus()),
+        }),
+        'GET /admin/meta/mirror': { body: mirrorStatus() },
+      }),
+    );
+    renderApp('/health/system');
+    expect(
+      await screen.findByText('Opening the local copy. This takes a few seconds.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No local copy yet/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeDisabled();
+    // Followed on the light route until it is open.
+    expect(
+      await screen.findByText(
+        'Answering from the local copy. No book is looked up over the internet.',
+        {},
+        { timeout: 3000 },
+      ),
+    ).toBeInTheDocument();
+    expect(calls.some((c) => c.path === '/admin/meta/mirror')).toBe(true);
+  });
+
+  it('keeps the next check row while a check runs, saying it is checking now', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/system': {
+          body: mirrorSystem(
+            mirrorStatus({
+              state: 'downloading',
+              next_check_at: undefined,
+              progress: { done: 1, total: 4 },
+            }),
+          ),
+        },
+        'GET /admin/meta/mirror': {
+          body: mirrorStatus({
+            state: 'downloading',
+            next_check_at: undefined,
+            progress: { done: 2, total: 4 },
+          }),
+        },
+      }),
+    );
+    renderApp('/health/system');
+    expect(await screen.findByText('Next check')).toBeInTheDocument();
+    expect(screen.getByText('Checking now')).toBeInTheDocument();
+  });
+
+  it.each([
+    [404, 'metadata_off'],
+    [409, 'not_mirror_mode'],
+  ])('stops following the copy when its route refuses (%i %s)', async (status, code) => {
+    let systemGets = 0;
+    const calls = mockFetch(
+      routes({
+        'GET /admin/system': () => {
+          systemGets++;
+          if (systemGets === 1)
+            return { body: mirrorSystem(mirrorStatus({ state: 'downloading', fallback: true })) };
+          // What the server says now: metadata turned off elsewhere, or remote mode.
+          const base = systemStatus();
+          return {
+            body: {
+              ...base,
+              metadata: {
+                ...base.metadata,
+                enabled: code !== 'metadata_off',
+                mode: code === 'metadata_off' ? 'mirror' : 'remote',
+                health: code === 'metadata_off' ? null : base.metadata.health,
+              },
+            },
+          };
+        },
+        'GET /admin/meta/mirror': { status, body: { error: 'the server says no', code } },
+      }),
+    );
+    renderApp('/health/system');
+    await waitFor(() => expect(systemGets).toBe(2), { timeout: 3000 });
+    await screen.findByText(
+      code === 'metadata_off'
+        ? 'Turned off. No requests leave the server for it.'
+        : 'Responding in 84 ms.',
+    );
+    // One refusal, then no more polling.
+    const polls = calls.filter((c) => c.path === '/admin/meta/mirror').length;
+    expect(polls).toBe(1);
+    await new Promise((r) => setTimeout(r, 2200));
+    expect(calls.filter((c) => c.path === '/admin/meta/mirror')).toHaveLength(1);
+  });
+
   it.each([
     [409, 'not_mirror_mode', /isn't keeping a local copy/],
     [404, 'metadata_off', /Community metadata is off/],

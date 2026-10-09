@@ -283,10 +283,13 @@ export function metadataDown(sys: SystemStatus): boolean {
   return !!h && !h.reachable && (!mirror || mirror.fallback);
 }
 
-/** One fact about the local copy: its label's i18n key and how the page formats the value. */
+/**
+ * One fact about the local copy: its label's i18n key and how the page formats the
+ * value (`text`: the value is an i18n key).
+ */
 export interface MirrorFact {
   key: string;
-  kind: 'mono' | 'number' | 'bytes' | 'date' | 'relative';
+  kind: 'mono' | 'number' | 'bytes' | 'date' | 'relative' | 'text';
   value: string | number;
 }
 
@@ -305,18 +308,20 @@ export interface MirrorLook {
   progress: { done: number; total: number; fraction: number | undefined } | null;
   /** The last failure: its headline's i18n key and the server's sentence. */
   error: { key: string; text: string } | null;
-  /** "Check now" makes sense (not while a download runs). */
+  /** "Check now" makes sense (not while a download runs or a copy opens). */
   canCheck: boolean;
 }
 
 /**
  * Reads the local copy's status. The worst thing wins the row: a failed first
- * download, then no copy yet, a first download, a copy newer than this server,
- * a failed update, lookups going online, then an update downloading over a
- * working copy, then ready. A copy still answering is never shown as down.
+ * download, then no copy yet, a copy opening or a first download with lookups
+ * online, a copy newer than this server, a failed update, lookups going online,
+ * then a new copy opening or an update downloading over a working copy, then
+ * ready. A copy still answering is never shown as down.
  */
 export function mirrorLook(m: MetaMirrorStatus): MirrorLook {
   const downloading = m.state === 'downloading';
+  const opening = m.state === 'opening';
   const schemaNewer = !!m.schema_newer;
   const error = m.error
     ? {
@@ -332,6 +337,8 @@ export function mirrorLook(m: MetaMirrorStatus): MirrorLook {
     [status, statusKey, detail] = ['bad', 'system.status.failed', 'mirrorFailed'];
   } else if (m.state === 'empty') {
     [status, statusKey, detail] = ['off', 'system.status.waiting', 'mirrorEmpty'];
+  } else if (opening && m.fallback) {
+    [status, statusKey, detail] = ['off', 'system.status.opening', 'mirrorOpening'];
   } else if (downloading && m.fallback) {
     [status, statusKey, detail] = ['off', 'system.status.downloading', 'mirrorFirstDownload'];
   } else if (schemaNewer) {
@@ -340,6 +347,8 @@ export function mirrorLook(m: MetaMirrorStatus): MirrorLook {
     [status, detail] = ['warn', 'mirrorUpdateFailed'];
   } else if (m.fallback) {
     [status, detail] = ['warn', 'mirrorFallback'];
+  } else if (opening) {
+    [status, statusKey, detail] = ['ok', 'system.status.opening', 'mirrorOpeningUpdate'];
   } else if (downloading) {
     [status, statusKey, detail] = ['ok', 'system.status.downloading', 'mirrorUpdating'];
   } else {
@@ -357,7 +366,10 @@ export function mirrorLook(m: MetaMirrorStatus): MirrorLook {
   fact('size', 'bytes', m.size_bytes);
   fact('downloaded', 'relative', m.downloaded_at);
   fact('checked', 'relative', m.checked_at);
-  fact('next', 'relative', m.next_check_at);
+  // A running check has no next one yet: the row stays, saying so, so the page
+  // doesn't jump while it runs.
+  if (m.next_check_at) fact('next', 'relative', m.next_check_at);
+  else fact('next', 'text', 'system.mirror.checkingNow');
 
   const p = downloading ? m.progress : undefined;
   return {
@@ -373,7 +385,7 @@ export function mirrorLook(m: MetaMirrorStatus): MirrorLook {
         }
       : null,
     error,
-    canCheck: !downloading,
+    canCheck: !downloading && !opening,
   };
 }
 

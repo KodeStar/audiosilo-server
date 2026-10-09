@@ -197,7 +197,7 @@ function SystemList({ sys }: { sys: SystemStatus }) {
 /**
  * The local metadata copy under its row (mirror mode): a download's progress,
  * what the copy is, why lookups go online, a copy newer than this server, the
- * last failure, and "Check now" (not while a download runs).
+ * last failure, and "Check now" (not while a download runs or a copy opens).
  */
 function MirrorPanel({ mirror, baseUrl }: { mirror: MetaMirrorStatus; baseUrl: string }) {
   const { t, i18n } = useTranslation();
@@ -228,6 +228,8 @@ function MirrorPanel({ mirror, baseUrl }: { mirror: MetaMirrorStatus; baseUrl: s
         return formatBytes(Number(f.value), lang);
       case 'date':
         return formatDate(String(f.value), lang);
+      case 'text':
+        return t(String(f.value));
       default:
         return (
           <time dateTime={String(f.value)} title={formatDateTime(String(f.value), lang, true)}>

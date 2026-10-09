@@ -1101,9 +1101,12 @@ admin overrides; see Metadata overrides below).
   (`mirrorRefused`); the POST is not audited (changes nothing an admin chose).
   The console: Health > System's community metadata row reads `metadata.mirror` while the copy is in
   use (`activeMirror` in `system-model.ts`, also Settings' status line and `metadataDown`), and
-  `useMirrorPoll` polls only `GET /admin/meta/mirror` every 2 s while the copy is busy (downloading,
-  checking, or due now), merging it into the cached system status and refetching `/admin/system`
-  once when it settles (that stays at 30 s); Settings > Community
+  `useMirrorPoll` (Health > System and Settings' status line) polls only `GET /admin/meta/mirror`
+  every 2 s while the copy is busy (downloading, opening, checking, or due now), merging it into the
+  cached system status and refetching `/admin/system` once when it settles (that stays at 30 s); a
+  404 `metadata_off` / 409 `not_mirror_mode` answer stops the poll, drops the copy from the cached
+  status and refetches it once. A running check (no `next_check_at`) keeps the Next check fact as
+  "Checking now". Settings > Community
   metadata's Source card saves `metadata.mode` (restart). TLS certificates read from their
   files (`server.Certificates`; never generates or requests one), database size + schema
   (`catalog.DatabaseInfo`), each root's availability + disk space (`Scanner.RootDisk`: statfs inside the

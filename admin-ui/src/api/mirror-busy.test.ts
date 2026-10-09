@@ -13,6 +13,13 @@ describe('mirrorBusy', () => {
     expect(mirrorBusy(mirrorStatus({ next_check_at: undefined }), now)).toBe(true);
   });
 
+  it('follows a copy being opened, even with its next check a day away', () => {
+    // At the server's start the copy on disk opens for seconds; the schedule is the copy's.
+    expect(
+      mirrorBusy({ state: 'opening', fallback: true, next_check_at: at(86_400_000) }, now),
+    ).toBe(true);
+  });
+
   it("sees Check now's due-now even when the browser's clock lags the server's", () => {
     // The server answered with its own now, a few seconds ahead of this browser.
     expect(mirrorBusy(mirrorStatus({ next_check_at: at(5_000) }), now)).toBe(true);

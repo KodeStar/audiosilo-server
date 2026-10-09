@@ -16,7 +16,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from 'lucide-react';
-import { useLibraries, useSettings, useSystem } from '@/api/hooks';
+import { useLibraries, useMirrorPoll, useSettings, useSystem } from '@/api/hooks';
 import type { AdminSettings } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { Page } from '@/components/page';
@@ -460,13 +460,15 @@ function MetadataTopic({ settings }: { settings: AdminSettings }) {
 
 /**
  * How lookups are going: the service's health, or in mirror mode the local
- * copy's state with a link to its details (Health > System).
+ * copy's state with a link to its details (Health > System), followed while the
+ * copy is busy as Health > System follows it.
  */
 function MetadataStatusRow() {
   const { t, i18n } = useTranslation();
   const system = useSystem();
   const h = system.data?.metadata.health;
   const mirror = system.data && activeMirror(system.data);
+  useMirrorPoll(mirror);
   if (mirror) {
     return (
       <SettingRow

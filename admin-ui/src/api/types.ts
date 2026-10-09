@@ -465,8 +465,12 @@ export interface AdminSettings {
  */
 export type MetadataMode = 'remote' | 'mirror';
 
-/** metamirror.Status's state: no copy yet, a download running, a usable copy, or a failed first download. */
-export type MetaMirrorState = 'empty' | 'downloading' | 'ready' | 'error';
+/**
+ * metamirror.Status's state: no copy yet, a download running, a copy being opened (the
+ * one on disk at the server's start, or a finished download before it answers), a
+ * usable copy, or a failed first download.
+ */
+export type MetaMirrorState = 'empty' | 'downloading' | 'opening' | 'ready' | 'error';
 
 /**
  * metamirror.Status (internal/metamirror): the local copy in mirror mode, on
