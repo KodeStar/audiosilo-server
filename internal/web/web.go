@@ -185,11 +185,16 @@ func noSniff(next http.Handler) http.Handler {
 
 var inlineScriptRE = regexp.MustCompile(`(?is)<script([^>]*)>(.*?)</script>`)
 
+// castSenderOrigin serves the Google Cast Web Sender (cast_sender.js and the
+// Cast framework it loads), which the web player loads on Chromium to cast
+// (capability cast). It is the one script origin besides the player's own.
+const castSenderOrigin = "https://www.gstatic.com"
+
 // htmlCSP builds the player's Content-Security-Policy for one HTML document.
-// Scripts stay strict ('self' plus a sha256 hash of each inline <script> in the
-// doc, so no 'unsafe-inline'); styles allow 'unsafe-inline' because
-// react-native-web/Uniwind inject styles at runtime, which cannot be hashed
-// ahead of time. Everything else is same-origin.
+// Scripts stay strict ('self', the Cast Web Sender's origin and a sha256 hash of
+// each inline <script> in the doc, so no 'unsafe-inline'); styles allow
+// 'unsafe-inline' because react-native-web/Uniwind inject styles at runtime,
+// which cannot be hashed ahead of time. Everything else is same-origin.
 func htmlCSP(html []byte) string {
 	hashes := map[string]struct{}{}
 	for _, m := range inlineScriptRE.FindAllSubmatch(html, -1) {
@@ -199,7 +204,7 @@ func htmlCSP(html []byte) string {
 		sum := sha256.Sum256(m[2])
 		hashes["'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'"] = struct{}{}
 	}
-	scriptSrc := append([]string{"'self'"}, sortedKeys(hashes)...)
+	scriptSrc := append([]string{"'self'", castSenderOrigin}, sortedKeys(hashes)...)
 	return strings.Join([]string{
 		"default-src 'self'",
 		"img-src 'self' data: blob:",

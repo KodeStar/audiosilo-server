@@ -78,6 +78,36 @@ func TestHTMLCSP(t *testing.T) {
 	}
 }
 
+// TestHTMLCSPCastSender: script-src admits the Cast Web Sender's origin
+// (https://www.gstatic.com) and nothing else widens. The whole policy is pinned
+// exactly, so any other origin, scheme or directive change fails here.
+func TestHTMLCSPCastSender(t *testing.T) {
+	t.Parallel()
+	sum := sha256.Sum256([]byte("1"))
+	hash := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	want := "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; " +
+		"style-src 'self' 'unsafe-inline'; script-src 'self' https://www.gstatic.com " + hash + "; " +
+		"connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+	if got := htmlCSP([]byte(`<script>1</script><script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js"></script>`)); got != want {
+		t.Fatalf("CSP =\n%s\nwant\n%s", got, want)
+	}
+	// Denied: no other directive names gstatic (or any other host), and the
+	// admin console's site-wide policy stays same-origin only.
+	for _, dir := range strings.Split(htmlCSP(nil), "; ") {
+		if !strings.HasPrefix(dir, "script-src ") && strings.Contains(dir, "https:") {
+			t.Errorf("%q admits a remote origin", dir)
+		}
+	}
+	for _, bad := range []string{"https://www.gstatic.com", "https:", "*"} {
+		if strings.Contains(contentSecurityPolicy, bad) {
+			t.Errorf("the console CSP admits %q: %s", bad, contentSecurityPolicy)
+		}
+	}
+	if strings.Contains(htmlCSP(nil), "gstatic.com/") || strings.Count(htmlCSP(nil), "https://") != 1 {
+		t.Errorf("script-src admits more than the gstatic origin: %s", htmlCSP(nil))
+	}
+}
+
 // TestHTMLCSPImagesStaySameOrigin: the player loads community covers through the
 // server (GET /libraries/{id}/meta/cover), never from their own hosts, so its
 // img-src admits no other origin. Widening it would let a listener's browser
