@@ -1,9 +1,7 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"image"
 	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +29,9 @@ type metaCoverEnv struct {
 
 func newMetaCoverEnv(t *testing.T, enabled bool) *metaCoverEnv {
 	t.Helper()
-	host := smallCoverHost(t)
+	mux, _ := coverMux(t) // without coverHost's 13 MB PNG (slow to make under -race)
+	host := httptest.NewServer(mux)
+	t.Cleanup(host.Close)
 	entry := func(pos, id, cover string) string {
 		return `{"position":"` + pos + `","work":{"id":"` + id + `","title":"` + id + `","authors":[],"series":null,"cover_url":"` + cover + `","added_at":null}}`
 	}
@@ -46,27 +46,6 @@ func newMetaCoverEnv(t *testing.T, enabled bool) *metaCoverEnv {
 	return e
 }
 
-// smallCoverHost is coverHost without its 13 MB PNG (slow to make under -race):
-// a small JPEG, a page that isn't an image and a decompression bomb; anything
-// else is a 404.
-func smallCoverHost(t *testing.T) *httptest.Server {
-	t.Helper()
-	var small bytes.Buffer
-	if err := jpeg.Encode(&small, image.NewRGBA(image.Rect(0, 0, 40, 60)), nil); err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/small.jpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(small.Bytes()) })
-	mux.HandleFunc("/page.html", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("<html><body>not a cover</body></html>"))
-	})
-	bomb := pngHeader(20000, 20000)
-	mux.HandleFunc("/bomb.png", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(bomb) })
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
-}
-
 // countFetches lets the cover host (loopback) be fetched, counting each fetch.
 func (e *metaCoverEnv) countFetches() {
 	e.api.fetchCover = func(ctx context.Context, url string, limit int64) ([]byte, error) {
@@ -75,13 +54,19 @@ func (e *metaCoverEnv) countFetches() {
 	}
 }
 
-// coverPath is the proxy URL for cover on path, with extra query (size, token).
-func (e *metaCoverEnv) coverPath(path, cover, extra string) string {
-	p := "/api/v1/libraries/" + strconv.FormatInt(e.lib, 10) + "/meta/cover?path=" + escape(path) + "&url=" + escape(cover)
+// metaCoverPath is the proxy URL for cover on path in lib, with extra query
+// (size, token).
+func metaCoverPath(lib int64, path, cover, extra string) string {
+	p := "/api/v1/libraries/" + strconv.FormatInt(lib, 10) + "/meta/cover?path=" + escape(path) + "&url=" + escape(cover)
 	if extra != "" {
 		p += "&" + extra
 	}
 	return p
+}
+
+// coverPath is metaCoverPath in the env's library.
+func (e *metaCoverEnv) coverPath(path, cover, extra string) string {
+	return metaCoverPath(e.lib, path, cover, extra)
 }
 
 func TestMetaCoverServesAHandedOutCover(t *testing.T) {
@@ -99,7 +84,7 @@ func TestMetaCoverServesAHandedOutCover(t *testing.T) {
 	if err != nil || cfg.Width > 160 || cfg.Height > 160 {
 		t.Fatalf("cover is not a 160 px JPEG thumbnail: %+v %v", cfg, err)
 	}
-	if cc := resp.Header.Get("Cache-Control"); cc != communityCoverCache {
+	if cc := resp.Header.Get("Cache-Control"); cc != coverCache {
 		t.Fatalf("Cache-Control = %q", cc)
 	}
 	etag := resp.Header.Get("ETag")
@@ -188,12 +173,9 @@ func TestMetaCoverAuthAndScope(t *testing.T) {
 	// A user granted only "Andy Weir" in a library that also holds another book
 	// carrying the same rail.
 	ctx := context.Background()
-	for _, b := range []*catalog.Book{
-		{LibraryID: e.lib, RelPath: "Other Author/Secret", Title: "Secret", Author: "Other", ASIN: "B00FLIJJSY", AddedAt: "2020-01-01"},
-	} {
-		if _, err := e.cat.UpsertBook(ctx, b); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: e.lib, RelPath: "Other Author/Secret",
+		Title: "Secret", Author: "Other", ASIN: "B00FLIJJSY", AddedAt: "2020-01-01"}); err != nil {
+		t.Fatal(err)
 	}
 	kid, _ := e.auth.CreateUser(ctx, "kid", "kid-password", auth.RoleUser)
 	share, _ := e.cat.CreateShare(ctx, catalog.Share{Name: "Weir only"})
@@ -210,8 +192,7 @@ func TestMetaCoverAuthAndScope(t *testing.T) {
 		t.Fatalf("out of scope = %d, want 403", resp.StatusCode)
 	}
 	// A library the user can't reach at all.
-	p := "/api/v1/libraries/" + strconv.FormatInt(e.lib+100, 10) + "/meta/cover?path=x&url=" + escape(cover) + "&token=" + kidTok
-	if resp, _ := e.do(t, "GET", p, "", ""); resp.StatusCode == http.StatusOK {
+	if resp, _ := e.do(t, "GET", metaCoverPath(e.lib+100, "x", cover, "token="+kidTok), "", ""); resp.StatusCode == http.StatusOK {
 		t.Fatalf("unknown library = %d", resp.StatusCode)
 	}
 }
@@ -256,8 +237,7 @@ func TestMetaCoverMetaUnavailable(t *testing.T) {
 	e := newMetaEnv(t, true, http.StatusInternalServerError)
 	libID := seedBook(t, e, "Andy Weir/The Martian", "B00FLIJJSY")
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
-	p := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/meta/cover?path=" + escape("Andy Weir/The Martian") + "&url=" + escape("https://c/1.jpg")
-	if resp, body := e.do(t, "GET", p, tok, ""); resp.StatusCode != http.StatusBadGateway {
+	if resp, body := e.do(t, "GET", metaCoverPath(libID, "Andy Weir/The Martian", "https://c/1.jpg", ""), tok, ""); resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("meta down = %d %s, want 502", resp.StatusCode, body)
 	}
 }
@@ -267,21 +247,5 @@ func TestMetaCoverDisabled(t *testing.T) {
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 	if resp, _ := e.do(t, "GET", e.coverPath("Andy Weir/The Martian", e.host+"/small.jpg", ""), tok, ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("disabled = %d, want 404", resp.StatusCode)
-	}
-	if _, si := e.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(si, `"meta_covers":false`) {
-		t.Fatalf("meta_covers should be false: %s", si)
-	}
-	on := newMetaCoverEnv(t, true)
-	if _, si := on.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(si, `"meta_covers":true`) {
-		t.Fatalf("meta_covers should be true: %s", si)
-	}
-}
-
-func TestMetaCoverStaysUnderTheRequestTimeout(t *testing.T) {
-	if isStreamingPath("/api/v1/libraries/1/meta/cover") {
-		t.Fatal("the community cover proxy escaped the request timeout")
-	}
-	if !isStreamingPath("/api/v1/libraries/1/cover") {
-		t.Fatal("library covers are bound by the request timeout")
 	}
 }

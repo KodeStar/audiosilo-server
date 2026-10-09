@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"syscall"
 	"time"
 
@@ -167,20 +168,13 @@ func (e *Enrichment) HandsOutCover(rawURL string) bool {
 	if e.Recording != nil && e.Recording.CoverURL == rawURL {
 		return true
 	}
-	inWorks := func(works []MetaSeriesWork) bool {
-		for _, w := range works {
-			if w.CoverURL == rawURL {
-				return true
-			}
-		}
-		return false
-	}
+	hasCover := func(w MetaSeriesWork) bool { return w.CoverURL == rawURL }
 	for _, s := range e.Series {
-		if inWorks(s.Works) {
+		if slices.ContainsFunc(s.Works, hasCover) {
 			return true
 		}
 		for _, o := range s.Orderings {
-			if inWorks(o.Works) {
+			if slices.ContainsFunc(o.Works, hasCover) {
 				return true
 			}
 		}

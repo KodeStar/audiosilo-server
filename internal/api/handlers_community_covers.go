@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"image"
 	"net/http"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -72,7 +70,11 @@ func (a *API) handleCommunityCovers(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	for i, u := range req.URLs {
 		wg.Go(func() {
-			if jpg, _ := a.communityThumbnail(ctx, u, req.Size); jpg != nil {
+			jpg, err := a.communityThumbnail(ctx, u, req.Size)
+			switch {
+			case err != nil:
+				a.log.Debug("fetch community cover failed", "err", err, "url", u)
+			case jpg != nil:
 				out[i] = jpegDataURL(jpg)
 			}
 		})
@@ -101,7 +103,6 @@ func (a *API) communityThumbnail(ctx context.Context, rawURL string, size int) (
 	switch {
 	case errors.Is(err, meta.ErrCoverURL) || errors.Is(err, media.ErrImageTooLarge):
 	case err != nil:
-		a.log.Debug("fetch community cover failed", "err", err, "url", rawURL)
 		return nil, err
 	default:
 		if jpg, err = a.decodeThumbnail(ctx, raw, size, "url", rawURL); err != nil {
@@ -203,10 +204,6 @@ func (a *API) keepableCover(ctx context.Context, data []byte, rawURL string) ([]
 	return jpg, err
 }
 
-// communityCoverCache is how long a client keeps a proxied community cover: the
-// image behind a community cover URL does not change (a new cover is a new URL).
-const communityCoverCache = "private, max-age=86400"
-
 // handleMetaCover serves GET /libraries/{id}/meta/cover?path=&url=&size= (the
 // `meta_covers` capability): a JPEG thumbnail of a community cover the book's
 // /meta envelope hands out (a rail entry's or the recording's cover_url), so the
@@ -241,45 +238,23 @@ func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
 	}
 	size := defaultThumbSize
 	if q.Has("size") {
-		n, err := strconv.Atoi(q.Get("size"))
-		if err != nil || !slices.Contains(thumbSizes, n) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("size must be one of %v", thumbSizes))
+		var ok bool
+		if size, ok = thumbSizeParam(w, q.Get("size")); !ok {
 			return
 		}
-		size = n
 	}
-	lib, path, scope, status, msg := a.authorizedScope(r)
-	if status != 0 {
-		writeError(w, status, msg)
-		return
-	}
-	book, ok := a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book")
+	// The envelope /meta sent for this book, from the same lookup and cache: what
+	// it hands out is all this route may fetch.
+	_, _, _, env, ok := a.bookEnvelope(w, r)
 	if !ok {
 		return
 	}
-	if book.ASIN == "" && book.ISBN == "" {
-		writeError(w, http.StatusNotFound, "no such cover")
-		return
-	}
-	// The envelope /meta sent for this book, from the same cache: what it hands
-	// out is all this route may fetch.
-	env, err := a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
-	switch {
-	case errors.Is(err, meta.ErrNotFound):
-		writeError(w, http.StatusNotFound, "no such cover")
-		return
-	case err != nil:
-		if r.Context().Err() == nil {
-			a.log.Warn("meta lookup for a cover failed", "err", err, "library", lib.ID, "path", path)
-		}
-		writeError(w, http.StatusBadGateway, "metadata service unavailable")
-		return
-	case !env.HandsOutCover(rawURL):
+	if !env.HandsOutCover(rawURL) { // nil (an unmatched book) hands out nothing
 		writeError(w, http.StatusNotFound, "no such cover")
 		return
 	}
 	cond := conditional{etag: `"community-` + strconv.Itoa(size) + "-" + catalog.CoverVersion(rawURL) + `"`,
-		cacheControl: communityCoverCache}
+		cacheControl: coverCache}
 	if cond.notModified(w, r) {
 		return
 	}

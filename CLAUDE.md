@@ -789,18 +789,18 @@ admin overrides; see Metadata overrides below).
   capability `meta_covers` = `metadataOn()`; media auth, so `?token=`): the web player's
   CSP takes images only from the server, which stays so (`TestHTMLCSPImagesStaySameOrigin`),
   and a listener's device never contacts a cover host. Not an open proxy: the path is
-  scope-checked like `/meta`, and `url` must be one the book's cached envelope hands out
+  scope-checked like `/meta` (the same `bookEnvelope` lookup), and `url` must be one the book's cached envelope hands out
   (`meta.Enrichment.HandsOutCover`: the recording's or any rail view's entry, exact match),
   else 404 before any fetch. That beats a remembered-URL set (lost on restart, needs a
   bound) and a signed URL (a new wire field on every cover, a key to keep): the envelope
   is already cached in memory and in `meta_cache`, so the check is a lookup. Served only as
   a JPEG thumbnail through `communityThumbnail` (same cache key as the console's batch,
   `FetchCover`'s guards, `communityReads`), so upstream bytes and content types never
-  reach the client; ETag `"community-<size>-<CoverVersion(url)>"`, `private, max-age=86400`.
+  reach the client; ETag `"community-<size>-<CoverVersion(url)>"`, `coverCache` (a day).
   404 `no such cover` (unmatched, untagged, URL not handed out), 502 metadata unavailable,
   502 `cover_unavailable` (fetch failed, not cached), 404 `no cover` (not an image, over
-  the pixel bound). It stays under the request timeout (`isStreamingPath` excludes
-  `/meta/cover`).
+  the pixel bound). It stays under the request timeout (`isStreamingPath` matches
+  only `/libraries/{id}/cover|stream` exactly, `isLibraryMedia`).
   `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
   covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
   thumbnails as `data:` URLs in request order (`""` = no art), resolved like

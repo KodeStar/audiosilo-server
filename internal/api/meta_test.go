@@ -641,8 +641,10 @@ func TestMetaBundleCapability(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		e := newMetaEnv(t, enabled, 0)
 		_, si := e.do(t, "GET", "/api/v1/server", "", "")
-		if want := `"meta_bundle":` + strconv.FormatBool(enabled); !strings.Contains(si, want) {
-			t.Fatalf("enabled=%v: /server missing %s: %s", enabled, want, si)
+		for _, flag := range []string{"meta_bundle", "meta_covers"} {
+			if want := `"` + flag + `":` + strconv.FormatBool(enabled); !strings.Contains(si, want) {
+				t.Fatalf("enabled=%v: /server missing %s: %s", enabled, want, si)
+			}
 		}
 	}
 }
