@@ -71,6 +71,37 @@ goreleaser build --snapshot --clean --skip=before --single-target
 --build-only`, a before-hook); run `scripts/build-admin.sh`
 first if the snapshot should include the console rather than its "not built" page.
 
+## 2c - the LinuxServer.io image (follows automatically)
+
+[linuxserver/docker-audiosilo](https://github.com/linuxserver/docker-audiosilo)
+builds `lscr.io/linuxserver/audiosilo` (the image Unraid's Community Applications
+lists) from this repo's GitHub Releases. Nothing to do per release: their
+`external_trigger` workflow polls `releases/latest` hourly and, on a new tag, builds
+`<tag>-ls<N>` (e.g. `v2.1.0-ls1`) from the linux archives. That makes these a
+contract:
+
+- **Publishing the draft is the trigger**, so publish only once the tag's
+  `release.yml` run is green: its smoke test (below) runs after the draft is
+  uploaded. Drafts and prereleases are invisible to `releases/latest`, but
+  GoReleaser does not mark a `-rc` tag as a prerelease itself - tick *Set as a
+  pre-release* when publishing one.
+- **Archive names and layout.** Their Dockerfile downloads
+  `releases/download/v<version>/audiosilo_<version>_linux_{amd64,arm64}.tar.gz`
+  (`<version>` is the tag without its `v`) and takes the `audiosilo` binary from the
+  archive root, so keep the `v` tags, the names and the flat layout.
+- **A static binary** (`CGO_ENABLED=0`): the image is Alpine (musl).
+- **The web player stays embedded** (`-tags embedplayer`): the image sets no
+  `AUDIOSILO_WEB_DIR`.
+- **How it runs:** `audiosilo --data /config` and nothing else, so it relies on the
+  headless first run (the admin banner in the log), the self-signed TLS default on
+  port 8080, and writes staying under `--data` (it supports a read-only root
+  filesystem). Its readiness check reads `bind:` from `/config/config.yaml`.
+
+`release.yml`'s last step checks the archive side of this while the release is still
+a draft: both archives' exact names and layout, each binary's `embedplayer` tag,
+`CGO_ENABLED=0` and architecture, and an amd64 boot run the way the image runs it
+(`--data` only, self-signed TLS) serving `/healthz` and `/web/`.
+
 ## 3 - end-to-end smoke test
 
 1. `docker compose up -d`; grab the admin password from `docker compose logs`.

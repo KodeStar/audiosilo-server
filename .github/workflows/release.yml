@@ -65,3 +65,31 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # scripts/fetch-web-player.sh pulls this and bakes it in via -tags embedplayer.
           WEB_IMAGE: ghcr.io/${{ steps.owner.outputs.lc }}/audiosilo-web:${{ github.event.inputs.web_version || 'latest' }}
+
+      # Smoke-test the native archives while the release is still a draft. The
+      # LinuxServer.io image depends on their exact names, layout, static linking
+      # and embedded player, and runs the binary with only --data (RELEASING.md 2c).
+      - name: Smoke-test the native archives
+        run: |
+          set -euo pipefail
+          # Their Dockerfile fetches audiosilo_<tag without v>_linux_<arch>.tar.gz.
+          version=$(jq -r .tag dist/metadata.json)
+          version=${version#v}
+          for arch in amd64 arm64; do
+            dir="$RUNNER_TEMP/smoke/$arch"
+            mkdir -p "$dir"
+            tar xzf "dist/audiosilo_${version}_linux_${arch}.tar.gz" -C "$dir" audiosilo
+            info=$(go version -m "$dir/audiosilo")
+            for want in -tags=embedplayer CGO_ENABLED=0 "GOARCH=$arch"; do
+              grep -qw -- "$want" <<<"$info"
+            done
+          done
+          # Boot amd64 as their image does: --data only, so the headless first run
+          # and the self-signed TLS default. Its one-time credentials banner (stdout)
+          # stays out of the log; ffmpeg/ffprobe are off so nothing downloads.
+          AUDIOSILO_BIND=127.0.0.1:18080 AUDIOSILO_UPDATE_CHECK=false \
+            "$RUNNER_TEMP/smoke/amd64/audiosilo" --data "$RUNNER_TEMP/smoke/data" --ffprobe "" --ffmpeg "" > /dev/null &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          curl -kfsS --retry 30 --retry-delay 1 --retry-connrefused https://127.0.0.1:18080/healthz
+          curl -kfsSL https://127.0.0.1:18080/web/ | grep -i '<html' > /dev/null
