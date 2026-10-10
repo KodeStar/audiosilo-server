@@ -259,7 +259,7 @@ admin overrides; see Metadata overrides below).
   (`internal/api`, `internal/auth` and `internal/matchrun`'s `main_test.go`; a real-cost argon2id hash is ~0.25 s under `-race`; it panics outside a test
   binary). A new top-level test starts with `t.Parallel()` (each has its own database and
   temp dirs; the only thing tests share is the read-only `testdata/` fixtures, so copy one into
-  `t.TempDir()` before changing it, as `TestCustomCoverFollowsTheBook` does) unless it calls `t.Setenv` or `t.Chdir`
+  `t.TempDir()` before changing it: `copyFixtures` in `internal/api`) unless it calls `t.Setenv` or `t.Chdir`
   (which panic in a parallel test) or writes a package-level var (pass the value in instead, as
   `hashWithCost` does for `TestHashCost`). Pure-logic tests sit next to the code (see
   `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
