@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -70,13 +71,13 @@ func (h *houseEnv) listen(t *testing.T, tok, path string) {
 	}
 }
 
-func (h *houseEnv) house(t *testing.T, tok string) (catalog.HouseListening, string) {
+func (h *houseEnv) house(t *testing.T, tok string) (houseListening, string) {
 	t.Helper()
 	resp, body := h.do(t, "GET", "/api/v1/household/listening", tok, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /household/listening = %d %s", resp.StatusCode, body)
 	}
-	var out catalog.HouseListening
+	var out houseListening
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestHouseListening(t *testing.T) {
 	}
 	row := got.Listening[0]
 	if row.UserID != h.sam || row.Username != "sam" || row.LibraryID != h.libID || row.Path != cradleBook ||
-		row.State != catalog.HousePlaying || row.Position != 20 || row.Title == "" || len(row.UpdatedAt) != len("2006-01-02T15:04:05.000Z") {
+		row.State != catalog.SessionPlaying || row.Position != 20 || row.Title == "" || len(row.UpdatedAt) != len("2006-01-02T15:04:05.000Z") {
 		t.Fatalf("sam's row = %s", body)
 	}
 	// The row's keys are exactly the contract's: never a device, an address, an
@@ -200,12 +201,7 @@ func TestHouseListening(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatal(err)
 	}
-	keys := make([]string, 0, len(raw.Listening[0]))
-	for k := range raw.Listening[0] {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	if strings.Join(keys, ",") != "author,chapter,chapter_index,duration,library_id,path,position,state,title,updated_at,user_id,username" {
+	if keys := slices.Sorted(maps.Keys(raw.Listening[0])); strings.Join(keys, ",") != "author,chapter,chapter_index,duration,library_id,path,position,state,title,updated_at,user_id,username" {
 		t.Fatalf("row keys = %v", keys)
 	}
 	for _, leak := range []string{"ip", "device", "client", "token", "last_ip", "device_name", "device_id"} {

@@ -1189,15 +1189,20 @@ admin overrides; see Metadata overrides below).
   -> `{"share_listening": bool}` (no row = false); `PUT /me/household` `{"share_listening": bool}`
   (strict decoder, the field required: `{}` is 400) answers the same shape; demo accounts 403
   (`nonDemoAccount`; GET stays allowed), an API key may set it (the person's own credential).
-  `GET /household/listening` -> `{"sharing": bool, "listening": [Row]}`, `catalog.HouseListening`.
+  `GET /household/listening` -> `{"sharing": bool, "listening": [Row]}` (the envelopes are the
+  handler's): the handler asks `HouseholdSharing` first and answers `{false, []}` before loading any
+  scope (non-sharers poll it too), then `catalog.HouseListening`, ONE query driven from
+  `household_sharing` (the caller's own row, so it is reciprocal by itself; each other sharer; a
+  scalar subquery takes their newest session through `idx_sessions_user_last`; `books` joined only
+  for those winners; `CROSS JOIN` pins that order, the verified plan is in the comment).
   **Privacy rules (all in catalog; each has an allowed and a denied test)**: reciprocal (`listening`
   is `[]` unless the CALLER shares); other people only (never the caller), enabled, not demo, sharing
   on; per person ONE row, their newest session with listening in it (`listening_sessions`,
-  `import_id = 0`, `backfilled = 0`, `listened > 0`) within `HouseWindow` (24 h); that book must pass
+  `import_id = 0`, `backfilled = 0`, `listened > 0`) within `houseWindow` (24 h); that book must pass
   the CALLER's current scopes (`ScopesAllow`), else the person is dropped, never shown on an older
   in-scope book. A row is `{user_id, username, library_id, path, title, author|null, state, position,
   duration|null, chapter|null, chapter_index|null, updated_at}` (newest first; `state` `playing`
-  within 60 s, `paused` within `SessionGap`, else `recent`; `title` the index's, else the path's last
+  within 60 s, `paused` within `SessionGap` (`SessionPlaying`/`SessionPaused`), else `recent`; `title` the index's, else the path's last
   segment; `duration` the index's, else the session's, null for 0; chapter fields as the live
   sessions', via the shared `chapterCache`; `updated_at` the newest save, fixed-width ms UTC). It
   NEVER carries a device, address, app or token: `HouseListeningRow` has no such field, unlike the

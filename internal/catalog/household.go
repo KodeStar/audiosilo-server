@@ -13,36 +13,22 @@ import (
 // listening to, on their Home page. Privacy rules, all enforced here:
 //
 //   - opt-in: off until a person turns it on (household_sharing, no row = off);
-//   - reciprocal: a person who doesn't share sees nobody (Listening is empty);
+//   - reciprocal: a person who doesn't share sees nobody (HouseListening is empty);
 //   - only other people who share, whose account is enabled and not a demo;
 //   - only a session recorded on this server (not imported, not backfilled) with
-//     listening in it, the newest per person, within HouseWindow;
+//     listening in it, the newest per person, within houseWindow;
 //   - only a book the CALLER may see: a person's newest book outside the caller's
 //     scopes drops that person, never falls back to an older book;
 //   - never a device, an address, an app or a token: HouseListeningRow has no
 //     field that could carry one (unlike the admin's LiveSessions).
 
-// HouseWindow is how far back a housemate's newest session may be to show.
-const HouseWindow = 24 * time.Hour
+// houseWindow is how far back a housemate's newest session may be to show.
+const houseWindow = 24 * time.Hour
 
-// House listening states, from the age of the housemate's newest save.
-const (
-	HousePlaying = SessionPlaying // a save within livePlaying
-	HousePaused  = SessionPaused  // within SessionGap
-	HouseRecent  = "recent"       // within HouseWindow
-)
-
-// HouseholdSettings is a person's own household choice (GET/PUT /me/household).
-type HouseholdSettings struct {
-	ShareListening bool `json:"share_listening"`
-}
-
-// HouseListening is GET /household/listening: whether the caller shares, and
-// (only then) what the other people who share are listening to, newest first.
-type HouseListening struct {
-	Sharing   bool                `json:"sharing"`
-	Listening []HouseListeningRow `json:"listening"`
-}
+// HouseRecent is a housemate's state when their newest save is older than
+// SessionGap (within houseWindow); newer ones are SessionPlaying or
+// SessionPaused, as live sessions say.
+const HouseRecent = "recent"
 
 // HouseListeningRow is one housemate's newest book. Author, Duration, Chapter and
 // ChapterIndex are null when unknown (Chapter is also null for a chapter whose
@@ -90,46 +76,54 @@ func (c *Catalog) SetHouseholdSharing(ctx context.Context, userID int64, share b
 	return err
 }
 
-// HouseListening answers GET /household/listening for callerID, whose current
-// scopes (UserScopes) are callerScopes. See the rules above.
-func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScopes []Scope) (*HouseListening, error) {
-	sharing, err := c.HouseholdSharing(ctx, callerID)
-	if err != nil {
-		return nil, err
-	}
-	out := &HouseListening{Sharing: sharing, Listening: []HouseListeningRow{}}
-	if !sharing {
-		return out, nil
-	}
+// HouseListening is what the other people who share are listening to, as
+// callerID sees it (callerScopes, as UserScopes gives them), newest first: empty
+// unless the caller shares. See the rules above. The api asks HouseholdSharing
+// first, so a caller who doesn't share costs no scope load; the query checks it
+// again itself, so the rule holds for any caller.
+func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScopes []Scope) ([]HouseListeningRow, error) {
 	type row struct {
 		HouseListeningRow
-		author   string
-		duration float64
-		bookID   int64
+		bookID int64
 	}
-	// Each housemate's newest session with listening in it (ROW_NUMBER over the
-	// window's sessions, read by idx_sessions_last), then the scope check in Go:
-	// a newest book the caller can't see drops the person rather than letting an
-	// older one stand in.
+	// Driven from household_sharing: the caller's own row (reciprocal), then each
+	// other sharer, their account, and their newest session with listening in it
+	// (the scalar subquery walks idx_sessions_user_last newest first and stops at
+	// the first match); the books join runs only for those winners. CROSS JOIN
+	// keeps that order: without it, and with no ANALYZE statistics, the planner
+	// starts from idx_users_demo and visits every account. Verified plan:
+	//
+	//	SEARCH me USING INTEGER PRIMARY KEY (rowid=?)
+	//	SCAN h
+	//	SEARCH u USING INTEGER PRIMARY KEY (rowid=?)
+	//	SEARCH w USING INTEGER PRIMARY KEY (rowid=?)
+	//	CORRELATED SCALAR SUBQUERY 1
+	//	  SEARCH s USING INDEX idx_sessions_user_last (user_id=? AND last_at>?)
+	//	SEARCH b USING INDEX sqlite_autoindex_books_1 (library_id=? AND rel_path=?) LEFT-JOIN
+	//	USE TEMP B-TREE FOR ORDER BY
+	//
+	// The scope check is in Go, on each person's newest book only: one the caller
+	// can't see drops the person rather than letting an older one stand in.
 	rows, err := queryRows(ctx, c.db, func(rs *sql.Rows, r *row) error {
-		return rs.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path, &r.Title, &r.author,
-			&r.Position, &r.duration, &r.UpdatedAt, &r.bookID)
-	}, `SELECT user_id, username, library_id, rel_path, title, author, end_pos, duration, last_at, book_id FROM (
-	      SELECT s.user_id, u.username, s.library_id, s.rel_path, COALESCE(b.title, '') AS title,
-	             COALESCE(b.author, '') AS author, s.end_pos,
-	             COALESCE(NULLIF(b.duration, 0), s.duration) AS duration, s.last_at,
-	             COALESCE(b.id, 0) AS book_id,
-	             ROW_NUMBER() OVER (PARTITION BY s.user_id ORDER BY s.last_at DESC, s.id DESC) AS n
-	        FROM listening_sessions s
-	        JOIN users u ON u.id = s.user_id AND u.disabled = 0 AND u.is_demo = 0
-	        JOIN household_sharing h ON h.user_id = s.user_id AND h.share_listening = 1
-	        LEFT JOIN books b ON b.library_id = s.library_id AND b.rel_path = s.rel_path
-	       WHERE s.last_at >= ? AND s.user_id <> ? AND s.import_id = 0 AND s.backfilled = 0 AND `+listenedSQL+`
-	    ) WHERE n = 1 ORDER BY last_at DESC, user_id`,
-		formatSessionTime(c.now().Add(-HouseWindow)), callerID)
+		return rs.Scan(&r.UserID, &r.Username, &r.LibraryID, &r.Path, &r.Title, &r.Author,
+			&r.Position, &r.Duration, &r.UpdatedAt, &r.bookID)
+	}, `SELECT h.user_id, u.username, w.library_id, w.rel_path, COALESCE(b.title, ''), NULLIF(b.author, ''),
+	           w.end_pos, NULLIF(COALESCE(NULLIF(b.duration, 0), w.duration), 0), w.last_at, COALESCE(b.id, 0)
+	      FROM household_sharing me
+	     CROSS JOIN household_sharing h ON h.share_listening = 1 AND h.user_id <> me.user_id
+	     CROSS JOIN users u ON u.id = h.user_id AND u.disabled = 0 AND u.is_demo = 0
+	      JOIN listening_sessions w ON w.id = (
+	           SELECT s.id FROM listening_sessions s
+	            WHERE s.user_id = h.user_id AND s.last_at >= ?1 AND s.import_id = 0 AND s.backfilled = 0 AND `+listenedSQL+`
+	            ORDER BY s.last_at DESC, s.id DESC LIMIT 1)
+	      LEFT JOIN books b ON b.library_id = w.library_id AND b.rel_path = w.rel_path
+	     WHERE me.user_id = ?2 AND me.share_listening = 1
+	     ORDER BY w.last_at DESC, h.user_id`,
+		formatSessionTime(c.now().Add(-houseWindow)), callerID)
 	if err != nil {
 		return nil, err
 	}
+	out := []HouseListeningRow{}
 	chapters := c.newChapterCache()
 	for _, r := range rows {
 		if !ScopesAllow(callerScopes, Ref{LibraryID: r.LibraryID, Path: r.Path}) {
@@ -137,12 +131,6 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 		}
 		if r.Title == "" {
 			r.Title = path.Base(r.Path) // not indexed (any more): the path names it
-		}
-		if r.author != "" {
-			r.Author = &r.author
-		}
-		if r.duration > 0 {
-			r.Duration = &r.duration
 		}
 		title, idx, err := chapters.at(ctx, r.bookID, r.Position)
 		if err != nil {
@@ -153,7 +141,7 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 		}
 		r.ChapterIndex = idx
 		r.State = houseState(c.now().Sub(parseSessionTime(r.UpdatedAt)))
-		out.Listening = append(out.Listening, r.HouseListeningRow)
+		out = append(out, r.HouseListeningRow)
 	}
 	return out, nil
 }
