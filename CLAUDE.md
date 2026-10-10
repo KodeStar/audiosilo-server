@@ -139,7 +139,9 @@ scripts/build-web.sh  dev helper: build the frontend export locally for AUDIOSIL
 ```
 
 Dependency direction: `api` → (`auth`, `catalog`, `library`, `media`, `config`);
-`library` → (`catalog`, `metadata`, `config`); everything DB-backed → `store`.
+`library` → (`catalog`, `metadata`, `config`); everything DB-backed → `store`; `catalog` and `auth`
+share `relpath` (the segment-boundary path rule of share scopes and cast tokens), so `auth` never
+imports `catalog`.
 `api` is transport-only - keep business logic out of handlers.
 
 ## Identity = the filesystem path
@@ -153,7 +155,7 @@ is used **only** to detect moves; it is not an identity.
 
 ## Data model (SQLite, see internal/store/migrations/)
 
-`users`, `tokens` (sessions + pairing, hashed; pairing tokens minted from an
+`users`, `tokens` (sessions, API keys, pairing and cast tokens, hashed; pairing tokens minted from an
 auth code carry `auth_code_id` - `0014` migration - so they live and die with
 the code), `auth_codes`, `libraries` (no
 `layout` column - shape is auto-detected), `books` (+ `content_hash` fingerprint,
@@ -226,9 +228,10 @@ rows (`added_at`), 409 only when the visible rows are at the cap (a whole-list P
 everything, hidden rows included, and its length check is unchanged); a move or join carries them
 (`carryListeningState`, the destination entry kept on a collision).
 Player redesign Phase 8: `household_sharing` (`0041`: `user_id` PK -> users CASCADE,
-`share_listening` 0/1; no row = off; names no book) and `cast_tokens` (`0042`: a cast token's
-SHA-256 hash, user (CASCADE), `library_id` + `rel_path` of the book, fixed-width ms UTC
-`created_at`/`expires_at`; path-keyed, no FK to the index, short-lived, not moved with a book).
+`share_listening` 0/1; no row = off; names no book) and `cast_grants` (`0042`: a cast token is a
+`tokens` row of kind `cast`, expires_at set; its grant is `token_id` PK -> tokens CASCADE,
+`library_id` + `rel_path` of the book, `parent_token_id` -> tokens CASCADE (the sender's token that
+minted it); path-keyed, no FK to the index, short-lived, not moved with a book).
 See "Listening in the house" and "Cast tokens" below.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
@@ -263,8 +266,8 @@ admin overrides; see Metadata overrides below).
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,
   `Scope.Allows`/`VisibleInBrowse`/`pathFilterSQL`, the rate limiters,
-  `auth.ResolveRequest`/`lookupToken`, the cast token checks (`auth.CastGrant.Covers`,
-  `ResolveCastToken`, `api.castAuthenticate`), or `web.htmlCSP`. Keep business logic in the non-`api`
+  `auth.ResolveRequest`/`lookupToken`, the cast token checks (`relpath.Within`, `auth.castGrant.covers`,
+  `ResolveCastRequest`, `api.authenticate`), or `web.htmlCSP`. Keep business logic in the non-`api`
   packages so it stays unit-testable (`api` is transport-only).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
@@ -1207,30 +1210,37 @@ admin overrides; see Metadata overrides below).
   `scopedPath` + `bookAt` exactly like the media routes (400 empty path, 403 outside scope, 404 no
   book; a part path resolves to its book, whose own `rel_path` is stored, so the token covers every
   file of it); demo accounts may mint (they can play); an API key may not (403, `denyAPIKey`'s
-  containment: a key must not spawn a credential that outlives its revocation). `auth.IssueCastToken`
-  stores only the SHA-256 hash, lives `CastTokenTTL` (24 h), and in one transaction deletes every
-  expired cast token and keeps the person's newest `MaxCastTokens` (20). **Acceptance**
-  (`api.castAuthenticate`, tried by `mediaAuth` only after the session/API-key lookup fails, only
-  on the routes wrapped in `requireBookMediaAuth`: `GET /libraries/{id}/cover` and `/stream`, NOT
-  `/meta/cover`, which keeps `requireMediaAuth`): the request carries NO `Authorization` header (a
-  cast token is never a bearer credential, nor accepted beside one), `?token=` resolves
-  (`auth.ResolveCastToken`: exists, not expired, user enabled; a deleted user's tokens went with the
-  account) and `auth.CastGrant.Covers(id, catalog.CleanRelPath(?path=))`: same library, the book's
-  path itself or below it on a segment boundary (`Book` never reaches `Book 2`, cleaning first stops
-  `Book/../Book 2`). Any refusal is the uniform 401. The context then carries the token's user and a
-  `Credential{Kind: auth.KindCast, ID: cast_tokens.id}`, and the handler's `authorizedPath` checks the
-  person's CURRENT scope as for every request (a revoked share is a 403). Only a cast-authenticated
-  answer sets `Cross-Origin-Resource-Policy: cross-origin` (the receiver, a gstatic.com web app,
-  loads them as no-cors `<audio>`/`<img>`; `secureHeaders`' `same-site` would make the browser block
-  them); the media limiter keys a cast credential as `cast:<id>` (`mediaBucket`: its ids are not
-  token ids). **Transcode**: a cast token authenticates `?transcode=1&t=` like a session (the sender
-  asks for it on codecs the Default Media Receiver can't play: ALAC, WMA, AC-3, or a book the web
-  player would transcode); each such stream holds one of the 4 `transcodeSem` slots while the
-  receiver reads it, and a full semaphore is the usual 503 + `Retry-After` (the receiver reports a
-  load error; the sender should say "busy, try again"); it does NOT mark a session transcoded
-  (`StreamMarks` keys on device tokens; the sender's own progress saves make the session). Known
-  limit: signing the minting device out does not revoke its cast tokens (the table has no token id);
-  they still die with the account, its disabling, its scope and the 24 h expiry.
+  containment: a key must not spawn a credential that outlives its revocation). A cast token is a
+  `tokens` row of kind `cast` (`auth.IssueCastToken`: SHA-256 hash only, `expires_at` 24 h in whole
+  seconds, `castTokenTTL`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
+  own token); one transaction deletes every expired cast token and keeps the person's newest
+  `maxCastTokens` (20). **Validity** is `lookupToken`'s one check (unknown, revoked, expired,
+  disabled user) plus, for kind `cast`, a grant and a live parent: **signing out the device that
+  minted it** (logout, My devices, the console) **ends it**, as do the account's delete or
+  disabling, its scope and the 24 h. **Acceptance**: `ResolveRequest` never accepts a cast token;
+  `auth.ResolveCastRequest(secret, presence, libraryID, cleanPath, kinds...)` does, only when its
+  grant covers the path (`castGrant.covers`: same library, the book's path itself or below it on a
+  segment boundary via `relpath.Within`, `Book` never reaches `Book 2`; an empty path on either side
+  covers nothing). `api.authenticate` calls it only on the routes wrapped in `requireBookMediaAuth`
+  (`GET /libraries/{id}/cover` and `/stream`, NOT `/meta/cover`, which keeps `requireMediaAuth`),
+  only for a `?token=` with NO `Authorization` header (a cast token is never a bearer credential,
+  nor accepted beside one), with `catalog.CleanRelPath(?path=)` (cleaning first stops
+  `Book/../Book 2`); ONE lookup decides session, API key or cast. Any refusal is the uniform 401. The
+  context then carries the token's user and a `Credential{Kind: auth.KindCast, ID: <its tokens id>,
+  DeviceID: <the sender's token id>}`, and the handler's `authorizedPath` checks the person's
+  CURRENT scope as for every request (a revoked share is a 403). `mediaAuth` sets
+  `Cross-Origin-Resource-Policy: cross-origin` only when the credential is a cast token (the
+  receiver, a gstatic.com web app, loads them as no-cors `<audio>`/`<img>`; `secureHeaders'`
+  `same-site` would make the browser block them); the media limiter keys every credential by its
+  token id (one id space, so a cast token has its own bucket). A cast token is never a device:
+  `ListDevices` (`/me/devices`, `/admin/devices`) and the device sign-outs take only session and
+  API-key kinds, like pairing tokens. **Transcode**: a cast token authenticates `?transcode=1&t=`
+  like a session (the sender asks for it on codecs the Default Media Receiver can't play: ALAC, WMA,
+  AC-3, or a book the web player would transcode); each such stream holds one of the 4
+  `transcodeSem` slots while the receiver reads it, and a full semaphore is the usual 503 +
+  `Retry-After` (the receiver reports a load error; the sender should say "busy, try again"); it
+  marks the SENDER's session transcoded (`StreamMarks.Note` keys on `Credential.DeviceID`, the
+  parent token, whose progress saves make the session).
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start

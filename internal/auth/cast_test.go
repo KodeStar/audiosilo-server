@@ -1,26 +1,25 @@
 package auth
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 )
 
-// Security-critical: Covers is all that keeps a cast token to its one book.
+// Security-critical: covers is all that keeps a cast token to its one book.
 func TestCastGrantCovers(t *testing.T) {
 	t.Parallel()
-	g := CastGrant{ID: 1, LibraryID: 7, Path: "Author/Book"}
+	g := castGrant{libraryID: sql.NullInt64{Int64: 7, Valid: true}, path: "Author/Book"}
 	allowed := []string{"Author/Book", "Author/Book/01.mp3", "Author/Book/CD1/01.mp3"}
 	for _, p := range allowed {
-		if !g.Covers(7, p) {
-			t.Errorf("Covers(7, %q) = false, want true", p)
+		if !g.covers(bookMedia{7, p}) {
+			t.Errorf("covers(7, %q) = false, want true", p)
 		}
 	}
-	denied := []struct {
-		lib  int64
-		path string
-	}{
+	denied := []bookMedia{
 		{7, "Author/Book 2"},        // a sibling sharing the prefix
 		{7, "Author/Book 2/01.mp3"}, // ... and a file in it
 		{7, "Author/Bookish.mp3"},   // a file sharing the prefix
@@ -32,54 +31,86 @@ func TestCastGrantCovers(t *testing.T) {
 		{7, "Author/Other.mp3"},     // "Author/Book/../Other.mp3" as the api cleans it first
 	}
 	for _, d := range denied {
-		if g.Covers(d.lib, d.path) {
-			t.Errorf("Covers(%d, %q) = true, want false", d.lib, d.path)
+		if g.covers(d) {
+			t.Errorf("covers(%d, %q) = true, want false", d.libraryID, d.path)
 		}
 	}
-	if (CastGrant{LibraryID: 7}).Covers(7, "anything") {
+	if (castGrant{libraryID: sql.NullInt64{Int64: 7, Valid: true}}).covers(bookMedia{7, "anything"}) {
 		t.Error("a grant without a path covers nothing")
 	}
+	if (castGrant{path: "Author/Book"}).covers(bookMedia{0, "Author/Book"}) {
+		t.Error("a token without a grant covers nothing")
+	}
+}
+
+// castSender is a user signed in on one device: the session that mints.
+func castSender(t *testing.T, s *Service, ctx context.Context, name string) (*User, string, int64) {
+	t.Helper()
+	u, err := s.CreateUser(ctx, name, "", RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cred, err := s.ResolveRequest(ctx, sess, Presence{}, KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u, sess, cred.ID
+}
+
+// resolveCast resolves secret as a book media request on (3, path), the way the
+// api's book media routes do.
+func resolveCast(s *Service, ctx context.Context, secret, path string) (*User, Credential, error) {
+	return s.ResolveCastRequest(ctx, secret, Presence{}, 3, path, KindSession, KindAPI, KindCast)
 }
 
 func TestCastTokenLifecycle(t *testing.T) {
 	t.Parallel()
 	s, ctx, now := newTestServiceWithClock(t)
-	u, err := s.CreateUser(ctx, "sam", "", RoleUser)
+	u, sess, sessID := castSender(t, s, ctx, "sam")
+	secret, expires, err := s.IssueCastToken(ctx, u.ID, sessID, 3, "Author/Book")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, expires, err := s.IssueCastToken(ctx, u.ID, 3, "Author/Book")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := now.Add(CastTokenTTL).UTC().Format(castTime); expires != want || len(expires) != len(castTime) {
+	if want := now.UTC().Add(castTokenTTL).Truncate(time.Second).Format(castTime); expires != want || len(expires) != len(castTime) {
 		t.Fatalf("expires_at = %q, want %q (fixed-width ms UTC)", expires, want)
 	}
-	// Only the hash is stored.
-	var stored string
-	if err := s.db.QueryRowContext(ctx, `SELECT token_hash FROM cast_tokens`).Scan(&stored); err != nil ||
-		stored != hashSecret(secret) || strings.Contains(stored, secret) {
-		t.Fatalf("stored %q, %v; want only the secret's hash", stored, err)
+	// Only the hash is stored, as a tokens row of kind cast with its grant.
+	var stored, path string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT t.token_hash, g.rel_path FROM tokens t JOIN cast_grants g ON g.token_id = t.id WHERE t.kind = 'cast'`).
+		Scan(&stored, &path); err != nil || stored != hashSecret(secret) || strings.Contains(stored, secret) || path != "Author/Book" {
+		t.Fatalf("stored %q %q, %v; want only the secret's hash", stored, path, err)
 	}
 
-	// Allowed: the token resolves to its user and book.
-	got, grant, err := s.ResolveCastToken(ctx, secret)
-	if err != nil || got.ID != u.ID || got.Role != RoleUser || grant.LibraryID != 3 || grant.Path != "Author/Book" {
-		t.Fatalf("resolve = %+v %+v %v", got, grant, err)
+	// Allowed: the token resolves to its user on its book's media, as a cast
+	// credential acting for the sender's device.
+	got, cred, err := resolveCast(s, ctx, secret, "Author/Book/01.mp3")
+	if err != nil || got.ID != u.ID || got.Role != RoleUser || cred.Kind != KindCast || cred.ID == sessID || cred.DeviceID != sessID {
+		t.Fatalf("resolve = %+v %+v %v", got, cred, err)
+	}
+	// ... and the session still resolves through the same entry point, as itself.
+	if _, cred, err := resolveCast(s, ctx, sess, "Author/Book"); err != nil || cred.Kind != KindSession || cred.DeviceID != sessID {
+		t.Fatalf("session on book media = %+v %v", cred, err)
 	}
 
-	// Denied: an unknown secret, an empty one, a session token's secret.
-	sess, err := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, bad := range []string{"", "nope", sess} {
-		if _, _, err := s.ResolveCastToken(ctx, bad); !errors.Is(err, ErrInvalidToken) {
-			t.Fatalf("resolve(%q) = %v, want ErrInvalidToken", bad, err)
+	// Denied: another book, an unknown secret, an empty one.
+	for _, bad := range []struct{ secret, path string }{
+		{secret, "Author/Book 2"}, {secret, ""}, {"", "Author/Book"}, {"nope", "Author/Book"},
+	} {
+		if _, _, err := resolveCast(s, ctx, bad.secret, bad.path); !errors.Is(err, ErrInvalidToken) {
+			t.Fatalf("resolve(%q, %q) = %v, want ErrInvalidToken", bad.secret, bad.path, err)
 		}
 	}
-	// ... and a cast token is never a session or API credential.
-	if _, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession, KindAPI); !errors.Is(err, ErrInvalidToken) {
+	// ... where the route doesn't list KindCast.
+	if _, _, err := s.ResolveCastRequest(ctx, secret, Presence{}, 3, "Author/Book", KindSession, KindAPI); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("cast token where cast isn't accepted = %v, want ErrInvalidToken", err)
+	}
+	// ... and through ResolveRequest, even listing KindCast: it knows no path.
+	if _, _, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession, KindAPI, KindCast); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("cast token as a session = %v, want ErrInvalidToken", err)
 	}
 
@@ -87,82 +118,154 @@ func TestCastTokenLifecycle(t *testing.T) {
 	if err := s.SetDisabled(ctx, u.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ResolveCastToken(ctx, secret); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("disabled user's token = %v, want ErrInvalidToken", err)
 	}
 	if err := s.SetDisabled(ctx, u.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ResolveCastToken(ctx, secret); err != nil {
+	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); err != nil {
 		t.Fatalf("re-enabled user's token = %v", err)
 	}
 
-	// Denied: expired (allowed just before).
-	*now = now.Add(CastTokenTTL - time.Millisecond)
-	if _, _, err := s.ResolveCastToken(ctx, secret); err != nil {
+	// Denied: expired (allowed just before; the expiry is in whole seconds).
+	*now = now.Add(castTokenTTL - time.Second)
+	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); err != nil {
 		t.Fatalf("a token just before its expiry = %v", err)
 	}
-	*now = now.Add(time.Millisecond)
-	if _, _, err := s.ResolveCastToken(ctx, secret); !errors.Is(err, ErrInvalidToken) {
+	*now = now.Add(2 * time.Second)
+	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("expired token = %v, want ErrInvalidToken", err)
 	}
 
-	// A mint deletes the expired tokens (anyone's).
-	if _, _, err := s.IssueCastToken(ctx, u.ID, 3, "Author/Book"); err != nil {
+	// A mint deletes the expired cast tokens (anyone's) and their grants.
+	if _, _, err := s.IssueCastToken(ctx, u.ID, sessID, 3, "Author/Book"); err != nil {
 		t.Fatal(err)
 	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cast_tokens WHERE token_hash = ?`, hashSecret(secret)).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("expired token rows after a mint = %d, %v", n, err)
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT (SELECT COUNT(*) FROM tokens WHERE token_hash = ?) + (SELECT COUNT(*) FROM cast_grants)`, hashSecret(secret)).
+		Scan(&n); err != nil || n != 1 {
+		t.Fatalf("expired token rows + grants after a mint = %d, %v; want the new grant only", n, err)
 	}
 
-	// Deleting the account deletes its tokens.
-	live, _, err := s.IssueCastToken(ctx, u.ID, 3, "Author/Book")
+	// Deleting the account deletes its tokens and their grants.
+	live, _, err := s.IssueCastToken(ctx, u.ID, sessID, 3, "Author/Book")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteUser(ctx, u.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ResolveCastToken(ctx, live); !errors.Is(err, ErrInvalidToken) {
+	if _, _, err := resolveCast(s, ctx, live, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("deleted user's token = %v, want ErrInvalidToken", err)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cast_tokens`).Scan(&n); err != nil || n != 0 {
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT (SELECT COUNT(*) FROM tokens WHERE kind = 'cast') + (SELECT COUNT(*) FROM cast_grants)`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("cast tokens after the account's delete = %d, %v", n, err)
 	}
 }
 
-// A person keeps at most MaxCastTokens: a mint past it drops the oldest, and
+// A cast token lives only as long as the sender's token that minted it: signing
+// that device out ends it, whichever way, while another device's leave it be.
+func TestCastTokenDiesWithItsSender(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u, sess, sessID := castSender(t, s, ctx, "sam")
+	other, err := s.IssueToken(ctx, u.ID, KindSession, "tablet", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, otherCred, err := s.ResolveRequest(ctx, other, Presence{}, KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mint := func(parent int64) string {
+		t.Helper()
+		secret, _, err := s.IssueCastToken(ctx, u.ID, parent, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return secret
+	}
+	fromPhone, fromTablet := mint(sessID), mint(otherCred.ID)
+
+	// Denied: the phone signs out (POST /auth/logout).
+	if err := s.RevokeToken(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolveCast(s, ctx, fromPhone, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("cast token of a signed-out sender = %v, want ErrInvalidToken", err)
+	}
+	// Allowed: the tablet's is untouched.
+	if _, _, err := resolveCast(s, ctx, fromTablet, "Author/Book"); err != nil {
+		t.Fatalf("another device's cast token = %v", err)
+	}
+	// Denied: the tablet signed out from "My devices".
+	if err := s.RevokeOwnDevice(ctx, u.ID, otherCred.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolveCast(s, ctx, fromTablet, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("cast token of a device signed out from My devices = %v, want ErrInvalidToken", err)
+	}
+}
+
+// A cast token is never a device: the device lists leave it out and a device
+// sign-out can't name it (like a pairing token).
+func TestCastTokenIsNoDevice(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u, _, sessID := castSender(t, s, ctx, "sam")
+	secret, _, err := s.IssueCastToken(ctx, u.ID, sessID, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cred, err := resolveCast(s, ctx, secret, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range []int64{0, u.ID} {
+		devices, err := s.ListDevices(ctx, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(devices) != 1 || devices[0].ID != sessID {
+			t.Fatalf("devices(%d) = %+v; want the session only", owner, devices)
+		}
+	}
+	if err := s.RevokeOwnDevice(ctx, u.ID, cred.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RevokeOwnDevice(cast) = %v, want ErrNotFound", err)
+	}
+	if err := s.RevokeDevice(ctx, cred.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RevokeDevice(cast) = %v, want ErrNotFound", err)
+	}
+}
+
+// A person keeps at most maxCastTokens: a mint past it drops the oldest, and
 // never another person's.
 func TestCastTokenCap(t *testing.T) {
 	t.Parallel()
 	s, ctx := newTestService(t)
-	sam, err := s.CreateUser(ctx, "sam", "", RoleUser)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ann, err := s.CreateUser(ctx, "ann", "", RoleUser)
-	if err != nil {
-		t.Fatal(err)
-	}
-	annTok, _, err := s.IssueCastToken(ctx, ann.ID, 1, "B")
+	sam, _, samSess := castSender(t, s, ctx, "sam")
+	ann, _, annSess := castSender(t, s, ctx, "ann")
+	annTok, _, err := s.IssueCastToken(ctx, ann.ID, annSess, 3, "Author/Book")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var secrets []string
-	for range MaxCastTokens + 2 {
-		sec, _, err := s.IssueCastToken(ctx, sam.ID, 1, "A")
+	for range maxCastTokens + 2 {
+		sec, _, err := s.IssueCastToken(ctx, sam.ID, samSess, 3, "Author/Book")
 		if err != nil {
 			t.Fatal(err)
 		}
 		secrets = append(secrets, sec)
 	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cast_tokens WHERE user_id = ?`, sam.ID).Scan(&n); err != nil || n != MaxCastTokens {
-		t.Fatalf("sam's cast tokens = %d, %v; want %d", n, err, MaxCastTokens)
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ? AND kind = 'cast'`, sam.ID).Scan(&n); err != nil || n != maxCastTokens {
+		t.Fatalf("sam's cast tokens = %d, %v; want %d", n, err, maxCastTokens)
 	}
 	for i, sec := range secrets {
-		_, _, err := s.ResolveCastToken(ctx, sec)
+		_, _, err := resolveCast(s, ctx, sec, "Author/Book")
 		if i < 2 && !errors.Is(err, ErrInvalidToken) {
 			t.Fatalf("oldest token %d still works: %v", i, err)
 		}
@@ -170,7 +273,7 @@ func TestCastTokenCap(t *testing.T) {
 			t.Fatalf("token %d = %v", i, err)
 		}
 	}
-	if _, _, err := s.ResolveCastToken(ctx, annTok); err != nil {
+	if _, _, err := resolveCast(s, ctx, annTok, "Author/Book"); err != nil {
 		t.Fatalf("another person's token was dropped: %v", err)
 	}
 }

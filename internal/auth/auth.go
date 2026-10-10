@@ -29,6 +29,10 @@ const (
 	// key, acting as its owner - but it is never valid for pairing exchange, and
 	// its lifecycle is mint/list/revoke rather than sign-in/sign-out.
 	KindAPI = "api"
+	// KindCast is a short-lived, one-book, media-only token a player mints for a
+	// Chromecast receiver (cast.go). Like a pairing token it is never a device:
+	// the device lists and sign-outs leave it out.
+	KindCast = "cast"
 )
 
 // Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
@@ -231,7 +235,7 @@ func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName
 	if err != nil {
 		return "", err
 	}
-	if _, err := s.insertToken(ctx, userID, hash, kind, deviceName, s.expiresAt(ttl), nil, ""); err != nil {
+	if _, err := s.insertToken(ctx, s.db, userID, hash, kind, deviceName, s.expiresAt(ttl), nil, ""); err != nil {
 		return "", err
 	}
 	return secret, nil
@@ -262,18 +266,19 @@ func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, si
 	if err != nil {
 		return "", false, err
 	}
-	if _, err := s.insertToken(ctx, userID, hash, KindSession, deviceName, nil, nil, keyHash); err != nil {
+	if _, err := s.insertToken(ctx, s.db, userID, hash, KindSession, deviceName, nil, nil, keyHash); err != nil {
 		return "", false, err
 	}
 	return secret, knownBrowser, nil
 }
 
-// insertToken writes one tokens row and returns the write Result (for callers
-// that need the new row's id) - the single place the column list lives. expires
-// and authCodeID are nil for "no expiry" / "unlinked"; signInKey is the hashed
-// browser key of a password sign-in ("" otherwise).
-func (s *Service) insertToken(ctx context.Context, userID int64, hash, kind, deviceName string, expires, authCodeID any, signInKey string) (sql.Result, error) {
-	return s.db.ExecContext(ctx,
+// insertToken writes one tokens row through ex (the database or a transaction)
+// and returns the write Result (for callers that need the new row's id) - the
+// single place the column list lives. expires and authCodeID are nil for "no
+// expiry" / "unlinked"; signInKey is the hashed browser key of a password
+// sign-in ("" otherwise).
+func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, hash, kind, deviceName string, expires, authCodeID any, signInKey string) (sql.Result, error) {
+	return ex.ExecContext(ctx,
 		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id, sign_in_key)
 		 VALUES(?,?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID, signInKey)
 }
@@ -302,14 +307,23 @@ const touchInterval = time.Minute
 // the row doesn't already hold (needsTouch). Middleware uses it to accept a
 // session OR an api key on the same route while never accepting a pairing token
 // there, and uses the returned kind to bar an api key from routes that mint a
-// fresh durable credential (see denyAPIKey).
+// fresh durable credential (see denyAPIKey). It never accepts a cast token, whose
+// check needs the path the request reads: that is ResolveCastRequest.
 func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence, kinds ...string) (*User, Credential, error) {
-	hash := hashSecret(secret)
-	u, row, err := s.lookupToken(ctx, hash, kinds...)
+	return s.resolve(ctx, secret, p, nil, kinds)
+}
+
+// resolve is ResolveRequest and ResolveCastRequest: a cast token is valid only
+// when media names the book media the request reads and its grant covers it.
+func (s *Service) resolve(ctx context.Context, secret string, p Presence, media *bookMedia, kinds []string) (*User, Credential, error) {
+	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
 	if err != nil {
 		return nil, Credential{}, err
 	}
-	cred := Credential{ID: row.id, Kind: row.kind, DeviceName: row.deviceName, Client: row.client}
+	if row.kind == KindCast && (media == nil || !row.grant.covers(*media)) {
+		return nil, Credential{}, ErrInvalidToken
+	}
+	cred := Credential{ID: row.id, Kind: row.kind, DeviceID: row.deviceID, DeviceName: row.deviceName, Client: row.client}
 	if p.Client.App != "" {
 		cred.Client = p.Client
 	}
@@ -353,21 +367,32 @@ type tokenRow struct {
 	client     ClientInfo
 	lastSeen   sql.NullString
 	lastIP     string
+	// deviceID is the device the token acts for: its own id, or for a cast token
+	// the sender's token that minted it.
+	deviceID int64
+	// grant is a cast token's book (cast_grants), zero for every other kind.
+	grant castGrant
 }
 
 // lookupToken resolves a token hash whose kind is one of the accepted kinds to
 // its (partial) user and token row, applying the shared validity checks:
 // unknown, revoked and expired tokens and disabled users all return
-// ErrInvalidToken. The single definition of "is this token valid", shared by
-// ResolveRequest (every authenticated request) and ConsumePairing
-// (exchange). token_hash is globally unique, so the kind filter only rejects a
-// real token presented where its kind is not accepted.
+// ErrInvalidToken, and so does a cast token without its grant or whose parent
+// (the token that minted it) is signed out or expired. The single definition of
+// "is this token valid", shared by ResolveRequest and ResolveCastRequest (every
+// authenticated request) and ConsumePairing (exchange). token_hash is globally
+// unique, so the kind filter only rejects a real token presented where its kind
+// is not accepted.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
 		u       User
 		row     tokenRow
 		expires sql.NullString
 		revoked bool
+		parent  struct {
+			revoked sql.NullBool
+			expires sql.NullString
+		}
 	)
 	args := make([]any, 0, len(kinds)+1)
 	args = append(args, hash)
@@ -376,11 +401,15 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT u.id, u.username, u.role, u.disabled, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
-		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip
+		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip,
+		        COALESCE(g.parent_token_id, t.id), g.library_id, COALESCE(g.rel_path, ''), p.revoked, p.expires_at
 		   FROM tokens t JOIN users u ON u.id = t.user_id
+		   LEFT JOIN cast_grants g ON g.token_id = t.id
+		   LEFT JOIN tokens p ON p.id = g.parent_token_id
 		  WHERE t.token_hash = ? AND t.kind IN (`+inPlaceholders(len(kinds))+`)`, args...).
 		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &row.id, &row.kind, &expires, &revoked, &row.codeID,
-			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP)
+			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP,
+			&row.deviceID, &row.grant.libraryID, &row.grant.path, &parent.revoked, &parent.expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tokenRow{}, ErrInvalidToken
 	}
@@ -388,6 +417,9 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 		return nil, tokenRow{}, err
 	}
 	if revoked || u.Disabled || s.pastExpiry(expires) {
+		return nil, tokenRow{}, ErrInvalidToken
+	}
+	if row.kind == KindCast && (!row.grant.libraryID.Valid || !parent.revoked.Valid || parent.revoked.Bool || s.pastExpiry(parent.expires)) {
 		return nil, tokenRow{}, ErrInvalidToken
 	}
 	return &u, row, nil
@@ -455,7 +487,7 @@ func (s *Service) IssueAPIToken(ctx context.Context, userID int64, label string)
 	if err != nil {
 		return "", APIToken{}, err
 	}
-	res, err := s.insertToken(ctx, userID, hash, KindAPI, label, nil, nil, "")
+	res, err := s.insertToken(ctx, s.db, userID, hash, KindAPI, label, nil, nil, "")
 	if err != nil {
 		return "", APIToken{}, err
 	}
@@ -891,7 +923,7 @@ func (s *Service) IssuePairingToken(ctx context.Context, rc *RedeemedCode) (stri
 	if rc.Kind == CodeRecovery {
 		expires = s.expiresAt(recoveryPairingTTL)
 	}
-	if _, err := s.insertToken(ctx, rc.User.ID, hash, KindPairing, "", expires, rc.CodeID, ""); err != nil {
+	if _, err := s.insertToken(ctx, s.db, rc.User.ID, hash, KindPairing, "", expires, rc.CodeID, ""); err != nil {
 		return "", err
 	}
 	return secret, nil

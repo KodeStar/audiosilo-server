@@ -3,12 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -40,25 +37,8 @@ func newCastEnv(t *testing.T) *castEnv {
 	t.Helper()
 	e := newTestEnv(t)
 	ctx := context.Background()
-	fixtures, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	root := t.TempDir()
-	for _, rel := range []string{cradlePart, cradlePart2, mistbornBook + "/01 - The Final Empire.m4b", cradleTwoF} {
-		src := rel
-		if rel == cradleTwoF {
-			src = cradlePart
-		}
-		data, err := os.ReadFile(filepath.Join(fixtures, filepath.FromSlash(src)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		dst := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	root := copyFixtures(t, cradlePart, cradlePart2, mistbornBook+"/01 - The Final Empire.m4b")
+	copyFixture(t, root, cradlePart, cradleTwoF)
 	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Copy", Root: root})
 	if err != nil {
 		t.Fatal(err)
@@ -120,9 +100,7 @@ func (c *castEnv) castToken(t *testing.T, path string) string {
 // header (as a receiver does), plus extra query.
 func (c *castEnv) media(t *testing.T, libID int64, endpoint, path, token, extra string) *http.Response {
 	t.Helper()
-	u := "/api/v1/libraries/" + strconv.FormatInt(libID, 10) + "/" + endpoint + "?path=" + url.QueryEscape(path) +
-		"&token=" + url.QueryEscape(token) + extra
-	resp, _ := c.do(t, "GET", u, "", "")
+	resp, _ := c.do(t, "GET", mediaURL(libID, endpoint, path, token)+extra, "", "")
 	return resp
 }
 
@@ -135,12 +113,7 @@ func TestCastTokenMint(t *testing.T) {
 	if status != http.StatusCreated || json.Unmarshal([]byte(body), &raw) != nil {
 		t.Fatalf("mint = %d %s", status, body)
 	}
-	keys := make([]string, 0, len(raw))
-	for k := range raw {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	if strings.Join(keys, ",") != "expires_at,token" {
+	if keys := slices.Sorted(maps.Keys(raw)); strings.Join(keys, ",") != "expires_at,token" {
 		t.Fatalf("mint keys = %v", keys)
 	}
 	part := c.castToken(t, cradlePart)
@@ -251,20 +224,20 @@ func TestCastTokenMediaAuth(t *testing.T) {
 		t.Fatalf("cast token as a header on /me = %d", resp.StatusCode)
 	}
 	// ... nor beside a header naming another credential.
-	u := bookURL(c.lib, "stream", cradlePart) + "&token=" + url.QueryEscape(tok)
-	if resp, _ := c.do(t, "GET", u, "not-a-token", ""); resp.StatusCode != http.StatusUnauthorized {
+	if resp, _ := c.do(t, "GET", mediaURL(c.lib, "stream", cradlePart, tok), "not-a-token", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("cast token beside a bad header = %d", resp.StatusCode)
 	}
 
 	// The session still works as before, with the same-site resource policy.
-	resp, _ = c.do(t, "GET", bookURL(c.lib, "stream", cradlePart)+"&token="+url.QueryEscape(c.samTok), "", "")
+	resp, _ = c.do(t, "GET", mediaURL(c.lib, "stream", cradlePart, c.samTok), "", "")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cross-Origin-Resource-Policy") != "same-site" {
 		t.Fatalf("session ?token= stream = %d, CORP %q", resp.StatusCode, resp.Header.Get("Cross-Origin-Resource-Policy"))
 	}
 }
 
 // A cast token stops working when its user is disabled (and works again when
-// enabled), when the person loses the book, and when it expires.
+// enabled), when the person loses the book, when it expires, when the device
+// that minted it signs out and when the account goes.
 func TestCastTokenRevocation(t *testing.T) {
 	t.Parallel()
 	c := newCastEnv(t)
@@ -297,29 +270,31 @@ func TestCastTokenRevocation(t *testing.T) {
 	}
 	ok(http.StatusOK, "scope back")
 
-	if _, err := c.db.ExecContext(ctx, `UPDATE cast_tokens SET expires_at = '2020-01-01T00:00:00.000Z'`); err != nil {
+	if _, err := c.db.ExecContext(ctx, `UPDATE tokens SET expires_at = '2020-01-01T00:00:00Z' WHERE kind = 'cast'`); err != nil {
 		t.Fatal(err)
 	}
 	ok(http.StatusUnauthorized, "expired")
 
-	// A deleted account's tokens go with it.
+	// Signing out the device that minted it ends it.
 	tok = c.castToken(t, cradleBook)
 	ok(http.StatusOK, "new token")
+	if resp, body := c.do(t, "POST", "/api/v1/auth/logout", c.samTok, ""); resp.StatusCode >= 300 {
+		t.Fatalf("logout = %d %s", resp.StatusCode, body)
+	}
+	ok(http.StatusUnauthorized, "sender signed out")
+
+	// A deleted account's tokens go with it.
+	tablet, err := c.auth.IssueToken(ctx, c.sam, auth.KindSession, "tablet", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.samTok = tablet
+	tok = c.castToken(t, cradleBook)
+	ok(http.StatusOK, "token from another device")
 	if err := c.auth.DeleteUser(ctx, c.sam); err != nil {
 		t.Fatal(err)
 	}
 	ok(http.StatusUnauthorized, "deleted user")
-}
-
-// The media rate limiter keys a cast token apart from the tokens table's ids.
-func TestMediaBucket(t *testing.T) {
-	t.Parallel()
-	if a, b := mediaBucket(auth.Credential{ID: 5, Kind: auth.KindSession}), mediaBucket(auth.Credential{ID: 5, Kind: auth.KindCast}); a == b {
-		t.Fatalf("session and cast id 5 share bucket %q", a)
-	}
-	if got := mediaBucket(auth.Credential{ID: 5, Kind: auth.KindAPI}); got != "5" {
-		t.Fatalf("api bucket = %q, want the token id as before", got)
-	}
 }
 
 func TestCastCapability(t *testing.T) {

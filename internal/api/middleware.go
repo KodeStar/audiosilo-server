@@ -4,12 +4,15 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/web"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
@@ -205,7 +208,7 @@ func bearerToken(r *http.Request, allowQuery bool) string {
 // exactly like a session; a pairing token is never accepted here.
 func (a *API) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, failure := a.authenticate(r, false)
+		ctx, failure := a.authenticate(r, false, sessionOrAPI)
 		if failure != "" {
 			writeError(w, http.StatusUnauthorized, failure)
 			return
@@ -235,41 +238,40 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 // Both payments are Charge, not Allow: requests that passed Ready together each
 // pay, even past empty, so concurrency can't buy lookups the bucket never paid for.
 func (a *API) requireMediaAuth(next http.Handler) http.Handler {
-	return a.mediaAuth(next, false)
+	return a.mediaAuth(next, sessionOrAPI)
 }
 
 // requireBookMediaAuth is requireMediaAuth that also accepts a cast token as the
-// ?token= (castAuthenticate: never as a header, only for the token's own book).
+// ?token= (never as a header, only for the token's own book: authenticate).
 // Only a book's own media use it: GET /libraries/{id}/cover and /stream, the
 // URLs a Chromecast receiver plays.
 func (a *API) requireBookMediaAuth(next http.Handler) http.Handler {
-	return a.mediaAuth(next, true)
+	return a.mediaAuth(next, bookMediaKinds)
 }
 
-func (a *API) mediaAuth(next http.Handler, castable bool) http.Handler {
+func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 	return mediaHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !a.ipLimiter.Ready(ip) {
 			rateLimited(w)
 			return
 		}
-		ctx, failure := a.authenticate(r, true)
-		if failure != "" && castable {
-			if castCtx, ok := a.castAuthenticate(r); ok {
-				ctx, failure = castCtx, ""
-				// The receiver is a web app on another site (gstatic.com) loading
-				// these as <audio>/<img>, no-cors requests that secureHeaders'
-				// same-site resource policy would make the browser block. Only a
-				// cast token's answers, which reach one book's media, opt out.
-				w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
-			}
-		}
+		ctx, failure := a.authenticate(r, true, kinds)
 		if failure != "" {
 			a.ipLimiter.Charge(ip)
 			writeError(w, http.StatusUnauthorized, failure)
 			return
 		}
-		if !a.mediaLimiter.Allow(mediaBucket(credentialFrom(ctx))) {
+		cred := credentialFrom(ctx)
+		if cred.Kind == auth.KindCast {
+			// The receiver is a web app on another site (gstatic.com) loading
+			// these as <audio>/<img>, no-cors requests that secureHeaders'
+			// same-site resource policy would make the browser block. Only a
+			// cast token's answers, which reach one book's media, opt out.
+			w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+		}
+		// Every credential is a tokens row, so its id is its bucket.
+		if !a.mediaLimiter.Allow(strconv.FormatInt(cred.ID, 10)) {
 			a.ipLimiter.Charge(ip)
 			rateLimited(w)
 			return
@@ -287,28 +289,49 @@ func isMedia(h http.Handler) bool {
 	return ok
 }
 
-// authenticate resolves r's credential and returns r's context carrying the user
-// and the credential, or the reason for a 401.
-func (a *API) authenticate(r *http.Request, allowQueryToken bool) (context.Context, string) {
+// The token kinds a route accepts. Session OR api key everywhere: both
+// authenticate, and pairing tokens are never accepted, so a QR/pairing secret
+// can never be used as a durable credential. A cast token only on a book's own
+// media (requireBookMediaAuth).
+var (
+	sessionOrAPI   = []string{auth.KindSession, auth.KindAPI}
+	bookMediaKinds = []string{auth.KindSession, auth.KindAPI, auth.KindCast}
+)
+
+// authenticate resolves r's credential, one of kinds, and returns r's context
+// carrying the user and the credential, or the reason for a 401. allowQueryToken
+// also takes the token from ?token= (media GETs only, see bearerToken).
+func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string) (context.Context, string) {
 	token := bearerToken(r, allowQueryToken)
 	if token == "" {
 		return nil, "missing bearer token"
 	}
-	// Session OR api key - both authenticate; pairing tokens are excluded, so
-	// a QR/pairing secret can never be used as a durable credential here.
 	// The request's address and app (X-AudioSilo-Client) are recorded on the
 	// token, for the admin console's devices and sessions.
 	presence := auth.Presence{IP: clientIP(r)}
 	presence.Client, _ = auth.ParseClient(r.Header.Get(auth.ClientHeader))
-	u, cred, err := a.auth.ResolveRequest(r.Context(), token, presence, auth.KindSession, auth.KindAPI)
+	var (
+		u    *auth.User
+		cred auth.Credential
+		err  error
+	)
+	if slices.Contains(kinds, auth.KindCast) && r.Header.Get("Authorization") == "" {
+		// A cast token is only ever the ?token= of a request with no
+		// Authorization header (never a bearer credential, nor accepted beside
+		// one), and auth accepts it only for (a file of) its own book.
+		libraryID, _ := pathInt(r, "id")
+		u, cred, err = a.auth.ResolveCastRequest(r.Context(), token, presence,
+			libraryID, catalog.CleanRelPath(r.URL.Query().Get("path")), kinds...)
+	} else {
+		u, cred, err = a.auth.ResolveRequest(r.Context(), token, presence, kinds...)
+	}
 	if err != nil {
 		return nil, "invalid or expired token"
 	}
 	// The credential carries the matched kind, so credential-minting handlers
 	// can bar an api key (denyAPIKey) - a leaked key must not spawn a durable
 	// credential.
-	ctx := context.WithValue(r.Context(), userKey, u)
-	return context.WithValue(ctx, credentialKey, cred), ""
+	return withCredential(r.Context(), u, cred), ""
 }
 
 // requireAdmin is requireAuth plus an admin-role check.
