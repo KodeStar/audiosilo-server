@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"path"
+
+	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
 
 // AdminBookDetail is everything the console's book page shows about one book.
@@ -184,7 +186,7 @@ func adminFiles(b AdminBook, files []BookFile) []AdminFile {
 }
 
 // sharesContaining returns the shares whose rules include relPath, with the rule
-// that does (pathAllowedBy, the same prefix rule Scope.Allows applies).
+// that does (relpath.Within, the same prefix rule Scope.Allows applies).
 func (c *Catalog) sharesContaining(ctx context.Context, libraryID int64, relPath string) ([]BookShare, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT s.id, s.name, sp.path, s.whole_library_id
@@ -200,7 +202,7 @@ func (c *Catalog) sharesContaining(ctx context.Context, libraryID int64, relPath
 		if err := rows.Scan(&s.ShareID, &s.Name, &s.Path, &s.WholeLibraryID); err != nil {
 			return nil, err
 		}
-		if pathAllowedBy(s.Path, relPath) && (len(out) == 0 || out[len(out)-1].ShareID != s.ShareID) {
+		if relpath.Within(s.Path, relPath) && (len(out) == 0 || out[len(out)-1].ShareID != s.ShareID) {
 			out = append(out, s)
 		}
 	}

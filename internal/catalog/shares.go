@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kodestar/audiosilo-server/internal/relpath"
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
@@ -50,7 +51,7 @@ type Scope struct {
 // CleanRelPath canonicalizes a library-relative path: separators become slashes,
 // "." and ".." segments collapse (a leading ".." clamps at the root instead of
 // escaping it), and enclosing slashes are trimmed - "" addresses the library
-// root. Security-relevant: pathAllowedBy is a literal prefix match, so without
+// root. Security-relevant: relpath.Within is a literal prefix match, so without
 // prior normalization "Author A/../Author B/x.m4b" passes an "Author A" grant
 // and the filesystem join then collapses the ".." to reach the out-of-scope
 // file. The scope gate, the eventual SafeJoin, and every persisted path key
@@ -61,19 +62,13 @@ func CleanRelPath(p string) string {
 	return strings.Trim(path.Clean("/"+filepath.ToSlash(p)), "/")
 }
 
-// pathAllowedBy reports whether p is granted by rule path rp (segment-boundary
-// prefix match; "" grants everything).
-func pathAllowedBy(rp, p string) bool {
-	return rp == "" || p == rp || strings.HasPrefix(p, rp+"/")
-}
-
 // Allows reports whether the scope grants access to path p.
 func (s Scope) Allows(p string) bool {
 	if s.AllowAll {
 		return true
 	}
 	for _, rp := range s.Paths {
-		if pathAllowedBy(rp, p) {
+		if relpath.Within(rp, p) {
 			return true
 		}
 	}
@@ -99,7 +94,7 @@ func (s Scope) VisibleInBrowse(p string) bool {
 		return true
 	}
 	for _, rp := range s.Paths {
-		if pathAllowedBy(rp, p) || strings.HasPrefix(rp, p+"/") {
+		if relpath.Within(rp, p) || strings.HasPrefix(rp, p+"/") {
 			return true
 		}
 	}
@@ -121,7 +116,7 @@ func pathFilterSQL(col string, s Scope) (string, []any) {
 		// The exact-match arm binds p literally; the subtree arm is the byte range
 		// of the paths that start with p+"/" ('0' is the byte after '/'), so it is
 		// the literal, case-sensitive prefix of the authoritative Go gate
-		// (pathAllowedBy). LIKE was neither: it ignores ASCII case, so a grant on
+		// (relpath.Within). LIKE was neither: it ignores ASCII case, so a grant on
 		// "Saga" reached a sibling "saga/..." on a case-sensitive filesystem, and
 		// its wildcards needed escaping.
 		conds = append(conds, "("+col+" = ? OR ("+col+" >= ? AND "+col+" < ?))")
