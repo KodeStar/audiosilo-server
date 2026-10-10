@@ -210,8 +210,8 @@ func TestHouseListening(t *testing.T) {
 		}
 	}
 
-	// Allowed: the admin (whole library, sharing) sees sam and pat; not the demo,
-	// not the disabled account.
+	// Allowed: the admin (whole library, sharing) sees kid, pat and sam (kid shares
+	// now too); not the demo, not the disabled account.
 	h.setShare(t, h.adminTok, true)
 	got, body = h.house(t, h.adminTok)
 	if names := usernames(got.Listening); strings.Join(names, ",") != "kid,pat,sam" {

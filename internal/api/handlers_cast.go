@@ -13,9 +13,9 @@ import (
 // {token, expires_at}: a cast token for the book at path (a part path resolves to
 // its book, whose path the token then covers), ending with the caller's own
 // token. The caller must be allowed the book (400/403/404 as the media routes
-// answer). Demo accounts may cast (they can play); an API key may not (a
-// credential minted by a key must not outlive the key's revocation: denyAPIKey's
-// containment rule).
+// answer). Demo accounts may cast (they can play); an API key may not
+// (denyAPIKey's containment rule: a key never mints another credential, even a
+// cast token, which would die with it).
 func (a *API) handleMintCastToken(w http.ResponseWriter, r *http.Request) {
 	if denyAPIKey(w, r) {
 		return

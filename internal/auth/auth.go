@@ -323,7 +323,8 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if row.kind == KindCast && (media == nil || !row.grant.covers(*media)) {
 		return nil, Credential{}, ErrInvalidToken
 	}
-	cred := Credential{ID: row.id, Kind: row.kind, DeviceID: row.deviceID, DeviceName: row.deviceName, Client: row.client}
+	cred := Credential{ID: row.id, Kind: row.kind, DeviceID: row.deviceID, DeviceName: row.deviceName, Client: row.client,
+		Book: row.grant.path}
 	if p.Client.App != "" {
 		cred.Client = p.Client
 	}
@@ -378,21 +379,17 @@ type tokenRow struct {
 // its (partial) user and token row, applying the shared validity checks:
 // unknown, revoked and expired tokens and disabled users all return
 // ErrInvalidToken, and so does a cast token without its grant or whose parent
-// (the token that minted it) is signed out or expired. The single definition of
-// "is this token valid", shared by ResolveRequest and ResolveCastRequest (every
-// authenticated request) and ConsumePairing (exchange). token_hash is globally
-// unique, so the kind filter only rejects a real token presented where its kind
-// is not accepted.
+// (the token that minted it) is signed out or expired (castGrantOf). The single
+// definition of "is this token valid", shared by ResolveRequest and
+// ResolveCastRequest (every authenticated request) and ConsumePairing
+// (exchange). token_hash is globally unique, so the kind filter only rejects a
+// real token presented where its kind is not accepted.
 func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string) (*User, tokenRow, error) {
 	var (
 		u       User
 		row     tokenRow
 		expires sql.NullString
 		revoked bool
-		parent  struct {
-			revoked sql.NullBool
-			expires sql.NullString
-		}
 	)
 	args := make([]any, 0, len(kinds)+1)
 	args = append(args, hash)
@@ -401,15 +398,11 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT u.id, u.username, u.role, u.disabled, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
-		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip,
-		        COALESCE(g.parent_token_id, t.id), g.library_id, COALESCE(g.rel_path, ''), p.revoked, p.expires_at
+		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip
 		   FROM tokens t JOIN users u ON u.id = t.user_id
-		   LEFT JOIN cast_grants g ON g.token_id = t.id
-		   LEFT JOIN tokens p ON p.id = g.parent_token_id
 		  WHERE t.token_hash = ? AND t.kind IN (`+inPlaceholders(len(kinds))+`)`, args...).
 		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &row.id, &row.kind, &expires, &revoked, &row.codeID,
-			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP,
-			&row.deviceID, &row.grant.libraryID, &row.grant.path, &parent.revoked, &parent.expires)
+			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tokenRow{}, ErrInvalidToken
 	}
@@ -419,21 +412,29 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	if revoked || u.Disabled || s.pastExpiry(expires) {
 		return nil, tokenRow{}, ErrInvalidToken
 	}
-	if row.kind == KindCast && (!row.grant.libraryID.Valid || !parent.revoked.Valid || parent.revoked.Bool || s.pastExpiry(parent.expires)) {
-		return nil, tokenRow{}, ErrInvalidToken
+	row.deviceID = row.id
+	// Only a cast token has a grant and a parent to read: every other token's
+	// lookup (each authenticated request) stays this one two-table query.
+	if row.kind == KindCast {
+		if err := s.castGrantOf(ctx, &row); err != nil {
+			return nil, tokenRow{}, err
+		}
 	}
 	return &u, row, nil
 }
 
 // inPlaceholders returns "?,?,..." with n placeholders for a SQL IN clause. The
-// 1- and 2-kind cases (the only ones the per-request auth path hits) return a
-// constant string so lookupToken adds no allocation to that hot path.
+// 1- to 3-kind cases (every per-request auth path: requireAuth's session or API
+// key, a book's media adding a cast token) return a constant string, so
+// lookupToken builds no placeholder list on that hot path.
 func inPlaceholders(n int) string {
 	switch n {
 	case 1:
 		return "?"
 	case 2:
 		return "?,?"
+	case 3:
+		return "?,?,?"
 	}
 	if n <= 0 {
 		return ""

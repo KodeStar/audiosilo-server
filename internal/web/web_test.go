@@ -78,18 +78,27 @@ func TestHTMLCSP(t *testing.T) {
 	}
 }
 
-// TestHTMLCSPCastSender: script-src admits the Cast Web Sender's origin
-// (https://www.gstatic.com) and nothing else widens. The whole policy is pinned
-// exactly, so any other origin, scheme or directive change fails here.
+// TestHTMLCSPCastSender: script-src admits the Cast Web Sender's scripts on
+// www.gstatic.com by path and nothing else widens. The whole policy is pinned
+// exactly, so any other origin, path, scheme or directive change fails here.
 func TestHTMLCSPCastSender(t *testing.T) {
 	t.Parallel()
 	sum := sha256.Sum256([]byte("1"))
 	hash := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 	want := "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; " +
-		"style-src 'self' 'unsafe-inline'; script-src 'self' https://www.gstatic.com " + hash + "; " +
+		"style-src 'self' 'unsafe-inline'; script-src 'self' https://www.gstatic.com/cv/js/sender/v1/cast_sender.js " +
+		"https://www.gstatic.com/cast/sdk/libs/sender/1.0/cast_framework.js https://www.gstatic.com/eureka/clank/ " + hash + "; " +
 		"connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
-	if got := htmlCSP([]byte(`<script>1</script><script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js"></script>`)); got != want {
+	got := htmlCSP([]byte(`<script>1</script><script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>`))
+	if got != want {
 		t.Fatalf("CSP =\n%s\nwant\n%s", got, want)
+	}
+	// Denied: never the whole gstatic origin, which serves AngularJS
+	// (/fsn/angular_js-bundle1.js), a script gadget that bypasses the policy.
+	for _, src := range strings.Fields(got) {
+		if strings.HasPrefix(src, "https://www.gstatic.com") && strings.TrimSuffix(strings.TrimPrefix(src, "https://www.gstatic.com"), ";") == "" {
+			t.Errorf("the player CSP admits the whole gstatic origin: %s", got)
+		}
 	}
 	// Denied: the admin console's site-wide policy stays same-origin only.
 	for _, bad := range []string{"https://www.gstatic.com", "https:", "*"} {

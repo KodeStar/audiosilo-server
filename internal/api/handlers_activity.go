@@ -15,15 +15,17 @@ import (
 // (catalog.RecordHeartbeat, see handlePutProgress), devices are tokens (auth).
 
 // recordHeartbeat folds a progress save into the saving device's listening
-// session. Best effort: a failure is logged and the save still succeeds.
+// session. Best effort: a failure is logged and the save still succeeds. The
+// device is the credential's DeviceID, the key handleStream marks a transcode
+// under (a cast token's is its sender's), so the two always meet.
 func (a *API) recordHeartbeat(r *http.Request, userID int64, p catalog.Progress) {
 	cred := credentialFrom(r.Context())
 	now := time.Now()
 	hb := catalog.Heartbeat{
-		UserID: userID, Ref: p.Ref, TokenID: cred.ID, DeviceName: cred.DeviceName,
+		UserID: userID, Ref: p.Ref, TokenID: cred.DeviceID, DeviceName: cred.DeviceName,
 		Client:   catalog.Client(cred.Client),
 		Position: p.Position, Duration: p.Duration, Speed: p.PlaybackSpeed, Finished: p.Finished,
-		Transcoded: a.streams.Transcoding(cred.ID, p.LibraryID, p.Path, now),
+		Transcoded: a.streams.Transcoding(cred.DeviceID, p.LibraryID, p.Path, now),
 		At:         now,
 	}
 	if err := a.cat.RecordHeartbeat(r.Context(), hb); err != nil {

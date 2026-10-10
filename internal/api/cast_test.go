@@ -2,12 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"maps"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -20,9 +24,10 @@ const (
 	cradlePart2 = "Will Wight/Cradle/02 - Soulsmith.m4b"
 )
 
-// castEnv: a copy of the fixture library plus a "Cradle 2" sibling (lib), a
-// second library over the fixtures (other), sam allowed both (lib through a share
-// the test can revoke), kid only the "Will Wight" folder of lib.
+// castEnv: a copy of the fixture library (Cradle with a sidecar cover, which the
+// fixtures' audio has none of) plus a "Cradle 2" sibling (lib), a second library
+// over the fixtures (other), sam allowed both (lib through a share the test can
+// revoke), kid only the "Will Wight" folder of lib.
 type castEnv struct {
 	*testEnv
 	lib, other int64
@@ -39,6 +44,9 @@ func newCastEnv(t *testing.T) *castEnv {
 	ctx := context.Background()
 	root := copyFixtures(t, cradlePart, cradlePart2, mistbornBook+"/01 - The Final Empire.m4b")
 	copyFixture(t, root, cradlePart, cradleTwoF)
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(cradleBook), "cover.jpg"), testImage(t, 64, 64, false), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Copy", Root: root})
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +134,8 @@ func TestCastTokenMint(t *testing.T) {
 	}
 
 	// Denied, as the media routes answer: out of scope 403, no such book 404, no
-	// such library 404, a bad body 400, anonymous 401.
+	// such library 403 (a member has no scope there; an admin would get 404), a
+	// bad body 400, anonymous 401.
 	for _, d := range []struct {
 		tok    string
 		lib    int64
@@ -149,7 +158,7 @@ func TestCastTokenMint(t *testing.T) {
 			t.Errorf("mint body %s = %d %s; want 400", bad, resp.StatusCode, body)
 		}
 	}
-	// Denied: an API key can't mint a credential that would outlive its revocation.
+	// Denied: an API key mints no credential (denyAPIKey), not even a cast token.
 	_, key := c.mintAPIKey(t, c.samTok, "script")
 	if status, body := c.mint(t, key, c.lib, cradleBook); status != http.StatusForbidden {
 		t.Fatalf("API-key mint = %d %s; want 403", status, body)
@@ -180,8 +189,9 @@ func TestCastTokenMediaAuth(t *testing.T) {
 		t.Fatalf("the other part = %d", resp.StatusCode)
 	}
 	for _, extra := range []string{"", "&size=160"} {
-		if resp := c.media(t, c.lib, "cover", cradleBook, tok, extra); resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			t.Fatalf("cover%s = %d", extra, resp.StatusCode)
+		resp := c.media(t, c.lib, "cover", cradleBook, tok, extra)
+		if resp.StatusCode != http.StatusOK || resp.Header.Get("Cross-Origin-Resource-Policy") != "cross-origin" {
+			t.Fatalf("cover%s = %d, CORP %q; want 200 cross-origin", extra, resp.StatusCode, resp.Header.Get("Cross-Origin-Resource-Policy"))
 		}
 	}
 	// Allowed: a transcode request authenticates too (no ffmpeg here: 503 after auth).
@@ -223,15 +233,120 @@ func TestCastTokenMediaAuth(t *testing.T) {
 	if resp, _ := c.do(t, "GET", "/api/v1/me", tok, ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("cast token as a header on /me = %d", resp.StatusCode)
 	}
-	// ... nor beside a header naming another credential.
+	// ... nor beside a header naming another credential, a bearer one or not (a
+	// basic-auth proxy's): only a request with no Authorization header at all.
 	if resp, _ := c.do(t, "GET", mediaURL(c.lib, "stream", cradlePart, tok), "not-a-token", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("cast token beside a bad header = %d", resp.StatusCode)
+	}
+	basic := map[string]string{"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte("sam:secret"))}
+	if resp, _ := c.doHeaders(t, "GET", mediaURL(c.lib, "stream", cradlePart, tok), "", "", basic); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("cast token beside a Basic header = %d; want 401", resp.StatusCode)
+	}
+	// Denied: a pairing token is never a credential, here either.
+	pairing, err := c.auth.IssueToken(context.Background(), c.sam, auth.KindPairing, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []struct{ endpoint, path string }{{"stream", cradlePart}, {"cover", cradleBook}} {
+		if resp := c.media(t, c.lib, m.endpoint, m.path, pairing, ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("a pairing token on %s = %d; want 401", m.endpoint, resp.StatusCode)
+		}
 	}
 
 	// The session still works as before, with the same-site resource policy.
 	resp, _ = c.do(t, "GET", mediaURL(c.lib, "stream", cradlePart, c.samTok), "", "")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cross-Origin-Resource-Policy") != "same-site" {
 		t.Fatalf("session ?token= stream = %d, CORP %q", resp.StatusCode, resp.Header.Get("Cross-Origin-Resource-Policy"))
+	}
+}
+
+// Security-critical: a folder book's folder can hold another book, and a cast
+// token for the outer book never reaches the nested one (the grant's path rule
+// alone would: castOwnBook asks the index which book a path is).
+func TestCastTokenStaysOutOfNestedBooks(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	const (
+		outer      = "A/Series"
+		outerFile  = outer + "/00 - Prequel.m4b"
+		nested     = outer + "/Book 2"
+		nestedFile = nested + "/01 - Second.m4b"
+	)
+	root := t.TempDir()
+	copyFixture(t, root, cradlePart, outerFile)
+	copyFixture(t, root, cradlePart2, nestedFile)
+	for _, dir := range []string{outer, nested} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(dir), "cover.jpg"), testImage(t, 64, 64, false), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Nested", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, e, lib)
+	c := &castEnv{testEnv: e, lib: lib.ID}
+	c.sam, c.samTok = newUserWithSession(t, e, "sam", false)
+	if err := e.cat.GrantWholeLibrary(ctx, c.sam, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Both folders are books (the precondition this test is about).
+	for _, p := range []string{outer, nested} {
+		if resp, body := c.do(t, "GET", bookURL(lib.ID, "item", p), c.samTok, ""); resp.StatusCode != http.StatusOK {
+			t.Fatalf("item %q = %d %s; want a book", p, resp.StatusCode, body)
+		}
+	}
+	tok := c.castToken(t, outer)
+
+	// Allowed: the outer book's own file and cover.
+	for _, m := range []struct{ endpoint, path string }{{"stream", outerFile}, {"cover", outer}} {
+		if resp := c.media(t, lib.ID, m.endpoint, m.path, tok, ""); resp.StatusCode != http.StatusOK {
+			t.Errorf("outer %s = %d; want 200", m.endpoint, resp.StatusCode)
+		}
+	}
+	// Denied: the nested book's file and cover, though both lie below the
+	// grant's path; a file the index places in no book; the session still may.
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(outer), "stray.m4b"), []byte("not indexed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []struct{ endpoint, path string }{{"stream", nestedFile}, {"cover", nested}, {"stream", outer + "/stray.m4b"}} {
+		if resp := c.media(t, lib.ID, m.endpoint, m.path, tok, ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s %q with the outer book's cast token = %d; want 401", m.endpoint, m.path, resp.StatusCode)
+		}
+	}
+	if resp := c.media(t, lib.ID, "stream", nestedFile, c.samTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the session on the nested book = %d", resp.StatusCode)
+	}
+}
+
+// A receiver's transcode (a cast token's ?transcode=1) marks the SENDER's
+// session transcoded: handleStream notes it under Credential.DeviceID, the
+// token that minted the cast token, whose progress saves make the session.
+func TestCastTranscodeMarksTheSender(t *testing.T) {
+	t.Parallel()
+	c := newCastEnv(t)
+	ctx := context.Background()
+	tok := c.castToken(t, cradleBook)
+	// The mark is noted before ffmpeg runs, so a missing binary (a 500) still shows it.
+	c.api.ffmpeg = filepath.Join(t.TempDir(), "no-ffmpeg")
+	if resp := c.media(t, c.lib, "stream", cradlePart, tok, "&transcode=1&t=30"); resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusServiceUnavailable {
+		t.Fatalf("cast transcode = %d; want it past auth and the semaphore", resp.StatusCode)
+	}
+	_, sender, err := c.auth.ResolveRequest(ctx, c.samTok, auth.Presence{}, auth.KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cast, err := c.auth.ResolveCastRequest(ctx, tok, auth.Presence{}, c.lib, cradleBook, auth.KindCast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if !c.api.streams.Transcoding(sender.ID, c.lib, cradleBook, now) {
+		t.Fatal("the sender's session is not marked transcoded")
+	}
+	if c.api.streams.Transcoding(cast.ID, c.lib, cradleBook, now) {
+		t.Fatal("the mark went to the cast token, not its sender")
 	}
 }
 

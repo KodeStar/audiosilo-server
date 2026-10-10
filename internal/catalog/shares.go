@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/relpath"
@@ -57,9 +55,10 @@ type Scope struct {
 // file. The scope gate, the eventual SafeJoin, and every persisted path key
 // (share rules, folder overrides, enrichment, progress) must all see the same
 // canonical form, so every user-supplied rel path goes through here before it
-// is checked or stored.
+// is checked or stored. It is relpath.Clean, which auth applies to a cast
+// token's path itself (auth never imports catalog).
 func CleanRelPath(p string) string {
-	return strings.Trim(path.Clean("/"+filepath.ToSlash(p)), "/")
+	return relpath.Clean(p)
 }
 
 // Allows reports whether the scope grants access to path p.

@@ -277,3 +277,92 @@ func TestCastTokenCap(t *testing.T) {
 		t.Fatalf("another person's token was dropped: %v", err)
 	}
 }
+
+// Security-critical: ResolveCastRequest cleans the path before the grant's prefix
+// rule judges it, so a traversal out of the book never passes, whoever calls.
+func TestCastTokenPathCleaned(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	u, _, sessID := castSender(t, s, ctx, "sam")
+	secret, _, err := s.IssueCastToken(ctx, u.ID, sessID, 3, "Author/Book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Allowed: paths that clean to the book or a file of it.
+	for _, p := range []string{"Author/Book/./01.mp3", "/Author/Book/01.mp3", "Author//Book/CD1/../01.mp3", "Author/Book/"} {
+		if _, _, err := resolveCast(s, ctx, secret, p); err != nil {
+			t.Errorf("resolve(%q) = %v, want allowed", p, err)
+		}
+	}
+	// Denied: paths that clean to another book, the folder above or the root.
+	for _, p := range []string{"Author/Book/../Book 2/01.mp3", "Author/Book/../../Other/x.m4b", "Author/Book/..", "Author/Book/../../.."} {
+		if _, _, err := resolveCast(s, ctx, secret, p); !errors.Is(err, ErrInvalidToken) {
+			t.Errorf("resolve(%q) = %v, want ErrInvalidToken", p, err)
+		}
+	}
+}
+
+// A dead cast token (its sender signed out, or past its 24 h) goes with its grant
+// at the daily retention, and the receiver's address with it; a live one stays.
+func TestPruneCastTokens(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	u, _, phoneID := castSender(t, s, ctx, "sam")
+	tablet, err := s.IssueToken(ctx, u.ID, KindSession, "tablet", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, tabletCred, err := s.ResolveRequest(ctx, tablet, Presence{}, KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mint := func(parent int64) string {
+		t.Helper()
+		secret, _, err := s.IssueCastToken(ctx, u.ID, parent, 3, "Author/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return secret
+	}
+	live, fromTablet := mint(phoneID), mint(tabletCred.ID)
+	// The receiver plays: its address lands on the cast token's own row.
+	if _, _, err := s.ResolveCastRequest(ctx, fromTablet, Presence{IP: "203.0.113.9"}, 3, "Author/Book", KindCast); err != nil {
+		t.Fatal(err)
+	}
+	rows := func(secret string) int {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT (SELECT COUNT(*) FROM tokens WHERE token_hash = ?1)
+			      + (SELECT COUNT(*) FROM cast_grants g JOIN tokens t ON t.id = g.token_id WHERE t.token_hash = ?1)`,
+			hashSecret(secret)).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	prune := func() {
+		t.Helper()
+		if err := s.PruneCastTokens(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Allowed: live tokens stay.
+	prune()
+	if rows(live) != 2 || rows(fromTablet) != 2 {
+		t.Fatalf("live cast tokens pruned: %d, %d rows", rows(live), rows(fromTablet))
+	}
+	// Denied: the tablet signs out, and its cast token goes, address and grant.
+	if err := s.RevokeOwnDevice(ctx, u.ID, tabletCred.ID); err != nil {
+		t.Fatal(err)
+	}
+	prune()
+	if rows(fromTablet) != 0 || rows(live) != 2 {
+		t.Fatalf("after its sender's sign-out: %d rows of its cast token, %d of the live one", rows(fromTablet), rows(live))
+	}
+	// Denied: past its 24 h the phone's goes too.
+	*now = now.Add(castTokenTTL + time.Second)
+	prune()
+	if rows(live) != 0 {
+		t.Fatalf("an expired cast token outlived the retention: %d rows", rows(live))
+	}
+}

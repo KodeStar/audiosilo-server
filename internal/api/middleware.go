@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"slices"
@@ -249,6 +250,9 @@ func (a *API) requireBookMediaAuth(next http.Handler) http.Handler {
 	return a.mediaAuth(next, bookMediaKinds)
 }
 
+// mediaAuth is requireMediaAuth and requireBookMediaAuth: the media rate limit
+// and authentication described on requireMediaAuth, accepting the token kinds
+// given.
 func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 	return mediaHandler{http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
@@ -280,8 +284,9 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 	})}
 }
 
-// mediaHandler marks a route wrapped in requireMediaAuth, so rateLimit can tell
-// media from the general API by the handler the mux picks for a request.
+// mediaHandler marks a route wrapped in mediaAuth (requireMediaAuth or
+// requireBookMediaAuth), so rateLimit can tell media from the general API by
+// the handler the mux picks for a request.
 type mediaHandler struct{ http.Handler }
 
 func isMedia(h http.Handler) bool {
@@ -318,10 +323,14 @@ func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string
 	if slices.Contains(kinds, auth.KindCast) && r.Header.Get("Authorization") == "" {
 		// A cast token is only ever the ?token= of a request with no
 		// Authorization header (never a bearer credential, nor accepted beside
-		// one), and auth accepts it only for (a file of) its own book.
+		// one), and auth accepts it only for a path below its own book's
+		// (castGrant.covers); castOwnBook then refuses a book nested there.
 		libraryID, _ := pathInt(r, "id")
-		u, cred, err = a.auth.ResolveCastRequest(r.Context(), token, presence,
-			libraryID, catalog.CleanRelPath(r.URL.Query().Get("path")), kinds...)
+		path := catalog.CleanRelPath(r.URL.Query().Get("path"))
+		u, cred, err = a.auth.ResolveCastRequest(r.Context(), token, presence, libraryID, path, kinds...)
+		if err == nil && cred.Kind == auth.KindCast {
+			err = a.castOwnBook(r.Context(), libraryID, path, cred.Book)
+		}
 	} else {
 		u, cred, err = a.auth.ResolveRequest(r.Context(), token, presence, kinds...)
 	}
@@ -332,6 +341,23 @@ func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string
 	// can bar an api key (denyAPIKey) - a leaked key must not spawn a durable
 	// credential.
 	return withCredential(r.Context(), u, cred), ""
+}
+
+// castOwnBook refuses a cast token's request for anything but its own book.
+// The grant's path rule reaches every path below the book's folder, and a folder
+// book's folder can hold other books ("Series" with "Series/Book 2" in it), so
+// the request's (clean) path must address the token's book in the index
+// (catalog.BookPathAt: the book at it, else the innermost folder book holding
+// it). A path the index places in no book is refused too. Security-critical.
+func (a *API) castOwnBook(ctx context.Context, libraryID int64, path, book string) error {
+	addressed, err := a.cat.BookPathAt(ctx, libraryID, path)
+	if err != nil && !errors.Is(err, catalog.ErrNotFound) {
+		a.log.Warn("cast token book check failed", "library", libraryID, "path", path, "err", err)
+	}
+	if err != nil || addressed != book {
+		return auth.ErrInvalidToken
+	}
+	return nil
 }
 
 // requireAdmin is requireAuth plus an admin-role check.

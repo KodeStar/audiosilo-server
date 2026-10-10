@@ -478,29 +478,57 @@ func (c *Catalog) GetBookByPath(ctx context.Context, libraryID int64, relPath st
 // client still holds after a join (a disc folder's) from the index, where
 // GetBookByPath, by the book's own path, finds nothing.
 func (c *Catalog) GetBookHolding(ctx context.Context, libraryID int64, relPath string) (*Book, error) {
+	id, _, err := c.bookHolding(ctx, libraryID, relPath)
+	if err != nil {
+		return nil, err
+	}
+	return c.GetBook(ctx, id)
+}
+
+// bookHolding is GetBookHolding's lookup: the id and path of the innermost
+// indexed folder book holding relPath, ErrNotFound when none does.
+func (c *Catalog) bookHolding(ctx context.Context, libraryID int64, relPath string) (int64, string, error) {
 	args := []any{libraryID}
 	for d := path.Dir(relPath); d != "." && d != "/"; d = path.Dir(d) {
 		args = append(args, d)
 	}
 	if len(args) == 1 {
-		return nil, ErrNotFound
+		return 0, "", ErrNotFound
 	}
 	n := len(args) - 1
 	args = append(args, relPath, escapeLike(relPath)+"/%")
-	var id int64
+	var (
+		id   int64
+		book string
+	)
 	err := c.db.QueryRowContext(ctx,
-		`SELECT b.id FROM books b
+		`SELECT b.id, b.rel_path FROM books b
 		  WHERE b.library_id = ? AND b.is_folder = 1 AND b.rel_path IN (`+placeholders(n)+`)
 		    AND EXISTS (SELECT 1 FROM book_files f WHERE f.book_id = b.id
 		                  AND (f.rel_path = ? OR f.rel_path LIKE ? ESCAPE '\'))
-		  ORDER BY length(b.rel_path) DESC LIMIT 1`, args...).Scan(&id)
+		  ORDER BY length(b.rel_path) DESC LIMIT 1`, args...).Scan(&id, &book)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
+		return 0, "", ErrNotFound
 	}
-	if err != nil {
-		return nil, err
+	return id, book, err
+}
+
+// BookPathAt is the path of the indexed book relPath addresses: the book at it,
+// else the innermost folder book holding it (GetBookHolding's rule), read from
+// the index alone (no on-demand read); ErrNotFound when no book does. Unlike a
+// path prefix, it tells a book's own files from those of a book nested in its
+// folder ("Series/Book 2/01.m4b" is Book 2's, not Series's), which is how a cast
+// token is kept to its one book (api.castOwnBook).
+func (c *Catalog) BookPathAt(ctx context.Context, libraryID int64, relPath string) (string, error) {
+	_, err := bookIDByPath(ctx, c.db, libraryID, relPath)
+	if err == nil {
+		return relPath, nil
 	}
-	return c.GetBook(ctx, id)
+	if !errors.Is(err, ErrNotFound) {
+		return "", err
+	}
+	_, book, err := c.bookHolding(ctx, libraryID, relPath)
+	return book, err
 }
 
 // GetBook returns a book by ID including its files, chapters and description

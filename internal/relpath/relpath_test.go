@@ -27,3 +27,25 @@ func TestWithin(t *testing.T) {
 		}
 	}
 }
+
+// Security-critical: Clean must collapse ".." before Within's literal prefix
+// match sees a path, and clamp at the root rather than escape it.
+func TestClean(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ in, want string }{
+		{"Author/Book/01.mp3", "Author/Book/01.mp3"},
+		{"/Author//Book/./01.mp3/", "Author/Book/01.mp3"},
+		{"Author/Book/../Book 2/01.mp3", "Author/Book 2/01.mp3"}, // so Within("Author/Book", ...) is false
+		{"../../etc/passwd", "etc/passwd"},                       // clamps at the root
+		{"..", ""},
+		{".", ""},
+		{"", ""},
+	} {
+		if got := Clean(c.in); got != c.want {
+			t.Errorf("Clean(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if Within("Author/Book", Clean("Author/Book/../Book 2/01.mp3")) {
+		t.Error("a cleaned traversal still lies within the book it left")
+	}
+}

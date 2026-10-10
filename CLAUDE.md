@@ -104,6 +104,7 @@ pkg/match/            PUBLIC fuzzy book matcher (Best/CleanTitle/SeqFromTitle) -
 internal/config/      YAML + env config, validation, secure defaults
 internal/store/       SQLite (modernc, pure Go) open + embedded migrations (internal/store/migrations)
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
+internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
 internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values)
@@ -266,8 +267,8 @@ admin overrides; see Metadata overrides below).
   `internal/web/web_test.go`). **Security-critical code requires both an allowed
   and a denied regression test** - anything touching `library.SafeJoin`,
   `Scope.Allows`/`VisibleInBrowse`/`pathFilterSQL`, the rate limiters,
-  `auth.ResolveRequest`/`lookupToken`, the cast token checks (`relpath.Within`, `auth.castGrant.covers`,
-  `ResolveCastRequest`, `api.authenticate`), or `web.htmlCSP`. Keep business logic in the non-`api`
+  `auth.ResolveRequest`/`lookupToken`, the cast token checks (`relpath.Within`/`Clean`, `auth.castGrant.covers`,
+  `ResolveCastRequest`, `api.authenticate`/`castOwnBook`), or `web.htmlCSP`. Keep business logic in the non-`api`
   packages so it stays unit-testable (`api` is transport-only).
 - **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
   never edit an applied migration. Applied names are tracked in `schema_migrations`.
@@ -365,9 +366,12 @@ admin overrides; see Metadata overrides below).
   export must be built with `baseUrl=/web` (frontend `app.json experiments.baseUrl`)
   so asset URLs resolve under the subpath. The handler resolves per-route HTML,
   falls back to `index.html` for client-routed deep links, 404s missing assets,
-  and sets a **scoped CSP** per HTML response (strict `script-src`: `'self'`,
-  `https://www.gstatic.com` (the Cast Web Sender, capability `cast`; the ONLY remote origin
-  in the policy, `TestHTMLCSPCastSender` pins the whole string) and a sha256
+  and sets a **scoped CSP** per HTML response (strict `script-src`: `'self'`, the Cast Web
+  Sender's three scripts on `https://www.gstatic.com` by PATH (`web.castSenderScripts`:
+  `/cv/js/sender/v1/cast_sender.js`, `/cast/sdk/libs/sender/1.0/cast_framework.js`,
+  `/eureka/clank/`; capability `cast`; the ONLY remote sources in the policy, never the whole
+  origin, which also serves AngularJS, a CSP-bypass gadget; `TestHTMLCSPCastSender` pins the
+  whole string) and a sha256
   hash of that doc's inline scripts; `style-src` allows `'unsafe-inline'` for
   react-native-web's runtime styles). Admin/connect pages keep the stricter
   site-wide CSP. Compatibility is by construction (the image pins a matching web
@@ -983,8 +987,9 @@ admin overrides; see Metadata overrides below).
   also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
 - **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
   `api/ratelimit.go`), read off the handler `mux.Handler` picks: static files
-  (`web.IsStatic`) are not counted; media routes (`requireMediaAuth`, whose
-  `mediaHandler` marks cover/stream) limit themselves: refused while the address's
+  (`web.IsStatic`) are not counted; media routes (`mediaAuth`, behind `requireBookMediaAuth` for
+  cover/stream and `requireMediaAuth` for `/meta/cover`, whose `mediaHandler` marks them) limit
+  themselves: refused while the address's
   general bucket is empty (`Ready`), a failed authentication charges it (`Charge`:
   even past empty, down to -burst, so requests that passed `Ready` together all pay), an
   authenticated one spends from `mediaLimiter` (~200/s, burst 2000, per credential id)
@@ -1056,9 +1061,11 @@ admin overrides; see Metadata overrides below).
   `activity.go`, `progress_admin.go`, `auth/devices.go`, `api/handlers_activity.go`)**: players name
   themselves in `X-AudioSilo-Client: <app>[/<version>] [(<platform>)]` (`auth.ParseClient`, strict;
   the console sends `AudioSilo Admin (web)`, the player `AudioSilo/<version> (<platform>)`, and only
-  same-origin on web). `authenticate` calls `auth.ResolveRequest`, which records the app (only when
+  same-origin on web). `authenticate` calls `auth.ResolveRequest` (or, for the `?token=` of a book's
+  cover or stream with no `Authorization` header, `auth.ResolveCastRequest`; both are `auth.resolve`),
+  which records the app (only when
   the request names one, so a headerless `<audio>` fetch keeps it) and the newest IP on the token, and
-  puts the `auth.Credential` (token id, kind, device name, app) in the context (`credentialFrom`; every
+  puts the `auth.Credential` (token id, kind, device id, device name, app; a cast token's book) in the context (`credentialFrom`; every
   context key lives in one iota block in `respond.go`, since the IP key once collided). CORS allows the
   header. **Sessions are derived from progress saves**, not from the client-posted
   `listening_history` spans (those arrive only on stop, are dropped offline and carry no device):
@@ -1077,8 +1084,9 @@ admin overrides; see Metadata overrides below).
   `PruneSessions` at startup and daily, rolling sessions older than the live
   `activity.session_days` setting (Settings > General `general.session_days`, env
   `AUDIOSILO_SESSION_DAYS`, 30-3650, default 400; `API.SessionRetention`, read at each run) into
-  `listening_daily` per local day, listener and book, and blanks `last_ip` on signed-out or expired tokens
-  (`auth.ForgetRevokedAddresses`). Migration 0021 backfilled listening from before sessions were
+  `listening_daily` per local day, listener and book, blanks `last_ip` on signed-out or expired tokens
+  (`auth.ForgetRevokedAddresses`), and deletes dead cast tokens with their grants (`auth.PruneCastTokens`:
+  expired, or the sender's token signed out; a cast row's own `revoked`/`expires_at` don't say that). Migration 0021 backfilled listening from before sessions were
   recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
   device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
   (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
@@ -1215,24 +1223,33 @@ admin overrides; see Metadata overrides below).
   `scopedPath` + `bookAt` exactly like the media routes (400 empty path, 403 outside scope, 404 no
   book; a part path resolves to its book, whose own `rel_path` is stored, so the token covers every
   file of it); demo accounts may mint (they can play); an API key may not (403, `denyAPIKey`'s
-  containment: a key must not spawn a credential that outlives its revocation). A cast token is a
+  containment: a key never mints another credential, even a cast token, which would die with it). A cast token is a
   `tokens` row of kind `cast` (`auth.IssueCastToken`: SHA-256 hash only, `expires_at` 24 h in whole
   seconds, `castTokenTTL`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
-  own token); one transaction deletes every expired cast token and keeps the person's newest
-  `maxCastTokens` (20). **Validity** is `lookupToken`'s one check (unknown, revoked, expired,
-  disabled user) plus, for kind `cast`, a grant and a live parent: **signing out the device that
+  own token); one transaction deletes every dead cast token (`pruneCastTokensSQL`: expired, or no
+  grant, or its parent gone, signed out or expired) and keeps the person's newest
+  `maxCastTokens` (20); the daily retention (`pkg/launcher.retention`) runs the same prune
+  (`auth.PruneCastTokens`), so a dead token's row (the receiver's `last_ip`) and grant (which book
+  was cast) never outlive it by more than a day. **Validity** is `lookupToken`'s one check (unknown, revoked, expired,
+  disabled user) plus, for kind `cast`, a grant and a live parent (`castGrantOf`, a second query run
+  only for a cast token, so every other token's per-request lookup stays one two-table query): **signing out the device that
   minted it** (logout, My devices, the console) **ends it**, as do the account's delete or
   disabling, its scope and the 24 h. **Acceptance**: `ResolveRequest` never accepts a cast token;
-  `auth.ResolveCastRequest(secret, presence, libraryID, cleanPath, kinds...)` does, only when its
+  `auth.ResolveCastRequest(secret, presence, libraryID, path, kinds...)` does, only when its
   grant covers the path (`castGrant.covers`: same library, the book's path itself or below it on a
   segment boundary via `relpath.Within`, `Book` never reaches `Book 2`; an empty path on either side
-  covers nothing). `api.authenticate` calls it only on the routes wrapped in `requireBookMediaAuth`
+  covers nothing; it cleans the path itself with `relpath.Clean`, which `catalog.CleanRelPath` is, so
+  `Book/../Book 2` never passes whoever calls). `api.authenticate` calls it only on the routes wrapped in `requireBookMediaAuth`
   (`GET /libraries/{id}/cover` and `/stream`, NOT `/meta/cover`, which keeps `requireMediaAuth`),
   only for a `?token=` with NO `Authorization` header (a cast token is never a bearer credential,
-  nor accepted beside one), with `catalog.CleanRelPath(?path=)` (cleaning first stops
-  `Book/../Book 2`); ONE lookup decides session, API key or cast. Any refusal is the uniform 401. The
+  nor accepted beside one, a `Basic` one included), with `catalog.CleanRelPath(?path=)`; ONE lookup decides session, API key or
+  cast. A path below the book's folder can belong to ANOTHER book nested there (a folder book's
+  folder can hold more books: `Series` holding `Series/Book 2`), so for a cast credential
+  `api.castOwnBook` then requires the path to address the token's own book in the index
+  (`catalog.BookPathAt`: the book at the path, else the innermost folder book holding it; a path the
+  index places in no book is refused too). Any refusal is the uniform 401. The
   context then carries the token's user and a `Credential{Kind: auth.KindCast, ID: <its tokens id>,
-  DeviceID: <the sender's token id>}`, and the handler's `authorizedPath` checks the person's
+  DeviceID: <the sender's token id>, Book: <its grant's path>}`, and the handler's `authorizedPath` checks the person's
   CURRENT scope as for every request (a revoked share is a 403). `mediaAuth` sets
   `Cross-Origin-Resource-Policy: cross-origin` only when the credential is a cast token (the
   receiver, a gstatic.com web app, loads them as no-cors `<audio>`/`<img>`; `secureHeaders'`
