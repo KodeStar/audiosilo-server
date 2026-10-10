@@ -14,10 +14,18 @@ import (
 )
 
 // matchRunMetaserve answers works/match by the book's title: "Martian" is a
-// confident match (UK and US ASINs), anything else nothing.
+// confident match (UK and US ASINs), anything else nothing; lookup knows the US
+// ASIN only.
 func matchRunMetaserve(t *testing.T) string {
 	t.Helper()
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/lookup", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("asin") != "B0US000001" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"work":{"id":"the-martian","title":"The Martian","authors":[{"id":"andy-weir","name":"Andy Weir"}]},"recording_id":"bray"}`))
+	})
 	mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(strings.Join(r.URL.Query()["title"], " "), "Martian") {
 			_, _ = w.Write([]byte(`{"results":[]}`))
@@ -145,6 +153,45 @@ func TestMatchRunsAPI(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "GET", "/api/v1/admin/match-runs/999", adminTok, ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown run = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestMatchRunsRefresh: a refresh run takes the books with an identifier, finds
+// them by it and fills their details; it keeps the identifier, and refuses the ids
+// scope (it would write nothing).
+func TestMatchRunsRefresh(t *testing.T) {
+	t.Parallel()
+	e, adminTok, _, libID := newMatchRunEnv(t, "uk")
+	ctx := context.Background()
+	if err := e.cat.SetEnrichment(ctx, libID, "Someone/Obscure", "B0US000001", ""); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := e.do(t, "POST", "/api/v1/admin/match-runs", adminTok, `{"mode":"refresh"}`)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("start = %d %s", resp.StatusCode, body)
+	}
+	run := decodeRun(t, body)
+	if run.Total != 1 || run.Mode != catalog.MatchModeRefresh {
+		t.Fatalf("started = %+v", run)
+	}
+	if _, body := e.do(t, "GET", "/api/v1/admin/audit", adminTok, ""); !strings.Contains(body, "book.match_refresh") {
+		t.Errorf("audit = %s, want the refresh logged as one", body)
+	}
+	e.api.matchRuns.Wait()
+	runURL := "/api/v1/admin/match-runs/" + strconv.FormatInt(run.ID, 10)
+	if _, body = e.do(t, "GET", runURL, adminTok, ""); decodeRun(t, body).Counts.Auto != 1 {
+		t.Fatalf("run = %s", body)
+	}
+	if resp, body := e.do(t, "POST", runURL+"/apply", adminTok, `{"scope":"ids"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("ids scope = %d %s, want 400", resp.StatusCode, body)
+	}
+	if resp, body = e.do(t, "POST", runURL+"/apply", adminTok, `{"scope":"fill"}`); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("apply = %d %s", resp.StatusCode, body)
+	}
+	e.api.matchRuns.Wait()
+	book, err := e.cat.GetBookByPath(ctx, libID, "Someone/Obscure")
+	if err != nil || book.ASIN != "B0US000001" || book.Narrator != "R. C. Bray" || book.Title != "Obscure" {
+		t.Fatalf("book after refresh = %+v %v, want the narrator filled, its title and ASIN kept", book, err)
 	}
 }
 

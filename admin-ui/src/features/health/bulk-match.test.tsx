@@ -123,6 +123,61 @@ describe('bulk matching', () => {
     );
   });
 
+  it('starts a refresh over the matched books', async () => {
+    const calls = mockFetch(
+      routes([], { 'POST /admin/match-runs': { status: 202, body: run({ status: 'matching' }) } }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Fill in matched books' }));
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs')?.body,
+      ).toEqual({ mode: 'refresh' }),
+    );
+  });
+
+  it("reviews a refresh run without the ids scope, and says when an identifier isn't known", async () => {
+    const unknown: MatchRunItem = {
+      ...confident,
+      id: 12,
+      path: 'Someone/Obscure',
+      outcome: 'none',
+      score: 0,
+      detail: 'identifier_unknown',
+      book: { title: 'Obscure', author: 'Someone' },
+      changes: {},
+    };
+    const calls = mockFetch(
+      routes([run({ mode: 'refresh', counts: { ...run().counts, review: 0, none: 1 } })], {
+        'GET /admin/match-runs/5/items': (req) => ({
+          body: {
+            items: req.query.get('outcome') === 'none' ? [unknown] : [confident],
+            next_after: 0,
+          },
+        }),
+        'POST /admin/match-runs/5/apply': { status: 202, body: run({ status: 'applying' }) },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
+    expect(await within(dialog).findByText('The Martian')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('radio', { name: /ASIN and ISBN only/ })).toBeNull();
+    expect(within(dialog).getByRole('radio', { name: /Fill in what's missing/ })).toBeChecked();
+    await user.click(within(dialog).getByRole('button', { name: /Not found/ }));
+    expect(
+      await within(dialog).findByText("The community doesn't know this book's ASIN or ISBN"),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/match-runs/5/apply')?.body,
+      ).toEqual({ scope: 'fill', exclude: [], include: [] }),
+    );
+  });
+
   it('shows a working run and stops it', async () => {
     const calls = mockFetch(
       routes([run({ status: 'matching', done: 1, total: 4 })], {

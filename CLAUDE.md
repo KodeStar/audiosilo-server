@@ -114,7 +114,7 @@ internal/chapteralign/ fits a community recording's chapter list onto a book's o
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
 internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
-internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
+internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of books that have an ASIN/ISBN by it), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/metamirror/  metadata mirror mode: the runner keeping a local copy of the community metadata database in <data>/meta-mirror/ (audiosilo-meta's pkg/release download, pkg/query handler over it; see "Mirror mode" below)
@@ -873,14 +873,21 @@ admin overrides; see Metadata overrides below).
   never a position beside another series, a cover only for a book with none), which
   also computes each item's `changes` for the review, so the two can't disagree.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN. A repick only touches an
-  ASIN whose override is `source=community`. `InterruptMatchRuns` (launcher, at
+  ASIN whose override is `source=community`. A **refresh** run (`mode: "refresh"`,
+  `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each book up by its own
+  identifier alone (the ISBN when the ASIN finds nothing) and takes that record as
+  confident (`identifier_unknown` = no match, never a fuzzy work); it fills or
+  overwrites the details but never writes an identifier (`planFor` drops them, the
+  proposal carries none), so `matchrun.ScopesFor` (the one statement of which scopes a
+  mode takes) allows only fill/overwrite (else `ErrScope`, 400); audited
+  `book.match_refresh`. `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
   ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
   409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
   books can be matched from fresh: `catalog.ClearCommunityMatches` drops the `source=community`
   overrides and covers, rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
   runs (a library's clear: its runs, and its items in runs over every library), one transaction;
-  edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_apply|match_stop|match_clear`;
+  edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_refresh|match_apply|match_stop|match_clear`;
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
   `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id
   (`meta.Service.WorkIDs`: per distinct normalized identifier, first the cached enrichment's

@@ -31,8 +31,15 @@ const (
 	ErrCodeInternal    = "internal"
 )
 
+// DetailIdentifierUnknown is a refresh item's detail when the community doesn't
+// know the book's ASIN or ISBN.
+const DetailIdentifierUnknown = "identifier_unknown"
+
 // ErrBusy is a start or apply asked while a run is working: one at a time.
 var ErrBusy = errors.New("a match run is already working")
+
+// ErrScope is an apply naming a scope its run's mode doesn't take (ScopesFor).
+var ErrScope = errors.New("the scope doesn't apply to this match run")
 
 // Matcher finds the community works a book might be (meta.Service.Candidates).
 type Matcher interface {
@@ -70,8 +77,8 @@ func New(cat *catalog.Catalog, matcher Matcher, saveCover CoverSaver, enabled fu
 }
 
 // StartOptions is what a run matches: the books of one library (0 = every
-// library), in mode (catalog.MatchModeMatch or MatchModeRepick), preferring
-// region's ASINs, for the admin userID.
+// library), in mode (catalog.MatchModeMatch, MatchModeRepick or
+// MatchModeRefresh), preferring region's ASINs, for the admin userID.
 type StartOptions struct {
 	LibraryID int64
 	Mode      string
@@ -92,9 +99,12 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 		books []catalog.Book
 		err   error
 	)
-	if o.Mode == catalog.MatchModeRepick {
+	switch o.Mode {
+	case catalog.MatchModeRepick:
 		books, err = r.cat.CommunityASINBooks(ctx, o.LibraryID)
-	} else {
+	case catalog.MatchModeRefresh:
+		books, err = r.cat.MatchedBooks(ctx, o.LibraryID)
+	default:
 		books, err = r.cat.UnmatchedBooks(ctx, o.LibraryID)
 	}
 	if err != nil {
@@ -230,14 +240,16 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 // community service's failure, if that's what the item records.
 func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book) (*catalog.MatchRunItem, error) {
 	item := &catalog.MatchRunItem{LibraryID: b.LibraryID, Path: b.RelPath, Proposal: catalog.MatchProposal{Values: map[string]string{}}}
-	if o.Mode == catalog.MatchModeRepick {
+	switch o.Mode {
+	case catalog.MatchModeRepick:
 		return r.repickBook(ctx, o.Region, b, item)
+	case catalog.MatchModeRefresh:
+		return r.refreshBook(ctx, o.Region, b, item)
 	}
 	q := QueryFor(b, o.Region)
 	q.Limit = bulkCandidates
-	cands, err := r.matcher.Candidates(ctx, q)
+	cands, err := r.candidates(ctx, q, item)
 	if err != nil {
-		item.Outcome, item.Detail = catalog.OutcomeError, ErrCodeUnavailable
 		return item, err
 	}
 	if len(cands) > 0 {
@@ -247,13 +259,22 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 	return item, nil
 }
 
+// candidates asks the community service for q's candidates, marking item as the
+// service's failure when it fails.
+func (r *Runner) candidates(ctx context.Context, q meta.MatchQuery, item *catalog.MatchRunItem) ([]meta.MatchCandidate, error) {
+	cands, err := r.matcher.Candidates(ctx, q)
+	if err != nil {
+		item.Outcome, item.Detail = catalog.OutcomeError, ErrCodeUnavailable
+	}
+	return cands, err
+}
+
 // repickBook looks the book's ASIN up: when the recording it names sells in the
 // preferred marketplace under another ASIN, that is the item (confident: it is
 // the same recording); else there is nothing to record.
 func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
-	cands, err := r.matcher.Candidates(ctx, meta.MatchQuery{ASIN: b.ASIN, Region: region, Limit: 1})
+	cands, err := r.candidates(ctx, meta.MatchQuery{ASIN: b.ASIN, Region: region, Limit: 1}, item)
 	if err != nil {
-		item.Outcome, item.Detail = catalog.OutcomeError, ErrCodeUnavailable
 		return item, err
 	}
 	if region == "" || len(cands) == 0 || cands[0].RecordingID == "" {
@@ -277,9 +298,41 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 	return item, nil
 }
 
+// refreshBook looks the book up by its own ASIN or ISBN alone: the record it
+// names is the book (confident, whatever the score), its recording the one the
+// identifier resolved to. The lookup takes the ASIN when there is one, so an ISBN
+// beside an ASIN the community doesn't know gets a look of its own. An identifier
+// the community doesn't know is no match: a book that names its record is never
+// offered another by title.
+func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
+	q := meta.MatchQuery{ASIN: b.ASIN, ISBN: b.ISBN, Duration: b.Duration, Region: region, Limit: 1}
+	cands, err := r.candidates(ctx, q, item)
+	if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
+		q.ASIN = ""
+		cands, err = r.candidates(ctx, q, item)
+	}
+	if err != nil {
+		return item, err
+	}
+	if len(cands) == 0 {
+		item.Outcome, item.Detail = catalog.OutcomeNone, DetailIdentifierUnknown
+		return item, nil
+	}
+	c := &cands[0]
+	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
+	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region))
+	// The book keeps its own identifiers (planFor), so the review mustn't show the
+	// community's (another marketplace's ASIN, say) as if applying set them.
+	delete(item.Proposal.Values, catalog.FieldASIN)
+	delete(item.Proposal.Values, catalog.FieldISBN)
+	item.Proposal.ASINRegion = ""
+	return item, nil
+}
+
 // ApplyOptions is what an apply writes: the run's confident items less Exclude,
-// plus the Include items (a "review" item the admin chose), under Scope (a
-// repick run's scope is its ASIN, whatever this says), as UserID.
+// plus the Include items (a "review" item the admin chose), under Scope (one of
+// ScopesFor the run's mode; a repick run's scope is its ASIN, whatever this says),
+// as UserID.
 type ApplyOptions struct {
 	Scope   string
 	Include []int64
@@ -289,7 +342,7 @@ type ApplyOptions struct {
 
 // Apply starts applying a ready run in the background, under base, returning the
 // run as it starts. ErrBusy while a run is working; catalog.ErrRunNotReady when
-// this one isn't ready.
+// this one isn't ready; ErrScope for a scope its mode doesn't take.
 func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (*catalog.MatchRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -302,6 +355,9 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 	}
 	if run.Status != catalog.MatchReady {
 		return nil, catalog.ErrRunNotReady
+	}
+	if scopes := ScopesFor(run.Mode); scopes != nil && !slices.Contains(scopes, o.Scope) {
+		return nil, ErrScope
 	}
 	items, err := r.cat.MatchItemsToApply(ctx, runID, o.Include, o.Exclude)
 	if err != nil {
@@ -416,6 +472,15 @@ type ItemBook struct {
 	Author string `json:"author"`
 }
 
+// itemScopes is the scopes the review shows a run in mode's changes under: its
+// own (ScopesFor), and for a repick, which ignores the scope, ids alone.
+func itemScopes(mode string) []string {
+	if scopes := ScopesFor(mode); scopes != nil {
+		return scopes
+	}
+	return []string{ScopeIDs}
+}
+
 // Items is a page of run's items (outcome "" = all) as the review shows them,
 // and the id the next page reads after (0 = the last page).
 func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome string, after int64, limit int) ([]ItemView, int64, error) {
@@ -424,6 +489,7 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 		return nil, 0, err
 	}
 	out := make([]ItemView, len(items))
+	scopes := itemScopes(run.Mode)
 	for i, it := range items {
 		v := ItemView{MatchRunItem: it, Changes: map[string]Change{}}
 		st, err := r.cat.BookMatchState(ctx, it.LibraryID, it.Path)
@@ -434,7 +500,7 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 			return nil, 0, err
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author}
-			for _, scope := range Scopes {
+			for _, scope := range scopes {
 				set, cover := planFor(run.Mode, scope, st, it.Proposal)
 				ch := Change{Fields: []string{}, Cover: cover}
 				for _, f := range catalog.OverrideFields {

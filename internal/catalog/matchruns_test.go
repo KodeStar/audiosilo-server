@@ -155,3 +155,45 @@ func TestClearCommunityMatches(t *testing.T) {
 		t.Errorf("runs = %d %v, want none", len(runs), err)
 	}
 }
+
+// TestMatchedBooks: a refresh run's books are those with an ASIN or ISBN (from an
+// enrichment or an override alike), in the library asked for or in every one; a
+// book with neither is left out.
+func TestMatchedBooks(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	one, _ := c.CreateLibrary(ctx, Library{Name: "One", Root: "/tmp/one"})
+	two, _ := c.CreateLibrary(ctx, Library{Name: "Two", Root: "/tmp/two"})
+	for _, ref := range []Ref{{one.ID, "A/Enriched"}, {one.ID, "A/ISBN"}, {one.ID, "A/Plain"}, {two.ID, "B/Other"}} {
+		if _, err := c.UpsertBook(ctx, scannedBook(ref.LibraryID, ref.Path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.SetEnrichment(ctx, one.ID, "A/Enriched", "B000000001", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditBook(ctx, one.ID, "A/ISBN", BookEdit{Set: map[string]string{FieldISBN: "9780000000002"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetEnrichment(ctx, two.ID, "B/Other", "B000000003", ""); err != nil {
+		t.Fatal(err)
+	}
+	paths := func(libraryID int64) []string {
+		t.Helper()
+		books, err := c.MatchedBooks(ctx, libraryID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, len(books))
+		for i, b := range books {
+			out[i] = b.RelPath
+		}
+		return out
+	}
+	if got, want := strings.Join(paths(one.ID), ","), "A/Enriched,A/ISBN"; got != want {
+		t.Errorf("library one = %s, want %s", got, want)
+	}
+	if got, want := strings.Join(paths(0), ","), "A/Enriched,A/ISBN,B/Other"; got != want {
+		t.Errorf("every library = %s, want %s", got, want)
+	}
+}

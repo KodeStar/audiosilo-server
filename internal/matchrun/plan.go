@@ -9,7 +9,9 @@
 //
 // A repick run looks again at books whose ASIN a community match set, for the same
 // recording's ASIN in the preferred Audible marketplace (config metadata.region),
-// which the community data may have gained since.
+// which the community data may have gained since. A refresh run looks the books
+// that already have an ASIN or ISBN up by it alone, to fill in the details an
+// identifier alone didn't bring; it never changes the identifier.
 package matchrun
 
 import (
@@ -48,6 +50,20 @@ var Scopes = []string{ScopeIDs, ScopeFill, ScopeOverwrite}
 
 // ValidScope reports whether s is one of Scopes.
 func ValidScope(s string) bool { return slices.Contains(Scopes, s) }
+
+// ScopesFor is the scopes an apply of a run in mode may name: every scope for a
+// match; fill and overwrite for a refresh (it never writes an identifier, so ids
+// would write nothing); none for a repick, which writes its ASIN whatever the
+// scope says.
+func ScopesFor(mode string) []string {
+	switch mode {
+	case catalog.MatchModeRepick:
+		return nil
+	case catalog.MatchModeRefresh:
+		return []string{ScopeFill, ScopeOverwrite}
+	}
+	return Scopes
+}
 
 // QueryFor is the match query for book b on a server preferring region: its own
 // facts, as both the match dialog and a bulk run send them.
@@ -211,10 +227,18 @@ func sameSeries(a, b string) bool {
 }
 
 // planFor is what applying p to a book in state st writes for a run in mode: a
-// repick's ASIN (whatever the scope), else Plan's.
+// repick's ASIN (whatever the scope); a refresh's Plan less the identifiers (the
+// book was found by its own, which stay: switching marketplace is a repick's);
+// else Plan's.
 func planFor(mode, scope string, st *catalog.MatchState, p catalog.MatchProposal) (map[string]string, bool) {
-	if mode == catalog.MatchModeRepick {
+	switch mode {
+	case catalog.MatchModeRepick:
 		return PlanRepick(st, p), false
+	case catalog.MatchModeRefresh:
+		set, cover := Plan(scope, st, p)
+		delete(set, catalog.FieldASIN)
+		delete(set, catalog.FieldISBN)
+		return set, cover
 	}
 	return Plan(scope, st, p)
 }

@@ -1721,8 +1721,11 @@ export interface BookMeta {
   web_url?: string;
 }
 
-/** catalog.MatchMode*: a run over unmatched books, or a second look at community ASINs. */
-export type MatchRunMode = 'match' | 'repick';
+/**
+ * catalog.MatchMode*: a run over unmatched books, a second look at community ASINs,
+ * or a lookup of books with an ASIN/ISBN by it, to fill in their details.
+ */
+export type MatchRunMode = 'match' | 'repick' | 'refresh';
 
 /** catalog.Match* statuses. matching and applying are working. */
 export type MatchRunStatus =
@@ -1809,7 +1812,7 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | edit_failed | cover_failed | metadata_unavailable. */
+  /** Why: book_gone | nothing_to_change | edit_failed | cover_failed | metadata_unavailable | identifier_unknown. */
   detail?: string;
   /** The book as it is now. */
   book: { title: string; author: string };
