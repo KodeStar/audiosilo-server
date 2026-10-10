@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -42,6 +43,33 @@ func newFixtureLibrary(t *testing.T, e *testEnv) *catalog.Library {
 	}
 	scanFixture(t, e, lib)
 	return lib
+}
+
+// copyFixtures copies the fixture library's files at rels (slash paths) into a
+// new temp dir, at the same paths, and returns it: a library a test may change.
+func copyFixtures(t *testing.T, rels ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, rel := range rels {
+		copyFixture(t, root, rel, rel)
+	}
+	return root
+}
+
+// copyFixture copies the fixture library's file at src to dst under root.
+func copyFixture(t *testing.T, root, src, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "library", filepath.FromSlash(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := filepath.Join(root, filepath.FromSlash(dst))
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(to, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // scanFixture scans lib with the env's own scanner (the server's).
