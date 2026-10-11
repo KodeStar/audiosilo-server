@@ -420,12 +420,13 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 		}
 		return catalog.ItemFailed, "edit_failed"
 	}
-	set, cover := planFor(mode, o.Scope, st, it.Proposal)
-	if len(set) == 0 && !cover {
+	w := planFor(mode, o.Scope, st, it.Proposal)
+	if w.Empty() {
 		return catalog.ItemSkipped, "nothing_to_change"
 	}
-	if len(set) > 0 {
-		edit := catalog.BookEdit{Set: set, Source: catalog.SourceCommunity, UserID: o.UserID}
+	edits := len(w.Set) > 0 || len(w.Revert) > 0
+	if edits {
+		edit := catalog.BookEdit{Set: w.Set, Revert: w.Revert, Source: catalog.SourceCommunity, UserID: o.UserID}
 		if err := r.cat.EditBook(ctx, it.LibraryID, it.Path, edit); err != nil {
 			if errors.Is(err, catalog.ErrNotFound) {
 				return catalog.ItemSkipped, "book_gone"
@@ -436,12 +437,12 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 			return catalog.ItemFailed, "edit_failed"
 		}
 	}
-	if cover {
+	if w.Cover {
 		if err := r.saveCover(ctx, it.LibraryID, it.Path, it.Proposal.CoverURL, o.UserID); err != nil {
 			if ctx.Err() == nil {
 				r.log.Info("match apply cover failed", "library", it.LibraryID, "path", it.Path, "err", err)
 			}
-			if len(set) == 0 {
+			if !edits {
 				return catalog.ItemFailed, "cover_failed"
 			}
 			return catalog.ItemApplied, "cover_failed"
@@ -451,10 +452,58 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 }
 
 // Change is what applying an item under one scope would write: its fields (in
-// catalog.OverrideFields order) and whether it takes the community cover.
+// catalog.OverrideFields order; set or reverted) and whether it takes the
+// community cover, and, when it changes the book's series, the series before and
+// after, so a series it removes is shown, never silent.
 type Change struct {
-	Fields []string `json:"fields"`
-	Cover  bool     `json:"cover"`
+	Fields []string      `json:"fields"`
+	Cover  bool          `json:"cover"`
+	Series *SeriesChange `json:"series,omitempty"`
+}
+
+// SeriesChange is a book's series before (From) and after (To) an apply: the main
+// series first, with its position (0 = none), then the others.
+type SeriesChange struct {
+	From []catalog.SeriesRef `json:"from"`
+	To   []catalog.SeriesRef `json:"to"`
+}
+
+// changeOf is what w writes to a book in state st, as the review shows it.
+func changeOf(st *catalog.MatchState, w Writes) Change {
+	ch := Change{Fields: []string{}, Cover: w.Cover}
+	after := func(f string) string {
+		if v, ok := w.Set[f]; ok {
+			return v
+		}
+		if slices.Contains(w.Revert, f) {
+			return st.Fields[f].Scanned
+		}
+		return st.Fields[f].Value
+	}
+	series := false
+	for _, f := range catalog.OverrideFields {
+		if _, ok := w.Set[f]; ok || slices.Contains(w.Revert, f) {
+			ch.Fields = append(ch.Fields, f)
+			series = series || f == catalog.FieldSeries || f == catalog.FieldSeriesIndex || f == catalog.FieldMoreSeries
+		}
+	}
+	if series {
+		from := seriesList(func(f string) string { return st.Fields[f].Value })
+		if to := seriesList(after); !slices.Equal(from, to) {
+			ch.Series = &SeriesChange{From: from, To: to}
+		}
+	}
+	return ch
+}
+
+// seriesList is a book's series as its fields hold them: the main one with its
+// position, then its more_series.
+func seriesList(field func(string) string) []catalog.SeriesRef {
+	out := []catalog.SeriesRef{}
+	if main := field(catalog.FieldSeries); main != "" {
+		out = append(out, catalog.SeriesRef{Name: main, Position: catalog.ParseSeriesIndex(field(catalog.FieldSeriesIndex))})
+	}
+	return append(out, catalog.ParseMoreSeries(field(catalog.FieldMoreSeries))...)
 }
 
 // ItemView is an item as the review shows it: the book as it is now (Gone when
@@ -501,14 +550,7 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author}
 			for _, scope := range scopes {
-				set, cover := planFor(run.Mode, scope, st, it.Proposal)
-				ch := Change{Fields: []string{}, Cover: cover}
-				for _, f := range catalog.OverrideFields {
-					if _, ok := set[f]; ok {
-						ch.Fields = append(ch.Fields, f)
-					}
-				}
-				v.Changes[scope] = ch
+				v.Changes[scope] = changeOf(st, planFor(run.Mode, scope, st, it.Proposal))
 			}
 		}
 		out[i] = v

@@ -55,6 +55,13 @@ func TestPropose(t *testing.T) {
 	}
 }
 
+// planSet is Plan's fields to set and its cover, for the tests that write no
+// revert.
+func planSet(scope string, st *catalog.MatchState, p catalog.MatchProposal) (map[string]string, bool) {
+	w := Plan(scope, st, p)
+	return w.Set, w.Cover
+}
+
 // state is a book as Plan sees it: field -> value (source tag), with overrides.
 func state(values map[string]string, edited []string, coverMissing bool) *catalog.MatchState {
 	st := &catalog.MatchState{Fields: map[string]catalog.FieldValue{}, CoverMissing: coverMissing}
@@ -94,7 +101,7 @@ func TestPlan(t *testing.T) {
 		// Overwrite replaces the tag title too, never the admin's narrator.
 		{ScopeOverwrite, []string{"asin", "description", "isbn", "published", "series", "series_index", "title"}, true},
 	} {
-		set, cover := Plan(tc.scope, st, p)
+		set, cover := planSet(tc.scope, st, p)
 		if got := keys(set); !slices.Equal(got, tc.want) || cover != tc.cover {
 			t.Errorf("%s: set %v cover %v, want %v %v", tc.scope, got, cover, tc.want, tc.cover)
 		}
@@ -102,7 +109,7 @@ func TestPlan(t *testing.T) {
 
 	// A book with a cover keeps it; a value the book already has isn't "set".
 	st = state(map[string]string{"title": "The Martian", "series": "Mars"}, nil, false)
-	set, cover := Plan(ScopeFill, st, p)
+	set, cover := planSet(ScopeFill, st, p)
 	if cover || set["title"] != "" || set["series"] != "" || set["series_index"] != "1" {
 		t.Fatalf("fill over a cover = %v %v", set, cover)
 	}
@@ -110,18 +117,18 @@ func TestPlan(t *testing.T) {
 	// A position never lands beside another series: the book's own "Red Planet"
 	// (kept by fill) has no place for Mars's "1".
 	st = state(map[string]string{"title": "The Martian", "series": "Red Planet"}, nil, false)
-	set, _ = Plan(ScopeFill, st, p)
+	set, _ = planSet(ScopeFill, st, p)
 	if _, ok := set["series_index"]; ok {
 		t.Fatalf("fill put Mars #1 beside Red Planet: %v", set)
 	}
 	// ...but overwrite, which replaces the series too, sets both.
-	set, _ = Plan(ScopeOverwrite, st, p)
+	set, _ = planSet(ScopeOverwrite, st, p)
 	if set["series"] != "Mars" || set["series_index"] != "1" {
 		t.Fatalf("overwrite = %v", set)
 	}
 	// An admin-edited series stays, and so the position stays off it.
 	st = state(map[string]string{"title": "The Martian", "series": "Red Planet"}, []string{"series"}, false)
-	set, _ = Plan(ScopeOverwrite, st, p)
+	set, _ = planSet(ScopeOverwrite, st, p)
 	if _, ok := set["series_index"]; ok || set["series"] != "" {
 		t.Fatalf("overwrite beside an edited series = %v", set)
 	}
@@ -129,7 +136,7 @@ func TestPlan(t *testing.T) {
 	// No cover on offer, no cover taken.
 	bare := p
 	bare.CoverURL = ""
-	if _, cover := Plan(ScopeFill, state(nil, nil, true), bare); cover {
+	if _, cover := planSet(ScopeFill, state(nil, nil, true), bare); cover {
 		t.Fatal("took a cover there is none of")
 	}
 }
@@ -200,7 +207,7 @@ func TestPlanSeries(t *testing.T) {
 	}
 
 	// No series yet: the work's main one, and the rest beside it.
-	set, _ := Plan(ScopeFill, state(map[string]string{"title": "Guards! Guards!"}, nil, false), p)
+	set, _ := planSet(ScopeFill, state(map[string]string{"title": "Guards! Guards!"}, nil, false), p)
 	if set["series"] != "Discworld" || set["series_index"] != "8" ||
 		set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
 		t.Fatalf("fill on no series = %v", set)
@@ -209,7 +216,7 @@ func TestPlanSeries(t *testing.T) {
 	// Filed under City Watch by its folder: fill keeps that, numbers it as City
 	// Watch numbers it (not Discworld's 8), and adds Discworld beside it.
 	st := state(map[string]string{"title": "Guards! Guards!", "series": watch}, nil, false)
-	set, _ = Plan(ScopeFill, st, p)
+	set, _ = planSet(ScopeFill, st, p)
 	if _, ok := set["series"]; ok || set["series_index"] != "1" ||
 		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]` {
 		t.Fatalf("fill on City Watch = %v", set)
@@ -218,7 +225,7 @@ func TestPlanSeries(t *testing.T) {
 	// Overwrite keeps it too (the work is in City Watch, as the match dialog
 	// offers it), numbered there.
 	st = state(map[string]string{"title": "Guards! Guards!", "series": watch, "series_index": "8"}, nil, false)
-	if set, _ := Plan(ScopeOverwrite, st, p); set["series"] != "" || set["series_index"] != "1" ||
+	if set, _ := planSet(ScopeOverwrite, st, p); set["series"] != "" || set["series_index"] != "1" ||
 		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]` {
 		t.Fatalf("overwrite on City Watch = %v", set)
 	}
@@ -228,14 +235,14 @@ func TestPlanSeries(t *testing.T) {
 	twice := Propose(&meta.MatchCandidate{WorkID: "gg", Title: "Guards! Guards!",
 		Series: []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "Discworld", Position: "8.5"}}}, nil)
 	st = state(map[string]string{"title": "Guards! Guards!", "series": "Discworld"}, nil, false)
-	if set, _ := Plan(ScopeFill, st, twice); set["series_index"] != "8" || set["more_series"] != "" {
+	if set, _ := planSet(ScopeFill, st, twice); set["series_index"] != "8" || set["more_series"] != "" {
 		t.Fatalf("fill from a work listed twice = %v", set)
 	}
 
 	// The admin's own City Watch stays under overwrite, and its position becomes
 	// City Watch's, though the tags' 8 happens to be Discworld's.
 	st = state(map[string]string{"title": "Guards! Guards!", "series": watch, "series_index": "8"}, []string{"series"}, false)
-	if set, _ := Plan(ScopeOverwrite, st, p); set["series_index"] != "1" || set["series"] != "" {
+	if set, _ := planSet(ScopeOverwrite, st, p); set["series_index"] != "1" || set["series"] != "" {
 		t.Fatalf("overwrite beside an edited City Watch = %v", set)
 	}
 
@@ -243,19 +250,19 @@ func TestPlanSeries(t *testing.T) {
 	// say): most likely the main one spelled otherwise, so only the work's other
 	// series go beside it.
 	st = state(map[string]string{"title": "Guards! Guards!", "series": "Pratchett Discworld"}, nil, false)
-	if set, _ := Plan(ScopeFill, st, p); set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
+	if set, _ := planSet(ScopeFill, st, p); set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
 		t.Fatalf("fill beside an unlisted series = %v", set)
 	}
 
 	// The admin's own list stays, under any scope.
 	st = state(map[string]string{"title": "Guards! Guards!", "more_series": `[{"name":"Mine","position":2}]`}, []string{"more_series"}, false)
-	if set, _ := Plan(ScopeOverwrite, st, p); set["more_series"] != "" {
+	if set, _ := planSet(ScopeOverwrite, st, p); set["more_series"] != "" {
 		t.Fatalf("overwrite replaced the admin's list: %v", set)
 	}
 	// A list the book already has isn't "set".
 	st = state(map[string]string{"title": "Guards! Guards!", "series": "Discworld", "series_index": "8",
 		"more_series": `[{"name":"` + watch + `","position":1},{"name":"Omnibus","position":0}]`}, nil, false)
-	if set, _ := Plan(ScopeOverwrite, st, p); len(set) != 0 {
+	if set, _ := planSet(ScopeOverwrite, st, p); len(set) != 0 {
 		t.Fatalf("overwrite on a book that has it all = %v", set)
 	}
 }
