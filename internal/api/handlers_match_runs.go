@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/matchrun"
@@ -36,7 +37,9 @@ func (a *API) handleListMatchRuns(w http.ResponseWriter, r *http.Request) {
 
 // handleStartMatchRun serves POST /admin/match-runs {"library_id"?, "mode"?}: match
 // the unmatched books of a library (or all) in the background; mode "repick"
-// instead looks again at community-matched ASINs for the preferred marketplace's.
+// instead looks again at community-matched ASINs for the preferred marketplace's,
+// and mode "refresh" looks the books with an ASIN or ISBN up by it, to fill in
+// their details.
 // 202 with the run; 409 match_run_busy while a run is working; 400 for an unknown
 // mode, and no_region for a repick with no preferred marketplace set.
 func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
@@ -55,14 +58,14 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 	switch req.Mode {
 	case "":
 		req.Mode = catalog.MatchModeMatch
-	case catalog.MatchModeMatch:
+	case catalog.MatchModeMatch, catalog.MatchModeRefresh:
 	case catalog.MatchModeRepick:
 		if region == "" {
 			writeErrorCode(w, http.StatusBadRequest, codeNoRegion, "set a preferred Audible marketplace first")
 			return
 		}
 	default:
-		writeError(w, http.StatusBadRequest, `mode must be "match" or "repick"`)
+		writeError(w, http.StatusBadRequest, `mode must be "match", "repick" or "refresh"`)
 		return
 	}
 	libName, ok := a.optionalLibraryName(w, r, req.LibraryID, "could not start the match run")
@@ -81,8 +84,11 @@ func (a *API) handleStartMatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := "book.match_run"
-	if run.Mode == catalog.MatchModeRepick {
+	switch run.Mode {
+	case catalog.MatchModeRepick:
 		action = "book.asin_repick"
+	case catalog.MatchModeRefresh:
+		action = "book.match_refresh"
 	}
 	a.audit(r, action, libName, map[string]any{"run": run.ID, "books": run.Total, "region": region})
 	writeJSON(w, http.StatusAccepted, run)
@@ -175,8 +181,9 @@ func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 // handleApplyMatchRun serves POST /admin/match-runs/{id}/apply {"scope",
 // "include"?, "exclude"?}: write the run's confident matches (less exclude, plus
 // the include items, which may be ones that needed review) in the background,
-// under scope ids | fill | overwrite. 202 with the run; 404 for a run that isn't
-// there (or was cleared meanwhile); 409 match_run_busy while a run is working,
+// under scope ids | fill | overwrite (a refresh run: fill | overwrite, as it never
+// changes an identifier). 202 with the run; 404 for a run that isn't there (or was
+// cleared meanwhile); 409 match_run_busy while a run is working,
 // match_run_not_ready unless this one is ready.
 func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
@@ -210,6 +217,9 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, matchrun.ErrBusy):
 		writeErrorCode(w, http.StatusConflict, codeMatchRunBusy, "a match run is already working")
 		return
+	case errors.Is(err, matchrun.ErrScope):
+		writeError(w, http.StatusBadRequest, "scope must be one of "+strings.Join(matchrun.ScopesFor(run.Mode), ", "))
+		return
 	case errors.Is(err, catalog.ErrRunNotReady):
 		writeErrorCode(w, http.StatusConflict, codeMatchRunNotReady, "the match run is not ready to apply")
 		return
@@ -221,7 +231,7 @@ func (a *API) handleApplyMatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	details := map[string]any{"run": started.ID, "books": started.ApplyTotal}
-	if started.Mode == catalog.MatchModeMatch {
+	if matchrun.ScopesFor(started.Mode) != nil {
 		details["scope"] = req.Scope // a repick writes its ASIN whatever the scope
 	}
 	a.audit(r, "book.match_apply", started.LibraryName, details)

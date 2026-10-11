@@ -93,12 +93,12 @@ func (b *Book) AllSeries() []SeriesRef {
 	if b.SeriesList != nil {
 		return b.SeriesList
 	}
-	return seriesList(b.Series, b.SeriesIndex, "")
+	return SeriesList(b.Series, b.SeriesIndex, "")
 }
 
-// seriesList is every series a book belongs to: the main one first (when it has
+// SeriesList is every series a book belongs to: the main one first (when it has
 // one), then the others, each name once.
-func seriesList(series string, index float64, more string) []SeriesRef {
+func SeriesList(series string, index float64, more string) []SeriesRef {
 	out := []SeriesRef{}
 	if series != "" {
 		out = append(out, SeriesRef{Name: series, Position: index})
@@ -160,7 +160,7 @@ func sqlQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") +
 // ftsSeries is the full-text index's series text: every series name, a line each.
 func ftsSeries(series, more string) string {
 	names := []string{}
-	for _, s := range seriesList(series, 0, more) {
+	for _, s := range SeriesList(series, 0, more) {
 		names = append(names, s.Name)
 	}
 	return strings.Join(names, "\n")

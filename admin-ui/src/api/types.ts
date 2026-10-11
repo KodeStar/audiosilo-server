@@ -1739,8 +1739,11 @@ export interface BookMeta {
   web_url?: string;
 }
 
-/** catalog.MatchMode*: a run over unmatched books, or a second look at community ASINs. */
-export type MatchRunMode = 'match' | 'repick';
+/**
+ * catalog.MatchMode*: a run over unmatched books, a second look at community ASINs,
+ * or a lookup of books with an ASIN/ISBN by it, to fill in their details.
+ */
+export type MatchRunMode = 'match' | 'repick' | 'refresh';
 
 /** catalog.Match* statuses. matching and applying are working. */
 export type MatchRunStatus =
@@ -1810,8 +1813,21 @@ export interface MatchProposal {
   cover_url?: string;
   /** The proposed ASIN's marketplace. */
   asin_region?: string;
+  /** A refresh's: the book's own identifier the record was found by ("asin:…" / "isbn:…"). */
+  found_by?: string;
   /** Each field the community has a value for, in stored form. */
   values: Partial<Record<OverrideField, string>>;
+}
+
+/**
+ * matchrun.Change: what applying an item under one scope writes - its fields (set
+ * or reverted) and the cover - and, when it changes the book's series, the series
+ * before and after (main first; position 0 = none), so a removal shows.
+ */
+export interface MatchChange {
+  fields: OverrideField[];
+  cover: boolean;
+  series?: { from: SeriesRef[]; to: SeriesRef[] };
 }
 
 /** matchrun.ItemView: one book a run matched, as the review shows it. */
@@ -1827,14 +1843,14 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | edit_failed | cover_failed | metadata_unavailable. */
+  /** Why: book_gone | nothing_to_change | edit_failed | cover_failed | metadata_unavailable | identifier_unknown. */
   detail?: string;
   /** The book as it is now. */
   book: { title: string; author: string };
   /** Nothing is indexed at the path any more. */
   gone?: boolean;
   /** What each scope would write: fields (in display order) and the cover. */
-  changes: Partial<Record<MatchScope, { fields: OverrideField[]; cover: boolean }>>;
+  changes: Partial<Record<MatchScope, MatchChange>>;
 }
 
 /** GET /admin/match-runs/{id}/items: a page, and the id the next reads after (0 = the last). */

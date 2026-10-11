@@ -193,7 +193,7 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 		func() {
 			b.Authors = append([]string{}, creditNames(b.Author)...)
 			b.Narrators = append([]string{}, creditNames(b.Narrator)...)
-			b.SeriesList = seriesList(b.Series, b.SeriesIndex, b.moreSeries)
+			b.SeriesList = SeriesList(b.Series, b.SeriesIndex, b.moreSeries)
 			b.CoverColor, _ = storedCoverColor(art, color)
 		}
 }
@@ -878,7 +878,7 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, mem
 		if err := rows.Scan(&series, &author, &idx, &more, &dur); err != nil {
 			return nil, err
 		}
-		for _, s := range seriesList(series, idx, more) {
+		for _, s := range SeriesList(series, idx, more) {
 			a := bySeries[s.Name]
 			if a == nil {
 				a = &acc{SeriesCount: SeriesCount{Name: s.Name, Positions: []float64{}}, authors: map[string]int{}, pos: map[float64]bool{}}

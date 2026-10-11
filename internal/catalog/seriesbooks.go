@@ -99,7 +99,7 @@ func (c *Catalog) memberIDs(ctx context.Context, q string, args []any, want map[
 		if err := rows.Scan(&id, &series, &more); err != nil {
 			return nil, err
 		}
-		if !have[id] && slices.ContainsFunc(seriesList(series, 0, more), func(s SeriesRef) bool { return want[match.SeriesKey(s.Name)] }) {
+		if !have[id] && slices.ContainsFunc(SeriesList(series, 0, more), func(s SeriesRef) bool { return want[match.SeriesKey(s.Name)] }) {
 			ids = append(ids, id)
 		}
 	}
