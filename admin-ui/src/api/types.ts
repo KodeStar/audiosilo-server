@@ -1555,6 +1555,12 @@ export interface MatchRecording {
   asin_region?: string;
   isbns: string[];
   cover_url?: string;
+  /**
+   * The series a book that is this recording is in, its main one first (an
+   * edition named for this recording, "Harry Potter (Full-Cast Editions)", in
+   * front). Absent from an older server: the candidate's `series` then.
+   */
+  series?: MatchSeries[];
 }
 
 /** meta.ASINRef: one of a recording's ASINs and the Audible marketplace it sells in. */
@@ -1587,7 +1593,12 @@ export interface MatchCandidate {
   language?: string;
   first_published?: string;
   description?: string;
-  series: { name: string; position: string }[];
+  /**
+   * The series a book of the work is in whatever its recording (the server's
+   * series rules leave out variant reading orders, translations and editions);
+   * each recording's `series` adds its own edition.
+   */
+  series: MatchSeries[];
   cover_url?: string;
   web_url: string;
   recordings: MatchRecording[];
@@ -1603,6 +1614,13 @@ export interface MatchCandidate {
   score: number;
   /** Which facts agreed, when the community service's match scored it. */
   reasons?: MatchReasons;
+}
+
+/** meta.MatchSeries: one of a candidate's series, with its position. */
+export interface MatchSeries {
+  id?: string;
+  name: string;
+  position: string;
 }
 
 /** meta.MatchReasons: each field present only when the request let it be judged. */
