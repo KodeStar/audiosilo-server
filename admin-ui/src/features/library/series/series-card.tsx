@@ -55,14 +55,21 @@ export function SeriesCard({
     candidate?.path ?? '',
     metadata && seen && !!candidate,
   );
-  const rail = meta.data?.matched ? pickRail(meta.data.series, s.name) : undefined;
+  const rails = meta.data?.matched ? meta.data.series : undefined;
   // Every matched book is asked about (the rail's own book too), batched with
-  // the other cards' books.
-  const matched = useMemo(() => (rail ? books.filter((b) => b.matched) : []), [books, rail]);
+  // the other cards' books: their works place them, and pick the rail when no
+  // rail is named like the series.
+  const matched = useMemo(
+    () => (rails?.length ? books.filter((b) => b.matched) : []),
+    [books, rails],
+  );
   const works = useBookWorks(matched);
   // Until the works answer, no rail: wrong gaps would flash, then go. A failed
   // lookup answers too (unresolved: the book falls back to its series index).
-  const placedOn = rail && !works.pending ? rail : undefined;
+  const placedOn = useMemo(
+    () => (works.pending ? undefined : pickRail(rails, s.name, books, works.ids)),
+    [works.pending, works.ids, rails, s.name, books],
+  );
   const placed = useMemo(
     () => placeBooks(books, placedOn, works.ids, s.name),
     [books, placedOn, works.ids, s.name],

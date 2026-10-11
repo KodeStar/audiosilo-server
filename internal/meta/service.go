@@ -448,11 +448,16 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 		return nil, false, err
 	}
 
-	rails, complete := s.seriesRails(ctx, detail)
+	rec := pickRecording(detail.Recordings, lookup.RecordingID)
+	recID := ""
+	if rec != nil {
+		recID = rec.ID
+	}
+	rails, complete := s.seriesRails(ctx, detail, recID)
 	env := &Enrichment{
 		Matched:   true,
 		Work:      s.toWork(detail),
-		Recording: pickRecording(detail.Recordings, lookup.RecordingID),
+		Recording: rec,
 		Series:    rails,
 		WebURL:    s.workURL(detail.ID),
 	}
@@ -670,20 +675,29 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 // holds it (a variant-only work keeps its variant, the only order that places
 // it).
 //
+// The families are the series a book that is recording recordingID can be in
+// (railMains: an edition only for its own recordings, after the rest), so the
+// cap spends itself on those: a Discworld novel listed in "Discworld (abridged)"
+// and "Discworld: For Kids (abridged)" too keeps its "Discworld: Tiffany Aching"
+// rail. A main view whose record says it translates another of the work's series,
+// or is in another language than the work, is left out once fetched.
+//
 // A per-series fetch failure is non-fatal: a failed main view skips the rail,
 // and a failed alternate ships the rail without that alternate, so the rest of
 // the enrichment (progressive enhancement) still returns - but either is
 // reported via complete=false so the caller caches the partial envelope only
 // briefly instead of hiding a rail or an order for the whole positive TTL.
-func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (rails []MetaSeries, complete bool) {
+func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail, recordingID string) (rails []MetaSeries, complete bool) {
 	// The work's own position in each series it belongs to, by series id. An
 	// alternate's position is read from here: the work detail is the one place
 	// that states where THIS work sits, and a series the work is absent from
 	// has no entry, which is exactly the empty position the envelope promises.
 	positions := make(map[string]string, len(detail.Series))
+	onWork := make([]string, 0, len(detail.Series))
 	for _, ref := range detail.Series {
 		if _, seen := positions[ref.ID]; !seen {
 			positions[ref.ID] = ref.Position
+			onWork = append(onWork, ref.ID)
 		}
 	}
 
@@ -691,7 +705,7 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (
 	// odd/hostile data (dozens of series refs on one work), a success-counted
 	// loop would issue one 5s-timeout GET per ref. The cap counts families, so
 	// grouping happens first.
-	mains := familyMains(detail.Series)
+	mains := railMains(familyMains(detail.Series), detail, recordingID)
 	if len(mains) > maxSeriesRails {
 		mains = mains[:maxSeriesRails]
 	}
@@ -707,6 +721,11 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (
 		sd, err := s.client.series(ctx, ref.ID)
 		if err != nil || sd == nil {
 			complete = false
+			continue
+		}
+		facts := factsOf(sd)
+		cachePut(s.cache, nsSeries.key(ref.ID), facts, positiveTTL)
+		if foreignSeries(facts, ref.ID, detail.Language, onWork) {
 			continue
 		}
 		out = append(out, MetaSeries{

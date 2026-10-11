@@ -55,6 +55,34 @@ func TestPropose(t *testing.T) {
 	}
 }
 
+// TestProposeSeriesForTheRecording: an edition (a series named for one kind of
+// recording) is proposed as the main series only for a book that is that
+// recording, with the work's series as another; a book of any other recording,
+// or of none known, gets the work's series alone, never the edition.
+func TestProposeSeriesForTheRecording(t *testing.T) {
+	c := meta.MatchCandidate{
+		WorkID: "chamber", Title: "Harry Potter and the Chamber of Secrets",
+		Series: []meta.MatchSeries{
+			{ID: "harry-potter", Name: "Harry Potter", Position: "2"},
+			{ID: "hp-full-cast", Name: "Harry Potter (Full-Cast Editions)", Position: "2", RecordingIDs: []string{"cast"}},
+		},
+		Recordings: []meta.MatchRecording{{ID: "dale"}, {ID: "cast"}},
+	}
+	for _, tc := range []struct {
+		rec              *meta.MatchRecording
+		series, moreJSON string
+	}{
+		{&c.Recordings[0], "Harry Potter", ""},
+		{nil, "Harry Potter", ""},
+		{&c.Recordings[1], "Harry Potter (Full-Cast Editions)", `[{"name":"Harry Potter","position":2}]`},
+	} {
+		p := Propose(&c, tc.rec)
+		if p.Values["series"] != tc.series || p.Values["series_index"] != "2" || p.Values["more_series"] != tc.moreJSON {
+			t.Errorf("recording %v: values = %v, want series %q more %q", tc.rec, p.Values, tc.series, tc.moreJSON)
+		}
+	}
+}
+
 // state is a book as Plan sees it: field -> value (source tag), with overrides.
 func state(values map[string]string, edited []string, coverMissing bool) *catalog.MatchState {
 	st := &catalog.MatchState{Fields: map[string]catalog.FieldValue{}, CoverMissing: coverMissing}

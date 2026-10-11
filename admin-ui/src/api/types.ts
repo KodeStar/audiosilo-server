@@ -1587,7 +1587,11 @@ export interface MatchCandidate {
   language?: string;
   first_published?: string;
   description?: string;
-  series: { name: string; position: string }[];
+  /**
+   * The series a book of the work can be in (the server's series rules leave out
+   * variant reading orders, translations and editions no recording is).
+   */
+  series: MatchSeries[];
   cover_url?: string;
   web_url: string;
   recordings: MatchRecording[];
@@ -1603,6 +1607,18 @@ export interface MatchCandidate {
   score: number;
   /** Which facts agreed, when the community service's match scored it. */
   reasons?: MatchReasons;
+}
+
+/**
+ * meta.MatchSeries: one of a candidate's series. `recording_ids` is set only on an
+ * edition (a series named for one kind of recording, "Harry Potter (Full-Cast
+ * Editions)"): a book is in it only as one of those recordings (seriesFor).
+ */
+export interface MatchSeries {
+  id?: string;
+  name: string;
+  position: string;
+  recording_ids?: string[];
 }
 
 /** meta.MatchReasons: each field present only when the request let it be judged. */

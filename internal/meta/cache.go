@@ -41,6 +41,13 @@ const maxWorkEntries = 256
 // spaces, and a lookup evicted early only costs one small GET again.
 const maxLookupEntries = 1024
 
+// maxSeriesEntries bounds the series key space: a series' facts (its language
+// and what it translates), read for each series of a match candidate's work.
+// The ids come from works the community lists, and a Series page or a bulk run
+// can name a great many, so they get a share of their own; an evicted entry
+// only costs one series GET again.
+const maxSeriesEntries = 512
+
 // keyspace namespaces the one shared cache so the feature's lookup kinds - an
 // asin/isbn enrichment, a work-id fetch and an identifier's lookup - can never
 // read each other's entries. Every key in the cache is minted through
@@ -54,6 +61,8 @@ const (
 	// nsLookup holds an identifier's lookup answer, keyed by its enrichment key
 	// ("l:a:<asin>" / "l:i:<isbn>").
 	nsLookup keyspace = "l:"
+	// nsSeries holds a series' facts (seriesFacts), keyed by its id.
+	nsSeries keyspace = "s:"
 )
 
 // quotas are the key spaces with their own share of the cache (see
@@ -62,7 +71,7 @@ const (
 // evictLocked), so a flood of keys there evicts its own entries - it reaches the
 // enrichment entries, which are bounded by cacheCap alone, only when its key
 // space holds nothing left to give up.
-var quotas = map[keyspace]int{nsWork: maxWorkEntries, nsLookup: maxLookupEntries}
+var quotas = map[keyspace]int{nsWork: maxWorkEntries, nsLookup: maxLookupEntries, nsSeries: maxSeriesEntries}
 
 // key mints the cache key for one lookup id in this key space.
 func (ns keyspace) key(id string) string { return string(ns) + id }

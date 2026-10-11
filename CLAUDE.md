@@ -109,7 +109,7 @@ internal/library/     filesystem view (fsview.go) + background scanner (scanner.
 internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below)
 internal/chapteralign/ fits a community recording's chapter list onto a book's own audio (pure, no I/O): anchors by title + time, places the rest in proportion, snaps each to its pause (an injected Prober); classifies fill/titles/refine/restructure/same or why not (length_mismatch, structure_mismatch, crosses_files). testdata/mythos is a real 34-vs-174-chapter golden case
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
 internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
@@ -456,6 +456,29 @@ admin overrides; see Metadata overrides below).
   work listed at two positions of one series is now one rail rather than two
   (`TestEnrichRepeatedMembershipIsOneRail`). Server-side because shipped players
   lag.
+  **Series rules** (`meta/seriesrules.go`): which of a work's series a book of it
+  is in. Never a variant reading order (`ordering_of`), a translation of another of
+  the work's series (`translation_of`) or a series whose derived `language` differs
+  from the work's (primary subtags; unknown agrees); an EDITION - a series named
+  exactly like another of the work's plus a bracketed qualifier or a "narrated by"
+  tail ("Discworld (abridged)", "Harry Potter (Full-Cast Editions)") - only for the
+  recordings its qualifier names (`editionHolds`: abridged, full cast = >= 4
+  narrators or one named "Full Cast", the named narrator; "(Unabridged)", a
+  language edition or an ordering note hold none). Editions are read from the name
+  because the community API links no series to a recording. A name that only
+  extends another ("Discworld: Tiffany Aching") is a series of its own. Match
+  candidates' `series` follow the rules (`workSeries`, with each series' facts read
+  from `series/{id}` through `workSem` and cached in the `s:` key space, quota
+  `maxSeriesEntries`; an unreadable record drops nothing) and carry additive `id`
+  and, on an edition, `recording_ids`; `meta.SeriesFor(series, recordingID)` (the
+  console's `seriesFor`) is the book's list for a recording, an edition of that
+  recording first, editions of others left out, which `matchrun.Propose` and the
+  match dialog's `communityValues` use. Rails take them too (`railMains`, before the
+  `maxSeriesRails` cap): an edition named for a kind of recording only for the
+  envelope's recording and after the rest, so the cap goes to the book's series (a
+  Discworld novel in six series kept its Tiffany Aching rail); other editions keep
+  their place (pre-v7 rails unchanged); a main view whose fetched record is a
+  translation or another language is left out.
   **Persistent meta cache** (`meta_cache`, migration 0024): `meta.Store` is a
   SQLite second level behind the memory cache (`catalog/metacache.go`, adapted to
   `meta.Store` by `api.metaStore`, which logs failures; best effort, a failure
@@ -849,7 +872,8 @@ admin overrides; see Metadata overrides below).
   Fallback, FROZEN until the production metaserve serves `works/match` (then delete
   it): when the route is missing (404 through `works/{id}`, 405, or a 200 without
   `results`) `searchHits` runs the old `lookup` + `works/search` unchanged (typed
-  text, else `CleanTitle` + author) scored by the tag-only `scoreCandidate`, and
+  text, else `CleanTitle` of the title without a file's numbering prefix,
+  `trimLeadNumbering`: "BV01 - ", "01 - ", as metaserve's works/match cuts it, + author) scored by the tag-only `scoreCandidate`, and
   the missing route is remembered for 15 min (`matchUnsupportedUntil`); a 503/5xx
   from works/match is an outage (502), never a fallback; identifiers normalized for
   the exact lookup; metadata off -> 404 `metadata_off`). Each recording keeps its
@@ -895,7 +919,12 @@ admin overrides; see Metadata overrides below).
   and per book `failed` says its own lookup failed or ran out of time, so asking again may resolve it
   (never for a clean miss); metadata off -> 404
   `metadata_off`. The Series cards place an owned book on a community rail by this work id first and
-  fall back to `series_index` (display only: no book is changed);
+  fall back to `series_index`, then to an unheld entry its title is (`sameTitle`: numbering prefix
+  and a trailing bracketed part ignored) (display only: no book is changed). A card's rail
+  (`pickRail`) is the one named like the series (or one of its `orderings`), then one named like
+  it give or take an article or a trailing "Series", then the rail holding >= 2 and more than half
+  of the series' resolved works (never a rail the series' name extends: the parent of a
+  sub-series; ties to the smaller rail), else none: no gaps rather than another series';
   `PUT`/`DELETE /admin/libraries/{id}/cover?path=` (custom cover in the DB;
   `catalog.SetCover` enforces 5 MiB, sniffed JPEG/PNG/WebP and an indexed book), which
   `GET /libraries/{id}/cover` serves first (by the requested path, then by the book a

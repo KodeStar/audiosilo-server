@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -115,10 +116,15 @@ type MatchReasons struct {
 	Identifier string `json:"identifier,omitempty"`
 }
 
-// MatchSeries is a series the work belongs to, with its position.
+// MatchSeries is a series the work belongs to, with its position. ID is its
+// community id; RecordingIDs, set only on an EDITION (a series named for one
+// kind of recording, see seriesrules.go), lists the work's recordings it holds:
+// a book is in it only as one of them (SeriesFor).
 type MatchSeries struct {
-	Name     string `json:"name"`
-	Position string `json:"position"`
+	ID           string   `json:"id,omitempty"`
+	Name         string   `json:"name"`
+	Position     string   `json:"position"`
+	RecordingIDs []string `json:"recording_ids,omitempty"`
 }
 
 // MatchRecording is one recording (narration/edition) of a candidate work.
@@ -339,7 +345,7 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 				errs[i] = err
 				return
 			}
-			c := s.toCandidate(detail, h.cover, q.Region)
+			c := s.toCandidate(detail, s.seriesFactsFor(ctx, detail), h.cover, q.Region)
 			c.RecordingID = h.recordingID
 			if rec := DefaultRecording(c, q.Duration, q.Region); rec != nil {
 				c.DefaultRecordingID = rec.ID
@@ -401,7 +407,7 @@ func (s *Service) searchHits(ctx context.Context, q MatchQuery, text, asin, isbn
 		// The book's own facts. metaserve's search requires every word, so the title
 		// goes in without what tags add and a community record lacks: the series
 		// name and "(Unabridged)" or ", Book 1" fluff.
-		text = strings.TrimSpace(match.CleanTitle(q.Title, q.Series) + " " + q.Author)
+		text = strings.TrimSpace(match.CleanTitle(trimLeadNumbering(q.Title), q.Series) + " " + q.Author)
 	}
 	var (
 		lookupHit          *matchHit
@@ -441,6 +447,34 @@ func (s *Service) searchHits(ctx context.Context, q MatchQuery, text, asin, isbn
 		}
 	}
 	return hits, []error{lookupErr, findErr}
+}
+
+// leadNumberingREs are the numbering shapes a file's title carries before the
+// title, as metaserve's works/match cuts them (its query/matchscore.go lead cuts):
+// "01 - ", "7. ", "#4 ", "Vol. 2 - "; a short code glued to its number, "BV01 - ",
+// "SW06: "; the code spaced from it, "HALO 28 - "; an upper-case code with only a
+// space, "DF15.5 ". The structured match sends titles raw for metaserve to read;
+// only the frozen search fallback (searchHits), which needs every word of its
+// query, cuts them here.
+var leadNumberingREs = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^\s*(?:(?:book|vol(?:ume)?\.?|part|band|teil|tome)\s*)?#?\d{1,3}(?:\.\d+)?(?:\s*[-.:_)\]]\s*|\s+)`),
+	regexp.MustCompile(`(?i)^\s*[a-z]{1,6}\d{1,3}(?:\.\d+)?\s*[-.:_)\]]\s+`),
+	regexp.MustCompile(`(?i)^\s*[a-z]{1,6}\s\d{1,3}(?:\.\d+)?\s*[-._)\]]\s+`),
+	regexp.MustCompile(`^\s*[A-Z]{1,6}\d{1,3}(?:\.\d+)?\s+`),
+}
+
+// trimLeadNumbering takes the first numbering shape off title's front, unless
+// that would leave nothing ("1984" stays: it is no shape, and "07" alone is kept).
+func trimLeadNumbering(title string) string {
+	for _, re := range leadNumberingREs {
+		if loc := re.FindStringIndex(title); loc != nil {
+			if rest := strings.TrimSpace(title[loc[1]:]); rest != "" {
+				return rest
+			}
+			return title
+		}
+	}
+	return title
 }
 
 // matchParams is the works/match request for a book: the typed text and
@@ -524,18 +558,15 @@ func hasMatchFacts(v url.Values) bool {
 	return false
 }
 
-func (s *Service) toCandidate(d *upstreamWorkDetail, cover, region string) *MatchCandidate {
+// toCandidate builds a candidate from its work document. Its series are the ones
+// a book of the work can be in (workSeries, with the series' facts): never a
+// variant reading order (it repeats a series at another position), a
+// translation or another language's series, nor an edition no recording is.
+func (s *Service) toCandidate(d *upstreamWorkDetail, facts map[string]*seriesFacts, cover, region string) *MatchCandidate {
 	c := &MatchCandidate{
 		WorkID: d.ID, Title: d.Title, Subtitle: d.Subtitle, Authors: toPersonRefs(d.Authors),
 		Language: d.Language, FirstPublished: d.FirstPublished, Description: d.Description,
-		Series: []MatchSeries{}, CoverURL: cover, WebURL: s.workURL(d.ID), Recordings: []MatchRecording{},
-	}
-	for _, sr := range d.Series {
-		// Alternate reading orders of one series repeat it; the console wants the
-		// series once, at its main position.
-		if sr.OrderingOf == "" {
-			c.Series = append(c.Series, MatchSeries{Name: sr.Name, Position: sr.Position})
-		}
+		Series: workSeries(d, facts), CoverURL: cover, WebURL: s.workURL(d.ID), Recordings: []MatchRecording{},
 	}
 	for _, r := range d.Recordings {
 		mr := MatchRecording{

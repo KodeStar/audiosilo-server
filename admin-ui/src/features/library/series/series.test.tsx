@@ -96,6 +96,25 @@ describe('series', () => {
     ).toBeInTheDocument();
   });
 
+  it("shows no gaps when no community rail is the series (never another series')", async () => {
+    // Only the wider Cosmere rail came back: it isn't named like the series, and
+    // none of the series' books are on it.
+    const calls = mockFetch(
+      routes({
+        'GET /libraries/1/meta': {
+          body: { ...wayOfKingsMeta, series: [wayOfKingsMeta.series![0]] },
+        },
+      }),
+    );
+    renderApp('/library/series');
+    const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+    await waitFor(() => expect(calls.some((c) => c.path === '/admin/books/works')).toBe(true));
+    await waitFor(() => expect(within(card).getByRole('button', { name: '#2 Words of Radiance' })));
+    expect(within(card).queryByRole('img')).toBeNull();
+    expect(card).not.toHaveTextContent(/missing/);
+    expect(within(card).queryByText(/\/\d/)).toBeNull();
+  });
+
   it("places a book on its community entry when its series index doesn't say", async () => {
     // Words of Radiance carries the series but no number; its ASIN says it is book 2.
     const unnumbered = [books[0], { ...books[1], series_index: 0 }, ...books.slice(2)];

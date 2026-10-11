@@ -324,16 +324,28 @@ type upstreamSeriesOrdering struct {
 	Ordering string `json:"ordering,omitempty"`
 }
 
+// upstreamSeriesTranslation is one end of a series' translation link.
+type upstreamSeriesTranslation struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Language string `json:"language,omitempty"`
+}
+
 // upstreamSeriesDetail is GET series/{id}. Ordering, OrderingOf and Orderings
 // arrive with artifact schema_version 7 and are absent before it. Orderings is
 // the whole family - primary first, then the variants by id - served
 // identically on every member, and omitted when the series has no variant.
 type upstreamSeriesDetail struct {
-	ID         string                   `json:"id"`
-	Name       string                   `json:"name"`
-	Ordering   string                   `json:"ordering,omitempty"`
-	OrderingOf string                   `json:"ordering_of,omitempty"`
-	Authors    []upstreamPersonRef      `json:"authors"`
-	Works      []upstreamSeriesEntry    `json:"works"`
-	Orderings  []upstreamSeriesOrdering `json:"orderings,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Language is the series' DERIVED language (its members' plurality), absent
+	// on a tie and before schema_version 7; TranslationOf the series it
+	// translates. Both feed the series rules (seriesrules.go).
+	Language      string                      `json:"language,omitempty"`
+	TranslationOf []upstreamSeriesTranslation `json:"translation_of,omitempty"`
+	Ordering      string                      `json:"ordering,omitempty"`
+	OrderingOf    string                      `json:"ordering_of,omitempty"`
+	Authors       []upstreamPersonRef         `json:"authors"`
+	Works         []upstreamSeriesEntry       `json:"works"`
+	Orderings     []upstreamSeriesOrdering    `json:"orderings,omitempty"`
 }

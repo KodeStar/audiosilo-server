@@ -174,6 +174,29 @@ func TestCandidatesSearchesTheCleanTitle(t *testing.T) {
 	}
 }
 
+// TestCandidatesSearchCutsTheNumbering: the search fallback cuts a file's
+// numbering prefix ("BV01 - ", "01 - "), which a community title never carries,
+// as the structured match's metaserve does; a title that is a number stays.
+func TestCandidatesSearchCutsTheNumbering(t *testing.T) {
+	for title, want := range map[string]string{
+		"BV01 - We Are Legion (We Are Bob)": "We Are Legion Dennis E. Taylor",
+		"BV03 - All These Worlds":           "All These Worlds Dennis E. Taylor",
+		"01 - For We Are Many":              "For We Are Many Dennis E. Taylor",
+		"DF15.5 Brief Cases":                "Brief Cases Dennis E. Taylor",
+		"1984":                              "1984 Dennis E. Taylor",
+		"07":                                "07 Dennis E. Taylor",
+		"R2-D2 and Me":                      "R2-D2 and Me Dennis E. Taylor",
+	} {
+		m := &matchServer{searchCode: 200, lookupCode: 200, workCode: 200}
+		if _, err := m.service(t).Candidates(context.Background(), MatchQuery{Title: title, Author: "Dennis E. Taylor"}); err != nil {
+			t.Fatal(err)
+		}
+		if m.gotQ != want {
+			t.Errorf("%q searched %q, want %q", title, m.gotQ, want)
+		}
+	}
+}
+
 // TestCandidatesNormalizesIdentifiers: an ASIN or ISBN as an admin pastes it
 // (lowercase, or hyphenated as printed) is looked up in the form metaserve holds.
 func TestCandidatesNormalizesIdentifiers(t *testing.T) {
