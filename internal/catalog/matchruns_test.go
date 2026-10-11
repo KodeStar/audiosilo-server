@@ -197,3 +197,44 @@ func TestMatchedBooks(t *testing.T) {
 		t.Errorf("every library = %s, want %s", got, want)
 	}
 }
+
+// TestCommunityRevertKeepsAnEdit: a community edit's revert (a match clearing a
+// series it wrote) removes only a community value, never an admin's own edit
+// made since; an admin's revert removes either.
+func TestCommunityRevertKeepsAnEdit(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "One", Root: "/tmp/one"})
+	if _, err := c.UpsertBook(ctx, scannedBook(lib.ID, "A/Book")); err != nil {
+		t.Fatal(err)
+	}
+	edit := func(source string, set map[string]string, revert ...string) {
+		t.Helper()
+		if err := c.EditBook(ctx, lib.ID, "A/Book", BookEdit{Source: source, Set: set, Revert: revert}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	series := func() string {
+		t.Helper()
+		b, err := c.GetBookByPath(ctx, lib.ID, "A/Book")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b.Series
+	}
+	edit(SourceEdited, map[string]string{FieldSeries: "Mine"})
+	edit(SourceCommunity, nil, FieldSeries)
+	if got := series(); got != "Mine" {
+		t.Fatalf("after a community revert = %q, want the admin's edit kept", got)
+	}
+	edit(SourceCommunity, map[string]string{FieldSeries: "Theirs"})
+	edit(SourceCommunity, nil, FieldSeries)
+	if got := series(); got == "Theirs" {
+		t.Fatalf("after a community revert = %q, want the community value gone", got)
+	}
+	edit(SourceEdited, map[string]string{FieldSeries: "Mine"})
+	edit(SourceEdited, nil, FieldSeries)
+	if got := series(); got == "Mine" {
+		t.Fatalf("after an admin revert = %q, want the edit gone", got)
+	}
+}

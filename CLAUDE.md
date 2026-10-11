@@ -901,7 +901,16 @@ admin overrides; see Metadata overrides below).
   via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep
   checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,
   never a position beside another series, a cover only for a book with none), which
-  also computes each item's `changes` for the review, so the two can't disagree.
+  also computes each item's `changes` for the review, so the two can't disagree. `Plan`
+  returns `Writes` (set, revert, cover): overwrite REPLACES a book's series with the
+  community's for its recording (the series rules), reverting a `series`/`series_index`/
+  `more_series` value the community wrote earlier that it no longer offers (a series it
+  deleted or merged, an edition or translation the rules leave out) back to the files';
+  fill and ids never revert; an admin's own series stay, and a community edit's revert
+  deletes only community rows (`editTx`), so an edit made since the run looked survives.
+  Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
+  changes the book's series, which the review shows as "old -> new". A retired work slug
+  is a redirect the client follows, so the names written are the merged record's.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN. A repick only touches an
   ASIN whose override is `source=community`. A **refresh** run (`mode: "refresh"`,
   `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each book up by its own

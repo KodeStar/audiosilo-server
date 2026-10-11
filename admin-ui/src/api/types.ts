@@ -1817,6 +1817,20 @@ export interface MatchProposal {
   values: Partial<Record<OverrideField, string>>;
 }
 
+/**
+ * matchrun.Change: what applying an item under one scope writes - its fields (set
+ * or reverted) and the cover - and, when it changes the book's series, the series
+ * before and after (main first; position 0 = none), so a removal shows.
+ */
+export interface MatchChange {
+  fields: OverrideField[];
+  cover: boolean;
+  series?: {
+    from: { name: string; position: number }[];
+    to: { name: string; position: number }[];
+  };
+}
+
 /** matchrun.ItemView: one book a run matched, as the review shows it. */
 export interface MatchRunItem {
   id: number;
@@ -1837,7 +1851,7 @@ export interface MatchRunItem {
   /** Nothing is indexed at the path any more. */
   gone?: boolean;
   /** What each scope would write: fields (in display order) and the cover. */
-  changes: Partial<Record<MatchScope, { fields: OverrideField[]; cover: boolean }>>;
+  changes: Partial<Record<MatchScope, MatchChange>>;
 }
 
 /** GET /admin/match-runs/{id}/items: a page, and the id the next reads after (0 = the last). */

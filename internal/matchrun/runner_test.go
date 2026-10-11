@@ -550,3 +550,55 @@ func TestApplyCoverFailureAndInterruptedApply(t *testing.T) {
 		t.Fatalf("status = %s, want ready", got.Status)
 	}
 }
+
+// TestRefreshCleansAPollutedBook: a book an earlier match filed under every
+// series of its work (editions included, as community values) is cleaned by a
+// refresh applied with overwrite: its series become the community's current ones
+// for its recording and the stale ones are reverted; the review shows the series
+// before and after; fill leaves them be.
+func TestRefreshCleansAPollutedBook(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "HP/Chamber", "Chamber", "B0US000001", nil)
+	if err := e.cat.EditBook(ctx, e.lib, "HP/Chamber", catalog.BookEdit{Source: catalog.SourceCommunity, Set: map[string]string{
+		"series": "Mars (Full-Cast Editions)", "series_index": "1",
+		"more_series": `[{"name":"Mars (Narrated by Someone Else)","position":1}]`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	hit := cand("the-martian", 100, "")
+	hit.RecordingID = "bray"
+	hit.Recordings[0].Series = []meta.MatchSeries{{Name: "Mars", Position: "1"}}
+	e.matcher.byASIN["B0US000001"] = []meta.MatchCandidate{hit}
+
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 1 {
+		t.Fatalf("auto = %+v", auto)
+	}
+	ch := auto[0].Changes
+	if ch[ScopeFill].Series != nil {
+		t.Errorf("fill series change = %+v, want none", ch[ScopeFill].Series)
+	}
+	sc := ch[ScopeOverwrite].Series
+	if sc == nil || len(sc.From) != 2 || sc.From[0].Name != "Mars (Full-Cast Editions)" || sc.From[1].Name != "Mars (Narrated by Someone Else)" ||
+		len(sc.To) != 1 || sc.To[0].Name != "Mars" || sc.To[0].Position != 1 {
+		t.Fatalf("overwrite series change = %+v, want the two editions -> Mars #1", sc)
+	}
+	if !slices.Contains(ch[ScopeOverwrite].Fields, "more_series") {
+		t.Errorf("overwrite fields = %v, want the reverted more_series listed", ch[ScopeOverwrite].Fields)
+	}
+
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	b, err := e.cat.GetBookByPath(ctx, e.lib, "HP/Chamber")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all := b.AllSeries(); len(all) != 1 || all[0].Name != "Mars" || all[0].Position != 1 {
+		t.Fatalf("book series = %+v, want Mars #1 alone", all)
+	}
+}

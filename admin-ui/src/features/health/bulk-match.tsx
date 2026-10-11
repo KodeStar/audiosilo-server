@@ -565,6 +565,18 @@ function ItemRow({
     : [];
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
+  const seriesLine = (refs: { name: string; position: number }[]) =>
+    refs
+      .map((s) => seriesLabel(s.name, s.position, lang, t))
+      .filter(Boolean)
+      .join('; ') || t('health.bulkMatch.noSeries');
+  // What the scope does to the book's series, old -> new: a series it removes shows.
+  const seriesChange = change?.series
+    ? t('health.bulkMatch.seriesChange', {
+        from: seriesLine(change.series.from),
+        to: seriesLine(change.series.to),
+      })
+    : '';
   // The community's main series, then any others the work is in ("Discworld #8; City Watch #1").
   const series = [
     { name: p.values.series ?? '', position: Number(p.values.series_index) },
@@ -644,7 +656,11 @@ function ItemRow({
             )}
           </span>
         )}
-        {candidate && series ? (
+        {candidate && seriesChange ? (
+          <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
+            {seriesChange}
+          </span>
+        ) : candidate && series ? (
           <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
             {t('health.bulkMatch.inSeries', { series })}
           </span>

@@ -292,3 +292,61 @@ func TestPlanSeries(t *testing.T) {
 		t.Fatalf("overwrite on a book that has it all = %v", set)
 	}
 }
+
+// polluted is a book an earlier match filed under every series of its work: a
+// full-cast edition as its main series and a narrator's edition beside it, all
+// written by the community (scanned: the path's "Harry Potter").
+func polluted(edited ...string) *catalog.MatchState {
+	st := state(nil, nil, false)
+	set := func(field, value, scanned string) {
+		fv := catalog.FieldValue{Value: value, Source: catalog.SourceCommunity, Scanned: scanned, Locked: true}
+		if slices.Contains(edited, field) {
+			fv.Source = catalog.SourceEdited
+		}
+		st.Fields[field] = fv
+	}
+	set("series", "Harry Potter (Full-Cast Editions)", "Harry Potter")
+	set("series_index", "2", "")
+	set("more_series", `[{"name":"Harry Potter (Narrated by Stephen Fry)","position":2}]`, "")
+	return st
+}
+
+// TestPlanOverwriteReplacesTheSeries: overwrite REPLACES a book's series with the
+// community's current ones (here: Harry Potter alone, the editions left out by
+// the series rules), reverting a series value the community wrote that it no
+// longer offers; fill and ids change nothing a book has. An admin's own series
+// stay under every scope.
+func TestPlanOverwriteReplacesTheSeries(t *testing.T) {
+	t.Parallel()
+	p := catalog.MatchProposal{Values: map[string]string{"series": "Harry Potter", "series_index": "2"}}
+
+	w := Plan(ScopeOverwrite, polluted(), p)
+	if !maps.Equal(w.Set, map[string]string{"series": "Harry Potter"}) || !slices.Equal(w.Revert, []string{"more_series"}) {
+		t.Fatalf("overwrite = set %v revert %v, want Harry Potter set and the edition reverted", w.Set, w.Revert)
+	}
+	for _, scope := range []string{ScopeFill, ScopeIDs} {
+		if w := Plan(scope, polluted(), p); !w.Empty() {
+			t.Errorf("%s = %+v, want nothing (the book has series)", scope, w)
+		}
+	}
+	// The admin's own main series stays; the community's other series still go.
+	w = Plan(ScopeOverwrite, polluted("series"), p)
+	if _, ok := w.Set["series"]; ok || !slices.Equal(w.Revert, []string{"more_series"}) {
+		t.Fatalf("edited series = set %v revert %v", w.Set, w.Revert)
+	}
+	// The admin's own other series stay too.
+	if w := Plan(ScopeOverwrite, polluted("more_series"), p); slices.Contains(w.Revert, "more_series") {
+		t.Fatalf("edited more_series reverted: %v", w.Revert)
+	}
+
+	// The community lists no series for the book any more: every series value it
+	// wrote goes, back to the files' ("Harry Potter" from the path).
+	w = Plan(ScopeOverwrite, polluted(), catalog.MatchProposal{Values: map[string]string{}})
+	if len(w.Set) != 0 || !slices.Equal(w.Revert, []string{"series", "series_index", "more_series"}) {
+		t.Fatalf("no community series = set %v revert %v", w.Set, w.Revert)
+	}
+	// A series from the files is never reverted (there is no override to drop).
+	if w := Plan(ScopeOverwrite, state(map[string]string{"series": "Discworld"}, nil, false), catalog.MatchProposal{Values: map[string]string{}}); !w.Empty() {
+		t.Fatalf("tag series = %+v, want nothing", w)
+	}
+}

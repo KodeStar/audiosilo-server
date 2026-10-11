@@ -178,6 +178,43 @@ describe('bulk matching', () => {
     );
   });
 
+  it('shows the series a scope replaces, old to new', async () => {
+    const polluted: MatchRunItem = {
+      ...confident,
+      changes: {
+        fill: { fields: [], cover: false },
+        overwrite: {
+          fields: ['series', 'more_series'],
+          cover: false,
+          series: {
+            from: [
+              { name: 'Mars (Full-Cast Editions)', position: 1 },
+              { name: 'Mars (Narrated by Someone Else)', position: 1 },
+            ],
+            to: [{ name: 'Mars', position: 1 }],
+          },
+        },
+      },
+    };
+    mockFetch(
+      routes([run({ mode: 'refresh' })], {
+        'GET /admin/match-runs/5/items': { body: { items: [polluted], next_after: 0 } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fill in matched books' });
+    // Fill leaves the series be: the proposal's series shows as before.
+    expect(await within(dialog).findByText('Series: Mars #1')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('radio', { name: /Use community values/ }));
+    expect(
+      await within(dialog).findByText(
+        'Series: Mars (Full-Cast Editions) #1; Mars (Narrated by Someone Else) #1 → Mars #1',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows a working run and stops it', async () => {
     const calls = mockFetch(
       routes([run({ status: 'matching', done: 1, total: 4 })], {
