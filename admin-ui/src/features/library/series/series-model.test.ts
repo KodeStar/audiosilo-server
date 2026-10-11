@@ -145,6 +145,12 @@ describe('rails', () => {
     expect(pickRail([elsewhere], 'Tiffany', tiffanyBooks)).toBeUndefined();
   });
 
+  it('takes a rail the series name merely extends, without a separator', () => {
+    const mistborn = tiffany('Mistborn');
+    expect(pickRail([mistborn], 'Mistborn Trilogy', tiffanyBooks, tiffanyWorks)).toBe(mistborn);
+    expect(pickRail([mistborn], 'Mistborn - Era One', tiffanyBooks, tiffanyWorks)).toBeUndefined();
+  });
+
   it('prefers the smaller of two rails holding as many of the books', () => {
     const big = rail(
       'Big',

@@ -59,6 +59,7 @@ func TestPropose(t *testing.T) {
 // recording's (an edition named for it first, as the community service's
 // candidate lists them per recording); with no recording, the work's own.
 func TestProposeSeriesForTheRecording(t *testing.T) {
+	t.Parallel()
 	hp := meta.MatchSeries{ID: "harry-potter", Name: "Harry Potter", Position: "2"}
 	cast := meta.MatchSeries{ID: "hp-full-cast", Name: "Harry Potter (Full-Cast Editions)", Position: "2"}
 	c := meta.MatchCandidate{

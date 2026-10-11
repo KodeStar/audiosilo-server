@@ -98,8 +98,9 @@ function orderingRail(o: MetaSeriesOrdering): MetaSeries {
  *    those that resolved. A book's work sits on every series it is in, so one
  *    shared book can't tell the series apart (a Tiffany Aching novel is on the
  *    Discworld rail too); two that are most of the series are this series spelled
- *    another way. A rail whose name the series' name extends ("Discworld" for
- *    "Discworld: Tiffany Aching") is the parent, never the series. Ties go to the
+ *    another way. A rail named like the head of a series' name before a colon
+ *    or a dash ("Discworld" for "Discworld: Tiffany Aching") is its parent, never
+ *    the series ("Mistborn" for "Mistborn Trilogy" can be). Ties go to the
  *    smaller rail, the more specific series.
  */
 export function pickRail(
@@ -119,11 +120,12 @@ export function pickRail(
     }
   }
   const ids = new Set(owned.map((b) => works?.get(refKey(b))).filter((id) => id !== undefined));
-  const local = seriesKey(name);
+  // "Discworld: Tiffany Aching" (or "Discworld - Witches") names a series of
+  // Discworld's: its head before the separator is the parent's name.
+  const head = seriesKey(name.split(/\s*:\s*|\s+[-\u2013\u2014]\s+/)[0]);
   let best: { rail: MetaSeries; held: number; size: number } | undefined;
   for (const r of rails) {
-    const parent = seriesKey(r.name);
-    if (parent && local.startsWith(parent)) continue;
+    if (head !== seriesKey(name) && seriesKey(r.name) === head) continue;
     const held = new Set(r.works.filter((w) => ids.has(w.id)).map((w) => w.id)).size;
     const size = railEntries(r).length;
     if (held < 2 || held * 2 <= ids.size) continue;

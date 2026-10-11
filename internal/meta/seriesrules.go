@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
 	"github.com/kodestar/audiosilo-server/pkg/match"
@@ -54,18 +55,33 @@ func factsOf(sd *upstreamSeriesDetail) *seriesFacts {
 	return f
 }
 
-// foreignSeries reports whether series id, whose record says f, is no series a
-// book of work d is in: it translates another of the work's series, or its
-// language differs from the work's. Facts not known (nil, or no language) never
-// count against a series.
-func foreignSeries(f *seriesFacts, id string, d *upstreamWorkDetail) bool {
+// foreignSeries reports whether series id is no series a book of work d is in,
+// by the records in facts: its language differs from the work's, or it
+// translates another of the work's series that is not itself in another
+// language than the work (a German work listed in "Discworld" and in its
+// translation "Scheibenwelt" is in Scheibenwelt). Facts not known (no record,
+// or no language) never count against a series.
+func foreignSeries(facts map[string]*seriesFacts, id string, d *upstreamWorkDetail) bool {
+	f := facts[id]
 	if f == nil {
 		return false
 	}
+	if otherLanguage(f, d) {
+		return true
+	}
 	for _, t := range f.TranslationOf {
-		if t != id && slices.ContainsFunc(d.Series, func(r upstreamSeriesRef) bool { return r.ID == t }) {
+		if t != id && !otherLanguage(facts[t], d) && slices.ContainsFunc(d.Series, func(r upstreamSeriesRef) bool { return r.ID == t }) {
 			return true
 		}
+	}
+	return false
+}
+
+// otherLanguage reports whether a series' record says it is in another language
+// than work d (primary subtags; a language not known agrees).
+func otherLanguage(f *seriesFacts, d *upstreamWorkDetail) bool {
+	if f == nil {
+		return false
 	}
 	a, b := model.PrimarySubtag(f.Language), model.PrimarySubtag(d.Language)
 	return a != "" && b != "" && a != b
@@ -93,9 +109,9 @@ var (
 	// "Discworld (abridged)", "Harry Potter [Full Cast]": a trailing bracketed
 	// qualifier.
 	editionBracketRE = regexp.MustCompile(`^(.*\S)\s*[(\[]([^()\[\]]+)[)\]]\s*$`)
-	// "Harry Potter - Narrated by Stephen Fry", "Harry Potter - Gesprochen von
-	// Rufus Beck": a narrator named after a dash or a colon.
-	editionNarratorRE = regexp.MustCompile(`(?i)^(.*\S)\s+[-:\x{2013}\x{2014}]\s+((?:` + narratedBy + `)\s+.+)$`)
+	// "Harry Potter - Narrated by Stephen Fry", "Harry Potter: Gesprochen von
+	// Rufus Beck": a narrator named after a spaced dash or a colon.
+	editionNarratorRE = regexp.MustCompile(`(?i)^(.*\S)(?:\s*:|\s+[-\x{2013}\x{2014}])\s+((?:` + narratedBy + `)\s+.+)$`)
 
 	narratedBy = `(?:narrated|read|performed)\s+by|gesprochen\s+von|lu\s+par|letto\s+da|le[ií]do\s+por|narrado\s+por`
 	narratorRE = regexp.MustCompile(`(?i)(?:` + narratedBy + `)\s+(.+)`)
@@ -110,18 +126,19 @@ var (
 // fullCastVoices is the narrators at which a recording is a full-cast production.
 const fullCastVoices = 4
 
-// kindOf reads an edition's qualifier (unabridged before abridged: the one word
-// holds the other).
+// kindOf reads an edition's qualifier: a narrator first (it says the most:
+// "Unabridged, Narrated by Stephen Fry"), then unabridged before abridged (the
+// one word holds the other).
 func kindOf(qualifier string) editionKind {
 	switch {
+	case narratorRE.MatchString(qualifier):
+		return editionNarrator
 	case unabridgedRE.MatchString(qualifier):
 		return editionUnabridged
 	case abridgedRE.MatchString(qualifier):
 		return editionAbridged
 	case fullCastRE.MatchString(qualifier):
 		return editionFullCast
-	case narratorRE.MatchString(qualifier):
-		return editionNarrator
 	}
 	return editionOther
 }
@@ -163,11 +180,14 @@ func editionQualifier(name string, bases []string) (qualifier string, ok bool) {
 // judgedSeries is one of a work's series with what the rules make of it for a
 // book: Dropped (no series a book of the work is in), else an edition (Kind) held
 // only by Recordings, or a series every recording is in (Kind notEdition).
+// Foreign says its record puts it in another language, or makes it a
+// translation (foreignSeries); a foreign series is Dropped and never an edition.
 type judgedSeries struct {
 	Ref        upstreamSeriesRef
 	Kind       editionKind
 	Recordings []string
 	Dropped    bool
+	Foreign    bool
 }
 
 // judgeSeries applies the rules to a work's memberships, in order, leaving out
@@ -183,7 +203,8 @@ func judgeSeries(d *upstreamWorkDetail, facts map[string]*seriesFacts) []judgedS
 			continue
 		}
 		seen[ref.ID] = true
-		j := judgedSeries{Ref: ref, Dropped: foreignSeries(facts[ref.ID], ref.ID, d)}
+		foreign := foreignSeries(facts, ref.ID, d)
+		j := judgedSeries{Ref: ref, Dropped: foreign, Foreign: foreign}
 		if !j.Dropped {
 			bases = append(bases, ref.Name)
 		}
@@ -248,7 +269,8 @@ func (ws workSeries) of(recordingID string) []MatchSeries {
 // railMains orders and filters a work's rail families (familyMains) for the
 // recording a book is (recordingID, "" = not known), before the rail cap
 // (maxSeriesRails) is spent: an edition named for a kind of recording only when
-// the book is that recording, after the rest, and no series already known to be
+// the book is that recording, and then first (it is the book's main series, as
+// workSeries.of makes it), and no series already known to be
 // foreign (facts: what the cache holds; the records aren't read here). Every
 // other family keeps its place: a variant-only work's variant, and an edition
 // named for anything else ("(Chronological)" from a metaserve that predates
@@ -265,14 +287,14 @@ func railMains(mains []upstreamSeriesRef, d *upstreamWorkDetail, recordingID str
 		case !ok:
 			out = append(out, ref)
 		case j.Kind == notEdition || j.Kind == editionOther:
-			if !foreignSeries(facts[ref.ID], ref.ID, d) {
+			if !j.Foreign {
 				out = append(out, ref)
 			}
 		case slices.Contains(j.Recordings, recordingID):
 			editions = append(editions, ref)
 		}
 	}
-	return append(out, editions...)
+	return append(editions, out...)
 }
 
 // cachedFacts is the facts the cache holds for d's series, none fetched.
@@ -286,19 +308,43 @@ func (s *Service) cachedFacts(d *upstreamWorkDetail) map[string]*seriesFacts {
 	return out
 }
 
-// seriesFactsFor reads the facts of every series the works name that a book can
-// be in (the variant orders aside), each once, concurrently (bounded by
-// workSem), from the cache when they are there. A series whose record can't be
-// read is left out, which drops nothing.
+// maxSeriesFacts bounds the series records one match reads for their facts,
+// and seriesFactsTimeout how long it waits for them. The facts only ever drop a
+// series, and one not read drops nothing, so a work listed in dozens of series
+// (odd or hostile data) or a slow series endpoint costs some facts, never a
+// burst of GETs on the shared community service or a dialog held for the whole
+// compose budget.
+const (
+	maxSeriesFacts     = 16
+	seriesFactsTimeout = 5 * time.Second
+)
+
+// seriesFactsFor reads the facts of the series the works name that a book can
+// be in (the variant orders aside) and the facts could rule on - a work with
+// no language and a single series has nothing to rule on -, each once, at most
+// maxSeriesFacts, concurrently (bounded by workSem), from the cache when they
+// are there. A series whose record can't be read is left out, which drops
+// nothing.
 func (s *Service) seriesFactsFor(ctx context.Context, works []*upstreamWorkDetail) map[string]*seriesFacts {
 	var ids []string
 	for _, d := range works {
+		var own []string
 		for _, ref := range d.Series {
-			if ref.OrderingOf == "" && ref.ID != "" && !slices.Contains(ids, ref.ID) {
-				ids = append(ids, ref.ID)
+			if ref.OrderingOf == "" && ref.ID != "" && !slices.Contains(own, ref.ID) {
+				own = append(own, ref.ID)
+			}
+		}
+		if d.Language == "" && len(own) < 2 {
+			continue
+		}
+		for _, id := range own {
+			if len(ids) < maxSeriesFacts && !slices.Contains(ids, id) {
+				ids = append(ids, id)
 			}
 		}
 	}
+	ctx, cancel := context.WithTimeout(ctx, seriesFactsTimeout)
+	defer cancel()
 	facts := make([]*seriesFacts, len(ids))
 	var wg sync.WaitGroup
 	for i, id := range ids {

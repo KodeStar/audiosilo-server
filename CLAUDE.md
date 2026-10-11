@@ -458,13 +458,15 @@ admin overrides; see Metadata overrides below).
   lag.
   **Series rules** (`meta/seriesrules.go`): which of a work's series a book of it
   is in. Never a variant reading order (`ordering_of`), a translation of another of
-  the work's series (`translation_of`) or a series whose derived `language` differs
-  from the work's (primary subtags; unknown agrees); an EDITION - a series named
+  the work's series (`translation_of`; unless that one's derived `language` differs
+  from the work's) or a series whose derived `language` differs from the work's
+  (primary subtags; unknown agrees); an EDITION - a series named
   exactly like another of the work's plus a bracketed qualifier or a "narrated by"
   tail ("Discworld (abridged)", "Harry Potter (Full-Cast Editions)") - only for the
   recordings its qualifier names (`editionHolds`: abridged, full cast = >= 4
   narrators or one named "Full Cast", the named narrator; "(Unabridged)", a
-  language edition or an ordering note hold none). Editions are read from the name
+  language edition or an ordering note hold none; "narrated by" after a spaced dash
+  or a colon). Editions are read from the name
   because the community API links no series to a recording. A name that only
   extends another ("Discworld: Tiffany Aching") is a series of its own. A match
   candidate's `series` is the work's series every recording is in, and each
@@ -472,14 +474,18 @@ admin overrides; see Metadata overrides below).
   first (`workSeries.of`), which `matchrun.Propose` and the match dialog's
   `communityValues` read (so the console has no copy of the rule); series carry an
   additive `id`. The facts come from `series/{id}`, each series once per request,
-  concurrently through `workSem`, cached in the `s:` key space (quota
-  `maxSeriesEntries`); an unreadable record drops nothing, and a repick
-  (`MatchQuery.NoSeries`) reads none. Rails take the rules too (`railMains`, before
-  the `maxSeriesRails` cap): an edition named for a kind of recording only for the
-  envelope's recording and after the rest, so the cap goes to the book's series (a
-  Discworld novel in six series kept its Tiffany Aching rail); other editions keep
-  their place (pre-v7 rails unchanged); a series the cache already knows is foreign
-  is left out before the cap, and a main view whose fetched record is foreign after it.
+  concurrently through `workSem`, at most `maxSeriesFacts` per match within
+  `seriesFactsTimeout` (none for a work they can't rule on: no language, one
+  series), cached in the `s:` key space (quota `maxSeriesEntries`); an unreadable
+  record drops nothing, and a repick (`MatchQuery.NoSeries`) reads none. Rails take
+  the rules too (`railMains`, before the `maxSeriesRails` cap): an edition named for
+  a kind of recording only for the recording the lookup named (or the work's only
+  one; never `pickRecording`'s first-recording fallback), then first (the book's main
+  series, as a match makes it), so the cap goes to the book's series (a Discworld novel in six series kept its Tiffany
+  Aching rail); other editions keep their place (pre-v7 rails unchanged); a series
+  the cache already knows is foreign is left out before the cap, and a main view
+  whose fetched record is foreign once read, handing its slot to the next family (at
+  most `maxForeignRails` times; a translation judged with every record read).
   **Persistent meta cache** (`meta_cache`, migration 0024): `meta.Store` is a
   SQLite second level behind the memory cache (`catalog/metacache.go`, adapted to
   `meta.Store` by `api.metaStore`, which logs failures; best effort, a failure
@@ -923,7 +929,7 @@ admin overrides; see Metadata overrides below).
   and a trailing bracketed part ignored) (display only: no book is changed). A card's rail
   (`pickRail`) is the one named like the series (or one of its `orderings`), then one named like
   it give or take an article or a trailing "Series", then the rail holding >= 2 and more than half
-  of the series' resolved works (never a rail the series' name extends: the parent of a
+  of the series' resolved works (never the rail named like the series' name before a colon or a dash: the parent of a
   sub-series; ties to the smaller rail), else none: no gaps rather than another series' (the rail
   comes from one matched book's `/meta`, so a work in more than `maxSeriesRails` real series can
   still lack one);

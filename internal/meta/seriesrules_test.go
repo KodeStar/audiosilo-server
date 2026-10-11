@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -162,6 +163,8 @@ func TestEditionHolds(t *testing.T) {
 		{"Dramatized Adaptation", cast, true},
 		{"Narrated by Stephen Fry", fry, true},
 		{"Narrated by Stephen Fry", beck, false},
+		{"Unabridged, Narrated by Stephen Fry", fry, true},
+		{"Unabridged, Narrated by Stephen Fry", beck, false},
 		{"Gesprochen von Rufus Beck", beck, true},
 		{"German Edition", fry, false},
 		{"Chronological", fry, false},
@@ -173,6 +176,12 @@ func TestEditionHolds(t *testing.T) {
 	if q, ok := editionQualifier("Harry Potter - Gesprochen von Rufus Beck", []string{"Harry Potter"}); !ok || q != "Gesprochen von Rufus Beck" {
 		t.Errorf("a narrator tail = %q %v", q, ok)
 	}
+	if q, ok := editionQualifier("Harry Potter: Narrated by Stephen Fry", []string{"Harry Potter"}); !ok || q != "Narrated by Stephen Fry" {
+		t.Errorf("a narrator after a colon = %q %v", q, ok)
+	}
+	if _, ok := editionQualifier("Spider-Man - Narrated by", []string{"Spider"}); ok {
+		t.Error("a hyphen inside a name read as a narrator tail")
+	}
 	if _, ok := editionQualifier("Harry Potter - The Illustrated Editions", []string{"Harry Potter"}); ok {
 		t.Error("a dash tail that names no narrator read as an edition")
 	}
@@ -182,7 +191,7 @@ func TestEditionHolds(t *testing.T) {
 // more series than the cap, most of them editions of the others, keeps the
 // series a book of its recording is in (the Series page's "Discworld: Tiffany
 // Aching" was cut by "(abridged)" editions sorting first); an edition comes back
-// for its own recording, after the rest; an edition named for anything else keeps
+// for its own recording, first (the book's main series); an edition named for anything else keeps
 // its place; a series the cache knows is foreign goes.
 func TestRailMains(t *testing.T) {
 	t.Parallel()
@@ -207,7 +216,7 @@ func TestRailMains(t *testing.T) {
 		t.Errorf("unabridged = %s, want %s", got, want)
 	}
 	if got, want := ids(railMains(familyMains(d.Series), d, "robinson", foreign)),
-		"discworld for-kids tiffany chrono discworld-abridged for-kids-abridged tiffany-abridged"; got != want {
+		"discworld-abridged for-kids-abridged tiffany-abridged discworld for-kids tiffany chrono"; got != want {
 		t.Errorf("abridged = %s, want %s", got, want)
 	}
 	if got := ids(railMains(familyMains(d.Series), d, "briggs", nil)); !strings.HasSuffix(got, "chrono scheibenwelt") {
@@ -293,5 +302,138 @@ func TestEnrichLeavesOutAForeignRail(t *testing.T) {
 	}
 	if len(env.Series) != 1 || env.Series[0].Name != "Discworld" {
 		t.Fatalf("rails = %+v, want Discworld alone", env.Series)
+	}
+}
+
+// TestForeignSeriesTranslatedWork: a translation is foreign only while its
+// original is in the work's language too. A German work listed in "Discworld"
+// (English) and its translation "Scheibenwelt" is in Scheibenwelt, not in no
+// series at all; an English work in both is in Discworld alone.
+func TestForeignSeriesTranslatedWork(t *testing.T) {
+	t.Parallel()
+	facts := map[string]*seriesFacts{
+		"discworld":    {Language: "en"},
+		"scheibenwelt": {Language: "de", TranslationOf: []string{"discworld"}},
+	}
+	refs := []upstreamSeriesRef{seriesRef("discworld", "Discworld"), seriesRef("scheibenwelt", "Scheibenwelt")}
+	for lang, want := range map[string]string{"de": "Scheibenwelt", "en": "Discworld"} {
+		d := &upstreamWorkDetail{ID: "w", Language: lang, Series: refs}
+		if got := seriesNames(newWorkSeries(d, facts).of("")); got != want {
+			t.Errorf("a %s work: %s, want %s", lang, got, want)
+		}
+	}
+	// The translation's own language unknown: its original, in the work's
+	// language, still makes it a translation.
+	facts["scheibenwelt"] = &seriesFacts{TranslationOf: []string{"discworld"}}
+	d := &upstreamWorkDetail{ID: "w", Language: "en", Series: refs}
+	if got := seriesNames(newWorkSeries(d, facts).of("")); got != "Discworld" {
+		t.Errorf("an unknown-language translation: %s, want Discworld", got)
+	}
+}
+
+// TestEnrichForeignRailSpendsNoSlot: a main view whose record turns out foreign
+// hands its rail to the next family, so a work listed in its translation's series
+// first still gets maxSeriesRails rails; and a translation whose original is in
+// another language than the work keeps its rail whatever order they are read in.
+func TestEnrichForeignRailSpendsNoSlot(t *testing.T) {
+	t.Parallel()
+	m := &mockMeta{
+		lookupJSON: `{"work":{"id":"w","title":"T","authors":[]},"recording_id":"r"}`,
+		workJSON: `{"id":"w","title":"T","language":"en","authors":[],"series":[
+			{"id":"scheibenwelt","name":"Scheibenwelt","position":"1"},{"id":"a","name":"A","position":"1"},
+			{"id":"b","name":"B","position":"1"},{"id":"c","name":"C","position":"1"}],"recordings":[{"id":"r","narrators":[]}]}`,
+		seriesJSON: map[string]string{
+			"scheibenwelt": seriesBody("scheibenwelt", "Scheibenwelt", `"language":"de",`),
+			"a":            seriesBody("a", "A", ""),
+			"b":            seriesBody("b", "B", ""),
+			"c":            seriesBody("c", "C", ""),
+		},
+	}
+	srv := httptest.NewServer(m.handler())
+	t.Cleanup(srv.Close)
+	env, err := NewService(srv.URL, nil).Enrich(context.Background(), "B0T", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(env.Series); got != maxSeriesRails || env.Series[2].Name != "C" {
+		t.Fatalf("rails = %+v, want A, B, C", env.Series)
+	}
+
+	// A German work: the translation is read before its English original.
+	m2 := &mockMeta{
+		lookupJSON: `{"work":{"id":"w","title":"T","authors":[]},"recording_id":"r"}`,
+		workJSON: `{"id":"w","title":"T","language":"de","authors":[],"series":[
+			{"id":"scheibenwelt","name":"Scheibenwelt","position":"1"},{"id":"discworld","name":"Discworld","position":"1"}],
+			"recordings":[{"id":"r","narrators":[]}]}`,
+		seriesJSON: map[string]string{
+			"scheibenwelt": seriesBody("scheibenwelt", "Scheibenwelt", `"language":"de","translation_of":[{"id":"discworld","name":"Discworld","language":"en"}],`),
+			"discworld":    seriesBody("discworld", "Discworld", `"language":"en",`),
+		},
+	}
+	srv2 := httptest.NewServer(m2.handler())
+	t.Cleanup(srv2.Close)
+	env, err = NewService(srv2.URL, nil).Enrich(context.Background(), "B0T", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Series) != 1 || env.Series[0].Name != "Scheibenwelt" {
+		t.Fatalf("rails = %+v, want Scheibenwelt alone", env.Series)
+	}
+}
+
+// TestEnrichEditionRailsNeedTheRecording: an edition's rail is the book's only
+// when the lookup named its recording, never because pickRecording fell back
+// to the work's first one.
+func TestEnrichEditionRailsNeedTheRecording(t *testing.T) {
+	t.Parallel()
+	work := `{"id":"w","title":"T","language":"en","authors":[],"series":[
+		{"id":"discworld","name":"Discworld","position":"1"},{"id":"discworld-abridged","name":"Discworld (abridged)","position":"1"}],
+		"recordings":[{"id":"short","abridged":true,"narrators":[]},{"id":"full","narrators":[]}]}`
+	for recording, want := range map[string]int{"": 1, "short": 2, "full": 1} {
+		m := &mockMeta{
+			lookupJSON: `{"work":{"id":"w","title":"T","authors":[]},"recording_id":"` + recording + `"}`,
+			workJSON:   work,
+			seriesJSON: map[string]string{
+				"discworld":          seriesBody("discworld", "Discworld", ""),
+				"discworld-abridged": seriesBody("discworld-abridged", "Discworld (abridged)", ""),
+			},
+		}
+		srv := httptest.NewServer(m.handler())
+		t.Cleanup(srv.Close)
+		env, err := NewService(srv.URL, nil).Enrich(context.Background(), "B0T", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(env.Series) != want {
+			t.Errorf("recording %q: rails = %+v, want %d", recording, env.Series, want)
+		}
+	}
+}
+
+// TestCandidatesBoundTheSeriesFacts: a work listed in dozens of series reads at
+// most maxSeriesFacts records, and a work the facts can't rule on (no language,
+// one series) reads none.
+func TestCandidatesBoundTheSeriesFacts(t *testing.T) {
+	t.Parallel()
+	var refs []string
+	for i := range 3 * maxSeriesFacts {
+		refs = append(refs, fmt.Sprintf(`{"id":"s%d","name":"S%d","position":"1"}`, i, i))
+	}
+	for _, c := range []struct {
+		work string
+		max  int32
+	}{
+		{`{"id":"w","title":"T","language":"en","authors":[],"series":[` + strings.Join(refs, ",") + `],"recordings":[]}`, maxSeriesFacts},
+		{`{"id":"w","title":"T","authors":[],"series":[` + refs[0] + `],"recordings":[]}`, 0},
+	} {
+		m := &mockMeta{lookupJSON: `{"work":{"id":"w","title":"T","authors":[]}}`, workJSON: c.work, seriesJSON: map[string]string{}}
+		srv := httptest.NewServer(m.handler())
+		t.Cleanup(srv.Close)
+		if _, err := NewService(srv.URL, nil).Candidates(context.Background(), MatchQuery{ASIN: "B0T"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := m.seriesHits.Load(); got != c.max {
+			t.Errorf("series GETs = %d, want %d", got, c.max)
+		}
 	}
 }
