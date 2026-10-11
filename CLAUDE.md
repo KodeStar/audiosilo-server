@@ -466,19 +466,20 @@ admin overrides; see Metadata overrides below).
   narrators or one named "Full Cast", the named narrator; "(Unabridged)", a
   language edition or an ordering note hold none). Editions are read from the name
   because the community API links no series to a recording. A name that only
-  extends another ("Discworld: Tiffany Aching") is a series of its own. Match
-  candidates' `series` follow the rules (`workSeries`, with each series' facts read
-  from `series/{id}` through `workSem` and cached in the `s:` key space, quota
-  `maxSeriesEntries`; an unreadable record drops nothing) and carry additive `id`
-  and, on an edition, `recording_ids`; `meta.SeriesFor(series, recordingID)` (the
-  console's `seriesFor`) is the book's list for a recording, an edition of that
-  recording first, editions of others left out, which `matchrun.Propose` and the
-  match dialog's `communityValues` use. Rails take them too (`railMains`, before the
-  `maxSeriesRails` cap): an edition named for a kind of recording only for the
+  extends another ("Discworld: Tiffany Aching") is a series of its own. A match
+  candidate's `series` is the work's series every recording is in, and each
+  recording's additive `series` the book's list as that recording, its own edition
+  first (`workSeries.of`), which `matchrun.Propose` and the match dialog's
+  `communityValues` read (so the console has no copy of the rule); series carry an
+  additive `id`. The facts come from `series/{id}`, each series once per request,
+  concurrently through `workSem`, cached in the `s:` key space (quota
+  `maxSeriesEntries`); an unreadable record drops nothing, and a repick
+  (`MatchQuery.NoSeries`) reads none. Rails take the rules too (`railMains`, before
+  the `maxSeriesRails` cap): an edition named for a kind of recording only for the
   envelope's recording and after the rest, so the cap goes to the book's series (a
   Discworld novel in six series kept its Tiffany Aching rail); other editions keep
-  their place (pre-v7 rails unchanged); a main view whose fetched record is a
-  translation or another language is left out.
+  their place (pre-v7 rails unchanged); a series the cache already knows is foreign
+  is left out before the cap, and a main view whose fetched record is foreign after it.
   **Persistent meta cache** (`meta_cache`, migration 0024): `meta.Store` is a
   SQLite second level behind the memory cache (`catalog/metacache.go`, adapted to
   `meta.Store` by `api.metaStore`, which logs failures; best effort, a failure
@@ -872,8 +873,7 @@ admin overrides; see Metadata overrides below).
   Fallback, FROZEN until the production metaserve serves `works/match` (then delete
   it): when the route is missing (404 through `works/{id}`, 405, or a 200 without
   `results`) `searchHits` runs the old `lookup` + `works/search` unchanged (typed
-  text, else `CleanTitle` of the title without a file's numbering prefix,
-  `trimLeadNumbering`: "BV01 - ", "01 - ", as metaserve's works/match cuts it, + author) scored by the tag-only `scoreCandidate`, and
+  text, else `CleanTitle` + author) scored by the tag-only `scoreCandidate`, and
   the missing route is remembered for 15 min (`matchUnsupportedUntil`); a 503/5xx
   from works/match is an outage (502), never a fallback; identifiers normalized for
   the exact lookup; metadata off -> 404 `metadata_off`). Each recording keeps its
@@ -924,7 +924,9 @@ admin overrides; see Metadata overrides below).
   (`pickRail`) is the one named like the series (or one of its `orderings`), then one named like
   it give or take an article or a trailing "Series", then the rail holding >= 2 and more than half
   of the series' resolved works (never a rail the series' name extends: the parent of a
-  sub-series; ties to the smaller rail), else none: no gaps rather than another series';
+  sub-series; ties to the smaller rail), else none: no gaps rather than another series' (the rail
+  comes from one matched book's `/meta`, so a work in more than `maxSeriesRails` real series can
+  still lack one);
   `PUT`/`DELETE /admin/libraries/{id}/cover?path=` (custom cover in the DB;
   `catalog.SetCover` enforces 5 MiB, sniffed JPEG/PNG/WebP and an indexed book), which
   `GET /libraries/{id}/cover` serves first (by the requested path, then by the book a

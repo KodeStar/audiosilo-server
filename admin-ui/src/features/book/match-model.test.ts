@@ -11,7 +11,6 @@ import {
   lengthComparison,
   parseMatchQuery,
   scoreTone,
-  seriesFor,
 } from './match-model';
 
 const recording = (over: Partial<MatchRecording> = {}): MatchRecording => ({
@@ -108,31 +107,22 @@ describe('compare', () => {
     });
   });
 
-  it('offers an edition only to a book that is its recording, as the main series', () => {
-    const c = candidate({
-      series: [
-        { name: 'Harry Potter', position: '2' },
-        { name: 'Harry Potter (Full-Cast Editions)', position: '2', recording_ids: ['cast'] },
-      ],
-    });
+  it("offers the chosen recording's series: its own edition first", () => {
+    const hp = { name: 'Harry Potter', position: '2' };
+    const cast = { name: 'Harry Potter (Full-Cast Editions)', position: '2' };
+    const c = candidate({ series: [hp] });
     // Another recording, or none: the work's series alone, never the edition.
-    for (const rec of [recording({ id: 'dale' }), undefined]) {
+    for (const rec of [recording({ id: 'dale', series: [hp] }), undefined]) {
       expect(communityValues(c, rec)).toMatchObject({
         series: 'Harry Potter',
         series_index: '2',
         more_series: '',
       });
     }
-    // The full-cast recording: its edition first, the series beside it.
-    expect(communityValues(c, recording({ id: 'cast' }))).toMatchObject({
+    expect(communityValues(c, recording({ id: 'cast', series: [cast, hp] }))).toMatchObject({
       series: 'Harry Potter (Full-Cast Editions)',
       more_series: '[{"name":"Harry Potter","position":2}]',
     });
-    expect(seriesFor(c.series, 'cast').map((s) => s.name)).toEqual([
-      'Harry Potter (Full-Cast Editions)',
-      'Harry Potter',
-    ]);
-    expect(seriesFor(c.series).map((s) => s.name)).toEqual(['Harry Potter']);
   });
 
   it('keeps the book series together when its own series is kept', () => {

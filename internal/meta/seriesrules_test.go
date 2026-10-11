@@ -2,24 +2,17 @@ package meta
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 )
 
-// seriesNames renders series as "name[recording,...]" in order, so a case reads
-// at a glance.
+// seriesNames renders series names in order, so a case reads at a glance.
 func seriesNames(series []MatchSeries) string {
 	parts := make([]string, 0, len(series))
 	for _, s := range series {
-		p := s.Name
-		if len(s.RecordingIDs) > 0 {
-			p += "[" + strings.Join(s.RecordingIDs, ",") + "]"
-		}
-		parts = append(parts, p)
+		parts = append(parts, s.Name)
 	}
 	return strings.Join(parts, "; ")
 }
@@ -32,15 +25,19 @@ func narrators(names ...string) []upstreamPersonRef {
 	return out
 }
 
+func seriesRef(id, name string) upstreamSeriesRef {
+	return upstreamSeriesRef{ID: id, Name: name, Position: "2"}
+}
+
 // potterWork is the motivating case: a work listed in its series and in two
 // editions of it, each named for a kind of recording.
 func potterWork() *upstreamWorkDetail {
 	return &upstreamWorkDetail{
 		ID: "chamber", Title: "Harry Potter and the Chamber of Secrets", Language: "en",
 		Series: []upstreamSeriesRef{
-			{ID: "harry-potter", Name: "Harry Potter", Position: "2"},
-			{ID: "harry-potter-full-cast-editions", Name: "Harry Potter (Full-Cast Editions)", Position: "2"},
-			{ID: "harry-potter-narrated-by-stephen-fry", Name: "Harry Potter (Narrated by Stephen Fry)", Position: "2"},
+			seriesRef("harry-potter", "Harry Potter"),
+			seriesRef("hp-full-cast", "Harry Potter (Full-Cast Editions)"),
+			seriesRef("hp-fry", "Harry Potter (Narrated by Stephen Fry)"),
 		},
 		Recordings: []upstreamRecording{
 			{ID: "jim-dale", Narrators: narrators("Jim Dale")},
@@ -53,62 +50,54 @@ func potterWork() *upstreamWorkDetail {
 // TestWorkSeriesEditions: an edition (a series named like another of the work's,
 // plus a qualifier naming a kind of recording) belongs to the recordings it
 // names, and a book is in it only as one of them, where it is the main series;
-// a book of another recording gets the work's own series alone.
+// a book of another recording, or of none known, gets the work's series alone.
 func TestWorkSeriesEditions(t *testing.T) {
 	t.Parallel()
-	series := workSeries(potterWork(), nil)
-	if got, want := seriesNames(series), "Harry Potter; Harry Potter (Full-Cast Editions)[full-cast]; Harry Potter (Narrated by Stephen Fry)[stephen-fry]"; got != want {
-		t.Fatalf("series = %s\nwant %s", got, want)
-	}
+	ws := newWorkSeries(potterWork(), nil)
 	for rec, want := range map[string]string{
 		"jim-dale":    "Harry Potter",
 		"":            "Harry Potter",
 		"unknown":     "Harry Potter",
-		"full-cast":   "Harry Potter (Full-Cast Editions)[full-cast]; Harry Potter",
-		"stephen-fry": "Harry Potter (Narrated by Stephen Fry)[stephen-fry]; Harry Potter",
+		"full-cast":   "Harry Potter (Full-Cast Editions); Harry Potter",
+		"stephen-fry": "Harry Potter (Narrated by Stephen Fry); Harry Potter",
 	} {
-		if got := seriesNames(SeriesFor(series, rec)); got != want {
-			t.Errorf("SeriesFor(%q) = %s, want %s", rec, got, want)
+		if got := seriesNames(ws.of(rec)); got != want {
+			t.Errorf("of(%q) = %s, want %s", rec, got, want)
 		}
 	}
 }
 
-// TestJudgeSeries: the allowed and the denied cases of each rule.
+// TestJudgeSeries: the allowed and the denied cases of each rule, as the series
+// a book of an unabridged recording is in.
 func TestJudgeSeries(t *testing.T) {
 	t.Parallel()
-	ref := func(id, name string) upstreamSeriesRef { return upstreamSeriesRef{ID: id, Name: name, Position: "1"} }
+	ref := seriesRef
 	unabridged := upstreamRecording{ID: "full", Narrators: narrators("Stephen Briggs")}
 	abridged := upstreamRecording{ID: "short", Abridged: true, Narrators: narrators("Tony Robinson")}
 	cases := []struct {
 		name  string
 		refs  []upstreamSeriesRef
-		recs  []upstreamRecording
 		facts map[string]*seriesFacts
-		want  string
+		want  string // a book of the unabridged recording
+		short string // a book of the abridged one ("" = as want)
 	}{{
 		name: "a sub-series named after its parent is a series of its own",
 		refs: []upstreamSeriesRef{ref("discworld", "Discworld"), ref("tiffany", "Discworld: Tiffany Aching")},
-		recs: []upstreamRecording{unabridged},
 		want: "Discworld; Discworld: Tiffany Aching",
 	}, {
-		name: "an abridged edition no recording is: dropped",
-		refs: []upstreamSeriesRef{ref("discworld", "Discworld"), ref("discworld-abridged", "Discworld (abridged)"), ref("tiffany", "Discworld: Tiffany Aching"), ref("tiffany-abridged", "Discworld: Tiffany Aching (abridged)")},
-		recs: []upstreamRecording{unabridged},
-		want: "Discworld; Discworld: Tiffany Aching",
-	}, {
-		name: "an abridged edition an abridged recording is: kept for it",
-		refs: []upstreamSeriesRef{ref("discworld", "Discworld"), ref("discworld-abridged", "Discworld (abridged)")},
-		recs: []upstreamRecording{unabridged, abridged},
-		want: "Discworld; Discworld (abridged)[short]",
+		name: "an abridged edition only for the abridged recording, as its main series",
+		refs: []upstreamSeriesRef{ref("discworld", "Discworld"), ref("discworld-abridged", "Discworld (abridged)"),
+			ref("tiffany", "Discworld: Tiffany Aching"), ref("tiffany-abridged", "Discworld: Tiffany Aching (abridged)")},
+		want:  "Discworld; Discworld: Tiffany Aching",
+		short: "Discworld (abridged); Discworld; Discworld: Tiffany Aching; Discworld: Tiffany Aching (abridged)",
 	}, {
 		name: "a qualified name with no base on the work is a series of its own",
 		refs: []upstreamSeriesRef{ref("tiffany-abridged", "Discworld: Tiffany Aching (abridged)")},
-		recs: []upstreamRecording{unabridged},
 		want: "Discworld: Tiffany Aching (abridged)",
 	}, {
 		name: "an ordering note, a language edition or an unabridged edition holds no recording",
-		refs: []upstreamSeriesRef{ref("narnia", "Narnia"), ref("chrono", "Narnia (Chronological)"), ref("de", "Narnia [German Edition]"), ref("full", "Narnia (Unabridged)")},
-		recs: []upstreamRecording{unabridged, abridged},
+		refs: []upstreamSeriesRef{ref("narnia", "Narnia"), ref("chrono", "Narnia (Chronological)"),
+			ref("de", "Narnia [German Edition]"), ref("full", "Narnia (Unabridged)")},
 		want: "Narnia",
 	}, {
 		name: "a variant reading order is never one of the book's series",
@@ -121,12 +110,13 @@ func TestJudgeSeries(t *testing.T) {
 		want:  "Bobiverse",
 	}, {
 		name:  "a translation whose original the work isn't in: kept",
-		refs:  []upstreamSeriesRef{ref("bobiverse-it", "Bobiverse")},
+		refs:  []upstreamSeriesRef{ref("bobiverse-it", "Bobiverse Italia")},
 		facts: map[string]*seriesFacts{"bobiverse-it": {Language: "en", TranslationOf: []string{"bobiverse"}}},
-		want:  "Bobiverse",
+		want:  "Bobiverse Italia",
 	}, {
-		name:  "another language's series: dropped; a regional tag or an unknown language: kept",
-		refs:  []upstreamSeriesRef{ref("hp", "Harry Potter"), ref("hp-de", "Harry Potter (Deutsch)"), ref("hp-gb", "Harry Potter UK"), ref("hp-tie", "Harry Potter Tie")},
+		name: "another language's series: dropped; a regional tag or an unknown language: kept",
+		refs: []upstreamSeriesRef{ref("hp", "Harry Potter"), ref("hp-de", "Harry Potter Deutsch"),
+			ref("hp-gb", "Harry Potter UK"), ref("hp-tie", "Harry Potter Tie")},
 		facts: map[string]*seriesFacts{"hp": {Language: "en"}, "hp-de": {Language: "de"}, "hp-gb": {Language: "en-GB"}, "hp-tie": {}},
 		want:  "Harry Potter; Harry Potter UK; Harry Potter Tie",
 	}, {
@@ -135,9 +125,16 @@ func TestJudgeSeries(t *testing.T) {
 		want: "Dune",
 	}}
 	for _, c := range cases {
-		d := &upstreamWorkDetail{ID: "w", Language: "en", Series: c.refs, Recordings: c.recs}
-		if got := seriesNames(workSeries(d, c.facts)); got != c.want {
+		d := &upstreamWorkDetail{ID: "w", Language: "en", Series: c.refs, Recordings: []upstreamRecording{unabridged, abridged}}
+		ws := newWorkSeries(d, c.facts)
+		if got := seriesNames(ws.of("full")); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+		if c.short == "" {
+			c.short = c.want
+		}
+		if got := seriesNames(ws.of("short")); got != c.short {
+			t.Errorf("%s (abridged): %s, want %s", c.name, got, c.short)
 		}
 	}
 }
@@ -169,8 +166,8 @@ func TestEditionHolds(t *testing.T) {
 		{"German Edition", fry, false},
 		{"Chronological", fry, false},
 	} {
-		if got := editionHolds(c.qualifier, &c.rec); got != c.want {
-			t.Errorf("editionHolds(%q, %v) = %v, want %v", c.qualifier, c.rec.Narrators, got, c.want)
+		if got := kindOf(c.qualifier).holds(c.qualifier, &c.rec); got != c.want {
+			t.Errorf("%q holds %v = %v, want %v", c.qualifier, c.rec.Narrators, got, c.want)
 		}
 	}
 	if q, ok := editionQualifier("Harry Potter - Gesprochen von Rufus Beck", []string{"Harry Potter"}); !ok || q != "Gesprochen von Rufus Beck" {
@@ -181,22 +178,41 @@ func TestEditionHolds(t *testing.T) {
 	}
 }
 
-// rulesMeta serves a work whose series records carry facts, through works/match
-// and the lookup, counting series GETs.
-func rulesMeta(t *testing.T, work string, series map[string]string) (*Service, *mockMeta) {
-	t.Helper()
-	m := &mockMeta{
-		lookupJSON: `{"work":{"id":"w","title":"T","authors":[]},"recording_id":"briggs"}`,
-		workJSON:   work, seriesJSON: series,
+// TestRailMains: the rail families a book's cap is spent on. A Discworld novel in
+// more series than the cap, most of them editions of the others, keeps the
+// series a book of its recording is in (the Series page's "Discworld: Tiffany
+// Aching" was cut by "(abridged)" editions sorting first); an edition comes back
+// for its own recording, after the rest; an edition named for anything else keeps
+// its place; a series the cache knows is foreign goes.
+func TestRailMains(t *testing.T) {
+	t.Parallel()
+	d := &upstreamWorkDetail{ID: "hat", Language: "en", Series: []upstreamSeriesRef{
+		seriesRef("discworld", "Discworld"), seriesRef("discworld-abridged", "Discworld (abridged)"),
+		seriesRef("for-kids", "Discworld: For Kids"), seriesRef("for-kids-abridged", "Discworld: For Kids (abridged)"),
+		seriesRef("tiffany", "Discworld: Tiffany Aching"), seriesRef("tiffany-abridged", "Discworld: Tiffany Aching (abridged)"),
+		seriesRef("chrono", "Discworld (Chronological)"), seriesRef("scheibenwelt", "Scheibenwelt"),
+	}, Recordings: []upstreamRecording{
+		{ID: "briggs", Narrators: narrators("Stephen Briggs")},
+		{ID: "robinson", Abridged: true, Narrators: narrators("Tony Robinson")},
+	}}
+	ids := func(refs []upstreamSeriesRef) string {
+		out := make([]string, 0, len(refs))
+		for _, r := range refs {
+			out = append(out, r.ID)
+		}
+		return strings.Join(out, " ")
 	}
-	mux := http.NewServeMux()
-	mux.Handle("/", m.handler())
-	mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"results":[{"id":"w","score":95,"reasons":{}}]}`))
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return NewService(srv.URL, nil), m
+	foreign := map[string]*seriesFacts{"scheibenwelt": {Language: "de"}}
+	if got, want := ids(railMains(familyMains(d.Series), d, "briggs", foreign)), "discworld for-kids tiffany chrono"; got != want {
+		t.Errorf("unabridged = %s, want %s", got, want)
+	}
+	if got, want := ids(railMains(familyMains(d.Series), d, "robinson", foreign)),
+		"discworld for-kids tiffany chrono discworld-abridged for-kids-abridged tiffany-abridged"; got != want {
+		t.Errorf("abridged = %s, want %s", got, want)
+	}
+	if got := ids(railMains(familyMains(d.Series), d, "briggs", nil)); !strings.HasSuffix(got, "chrono scheibenwelt") {
+		t.Errorf("no facts known = %s, want the foreign series kept in place", got)
+	}
 }
 
 // seriesBody is a series record with the given extra fields and no works.
@@ -206,31 +222,48 @@ func seriesBody(id, name, extra string) string {
 
 // TestCandidatesApplyTheSeriesRules: a candidate's series are the ones a book of
 // its work can be in, read from the series records too (a translation and another
-// language's series are left out), and a second look is answered from the cache.
+// language's series are left out), each record read once, then from the cache;
+// each recording carries its own; a repick reads no record.
 func TestCandidatesApplyTheSeriesRules(t *testing.T) {
 	t.Parallel()
-	work := `{"id":"w","title":"We Are Legion","language":"en","authors":[],"series":[
-		{"id":"bobiverse","name":"Bobiverse","position":"1"},
-		{"id":"bobiverse-it","name":"Bobiverse","position":"1"},
-		{"id":"bob-de","name":"Bob-Universum","position":"1"},
-		{"id":"bobiverse-gone","name":"Bobiverse Omnibus","position":"1"}],
-		"recordings":[{"id":"briggs","narrators":[{"id":"ray-porter","name":"Ray Porter"}]}]}`
-	s, m := rulesMeta(t, work, map[string]string{
-		"bobiverse":    seriesBody("bobiverse", "Bobiverse", `"language":"en",`),
-		"bobiverse-it": seriesBody("bobiverse-it", "Bobiverse", `"language":"en","translation_of":[{"id":"bobiverse","name":"Bobiverse","language":"en"}],`),
-		"bob-de":       seriesBody("bob-de", "Bob-Universum", `"language":"de",`),
-		// bobiverse-gone has no record (404): nothing is known against it.
+	m := &mockMeta{
+		lookupJSON: `{"work":{"id":"w","title":"T","authors":[]},"recording_id":"porter"}`,
+		workJSON: `{"id":"w","title":"We Are Legion","language":"en","authors":[],"series":[
+			{"id":"bobiverse","name":"Bobiverse","position":"1"},
+			{"id":"bobiverse-it","name":"Bobiverse","position":"1"},
+			{"id":"bob-de","name":"Bob-Universum","position":"1"},
+			{"id":"bobiverse-gone","name":"Bobiverse Omnibus","position":"1"}],
+			"recordings":[{"id":"porter","narrators":[{"id":"ray-porter","name":"Ray Porter"}]}]}`,
+		seriesJSON: map[string]string{
+			"bobiverse":    seriesBody("bobiverse", "Bobiverse", `"language":"en",`),
+			"bobiverse-it": seriesBody("bobiverse-it", "Bobiverse", `"language":"en","translation_of":[{"id":"bobiverse","name":"Bobiverse","language":"en"}],`),
+			"bob-de":       seriesBody("bob-de", "Bob-Universum", `"language":"de",`),
+			// bobiverse-gone has no record (404): nothing is known against it.
+		},
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/", m.handler())
+	mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, _ *http.Request) {
+		// Two hits of the one work: its series records are still read once each.
+		_, _ = w.Write([]byte(`{"results":[{"id":"w","score":95,"reasons":{}},{"id":"w","score":90,"reasons":{}}]}`))
 	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := NewService(srv.URL, nil)
+
+	if _, err := s.Candidates(context.Background(), MatchQuery{ASIN: "B0LEGION", NoSeries: true}); err != nil || m.seriesHits.Load() != 0 {
+		t.Fatalf("repick read %d series records (%v), want none", m.seriesHits.Load(), err)
+	}
 	for range 2 {
 		cands, err := s.Candidates(context.Background(), MatchQuery{Title: "We Are Legion"})
-		if err != nil || len(cands) != 1 {
+		if err != nil || len(cands) != 2 {
 			t.Fatalf("candidates = %v %v", cands, err)
 		}
 		if got, want := seriesNames(cands[0].Series), "Bobiverse; Bobiverse Omnibus"; got != want {
 			t.Fatalf("series = %s, want %s", got, want)
 		}
-		if cands[0].Series[0].ID != "bobiverse" {
-			t.Fatalf("series = %+v, want each with its id", cands[0].Series)
+		if rec := cands[0].Recordings[0]; seriesNames(rec.Series) != "Bobiverse; Bobiverse Omnibus" || cands[0].Series[0].ID != "bobiverse" {
+			t.Fatalf("recording series = %+v, series = %+v", rec.Series, cands[0].Series)
 		}
 	}
 	if got := m.seriesHits.Load(); got != 4 {
@@ -238,68 +271,27 @@ func TestCandidatesApplyTheSeriesRules(t *testing.T) {
 	}
 }
 
-// TestEnrichRailsSpendTheCapOnTheBooksSeries: a work in more series than the
-// rail cap, most of them editions of the others, keeps the rails a book of its
-// recording is in (the Series page's "Discworld: Tiffany Aching" was cut by
-// "(abridged)" editions sorting first); an edition comes back for its own
-// recording, after the rest; a rail in another language is left out.
-func TestEnrichRailsSpendTheCapOnTheBooksSeries(t *testing.T) {
+// TestEnrichLeavesOutAForeignRail: a rail whose record says it is in another
+// language than the work is left out of the envelope.
+func TestEnrichLeavesOutAForeignRail(t *testing.T) {
 	t.Parallel()
-	refs := []string{"discworld", "Discworld", "discworld-abridged", "Discworld (abridged)",
-		"discworld-for-kids", "Discworld: For Kids", "discworld-for-kids-abridged", "Discworld: For Kids (abridged)",
-		"discworld-tiffany-aching", "Discworld: Tiffany Aching", "discworld-tiffany-aching-abridged", "Discworld: Tiffany Aching (abridged)"}
-	work := func(extra ...string) string {
-		var parts []string
-		all := append(slices.Clone(refs), extra...)
-		for i := 0; i < len(all); i += 2 {
-			parts = append(parts, `{"id":"`+all[i]+`","name":"`+all[i+1]+`","position":"2"}`)
-		}
-		return `{"id":"w","title":"A Hat Full of Sky","language":"en","authors":[],"series":[` + strings.Join(parts, ",") + `],
-			"recordings":[{"id":"briggs","narrators":[{"id":"sb","name":"Stephen Briggs"}]},
-			{"id":"robinson","abridged":true,"narrators":[{"id":"tr","name":"Tony Robinson"}]}]}`
+	m := &mockMeta{
+		lookupJSON: `{"work":{"id":"w","title":"A Hat Full of Sky","authors":[]},"recording_id":"briggs"}`,
+		workJSON: `{"id":"w","title":"A Hat Full of Sky","language":"en","authors":[],"series":[
+			{"id":"scheibenwelt","name":"Scheibenwelt","position":"32"},{"id":"discworld","name":"Discworld","position":"32"}],
+			"recordings":[{"id":"briggs","narrators":[]}]}`,
+		seriesJSON: map[string]string{
+			"scheibenwelt": seriesBody("scheibenwelt", "Scheibenwelt", `"language":"de",`),
+			"discworld":    seriesBody("discworld", "Discworld", `"language":"en",`),
+		},
 	}
-	series := map[string]string{}
-	for i := 0; i < len(refs); i += 2 {
-		series[refs[i]] = seriesBody(refs[i], refs[i+1], `"language":"en",`)
+	srv := httptest.NewServer(m.handler())
+	t.Cleanup(srv.Close)
+	env, err := NewService(srv.URL, nil).Enrich(context.Background(), "B0HAT", "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	rails := func(lookup, work string) string {
-		t.Helper()
-		m := &mockMeta{lookupJSON: lookup, workJSON: work, seriesJSON: series}
-		srv := httptest.NewServer(m.handler())
-		t.Cleanup(srv.Close)
-		env, err := NewService(srv.URL, nil).Enrich(context.Background(), "B0HAT", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		names := make([]string, 0, len(env.Series))
-		for _, r := range env.Series {
-			names = append(names, r.Name)
-		}
-		return strings.Join(names, "; ")
-	}
-	const briggs = `{"work":{"id":"w","title":"A Hat Full of Sky","authors":[]},"recording_id":"briggs"}`
-	const robinson = `{"work":{"id":"w","title":"A Hat Full of Sky","authors":[]},"recording_id":"robinson"}`
-	if got, want := rails(briggs, work()), "Discworld; Discworld: For Kids; Discworld: Tiffany Aching"; got != want {
-		t.Errorf("unabridged rails = %s, want %s", got, want)
-	}
-	if got, want := rails(robinson, work()), "Discworld; Discworld: For Kids; Discworld: Tiffany Aching"; got != want {
-		t.Errorf("abridged rails = %s, want %s (the editions after)", got, want)
-	}
-	series["scheibenwelt"] = seriesBody("scheibenwelt", "Scheibenwelt", `"language":"de",`)
-	foreign := `{"id":"w","title":"A Hat Full of Sky","language":"en","authors":[],"series":[
-		{"id":"scheibenwelt","name":"Scheibenwelt","position":"32"},{"id":"discworld","name":"Discworld","position":"32"}],
-		"recordings":[{"id":"briggs","narrators":[]}]}`
-	if got, want := rails(briggs, foreign), "Discworld"; got != want {
-		t.Errorf("rails = %s, want %s (none in another language)", got, want)
-	}
-}
-
-// TestMatchSeriesWire: the fields MatchSeries adds are omitted where empty, so a
-// candidate's series read as they did for a series that is no edition.
-func TestMatchSeriesWire(t *testing.T) {
-	t.Parallel()
-	b, _ := json.Marshal(MatchSeries{Name: "Dune", Position: "1"})
-	if string(b) != `{"name":"Dune","position":"1"}` {
-		t.Fatalf("plain series = %s", b)
+	if len(env.Series) != 1 || env.Series[0].Name != "Discworld" {
+		t.Fatalf("rails = %+v, want Discworld alone", env.Series)
 	}
 }

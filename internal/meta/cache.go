@@ -46,7 +46,7 @@ const maxLookupEntries = 1024
 // The ids come from works the community lists, and a Series page or a bulk run
 // can name a great many, so they get a share of their own; an evicted entry
 // only costs one series GET again.
-const maxSeriesEntries = 512
+const maxSeriesEntries = 256
 
 // keyspace namespaces the one shared cache so the feature's lookup kinds - an
 // asin/isbn enrichment, a work-id fetch and an identifier's lookup - can never

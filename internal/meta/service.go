@@ -693,11 +693,9 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail, r
 	// that states where THIS work sits, and a series the work is absent from
 	// has no entry, which is exactly the empty position the envelope promises.
 	positions := make(map[string]string, len(detail.Series))
-	onWork := make([]string, 0, len(detail.Series))
 	for _, ref := range detail.Series {
 		if _, seen := positions[ref.ID]; !seen {
 			positions[ref.ID] = ref.Position
-			onWork = append(onWork, ref.ID)
 		}
 	}
 
@@ -705,7 +703,7 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail, r
 	// odd/hostile data (dozens of series refs on one work), a success-counted
 	// loop would issue one 5s-timeout GET per ref. The cap counts families, so
 	// grouping happens first.
-	mains := railMains(familyMains(detail.Series), detail, recordingID)
+	mains := railMains(familyMains(detail.Series), detail, recordingID, s.cachedFacts(detail))
 	if len(mains) > maxSeriesRails {
 		mains = mains[:maxSeriesRails]
 	}
@@ -725,7 +723,7 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail, r
 		}
 		facts := factsOf(sd)
 		cachePut(s.cache, nsSeries.key(ref.ID), facts, positiveTTL)
-		if foreignSeries(facts, ref.ID, detail.Language, onWork) {
+		if foreignSeries(facts, ref.ID, detail) {
 			continue
 		}
 		out = append(out, MetaSeries{

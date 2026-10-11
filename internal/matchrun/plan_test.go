@@ -55,18 +55,15 @@ func TestPropose(t *testing.T) {
 	}
 }
 
-// TestProposeSeriesForTheRecording: an edition (a series named for one kind of
-// recording) is proposed as the main series only for a book that is that
-// recording, with the work's series as another; a book of any other recording,
-// or of none known, gets the work's series alone, never the edition.
+// TestProposeSeriesForTheRecording: the series proposed are the chosen
+// recording's (an edition named for it first, as the community service's
+// candidate lists them per recording); with no recording, the work's own.
 func TestProposeSeriesForTheRecording(t *testing.T) {
+	hp := meta.MatchSeries{ID: "harry-potter", Name: "Harry Potter", Position: "2"}
+	cast := meta.MatchSeries{ID: "hp-full-cast", Name: "Harry Potter (Full-Cast Editions)", Position: "2"}
 	c := meta.MatchCandidate{
-		WorkID: "chamber", Title: "Harry Potter and the Chamber of Secrets",
-		Series: []meta.MatchSeries{
-			{ID: "harry-potter", Name: "Harry Potter", Position: "2"},
-			{ID: "hp-full-cast", Name: "Harry Potter (Full-Cast Editions)", Position: "2", RecordingIDs: []string{"cast"}},
-		},
-		Recordings: []meta.MatchRecording{{ID: "dale"}, {ID: "cast"}},
+		WorkID: "chamber", Title: "Harry Potter and the Chamber of Secrets", Series: []meta.MatchSeries{hp},
+		Recordings: []meta.MatchRecording{{ID: "dale", Series: []meta.MatchSeries{hp}}, {ID: "cast", Series: []meta.MatchSeries{cast, hp}}},
 	}
 	for _, tc := range []struct {
 		rec              *meta.MatchRecording

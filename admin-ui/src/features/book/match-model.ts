@@ -5,7 +5,6 @@ import {
   type FieldValue,
   type MatchCandidate,
   type MatchRecording,
-  type MatchSeries,
   type OverrideField,
 } from '@/api/types';
 import type { MatchBy } from '@/api/client';
@@ -51,32 +50,10 @@ export function candidateAuthors(c: MatchCandidate): string {
 }
 
 /**
- * The series a book that is recording `recordingId` of a candidate is in, its
- * main one first (the server's meta.SeriesFor): the first edition named for that
- * recording, else the work's first series; editions of other recordings are left
- * out.
- */
-export function seriesFor(series: MatchSeries[], recordingId = ''): MatchSeries[] {
-  const out: MatchSeries[] = [];
-  let main = -1;
-  for (const s of series) {
-    if (!s.recording_ids?.length) {
-      out.push(s);
-      continue;
-    }
-    if (!recordingId || !s.recording_ids.includes(recordingId)) continue;
-    if (main < 0) main = out.length;
-    out.push(s);
-  }
-  if (main > 0) out.unshift(...out.splice(main, 1));
-  return out;
-}
-
-/**
  * What the community says for each field, from the work and the chosen recording.
  * A work in several series offers one as the main series - the one the book is
- * filed under (`mainSeries`) when the work is in it, else the recording's own
- * (seriesFor) - and the rest as the book's other series (as matchrun.planSeries
+ * filed under (`mainSeries`) when the work is in it, else the recording's first
+ * (its own edition, when the community lists one) - and the rest as the book's other series (as matchrun.planSeries
  * does).
  */
 export function communityValues(
@@ -84,7 +61,7 @@ export function communityValues(
   rec: MatchRecording | undefined,
   mainSeries = '',
 ): Record<OverrideField, string> {
-  const all = seriesFor(c.series ?? [], rec?.id);
+  const all = rec?.series ?? c.series ?? [];
   const key = seriesKey(mainSeries);
   const series = (key && all.find((s) => seriesKey(s.name) === key)) || all[0];
   // The others: a work listed again in its main series isn't another series.

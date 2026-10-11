@@ -65,8 +65,8 @@ var yearRE = regexp.MustCompile(`^\d{4}`)
 // in stored form, a value an override would refuse left out. The ASIN is the
 // recording's best for this server (meta.MatchRecording.ASINs is ordered by the
 // preferred marketplace), named with its marketplace. The series are the ones a
-// book that is rec is in (meta.SeriesFor): an edition named for that recording
-// first, never an edition of another recording.
+// book that is rec is in (meta.MatchRecording.Series): an edition named for that
+// recording first, never an edition of another recording.
 func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProposal {
 	p := catalog.MatchProposal{
 		WorkID: c.WorkID, Title: c.Title, Authors: names(c.Authors), WebURL: c.WebURL,
@@ -76,11 +76,11 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 	raw := map[string]string{
 		catalog.FieldTitle: c.Title, catalog.FieldAuthor: p.Authors, catalog.FieldDescription: c.Description,
 	}
-	recID := ""
-	if rec != nil {
-		recID = rec.ID
+	series := c.Series
+	if rec != nil && rec.Series != nil {
+		series = rec.Series
 	}
-	if series := meta.SeriesFor(c.Series, recID); len(series) > 0 {
+	if len(series) > 0 {
 		raw[catalog.FieldSeries], raw[catalog.FieldSeriesIndex] = series[0].Name, series[0].Position
 		// The work's other series (Plan decides which is the book's main one). A
 		// position that is no plain number (a range, "1-3") is no position.

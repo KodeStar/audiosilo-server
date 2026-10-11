@@ -63,16 +63,16 @@ export function seriesKey(name: string): string {
 }
 
 /**
- * A series name with what a catalogue adds or drops around the same series: a
- * leading article and a trailing "Series", "Saga", "Trilogy" ("The Stormlight
- * Archive" and "Stormlight Archive Series" are one series).
+ * A series name without a leading article or a trailing "Series", as the
+ * server's match.NormalizeSeries reads one ("The Stormlight Archive" and
+ * "Stormlight Archive Series" are one series).
  */
 function looseSeriesKey(name: string): string {
   return seriesKey(
     name
       .trim()
-      .replace(/^(?:the|a|an)\s+/i, '')
-      .replace(/\s+(?:series|saga|trilogy|books|novels)$/i, ''),
+      .replace(/^(?:the|a|an)\s+(?=\S)/i, '')
+      .replace(/(?<=\S)\s+series$/i, ''),
   );
 }
 
@@ -230,12 +230,15 @@ export function placeBooks(
       : { book, slot: 'rail', position };
   });
   const held = placed.filter((p) => p.slot === 'rail').map((p) => p.position);
-  const free = railEntries(rail).filter((e) => !held.some((i) => samePosition(i, e.position)));
+  const free = railEntries(rail)
+    .filter((e) => !held.some((i) => samePosition(i, e.position)))
+    .map((entry) => ({ entry, keys: titleKeys(entry.title) }));
   return placed.map((p) => {
     if (p.slot === 'rail' || works?.has(refKey(p.book))) return p;
-    const at = free.findIndex((e) => sameTitle(p.book.title, e.title));
+    const keys = titleKeys(p.book.title);
+    const at = free.findIndex((f) => f.keys.some((k) => keys.includes(k)));
     if (at < 0) return p;
-    const [entry] = free.splice(at, 1);
+    const [{ entry }] = free.splice(at, 1);
     return { ...p, slot: 'rail', position: entry.position };
   });
 }
