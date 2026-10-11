@@ -107,6 +107,24 @@ describe('compare', () => {
     });
   });
 
+  it("offers the chosen recording's series: its own edition first", () => {
+    const hp = { name: 'Harry Potter', position: '2' };
+    const cast = { name: 'Harry Potter (Full-Cast Editions)', position: '2' };
+    const c = candidate({ series: [hp] });
+    // Another recording, or none: the work's series alone, never the edition.
+    for (const rec of [recording({ id: 'dale', series: [hp] }), undefined]) {
+      expect(communityValues(c, rec)).toMatchObject({
+        series: 'Harry Potter',
+        series_index: '2',
+        more_series: '',
+      });
+    }
+    expect(communityValues(c, recording({ id: 'cast', series: [cast, hp] }))).toMatchObject({
+      series: 'Harry Potter (Full-Cast Editions)',
+      more_series: '[{"name":"Harry Potter","position":2}]',
+    });
+  });
+
   it('keeps the book series together when its own series is kept', () => {
     const detail = bookDetail();
     detail.fields.series = { ...detail.fields.series, value: 'Red Planet' };

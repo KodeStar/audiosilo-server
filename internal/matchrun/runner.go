@@ -273,7 +273,7 @@ func (r *Runner) candidates(ctx context.Context, q meta.MatchQuery, item *catalo
 // preferred marketplace under another ASIN, that is the item (confident: it is
 // the same recording); else there is nothing to record.
 func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
-	cands, err := r.candidates(ctx, meta.MatchQuery{ASIN: b.ASIN, Region: region, Limit: 1}, item)
+	cands, err := r.candidates(ctx, meta.MatchQuery{ASIN: b.ASIN, Region: region, Limit: 1, NoSeries: true}, item)
 	if err != nil {
 		return item, err
 	}

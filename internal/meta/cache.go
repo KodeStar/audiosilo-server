@@ -41,9 +41,16 @@ const maxWorkEntries = 256
 // spaces, and a lookup evicted early only costs one small GET again.
 const maxLookupEntries = 1024
 
+// maxSeriesEntries bounds the series key space: a series' facts (its language
+// and what it translates), read for each series of a match candidate's work.
+// The ids come from works the community lists, and a Series page or a bulk run
+// can name a great many, so they get a share of their own; an evicted entry
+// only costs one series GET again.
+const maxSeriesEntries = 256
+
 // keyspace namespaces the one shared cache so the feature's lookup kinds - an
-// asin/isbn enrichment, a work-id fetch and an identifier's lookup - can never
-// read each other's entries. Every key in the cache is minted through
+// asin/isbn enrichment, a work-id fetch, an identifier's lookup and a series'
+// facts - can never read each other's entries. Every key in the cache is minted through
 // keyspace.key, so these prefixes are declared in exactly one place.
 type keyspace string
 
@@ -54,15 +61,17 @@ const (
 	// nsLookup holds an identifier's lookup answer, keyed by its enrichment key
 	// ("l:a:<asin>" / "l:i:<isbn>").
 	nsLookup keyspace = "l:"
+	// nsSeries holds a series' facts (seriesFacts), keyed by its id.
+	nsSeries keyspace = "s:"
 )
 
 // quotas are the key spaces with their own share of the cache (see
-// maxWorkEntries, maxLookupEntries). A new entry in one of them first makes room
+// maxWorkEntries, maxLookupEntries, maxSeriesEntries). A new entry in one of them first makes room
 // WITHIN its own key space, and at cacheCap gives up its own entries first (see
 // evictLocked), so a flood of keys there evicts its own entries - it reaches the
 // enrichment entries, which are bounded by cacheCap alone, only when its key
 // space holds nothing left to give up.
-var quotas = map[keyspace]int{nsWork: maxWorkEntries, nsLookup: maxLookupEntries}
+var quotas = map[keyspace]int{nsWork: maxWorkEntries, nsLookup: maxLookupEntries, nsSeries: maxSeriesEntries}
 
 // key mints the cache key for one lookup id in this key space.
 func (ns keyspace) key(id string) string { return string(ns) + id }
@@ -89,8 +98,8 @@ func quotaSpace(key string) (ns keyspace, ok bool) {
 // cacheEntry is one memoised lookup outcome, in exactly one of three states: a
 // non-nil err marks a cached transport error; a nil value with a nil err marks a
 // cached "no match" (ErrNotFound); a non-nil value marks a cached positive
-// result. value holds *Enrichment, *MetaWork or *upstreamLookup depending on the
-// key space, and is read only through cacheGet (which treats a wrong-typed hit
+// result. value holds *Enrichment, *MetaWork, *upstreamLookup or *seriesFacts
+// depending on the key space, and is read only through cacheGet (which treats a wrong-typed hit
 // as a miss), so the kinds share one bounded memory budget without the payload's
 // meaning depending on a key-prefix convention.
 type cacheEntry struct {

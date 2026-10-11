@@ -55,6 +55,32 @@ func TestPropose(t *testing.T) {
 	}
 }
 
+// TestProposeSeriesForTheRecording: the series proposed are the chosen
+// recording's (an edition named for it first, as the community service's
+// candidate lists them per recording); with no recording, the work's own.
+func TestProposeSeriesForTheRecording(t *testing.T) {
+	t.Parallel()
+	hp := meta.MatchSeries{ID: "harry-potter", Name: "Harry Potter", Position: "2"}
+	cast := meta.MatchSeries{ID: "hp-full-cast", Name: "Harry Potter (Full-Cast Editions)", Position: "2"}
+	c := meta.MatchCandidate{
+		WorkID: "chamber", Title: "Harry Potter and the Chamber of Secrets", Series: []meta.MatchSeries{hp},
+		Recordings: []meta.MatchRecording{{ID: "dale", Series: []meta.MatchSeries{hp}}, {ID: "cast", Series: []meta.MatchSeries{cast, hp}}},
+	}
+	for _, tc := range []struct {
+		rec              *meta.MatchRecording
+		series, moreJSON string
+	}{
+		{&c.Recordings[0], "Harry Potter", ""},
+		{nil, "Harry Potter", ""},
+		{&c.Recordings[1], "Harry Potter (Full-Cast Editions)", `[{"name":"Harry Potter","position":2}]`},
+	} {
+		p := Propose(&c, tc.rec)
+		if p.Values["series"] != tc.series || p.Values["series_index"] != "2" || p.Values["more_series"] != tc.moreJSON {
+			t.Errorf("recording %v: values = %v, want series %q more %q", tc.rec, p.Values, tc.series, tc.moreJSON)
+		}
+	}
+}
+
 // planSet is Plan's fields to set and its cover, for the tests that write no
 // revert.
 func planSet(scope string, st *catalog.MatchState, p catalog.MatchProposal) (map[string]string, bool) {
