@@ -260,14 +260,19 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 	plan(scope, catalog.FieldSeriesIndex, mainPos, st.Fields[catalog.FieldSeriesIndex], set)
 	// A main series the community doesn't list keeps its position: the book's own
 	// spelling of the work's main series, numbered as the community numbers it.
-	if mainPos == "" && !unlisted {
+	// The files' position comes back only beside the series it numbers (or when
+	// the files have none): never the tags' #3 of one series beside another.
+	if files := st.Fields[catalog.FieldSeriesIndex].Scanned; mainPos == "" && !unlisted &&
+		(files == "" || sameSeries(st.Fields[catalog.FieldSeries].Scanned, main)) {
 		stale(catalog.FieldSeriesIndex)
 	}
 	// In stored form (each name once, within the bounds), as the book's own value
 	// is compared and as an apply would store it.
 	more := catalog.CleanOverride(catalog.FieldMoreSeries, catalog.EncodeMoreSeries(others))
 	plan(scope, catalog.FieldMoreSeries, more, st.Fields[catalog.FieldMoreSeries], set)
-	if more == "" {
+	// Only a community that lists no other series takes them away: a list it
+	// offers that can't be stored (too many, a name too long) is no answer.
+	if len(others) == 0 {
 		stale(catalog.FieldMoreSeries)
 	}
 }
@@ -280,13 +285,30 @@ func sameSeries(a, b string) bool {
 
 // planFor is what applying p to a book in state st writes for a run in mode: a
 // repick's ASIN (whatever the scope), else Plan's (a refresh's proposal carries
-// no identifier, so its Plan writes none: refreshBook).
+// no identifier, so its Plan writes none: refreshBook), and for a refresh only
+// while the book still has the identifier it was found by.
 func planFor(mode, scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	switch mode {
 	case catalog.MatchModeRepick:
 		return Writes{Set: PlanRepick(st, p)}
+	case catalog.MatchModeRefresh:
+		if !stillFoundBy(st, p.FoundBy) {
+			return Writes{}
+		}
 	}
 	return Plan(scope, st, p)
+}
+
+// stillFoundBy reports whether the book still has the identifier a refresh
+// found its record by (Proposal.FoundBy): a book matched again since (by hand,
+// to another record) is not overwritten with the old one's details.
+func stillFoundBy(st *catalog.MatchState, foundBy string) bool {
+	kind, id, ok := strings.Cut(foundBy, ":")
+	if !ok {
+		return false
+	}
+	field := map[string]string{"asin": catalog.FieldASIN, "isbn": catalog.FieldISBN}[kind]
+	return field != "" && catalog.CleanOverride(field, st.Fields[field].Value) == id
 }
 
 // PlanRepick is what applying a repick item writes: its ASIN, while the book's

@@ -98,16 +98,20 @@ type MatchRun struct {
 // recording it is, how to show it, and the value it has for each overridable
 // field (in stored form; a field it has nothing for is absent).
 type MatchProposal struct {
-	WorkID      string            `json:"work_id,omitempty"`
-	RecordingID string            `json:"recording_id,omitempty"`
-	Title       string            `json:"title,omitempty"`
-	Authors     string            `json:"authors,omitempty"`
-	Narrators   string            `json:"narrators,omitempty"`
-	RuntimeMin  int               `json:"runtime_min,omitempty"`
-	WebURL      string            `json:"web_url,omitempty"`
-	CoverURL    string            `json:"cover_url,omitempty"`
-	ASINRegion  string            `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
-	Values      map[string]string `json:"values"`
+	WorkID      string `json:"work_id,omitempty"`
+	RecordingID string `json:"recording_id,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Authors     string `json:"authors,omitempty"`
+	Narrators   string `json:"narrators,omitempty"`
+	RuntimeMin  int    `json:"runtime_min,omitempty"`
+	WebURL      string `json:"web_url,omitempty"`
+	CoverURL    string `json:"cover_url,omitempty"`
+	ASINRegion  string `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
+	// FoundBy is the book's own identifier a refresh found the record by,
+	// "asin:<ASIN>" or "isbn:<ISBN>" ("" for any other run): applying it is for
+	// a book that still has it.
+	FoundBy string            `json:"found_by,omitempty"`
+	Values  map[string]string `json:"values"`
 }
 
 // MatchRunItem is one book a run matched.

@@ -327,10 +327,17 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	delete(item.Proposal.Values, catalog.FieldASIN)
 	delete(item.Proposal.Values, catalog.FieldISBN)
 	item.Proposal.ASINRegion = ""
+	item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
+	if q.ASIN != "" {
+		item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
+	}
 	// A book neither scope would change is up to date: nothing to record (most
 	// of a matched library, whose proposals would only fill the review).
 	st, err := r.cat.BookMatchState(ctx, b.LibraryID, b.RelPath)
 	if err != nil {
+		if !errors.Is(err, catalog.ErrNotFound) && ctx.Err() == nil {
+			r.log.Warn("load book for match refresh failed", "library", b.LibraryID, "path", b.RelPath, "err", err)
+		}
 		return nil, nil // gone meanwhile, or unreadable: nothing to offer now
 	}
 	for _, scope := range ScopesFor(catalog.MatchModeRefresh) {

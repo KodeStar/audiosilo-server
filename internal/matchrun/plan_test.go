@@ -3,6 +3,7 @@ package matchrun
 import (
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -348,5 +349,35 @@ func TestPlanOverwriteReplacesTheSeries(t *testing.T) {
 	// A series from the files is never reverted (there is no override to drop).
 	if w := Plan(ScopeOverwrite, state(map[string]string{"series": "Discworld"}, nil, false), catalog.MatchProposal{Values: map[string]string{}}); !w.Empty() {
 		t.Fatalf("tag series = %+v, want nothing", w)
+	}
+}
+
+// TestPlanOverwriteRevertsOnlyWhatItCan: a position the community no longer
+// gives goes back to the files' only beside the series the files number (never
+// the tags' Red Planet #3 beside Mars), and a list of other series the community
+// offers that can't be stored takes none away.
+func TestPlanOverwriteRevertsOnlyWhatItCan(t *testing.T) {
+	t.Parallel()
+	community := func(scannedSeries string) *catalog.MatchState {
+		st := state(nil, nil, false)
+		st.Fields["series"] = catalog.FieldValue{Value: "Mars (Full-Cast Editions)", Source: catalog.SourceCommunity, Scanned: scannedSeries, Locked: true}
+		st.Fields["series_index"] = catalog.FieldValue{Value: "1", Source: catalog.SourceCommunity, Scanned: "3", Locked: true}
+		return st
+	}
+	unnumbered := catalog.MatchProposal{Values: map[string]string{"series": "Mars"}}
+	w := Plan(ScopeOverwrite, community("Red Planet"), unnumbered)
+	if w.Set["series"] != "Mars" || slices.Contains(w.Revert, "series_index") {
+		t.Fatalf("beside another series = set %v revert %v, want Mars set and the position kept", w.Set, w.Revert)
+	}
+	if w := Plan(ScopeOverwrite, community("Mars"), unnumbered); !slices.Contains(w.Revert, "series_index") {
+		t.Fatalf("beside the files' series = revert %v, want the files' position back", w.Revert)
+	}
+
+	st := state(map[string]string{"series": "Main"}, nil, false)
+	st.Fields["more_series"] = catalog.FieldValue{Value: `[{"name":"Old","position":1}]`, Source: catalog.SourceCommunity, Locked: true}
+	tooLong := catalog.MatchProposal{Values: map[string]string{"series": "Main",
+		"more_series": `[{"name":"` + strings.Repeat("x", 5000) + `","position":1}]`}}
+	if w := Plan(ScopeOverwrite, st, tooLong); slices.Contains(w.Revert, "more_series") {
+		t.Fatalf("a list that can't be stored = revert %v, want the book's kept", w.Revert)
 	}
 }

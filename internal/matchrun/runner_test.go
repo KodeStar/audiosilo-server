@@ -590,6 +590,10 @@ func TestRefreshCleansAPollutedBook(t *testing.T) {
 		t.Errorf("overwrite fields = %v, want the reverted more_series listed", ch[ScopeOverwrite].Fields)
 	}
 
+	if auto[0].Proposal.FoundBy != "asin:B0US000001" {
+		t.Fatalf("found by = %q, want the book's ASIN", auto[0].Proposal.FoundBy)
+	}
+
 	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, UserID: e.admin}); err != nil {
 		t.Fatal(err)
 	}
@@ -604,5 +608,37 @@ func TestRefreshCleansAPollutedBook(t *testing.T) {
 	// Cleaned, the book is up to date: a second refresh records nothing for it.
 	if again := e.start(t, catalog.MatchModeRefresh, ""); again.Counts.Auto != 0 || again.Total != 1 {
 		t.Fatalf("second refresh = %+v, want the book left out", again)
+	}
+}
+
+// TestRefreshSkipsABookMatchedAgain: a book matched again (to another record)
+// between a refresh run and its apply is not overwritten with the old record's
+// details: the review shows nothing to change, and the apply skips it.
+func TestRefreshSkipsABookMatchedAgain(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Book", "Something Else", "B0US000001", nil)
+	hit := cand("the-martian", 100, "")
+	hit.RecordingID = "bray"
+	e.matcher.byASIN["B0US000001"] = []meta.MatchCandidate{hit}
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	if run.Counts.Auto != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	// Matched by hand meanwhile, to another record.
+	if err := e.cat.EditBook(ctx, e.lib, "A/Book", catalog.BookEdit{Source: catalog.SourceCommunity,
+		Set: map[string]string{"asin": "B0OTHER001", "title": "Another Book"}}); err != nil {
+		t.Fatal(err)
+	}
+	if ch := e.items(t, run, catalog.OutcomeAuto)[0].Changes[ScopeOverwrite]; len(ch.Fields) != 0 || ch.Series != nil {
+		t.Fatalf("review = %+v, want nothing to change", ch)
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	if b, _ := e.cat.GetBookByPath(ctx, e.lib, "A/Book"); b.Title != "Another Book" {
+		t.Fatalf("title = %q, want the new match's kept", b.Title)
 	}
 }
