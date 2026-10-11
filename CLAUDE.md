@@ -907,7 +907,11 @@ admin overrides; see Metadata overrides below).
   `more_series` value the community wrote earlier that it no longer offers (a series it
   deleted or merged, an edition or translation the rules leave out) back to the files';
   fill and ids never revert; an admin's own series stay, and a community edit's revert
-  deletes only community rows (`editTx`), so an edit made since the run looked survives.
+  deletes only community rows (`editTx`), so an edit made since the run looked survives
+  a revert (a set still overwrites it, as the match dialog's ticked edited field must).
+  `Writes.after` is the one rule for a field's value once written (both `planSeries`
+  and the review use it). A refresh records only books a scope would change (as a
+  repick records only books with a new ASIN), so a clean library leaves no items.
   Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
   changes the book's series, which the review shows as "old -> new". A retired work slug
   is a redirect the client follows, so the names written are the merged record's.

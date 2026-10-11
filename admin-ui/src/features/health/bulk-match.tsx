@@ -19,6 +19,7 @@ import {
   type MatchRunItem,
   type MatchRunMode,
   type MatchScope,
+  type SeriesRef,
 } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { LibrarySelect } from '@/components/library-select';
@@ -565,26 +566,24 @@ function ItemRow({
     : [];
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
-  const seriesLine = (refs: { name: string; position: number }[]) =>
+  const seriesLine = (refs: SeriesRef[]) =>
     refs
-      .map((s) => seriesLabel(s.name, s.position, lang, t))
+      .map((r) => seriesLabel(r.name, r.position, lang, t))
       .filter(Boolean)
-      .join('; ') || t('health.bulkMatch.noSeries');
-  // What the scope does to the book's series, old -> new: a series it removes shows.
-  const seriesChange = change?.series
+      .join('; ');
+  // What the scope does to the book's series, old -> new (a series it removes
+  // shows), else the community's series.
+  const seriesText = change?.series
     ? t('health.bulkMatch.seriesChange', {
-        from: seriesLine(change.series.from),
-        to: seriesLine(change.series.to),
+        from: seriesLine(change.series.from) || t('health.bulkMatch.noSeries'),
+        to: seriesLine(change.series.to) || t('health.bulkMatch.noSeries'),
       })
     : '';
   // The community's main series, then any others the work is in ("Discworld #8; City Watch #1").
-  const series = [
+  const series = seriesLine([
     { name: p.values.series ?? '', position: Number(p.values.series_index) },
     ...moreSeriesRefs(p.values.more_series ?? ''),
-  ]
-    .map((s) => seriesLabel(s.name, s.position, lang, t))
-    .filter(Boolean)
-    .join('; ');
+  ]);
   // The path tells two books of one title apart, read out with the row's controls
   // too. A book with no title (or one gone) already shows its path as the title.
   const pathId = useId();
@@ -656,13 +655,9 @@ function ItemRow({
             )}
           </span>
         )}
-        {candidate && seriesChange ? (
+        {candidate && (seriesText || series) ? (
           <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
-            {seriesChange}
-          </span>
-        ) : candidate && series ? (
-          <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.inSeries', { series })}
+            {seriesText || t('health.bulkMatch.inSeries', { series })}
           </span>
         ) : null}
         {asin ? (

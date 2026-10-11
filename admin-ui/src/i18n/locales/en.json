@@ -1148,7 +1148,7 @@
   "health.bulkMatch.scope.fill": "Fill in what's missing",
   "health.bulkMatch.scope.fillBody": "Also adds empty fields, and a cover where a book has none. Nothing a book has is replaced.",
   "health.bulkMatch.scope.overwrite": "Use community values",
-  "health.bulkMatch.scope.overwriteBody": "Also replaces fields that differ, as accepting a match does, and a book's series become the community's (series it no longer lists are removed). Your own edits stay.",
+  "health.bulkMatch.scope.overwriteBody": "Also replaces fields that differ, as accepting a match does. Series an earlier match wrote that the community no longer lists for the book are removed. Your own edits stay.",
   "health.bulkMatch.outcomes": "Matches by outcome",
   "health.bulkMatch.tab.auto": "Confident",
   "health.bulkMatch.tab.review": "To review",

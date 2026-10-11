@@ -601,4 +601,8 @@ func TestRefreshCleansAPollutedBook(t *testing.T) {
 	if all := b.AllSeries(); len(all) != 1 || all[0].Name != "Mars" || all[0].Position != 1 {
 		t.Fatalf("book series = %+v, want Mars #1 alone", all)
 	}
+	// Cleaned, the book is up to date: a second refresh records nothing for it.
+	if again := e.start(t, catalog.MatchModeRefresh, ""); again.Counts.Auto != 0 || again.Total != 1 {
+		t.Fatalf("second refresh = %+v, want the book left out", again)
+	}
 }

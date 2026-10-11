@@ -1233,7 +1233,7 @@
   "health.bulkMatch.scope.fill": "Completa ciò che manca",
   "health.bulkMatch.scope.fillBody": "Aggiunge anche i campi vuoti e una copertina se manca. Nulla di ciò che il libro ha viene sostituito.",
   "health.bulkMatch.scope.overwrite": "Usa i valori della community",
-  "health.bulkMatch.scope.overwriteBody": "Sostituisce anche i campi diversi, come quando accetti una corrispondenza, e le serie di un libro diventano quelle della community (quelle che non elenca più vengono rimosse). Le tue modifiche restano.",
+  "health.bulkMatch.scope.overwriteBody": "Sostituisce anche i campi diversi, come quando accetti una corrispondenza. Le serie scritte da un abbinamento precedente che la community non elenca più per il libro vengono rimosse. Le tue modifiche restano.",
   "health.bulkMatch.outcomes": "Corrispondenze per esito",
   "health.bulkMatch.tab.auto": "Sicure",
   "health.bulkMatch.tab.review": "Da controllare",

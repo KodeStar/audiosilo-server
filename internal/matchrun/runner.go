@@ -321,12 +321,24 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	c := &cands[0]
 	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
 	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region))
-	// The book keeps its own identifiers (planFor), so the review mustn't show the
+	// The book keeps its own identifiers (switching marketplace is a repick's):
+	// a proposal without them writes none, and the review shows none of the
 	// community's (another marketplace's ASIN, say) as if applying set them.
 	delete(item.Proposal.Values, catalog.FieldASIN)
 	delete(item.Proposal.Values, catalog.FieldISBN)
 	item.Proposal.ASINRegion = ""
-	return item, nil
+	// A book neither scope would change is up to date: nothing to record (most
+	// of a matched library, whose proposals would only fill the review).
+	st, err := r.cat.BookMatchState(ctx, b.LibraryID, b.RelPath)
+	if err != nil {
+		return nil, nil // gone meanwhile, or unreadable: nothing to offer now
+	}
+	for _, scope := range ScopesFor(catalog.MatchModeRefresh) {
+		if !Plan(scope, st, item.Proposal).Empty() {
+			return item, nil
+		}
+	}
+	return nil, nil
 }
 
 // ApplyOptions is what an apply writes: the run's confident items less Exclude,
@@ -471,39 +483,19 @@ type SeriesChange struct {
 // changeOf is what w writes to a book in state st, as the review shows it.
 func changeOf(st *catalog.MatchState, w Writes) Change {
 	ch := Change{Fields: []string{}, Cover: w.Cover}
-	after := func(f string) string {
-		if v, ok := w.Set[f]; ok {
-			return v
-		}
-		if slices.Contains(w.Revert, f) {
-			return st.Fields[f].Scanned
-		}
-		return st.Fields[f].Value
-	}
-	series := false
 	for _, f := range catalog.OverrideFields {
 		if _, ok := w.Set[f]; ok || slices.Contains(w.Revert, f) {
 			ch.Fields = append(ch.Fields, f)
-			series = series || f == catalog.FieldSeries || f == catalog.FieldSeriesIndex || f == catalog.FieldMoreSeries
 		}
 	}
-	if series {
-		from := seriesList(func(f string) string { return st.Fields[f].Value })
-		if to := seriesList(after); !slices.Equal(from, to) {
-			ch.Series = &SeriesChange{From: from, To: to}
-		}
+	series := func(value func(string) string) []catalog.SeriesRef {
+		return catalog.SeriesList(value(catalog.FieldSeries), catalog.ParseSeriesIndex(value(catalog.FieldSeriesIndex)), value(catalog.FieldMoreSeries))
+	}
+	from := series(func(f string) string { return st.Fields[f].Value })
+	if to := series(func(f string) string { return w.after(st, f) }); !slices.Equal(from, to) {
+		ch.Series = &SeriesChange{From: from, To: to}
 	}
 	return ch
-}
-
-// seriesList is a book's series as its fields hold them: the main one with its
-// position, then its more_series.
-func seriesList(field func(string) string) []catalog.SeriesRef {
-	out := []catalog.SeriesRef{}
-	if main := field(catalog.FieldSeries); main != "" {
-		out = append(out, catalog.SeriesRef{Name: main, Position: catalog.ParseSeriesIndex(field(catalog.FieldSeriesIndex))})
-	}
-	return append(out, catalog.ParseMoreSeries(field(catalog.FieldMoreSeries))...)
 }
 
 // ItemView is an item as the review shows it: the book as it is now (Gone when

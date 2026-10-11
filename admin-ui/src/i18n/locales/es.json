@@ -1233,7 +1233,7 @@
   "health.bulkMatch.scope.fill": "Completar lo que falta",
   "health.bulkMatch.scope.fillBody": "También añade los campos vacíos y una portada si el libro no tiene. No se sustituye nada que el libro tenga.",
   "health.bulkMatch.scope.overwrite": "Usar los valores de la comunidad",
-  "health.bulkMatch.scope.overwriteBody": "También sustituye los campos que difieren, como al aceptar una coincidencia, y las series de un libro pasan a ser las de la comunidad (se quitan las que ya no figuran). Tus propias ediciones se mantienen.",
+  "health.bulkMatch.scope.overwriteBody": "También sustituye los campos que difieren, como al aceptar una coincidencia. Se quitan las series que escribió un emparejamiento anterior y que la comunidad ya no indica para el libro. Tus propias ediciones se mantienen.",
   "health.bulkMatch.outcomes": "Coincidencias por resultado",
   "health.bulkMatch.tab.auto": "Seguras",
   "health.bulkMatch.tab.review": "Por revisar",

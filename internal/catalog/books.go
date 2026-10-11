@@ -444,7 +444,7 @@ func bookDest(b *Book) (dest []any, finish func()) {
 			if more != "[]" && more != "" { // most books have no list: no parse
 				// In a series beyond its main one: the whole list. A list that only
 				// repeats the main series (or can't be read) adds none.
-				if l := seriesList(b.Series, b.SeriesIndex, more); len(l) > 1 || (len(l) == 1 && b.Series == "") {
+				if l := SeriesList(b.Series, b.SeriesIndex, more); len(l) > 1 || (len(l) == 1 && b.Series == "") {
 					b.SeriesList = l
 				}
 			}

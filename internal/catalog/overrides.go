@@ -759,10 +759,12 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	}
 	// A community edit reverts only community values (a match clearing a series it
 	// wrote earlier), never an admin's own edit made since it looked.
+	del := `DELETE FROM book_overrides WHERE library_id = ? AND path = ? AND field = ?`
+	if edit.Source == SourceCommunity {
+		del += ` AND source = '` + SourceCommunity + `'`
+	}
 	for _, field := range revert {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM book_overrides WHERE library_id = ? AND path = ? AND field = ? AND (? <> ? OR source = ?)`,
-			ref.LibraryID, path, field, edit.Source, SourceCommunity, SourceCommunity); err != nil {
+		if _, err := tx.ExecContext(ctx, del, ref.LibraryID, path, field); err != nil {
 			return err
 		}
 	}

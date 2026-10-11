@@ -1148,7 +1148,7 @@
   "health.bulkMatch.scope.fill": "Fehlendes ergänzen",
   "health.bulkMatch.scope.fillBody": "Ergänzt auch leere Felder und ein Cover, wo keins ist. Nichts Vorhandenes wird ersetzt.",
   "health.bulkMatch.scope.overwrite": "Community-Werte verwenden",
-  "health.bulkMatch.scope.overwriteBody": "Ersetzt auch abweichende Felder, wie beim Übernehmen eines Treffers, und die Reihen eines Buchs werden die der Community (Reihen, die sie nicht mehr führt, werden entfernt). Deine eigenen Änderungen bleiben.",
+  "health.bulkMatch.scope.overwriteBody": "Ersetzt auch abweichende Felder, wie beim Übernehmen eines Treffers. Reihen, die ein früherer Abgleich eingetragen hat und die die Community für das Buch nicht mehr führt, werden entfernt. Deine eigenen Änderungen bleiben.",
   "health.bulkMatch.outcomes": "Treffer nach Ergebnis",
   "health.bulkMatch.tab.auto": "Sicher",
   "health.bulkMatch.tab.review": "Zu prüfen",

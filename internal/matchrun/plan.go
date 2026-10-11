@@ -156,6 +156,18 @@ type Writes struct {
 // Empty reports whether w writes nothing.
 func (w Writes) Empty() bool { return len(w.Set) == 0 && len(w.Revert) == 0 && !w.Cover }
 
+// after is field's value on a book in state st once w is applied: the value it
+// sets, else what the files say for one it reverts, else the value it has.
+func (w Writes) after(st *catalog.MatchState, field string) string {
+	if v, ok := w.Set[field]; ok {
+		return v
+	}
+	if slices.Contains(w.Revert, field) {
+		return st.Fields[field].Scanned
+	}
+	return st.Fields[field].Value
+}
+
 // Plan is what applying proposal p to a book in state st writes under scope. It is
 // the one statement of the scopes, so what the review shows and what an apply
 // writes can't disagree. Never: a value the book already has, an admin's own edit,
@@ -231,14 +243,9 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 	} else {
 		stale(catalog.FieldSeries)
 	}
-	main := own
-	if v, ok := set[catalog.FieldSeries]; ok {
-		main = v
-	} else if slices.Contains(w.Revert, catalog.FieldSeries) {
-		main = st.Fields[catalog.FieldSeries].Scanned
-	}
+	main := w.after(st, catalog.FieldSeries)
 	mainPos, found := "", false
-	unlisted := main != "" && !slices.ContainsFunc(work, func(s catalog.SeriesRef) bool { return sameSeries(s.Name, main) })
+	unlisted := len(work) > 0 && main != "" && !slices.ContainsFunc(work, func(s catalog.SeriesRef) bool { return sameSeries(s.Name, main) })
 	others := []catalog.SeriesRef{}
 	for i, s := range work {
 		if !sameSeries(s.Name, main) {
@@ -253,7 +260,7 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 	plan(scope, catalog.FieldSeriesIndex, mainPos, st.Fields[catalog.FieldSeriesIndex], set)
 	// A main series the community doesn't list keeps its position: the book's own
 	// spelling of the work's main series, numbered as the community numbers it.
-	if mainPos == "" && (len(work) == 0 || !unlisted) {
+	if mainPos == "" && !unlisted {
 		stale(catalog.FieldSeriesIndex)
 	}
 	// In stored form (each name once, within the bounds), as the book's own value
@@ -272,18 +279,12 @@ func sameSeries(a, b string) bool {
 }
 
 // planFor is what applying p to a book in state st writes for a run in mode: a
-// repick's ASIN (whatever the scope); a refresh's Plan less the identifiers (the
-// book was found by its own, which stay: switching marketplace is a repick's);
-// else Plan's.
+// repick's ASIN (whatever the scope), else Plan's (a refresh's proposal carries
+// no identifier, so its Plan writes none: refreshBook).
 func planFor(mode, scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	switch mode {
 	case catalog.MatchModeRepick:
 		return Writes{Set: PlanRepick(st, p)}
-	case catalog.MatchModeRefresh:
-		w := Plan(scope, st, p)
-		delete(w.Set, catalog.FieldASIN)
-		delete(w.Set, catalog.FieldISBN)
-		return w
 	}
 	return Plan(scope, st, p)
 }

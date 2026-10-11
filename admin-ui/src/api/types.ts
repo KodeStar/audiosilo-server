@@ -1825,10 +1825,7 @@ export interface MatchProposal {
 export interface MatchChange {
   fields: OverrideField[];
   cover: boolean;
-  series?: {
-    from: { name: string; position: number }[];
-    to: { name: string; position: number }[];
-  };
+  series?: { from: SeriesRef[]; to: SeriesRef[] };
 }
 
 /** matchrun.ItemView: one book a run matched, as the review shows it. */
