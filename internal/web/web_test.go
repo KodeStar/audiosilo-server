@@ -227,6 +227,26 @@ func TestI18nAssets(t *testing.T) {
 	}
 }
 
+// TestSetupPageAssets: the setup wizard (served by the api package from Asset)
+// loads the theme script before its stylesheet and keeps every <script> external.
+func TestSetupPageAssets(t *testing.T) {
+	t.Parallel()
+	b, err := Asset("setup.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(b)
+	theme, css := strings.Index(html, "/assets/theme-init.js"), strings.Index(html, "/assets/style.css")
+	if theme < 0 || css < 0 || theme > css {
+		t.Errorf("setup.html must load /assets/theme-init.js before /assets/style.css (at %d and %d)", theme, css)
+	}
+	for _, m := range inlineScriptRE.FindAllStringSubmatch(html, -1) {
+		if !strings.Contains(strings.ToLower(m[1]), "src=") {
+			t.Errorf("setup.html has an inline <script> that breaks the strict CSP: %.40q", m[2])
+		}
+	}
+}
+
 // TestAdminPWA checks the admin console is installable: the service worker is
 // served from the site root (so its scope covers /admin) with a JS content type,
 // the web manifest is served with the correct content type and names the app, and

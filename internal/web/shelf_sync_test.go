@@ -11,16 +11,22 @@ import (
 // admin console's theme script and Shelf tokens. These tests fail when the
 // console's originals change without the copies.
 
+// readFile returns the file at path (relative to this package) as a string.
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 // TestThemeInitMatchesConsole: assets/theme-init.js is admin-ui's, comments aside.
 func TestThemeInitMatchesConsole(t *testing.T) {
 	t.Parallel()
 	code := func(path string) string {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
 		var lines []string
-		for _, l := range strings.Split(string(b), "\n") {
+		for _, l := range strings.Split(readFile(t, path), "\n") {
 			if !strings.HasPrefix(strings.TrimSpace(l), "//") {
 				lines = append(lines, l)
 			}
@@ -42,7 +48,11 @@ func tokens(t *testing.T, css, header string) map[string]string {
 		t.Fatalf("no %q block", header)
 	}
 	block := css[i:]
-	block = block[:strings.Index(block, "}")]
+	end := strings.Index(block, "}")
+	if end < 0 {
+		t.Fatalf("the %q block never closes", header)
+	}
+	block = block[:end]
 	out := map[string]string{}
 	for _, m := range tokenRE.FindAllStringSubmatch(block, -1) {
 		out[m[1]] = strings.TrimSpace(m[2])
@@ -55,14 +65,7 @@ func tokens(t *testing.T, css, header string) map[string]string {
 // named differently on purpose (no fontsource "Variable" families, fixed px).
 func TestStyleTokensMatchConsole(t *testing.T) {
 	t.Parallel()
-	read := func(path string) string {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
-	ours, console := read("assets/style.css"), read("../../admin-ui/src/styles/globals.css")
+	ours, console := readFile(t, "assets/style.css"), readFile(t, "../../admin-ui/src/styles/globals.css")
 	for _, block := range []struct{ ours, console string }{
 		{":root {", ":root {"},
 		{`[data-theme="dark"] {`, "[data-theme='dark'] {"},

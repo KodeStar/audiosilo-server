@@ -107,7 +107,6 @@ p { margin: 6px 0 0; }
   height: 30px;
   border-radius: 9px;
   background: var(--primary);
-  color: var(--brand);
 }
 /* The mark is favicon.svg used as a mask, so it takes the brand colour in both
    themes without a second copy of its path. favicon.svg pads the mark, hence 23px
@@ -148,6 +147,9 @@ input {
   transition: border-color var(--dur-1), box-shadow var(--dur-1);
 }
 input::placeholder { color: var(--subtle-foreground); }
+/* iOS Safari zooms into a focused field whose text is under 16px, and these pages
+   are opened on phones (an invite link), so fields read 16px there. */
+@media (max-width: 639px) { input, select { font-size: 16px; } }
 input:focus-visible, select:focus-visible {
   outline: none;
   border-color: var(--ring);
@@ -178,7 +180,17 @@ button:hover, .button:hover {
 }
 button:active, .button:active { transform: translateY(1px); }
 button:disabled, [aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
-.block { width: 100%; height: 44px; padding: 0 20px; border-radius: var(--radius-btn-lg); font-size: 15px; }
+/* A full-width button may wrap: a translated label can outgrow a narrow phone. */
+.block {
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  padding: 8px 20px;
+  border-radius: var(--radius-btn-lg);
+  font-size: 15px;
+  white-space: normal;
+  text-align: center;
+}
 form .block { margin-top: 4px; }
 .button.secondary {
   background: var(--card);
@@ -197,8 +209,9 @@ form .block { margin-top: 4px; }
 /* The QR is a PNG with a white quiet zone, so it sits on a white tile in both themes. */
 .qr img {
   width: 240px;
-  height: 240px;
   max-width: 100%;
+  height: auto;
+  aspect-ratio: 1;
   image-rendering: pixelated;
   background: #fff;
   border: 1px solid var(--border);

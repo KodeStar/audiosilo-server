@@ -74,7 +74,8 @@ self.addEventListener("fetch", (e) => {
 
   // Unhashed code and styles - the console's (theme-init.js) and the connect and
   // setup pages' /assets/*.css|js, which share this scope - change in place with a
-  // release and are served no-cache: network-first, the cache only when offline.
+  // release and revalidate on every load (an ETag, no freshness lifetime):
+  // network-first, the cache only when offline.
   // Running a stale copy once after an upgrade would pair old code with a new page.
   const unhashedConsole = url.pathname.startsWith("/admin/") && !url.pathname.startsWith("/admin/assets/");
   if (unhashedConsole || /^\/assets\/[^/]+\.(css|js)$/.test(url.pathname)) {
