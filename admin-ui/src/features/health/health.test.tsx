@@ -468,8 +468,8 @@ describe('library health', () => {
       expect(calls.find((c) => c.path === '/admin/books/bulk')?.body).toEqual({
         books: [
           { library_id: 1, path: 'M/2' },
-          { library_id: 1, path: 'M/4' },
           { library_id: 1, path: 'M/3' },
+          { library_id: 1, path: 'M/4' },
         ],
         set: { series: 'He Who Fights with Monsters' },
       }),

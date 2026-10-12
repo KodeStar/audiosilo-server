@@ -135,15 +135,6 @@ func seriesKey(name string) string { return seriesKeys.get(name) }
 
 var seriesKeys = &memo[string]{f: func(name string) string { return cmp.Or(match.SeriesKey(name), name) }}
 
-// mainSeriesKey is the key a book's main series is stored by (books.series_key):
-// empty for none.
-func mainSeriesKey(series string) string {
-	if series == "" {
-		return ""
-	}
-	return seriesKey(series)
-}
-
 // otherSeries is the series a book is in besides its main one (SeriesList less
 // the main series): what book_more_series holds for it.
 func otherSeries(series, more string) []SeriesRef {
@@ -279,11 +270,10 @@ func (c *Catalog) KeySeries(ctx context.Context) (int, error) {
 				v, l.lib, l.path, FieldMoreSeries); err != nil {
 				return err
 			}
-			var id int64
-			switch err := tx.QueryRowContext(ctx, `SELECT id FROM books WHERE library_id = ? AND rel_path = ?`, l.lib, l.path).Scan(&id); {
+			switch id, err := bookIDByPath(ctx, tx, l.lib, l.path); {
 			case err == nil:
 				relisted = append(relisted, id)
-			case !errors.Is(err, sql.ErrNoRows): // an edit kept for a book not indexed now
+			case !errors.Is(err, ErrNotFound): // an edit kept for a book not indexed now
 				return err
 			}
 		}
@@ -299,9 +289,14 @@ func (c *Catalog) KeySeries(ctx context.Context) (int, error) {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM book_more_series`); err != nil {
 			return err
 		}
+		setKey, err := tx.PrepareContext(ctx, `UPDATE books SET series_key = ? WHERE id = ?`)
+		if err != nil {
+			return err
+		}
+		defer setKey.Close()
 		for _, b := range books {
 			if b.series != "" {
-				if _, err := tx.ExecContext(ctx, `UPDATE books SET series_key = ? WHERE id = ?`, seriesKey(b.series), b.id); err != nil {
+				if _, err := setKey.ExecContext(ctx, seriesKey(b.series), b.id); err != nil {
 					return err
 				}
 			}

@@ -139,10 +139,13 @@ export function attentionTotal(summary: IssuesSummary): number {
 }
 
 /**
- * The kinds that list books (all but duplicates, which come as groups, and series
- * spellings, which come per series).
+ * The kinds that come as groups, each with a view of its own: duplicates (copies
+ * of a book) and series spellings (per series). The rest list books.
  */
-export type BookIssueKind = Exclude<IssueKind, 'duplicate' | 'series_spellings'>;
+export const GROUPED_KINDS = ['duplicate', 'series_spellings'] as const;
+
+/** The kinds that list books. */
+export type BookIssueKind = Exclude<IssueKind, (typeof GROUPED_KINDS)[number]>;
 
 /**
  * Why a book without chapters didn't get the community's (the i18n key), or
@@ -156,5 +159,5 @@ export function chaptersCheckNote(kind: IssueKind, b: AdminBook): string | undef
 }
 
 export function isBookKind(kind: IssueKind): kind is BookIssueKind {
-  return kind !== 'duplicate' && kind !== 'series_spellings';
+  return !(GROUPED_KINDS as readonly IssueKind[]).includes(kind);
 }

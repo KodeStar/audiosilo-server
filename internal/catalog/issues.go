@@ -138,8 +138,10 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 			counts[k] = ic
 			pred := issuePredicates[k]
 			cols = append(cols,
-				`COALESCE(SUM(CASE WHEN `+pred+` AND ig.`+k+` IS NOT 1 THEN 1 ELSE 0 END), 0)`,
-				`COALESCE(SUM(CASE WHEN `+pred+` AND ig.`+k+` IS 1 THEN 1 ELSE 0 END), 0)`)
+				// The ignore first: a costly predicate (series_spellings' seeks) then
+				// runs once per book, not twice.
+				`COALESCE(SUM(CASE WHEN ig.`+k+` IS NOT 1 AND `+pred+` THEN 1 ELSE 0 END), 0)`,
+				`COALESCE(SUM(CASE WHEN ig.`+k+` IS 1 AND `+pred+` THEN 1 ELSE 0 END), 0)`)
 			flags = append(flags, `MAX(kind = '`+k+`') AS `+k)
 			dest = append(dest, &ic.Count, &ic.Ignored)
 		}

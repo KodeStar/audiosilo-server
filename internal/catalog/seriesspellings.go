@@ -57,16 +57,18 @@ func (c *Catalog) SeriesSpellingGroups(ctx context.Context, libraryID int64, ign
 		key, series        string
 		matched, isIgnored bool
 	}
+	lib, args := "", []any{IssueSeriesSpellings}
+	if libraryID != 0 {
+		lib, args = " AND b.library_id = ?", append(args, libraryID)
+	}
 	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, x *row) error {
 		return r.Scan(&x.lib, &x.key, &x.series, &x.matched, &x.isIgnored)
 	}, `SELECT b.library_id, b.series_key, b.series, `+matchedExpr+`, `+ignoredExpr+` FROM books b
-		 WHERE `+seriesSpellingsExpr+` AND (? = 0 OR b.library_id = ?)`,
-		IssueSeriesSpellings, libraryID, libraryID)
+		 WHERE `+seriesSpellingsExpr+lib, args...)
 	if err != nil {
 		return nil, err
 	}
 	type acc struct {
-		lib       int64
 		spellings map[string]spelling
 		books     int
 		show      bool
@@ -80,7 +82,7 @@ func (c *Catalog) SeriesSpellingGroups(ctx context.Context, libraryID int64, ign
 		k := groupKey{x.lib, x.key}
 		a := groups[k]
 		if a == nil {
-			a = &acc{lib: x.lib, spellings: map[string]spelling{}}
+			a = &acc{spellings: map[string]spelling{}}
 			groups[k] = a
 		}
 		sp := a.spellings[x.series]
@@ -93,11 +95,11 @@ func (c *Catalog) SeriesSpellingGroups(ctx context.Context, libraryID int64, ign
 		a.show = a.show || x.isIgnored == ignored
 	}
 	out := []SeriesSpellingGroup{}
-	for _, a := range groups {
+	for k, a := range groups {
 		if !a.show {
 			continue
 		}
-		g := SeriesSpellingGroup{LibraryID: a.lib, Suggested: seriesName(a.spellings), Books: a.books}
+		g := SeriesSpellingGroup{LibraryID: k.lib, Suggested: seriesName(a.spellings), Books: a.books}
 		for name, sp := range a.spellings {
 			g.Spellings = append(g.Spellings, SeriesSpelling{Name: name, Books: sp.books})
 		}
@@ -107,13 +109,7 @@ func (c *Catalog) SeriesSpellingGroups(ctx context.Context, libraryID int64, ign
 		out = append(out, g)
 	}
 	slices.SortFunc(out, func(x, y SeriesSpellingGroup) int {
-		if lessFold(x.Suggested, y.Suggested) {
-			return -1
-		}
-		if lessFold(y.Suggested, x.Suggested) {
-			return 1
-		}
-		return cmp.Compare(x.LibraryID, y.LibraryID)
+		return cmp.Or(compareFold(x.Suggested, y.Suggested), cmp.Compare(x.LibraryID, y.LibraryID))
 	})
 	return out[:min(len(out), maxSpellingGroups)], nil
 }

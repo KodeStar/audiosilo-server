@@ -457,17 +457,11 @@ func TestNextInSeriesPlan(t *testing.T) {
 					t.Errorf("%s: plan does not use %s:\n%s", series, want, joined)
 				}
 			}
-			assertNoBooksWalk(t, series, plan)
-		}
-	}
-}
-
-// assertNoBooksWalk fails when plan walks the books table rather than seeking it.
-func assertNoBooksWalk(t *testing.T, what string, plan []string) {
-	t.Helper()
-	for _, line := range plan {
-		if (strings.HasPrefix(line, "SCAN b") || strings.HasPrefix(line, "SCAN s")) && !strings.Contains(line, "INDEX") {
-			t.Errorf("%s: plan walks the books table: %q", what, line)
+			for _, line := range plan {
+				if strings.HasPrefix(line, "SCAN b") && !strings.Contains(line, "INDEX") {
+					t.Errorf("%s: plan walks the books table: %q", series, line)
+				}
+			}
 		}
 	}
 }

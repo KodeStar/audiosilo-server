@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Loader2, Merge } from 'lucide-react';
-import { api } from '@/api/client';
 import { useSeriesSpellings } from '@/api/hooks';
 import type { AdminBook, SeriesSpellingGroup } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { QueryError } from '@/components/query-error';
 import { Button } from '@/components/ui/button';
 import { NativeSelect } from '@/components/ui/native-select';
-import { useMerge } from '@/features/library/people/use-merge';
+import { otherSpellings } from '@/features/library/people/people-model';
+import { booksWhere, useMerge } from '@/features/library/people/use-merge';
 import { toastError } from '@/lib/errors';
 import { counted, formatList } from '@/lib/format';
 import { seriesKey } from '@/lib/series-key';
@@ -58,21 +58,12 @@ export function SeriesSpellings({ ignored }: { ignored: boolean }) {
  * spelling (its main series; the series filter also finds the books listing it
  * among their other series, which a rename doesn't touch).
  */
-async function seriesBooks(g: SeriesSpellingGroup): Promise<AdminBook[]> {
+function seriesBooks(g: SeriesSpellingGroup): Promise<AdminBook[]> {
   const key = seriesKey(g.suggested);
-  const out: AdminBook[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await api.adminBooks({
-      series: g.suggested,
-      library_id: g.library_id,
-      limit: 200,
-      cursor,
-    });
-    out.push(...page.books.filter((b) => b.series !== '' && seriesKey(b.series) === key));
-    cursor = page.next_cursor || undefined;
-  } while (cursor);
-  return out;
+  return booksWhere(
+    { series: g.suggested, library_id: g.library_id },
+    (b) => b.series !== '' && seriesKey(b.series) === key,
+  );
 }
 
 function SpellingNotice({ group: g, ignored }: { group: SeriesSpellingGroup; ignored: boolean }) {
@@ -84,7 +75,7 @@ function SpellingNotice({ group: g, ignored }: { group: SeriesSpellingGroup; ign
   const [ignoring, setIgnoring] = useState(false);
   const names = g.spellings.map((s) => s.name);
   const chosen = names.includes(keep) ? keep : g.suggested;
-  const others = names.filter((n) => n !== chosen);
+  const others = otherSpellings({ names, suggested: chosen, books: g.books, other_books: 0 });
   const rewrites = g.books - (g.spellings.find((s) => s.name === chosen)?.books ?? 0);
   const busy = merging !== null || ignoring;
 
@@ -138,8 +129,12 @@ function SpellingNotice({ group: g, ignored }: { group: SeriesSpellingGroup; ign
               <Button
                 size="sm"
                 disabled={busy}
+                // The series filter finds every spelling at once: one lookup.
                 onClick={() =>
-                  void merge({ names, suggested: chosen, books: g.books, other_books: rewrites })
+                  void merge(
+                    { names, suggested: chosen, books: g.books, other_books: rewrites },
+                    () => seriesBooks(g),
+                  )
                 }
               >
                 {merging ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}

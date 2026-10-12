@@ -15,6 +15,8 @@
 -- spelling below this one, or above), not a walk of the series.
 ALTER TABLE books ADD COLUMN series_key TEXT NOT NULL DEFAULT '';
 DROP INDEX idx_books_series;
+-- The lists' own index (0039) served only the reads book_more_series replaces.
+DROP INDEX idx_books_more_series;
 CREATE INDEX idx_books_series_key ON books(library_id, series_key, series, series_index);
 
 CREATE TABLE book_more_series (

@@ -314,13 +314,11 @@ func TestKeySeries(t *testing.T) {
 	if stored != once || EncodeMoreSeries(b.AllSeries()[1:]) != once {
 		t.Errorf("list = %s (row %v), want %s", stored, b.AllSeries(), once)
 	}
-	var positions []float64
-	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, p *float64) error { return r.Scan(p) },
+	positions, err := queryRows(ctx, c.db, func(r *sql.Rows, p *float64) error { return r.Scan(p) },
 		`SELECT m.position FROM book_more_series m JOIN books b ON b.id = m.book_id WHERE b.rel_path = 'Disc/8'`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	positions = rows
 	if !slices.Equal(positions, []float64{1}) {
 		t.Errorf("keyed list positions = %v, want [1]", positions)
 	}

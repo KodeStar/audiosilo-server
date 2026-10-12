@@ -577,7 +577,7 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 		`UPDATE books SET title = ?, author = ?, narrator = ?, series = ?, series_key = ?, series_index = ?,
 		     more_series = ?, published = ?, description = ?, asin = ?, isbn = ?
 		 WHERE id = ?`,
-		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), mainSeriesKey(v(FieldSeries)), ParseSeriesIndex(v(FieldSeriesIndex)),
+		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), seriesKey(v(FieldSeries)), ParseSeriesIndex(v(FieldSeriesIndex)),
 		cmp.Or(v(FieldMoreSeries), "[]"), v(FieldPublished), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
 		return err
 	}
