@@ -2,19 +2,26 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/client';
-import { invalidateBooks } from '@/api/hooks';
-import type { AdminBook, MergeSuggestion, PersonField } from '@/api/types';
+import { invalidateBooks, invalidateIssues } from '@/api/hooks';
+import type { AdminBook, MergeSuggestion } from '@/api/types';
 import { toastError } from '@/lib/errors';
 import { counted } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import { mergeSteps, otherSpellings, undoSteps, type BulkStep } from './people-model';
+import {
+  mergeSteps,
+  otherSpellings,
+  undoSteps,
+  type BulkStep,
+  type MergeField,
+} from './people-model';
 
 /**
  * Every book whose `field` is exactly `name` (in one library, or all), page by
- * page. The filter also finds the co-credits naming `name` ("A, B" for B); a merge
- * rewrites the whole field, so those are left out, keeping their other people.
+ * page. The filter also finds the co-credits naming `name` ("A, B" for B), and a
+ * series filter every spelling of it and the books listing it among their other
+ * series; a merge rewrites the whole field, so those are left out.
  */
-async function booksTagged(field: PersonField, name: string, libraryId?: number) {
+async function booksTagged(field: MergeField, name: string, libraryId?: number) {
   const out: AdminBook[] = [];
   let cursor: string | undefined;
   do {
@@ -35,12 +42,12 @@ async function run(steps: BulkStep[]) {
 }
 
 /**
- * Merging spellings of one person: collect the books tagged with the other
+ * Merging spellings of one person (or series): collect the books tagged with the other
  * spellings, set the suggested one on each (an edit, so files are untouched),
  * and toast with an Undo that puts every book back as it was. `merging` is the
  * suggestion in flight (by its suggested name).
  */
-export function useMerge(field: PersonField, libraryId?: number) {
+export function useMerge(field: MergeField, libraryId?: number) {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const [merging, setMerging] = useState<string | null>(null);
@@ -58,6 +65,7 @@ export function useMerge(field: PersonField, libraryId?: number) {
       toastError(t('people-merge.undoFailed'), err);
     } finally {
       invalidateBooks(qc, books);
+      invalidateIssues(qc); // Health's series spellings
     }
   };
 
@@ -88,6 +96,7 @@ export function useMerge(field: PersonField, libraryId?: number) {
     } finally {
       setMerging(null);
       invalidateBooks(qc, books);
+      invalidateIssues(qc);
     }
   };
 

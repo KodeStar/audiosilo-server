@@ -42,6 +42,9 @@ export function otherSpellings(s: MergeSuggestion): string[] {
   return s.names.filter((n) => n !== s.suggested);
 }
 
+/** A field a merge rewrites: a person's (Authors, Narrators) or a series' (Health). */
+export type MergeField = PersonField | 'series';
+
 /** One POST /admin/books/bulk request. */
 export interface BulkStep {
   books: BookRef[];
@@ -49,7 +52,7 @@ export interface BulkStep {
 }
 
 /** The requests that set `field` to `suggested` on every book. */
-export function mergeSteps(books: AdminBook[], field: PersonField, suggested: string): BulkStep[] {
+export function mergeSteps(books: AdminBook[], field: MergeField, suggested: string): BulkStep[] {
   return chunk(books.map(refOf), BULK_LIMIT).map((refs) => ({
     books: refs,
     edit: { set: { [field]: suggested } },
@@ -62,7 +65,7 @@ export function mergeSteps(books: AdminBook[], field: PersonField, suggested: st
  * found, unlocked); one whose field had an override gets its old spelling set
  * again, one request per spelling. Edits to other fields don't matter.
  */
-export function undoSteps(books: AdminBook[], field: PersonField): BulkStep[] {
+export function undoSteps(books: AdminBook[], field: MergeField): BulkStep[] {
   const overridden = (b: AdminBook) => b.edited_fields.includes(field);
   const steps: BulkStep[] = chunk(books.filter((b) => !overridden(b)).map(refOf), BULK_LIMIT).map(
     (refs) => ({ books: refs, edit: { revert: [field] } }),
