@@ -43,6 +43,19 @@ describe('service worker', () => {
     expect(network).toHaveBeenCalledTimes(1);
   });
 
+  it("fetches the connect and setup pages' stylesheet and scripts from the network even when cached", async () => {
+    for (const path of ['/assets/style.css', '/assets/theme-init.js']) {
+      const { network, request } = loadWorker({ [path]: 'stale' });
+      await expect(request(path)).resolves.toMatchObject({ body: 'network' });
+      expect(network).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('serves fonts and icons from the cache first', async () => {
+    const { request } = loadWorker({ '/assets/fonts/figtree-variable.woff2': 'cached' });
+    await expect(request('/assets/fonts/figtree-variable.woff2')).resolves.toBe('cached');
+  });
+
   it('serves hashed console assets from the cache first', async () => {
     const { request } = loadWorker({ '/admin/assets/index-abc.js': 'cached' });
     await expect(request('/admin/assets/index-abc.js')).resolves.toBe('cached');

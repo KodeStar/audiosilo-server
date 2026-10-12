@@ -36,14 +36,11 @@
   --card: #ffffff;
   --primary: #15203d;
   --primary-foreground: #f5f7fa;
-  --secondary: #eaedf3;
-  --secondary-foreground: #18244a;
   --muted: #eef1f5;
   --muted-foreground: #5b6680;
   --subtle-foreground: #8590a6;
   --accent: #e8ecf3;
   --destructive: #c42b3c;
-  --destructive-soft: #fde8ea;
   --border: #e0e5ed;
   --border-strong: #cdd4df;
   --input: #d4dae4;
@@ -62,14 +59,11 @@
   --card: #10172b;
   --primary: #eef1f8;
   --primary-foreground: #0a0f1e;
-  --secondary: #1a2340;
-  --secondary-foreground: #dfe5f2;
   --muted: #151d34;
   --muted-foreground: #8f9ab3;
   --subtle-foreground: #66718b;
   --accent: #1a2340;
   --destructive: #f0606e;
-  --destructive-soft: #3a1720;
   --border: #1d2640;
   --border-strong: #2a3555;
   --input: #283252;
@@ -89,7 +83,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: inherit; }
 ::selection { background: color-mix(in oklab, var(--brand) 25%, transparent); }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
@@ -103,7 +96,6 @@ p { margin: 6px 0 0; }
 /* ---- Layout: a 400px column centred on the page (the console's sign-in) ---- */
 .center { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 40px 16px; }
 .column { width: 100%; max-width: 400px; }
-.spacer { height: 12px; }
 .inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 18px; }
 
 /* ---- Brand: the mark on its ink tile + the wordmark (logo.tsx LogoTile) ---- */
@@ -117,7 +109,16 @@ p { margin: 6px 0 0; }
   background: var(--primary);
   color: var(--brand);
 }
-.brand .tile svg { width: 20px; height: 20px; display: block; }
+/* The mark is favicon.svg used as a mask, so it takes the brand colour in both
+   themes without a second copy of its path. favicon.svg pads the mark, hence 23px
+   for the console's 20px. */
+.brand .tile .mark {
+  width: 23px;
+  height: 23px;
+  background: var(--brand);
+  -webkit-mask: url("/assets/favicon.svg") center / contain no-repeat;
+  mask: url("/assets/favicon.svg") center / contain no-repeat;
+}
 .brand .wordmark { font-family: var(--font-display); font-size: 16px; font-weight: 700; letter-spacing: -0.02em; }
 
 /* ---- Card ---- */
@@ -144,7 +145,6 @@ input {
   border: 1px solid var(--input);
   background: var(--card);
   color: var(--foreground);
-  font-size: 14px;
   transition: border-color var(--dur-1), box-shadow var(--dur-1);
 }
 input::placeholder { color: var(--subtle-foreground); }
@@ -155,11 +155,10 @@ input:focus-visible, select:focus-visible {
 }
 
 /* ---- Buttons (and links styled as buttons): Shelf ink default, hairline outline ---- */
-button, .button, .links a {
+button, .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
   height: 36px;
   padding: 0 14px;
   border-radius: var(--radius-md);
@@ -174,18 +173,19 @@ button, .button, .links a {
   user-select: none;
   transition: background-color var(--dur-1), border-color var(--dur-1), transform var(--dur-1);
 }
-button:hover, .button:hover, .links a.primary:hover {
+button:hover, .button:hover {
   background: color-mix(in oklab, var(--primary) 88%, var(--brand));
 }
-button:active, .button:active, .links a:active { transform: translateY(1px); }
-button:disabled { opacity: 0.45; pointer-events: none; }
-button.block { width: 100%; height: 44px; padding: 0 20px; border-radius: var(--radius-btn-lg); font-size: 15px; margin-top: 4px; }
-.button.secondary, .links a {
+button:active, .button:active { transform: translateY(1px); }
+button:disabled, [aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+.block { width: 100%; height: 44px; padding: 0 20px; border-radius: var(--radius-btn-lg); font-size: 15px; }
+form .block { margin-top: 4px; }
+.button.secondary {
   background: var(--card);
   color: var(--foreground);
   border-color: var(--border-strong);
 }
-.button.secondary:hover, .links a:hover { background: var(--accent); }
+.button.secondary:hover { background: var(--accent); }
 
 /* ---- Messages ---- */
 .msg { display: none; margin: 16px 0 0; font-size: 13px; font-weight: 500; color: var(--destructive); }
@@ -206,9 +206,6 @@ button.block { width: 100%; height: 44px; padding: 0 20px; border-radius: var(--
   padding: 12px;
 }
 .links { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
-.links a { height: 44px; border-radius: var(--radius-btn-lg); font-size: 15px; }
-.links a.primary { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
-.links a[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
 
 /* ---- Footer row under the card (language picker) ---- */
 .lang-row {
@@ -220,7 +217,7 @@ button.block { width: 100%; height: 44px; padding: 0 20px; border-radius: var(--
   font-size: 13px;
   color: var(--muted-foreground);
 }
-.lang-row label { font-size: 13px; font-weight: 500; }
+.lang-row label { font-weight: 500; }
 .lang-select {
   height: 32px;
   padding: 0 8px;
@@ -228,7 +225,6 @@ button.block { width: 100%; height: 44px; padding: 0 20px; border-radius: var(--
   border: 1px solid var(--input);
   background: var(--card);
   color: var(--foreground);
-  font-size: 13px;
 }
 
 /* ---- Code (the "console not built" page) ---- */
