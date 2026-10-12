@@ -222,26 +222,6 @@ type BookFilter struct {
 	// IssueIgnored, listing only those.
 	Issue        string
 	IssueIgnored bool
-
-	// series is how the index spells Series' series (spellSeries): the filter
-	// takes every spelling.
-	series seriesNames
-}
-
-// spellSeries reads how the index spells f's series filter into f: in f's
-// library, or with every library (the library facet, which counts the others
-// too) in all of them.
-func (c *Catalog) spellSeries(ctx context.Context, f *BookFilter, every bool) error {
-	if f.Series == "" {
-		return nil
-	}
-	var libs []int64
-	if f.LibraryID != 0 && !every {
-		libs = []int64{f.LibraryID}
-	}
-	var err error
-	f.series, err = c.spellingsOf(ctx, libs, true, f.Series)
-	return err
 }
 
 // Facet dimensions: the filters a facet count is computed without, so the console
@@ -280,12 +260,12 @@ func (f BookFilter) where(skip string) (string, []any) {
 		}
 	}
 	if f.LibraryID != 0 && skip != facetLibrary {
-		// With an author, narrator or series filter the full-text index finds a
-		// handful of candidates; a plain library term would have SQLite walk the
+		// With an author or narrator filter the full-text index finds a handful of
+		// candidates, and with a series filter the series' own index does; a plain library term would have SQLite walk the
 		// whole library by its library index instead (the unary + rules it out).
 		// A value with no phrase to match isn't looked up there, so the library
 		// index stays the way in.
-		if hasFTSPhrase(f.Author) || hasFTSPhrase(f.Narrator) || hasFTSPhrase(f.Series) {
+		if hasFTSPhrase(f.Author) || hasFTSPhrase(f.Narrator) || f.Series != "" {
 			add("+b.library_id = ?", f.LibraryID)
 		} else {
 			add("b.library_id = ?", f.LibraryID)
@@ -302,7 +282,7 @@ func (f BookFilter) where(skip string) (string, []any) {
 		add(cond, a...)
 	}
 	if f.Series != "" {
-		cond, a := seriesFilter("b.", f.series, true)
+		cond, a := seriesFilter("b.", f.Series, true)
 		add(cond, a...)
 	}
 	if f.Narrator != "" {
@@ -464,12 +444,9 @@ func (c *Catalog) ListAdminBooks(ctx context.Context, opt AdminListOptions) (*Ad
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSort, opt.Sort)
 	}
-	if err := c.spellSeries(ctx, &opt.Filter, false); err != nil {
-		return nil, err
-	}
 	if opt.Sort == "series" && opt.Filter.Series != "" {
 		// One series' books, in their order in that series (not their main one's).
-		keys = seriesOrderKeys(opt.Filter.Series, opt.Filter.series)
+		keys = seriesOrderKeys(opt.Filter.Series)
 	}
 	keys = directed(keys, opt.Desc)
 	if opt.Limit <= 0 || opt.Limit > 200 {
@@ -602,9 +579,6 @@ type BookFacets struct {
 // BookFacets computes the facet counts for f.
 func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, error) {
 	out := &BookFacets{}
-	if err := c.spellSeries(ctx, &f, true); err != nil {
-		return nil, err
-	}
 	var err error
 	where, args := f.where(facetLibrary)
 	if out.Libraries, err = queryRows(ctx, c.db, func(rows *sql.Rows, lc *LibraryCount) error {

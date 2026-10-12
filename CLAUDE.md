@@ -587,8 +587,8 @@ admin overrides; see Metadata overrides below).
   that work. Resolved per request AFTER the cache, on a copy of the rails (never
   stored: the cached envelope is shared): `api.localRails` fetches the caller's
   candidates (`catalog.SeriesBooks` over their `UserScopes`, scope-filtered: books
-  whose series - the main one, or one their `more_series` names (`seriesMembers`,
-  over the partial index `idx_books_more_series`, migration 0039) - folds to a
+  whose series - the main one (`books.series_key`), or one their `more_series` names
+  (`seriesMembers`, over `book_more_series`, migration 0041) - folds to a
   rail/ordering name by `match.SeriesKey`, the console's `seriesKey` - NFKD, case,
   punctuation and spacing ignored; a book in several series is a candidate in each,
   at its position there) and `meta.PlaceLocal`
@@ -623,14 +623,13 @@ admin overrides; see Metadata overrides below).
   (`catalog.NextInSeries`: every series of `Book.AllSeries()` with a position, main
   first; per series one query
   (`laterSeriesMembers`) over its numbered members in scope - same library, books in
-  that series (any spelling: `seriesNames`, see Series spellings) by their main series or a more_series entry, at their
+  that series (any spelling: by its key, see Series spellings) by their main series or a more_series entry, at their
   position IN THAT SERIES - those above the book's position first, then by
   position, ties by path (unbounded: SQLite sorts every member first anyway):
   read in that order, the first row above that doesn't step back is the next book,
   and any row at all means numbered (the first at or below ends the walk); a UNION
-  ALL of an `idx_books_series` branch and a list branch narrowed by the full-text index's series column (`books_fts`, every series
-  name; `idx_books_more_series` alone for a name with no phrase) + `json_each` for
-  the exact name; the first series with a later book that doesn't step back
+  ALL of an `idx_books_series_key` branch and a `book_more_series` branch (its key
+  index, then each book by rowid); the first series with a later book that doesn't step back
   answers with the first such book (`stepsBack`: it sits at or before the current
   book in an earlier-ranked series of the current book's, both numbered there; a
   book that steps back is passed over, not the whole series); numbered books in
@@ -849,15 +848,25 @@ admin overrides; see Metadata overrides below).
   "...with..." and "...WIth..." are one series and nothing fuzzier merges ("The Expanse" and
   "Expanse" stay two). `catalog.Series` groups by it (counts, positions, lengths and authors
   merged; `SeriesList` and `normalizeMoreSeries` keep a series once however a list spells it again) and names the group `seriesName`: the spelling its
-  matched books use most, else the most books', ties alphabetical. Every series filter takes
-  every spelling: `Catalog.spellings` reads the index's spellings of the asked series (the
-  distinct `(library_id, series)` of idx_books_series in order, plus, unless the caller matches main
-  series only (`SeriesBooks`, the rails' spellings; `ListBooks` without memberships), the more_series
-  names of the books with a list; about 20 ms over 50,000 books, 9 in one library) into `seriesNames`, which `seriesFilter` (IN
-  lists; with memberships the FTS series column narrows by an OR of every spelling's phrase),
-  `seriesOrderKeys` (literals), `numberedSeriesMembers` (the next book) and `positionIn` (Go, by key)
-  use, so the SQL and a keyset cursor agree. `ListSeriesBooks` reads the spellings once per batch,
-  `BookFilter` (`spellSeries`) across every library (the library facet counts the others). The JSON
+  matched books use most, else the most books', ties alphabetical. **The key is stored**
+  (migration 0041): `refreshEffective` writes `books.series_key` (`mainSeriesKey`, '' for no
+  series; index `idx_books_series_key (library_id, series_key, series_index)`) and the book's
+  other series to `book_more_series` (`keyOtherSeries`: `SeriesList` less the main series, one
+  row per key with its position; PK `(book_id, series_key)`, index `(series_key, library_id,
+  position)`, cascades with the book). Both are written by Go, never computed in SQL (the key
+  needs NFKD; the catalogue's SQL functions stay out of the schema), and `refreshEffective` is
+  the only writer of `books.series`, so every path that changes a series keys it. Every series
+  filter asks by key: `seriesFilter` (an `id IN` over `idx_books_series_key` in every library,
+  with memberships a UNION ALL of the list rows too; the caller's library term narrows them),
+  `seriesOrderKeys` (the key as a literal), `numberedSeriesMembers` (the next book),
+  `SeriesBooks`/`seriesMembers` (the rails) and `positionIn` (Go, by key), so the SQL and a
+  keyset cursor agree; each is an index seek (`TestNextInSeriesPlan`; under a millisecond for a
+  25-book series in 50,000 books, `TestSeriesKeyScale`). Rows indexed before 0041 are keyed by
+  `Catalog.KeySeries`, which the launcher runs once per database (server_state `series_keys`),
+  synchronously before the listener (about a second per 50,000 books; a failure is logged and
+  retried at the next start): it first puts every stored `more_series` override through
+  `normalizeMoreSeries` (a list written before #123 could name one series twice) and rebuilds
+  those books, then keys every book in one transaction. The JSON
   is unchanged: an older player sees fewer, fuller series. **A position from the title**:
   `bookLayers.scannedFields` gives a book with a series and no position the one its title gives
   (`titlePosition`, `metadata.PositionInTitle`), read as the title's source (path when the title is
@@ -1561,7 +1570,7 @@ main one first, with its position in each; omitted otherwise).
 The first page of several series' books in one request (capability `series_books`, the
 player's Series cards) is `GET /libraries/{id}/series/books?name=A&name=B[&limit=N]` ->
 `{"series": [{name, books, next_cursor?}]}` (authed, `browseScope` like `/books`; 400 for no
-names or over `maxSeriesBatch` = 50 distinct ones). Names come back verbatim (each finds its series in any spelling; the spellings are read once for the batch), empty ones ignored
+names or over `maxSeriesBatch` = 50 distinct ones). Names come back verbatim (each finds its series in any spelling, by its key), empty ones ignored
 (`catalog.ListSeriesBooks` skips them too), duplicates answered once, entries in request
 order; each entry is exactly the page `/books?series=<name>&memberships=1&limit=N` returns
 (`ListSeriesBooks`: one `ListBooks` per name), so its `next_cursor` continues there, with

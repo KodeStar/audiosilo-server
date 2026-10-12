@@ -574,10 +574,6 @@ type ListOptions struct {
 	Limit       int
 	Cursor      string // opaque keyset cursor from a previous page
 	Scope       *Scope // optional access scope; nil = unrestricted (admin/internal)
-
-	// series is how the library spells Series' series, when the caller has read
-	// it already (ListSeriesBooks, for every name at once); nil reads it.
-	series *seriesNames
 }
 
 // Page is a page of books plus the cursor for the next page ("" when exhausted).
@@ -631,9 +627,9 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 
 	where := []string{"library_id = ?"}
 	args := []any{opt.LibraryID}
-	if hasFTSPhrase(opt.Author) || hasFTSPhrase(opt.Narrator) || (opt.Memberships && hasFTSPhrase(opt.Series)) {
-		// The full-text candidates drive these filters, not the library index (as
-		// in BookFilter.where).
+	if hasFTSPhrase(opt.Author) || hasFTSPhrase(opt.Narrator) || opt.Series != "" {
+		// The full-text candidates or the series' own index drive these filters,
+		// not the library index (as in BookFilter.where).
 		where[0] = "+library_id = ?"
 	}
 	if opt.Author != "" {
@@ -641,14 +637,7 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 		where, args = append(where, cond), append(args, a...)
 	}
 	if opt.Series != "" {
-		if opt.series == nil {
-			n, err := c.spellingsOf(ctx, []int64{opt.LibraryID}, opt.Memberships, opt.Series)
-			if err != nil {
-				return nil, err
-			}
-			opt.series = &n
-		}
-		cond, a := seriesFilter("", *opt.series, opt.Memberships)
+		cond, a := seriesFilter("", opt.Series, opt.Memberships)
 		where, args = append(where, cond), append(args, a...)
 	}
 	if opt.Narrator != "" {
@@ -721,26 +710,19 @@ type SeriesPage struct {
 // so each NextCursor continues on /books?series=<name>&memberships=1 with the
 // same limit. Books is an empty list, never nil, for a series with no books in
 // scope. An empty name is skipped (an empty Series filters nothing: it would be
-// the whole library). The spellings are read once for every name, then one
-// indexed query per name; the caller bounds the names.
+// the whole library). One indexed query per name; the caller bounds the names.
 func (c *Catalog) ListSeriesBooks(ctx context.Context, libraryID int64, names []string, limit int, scope *Scope) ([]SeriesPage, error) {
 	out := make([]SeriesPage, 0, len(names))
-	spelled, err := c.spellings(ctx, []int64{libraryID}, true, names...)
-	if err != nil {
-		return nil, err
-	}
 	for _, name := range names {
 		if name == "" {
 			continue
 		}
-		n := spelled[seriesKey(name)]
 		page, err := c.ListBooks(ctx, ListOptions{
 			LibraryID:   libraryID,
 			Series:      name,
 			Memberships: true,
 			Limit:       limit,
 			Scope:       scope,
-			series:      &n,
 		})
 		if err != nil {
 			return nil, err

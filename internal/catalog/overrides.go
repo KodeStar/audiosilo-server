@@ -545,7 +545,7 @@ func pathFields(m *metadata.Metadata) bookFields {
 }
 
 // refreshEffective rebuilds a book's effective metadata (bookLayers.resolve) into
-// its books row, its chapters (their source: applyChapterSource; then their
+// its books row (with its series keys: series_key, book_more_series), its chapters (their source: applyChapterSource; then their
 // titles), then refreshes its FTS row. UpsertBook,
 // SetEnrichment and every edit call it, so the books row can never disagree with
 // what the durable tables say.
@@ -573,11 +573,14 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	fields := l.resolve()
 	v := func(field string) string { return fields[field].Value }
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE books SET title = ?, author = ?, narrator = ?, series = ?, series_index = ?,
+		`UPDATE books SET title = ?, author = ?, narrator = ?, series = ?, series_key = ?, series_index = ?,
 		     more_series = ?, published = ?, description = ?, asin = ?, isbn = ?
 		 WHERE id = ?`,
-		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), ParseSeriesIndex(v(FieldSeriesIndex)),
+		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), mainSeriesKey(v(FieldSeries)), ParseSeriesIndex(v(FieldSeriesIndex)),
 		cmp.Or(v(FieldMoreSeries), "[]"), v(FieldPublished), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
+		return err
+	}
+	if err := keyOtherSeries(ctx, tx, bookID, l.libID, v(FieldSeries), v(FieldMoreSeries)); err != nil {
 		return err
 	}
 

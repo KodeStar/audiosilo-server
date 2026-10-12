@@ -136,6 +136,14 @@ func Run(ctx context.Context, opts Options) error {
 	if restored != nil {
 		recordRestore(ctx, cat, restored, log)
 	}
+	// Books indexed before series keys were stored get them now, once, before
+	// anything reads a series filter (about a second per 50,000 books). A failure
+	// leaves those books out of the series filters until a later start keys them.
+	if n, err := cat.KeySeries(ctx); err != nil {
+		log.Warn("keying the books' series failed", "err", err)
+	} else if n > 0 {
+		log.Info("keyed the books' series", "books", n)
+	}
 
 	// Notifications: the event feed and its deliveries. Messages name the server as
 	// the API's live settings have it (a is set before Run starts sending).
