@@ -108,7 +108,15 @@ const routeTree = rootRoute.addChildren([homeRoute, userRoute, bookRouteDef, ...
 export function createAppRouter(
   opts: { history?: Parameters<typeof createRouter>[0]['history'] } = {},
 ) {
-  return createRouter({ routeTree, basepath: '/admin', defaultPreload: 'intent', ...opts });
+  // Back and Forward return to where the page was scrolled (a new visit opens at
+  // the top): a long list (Series, Books) is where you left it after a book.
+  return createRouter({
+    routeTree,
+    basepath: '/admin',
+    defaultPreload: 'intent',
+    scrollRestoration: true,
+    ...opts,
+  });
 }
 
 declare module '@tanstack/react-router' {

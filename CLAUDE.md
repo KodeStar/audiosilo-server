@@ -106,7 +106,7 @@ internal/store/       SQLite (modernc, pure Go) open + embedded migrations (inte
 internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go has the crypto
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
-internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values)
+internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below)
@@ -623,7 +623,7 @@ admin overrides; see Metadata overrides below).
   (`catalog.NextInSeries`: every series of `Book.AllSeries()` with a position, main
   first; per series one query
   (`laterSeriesMembers`) over its numbered members in scope - same library, books in
-  exactly that series by their main series or a more_series entry, at their
+  that series (any spelling: `seriesNames`, see Series spellings) by their main series or a more_series entry, at their
   position IN THAT SERIES - those above the book's position first, then by
   position, ties by path (unbounded: SQLite sorts every member first anyway):
   read in that order, the first row above that doesn't step back is the next book,
@@ -789,7 +789,7 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
-  An admin edit that makes the main series a name its `more_series` lists (exactly) -
+  An admin edit that makes the main series a series its `more_series` lists (any spelling, `sameSeries`) -
   by setting `series`, or by reverting it when the series the revert leaves
   (`newMainSeries`: `loadLayers` + `resolve` without the series override) is listed -
   without setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`,
@@ -843,6 +843,29 @@ admin overrides; see Metadata overrides below).
   chapter titles) and re-resolves them in batches of 250, flushed every 500 during the scan and
   on a Stop; no re-index. Until then `bookLayers.pathBaseline` resolves a snapshot against the
   baseline it was read with, so a path-first library still drops the folder as a series.
+- **Series spellings (`catalog/moreseries.go`)**: a series is every name with one
+  `seriesKey` (`match.SeriesKey`, the rails' key: case, accents, punctuation and spacing
+  aside; a name with no letter or number is its own key), so "He Who Fights With Monsters",
+  "...with..." and "...WIth..." are one series and nothing fuzzier merges ("The Expanse" and
+  "Expanse" stay two). `catalog.Series` groups by it (counts, positions, lengths and authors
+  merged; `SeriesList` and `normalizeMoreSeries` keep a series once however a list spells it again) and names the group `seriesName`: the spelling its
+  matched books use most, else the most books', ties alphabetical. Every series filter takes
+  every spelling: `Catalog.spellings` reads the index's spellings of the asked series (the
+  distinct `(library_id, series)` of idx_books_series in order, plus, unless the caller matches main
+  series only (`SeriesBooks`, the rails' spellings; `ListBooks` without memberships), the more_series
+  names of the books with a list; about 20 ms over 50,000 books, 9 in one library) into `seriesNames`, which `seriesFilter` (IN
+  lists; with memberships the FTS series column narrows by an OR of every spelling's phrase),
+  `seriesOrderKeys` (literals), `numberedSeriesMembers` (the next book) and `positionIn` (Go, by key)
+  use, so the SQL and a keyset cursor agree. `ListSeriesBooks` reads the spellings once per batch,
+  `BookFilter` (`spellSeries`) across every library (the library facet counts the others). The JSON
+  is unchanged: an older player sees fewer, fuller series. **A position from the title**:
+  `bookLayers.scannedFields` gives a book with a series and no position the one its title gives
+  (`titlePosition`, `metadata.PositionInTitle`), read as the title's source (path when the title is
+  the path's, else tag); an edit or a tag's own position wins. Rows indexed before the rule get it
+  from `Catalog.PlaceByTitles`, which the launcher runs in the background at start, once per database
+  (server_state `title_positions`): the books with a series, no position and a digit in the row's, the
+  snapshot's or the path's title (a match may have replaced the row's) whose resolve gives one,
+  re-resolved by `refreshEffective` in batches of 250.
 - **Admin catalog API** (`api/handlers_catalog.go`, admin-only, transport-only):
   `GET /admin/books` (keyset over the named orderings in `catalog.adminSorts`, sorted and
   paged on ids before the per-row columns are computed; the cursor names its ordering;
@@ -1526,7 +1549,7 @@ The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}
 `/narrators` (`{narrators, unknown}`) and `/series` (`{series}`) (authed,
 `libraryScope`: 403 no access, 404 unknown library; counts only the caller's
 granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
-by exact `series=`, and by `author=` / `narrator=` matching the whole credit or exactly
+by `series=` (any spelling, see Series spellings), and by `author=` / `narrator=` matching the whole credit or exactly
 one person it names (`catalog.creditFilter`: an FTS5 phrase narrows the candidates,
 the `credit_has` SQL function keeps the exact ones; `/admin/books` filters the same way).
 Books in several series (capability `series_memberships`): with `memberships=1`,
@@ -1538,7 +1561,7 @@ main one first, with its position in each; omitted otherwise).
 The first page of several series' books in one request (capability `series_books`, the
 player's Series cards) is `GET /libraries/{id}/series/books?name=A&name=B[&limit=N]` ->
 `{"series": [{name, books, next_cursor?}]}` (authed, `browseScope` like `/books`; 400 for no
-names or over `maxSeriesBatch` = 50 distinct ones). Names are verbatim, empty ones ignored
+names or over `maxSeriesBatch` = 50 distinct ones). Names come back verbatim (each finds its series in any spelling; the spellings are read once for the batch), empty ones ignored
 (`catalog.ListSeriesBooks` skips them too), duplicates answered once, entries in request
 order; each entry is exactly the page `/books?series=<name>&memberships=1&limit=N` returns
 (`ListSeriesBooks`: one `ListBooks` per name), so its `next_cursor` continues there, with

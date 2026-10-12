@@ -1,22 +1,22 @@
 import type {
   AdminBook,
-  AdminBookPage,
   MetaSeries,
   MetaSeriesOrdering,
   MetaSeriesWork,
+  SeriesCount,
 } from '@/api/types';
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
 import { hashString } from '@/lib/monogram';
+import { sameSeries, seriesKey } from '@/lib/series-key';
 
-// The Series screen's pure parts: grouping the series-sorted book list into
-// series, matching a book's community series rail to a local series, placing
-// the owned books on it, the gaps (rail positions the server doesn't hold),
-// "1, 2, 4-6" position lists and the spine row that interleaves owned books
-// with missing entries.
+// The Series screen's pure parts: finding series by name or author, matching a
+// book's community series rail to a local series, placing the owned books on
+// it, the gaps (rail positions the server doesn't hold), "1, 2, 4-6" position
+// lists and the spine row that interleaves owned books with missing entries.
 
-/** Series a page of cards shows at first, and how many more each "Show more" adds. */
-export const CARD_STEP = 24;
+/** Series cards on a page. */
+export const SERIES_PAGE = 24;
 
 /** One numbered entry of a community series rail. */
 export interface RailEntry {
@@ -54,12 +54,17 @@ export type Spine = ({ kind: 'book' } & Placed) | { kind: 'gap'; entry: RailEntr
 
 const samePosition = (a: number, b: number) => Math.abs(a - b) < 1e-6;
 
-/** A series name for comparison: no case, accents, punctuation or spacing. */
-export function seriesKey(name: string): string {
-  return name
-    .normalize('NFKD')
-    .replace(/[^\p{L}\p{N}]/gu, '')
-    .toLowerCase();
+/**
+ * The series whose name or author holds the search, compared as series keys
+ * (seriesKey: "fights with" finds "He Who Fights WIth Monsters"); every series
+ * for a search with no letter or number.
+ */
+export function filterSeries(list: SeriesCount[], q: string): SeriesCount[] {
+  const needle = seriesKey(q);
+  if (!needle) return list;
+  return list.filter(
+    (s) => seriesKey(s.name).includes(needle) || seriesKey(s.author).includes(needle),
+  );
 }
 
 /**
@@ -152,11 +157,12 @@ export function railEntries(rail: MetaSeries): RailEntry[] {
 
 /**
  * A book's position in the named series (its main series' index without a name):
- * a book in several series has its own position in each (series_list).
+ * a book in several series has its own position in each (series_list). The
+ * series is matched as the server groups its spellings (sameSeries).
  */
 export function positionIn(book: AdminBook, series?: string): number {
   if (series === undefined) return book.series_index;
-  return book.series_list.find((s) => s.name === series)?.position ?? 0;
+  return book.series_list.find((s) => sameSeries(s.name, series))?.position ?? 0;
 }
 
 /**
@@ -284,12 +290,6 @@ export function formatPositions(ns: number[], fmt: (n: number) => string = Strin
   return parts.join(', ');
 }
 
-/** Owned books by series index (unnumbered last), then title. */
-export function sortSeriesBooks(books: AdminBook[]): AdminBook[] {
-  const idx = (b: AdminBook) => (b.series_index > 0 ? b.series_index : Infinity);
-  return [...books].sort((a, b) => idx(a) - idx(b) || a.title.localeCompare(b.title));
-}
-
 /**
  * The shelf: placed books and missing entries in series order, then the books
  * at the end (numbered ones by their number, unnumbered last).
@@ -311,32 +311,6 @@ export function spineRow(placed: Placed[], missing: RailEntry[]): Spine[] {
     const [b1, b2] = order(b);
     return cmp(a1, b1) || cmp(a2, b2) || title(a).localeCompare(title(b));
   });
-}
-
-/**
- * The series-sorted book list grouped by series name. Series books come first
- * and books without a series last, so `done` turns true on the first page
- * holding a book without one (or when there is no next page).
- */
-export function groupSeriesPages(
-  pages: AdminBookPage[],
-  hasNextPage: boolean,
-): { bySeries: Map<string, AdminBook[]>; done: boolean } {
-  const bySeries = new Map<string, AdminBook[]>();
-  let done = !hasNextPage;
-  for (const page of pages) {
-    for (const b of page.books) {
-      if (!b.series) {
-        done = true;
-        continue;
-      }
-      const list = bySeries.get(b.series) ?? [];
-      list.push(b);
-      bySeries.set(b.series, list);
-    }
-  }
-  for (const [name, list] of bySeries) bySeries.set(name, sortSeriesBooks(list));
-  return { bySeries, done };
 }
 
 /** The book whose community metadata names the series: the first one matched. */

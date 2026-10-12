@@ -956,8 +956,7 @@
   "series.spine": "Nr. {{index}} {{title}}",
   "series.gap": "Nr. {{index}} {{title}}: nicht in deiner Bibliothek",
   "series.spinesLabel": "Bücher der Reihe {{name}}",
-  "series.showMore_one": "{{formatted}} weitere Reihe anzeigen",
-  "series.showMore_other": "{{formatted}} weitere Reihen anzeigen",
+  "series.filter": "Reihe oder Autor finden",
   "series.error": "Reihen konnten nicht geladen werden",
   "series.booksError": "Die Bücher dieser Reihen konnten nicht geladen werden",
   "series.empty.title": "Noch keine Reihen",
@@ -2396,5 +2395,9 @@
   "system.mirror.fallback.body": "Abfragen gehen bis dahin an {{host}}, wie ohne lokale Kopie.",
   "system.mirror.checkStarted": "Es wird nach einer neueren Kopie gesucht",
   "system.mirror.checkFailed": "Die Suche nach einer neueren Kopie ist fehlgeschlagen",
-  "system.mirror.checkNotMirror": "Dieser Server behält keine lokale Kopie. Wähle sie unter Community-Metadaten aus und starte den Server dann neu."
+  "system.mirror.checkNotMirror": "Dieser Server behält keine lokale Kopie. Wähle sie unter Community-Metadaten aus und starte den Server dann neu.",
+  "pager.label": "Seiten",
+  "pager.previous": "Zurück",
+  "pager.next": "Weiter",
+  "pager.page": "Seite {{page}}"
 }

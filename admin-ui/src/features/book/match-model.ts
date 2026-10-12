@@ -8,7 +8,7 @@ import {
   type OverrideField,
 } from '@/api/types';
 import type { MatchBy } from '@/api/client';
-import { seriesKey } from '@/features/library/series/series-model';
+import { seriesKey } from '@/lib/series-key';
 import { ISBN, checkField } from './book-model';
 
 // The match dialog's logic (STYLEGUIDE.md "Match with community"): what the

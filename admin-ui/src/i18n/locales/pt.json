@@ -1024,9 +1024,7 @@
   "series.spine": "n.º {{index}} {{title}}",
   "series.gap": "n.º {{index}} {{title}}: não está na sua biblioteca",
   "series.spinesLabel": "Livros de {{name}}",
-  "series.showMore_one": "Mostrar mais {{formatted}} série",
-  "series.showMore_other": "Mostrar mais {{formatted}} séries",
-  "series.showMore_many": "Mostrar mais {{formatted}} séries",
+  "series.filter": "Encontrar uma série ou autor",
   "series.error": "Não foi possível carregar as séries",
   "series.booksError": "Não foi possível carregar os livros destas séries",
   "series.empty.title": "Ainda não há séries",
@@ -2534,5 +2532,9 @@
   "system.mirror.fallback.body": "Entretanto, as consultas vão para {{host}}, como sem cópia local.",
   "system.mirror.checkStarted": "A procurar uma cópia mais recente",
   "system.mirror.checkFailed": "Não foi possível procurar uma cópia mais recente",
-  "system.mirror.checkNotMirror": "Este servidor não mantém uma cópia local. Escolha-a em Metadados da comunidade e reinicie o servidor."
+  "system.mirror.checkNotMirror": "Este servidor não mantém uma cópia local. Escolha-a em Metadados da comunidade e reinicie o servidor.",
+  "pager.label": "Páginas",
+  "pager.previous": "Anterior",
+  "pager.next": "Seguinte",
+  "pager.page": "Página {{page}}"
 }

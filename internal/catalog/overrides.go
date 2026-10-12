@@ -464,7 +464,40 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 // when it equals the leaf's number ("Brandon Sanderson/01 - The Way of Kings"
 // tagged The Stormlight Archive #1), and goes with a series the layout replaced
 // or dropped.
+//
+// A series with no position takes the one its title gives
+// (titlePosition), so the untagged copies of a numbered series still sit in it
+// by number.
 func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
+	scanned, baseline, layout = l.readScanned()
+	scanned, baseline = titlePosition(scanned, baseline, layout)
+	return scanned, baseline, layout
+}
+
+// titlePosition is scanned with the position its title gives
+// (metadata.PositionInTitle: "He Who Fights with Monsters 4: A LitRPG Adventure"
+// is #4 of He Who Fights With Monsters) when it has a series and no position,
+// and baseline with it too when the title is the path's (so the position reads
+// as the path's, else a tag's); both unchanged otherwise.
+func titlePosition(scanned, baseline, layout bookFields) (bookFields, bookFields) {
+	if scanned[FieldSeries] == "" || ParseSeriesIndex(scanned[FieldSeriesIndex]) != 0 {
+		return scanned, baseline
+	}
+	p, ok := metadata.PositionInTitle(scanned[FieldTitle], scanned[FieldSeries])
+	if !ok {
+		return scanned, baseline
+	}
+	scanned = maps.Clone(scanned)
+	scanned[FieldSeriesIndex] = FormatSeriesPosition(p)
+	if t := scanned[FieldTitle]; t == baseline[FieldTitle] || (layout != nil && t == layout[FieldTitle]) {
+		baseline = maps.Clone(baseline)
+		baseline[FieldSeriesIndex] = scanned[FieldSeriesIndex]
+	}
+	return scanned, baseline
+}
+
+// readScanned is scannedFields before the title's position.
+func (l *bookLayers) readScanned() (scanned, baseline, layout bookFields) {
 	baseline = l.pathBaseline()
 	if !l.preferPath {
 		return l.scanned, baseline, nil
@@ -853,8 +886,9 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 	if err != nil {
 		return nil, nil, err
 	}
-	at := slices.IndexFunc(list, func(s SeriesRef) bool { return s.Name == name })
-	if name == "" || name == old || at < 0 {
+	// The listed series the new main one is, in any spelling (seriesKey).
+	at := slices.IndexFunc(list, func(s SeriesRef) bool { return sameSeries(s.Name, name) })
+	if name == "" || sameSeries(name, old) || at < 0 {
 		return nil, nil, nil
 	}
 	swapped := make([]SeriesRef, 0, len(list))
@@ -862,7 +896,7 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 		switch {
 		case i == at && old != "":
 			swapped = append(swapped, SeriesRef{Name: old, Position: index})
-		case i == at, s.Name == old:
+		case i == at, sameSeries(s.Name, old):
 		default:
 			swapped = append(swapped, s)
 		}
@@ -890,9 +924,9 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 		if field == FieldSeriesIndex {
 			// The unedited position numbers the unedited series: it is the
 			// file's own for the new main series only when that is the same
-			// series (by any case, as scannedFields pairs them), not another
-			// series that happens to share the number.
-			same = same && strings.EqualFold(name, unedited[FieldSeries].Value)
+			// series (in any spelling), not another series that happens to
+			// share the number.
+			same = same && sameSeries(name, unedited[FieldSeries].Value)
 		}
 		if same {
 			revert = append(revert, field)
@@ -952,4 +986,75 @@ func (l *bookLayers) unedited(fields ...string) map[string]FieldValue {
 func touches(edit BookEdit, field string) bool {
 	_, set := edit.Set[field]
 	return set || slices.Contains(edit.Revert, field)
+}
+
+// titlePositionsKey is the server_state row saying PlaceByTitles has run.
+const titlePositionsKey = "title_positions"
+
+// PlaceByTitles re-resolves, once per database, the books whose title gives them
+// a position in their series (titlePosition) while their row has none: books
+// indexed before that rule, which a scan leaves alone while their files don't
+// change (a book indexed since gets it from its own resolve). The rule reads the
+// scanned title and series, which a match or an edit may have replaced on the
+// row, so each book with a series, no position and a digit in its row's, its
+// snapshot's or its path's title is resolved (read only) to see whether it now
+// has one. It returns how many it placed; 0 once it has run (server_state
+// titlePositionsKey).
+func (c *Catalog) PlaceByTitles(ctx context.Context) (int, error) {
+	if done, err := getServerState[bool](ctx, c.db, titlePositionsKey); err != nil || done {
+		return 0, err
+	}
+	type row struct {
+		id                    int64
+		title, path, snapshot string
+	}
+	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, b *row) error { return r.Scan(&b.id, &b.title, &b.path, &b.snapshot) },
+		`SELECT id, title, rel_path, scanned FROM books WHERE series <> '' AND series_index = 0`)
+	if err != nil {
+		return 0, err
+	}
+	const digits = "0123456789"
+	var ids []int64
+	for _, b := range rows {
+		scanned, _, _, _ := parseScanned(b.snapshot) // unreadable: the row's title and path still count
+		if !strings.ContainsAny(b.title, digits) && !strings.ContainsAny(b.path, digits) &&
+			!strings.ContainsAny(scanned[FieldTitle], digits) {
+			continue
+		}
+		l, err := loadLayers(ctx, c.db, b.id)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // removed by a scan meanwhile
+		} else if err != nil {
+			return 0, err
+		}
+		if ParseSeriesIndex(l.resolve()[FieldSeriesIndex].Value) > 0 {
+			ids = append(ids, b.id)
+		}
+	}
+	placed := 0
+	for len(ids) > 0 {
+		batch := ids[:min(len(ids), 250)]
+		ids = ids[len(batch):]
+		if err := c.db.WithTx(ctx, "PlaceByTitles", func(tx *sql.Tx) error {
+			for _, id := range batch {
+				// A book a scan removed meanwhile has nothing to resolve.
+				if err := refreshEffective(ctx, tx, id); errors.Is(err, sql.ErrNoRows) {
+					continue
+				} else if err != nil {
+					return err
+				}
+				var idx float64
+				if err := tx.QueryRowContext(ctx, `SELECT series_index FROM books WHERE id = ?`, id).Scan(&idx); err != nil {
+					return err
+				}
+				if idx > 0 {
+					placed++
+				}
+			}
+			return nil
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return placed, putServerState(ctx, c.db, titlePositionsKey, true, c.stamp())
 }

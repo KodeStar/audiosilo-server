@@ -956,8 +956,7 @@
   "series.spine": "#{{index}} {{title}}",
   "series.gap": "#{{index}} {{title}}: not in your library",
   "series.spinesLabel": "Books of {{name}}",
-  "series.showMore_one": "Show {{formatted}} more series",
-  "series.showMore_other": "Show {{formatted}} more series",
+  "series.filter": "Find a series or author",
   "series.error": "Series didn't load",
   "series.booksError": "The books of these series didn't load",
   "series.empty.title": "No series yet",
@@ -2396,5 +2395,9 @@
   "system.mirror.fallback.body": "Lookups go to {{host}} meanwhile, as they do without a local copy.",
   "system.mirror.checkStarted": "Checking for a newer copy",
   "system.mirror.checkFailed": "Couldn't check for a newer copy",
-  "system.mirror.checkNotMirror": "This server isn't keeping a local copy. Choose it under Community metadata, then restart the server."
+  "system.mirror.checkNotMirror": "This server isn't keeping a local copy. Choose it under Community metadata, then restart the server.",
+  "pager.label": "Pages",
+  "pager.previous": "Previous",
+  "pager.next": "Next",
+  "pager.page": "Page {{page}}"
 }

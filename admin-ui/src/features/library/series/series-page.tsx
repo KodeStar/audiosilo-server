@@ -1,59 +1,59 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from '@tanstack/react-router';
+import { useEffect, useMemo } from 'react';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
 import { Layers } from 'lucide-react';
 import { useAdminBooks, useSeries, useServerInfo } from '@/api/hooks';
 import { EmptyState } from '@/components/empty-state';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
+import { Pager } from '@/components/pager';
 import { QueryError } from '@/components/query-error';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { SearchBox } from '@/components/search-box';
+import { buttonVariants } from '@/components/ui/button';
 import type { SeriesCount } from '@/api/types';
 import { counted } from '@/lib/format';
+import { clampPage, pageCount } from '@/lib/pager';
+import { compact } from '@/lib/utils';
 import { LibraryFilter } from '../library-filter';
-import { useLibraryBookCount, useLibraryParam } from '../library-param';
+import { useLibraryBookCount, useLibraryParam, useUpdateSearch } from '../library-param';
+import type { LibrarySearch } from '../library-search';
 import { SeriesCard } from './series-card';
-import { CARD_STEP, groupSeriesPages } from './series-model';
+import { SERIES_PAGE, filterSeries } from './series-model';
 import { useInView } from './use-in-view';
 
 /**
- * Library > Series: one card per series with its books as spines. The books
- * come from the series-sorted list, paged only as far as the cards on screen
- * need; with community metadata on, each card marks the entries the server is
- * missing.
+ * Library > Series: one card per series with its books as spines, a page of
+ * cards at a time, found by name or author. The search and the page are in the
+ * URL, so Back from a book returns to them (and the router to the scroll
+ * position). Each card loads its own books once it nears the viewport; with
+ * community metadata on, it marks the entries the server is missing.
  */
 export function SeriesPage() {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const [library] = useLibraryParam();
+  const { q = '', page: wanted } = useSearch({ strict: false }) as LibrarySearch;
+  const update = useUpdateSearch();
+  const navigate = useNavigate();
   const server = useServerInfo();
   const metadata = server.data?.capabilities.metadata ?? false;
   const series = useSeries(library);
-  const books = useAdminBooks({ sort: 'series', limit: 200, library_id: library });
   const bookCount = useLibraryBookCount(library);
-  const [limit, setLimit] = useState(CARD_STEP);
 
-  // A previous library's pages stay on screen while a new filter loads: not ours.
-  const loaded = !!books.data && !books.isPlaceholderData;
-  const pages = loaded ? books.data?.pages : undefined;
-  const { bySeries, done } = useMemo(
-    () => groupSeriesPages(pages ?? [], !!books.hasNextPage),
-    [pages, books.hasNextPage],
-  );
-  const list = series.data ?? [];
-  const shown = list.slice(0, limit);
-  const has = (name: string) => bySeries.get(name)?.length ?? 0;
-  // The series-sorted list holds each book under its main series only, so a
-  // series some books are in beyond it loads its own (MembersCard).
-  const needMore =
-    loaded && !done && shown.some((s) => s.extra_books === 0 && has(s.name) < s.books);
+  const list = useMemo(() => series.data ?? [], [series.data]);
+  const matching = useMemo(() => filterSeries(list, q), [list, q]);
+  const pages = pageCount(matching.length, SERIES_PAGE);
+  const page = clampPage(wanted, pages);
+  const shown = matching.slice((page - 1) * SERIES_PAGE, page * SERIES_PAGE);
 
-  const { fetchNextPage, isFetchingNextPage, isError: booksFailed } = books;
-  useEffect(() => {
-    if (needMore && !isFetchingNextPage && !booksFailed) void fetchNextPage();
-  }, [needMore, isFetchingNextPage, booksFailed, fetchNextPage]);
-
-  const rest = list.length - shown.length;
+  const search = (value: string) => update((prev) => ({ ...prev, q: value, page: undefined }));
+  // A new page is a history entry (Back returns to the page before), and opens
+  // at the top.
+  const goTo = (n: number) =>
+    void navigate({
+      to: '.',
+      search: (prev: LibrarySearch) => compact({ ...prev, page: n > 1 ? n : undefined }),
+    });
 
   return (
     <Page>
@@ -114,33 +114,24 @@ export function SeriesPage() {
               )}
             </p>
           ) : null}
-          {books.isError ? (
-            <QueryError
-              title={t('series.booksError')}
-              error={books.error}
-              onRetry={() => void books.refetch()}
-            />
-          ) : null}
-          {shown.map((s) =>
-            s.extra_books > 0 ? (
-              <MembersCard key={s.name} series={s} library={library} metadata={metadata} />
-            ) : (
-              <SeriesCard
-                key={s.name}
-                series={s}
-                books={bySeries.get(s.name) ?? []}
-                complete={loaded && (done || has(s.name) >= s.books)}
-                metadata={metadata}
-              />
-            ),
+          <SearchBox
+            value={q}
+            onChange={search}
+            label={t('series.filter')}
+            placeholder={t('series.filter')}
+            clearLabel={t('books.search.clear')}
+            className="w-full max-w-[320px]"
+          />
+          {shown.length === 0 ? (
+            <p className="py-10 text-center text-muted-foreground">
+              {t('credits.noMatch', { q: q.trim() })}
+            </p>
+          ) : (
+            shown.map((s) => (
+              <SeriesShelf key={s.name} series={s} library={library} metadata={metadata} />
+            ))
           )}
-          {rest > 0 ? (
-            <div className="mt-4 flex justify-center">
-              <Button variant="outline" onClick={() => setLimit((n) => n + CARD_STEP)}>
-                {t('series.showMore', counted(Math.min(rest, CARD_STEP), lang))}
-              </Button>
-            </div>
-          ) : null}
+          <Pager page={page} count={pages} onPage={goTo} className="mt-4" />
         </div>
       )}
     </Page>
@@ -148,11 +139,11 @@ export function SeriesPage() {
 }
 
 /**
- * A series some books are in beyond their main series: its card, with the books
- * the series= filter finds (every member, in their order in this series), paged
- * in full.
+ * One series' card with its books: every book the series= filter finds (each
+ * spelling of the series, books in it beyond their main series too, in their
+ * order in it), asked for once the card nears the viewport and paged in full.
  */
-function MembersCard({
+function SeriesShelf({
   series: s,
   library,
   metadata,

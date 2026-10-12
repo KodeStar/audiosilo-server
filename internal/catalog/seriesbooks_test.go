@@ -35,6 +35,16 @@ func seedSeries(t *testing.T) (*Catalog, context.Context, *Library, *Library) {
 	return c, ctx, first, second
 }
 
+// spelledIn is how library lib spells the series name (Catalog.spellingsOf).
+func spelledIn(t *testing.T, c *Catalog, lib int64, name string) seriesNames {
+	t.Helper()
+	n, err := c.spellingsOf(context.Background(), []int64{lib}, true, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func relPaths(books []Book) []string {
 	out := make([]string, len(books))
 	for i, b := range books {
@@ -97,7 +107,8 @@ func TestNextInOneSeries(t *testing.T) {
 		{RelPath: "S/3 a", Series: "S", SeriesIndex: 3},
 		{RelPath: "Hidden/2", Series: "S", SeriesIndex: 2},
 		{RelPath: "S/5", Series: "S", SeriesIndex: 5},
-		{RelPath: "S/x", Series: "s", SeriesIndex: 4}, // another (exact) series
+		{RelPath: "S/x", Series: "s", SeriesIndex: 4},   // S spelled another way: the same series
+		{RelPath: "T/1", Series: "S T", SeriesIndex: 4}, // another series
 		{RelPath: "U/a", Series: "U", SeriesIndex: 0},
 		{RelPath: "U/b", Series: "U", SeriesIndex: 0},
 	} {
@@ -108,6 +119,7 @@ func TestNextInOneSeries(t *testing.T) {
 	}
 	all := Scope{LibraryID: lib.ID, AllowAll: true}
 	granted := Scope{LibraryID: lib.ID, Paths: []string{"S", "U"}}
+	spelled := func(name string) seriesNames { return spelledIn(t, c, lib.ID, name) }
 	for name, tc := range map[string]struct {
 		path         string
 		series       string
@@ -120,11 +132,12 @@ func TestNextInOneSeries(t *testing.T) {
 		"denied: outside the grant": {"S/1", "S", 1, granted, "S/3 a", true},
 		"ties by path":              {"Hidden/2", "S", 2, all, "S/3 a", true},
 		"end of the series":         {"S/5", "S", 5, all, "", true},
+		"any spelling":              {"S/3 b", "S", 3, all, "S/x", true},
 		"nothing else in scope":     {"S/1", "S", 1, Scope{LibraryID: lib.ID, Paths: []string{"S/1"}}, "", false},
 		"unnumbered series":         {"U/a", "U", 1, all, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope, nil)
+			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, spelled(tc.series), tc.index, tc.scope, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -139,8 +152,8 @@ func TestNextInOneSeries(t *testing.T) {
 	}
 	// A skipped book is passed over for the next later one, in position order
 	// (ties by path); skipping every later one is numbered with none later.
-	for skipped, want := range map[string]string{"Hidden/2": "S/3 a", "Hidden/2|S/3 a": "S/3 b", "Hidden/2|S/3 a|S/3 b|S/5": ""} {
-		next, numbered, err := c.nextInOneSeries(ctx, lib.ID, "S/1", "S", 1, all, func(b *Book) bool {
+	for skipped, want := range map[string]string{"Hidden/2": "S/3 a", "Hidden/2|S/3 a": "S/3 b", "Hidden/2|S/3 a|S/3 b|S/x|S/5": ""} {
+		next, numbered, err := c.nextInOneSeries(ctx, lib.ID, "S/1", spelled("S"), 1, all, func(b *Book) bool {
 			return slices.Contains(strings.Split(skipped, "|"), b.RelPath)
 		})
 		if err != nil || !numbered || (next == nil) != (want == "") || (next != nil && next.RelPath != want) {
@@ -173,7 +186,7 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 	for path, list := range map[string]string{
 		"gg":           `[{"name":"City Watch","position":1}]`,
 		"foc":          `[{"name":"City Watch","position":3}]`,
-		"foc b":        `[{"name":"Other","position":9},{"name":"City Watch","position":3}]`,
+		"foc b":        `[{"name":"Other","position":9},{"name":"city watch","position":3}]`, // any spelling
 		"nw":           `[{"name":"City Watch","position":0.5}]`,
 		"Hidden/jingo": `[{"name":"City Watch","position":2.5}]`,
 	} {
@@ -183,6 +196,7 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 	}
 	all := Scope{LibraryID: lib.ID, AllowAll: true}
 	granted := Scope{LibraryID: lib.ID, Paths: []string{"gg", "maa", "foc", "foc b", "nw"}}
+	spelled := func(name string) seriesNames { return spelledIn(t, c, lib.ID, name) }
 	for name, tc := range map[string]struct {
 		path         string
 		series       string
@@ -211,7 +225,7 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 		"denied: alone in scope":            {"gg", "City Watch", 1, Scope{LibraryID: lib.ID, Paths: []string{"gg"}}, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope, nil)
+			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, spelled(tc.series), tc.index, tc.scope, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -227,11 +241,27 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 			}
 		})
 	}
-	// nw, in City Watch by its main series and again in its list, is one member.
-	q, args := numberedSeriesMembers(lib.ID, "", "City Watch", all)
-	var n int
-	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (`+q+`) WHERE rel_path = 'nw'`, args...).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("nw counted %d times (%v)", n, err)
+	// nw, in City Watch by its main series and again in its list, is one member;
+	// so is a book given a list that spells City Watch twice (the edit keeps the
+	// first).
+	add := func(path, series, list string) {
+		t.Helper()
+		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: path, Title: path, Series: series, AddedAt: "2024-01-01T00:00:00Z"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.EditBook(ctx, lib.ID, path, BookEdit{Set: map[string]string{FieldMoreSeries: list}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("twice", "Other", `[{"name":"City Watch","position":0.25},{"name":"city watch","position":0.3}]`)
+	q, args := numberedSeriesMembers(lib.ID, "", spelled("City Watch"), all)
+	for path, want := range map[string]float64{"nw": 6, "twice": 0.25} {
+		var n int
+		var pos float64
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*), SUM(pos) FROM (`+q+`) WHERE rel_path = ?`,
+			append(args, path)...).Scan(&n, &pos); err != nil || n != 1 || pos != want {
+			t.Fatalf("%s counted %d times at %v (%v), want once at %v", path, n, pos, err, want)
+		}
 	}
 }
 
@@ -431,7 +461,8 @@ func TestNextInSeriesPlan(t *testing.T) {
 			"S":  {"SCAN books_fts VIRTUAL TABLE", "SEARCH b USING INDEX idx_books_more_series (library_id=? AND rowid=?)"},
 			"!!": {"SEARCH b USING INDEX idx_books_more_series (library_id=?)"},
 		} {
-			q, args := laterSeriesMembers(1, "x", series, 1, scope)
+			spelled := seriesNames{main: []string{series, strings.ToLower(series)}, more: []string{series}}
+			q, args := laterSeriesMembers(1, "x", spelled, 1, scope)
 			plan := queryPlan(t, c, q, args)
 			joined := strings.Join(plan, "\n")
 			for _, want := range append([]string{"SEARCH b USING INDEX idx_books_series"}, lists...) {
