@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Metadata overrides: an admin's edits to a book, stored path-keyed in
@@ -890,8 +891,8 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 		return nil, nil, err
 	}
 	// The listed series the new main one is, in any spelling (seriesKey).
-	at := slices.IndexFunc(list, func(s SeriesRef) bool { return sameSeries(s.Name, name) })
-	if name == "" || sameSeries(name, old) || at < 0 {
+	at := slices.IndexFunc(list, func(s SeriesRef) bool { return match.SameSeries(s.Name, name) })
+	if name == "" || match.SameSeries(name, old) || at < 0 {
 		return nil, nil, nil
 	}
 	swapped := make([]SeriesRef, 0, len(list))
@@ -899,7 +900,7 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 		switch {
 		case i == at && old != "":
 			swapped = append(swapped, SeriesRef{Name: old, Position: index})
-		case i == at, sameSeries(s.Name, old):
+		case i == at, match.SameSeries(s.Name, old):
 		default:
 			swapped = append(swapped, s)
 		}
@@ -929,7 +930,7 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 			// file's own for the new main series only when that is the same
 			// series (in any spelling), not another series that happens to
 			// share the number.
-			same = same && sameSeries(name, unedited[FieldSeries].Value)
+			same = same && match.SameSeries(name, unedited[FieldSeries].Value)
 		}
 		if same {
 			revert = append(revert, field)

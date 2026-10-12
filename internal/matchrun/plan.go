@@ -238,17 +238,17 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 	work = append(work, catalog.ParseMoreSeries(p.Values[catalog.FieldMoreSeries])...)
 	own := st.Fields[catalog.FieldSeries].Value
 	if len(work) > 0 {
-		offered := max(slices.IndexFunc(work, func(s catalog.SeriesRef) bool { return sameSeries(s.Name, own) }), 0)
+		offered := max(slices.IndexFunc(work, func(s catalog.SeriesRef) bool { return match.SameSeries(s.Name, own) }), 0)
 		plan(scope, catalog.FieldSeries, work[offered].Name, st.Fields[catalog.FieldSeries], set)
 	} else {
 		stale(catalog.FieldSeries)
 	}
 	main := w.after(st, catalog.FieldSeries)
 	mainPos, found := "", false
-	unlisted := len(work) > 0 && main != "" && !slices.ContainsFunc(work, func(s catalog.SeriesRef) bool { return sameSeries(s.Name, main) })
+	unlisted := len(work) > 0 && main != "" && !slices.ContainsFunc(work, func(s catalog.SeriesRef) bool { return match.SameSeries(s.Name, main) })
 	others := []catalog.SeriesRef{}
 	for i, s := range work {
-		if !sameSeries(s.Name, main) {
+		if !match.SameSeries(s.Name, main) {
 			if !(unlisted && i == 0) {
 				others = append(others, s)
 			}
@@ -263,7 +263,7 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 	// The files' position comes back only beside the series it numbers (or when
 	// the files have none): never the tags' #3 of one series beside another.
 	if files := st.Fields[catalog.FieldSeriesIndex].Scanned; mainPos == "" && !unlisted &&
-		(files == "" || sameSeries(st.Fields[catalog.FieldSeries].Scanned, main)) {
+		(files == "" || match.SameSeries(st.Fields[catalog.FieldSeries].Scanned, main)) {
 		stale(catalog.FieldSeriesIndex)
 	}
 	// In stored form (each name once, within the bounds), as the book's own value
@@ -275,12 +275,6 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 	if len(others) == 0 {
 		stale(catalog.FieldMoreSeries)
 	}
-}
-
-// sameSeries reports whether two series names name one series (match.SeriesKey,
-// as the console's seriesKey compares them).
-func sameSeries(a, b string) bool {
-	return b != "" && match.SeriesKey(a) == match.SeriesKey(b)
 }
 
 // planFor is what applying p to a book in state st writes for a run in mode: a

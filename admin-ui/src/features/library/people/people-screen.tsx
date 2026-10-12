@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
-import { Link } from '@tanstack/react-router';
+import { useMemo } from 'react';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { BookUser, Mic, Search } from 'lucide-react';
+import { BookUser, Mic } from 'lucide-react';
 import { usePeople } from '@/api/hooks';
 import type { PersonCount, PersonField } from '@/api/types';
 import { BooksLink } from '@/components/books-link';
@@ -9,20 +9,25 @@ import { EmptyState } from '@/components/empty-state';
 import { Monogram } from '@/components/monogram';
 import { Page } from '@/components/page';
 import { PageHead } from '@/components/page-head';
+import { Pager } from '@/components/pager';
 import { QueryError } from '@/components/query-error';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchBox } from '@/components/search-box';
+import { buttonVariants } from '@/components/ui/button';
 import { counted, formatDuration } from '@/lib/format';
+import { clampPage, pageCount } from '@/lib/pager';
+import { compact } from '@/lib/utils';
 import { LibraryFilter } from '../library-filter';
-import { useLibraryBookCount, useLibraryParam } from '../library-param';
+import { useLibraryBookCount, useLibraryParam, useUpdateSearch } from '../library-param';
+import type { LibrarySearch } from '../library-search';
 import { MergeSuggestions } from './merge-suggestions';
-import { PAGE_STEP, filterPeople, sortByBooks, sortByDuration } from './people-model';
+import { PEOPLE_PAGE, filterPeople, sortByBooks, sortByDuration } from './people-model';
 
 /**
  * Library > Authors and Library > Narrators: spellings that look alike offered
  * for a merge first (whole credits), then a tile per person a credit names (a
  * co-credit counts for each; authors by books, narrators by hours) that opens
- * the Books list filtered to them. Long lists render a page of tiles at a time.
+ * the Books list filtered to them, a page of tiles at a time. The search and the
+ * page are in the URL, so Back from the Books list returns to them.
  */
 export function PeopleScreen({ field }: { field: PersonField }) {
   const { t, i18n } = useTranslation();
@@ -31,8 +36,9 @@ export function PeopleScreen({ field }: { field: PersonField }) {
   const [library] = useLibraryParam();
   const query = usePeople(field, library);
   const bookCount = useLibraryBookCount(library);
-  const [q, setQ] = useState('');
-  const [limit, setLimit] = useState(PAGE_STEP);
+  const { q = '', page: wanted } = useSearch({ strict: false }) as LibrarySearch;
+  const update = useUpdateSearch();
+  const navigate = useNavigate();
 
   const raw = query.data;
   const data = useMemo(
@@ -45,8 +51,18 @@ export function PeopleScreen({ field }: { field: PersonField }) {
   );
 
   const matching = data ? filterPeople(data.people, q) : [];
-  const shown = matching.slice(0, limit);
-  const rest = matching.length - shown.length;
+  const pages = pageCount(matching.length, PEOPLE_PAGE);
+  const page = clampPage(wanted, pages);
+  const shown = matching.slice((page - 1) * PEOPLE_PAGE, page * PEOPLE_PAGE);
+
+  const search = (value: string) => update((prev) => ({ ...prev, q: value, page: undefined }));
+  // A new page is a history entry (Back returns to the page before), and opens
+  // at the top.
+  const goTo = (n: number) =>
+    void navigate({
+      to: '.',
+      search: (prev: LibrarySearch) => compact({ ...prev, page: n > 1 ? n : undefined }),
+    });
 
   return (
     <Page>
@@ -92,23 +108,14 @@ export function PeopleScreen({ field }: { field: PersonField }) {
             libraryId={library}
           />
           <div className="mb-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <div className="relative w-full max-w-[320px]">
-              <Search
-                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-subtle-foreground"
-                aria-hidden="true"
-              />
-              <Input
-                type="search"
-                value={q}
-                onChange={(e) => {
-                  setQ(e.target.value);
-                  setLimit(PAGE_STEP);
-                }}
-                placeholder={t(`${ns}.filter`)}
-                aria-label={t(`${ns}.filter`)}
-                className="pl-9"
-              />
-            </div>
+            <SearchBox
+              value={q}
+              onChange={search}
+              label={t(`${ns}.filter`)}
+              placeholder={t(`${ns}.filter`)}
+              clearLabel={t('books.search.clear')}
+              className="w-full max-w-[320px]"
+            />
             {data.unknown > 0 ? (
               <p className="text-[12.5px] text-muted-foreground tabular-nums">
                 {t(`${ns}.unknown`, counted(data.unknown, lang))}
@@ -135,13 +142,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
               ))}
             </ul>
           )}
-          {rest > 0 ? (
-            <div className="mt-8 flex justify-center">
-              <Button variant="outline" onClick={() => setLimit((n) => n + PAGE_STEP)}>
-                {t('credits.showMore', counted(Math.min(rest, PAGE_STEP), lang))}
-              </Button>
-            </div>
-          ) : null}
+          <Pager page={page} count={pages} onPage={goTo} className="mt-8" />
         </>
       )}
     </Page>

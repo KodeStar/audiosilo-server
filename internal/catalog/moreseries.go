@@ -113,7 +113,7 @@ func SeriesList(series string, index float64, more string) []SeriesRef {
 	}
 	for _, s := range ParseMoreSeries(more) {
 		// A series once, however the list spells it again.
-		if !slices.ContainsFunc(out, func(o SeriesRef) bool { return sameSeries(o.Name, s.Name) }) {
+		if !slices.ContainsFunc(out, func(o SeriesRef) bool { return match.SameSeries(o.Name, s.Name) }) {
 			out = append(out, s)
 		}
 	}
@@ -135,11 +135,8 @@ func seriesKey(name string) string { return seriesKeys.get(name) }
 
 var seriesKeys = &memo[string]{f: func(name string) string { return cmp.Or(match.SeriesKey(name), name) }}
 
-// sameSeries reports whether two names are one series (seriesKey).
-func sameSeries(a, b string) bool { return a == b || seriesKey(a) == seriesKey(b) }
-
 // mainSeriesKey is the key a book's main series is stored by (books.series_key):
-// '' for none.
+// empty for none.
 func mainSeriesKey(series string) string {
 	if series == "" {
 		return ""
@@ -208,7 +205,7 @@ func anyOf[T any](ss []T) []any {
 // isn't in it), the series matched by seriesKey: its first entry that is it.
 func positionIn(list []SeriesRef, name string) float64 {
 	for _, s := range list {
-		if sameSeries(s.Name, name) {
+		if match.SameSeries(s.Name, name) {
 			return s.Position
 		}
 	}

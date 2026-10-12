@@ -788,7 +788,7 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
-  An admin edit that makes the main series a series its `more_series` lists (any spelling, `sameSeries`) -
+  An admin edit that makes the main series a series its `more_series` lists (any spelling, `match.SameSeries`) -
   by setting `series`, or by reverting it when the series the revert leaves
   (`newMainSeries`: `loadLayers` + `resolve` without the series override) is listed -
   without setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`,

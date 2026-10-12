@@ -898,8 +898,6 @@
   "credits.books_other": "{{formatted}} Bücher",
   "credits.stats": "{{books}} · {{time}}",
   "credits.statsNarrated": "{{books}} · {{time}} gesprochen",
-  "credits.showMore_one": "{{formatted}} weiteren anzeigen",
-  "credits.showMore_other": "{{formatted}} weitere anzeigen",
   "credits.noMatch": "Nichts passt zu „{{q}}“.",
   "credits.goToLibraries": "Zu den Bibliotheken",
   "authors.title": "Autoren",

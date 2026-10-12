@@ -16,8 +16,8 @@ import { chunk, fold } from '@/lib/utils';
 // the books whose whole credit is a spelling ("Michael Kramer & Kate Reading"
 // stays as it is when "Michael Kramer" is merged).
 
-/** How many tiles render at first, and how many more each "Show more" adds. */
-export const PAGE_STEP = 120;
+/** How many tiles a page of Authors or Narrators holds. */
+export const PEOPLE_PAGE = 120;
 
 /** The people whose name contains `q` (case and accent insensitive). */
 export function filterPeople(people: PersonCount[], q: string): PersonCount[] {
