@@ -1,10 +1,11 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { BookMeta, BookRef } from '@/api/types';
+import type { AdminBook, BookMeta, BookRef, SeriesCount } from '@/api/types';
 import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail, books, series } from '@/test/library-fixtures';
+import { seriesKey } from './series-model';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -51,10 +52,36 @@ function worksReply(req: MockRequest): MockReply {
   };
 }
 
+/**
+ * GET /admin/books as the server answers a card: the books in the series= asked
+ * for, any spelling (seriesKey), from `all`.
+ */
+function seriesBooks(all: AdminBook[]): MockRoute {
+  return (req) => {
+    const key = seriesKey(req.query.get('series') ?? '');
+    return {
+      body: { books: all.filter((b) => b.series_list.some((s) => seriesKey(s.name) === key)) },
+    };
+  };
+}
+
+/** n one-book series named "Saga 1".."Saga n" by Someone, each changed by `over`. */
+function sagas(n: number, over: (i: number) => Partial<SeriesCount> = () => ({})): SeriesCount[] {
+  return Array.from({ length: n }, (_, i) => ({
+    name: `Saga ${i + 1}`,
+    author: 'Someone',
+    books: 1,
+    duration: 1,
+    positions: [1],
+    extra_books: 0,
+    ...over(i),
+  }));
+}
+
 function routes(over: Record<string, MockRoute> = {}) {
   return signedInRoutes({
     'GET /admin/series': { body: { series } },
-    'GET /admin/books': { body: { books } },
+    'GET /admin/books': seriesBooks(books),
     'GET /libraries/1/meta': { body: wayOfKingsMeta },
     'POST /admin/books/works': worksReply,
     // The book page a spine opens.
@@ -86,7 +113,12 @@ describe('series', () => {
     // The rail came from the first book with an identifier.
     const meta = calls.filter((c) => c.path === '/libraries/1/meta');
     expect(meta.map((c) => c.query.get('path'))).toEqual([books[0].path]);
-    expect(calls.find((c) => c.path === '/admin/books')?.query.get('sort')).toBe('series');
+    // Each card asks for its own series' books, in their order in it.
+    const asked = calls.filter((c) => c.path === '/admin/books');
+    expect(asked.map((c) => [c.query.get('series'), c.query.get('sort')]).sort()).toEqual([
+      ['The Murderbot Diaries', 'series'],
+      ['The Stormlight Archive', 'series'],
+    ]);
 
     // All Systems Red has no ASIN or ISBN: no rail to compare with.
     const murderbot = screen.getByRole('region', { name: 'The Murderbot Diaries' });
@@ -121,7 +153,7 @@ describe('series', () => {
     let release = () => {};
     const calls = mockFetch(
       routes({
-        'GET /admin/books': { body: { books: unnumbered } },
+        'GET /admin/books': seriesBooks(unnumbered),
         'POST /admin/books/works': (req) =>
           new Promise<void>((resolve) => (release = resolve)).then(() => worksReply(req)),
       }),
@@ -160,10 +192,10 @@ describe('series', () => {
       { ...books[1], duration: 4 * 3600 },
       ...books.slice(2),
     ];
-    mockFetch(routes({ 'GET /admin/books': { body: { books: coloured } } }));
+    mockFetch(routes({ 'GET /admin/books': seriesBooks(coloured) }));
     renderApp('/library/series');
     const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
-    const first = within(card).getByRole('button', { name: '#1 The Way of Kings' });
+    const first = await within(card).findByRole('button', { name: '#1 The Way of Kings' });
     expect(first.style.getPropertyValue('--c1')).toBe('#1e2a50');
     const second = within(card).getByRole('button', { name: '#2 Words of Radiance' });
     expect(parseFloat(first.style.height)).toBeGreaterThan(parseFloat(second.style.height));
@@ -175,7 +207,7 @@ describe('series', () => {
     const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
     await userEvent
       .setup()
-      .click(within(card).getByRole('button', { name: '#2 Words of Radiance' }));
+      .click(await within(card).findByRole('button', { name: '#2 Words of Radiance' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/library/book'));
     expect(router.state.location.search).toEqual({ library: 1, path: books[1].path });
   });
@@ -206,10 +238,7 @@ describe('series', () => {
             ],
           },
         },
-        'GET /admin/books': (req) =>
-          req.query.get('series') === 'Cosmere'
-            ? { body: { books: [elantris] } }
-            : { body: { books } },
+        'GET /admin/books': seriesBooks([...books, elantris]),
       }),
     );
     renderApp('/library/series');
@@ -255,29 +284,165 @@ describe('series', () => {
     expect(within(card).queryByRole('img', { name: /not in your library/ })).toBeNull();
   });
 
-  it('pages the series-sorted books only until the series-less ones begin', async () => {
-    const calls = mockFetch(
+  it('is one card for every spelling of a series, all its books placed', async () => {
+    // Thirteen books under three spellings; the matched ones (1, 6, 9, 11, 12)
+    // say "with", as the community does. The server groups them under that name
+    // and the card's series= filter brings back all thirteen.
+    const spellings = ['He Who Fights With Monsters', 'He Who Fights WIth Monsters'];
+    const matched = [1, 6, 9, 11, 12];
+    const monsters = Array.from({ length: 13 }, (_, i) => {
+      const n = i + 1;
+      return adminBook({
+        path: `Shirtaloon/FWM${n}`,
+        title: `He Who Fights with Monsters ${n}`,
+        author: 'Shirtaloon',
+        series: matched.includes(n) ? 'He Who Fights with Monsters' : spellings[n % 2],
+        series_index: n,
+        asin: matched.includes(n) ? `B0${n}` : '',
+      });
+    });
+    const rail = Array.from({ length: 13 }, (_, i) =>
+      work(String(i + 1), `He Who Fights with Monsters ${i + 1}`),
+    );
+    mockFetch(
       routes({
-        'GET /admin/books': (req) =>
-          req.query.get('cursor')
-            ? {
-                body: {
-                  books: [books[1], adminBook({ series: '', path: 'Loose' })],
-                  next_cursor: 'p3',
-                },
-              }
-            : { body: { books: [books[0], books[2]], next_cursor: 'p2' } },
+        'GET /admin/series': {
+          body: {
+            series: [
+              {
+                name: 'He Who Fights with Monsters',
+                author: 'Shirtaloon',
+                books: 13,
+                duration: 13,
+                positions: rail.map((_, i) => i + 1),
+                extra_books: 0,
+              },
+            ],
+          },
+        },
+        'GET /admin/books': seriesBooks(monsters),
+        'GET /libraries/1/meta': {
+          body: {
+            matched: true,
+            series: [
+              { id: 'hwfwm', name: 'He Who Fights with Monsters', position: '1', works: rail },
+            ],
+          },
+        },
+        'POST /admin/books/works': (req) => ({
+          body: {
+            works: (req.body as { books: BookRef[] }).books.map((r) => ({
+              ...r,
+              work_id: monsters.find((b) => b.path === r.path)?.title ?? '',
+              failed: false,
+            })),
+          },
+        }),
       }),
     );
     renderApp('/library/series');
+    const card = await screen.findByRole('region', { name: 'He Who Fights with Monsters' });
+    expect(screen.getAllByRole('region', { name: /monsters/i })).toHaveLength(1);
+    await waitFor(() => expect(card).toHaveTextContent('Complete: you have all 13'));
+    expect(within(card).queryByRole('img', { name: /not in your library/ })).toBeNull();
+    expect(within(card).getByRole('button', { name: /^#4 / })).toBeInTheDocument();
+  });
+
+  it('pages the cards, and a page asks only for its own series', async () => {
+    // Two-digit names, so the list sorts in number order.
+    const many = sagas(60, (i) => ({ name: `Saga ${String(i + 1).padStart(2, '0')}` }));
+    const calls = mockFetch(
+      routes({
+        'GET /admin/series': { body: { series: many } },
+        'GET /admin/books': (req) => ({
+          body: {
+            books: [
+              adminBook({
+                path: `${req.query.get('series')}/1`,
+                title: `${req.query.get('series')} One`,
+                series: req.query.get('series') ?? '',
+                asin: '',
+              }),
+            ],
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    const { router } = renderApp('/library/series');
+    expect(await screen.findByRole('region', { name: 'Saga 01' })).toBeInTheDocument();
+    expect(screen.getAllByRole('region', { name: /^Saga/ })).toHaveLength(24);
+    const pager = screen.getByRole('navigation', { name: 'Pages' });
+    expect(within(pager).getByRole('button', { name: 'Page 1' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(pager).getByRole('button', { name: 'Previous' })).toBeDisabled();
+
+    await user.click(within(pager).getByRole('button', { name: 'Page 3' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ page: 3 }));
+    expect(await screen.findByRole('region', { name: 'Saga 49' })).toBeInTheDocument();
+    expect(screen.getAllByRole('region', { name: /^Saga/ })).toHaveLength(12);
+    // Only this page's series were asked for: no walk through the first two pages.
+    await waitFor(() => expect(calls.some((c) => c.query.get('series') === 'Saga 60')).toBe(true));
+    expect(calls.some((c) => c.query.get('series') === 'Saga 30')).toBe(false);
+
+    // Back returns to the page before.
+    router.history.back();
+    expect(await screen.findByRole('region', { name: 'Saga 01' })).toBeInTheDocument();
+  });
+
+  it('finds a series by name or author, every spelling, from page 1', async () => {
+    const many = sagas(30);
+    mockFetch(
+      routes({
+        'GET /admin/series': {
+          body: {
+            series: [
+              ...many,
+              { ...many[0], name: 'He Who Fights with Monsters', author: 'Shirtaloon' },
+              { ...many[0], name: 'Earthsea', author: 'Ursula K. Le Guin' },
+            ],
+          },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    const { router } = renderApp('/library/series?page=2');
+    expect(await screen.findByRole('region', { name: 'Earthsea' })).toBeInTheDocument();
+
+    const box = screen.getByRole('textbox', { name: 'Find a series or author' });
+    await user.type(box, 'fights  WITH');
+    // The search applies once typing pauses.
+    await waitFor(() => expect(router.state.location.search).toEqual({ q: 'fights  WITH' }));
+    expect(await screen.findByRole('region', { name: 'He Who Fights with Monsters' }));
+    expect(screen.queryAllByRole('region', { name: /^(Saga|Earthsea)/ })).toHaveLength(0);
+
+    expect(screen.queryByRole('navigation', { name: 'Pages' })).toBeNull();
+
+    await user.clear(box);
+    await user.type(box, 'le guin');
+    expect(await screen.findByRole('region', { name: 'Earthsea' })).toBeInTheDocument();
+
+    await user.clear(box);
+    await user.type(box, 'nothing like it');
+    expect(await screen.findByText('Nothing matches “nothing like it”.')).toBeInTheDocument();
+  });
+
+  it('comes back to the same page and search from a book', async () => {
+    const many = sagas(30);
+    mockFetch(routes({ 'GET /admin/series': { body: { series: [...many, ...series] } } }));
+    const user = userEvent.setup();
+    const { router } = renderApp('/library/series?q=a&page=2');
     const card = await screen.findByRole('region', { name: 'The Stormlight Archive' });
+    await user.click(await within(card).findByRole('button', { name: '#2 Words of Radiance' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/library/book'));
+    router.history.back();
     expect(
-      await within(card).findByRole('button', { name: '#2 Words of Radiance' }),
+      await screen.findByRole('region', { name: 'The Stormlight Archive' }),
     ).toBeInTheDocument();
-    await waitFor(() => expect(card).toHaveTextContent('You have 1, 2 of 5'));
-    expect(
-      calls.filter((c) => c.path === '/admin/books').map((c) => c.query.get('cursor')),
-    ).toEqual([null, 'p2']);
+    expect(router.state.location.search).toEqual({ q: 'a', page: 2 });
+    expect(screen.getByRole('textbox', { name: 'Find a series or author' })).toHaveValue('a');
   });
 
   it('without community metadata, says how to see gaps and asks for none', async () => {

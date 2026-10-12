@@ -204,7 +204,7 @@ type BookFilter struct {
 	LibraryID      int64
 	Query          string // full-text, over title/author/series/narrator
 	Author         string // the whole effective value, or exactly one person it names (creditFilter)
-	Series         string // exactly the main series, or one more_series names (seriesFilter)
+	Series         string // the main series, or one more_series names, in any spelling (seriesFilter)
 	Narrator       string // as Author
 	Formats        []string
 	Codecs         []string
@@ -222,6 +222,26 @@ type BookFilter struct {
 	// IssueIgnored, listing only those.
 	Issue        string
 	IssueIgnored bool
+
+	// series is how the index spells Series' series (spellSeries): the filter
+	// takes every spelling.
+	series seriesNames
+}
+
+// spellSeries reads how the index spells f's series filter into f: in f's
+// library, or with every library (the library facet, which counts the others
+// too) in all of them.
+func (c *Catalog) spellSeries(ctx context.Context, f *BookFilter, every bool) error {
+	if f.Series == "" {
+		return nil
+	}
+	var libs []int64
+	if f.LibraryID != 0 && !every {
+		libs = []int64{f.LibraryID}
+	}
+	var err error
+	f.series, err = c.spellingsOf(ctx, libs, f.Series)
+	return err
 }
 
 // Facet dimensions: the filters a facet count is computed without, so the console
@@ -247,11 +267,7 @@ func (f BookFilter) where(skip string) (string, []any) {
 		args = append(args, a...)
 	}
 	in := func(col string, vals []string) {
-		a := make([]any, len(vals))
-		for i, v := range vals {
-			a[i] = v
-		}
-		add(col+" IN ("+placeholders(len(vals))+")", a...)
+		add(col+" IN ("+placeholders(len(vals))+")", anyOf(vals)...)
 	}
 	flag := func(dim, expr string, v *bool) {
 		if v == nil || dim == skip {
@@ -286,7 +302,7 @@ func (f BookFilter) where(skip string) (string, []any) {
 		add(cond, a...)
 	}
 	if f.Series != "" {
-		cond, a := seriesFilter("b.", f.Series)
+		cond, a := seriesFilter("b.", f.series, true)
 		add(cond, a...)
 	}
 	if f.Narrator != "" {
@@ -448,9 +464,12 @@ func (c *Catalog) ListAdminBooks(ctx context.Context, opt AdminListOptions) (*Ad
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSort, opt.Sort)
 	}
+	if err := c.spellSeries(ctx, &opt.Filter, false); err != nil {
+		return nil, err
+	}
 	if opt.Sort == "series" && opt.Filter.Series != "" {
 		// One series' books, in their order in that series (not their main one's).
-		keys = seriesOrderKeys(opt.Filter.Series)
+		keys = seriesOrderKeys(opt.Filter.Series, opt.Filter.series)
 	}
 	keys = directed(keys, opt.Desc)
 	if opt.Limit <= 0 || opt.Limit > 200 {
@@ -583,6 +602,9 @@ type BookFacets struct {
 // BookFacets computes the facet counts for f.
 func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, error) {
 	out := &BookFacets{}
+	if err := c.spellSeries(ctx, &f, true); err != nil {
+		return nil, err
+	}
 	var err error
 	where, args := f.where(facetLibrary)
 	if out.Libraries, err = queryRows(ctx, c.db, func(rows *sql.Rows, lc *LibraryCount) error {
@@ -850,14 +872,17 @@ type SeriesCount struct {
 // counts in every series it is in (its more_series too), at its position there;
 // without, only in its main series (what a client that places books by
 // series_index can show).
+//
+// A series is every spelling with one seriesKey, its counts merged and named by
+// seriesName; a series= filter on that name finds all its books (seriesFilter).
 func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, memberships bool) ([]SeriesCount, error) {
 	frag, fargs := aggregateScope(scope)
 	// Without memberships, only main series: the narrower query of the books
 	// that have one, with no list to read.
-	q := `SELECT series, author, series_index, '[]', duration FROM books
+	q := `SELECT series, author, series_index, '[]', duration, ` + matchedExpr + ` FROM books b
 		  WHERE series <> '' AND (? = 0 OR library_id = ?) AND %s`
 	if memberships {
-		q = `SELECT series, author, series_index, more_series, duration FROM books
+		q = `SELECT series, author, series_index, more_series, duration, ` + matchedExpr + ` FROM books b
 		  WHERE (series <> '' OR more_series <> '[]') AND (? = 0 OR library_id = ?) AND %s`
 	}
 	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(q, frag),
@@ -868,25 +893,29 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, mem
 	defer rows.Close()
 	type acc struct {
 		SeriesCount
-		authors map[string]int
-		pos     map[float64]bool
+		authors   map[string]int
+		pos       map[float64]bool
+		spellings map[string]spelling
 	}
 	bySeries := map[string]*acc{}
 	for rows.Next() {
 		var series, author, more string
 		var idx, dur float64
-		if err := rows.Scan(&series, &author, &idx, &more, &dur); err != nil {
+		var matched bool
+		if err := rows.Scan(&series, &author, &idx, &more, &dur, &matched); err != nil {
 			return nil, err
 		}
-		for _, s := range SeriesList(series, idx, more) {
-			a := bySeries[s.Name]
+		for i, s := range SeriesList(series, idx, more) { // each series once
+			k := seriesKey(s.Name)
+			a := bySeries[k]
 			if a == nil {
-				a = &acc{SeriesCount: SeriesCount{Name: s.Name, Positions: []float64{}}, authors: map[string]int{}, pos: map[float64]bool{}}
-				bySeries[s.Name] = a
+				a = &acc{SeriesCount: SeriesCount{Positions: []float64{}}, authors: map[string]int{},
+					pos: map[float64]bool{}, spellings: map[string]spelling{}}
+				bySeries[k] = a
 			}
 			a.Books++
 			a.Duration += dur
-			if s.Name != series {
+			if i > 0 || series == "" {
 				a.ExtraBooks++
 			}
 			if author != "" {
@@ -896,6 +925,12 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, mem
 				a.pos[s.Position] = true
 				a.Positions = append(a.Positions, s.Position)
 			}
+			sp := a.spellings[s.Name]
+			sp.books++
+			if matched {
+				sp.matched++
+			}
+			a.spellings[s.Name] = sp
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -909,8 +944,27 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, mem
 				a.Author = name
 			}
 		}
+		a.Name = seriesName(a.spellings)
 		out = append(out, a.SeriesCount)
 	}
 	sort.Slice(out, func(i, j int) bool { return lessFold(out[i].Name, out[j].Name) })
 	return out, nil
+}
+
+// spelling is how many of a series' books spell it one way, and how many of
+// those are matched to the community's records.
+type spelling struct{ books, matched int }
+
+// seriesName is the name a series of several spellings goes by: the one its
+// matched books use most (a community match writes the community's spelling),
+// else the one most of its books use; ties go to the first alphabetically.
+func seriesName(spellings map[string]spelling) string {
+	best, bs := "", spelling{}
+	for name, s := range spellings {
+		if best == "" || s.matched > bs.matched || (s.matched == bs.matched &&
+			(s.books > bs.books || (s.books == bs.books && name < best))) {
+			best, bs = name, s
+		}
+	}
+	return best
 }

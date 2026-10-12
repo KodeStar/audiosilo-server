@@ -4,7 +4,7 @@ import { coverModel } from '@/lib/cover-model';
 import { adminBook } from '@/test/library-fixtures';
 import {
   formatPositions,
-  groupSeriesPages,
+  filterSeries,
   metaCandidate,
   pickRail,
   placeBooks,
@@ -459,34 +459,37 @@ describe('a book in several series', () => {
   });
 });
 
-describe('groupSeriesPages', () => {
-  it('groups by series in index order and stops at the first book without one', () => {
-    const pages = [
-      {
-        books: [
-          book(2, 'Words of Radiance'),
-          book(1, 'The Way of Kings'),
-          adminBook({ series: 'The Murderbot Diaries', path: 'm1' }),
-        ],
-        next_cursor: 'c1',
-      },
-    ];
-    const first = groupSeriesPages(pages, true);
-    expect(first.done).toBe(false);
-    expect(first.bySeries.get('The Stormlight Archive')?.map((b) => b.title)).toEqual([
-      'The Way of Kings',
-      'Words of Radiance',
-    ]);
-    expect(first.bySeries.get('The Murderbot Diaries')).toHaveLength(1);
+describe('filterSeries', () => {
+  const list = [
+    { name: 'He Who Fights with Monsters', author: 'Shirtaloon' },
+    { name: 'Earthsea', author: 'Ursula K. Le Guin' },
+    { name: 'The Expanse', author: 'James S. A. Corey' },
+  ].map((s) => ({ ...s, books: 1, duration: 1, positions: [], extra_books: 0 }));
+  const names = (q: string) => filterSeries(list, q).map((s) => s.name);
 
-    const second = groupSeriesPages(
-      [...pages, { books: [adminBook({ series: '', path: 'loose' })], next_cursor: 'c2' }],
-      true,
-    );
-    expect(second.done).toBe(true);
-    expect([...second.bySeries.keys()]).not.toContain('');
-    // No next page: everything has loaded.
-    expect(groupSeriesPages(pages, false).done).toBe(true);
+  it('finds a series by its name or author, as series keys compare', () => {
+    expect(names('fights  WITH')).toEqual(['He Who Fights with Monsters']);
+    expect(names('le guin')).toEqual(['Earthsea']);
+    expect(names('James S.A.')).toEqual(['The Expanse']);
+    expect(names('nothing')).toEqual([]);
+  });
+
+  it('keeps every series for a search with nothing to compare', () => {
+    expect(names('  ')).toHaveLength(3);
+    expect(names('?!')).toHaveLength(3);
+  });
+});
+
+describe('positionIn', () => {
+  it("reads a book's place in the series however the series is spelled", () => {
+    const b = adminBook({
+      series: 'He Who Fights With Monsters',
+      series_index: 4,
+      series_list: [{ name: 'He Who Fights With Monsters', position: 4 }],
+    });
+    expect(positionIn(b, 'He Who Fights with Monsters')).toBe(4);
+    expect(positionIn(b, 'He Who Fights WIth Monsters')).toBe(4);
+    expect(positionIn(b, 'Monsters')).toBe(0);
   });
 });
 

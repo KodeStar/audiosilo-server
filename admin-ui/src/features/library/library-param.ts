@@ -21,12 +21,15 @@ export function useUpdateSearch(): Update {
   );
 }
 
-/** The Library screens' `?library=` filter: one library's id, or undefined for all. */
+/**
+ * The Library screens' `?library=` filter: one library's id, or undefined for all.
+ * Another library starts its list on the first page.
+ */
 export function useLibraryParam(): [number | undefined, (id: number | undefined) => void] {
   const { library } = useSearch({ strict: false }) as LibrarySearch;
   const update = useUpdateSearch();
   const set = useCallback(
-    (id: number | undefined) => update((prev) => ({ ...prev, library: id })),
+    (id: number | undefined) => update((prev) => ({ ...prev, library: id, page: undefined })),
     [update],
   );
   return [library, set];

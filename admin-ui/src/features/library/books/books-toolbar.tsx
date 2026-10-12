@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { LayoutGrid, List, Search, SlidersHorizontal, X } from 'lucide-react';
+import { LayoutGrid, List, SlidersHorizontal, X } from 'lucide-react';
 import { ADMIN_BOOK_SORTS, type AdminBookSort, type AdminLibrary } from '@/api/types';
+import { SearchBox } from '@/components/search-box';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { useDebounced } from '@/lib/use-debounced';
 import { cn } from '@/lib/utils';
 import type { LibrarySearch, Update } from '../library-search';
 import {
@@ -20,9 +18,6 @@ import {
 } from './books-model';
 import { chipClass } from './chip-class';
 import { chipLabel } from './filter-labels';
-
-/** How long the search box waits for typing to pause before it filters. */
-const SEARCH_DEBOUNCE_MS = 250;
 
 /**
  * The sticky row over the list: its heading, the search box, the Filters button
@@ -53,6 +48,10 @@ export function BooksToolbar({
         <SearchBox
           value={search.q ?? ''}
           onChange={(q) => update((prev) => ({ ...prev, q: q || undefined }))}
+          label={t('books.search.label')}
+          placeholder={t('books.search.placeholder')}
+          clearLabel={t('books.search.clear')}
+          className="min-w-[180px] flex-[0_1_300px]"
         />
         <Button variant="outline" onClick={onOpenFilters}>
           <SlidersHorizontal aria-hidden="true" />
@@ -113,67 +112,6 @@ export function BooksToolbar({
         />
       </div>
     </div>
-  );
-}
-
-/**
- * The search box: types freely, filters once typing pauses. A change from
- * outside (a chip's clear, Back) replaces what is typed.
- */
-function SearchBox({ value, onChange }: { value: string; onChange: (q: string) => void }) {
-  const { t } = useTranslation();
-  const [text, setText] = useState(value);
-  const settled = useDebounced(text.trim(), SEARCH_DEBOUNCE_MS);
-  // The last value this box sent (or was given), to tell outside changes apart.
-  const sent = useRef(value);
-  const latest = useRef(onChange);
-  useEffect(() => {
-    latest.current = onChange;
-  });
-
-  useEffect(() => {
-    if (value === sent.current) return;
-    sent.current = value;
-    setText(value);
-  }, [value]);
-
-  // Only once typing has paused (the debounced value caught up with the box), so
-  // a change from outside isn't answered with the stale text from before it.
-  useEffect(() => {
-    if (settled !== text.trim() || settled === sent.current.trim()) return;
-    sent.current = settled;
-    latest.current(settled);
-  }, [settled, text]);
-
-  return (
-    <label className="relative flex min-w-[180px] flex-[0_1_300px] items-center">
-      <Search
-        className="pointer-events-none absolute left-3 size-4 text-muted-foreground"
-        aria-hidden="true"
-      />
-      <Input
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        aria-label={t('books.search.label')}
-        placeholder={t('books.search.placeholder')}
-        autoComplete="off"
-        className="pr-9 pl-9"
-      />
-      {text ? (
-        <button
-          type="button"
-          aria-label={t('books.search.clear')}
-          onClick={() => {
-            setText('');
-            sent.current = '';
-            latest.current('');
-          }}
-          className="absolute right-1.5 grid size-7 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-4" aria-hidden="true" />
-        </button>
-      ) : null}
-    </label>
   );
 }
 
