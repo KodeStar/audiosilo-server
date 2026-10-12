@@ -3,7 +3,7 @@ import { ADMIN_BOOK_SORTS, type AdminBookSort } from '@/api/types';
 // The Library destination's search params (every view deep-links, STYLEGUIDE.md
 // section 2): the Books list's search, sort, view and facet filters, the exact
 // author/series/narrator filters the Authors/Series/Narrators tiles open, and
-// the Folders tree's selection, the Series page's search and page. Validated here; router.tsx merges them into the
+// the Folders tree's selection, the Series, Authors and Narrators pages' search and page. Validated here; router.tsx merges them into the
 // destination routes' search.
 
 export const LENGTHS = ['short', 'medium', 'long', 'epic'] as const;
@@ -17,9 +17,12 @@ export type YesNo = (typeof YES_NO)[number];
 export type Playback = (typeof PLAYBACK)[number];
 
 export interface LibrarySearch {
-  /** Books: full-text filter. Series: the series search (name or author). */
+  /**
+   * Books: full-text filter. Series: the series search (name or author).
+   * Authors, Narrators: the name search.
+   */
   q?: string;
-  /** Series: the page of cards, from 1 (absent = the first). */
+  /** Series, Authors, Narrators: the page of cards, from 1 (absent = the first). */
   page?: number;
   sort?: AdminBookSort;
   order?: 'asc' | 'desc';

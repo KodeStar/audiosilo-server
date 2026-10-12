@@ -105,6 +105,24 @@ func (a *API) handleDuplicates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
 }
 
+// handleSeriesSpellings serves GET /admin/issues/series-spellings: the series a
+// library's books spell more than one way, each with its spellings and the one to
+// offer (?library_id= narrows it; ?ignored=true lists those with an ignored book).
+func (a *API) handleSeriesSpellings(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	libID, ok := parseOptionalID(q.Get("library_id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library_id")
+		return
+	}
+	groups, err := a.cat.SeriesSpellingGroups(r.Context(), libID, q.Get("ignored") == "true")
+	if err != nil {
+		a.writeCatalogError(w, err, "series spellings failed", "could not find series spellings")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
+}
+
 // ignoreRequest is the body of POST/DELETE /admin/issues/ignore.
 type ignoreRequest struct {
 	Kind  string        `json:"kind"`

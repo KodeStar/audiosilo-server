@@ -5,8 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
+	"unicode"
+
+	unorm "golang.org/x/text/unicode/norm"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -112,7 +116,7 @@ func SeriesList(series string, index float64, more string) []SeriesRef {
 	}
 	for _, s := range ParseMoreSeries(more) {
 		// A series once, however the list spells it again.
-		if !slices.ContainsFunc(out, func(o SeriesRef) bool { return sameSeries(o.Name, s.Name) }) {
+		if !slices.ContainsFunc(out, func(o SeriesRef) bool { return match.SameSeries(o.Name, s.Name) }) {
 			out = append(out, s)
 		}
 	}
@@ -134,106 +138,52 @@ func seriesKey(name string) string { return seriesKeys.get(name) }
 
 var seriesKeys = &memo[string]{f: func(name string) string { return cmp.Or(match.SeriesKey(name), name) }}
 
-// sameSeries reports whether two names are one series (seriesKey).
-func sameSeries(a, b string) bool { return a == b || seriesKey(a) == seriesKey(b) }
-
-// seriesNames is one series as the index spells it: the main series values and
-// the more_series names that are that series (seriesKey). A filter or an
-// ordering on one series takes them all, exactly, so an index finds them.
-type seriesNames struct {
-	main, more []string
+// otherSeries is the series a book is in besides its main one (SeriesList less
+// the main series): what book_more_series holds for it.
+func otherSeries(series, more string) []SeriesRef {
+	all := SeriesList(series, 0, more)
+	if series != "" {
+		all = all[1:]
+	}
+	return all
 }
 
-// spellings returns, by seriesKey, how the index spells each of names' series in
-// libraries (none: every library): the distinct series values (idx_books_series
-// in order, no table row) and, with more, the more_series names of the books
-// that have a list (idx_books_more_series, reading each list; a caller that
-// matches main series only leaves it off). A name the index doesn't hold is
-// absent. Spellings are only compared, never returned, so the share's paths
-// don't narrow them.
-func (c *Catalog) spellings(ctx context.Context, libraries []int64, more bool, names ...string) (map[string]seriesNames, error) {
-	want := map[string]bool{}
-	for _, n := range names {
-		want[seriesKey(n)] = true
-	}
-	lib, args := "", anyOf(libraries)
-	if len(libraries) > 0 {
-		lib = " AND b.library_id IN (" + placeholders(len(libraries)) + ")"
-	}
-	// By library and name, not name alone: the index's own order, so no sort.
-	main, err := c.distinctNames(ctx, `SELECT DISTINCT b.library_id, b.series FROM books b WHERE b.series <> ''`+lib, args)
-	if err != nil {
-		return nil, err
-	}
-	var listed []string
-	if more {
-		if listed, err = c.distinctNames(ctx, `SELECT DISTINCT b.library_id, json_extract(j.value, '$.name')
-			  FROM books b, json_each(b.more_series) j WHERE b.more_series <> '[]'`+lib, args); err != nil {
-			return nil, err
-		}
-	}
-	out := map[string]seriesNames{}
-	add := func(names []string, list func(*seriesNames) *[]string) {
-		for _, name := range names {
-			k := seriesKey(name)
-			if name == "" || !want[k] {
-				continue
-			}
-			n := out[k]
-			if l := list(&n); !slices.Contains(*l, name) { // a spelling in several libraries
-				*l = append(*l, name)
-			}
-			out[k] = n
-		}
-	}
-	add(main, func(n *seriesNames) *[]string { return &n.main })
-	add(listed, func(n *seriesNames) *[]string { return &n.more })
-	return out, nil
-}
-
-// distinctNames runs q, selecting a library id and a name, for the names.
-func (c *Catalog) distinctNames(ctx context.Context, q string, args []any) ([]string, error) {
-	return queryRows(ctx, c.db, func(r *sql.Rows, name *string) error {
-		var lib int64
-		var n sql.NullString
-		err := r.Scan(&lib, &n)
-		*name = n.String
+// keyOtherSeries writes book_more_series for a book: its other series by key,
+// with its position in each. A series filter, ordering or next-book query finds
+// a book in a series through its list by that table's index, whatever the
+// spelling (refreshEffective writes books.series_key beside it).
+func keyOtherSeries(ctx context.Context, tx *sql.Tx, bookID, libID int64, series, more string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_more_series WHERE book_id = ?`, bookID); err != nil {
 		return err
-	}, q, args...)
+	}
+	return insertOtherSeries(ctx, tx, bookID, libID, series, more)
 }
 
-// spellingsOf is spellings for one series.
-func (c *Catalog) spellingsOf(ctx context.Context, libraries []int64, more bool, name string) (seriesNames, error) {
-	m, err := c.spellings(ctx, libraries, more, name)
-	return m[seriesKey(name)], err
+// insertOtherSeries adds a book's other series to book_more_series.
+func insertOtherSeries(ctx context.Context, tx *sql.Tx, bookID, libID int64, series, more string) error {
+	for _, s := range otherSeries(series, more) {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO book_more_series(book_id, library_id, series_key, position) VALUES(?, ?, ?, ?)`,
+			bookID, libID, seriesKey(s.Name), s.Position); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// seriesFilter is the WHERE condition, and its args, for a series filter on the
-// books row whose columns carry prefix: the books whose main series is one of
-// n's spellings, and with memberships also those whose more_series names one.
-// With memberships the full-text index (whose series column holds every series
-// name, verbatim) finds the candidates by any spelling's phrase, and the exact
-// test keeps the rest out; a series with no letter or digit has no phrase to
-// match and is tested alone. Without, idx_books_series finds them.
-func seriesFilter(prefix string, n seriesNames, memberships bool) (string, []any) {
-	cond := prefix + "series IN (" + placeholders(len(n.main)) + ")"
-	args := anyOf(n.main)
+// seriesFilter is the WHERE condition, and its args, for a filter on the series
+// named name (any spelling: its seriesKey) on the books row whose columns carry
+// prefix: the books whose main series it is (idx_books_series_key), and with
+// memberships also those whose list names it (book_more_series), each found by
+// its index in every library (the caller's library term narrows them).
+func seriesFilter(prefix, name string, memberships bool) (string, []any) {
+	key := seriesKey(name)
+	main := `SELECT s.id FROM books s WHERE s.library_id IN (SELECT id FROM libraries) AND s.series_key = ?`
 	if !memberships {
-		return cond, args
+		return prefix + "id IN (" + main + ")", []any{key}
 	}
-	cond = "(" + cond + " OR EXISTS (SELECT 1 FROM json_each(" + prefix +
-		"more_series) j WHERE json_extract(j.value, '$.name') IN (" + placeholders(len(n.more)) + ")))"
-	args = append(args, anyOf(n.more)...)
-	all := slices.Concat(n.main, n.more)
-	if len(all) == 0 {
-		return "0", nil // no spelling in the index
-	}
-	phrases, ok := ftsPhrases(all)
-	if !ok {
-		return cond, args
-	}
-	return prefix + "id IN (SELECT rowid FROM books_fts WHERE series MATCH ?) AND " + cond,
-		append([]any{phrases}, args...)
+	return prefix + "id IN (" + main + ` UNION ALL SELECT m.book_id FROM book_more_series m WHERE m.series_key = ?)`,
+		[]any{key, key}
 }
 
 // anyOf is ss as query arguments.
@@ -249,22 +199,23 @@ func anyOf[T any](ss []T) []any {
 // isn't in it), the series matched by seriesKey: its first entry that is it.
 func positionIn(list []SeriesRef, name string) float64 {
 	for _, s := range list {
-		if sameSeries(s.Name, name) {
+		if match.SameSeries(s.Name, name) {
 			return s.Position
 		}
 	}
 	return 0
 }
 
-// seriesOrderKeys is the series sort for a list filtered to the series name,
-// spelled n: by the book's position in that series (unnumbered last), then title.
-// The spellings are quoted literals in the expression, since a sort key binds no
-// arguments (the only key built from a request value). The SQL takes a book's
-// main series when it is one of n's, else its first more_series entry that is,
-// as positionIn does for the cursor.
-func seriesOrderKeys(name string, n seriesNames) []sortKey {
-	pos := "(CASE WHEN b.series IN (" + sqlList(n.main) + ") THEN b.series_index ELSE COALESCE((SELECT json_extract(j.value, '$.position') " +
-		"FROM json_each(b.more_series) j WHERE json_extract(j.value, '$.name') IN (" + sqlList(n.more) + ")), 0) END)"
+// seriesOrderKeys is the series sort for a list filtered to the series name:
+// by the book's position in that series (unnumbered last), then title. The key is
+// a quoted literal in the expression, since a sort key binds no arguments (the
+// only key built from a request value). The SQL takes a book's main series when
+// it is that series, else its book_more_series row for it, as positionIn does for
+// the cursor.
+func seriesOrderKeys(name string) []sortKey {
+	key := sqlQuote(seriesKey(name))
+	pos := "(CASE WHEN b.series_key = " + key + " THEN b.series_index ELSE COALESCE((SELECT m.position " +
+		"FROM book_more_series m WHERE m.book_id = b.id AND m.series_key = " + key + "), 0) END)"
 	val := func(b AdminBook) float64 { return positionIn(b.SeriesList, name) }
 	return []sortKey{
 		lastWhen(pos+" = 0", func(b AdminBook) bool { return val(b) == 0 }),
@@ -276,16 +227,6 @@ func seriesOrderKeys(name string, n seriesNames) []sortKey {
 // sqlQuote is s as an SQL string literal.
 func sqlQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
-// sqlList is ss as a list of SQL string literals (empty for none: SQLite takes
-// "IN ()" as false).
-func sqlList(ss []string) string {
-	q := make([]string, len(ss))
-	for i, s := range ss {
-		q[i] = sqlQuote(s)
-	}
-	return strings.Join(q, ", ")
-}
-
 // ftsSeries is the full-text index's series text: every series name, a line each.
 func ftsSeries(series, more string) string {
 	names := []string{}
@@ -293,4 +234,96 @@ func ftsSeries(series, more string) string {
 		names = append(names, s.Name)
 	}
 	return strings.Join(names, "\n")
+}
+
+// seriesKeysKey is the server_state row holding the seriesKeysVersion the stored
+// keys were computed with.
+const seriesKeysKey = "series_keys"
+
+// seriesKeysVersion names what a stored key was computed with: the key's rules
+// (the leading number: bump it whenever seriesKey or match.SeriesKey changes what
+// a name keys to) and the Unicode tables behind them (Go's letters and numbers,
+// x/text's NFKD), so a toolchain or dependency upgrade that reads a name another
+// way keys every book again instead of leaving filters on stale keys.
+var seriesKeysVersion = "1/" + unicode.Version + "/" + unorm.Version
+
+// KeySeries keys the books whose stored keys are missing or out of date: once per
+// database for the books indexed before series keys were stored (migration 0041
+// added books.series_key and book_more_series empty), and again whenever
+// seriesKeysVersion changes. Every book's main series key and other series are
+// written as refreshEffective writes them. It first puts every stored more_series
+// list through normalizeMoreSeries, since a list written before a series became
+// one by its key can name one series twice, in two spellings, and rebuilds those
+// books whole. One transaction, before the server answers (the series filters
+// read only the keys), about a second per 50,000 books. It returns how many books
+// it keyed; 0 while the stored keys are current (server_state seriesKeysKey).
+func (c *Catalog) KeySeries(ctx context.Context) (int, error) {
+	if v, err := getServerState[string](ctx, c.db, seriesKeysKey); err != nil || v == seriesKeysVersion {
+		return 0, err
+	}
+	keyed := 0
+	err := c.db.WithTx(ctx, "KeySeries", func(tx *sql.Tx) error {
+		type list struct {
+			lib         int64
+			path, value string
+		}
+		lists, err := queryRows(ctx, tx, func(r *sql.Rows, l *list) error { return r.Scan(&l.lib, &l.path, &l.value) },
+			`SELECT library_id, path, value FROM book_overrides WHERE field = ?`, FieldMoreSeries)
+		if err != nil {
+			return err
+		}
+		var relisted []int64
+		for _, l := range lists {
+			v, err := normalizeMoreSeries(l.value)
+			if err != nil || v == l.value {
+				continue // a list it can't read stays as stored (it names no series)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE book_overrides SET value = ? WHERE library_id = ? AND path = ? AND field = ?`,
+				v, l.lib, l.path, FieldMoreSeries); err != nil {
+				return err
+			}
+			switch id, err := bookIDByPath(ctx, tx, l.lib, l.path); {
+			case err == nil:
+				relisted = append(relisted, id)
+			case !errors.Is(err, ErrNotFound): // an edit kept for a book not indexed now
+				return err
+			}
+		}
+		type book struct {
+			id, lib           int64
+			series, key, more string
+		}
+		books, err := queryRows(ctx, tx, func(r *sql.Rows, b *book) error {
+			return r.Scan(&b.id, &b.lib, &b.series, &b.key, &b.more)
+		}, `SELECT id, library_id, series, series_key, more_series FROM books`)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM book_more_series`); err != nil {
+			return err
+		}
+		setKey, err := tx.PrepareContext(ctx, `UPDATE books SET series_key = ? WHERE id = ?`)
+		if err != nil {
+			return err
+		}
+		defer setKey.Close()
+		for _, b := range books {
+			if k := seriesKey(b.series); k != b.key { // a re-key leaves current keys alone
+				if _, err := setKey.ExecContext(ctx, k, b.id); err != nil {
+					return err
+				}
+			}
+			if err := insertOtherSeries(ctx, tx, b.id, b.lib, b.series, b.more); err != nil {
+				return err
+			}
+		}
+		for _, id := range relisted {
+			if err := refreshEffective(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		keyed = len(books)
+		return putServerState(ctx, tx, seriesKeysKey, seriesKeysVersion, c.stamp())
+	})
+	return keyed, err
 }

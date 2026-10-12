@@ -33,3 +33,10 @@ export function pageCount(total: number, size: number): number {
 export function clampPage(page: number | undefined, count: number): number {
   return Math.min(Math.max(1, page ?? 1), count);
 }
+
+/** The page of `items` at `size` a page that `wanted` asks for (clampPage), and how many there are. */
+export function pageOf<T>(items: readonly T[], wanted: number | undefined, size: number) {
+  const pages = pageCount(items.length, size);
+  const page = clampPage(wanted, pages);
+  return { page, pages, shown: items.slice((page - 1) * size, page * size) };
+}

@@ -95,6 +95,7 @@ export const keys = {
   issues: ['admin', 'issues'] as const,
   issueSummary: ['admin', 'issues', 'summary'] as const,
   duplicates: (ignored: boolean) => ['admin', 'issues', 'duplicates', ignored] as const,
+  seriesSpellings: (ignored: boolean) => ['admin', 'issues', 'series-spellings', ignored] as const,
   jobs: ['admin', 'jobs'] as const,
   /** Bulk match runs and every page of their items (a prefix). */
   matchRuns: ['admin', 'match-runs'] as const,
@@ -663,6 +664,15 @@ export function useDuplicates(ignored: boolean) {
   return useQuery({
     queryKey: keys.duplicates(ignored),
     queryFn: () => api.duplicates({ ignored: ignored || undefined }).then((r) => r.groups ?? []),
+  });
+}
+
+/** Series spelled several ways: the open ones, or with `ignored` those with an ignored book. */
+export function useSeriesSpellings(ignored: boolean) {
+  return useQuery({
+    queryKey: keys.seriesSpellings(ignored),
+    queryFn: () =>
+      api.seriesSpellings({ ignored: ignored || undefined }).then((r) => r.groups ?? []),
   });
 }
 

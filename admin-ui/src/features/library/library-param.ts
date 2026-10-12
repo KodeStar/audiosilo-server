@@ -35,6 +35,31 @@ export function useLibraryParam(): [number | undefined, (id: number | undefined)
   return [library, set];
 }
 
+/**
+ * A Library page of cards found by a search (Series, Authors, Narrators): the
+ * search and the page, both in the URL so Back returns to them. A new search
+ * replaces its history entry and starts again on the first page; a new page is a
+ * history entry (Back returns to the page before) and opens at the top.
+ */
+export function useSearchPage() {
+  const { q = '', page } = useSearch({ strict: false }) as LibrarySearch;
+  const update = useUpdateSearch();
+  const navigate = useNavigate();
+  const search = useCallback(
+    (value: string) => update((prev) => ({ ...prev, q: value, page: undefined })),
+    [update],
+  );
+  const goTo = useCallback(
+    (n: number) =>
+      void navigate({
+        to: '.',
+        search: (prev: LibrarySearch) => compact({ ...prev, page: n > 1 ? n : undefined }),
+      }),
+    [navigate],
+  );
+  return { q, page, search, goTo };
+}
+
 /** How many books the filtered libraries hold (undefined until libraries load). */
 export function useLibraryBookCount(library: number | undefined): number | undefined {
   const libraries = useLibraries();

@@ -1,4 +1,4 @@
-import { clampPage, pageCount, pagerItems } from './pager';
+import { clampPage, pageCount, pageOf, pagerItems } from './pager';
 
 describe('pagerItems', () => {
   it('shows every page of a short list', () => {
@@ -25,5 +25,14 @@ describe('pageCount and clampPage', () => {
     expect(clampPage(undefined, 3)).toBe(1);
     expect(clampPage(9, 3)).toBe(3);
     expect(clampPage(0, 3)).toBe(1);
+  });
+});
+
+describe('pageOf', () => {
+  it('slices the page asked for, the last one for a page past the end', () => {
+    const items = Array.from({ length: 5 }, (_, i) => i);
+    expect(pageOf(items, undefined, 2)).toEqual({ page: 1, pages: 3, shown: [0, 1] });
+    expect(pageOf(items, 9, 2)).toEqual({ page: 3, pages: 3, shown: [4] });
+    expect(pageOf([], 2, 2)).toEqual({ page: 1, pages: 1, shown: [] });
   });
 });

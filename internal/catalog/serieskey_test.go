@@ -2,10 +2,12 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 )
 
 // seedMonsters indexes He Who Fights with Monsters as the report found it: five
@@ -244,4 +246,185 @@ func TestPlaceByTitles(t *testing.T) {
 			t.Errorf("%s at %v, want %v", path, b.SeriesIndex, want)
 		}
 	}
+}
+
+// unkey puts the index back as migration 0041 leaves a database indexed before
+// it: no book keyed, no list held by key, KeySeries not run.
+func unkey(t *testing.T, c *Catalog, ctx context.Context) {
+	t.Helper()
+	for _, q := range []string{`UPDATE books SET series_key = ''`, `DELETE FROM book_more_series`,
+		`DELETE FROM server_state WHERE key = 'series_keys'`} {
+		if _, err := c.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestKeySeries: a database indexed before series keys finds no series by its
+// key until the startup pass keys every book, once; that pass also puts a list
+// naming one series twice, in two spellings, back to one entry, so the next book
+// in it is the first spelling's.
+func TestKeySeries(t *testing.T) {
+	t.Parallel()
+	c, ctx, lib := seedMonsters(t)
+	if err := c.EditBook(ctx, lib, "Disc/8", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"City Watch","position":1}]`}}); err != nil {
+		t.Fatal(err)
+	}
+	twice := `[{"name":"City Watch","position":1},{"name":"city watch","position":5}]`
+	for _, q := range []string{`UPDATE book_overrides SET value = ? WHERE path = 'Disc/8' AND field = 'more_series'`,
+		`UPDATE books SET more_series = ? WHERE rel_path = 'Disc/8'`} {
+		if _, err := c.db.ExecContext(ctx, q, twice); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unkey(t, c, ctx)
+	scope := &Scope{LibraryID: lib, AllowAll: true}
+	count := func(series string) int {
+		t.Helper()
+		page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib, Series: series, Memberships: true, Scope: scope, Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(page.Books)
+	}
+	if n := count("He Who Fights with Monsters"); n != 0 {
+		t.Fatalf("before keying: %d books found by key, want 0 (the test's unkeyed state)", n)
+	}
+	for _, want := range []int{17, 0} { // every book, then nothing: it has run
+		n, err := c.KeySeries(ctx)
+		if err != nil || n != want {
+			t.Fatalf("KeySeries = %d, %v; want %d", n, err, want)
+		}
+	}
+	// Keys stored by other rules or Unicode tables (or the first build's bare
+	// "done") are keyed again, once.
+	for _, stale := range []any{true, "0/old"} {
+		if err := putServerState(ctx, c.db, seriesKeysKey, stale, c.stamp()); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []int{17, 0} {
+			if n, err := c.KeySeries(ctx); err != nil || n != want {
+				t.Fatalf("KeySeries over %v = %d, %v; want %d", stale, n, err, want)
+			}
+		}
+	}
+	if n := count("He Who Fights WIth Monsters"); n != 13 {
+		t.Errorf("after keying: %d books, want 13", n)
+	}
+	if n := count("CITY WATCH"); n != 1 { // Guards! Guards!, by its list
+		t.Errorf("City Watch: %d books, want 1", n)
+	}
+	b, err := c.GetBookByPath(ctx, lib, "Disc/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	once := `[{"name":"City Watch","position":1}]`
+	var stored string
+	if err := c.db.QueryRowContext(ctx, `SELECT value FROM book_overrides WHERE path = 'Disc/8' AND field = 'more_series'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != once || EncodeMoreSeries(b.AllSeries()[1:]) != once {
+		t.Errorf("list = %s (row %v), want %s", stored, b.AllSeries(), once)
+	}
+	positions, err := queryRows(ctx, c.db, func(r *sql.Rows, p *float64) error { return r.Scan(p) },
+		`SELECT m.position FROM book_more_series m JOIN books b ON b.id = m.book_id WHERE b.rel_path = 'Disc/8'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(positions, []float64{1}) {
+		t.Errorf("keyed list positions = %v, want [1]", positions)
+	}
+	two, _ := c.GetBookByPath(ctx, lib, monsterPath(2))
+	if next, _, _ := c.NextInSeries(ctx, lib, two, *scope); next == nil || next.RelPath != monsterPath(3) {
+		t.Errorf("next after #2 = %+v, want #3", next)
+	}
+}
+
+// TestSeriesKeyScale times keying and the series reads on 50,000 books in 2,000
+// series of 25, each spelled three ways, a tenth of the books also in one of 100
+// shared series through a list. A plain build keys them all in about a second
+// and answers each read in a few milliseconds (the spellings each read used to
+// gather cost 9 ms in one library, 20 across all); the race detector, about 40
+// times slower here, takes a tenth of the books and only logs the times.
+func TestSeriesKeyScale(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, err := c.CreateLibrary(ctx, Library{Name: "Big", Root: "/tmp/big"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	books := 50_000
+	if raceEnabled {
+		books = 5_000
+	}
+	mid := books / 25 / 2 // a series in the middle, as its three spellings
+	if _, err := c.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < ?)
+		INSERT INTO books(library_id, rel_path, title, author, series, series_index, more_series, indexed_at, added_at)
+		SELECT ?, 'B/' || i, 'Book ' || i, 'Author ' || (i % 3000),
+		       CASE i % 3 WHEN 0 THEN 'Series ' || (i / 25) WHEN 1 THEN 'series ' || (i / 25) ELSE 'SERIES-' || (i / 25) END,
+		       i % 25 + 1,
+		       CASE WHEN i % 10 = 0 THEN '[{"name":"Shared ' || (i % 100) || '","position":' || (i / 100 + 1) || '}]' ELSE '[]' END,
+		       'x', '2024-01-01T00:00:00Z'
+		  FROM n`, books, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	timed := func(what string, limit time.Duration, f func() error) {
+		t.Helper()
+		start := time.Now()
+		if err := f(); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		took := time.Since(start)
+		t.Logf("%s: %v", what, took)
+		if !raceEnabled && took > limit {
+			t.Errorf("%s took %v, want under %v", what, took, limit)
+		}
+	}
+	timed("KeySeries", 5*time.Second, func() error {
+		n, err := c.KeySeries(ctx)
+		if err == nil && n != books {
+			err = fmt.Errorf("keyed %d books, want %d", n, books)
+		}
+		return err
+	})
+	scope := &Scope{LibraryID: lib.ID, AllowAll: true}
+	timed("player list", 50*time.Millisecond, func() error {
+		page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Series: fmt.Sprint("Series ", mid), Memberships: true, Scope: scope, Limit: 50})
+		if err == nil && len(page.Books) != 25 {
+			err = fmt.Errorf("%d books, want 25", len(page.Books))
+		}
+		return err
+	})
+	timed("admin list in series order, every library", 50*time.Millisecond, func() error {
+		page, err := c.ListAdminBooks(ctx, AdminListOptions{Filter: BookFilter{Series: fmt.Sprint("series-", mid)}, Sort: "series", Limit: 60})
+		if err == nil && (len(page.Books) != 25 || page.Books[0].SeriesIndex != 1) {
+			err = fmt.Errorf("%d books, first at %v", len(page.Books), page.Books[0].SeriesIndex)
+		}
+		return err
+	})
+	timed("a list series", 50*time.Millisecond, func() error {
+		page, err := c.ListBooks(ctx, ListOptions{LibraryID: lib.ID, Series: "shared 70", Memberships: true, Scope: scope, Limit: 200})
+		if err == nil && (len(page.Books) != min(200, books/100) || (page.NextCursor != "") != (books/100 > 200)) {
+			err = fmt.Errorf("%d books, next %q", len(page.Books), page.NextCursor)
+		}
+		return err
+	})
+	timed("Health: series spelled several ways", 200*time.Millisecond, func() error {
+		ic, err := c.IssueCounts(ctx, []string{IssueSeriesSpellings})
+		if err == nil && ic[0].Count != books {
+			err = fmt.Errorf("count %d, want %d", ic[0].Count, books)
+		}
+		return err
+	})
+	book, err := c.GetBookByPath(ctx, lib.ID, fmt.Sprint("B/", mid*25+1)) // #2 in the middle series
+	if err != nil {
+		t.Fatal(err)
+	}
+	timed("next in series", 50*time.Millisecond, func() error {
+		next, _, err := c.NextInSeries(ctx, lib.ID, book, *scope)
+		if err == nil && (next == nil || next.SeriesIndex != 3) {
+			err = fmt.Errorf("next = %+v", next)
+		}
+		return err
+	})
 }

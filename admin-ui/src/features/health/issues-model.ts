@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Repeat,
   Sparkles,
+  SpellCheck,
   Split,
   type LucideIcon,
 } from 'lucide-react';
@@ -36,6 +37,7 @@ export const CATEGORY_LOOK: Record<IssueKind, { icon: LucideIcon; tile: string }
   duplicate: { icon: Copy, tile: 'bg-info-soft text-info' },
   no_cover: { icon: ImageOff, tile: 'bg-warning-soft text-warning' },
   unmatched: { icon: Globe, tile: 'bg-prov-community-soft text-prov-community' },
+  series_spellings: { icon: SpellCheck, tile: 'bg-info-soft text-info' },
   no_chapters: { icon: List, tile: 'bg-muted text-muted-foreground' },
   detailed_chapters: { icon: ListTree, tile: 'bg-prov-community-soft text-prov-community' },
   transcode: { icon: Repeat, tile: 'bg-warning-soft text-warning' },
@@ -56,6 +58,7 @@ export const FIXES: Record<IssueKind, IssueFix> = {
   duplicate: null, // the compare view has its own actions
   no_cover: 'cover',
   unmatched: 'match',
+  series_spellings: null, // the spellings view has its own action
   no_chapters: null,
   detailed_chapters: 'chapters',
   transcode: null,
@@ -99,6 +102,8 @@ export function issueReason(kind: IssueKind, b: AdminBook): Phrase {
       return { key: 'health.reason.no_cover' };
     case 'unmatched':
       return { key: 'health.reason.unmatched' };
+    case 'series_spellings':
+      return { key: 'health.reason.series_spellings', values: { series: b.series } };
     case 'no_chapters':
       return {
         key: b.chapter_count ? 'health.reason.one_chapter' : 'health.reason.no_chapters',
@@ -133,8 +138,14 @@ export function attentionTotal(summary: IssuesSummary): number {
   return summary.categories.reduce((n, c) => n + c.count, 0) + summary.offline.length;
 }
 
-/** The kinds that list books (all but duplicates, which come as groups). */
-export type BookIssueKind = Exclude<IssueKind, 'duplicate'>;
+/**
+ * The kinds that come as groups, each with a view of its own: duplicates (copies
+ * of a book) and series spellings (per series). The rest list books.
+ */
+export const GROUPED_KINDS = ['duplicate', 'series_spellings'] as const;
+
+/** The kinds that list books. */
+export type BookIssueKind = Exclude<IssueKind, (typeof GROUPED_KINDS)[number]>;
 
 /**
  * Why a book without chapters didn't get the community's (the i18n key), or
@@ -148,5 +159,5 @@ export function chaptersCheckNote(kind: IssueKind, b: AdminBook): string | undef
 }
 
 export function isBookKind(kind: IssueKind): kind is BookIssueKind {
-  return kind !== 'duplicate';
+  return !(GROUPED_KINDS as readonly IssueKind[]).includes(kind);
 }
