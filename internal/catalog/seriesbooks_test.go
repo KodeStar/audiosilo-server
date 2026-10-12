@@ -38,7 +38,7 @@ func seedSeries(t *testing.T) (*Catalog, context.Context, *Library, *Library) {
 // spelledIn is how library lib spells the series name (Catalog.spellingsOf).
 func spelledIn(t *testing.T, c *Catalog, lib int64, name string) seriesNames {
 	t.Helper()
-	n, err := c.spellingsOf(context.Background(), []int64{lib}, name)
+	n, err := c.spellingsOf(context.Background(), []int64{lib}, true, name)
 	if err != nil {
 		t.Fatal(err)
 	}

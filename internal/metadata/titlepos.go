@@ -72,7 +72,9 @@ func afterName(title, series string) (string, bool) {
 			return "", false
 		}
 		if got.Len() == len(want) {
-			rest := title[i+utf8.RuneLen(r):]
+			// Marks combining with the name's last letter are part of it: a title
+			// in decomposed form (NFD, as macOS names files) spells "é" as "e" + U+0301.
+			rest := strings.TrimLeftFunc(title[i+utf8.RuneLen(r):], func(r rune) bool { return unicode.Is(unicode.Mn, r) })
 			next, _ := utf8.DecodeRuneInString(rest)
 			if unicode.IsLetter(next) || unicode.IsNumber(next) {
 				return "", false // the name ends mid-word: "Catch" in "Catcher"

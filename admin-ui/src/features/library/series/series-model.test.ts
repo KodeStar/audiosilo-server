@@ -1,6 +1,7 @@
 import type { AdminBook, MetaSeries } from '@/api/types';
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
+import { seriesKey } from '@/lib/series-key';
 import { adminBook } from '@/test/library-fixtures';
 import {
   formatPositions,
@@ -11,7 +12,6 @@ import {
   positionIn,
   railEntries,
   sameTitle,
-  seriesKey,
   seriesStatus,
   spineColors,
   spineHeight,
@@ -490,6 +490,19 @@ describe('positionIn', () => {
     expect(positionIn(b, 'He Who Fights with Monsters')).toBe(4);
     expect(positionIn(b, 'He Who Fights WIth Monsters')).toBe(4);
     expect(positionIn(b, 'Monsters')).toBe(0);
+  });
+
+  it('keeps names with no letter or number apart, as the server does', () => {
+    const b = adminBook({
+      series: '!!',
+      series_index: 2,
+      series_list: [
+        { name: '!!', position: 2 },
+        { name: '?!', position: 5 },
+      ],
+    });
+    expect(positionIn(b, '?!')).toBe(5);
+    expect(positionIn(b, '!!')).toBe(2);
   });
 });
 

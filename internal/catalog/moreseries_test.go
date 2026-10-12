@@ -342,13 +342,18 @@ func TestSeriesSwap(t *testing.T) {
 	edit("shadow", BookEdit{Set: setSeries(watch)})
 	check("shadow", watch, "1", `[{"name":"Discworld","position":8}]`)
 
-	// The same series again, another spelling, or a blank series: no swap.
+	// Another spelling of a listed series is that series (seriesKey): it swaps.
+	add("case", disc, 8, `[{"name":"City Watch","position":1}]`)
+	edit("case", BookEdit{Set: setSeries("city watch")})
+	check("case", "city watch", "1", `[{"name":"Discworld","position":8}]`)
+
+	// The same series again, however spelled, or a blank series: no swap.
 	add("same", watch, 1, `[{"name":"City Watch","position":4},{"name":"Discworld","position":8}]`)
 	edit("same", BookEdit{Set: setSeries(watch)})
 	check("same", watch, "1", `[{"name":"City Watch","position":4},{"name":"Discworld","position":8}]`)
-	add("case", disc, 8, `[{"name":"City Watch","position":1}]`)
-	edit("case", BookEdit{Set: setSeries("city watch")})
-	check("case", "city watch", "8", `[{"name":"City Watch","position":1}]`)
+	add("respelled", disc, 8, `[{"name":"City Watch","position":1}]`)
+	edit("respelled", BookEdit{Set: setSeries("discworld")})
+	check("respelled", "discworld", "8", `[{"name":"City Watch","position":1}]`)
 	add("blank", disc, 8, `[{"name":"City Watch","position":1}]`)
 	edit("blank", BookEdit{Set: setSeries("")})
 	check("blank", "", "8", `[{"name":"City Watch","position":1}]`)

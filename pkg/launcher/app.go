@@ -223,12 +223,15 @@ func Run(ctx context.Context, opts Options) error {
 		log.Warn("settle interrupted imports failed", "err", err)
 	}
 	// Books indexed before a series' title gave its untagged books their
-	// position get it now, once (a scan leaves unchanged books alone).
-	if n, err := cat.PlaceByTitles(ctx); err != nil {
-		log.Warn("placing books by their titles failed", "err", err)
-	} else if n > 0 {
-		log.Info("placed books in their series by their titles", "books", n)
-	}
+	// position get it now, once (a scan leaves unchanged books alone); in the
+	// background, beside the startup scan, so the listener doesn't wait on it.
+	go func() {
+		if n, err := cat.PlaceByTitles(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("placing books by their titles failed", "err", err)
+		} else if n > 0 {
+			log.Info("placed books in their series by their titles", "books", n)
+		}
+	}()
 	go retention(ctx, cat, authSvc, a.SessionRetention, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	a.StartChapterChecks(ctx)

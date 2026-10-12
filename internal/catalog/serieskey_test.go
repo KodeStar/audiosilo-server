@@ -221,17 +221,25 @@ func TestPlaceByTitles(t *testing.T) {
 	if b, _ := c.GetBookByPath(ctx, lib, "Tagged"); b.SeriesIndex != 7 {
 		t.Fatalf("tagged position = %v, want 7", b.SeriesIndex)
 	}
-	// Rows from before the rule: the pass places them, once.
-	if _, err := c.db.ExecContext(ctx, `UPDATE books SET series_index = 0 WHERE rel_path IN (?, ?)`, monsterPath(4), monsterPath(10)); err != nil {
+	// A match that replaced the title (without its number) and gave no position:
+	// the scanned title still numbers it.
+	if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib, RelPath: "Foo/4", Title: "Foo 4: The Bar", Series: "Foo", AddedAt: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []int{2, 0} {
+	if err := c.EditBook(ctx, lib, "Foo/4", BookEdit{Source: SourceCommunity, Set: map[string]string{FieldTitle: "The Bar", FieldASIN: "B000000099"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Rows from before the rule: the pass places them, once.
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET series_index = 0 WHERE rel_path IN (?, ?, ?)`, monsterPath(4), monsterPath(10), "Foo/4"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []int{3, 0} {
 		n, err := c.PlaceByTitles(ctx)
 		if err != nil || n != want {
 			t.Fatalf("PlaceByTitles = %d, %v; want %d", n, err, want)
 		}
 	}
-	for path, want := range map[string]float64{monsterPath(4): 4, monsterPath(10): 10, "Disc/8": 8} {
+	for path, want := range map[string]float64{monsterPath(4): 4, monsterPath(10): 10, "Disc/8": 8, "Foo/4": 4} {
 		if b, _ := c.GetBookByPath(ctx, lib, path); b.SeriesIndex != want {
 			t.Errorf("%s at %v, want %v", path, b.SeriesIndex, want)
 		}

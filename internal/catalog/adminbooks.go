@@ -240,7 +240,7 @@ func (c *Catalog) spellSeries(ctx context.Context, f *BookFilter, every bool) er
 		libs = []int64{f.LibraryID}
 	}
 	var err error
-	f.series, err = c.spellingsOf(ctx, libs, f.Series)
+	f.series, err = c.spellingsOf(ctx, libs, true, f.Series)
 	return err
 }
 

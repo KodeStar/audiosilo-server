@@ -5,7 +5,7 @@ import type { AdminBook, BookMeta, BookRef, SeriesCount } from '@/api/types';
 import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail, books, series } from '@/test/library-fixtures';
-import { seriesKey } from './series-model';
+import { seriesKey } from '@/lib/series-key';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 

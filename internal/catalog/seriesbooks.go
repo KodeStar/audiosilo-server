@@ -27,8 +27,8 @@ const maxSeriesBooks = 1000
 // Expanse!". They come in placement preference order: library sort order, then
 // path. Files and chapters are not loaded (the list shape).
 //
-// Index-friendly queries: the spellings of the caller's libraries
-// (Catalog.spellings, never a table row) that match, then the books of exactly those spellings within scopes,
+// Index-friendly queries: the main series spellings of the caller's libraries
+// (Catalog.spellings without the lists, never a table row) that match, then the books of exactly those spellings within scopes,
 // then the books in a matching series only through their more_series
 // (seriesMembers). The first is not narrowed by the share's paths, since a
 // spelling is only compared, never returned; the others are, so a book outside
@@ -49,7 +49,8 @@ func (c *Catalog) SeriesBooks(ctx context.Context, scopes []Scope, names []strin
 	for i, s := range scopes {
 		libs[i] = s.LibraryID
 	}
-	spelled, err := c.spellings(ctx, libs, asked...)
+	// The main series only: seriesMembers reads the lists itself.
+	spelled, err := c.spellings(ctx, libs, false, asked...)
 	if err != nil {
 		return nil, err
 	}
@@ -193,11 +194,16 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, want map[st
 // is true whenever next is found.
 func (c *Catalog) NextInSeries(ctx context.Context, libraryID int64, book *Book, scope Scope) (next *Book, numbered bool, err error) {
 	all := book.AllSeries()
-	names := make([]string, len(all))
-	for i, s := range all {
-		names[i] = s.Name
+	var names []string // the series it has a position in: the only ones asked
+	for _, s := range all {
+		if s.Position > 0 {
+			names = append(names, s.Name)
+		}
 	}
-	spelled, err := c.spellings(ctx, []int64{libraryID}, names...)
+	if len(names) == 0 {
+		return nil, false, nil // unnumbered everywhere: no order to follow
+	}
+	spelled, err := c.spellings(ctx, []int64{libraryID}, true, names...)
 	if err != nil {
 		return nil, false, err
 	}

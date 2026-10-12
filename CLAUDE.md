@@ -789,7 +789,7 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
-  An admin edit that makes the main series a name its `more_series` lists (exactly) -
+  An admin edit that makes the main series a series its `more_series` lists (any spelling, `sameSeries`) -
   by setting `series`, or by reverting it when the series the revert leaves
   (`newMainSeries`: `loadLayers` + `resolve` without the series override) is listed -
   without setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`,
@@ -851,9 +851,9 @@ admin overrides; see Metadata overrides below).
   merged; `SeriesList` and `normalizeMoreSeries` keep a series once however a list spells it again) and names the group `seriesName`: the spelling its
   matched books use most, else the most books', ties alphabetical. Every series filter takes
   every spelling: `Catalog.spellings` reads the index's spellings of the asked series (the
-  distinct `(library_id, series)` of idx_books_series in order, plus the more_series names of the
-  books with a list; about 20 ms over 50,000 books, 9 in one library; `SeriesBooks` reads the rails'
-  spellings with it too) into `seriesNames`, which `seriesFilter` (IN
+  distinct `(library_id, series)` of idx_books_series in order, plus, unless the caller matches main
+  series only (`SeriesBooks`, the rails' spellings; `ListBooks` without memberships), the more_series
+  names of the books with a list; about 20 ms over 50,000 books, 9 in one library) into `seriesNames`, which `seriesFilter` (IN
   lists; with memberships the FTS series column narrows by an OR of every spelling's phrase),
   `seriesOrderKeys` (literals), `numberedSeriesMembers` (the next book) and `positionIn` (Go, by key)
   use, so the SQL and a keyset cursor agree. `ListSeriesBooks` reads the spellings once per batch,
@@ -862,9 +862,10 @@ admin overrides; see Metadata overrides below).
   `bookLayers.scannedFields` gives a book with a series and no position the one its title gives
   (`titlePosition`, `metadata.PositionInTitle`), read as the title's source (path when the title is
   the path's, else tag); an edit or a tag's own position wins. Rows indexed before the rule get it
-  from `Catalog.PlaceByTitles`, which the launcher runs at start, once per database (server_state
-  `title_positions`): the books with a series, no position and a digit in the title, re-resolved by
-  `refreshEffective` in batches of 250.
+  from `Catalog.PlaceByTitles`, which the launcher runs in the background at start, once per database
+  (server_state `title_positions`): the books with a series, no position and a digit in the row's, the
+  snapshot's or the path's title (a match may have replaced the row's) whose resolve gives one,
+  re-resolved by `refreshEffective` in batches of 250.
 - **Admin catalog API** (`api/handlers_catalog.go`, admin-only, transport-only):
   `GET /admin/books` (keyset over the named orderings in `catalog.adminSorts`, sorted and
   paged on ids before the per-row columns are computed; the cursor names its ordering;

@@ -956,7 +956,7 @@
   "series.spine": "Nr. {{index}} {{title}}",
   "series.gap": "Nr. {{index}} {{title}}: nicht in deiner Bibliothek",
   "series.spinesLabel": "Bücher der Reihe {{name}}",
-  "series.filter": "Serie oder Autor finden",
+  "series.filter": "Reihe oder Autor finden",
   "series.error": "Reihen konnten nicht geladen werden",
   "series.booksError": "Die Bücher dieser Reihen konnten nicht geladen werden",
   "series.empty.title": "Noch keine Reihen",

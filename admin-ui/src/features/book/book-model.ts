@@ -12,6 +12,7 @@ import {
   type OverrideField,
 } from '@/api/types';
 import type { Phrase } from '@/lib/phrase';
+import { sameSeries } from '@/lib/series-key';
 import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER } from './field-rules';
 import { moreSeriesRefs, moreSeriesText, parseMoreSeries } from './more-series';
 
@@ -142,8 +143,8 @@ export interface SeriesSwap {
 
 /**
  * What making `name` the main series does to the saved other series, as the
- * server's catalog.seriesSwap does it: when name is one of them (by its exact
- * name) and not the saved main series, the list with its entry replaced by the
+ * server's catalog.seriesSwap does it: when name is one of them (in any
+ * spelling, sameSeries) and not the saved main series, the list with its entry replaced by the
  * old main series at its saved position (left out when there was none; an entry
  * already naming it gives way), and name's position there as the series_index.
  * undefined when there is nothing to swap (or the old main can't be listed).
@@ -154,10 +155,10 @@ export function seriesSwap(
 ): SeriesSwap | undefined {
   const old = fields.series.value;
   const list = moreSeriesRefs(fields.more_series.value);
-  const at = list.findIndex((s) => s.name === name);
-  if (!name || name === old || at < 0) return undefined;
+  const at = list.findIndex((s) => sameSeries(s.name, name));
+  if (!name || sameSeries(name, old) || at < 0) return undefined;
   const oldMain = old ? [{ name: old, position: Number(fields.series_index.value) || 0 }] : [];
-  const swapped = list.flatMap((s, i) => (i === at ? oldMain : s.name === old ? [] : [s]));
+  const swapped = list.flatMap((s, i) => (i === at ? oldMain : sameSeries(s.name, old) ? [] : [s]));
   const more = parseMoreSeries(JSON.stringify(swapped));
   if (more.error) return undefined;
   return {

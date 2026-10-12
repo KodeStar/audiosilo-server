@@ -24,6 +24,8 @@ func TestPositionInTitle(t *testing.T) {
 		{"The Expanse Vol. 2 - Caliban's War", "The Expanse", 2},
 		{"Discworld #8: Guards! Guards!", "Discworld", 8},
 		{"Thé Expanse 7 (Unabridged)", "the expanse", 7},
+		{"Café 3", "Café", 3}, // a decomposed title (NFD, a macOS file name)
+		{"Café 4", "Café", 4},
 		{"Expanse 2.5: The Churn", "Expanse", 2.5},
 		{"Bobiverse 3", "Bobiverse", 3},
 		{"Bobiverse 4 \u2013 Heaven's River", "Bobiverse", 4},

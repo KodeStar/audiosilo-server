@@ -642,7 +642,7 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 	}
 	if opt.Series != "" {
 		if opt.series == nil {
-			n, err := c.spellingsOf(ctx, []int64{opt.LibraryID}, opt.Series)
+			n, err := c.spellingsOf(ctx, []int64{opt.LibraryID}, opt.Memberships, opt.Series)
 			if err != nil {
 				return nil, err
 			}
@@ -725,7 +725,7 @@ type SeriesPage struct {
 // indexed query per name; the caller bounds the names.
 func (c *Catalog) ListSeriesBooks(ctx context.Context, libraryID int64, names []string, limit int, scope *Scope) ([]SeriesPage, error) {
 	out := make([]SeriesPage, 0, len(names))
-	spelled, err := c.spellings(ctx, []int64{libraryID}, names...)
+	spelled, err := c.spellings(ctx, []int64{libraryID}, true, names...)
 	if err != nil {
 		return nil, err
 	}

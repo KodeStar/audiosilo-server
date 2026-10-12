@@ -8,6 +8,7 @@ import type {
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
 import { hashString } from '@/lib/monogram';
+import { sameSeries, seriesKey } from '@/lib/series-key';
 
 // The Series screen's pure parts: finding series by name or author, matching a
 // book's community series rail to a local series, placing the owned books on
@@ -52,17 +53,6 @@ export interface Placed {
 export type Spine = ({ kind: 'book' } & Placed) | { kind: 'gap'; entry: RailEntry };
 
 const samePosition = (a: number, b: number) => Math.abs(a - b) < 1e-6;
-
-/**
- * A series name for comparison: no case, accents, punctuation or spacing. The
- * server's match.SeriesKey, by which it groups a series' spellings into one.
- */
-export function seriesKey(name: string): string {
-  return name
-    .normalize('NFKD')
-    .replace(/[^\p{L}\p{N}]/gu, '')
-    .toLowerCase();
-}
 
 /**
  * The series whose name or author holds the search, compared as series keys
@@ -168,12 +158,11 @@ export function railEntries(rail: MetaSeries): RailEntry[] {
 /**
  * A book's position in the named series (its main series' index without a name):
  * a book in several series has its own position in each (series_list). The
- * series is matched by seriesKey, as the server groups its spellings.
+ * series is matched as the server groups its spellings (sameSeries).
  */
 export function positionIn(book: AdminBook, series?: string): number {
   if (series === undefined) return book.series_index;
-  const key = seriesKey(series);
-  return book.series_list.find((s) => seriesKey(s.name) === key)?.position ?? 0;
+  return book.series_list.find((s) => sameSeries(s.name, series))?.position ?? 0;
 }
 
 /**

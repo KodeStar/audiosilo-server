@@ -146,11 +146,12 @@ type seriesNames struct {
 
 // spellings returns, by seriesKey, how the index spells each of names' series in
 // libraries (none: every library): the distinct series values (idx_books_series
-// in order, no table row) and the more_series names of the books that have a
-// list (idx_books_more_series). A name the index doesn't hold is absent.
-// Spellings are only compared, never returned, so the share's paths don't
-// narrow them.
-func (c *Catalog) spellings(ctx context.Context, libraries []int64, names ...string) (map[string]seriesNames, error) {
+// in order, no table row) and, with more, the more_series names of the books
+// that have a list (idx_books_more_series, reading each list; a caller that
+// matches main series only leaves it off). A name the index doesn't hold is
+// absent. Spellings are only compared, never returned, so the share's paths
+// don't narrow them.
+func (c *Catalog) spellings(ctx context.Context, libraries []int64, more bool, names ...string) (map[string]seriesNames, error) {
 	want := map[string]bool{}
 	for _, n := range names {
 		want[seriesKey(n)] = true
@@ -164,10 +165,12 @@ func (c *Catalog) spellings(ctx context.Context, libraries []int64, names ...str
 	if err != nil {
 		return nil, err
 	}
-	more, err := c.distinctNames(ctx, `SELECT DISTINCT b.library_id, json_extract(j.value, '$.name')
-		  FROM books b, json_each(b.more_series) j WHERE b.more_series <> '[]'`+lib, args)
-	if err != nil {
-		return nil, err
+	var listed []string
+	if more {
+		if listed, err = c.distinctNames(ctx, `SELECT DISTINCT b.library_id, json_extract(j.value, '$.name')
+			  FROM books b, json_each(b.more_series) j WHERE b.more_series <> '[]'`+lib, args); err != nil {
+			return nil, err
+		}
 	}
 	out := map[string]seriesNames{}
 	add := func(names []string, list func(*seriesNames) *[]string) {
@@ -184,7 +187,7 @@ func (c *Catalog) spellings(ctx context.Context, libraries []int64, names ...str
 		}
 	}
 	add(main, func(n *seriesNames) *[]string { return &n.main })
-	add(more, func(n *seriesNames) *[]string { return &n.more })
+	add(listed, func(n *seriesNames) *[]string { return &n.more })
 	return out, nil
 }
 
@@ -200,8 +203,8 @@ func (c *Catalog) distinctNames(ctx context.Context, q string, args []any) ([]st
 }
 
 // spellingsOf is spellings for one series.
-func (c *Catalog) spellingsOf(ctx context.Context, libraries []int64, name string) (seriesNames, error) {
-	m, err := c.spellings(ctx, libraries, name)
+func (c *Catalog) spellingsOf(ctx context.Context, libraries []int64, more bool, name string) (seriesNames, error) {
+	m, err := c.spellings(ctx, libraries, more, name)
 	return m[seriesKey(name)], err
 }
 
