@@ -107,15 +107,15 @@ internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go
 internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
-internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values)
+internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below)
 internal/chapteralign/ fits a community recording's chapter list onto a book's own audio (pure, no I/O): anchors by title + time, places the rest in proportion, snaps each to its pause (an injected Prober); classifies fill/titles/refine/restructure/same or why not (length_mismatch, structure_mismatch, crosses_files). testdata/mythos is a real 34-vs-174-chapter golden case
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
 internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
 internal/pool/        Each: work over a list a few items at a time (the background jobs that wait on the community service share it)
-internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
+internal/matchrun/    bulk community matching (Health > Not matched): a background run matches every unmatched book (or repicks community ASINs for the preferred marketplace, or refreshes the details of books that have an ASIN/ISBN by it), records each book's best candidate for review, and applies the admin's picks under a scope (plan.go is the one statement of what each scope writes)
 internal/importer/    listening imports from Audiobookshelf (admin, v1): the read-only ABS client (abs.go: http/https only, same-host redirects, /status identifies ABS before the token is sent, size caps, timeouts; no private-address block - the routes are admin-only), the normalized payload, the path/ASIN/ISBN/title matcher (match.go), the pure planner (plan.go) and the background fetch/review/apply (service.go); abstest/ is a fake ABS serving recorded 2.37.1 responses (tests only)
 internal/toolfetch/   on-demand ffmpeg/ffprobe download+cache (<data>/tools) when none is local; Version reads a tool's -version
 internal/metamirror/  metadata mirror mode: the runner keeping a local copy of the community metadata database in <data>/meta-mirror/ (audiosilo-meta's pkg/release download, pkg/query handler over it; see "Mirror mode" below)
@@ -472,6 +472,36 @@ admin overrides; see Metadata overrides below).
   work listed at two positions of one series is now one rail rather than two
   (`TestEnrichRepeatedMembershipIsOneRail`). Server-side because shipped players
   lag.
+  **Series rules** (`meta/seriesrules.go`): which of a work's series a book of it
+  is in. Never a variant reading order (`ordering_of`), a translation of another of
+  the work's series (`translation_of`; unless that one's derived `language` differs
+  from the work's) or a series whose derived `language` differs from the work's
+  (primary subtags; unknown agrees); an EDITION - a series named
+  exactly like another of the work's plus a bracketed qualifier or a "narrated by"
+  tail ("Discworld (abridged)", "Harry Potter (Full-Cast Editions)") - only for the
+  recordings its qualifier names (`editionHolds`: abridged, full cast = >= 4
+  narrators or one named "Full Cast", the named narrator; "(Unabridged)", a
+  language edition or an ordering note hold none; "narrated by" after a spaced dash
+  or a colon). Editions are read from the name
+  because the community API links no series to a recording. A name that only
+  extends another ("Discworld: Tiffany Aching") is a series of its own. A match
+  candidate's `series` is the work's series every recording is in, and each
+  recording's additive `series` the book's list as that recording, its own edition
+  first (`workSeries.of`), which `matchrun.Propose` and the match dialog's
+  `communityValues` read (so the console has no copy of the rule); series carry an
+  additive `id`. The facts come from `series/{id}`, each series once per request,
+  concurrently through `workSem`, at most `maxSeriesFacts` per match within
+  `seriesFactsTimeout` (none for a work they can't rule on: no language, one
+  series), cached in the `s:` key space (quota `maxSeriesEntries`); an unreadable
+  record drops nothing, and a repick (`MatchQuery.NoSeries`) reads none. Rails take
+  the rules too (`railMains`, before the `maxSeriesRails` cap): an edition named for
+  a kind of recording only for the recording the lookup named (or the work's only
+  one; never `pickRecording`'s first-recording fallback), then first (the book's main
+  series, as a match makes it), so the cap goes to the book's series (a Discworld novel in six series kept its Tiffany
+  Aching rail); other editions keep their place (pre-v7 rails unchanged); a series
+  the cache already knows is foreign is left out before the cap, and a main view
+  whose fetched record is foreign once read, handing its slot to the next family (at
+  most `maxForeignRails` times; a translation judged with every record read).
   **Persistent meta cache** (`meta_cache`, migration 0024): `meta.Store` is a
   SQLite second level behind the memory cache (`catalog/metacache.go`, adapted to
   `meta.Store` by `api.metaStore`, which logs failures; best effort, a failure
@@ -609,7 +639,7 @@ admin overrides; see Metadata overrides below).
   (`catalog.NextInSeries`: every series of `Book.AllSeries()` with a position, main
   first; per series one query
   (`laterSeriesMembers`) over its numbered members in scope - same library, books in
-  exactly that series by their main series or a more_series entry, at their
+  that series (any spelling: `seriesNames`, see Series spellings) by their main series or a more_series entry, at their
   position IN THAT SERIES - those above the book's position first, then by
   position, ties by path (unbounded: SQLite sorts every member first anyway):
   read in that order, the first row above that doesn't step back is the next book,
@@ -775,7 +805,7 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
-  An admin edit that makes the main series a name its `more_series` lists (exactly) -
+  An admin edit that makes the main series a series its `more_series` lists (any spelling, `sameSeries`) -
   by setting `series`, or by reverting it when the series the revert leaves
   (`newMainSeries`: `loadLayers` + `resolve` without the series override) is listed -
   without setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`,
@@ -829,6 +859,29 @@ admin overrides; see Metadata overrides below).
   chapter titles) and re-resolves them in batches of 250, flushed every 500 during the scan and
   on a Stop; no re-index. Until then `bookLayers.pathBaseline` resolves a snapshot against the
   baseline it was read with, so a path-first library still drops the folder as a series.
+- **Series spellings (`catalog/moreseries.go`)**: a series is every name with one
+  `seriesKey` (`match.SeriesKey`, the rails' key: case, accents, punctuation and spacing
+  aside; a name with no letter or number is its own key), so "He Who Fights With Monsters",
+  "...with..." and "...WIth..." are one series and nothing fuzzier merges ("The Expanse" and
+  "Expanse" stay two). `catalog.Series` groups by it (counts, positions, lengths and authors
+  merged; `SeriesList` and `normalizeMoreSeries` keep a series once however a list spells it again) and names the group `seriesName`: the spelling its
+  matched books use most, else the most books', ties alphabetical. Every series filter takes
+  every spelling: `Catalog.spellings` reads the index's spellings of the asked series (the
+  distinct `(library_id, series)` of idx_books_series in order, plus, unless the caller matches main
+  series only (`SeriesBooks`, the rails' spellings; `ListBooks` without memberships), the more_series
+  names of the books with a list; about 20 ms over 50,000 books, 9 in one library) into `seriesNames`, which `seriesFilter` (IN
+  lists; with memberships the FTS series column narrows by an OR of every spelling's phrase),
+  `seriesOrderKeys` (literals), `numberedSeriesMembers` (the next book) and `positionIn` (Go, by key)
+  use, so the SQL and a keyset cursor agree. `ListSeriesBooks` reads the spellings once per batch,
+  `BookFilter` (`spellSeries`) across every library (the library facet counts the others). The JSON
+  is unchanged: an older player sees fewer, fuller series. **A position from the title**:
+  `bookLayers.scannedFields` gives a book with a series and no position the one its title gives
+  (`titlePosition`, `metadata.PositionInTitle`), read as the title's source (path when the title is
+  the path's, else tag); an edit or a tag's own position wins. Rows indexed before the rule get it
+  from `Catalog.PlaceByTitles`, which the launcher runs in the background at start, once per database
+  (server_state `title_positions`): the books with a series, no position and a digit in the row's, the
+  snapshot's or the path's title (a match may have replaced the row's) whose resolve gives one,
+  re-resolved by `refreshEffective` in batches of 250.
 - **Admin catalog API** (`api/handlers_catalog.go`, admin-only, transport-only):
   `GET /admin/books` (keyset over the named orderings in `catalog.adminSorts`, sorted and
   paged on ids before the per-row columns are computed; the cursor names its ordering;
@@ -887,16 +940,39 @@ admin overrides; see Metadata overrides below).
   via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep
   checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,
   never a position beside another series, a cover only for a book with none), which
-  also computes each item's `changes` for the review, so the two can't disagree.
+  also computes each item's `changes` for the review, so the two can't disagree. `Plan`
+  returns `Writes` (set, revert, cover): overwrite REPLACES a book's series with the
+  community's for its recording (the series rules), reverting a `series`/`series_index`/
+  `more_series` value the community wrote earlier that it no longer offers (a series it
+  deleted or merged, an edition or translation the rules leave out) back to the files'
+  (a position only beside the files' series, other series only when none are offered);
+  fill and ids never revert; an admin's own series stay, and a community edit's revert
+  deletes only community rows (`editTx`), so an edit made since the run looked survives
+  a revert (a set still overwrites it, as the match dialog's ticked edited field must).
+  `Writes.after` is the one rule for a field's value once written (both `planSeries`
+  and the review use it). A refresh records only books a scope would change (as a
+  repick records only books with a new ASIN), so a clean library leaves no items. A refresh
+  proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:..."), and
+  applying it is a no-op for a book that no longer has it (matched again since).
+  Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
+  changes the book's series, which the review shows as "old -> new". A retired work slug
+  is a redirect the client follows, so the names written are the merged record's.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN. A repick only touches an
-  ASIN whose override is `source=community`. `InterruptMatchRuns` (launcher, at
+  ASIN whose override is `source=community`. A **refresh** run (`mode: "refresh"`,
+  `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each book up by its own
+  identifier alone (the ISBN when the ASIN finds nothing) and takes that record as
+  confident (`identifier_unknown` = no match, never a fuzzy work); it fills or
+  overwrites the details but never writes an identifier (`planFor` drops them, the
+  proposal carries none), so `matchrun.ScopesFor` (the one statement of which scopes a
+  mode takes) allows only fill/overwrite (else `ErrScope`, 400); audited
+  `book.match_refresh`. `InterruptMatchRuns` (launcher, at
   start) settles runs a stopped server left: matching -> interrupted, applying ->
   ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
   409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
   books can be matched from fresh: `catalog.ClearCommunityMatches` drops the `source=community`
   overrides and covers, rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
   runs (a library's clear: its runs, and its items in runs over every library), one transaction;
-  edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_apply|match_stop|match_clear`;
+  edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_refresh|match_apply|match_stop|match_clear`;
   `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
   `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id
   (`meta.Service.WorkIDs`: per distinct normalized identifier, first the cached enrichment's
@@ -911,7 +987,14 @@ admin overrides; see Metadata overrides below).
   and per book `failed` says its own lookup failed or ran out of time, so asking again may resolve it
   (never for a clean miss); metadata off -> 404
   `metadata_off`. The Series cards place an owned book on a community rail by this work id first and
-  fall back to `series_index` (display only: no book is changed);
+  fall back to `series_index`, then to an unheld entry its title is (`sameTitle`: numbering prefix
+  and a trailing bracketed part ignored) (display only: no book is changed). A card's rail
+  (`pickRail`) is the one named like the series (or one of its `orderings`), then one named like
+  it give or take an article or a trailing "Series", then the rail holding >= 2 and more than half
+  of the series' resolved works (never the rail named like the series' name before a colon or a dash: the parent of a
+  sub-series; ties to the smaller rail), else none: no gaps rather than another series' (the rail
+  comes from one matched book's `/meta`, so a work in more than `maxSeriesRails` real series can
+  still lack one);
   `PUT`/`DELETE /admin/libraries/{id}/cover?path=` (custom cover in the DB;
   `catalog.SetCover` enforces 5 MiB, sniffed JPEG/PNG/WebP and an indexed book), which
   `GET /libraries/{id}/cover` serves first (by the requested path, then by the book a
@@ -1560,7 +1643,7 @@ The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}
 `/narrators` (`{narrators, unknown}`) and `/series` (`{series}`) (authed,
 `libraryScope`: 403 no access, 404 unknown library; counts only the caller's
 granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
-by exact `series=`, and by `author=` / `narrator=` matching the whole credit or exactly
+by `series=` (any spelling, see Series spellings), and by `author=` / `narrator=` matching the whole credit or exactly
 one person it names (`catalog.creditFilter`: an FTS5 phrase narrows the candidates,
 the `credit_has` SQL function keeps the exact ones; `/admin/books` filters the same way).
 Books in several series (capability `series_memberships`): with `memberships=1`,
@@ -1572,7 +1655,7 @@ main one first, with its position in each; omitted otherwise).
 The first page of several series' books in one request (capability `series_books`, the
 player's Series cards) is `GET /libraries/{id}/series/books?name=A&name=B[&limit=N]` ->
 `{"series": [{name, books, next_cursor?}]}` (authed, `browseScope` like `/books`; 400 for no
-names or over `maxSeriesBatch` = 50 distinct ones). Names are verbatim, empty ones ignored
+names or over `maxSeriesBatch` = 50 distinct ones). Names come back verbatim (each finds its series in any spelling; the spellings are read once for the batch), empty ones ignored
 (`catalog.ListSeriesBooks` skips them too), duplicates answered once, entries in request
 order; each entry is exactly the page `/books?series=<name>&memberships=1&limit=N` returns
 (`ListSeriesBooks`: one `ListBooks` per name), so its `next_cursor` continues there, with

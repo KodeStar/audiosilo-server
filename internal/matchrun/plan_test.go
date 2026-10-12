@@ -3,6 +3,7 @@ package matchrun
 import (
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -55,6 +56,39 @@ func TestPropose(t *testing.T) {
 	}
 }
 
+// TestProposeSeriesForTheRecording: the series proposed are the chosen
+// recording's (an edition named for it first, as the community service's
+// candidate lists them per recording); with no recording, the work's own.
+func TestProposeSeriesForTheRecording(t *testing.T) {
+	t.Parallel()
+	hp := meta.MatchSeries{ID: "harry-potter", Name: "Harry Potter", Position: "2"}
+	cast := meta.MatchSeries{ID: "hp-full-cast", Name: "Harry Potter (Full-Cast Editions)", Position: "2"}
+	c := meta.MatchCandidate{
+		WorkID: "chamber", Title: "Harry Potter and the Chamber of Secrets", Series: []meta.MatchSeries{hp},
+		Recordings: []meta.MatchRecording{{ID: "dale", Series: []meta.MatchSeries{hp}}, {ID: "cast", Series: []meta.MatchSeries{cast, hp}}},
+	}
+	for _, tc := range []struct {
+		rec              *meta.MatchRecording
+		series, moreJSON string
+	}{
+		{&c.Recordings[0], "Harry Potter", ""},
+		{nil, "Harry Potter", ""},
+		{&c.Recordings[1], "Harry Potter (Full-Cast Editions)", `[{"name":"Harry Potter","position":2}]`},
+	} {
+		p := Propose(&c, tc.rec)
+		if p.Values["series"] != tc.series || p.Values["series_index"] != "2" || p.Values["more_series"] != tc.moreJSON {
+			t.Errorf("recording %v: values = %v, want series %q more %q", tc.rec, p.Values, tc.series, tc.moreJSON)
+		}
+	}
+}
+
+// planSet is Plan's fields to set and its cover, for the tests that write no
+// revert.
+func planSet(scope string, st *catalog.MatchState, p catalog.MatchProposal) (map[string]string, bool) {
+	w := Plan(scope, st, p)
+	return w.Set, w.Cover
+}
+
 // state is a book as Plan sees it: field -> value (source tag), with overrides.
 func state(values map[string]string, edited []string, coverMissing bool) *catalog.MatchState {
 	st := &catalog.MatchState{Fields: map[string]catalog.FieldValue{}, CoverMissing: coverMissing}
@@ -94,7 +128,7 @@ func TestPlan(t *testing.T) {
 		// Overwrite replaces the tag title too, never the admin's narrator.
 		{ScopeOverwrite, []string{"asin", "description", "isbn", "published", "series", "series_index", "title"}, true},
 	} {
-		set, cover := Plan(tc.scope, st, p)
+		set, cover := planSet(tc.scope, st, p)
 		if got := keys(set); !slices.Equal(got, tc.want) || cover != tc.cover {
 			t.Errorf("%s: set %v cover %v, want %v %v", tc.scope, got, cover, tc.want, tc.cover)
 		}
@@ -102,7 +136,7 @@ func TestPlan(t *testing.T) {
 
 	// A book with a cover keeps it; a value the book already has isn't "set".
 	st = state(map[string]string{"title": "The Martian", "series": "Mars"}, nil, false)
-	set, cover := Plan(ScopeFill, st, p)
+	set, cover := planSet(ScopeFill, st, p)
 	if cover || set["title"] != "" || set["series"] != "" || set["series_index"] != "1" {
 		t.Fatalf("fill over a cover = %v %v", set, cover)
 	}
@@ -110,18 +144,18 @@ func TestPlan(t *testing.T) {
 	// A position never lands beside another series: the book's own "Red Planet"
 	// (kept by fill) has no place for Mars's "1".
 	st = state(map[string]string{"title": "The Martian", "series": "Red Planet"}, nil, false)
-	set, _ = Plan(ScopeFill, st, p)
+	set, _ = planSet(ScopeFill, st, p)
 	if _, ok := set["series_index"]; ok {
 		t.Fatalf("fill put Mars #1 beside Red Planet: %v", set)
 	}
 	// ...but overwrite, which replaces the series too, sets both.
-	set, _ = Plan(ScopeOverwrite, st, p)
+	set, _ = planSet(ScopeOverwrite, st, p)
 	if set["series"] != "Mars" || set["series_index"] != "1" {
 		t.Fatalf("overwrite = %v", set)
 	}
 	// An admin-edited series stays, and so the position stays off it.
 	st = state(map[string]string{"title": "The Martian", "series": "Red Planet"}, []string{"series"}, false)
-	set, _ = Plan(ScopeOverwrite, st, p)
+	set, _ = planSet(ScopeOverwrite, st, p)
 	if _, ok := set["series_index"]; ok || set["series"] != "" {
 		t.Fatalf("overwrite beside an edited series = %v", set)
 	}
@@ -129,7 +163,7 @@ func TestPlan(t *testing.T) {
 	// No cover on offer, no cover taken.
 	bare := p
 	bare.CoverURL = ""
-	if _, cover := Plan(ScopeFill, state(nil, nil, true), bare); cover {
+	if _, cover := planSet(ScopeFill, state(nil, nil, true), bare); cover {
 		t.Fatal("took a cover there is none of")
 	}
 }
@@ -200,7 +234,7 @@ func TestPlanSeries(t *testing.T) {
 	}
 
 	// No series yet: the work's main one, and the rest beside it.
-	set, _ := Plan(ScopeFill, state(map[string]string{"title": "Guards! Guards!"}, nil, false), p)
+	set, _ := planSet(ScopeFill, state(map[string]string{"title": "Guards! Guards!"}, nil, false), p)
 	if set["series"] != "Discworld" || set["series_index"] != "8" ||
 		set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
 		t.Fatalf("fill on no series = %v", set)
@@ -209,7 +243,7 @@ func TestPlanSeries(t *testing.T) {
 	// Filed under City Watch by its folder: fill keeps that, numbers it as City
 	// Watch numbers it (not Discworld's 8), and adds Discworld beside it.
 	st := state(map[string]string{"title": "Guards! Guards!", "series": watch}, nil, false)
-	set, _ = Plan(ScopeFill, st, p)
+	set, _ = planSet(ScopeFill, st, p)
 	if _, ok := set["series"]; ok || set["series_index"] != "1" ||
 		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]` {
 		t.Fatalf("fill on City Watch = %v", set)
@@ -218,7 +252,7 @@ func TestPlanSeries(t *testing.T) {
 	// Overwrite keeps it too (the work is in City Watch, as the match dialog
 	// offers it), numbered there.
 	st = state(map[string]string{"title": "Guards! Guards!", "series": watch, "series_index": "8"}, nil, false)
-	if set, _ := Plan(ScopeOverwrite, st, p); set["series"] != "" || set["series_index"] != "1" ||
+	if set, _ := planSet(ScopeOverwrite, st, p); set["series"] != "" || set["series_index"] != "1" ||
 		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]` {
 		t.Fatalf("overwrite on City Watch = %v", set)
 	}
@@ -228,14 +262,14 @@ func TestPlanSeries(t *testing.T) {
 	twice := Propose(&meta.MatchCandidate{WorkID: "gg", Title: "Guards! Guards!",
 		Series: []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: "Discworld", Position: "8.5"}}}, nil)
 	st = state(map[string]string{"title": "Guards! Guards!", "series": "Discworld"}, nil, false)
-	if set, _ := Plan(ScopeFill, st, twice); set["series_index"] != "8" || set["more_series"] != "" {
+	if set, _ := planSet(ScopeFill, st, twice); set["series_index"] != "8" || set["more_series"] != "" {
 		t.Fatalf("fill from a work listed twice = %v", set)
 	}
 
 	// The admin's own City Watch stays under overwrite, and its position becomes
 	// City Watch's, though the tags' 8 happens to be Discworld's.
 	st = state(map[string]string{"title": "Guards! Guards!", "series": watch, "series_index": "8"}, []string{"series"}, false)
-	if set, _ := Plan(ScopeOverwrite, st, p); set["series_index"] != "1" || set["series"] != "" {
+	if set, _ := planSet(ScopeOverwrite, st, p); set["series_index"] != "1" || set["series"] != "" {
 		t.Fatalf("overwrite beside an edited City Watch = %v", set)
 	}
 
@@ -243,19 +277,107 @@ func TestPlanSeries(t *testing.T) {
 	// say): most likely the main one spelled otherwise, so only the work's other
 	// series go beside it.
 	st = state(map[string]string{"title": "Guards! Guards!", "series": "Pratchett Discworld"}, nil, false)
-	if set, _ := Plan(ScopeFill, st, p); set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
+	if set, _ := planSet(ScopeFill, st, p); set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
 		t.Fatalf("fill beside an unlisted series = %v", set)
 	}
 
 	// The admin's own list stays, under any scope.
 	st = state(map[string]string{"title": "Guards! Guards!", "more_series": `[{"name":"Mine","position":2}]`}, []string{"more_series"}, false)
-	if set, _ := Plan(ScopeOverwrite, st, p); set["more_series"] != "" {
+	if set, _ := planSet(ScopeOverwrite, st, p); set["more_series"] != "" {
 		t.Fatalf("overwrite replaced the admin's list: %v", set)
 	}
 	// A list the book already has isn't "set".
 	st = state(map[string]string{"title": "Guards! Guards!", "series": "Discworld", "series_index": "8",
 		"more_series": `[{"name":"` + watch + `","position":1},{"name":"Omnibus","position":0}]`}, nil, false)
-	if set, _ := Plan(ScopeOverwrite, st, p); len(set) != 0 {
+	if set, _ := planSet(ScopeOverwrite, st, p); len(set) != 0 {
 		t.Fatalf("overwrite on a book that has it all = %v", set)
+	}
+}
+
+// polluted is a book an earlier match filed under every series of its work: a
+// full-cast edition as its main series and a narrator's edition beside it, all
+// written by the community (scanned: the path's "Harry Potter").
+func polluted(edited ...string) *catalog.MatchState {
+	st := state(nil, nil, false)
+	set := func(field, value, scanned string) {
+		fv := catalog.FieldValue{Value: value, Source: catalog.SourceCommunity, Scanned: scanned, Locked: true}
+		if slices.Contains(edited, field) {
+			fv.Source = catalog.SourceEdited
+		}
+		st.Fields[field] = fv
+	}
+	set("series", "Harry Potter (Full-Cast Editions)", "Harry Potter")
+	set("series_index", "2", "")
+	set("more_series", `[{"name":"Harry Potter (Narrated by Stephen Fry)","position":2}]`, "")
+	return st
+}
+
+// TestPlanOverwriteReplacesTheSeries: overwrite REPLACES a book's series with the
+// community's current ones (here: Harry Potter alone, the editions left out by
+// the series rules), reverting a series value the community wrote that it no
+// longer offers; fill and ids change nothing a book has. An admin's own series
+// stay under every scope.
+func TestPlanOverwriteReplacesTheSeries(t *testing.T) {
+	t.Parallel()
+	p := catalog.MatchProposal{Values: map[string]string{"series": "Harry Potter", "series_index": "2"}}
+
+	w := Plan(ScopeOverwrite, polluted(), p)
+	if !maps.Equal(w.Set, map[string]string{"series": "Harry Potter"}) || !slices.Equal(w.Revert, []string{"more_series"}) {
+		t.Fatalf("overwrite = set %v revert %v, want Harry Potter set and the edition reverted", w.Set, w.Revert)
+	}
+	for _, scope := range []string{ScopeFill, ScopeIDs} {
+		if w := Plan(scope, polluted(), p); !w.Empty() {
+			t.Errorf("%s = %+v, want nothing (the book has series)", scope, w)
+		}
+	}
+	// The admin's own main series stays; the community's other series still go.
+	w = Plan(ScopeOverwrite, polluted("series"), p)
+	if _, ok := w.Set["series"]; ok || !slices.Equal(w.Revert, []string{"more_series"}) {
+		t.Fatalf("edited series = set %v revert %v", w.Set, w.Revert)
+	}
+	// The admin's own other series stay too.
+	if w := Plan(ScopeOverwrite, polluted("more_series"), p); slices.Contains(w.Revert, "more_series") {
+		t.Fatalf("edited more_series reverted: %v", w.Revert)
+	}
+
+	// The community lists no series for the book any more: every series value it
+	// wrote goes, back to the files' ("Harry Potter" from the path).
+	w = Plan(ScopeOverwrite, polluted(), catalog.MatchProposal{Values: map[string]string{}})
+	if len(w.Set) != 0 || !slices.Equal(w.Revert, []string{"series", "series_index", "more_series"}) {
+		t.Fatalf("no community series = set %v revert %v", w.Set, w.Revert)
+	}
+	// A series from the files is never reverted (there is no override to drop).
+	if w := Plan(ScopeOverwrite, state(map[string]string{"series": "Discworld"}, nil, false), catalog.MatchProposal{Values: map[string]string{}}); !w.Empty() {
+		t.Fatalf("tag series = %+v, want nothing", w)
+	}
+}
+
+// TestPlanOverwriteRevertsOnlyWhatItCan: a position the community no longer
+// gives goes back to the files' only beside the series the files number (never
+// the tags' Red Planet #3 beside Mars), and a list of other series the community
+// offers that can't be stored takes none away.
+func TestPlanOverwriteRevertsOnlyWhatItCan(t *testing.T) {
+	t.Parallel()
+	community := func(scannedSeries string) *catalog.MatchState {
+		st := state(nil, nil, false)
+		st.Fields["series"] = catalog.FieldValue{Value: "Mars (Full-Cast Editions)", Source: catalog.SourceCommunity, Scanned: scannedSeries, Locked: true}
+		st.Fields["series_index"] = catalog.FieldValue{Value: "1", Source: catalog.SourceCommunity, Scanned: "3", Locked: true}
+		return st
+	}
+	unnumbered := catalog.MatchProposal{Values: map[string]string{"series": "Mars"}}
+	w := Plan(ScopeOverwrite, community("Red Planet"), unnumbered)
+	if w.Set["series"] != "Mars" || slices.Contains(w.Revert, "series_index") {
+		t.Fatalf("beside another series = set %v revert %v, want Mars set and the position kept", w.Set, w.Revert)
+	}
+	if w := Plan(ScopeOverwrite, community("Mars"), unnumbered); !slices.Contains(w.Revert, "series_index") {
+		t.Fatalf("beside the files' series = revert %v, want the files' position back", w.Revert)
+	}
+
+	st := state(map[string]string{"series": "Main"}, nil, false)
+	st.Fields["more_series"] = catalog.FieldValue{Value: `[{"name":"Old","position":1}]`, Source: catalog.SourceCommunity, Locked: true}
+	tooLong := catalog.MatchProposal{Values: map[string]string{"series": "Main",
+		"more_series": `[{"name":"` + strings.Repeat("x", 5000) + `","position":1}]`}}
+	if w := Plan(ScopeOverwrite, st, tooLong); slices.Contains(w.Revert, "more_series") {
+		t.Fatalf("a list that can't be stored = revert %v, want the book's kept", w.Revert)
 	}
 }

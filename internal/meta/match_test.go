@@ -566,3 +566,27 @@ func TestMatchParamsBoundsEachValue(t *testing.T) {
 		}
 	}
 }
+
+// TestCandidatesFollowARetiredSlug: a work id the community has retired (merged
+// into another) answers with a redirect, which is followed, so the candidate -
+// and the series a refresh writes from it - is the record it was merged into.
+func TestCandidatesFollowARetiredSlug(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/works/match", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"id":"old-slug","score":100,"reasons":{"identifier":"asin"}}]}`))
+	})
+	mux.HandleFunc("GET /api/v1/works/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") == "old-slug" {
+			http.Redirect(w, r, "/api/v1/works/new-slug", http.StatusMovedPermanently)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"new-slug","title":"T","authors":[],"series":[{"id":"merged","name":"Merged Series","position":"3"}],"recordings":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	cands, err := NewService(srv.URL, nil).Candidates(context.Background(), MatchQuery{Title: "T", BookASIN: "B0OLD00001"})
+	if err != nil || len(cands) != 1 || cands[0].WorkID != "new-slug" || len(cands[0].Series) != 1 || cands[0].Series[0].Name != "Merged Series" {
+		t.Fatalf("candidates = %+v %v, want the merged record", cands, err)
+	}
+}

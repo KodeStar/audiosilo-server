@@ -31,8 +31,15 @@ const (
 	ErrCodeInternal    = "internal"
 )
 
+// DetailIdentifierUnknown is a refresh item's detail when the community doesn't
+// know the book's ASIN or ISBN.
+const DetailIdentifierUnknown = "identifier_unknown"
+
 // ErrBusy is a start or apply asked while a run is working: one at a time.
 var ErrBusy = errors.New("a match run is already working")
+
+// ErrScope is an apply naming a scope its run's mode doesn't take (ScopesFor).
+var ErrScope = errors.New("the scope doesn't apply to this match run")
 
 // Matcher finds the community works a book might be (meta.Service.Candidates).
 type Matcher interface {
@@ -70,8 +77,8 @@ func New(cat *catalog.Catalog, matcher Matcher, saveCover CoverSaver, enabled fu
 }
 
 // StartOptions is what a run matches: the books of one library (0 = every
-// library), in mode (catalog.MatchModeMatch or MatchModeRepick), preferring
-// region's ASINs, for the admin userID.
+// library), in mode (catalog.MatchModeMatch, MatchModeRepick or
+// MatchModeRefresh), preferring region's ASINs, for the admin userID.
 type StartOptions struct {
 	LibraryID int64
 	Mode      string
@@ -92,9 +99,12 @@ func (r *Runner) Start(ctx, base context.Context, o StartOptions) (*catalog.Matc
 		books []catalog.Book
 		err   error
 	)
-	if o.Mode == catalog.MatchModeRepick {
+	switch o.Mode {
+	case catalog.MatchModeRepick:
 		books, err = r.cat.CommunityASINBooks(ctx, o.LibraryID)
-	} else {
+	case catalog.MatchModeRefresh:
+		books, err = r.cat.MatchedBooks(ctx, o.LibraryID)
+	default:
 		books, err = r.cat.UnmatchedBooks(ctx, o.LibraryID)
 	}
 	if err != nil {
@@ -230,14 +240,16 @@ func (r *Runner) match(ctx context.Context, runID int64, o StartOptions, books [
 // community service's failure, if that's what the item records.
 func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book) (*catalog.MatchRunItem, error) {
 	item := &catalog.MatchRunItem{LibraryID: b.LibraryID, Path: b.RelPath, Proposal: catalog.MatchProposal{Values: map[string]string{}}}
-	if o.Mode == catalog.MatchModeRepick {
+	switch o.Mode {
+	case catalog.MatchModeRepick:
 		return r.repickBook(ctx, o.Region, b, item)
+	case catalog.MatchModeRefresh:
+		return r.refreshBook(ctx, o.Region, b, item)
 	}
 	q := QueryFor(b, o.Region)
 	q.Limit = bulkCandidates
-	cands, err := r.matcher.Candidates(ctx, q)
+	cands, err := r.candidates(ctx, q, item)
 	if err != nil {
-		item.Outcome, item.Detail = catalog.OutcomeError, ErrCodeUnavailable
 		return item, err
 	}
 	if len(cands) > 0 {
@@ -247,13 +259,22 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 	return item, nil
 }
 
+// candidates asks the community service for q's candidates, marking item as the
+// service's failure when it fails.
+func (r *Runner) candidates(ctx context.Context, q meta.MatchQuery, item *catalog.MatchRunItem) ([]meta.MatchCandidate, error) {
+	cands, err := r.matcher.Candidates(ctx, q)
+	if err != nil {
+		item.Outcome, item.Detail = catalog.OutcomeError, ErrCodeUnavailable
+	}
+	return cands, err
+}
+
 // repickBook looks the book's ASIN up: when the recording it names sells in the
 // preferred marketplace under another ASIN, that is the item (confident: it is
 // the same recording); else there is nothing to record.
 func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
-	cands, err := r.matcher.Candidates(ctx, meta.MatchQuery{ASIN: b.ASIN, Region: region, Limit: 1})
+	cands, err := r.candidates(ctx, meta.MatchQuery{ASIN: b.ASIN, Region: region, Limit: 1, NoSeries: true}, item)
 	if err != nil {
-		item.Outcome, item.Detail = catalog.OutcomeError, ErrCodeUnavailable
 		return item, err
 	}
 	if region == "" || len(cands) == 0 || cands[0].RecordingID == "" {
@@ -277,9 +298,60 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 	return item, nil
 }
 
+// refreshBook looks the book up by its own ASIN or ISBN alone: the record it
+// names is the book (confident, whatever the score), its recording the one the
+// identifier resolved to. The lookup takes the ASIN when there is one, so an ISBN
+// beside an ASIN the community doesn't know gets a look of its own. An identifier
+// the community doesn't know is no match: a book that names its record is never
+// offered another by title.
+func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book, item *catalog.MatchRunItem) (*catalog.MatchRunItem, error) {
+	q := meta.MatchQuery{ASIN: b.ASIN, ISBN: b.ISBN, Duration: b.Duration, Region: region, Limit: 1}
+	cands, err := r.candidates(ctx, q, item)
+	if err == nil && len(cands) == 0 && q.ASIN != "" && q.ISBN != "" {
+		q.ASIN = ""
+		cands, err = r.candidates(ctx, q, item)
+	}
+	if err != nil {
+		return item, err
+	}
+	if len(cands) == 0 {
+		item.Outcome, item.Detail = catalog.OutcomeNone, DetailIdentifierUnknown
+		return item, nil
+	}
+	c := &cands[0]
+	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
+	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region))
+	// The book keeps its own identifiers (switching marketplace is a repick's):
+	// a proposal without them writes none, and the review shows none of the
+	// community's (another marketplace's ASIN, say) as if applying set them.
+	delete(item.Proposal.Values, catalog.FieldASIN)
+	delete(item.Proposal.Values, catalog.FieldISBN)
+	item.Proposal.ASINRegion = ""
+	item.Proposal.FoundBy = "isbn:" + catalog.CleanOverride(catalog.FieldISBN, q.ISBN)
+	if q.ASIN != "" {
+		item.Proposal.FoundBy = "asin:" + catalog.CleanOverride(catalog.FieldASIN, q.ASIN)
+	}
+	// A book neither scope would change is up to date: nothing to record (most
+	// of a matched library, whose proposals would only fill the review).
+	st, err := r.cat.BookMatchState(ctx, b.LibraryID, b.RelPath)
+	if err != nil {
+		if !errors.Is(err, catalog.ErrNotFound) && ctx.Err() == nil {
+			r.log.Warn("load book for match refresh failed", "library", b.LibraryID, "path", b.RelPath, "err", err)
+		}
+		return nil, nil // gone meanwhile, or unreadable: nothing to offer now
+	}
+	for _, scope := range ScopesFor(catalog.MatchModeRefresh) {
+		if !Plan(scope, st, item.Proposal).Empty() {
+			return item, nil
+		}
+	}
+	return nil, nil
+}
+
 // ApplyOptions is what an apply writes: the run's confident items less Exclude,
-// plus the Include items (a "review" item the admin chose), under Scope (a
-// repick run's scope is its ASIN, whatever this says), as UserID.
+// plus the Include items (a "review" item the admin chose), under Scope (one of
+// ScopesFor the run's mode; a repick run's scope is its ASIN, whatever this says),
+// as UserID.
 type ApplyOptions struct {
 	Scope   string
 	Include []int64
@@ -289,7 +361,7 @@ type ApplyOptions struct {
 
 // Apply starts applying a ready run in the background, under base, returning the
 // run as it starts. ErrBusy while a run is working; catalog.ErrRunNotReady when
-// this one isn't ready.
+// this one isn't ready; ErrScope for a scope its mode doesn't take.
 func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (*catalog.MatchRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -302,6 +374,9 @@ func (r *Runner) Apply(ctx, base context.Context, runID int64, o ApplyOptions) (
 	}
 	if run.Status != catalog.MatchReady {
 		return nil, catalog.ErrRunNotReady
+	}
+	if scopes := ScopesFor(run.Mode); scopes != nil && !slices.Contains(scopes, o.Scope) {
+		return nil, ErrScope
 	}
 	items, err := r.cat.MatchItemsToApply(ctx, runID, o.Include, o.Exclude)
 	if err != nil {
@@ -364,12 +439,13 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 		}
 		return catalog.ItemFailed, "edit_failed"
 	}
-	set, cover := planFor(mode, o.Scope, st, it.Proposal)
-	if len(set) == 0 && !cover {
+	w := planFor(mode, o.Scope, st, it.Proposal)
+	if w.Empty() {
 		return catalog.ItemSkipped, "nothing_to_change"
 	}
-	if len(set) > 0 {
-		edit := catalog.BookEdit{Set: set, Source: catalog.SourceCommunity, UserID: o.UserID}
+	edits := len(w.Set) > 0 || len(w.Revert) > 0
+	if edits {
+		edit := catalog.BookEdit{Set: w.Set, Revert: w.Revert, Source: catalog.SourceCommunity, UserID: o.UserID}
 		if err := r.cat.EditBook(ctx, it.LibraryID, it.Path, edit); err != nil {
 			if errors.Is(err, catalog.ErrNotFound) {
 				return catalog.ItemSkipped, "book_gone"
@@ -380,12 +456,12 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 			return catalog.ItemFailed, "edit_failed"
 		}
 	}
-	if cover {
+	if w.Cover {
 		if err := r.saveCover(ctx, it.LibraryID, it.Path, it.Proposal.CoverURL, o.UserID); err != nil {
 			if ctx.Err() == nil {
 				r.log.Info("match apply cover failed", "library", it.LibraryID, "path", it.Path, "err", err)
 			}
-			if len(set) == 0 {
+			if !edits {
 				return catalog.ItemFailed, "cover_failed"
 			}
 			return catalog.ItemApplied, "cover_failed"
@@ -395,10 +471,38 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 }
 
 // Change is what applying an item under one scope would write: its fields (in
-// catalog.OverrideFields order) and whether it takes the community cover.
+// catalog.OverrideFields order; set or reverted) and whether it takes the
+// community cover, and, when it changes the book's series, the series before and
+// after, so a series it removes is shown, never silent.
 type Change struct {
-	Fields []string `json:"fields"`
-	Cover  bool     `json:"cover"`
+	Fields []string      `json:"fields"`
+	Cover  bool          `json:"cover"`
+	Series *SeriesChange `json:"series,omitempty"`
+}
+
+// SeriesChange is a book's series before (From) and after (To) an apply: the main
+// series first, with its position (0 = none), then the others.
+type SeriesChange struct {
+	From []catalog.SeriesRef `json:"from"`
+	To   []catalog.SeriesRef `json:"to"`
+}
+
+// changeOf is what w writes to a book in state st, as the review shows it.
+func changeOf(st *catalog.MatchState, w Writes) Change {
+	ch := Change{Fields: []string{}, Cover: w.Cover}
+	for _, f := range catalog.OverrideFields {
+		if _, ok := w.Set[f]; ok || slices.Contains(w.Revert, f) {
+			ch.Fields = append(ch.Fields, f)
+		}
+	}
+	series := func(value func(string) string) []catalog.SeriesRef {
+		return catalog.SeriesList(value(catalog.FieldSeries), catalog.ParseSeriesIndex(value(catalog.FieldSeriesIndex)), value(catalog.FieldMoreSeries))
+	}
+	from := series(func(f string) string { return st.Fields[f].Value })
+	if to := series(func(f string) string { return w.after(st, f) }); !slices.Equal(from, to) {
+		ch.Series = &SeriesChange{From: from, To: to}
+	}
+	return ch
 }
 
 // ItemView is an item as the review shows it: the book as it is now (Gone when
@@ -416,6 +520,15 @@ type ItemBook struct {
 	Author string `json:"author"`
 }
 
+// itemScopes is the scopes the review shows a run in mode's changes under: its
+// own (ScopesFor), and for a repick, which ignores the scope, ids alone.
+func itemScopes(mode string) []string {
+	if scopes := ScopesFor(mode); scopes != nil {
+		return scopes
+	}
+	return []string{ScopeIDs}
+}
+
 // Items is a page of run's items (outcome "" = all) as the review shows them,
 // and the id the next page reads after (0 = the last page).
 func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome string, after int64, limit int) ([]ItemView, int64, error) {
@@ -424,6 +537,7 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 		return nil, 0, err
 	}
 	out := make([]ItemView, len(items))
+	scopes := itemScopes(run.Mode)
 	for i, it := range items {
 		v := ItemView{MatchRunItem: it, Changes: map[string]Change{}}
 		st, err := r.cat.BookMatchState(ctx, it.LibraryID, it.Path)
@@ -434,15 +548,8 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 			return nil, 0, err
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author}
-			for _, scope := range Scopes {
-				set, cover := planFor(run.Mode, scope, st, it.Proposal)
-				ch := Change{Fields: []string{}, Cover: cover}
-				for _, f := range catalog.OverrideFields {
-					if _, ok := set[f]; ok {
-						ch.Fields = append(ch.Fields, f)
-					}
-				}
-				v.Changes[scope] = ch
+			for _, scope := range scopes {
+				v.Changes[scope] = changeOf(st, planFor(run.Mode, scope, st, it.Proposal))
 			}
 		}
 		out[i] = v

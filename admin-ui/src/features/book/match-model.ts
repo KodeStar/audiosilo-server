@@ -8,7 +8,7 @@ import {
   type OverrideField,
 } from '@/api/types';
 import type { MatchBy } from '@/api/client';
-import { seriesKey } from '@/features/library/series/series-model';
+import { seriesKey } from '@/lib/series-key';
 import { ISBN, checkField } from './book-model';
 
 // The match dialog's logic (STYLEGUIDE.md "Match with community"): what the
@@ -52,15 +52,16 @@ export function candidateAuthors(c: MatchCandidate): string {
 /**
  * What the community says for each field, from the work and the chosen recording.
  * A work in several series offers one as the main series - the one the book is
- * filed under (`mainSeries`) when the work is in it, else the work's first - and
- * the rest as the book's other series (as matchrun.planSeries does).
+ * filed under (`mainSeries`) when the work is in it, else the recording's first
+ * (its own edition, when the community lists one) - and the rest as the book's other series (as matchrun.planSeries
+ * does).
  */
 export function communityValues(
   c: MatchCandidate,
   rec: MatchRecording | undefined,
   mainSeries = '',
 ): Record<OverrideField, string> {
-  const all = c.series ?? [];
+  const all = rec?.series ?? c.series ?? [];
   const key = seriesKey(mainSeries);
   const series = (key && all.find((s) => seriesKey(s.name) === key)) || all[0];
   // The others: a work listed again in its main series isn't another series.

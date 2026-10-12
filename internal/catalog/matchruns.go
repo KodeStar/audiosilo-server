@@ -27,6 +27,10 @@ const (
 	// MatchModeRepick looks again at books whose ASIN a community match set, for
 	// the same recording's ASIN in the preferred marketplace.
 	MatchModeRepick = "repick"
+	// MatchModeRefresh looks the books with an ASIN or ISBN up by it, to fill in
+	// the details an identifier alone didn't bring (the manager's enrichment, an
+	// apply of ids only).
+	MatchModeRefresh = "refresh"
 )
 
 // Match run statuses.
@@ -94,16 +98,20 @@ type MatchRun struct {
 // recording it is, how to show it, and the value it has for each overridable
 // field (in stored form; a field it has nothing for is absent).
 type MatchProposal struct {
-	WorkID      string            `json:"work_id,omitempty"`
-	RecordingID string            `json:"recording_id,omitempty"`
-	Title       string            `json:"title,omitempty"`
-	Authors     string            `json:"authors,omitempty"`
-	Narrators   string            `json:"narrators,omitempty"`
-	RuntimeMin  int               `json:"runtime_min,omitempty"`
-	WebURL      string            `json:"web_url,omitempty"`
-	CoverURL    string            `json:"cover_url,omitempty"`
-	ASINRegion  string            `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
-	Values      map[string]string `json:"values"`
+	WorkID      string `json:"work_id,omitempty"`
+	RecordingID string `json:"recording_id,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Authors     string `json:"authors,omitempty"`
+	Narrators   string `json:"narrators,omitempty"`
+	RuntimeMin  int    `json:"runtime_min,omitempty"`
+	WebURL      string `json:"web_url,omitempty"`
+	CoverURL    string `json:"cover_url,omitempty"`
+	ASINRegion  string `json:"asin_region,omitempty"` // the proposed ASIN's marketplace
+	// FoundBy is the book's own identifier a refresh found the record by,
+	// "asin:<ASIN>" or "isbn:<ISBN>" ("" for any other run): applying it is for
+	// a book that still has it.
+	FoundBy string            `json:"found_by,omitempty"`
+	Values  map[string]string `json:"values"`
 }
 
 // MatchRunItem is one book a run matched.
@@ -363,6 +371,14 @@ func (c *Catalog) UnmatchedBooks(ctx context.Context, libraryID int64) ([]Book, 
 	     WHERE (?1 = 0 OR b.library_id = ?1) AND `+issuePredicates[IssueUnmatched]+`
 	       AND NOT `+ignoredExpr+`
 	     ORDER BY b.library_id, b.rel_path`, libraryID, IssueUnmatched)
+}
+
+// MatchedBooks lists the books with an ASIN or ISBN in one library (0 = every
+// library): what a refresh run looks up.
+func (c *Catalog) MatchedBooks(ctx context.Context, libraryID int64) ([]Book, error) {
+	return queryRows(ctx, c.db, scanMatchSubject, `SELECT `+matchSubjectCols+` FROM books b
+	     WHERE (?1 = 0 OR b.library_id = ?1) AND `+matchedExpr+`
+	     ORDER BY b.library_id, b.rel_path`, libraryID)
 }
 
 // CommunityASINBooks lists the books whose ASIN an admin accepted from a community

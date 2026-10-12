@@ -246,10 +246,33 @@ func TestI18nAssets(t *testing.T) {
 		if !strings.Contains(html, "/assets/i18n.js") || !strings.Contains(html, "/assets/i18n-dict.js") {
 			t.Errorf("GET %s does not load the i18n scripts", p)
 		}
+		if !strings.Contains(html, "/assets/theme-init.js") {
+			t.Errorf("GET %s does not load the theme script", p)
+		}
 		for _, m := range inlineScriptRE.FindAllStringSubmatch(html, -1) {
 			if !strings.Contains(strings.ToLower(m[1]), "src=") {
 				t.Errorf("GET %s has an inline <script> that breaks the strict CSP: %.40q", p, m[2])
 			}
+		}
+	}
+}
+
+// TestSetupPageAssets: the setup wizard (served by the api package from Asset)
+// loads the theme script before its stylesheet and keeps every <script> external.
+func TestSetupPageAssets(t *testing.T) {
+	t.Parallel()
+	b, err := Asset("setup.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(b)
+	theme, css := strings.Index(html, "/assets/theme-init.js"), strings.Index(html, "/assets/style.css")
+	if theme < 0 || css < 0 || theme > css {
+		t.Errorf("setup.html must load /assets/theme-init.js before /assets/style.css (at %d and %d)", theme, css)
+	}
+	for _, m := range inlineScriptRE.FindAllStringSubmatch(html, -1) {
+		if !strings.Contains(strings.ToLower(m[1]), "src=") {
+			t.Errorf("setup.html has an inline <script> that breaks the strict CSP: %.40q", m[2])
 		}
 	}
 }
@@ -470,7 +493,7 @@ func TestStaticCompression(t *testing.T) {
 		t.Errorf("player index revalidation = %d, CSP %q", nm.Code, nm.Header().Get("Content-Security-Policy"))
 	}
 
-	for _, p := range []string{"/", "/connect", "/assets/style.css", "/assets/connect.js", "/sw.js", "/manifest.webmanifest"} {
+	for _, p := range []string{"/", "/connect", "/assets/style.css", "/assets/connect.js", "/assets/theme-init.js", "/sw.js", "/manifest.webmanifest"} {
 		rec := serve(mux, http.MethodGet, p, "Accept-Encoding", "gzip")
 		if rec.Code != 200 || rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("Vary") != "Accept-Encoding" {
 			t.Errorf("GET %s = %d, Content-Encoding %q, Vary %q", p, rec.Code, rec.Header().Get("Content-Encoding"), rec.Header().Get("Vary"))

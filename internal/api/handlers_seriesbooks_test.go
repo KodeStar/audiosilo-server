@@ -126,12 +126,17 @@ func TestSeriesBooksOrderAndDedupe(t *testing.T) {
 	if !strings.Contains(body, `{"name":"Nope","books":[]}`) {
 		t.Errorf("an empty series should be books:[] without next_cursor: %s", body)
 	}
-	// Names are verbatim: no case folding or trimming.
+	// Names come back verbatim, each its own entry, and find the series however
+	// it is spelled (case, punctuation and spacing aside); a series spelled
+	// another way is still another series.
 	got = seriesBooksBody{}
-	e.get(t, e.libPath(e.libID)+"/series/books"+seriesBooksQuery([]string{"saga", " Saga"}, ""), e.adminTok, &got)
-	for _, entry := range got.Series {
-		if paths := entryPaths(t, entry); len(paths) != 0 {
-			t.Errorf("%q matched %v, want none (exact match)", entry["name"], paths)
+	e.get(t, e.libPath(e.libID)+"/series/books"+seriesBooksQuery([]string{"saga", " Saga", "Spin off", "Sagas"}, ""), e.adminTok, &got)
+	if names := entryNames(got); !reflect.DeepEqual(names, []string{"saga", " Saga", "Spin off", "Sagas"}) {
+		t.Fatalf("names = %v", names)
+	}
+	for i, want := range [][]string{{"In/A1", "In/A2", "Inner/C"}, {"In/A1", "In/A2", "Inner/C"}, {"In/A2", "Out/B1"}, {}} {
+		if paths := entryPaths(t, got.Series[i]); !slices.Equal(paths, want) {
+			t.Errorf("%q matched %v, want %v", got.Series[i]["name"], paths, want)
 		}
 	}
 }

@@ -17,7 +17,9 @@ import {
   type MatchOutcome,
   type MatchRun,
   type MatchRunItem,
+  type MatchRunMode,
   type MatchScope,
+  type SeriesRef,
 } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { LibrarySelect } from '@/components/library-select';
@@ -68,7 +70,10 @@ import {
  * Health > Not matched: match every unmatched book in one pass (STYLEGUIDE.md
  * "Health triage"). A run only looks; the admin reviews what it found, chooses
  * how much it may write, and applies it. A repick run switches books matched
- * earlier to the preferred marketplace's ASIN. Runs work on the server, so the
+ * earlier to the preferred marketplace's ASIN, and a refresh run looks the books
+ * that already have an ASIN or ISBN up by it to fill in their details (an
+ * identifier alone, from the manager or an ids-only apply, brought none). Runs
+ * work on the server, so the
  * card follows the newest one by polling, whoever started it.
  */
 export function BulkMatch() {
@@ -100,7 +105,7 @@ export function BulkMatch() {
 
   // Start over runs the same books again: the run's library, not the select's
   // (hidden while a run waits for review, and reset when the page reloads).
-  const start = async (mode: 'match' | 'repick', library = libraryId) => {
+  const start = async (mode: MatchRunMode, library = libraryId) => {
     setBusy(true);
     try {
       await api.startMatchRun({ library_id: library || undefined, mode });
@@ -184,12 +189,18 @@ export function BulkMatch() {
               )}
               {t('health.bulkMatch.start')}
             </Button>
+            <Button variant="outline" disabled={busy} onClick={() => void start('refresh')}>
+              {t('health.bulkMatch.refresh')}
+            </Button>
             {region ? (
               <Button variant="outline" disabled={busy} onClick={() => void start('repick')}>
                 {t('health.bulkMatch.repick', { country: regionName(region, lang) })}
               </Button>
             ) : null}
           </div>
+          <p className="text-[12.5px] text-subtle-foreground">
+            {t('health.bulkMatch.refreshHint')}
+          </p>
           <p className="text-[12.5px] text-subtle-foreground">
             {t('health.bulkMatch.privacy')}{' '}
             {region ? (
@@ -325,6 +336,8 @@ function ReviewDialog({
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const repick = run.mode === 'repick';
+  // A refresh never changes an identifier, so ASIN and ISBN only would write nothing.
+  const scopes = run.mode === 'refresh' ? MATCH_SCOPES.filter((s) => s !== 'ids') : MATCH_SCOPES;
   const firstTab: MatchOutcome = run.counts.pending || repick ? 'auto' : 'review';
   const [tab, setTab] = useState<MatchOutcome>(firstTab);
   const [picks, setPicks] = useState<Picks>(NO_PICKS);
@@ -342,6 +355,22 @@ function ReviewDialog({
   }
   const count = applyCount(run, picks);
   const country = regionName(run.region, lang);
+  const headings: Record<MatchRunMode, { title: string; description: string }> = {
+    match: {
+      title: t('health.bulkMatch.reviewTitle'),
+      description: t('health.bulkMatch.reviewDescription'),
+    },
+    repick: {
+      title: t('health.bulkMatch.repickTitle', { country }),
+      description: t('health.bulkMatch.repickDescription', { store: storeOf(run.region) }),
+    },
+    refresh: {
+      title: t('health.bulkMatch.refreshTitle'),
+      description: t('health.bulkMatch.refreshDescription'),
+    },
+  };
+  // A mode this console doesn't know reads as a match.
+  const heading = headings[run.mode] ?? headings.match;
 
   const apply = async () => {
     setBusy(true);
@@ -373,16 +402,8 @@ function ReviewDialog({
         size="lg"
         tone="community"
         icon={Sparkles}
-        title={
-          repick
-            ? t('health.bulkMatch.repickTitle', { country })
-            : t('health.bulkMatch.reviewTitle')
-        }
-        description={
-          repick
-            ? t('health.bulkMatch.repickDescription', { store: storeOf(run.region) })
-            : t('health.bulkMatch.reviewDescription')
-        }
+        title={heading.title}
+        description={heading.description}
       >
         {open ? (
           <>
@@ -393,7 +414,7 @@ function ReviewDialog({
                     label={t('health.bulkMatch.scope.label')}
                     value={scope}
                     onValueChange={setScope}
-                    options={MATCH_SCOPES.map((s) => ({
+                    options={scopes.map((s) => ({
                       value: s,
                       title: t(`health.bulkMatch.scope.${s}`),
                       description: t(`health.bulkMatch.scope.${s}Body`),
@@ -545,14 +566,24 @@ function ItemRow({
     : [];
   const asin = p.values.asin;
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
+  const seriesLine = (refs: SeriesRef[]) =>
+    refs
+      .map((r) => seriesLabel(r.name, r.position, lang, t))
+      .filter(Boolean)
+      .join('; ');
+  // What the scope does to the book's series, old -> new (a series it removes
+  // shows), else the community's series.
+  const seriesText = change?.series
+    ? t('health.bulkMatch.seriesChange', {
+        from: seriesLine(change.series.from) || t('health.bulkMatch.noSeries'),
+        to: seriesLine(change.series.to) || t('health.bulkMatch.noSeries'),
+      })
+    : '';
   // The community's main series, then any others the work is in ("Discworld #8; City Watch #1").
-  const series = [
+  const series = seriesLine([
     { name: p.values.series ?? '', position: Number(p.values.series_index) },
     ...moreSeriesRefs(p.values.more_series ?? ''),
-  ]
-    .map((s) => seriesLabel(s.name, s.position, lang, t))
-    .filter(Boolean)
-    .join('; ');
+  ]);
   // The path tells two books of one title apart, read out with the row's controls
   // too. A book with no title (or one gone) already shows its path as the title.
   const pathId = useId();
@@ -615,14 +646,18 @@ function ItemRow({
           </span>
         ) : (
           <span className="text-[12.5px] text-muted-foreground">
-            {item.outcome === 'none'
-              ? t('health.bulkMatch.item.none')
-              : t('health.bulkMatch.item.error')}
+            {t(
+              item.outcome === 'error'
+                ? 'health.bulkMatch.item.error'
+                : item.detail === 'identifier_unknown'
+                  ? 'health.bulkMatch.item.identifierUnknown'
+                  : 'health.bulkMatch.item.none',
+            )}
           </span>
         )}
-        {candidate && series ? (
+        {candidate && (seriesText || series) ? (
           <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
-            {t('health.bulkMatch.inSeries', { series })}
+            {seriesText || t('health.bulkMatch.inSeries', { series })}
           </span>
         ) : null}
         {asin ? (

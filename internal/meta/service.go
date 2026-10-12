@@ -24,6 +24,13 @@ import (
 // "Narnia" and "Narnia (Chronological)" spends one slot, not two.
 const maxSeriesRails = 3
 
+// maxForeignRails is how many main views whose record turns out foreign (another
+// language than the work, or a translation: foreignSeries) may hand their slot
+// to the next family, so a work listed in its translation's series first still
+// gets maxSeriesRails rails. It widens the attempt bound to at most
+// maxSeriesRails + maxForeignRails series requests for the main views.
+const maxForeignRails = 2
+
 // maxOrderingAlternates caps how many OTHER reading orders of one family are
 // fetched as alternates of its rail. Like maxSeriesRails it bounds attempts, so
 // one enrichment issues at most maxSeriesRails * (1 + maxOrderingAlternates)
@@ -448,11 +455,19 @@ func (s *Service) compose(ctx context.Context, asin, isbn string) (*Enrichment, 
 		return nil, false, err
 	}
 
-	rails, complete := s.seriesRails(ctx, detail)
+	rec := pickRecording(detail.Recordings, lookup.RecordingID)
+	// The rails' editions go by the recording the book is known to be: the one
+	// the lookup named (or the work's only one), never pickRecording's guess of
+	// the first, which could hand every book of the work one recording's edition.
+	recID := ""
+	if rec != nil && (rec.ID == lookup.RecordingID || len(detail.Recordings) == 1) {
+		recID = rec.ID
+	}
+	rails, complete := s.seriesRails(ctx, detail, recID)
 	env := &Enrichment{
 		Matched:   true,
 		Work:      s.toWork(detail),
-		Recording: pickRecording(detail.Recordings, lookup.RecordingID),
+		Recording: rec,
 		Series:    rails,
 		WebURL:    s.workURL(detail.ID),
 	}
@@ -670,12 +685,22 @@ func pickRecording(recs []upstreamRecording, recordingID string) *MetaRecording 
 // holds it (a variant-only work keeps its variant, the only order that places
 // it).
 //
+// The families are the series a book that is recording recordingID can be in
+// (railMains: an edition only for its own recordings, and then first), so the
+// cap spends itself on those: a Discworld novel listed in "Discworld (abridged)"
+// and "Discworld: For Kids (abridged)" too keeps its "Discworld: Tiffany Aching"
+// rail. A main view whose record says it is foreign (foreignSeries: another
+// language than the work, or a translation of another of its series) is left
+// out once fetched, and spends no rail: the next family takes its turn, at most
+// maxForeignRails times. Whether a translation is foreign is decided with every
+// record read, so the original's language counts wherever it is listed.
+//
 // A per-series fetch failure is non-fatal: a failed main view skips the rail,
 // and a failed alternate ships the rail without that alternate, so the rest of
 // the enrichment (progressive enhancement) still returns - but either is
 // reported via complete=false so the caller caches the partial envelope only
 // briefly instead of hiding a rail or an order for the whole positive TTL.
-func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (rails []MetaSeries, complete bool) {
+func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail, recordingID string) (rails []MetaSeries, complete bool) {
 	// The work's own position in each series it belongs to, by series id. An
 	// alternate's position is read from here: the work detail is the one place
 	// that states where THIS work sits, and a series the work is absent from
@@ -689,24 +714,47 @@ func (s *Service) seriesRails(ctx context.Context, detail *upstreamWorkDetail) (
 
 	// Bound ATTEMPTS up front, not successes: with a failing series endpoint and
 	// odd/hostile data (dozens of series refs on one work), a success-counted
-	// loop would issue one 5s-timeout GET per ref. The cap counts families, so
-	// grouping happens first.
-	mains := familyMains(detail.Series)
-	if len(mains) > maxSeriesRails {
-		mains = mains[:maxSeriesRails]
-	}
+	// loop would issue one 5s-timeout GET per ref (a foreign main view widens the
+	// bound, at most maxForeignRails times). The cap counts families, so grouping
+	// happens first.
+	known := s.cachedFacts(detail)
+	mains := railMains(familyMains(detail.Series), detail, recordingID, known)
 	complete = true
-	var out []MetaSeries
 	// Every MAIN view is fetched before any alternate. The fan-out is sequential
 	// under one composeTimeout budget, so interleaving rail 1's alternates ahead
 	// of rail 2's main would let a slow-but-alive upstream spend the budget on
 	// optional views and drop whole rails - the thing a shipped player renders.
 	// Alternates go last; a deadline that fires among them costs only alternates.
-	families := make([][]upstreamSeriesOrdering, 0, len(mains))
-	for _, ref := range mains {
+	type mainView struct {
+		ref upstreamSeriesRef
+		sd  *upstreamSeriesDetail
+	}
+	var read []mainView
+	attempts := maxSeriesRails
+	for i, ref := range mains {
+		if i == attempts {
+			break
+		}
 		sd, err := s.client.series(ctx, ref.ID)
 		if err != nil || sd == nil {
 			complete = false
+			continue
+		}
+		known[ref.ID] = factsOf(sd)
+		cachePut(s.cache, nsSeries.key(ref.ID), known[ref.ID], positiveTTL)
+		if foreignSeries(known, ref.ID, detail) && attempts < maxSeriesRails+maxForeignRails {
+			attempts++ // a foreign series spends no rail
+		}
+		read = append(read, mainView{ref, sd})
+	}
+	var out []MetaSeries
+	families := make([][]upstreamSeriesOrdering, 0, len(read))
+	for _, m := range read {
+		if len(out) == maxSeriesRails {
+			break
+		}
+		ref, sd := m.ref, m.sd
+		if foreignSeries(known, ref.ID, detail) {
 			continue
 		}
 		out = append(out, MetaSeries{

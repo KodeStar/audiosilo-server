@@ -15,11 +15,13 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
-// fakeMatcher answers Candidates by the book's title (or, for a repick, its ASIN).
+// fakeMatcher answers Candidates by the book's title (or, for a repick or a
+// refresh, its ASIN, else its ISBN).
 type fakeMatcher struct {
 	mu      sync.Mutex
 	byTitle map[string][]meta.MatchCandidate
 	byASIN  map[string][]meta.MatchCandidate
+	byISBN  map[string][]meta.MatchCandidate
 	fail    bool          // every query fails
 	block   chan struct{} // when set, each query waits on it (or the context)
 	queries []meta.MatchQuery
@@ -43,6 +45,9 @@ func (f *fakeMatcher) Candidates(ctx context.Context, q meta.MatchQuery) ([]meta
 	if q.ASIN != "" {
 		return f.byASIN[q.ASIN], nil
 	}
+	if q.ISBN != "" {
+		return f.byISBN[q.ISBN], nil
+	}
 	return f.byTitle[q.Title], nil
 }
 
@@ -60,7 +65,7 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
 	db := storetest.Open(t)
-	e := &env{cat: catalog.New(db, time.Now), matcher: &fakeMatcher{byTitle: map[string][]meta.MatchCandidate{}, byASIN: map[string][]meta.MatchCandidate{}}}
+	e := &env{cat: catalog.New(db, time.Now), matcher: &fakeMatcher{byTitle: map[string][]meta.MatchCandidate{}, byASIN: map[string][]meta.MatchCandidate{}, byISBN: map[string][]meta.MatchCandidate{}}}
 	e.enabled.Store(true)
 	admin, err := auth.New(db, time.Now).CreateUser(ctx, "admin", "correct horse battery", "admin")
 	if err != nil {
@@ -393,6 +398,86 @@ func TestRepick(t *testing.T) {
 	}
 }
 
+// TestRefresh: a refresh run looks up the books that already have an ASIN or
+// ISBN by that identifier alone (an ISBN beside an unknown ASIN too), takes the
+// record it names as confident, and applying fills the details (cover included)
+// without touching the identifier or an admin's own edit; an identifier the
+// community doesn't know is no match.
+func TestRefresh(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Enriched", "Martian", "B0US000001", no)
+	e.book(t, "A/Edited", "Martian Again", "B0US000001", nil)
+	e.book(t, "A/Unknown", "Unknown", "B0NONE0001", nil)
+	e.book(t, "A/ByISBN", "Martian Too", "", nil)
+	e.book(t, "A/Plain", "Plain", "", nil) // no identifier: a match run's, not a refresh's
+	if err := e.cat.EditBook(ctx, e.lib, "A/Edited", catalog.BookEdit{Set: map[string]string{"narrator": "My Reader"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.SetEnrichment(ctx, e.lib, "A/ByISBN", "B0NONE0002", "9780553418026"); err != nil {
+		t.Fatal(err)
+	}
+	hit := cand("the-martian", 100, "https://c/rec.jpg")
+	hit.RecordingID = "bray"
+	e.matcher.byASIN["B0US000001"] = []meta.MatchCandidate{hit}
+	e.matcher.byISBN["9780553418026"] = []meta.MatchCandidate{hit}
+
+	run := e.start(t, catalog.MatchModeRefresh, "uk")
+	if run.Status != catalog.MatchReady || run.Total != 4 || run.Counts.Auto != 3 || run.Counts.None != 1 {
+		t.Fatalf("refresh run = %+v", run)
+	}
+	for _, q := range e.matcher.queries {
+		if (q.ASIN == "" && q.ISBN == "") || q.Title != "" || q.Limit != 1 || q.Region != "uk" {
+			t.Fatalf("query = %+v, want the identifier alone", q)
+		}
+	}
+	none := e.items(t, run, catalog.OutcomeNone)
+	if len(none) != 1 || none[0].Path != "A/Unknown" || none[0].Detail != DetailIdentifierUnknown {
+		t.Fatalf("none = %+v", none)
+	}
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 3 {
+		t.Fatalf("auto = %+v", auto)
+	}
+	for _, it := range auto {
+		ch := it.Changes
+		if _, ok := ch[ScopeIDs]; ok ||
+			slices.Contains(ch[ScopeOverwrite].Fields, "asin") || slices.Contains(ch[ScopeOverwrite].Fields, "isbn") {
+			t.Fatalf("%s changes = %+v, want no identifier and no ids scope", it.Path, ch)
+		}
+		// The review shows no identifier of the community's: the book keeps its own.
+		if p := it.Proposal; p.Values["asin"] != "" || p.Values["isbn"] != "" || p.ASINRegion != "" {
+			t.Fatalf("%s proposal = %+v, want no identifier", it.Path, p)
+		}
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeIDs}); !errors.Is(err, ErrScope) {
+		t.Fatalf("apply ids = %v, want ErrScope", err)
+	}
+
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	st, err := e.cat.BookMatchState(ctx, e.lib, "A/Enriched")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := st.Fields
+	if f["asin"].Value != "B0US000001" || f["isbn"].Value != "" || f["title"].Value != "The Martian" ||
+		f["narrator"].Value != "R. C. Bray" || f["series"].Value != "Mars" || f["series_index"].Value != "1" ||
+		f["title"].Source != catalog.SourceCommunity {
+		t.Fatalf("refreshed fields = %+v", f)
+	}
+	if e.covers.Load() != 1 {
+		t.Fatalf("covers saved = %d, want 1 (only the book with none)", e.covers.Load())
+	}
+	st, _ = e.cat.BookMatchState(ctx, e.lib, "A/Edited")
+	if st.Fields["narrator"].Value != "My Reader" || st.Fields["title"].Value != "The Martian" {
+		t.Fatalf("edited book = %+v, want its own narrator kept", st.Fields)
+	}
+}
+
 // TestApplyStopsWhenMetadataTurnsOff: an apply hands out no more books once
 // community metadata is off (a cover is an outbound fetch, and Stop answers
 // metadata_off then); the run is ready again, the rest still to apply.
@@ -463,5 +548,97 @@ func TestApplyCoverFailureAndInterruptedApply(t *testing.T) {
 	}
 	if got, _ := e.cat.GetMatchRun(ctx, run.ID); got.Status != catalog.MatchReady {
 		t.Fatalf("status = %s, want ready", got.Status)
+	}
+}
+
+// TestRefreshCleansAPollutedBook: a book an earlier match filed under every
+// series of its work (editions included, as community values) is cleaned by a
+// refresh applied with overwrite: its series become the community's current ones
+// for its recording and the stale ones are reverted; the review shows the series
+// before and after; fill leaves them be.
+func TestRefreshCleansAPollutedBook(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "HP/Chamber", "Chamber", "B0US000001", nil)
+	if err := e.cat.EditBook(ctx, e.lib, "HP/Chamber", catalog.BookEdit{Source: catalog.SourceCommunity, Set: map[string]string{
+		"series": "Mars (Full-Cast Editions)", "series_index": "1",
+		"more_series": `[{"name":"Mars (Narrated by Someone Else)","position":1}]`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	hit := cand("the-martian", 100, "")
+	hit.RecordingID = "bray"
+	hit.Recordings[0].Series = []meta.MatchSeries{{Name: "Mars", Position: "1"}}
+	e.matcher.byASIN["B0US000001"] = []meta.MatchCandidate{hit}
+
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	auto := e.items(t, run, catalog.OutcomeAuto)
+	if len(auto) != 1 {
+		t.Fatalf("auto = %+v", auto)
+	}
+	ch := auto[0].Changes
+	if ch[ScopeFill].Series != nil {
+		t.Errorf("fill series change = %+v, want none", ch[ScopeFill].Series)
+	}
+	sc := ch[ScopeOverwrite].Series
+	if sc == nil || len(sc.From) != 2 || sc.From[0].Name != "Mars (Full-Cast Editions)" || sc.From[1].Name != "Mars (Narrated by Someone Else)" ||
+		len(sc.To) != 1 || sc.To[0].Name != "Mars" || sc.To[0].Position != 1 {
+		t.Fatalf("overwrite series change = %+v, want the two editions -> Mars #1", sc)
+	}
+	if !slices.Contains(ch[ScopeOverwrite].Fields, "more_series") {
+		t.Errorf("overwrite fields = %v, want the reverted more_series listed", ch[ScopeOverwrite].Fields)
+	}
+
+	if auto[0].Proposal.FoundBy != "asin:B0US000001" {
+		t.Fatalf("found by = %q, want the book's ASIN", auto[0].Proposal.FoundBy)
+	}
+
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	b, err := e.cat.GetBookByPath(ctx, e.lib, "HP/Chamber")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all := b.AllSeries(); len(all) != 1 || all[0].Name != "Mars" || all[0].Position != 1 {
+		t.Fatalf("book series = %+v, want Mars #1 alone", all)
+	}
+	// Cleaned, the book is up to date: a second refresh records nothing for it.
+	if again := e.start(t, catalog.MatchModeRefresh, ""); again.Counts.Auto != 0 || again.Total != 1 {
+		t.Fatalf("second refresh = %+v, want the book left out", again)
+	}
+}
+
+// TestRefreshSkipsABookMatchedAgain: a book matched again (to another record)
+// between a refresh run and its apply is not overwritten with the old record's
+// details: the review shows nothing to change, and the apply skips it.
+func TestRefreshSkipsABookMatchedAgain(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/Book", "Something Else", "B0US000001", nil)
+	hit := cand("the-martian", 100, "")
+	hit.RecordingID = "bray"
+	e.matcher.byASIN["B0US000001"] = []meta.MatchCandidate{hit}
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	if run.Counts.Auto != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	// Matched by hand meanwhile, to another record.
+	if err := e.cat.EditBook(ctx, e.lib, "A/Book", catalog.BookEdit{Source: catalog.SourceCommunity,
+		Set: map[string]string{"asin": "B0OTHER001", "title": "Another Book"}}); err != nil {
+		t.Fatal(err)
+	}
+	if ch := e.items(t, run, catalog.OutcomeAuto)[0].Changes[ScopeOverwrite]; len(ch.Fields) != 0 || ch.Series != nil {
+		t.Fatalf("review = %+v, want nothing to change", ch)
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite, UserID: e.admin}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	if b, _ := e.cat.GetBookByPath(ctx, e.lib, "A/Book"); b.Title != "Another Book" {
+		t.Fatalf("title = %q, want the new match's kept", b.Title)
 	}
 }

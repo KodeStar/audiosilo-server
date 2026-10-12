@@ -444,7 +444,7 @@ func bookDest(b *Book) (dest []any, finish func()) {
 			if more != "[]" && more != "" { // most books have no list: no parse
 				// In a series beyond its main one: the whole list. A list that only
 				// repeats the main series (or can't be read) adds none.
-				if l := seriesList(b.Series, b.SeriesIndex, more); len(l) > 1 || (len(l) == 1 && b.Series == "") {
+				if l := SeriesList(b.Series, b.SeriesIndex, more); len(l) > 1 || (len(l) == 1 && b.Series == "") {
 					b.SeriesList = l
 				}
 			}
@@ -593,7 +593,7 @@ func (c *Catalog) loadChapters(ctx context.Context, b *Book) error {
 type ListOptions struct {
 	LibraryID int64
 	Author    string // optional: the whole credit, or exactly one person it names (creditFilter)
-	Series    string // optional: exactly the main series, or with Memberships one more_series names
+	Series    string // optional: the main series, or with Memberships one more_series names, in any spelling (seriesFilter)
 	// Memberships widens Series to every series a book is in (seriesFilter); a
 	// client that places books by series_index alone leaves it off.
 	Memberships bool
@@ -602,6 +602,10 @@ type ListOptions struct {
 	Limit       int
 	Cursor      string // opaque keyset cursor from a previous page
 	Scope       *Scope // optional access scope; nil = unrestricted (admin/internal)
+
+	// series is how the library spells Series' series, when the caller has read
+	// it already (ListSeriesBooks, for every name at once); nil reads it.
+	series *seriesNames
 }
 
 // Page is a page of books plus the cursor for the next page ("" when exhausted).
@@ -665,13 +669,15 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 		where, args = append(where, cond), append(args, a...)
 	}
 	if opt.Series != "" {
-		if opt.Memberships {
-			cond, a := seriesFilter("", opt.Series)
-			where, args = append(where, cond), append(args, a...)
-		} else {
-			where = append(where, "series = ?")
-			args = append(args, opt.Series)
+		if opt.series == nil {
+			n, err := c.spellingsOf(ctx, []int64{opt.LibraryID}, opt.Memberships, opt.Series)
+			if err != nil {
+				return nil, err
+			}
+			opt.series = &n
 		}
+		cond, a := seriesFilter("", *opt.series, opt.Memberships)
+		where, args = append(where, cond), append(args, a...)
 	}
 	if opt.Narrator != "" {
 		cond, a := creditFilter("", "narrator", opt.Narrator)
@@ -743,19 +749,26 @@ type SeriesPage struct {
 // so each NextCursor continues on /books?series=<name>&memberships=1 with the
 // same limit. Books is an empty list, never nil, for a series with no books in
 // scope. An empty name is skipped (an empty Series filters nothing: it would be
-// the whole library). One indexed query per name; the caller bounds the names.
+// the whole library). The spellings are read once for every name, then one
+// indexed query per name; the caller bounds the names.
 func (c *Catalog) ListSeriesBooks(ctx context.Context, libraryID int64, names []string, limit int, scope *Scope) ([]SeriesPage, error) {
 	out := make([]SeriesPage, 0, len(names))
+	spelled, err := c.spellings(ctx, []int64{libraryID}, true, names...)
+	if err != nil {
+		return nil, err
+	}
 	for _, name := range names {
 		if name == "" {
 			continue
 		}
+		n := spelled[seriesKey(name)]
 		page, err := c.ListBooks(ctx, ListOptions{
 			LibraryID:   libraryID,
 			Series:      name,
 			Memberships: true,
 			Limit:       limit,
 			Scope:       scope,
+			series:      &n,
 		})
 		if err != nil {
 			return nil, err

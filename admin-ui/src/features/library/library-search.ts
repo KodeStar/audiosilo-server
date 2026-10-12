@@ -3,7 +3,7 @@ import { ADMIN_BOOK_SORTS, type AdminBookSort } from '@/api/types';
 // The Library destination's search params (every view deep-links, STYLEGUIDE.md
 // section 2): the Books list's search, sort, view and facet filters, the exact
 // author/series/narrator filters the Authors/Series/Narrators tiles open, and
-// the Folders tree's selection. Validated here; router.tsx merges them into the
+// the Folders tree's selection, the Series page's search and page. Validated here; router.tsx merges them into the
 // destination routes' search.
 
 export const LENGTHS = ['short', 'medium', 'long', 'epic'] as const;
@@ -17,8 +17,10 @@ export type YesNo = (typeof YES_NO)[number];
 export type Playback = (typeof PLAYBACK)[number];
 
 export interface LibrarySearch {
-  /** Books: full-text filter. */
+  /** Books: full-text filter. Series: the series search (name or author). */
   q?: string;
+  /** Series: the page of cards, from 1 (absent = the first). */
+  page?: number;
   sort?: AdminBookSort;
   order?: 'asc' | 'desc';
   /** Books: the table view (the cover grid is the default). */
@@ -63,8 +65,10 @@ const list = (v: unknown): string[] | undefined => {
 /** Keeps the Library params that parse; anything else is dropped. */
 export function validateLibrarySearch(s: Record<string, unknown>): LibrarySearch {
   const library = Number(s.library);
+  const page = Number(s.page);
   const out: LibrarySearch = {
     q: text(s.q),
+    page: Number.isInteger(page) && page > 1 ? page : undefined,
     sort: oneOf(ADMIN_BOOK_SORTS, s.sort),
     order: oneOf(['asc', 'desc'] as const, s.order),
     view: s.view === 'table' ? 'table' : undefined,

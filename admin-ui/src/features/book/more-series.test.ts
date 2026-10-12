@@ -99,11 +99,18 @@ describe('seriesSwap', () => {
     );
   });
 
-  it('swaps nothing for a series the list lacks, the same series, or another spelling', () => {
+  it('takes another spelling of a listed series for it, as the server groups series', () => {
+    expect(seriesSwap(swapFields(), 'city watch')).toEqual({
+      more_series: '[{"name":"Omnibus","position":0},{"name":"Discworld","position":8}]',
+      series_index: '1',
+    });
+  });
+
+  it('swaps nothing for a series the list lacks, or the same series however spelled', () => {
     expect(seriesSwap(swapFields(), 'Rincewind')).toBeUndefined();
-    expect(seriesSwap(swapFields(), 'city watch')).toBeUndefined();
     expect(seriesSwap(swapFields(), '')).toBeUndefined();
     expect(seriesSwap(swapFields('City Watch', '1'), 'City Watch')).toBeUndefined();
+    expect(seriesSwap(swapFields('Discworld', '8', LIST), 'discworld')).toBeUndefined();
   });
 });
 

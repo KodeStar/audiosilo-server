@@ -1,16 +1,22 @@
-import type { AdminBook, AdminBookPage, MetaSeries, MetaSeriesWork } from '@/api/types';
+import type {
+  AdminBook,
+  MetaSeries,
+  MetaSeriesOrdering,
+  MetaSeriesWork,
+  SeriesCount,
+} from '@/api/types';
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
 import { hashString } from '@/lib/monogram';
+import { sameSeries, seriesKey } from '@/lib/series-key';
 
-// The Series screen's pure parts: grouping the series-sorted book list into
-// series, matching a book's community series rail to a local series, placing
-// the owned books on it, the gaps (rail positions the server doesn't hold),
-// "1, 2, 4-6" position lists and the spine row that interleaves owned books
-// with missing entries.
+// The Series screen's pure parts: finding series by name or author, matching a
+// book's community series rail to a local series, placing the owned books on
+// it, the gaps (rail positions the server doesn't hold), "1, 2, 4-6" position
+// lists and the spine row that interleaves owned books with missing entries.
 
-/** Series a page of cards shows at first, and how many more each "Show more" adds. */
-export const CARD_STEP = 24;
+/** Series cards on a page. */
+export const SERIES_PAGE = 24;
 
 /** One numbered entry of a community series rail. */
 export interface RailEntry {
@@ -48,19 +54,91 @@ export type Spine = ({ kind: 'book' } & Placed) | { kind: 'gap'; entry: RailEntr
 
 const samePosition = (a: number, b: number) => Math.abs(a - b) < 1e-6;
 
-/** A series name for comparison: no case, accents, punctuation or spacing. */
-export function seriesKey(name: string): string {
-  return name
-    .normalize('NFKD')
-    .replace(/[^\p{L}\p{N}]/gu, '')
-    .toLowerCase();
+/**
+ * The series whose name or author holds the search, compared as series keys
+ * (seriesKey: "fights with" finds "He Who Fights WIth Monsters"); every series
+ * for a search with no letter or number.
+ */
+export function filterSeries(list: SeriesCount[], q: string): SeriesCount[] {
+  const needle = seriesKey(q);
+  if (!needle) return list;
+  return list.filter(
+    (s) => seriesKey(s.name).includes(needle) || seriesKey(s.author).includes(needle),
+  );
 }
 
-/** The rail named like the local series, else the book's first rail. */
-export function pickRail(rails: MetaSeries[] | undefined, name: string): MetaSeries | undefined {
+/**
+ * A series name without a leading article or a trailing "Series", as the
+ * server's match.NormalizeSeries reads one ("The Stormlight Archive" and
+ * "Stormlight Archive Series" are one series).
+ */
+function looseSeriesKey(name: string): string {
+  return seriesKey(
+    name
+      .trim()
+      .replace(/^(?:the|a|an)\s+(?=\S)/i, '')
+      .replace(/(?<=\S)\s+series$/i, ''),
+  );
+}
+
+/** A rail's alternate reading order as a rail of its own (its works, its name). */
+function orderingRail(o: MetaSeriesOrdering): MetaSeries {
+  return {
+    id: o.id,
+    name: o.name,
+    position: o.position ?? '',
+    works: o.works,
+    ordering: o.ordering,
+  };
+}
+
+/**
+ * The rail that is the local series `name`, else none (the shelf then goes by
+ * the books' own positions, with no gaps):
+ *
+ * 1. the rail, or one of its reading orders, named like it (seriesKey);
+ * 2. else one named like it give or take an article or a trailing "Series";
+ * 3. else the rail holding the most of the series' own books by their community
+ *    works (`works`), when that is at least two of them and more than half of
+ *    those that resolved. A book's work sits on every series it is in, so one
+ *    shared book can't tell the series apart (a Tiffany Aching novel is on the
+ *    Discworld rail too); two that are most of the series are this series spelled
+ *    another way. A rail named like the head of a series' name before a colon
+ *    or a dash ("Discworld" for "Discworld: Tiffany Aching") is its parent, never
+ *    the series ("Mistborn" for "Mistborn Trilogy" can be). Ties go to the
+ *    smaller rail, the more specific series.
+ */
+export function pickRail(
+  rails: MetaSeries[] | undefined,
+  name: string,
+  owned: AdminBook[] = [],
+  works?: WorkIds,
+): MetaSeries | undefined {
   if (!rails?.length) return undefined;
-  const key = seriesKey(name);
-  return rails.find((r) => seriesKey(r.name) === key) ?? rails[0];
+  for (const key of [seriesKey, looseSeriesKey]) {
+    const want = key(name);
+    if (!want) continue;
+    for (const r of rails) {
+      if (key(r.name) === want) return r;
+      const o = r.orderings?.find((v) => key(v.name) === want);
+      if (o) return orderingRail(o);
+    }
+  }
+  const ids = new Set(owned.map((b) => works?.get(refKey(b))).filter((id) => id !== undefined));
+  // "Discworld: Tiffany Aching" (or "Discworld - Witches") names a series of
+  // Discworld's: its head before the separator is the parent's name.
+  const head = seriesKey(name.split(/\s*:\s*|\s+[-\u2013\u2014]\s+/)[0]);
+  let best: { rail: MetaSeries; held: number; size: number } | undefined;
+  for (const r of rails) {
+    if (head !== seriesKey(name) && seriesKey(r.name) === head) continue;
+    const held = new Set(r.works.filter((w) => ids.has(w.id)).map((w) => w.id)).size;
+    const size = railEntries(r).length;
+    if (held < 2 || held * 2 <= ids.size) continue;
+    if (!best || held > best.held || (held === best.held && size < best.size)) {
+      best = { rail: r, held, size };
+    }
+  }
+  return best?.rail;
 }
 
 /** A rail work's position, NaN when it is unnumbered (blank, or not a number). */
@@ -79,11 +157,49 @@ export function railEntries(rail: MetaSeries): RailEntry[] {
 
 /**
  * A book's position in the named series (its main series' index without a name):
- * a book in several series has its own position in each (series_list).
+ * a book in several series has its own position in each (series_list). The
+ * series is matched as the server groups its spellings (sameSeries).
  */
 export function positionIn(book: AdminBook, series?: string): number {
   if (series === undefined) return book.series_index;
-  return book.series_list.find((s) => s.name === series)?.position ?? 0;
+  return book.series_list.find((s) => sameSeries(s.name, series))?.position ?? 0;
+}
+
+/**
+ * The numbering a file's title often carries before the title, as the server's
+ * match cuts it: "01 - ", "7. ", "Book 3: ", "#4 "; a short code glued to its
+ * number, "BV01 - ", "SW06: "; the code spaced from it, "HALO 28 - "; an
+ * upper-case code with only a space, "DF15.5 ".
+ */
+const LEAD_NUMBERING = [
+  /^\s*(?:(?:book|vol(?:ume)?\.?|part|band|teil|tome)\s*)?#?\d{1,3}(?:\.\d+)?(?:\s*[-.:_)\]]\s*|\s+)/i,
+  /^\s*[a-z]{1,6}\d{1,3}(?:\.\d+)?\s*[-.:_)\]]\s+/i,
+  /^\s*[a-z]{1,6}\s\d{1,3}(?:\.\d+)?\s*[-._)\]]\s+/i,
+  /^\s*[A-Z]{1,6}\d{1,3}(?:\.\d+)?\s+/,
+];
+
+/**
+ * The forms a title is compared in: without a leading numbering, with and
+ * without a trailing bracketed part ("We Are Legion (We Are Bob)"), no case,
+ * accents or punctuation.
+ */
+function titleKeys(title: string): string[] {
+  let bare = title.trim();
+  for (const re of LEAD_NUMBERING) {
+    const rest = bare.replace(re, '').trim();
+    if (rest !== bare) {
+      if (rest) bare = rest;
+      break;
+    }
+  }
+  const short = bare.replace(/\s*[([][^()[\]]*[)\]]\s*$/, '');
+  return [seriesKey(bare), seriesKey(short)].filter(Boolean);
+}
+
+/** Whether two titles name one book (titleKeys share a form). */
+export function sameTitle(a: string, b: string): boolean {
+  const keys = titleKeys(a);
+  return titleKeys(b).some((k) => keys.includes(k));
 }
 
 /**
@@ -92,7 +208,9 @@ export function positionIn(book: AdminBook, series?: string): number {
  * whatever its own position says (local numbering is often missing or
  * different). A book known to be another work holds none and goes to the end;
  * one that didn't resolve (no identifier, no match, or no rail yet) falls back to
- * its position in the series, and without one goes to the end.
+ * its position in the series. Without one, it holds the rail entry its title is
+ * (sameTitle: "BV03 - All These Worlds" is All These Worlds), when no other book
+ * holds that entry, and else goes to the end.
  */
 export function placeBooks(
   owned: AdminBook[],
@@ -111,13 +229,25 @@ export function placeBooks(
     const position = railPosition(w);
     if (Number.isFinite(position) && !positions.has(w.id)) positions.set(w.id, position);
   }
-  return owned.map((book): Placed => {
+  const placed = owned.map((book): Placed => {
     const work = works?.get(refKey(book));
     if (work === undefined) return byIndex(book);
     const position = positions.get(work);
     return position === undefined
       ? { book, slot: 'end', position: positionIn(book, series) }
       : { book, slot: 'rail', position };
+  });
+  const held = placed.filter((p) => p.slot === 'rail').map((p) => p.position);
+  const free = railEntries(rail)
+    .filter((e) => !held.some((i) => samePosition(i, e.position)))
+    .map((entry) => ({ entry, keys: titleKeys(entry.title) }));
+  return placed.map((p) => {
+    if (p.slot === 'rail' || works?.has(refKey(p.book))) return p;
+    const keys = titleKeys(p.book.title);
+    const at = free.findIndex((f) => f.keys.some((k) => keys.includes(k)));
+    if (at < 0) return p;
+    const [{ entry }] = free.splice(at, 1);
+    return { ...p, slot: 'rail', position: entry.position };
   });
 }
 
@@ -160,12 +290,6 @@ export function formatPositions(ns: number[], fmt: (n: number) => string = Strin
   return parts.join(', ');
 }
 
-/** Owned books by series index (unnumbered last), then title. */
-export function sortSeriesBooks(books: AdminBook[]): AdminBook[] {
-  const idx = (b: AdminBook) => (b.series_index > 0 ? b.series_index : Infinity);
-  return [...books].sort((a, b) => idx(a) - idx(b) || a.title.localeCompare(b.title));
-}
-
 /**
  * The shelf: placed books and missing entries in series order, then the books
  * at the end (numbered ones by their number, unnumbered last).
@@ -187,32 +311,6 @@ export function spineRow(placed: Placed[], missing: RailEntry[]): Spine[] {
     const [b1, b2] = order(b);
     return cmp(a1, b1) || cmp(a2, b2) || title(a).localeCompare(title(b));
   });
-}
-
-/**
- * The series-sorted book list grouped by series name. Series books come first
- * and books without a series last, so `done` turns true on the first page
- * holding a book without one (or when there is no next page).
- */
-export function groupSeriesPages(
-  pages: AdminBookPage[],
-  hasNextPage: boolean,
-): { bySeries: Map<string, AdminBook[]>; done: boolean } {
-  const bySeries = new Map<string, AdminBook[]>();
-  let done = !hasNextPage;
-  for (const page of pages) {
-    for (const b of page.books) {
-      if (!b.series) {
-        done = true;
-        continue;
-      }
-      const list = bySeries.get(b.series) ?? [];
-      list.push(b);
-      bySeries.set(b.series, list);
-    }
-  }
-  for (const [name, list] of bySeries) bySeries.set(name, sortSeriesBooks(list));
-  return { bySeries, done };
 }
 
 /** The book whose community metadata names the series: the first one matched. */

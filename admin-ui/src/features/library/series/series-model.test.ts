@@ -1,16 +1,17 @@
 import type { AdminBook, MetaSeries } from '@/api/types';
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
+import { seriesKey } from '@/lib/series-key';
 import { adminBook } from '@/test/library-fixtures';
 import {
   formatPositions,
-  groupSeriesPages,
+  filterSeries,
   metaCandidate,
   pickRail,
   placeBooks,
   positionIn,
   railEntries,
-  seriesKey,
+  sameTitle,
   seriesStatus,
   spineColors,
   spineHeight,
@@ -63,12 +64,100 @@ describe('rails', () => {
     expect(seriesKey('Émile')).toBe('emile');
   });
 
-  it("picks the rail named like the series, else the book's first", () => {
+  it('picks the rail named like the series, else none', () => {
     const cosmere = rail('Cosmere', []);
     expect(pickRail([cosmere, stormlight], 'The Stormlight Archive.')).toBe(stormlight);
-    expect(pickRail([cosmere, stormlight], 'Mistborn')).toBe(cosmere);
+    // A respelling a catalogue makes: no article, a trailing "Series".
+    expect(pickRail([cosmere, stormlight], 'Stormlight Archive Series')).toBe(stormlight);
+    // No rail is the series: none, never the book's first (its gaps would be another series').
+    expect(pickRail([cosmere, stormlight], 'Mistborn')).toBeUndefined();
     expect(pickRail([], 'x')).toBeUndefined();
     expect(pickRail(undefined, 'x')).toBeUndefined();
+  });
+
+  it("picks a rail's reading order named like the series", () => {
+    const narnia: MetaSeries = {
+      ...rail('The Chronicles of Narnia', [work('1', 'LWW'), work('6', 'MN')]),
+      orderings: [
+        {
+          id: 'narnia-chrono',
+          name: 'Narnia (Chronological)',
+          ordering: 'chronological',
+          position: '2',
+          works: [work('1', 'MN'), work('2', 'LWW')],
+        },
+      ],
+    };
+    const picked = pickRail([narnia], 'narnia chronological');
+    expect(picked?.name).toBe('Narnia (Chronological)');
+    expect(railEntries(picked!).map((e) => e.title)).toEqual(['MN', 'LWW']);
+  });
+
+  // The Tiffany Aching case: three books in "Discworld: Tiffany Aching", whose
+  // works are also Discworld 32, 38 and 41.
+  const discworld = rail(
+    'Discworld',
+    [32, 38, 41, 1, 2].map((i) => ({ ...work(String(i), `Discworld ${i}`), id: `dw-${i}` })),
+  );
+  const tiffany = (name: string) =>
+    rail(
+      name,
+      [2, 4, 5, 1].map((i, k) => ({
+        ...work(String(i), `Tiffany ${i}`),
+        id: `dw-${[32, 38, 41, 1][k]}`,
+      })),
+    );
+  const tiffanyBooks = [32, 38, 41].map((i) =>
+    adminBook({ series: 'Discworld: Tiffany Aching', title: `T${i}`, path: `tiffany/${i}` }),
+  );
+  const tiffanyWorks = resolved(tiffanyBooks.map((b, k) => [b, `dw-${[32, 38, 41][k]}`]));
+
+  it('never takes the parent series for a sub-series named after it', () => {
+    expect(
+      pickRail([discworld], 'Discworld: Tiffany Aching', tiffanyBooks, tiffanyWorks),
+    ).toBeUndefined();
+    // Named otherwise, the sub-series' own rail is found by its books.
+    const sub = tiffany('Tiffany Aching Sequence');
+    expect(
+      pickRail([discworld, sub], 'Discworld: Tiffany Aching', tiffanyBooks, tiffanyWorks),
+    ).toBe(sub);
+  });
+
+  it('picks a rail by its books only when two or more, and most, of them are on it', () => {
+    const elsewhere = rail('Elsewhere', [
+      { ...work('1', 'One'), id: 'dw-32' },
+      { ...work('2', 'Two'), id: 'dw-38' },
+    ]);
+    // Two of three resolved books: most of them.
+    expect(pickRail([elsewhere], 'Tiffany', tiffanyBooks, tiffanyWorks)).toBe(elsewhere);
+    // One book is not enough: every series it is in holds it.
+    const one = resolved([[tiffanyBooks[0], 'dw-32']]);
+    expect(pickRail([elsewhere], 'Tiffany', tiffanyBooks, one)).toBeUndefined();
+    // Two of five is not most.
+    const five = [...tiffanyBooks, adminBook({ path: 'x/4' }), adminBook({ path: 'x/5' })];
+    const fiveWorks = new Map([
+      ...tiffanyWorks,
+      [refKey(five[3]), 'other-1'],
+      [refKey(five[4]), 'other-2'],
+    ]);
+    expect(pickRail([elsewhere], 'Tiffany', five, fiveWorks)).toBeUndefined();
+    // No works resolved: nothing to go by.
+    expect(pickRail([elsewhere], 'Tiffany', tiffanyBooks)).toBeUndefined();
+  });
+
+  it('takes a rail the series name merely extends, without a separator', () => {
+    const mistborn = tiffany('Mistborn');
+    expect(pickRail([mistborn], 'Mistborn Trilogy', tiffanyBooks, tiffanyWorks)).toBe(mistborn);
+    expect(pickRail([mistborn], 'Mistborn - Era One', tiffanyBooks, tiffanyWorks)).toBeUndefined();
+  });
+
+  it('prefers the smaller of two rails holding as many of the books', () => {
+    const big = rail(
+      'Big',
+      [32, 38, 41, 50, 60].map((i) => ({ ...work(String(i), `B${i}`), id: `dw-${i}` })),
+    );
+    const small = tiffany('Small');
+    expect(pickRail([big, small], 'Tiffany', tiffanyBooks, tiffanyWorks)).toBe(small);
   });
 
   it('keeps one numbered entry per position, in order', () => {
@@ -108,6 +197,67 @@ describe('seriesStatus', () => {
   it('is complete when every position is held', () => {
     const owned = [1, 2, 3, 4, 5].map((i) => book(i, `B${i}`));
     expect(seriesStatus(stormlight, placeBooks(owned, stormlight)).missing).toEqual([]);
+  });
+});
+
+describe('placing books by title', () => {
+  // Bobiverse: book 2 matched (its work resolved), books 1 and 3 unmatched and
+  // unnumbered, titled with a file's numbering.
+  const bobiverse = rail(
+    'Bobiverse',
+    [
+      work('1', 'We Are Legion (We Are Bob)'),
+      work('2', 'For We Are Many'),
+      work('3', 'All These Worlds'),
+      work('4', "Heaven's River"),
+    ].map((w, i) => ({ ...w, id: `bv-${i + 1}` })),
+  );
+  const bv = (title: string, over = {}) =>
+    adminBook({ series: 'Bobiverse', series_index: 0, title, path: `bv/${title}`, ...over });
+  const legion = bv('BV01 - We Are Legion (We Are Bob)');
+  const many = bv('For We Are Many', { matched: true });
+  const worlds = bv('BV03 - All These Worlds');
+
+  it('puts an unnumbered book on the missing entry its title is', () => {
+    const placed = placeBooks([legion, many, worlds], bobiverse, resolved([[many, 'bv-2']]));
+    const st = seriesStatus(bobiverse, placed);
+    expect(st.have).toEqual([1, 2, 3]);
+    expect(st.missing).toEqual([{ position: 4, title: "Heaven's River" }]);
+    expect(shelf(spineRow(placed, st.missing))).toEqual([
+      '#1 BV01 - We Are Legion (We Are Bob)',
+      '#2 For We Are Many',
+      '#3 BV03 - All These Worlds',
+      'gap 4',
+    ]);
+  });
+
+  it('reads a title without its numbering or a trailing bracketed part', () => {
+    expect(sameTitle('BV01 - We Are Legion', 'We Are Legion (We Are Bob)')).toBe(true);
+    expect(sameTitle('01 - For We Are Many', 'For We Are Many')).toBe(true);
+    expect(sameTitle('Book 3: All These Worlds', 'All These Worlds')).toBe(true);
+    expect(sameTitle('DF15.5 Brief Cases', 'Brief Cases')).toBe(true);
+    expect(sameTitle('All These Worlds', 'All These Worlds Collide')).toBe(false);
+    expect(sameTitle('1984', '1984')).toBe(true);
+    expect(sameTitle('We Are Legion', 'For We Are Many')).toBe(false);
+  });
+
+  it('never moves a book known to be another work, nor onto a held entry', () => {
+    const other = bv('All These Worlds', { matched: true, path: 'bv/other' });
+    // Its work resolved to one the rail doesn't list: it stays at the end.
+    const placed = placeBooks([other], bobiverse, resolved([[other, 'elsewhere']]));
+    expect(placed[0].slot).toBe('end');
+    // Entry 3 is held by its work; a second copy by title stays at the end.
+    const held = bv('All These Worlds', { matched: true, path: 'bv/held' });
+    const both = placeBooks([held, worlds], bobiverse, resolved([[held, 'bv-3']]));
+    expect(both.map((p) => [p.slot, p.position])).toEqual([
+      ['rail', 3],
+      ['end', 0],
+    ]);
+  });
+
+  it('keeps a numbered book where its number puts it', () => {
+    const numbered = bv('BV03 - All These Worlds', { series_index: 4 });
+    expect(placeBooks([numbered], bobiverse)[0]).toMatchObject({ slot: 'rail', position: 4 });
   });
 });
 
@@ -309,34 +459,50 @@ describe('a book in several series', () => {
   });
 });
 
-describe('groupSeriesPages', () => {
-  it('groups by series in index order and stops at the first book without one', () => {
-    const pages = [
-      {
-        books: [
-          book(2, 'Words of Radiance'),
-          book(1, 'The Way of Kings'),
-          adminBook({ series: 'The Murderbot Diaries', path: 'm1' }),
-        ],
-        next_cursor: 'c1',
-      },
-    ];
-    const first = groupSeriesPages(pages, true);
-    expect(first.done).toBe(false);
-    expect(first.bySeries.get('The Stormlight Archive')?.map((b) => b.title)).toEqual([
-      'The Way of Kings',
-      'Words of Radiance',
-    ]);
-    expect(first.bySeries.get('The Murderbot Diaries')).toHaveLength(1);
+describe('filterSeries', () => {
+  const list = [
+    { name: 'He Who Fights with Monsters', author: 'Shirtaloon' },
+    { name: 'Earthsea', author: 'Ursula K. Le Guin' },
+    { name: 'The Expanse', author: 'James S. A. Corey' },
+  ].map((s) => ({ ...s, books: 1, duration: 1, positions: [], extra_books: 0 }));
+  const names = (q: string) => filterSeries(list, q).map((s) => s.name);
 
-    const second = groupSeriesPages(
-      [...pages, { books: [adminBook({ series: '', path: 'loose' })], next_cursor: 'c2' }],
-      true,
-    );
-    expect(second.done).toBe(true);
-    expect([...second.bySeries.keys()]).not.toContain('');
-    // No next page: everything has loaded.
-    expect(groupSeriesPages(pages, false).done).toBe(true);
+  it('finds a series by its name or author, as series keys compare', () => {
+    expect(names('fights  WITH')).toEqual(['He Who Fights with Monsters']);
+    expect(names('le guin')).toEqual(['Earthsea']);
+    expect(names('James S.A.')).toEqual(['The Expanse']);
+    expect(names('nothing')).toEqual([]);
+  });
+
+  it('keeps every series for a search with nothing to compare', () => {
+    expect(names('  ')).toHaveLength(3);
+    expect(names('?!')).toHaveLength(3);
+  });
+});
+
+describe('positionIn', () => {
+  it("reads a book's place in the series however the series is spelled", () => {
+    const b = adminBook({
+      series: 'He Who Fights With Monsters',
+      series_index: 4,
+      series_list: [{ name: 'He Who Fights With Monsters', position: 4 }],
+    });
+    expect(positionIn(b, 'He Who Fights with Monsters')).toBe(4);
+    expect(positionIn(b, 'He Who Fights WIth Monsters')).toBe(4);
+    expect(positionIn(b, 'Monsters')).toBe(0);
+  });
+
+  it('keeps names with no letter or number apart, as the server does', () => {
+    const b = adminBook({
+      series: '!!',
+      series_index: 2,
+      series_list: [
+        { name: '!!', position: 2 },
+        { name: '?!', position: 5 },
+      ],
+    });
+    expect(positionIn(b, '?!')).toBe(5);
+    expect(positionIn(b, '!!')).toBe(2);
   });
 });
 

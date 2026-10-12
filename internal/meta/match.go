@@ -59,6 +59,9 @@ type MatchQuery struct {
 	BookISBN    string
 	Region      string
 	Limit       int
+	// NoSeries says the caller reads no candidate's series (a repick), so the
+	// series records the series rules read aren't fetched for it.
+	NoSeries bool
 }
 
 // limit is how many works the query expands.
@@ -115,8 +118,10 @@ type MatchReasons struct {
 	Identifier string `json:"identifier,omitempty"`
 }
 
-// MatchSeries is a series the work belongs to, with its position.
+// MatchSeries is a series the work belongs to, with its position and its
+// community id.
 type MatchSeries struct {
+	ID       string `json:"id,omitempty"`
 	Name     string `json:"name"`
 	Position string `json:"position"`
 }
@@ -138,6 +143,11 @@ type MatchRecording struct {
 	ASINRegion string   `json:"asin_region,omitempty"`
 	ISBNs      []string `json:"isbns"`
 	CoverURL   string   `json:"cover_url,omitempty"`
+	// Series is the series a book that is this recording is in, its main one
+	// first: the candidate's, with an edition named for this recording in front
+	// (seriesrules.go). The console and a bulk run read it, so neither has a
+	// copy of the rule.
+	Series []MatchSeries `json:"series"`
 }
 
 // ASINRef is one of a recording's ASINs with the Audible marketplace it sells in
@@ -328,18 +338,23 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 		hits = hits[:q.limit()]
 	}
 
-	// Expand each hit into its full work document, a few at a time.
-	out := make([]*MatchCandidate, len(hits))
+	// Expand each hit into its full work document, a few at a time, then read the
+	// facts of their series once each (works often share one).
+	details := make([]*upstreamWorkDetail, len(hits))
 	errs := make([]error, len(hits))
 	var wg sync.WaitGroup
 	for i, h := range hits {
-		wg.Go(func() {
-			detail, err := s.fetchWork(ctx, h.id)
-			if err != nil {
-				errs[i] = err
-				return
-			}
-			c := s.toCandidate(detail, h.cover, q.Region)
+		wg.Go(func() { details[i], errs[i] = s.fetchWork(ctx, h.id) })
+	}
+	wg.Wait()
+	facts := map[string]*seriesFacts{}
+	if !q.NoSeries {
+		facts = s.seriesFactsFor(ctx, slices.DeleteFunc(slices.Clone(details), func(d *upstreamWorkDetail) bool { return d == nil }))
+	}
+	out := make([]*MatchCandidate, len(hits))
+	for i, h := range hits {
+		if detail := details[i]; detail != nil {
+			c := s.toCandidate(detail, facts, h.cover, q.Region)
 			c.RecordingID = h.recordingID
 			if rec := DefaultRecording(c, q.Duration, q.Region); rec != nil {
 				c.DefaultRecordingID = rec.ID
@@ -350,9 +365,8 @@ func (s *Service) Candidates(ctx context.Context, q MatchQuery) ([]MatchCandidat
 				c.Score = scoreCandidate(q, c)
 			}
 			out[i] = c
-		})
+		}
 	}
-	wg.Wait()
 
 	cands := make([]MatchCandidate, 0, len(hits))
 	var expandErr error
@@ -524,23 +538,23 @@ func hasMatchFacts(v url.Values) bool {
 	return false
 }
 
-func (s *Service) toCandidate(d *upstreamWorkDetail, cover, region string) *MatchCandidate {
+// toCandidate builds a candidate from its work document. Its series are the ones
+// a book of the work is in whatever its recording (seriesrules.go, with the
+// series' facts): never a variant reading order (it repeats a series at another
+// position), a translation or another language's series, nor an edition; each
+// recording carries its own, an edition named for it first.
+func (s *Service) toCandidate(d *upstreamWorkDetail, facts map[string]*seriesFacts, cover, region string) *MatchCandidate {
+	series := newWorkSeries(d, facts)
 	c := &MatchCandidate{
 		WorkID: d.ID, Title: d.Title, Subtitle: d.Subtitle, Authors: toPersonRefs(d.Authors),
 		Language: d.Language, FirstPublished: d.FirstPublished, Description: d.Description,
-		Series: []MatchSeries{}, CoverURL: cover, WebURL: s.workURL(d.ID), Recordings: []MatchRecording{},
-	}
-	for _, sr := range d.Series {
-		// Alternate reading orders of one series repeat it; the console wants the
-		// series once, at its main position.
-		if sr.OrderingOf == "" {
-			c.Series = append(c.Series, MatchSeries{Name: sr.Name, Position: sr.Position})
-		}
+		Series: series.of(""), CoverURL: cover, WebURL: s.workURL(d.ID), Recordings: []MatchRecording{},
 	}
 	for _, r := range d.Recordings {
 		mr := MatchRecording{
 			ID: r.ID, Narrators: toPersonRefs(r.Narrators), Abridged: r.Abridged, RuntimeMin: r.RuntimeMin,
 			ReleaseDate: r.ReleaseDate, Publisher: r.Publisher, ASINRefs: []ASINRef{}, ISBNs: []string{}, CoverURL: r.CoverURL,
+			Series: series.of(r.ID),
 		}
 		for _, a := range r.ASIN {
 			if ref := ASINRef(a); a.ASIN != "" && !slices.Contains(mr.ASINRefs, ref) {
