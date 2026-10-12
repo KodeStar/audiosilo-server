@@ -58,17 +58,22 @@ func Handler(fsys fs.FS, csp string) http.Handler {
 }
 
 // notBuiltPage is what a source build without the console serves at /admin. It
-// is self-contained: no inline style or script, so the strict CSP holds.
+// wears the connect page's stylesheet (internal/web/assets) and has no inline style
+// or script, so the strict CSP holds.
 const notBuiltPage = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AudioSilo - admin console not built</title></head>
+<title>AudioSilo - admin console not built</title>
+<script src="/assets/theme-init.js"></script>
+<link rel="stylesheet" href="/assets/style.css"></head>
 <body>
+<div class="center"><div class="column"><div class="card">
 <h1>The admin console isn't built</h1>
-<p>This server was compiled without the admin console. Build it, then rebuild the server:</p>
+<p class="muted">This server was compiled without the admin console. Build it, then rebuild the server:</p>
 <pre>scripts/build-admin.sh
 go build ./cmd/audiosilo</pre>
-<p>Release binaries and the Docker image include it.</p>
+<p class="muted">Release binaries and the Docker image include it.</p>
+</div></div></div>
 </body>
 </html>
 `

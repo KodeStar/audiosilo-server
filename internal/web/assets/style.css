@@ -1,151 +1,243 @@
 /* AudioSilo connect and setup pages (the admin console is the separate admin-ui
-   app). Design cues are ported from the Expo player: Roboto, dark-mode-first,
-   borders-instead-of-shadows, with a violet accent (#7c3aed). The pages are served
-   under a strict same-origin CSP (style-src 'self'; script-src 'self'), so ALL
-   styling lives here - there are no inline <style> blocks or style="" attributes
-   in the HTML. */
+   app). They wear the console's Shelf look: the tokens below mirror
+   admin-ui/src/styles/globals.css (STYLEGUIDE.md section 3), and the card, field
+   and button rules mirror the console's sign-in page (login-page.tsx). Keep them
+   in sync when the console's tokens change. The pages are served under a strict
+   same-origin CSP (style-src 'self'; script-src 'self'), so ALL styling lives
+   here - there are no inline <style> blocks or style="" attributes in the HTML.
+   theme-init.js sets data-theme on <html> before the first paint. */
 
-/* Self-hosted Roboto (latin) - no CDN, so it works offline and under the CSP. */
+/* Self-hosted variable fonts (latin subset, SIL OFL 1.1, from @fontsource-variable)
+   - no CDN, so they work offline and under the CSP. */
 @font-face {
-  font-family: "Roboto";
+  font-family: "Figtree";
   font-style: normal;
-  font-weight: 400;
+  font-weight: 300 900;
   font-display: swap;
-  src: url("/assets/fonts/roboto-400.woff2") format("woff2");
+  src: url("/assets/fonts/figtree-variable.woff2") format("woff2-variations");
 }
 @font-face {
-  font-family: "Roboto";
+  font-family: "Bricolage Grotesque";
   font-style: normal;
-  font-weight: 500;
+  font-weight: 200 800;
   font-display: swap;
-  src: url("/assets/fonts/roboto-500.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Roboto";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("/assets/fonts/roboto-700.woff2") format("woff2");
+  src: url("/assets/fonts/bricolage-grotesque-variable.woff2") format("woff2-variations");
 }
 
 :root {
-  --primary: #7c3aed;        /* violet-600 */
-  --primary-press: #6d28d9;  /* violet-700 */
-  --bg: #1f2937;        /* gray-800 */
-  --surface: #1a2331;   /* gray-840 */
-  --surface-alt: #161f2c; /* gray-860 */
-  --border: #2c3340;    /* gray-750 */
-  --text: #e5e7eb;      /* gray-200 */
-  --text-muted: #9ca3af; /* gray-400 */
-  --muted: #6b7280;     /* gray-500 */
-  --danger: #ef4444;
-  --radius: 8px;
-  --radius-lg: 12px;
+  color-scheme: light;
+  --radius-sm: 8px;
+  --radius-md: 10px;   /* buttons, inputs */
+  --radius-btn-lg: 12px;
+  --radius-xl: 16px;   /* cards */
+
+  --background: #f5f7fa;
+  --foreground: #121c36;
+  --card: #ffffff;
+  --primary: #15203d;
+  --primary-foreground: #f5f7fa;
+  --secondary: #eaedf3;
+  --secondary-foreground: #18244a;
+  --muted: #eef1f5;
+  --muted-foreground: #5b6680;
+  --subtle-foreground: #8590a6;
+  --accent: #e8ecf3;
+  --destructive: #c42b3c;
+  --destructive-soft: #fde8ea;
+  --border: #e0e5ed;
+  --border-strong: #cdd4df;
+  --input: #d4dae4;
+  --ring: #db2777;
+  --brand: #db2777;
+
+  --font-display: "Bricolage Grotesque", "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --dur-1: 120ms;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0a0f1e;
+  --foreground: #e7ebf4;
+  --card: #10172b;
+  --primary: #eef1f8;
+  --primary-foreground: #0a0f1e;
+  --secondary: #1a2340;
+  --secondary-foreground: #dfe5f2;
+  --muted: #151d34;
+  --muted-foreground: #8f9ab3;
+  --subtle-foreground: #66718b;
+  --accent: #1a2340;
+  --destructive: #f0606e;
+  --destructive-soft: #3a1720;
+  --border: #1d2640;
+  --border-strong: #2a3555;
+  --input: #283252;
+  --ring: #ec4f95;
+  --brand: #ec4f95;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font-family: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 15px;
+  font-family: var(--font-sans);
+  font-size: 14px;
   line-height: 1.5;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--background);
+  color: var(--foreground);
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--primary); }
+a { color: inherit; }
+::selection { background: color-mix(in oklab, var(--brand) 25%, transparent); }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
-h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
-h2 { font-size: 18px; font-weight: 500; margin: 0 0 4px; }
-h3 { font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin: 0 0 12px; }
-p.muted, .muted { color: var(--text-muted); }
+h1, h2 { font-family: var(--font-display); line-height: 1.15; margin: 0; }
+h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.03em; }
+h2 { font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
+p { margin: 6px 0 0; }
+.muted { color: var(--muted-foreground); }
 .hidden { display: none !important; }
 
-/* ---- Brand / logo ---- */
-.brand { display: flex; align-items: center; gap: 10px; }
-.brand .logo { width: 34px; height: 34px; display: block; }
-.brand .wordmark { font-weight: 700; font-size: 20px; letter-spacing: 0.3px; line-height: 1; }
-.brand .wordmark .a { color: var(--primary); }
-.brand .wordmark .s { color: var(--text-muted); }
+/* ---- Layout: a 400px column centred on the page (the console's sign-in) ---- */
+.center { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 40px 16px; }
+.column { width: 100%; max-width: 400px; }
+.spacer { height: 12px; }
+.inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 18px; }
+
+/* ---- Brand: the mark on its ink tile + the wordmark (logo.tsx LogoTile) ---- */
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+.brand .tile {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--primary);
+  color: var(--brand);
+}
+.brand .tile svg { width: 20px; height: 20px; display: block; }
+.brand .wordmark { font-family: var(--font-display); font-size: 16px; font-weight: 700; letter-spacing: -0.02em; }
+
+/* ---- Card ---- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 24px;
+}
+@media (min-width: 640px) { .card { padding: 32px; } }
 
 /* ---- Forms ---- */
-label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin: 0 0 6px; }
-input, select, textarea, button { font: inherit; }
-input, select, textarea {
+form { display: flex; flex-direction: column; gap: 16px; margin-top: 24px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field .muted { margin: 0; font-size: 13px; }
+label { font-size: 13px; font-weight: 600; }
+input, select, button { font: inherit; }
+input {
   width: 100%;
-  padding: 11px 13px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  background: var(--surface-alt);
-  color: var(--text);
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--input);
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 14px;
+  transition: border-color var(--dur-1), box-shadow var(--dur-1);
 }
-input::placeholder { color: var(--muted); }
-input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); }
-.field { margin-bottom: 14px; }
-.field:last-child { margin-bottom: 0; }
+input::placeholder { color: var(--subtle-foreground); }
+input:focus-visible, select:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 20%, transparent);
+}
 
-/* ---- Buttons ---- */
-button {
-  cursor: pointer;
-  padding: 11px 18px;
-  border-radius: var(--radius);
+/* ---- Buttons (and links styled as buttons): Shelf ink default, hairline outline ---- */
+button, .button, .links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: var(--primary);
-  color: #fff;
-  font-weight: 500;
+  color: var(--primary-foreground);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--dur-1), border-color var(--dur-1), transform var(--dur-1);
 }
-button:hover { background: var(--primary-press); }
-button:active { opacity: 0.8; }
-button:disabled { opacity: 0.5; cursor: default; }
-button.secondary { background: var(--surface-alt); color: var(--text); border-color: var(--border); }
-button.secondary:hover { border-color: var(--primary); background: var(--surface-alt); }
-button.block { width: 100%; }
-
-/* ---- Cards ---- */
-.card {
-  background: var(--surface);
-  border: 1px solid var(--surface-alt);
-  border-radius: var(--radius-lg);
-  padding: 22px;
+button:hover, .button:hover, .links a.primary:hover {
+  background: color-mix(in oklab, var(--primary) 88%, var(--brand));
 }
-.card + .card { margin-top: 16px; }
-.card.narrow { max-width: 420px; width: 100%; }
+button:active, .button:active, .links a:active { transform: translateY(1px); }
+button:disabled { opacity: 0.45; pointer-events: none; }
+button.block { width: 100%; height: 44px; padding: 0 20px; border-radius: var(--radius-btn-lg); font-size: 15px; margin-top: 4px; }
+.button.secondary, .links a {
+  background: var(--card);
+  color: var(--foreground);
+  border-color: var(--border-strong);
+}
+.button.secondary:hover, .links a:hover { background: var(--accent); }
 
-/* ---- Layout primitives ---- */
-.inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.spacer { height: 12px; }
-
-/* ---- Centered (login / connect) ---- */
-.center { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-
-/* ---- Messages / toasts ---- */
-.msg { margin: 14px 0 0; padding: 11px 13px; border-radius: var(--radius); font-size: 14px; display: none; }
+/* ---- Messages ---- */
+.msg { display: none; margin: 16px 0 0; font-size: 13px; font-weight: 500; color: var(--destructive); }
 .msg.show { display: block; }
-.msg.error { background: rgba(239, 68, 68, 0.12); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
-/* ---- QR / links (connect) ---- */
-.qr { text-align: center; margin: 20px 0; }
-.qr img { width: 240px; height: 240px; image-rendering: pixelated; background: #fff; border-radius: var(--radius); padding: 10px; }
-.links { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
-.links a { text-align: center; text-decoration: none; padding: 12px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-weight: 500; }
-.links a:hover { border-color: var(--primary); }
-.links a[aria-disabled="true"] { opacity: 0.4; pointer-events: none; }
-.links a.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
 
-/* Language selector (connect footer). */
+/* ---- QR / links (connect) ---- */
+#result, #setup-done { margin-top: 24px; }
+.qr { display: flex; justify-content: center; margin: 20px 0; }
+/* The QR is a PNG with a white quiet zone, so it sits on a white tile in both themes. */
+.qr img {
+  width: 240px;
+  height: 240px;
+  max-width: 100%;
+  image-rendering: pixelated;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 12px;
+}
+.links { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+.links a { height: 44px; border-radius: var(--radius-btn-lg); font-size: 15px; }
+.links a.primary { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.links a[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+
+/* ---- Footer row under the card (language picker) ---- */
 .lang-row {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 20px;
   font-size: 13px;
-  color: var(--text-muted);
+  color: var(--muted-foreground);
 }
+.lang-row label { font-size: 13px; font-weight: 500; }
 .lang-select {
-  width: auto;
-  flex: 0 0 auto;
-  padding: 6px 9px;
-  border-radius: var(--radius);
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--input);
+  background: var(--card);
+  color: var(--foreground);
   font-size: 13px;
+}
+
+/* ---- Code (the "console not built" page) ---- */
+pre {
+  margin: 16px 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  overflow-x: auto;
 }
