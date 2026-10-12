@@ -13,7 +13,7 @@
 // build); the stale-while-revalidate branch below caches them on first use, so
 // the console works offline after one online visit. Bump VERSION whenever the
 // shell list changes shape so old caches are dropped.
-const VERSION = "audiosilo-admin-v3";
+const VERSION = "audiosilo-admin-v4";
 const SHELL = [
   "/admin",
   "/admin/theme-init.js",
@@ -72,10 +72,13 @@ self.addEventListener("fetch", (e) => {
     return; // other navigations pass straight through to the network
   }
 
-  // The console's unhashed files (theme-init.js) change in place with a release
-  // and are served no-cache: network-first, the cache only when offline. Running
-  // a stale copy once after an upgrade would pair old code with a new page.
-  if (url.pathname.startsWith("/admin/") && !url.pathname.startsWith("/admin/assets/")) {
+  // Unhashed code and styles - the console's (theme-init.js) and the connect and
+  // setup pages' /assets/*.css|js, which share this scope - change in place with a
+  // release and revalidate on every load (an ETag, no freshness lifetime):
+  // network-first, the cache only when offline.
+  // Running a stale copy once after an upgrade would pair old code with a new page.
+  const unhashedConsole = url.pathname.startsWith("/admin/") && !url.pathname.startsWith("/admin/assets/");
+  if (unhashedConsole || /^\/assets\/[^/]+\.(css|js)$/.test(url.pathname)) {
     e.respondWith(
       fetch(req)
         .then((res) => {
@@ -90,7 +93,7 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Everything else static (hashed console assets, icons, the manifest):
+  // Everything else static (hashed console assets, fonts, icons, the manifest):
   // stale-while-revalidate.
   e.respondWith(
     caches.match(req).then((cached) => {
