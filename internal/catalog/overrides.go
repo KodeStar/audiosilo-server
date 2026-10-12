@@ -603,7 +603,7 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 
 	// Refresh FTS: delete-then-insert keyed by rowid = book id, from the effective
 	// values just written. The series column holds every series the book is in,
-	// so a search (and the series= filter's candidates) find it by any.
+	// so a search finds it by any (the series= filter goes by key instead).
 	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, bookID); err != nil {
 		return err
 	}

@@ -136,9 +136,10 @@ func Run(ctx context.Context, opts Options) error {
 	if restored != nil {
 		recordRestore(ctx, cat, restored, log)
 	}
-	// Books indexed before series keys were stored get them now, once, before
-	// anything reads a series filter (about a second per 50,000 books). Every series
-	// filter reads only the keys, so a failure stops the start, as a migration's does.
+	// Books indexed before series keys were stored (or keyed by older rules or
+	// Unicode tables) get them now, before anything reads a series filter (about a
+	// second per 50,000 books). Every series filter reads only the keys, so a failure
+	// stops the start, as a migration's does.
 	if n, err := cat.KeySeries(ctx); err != nil {
 		return fmt.Errorf("keying the books' series: %w", err)
 	} else if n > 0 {

@@ -31,9 +31,11 @@ type SeriesSpelling struct {
 	Books int    `json:"books"`
 }
 
-// SeriesSpellingGroup is a series of one library spelled several ways: the name
-// the Series page gives it (seriesName, the spelling to offer), each spelling
-// with its books (most first, ties alphabetical), and how many books it has.
+// SeriesSpellingGroup is a series of one library spelled several ways: the
+// spelling to offer (seriesName, the Series page's rule, over this library's main
+// series only, so it can differ from the Series page's name when other libraries
+// or more_series lists spell it too), each spelling with its books (most first,
+// ties alphabetical), and how many books it has.
 type SeriesSpellingGroup struct {
 	LibraryID int64            `json:"library_id"`
 	Suggested string           `json:"suggested"`

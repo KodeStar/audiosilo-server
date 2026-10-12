@@ -296,6 +296,18 @@ func TestKeySeries(t *testing.T) {
 			t.Fatalf("KeySeries = %d, %v; want %d", n, err, want)
 		}
 	}
+	// Keys stored by other rules or Unicode tables (or the first build's bare
+	// "done") are keyed again, once.
+	for _, stale := range []any{true, "0/old"} {
+		if err := putServerState(ctx, c.db, seriesKeysKey, stale, c.stamp()); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []int{17, 0} {
+			if n, err := c.KeySeries(ctx); err != nil || n != want {
+				t.Fatalf("KeySeries over %v = %d, %v; want %d", stale, n, err, want)
+			}
+		}
+	}
 	if n := count("He Who Fights WIth Monsters"); n != 13 {
 		t.Errorf("after keying: %d books, want 13", n)
 	}

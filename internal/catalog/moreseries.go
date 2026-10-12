@@ -8,6 +8,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"unicode"
+
+	unorm "golang.org/x/text/unicode/norm"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
@@ -233,20 +236,29 @@ func ftsSeries(series, more string) string {
 	return strings.Join(names, "\n")
 }
 
-// seriesKeysKey is the server_state row saying KeySeries has run.
+// seriesKeysKey is the server_state row holding the seriesKeysVersion the stored
+// keys were computed with.
 const seriesKeysKey = "series_keys"
 
-// KeySeries keys, once per database, the books indexed before series keys were
-// stored (migration 0041 added books.series_key and book_more_series empty):
-// every book's main series key and other series, written as refreshEffective
-// writes them. It first puts every stored more_series list through
-// normalizeMoreSeries, since a list written before a series became one by its key
-// can name one series twice, in two spellings, and rebuilds those books whole.
-// One transaction, before the server answers (the series filters read only the
-// keys), about a second per 50,000 books. It returns how many books it keyed;
-// 0 once it has run (server_state seriesKeysKey).
+// seriesKeysVersion names what a stored key was computed with: the key's rules
+// (the leading number: bump it whenever seriesKey or match.SeriesKey changes what
+// a name keys to) and the Unicode tables behind them (Go's letters and numbers,
+// x/text's NFKD), so a toolchain or dependency upgrade that reads a name another
+// way keys every book again instead of leaving filters on stale keys.
+var seriesKeysVersion = "1/" + unicode.Version + "/" + unorm.Version
+
+// KeySeries keys the books whose stored keys are missing or out of date: once per
+// database for the books indexed before series keys were stored (migration 0041
+// added books.series_key and book_more_series empty), and again whenever
+// seriesKeysVersion changes. Every book's main series key and other series are
+// written as refreshEffective writes them. It first puts every stored more_series
+// list through normalizeMoreSeries, since a list written before a series became
+// one by its key can name one series twice, in two spellings, and rebuilds those
+// books whole. One transaction, before the server answers (the series filters
+// read only the keys), about a second per 50,000 books. It returns how many books
+// it keyed; 0 while the stored keys are current (server_state seriesKeysKey).
 func (c *Catalog) KeySeries(ctx context.Context) (int, error) {
-	if done, err := getServerState[bool](ctx, c.db, seriesKeysKey); err != nil || done {
+	if v, err := getServerState[string](ctx, c.db, seriesKeysKey); err != nil || v == seriesKeysVersion {
 		return 0, err
 	}
 	keyed := 0
@@ -278,11 +290,12 @@ func (c *Catalog) KeySeries(ctx context.Context) (int, error) {
 			}
 		}
 		type book struct {
-			id, lib      int64
-			series, more string
+			id, lib           int64
+			series, key, more string
 		}
-		books, err := queryRows(ctx, tx, func(r *sql.Rows, b *book) error { return r.Scan(&b.id, &b.lib, &b.series, &b.more) },
-			`SELECT id, library_id, series, more_series FROM books`)
+		books, err := queryRows(ctx, tx, func(r *sql.Rows, b *book) error {
+			return r.Scan(&b.id, &b.lib, &b.series, &b.key, &b.more)
+		}, `SELECT id, library_id, series, series_key, more_series FROM books`)
 		if err != nil {
 			return err
 		}
@@ -295,8 +308,8 @@ func (c *Catalog) KeySeries(ctx context.Context) (int, error) {
 		}
 		defer setKey.Close()
 		for _, b := range books {
-			if b.series != "" {
-				if _, err := setKey.ExecContext(ctx, seriesKey(b.series), b.id); err != nil {
+			if k := seriesKey(b.series); k != b.key { // a re-key leaves current keys alone
+				if _, err := setKey.ExecContext(ctx, k, b.id); err != nil {
 					return err
 				}
 			}
@@ -310,7 +323,7 @@ func (c *Catalog) KeySeries(ctx context.Context) (int, error) {
 			}
 		}
 		keyed = len(books)
-		return putServerState(ctx, tx, seriesKeysKey, true, c.stamp())
+		return putServerState(ctx, tx, seriesKeysKey, seriesKeysVersion, c.stamp())
 	})
 	return keyed, err
 }

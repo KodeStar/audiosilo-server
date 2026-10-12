@@ -849,24 +849,27 @@ admin overrides; see Metadata overrides below).
   "Expanse" stay two). `catalog.Series` groups by it (counts, positions, lengths and authors
   merged; `SeriesList` and `normalizeMoreSeries` keep a series once however a list spells it again) and names the group `seriesName`: the spelling its
   matched books use most, else the most books', ties alphabetical. **The key is stored**
-  (migration 0041): `refreshEffective` writes `books.series_key` (`mainSeriesKey`, '' for no
+  (migration 0041): `refreshEffective` writes `books.series_key` (`seriesKey`, '' for no
   series; index `idx_books_series_key (library_id, series_key, series, series_index)`, which
   replaced `idx_books_series`: spellings adjacent, so Health's `series_spellings` is two range
   seeks per book) and the book's
   other series to `book_more_series` (`keyOtherSeries`: `SeriesList` less the main series, one
   row per key with its position; PK `(book_id, series_key)`, index `(series_key, library_id,
   position)`, cascades with the book). Both are written by Go, never computed in SQL (the key
-  needs NFKD; the catalogue's SQL functions stay out of the schema), and `refreshEffective` is
-  the only writer of `books.series`, so every path that changes a series keys it. Every series
+  needs NFKD; the catalogue's SQL functions stay out of the schema), and every write of
+  `books.series` ends in `refreshEffective` (`UpsertBook` runs it in the scan's own transaction),
+  so every path that changes a series keys it. Every series
   filter asks by key: `seriesFilter` (an `id IN` over `idx_books_series_key` in every library,
   with memberships a UNION ALL of the list rows too; the caller's library term narrows them),
   `seriesOrderKeys` (the key as a literal), `numberedSeriesMembers` (the next book),
   `SeriesBooks`/`seriesMembers` (the rails) and `positionIn` (Go, by key), so the SQL and a
   keyset cursor agree; each is an index seek (`TestNextInSeriesPlan`; under a millisecond for a
   25-book series in 50,000 books, `TestSeriesKeyScale`). Rows indexed before 0041 are keyed by
-  `Catalog.KeySeries`, which the launcher runs once per database (server_state `series_keys`),
-  synchronously before the listener (about a second per 50,000 books; a failure is logged and
-  retried at the next start): it first puts every stored `more_series` override through
+  `Catalog.KeySeries`, which the launcher runs synchronously before the listener whenever the
+  stored keys are missing or out of date (server_state `series_keys` holds `seriesKeysVersion`:
+  the key rules' number, bumped when `seriesKey`/`match.SeriesKey` changes, plus Go's and
+  x/text's Unicode versions, so a toolchain upgrade re-keys); about a second per 50,000 books, and
+  a failure stops the start, as a migration's does (the next start tries again): it first puts every stored `more_series` override through
   `normalizeMoreSeries` (a list written before #123 could name one series twice) and rebuilds
   those books, then keys every book in one transaction. The JSON
   is unchanged: an older player sees fewer, fuller series. **A position from the title**:

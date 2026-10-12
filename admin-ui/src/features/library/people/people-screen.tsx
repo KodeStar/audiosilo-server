@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Link, useNavigate, useSearch } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BookUser, Mic } from 'lucide-react';
 import { usePeople } from '@/api/hooks';
@@ -14,11 +14,9 @@ import { QueryError } from '@/components/query-error';
 import { SearchBox } from '@/components/search-box';
 import { buttonVariants } from '@/components/ui/button';
 import { counted, formatDuration } from '@/lib/format';
-import { clampPage, pageCount } from '@/lib/pager';
-import { compact } from '@/lib/utils';
+import { pageOf } from '@/lib/pager';
 import { LibraryFilter } from '../library-filter';
-import { useLibraryBookCount, useLibraryParam, useUpdateSearch } from '../library-param';
-import type { LibrarySearch } from '../library-search';
+import { useLibraryBookCount, useLibraryParam, useSearchPage } from '../library-param';
 import { MergeSuggestions } from './merge-suggestions';
 import { PEOPLE_PAGE, filterPeople, sortByBooks, sortByDuration } from './people-model';
 
@@ -36,9 +34,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
   const [library] = useLibraryParam();
   const query = usePeople(field, library);
   const bookCount = useLibraryBookCount(library);
-  const { q = '', page: wanted } = useSearch({ strict: false }) as LibrarySearch;
-  const update = useUpdateSearch();
-  const navigate = useNavigate();
+  const { q, page: wanted, search, goTo } = useSearchPage();
 
   const raw = query.data;
   const data = useMemo(
@@ -51,18 +47,7 @@ export function PeopleScreen({ field }: { field: PersonField }) {
   );
 
   const matching = data ? filterPeople(data.people, q) : [];
-  const pages = pageCount(matching.length, PEOPLE_PAGE);
-  const page = clampPage(wanted, pages);
-  const shown = matching.slice((page - 1) * PEOPLE_PAGE, page * PEOPLE_PAGE);
-
-  const search = (value: string) => update((prev) => ({ ...prev, q: value, page: undefined }));
-  // A new page is a history entry (Back returns to the page before), and opens
-  // at the top.
-  const goTo = (n: number) =>
-    void navigate({
-      to: '.',
-      search: (prev: LibrarySearch) => compact({ ...prev, page: n > 1 ? n : undefined }),
-    });
+  const { page, pages, shown } = pageOf(matching, wanted, PEOPLE_PAGE);
 
   return (
     <Page>
