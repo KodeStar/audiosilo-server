@@ -8,8 +8,14 @@
 -- keyed once at start (Catalog.KeySeries, server_state 'series_keys').
 --
 -- Derived, rebuildable index data like the books rows they belong to.
+--
+-- idx_books_series_key replaces idx_books_series, which no query reads once the
+-- filters go by key. series sits before series_index so a series' spellings are
+-- adjacent: Health's "spelled several ways" is two range seeks per book (a
+-- spelling below this one, or above), not a walk of the series.
 ALTER TABLE books ADD COLUMN series_key TEXT NOT NULL DEFAULT '';
-CREATE INDEX idx_books_series_key ON books(library_id, series_key, series_index);
+DROP INDEX idx_books_series;
+CREATE INDEX idx_books_series_key ON books(library_id, series_key, series, series_index);
 
 CREATE TABLE book_more_series (
     book_id    INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,

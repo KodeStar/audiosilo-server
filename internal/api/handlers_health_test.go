@@ -35,6 +35,7 @@ func TestHealthEndpointsRequireAdmin(t *testing.T) {
 	}{
 		{"GET", "/api/v1/admin/issues", "", 200},
 		{"GET", "/api/v1/admin/issues/duplicates", "", 200},
+		{"GET", "/api/v1/admin/issues/series-spellings", "", 200},
 		{"POST", "/api/v1/admin/issues/ignore", ignore, 204},
 		{"DELETE", "/api/v1/admin/issues/ignore", ignore, 204},
 		// The seeded books have no files on disk: the admin's answer is the 404.

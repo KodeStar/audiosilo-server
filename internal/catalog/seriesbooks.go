@@ -235,7 +235,7 @@ func laterSeriesMembers(libraryID int64, relPath string, series string, index fl
 // named series (any spelling: its seriesKey) within one library and scope, other
 // than relPath, with a position in it (above 0): bookCols, then pos, their
 // position. Its two branches are each found by an index: the books whose main
-// series it is by idx_books_series_key (library_id, series_key, series_index),
+// series it is by idx_books_series_key (library_id, series_key, ...),
 // and the books in it only through their list by book_more_series' key index
 // (which never holds a book's main series, so a list repeating it counts once).
 // Both are narrowed by the scope's paths, so a book outside the grant is never a

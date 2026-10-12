@@ -32,11 +32,14 @@ const (
 	IssueSplitDiscs       = "split_discs"
 	IssueScanError        = "scan_error"
 	IssueDuplicate        = "duplicate"
+	// IssueSeriesSpellings: the book's series is spelled another way by other
+	// books of its library (seriesspellings.go).
+	IssueSeriesSpellings = "series_spellings"
 )
 
 // IssueKinds are the kinds an issue can be ignored for, in the Health page's order.
 var IssueKinds = []string{IssueScanError, IssueSuspect, IssueSplitDiscs, IssueDuplicate, IssueNoCover,
-	IssueUnmatched, IssueNoChapters, IssueDetailedChapters, IssueTranscode}
+	IssueUnmatched, IssueSeriesSpellings, IssueNoChapters, IssueDetailedChapters, IssueTranscode}
 
 // ErrUnknownIssue marks an issue kind that isn't one of IssueKinds.
 var ErrUnknownIssue = errors.New("unknown issue kind")
@@ -61,7 +64,8 @@ var issuePredicates = map[string]string{
 	// A folder an admin set to "one book" (the category's own fix) is settled.
 	IssueSuspect: `(COALESCE(b.suspect_parts, 0) >= 2 AND NOT EXISTS(SELECT 1 FROM folder_overrides fo
 		WHERE fo.library_id = b.library_id AND fo.path = b.rel_path AND fo.mode = '` + OverrideBook + `'))`,
-	IssueScanError: `(b.scan_error <> '')`,
+	IssueScanError:       `(b.scan_error <> '')`,
+	IssueSeriesSpellings: seriesSpellingsExpr,
 	// One book split across disc folders, listed once: by its first disc.
 	IssueSplitDiscs: `(` + splitDiscExpr + ` AND NOT EXISTS(SELECT 1 FROM books s
 		WHERE s.library_id = b.library_id AND s.split_parent <> '' AND s.split_parent = b.split_parent

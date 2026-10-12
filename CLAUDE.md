@@ -850,7 +850,9 @@ admin overrides; see Metadata overrides below).
   merged; `SeriesList` and `normalizeMoreSeries` keep a series once however a list spells it again) and names the group `seriesName`: the spelling its
   matched books use most, else the most books', ties alphabetical. **The key is stored**
   (migration 0041): `refreshEffective` writes `books.series_key` (`mainSeriesKey`, '' for no
-  series; index `idx_books_series_key (library_id, series_key, series_index)`) and the book's
+  series; index `idx_books_series_key (library_id, series_key, series, series_index)`, which
+  replaced `idx_books_series`: spellings adjacent, so Health's `series_spellings` is two range
+  seeks per book) and the book's
   other series to `book_more_series` (`keyOtherSeries`: `SeriesList` less the main series, one
   row per key with its position; PK `(book_id, series_key)`, index `(series_key, library_id,
   position)`, cascades with the book). Both are written by Go, never computed in SQL (the key
@@ -1112,7 +1114,12 @@ admin overrides; see Metadata overrides below).
   `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
   (checked rows only), `no_chapters` (<= 1 chapter, > 2 h), `unmatched` (left out of the summary
   while metadata is off), `transcode`, `suspect` (not a folder with a `book` override, the
-  category's own fix), `scan_error`, `split_discs` (one book split across disc folders, listed by
+  category's own fix), `scan_error`, `series_spellings` (`catalog/seriesspellings.go`: another book of
+  its library spells its main series another way, same `series_key`; listed per series by `GET
+  /admin/issues/series-spellings[?library_id=&ignored=true]` -> `{groups: [{library_id, suggested,
+  spellings: [{name, books}], books}]}`, from the same predicate, `suggested` being `seriesName`;
+  open = a book not ignored, ignored view = a book ignored; the console's fix is the author merge's bulk
+  `series` edit), `split_discs` (one book split across disc folders, listed by
   its first disc: `books.split_parent` set, no override on that folder; the console's fix sets
   `book` on it, which joins them; its discs never also group as duplicates). `split_parent` is
   worked out during discovery (`library.markSplitDiscs`: a folder book whose folder is a disc

@@ -449,7 +449,7 @@ func TestNextInSeriesPlan(t *testing.T) {
 			plan := queryPlan(t, c, q, args)
 			joined := strings.Join(plan, "\n")
 			for _, want := range []string{
-				"SEARCH b USING INDEX idx_books_series_key (library_id=? AND series_key=? AND series_index>?)",
+				"SEARCH b USING INDEX idx_books_series_key (library_id=? AND series_key=?)",
 				"SEARCH m USING COVERING INDEX idx_book_more_series_key (series_key=? AND library_id=? AND position>?)",
 				"SEARCH b USING INTEGER PRIMARY KEY (rowid=?)",
 			} {

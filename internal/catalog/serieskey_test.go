@@ -399,6 +399,13 @@ func TestSeriesKeyScale(t *testing.T) {
 		}
 		return err
 	})
+	timed("Health: series spelled several ways", 200*time.Millisecond, func() error {
+		ic, err := c.IssueCounts(ctx, []string{IssueSeriesSpellings})
+		if err == nil && ic[0].Count != books {
+			err = fmt.Errorf("count %d, want %d", ic[0].Count, books)
+		}
+		return err
+	})
 	book, err := c.GetBookByPath(ctx, lib.ID, fmt.Sprint("B/", mid*25+1)) // #2 in the middle series
 	if err != nil {
 		t.Fatal(err)
