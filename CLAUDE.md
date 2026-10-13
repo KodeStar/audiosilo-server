@@ -1330,18 +1330,27 @@ admin overrides; see Metadata overrides below).
   adds a member from the player, with no admin: a real account (role user, no password) whose
   `managed_by` is the owner, with a `member_kind` (`kid`|`grownup`) and `member_access`
   (`all`|`collections`) only the owner sets. One level only: an owner is never a member, a member never
-  has members, never gets the admin role (`SetRole` 409 `member_not_admin`). **Access** (the member
+  has members, never gets the admin role (`UpdateUser` 409 `member_not_admin`). **Access** (the member
   rule, in `UserScope`/`UserScopes`/`AccessibleLibraries`, decided per request, no cache): the member's
   own grants UNION, for `all`, the owner's CURRENT scopes computed with the owner's role (an admin
   owner gives every library as content scope), or, for `collections`, the items of collections the
   owner owns and shares with the member, each kept only while the owner's scopes allow it
   (`relpath.Within`: a folder book covers its subtree; an `""` item never grants a library); a
   member-owner (bad data) or self-managed row derives nothing; a disabled owner changes nothing.
-  Callers keep passing `isAdmin = u.Role == "admin"`. Scopes over 32 paths filter SQL in
+  **The rule rides on the request**: `auth.lookupToken` reads `managed_by`, `member_kind` and the
+  rule (`auth.User.MemberRule`: owner, access, owner is an admin) through a primary-key `LEFT JOIN`
+  of the owner in its one statement (`memberColumns`/`memberScan`, which `getUser` shares), and the
+  transport passes it as a `catalog.Caller` (`api.callerOf`) to `CallerScope`/`CallerScopes`/
+  `CallerLibraries`, so a non-member's scopes cost the one grants statement they did before 8b-1
+  and a kid's refusal reads nothing; `UserScope`/`UserScopes`/`AccessibleLibraries` (id + isAdmin)
+  read the rule themselves (`memberRuleOf`, the same conditions) for a caller known only by id
+  (the importer, tests). New transport code builds scopes from the request's user with `callerOf`,
+  never from an id. Scopes over 32 paths filter SQL in
   `pathsJSONFilterSQL`'s single-parameter form (a row's path and its ancestors looked up in one JSON
   list; same rows as the OR form, which can't hold 1,000 arms at all). `BenchmarkMemberScopes`
-  (M1 Ultra, 3,000 books, a 1,000-item kid vs a whole-library listener): browse 2.4 ms vs 0.27 ms,
-  search 9.2 ms vs 5.6 ms, progress list 4.8 ms vs 1.7 ms, the scope load 1.0 ms vs 0.03 ms.
+  (M1 Ultra, 3,000 books, a 1,000-item kid vs a whole-library listener, the `Caller` path): browse
+  2.4 ms vs 0.26 ms, search 9.1 ms vs 5.6 ms, progress list 4.9 ms vs 1.7 ms, the scope load
+  1.05 ms vs 0.017 ms (0.034 ms by id, which reads the rule).
   **Routes** (`/me/household/members`; API keys 403 everywhere, demo 403 `demo_account`, a member
   403 `member_cannot_manage`, someone else's member 404): `GET` -> `{allowed, reason?, max, members}`
   (200 for everyone signed in: `reason` `demo`|`member`|`feature_off`|`not_allowed`; at the cap is not
@@ -1356,15 +1365,24 @@ admin overrides; see Metadata overrides below).
   of the caller's own collections shared with the member (`catalog.SetMemberCollections`, run inside
   `auth`'s transaction through `auth.ShareFunc`). A session made here records `created_on_token_id`
   and copies the caller's device name. **Kids**: 403 `kid_account` on `POST /auth/password|tokens|pair|
-  recovery`, `PUT /me/household`, `PUT /me/collections/{id}/shares`; switching a grown-up to a kid
-  (or the admin assigning a kid) clears the password, API keys, pairing tokens and recovery code
-  (`clearKidCredentials`), sessions stay; `ShareTargets` lists a kid only to their owner and
-  `SetCollectionShares` refuses one from anyone else (`ErrUnknownUser`); `HouseListening` and
-  `HouseholdSharing` leave kids out both ways. `/me` and the session envelope carry
+  recovery`, `PUT /me/household`, `PUT /me/collections/{id}/shares`, from one route wrapper
+  (`api.notKid` in `api.go`, before the handler; wrap any new route a kid can't use); switching a
+  grown-up to a kid (or the admin assigning a kid) clears the password, API keys, pairing tokens,
+  recovery code and the person's `household_sharing` row (`clearKidCredentials`), sessions stay, so
+  a kid made a grown-up again starts with house sharing off and opts in again; `ShareTargets` lists
+  a kid only to their owner and `SetCollectionShares` refuses one from anyone else
+  (`ErrUnknownUser`, `kidOnlyToOwnerSQL`); `HouseListening` and `HouseholdSharing` leave kids out
+  both ways because a kid has no row (no kid filter of their own). `/me` and the session envelope carry
   `managed_by` (`{id, username}`|null), `member_kind` and, for a member only, `display_name` (omitted otherwise); `/me/devices` rows carry `member_sign_ins`
-  and `DELETE /me/devices/{id}?also_members=1` signs those out in the same transaction
-  (`{current, members_signed_out}`). Admin: user objects add `member_access`, `can_add_members`,
-  `members_count`, `display_name`; the detail adds `members` and `member_collections`; `PATCH`
+  (always `[]` for a member, with no read) and `DELETE /me/devices/{id}?also_members=1` signs those out in the same transaction
+  (`{current, members_signed_out}`). The list's `reason` is `auth.MayAddMembers` (the one may-add ladder,
+  which `CreateMember` runs too). Admin: user objects add `member_access`, `can_add_members`,
+  `members_count`, `display_name` and, on `managed_by` only there, the owner's own `display_name`
+  (`api.adminUser`/`adminOwner`; the player's `managed_by` never carries it, and `/me`'s
+  `display_name` is `api.meUser`'s, a member's only); the detail adds `members` (each an
+  `auth.Member` plus `disabled`) and `member_collections` and, for a member, `owner_libraries` and
+  `owner_is_admin`; the settings envelope's `household` section carries `max_members_default`,
+  `max_members_min` and `max_members_max` as read-only facts; `PATCH`
   takes `can_add_members` and `managed_by` (an id with `member_kind` + `member_access`: "Assign to
   someone", 409 `owner_is_member`/`owner_is_demo`/`self_managed`/`member_is_demo`/`member_not_admin`/
   `has_members`, 400 `kid_no_password` for a non-empty `password` on a kid or beside assigning one,
@@ -1556,7 +1574,7 @@ admin overrides; see Metadata overrides below).
   change; `DELETE /admin/libraries/{id}` removes the library
   + its index (files on disk untouched). Both are surfaced in the admin console.
 - **User/account admin**: `PATCH /admin/users/{id}` edits role/password/disabled
-  in place (`auth.SetRole`/`SetPassword`/`SetDisabled`); `DELETE /admin/users/{id}`
+  in place (one `auth.UpdateUser` transaction); `DELETE /admin/users/{id}`
   (`auth.DeleteUser` → `handleDeleteUser`) permanently removes an account and all
   of its durable state via the schema's `ON DELETE CASCADE` (sessions, auth codes,
   progress/bookmarks/notes/history, share grants) - files on disk are untouched.

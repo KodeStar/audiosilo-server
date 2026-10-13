@@ -16,7 +16,7 @@ import (
 // read-only reader pool (query_only) as in production, so a write issued through
 // a read method (an INSERT ... RETURNING via QueryRowContext) fails the test,
 // where :memory: (reader == writer, one pool) would hide it.
-func newTestCatalog(t *testing.T) (*Catalog, context.Context) {
+func newTestCatalog(t testing.TB) (*Catalog, context.Context) {
 	t.Helper()
 	return New(storetest.Open(t), time.Now), context.Background()
 }

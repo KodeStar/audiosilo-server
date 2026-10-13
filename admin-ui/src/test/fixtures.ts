@@ -441,20 +441,9 @@ export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
 }
 
 export const sam: AdminUser = {
-  id: 2,
-  username: 'sam',
-  role: 'user',
-  disabled: false,
+  ...member,
   has_password: false,
-  has_recovery: false,
-  is_demo: false,
   last_seen_at: new Date(Date.now() - 3600_000).toISOString(),
-  managed_by: null,
-  member_kind: null,
-  member_access: null,
-  can_add_members: true,
-  members_count: 0,
-  display_name: '',
 };
 
 export const users: AdminUser[] = [admin, sam];

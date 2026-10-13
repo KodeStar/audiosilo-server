@@ -40,9 +40,9 @@ func colURL(id int64, suffix string) string {
 }
 
 // createCollection POSTs a collection as tok, failing on anything but 201.
-func (l *listsEnv) createCollection(t *testing.T, tok, name string) wireCollection {
+func (e *testEnv) createCollection(t *testing.T, tok, name string) wireCollection {
 	t.Helper()
-	resp, body := l.do(t, "POST", "/api/v1/me/collections", tok, fmt.Sprintf(`{"name":%q}`, name))
+	resp, body := e.do(t, "POST", "/api/v1/me/collections", tok, fmt.Sprintf(`{"name":%q}`, name))
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create %q = %d %s", name, resp.StatusCode, body)
 	}

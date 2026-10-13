@@ -19,7 +19,7 @@ type memberFixture struct {
 	libA, libB int64
 }
 
-func newMemberFixture(t *testing.T) *memberFixture {
+func newMemberFixture(t testing.TB) *memberFixture {
 	t.Helper()
 	c, ctx := newTestCatalog(t)
 	f := &memberFixture{c: c, ctx: ctx}
@@ -45,7 +45,7 @@ func newMemberFixture(t *testing.T) *memberFixture {
 
 // user inserts an account: role, and (owner > 0) a member of owner with kind and
 // access.
-func (f *memberFixture) user(t *testing.T, name, role string, owner int64, access string) int64 {
+func (f *memberFixture) user(t testing.TB, name, role string, owner int64, access string) int64 {
 	t.Helper()
 	var managed, kind, acc any
 	if owner > 0 {
@@ -61,7 +61,7 @@ func (f *memberFixture) user(t *testing.T, name, role string, owner int64, acces
 	return id
 }
 
-func (f *memberFixture) exec(t *testing.T, q string, args ...any) {
+func (f *memberFixture) exec(t testing.TB, q string, args ...any) {
 	t.Helper()
 	if _, err := f.c.db.ExecContext(f.ctx, q, args...); err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func (f *memberFixture) exec(t *testing.T, q string, args ...any) {
 }
 
 // grant gives userID the path of lib through a share of its own.
-func (f *memberFixture) grant(t *testing.T, userID, lib int64, path string) int64 {
+func (f *memberFixture) grant(t testing.TB, userID, lib int64, path string) int64 {
 	t.Helper()
 	s, err := f.c.CreateShare(f.ctx, Share{Name: fmt.Sprintf("u%d-l%d-%s", userID, lib, path),
 		Paths: []PathRule{{LibraryID: lib, Path: path}}})
@@ -83,7 +83,7 @@ func (f *memberFixture) grant(t *testing.T, userID, lib int64, path string) int6
 }
 
 // collection makes owner's collection holding items (lib A) shared with viewers.
-func (f *memberFixture) collection(t *testing.T, owner int64, items []string, viewers ...int64) int64 {
+func (f *memberFixture) collection(t testing.TB, owner int64, items []string, viewers ...int64) int64 {
 	t.Helper()
 	col, err := f.c.CreateCollection(f.ctx, owner, fmt.Sprintf("c%d-%d", owner, len(items)), "")
 	if err != nil {
@@ -389,5 +389,29 @@ func TestPathFilterForms(t *testing.T) {
 	// A path JSON can't carry exactly falls back to the OR form.
 	if _, _, ok := pathsJSONFilterSQL("rel_path", []string{"a\xffb"}); ok {
 		t.Error("invalid UTF-8 path took the JSON form")
+	}
+}
+
+// A non-member's scopes, given as a Caller (the transport's path, whose token
+// lookup read the member rule), read only their grants: with the users table
+// renamed away they still load, so they cost the one statement they did before
+// household members. Denied: the by-id form, which reads the rule from users,
+// fails without it.
+func TestCallerScopes_NonMemberReadsNoRule(t *testing.T) {
+	t.Parallel()
+	f := newMemberFixture(t)
+	bob := f.user(t, "bob", "user", 0, "")
+	f.grant(t, bob, f.libA, "Author")
+	who := Caller{ID: bob}
+	f.exec(t, `ALTER TABLE users RENAME TO users_away`)
+	s, err := f.c.CallerScope(f.ctx, who, f.libA)
+	if err != nil || !s.Allows("Author/Book") || s.Allows("Other/X") {
+		t.Fatalf("scope = %+v %v", s, err)
+	}
+	if all, err := f.c.CallerScopes(f.ctx, who); err != nil || len(all) != 1 {
+		t.Fatalf("scopes = %+v %v", all, err)
+	}
+	if _, err := f.c.UserScopes(f.ctx, bob, false); err == nil {
+		t.Fatal("the by-id form read no rule")
 	}
 }

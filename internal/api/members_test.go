@@ -151,18 +151,11 @@ func memberURL(id int64, rest string) string {
 // collection makes tok's collection holding paths of lib and returns its id.
 func (m *memberEnv) collection(t *testing.T, tok, name string, paths ...string) int64 {
 	t.Helper()
-	resp, b := m.do(t, "POST", "/api/v1/me/collections", tok, fmt.Sprintf(`{"name":%q}`, name))
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create collection = %d %s", resp.StatusCode, b)
-	}
-	var out struct {
-		Collection catalog.Collection `json:"collection"`
-	}
-	_ = json.Unmarshal([]byte(b), &out)
+	id := m.createCollection(t, tok, name).ID
 	for _, p := range paths {
-		m.addItem(t, tok, out.Collection.ID, p)
+		m.addItem(t, tok, id, p)
 	}
-	return out.Collection.ID
+	return id
 }
 
 func (m *memberEnv) addItem(t *testing.T, tok string, col int64, path string) {
@@ -1170,6 +1163,45 @@ func TestMembers_AdminFields(t *testing.T) {
 	}
 	if s, b := patch(m.bob, `{"managed_by":null}`); s != http.StatusOK {
 		t.Fatalf("make independent again (no-op) = %d %s", s, b)
+	}
+}
+
+// Admin fields (a member's owner): a member's detail carries what their owner
+// reaches (owner_libraries, owner_is_admin) and names the owner with their
+// display_name in managed_by. Denied: an ordinary person's detail carries no
+// owner facts, and the member's own /me never carries the owner's display_name.
+func TestMembers_AdminOwnerFacts(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ellis, ellisTok := m.grownup(t, m.adamTok, "Ellis", "all")
+	adminKid := m.mustAdd(t, m.adminTok, `{"name":"Ada","kind":"kid","access":"all"}`)
+	detailOf := func(id int64) map[string]json.RawMessage {
+		t.Helper()
+		resp, b := m.do(t, "GET", "/api/v1/admin/users/"+strconv.FormatInt(id, 10), m.adminTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("detail %d = %d %s", id, resp.StatusCode, b)
+		}
+		var out map[string]json.RawMessage
+		_ = json.Unmarshal([]byte(b), &out)
+		return out
+	}
+	d := detailOf(ellis.ID)
+	var libs []catalog.Library
+	_ = json.Unmarshal(d["owner_libraries"], &libs)
+	if len(libs) != 1 || libs[0].ID != m.lib || string(d["owner_is_admin"]) != "false" ||
+		!strings.Contains(string(d["user"]), `"managed_by":{"id":`+strconv.FormatInt(m.adam, 10)+`,"username":"adam","display_name":""}`) {
+		t.Fatalf("ellis's detail = %s %s %s", d["owner_libraries"], d["owner_is_admin"], d["user"])
+	}
+	d = detailOf(adminKid.Member.ID)
+	_ = json.Unmarshal(d["owner_libraries"], &libs)
+	if string(d["owner_is_admin"]) != "true" || len(libs) != 2 {
+		t.Fatalf("an admin's member = %s %s", d["owner_libraries"], d["owner_is_admin"])
+	}
+	if d := detailOf(m.adam); d["owner_libraries"] != nil || d["owner_is_admin"] != nil {
+		t.Fatalf("an owner's detail carries owner facts: %s %s", d["owner_libraries"], d["owner_is_admin"])
+	}
+	if _, b := m.do(t, "GET", "/api/v1/me", ellisTok, ""); !strings.Contains(b, `"managed_by":{"id":`+strconv.FormatInt(m.adam, 10)+`,"username":"adam"}`) {
+		t.Fatalf("ellis's /me = %s", b)
 	}
 }
 

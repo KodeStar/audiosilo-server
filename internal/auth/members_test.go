@@ -441,3 +441,124 @@ func TestMembers_AdminAssign(t *testing.T) {
 		t.Fatal("unknown id")
 	}
 }
+
+// The request's user (ResolveRequest's token lookup) carries the member fields
+// and the member rule, as GetUser reads them: a kid of an ordinary owner, a
+// grown-up of an admin owner, nothing for anyone else. Denied: a self-managed
+// row and a member managed by a member (bad data) read as members but derive
+// nothing.
+func TestMembers_RequestUserCarriesTheRule(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	root := mustUser(t, s, ctx, "root", "root-password", RoleAdmin)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberCollections})
+	ellis := mustMember(t, s, ctx, root.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	request := func(id int64) *User {
+		t.Helper()
+		tok, err := s.IssueToken(ctx, id, KindSession, "phone", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, _, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		full, err := s.GetUser(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (u.MemberRule == nil) != (full.MemberRule == nil) || u.MemberRule != nil && *u.MemberRule != *full.MemberRule ||
+			u.IsKid() != full.IsKid() || u.IsMember() != full.IsMember() {
+			t.Fatalf("request user %+v and GetUser %+v disagree", u, full)
+		}
+		return u
+	}
+	if u := request(evie.ID); !u.IsKid() || u.ManagedBy.ID != adam.ID ||
+		*u.MemberRule != (MemberRule{Owner: adam.ID, Access: MemberCollections, OwnerAdmin: false}) {
+		t.Fatalf("kid = %+v %+v", u, u.MemberRule)
+	}
+	if u := request(ellis.ID); u.IsKid() || *u.MemberRule != (MemberRule{Owner: root.ID, Access: MemberAll, OwnerAdmin: true}) {
+		t.Fatalf("grown-up of an admin = %+v %+v", u, u.MemberRule)
+	}
+	if u := request(adam.ID); u.IsMember() || u.MemberRule != nil || u.MemberKind != nil {
+		t.Fatalf("ordinary = %+v", u)
+	}
+
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	kit := mustUser(t, s, ctx, "kit", "", RoleUser)
+	for _, q := range []string{
+		`UPDATE users SET managed_by = id, member_kind = 'kid', member_access = 'all' WHERE username = 'bob'`,
+		`UPDATE users SET managed_by = ?, member_kind = 'kid', member_access = 'all' WHERE username = 'kit'`,
+	} {
+		if _, err := s.db.ExecContext(ctx, q, evie.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []int64{bob.ID, kit.ID} {
+		if u := request(id); !u.IsMember() || u.MemberRule != nil {
+			t.Fatalf("bad data derives: %+v %+v", u, u.MemberRule)
+		}
+	}
+}
+
+// Becoming a kid clears the person's house sharing choice (a kid never shares):
+// the owner's switch and the admin's assignment both. Denied: a grown-up's
+// change of access keeps it.
+func TestMembers_KidClearsHouseSharing(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	share := func(id int64) {
+		t.Helper()
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT OR REPLACE INTO household_sharing(user_id, share_listening, updated_at) VALUES(?, 1, 't')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sharing := func(id int64) bool {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM household_sharing WHERE user_id = ?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	}
+	share(ellis.ID)
+	share(bob.ID)
+	coll, kid := MemberCollections, MemberKid
+	if _, _, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Access: &coll}); err != nil || !sharing(ellis.ID) {
+		t.Fatalf("access change cleared sharing (%v)", err)
+	}
+	if _, _, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Kind: &kid}); err != nil || sharing(ellis.ID) {
+		t.Fatalf("kid keeps sharing (%v)", err)
+	}
+	if err := s.UpdateUser(ctx, bob.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: MemberKid, Access: MemberAll}}); err != nil || sharing(bob.ID) {
+		t.Fatalf("assigned kid keeps sharing (%v)", err)
+	}
+}
+
+// MayAddMembers' ladder, in the transport's order (the cap is not on it).
+func TestMayAddMembers(t *testing.T) {
+	t.Parallel()
+	member := &User{ManagedBy: &UserRef{ID: 1}, MemberKind: new(MemberGrownup), CanAddMembers: true}
+	for name, c := range map[string]struct {
+		u      *User
+		policy MemberPolicy
+		want   error
+	}{
+		"allowed":      {&User{CanAddMembers: true}, testPolicy, nil},
+		"demo first":   {&User{IsDemo: true}, MemberPolicy{}, ErrDemoAccount},
+		"member":       {member, testPolicy, ErrMemberCannotManage},
+		"server off":   {&User{CanAddMembers: true}, MemberPolicy{Max: 6}, ErrFeatureOff},
+		"switched off": {&User{}, testPolicy, ErrNotAllowed},
+		"disabled":     {&User{CanAddMembers: true, Disabled: true}, testPolicy, ErrNotAllowed},
+		"at the cap":   {&User{CanAddMembers: true, MembersCount: 6}, testPolicy, nil},
+	} {
+		if err := MayAddMembers(c.u, c.policy); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, want %v", name, err, c.want)
+		}
+	}
+}
