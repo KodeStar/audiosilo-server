@@ -529,4 +529,72 @@ describe('settings', () => {
       '200 (default)',
     );
   });
+
+  it('saves the household member settings, only what changed', async () => {
+    const base = settingsWith();
+    const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));
+    renderApp('/server?topic=household');
+    const user = userEvent.setup();
+    const toggle = await screen.findByRole('switch', { name: 'People can add household members' });
+    expect(toggle).toBeChecked();
+    const max = screen.getByRole('textbox', { name: 'Members per person' });
+    expect(max).toHaveValue('6');
+    await user.click(toggle);
+    await user.clear(max);
+    await user.type(max, '3');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+        household: { members_enabled: false, max_members: 3 },
+      }),
+    );
+    expect(await screen.findByText('Household members saved')).toBeInTheDocument();
+  });
+
+  it('shows a refused member cap on its field', async () => {
+    mockFetch(
+      routes({
+        'PATCH /admin/settings': {
+          status: 400,
+          body: {
+            error: 'must be between 1 and 50',
+            code: 'invalid_setting',
+            field: 'household.max_members',
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=household');
+    const user = userEvent.setup();
+    const max = await screen.findByRole('textbox', { name: 'Members per person' });
+    await user.clear(max);
+    await user.type(max, '80');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('must be between 1 and 50');
+    expect(max).toHaveValue('80');
+  });
+
+  it('locks the household settings the environment sets', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            household: { members_enabled: false, max_members: 4 },
+            locked: {
+              'household.members_enabled': 'AUDIOSILO_HOUSEHOLD_MEMBERS_ENABLED',
+              'household.max_members': 'AUDIOSILO_HOUSEHOLD_MAX_MEMBERS',
+            },
+          }),
+        },
+      }),
+    );
+    renderApp('/server?topic=household');
+    const toggle = await screen.findByRole('switch', { name: 'People can add household members' });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('textbox', { name: 'Members per person' })).toBeDisabled();
+    expect(screen.getByText('Set by AUDIOSILO_HOUSEHOLD_MAX_MEMBERS')).toBeInTheDocument();
+    // Every field is set elsewhere: nothing to save here.
+    expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument();
+  });
 });

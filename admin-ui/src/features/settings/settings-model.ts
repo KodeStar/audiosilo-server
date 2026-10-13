@@ -16,6 +16,7 @@ export const SETTINGS_PAGES = [
   'players',
   'metadata',
   'transcoding',
+  'household',
   'demo',
   'backups',
   'notifications',
