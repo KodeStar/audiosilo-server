@@ -2,6 +2,7 @@ import type {
   Activity,
   AdminLibrary,
   AdminSettings,
+  AdminUser,
   SystemStatus,
   UpdateStatus,
   AdminShare,
@@ -15,7 +16,6 @@ import type {
   JobsState,
   ScanProgress,
   ServerInfo,
-  User,
   UserDetail,
 } from '@/api/types';
 
@@ -38,7 +38,7 @@ export const serverInfo: ServerInfo = {
   demo: { enabled: false },
 };
 
-export const admin: User = {
+export const admin: AdminUser = {
   id: 1,
   username: 'chris',
   role: 'admin',
@@ -46,9 +46,15 @@ export const admin: User = {
   has_password: true,
   has_recovery: false,
   is_demo: false,
+  managed_by: null,
+  member_kind: null,
+  member_access: null,
+  can_add_members: true,
+  members_count: 0,
+  display_name: '',
 };
 
-export const member: User = { ...admin, id: 2, username: 'sam', role: 'user' };
+export const member: AdminUser = { ...admin, id: 2, username: 'sam', role: 'user' };
 
 export function stats(over: Partial<AdminStats> = {}): AdminStats {
   const now = Date.now();
@@ -253,6 +259,7 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
       available: true,
     },
     demo: { enabled: false, library: '', max_users: null, max_users_default: 200, idle_ttl: '' },
+    household: { members_enabled: true, max_members: 6 },
     backups: { schedule: 'daily:03:00', keep: 7, dir: '' },
     locked: { 'players.web_dir': 'AUDIOSILO_WEB_DIR' },
     restart_settings: [
@@ -427,7 +434,7 @@ export function libraries(over: Partial<AdminLibrary>[] = []): AdminLibrary[] {
   return base.map((l, i) => ({ ...l, ...over[i] }));
 }
 
-export const sam: User = {
+export const sam: AdminUser = {
   id: 2,
   username: 'sam',
   role: 'user',
@@ -436,9 +443,15 @@ export const sam: User = {
   has_recovery: false,
   is_demo: false,
   last_seen_at: new Date(Date.now() - 3600_000).toISOString(),
+  managed_by: null,
+  member_kind: null,
+  member_access: null,
+  can_add_members: true,
+  members_count: 0,
+  display_name: '',
 };
 
-export const users: User[] = [admin, sam];
+export const users: AdminUser[] = [admin, sam];
 
 export const kidsShare: AdminShare = {
   id: 7,
@@ -480,6 +493,8 @@ export function samDetail(over: Partial<UserDetail> = {}): UserDetail {
     accessible_libraries: [],
     shares: [kidsShare],
     auth_codes: [invite()],
+    members: [],
+    member_collections: [],
     ...over,
   };
 }

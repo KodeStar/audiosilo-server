@@ -50,6 +50,14 @@ const BY_CODE: Record<string, string> = {
   import_applied: 'errors.importApplied',
   // A match run is working (starting another, applying, clearing matches).
   match_run_busy: 'errors.matchRunBusy',
+  // Household members: assigning someone, making them an admin, deleting an owner.
+  member_not_admin: 'errors.memberNotAdmin',
+  owner_is_member: 'errors.ownerIsMember',
+  owner_is_demo: 'errors.ownerIsDemo',
+  self_managed: 'errors.selfManaged',
+  has_members: 'errors.hasMembers',
+  member_fields_required: 'errors.memberFieldsRequired',
+  invalid_keep_members: 'errors.invalidKeepMembers',
 };
 
 /** A failure as one sentence for a toast or a field. */

@@ -33,6 +33,62 @@ export interface User {
   has_recovery: boolean;
   is_demo: boolean;
   last_seen_at?: string;
+  /** A household member: the person who manages them (null for anyone else). */
+  managed_by: UserRef | null;
+  /** A household member's kind (null for anyone else). */
+  member_kind: MemberKind | null;
+}
+
+/** auth.UserRef: a person named by id and username. */
+export interface UserRef {
+  id: number;
+  username: string;
+}
+
+/** A household member is a kid (kids mode, no password) or a grown-up. */
+export type MemberKind = 'kid' | 'grownup';
+
+/**
+ * What a household member can listen to: everything their owner can (`all`), or
+ * the books in the owner's collections shared with them (`collections`).
+ */
+export type MemberAccess = 'all' | 'collections';
+
+/**
+ * A person in GET /admin/users and GET /admin/users/{id}'s `user`
+ * (handlers_admin.go): auth.User plus the household facts only the admin sees.
+ * `member_access` is null exactly when `managed_by` is.
+ */
+export interface AdminUser extends User {
+  member_access: MemberAccess | null;
+  /** The admin's per-person switch: may add household members (members never can). */
+  can_add_members: boolean;
+  /** How many household members this person manages. */
+  members_count: number;
+  /** The name the household uses ("Evie"); "" = the username. */
+  display_name: string;
+}
+
+/** One of a person's own household members, in GET /admin/users/{id}'s `members`. */
+export interface AdminMember {
+  id: number;
+  username: string;
+  /** The display name, or the username when it has none. */
+  name: string;
+  kind: MemberKind;
+  access: MemberAccess;
+  disabled: boolean;
+}
+
+/**
+ * A collection a `collections` member gets books from (GET /admin/users/{id}'s
+ * `member_collections`): owned by their owner and shared with them.
+ */
+export interface MemberCollection {
+  id: number;
+  name: string;
+  /** How many books it holds. */
+  items: number;
 }
 
 /** POST /api/v1/auth/login (handlers_auth.go handleLogin). */
@@ -447,6 +503,12 @@ export interface AdminSettings {
     /** "" = 24h. */
     idle_ttl: string;
   };
+  household: {
+    /** People may add household members (each still needs their own switch, can_add_members). */
+    members_enabled: boolean;
+    /** The most household members one person may add (1-50). */
+    max_members: number;
+  };
   backups: {
     /** "" (off), "daily:HH:MM" or "weekly:DAY:HH:MM" in server time (backup.ParseSchedule). */
     schedule: string;
@@ -504,7 +566,8 @@ export interface MetaMirrorStatus {
 }
 
 /** The sections of AdminSettings that hold settings. */
-export type SettingsSection = 'general' | 'network' | 'players' | 'metadata' | 'demo' | 'backups';
+export type SettingsSection =
+  'general' | 'network' | 'players' | 'metadata' | 'demo' | 'household' | 'backups';
 
 /** A PATCH body: only the settings to change, by section. */
 export type SettingsPatch = {
@@ -768,7 +831,7 @@ export interface AuditPage {
 /** The audit log's filters (all optional). */
 export interface AuditFilter {
   actor_id?: number;
-  /** An action's first part: user, invite, library, book, share, settings, backup, notify, device, progress, issue. */
+  /** An action's first part: user, member, invite, library, book, share, settings, backup, notify, device, progress, issue. */
   area?: string;
   q?: string;
 }
@@ -1182,11 +1245,33 @@ export interface AdminShare extends Share {
 
 /** GET /admin/users/{id} (handlers_admin.go handleGetUserDetail). */
 export interface UserDetail {
-  user: User;
+  user: AdminUser;
+  /** Every library the person can reach, including through their owner (a household member). */
   accessible_libraries: Library[] | null;
+  /** The admin's direct grants only (a member's derived access is not among them). */
   shares: Share[] | null;
   auth_codes: AuthCode[] | null;
+  /** The person's own household members. */
+  members: AdminMember[] | null;
+  /** A `collections` member's books: their owner's collections shared with them ([] otherwise). */
+  member_collections: MemberCollection[] | null;
 }
+
+/**
+ * PATCH /admin/users/{id} (handlers_admin.go): only the fields to change.
+ * `managed_by: <id>` ("Assign to someone") must carry the member's kind and
+ * access; `managed_by: null` ("Make independent") clears all three.
+ */
+export type UserPatch = {
+  role?: User['role'];
+  password?: string;
+  disabled?: boolean;
+  can_add_members?: boolean;
+} & (
+  | { managed_by?: never; member_kind?: never; member_access?: never }
+  | { managed_by: number; member_kind: MemberKind; member_access: MemberAccess }
+  | { managed_by: null; member_kind?: never; member_access?: never }
+);
 
 /** The {"error": "..."} envelope every handler uses for failures (respond.go). */
 export interface ErrorEnvelope {
