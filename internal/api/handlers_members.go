@@ -37,6 +37,8 @@ const (
 	codeOwnerIsDemo        = "owner_is_demo"
 	codeSelfManaged        = "self_managed"
 	codeHasMembers         = "has_members"
+	codeMemberIsDemo       = "member_is_demo"
+	codeKidNoPassword      = "kid_no_password"
 )
 
 // The list's reasons a caller may not add members (householdMembers.Reason).
@@ -118,13 +120,13 @@ func memberID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 }
 
 // writeMemberError maps the member routes' errors; anything else goes to
-// writeCatalogError (a share cap, else a logged 500).
+// writeCatalogError (a share cap, else a logged 500). auth.ErrNotFound is not
+// mapped: what wasn't found differs per call (the caller's own account is a
+// logged 500, a member's device 404 "device not found" at its one call site).
 func (a *API) writeMemberError(w http.ResponseWriter, err error, op, generic string, logKV ...any) {
 	switch {
 	case errors.Is(err, auth.ErrNotMember):
 		writeError(w, http.StatusNotFound, "member not found")
-	case errors.Is(err, auth.ErrNotFound):
-		writeError(w, http.StatusNotFound, "device not found")
 	case errors.Is(err, auth.ErrDemoAccount):
 		writeErrorCode(w, http.StatusForbidden, codeDemoAccount, err.Error())
 	case errors.Is(err, auth.ErrMemberCannotManage):
@@ -297,6 +299,9 @@ func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"member": member}
 	if secret != "" {
 		u, err := a.auth.GetUser(r.Context(), m.ID)
+		if errors.Is(err, auth.ErrNotFound) {
+			err = auth.ErrNotMember // deleted since: the member is gone
+		}
 		if err != nil {
 			a.writeMemberError(w, err, "load member failed", "could not load the member", "member", m.ID)
 			return
@@ -402,6 +407,10 @@ func (a *API) handleRevokeMemberDevice(w http.ResponseWriter, r *http.Request) {
 	m, err := a.auth.Member(r.Context(), owner.ID, id)
 	if err == nil {
 		err = a.auth.RevokeMemberDevice(r.Context(), owner.ID, id, device)
+	}
+	if errors.Is(err, auth.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "device not found")
+		return
 	}
 	if err != nil {
 		a.writeMemberError(w, err, "revoke member device failed", "could not sign the device out", "member", id)

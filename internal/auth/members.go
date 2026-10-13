@@ -79,6 +79,10 @@ var (
 	ErrOwnerIsDemo   = errors.New("the new owner is a demo account")
 	ErrSelfManaged   = errors.New("a person can't manage themselves")
 	ErrHasMembers    = errors.New("this person has household members of their own")
+	ErrMemberIsDemo  = errors.New("a demo account can't be a household member")
+	// ErrKidNoPassword is a password in the same change that assigns the person
+	// as a kid, who holds none.
+	ErrKidNoPassword = errors.New("a kid's account has no password")
 )
 
 // MemberPolicy is the server's household settings as the transport reads them
@@ -397,20 +401,25 @@ func (s *Service) memberSessionTx(ctx context.Context, ex sqlExecer, member int6
 // named deviceName recording onToken (the owner's token). It returns the secret
 // and the member's account (for the session envelope).
 func (s *Service) MemberSession(ctx context.Context, owner, id int64, deviceName string, onToken int64) (string, *User, error) {
-	var secret string
+	var (
+		secret string
+		u      *User
+	)
 	err := s.db.WithTx(ctx, "MemberSession", func(tx *sql.Tx) error {
 		if _, err := s.memberOf(ctx, tx, owner, id); err != nil {
 			return err
 		}
 		var err error
-		secret, err = s.memberSessionTx(ctx, tx, id, deviceName, onToken)
+		if secret, err = s.memberSessionTx(ctx, tx, id, deviceName, onToken); err != nil {
+			return err
+		}
+		u, err = getUser(ctx, tx, id)
 		return err
 	})
 	if err != nil {
 		return "", nil, err
 	}
-	u, err := s.GetUser(ctx, id)
-	return secret, u, err
+	return secret, u, nil
 }
 
 // MemberPairing mints a pairing token for owner's member id, for the member's
@@ -604,90 +613,51 @@ func (s *Service) MemberSignIns(ctx context.Context, owner int64) (map[int64][]M
 
 // SetCanAddMembers sets the admin's per-person switch.
 func (s *Service) SetCanAddMembers(ctx context.Context, id int64, on bool) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET can_add_members = ?, updated_at = ? WHERE id = ?`, on, s.ts(), id)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.UpdateUser(ctx, id, UserChanges{CanAddMembers: &on})
 }
 
 // AssignMember makes account id a household member of owner, with kind and
 // access (the admin's "Assign to someone"). Refused: an unknown account or owner
 // (ErrNotFound), the same person (ErrSelfManaged), an owner who is a member
-// (ErrOwnerIsMember) or a demo account (ErrOwnerIsDemo), an admin as the member
-// (ErrMemberNotAdmin), a person with members of their own (ErrHasMembers: no
-// chains). The owner's cap and switch don't apply: the admin decides. As a kid,
-// the person's credentials are cleared (clearKidCredentials). Their own grants
-// stay (the member rule is a union).
+// (ErrOwnerIsMember) or a demo account (ErrOwnerIsDemo), a demo account as the
+// member (ErrMemberIsDemo), an admin as the member (ErrMemberNotAdmin), a person
+// with members of their own (ErrHasMembers: no chains). The owner's cap and
+// switch don't apply: the admin decides. As a kid, the person's credentials are
+// cleared (clearKidCredentials). Their own grants stay (the member rule is a
+// union). UpdateUser applies it.
 func (s *Service) AssignMember(ctx context.Context, id, owner int64, kind, access string) error {
-	if err := checkKind(kind); err != nil {
+	return s.UpdateUser(ctx, id, UserChanges{Household: &HouseholdChange{Owner: owner, Kind: kind, Access: access}})
+}
+
+// checkAssign settles AssignMember's refusals of u joining owner's household,
+// inside UpdateUser's transaction (the input and ErrSelfManaged are checked
+// before it).
+func checkAssign(ctx context.Context, tx *sql.Tx, u *User, owner int64) error {
+	var ownerMember, ownerDemo bool
+	err := tx.QueryRowContext(ctx, `SELECT managed_by IS NOT NULL, is_demo FROM users WHERE id = ?`, owner).
+		Scan(&ownerMember, &ownerDemo)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
 		return err
+	case ownerMember:
+		return ErrOwnerIsMember
+	case ownerDemo:
+		return ErrOwnerIsDemo
+	case u.IsDemo:
+		return ErrMemberIsDemo
+	case u.Role == RoleAdmin:
+		return ErrMemberNotAdmin
+	case u.MembersCount > 0:
+		return ErrHasMembers
 	}
-	if err := checkAccess(access); err != nil {
-		return err
-	}
-	if id == owner {
-		return ErrSelfManaged
-	}
-	return s.db.WithTx(ctx, "AssignMember", func(tx *sql.Tx) error {
-		var (
-			role    string
-			members int
-		)
-		err := tx.QueryRowContext(ctx,
-			`SELECT role, (SELECT COUNT(*) FROM users m WHERE m.managed_by = u.id) FROM users u WHERE u.id = ?`, id).
-			Scan(&role, &members)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return err
-		}
-		var ownerMember, ownerDemo bool
-		err = tx.QueryRowContext(ctx, `SELECT managed_by IS NOT NULL, is_demo FROM users WHERE id = ?`, owner).
-			Scan(&ownerMember, &ownerDemo)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			return ErrNotFound
-		case err != nil:
-			return err
-		case ownerMember:
-			return ErrOwnerIsMember
-		case ownerDemo:
-			return ErrOwnerIsDemo
-		case role == RoleAdmin:
-			return ErrMemberNotAdmin
-		case members > 0:
-			return ErrHasMembers
-		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE users SET managed_by = ?, member_kind = ?, member_access = ?, updated_at = ? WHERE id = ?`,
-			owner, kind, access, s.ts(), id); err != nil {
-			return err
-		}
-		if kind == MemberKid {
-			return clearKidCredentials(ctx, tx, id)
-		}
-		return nil
-	})
+	return nil
 }
 
 // MakeIndependent turns member id into an ordinary account (the admin's "Make
 // independent"): the three member columns cleared, so they keep only their own
 // grants. A no-op for an account that isn't a member; ErrNotFound for no account.
 func (s *Service) MakeIndependent(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE users SET managed_by = NULL, member_kind = NULL, member_access = NULL,
-		        updated_at = CASE WHEN managed_by IS NULL THEN updated_at ELSE ? END
-		  WHERE id = ?`, s.ts(), id)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.UpdateUser(ctx, id, UserChanges{Household: &HouseholdChange{}})
 }

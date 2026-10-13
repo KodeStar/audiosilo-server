@@ -51,7 +51,7 @@ export function ownerName(u: AdminUser, users: readonly AdminUser[]): string | u
 /**
  * Why a person can't be put in someone's household (an i18n key under
  * user.household.blocked), or undefined when they can. The server refuses the
- * same cases (member_not_admin, has_members); demo accounts are throwaway.
+ * same cases (member_is_demo, member_not_admin, has_members).
  */
 export function assignBlocked(u: AdminUser): 'admin' | 'hasMembers' | 'demo' | undefined {
   if (u.is_demo) return 'demo';

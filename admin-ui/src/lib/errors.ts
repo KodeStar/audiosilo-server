@@ -57,6 +57,10 @@ const BY_CODE: Record<string, string> = {
   self_managed: 'errors.selfManaged',
   has_members: 'errors.hasMembers',
   member_fields_required: 'errors.memberFieldsRequired',
+  // The person page disables Assign for a demo account; this is the server's
+  // answer when the page was stale.
+  member_is_demo: 'user.household.blocked.demo',
+  kid_no_password: 'errors.kidNoPassword',
   invalid_keep_members: 'errors.invalidKeepMembers',
 };
 

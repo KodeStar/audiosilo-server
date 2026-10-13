@@ -1366,9 +1366,11 @@ admin overrides; see Metadata overrides below).
   (`{current, members_signed_out}`). Admin: user objects add `member_access`, `can_add_members`,
   `members_count`, `display_name`; the detail adds `members` and `member_collections`; `PATCH`
   takes `can_add_members` and `managed_by` (an id with `member_kind` + `member_access`: "Assign to
-  someone", 409 `owner_is_member`/`owner_is_demo`/`self_managed`/`member_not_admin`/`has_members`;
-  null: "Make independent"); `DELETE ?keep_members=<id>,<id>` deletes the person's other members with
-  them (400 `invalid_keep_members`). Audit `member.create|update|delete|session|pair|device_revoke`
+  someone", 409 `owner_is_member`/`owner_is_demo`/`self_managed`/`member_is_demo`/`member_not_admin`/
+  `has_members`, 400 `kid_no_password` for a `password` beside assigning a kid; null: "Make
+  independent"); the whole PATCH is one `auth.UpdateUser` transaction that checks every field before
+  writing, so a refused field changes nothing; `DELETE ?keep_members=<id>,<id>` deletes the person's
+  other members with them (400 `invalid_keep_members`). Audit `member.create|update|delete|session|pair|device_revoke`
   (actor the owner, target the member; tested in `members_test.go`, not `audit_coverage_test`).
 - **Cast tokens (player redesign Phase 8, capability `cast`, `auth/cast.go`, `api/handlers_cast.go`;
   security-critical)**: a Chromecast receiver plays from URLs the player hands it, so the player

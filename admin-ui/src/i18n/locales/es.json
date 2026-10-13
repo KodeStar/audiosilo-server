@@ -2630,6 +2630,7 @@
   "errors.selfManaged": "Nadie puede ser miembro de su propio hogar. Elige a otra persona.",
   "errors.hasMembers": "Esta persona tiene sus propios miembros del hogar, así que no puede unirse al hogar de otra.",
   "errors.memberFieldsRequired": "Elige infantil o adulto y qué puede escuchar, y vuelve a intentarlo.",
+  "errors.kidNoPassword": "Un niño inicia sesión sin contraseña. No pongas contraseña o elige Adulto.",
   "errors.invalidKeepMembers": "Los miembros del hogar cambiaron mientras decidías. Actualiza la página y vuelve a intentarlo.",
   "audit.area.member": "Miembros del hogar",
   "audit.action.member.create": "Añadió un miembro del hogar",

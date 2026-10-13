@@ -192,12 +192,15 @@ func (p userPatch) owner() (present bool, id int64, ok bool) {
 
 // handleUpdateUser patches an account in place: role, password, disabled state
 // and the household member fields (any subset). It replaces the old
-// delete-and-recreate dance and the separate disable endpoint. Apply password
-// before role so promoting a password-less account to admin in one request passes
-// the admin-password guard, and the member fields before role so "Make
+// delete-and-recreate dance and the separate disable endpoint. auth.UpdateUser
+// applies the whole body in one transaction, checking all of it first, so a
+// refused field changes nothing. The password counts before the role, so
+// promoting a password-less account to admin in one request passes the
+// admin-password guard, and the member fields before the role, so "Make
 // independent" then admin works in one request. managed_by: <id> needs
 // member_kind and member_access beside it, and they come only with it (400
-// member_fields_required).
+// member_fields_required); a password beside assigning a kid is 400
+// kid_no_password.
 func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -221,41 +224,18 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			"managed_by needs member_kind and member_access, and they come only with it")
 		return
 	}
-	if req.Password != nil {
-		if err := a.auth.SetPassword(r.Context(), id, *req.Password); err != nil {
-			a.writeUserError(w, err, "could not update user")
-			return
-		}
+	change := auth.UserChanges{
+		Password: req.Password, Role: req.Role, Disabled: req.Disabled, CanAddMembers: req.CanAddMembers,
 	}
 	if assign {
-		var err error
+		change.Household = &auth.HouseholdChange{Owner: owner}
 		if owner > 0 {
-			err = a.auth.AssignMember(r.Context(), id, owner, *req.MemberKind, *req.MemberAccess)
-		} else {
-			err = a.auth.MakeIndependent(r.Context(), id)
-		}
-		if err != nil {
-			a.writeUserError(w, err, "could not update user")
-			return
+			change.Household.Kind, change.Household.Access = *req.MemberKind, *req.MemberAccess
 		}
 	}
-	if req.Role != nil {
-		if err := a.auth.SetRole(r.Context(), id, *req.Role); err != nil {
-			a.writeUserError(w, err, "could not update user")
-			return
-		}
-	}
-	if req.Disabled != nil {
-		if err := a.auth.SetDisabled(r.Context(), id, *req.Disabled); err != nil {
-			a.writeUserError(w, err, "could not update user")
-			return
-		}
-	}
-	if req.CanAddMembers != nil {
-		if err := a.auth.SetCanAddMembers(r.Context(), id, *req.CanAddMembers); err != nil {
-			a.writeUserError(w, err, "could not update user")
-			return
-		}
+	if err := a.auth.UpdateUser(r.Context(), id, change); err != nil {
+		a.writeUserError(w, err, "could not update user")
+		return
 	}
 	u, err := a.auth.GetUser(r.Context(), id)
 	if err != nil {
@@ -370,6 +350,10 @@ func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string
 		writeErrorCode(w, http.StatusConflict, codeSelfManaged, err.Error())
 	case errors.Is(err, auth.ErrHasMembers):
 		writeErrorCode(w, http.StatusConflict, codeHasMembers, err.Error())
+	case errors.Is(err, auth.ErrMemberIsDemo):
+		writeErrorCode(w, http.StatusConflict, codeMemberIsDemo, err.Error())
+	case errors.Is(err, auth.ErrKidNoPassword):
+		writeErrorCode(w, http.StatusBadRequest, codeKidNoPassword, err.Error())
 	case errors.Is(err, auth.ErrInvalidKind), errors.Is(err, auth.ErrInvalidAccess):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, auth.ErrInvalidKeepMembers):

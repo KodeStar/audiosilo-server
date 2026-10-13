@@ -404,6 +404,7 @@ func TestMembers_AdminAssign(t *testing.T) {
 		"self":            {bob.ID, bob.ID, MemberKid, ErrSelfManaged},
 		"owner is member": {bob.ID, ellis.ID, MemberKid, ErrOwnerIsMember},
 		"owner is demo":   {bob.ID, demo.ID, MemberKid, ErrOwnerIsDemo},
+		"member is demo":  {demo.ID, adam.ID, MemberGrownup, ErrMemberIsDemo},
 		"admin member":    {root.ID, adam.ID, MemberKid, ErrMemberNotAdmin},
 		"has members":     {adam.ID, bob.ID, MemberKid, ErrHasMembers},
 		"unknown owner":   {bob.ID, 99999, MemberKid, ErrNotFound},

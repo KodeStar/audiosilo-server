@@ -2630,6 +2630,7 @@
   "errors.selfManaged": "Ninguém pode ser membro da própria casa. Escolha outra pessoa.",
   "errors.hasMembers": "Esta pessoa tem os seus próprios membros da casa, por isso não pode juntar-se à casa de outra.",
   "errors.memberFieldsRequired": "Escolha criança ou adulto e o que pode ouvir, e tente de novo.",
+  "errors.kidNoPassword": "Uma criança inicia sessão sem palavra-passe. Não defina a palavra-passe ou escolha Adulto.",
   "errors.invalidKeepMembers": "Os membros da casa mudaram entretanto. Atualize a página e tente de novo.",
   "audit.area.member": "Membros da casa",
   "audit.action.member.create": "Adicionou um membro da casa",

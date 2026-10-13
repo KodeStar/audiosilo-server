@@ -2489,6 +2489,7 @@
   "errors.selfManaged": "Niemand kann im eigenen Haushalt Mitglied sein. Wähle jemand anderen.",
   "errors.hasMembers": "Diese Person hat eigene Haushaltsmitglieder und kann deshalb keinem anderen Haushalt beitreten.",
   "errors.memberFieldsRequired": "Wähle Kind oder erwachsen und was gehört werden kann, dann versuch es noch einmal.",
+  "errors.kidNoPassword": "Ein Kind meldet sich ohne Passwort an. Lass das Passwort weg oder wähle Erwachsen.",
   "errors.invalidKeepMembers": "Die Haushaltsmitglieder haben sich in der Zwischenzeit geändert. Lade die Seite neu und versuch es noch einmal.",
   "audit.area.member": "Haushaltsmitglieder",
   "audit.action.member.create": "Ein Haushaltsmitglied hinzugefügt",

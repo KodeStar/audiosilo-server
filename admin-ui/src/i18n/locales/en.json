@@ -2489,6 +2489,7 @@
   "errors.selfManaged": "Nobody can be in their own household. Pick someone else.",
   "errors.hasMembers": "This person has household members of their own, so they can't join someone else's household.",
   "errors.memberFieldsRequired": "Choose kid or grown-up and what they can listen to, then try again.",
+  "errors.kidNoPassword": "A kid signs in without a password. Leave the password out, or choose grown-up.",
   "errors.invalidKeepMembers": "The household members changed while you were deciding. Refresh the page and try again.",
   "audit.area.member": "Household members",
   "audit.action.member.create": "Added a household member",

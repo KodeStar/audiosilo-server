@@ -1118,6 +1118,121 @@ func TestMembers_AdminFields(t *testing.T) {
 	}
 }
 
+// Admin fields (demo): a demo account is never assigned to anyone (409
+// member_is_demo, nothing changed), while an ordinary account is.
+func TestMembers_AdminAssignDemo(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	demo, demoTok := newUserWithSession(t, m.testEnv, auth.DemoUsernamePrefix+"x", true)
+	body := fmt.Sprintf(`{"managed_by":%d,"member_kind":"grownup","member_access":"all"}`, m.adam)
+	resp, b := m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(demo, 10), m.adminTok, body)
+	if resp.StatusCode != http.StatusConflict || codeOf(b) != "member_is_demo" {
+		t.Fatalf("demo assigned = %d %s", resp.StatusCode, b)
+	}
+	if u := m.me(t, demoTok); u.ManagedBy != nil || u.MemberKind != nil {
+		t.Fatalf("refused assign changed the demo account: %+v", u)
+	}
+	if l := m.list(t, m.adamTok); len(l.Members) != 0 {
+		t.Fatalf("adam lists the demo account: %+v", l.Members)
+	}
+	// Allowed: bob, an ordinary account, in the same body.
+	resp, b = m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(m.bob, 10), m.adminTok, body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(b, `"member_kind":"grownup"`) {
+		t.Fatalf("bob assigned = %d %s", resp.StatusCode, b)
+	}
+}
+
+// Admin fields (one change): PATCH /admin/users/{id} checks the whole body
+// before writing, so a refused field leaves the password, the household and the
+// role as they were; a password beside assigning a kid is 400 kid_no_password.
+func TestMembers_AdminPatchAtomic(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ctx := context.Background()
+	evie, _ := m.kid(t, m.adamTok, "Evie")
+	patch := func(body string) (int, string) {
+		resp, b := m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(m.bob, 10), m.adminTok, body)
+		return resp.StatusCode, b
+	}
+	unchanged := func(what string) {
+		t.Helper()
+		if err := m.auth.CheckPassword(ctx, m.bob, "bob-password"); err != nil {
+			t.Errorf("%s: bob's password changed: %v", what, err)
+		}
+		u, err := m.auth.GetUser(ctx, m.bob)
+		if err != nil || u.IsMember() || u.Role != auth.RoleUser || u.Disabled || !u.CanAddMembers {
+			t.Errorf("%s: bob changed: %+v %v", what, u, err)
+		}
+	}
+	for _, c := range []struct {
+		body   string
+		status int
+		code   string
+	}{
+		// A refused assign after a password.
+		{fmt.Sprintf(`{"password":"new-password-1","managed_by":%d,"member_kind":"grownup","member_access":"all"}`, evie.ID),
+			http.StatusConflict, "owner_is_member"},
+		// A password beside assigning a kid (it would be set, then cleared).
+		{fmt.Sprintf(`{"password":"new-password-1","managed_by":%d,"member_kind":"kid","member_access":"collections"}`, m.adam),
+			http.StatusBadRequest, "kid_no_password"},
+		{fmt.Sprintf(`{"password":"","managed_by":%d,"member_kind":"kid","member_access":"collections"}`, m.adam),
+			http.StatusBadRequest, "kid_no_password"},
+		// A refused role after an allowed password and assign.
+		{fmt.Sprintf(`{"password":"new-password-1","managed_by":%d,"member_kind":"grownup","member_access":"all","role":"admin"}`, m.adam),
+			http.StatusConflict, "member_not_admin"},
+		// The other fields wait for the refusal too.
+		{fmt.Sprintf(`{"disabled":true,"can_add_members":false,"managed_by":%d,"member_kind":"grownup","member_access":"all"}`, evie.ID),
+			http.StatusConflict, "owner_is_member"},
+		{`{"role":"admin","disabled":true,"can_add_members":false,"managed_by":null,"password":"short"}`,
+			http.StatusBadRequest, "password_too_short"},
+	} {
+		if s, b := patch(c.body); s != c.status || codeOf(b) != c.code {
+			t.Errorf("%s = %d %s, want %d %s", c.body, s, b, c.status, c.code)
+		}
+		unchanged(c.body)
+	}
+	// Allowed: the same fields without the refused one apply together.
+	s, b := patch(fmt.Sprintf(`{"password":"new-password-1","managed_by":%d,"member_kind":"grownup","member_access":"all"}`, m.adam))
+	if s != http.StatusOK || !strings.Contains(b, `"member_kind":"grownup"`) {
+		t.Fatalf("password and assign = %d %s", s, b)
+	}
+	if err := m.auth.CheckPassword(ctx, m.bob, "new-password-1"); err != nil {
+		t.Fatalf("password not set: %v", err)
+	}
+	// Assigning a kid with no password in the body clears the one bob has.
+	s, b = patch(fmt.Sprintf(`{"managed_by":%d,"member_kind":"kid","member_access":"collections"}`, m.adam))
+	if s != http.StatusOK || !strings.Contains(b, `"has_password":false`) {
+		t.Fatalf("assign a kid = %d %s", s, b)
+	}
+}
+
+// Not found (the member routes): someone else's or no member is "member not
+// found", a device that isn't the member's "device not found".
+func TestMembers_NotFoundAnswers(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	evie, evieTok := m.kid(t, m.adamTok, "Evie")
+	devices, _ := myDevicesOf(t, m.testEnv, evieTok)
+	want := func(method, path, tok, msg string) {
+		t.Helper()
+		resp, b := m.do(t, method, path, tok, "")
+		if resp.StatusCode != http.StatusNotFound || !strings.Contains(b, `"error":"`+msg+`"`) {
+			t.Errorf("%s %s = %d %s, want 404 %q", method, path, resp.StatusCode, b, msg)
+		}
+	}
+	device := memberURL(evie.ID, "devices/") + strconv.FormatInt(devices[0].ID, 10)
+	want("DELETE", memberURL(evie.ID, "devices/99999"), m.adamTok, "device not found")
+	want("DELETE", device, m.bobTok, "member not found")
+	want("DELETE", memberURL(99999, "devices/")+strconv.FormatInt(devices[0].ID, 10), m.adamTok, "member not found")
+	want("POST", memberURL(99999, "session"), m.adamTok, "member not found")
+	want("GET", memberURL(evie.ID, "devices"), m.bobTok, "member not found")
+	// Allowed: adam signs evie's device out.
+	if s := m.status(t, "DELETE", device, m.adamTok, ""); s != http.StatusNoContent {
+		t.Fatalf("revoke = %d", s)
+	}
+	want("DELETE", device, m.adamTok, "device not found")
+}
+
 // The server reports the capability, and the settings envelope carries the
 // household section.
 func TestMembers_CapabilityAndSettings(t *testing.T) {

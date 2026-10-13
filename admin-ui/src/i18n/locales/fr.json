@@ -2630,6 +2630,7 @@
   "errors.selfManaged": "Personne ne peut être membre de son propre foyer. Choisissez quelqu'un d'autre.",
   "errors.hasMembers": "Cette personne a ses propres membres du foyer et ne peut donc pas rejoindre le foyer de quelqu'un d'autre.",
   "errors.memberFieldsRequired": "Choisissez enfant ou adulte et ce qui peut être écouté, puis réessayez.",
+  "errors.kidNoPassword": "Un enfant se connecte sans mot de passe. Ne définissez pas de mot de passe ou choisissez Adulte.",
   "errors.invalidKeepMembers": "Les membres du foyer ont changé entre-temps. Actualisez la page et réessayez.",
   "audit.area.member": "Membres du foyer",
   "audit.action.member.create": "A ajouté un membre du foyer",

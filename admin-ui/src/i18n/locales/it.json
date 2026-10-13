@@ -2630,6 +2630,7 @@
   "errors.selfManaged": "Nessuno può essere membro della propria famiglia. Scegli qualcun altro.",
   "errors.hasMembers": "Questa persona ha già dei membri della propria famiglia, quindi non può entrare nella famiglia di un'altra.",
   "errors.memberFieldsRequired": "Scegli bambino o adulto e cosa può ascoltare, poi riprova.",
+  "errors.kidNoPassword": "Un bambino accede senza password. Non impostare la password o scegli Adulto.",
   "errors.invalidKeepMembers": "I membri della famiglia sono cambiati nel frattempo. Aggiorna la pagina e riprova.",
   "audit.area.member": "Membri della famiglia",
   "audit.action.member.create": "Ha aggiunto un membro della famiglia",

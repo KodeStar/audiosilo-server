@@ -1075,7 +1075,13 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 
 // GetUser returns a user by ID.
 func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
-	u, err := scanUser(s.db.QueryRowContext(ctx,
+	return getUser(ctx, s.db, id)
+}
+
+// getUser reads a user by ID through q (the reader, or a transaction):
+// ErrNotFound when there is none.
+func getUser(ctx context.Context, q rowQuerier, id int64) (*User, error) {
+	u, err := scanUser(q.QueryRowContext(ctx,
 		`SELECT `+userColumns+` FROM users u WHERE u.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -1137,42 +1143,18 @@ func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int6
 // countEnabledAdmins returns the number of enabled admin accounts, optionally
 // excluding one user id (pass 0 to exclude none). Used to prevent locking the
 // last admin out of the console by demotion or disabling.
-func (s *Service) countEnabledAdmins(ctx context.Context, exclude int64) (int, error) {
+func countEnabledAdmins(ctx context.Context, q rowQuerier, exclude int64) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM users WHERE role = ? AND disabled = 0 AND id != ?`,
 		RoleAdmin, exclude).Scan(&n)
 	return n, err
 }
 
 // SetDisabled enables or disables an account. Disabling the last enabled admin
-// is refused so the console can never be locked out.
+// is refused so the console can never be locked out (UpdateUser).
 func (s *Service) SetDisabled(ctx context.Context, id int64, disabled bool) error {
-	if disabled {
-		u, err := s.GetUser(ctx, id)
-		if err != nil {
-			return err
-		}
-		if u.Role == RoleAdmin {
-			others, err := s.countEnabledAdmins(ctx, id)
-			if err != nil {
-				return err
-			}
-			if others == 0 {
-				return ErrLastAdmin
-			}
-		}
-	}
-	return s.db.WithTx(ctx, "SetDisabled", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?`, disabled, s.ts(), id); err != nil {
-			return err
-		}
-		if !disabled {
-			return nil
-		}
-		return forgetBrowsers(ctx, tx, id)
-	})
+	return s.UpdateUser(ctx, id, UserChanges{Disabled: &disabled})
 }
 
 // DeleteUser permanently removes an account. Deleting the last enabled admin is
@@ -1192,12 +1174,8 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 		return DeletedUser{}, err
 	}
 	if u.Role == RoleAdmin && !u.Disabled {
-		others, err := s.countEnabledAdmins(ctx, id)
-		if err != nil {
+		if err := lastAdminGuard(ctx, s.db, id); err != nil {
 			return DeletedUser{}, err
-		}
-		if others == 0 {
-			return DeletedUser{}, ErrLastAdmin
 		}
 	}
 	var out DeletedUser
@@ -1246,63 +1224,197 @@ type DeletedUser struct {
 
 // SetRole changes an account's role. Demoting the last enabled admin is refused.
 // Promoting a password-less account to admin requires a password to be set first
-// (see SetPassword) - admins must be able to sign in to the console.
+// (see SetPassword) - admins must be able to sign in to the console. A household
+// member never becomes an admin (UpdateUser).
 func (s *Service) SetRole(ctx context.Context, id int64, role string) error {
-	if role != RoleAdmin {
-		role = RoleUser
-	}
-	u, err := s.GetUser(ctx, id)
-	if err != nil {
-		return err
-	}
-	if u.Role == RoleAdmin && role != RoleAdmin {
-		others, err := s.countEnabledAdmins(ctx, id)
-		if err != nil {
-			return err
-		}
-		if others == 0 {
-			return ErrLastAdmin
-		}
-	}
-	if role == RoleAdmin && u.IsMember() {
-		return ErrMemberNotAdmin // decision 3: "Make independent" comes first
-	}
-	if role == RoleAdmin && !u.HasPassword {
-		return ErrAdminNeedsPassword
-	}
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, role, s.ts(), id)
-	return err
+	return s.UpdateUser(ctx, id, UserChanges{Role: &role})
 }
 
 // SetPassword sets (or clears) an account's password. A non-empty password is
 // hashed with argon2id; an empty password clears it (only valid for non-admins).
 func (s *Service) SetPassword(ctx context.Context, id int64, password string) error {
-	if err := validatePassword(password); err != nil {
-		return err
-	}
+	return s.UpdateUser(ctx, id, UserChanges{Password: &password})
+}
+
+// UserChanges is a change to an account (the admin's PATCH /admin/users/{id}):
+// nil leaves a field.
+type UserChanges struct {
+	// Password sets a password, or clears it with "".
+	Password *string
+	// Role is RoleAdmin or anything else (RoleUser).
+	Role          *string
+	Disabled      *bool
+	CanAddMembers *bool
+	// Household changes who manages the person: an owner makes them that
+	// owner's member ("Assign to someone"), no owner makes them independent.
+	Household *HouseholdChange
+}
+
+// HouseholdChange is UserChanges.Household: Owner > 0 assigns the person to
+// Owner as a Kind member with Access (AssignMember's rules), 0 makes them
+// independent (MakeIndependent).
+type HouseholdChange struct {
+	Owner        int64
+	Kind, Access string
+}
+
+// UpdateUser applies c to account id in one transaction, checking every change
+// against the account before any write, so a refused change changes nothing.
+// The changes apply in this order, each checked against the account as the ones
+// before it leave it: the password (an admin's can't be cleared:
+// ErrAdminNeedsPassword), the household (AssignMember's refusals; a password
+// beside assigning a kid is ErrKidNoPassword, since a kid holds none), the role
+// (not the last enabled admin's demotion: ErrLastAdmin; to admin only with a
+// password, ErrAdminNeedsPassword, and never a member, ErrMemberNotAdmin), the
+// disabled state (not the last enabled admin: ErrLastAdmin) and the admin's
+// can_add_members switch. An unknown account is ErrNotFound. A new password, a
+// disabled account and a kid's assignment forget the person's browsers.
+func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
 	hash := ""
-	if password != "" {
-		var err error
-		if hash, err = HashPassword(password); err != nil {
+	if c.Password != nil {
+		if err := validatePassword(*c.Password); err != nil {
 			return err
 		}
-	} else {
-		u, err := s.GetUser(ctx, id)
+		// Hashing (argon2id) is slow: never while holding the writer.
+		if *c.Password != "" {
+			var err error
+			if hash, err = HashPassword(*c.Password); err != nil {
+				return err
+			}
+		}
+	}
+	h := c.Household
+	if h != nil && h.Owner > 0 {
+		if err := checkKind(h.Kind); err != nil {
+			return err
+		}
+		if err := checkAccess(h.Access); err != nil {
+			return err
+		}
+		if h.Owner == id {
+			return ErrSelfManaged
+		}
+		if h.Kind == MemberKid && c.Password != nil {
+			return ErrKidNoPassword
+		}
+	}
+	role := ""
+	if c.Role != nil {
+		role = RoleUser
+		if *c.Role == RoleAdmin {
+			role = RoleAdmin
+		}
+	}
+	return s.db.WithTx(ctx, "UpdateUser", func(tx *sql.Tx) error {
+		u, err := getUser(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if u.Role == RoleAdmin {
-			return ErrAdminNeedsPassword
+		// Check every change against the account as the changes before it
+		// leave it, then write.
+		hasPassword, member, curRole := u.HasPassword, u.IsMember(), u.Role
+		if c.Password != nil {
+			if hash == "" && curRole == RoleAdmin {
+				return ErrAdminNeedsPassword
+			}
+			hasPassword = hash != ""
 		}
-	}
-	return s.db.WithTx(ctx, "SetPassword", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, s.ts(), id); err != nil {
+		if h != nil && h.Owner > 0 {
+			if err := checkAssign(ctx, tx, u, h.Owner); err != nil {
+				return err
+			}
+			member = true
+			if h.Kind == MemberKid {
+				hasPassword = false
+			}
+		} else if h != nil {
+			member = false
+		}
+		if c.Role != nil {
+			if curRole == RoleAdmin && role != RoleAdmin {
+				if err := lastAdminGuard(ctx, tx, id); err != nil {
+					return err
+				}
+			}
+			if role == RoleAdmin && member {
+				return ErrMemberNotAdmin // decision 3: "Make independent" comes first
+			}
+			if role == RoleAdmin && !hasPassword {
+				return ErrAdminNeedsPassword
+			}
+			curRole = role
+		}
+		if c.Disabled != nil && *c.Disabled && curRole == RoleAdmin {
+			if err := lastAdminGuard(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+
+		now := s.ts()
+		set := func(q string, args ...any) error {
+			_, err := tx.ExecContext(ctx, q, args...)
 			return err
 		}
-		return forgetBrowsers(ctx, tx, id)
+		if c.Password != nil {
+			if err := set(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, now, id); err != nil {
+				return err
+			}
+			if err := forgetBrowsers(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		if h != nil && h.Owner > 0 {
+			if err := set(`UPDATE users SET managed_by = ?, member_kind = ?, member_access = ?, updated_at = ? WHERE id = ?`,
+				h.Owner, h.Kind, h.Access, now, id); err != nil {
+				return err
+			}
+			if h.Kind == MemberKid {
+				if err := clearKidCredentials(ctx, tx, id); err != nil {
+					return err
+				}
+			}
+		} else if h != nil {
+			if err := set(`UPDATE users SET managed_by = NULL, member_kind = NULL, member_access = NULL,
+			        updated_at = CASE WHEN managed_by IS NULL THEN updated_at ELSE ? END
+			  WHERE id = ?`, now, id); err != nil {
+				return err
+			}
+		}
+		if c.Role != nil {
+			if err := set(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, role, now, id); err != nil {
+				return err
+			}
+		}
+		if c.Disabled != nil {
+			if err := set(`UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?`, *c.Disabled, now, id); err != nil {
+				return err
+			}
+			if *c.Disabled {
+				if err := forgetBrowsers(ctx, tx, id); err != nil {
+					return err
+				}
+			}
+		}
+		if c.CanAddMembers != nil {
+			if err := set(`UPDATE users SET can_add_members = ?, updated_at = ? WHERE id = ?`, *c.CanAddMembers, now, id); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// lastAdminGuard is ErrLastAdmin when no enabled admin but id exists (so
+// demoting, disabling or deleting id would leave none).
+func lastAdminGuard(ctx context.Context, q rowQuerier, id int64) error {
+	others, err := countEnabledAdmins(ctx, q, id)
+	if err != nil {
+		return err
+	}
+	if others == 0 {
+		return ErrLastAdmin
+	}
+	return nil
 }
 
 // forgetBrowsers forgets every browser the person signed in from (IssueSession),
