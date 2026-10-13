@@ -1262,8 +1262,9 @@ type HouseholdChange struct {
 // against the account before any write, so a refused change changes nothing.
 // The changes apply in this order, each checked against the account as the ones
 // before it leave it: the password (an admin's can't be cleared:
-// ErrAdminNeedsPassword), the household (AssignMember's refusals; a password
-// beside assigning a kid is ErrKidNoPassword, since a kid holds none), the role
+// ErrAdminNeedsPassword; a kid's, or one beside assigning the person as a kid,
+// is ErrKidNoPassword, since a kid holds none, while clearing one is fine), the
+// household (AssignMember's refusals), the role
 // (not the last enabled admin's demotion: ErrLastAdmin; to admin only with a
 // password, ErrAdminNeedsPassword, and never a member, ErrMemberNotAdmin), the
 // disabled state (not the last enabled admin: ErrLastAdmin) and the admin's
@@ -1294,7 +1295,7 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		if h.Owner == id {
 			return ErrSelfManaged
 		}
-		if h.Kind == MemberKid && c.Password != nil {
+		if h.Kind == MemberKid && hash != "" {
 			return ErrKidNoPassword
 		}
 	}
@@ -1313,6 +1314,12 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		// Check every change against the account as the changes before it
 		// leave it, then write.
 		hasPassword, member, curRole := u.HasPassword, u.IsMember(), u.Role
+		// A kid holds no password (decision 1): not one set on a kid, nor one
+		// beside assigning the person as a kid (checked above); clearing is
+		// fine, and so is one beside a change that leaves them no kid.
+		if hash != "" && h == nil && u.IsKid() {
+			return ErrKidNoPassword
+		}
 		if c.Password != nil {
 			if hash == "" && curRole == RoleAdmin {
 				return ErrAdminNeedsPassword

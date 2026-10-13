@@ -80,8 +80,8 @@ var (
 	ErrSelfManaged   = errors.New("a person can't manage themselves")
 	ErrHasMembers    = errors.New("this person has household members of their own")
 	ErrMemberIsDemo  = errors.New("a demo account can't be a household member")
-	// ErrKidNoPassword is a password in the same change that assigns the person
-	// as a kid, who holds none.
+	// ErrKidNoPassword is a password set on a kid, or in the same change that
+	// assigns the person as a kid: a kid holds none.
 	ErrKidNoPassword = errors.New("a kid's account has no password")
 )
 

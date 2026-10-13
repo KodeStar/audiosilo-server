@@ -371,6 +371,7 @@
   "user.signIn.passwordNone": "Kein Passwort. Meldet sich nur durch Koppeln eines Geräts an, was für die meisten einfacher ist.",
   "user.signIn.set": "Passwort festlegen",
   "user.signIn.change": "Passwort ändern",
+  "user.signIn.passwordKid": "Kinder melden sich ohne Passwort an: {{owner}} meldet sie an oder nutzt „Eigenes Gerät einrichten“ im Player.",
   "user.signIn.recovery": "Wiederherstellungscode",
   "user.signIn.recoveryBody": "{{name}} hat einen Wiederherstellungscode gespeichert und kann sich so ohne dich erneut koppeln. Er lässt sich nicht anzeigen, nur widerrufen.",
   "user.signIn.revokeRecovery": "Wiederherstellungscode widerrufen",

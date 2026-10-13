@@ -233,6 +233,26 @@ describe("a member's page", () => {
     ).toBeInTheDocument();
   });
 
+  it('offers no password for a kid, and says how they sign in instead', async () => {
+    mockFetch(routes());
+    renderApp('/people/user/6?tab=sign-in');
+    const card = await screen.findByRole('region', { name: 'Password' });
+    expect(
+      within(card).getByText(
+        'Kids sign in without a password: adam signs them in, or uses “Set up their own device” in the player.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('offers a grown-up member a password', async () => {
+    mockFetch(routes());
+    renderApp('/people/user/7?tab=sign-in');
+    const card = await screen.findByRole('region', { name: 'Password' });
+    expect(within(card).getByRole('button', { name: 'Set a password' })).toBeInTheDocument();
+    expect(within(card).queryByText(/Kids sign in without a password/)).not.toBeInTheDocument();
+  });
+
   it('lists the collections their owner shares with them, read-only, beside direct grants', async () => {
     mockFetch(routes());
     renderApp('/people/user/6?tab=access');

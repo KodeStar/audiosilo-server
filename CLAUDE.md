@@ -1367,8 +1367,8 @@ admin overrides; see Metadata overrides below).
   `members_count`, `display_name`; the detail adds `members` and `member_collections`; `PATCH`
   takes `can_add_members` and `managed_by` (an id with `member_kind` + `member_access`: "Assign to
   someone", 409 `owner_is_member`/`owner_is_demo`/`self_managed`/`member_is_demo`/`member_not_admin`/
-  `has_members`, 400 `kid_no_password` for a `password` beside assigning a kid; null: "Make
-  independent"); the whole PATCH is one `auth.UpdateUser` transaction that checks every field before
+  `has_members`, 400 `kid_no_password` for a non-empty `password` on a kid or beside assigning one,
+  which `""` (clearing) is not; null: "Make independent"); the whole PATCH is one `auth.UpdateUser` transaction that checks every field before
   writing, so a refused field changes nothing; `DELETE ?keep_members=<id>,<id>` deletes the person's
   other members with them (400 `invalid_keep_members`). Audit `member.create|update|delete|session|pair|device_revoke`
   (actor the owner, target the member; tested in `members_test.go`, not `audit_coverage_test`).

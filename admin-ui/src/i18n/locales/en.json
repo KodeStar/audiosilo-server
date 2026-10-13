@@ -371,6 +371,7 @@
   "user.signIn.passwordNone": "No password. Signs in only by pairing a device, which is simpler for most people.",
   "user.signIn.set": "Set a password",
   "user.signIn.change": "Change password",
+  "user.signIn.passwordKid": "Kids sign in without a password: {{owner}} signs them in, or uses “Set up their own device” in the player.",
   "user.signIn.recovery": "Recovery code",
   "user.signIn.recoveryBody": "{{name}} saved a recovery code, so they can pair again without you. It can't be viewed, only revoked.",
   "user.signIn.revokeRecovery": "Revoke recovery code",

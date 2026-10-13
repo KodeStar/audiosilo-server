@@ -1175,8 +1175,6 @@ func TestMembers_AdminPatchAtomic(t *testing.T) {
 		// A password beside assigning a kid (it would be set, then cleared).
 		{fmt.Sprintf(`{"password":"new-password-1","managed_by":%d,"member_kind":"kid","member_access":"collections"}`, m.adam),
 			http.StatusBadRequest, "kid_no_password"},
-		{fmt.Sprintf(`{"password":"","managed_by":%d,"member_kind":"kid","member_access":"collections"}`, m.adam),
-			http.StatusBadRequest, "kid_no_password"},
 		// A refused role after an allowed password and assign.
 		{fmt.Sprintf(`{"password":"new-password-1","managed_by":%d,"member_kind":"grownup","member_access":"all","role":"admin"}`, m.adam),
 			http.StatusConflict, "member_not_admin"},
@@ -1203,6 +1201,77 @@ func TestMembers_AdminPatchAtomic(t *testing.T) {
 	s, b = patch(fmt.Sprintf(`{"managed_by":%d,"member_kind":"kid","member_access":"collections"}`, m.adam))
 	if s != http.StatusOK || !strings.Contains(b, `"has_password":false`) {
 		t.Fatalf("assign a kid = %d %s", s, b)
+	}
+}
+
+// Admin fields (a kid's password): a kid holds no password, so the admin's
+// PATCH /admin/users/{id} can't set one on a kid (400 kid_no_password, the hash
+// stays empty), nor beside assigning someone as a kid, though clearing one
+// beside it is fine; a grown-up member and an ordinary account are given one,
+// and so is a kid in the same change that leaves them no kid.
+func TestMembers_AdminPasswordOnKid(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ctx := context.Background()
+	evie, _ := m.kid(t, m.adamTok, "Evie")
+	ellis, _ := m.grownup(t, m.adamTok, "Ellis", "all")
+	patch := func(id int64, body string) (int, string) {
+		resp, b := m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(id, 10), m.adminTok, body)
+		return resp.StatusCode, b
+	}
+	noPassword := func(id int64, what string) {
+		t.Helper()
+		u, err := m.auth.GetUser(ctx, id)
+		if err != nil || u.HasPassword {
+			t.Errorf("%s: has a password: %+v %v", what, u, err)
+		}
+		var hash string
+		if err := m.db.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, id).Scan(&hash); err != nil || hash != "" {
+			t.Errorf("%s: hash = %q %v", what, hash, err)
+		}
+	}
+	// Denied: a password on the kid, alone, beside other fields, or beside
+	// assigning them (again) as a kid.
+	for _, body := range []string{
+		`{"password":"kid-password-1"}`,
+		`{"password":"kid-password-1","disabled":false,"can_add_members":false}`,
+		fmt.Sprintf(`{"password":"kid-password-1","managed_by":%d,"member_kind":"kid","member_access":"all"}`, m.bob),
+	} {
+		if s, b := patch(evie.ID, body); s != http.StatusBadRequest || codeOf(b) != "kid_no_password" {
+			t.Errorf("kid %s = %d %s, want 400 kid_no_password", body, s, b)
+		}
+		noPassword(evie.ID, body)
+		if u, err := m.auth.GetUser(ctx, evie.ID); err != nil || !u.IsKid() || u.ManagedBy.ID != m.adam || !u.CanAddMembers {
+			t.Errorf("%s: evie changed: %+v %v", body, u, err)
+		}
+	}
+	// The self-service route never reaches it (403 kid_account), and the
+	// service refuses it under that too.
+	if err := m.auth.SetPassword(ctx, evie.ID, "kid-password-1"); !errors.Is(err, auth.ErrKidNoPassword) {
+		t.Errorf("SetPassword on a kid = %v, want ErrKidNoPassword", err)
+	}
+	noPassword(evie.ID, "SetPassword")
+	// Allowed: clearing a kid's (absent) password.
+	if s, b := patch(evie.ID, `{"password":""}`); s != http.StatusOK || !strings.Contains(b, `"has_password":false`) {
+		t.Errorf("clear a kid's password = %d %s", s, b)
+	}
+	// Allowed: a grown-up member and an ordinary account are given one.
+	for _, id := range []int64{ellis.ID, m.bob} {
+		if s, b := patch(id, `{"password":"new-password-1"}`); s != http.StatusOK || !strings.Contains(b, `"has_password":true`) {
+			t.Errorf("password for %d = %d %s", id, s, b)
+		}
+		if err := m.auth.CheckPassword(ctx, id, "new-password-1"); err != nil {
+			t.Errorf("password for %d not set: %v", id, err)
+		}
+	}
+	// Clearing bob's beside assigning him as a kid is fine.
+	if s, b := patch(m.bob, fmt.Sprintf(`{"password":"","managed_by":%d,"member_kind":"kid","member_access":"collections"}`, m.adam)); s != http.StatusOK || !strings.Contains(b, `"member_kind":"kid"`) {
+		t.Errorf("clear and assign a kid = %d %s", s, b)
+	}
+	noPassword(m.bob, "clear and assign a kid")
+	// A kid made a grown-up in the same change may be given one.
+	if s, b := patch(evie.ID, fmt.Sprintf(`{"password":"new-password-2","managed_by":%d,"member_kind":"grownup","member_access":"all"}`, m.adam)); s != http.StatusOK || !strings.Contains(b, `"has_password":true`) {
+		t.Errorf("password beside kid to grown-up = %d %s", s, b)
 	}
 }
 

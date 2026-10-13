@@ -161,7 +161,7 @@ function UserView({ detail }: { detail: UserDetail }) {
           <InvitesTab user={u} detail={detail} onInvite={() => setInviting(true)} />
         </TabsPanel>
         <TabsPanel value="sign-in">
-          <SignInTab user={u} />
+          <SignInTab user={u} owner={ownerName(u, users.data ?? []) ?? ''} />
         </TabsPanel>
         <TabsPanel value="account">
           <AccountTab detail={detail} />
@@ -363,11 +363,13 @@ function InvitesTab({
   return <InviteTable invites={invites} now={now} showFor={false} />;
 }
 
-function SignInTab({ user: u }: { user: User }) {
+/** How a person signs in. A kid holds no password (the server refuses one), so their card says how they do sign in instead. */
+function SignInTab({ user: u, owner }: { user: User; owner: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [password, setPassword] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const kid = u.member_kind === 'kid';
   return (
     <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
       <Card className="flex flex-col gap-3 p-5" aria-labelledby="password-title">
@@ -375,14 +377,20 @@ function SignInTab({ user: u }: { user: User }) {
           {t('user.signIn.password')}
         </h2>
         <p className="text-[13.5px] text-muted-foreground">
-          {u.has_password ? t('user.signIn.passwordSet') : t('user.signIn.passwordNone')}
+          {kid
+            ? t('user.signIn.passwordKid', { owner })
+            : u.has_password
+              ? t('user.signIn.passwordSet')
+              : t('user.signIn.passwordNone')}
         </p>
-        <div>
-          <Button size="sm" variant="outline" onClick={() => setPassword(true)}>
-            <KeyRound aria-hidden="true" />
-            {u.has_password ? t('user.signIn.change') : t('user.signIn.set')}
-          </Button>
-        </div>
+        {kid ? null : (
+          <div>
+            <Button size="sm" variant="outline" onClick={() => setPassword(true)}>
+              <KeyRound aria-hidden="true" />
+              {u.has_password ? t('user.signIn.change') : t('user.signIn.set')}
+            </Button>
+          </div>
+        )}
       </Card>
       {u.has_recovery ? (
         <Card className="flex flex-col gap-3 p-5" aria-labelledby="recovery-title">
@@ -400,7 +408,7 @@ function SignInTab({ user: u }: { user: User }) {
           </div>
         </Card>
       ) : null}
-      <PasswordDialog open={password} onOpenChange={setPassword} user={u} />
+      {kid ? null : <PasswordDialog open={password} onOpenChange={setPassword} user={u} />}
       <ConfirmDialog
         open={clearing}
         onOpenChange={setClearing}

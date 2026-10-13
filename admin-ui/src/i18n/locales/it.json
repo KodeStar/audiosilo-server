@@ -387,6 +387,7 @@
   "user.signIn.passwordNone": "Nessuna password. Accede solo associando un dispositivo, il che è più semplice per la maggior parte delle persone.",
   "user.signIn.set": "Imposta una password",
   "user.signIn.change": "Cambia password",
+  "user.signIn.passwordKid": "I bambini accedono senza password: {{owner}} li fa accedere, oppure usa «Configura il suo dispositivo» nel player.",
   "user.signIn.recovery": "Codice di recupero",
   "user.signIn.recoveryBody": "{{name}} ha salvato un codice di recupero, quindi può associarsi di nuovo senza di te. Non si può visualizzare, solo revocare.",
   "user.signIn.revokeRecovery": "Revoca codice di recupero",

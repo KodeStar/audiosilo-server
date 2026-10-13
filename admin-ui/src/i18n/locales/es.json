@@ -387,6 +387,7 @@
   "user.signIn.passwordNone": "Sin contraseña. Solo inicia sesión vinculando un dispositivo, que es más sencillo para la mayoría.",
   "user.signIn.set": "Establecer una contraseña",
   "user.signIn.change": "Cambiar contraseña",
+  "user.signIn.passwordKid": "Los niños inician sesión sin contraseña: {{owner}} les inicia la sesión o usa «Configurar su propio dispositivo» en el reproductor.",
   "user.signIn.recovery": "Código de recuperación",
   "user.signIn.recoveryBody": "{{name}} guardó un código de recuperación, así que puede volver a vincularse sin ti. No se puede ver, solo revocar.",
   "user.signIn.revokeRecovery": "Revocar código de recuperación",

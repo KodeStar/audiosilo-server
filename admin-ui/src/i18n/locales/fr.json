@@ -387,6 +387,7 @@
   "user.signIn.passwordNone": "Pas de mot de passe. Se connecte uniquement en associant un appareil, ce qui est plus simple pour la plupart des gens.",
   "user.signIn.set": "Définir un mot de passe",
   "user.signIn.change": "Changer le mot de passe",
+  "user.signIn.passwordKid": "Les enfants se connectent sans mot de passe : {{owner}} les connecte, ou utilise « Configurer son propre appareil » dans le lecteur.",
   "user.signIn.recovery": "Code de récupération",
   "user.signIn.recoveryBody": "{{name}} a enregistré un code de récupération et peut donc s'associer à nouveau sans vous. Il ne peut pas être affiché, seulement révoqué.",
   "user.signIn.revokeRecovery": "Révoquer le code de récupération",

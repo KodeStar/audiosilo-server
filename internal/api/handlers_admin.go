@@ -199,8 +199,8 @@ func (p userPatch) owner() (present bool, id int64, ok bool) {
 // admin-password guard, and the member fields before the role, so "Make
 // independent" then admin works in one request. managed_by: <id> needs
 // member_kind and member_access beside it, and they come only with it (400
-// member_fields_required); a password beside assigning a kid is 400
-// kid_no_password.
+// member_fields_required); a password for a kid, or beside assigning a kid, is
+// 400 kid_no_password (clearing one is fine).
 func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {

@@ -387,6 +387,7 @@
   "user.signIn.passwordNone": "Sem palavra-passe. Só inicia sessão ao emparelhar um dispositivo, o que é mais simples para a maioria das pessoas.",
   "user.signIn.set": "Definir uma palavra-passe",
   "user.signIn.change": "Alterar palavra-passe",
+  "user.signIn.passwordKid": "As crianças iniciam sessão sem palavra-passe: {{owner}} inicia-lhes a sessão ou usa “Configurar o próprio dispositivo” no leitor.",
   "user.signIn.recovery": "Código de recuperação",
   "user.signIn.recoveryBody": "{{name}} guardou um código de recuperação, por isso pode voltar a emparelhar sem a sua ajuda. Não pode ser visto, só revogado.",
   "user.signIn.revokeRecovery": "Revogar código de recuperação",
