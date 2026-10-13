@@ -681,7 +681,9 @@ func (s *Service) CreateAuthCode(ctx context.Context, userID int64, label string
 // CreateInvite mints a fresh invite for a user and, in the same transaction,
 // supersedes the user's currently-active (still-redeemable) invites so there is
 // exactly one active invite per user. Spent (used-up) and expired invites are
-// left untouched as history. The code is returned once.
+// left untouched as history. The code is returned once. A kid holds no invite
+// (only their owner sets up their devices), so a kid's is ErrKidAccount, read in
+// the same transaction (refuseKid); a missing user is ErrNotFound.
 func (s *Service) CreateInvite(ctx context.Context, userID int64, label string, maxUses int, ttl time.Duration) (Minted, error) {
 	code, hash, err := generateAuthCode()
 	if err != nil {
@@ -689,6 +691,9 @@ func (s *Service) CreateInvite(ctx context.Context, userID int64, label string, 
 	}
 	expires := s.expiresAt(ttl)
 	if err := s.db.WithTx(ctx, "CreateInvite", func(tx *sql.Tx) error {
+		if err := refuseKid(ctx, tx, userID); err != nil {
+			return err
+		}
 		if err := supersedeActiveInvites(ctx, tx, userID, s.ts()); err != nil {
 			return err
 		}
@@ -735,7 +740,9 @@ func supersedeActiveInvites(ctx context.Context, ex sqlExecer, userID int64, now
 // which disconnects any QR still on screen from the old secret. Only invite-kind
 // codes rotate (recovery codes are user-owned); a missing or non-invite id
 // returns ErrNotFound. The user's other still-redeemable invites are retired,
-// keeping one active invite per user. This backs the admin "Rotate".
+// keeping one active invite per user. An invite whose user is a kid is
+// ErrKidAccount (refuseKid, in the transaction): rotating would revive a code
+// into an account that holds none. This backs the admin "Rotate".
 func (s *Service) RotateAuthCode(ctx context.Context, id int64) (Minted, error) {
 	code, hash, err := generateAuthCode()
 	if err != nil {
@@ -755,6 +762,9 @@ func (s *Service) RotateAuthCode(ctx context.Context, id int64) (Minted, error) 
 			return ErrNotFound
 		}
 		if err != nil {
+			return err
+		}
+		if err := refuseKid(ctx, tx, userID); err != nil {
 			return err
 		}
 		// Renew the expiry for the same duration the invite was originally granted,

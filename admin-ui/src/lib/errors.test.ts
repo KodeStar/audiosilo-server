@@ -33,12 +33,17 @@ describe('errorMessage', () => {
       'has_members',
       'member_fields_required',
       'invalid_keep_members',
+      'kid_account',
     ];
     for (const code of codes) {
       const text = errorMessage(new ApiError(409, 'server words', code), t);
       expect(text, code).not.toBe('server words');
       expect(text, code).not.toMatch(/^errors\./);
     }
+    // The admin minting or rotating an invite for a kid.
+    expect(errorMessage(new ApiError(409, 'x', 'kid_account'), t)).toBe(
+      "Kids don't use invites. The person who manages the account sets up their devices in the player.",
+    );
     expect(errorMessage(new ApiError(409, 'x', 'member_not_admin'), t)).toBe(
       "A household member can't be an admin. Make them independent first.",
     );

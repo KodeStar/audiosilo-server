@@ -61,6 +61,8 @@ const BY_CODE: Record<string, string> = {
   // answer when the page was stale.
   member_is_demo: 'user.household.blocked.demo',
   kid_no_password: 'errors.kidNoPassword',
+  // Minting or rotating an invite for a kid (409): a kid holds none.
+  kid_account: 'errors.kidAccount',
   invalid_keep_members: 'errors.invalidKeepMembers',
 };
 

@@ -5,9 +5,11 @@
 -- the owner sets. All three are NULL for everyone else, or all set: SQLite can't
 -- add a table CHECK with ALTER TABLE, so auth (members.go) keeps that rule.
 --
--- managed_by's SET NULL only covers a member an admin chose to keep when deleting
--- their owner, and auth clears the other two columns in the same transaction;
--- auth.DeleteUser deletes the members it doesn't keep explicitly.
+-- auth.DeleteUser handles an owner's members itself, in its own transaction: it
+-- clears all three member columns on the members the admin chose to keep
+-- (keepMembers) and deletes the rest. managed_by's SET NULL is only a backstop
+-- for a users row deleted some other way, which would leave the other two
+-- columns set.
 ALTER TABLE users ADD COLUMN managed_by INTEGER NULL REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE users ADD COLUMN member_kind TEXT NULL CHECK (member_kind IN ('kid','grownup'));
 ALTER TABLE users ADD COLUMN member_access TEXT NULL CHECK (member_access IN ('all','collections'));

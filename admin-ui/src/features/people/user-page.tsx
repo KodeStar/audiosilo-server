@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import { invalidatePeople, useDevices, useLibraries, useUser } from '@/api/hooks';
-import type { User, UserDetail } from '@/api/types';
+import type { AdminUser, User, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DangerZone } from '@/components/danger-zone';
 import { EmptyState } from '@/components/empty-state';
@@ -100,6 +100,9 @@ function UserView({ detail }: { detail: UserDetail }) {
   const tab: UserTab = search.tab ?? 'listening';
   const devices = useDevices(u.id);
   const [inviting, setInviting] = useState(false);
+  // A kid holds no invite: only their owner sets up their devices, from the
+  // player (the server answers 409 kid_account), so the page offers no pairing.
+  const kid = u.member_kind === 'kid';
 
   const facts = [
     u.last_seen_at
@@ -124,10 +127,12 @@ function UserView({ detail }: { detail: UserDetail }) {
           <MemberChips user={u} />
           <span className="text-muted-foreground">{facts.join(' · ')}</span>
         </div>
-        <Button variant="outline" onClick={() => setInviting(true)} disabled={u.disabled}>
-          <QrCode aria-hidden="true" />
-          {t('user.pairDevice')}
-        </Button>
+        {kid ? null : (
+          <Button variant="outline" onClick={() => setInviting(true)} disabled={u.disabled}>
+            <QrCode aria-hidden="true" />
+            {t('user.pairDevice')}
+          </Button>
+        )}
       </div>
 
       <Tabs
@@ -155,10 +160,18 @@ function UserView({ detail }: { detail: UserDetail }) {
           <AccessTab detail={detail} />
         </TabsPanel>
         <TabsPanel value="devices">
-          <DevicesTab user={u} devices={devices} onPair={() => setInviting(true)} />
+          <DevicesTab
+            user={u}
+            devices={devices}
+            onPair={kid ? undefined : () => setInviting(true)}
+          />
         </TabsPanel>
         <TabsPanel value="invites">
-          <InvitesTab user={u} detail={detail} onInvite={() => setInviting(true)} />
+          <InvitesTab
+            user={u}
+            detail={detail}
+            onInvite={kid ? undefined : () => setInviting(true)}
+          />
         </TabsPanel>
         <TabsPanel value="sign-in">
           <SignInTab user={u} owner={ownerName(u) ?? ''} />
@@ -167,19 +180,22 @@ function UserView({ detail }: { detail: UserDetail }) {
           <AccountTab detail={detail} />
         </TabsPanel>
       </Tabs>
-      <InviteDialog open={inviting} onOpenChange={setInviting} user={u} codes={codes} />
+      {kid ? null : (
+        <InviteDialog open={inviting} onOpenChange={setInviting} user={u} codes={codes} />
+      )}
     </Page>
   );
 }
 
+/** A person's devices; onPair is undefined for a kid, whose owner pairs them from the player. */
 function DevicesTab({
   user,
   devices,
   onPair,
 }: {
-  user: User;
+  user: AdminUser;
   devices: ReturnType<typeof useDevices>;
-  onPair: () => void;
+  onPair?: () => void;
 }) {
   const { t } = useTranslation();
   if (devices.isError) {
@@ -204,12 +220,18 @@ function DevicesTab({
         <EmptyState
           icon={Smartphone}
           title={t('user.devices.emptyTitle')}
-          body={t('user.devices.emptyBody', { name: user.username })}
+          body={
+            onPair
+              ? t('user.devices.emptyBody', { name: user.username })
+              : t('user.kidDevices', { owner: ownerName(user) ?? '' })
+          }
           action={
-            <Button onClick={onPair} disabled={user.disabled}>
-              <QrCode aria-hidden="true" />
-              {t('user.pairDevice')}
-            </Button>
+            onPair ? (
+              <Button onClick={onPair} disabled={user.disabled}>
+                <QrCode aria-hidden="true" />
+                {t('user.pairDevice')}
+              </Button>
+            ) : undefined
           }
         />
       )}
@@ -325,14 +347,19 @@ function AccessTab({ detail }: { detail: UserDetail }) {
   );
 }
 
+/**
+ * A person's invites. onInvite is undefined for a kid: their owner sets up their
+ * devices, so there is no invite to make, and the used-up or expired ones kept
+ * as history can't be rotated back to life.
+ */
 function InvitesTab({
   user,
   detail,
   onInvite,
 }: {
-  user: User;
+  user: AdminUser;
   detail: UserDetail;
-  onInvite: () => void;
+  onInvite?: () => void;
 }) {
   const { t } = useTranslation();
   const now = Date.now();
@@ -345,17 +372,23 @@ function InvitesTab({
       <EmptyState
         icon={Smartphone}
         title={t('user.invites.emptyTitle')}
-        body={t('user.invites.emptyBody', { name: user.username })}
+        body={
+          onInvite
+            ? t('user.invites.emptyBody', { name: user.username })
+            : t('user.kidDevices', { owner: ownerName(user) ?? '' })
+        }
         action={
-          <Button onClick={onInvite} disabled={user.disabled}>
-            <QrCode aria-hidden="true" />
-            {t('user.pairDevice')}
-          </Button>
+          onInvite ? (
+            <Button onClick={onInvite} disabled={user.disabled}>
+              <QrCode aria-hidden="true" />
+              {t('user.pairDevice')}
+            </Button>
+          ) : undefined
         }
       />
     );
   }
-  return <InviteTable invites={invites} now={now} showFor={false} />;
+  return <InviteTable invites={invites} now={now} showFor={false} canRotate={Boolean(onInvite)} />;
 }
 
 /** How a person signs in. A kid holds no password (the server refuses one), so their card says how they do sign in instead. */

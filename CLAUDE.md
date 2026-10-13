@@ -1375,7 +1375,10 @@ admin overrides; see Metadata overrides below).
   `GenerateRecoveryCode`, `IssueOwnPairingToken`; `catalog.SetHouseholdSharing`, `SetCollectionShares`;
   `SetPassword`'s `ErrKidNoPassword`, which `/auth/password` answers as 403 `kid_account`), so a request
   that passed `notKid` just before the owner's switch to kid committed can't leave the kid holding one (403
-  `kid_account`); switching a grown-up to a kid (or the admin assigning a kid) clears the password,
+  `kid_account`); the admin can't mint or rotate a kid's invite either (`POST /admin/users/{id}/authcode`,
+  `POST /admin/authcodes/{id}/rotate` answer 409 `kid_account`: `auth.refuseKid` in `CreateInvite` and
+  `RotateAuthCode`, the latter so a used-up invite kept as history can't be revived into a kid's account),
+  since only the owner sets up a kid's devices; switching a grown-up to a kid (or the admin assigning a kid) clears the password,
   API keys, pairing tokens,
   recovery code, still-redeemable invites (`supersedeActiveInvites`), the collections shared between
   the kid and anyone but their owner (both ways, so no sharer is left with a kid in a list the server

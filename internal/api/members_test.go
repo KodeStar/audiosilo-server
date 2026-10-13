@@ -1646,6 +1646,108 @@ func TestMembers_KidLosesInvites(t *testing.T) {
 	}
 }
 
+// The admin can't mint or rotate a kid's invite: a kid holds none, and only
+// their owner sets up their devices. Denied: minting for a kid (made one, or
+// switched to one) and rotating a kid's used-up invite (kept as history, which a
+// rotate would revive) answer 409 kid_account and leave no code that redeems.
+// Allowed: the same calls for a grown-up member and an ordinary user.
+func TestMembers_AdminInviteForKid(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ctx := context.Background()
+	mint := func(id int64) (int, string) {
+		resp, b := m.do(t, "POST", "/api/v1/admin/users/"+strconv.FormatInt(id, 10)+"/authcode", m.adminTok, `{"max_uses":1}`)
+		return resp.StatusCode, b
+	}
+	rotate := func(codeID int64) (int, string) {
+		resp, b := m.do(t, "POST", "/api/v1/admin/authcodes/"+strconv.FormatInt(codeID, 10)+"/rotate", m.adminTok, "")
+		return resp.StatusCode, b
+	}
+	inviteOf := func(user int64) auth.Invite {
+		t.Helper()
+		invites, err := m.auth.ListInvites(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, inv := range invites {
+			if inv.UserID == user {
+				return inv
+			}
+		}
+		t.Fatalf("no invite for user %d", user)
+		return auth.Invite{}
+	}
+	wantKidRefusal := func(what string, status int, body string) {
+		t.Helper()
+		if status != http.StatusConflict || codeOf(body) != "kid_account" || !strings.Contains(body, "not available for a kid's account") {
+			t.Errorf("%s = %d %s, want 409 kid_account", what, status, body)
+		}
+	}
+
+	// Allowed: an ordinary user and a grown-up member.
+	if s, b := mint(m.bob); s != http.StatusCreated {
+		t.Fatalf("bob's invite = %d %s", s, b)
+	}
+	ellis, _ := m.grownup(t, m.adamTok, "Ellis", "all")
+	s, b := mint(ellis.ID)
+	if s != http.StatusCreated {
+		t.Fatalf("grown-up's invite = %d %s", s, b)
+	}
+	var minted struct {
+		AuthCode string `json:"auth_code"`
+	}
+	_ = json.Unmarshal([]byte(b), &minted)
+	if s, b := rotate(inviteOf(m.bob).ID); s != http.StatusOK {
+		t.Errorf("rotate bob's invite = %d %s", s, b)
+	}
+	if s, b := rotate(inviteOf(ellis.ID).ID); s != http.StatusOK {
+		t.Fatalf("rotate grown-up's invite = %d %s", s, b)
+	} else {
+		_ = json.Unmarshal([]byte(b), &minted)
+	}
+	// Spend it (its one use counts on the exchange), so it stays as history
+	// once Ellis is a kid.
+	s, pairing, _ := m.redeemCode(t, minted.AuthCode)
+	if s != http.StatusOK {
+		t.Fatalf("redeem grown-up's invite = %d", s)
+	}
+	if s, b := m.exchangeToken(t, pairing, "Ellis's phone"); s != http.StatusOK {
+		t.Fatalf("exchange grown-up's invite = %d %s", s, b)
+	}
+	spent := inviteOf(ellis.ID).ID
+
+	// Denied: a kid made as one, and Ellis switched to one.
+	kit, _ := m.kid(t, m.adamTok, "Kit")
+	s, b = mint(kit.ID)
+	wantKidRefusal("kid's invite", s, b)
+	if s := m.status(t, "PATCH", memberURL(ellis.ID, ""), m.adamTok, `{"kind":"kid"}`); s != http.StatusOK {
+		t.Fatalf("to kid = %d", s)
+	}
+	s, b = mint(ellis.ID)
+	wantKidRefusal("switched kid's invite", s, b)
+	s, b = rotate(spent)
+	wantKidRefusal("rotate kid's spent invite", s, b)
+	invites, err := m.auth.ListInvites(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, inv := range invites {
+		if inv.UserID == kit.ID {
+			t.Errorf("kid holds invite %d", inv.ID)
+		}
+		if inv.UserID == ellis.ID && (inv.ID != spent || inv.Uses != 1) {
+			t.Errorf("switched kid holds a live invite: %+v", inv)
+		}
+	}
+	if s, _, _ := m.redeemCode(t, minted.AuthCode); s != http.StatusUnauthorized {
+		t.Errorf("kid's spent code redeems = %d", s)
+	}
+	// A missing account is 404, not a 500.
+	if s, b := mint(1 << 40); s != http.StatusNotFound {
+		t.Errorf("invite for no one = %d %s", s, b)
+	}
+}
+
 // A member the admin disabled can't be signed in or paired (no token of theirs
 // would work): 409 member_disabled, with no token made. Allowed: the owner still
 // manages them, and once enabled again they sign in.

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminMember, AdminUser, UserDetail } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
-import { admin, libraries, sam, samDetail, settingsWith } from '@/test/fixtures';
+import { admin, invite, libraries, sam, samDetail, settingsWith } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -434,5 +434,55 @@ describe('assigning someone to a household', () => {
     renderApp('/people/user/1?tab=account');
     expect(await screen.findByRole('region', { name: 'Household' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Assign to someone' })).not.toBeInTheDocument();
+  });
+});
+
+describe("a kid's devices", () => {
+  const kidLine =
+    "Kids don't use invites: adam signs them in, or uses “Set up their own device” in the player.";
+  // An expired invite kept as history from before the switch to kid.
+  const expired = invite({
+    user_id: 6,
+    username: 'evie',
+    expires_at: new Date(Date.now() - 86400_000).toISOString(),
+  });
+
+  it('offers no pairing for a kid, and says who sets up their devices', async () => {
+    mockFetch(routes());
+    renderApp('/people/user/6?tab=devices');
+    expect(await screen.findByText('No devices yet')).toBeInTheDocument();
+    expect(screen.getByText(kidLine)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pair a device' })).not.toBeInTheDocument();
+  });
+
+  it('offers no invite for a kid', async () => {
+    mockFetch(routes());
+    renderApp('/people/user/6?tab=invites');
+    expect(await screen.findByText('No invites yet')).toBeInTheDocument();
+    expect(screen.getByText(kidLine)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pair a device' })).not.toBeInTheDocument();
+  });
+
+  it("offers no Rotate of a kid's invite kept as history", async () => {
+    mockFetch(routes({ 'GET /admin/users/6': { body: detail(evie, { auth_codes: [expired] }) } }));
+    renderApp('/people/user/6?tab=invites');
+    expect(await screen.findByRole('button', { name: "Revoke evie's invite" })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Rotate/ })).not.toBeInTheDocument();
+  });
+
+  it('still offers a grown-up member pairing and Rotate', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/users/7': {
+          body: detail(ellis, { auth_codes: [expired] }),
+        },
+      }),
+    );
+    renderApp('/people/user/7?tab=invites');
+    expect(
+      await screen.findByRole('button', { name: "Rotate ellis's invite" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pair a device' })).toBeInTheDocument();
+    expect(screen.queryByText(kidLine)).not.toBeInTheDocument();
   });
 });

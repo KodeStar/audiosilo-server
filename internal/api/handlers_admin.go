@@ -449,7 +449,14 @@ func (a *API) handleCreateAuthCode(w http.ResponseWriter, r *http.Request) {
 	// One active invite per user: minting atomically supersedes the user's other
 	// still-redeemable invites (used-up/expired ones stay as history).
 	minted, err := a.auth.CreateInvite(r.Context(), id, req.Label, maxUses, ttl)
-	if err != nil {
+	switch {
+	case errors.Is(err, auth.ErrNotFound):
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	case writeKidInviteRefusal(w, err):
+		return
+	case err != nil:
+		a.log.Warn("create invite failed", "user", id, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not create auth code")
 		return
 	}
@@ -493,12 +500,29 @@ func (a *API) handleRotateAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "invite not found")
 		return
 	}
+	if writeKidInviteRefusal(w, err) {
+		return
+	}
 	if err != nil {
+		a.log.Warn("rotate invite failed", "code", id, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not rotate auth code")
 		return
 	}
 	a.audit(r, "invite.rotate", a.codeOwner(r, id), inviteDetails(minted))
 	writeJSON(w, http.StatusOK, a.mintedInvite(r, minted))
+}
+
+// writeKidInviteRefusal answers 409 kid_account for an invite the admin mints or
+// rotates for a kid's account (auth.ErrKidAccount): a kid holds no invite, only
+// their owner sets up their devices. 409, not notKid's 403, since the admin is
+// allowed the route and it is the account's state that refuses it. It reports
+// whether it answered.
+func writeKidInviteRefusal(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, auth.ErrKidAccount) {
+		return false
+	}
+	writeErrorCode(w, http.StatusConflict, codeKidAccount, auth.ErrKidAccount.Error())
+	return true
 }
 
 // mintedInvite is the create/rotate response: the code and its invite link
