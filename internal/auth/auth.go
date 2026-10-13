@@ -118,6 +118,12 @@ type User struct {
 	// (MemberKid or MemberGrownup), null likewise.
 	ManagedBy  *UserRef `json:"managed_by"`
 	MemberKind *string  `json:"member_kind"`
+	// MemberName is the name the owner typed for this member (DisplayName), on
+	// the /me and session wire so the member's own device greets them by it;
+	// empty, and so absent, for everyone who isn't a member (a former member's
+	// stored name stays off it). The admin console's user objects carry
+	// display_name for everyone (api.adminUser, whose field wins over this one).
+	MemberName string `json:"display_name,omitempty"`
 
 	// The owner's and the admin's business, off the /me wire: the admin console
 	// adds them to its own user objects (api.adminUser), the members list carries
@@ -1069,6 +1075,7 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	if owner.Valid && kind.Valid && access.Valid {
 		u.ManagedBy = &UserRef{ID: owner.Int64, Username: ownerName.String}
 		u.MemberKind, u.MemberAccess = &kind.String, &access.String
+		u.MemberName = u.DisplayName
 	}
 	return u, nil
 }

@@ -1361,7 +1361,7 @@ admin overrides; see Metadata overrides below).
   (`clearKidCredentials`), sessions stay; `ShareTargets` lists a kid only to their owner and
   `SetCollectionShares` refuses one from anyone else (`ErrUnknownUser`); `HouseListening` and
   `HouseholdSharing` leave kids out both ways. `/me` and the session envelope carry
-  `managed_by` (`{id, username}`|null) and `member_kind`; `/me/devices` rows carry `member_sign_ins`
+  `managed_by` (`{id, username}`|null), `member_kind` and, for a member only, `display_name` (omitted otherwise); `/me/devices` rows carry `member_sign_ins`
   and `DELETE /me/devices/{id}?also_members=1` signs those out in the same transaction
   (`{current, members_signed_out}`). Admin: user objects add `member_access`, `can_add_members`,
   `members_count`, `display_name`; the detail adds `members` and `member_collections`; `PATCH`

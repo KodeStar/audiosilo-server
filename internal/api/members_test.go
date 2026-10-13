@@ -263,6 +263,51 @@ func TestMembers_Create_Allowed(t *testing.T) {
 	}
 }
 
+// Display name (allowed): a member's /me and session envelopes carry the name
+// the owner typed (display_name), and a rename reaches /me.
+func TestMembers_DisplayName_Allowed(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	evie := m.mustAdd(t, m.adamTok, `{"name":"Evie Rose","kind":"kid","access":"collections","sign_in_here":true,"collection_ids":[]}`)
+	if evie.Session == nil || evie.Session.User.MemberName != "Evie Rose" {
+		t.Fatalf("kid session envelope = %+v", evie.Session)
+	}
+	if u := m.me(t, evie.Session.Token); u.MemberName != "Evie Rose" {
+		t.Fatalf("kid /me display_name = %q", u.MemberName)
+	}
+	ellis := m.mustAdd(t, m.adamTok, `{"name":"Ellis","kind":"grownup","access":"all"}`)
+	resp, b := m.do(t, "POST", memberURL(ellis.Member.ID, "session"), m.adamTok, "")
+	if resp.StatusCode != http.StatusCreated || !strings.Contains(b, `"display_name":"Ellis"`) {
+		t.Fatalf("member session envelope = %d %s", resp.StatusCode, b)
+	}
+	if resp, b := m.do(t, "PATCH", memberURL(evie.Member.ID, ""), m.adamTok, `{"name":"Evie"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("rename = %d %s", resp.StatusCode, b)
+	}
+	if u := m.me(t, evie.Session.Token); u.MemberName != "Evie" {
+		t.Fatalf("renamed kid /me display_name = %q", u.MemberName)
+	}
+}
+
+// Display name (denied): an ordinary person's /me and session envelope carry no
+// display_name, and neither does a former member's (made independent; the
+// stored name stays on the admin's user object only).
+func TestMembers_DisplayName_Denied(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	if _, b := m.do(t, "GET", "/api/v1/me", m.bobTok, ""); strings.Contains(b, "display_name") {
+		t.Fatalf("ordinary /me = %s", b)
+	}
+	ellis := m.mustAdd(t, m.adamTok, `{"name":"Ellis","kind":"grownup","access":"all"}`)
+	tok := m.memberSession(t, m.adamTok, ellis.Member.ID)
+	if resp, b := m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(ellis.Member.ID, 10), m.adminTok, `{"managed_by":null}`); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(b, `"display_name":"Ellis"`) {
+		t.Fatalf("make independent = %d %s", resp.StatusCode, b)
+	}
+	if _, b := m.do(t, "GET", "/api/v1/me", tok, ""); strings.Contains(b, "display_name") {
+		t.Fatalf("former member /me = %s", b)
+	}
+}
+
 // Create (denied): feature off, owner switched off, demo, API key, member caller,
 // the cap, an unknown field, another user's collection, anonymous, and a kid's
 // password login.
