@@ -551,27 +551,27 @@ describe('settings', () => {
     expect(await screen.findByText('Household members saved')).toBeInTheDocument();
   });
 
-  it('shows a refused member cap on its field', async () => {
-    mockFetch(
-      routes({
-        'PATCH /admin/settings': {
-          status: 400,
-          body: {
-            error: 'must be between 1 and 50',
-            code: 'invalid_setting',
-            field: 'household.max_members',
-          },
-        },
-      }),
-    );
+  it('refuses a member cap outside 1 to 50 before saving', async () => {
+    const calls = mockFetch(routes());
     renderApp('/server?topic=household');
     const user = userEvent.setup();
     const max = await screen.findByRole('textbox', { name: 'Members per person' });
+    const save = screen.getByRole('button', { name: 'Save changes' });
+    for (const bad of ['0', '51', '2.5', 'six']) {
+      await user.clear(max);
+      await user.type(max, bad);
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Enter a whole number from 1 to 50.',
+      );
+      expect(max).toHaveAttribute('aria-invalid', 'true');
+      expect(save).toBeDisabled();
+    }
+    await user.type(max, '{Enter}');
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
     await user.clear(max);
-    await user.type(max, '80');
-    await user.click(screen.getByRole('button', { name: 'Save changes' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('must be between 1 and 50');
-    expect(max).toHaveValue('80');
+    await user.type(max, '50');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(save).toBeEnabled();
   });
 
   it('locks the household settings the environment sets', async () => {

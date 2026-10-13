@@ -56,7 +56,13 @@ function AssignForm({ user, onDone }: { user: AdminUser; onDone: () => void }) {
   const [error, setError] = useState<string>();
 
   const owner = targets.find((u) => String(u.id) === ownerId);
-  const ownerLabel = owner ? displayName(owner) : t('user.household.theOwner');
+  // Until someone is picked the copy has its own strings: "the person you pick"
+  // can't stand in for a name ("von/di/de {{owner}}" breaks the grammar).
+  const ownerLabel = owner ? displayName(owner) : undefined;
+  const ownerText = (key: string, vars: Record<string, string> = {}) =>
+    ownerLabel
+      ? t(`user.household.${key}`, { ...vars, owner: ownerLabel })
+      : t(`user.household.unpicked.${key}`, vars);
   const chosenAccess = access ?? user.member_access ?? defaultAccess(kind);
   // A kid has no password, API keys or pairing invites: the server clears them.
   const clears = kind === 'kid' && user.member_kind !== 'kid';
@@ -131,8 +137,8 @@ function AssignForm({ user, onDone }: { user: AdminUser; onDone: () => void }) {
                 onValueChange={setAccess}
                 options={(['all', 'collections'] as const).map((a) => ({
                   value: a,
-                  title: t(`user.household.accessOption.${a}`, { owner: ownerLabel }),
-                  description: t(`user.household.accessOptionBody.${a}`, { owner: ownerLabel }),
+                  title: ownerText(`accessOption.${a}`),
+                  description: ownerText(`accessOptionBody.${a}`),
                 }))}
               />
             </div>
@@ -143,7 +149,7 @@ function AssignForm({ user, onDone }: { user: AdminUser; onDone: () => void }) {
             ) : null}
             {chosenAccess === 'collections' ? (
               <Notice tone="info" icon={Info}>
-                {t('user.household.collectionsStart', { name: user.username, owner: ownerLabel })}
+                {ownerText('collectionsStart', { name: user.username })}
               </Notice>
             ) : null}
           </>

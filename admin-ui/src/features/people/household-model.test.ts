@@ -6,7 +6,8 @@ import {
   assignTargets,
   defaultAccess,
   displayName,
-  householdOrder,
+  peopleGroups,
+  type PeopleEntry,
   independentPatch,
   keptMembers,
   ownerName,
@@ -37,27 +38,48 @@ const evie = memberOf(adam, 3, 'evie');
 const ellis = memberOf(adam, 4, 'ellis', 'grownup');
 const ids = (list: AdminUser[]) => list.map((u) => u.username);
 
-describe('householdOrder', () => {
-  it('moves each member up to follow their owner, keeping the server order otherwise', () => {
+/** An entry as text: a person's username, or "owner[member,member]" for a household. */
+const shape = (entries: PeopleEntry[]) =>
+  entries.map((e) =>
+    e.kind === 'person' ? e.user.username : `${e.owner.username}[${ids(e.members).join(',')}]`,
+  );
+
+describe('peopleGroups', () => {
+  it('gathers each household into one entry where the owner stands, keeping the server order', () => {
     // The server lists by name: ellis and evie come before their owner.
-    expect(ids(householdOrder([adam, bea, ellis, evie]))).toEqual(['adam', 'ellis', 'evie', 'bea']);
-    expect(ids(householdOrder([ellis, bea, evie, adam]))).toEqual(['bea', 'adam', 'ellis', 'evie']);
+    expect(shape(peopleGroups([adam, bea, ellis, evie]))).toEqual(['adam[ellis,evie]', 'bea']);
+    expect(shape(peopleGroups([ellis, bea, evie, adam]))).toEqual(['bea', 'adam[ellis,evie]']);
   });
 
-  it("keeps a member whose owner isn't in the list, in its own place", () => {
-    expect(ids(householdOrder([bea, evie]))).toEqual(['bea', 'evie']);
-    expect(ids(householdOrder([evie, bea]))).toEqual(['evie', 'bea']);
+  it('leaves ordinary people as people', () => {
+    const cy = person(5, 'cy');
+    expect(shape(peopleGroups([bea, cy]))).toEqual(['bea', 'cy']);
+  });
+
+  it("keeps a member whose owner isn't in the list as a person, in its own place", () => {
+    expect(shape(peopleGroups([bea, evie]))).toEqual(['bea', 'evie']);
+    expect(shape(peopleGroups([evie, bea]))).toEqual(['evie', 'bea']);
+  });
+
+  it('shows an owner with none of their members listed as a person', () => {
+    expect(peopleGroups([adam, bea])).toEqual([
+      { kind: 'person', user: adam },
+      { kind: 'person', user: bea },
+    ]);
   });
 
   it('groups one level only: a member of a member keeps its own place', () => {
     const odd = memberOf(evie, 9, 'odd');
-    expect(ids(householdOrder([odd, adam, evie]))).toEqual(['odd', 'adam', 'evie']);
+    expect(shape(peopleGroups([odd, adam, evie]))).toEqual(['odd', 'adam[evie]']);
   });
 
   it('shows everyone exactly once', () => {
     const all = [adam, bea, evie, ellis];
-    expect(householdOrder(all)).toHaveLength(all.length);
-    expect(new Set(householdOrder(all))).toEqual(new Set(all));
+    const shown = peopleGroups(all).flatMap((e) =>
+      e.kind === 'person' ? [e.user] : [e.owner, ...e.members],
+    );
+    expect(shown).toHaveLength(all.length);
+    expect(new Set(shown)).toEqual(new Set(all));
   });
 });
 

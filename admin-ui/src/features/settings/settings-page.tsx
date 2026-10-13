@@ -579,7 +579,7 @@ function HouseholdTopic({ settings }: { settings: AdminSettings }) {
       description={t('settings.household.cardBody')}
       fields={[
         { name: 'members_enabled', kind: 'switch' },
-        { name: 'max_members', kind: 'number', placeholder: '6' },
+        { name: 'max_members', kind: 'number', placeholder: '6', range: { min: 1, max: 50 } },
       ]}
     />
   );

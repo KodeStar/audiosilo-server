@@ -4,14 +4,21 @@ import type { AdminMember, AdminUser, MemberAccess, MemberKind, UserPatch } from
 // who someone can be assigned to, and the bodies the Account tab sends. Pure,
 // so the rules are tested apart from the screens.
 
+/** One entry on People: an ordinary person's card, or a household shown as one block. */
+export type PeopleEntry =
+  | { kind: 'person'; user: AdminUser }
+  | { kind: 'household'; owner: AdminUser; members: AdminUser[] };
+
 /**
- * People in the order People shows them: the server's order, with each
- * person's household members moved up to follow them. A member whose owner
- * isn't in the list (filtered out, or not loaded) keeps its own place, so
- * hiding an owner never hides their members. One level only: a member is
- * grouped only under an owner who is not a member themselves.
+ * People as People shows them: the server's order, with each household (an
+ * owner and the members listed with them) gathered into one entry where the
+ * owner stands. A member whose owner isn't in the list (filtered out, or not
+ * loaded) keeps its own place as a person, so hiding an owner never hides
+ * their members; an owner with none of their members listed is a person too.
+ * One level only: a member is grouped only under an owner who is not a member
+ * themselves.
  */
-export function householdOrder(users: readonly AdminUser[]): AdminUser[] {
+export function peopleGroups(users: readonly AdminUser[]): PeopleEntry[] {
   const byId = new Map(users.map((u) => [u.id, u]));
   const ownerOf = (u: AdminUser) => {
     const owner = u.managed_by ? byId.get(u.managed_by.id) : undefined;
@@ -25,10 +32,11 @@ export function householdOrder(users: readonly AdminUser[]): AdminUser[] {
     if (list) list.push(u);
     else membersOf.set(owner.id, [u]);
   }
-  const out: AdminUser[] = [];
+  const out: PeopleEntry[] = [];
   for (const u of users) {
-    if (ownerOf(u)) continue; // placed after their owner
-    out.push(u, ...(membersOf.get(u.id) ?? []));
+    if (ownerOf(u)) continue; // inside their owner's household
+    const members = membersOf.get(u.id);
+    out.push(members ? { kind: 'household', owner: u, members } : { kind: 'person', user: u });
   }
   return out;
 }

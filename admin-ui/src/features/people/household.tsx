@@ -170,11 +170,13 @@ function OwnerRows({ detail }: { detail: UserDetail }) {
                 {t('user.household.featureOffLink')}
               </Link>
             </>
-          ) : (
+          ) : u.can_add_members ? (
             t('user.household.canAddBody', {
               name: u.username,
               max: formatNumber(household?.max_members ?? 6, i18n.resolvedLanguage ?? 'en'),
             })
+          ) : (
+            t('user.household.canAddBodyOff', { name: u.username })
           )
         }
       >

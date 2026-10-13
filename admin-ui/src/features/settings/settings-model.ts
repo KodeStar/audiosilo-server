@@ -57,6 +57,18 @@ export function listToText(list: readonly string[]): string {
   return list.join('\n');
 }
 
+/**
+ * Whether a number field's text is outside its whole-number range, checked
+ * before saving (the server refuses the same). Blank is not: it means the
+ * default.
+ */
+export function outOfRange(text: string, min: number, max: number): boolean {
+  const s = text.trim();
+  if (s === '') return false;
+  const n = Number(s);
+  return !Number.isInteger(n) || n < min || n > max;
+}
+
 function same(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((v, i) => v === b[i]);

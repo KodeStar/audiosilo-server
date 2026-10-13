@@ -432,6 +432,7 @@ function AccountTab({ detail }: { detail: UserDetail }) {
   const members = detail.members ?? [];
   const qc = useQueryClient();
   const me = useCurrentUser();
+  const users = useUsers();
   const navigate = useNavigate();
   const self = me.id === u.id;
   const [promoting, setPromoting] = useState(false);
@@ -472,7 +473,10 @@ function AccountTab({ detail }: { detail: UserDetail }) {
             self
               ? t('user.account.roleSelf')
               : member
-                ? t('user.account.roleMember', { name: u.username })
+                ? t('user.account.roleMember', {
+                    name: u.username,
+                    owner: ownerName(u, users.data ?? []),
+                  })
                 : t('user.account.roleBody')
           }
         >

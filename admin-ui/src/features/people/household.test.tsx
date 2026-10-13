@@ -66,16 +66,21 @@ function routes(over: Record<string, MockRoute> = {}) {
 beforeEach(() => setToken('stored'));
 
 describe('household members on People', () => {
-  it('follow their owner, each with who manages them and Kid or Grown-up', async () => {
+  it('show a household as one block, each member with who manages them and Kid or Grown-up', async () => {
     mockFetch(routes());
     renderApp('/people');
     await screen.findByRole('link', { name: /^adam/ });
-    const cards = screen
-      .getAllByRole('link')
-      .map((a) => a.getAttribute('href') ?? '')
-      .filter((h) => h.startsWith('/admin/people/user/'))
-      .map((h) => Number(h.split('/').pop()));
-    expect(cards).toEqual([1, 2, 5, 7, 6]);
+    const cardsIn = (el: HTMLElement) =>
+      within(el)
+        .getAllByRole('link')
+        .map((a) => a.getAttribute('href') ?? '')
+        .filter((h) => h.startsWith('/admin/people/user/'))
+        .map((h) => Number(h.split('/').pop()));
+    expect(cardsIn(document.body)).toEqual([1, 2, 5, 7, 6]);
+    // The owner leads their household's block; ordinary people stay outside it.
+    const household = screen.getByRole('region', { name: "adam's household" });
+    expect(cardsIn(household)).toEqual([5, 7, 6]);
+    expect(screen.getAllByRole('region', { name: /household/ })).toHaveLength(1);
 
     const card = screen.getByRole('link', { name: /^evie/ });
     expect(within(card).getByText('Managed by adam')).toBeInTheDocument();
@@ -115,6 +120,9 @@ describe("an owner's page", () => {
     const user = userEvent.setup();
     const toggle = within(household).getByRole('switch', { name: 'Can add household members' });
     expect(toggle).toBeChecked();
+    expect(toggle).toHaveAccessibleDescription(
+      'adam can add kids and grown-ups from the player, up to 6.',
+    );
     await user.click(toggle);
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ can_add_members: false }),
@@ -122,6 +130,17 @@ describe("an owner's page", () => {
     expect(
       await screen.findByText("adam can't add household members any more"),
     ).toBeInTheDocument();
+  });
+
+  it("says so when they can't add members, and that existing members keep working", async () => {
+    const off = { ...adam, can_add_members: false };
+    mockFetch(routes({ 'GET /admin/users/5': { body: detail(off, { members: adamMembers }) } }));
+    renderApp('/people/user/5?tab=account');
+    const toggle = await screen.findByRole('switch', { name: 'Can add household members' });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAccessibleDescription(
+      "adam can't add household members. Members already added keep working.",
+    );
   });
 
   it('points to Settings when household members are off for the server', async () => {
@@ -228,7 +247,7 @@ describe("a member's page", () => {
     expect(within(role).getByRole('option', { name: 'Admin' })).toBeDisabled();
     expect(
       screen.getByText(
-        "evie is a household member, so they can't be an admin. Make them independent first.",
+        "evie is in adam's household, so they can't be an admin. Make them independent first.",
       ),
     ).toBeInTheDocument();
   });
@@ -299,6 +318,13 @@ describe('assigning someone to a household', () => {
         .map((o) => o.textContent),
     ).toEqual(['Choose a person', 'chris', 'adam']);
     expect(within(dialog).getByRole('button', { name: 'Assign to someone' })).toBeDisabled();
+    // Nobody picked yet: the access copy has its own wording, not a name's place-holder.
+    expect(
+      within(dialog).getByRole('radio', { name: /^Everything the person you pick can listen to/ }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('Follows the access of the person you pick, as it changes.'),
+    ).toBeInTheDocument();
     await user.selectOptions(owner, 'adam');
     // A grown-up starts on everything their owner can listen to.
     expect(within(dialog).getByRole('radio', { name: /^Grown-up/ })).toBeChecked();

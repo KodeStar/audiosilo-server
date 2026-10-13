@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { House, KeyRound, Smartphone, UserPlus, Users } from 'lucide-react';
@@ -17,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { InviteDialog } from './invite-dialog';
-import { householdOrder, ownerName } from './household-model';
+import { displayName, ownerName, peopleGroups } from './household-model';
 import { MemberChips } from './member-chips';
 import { currentBook, groupDevices } from './people-model';
 
@@ -80,24 +81,50 @@ export function PeoplePage() {
           action={inviteButton}
         />
       ) : (
-        // Household members follow their owner, so a household reads as a run of cards.
+        // A household (an owner and their members) is one block across the grid.
         <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {householdOrder(list).map((u) => (
-            <li key={u.id} className="min-w-0">
-              <PersonCard
-                user={u}
-                owner={ownerName(u, list)}
-                listening={stats.data?.listening ?? []}
-                live={live.data ?? []}
-                devices={devicesOf && (devicesOf.get(u.id) ?? [])}
-                now={now}
-              />
-            </li>
-          ))}
+          {peopleGroups(list).map((e) => {
+            const card = (u: AdminUser) => (
+              <li key={u.id} className="min-w-0">
+                <PersonCard
+                  user={u}
+                  owner={ownerName(u, list)}
+                  listening={stats.data?.listening ?? []}
+                  live={live.data ?? []}
+                  devices={devicesOf && (devicesOf.get(u.id) ?? [])}
+                  now={now}
+                />
+              </li>
+            );
+            return e.kind === 'person' ? (
+              card(e.user)
+            ) : (
+              <li key={`household-${e.owner.id}`} className="col-span-full min-w-0">
+                <HouseholdGroup name={displayName(e.owner)}>
+                  {[e.owner, ...e.members].map(card)}
+                </HouseholdGroup>
+              </li>
+            );
+          })}
         </ul>
       )}
       <InviteDialog open={inviting} onOpenChange={setInviting} />
     </Page>
+  );
+}
+
+/** One household on People: a heading, then the owner's and the members' cards. */
+function HouseholdGroup({ name, children }: { name: string; children: React.ReactNode }) {
+  const { t } = useTranslation();
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className="rounded-2xl border bg-muted/50 p-3 md:p-4">
+      <h2 id={id} className="h3 mb-3 flex min-w-0 items-center gap-2 px-1">
+        <House className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="truncate">{t('user.household.members', { name })}</span>
+      </h2>
+      <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">{children}</ul>
+    </section>
   );
 }
 
