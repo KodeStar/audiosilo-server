@@ -14,11 +14,13 @@ import (
 // the caller's own members under /me/household/members. The accounts and their
 // rules live in auth (members.go), what a member may listen to in catalog (the
 // member rule) and the collections shared with them in catalog too; this file is
-// transport. Every route refuses an API key (denyAPIKey), a demo account and a
-// member caller; adding is also refused while the server's or the person's switch
-// is off or at the cap, while the other routes keep working on the caller's
-// existing members (so an owner can always rename, sign out and delete them).
-// Someone else's member is 404 on every route.
+// transport. Every route refuses an API key (denyAPIKey); every route but the
+// list (which answers a demo or member caller 200 with allowed false and its
+// reason) refuses a demo account and a member caller too. Adding is also refused
+// while the server's or the person's switch is off or at the cap, while the
+// other routes keep working on the caller's existing members (so an owner can
+// always rename, sign out and delete them). Someone else's member is 404 on
+// every route.
 
 // Member route error codes.
 const (
@@ -39,6 +41,7 @@ const (
 	codeHasMembers         = "has_members"
 	codeMemberIsDemo       = "member_is_demo"
 	codeKidNoPassword      = "kid_no_password"
+	codeMemberDisabled     = "member_disabled"
 )
 
 // addReasons names auth.MayAddMembers' refusals as the list's reasons
@@ -84,6 +87,18 @@ func notKid(next http.Handler) http.Handler {
 	})
 }
 
+// writeKidRefusal answers 403 kid_account, as notKid does, for a write that
+// auth or catalog refused for a kid inside its own transaction (a request that
+// passed notKid just before the owner's switch to kid committed), and reports
+// whether it did.
+func writeKidRefusal(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, auth.ErrKidAccount) && !errors.Is(err, catalog.ErrKidAccount) {
+		return false
+	}
+	writeErrorCode(w, http.StatusForbidden, codeKidAccount, "not available for a kid's account")
+	return true
+}
+
 // refuseMember answers 403 member_cannot_manage and returns true when u is a
 // household member.
 func refuseMember(w http.ResponseWriter, u *auth.User) bool {
@@ -96,19 +111,18 @@ func refuseMember(w http.ResponseWriter, u *auth.User) bool {
 
 // memberOwner loads the caller who may manage their members: an API key, a demo
 // account and a member are refused (403); with limited, the account limiter
-// applies first (gateSelfService: the routes that make an account or a
-// credential). nil when it has answered.
+// then applies (gateSelfService's: the routes that make an account or a
+// credential), after the refusals, so a member's or demo's refused calls never
+// spend the address's shared budget. nil when it has answered.
 func (a *API) memberOwner(w http.ResponseWriter, r *http.Request, limited bool) *auth.User {
 	if denyAPIKey(w, r) {
 		return nil
 	}
-	var u *auth.User
-	if limited {
-		u = a.gateSelfService(w, r)
-	} else {
-		u = a.nonDemoAccount(w, r)
-	}
+	u := a.nonDemoAccount(w, r)
 	if u == nil || refuseMember(w, u) {
+		return nil
+	}
+	if limited && !allowAttempt(w, a.accountLimiter.Acquire(clientIP(r))) {
 		return nil
 	}
 	return u
@@ -137,8 +151,8 @@ func (a *API) writeMemberError(w http.ResponseWriter, err error, op, generic str
 		writeErrorCode(w, http.StatusForbidden, codeNotAllowed, err.Error())
 	case errors.Is(err, auth.ErrMemberLimit):
 		writeErrorCode(w, http.StatusConflict, codeMemberLimit, err.Error())
-	case errors.Is(err, auth.ErrUsernameTaken):
-		writeErrorCode(w, http.StatusConflict, codeUsernameTaken, "no free username for that name")
+	case errors.Is(err, auth.ErrMemberDisabled):
+		writeErrorCode(w, http.StatusConflict, codeMemberDisabled, err.Error())
 	case errors.Is(err, auth.ErrInvalidName):
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidName, err.Error())
 	case errors.Is(err, auth.ErrInvalidKind), errors.Is(err, auth.ErrInvalidAccess):
@@ -289,7 +303,8 @@ func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMemberSession answers POST /me/household/members/{id}/session: 201 and
-// the session envelope of the member signed in on the caller's device.
+// the session envelope of the member signed in on the caller's device (409
+// member_disabled for a member the admin disabled).
 func (a *API) handleMemberSession(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
 	if !ok {
@@ -311,7 +326,7 @@ func (a *API) handleMemberSession(w http.ResponseWriter, r *http.Request) {
 
 // handleMemberPair answers POST /me/household/members/{id}/pair: the pairing
 // payload for the member's own device (single use, 10 minutes, built like
-// handlePair's).
+// handlePair's; 409 member_disabled for a member the admin disabled).
 func (a *API) handleMemberPair(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
 	if !ok {
@@ -321,7 +336,7 @@ func (a *API) handleMemberPair(w http.ResponseWriter, r *http.Request) {
 	if owner == nil {
 		return
 	}
-	m, token, err := a.auth.MemberPairing(r.Context(), owner.ID, id)
+	m, token, err := a.auth.MemberPairing(r.Context(), owner.ID, id, pairingTTL)
 	if err != nil {
 		a.writeMemberError(w, err, "member pairing failed", "could not set up the device", "member", id)
 		return
@@ -390,8 +405,9 @@ func (a *API) handleRevokeMemberDevice(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateMember answers PATCH /me/household/members/{id} {name?, kind?,
 // access?, collection_ids?} (strict; {} is 400): 200 and the member. Switching a
-// grown-up to a kid clears their password, API keys and pairing codes; their
-// devices stay signed in.
+// grown-up to a kid clears their password, API keys, pairing codes, invites and
+// recovery code, and the collections shared between them and anyone but the
+// caller; their devices stay signed in.
 func (a *API) handleUpdateMember(w http.ResponseWriter, r *http.Request) {
 	id, ok := memberID(w, r)
 	if !ok {

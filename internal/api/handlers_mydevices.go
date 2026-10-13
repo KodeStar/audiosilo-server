@@ -72,8 +72,9 @@ func (a *API) handleListMyDevices(w http.ResponseWriter, r *http.Request) {
 // request, and the client signs out locally. Anyone else's device, like an
 // unknown or signed-out one, is 404 and untouched. With ?also_members=1 (or
 // true) the caller's household members signed in on that device are signed out
-// there too, in the same transaction. An API-key caller may do it too (it only
-// reduces access).
+// there too, in the same transaction, each audited as member.device_revoke (the
+// caller as actor, the member as target, as on the member route). An API-key
+// caller may do it too (it only reduces access).
 func (a *API) handleRevokeMyDevice(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -81,7 +82,7 @@ func (a *API) handleRevokeMyDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	also := r.URL.Query().Get("also_members")
-	n, err := a.auth.RevokeOwnDeviceAndMembers(r.Context(), userFrom(r.Context()).ID, id, also == "1" || also == "true")
+	members, err := a.auth.RevokeOwnDeviceAndMembers(r.Context(), userFrom(r.Context()).ID, id, also == "1" || also == "true")
 	switch {
 	case errors.Is(err, auth.ErrNotFound):
 		writeError(w, http.StatusNotFound, "device not found")
@@ -89,6 +90,9 @@ func (a *API) handleRevokeMyDevice(w http.ResponseWriter, r *http.Request) {
 		a.log.Warn("revoke own device failed", "err", err, "device", id)
 		writeError(w, http.StatusInternalServerError, "could not sign the device out")
 	default:
-		writeJSON(w, http.StatusOK, map[string]any{"current": id == credentialFrom(r.Context()).ID, "members_signed_out": n})
+		for _, m := range members {
+			a.audit(r, "member.device_revoke", m, map[string]any{"member": m, "device_id": id})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"current": id == credentialFrom(r.Context()).ID, "members_signed_out": len(members)})
 	}
 }

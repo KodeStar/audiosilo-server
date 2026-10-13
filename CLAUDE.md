@@ -1344,20 +1344,24 @@ admin overrides; see Metadata overrides below).
   `CallerLibraries`, so a non-member's scopes cost the one grants statement they did before 8b-1
   and a kid's refusal reads nothing; `UserScope`/`UserScopes`/`AccessibleLibraries` (id + isAdmin)
   read the rule themselves (`memberRuleOf`, the same conditions) for a caller known only by id
-  (the importer, tests). New transport code builds scopes from the request's user with `callerOf`,
+  (the importer, tests); `TestMembers_RuleReadsAgree` holds both readings to the same scopes for
+  every kind of account, bad data included. New transport code builds scopes from the request's user with `callerOf`,
   never from an id. Scopes over 32 paths filter SQL in
   `pathsJSONFilterSQL`'s single-parameter form (a row's path and its ancestors looked up in one JSON
-  list; same rows as the OR form, which can't hold 1,000 arms at all). `BenchmarkMemberScopes`
+  list; same rows as the OR form, which can't hold 1,000 arms at all; a path that isn't valid UTF-8,
+  which JSON can't carry exactly, keeps an OR arm of its own beside the list). `BenchmarkMemberScopes`
   (M1 Ultra, 3,000 books, a 1,000-item kid vs a whole-library listener, the `Caller` path): browse
   2.4 ms vs 0.26 ms, search 9.1 ms vs 5.6 ms, progress list 4.9 ms vs 1.7 ms, the scope load
   1.05 ms vs 0.017 ms (0.034 ms by id, which reads the rule).
   **Routes** (`/me/household/members`; API keys 403 everywhere, demo 403 `demo_account`, a member
   403 `member_cannot_manage`, someone else's member 404): `GET` -> `{allowed, reason?, max, members}`
   (200 for everyone signed in: `reason` `demo`|`member`|`feature_off`|`not_allowed`; at the cap is not
-  a reason), `POST {name, kind, access, sign_in_here?, collection_ids?}` (strict; `gateSelfService`;
+  a reason), `POST {name, kind, access, sign_in_here?, collection_ids?}` (strict; the account limiter, as
+  `gateSelfService`'s, charged after the API-key, demo and member refusals;
   403 `feature_off`/`not_allowed`, 409 `member_limit`, 400 `invalid_name`/`invalid_collections`;
-  username derived from the name, then `-<owner>`, then `-2`..`-99`) -> `201 {member, session?}`,
-  `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min), `GET
+  username derived from the name, then `-<owner>`, then `-2`, `-3`, ... with no cap) -> `201 {member, session?}`,
+  `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min; both 409
+  `member_disabled` for a member the admin disabled, whose tokens would never work), `GET
   {id}/devices` (a bare `[MyDevice]`), `DELETE {id}/devices/{device_id}`, `PATCH {id} {name?, kind?,
   access?, collection_ids?}` (`{}` 400), `DELETE {id}`. Only adding checks the switches (the server's
   `household.members_enabled`, the person's `can_add_members`) and the cap (`household.max_members`,
@@ -1366,16 +1370,22 @@ admin overrides; see Metadata overrides below).
   `auth`'s transaction through `auth.ShareFunc`). A session made here records `created_on_token_id`
   and copies the caller's device name. **Kids**: 403 `kid_account` on `POST /auth/password|tokens|pair|
   recovery`, `PUT /me/household`, `PUT /me/collections/{id}/shares`, from one route wrapper
-  (`api.notKid` in `api.go`, before the handler; wrap any new route a kid can't use); switching a
-  grown-up to a kid (or the admin assigning a kid) clears the password, API keys, pairing tokens,
-  recovery code and the person's `household_sharing` row (`clearKidCredentials`), sessions stay, so
+  (`api.notKid` in `api.go`, before the handler; wrap any new route a kid can't use), and the writes
+  refuse a kid themselves inside their transaction (`auth.refuseKid` in `IssueAPIToken`,
+  `GenerateRecoveryCode`, `IssueOwnPairingToken`; `catalog.SetHouseholdSharing`), so a request that
+  passed `notKid` just before the owner's switch to kid committed can't leave the kid holding one (403
+  `kid_account`); switching a grown-up to a kid (or the admin assigning a kid) clears the password,
+  API keys, pairing tokens,
+  recovery code, still-redeemable invites (`supersedeActiveInvites`), the collections shared between
+  the kid and anyone but their owner (both ways, so no sharer is left with a kid in a list the server
+  refuses back) and the person's `household_sharing` row (`clearKidCredentials`), sessions stay, so
   a kid made a grown-up again starts with house sharing off and opts in again; `ShareTargets` lists
   a kid only to their owner and `SetCollectionShares` refuses one from anyone else
   (`ErrUnknownUser`, `kidOnlyToOwnerSQL`); `HouseListening` and `HouseholdSharing` leave kids out
   both ways because a kid has no row (no kid filter of their own). `/me` and the session envelope carry
   `managed_by` (`{id, username}`|null), `member_kind` and, for a member only, `display_name` (omitted otherwise); `/me/devices` rows carry `member_sign_ins`
   (always `[]` for a member, with no read) and `DELETE /me/devices/{id}?also_members=1` signs those out in the same transaction
-  (`{current, members_signed_out}`). The list's `reason` is `auth.MayAddMembers` (the one may-add ladder,
+  (`{current, members_signed_out}`; each member signed out is audited `member.device_revoke`). The list's `reason` is `auth.MayAddMembers` (the one may-add ladder,
   which `CreateMember` runs too). Admin: user objects add `member_access`, `can_add_members`,
   `members_count`, `display_name` and, on `managed_by` only there, the owner's own `display_name`
   (`api.adminUser`/`adminOwner`; the player's `managed_by` never carries it, and `/me`'s
@@ -1387,8 +1397,12 @@ admin overrides; see Metadata overrides below).
   someone", 409 `owner_is_member`/`owner_is_demo`/`self_managed`/`member_is_demo`/`member_not_admin`/
   `has_members`, 400 `kid_no_password` for a non-empty `password` on a kid or beside assigning one,
   which `""` (clearing) is not; null: "Make independent"); the whole PATCH is one `auth.UpdateUser` transaction that checks every field before
-  writing, so a refused field changes nothing; `DELETE ?keep_members=<id>,<id>` deletes the person's
-  other members with them (400 `invalid_keep_members`). Audit `member.create|update|delete|session|pair|device_revoke`
+  writing, so a refused field changes nothing; `DELETE ?keep_members=<id>,<id>` (or the parameter repeated) deletes the person's
+  other members with them (400 `invalid_keep_members`). Joining another owner's household signs the
+  person out of what another owner set up for them (`auth.leaveOwners`: the sessions and API keys made
+  on anyone else's devices, by `created_on_token_id`, which would otherwise carry the new owner's
+  access to the old owner's phone, and open unlinked pairing tokens); leaving one ("Make independent",
+  or kept by `keep_members`) takes the open pairing tokens only; their own devices stay signed in. Audit `member.create|update|delete|session|pair|device_revoke`
   (actor the owner, target the member; tested in `members_test.go`, not `audit_coverage_test`).
 - **Cast tokens (player redesign Phase 8, capability `cast`, `auth/cast.go`, `api/handlers_cast.go`;
   security-critical)**: a Chromecast receiver plays from URLs the player hands it, so the player
@@ -1698,14 +1712,16 @@ admin overrides; see Metadata overrides below).
 `GET /api/v1/server` advertises capability flags (`admin_ui`, `web_player`,
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
-`user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`); flip them on
+`user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
+`household_members`); flip them on
 as phases land. `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
 `Book` in more than one series; see API surface below). `series_books` is true (the first page of several
 series' books in one request, `GET /libraries/{id}/series/books`; see API surface below). `addresses` is true (home/away addresses on pairing, exchange and login, and
 `GET /addresses`; see Home and away addresses above). `household` (`/me/household`,
 `/household/listening`) and `cast` (`POST /cast/token` + cast tokens on a book's cover/stream) are
-true (player redesign Phase 8; see Listening in the house and Cast tokens above).
+true (player redesign Phase 8; see Listening in the house and Cast tokens above). `household_members`
+is true (`/me/household/members`; player redesign Phase 8b-1, see Household members above).
 `browse_people` is true (the player's browse lists and `/books?narrator=`),
 `cover_sizes` is true (`GET /libraries/{id}/cover?size=`) and `next_book` is true
 (`GET /libraries/{id}/next`). `queue`, `collections`, `user_stats`, `ratings`,
@@ -1762,7 +1778,9 @@ scope-filtered like favourites: a revoked share hides a rating, never deletes it
 collision keeps the newer `updated_at`, whole). **My devices** are `GET
 /me/devices` (the caller's own live sessions and API keys, `auth.ListDevices(caller)` without
 `user_id`/`username`, `current` marks the request's token) and `DELETE /me/devices/{id}` (200
-`{"current": bool}`; `auth.RevokeOwnDevice`, owner-scoped: anyone else's, unknown, revoked or
+`{"current": bool, "members_signed_out": int}`; `auth.RevokeOwnDeviceAndMembers`, with
+`?also_members=1` also signing out the caller's household members' sign-ins made on that device;
+owner-scoped: anyone else's, unknown, revoked or
 pairing id is 404 and untouched; revoking the current device is allowed and its token is dead from
 the next request; an API-key caller may revoke).
 Listening in the house is `GET`/`PUT /me/household` and `GET /household/listening`; casting is

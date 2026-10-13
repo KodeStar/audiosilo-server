@@ -28,7 +28,8 @@ func callerOf(u *auth.User) catalog.Caller {
 	return who
 }
 
-// handleListLibraries lists libraries the caller can reach (via any share).
+// handleListLibraries lists libraries the caller can reach (via any share, or
+// for a household member through their owner: the member rule).
 func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
 	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(userFrom(r.Context())))
 	if err != nil {
@@ -39,7 +40,8 @@ func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
 }
 
 // libraryScope loads a library and the caller's effective access scope for it.
-// A non-admin with no granting share gets 403.
+// A non-admin with no access there (no granting share, and for a household
+// member nothing through their owner) gets 403.
 func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, catalog.Scope, int, string) {
 	scope, err := a.cat.CallerScope(r.Context(), callerOf(userFrom(r.Context())), libraryID)
 	if err != nil {
@@ -48,7 +50,7 @@ func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, 
 	return a.scopedLibrary(r, scope)
 }
 
-// callerScopes is the caller's current access in every library (UserScopes), for
+// callerScopes is the caller's current access in every library (CallerScopes), for
 // a cross-library read or a request that reads more than one library; on a
 // failure it answers 500 with msg and returns false.
 func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) ([]catalog.Scope, bool) {
@@ -63,7 +65,7 @@ func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) (
 }
 
 // scopeIn is the caller's scope in one library out of their callerScopes, as
-// UserScope gives it: an admin's is AllowAll (for any id: an unknown library is
+// CallerScope gives it: an admin's is AllowAll (for any id: an unknown library is
 // then a 404, not a 403), anyone else's the library's entry or none.
 func scopeIn(r *http.Request, scopes []catalog.Scope, libraryID int64) catalog.Scope {
 	if userFrom(r.Context()).Role == auth.RoleAdmin {

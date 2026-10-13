@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -350,7 +351,10 @@ func TestPathFilterForms(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := []string{"Book", "Book 2", "Book-x", "Book.x", "Book/1.mp3", "Book/CD1/1.mp3", "Book0", "Booka", "book/1.mp3",
-		"Bookish", "Saga/One", "Saga/One 2", "Saga/One/x", "Ä/b", "Ä b", "z", "Z/y", "Other/Book"}
+		"Bookish", "Saga/One", "Saga/One 2", "Saga/One/x", "Ä/b", "Ä b", "z", "Z/y", "Other/Book", "Odd\xff/1.mp3", "Odd\xfe/1.mp3",
+		// Rows that aren't UTF-8 beside a granted folder: a stray continuation
+		// byte must not make "Book" or "Saga/One" an ancestor.
+		"Book\x85/1.mp3", "Book\x85", "Saga/One\x92/x", "Saga/One/\x85/y"}
 	for _, p := range rows {
 		if _, err := c.UpsertBook(ctx, &Book{LibraryID: lib.ID, RelPath: p, Title: p}); err != nil {
 			t.Fatal(err)
@@ -370,12 +374,12 @@ func TestPathFilterForms(t *testing.T) {
 		return got
 	}
 	orFrag, orArgs := pathsORFilterSQL("rel_path", paths)
-	jsFrag, jsArgs, ok := pathsJSONFilterSQL("rel_path", paths)
-	if !ok || len(jsArgs) != 1 {
-		t.Fatalf("json form = %v, %d args", ok, len(jsArgs))
+	jsFrag, jsArgs := pathsJSONFilterSQL("rel_path", paths)
+	if len(jsArgs) != 1 {
+		t.Fatalf("json form = %d args", len(jsArgs))
 	}
 	orRows, jsRows := query(orFrag, orArgs), query(jsFrag, jsArgs)
-	want := []string{"Book", "Book/1.mp3", "Book/CD1/1.mp3", "Saga/One", "Saga/One/x", "z", "Ä/b"}
+	want := []string{"Book", "Book/1.mp3", "Book/CD1/1.mp3", "Saga/One", "Saga/One/x", "Saga/One/\x85/y", "z", "Ä/b"}
 	if !slices.Equal(orRows, want) || !slices.Equal(jsRows, want) {
 		t.Fatalf("or = %v\njson = %v\nwant %v", orRows, jsRows, want)
 	}
@@ -386,9 +390,15 @@ func TestPathFilterForms(t *testing.T) {
 	if frag, _ := pathFilterSQL("rel_path", Scope{Paths: paths[:3]}); strings.HasPrefix(frag, "EXISTS") {
 		t.Error("short scope in the single-parameter form")
 	}
-	// A path JSON can't carry exactly falls back to the OR form.
-	if _, _, ok := pathsJSONFilterSQL("rel_path", []string{"a\xffb"}); ok {
-		t.Error("invalid UTF-8 path took the JSON form")
+	// A path JSON can't carry exactly (not valid UTF-8) keeps an OR arm of its
+	// own beside the list, even in a list too long for the OR form alone.
+	long := []string{"Odd\xff"}
+	for i := range 1200 {
+		long = append(long, fmt.Sprintf("Filler/%d", i))
+	}
+	frag, args := pathFilterSQL("rel_path", Scope{Paths: long})
+	if want := []string{"Odd\xff/1.mp3"}; !strings.HasPrefix(frag, "(EXISTS") || !slices.Equal(query(frag, args), want) {
+		t.Errorf("long scope with an invalid UTF-8 path = %v", query(frag, args))
 	}
 }
 
@@ -413,5 +423,36 @@ func TestCallerScopes_NonMemberReadsNoRule(t *testing.T) {
 	}
 	if _, err := f.c.UserScopes(f.ctx, bob, false); err == nil {
 		t.Fatal("the by-id form read no rule")
+	}
+}
+
+// LastListened is each person's newest session recorded here with listening in
+// it: an imported, a backfilled or an empty session newer than it doesn't count,
+// someone with only those is absent, and so is someone who never listened.
+func TestLastListened(t *testing.T) {
+	t.Parallel()
+	f := newMemberFixture(t)
+	adam := f.user(t, "adam", "user", 0, "")
+	evie := f.user(t, "evie", "user", adam, "all")
+	ellis := f.user(t, "ellis", "user", adam, "all")
+	kit := f.user(t, "kit", "user", adam, "all")
+	session := func(user int64, at string, listened float64, importID, backfilled int) {
+		t.Helper()
+		f.exec(t, `INSERT INTO listening_sessions(user_id, library_id, rel_path, started_at, last_at, listened, import_id, backfilled)
+		  VALUES(?, ?, 'Author/Book', ?, ?, ?, ?, ?)`, user, f.libA, at, at, listened, importID, backfilled)
+	}
+	session(evie, "2026-10-01T10:00:00.000Z", 60, 0, 0)
+	session(evie, "2026-10-02T10:00:00.000Z", 30, 0, 0)
+	session(evie, "2026-10-03T10:00:00.000Z", 0, 0, 0)  // nothing listened
+	session(evie, "2026-10-04T10:00:00.000Z", 60, 7, 0) // imported
+	session(evie, "2026-10-05T10:00:00.000Z", 60, 0, 1) // backfilled
+	session(ellis, "2026-10-06T10:00:00.000Z", 60, 7, 0)
+	session(ellis, "2026-10-07T10:00:00.000Z", 0, 0, 0)
+	got, err := f.c.LastListened(f.ctx, []int64{evie, ellis, kit, 99999})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[int64]string{evie: "2026-10-02T10:00:00.000Z"}; !maps.Equal(got, want) {
+		t.Fatalf("last listened = %v, want %v", got, want)
 	}
 }

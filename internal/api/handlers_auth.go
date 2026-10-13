@@ -12,10 +12,12 @@ import (
 )
 
 // pairingTTL bounds how long an UNLINKED pairing token is valid (/auth/pair,
-// demo sessions). Tokens minted by redeeming a code get their lifetime from
-// internal/auth instead: invite-derived ones inherit the invite's own expiry -
-// so the QR built from one stays scannable for as long as the invite is
-// redeemable - and recovery-derived ones carry a short TTL of their own.
+// demo sessions, a household member's own device from POST
+// /me/household/members/{id}/pair). Tokens minted by redeeming a code get their
+// lifetime from internal/auth instead: invite-derived ones inherit the invite's
+// own expiry - so the QR built from one stays scannable for as long as the
+// invite is redeemable - and recovery-derived ones carry a short TTL of their
+// own.
 const pairingTTL = 10 * time.Minute
 
 // handleServerInfo reports server identity and capabilities. Public so a client
@@ -240,7 +242,10 @@ func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	token, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindPairing, "", pairingTTL)
+	token, err := a.auth.IssueOwnPairingToken(r.Context(), u.ID, pairingTTL)
+	if writeKidRefusal(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue pairing token")
 		return
@@ -346,6 +351,9 @@ func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID)
+	if writeKidRefusal(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate recovery code")
 		return
@@ -447,6 +455,9 @@ func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret, meta, err := a.auth.IssueAPIToken(r.Context(), full.ID, label)
+	if writeKidRefusal(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create API key")
 		return

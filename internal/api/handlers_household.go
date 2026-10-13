@@ -50,7 +50,11 @@ func (a *API) handlePutHousehold(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := a.cat.SetHouseholdSharing(r.Context(), u.ID, *body.ShareListening); err != nil {
+	err := a.cat.SetHouseholdSharing(r.Context(), u.ID, *body.ShareListening)
+	if writeKidRefusal(w, err) {
+		return
+	}
+	if err != nil {
 		a.writeCatalogError(w, err, "save household setting failed", "could not save your household setting", "user", u.ID)
 		return
 	}

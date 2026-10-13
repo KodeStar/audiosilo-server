@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -90,6 +91,53 @@ func TestDeleteUser(t *testing.T) {
 	}
 	if _, err := s.DeleteUser(ctx, admin2.ID, nil); err != nil {
 		t.Fatalf("delete admin2 with another admin present: %v", err)
+	}
+}
+
+// Two admins deleting each other at once can't both pass the last-admin guard:
+// DeleteUser reads the account and the guard inside its write, which the
+// store's one writer orders, so one delete is ErrLastAdmin and an enabled admin
+// stays. The writer is held first, as a long scan would, so both requests are in
+// flight before either writes.
+func TestDeleteUserLastAdminGuardInTheWrite(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	alice := mustUser(t, s, ctx, "alice", "alice-password", RoleAdmin)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleAdmin)
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.db.WithTx(ctx, "hold", func(*sql.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, id := range []int64{bob.ID, alice.ID} {
+		wg.Go(func() { _, errs[i] = s.DeleteUser(ctx, id, nil) })
+	}
+	time.Sleep(100 * time.Millisecond) // both requests wait for the writer
+	close(release)
+	<-done
+	wg.Wait()
+	refused := 0
+	for _, err := range errs {
+		switch {
+		case errors.Is(err, ErrLastAdmin):
+			refused++
+		case err != nil:
+			t.Fatal(err)
+		}
+	}
+	var left int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if refused != 1 || left != 1 {
+		t.Fatalf("errors %v, enabled admins left %d", errs, left)
 	}
 }
 

@@ -278,6 +278,23 @@ func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName
 	return s.issueToken(ctx, s.db, userID, kind, deviceName, ttl)
 }
 
+// IssueOwnPairingToken is IssueToken(KindPairing) for the signed-in person's own
+// new device (/auth/pair), refused for a kid inside the write (refuseKid). The
+// owner's pairing for a member's device (MemberPairing) and the demo's don't
+// come here: a kid's own device is paired that way.
+func (s *Service) IssueOwnPairingToken(ctx context.Context, userID int64, ttl time.Duration) (string, error) {
+	var secret string
+	err := s.db.WithTx(ctx, "IssueOwnPairingToken", func(tx *sql.Tx) error {
+		if err := refuseKid(ctx, tx, userID); err != nil {
+			return err
+		}
+		var err error
+		secret, err = s.issueToken(ctx, tx, userID, KindPairing, "", ttl)
+		return err
+	})
+	return secret, err
+}
+
 // issueToken is IssueToken through ex (the database or a transaction).
 func (s *Service) issueToken(ctx context.Context, ex sqlExecer, userID int64, kind, deviceName string, ttl time.Duration) (string, error) {
 	secret, hash, err := generateToken()
@@ -546,19 +563,26 @@ func scanAPIToken(row interface{ Scan(...any) error }) (APIToken, error) {
 // IssueAPIToken mints a personal API key (kind=api, no expiry) for a user and
 // returns the plaintext secret (shown once) plus the stored row's metadata for
 // the create response. The secret is stored only as a hash. label is carried in
-// device_name; callers trim/validate it before calling.
+// device_name; callers trim/validate it before calling. A kid's is refused
+// inside the write (ErrKidAccount, refuseKid).
 func (s *Service) IssueAPIToken(ctx context.Context, userID int64, label string) (string, APIToken, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
 		return "", APIToken{}, err
 	}
-	res, err := s.insertToken(ctx, s.db, userID, hash, KindAPI, label, nil, nil, "")
-	if err != nil {
-		return "", APIToken{}, err
-	}
-	id, _ := res.LastInsertId()
-	meta, err := scanAPIToken(s.db.QueryRowContext(ctx,
-		`SELECT `+keyMetaColumns+` FROM tokens WHERE id = ?`, id))
+	var meta APIToken
+	err = s.db.WithTx(ctx, "IssueAPIToken", func(tx *sql.Tx) error {
+		if err := refuseKid(ctx, tx, userID); err != nil {
+			return err
+		}
+		res, err := s.insertToken(ctx, tx, userID, hash, KindAPI, label, nil, nil, "")
+		if err != nil {
+			return err
+		}
+		id, _ := res.LastInsertId()
+		meta, err = scanAPIToken(tx.QueryRowContext(ctx, `SELECT `+keyMetaColumns+` FROM tokens WHERE id = ?`, id))
+		return err
+	})
 	if err != nil {
 		return "", APIToken{}, err
 	}
@@ -782,6 +806,9 @@ func (s *Service) GenerateRecoveryCode(ctx context.Context, userID int64) (strin
 		return "", err
 	}
 	if err := s.db.WithTx(ctx, "GenerateRecoveryCode", func(tx *sql.Tx) error {
+		if err := refuseKid(ctx, tx, userID); err != nil {
+			return err // a kid holds no recovery code
+		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM auth_codes WHERE user_id = ? AND kind = ?`, userID, CodeRecovery); err != nil {
 			return err
@@ -1216,15 +1243,6 @@ func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int6
 // cleared, so they keep only their own grants). An id in keep that isn't one of
 // this person's members is ErrInvalidKeepMembers and nothing changes.
 func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (DeletedUser, error) {
-	u, err := s.GetUser(ctx, id)
-	if err != nil {
-		return DeletedUser{}, err
-	}
-	if u.Role == RoleAdmin && !u.Disabled {
-		if err := lastAdminGuard(ctx, s.db, id); err != nil {
-			return DeletedUser{}, err
-		}
-	}
 	keep = slices.Compact(slices.Sorted(slices.Values(keep)))
 	list, err := json.Marshal(append([]int64{}, keep...)) // [] for none, never null
 	if err != nil {
@@ -1232,12 +1250,28 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 	}
 	var out DeletedUser
 	err = s.db.WithTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
-		var err error
+		// The account and the last-admin guard are read inside the write, as
+		// UpdateUser's are: two admins removing each other at once can't both
+		// pass the guard.
+		u, err := getUser(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if u.Role == RoleAdmin && !u.Disabled {
+			if err := lastAdminGuard(ctx, tx, id); err != nil {
+				return err
+			}
+		}
 		if out.MembersKept, err = s.keepMembers(ctx, tx, id, string(list)); err != nil {
 			return err
 		}
 		if len(out.MembersKept) != len(keep) {
 			return ErrInvalidKeepMembers
+		}
+		for _, kept := range keep {
+			if err := leaveOwners(ctx, tx, kept, 0); err != nil {
+				return err
+			}
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE managed_by = ?`, id)
 		if err != nil {
@@ -1317,6 +1351,10 @@ type UserChanges struct {
 // members of their own (ErrHasMembers: no chains). The owner's cap and switch
 // don't apply: the admin decides. As a kid, the person's credentials are cleared
 // (clearKidCredentials); their own grants stay (the member rule is a union).
+// Joining someone else's household signs them out of what another owner set up
+// for them (leaveOwners: the sessions made on that owner's devices and the open
+// pairing codes), and leaving one takes the open pairing codes; their own
+// devices stay signed in.
 // Owner 0 makes them independent (the admin's "Make independent"): the three
 // member columns cleared, so they keep only their own grants; a no-op for
 // someone who isn't a member.
@@ -1467,8 +1505,19 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 				return err
 			}
 		}
+		// A move to another household, or out of one (leaveOwners).
+		switch {
+		case assign && (u.ManagedBy == nil || u.ManagedBy.ID != h.Owner):
+			if err := leaveOwners(ctx, tx, id, h.Owner); err != nil {
+				return err
+			}
+		case h != nil && !assign && u.IsMember():
+			if err := leaveOwners(ctx, tx, id, 0); err != nil {
+				return err
+			}
+		}
 		if assign && kid {
-			return clearKidCredentials(ctx, tx, id)
+			return clearKidCredentials(ctx, tx, id, s.ts())
 		}
 		return nil
 	})

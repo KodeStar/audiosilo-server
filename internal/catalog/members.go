@@ -212,24 +212,28 @@ func (c *Catalog) MemberCollections(ctx context.Context, owner int64, ownerAdmin
 
 // LastListened maps each of users to the end of their newest listening session
 // recorded here (not imported, not backfilled, with listening in it): fixed-width
-// millisecond UTC. Someone who never listened is absent.
+// millisecond UTC. Someone who never listened is absent. Each person's is read
+// from the newest down on idx_sessions_user_last, which stops at the first that
+// counts, rather than from every session they kept.
 func (c *Catalog) LastListened(ctx context.Context, users []int64) (map[int64]string, error) {
 	out := map[int64]string{}
 	err := inChunks(users, func(in string, args []any) error {
 		type row struct {
 			id int64
-			at string
+			at sql.NullString
 		}
 		rows, err := queryRows(ctx, c.db, func(rs *sql.Rows, r *row) error {
 			return rs.Scan(&r.id, &r.at)
-		}, `SELECT s.user_id, MAX(s.last_at) FROM listening_sessions s
-		     WHERE s.user_id IN (`+in+`) AND s.import_id = 0 AND s.backfilled = 0 AND `+listenedSQL+`
-		     GROUP BY s.user_id`, args...)
+		}, `SELECT u.id, (SELECT MAX(s.last_at) FROM listening_sessions s
+		                   WHERE s.user_id = u.id AND s.import_id = 0 AND s.backfilled = 0 AND `+listenedSQL+`)
+		      FROM users u WHERE u.id IN (`+in+`)`, args...)
 		if err != nil {
 			return err
 		}
 		for _, r := range rows {
-			out[r.id] = r.at
+			if r.at.Valid {
+				out[r.id] = r.at.String
+			}
 		}
 		return nil
 	})

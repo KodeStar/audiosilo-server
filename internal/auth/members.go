@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,8 +26,12 @@ import (
 // Rules kept here:
 //   - one level: an owner is never a member, and a member never has members;
 //   - a member never gets the admin role (UpdateUser);
-//   - a kid holds no password, API key, pairing token, recovery code or house
-//     sharing (clearKidCredentials), and its existing sign-ins stay;
+//   - a kid holds no password, API key, pairing token, recovery code, invite or
+//     house sharing, and shares collections only with their owner: becoming one
+//     clears them (clearKidCredentials, its existing sign-ins stay), and the
+//     writes that would make one refuse a kid (refuseKid, UpdateUser);
+//   - leaving an owner's household, or joining another's, signs the person out
+//     of what another owner set up for them (leaveOwners);
 //   - the owner's routes answer ErrNotMember for anyone who isn't their member,
 //     so another person's member is indistinguishable from no such account.
 
@@ -42,10 +45,6 @@ const (
 
 // MaxMemberName bounds a member's name, in characters after trimming.
 const MaxMemberName = 40
-
-// memberPairingTTL bounds the pairing token an owner mints for a member's own
-// device: single use, like /auth/pair's.
-const memberPairingTTL = 10 * time.Minute
 
 // Errors of the member routes and the admin's member fields.
 var (
@@ -84,7 +83,33 @@ var (
 	// ErrKidNoPassword is a password set on a kid, or in the same change that
 	// assigns the person as a kid: a kid holds none.
 	ErrKidNoPassword = errors.New("a kid's account has no password")
+	// ErrMemberDisabled is signing in, or pairing a device for, a member whose
+	// account the admin disabled: no token of theirs would work.
+	ErrMemberDisabled = errors.New("this household member's account is disabled")
+	// ErrKidAccount is a credential a kid can't hold, refused inside the write
+	// that would make it (refuseKid): the transport's notKid answers first, but a
+	// request that passed it just before the owner's switch to kid committed
+	// lands here.
+	ErrKidAccount = errors.New("not available for a kid's account")
 )
+
+// refuseKid is ErrKidAccount when id is a kid (all three member columns, as
+// User.IsKid reads them), read through q: the write's own transaction on the
+// one writer, so no switch to kid can commit between the check and the write.
+func refuseKid(ctx context.Context, q rowQuerier, id int64) error {
+	var kid bool
+	err := q.QueryRowContext(ctx, `SELECT COALESCE(member_kind = '`+MemberKid+`' AND managed_by IS NOT NULL
+	        AND member_access IS NOT NULL, 0) FROM users WHERE id = ?`, id).Scan(&kid)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return err
+	case kid:
+		return ErrKidAccount
+	}
+	return nil
+}
 
 // MemberPolicy is the server's household settings as the transport reads them
 // per request (config.Household).
@@ -189,26 +214,17 @@ func usernameBase(name string) string {
 }
 
 // deriveUsername picks the member's username: the name's base, then the base
-// with the owner's username, then numbered (-2 .. -99); the first one no account
-// has in any case (one read of which are taken). Past -99 it is
-// ErrUsernameTaken. Runs inside the create's transaction.
+// with the owner's username, then numbered (-2, -3, ...); the first one no
+// account has in any case (one read of which are taken, so there is always a
+// free one: a server whose people have names with no Latin letters shares the
+// base "member"). Runs inside the create's transaction.
 func deriveUsername(ctx context.Context, tx *sql.Tx, name, ownerUsername string) (string, error) {
 	base := usernameBase(name)
-	candidates := []string{base}
-	if owner := usernameSlug(ownerUsername); owner != "" {
-		candidates = append(candidates, base+"-"+owner)
-	}
-	for n := 2; n <= 99; n++ {
-		candidates = append(candidates, fmt.Sprintf("%s-%d", base, n))
-	}
-	list, err := json.Marshal(candidates)
-	if err != nil {
-		return "", err
-	}
-	// The candidates are lower case ASCII (usernameSlug), so lower() on the
-	// stored side is the whole case fold.
+	// The base is lower case ASCII letters, digits and '-' (usernameSlug), so
+	// lower() on the stored side is the whole case fold, and the LIKE pattern
+	// holds no wildcard but its own '%'.
 	rows, err := tx.QueryContext(ctx,
-		`SELECT lower(username) FROM users WHERE lower(username) IN (SELECT value FROM json_each(?))`, string(list))
+		`SELECT lower(username) FROM users WHERE lower(username) = ?1 OR lower(username) LIKE ?1 || '-%'`, base)
 	if err != nil {
 		return "", err
 	}
@@ -224,12 +240,17 @@ func deriveUsername(ctx context.Context, tx *sql.Tx, name, ownerUsername string)
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	for _, c := range candidates {
-		if !taken[c] {
+	if !taken[base] {
+		return base, nil
+	}
+	if owner := usernameSlug(ownerUsername); owner != "" && !taken[base+"-"+owner] {
+		return base + "-" + owner, nil
+	}
+	for n := 2; ; n++ {
+		if c := fmt.Sprintf("%s-%d", base, n); !taken[c] {
 			return c, nil
 		}
 	}
-	return "", ErrUsernameTaken
 }
 
 // stampMillis renders a users.created_at (RFC3339, whole seconds) as the
@@ -431,17 +452,21 @@ func (s *Service) memberSessionTx(ctx context.Context, ex sqlExecer, member int6
 
 // MemberSession signs owner's member id in on the owner's device: a session
 // named deviceName recording onToken (the owner's token). It returns the secret
-// and the member's account (for the session envelope).
+// and the member's account (for the session envelope). A member the admin
+// disabled is ErrMemberDisabled: no token of theirs would work.
 func (s *Service) MemberSession(ctx context.Context, owner, id int64, deviceName string, onToken int64) (string, *User, error) {
 	var (
 		secret string
 		u      *User
 	)
 	err := s.db.WithTx(ctx, "MemberSession", func(tx *sql.Tx) error {
-		if _, err := s.memberOf(ctx, tx, owner, id); err != nil {
+		m, err := s.memberOf(ctx, tx, owner, id)
+		if err != nil {
 			return err
 		}
-		var err error
+		if m.Disabled {
+			return ErrMemberDisabled
+		}
 		if secret, err = s.memberSessionTx(ctx, tx, id, deviceName, onToken); err != nil {
 			return err
 		}
@@ -455,9 +480,10 @@ func (s *Service) MemberSession(ctx context.Context, owner, id int64, deviceName
 }
 
 // MemberPairing mints a pairing token for owner's member id, for the member's
-// own device: unlinked, single use, memberPairingTTL, like /auth/pair's. It
-// returns the member with the token.
-func (s *Service) MemberPairing(ctx context.Context, owner, id int64) (Member, string, error) {
+// own device: unlinked, single use, valid for ttl (the transport's /auth/pair
+// lifetime). It returns the member with the token. A member the admin disabled
+// is ErrMemberDisabled, as MemberSession.
+func (s *Service) MemberPairing(ctx context.Context, owner, id int64, ttl time.Duration) (Member, string, error) {
 	var (
 		m     Member
 		token string
@@ -467,7 +493,10 @@ func (s *Service) MemberPairing(ctx context.Context, owner, id int64) (Member, s
 		if m, err = s.memberOf(ctx, tx, owner, id); err != nil {
 			return err
 		}
-		token, err = s.issueToken(ctx, tx, id, KindPairing, "", memberPairingTTL)
+		if m.Disabled {
+			return ErrMemberDisabled
+		}
+		token, err = s.issueToken(ctx, tx, id, KindPairing, "", ttl)
 		return err
 	})
 	if err != nil {
@@ -545,8 +574,12 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 				return err
 			}
 		}
+		// The typed name only when it changes: cur.Name falls back to the
+		// username (memberNameSQL), which must not become a typed name of its own.
+		var nameArg any
 		if name != cur.Name {
 			changes["name"] = name
+			nameArg = name
 		}
 		if kind != cur.Kind {
 			changes["kind"] = kind
@@ -556,13 +589,14 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 		}
 		if len(changes) > 0 {
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE users SET display_name = ?, member_kind = ?, member_access = ?, updated_at = ? WHERE id = ?`,
-				name, kind, access, s.ts(), id); err != nil {
+				`UPDATE users SET display_name = COALESCE(?, display_name), member_kind = ?, member_access = ?, updated_at = ?
+				  WHERE id = ?`,
+				nameArg, kind, access, s.ts(), id); err != nil {
 				return err
 			}
 		}
 		if kind == MemberKid && cur.Kind != MemberKid {
-			if err := clearKidCredentials(ctx, tx, id); err != nil {
+			if err := clearKidCredentials(ctx, tx, id, s.ts()); err != nil {
 				return err
 			}
 		}
@@ -582,24 +616,55 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 
 // clearKidCredentials takes from a member becoming a kid every way to sign in
 // that a kid can't have (plan decision 1): the password (and the browsers it
-// signed in from), API keys, open pairing tokens and the recovery code (whose
-// linked pairing tokens cascade). Sessions stay: their devices stay signed in.
-// It also clears their household listening choice (household_sharing): a kid
-// never shares nor sees the house (catalog's household.go relies on no kid
-// having a row, which the routes keep: a kid can't set one), so a kid made a
-// grown-up again starts from off and opts in again.
-func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64) error {
+// signed in from), API keys, open pairing tokens, the recovery code and any
+// still-redeemable invite (whose linked pairing tokens cascade), so no code can
+// pair a new device into the kid's account. Sessions stay: their devices stay
+// signed in. It also clears their household listening choice
+// (household_sharing): a kid never shares nor sees the house (catalog's
+// household.go relies on no kid having a row, which the routes keep: a kid can't
+// set one), so a kid made a grown-up again starts from off and opts in again.
+// And it takes away the collections shared between the kid and anyone but their
+// owner (managed_by, already the new owner when the admin assigns), both ways: a
+// kid is shared with only by their owner and shares with nobody else (catalog's
+// kidOnlyToOwnerSQL, ShareTargets), so a sharer is never left with a kid in the
+// list they are shown that the server would refuse back.
+func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64, now string) error {
 	for _, q := range []string{
 		`UPDATE users SET password_hash = '' WHERE id = ?1`,
 		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND kind IN ('` + KindAPI + `', '` + KindPairing + `') AND revoked = 0`,
 		`DELETE FROM auth_codes WHERE user_id = ?1 AND kind = '` + CodeRecovery + `'`,
 		`DELETE FROM household_sharing WHERE user_id = ?1`,
+		`DELETE FROM collection_shares
+		  WHERE (user_id = ?1 AND collection_id IN (SELECT id FROM collections
+		          WHERE user_id IS NOT (SELECT managed_by FROM users WHERE id = ?1)))
+		     OR (collection_id IN (SELECT id FROM collections WHERE user_id = ?1)
+		          AND user_id IS NOT (SELECT managed_by FROM users WHERE id = ?1))`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {
 			return err
 		}
 	}
+	if err := supersedeActiveInvites(ctx, tx, id, now); err != nil {
+		return err
+	}
 	return forgetBrowsers(ctx, tx, id)
+}
+
+// leaveOwners signs a person who leaves their owner's household (newOwner 0:
+// "Make independent", or kept when their owner is deleted) or joins newOwner's
+// out of what another owner set up for them: the open pairing codes minted for
+// their own device (unlinked pairing tokens) and, joining newOwner's household,
+// the sessions and API keys made on anyone else's devices (created_on_token_id),
+// which would otherwise carry newOwner's access to that person's phone. Their own
+// devices stay signed in, and so, made independent, do the devices their old
+// owner signed them in on (the account then reaches only its own grants).
+func leaveOwners(ctx context.Context, tx *sql.Tx, id, newOwner int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1
+	  WHERE user_id = ?1 AND revoked = 0
+	    AND ((kind = '`+KindPairing+`' AND auth_code_id IS NULL)
+	         OR (?2 > 0 AND kind IN ('`+KindSession+`', '`+KindAPI+`')
+	             AND (SELECT d.user_id FROM tokens d WHERE d.id = tokens.created_on_token_id) <> ?2))`, id, newOwner)
+	return err
 }
 
 // DeleteMember deletes owner's member id and all of its state (the schema's

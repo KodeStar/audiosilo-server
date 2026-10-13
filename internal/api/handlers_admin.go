@@ -87,7 +87,14 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "user.create", u.Username, map[string]any{"role": u.Role, "password": req.Password != ""})
-	writeJSON(w, http.StatusCreated, u)
+	// Re-read, so the answer is the admin's user object like every other admin
+	// user answer (adminUser): the stored defaults (can_add_members) included.
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load user")
+		return
+	}
+	writeJSON(w, http.StatusCreated, toAdminUser(full))
 }
 
 // handleGetUserDetail returns one account plus everything the admin console
@@ -287,8 +294,8 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 // handleDeleteUser permanently removes an account and all of its durable state
 // (sessions, auth codes, progress/bookmarks/notes/history, share grants) via the
 // schema's cascade, and its household members with it except the ids in
-// ?keep_members=<id>,<id> (kept as ordinary accounts; an id that isn't one of
-// theirs is 400 invalid_keep_members). Two guards: an admin cannot delete their
+// ?keep_members=<id>,<id> (or the parameter repeated; kept as ordinary
+// accounts; an id that isn't one of theirs is 400 invalid_keep_members). Two guards: an admin cannot delete their
 // own account (disable it instead - prevents self-lockout and fat-finger loss),
 // and auth.DeleteUser refuses the last enabled admin (ErrLastAdmin → 409).
 func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +304,10 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	keep, ok := parseIDList(r.URL.Query().Get("keep_members"))
+	// Every keep_members value counts (?keep_members=3,7 and the repeated
+	// ?keep_members=3&keep_members=7 alike): reading only the first would delete
+	// the members a client asked to keep.
+	keep, ok := parseIDList(strings.Join(r.URL.Query()["keep_members"], ","))
 	if !ok {
 		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, "keep_members must be user ids separated by commas")
 		return
@@ -316,7 +326,13 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
-	a.audit(r, "user.delete", target.Username, map[string]any{"members_deleted": done.MembersDeleted, "members_kept": done.MembersKept})
+	// The household facts only for someone who had members (no "0 deleted,
+	// none kept" on every other deletion).
+	var details map[string]any
+	if done.MembersDeleted > 0 || len(done.MembersKept) > 0 {
+		details = map[string]any{"members_deleted": done.MembersDeleted, "members_kept": done.MembersKept}
+	}
+	a.audit(r, "user.delete", target.Username, details)
 	w.WriteHeader(http.StatusNoContent)
 }
 

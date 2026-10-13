@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 var testPolicy = MemberPolicy{Enabled: true, Max: 6}
@@ -27,6 +28,22 @@ func mustMember(t *testing.T, s *Service, ctx context.Context, owner int64, in N
 		t.Fatalf("create %q: %v", in.Name, err)
 	}
 	return m
+}
+
+// memberColumnsHold checks the rule SQLite can't hold as a CHECK (migration
+// 0044): in every row, managed_by, member_kind and member_access are all NULL or
+// all set. GetUser can't see a broken row (memberScan reads it as no member), so
+// the writers' tests read the columns themselves.
+func memberColumnsHold(t *testing.T, s *Service, ctx context.Context) {
+	t.Helper()
+	var broken int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users
+	  WHERE (managed_by IS NULL) <> (member_kind IS NULL) OR (member_kind IS NULL) <> (member_access IS NULL)`).Scan(&broken); err != nil {
+		t.Fatal(err)
+	}
+	if broken != 0 {
+		t.Fatalf("%d accounts break the all-or-none member columns", broken)
+	}
 }
 
 func TestUsernameSlug(t *testing.T) {
@@ -106,6 +123,26 @@ func TestMembers_Create(t *testing.T) {
 	adamNow, _ := s.GetUser(ctx, adam.ID)
 	if adamNow.MembersCount != 4 || adamNow.IsMember() || !adamNow.CanAddMembers {
 		t.Fatalf("owner = %+v", adamNow)
+	}
+	memberColumnsHold(t, s, ctx)
+}
+
+// Usernames have no cap: names with no Latin letters all share the base
+// "member", and an owner whose username has none gets no "-<owner>" form, so on
+// a server with a hundred of them the next is numbered past 99 instead of being
+// refused.
+func TestMembers_UsernamesPastNinetyNine(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	owner := mustUser(t, s, ctx, "Маша", "masha-password", RoleUser)
+	if _, err := s.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 150)
+	  INSERT INTO users(username, password_hash, role, created_at, updated_at)
+	  SELECT 'member' || CASE WHEN i = 1 THEN '' ELSE '-' || i END, '', 'user', 't', 't' FROM n`); err != nil {
+		t.Fatal(err)
+	}
+	m, _, _, err := s.CreateMember(ctx, owner.ID, NewMember{Name: "小明", Kind: MemberKid, Access: MemberAll}, testPolicy)
+	if err != nil || m.Username != "member-151" || m.Name != "小明" {
+		t.Fatalf("member = %+v, %v", m, err)
 	}
 }
 
@@ -187,7 +224,7 @@ func TestMembers_KindChangeClearsCredentials(t *testing.T) {
 	}
 	session, _ := s.IssueToken(ctx, ellis.ID, KindSession, "Ellis's phone", 0)
 	key, _, _ := s.IssueAPIToken(ctx, ellis.ID, "dash")
-	pairing, _ := s.IssueToken(ctx, ellis.ID, KindPairing, "", memberPairingTTL)
+	pairing, _ := s.IssueToken(ctx, ellis.ID, KindPairing, "", 10*time.Minute)
 	if _, err := s.GenerateRecoveryCode(ctx, ellis.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -232,6 +269,7 @@ func TestMembers_KindChangeClearsCredentials(t *testing.T) {
 	if _, _, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Kind: &bad}); !errors.Is(err, ErrInvalidKind) {
 		t.Fatalf("bad kind = %v", err)
 	}
+	memberColumnsHold(t, s, ctx)
 }
 
 // Ownership: every per-member operation answers ErrNotMember for anyone else's
@@ -252,14 +290,14 @@ func TestMembers_Ownership(t *testing.T) {
 	if d, err := s.MemberDevices(ctx, adam.ID, evie.ID); err != nil || len(d) != 1 {
 		t.Fatalf("devices = %v %v", d, err)
 	}
-	if m, p, err := s.MemberPairing(ctx, adam.ID, evie.ID); err != nil || p == "" || m.ID != evie.ID {
+	if m, p, err := s.MemberPairing(ctx, adam.ID, evie.ID, 10*time.Minute); err != nil || p == "" || m.ID != evie.ID {
 		t.Fatalf("pairing = %v", err)
 	}
 	for _, who := range []int64{bob.ID, evie.ID, 0} {
 		for name, err := range map[string]error{
 			"member":  func() error { _, err := s.Member(ctx, who, evie.ID); return err }(),
 			"session": func() error { _, _, err := s.MemberSession(ctx, who, evie.ID, "x", 0); return err }(),
-			"pair":    func() error { _, _, err := s.MemberPairing(ctx, who, evie.ID); return err }(),
+			"pair":    func() error { _, _, err := s.MemberPairing(ctx, who, evie.ID, 10*time.Minute); return err }(),
 			"devices": func() error { _, err := s.MemberDevices(ctx, who, evie.ID); return err }(),
 			"revoke":  func() error { _, err := s.RevokeMemberDevice(ctx, who, evie.ID, cred.ID); return err }(),
 			"delete":  func() error { _, err := s.DeleteMember(ctx, who, evie.ID); return err }(),
@@ -317,9 +355,9 @@ func TestMembers_SignIns(t *testing.T) {
 	}
 
 	// Without alsoMembers: only the phone.
-	n, err := s.RevokeOwnDeviceAndMembers(ctx, adam.ID, pc.ID, false)
-	if err != nil || n != 0 {
-		t.Fatalf("revoke = %d %v", n, err)
+	gone, err := s.RevokeOwnDeviceAndMembers(ctx, adam.ID, pc.ID, false)
+	if err != nil || len(gone) != 0 {
+		t.Fatalf("revoke = %v %v", gone, err)
 	}
 	if _, err := s.ResolveToken(ctx, evieHere, KindSession); err != nil {
 		t.Fatal("member signed out without alsoMembers")
@@ -330,9 +368,9 @@ func TestMembers_SignIns(t *testing.T) {
 	_, pc2, _ := s.ResolveRequest(ctx, phone2, Presence{}, KindSession)
 	e2, _, _ := s.MemberSession(ctx, adam.ID, evie.ID, "phone 2", pc2.ID)
 	l2, _, _ := s.MemberSession(ctx, adam.ID, ellis.ID, "phone 2", pc2.ID)
-	n, err = s.RevokeOwnDeviceAndMembers(ctx, adam.ID, pc2.ID, true)
-	if err != nil || n != 2 {
-		t.Fatalf("revoke with members = %d %v", n, err)
+	gone, err = s.RevokeOwnDeviceAndMembers(ctx, adam.ID, pc2.ID, true)
+	if err != nil || !slices.Equal(gone, []string{ellis.Username, evie.Username}) {
+		t.Fatalf("revoke with members = %v %v", gone, err)
 	}
 	for _, tok := range []string{e2, l2} {
 		if _, err := s.ResolveToken(ctx, tok, KindSession); !errors.Is(err, ErrInvalidToken) {
@@ -382,6 +420,7 @@ func TestMembers_DeleteOwner(t *testing.T) {
 	if out, err := s.DeleteUser(ctx, bob.ID, nil); err != nil || out.MembersDeleted != 1 {
 		t.Fatalf("delete bob = %+v %v", out, err)
 	}
+	memberColumnsHold(t, s, ctx)
 }
 
 // The admin's member fields: assign (each refusal), make independent, the role
@@ -440,6 +479,7 @@ func TestMembers_AdminAssign(t *testing.T) {
 	if err := s.UpdateUser(ctx, 99999, UserChanges{Household: &HouseholdChange{}}); !errors.Is(err, ErrNotFound) {
 		t.Fatal("unknown id")
 	}
+	memberColumnsHold(t, s, ctx)
 }
 
 // The request's user (ResolveRequest's token lookup) carries the member fields
@@ -560,5 +600,38 @@ func TestMayAddMembers(t *testing.T) {
 		if err := MayAddMembers(c.u, c.policy); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
 		}
+	}
+}
+
+// A kid's credentials are refused inside the writes that would make them, not
+// only by the transport's notKid (which reads the request's token lookup, before
+// an owner's switch to kid can commit): an API key, a recovery code and the
+// person's own pairing token are each ErrKidAccount for a kid. Allowed: a
+// grown-up gets each, and the owner still pairs the kid's own device.
+func TestMembers_KidRefusedInTheWrite(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	mint := map[string]func(id int64) error{
+		"API key":       func(id int64) error { _, _, err := s.IssueAPIToken(ctx, id, "dash"); return err },
+		"recovery code": func(id int64) error { _, err := s.GenerateRecoveryCode(ctx, id); return err },
+		"own pairing":   func(id int64) error { _, err := s.IssueOwnPairingToken(ctx, id, time.Minute); return err },
+	}
+	for what, f := range mint {
+		if err := f(evie.ID); !errors.Is(err, ErrKidAccount) {
+			t.Errorf("kid's %s = %v", what, err)
+		}
+		if err := f(ellis.ID); err != nil {
+			t.Errorf("grown-up's %s = %v", what, err)
+		}
+	}
+	var live int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ? AND revoked = 0`, evie.ID).Scan(&live); err != nil || live != 0 {
+		t.Fatalf("the kid holds %d tokens, %v", live, err)
+	}
+	if _, _, err := s.MemberPairing(ctx, adam.ID, evie.ID, 10*time.Minute); err != nil {
+		t.Fatalf("owner's pairing for the kid = %v", err)
 	}
 }

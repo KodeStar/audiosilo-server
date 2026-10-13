@@ -122,9 +122,7 @@ func pathFilterSQL(col string, s Scope) (string, []any) {
 		return "0", nil
 	}
 	if len(s.Paths) > jsonPathsAbove {
-		if frag, args, ok := pathsJSONFilterSQL(col, s.Paths); ok {
-			return frag, args
-		}
+		return pathsJSONFilterSQL(col, s.Paths)
 	}
 	return pathsORFilterSQL(col, s.Paths)
 }
@@ -155,24 +153,39 @@ func pathsORFilterSQL(col string, paths []string) (string, []any) {
 // IN), so a row costs its depth, not the length of the list: a json_each walk
 // per row cost a 1,000-item member about a hundred times an ordinary listener
 // (BenchmarkMemberScopes), and 1,000 OR arms pass SQLite's expression depth.
-// ok is false when a path isn't valid UTF-8, which JSON can't carry exactly
-// (encoding/json would replace the bad bytes, naming another path): the caller
-// uses the OR form.
-func pathsJSONFilterSQL(col string, paths []string) (string, []any, bool) {
+// A path that isn't valid UTF-8 can't ride in the list (encoding/json would
+// replace the bad bytes, naming another path), so it keeps an OR arm of its own
+// beside it: one such path never sends the whole list to the OR form, whose
+// arms pass SQLite's expression depth at about a thousand.
+func pathsJSONFilterSQL(col string, paths []string) (string, []any) {
+	list := make([]string, 0, len(paths))
+	var odd []string
 	for _, p := range paths {
-		if !utf8.ValidString(p) {
-			return "", nil, false
+		if utf8.ValidString(p) {
+			list = append(list, p)
+		} else {
+			odd = append(odd, p)
 		}
 	}
-	list, err := json.Marshal(paths)
-	if err != nil {
-		return "", nil, false
+	js, err := json.Marshal(list) // valid UTF-8 strings only: it can't fail
+	if err != nil || len(list) == 0 {
+		return pathsORFilterSQL(col, paths)
 	}
-	return "EXISTS(WITH RECURSIVE anc(p, rest) AS (" +
+	// The row's path is split on its bytes (a BLOB): on TEXT, instr and substr
+	// count a stray continuation byte (a path that isn't UTF-8) differently, so
+	// "Wait for it\x85/1.mp3" got the false ancestor "Wait for it".
+	b := "CAST(" + col + " AS BLOB)"
+	frag := "EXISTS(WITH RECURSIVE anc(p, rest) AS (" +
 		"SELECT " + col + ", NULL UNION ALL " +
-		"SELECT substr(" + col + ", 1, instr(" + col + ", '/') - 1), substr(" + col + ", instr(" + col + ", '/') + 1) WHERE instr(" + col + ", '/') > 0 UNION ALL " +
-		"SELECT p || '/' || substr(rest, 1, instr(rest, '/') - 1), substr(rest, instr(rest, '/') + 1) FROM anc WHERE instr(rest, '/') > 0) " +
-		"SELECT 1 FROM anc WHERE p IN (SELECT value FROM json_each(?)))", []any{string(list)}, true
+		"SELECT substr(" + b + ", 1, instr(" + b + ", X'2F') - 1), substr(" + b + ", instr(" + b + ", X'2F') + 1) WHERE instr(" + b + ", X'2F') > 0 UNION ALL " +
+		"SELECT p || '/' || substr(rest, 1, instr(rest, X'2F') - 1), substr(rest, instr(rest, X'2F') + 1) FROM anc WHERE instr(rest, X'2F') > 0) " +
+		"SELECT 1 FROM anc WHERE CAST(p AS TEXT) IN (SELECT value FROM json_each(?)))"
+	args := []any{string(js)}
+	if len(odd) > 0 {
+		oddFrag, oddArgs := pathsORFilterSQL(col, odd)
+		frag, args = "("+frag+" OR "+oddFrag+")", append(args, oddArgs...)
+	}
+	return frag, args
 }
 
 // escapeLike escapes the SQLite LIKE wildcards ('%', '_') and the backslash
