@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,13 +14,42 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
 
+// adminUser is an account as the admin console shows it: the /me fields plus the
+// household member fields only the admin (and the owner's own list) sees.
+type adminUser struct {
+	*auth.User
+	MemberAccess  *string `json:"member_access"` // "all" | "collections", null for a non-member
+	CanAddMembers bool    `json:"can_add_members"`
+	MembersCount  int     `json:"members_count"`
+	DisplayName   string  `json:"display_name"`
+}
+
+func toAdminUser(u *auth.User) adminUser {
+	return adminUser{User: u, MemberAccess: u.MemberAccess, CanAddMembers: u.CanAddMembers,
+		MembersCount: u.MembersCount, DisplayName: u.DisplayName}
+}
+
+// adminMember is one of a person's household members on their console page.
+type adminMember struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Access   string `json:"access"`
+	Disabled bool   `json:"disabled"`
+}
+
 func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := a.auth.ListUsers(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list users")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+	out := make([]adminUser, len(users))
+	for i := range users {
+		out[i] = toAdminUser(&users[i])
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }
 
 func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -49,8 +80,10 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetUserDetail returns one account plus everything the admin console
-// needs to manage it: the libraries it can reach, the shares granted to it, and
-// its issued auth codes (metadata only - the plaintext codes are never stored).
+// needs to manage it: the libraries it can reach (a household member's derived
+// access included), the shares granted to it, its issued auth codes (metadata
+// only - the plaintext codes are never stored), its own household members and,
+// for a member on "collections", the owner's collections shared with it.
 func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -77,35 +110,131 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load auth codes")
 		return
 	}
+	members, err := a.auth.ListMembers(r.Context(), id)
+	if err != nil {
+		a.log.Warn("list members failed", "user", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load household members")
+		return
+	}
+	own := make([]adminMember, len(members))
+	for i, m := range members {
+		own[i] = adminMember{ID: m.ID, Username: m.Username, Name: m.Name, Kind: m.Kind, Access: m.Access, Disabled: m.Disabled}
+	}
+	shared, err := a.memberCollectionsOf(r.Context(), u)
+	if err != nil {
+		a.log.Warn("member collections failed", "user", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load household members")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":                 u,
+		"user":                 toAdminUser(u),
 		"accessible_libraries": libs,
 		"shares":               shares,
 		"auth_codes":           codes,
+		"members":              own,
+		"member_collections":   shared,
 	})
 }
 
-// handleUpdateUser patches an account in place: role, password and/or disabled
-// state (any subset). It replaces the old delete-and-recreate dance and the
-// separate disable endpoint. Apply password before role so promoting a
-// password-less account to admin in one request passes the admin-password guard.
+// memberCollectionsOf is the owner's collections shared with u when u is a
+// member on "collections" (counted as the owner's current access sees them),
+// else [].
+func (a *API) memberCollectionsOf(ctx context.Context, u *auth.User) ([]catalog.MemberCollection, error) {
+	out := []catalog.MemberCollection{}
+	if u.ManagedBy == nil || u.MemberAccess == nil || *u.MemberAccess != auth.MemberCollections {
+		return out, nil
+	}
+	owner, err := a.auth.GetUser(ctx, u.ManagedBy.ID)
+	if err != nil {
+		return nil, err
+	}
+	scopes, err := a.cat.UserScopes(ctx, owner.ID, owner.Role == auth.RoleAdmin)
+	if err != nil {
+		return nil, err
+	}
+	shared, err := a.cat.MemberCollections(ctx, owner.ID, []int64{u.ID}, scopes)
+	if err != nil {
+		return nil, err
+	}
+	if got := shared[u.ID]; got != nil {
+		out = got
+	}
+	return out, nil
+}
+
+// userPatch is PATCH /admin/users/{id}'s body. ManagedBy is raw so an absent
+// field ("leave it"), null ("Make independent") and an id ("Assign to someone")
+// differ.
+type userPatch struct {
+	Role          *string         `json:"role"`
+	Password      *string         `json:"password"`
+	Disabled      *bool           `json:"disabled"`
+	CanAddMembers *bool           `json:"can_add_members"`
+	ManagedBy     json.RawMessage `json:"managed_by"`
+	MemberKind    *string         `json:"member_kind"`
+	MemberAccess  *string         `json:"member_access"`
+}
+
+// owner reads ManagedBy: present, and the owner's id (0 for null). ok is false
+// for anything but null or a whole number.
+func (p userPatch) owner() (present bool, id int64, ok bool) {
+	if p.ManagedBy == nil {
+		return false, 0, true
+	}
+	if string(p.ManagedBy) == "null" {
+		return true, 0, true
+	}
+	if err := json.Unmarshal(p.ManagedBy, &id); err != nil || id <= 0 {
+		return true, 0, false
+	}
+	return true, id, true
+}
+
+// handleUpdateUser patches an account in place: role, password, disabled state
+// and the household member fields (any subset). It replaces the old
+// delete-and-recreate dance and the separate disable endpoint. Apply password
+// before role so promoting a password-less account to admin in one request passes
+// the admin-password guard, and the member fields before role so "Make
+// independent" then admin works in one request. managed_by: <id> needs
+// member_kind and member_access beside it, and they come only with it (400
+// member_fields_required).
 func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	var req struct {
-		Role     *string `json:"role"`
-		Password *string `json:"password"`
-		Disabled *bool   `json:"disabled"`
-	}
+	var req userPatch
 	if err := decodeJSON(r, &req, 0); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	assign, owner, ok := req.owner()
+	if !ok {
+		writeError(w, http.StatusBadRequest, "managed_by must be a user id or null")
+		return
+	}
+	toOwner := assign && owner > 0
+	if toOwner && (req.MemberKind == nil || req.MemberAccess == nil) ||
+		!toOwner && (req.MemberKind != nil || req.MemberAccess != nil) {
+		writeErrorCode(w, http.StatusBadRequest, codeMemberFields,
+			"managed_by needs member_kind and member_access, and they come only with it")
+		return
+	}
 	if req.Password != nil {
 		if err := a.auth.SetPassword(r.Context(), id, *req.Password); err != nil {
+			a.writeUserError(w, err, "could not update user")
+			return
+		}
+	}
+	if assign {
+		var err error
+		if owner > 0 {
+			err = a.auth.AssignMember(r.Context(), id, owner, *req.MemberKind, *req.MemberAccess)
+		} else {
+			err = a.auth.MakeIndependent(r.Context(), id)
+		}
+		if err != nil {
 			a.writeUserError(w, err, "could not update user")
 			return
 		}
@@ -118,6 +247,12 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Disabled != nil {
 		if err := a.auth.SetDisabled(r.Context(), id, *req.Disabled); err != nil {
+			a.writeUserError(w, err, "could not update user")
+			return
+		}
+	}
+	if req.CanAddMembers != nil {
+		if err := a.auth.SetCanAddMembers(r.Context(), id, *req.CanAddMembers); err != nil {
 			a.writeUserError(w, err, "could not update user")
 			return
 		}
@@ -138,19 +273,35 @@ func (a *API) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if req.Password != nil {
 		details["password"] = map[bool]string{true: "set", false: "cleared"}[*req.Password != ""]
 	}
+	if req.CanAddMembers != nil {
+		details["can_add_members"] = u.CanAddMembers
+	}
+	if assign {
+		details["managed_by"], details["member_kind"], details["member_access"] = nil, nil, nil
+		if u.ManagedBy != nil {
+			details["managed_by"], details["member_kind"], details["member_access"] = u.ManagedBy.Username, *u.MemberKind, *u.MemberAccess
+		}
+	}
 	a.audit(r, "user.update", u.Username, details)
-	writeJSON(w, http.StatusOK, u)
+	writeJSON(w, http.StatusOK, toAdminUser(u))
 }
 
 // handleDeleteUser permanently removes an account and all of its durable state
 // (sessions, auth codes, progress/bookmarks/notes/history, share grants) via the
-// schema's cascade. Two guards: an admin cannot delete their own account (disable
-// it instead - prevents self-lockout and fat-finger loss), and auth.DeleteUser
-// refuses the last enabled admin (ErrLastAdmin → 409).
+// schema's cascade, and its household members with it except the ids in
+// ?keep_members=<id>,<id> (kept as ordinary accounts; an id that isn't one of
+// theirs is 400 invalid_keep_members). Two guards: an admin cannot delete their
+// own account (disable it instead - prevents self-lockout and fat-finger loss),
+// and auth.DeleteUser refuses the last enabled admin (ErrLastAdmin → 409).
 func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	keep, ok := parseIDList(r.URL.Query().Get("keep_members"))
+	if !ok {
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, "keep_members must be user ids separated by commas")
 		return
 	}
 	if caller := userFrom(r.Context()); caller != nil && caller.ID == id {
@@ -162,12 +313,33 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
-	if _, err := a.auth.DeleteUser(r.Context(), id, nil); err != nil {
+	done, err := a.auth.DeleteUser(r.Context(), id, keep)
+	if err != nil {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
-	a.audit(r, "user.delete", target.Username, nil)
+	kept := done.MembersKept
+	if kept == nil {
+		kept = []string{}
+	}
+	a.audit(r, "user.delete", target.Username, map[string]any{"members_deleted": done.MembersDeleted, "members_kept": kept})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseIDList reads "3,7" as ids ("" is none); ok is false for anything else.
+func parseIDList(s string) ([]int64, bool) {
+	if s == "" {
+		return nil, true
+	}
+	var out []int64
+	for part := range strings.SplitSeq(s, ",") {
+		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, false
+		}
+		out = append(out, id)
+	}
+	return out, true
 }
 
 // writeUserError maps auth account-management errors to HTTP statuses - the
@@ -187,6 +359,21 @@ func (a *API) writeUserError(w http.ResponseWriter, err error, genericMsg string
 		writeErrorCode(w, http.StatusBadRequest, codeAdminNeedsPassword, err.Error())
 	case errors.Is(err, auth.ErrPasswordTooShort):
 		writeErrorCode(w, http.StatusBadRequest, codePasswordTooShort, err.Error())
+	// Household members (the admin's member fields, DeleteUser's keep list).
+	case errors.Is(err, auth.ErrMemberNotAdmin):
+		writeErrorCode(w, http.StatusConflict, codeMemberNotAdmin, err.Error())
+	case errors.Is(err, auth.ErrOwnerIsMember):
+		writeErrorCode(w, http.StatusConflict, codeOwnerIsMember, err.Error())
+	case errors.Is(err, auth.ErrOwnerIsDemo):
+		writeErrorCode(w, http.StatusConflict, codeOwnerIsDemo, err.Error())
+	case errors.Is(err, auth.ErrSelfManaged):
+		writeErrorCode(w, http.StatusConflict, codeSelfManaged, err.Error())
+	case errors.Is(err, auth.ErrHasMembers):
+		writeErrorCode(w, http.StatusConflict, codeHasMembers, err.Error())
+	case errors.Is(err, auth.ErrInvalidKind), errors.Is(err, auth.ErrInvalidAccess):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, auth.ErrInvalidKeepMembers):
+		writeErrorCode(w, http.StatusBadRequest, codeInvalidKeepMembers, err.Error())
 	default:
 		a.log.Warn(genericMsg, "err", err)
 		writeError(w, http.StatusInternalServerError, genericMsg)

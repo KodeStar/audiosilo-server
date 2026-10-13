@@ -53,6 +53,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
 			"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
 			"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
+			"household_members":  true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
@@ -238,6 +239,15 @@ func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
+	full, err := a.auth.GetUser(r.Context(), u.ID)
+	if err != nil {
+		a.log.Warn("load account failed", "user", u.ID, "err", err)
+		writeError(w, http.StatusInternalServerError, "could not load account")
+		return
+	}
+	if refuseKid(w, full) {
+		return
+	}
 	token, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindPairing, "", pairingTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue pairing token")
@@ -284,7 +294,7 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := a.gateSelfService(w, r)
-	if full == nil {
+	if full == nil || refuseKid(w, full) {
 		return
 	}
 	var req struct {
@@ -323,7 +333,7 @@ func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := a.gateSelfService(w, r)
-	if full == nil {
+	if full == nil || refuseKid(w, full) {
 		return
 	}
 	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID)
@@ -392,7 +402,7 @@ func (a *API) nonDemoAccount(w http.ResponseWriter, r *http.Request) *auth.User 
 		return nil
 	}
 	if full.IsDemo {
-		writeError(w, http.StatusForbidden, "not available for demo accounts")
+		writeErrorCode(w, http.StatusForbidden, codeDemoAccount, "not available for demo accounts")
 		return nil
 	}
 	return full
@@ -408,7 +418,7 @@ func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := a.gateSelfService(w, r)
-	if full == nil {
+	if full == nil || refuseKid(w, full) {
 		return
 	}
 	var req struct {

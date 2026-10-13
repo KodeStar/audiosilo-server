@@ -1,0 +1,1201 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/auth"
+	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
+)
+
+// Household members (Phase 8b-1): the server test table of the plan, one test
+// (or more) per row, named TestMembers_<Row>_*, each with its allowed and denied
+// halves. memberEnv: a copy of the fixture library (lib: Cradle, its "Cradle 2"
+// sibling, Mistborn) and the fixture library itself (other); adam reaches lib
+// through a share the tests revoke, bob through his own. Members are made through
+// the API, as the player makes them.
+
+type memberEnv struct {
+	*testEnv
+	lib, other      int64
+	adam, bob       int64
+	adamTok, bobTok string
+	adminTok        string
+	adamShare       int64
+}
+
+func newMemberEnv(t *testing.T) *memberEnv {
+	return newMemberEnvWith(t, nil)
+}
+
+func newMemberEnvWith(t *testing.T, configure func(*config.Config)) *memberEnv {
+	t.Helper()
+	e := newTestEnvWith(t, configure)
+	// The tests make more members, sessions and keys than the per-address
+	// account limit (10 / 15 min) and the general burst allow one address.
+	e.api.accountLimiter = newLimiter(100000, time.Minute)
+	e.api.ipLimiter = newRateLimiter(100000, 100000)
+	ctx := context.Background()
+	root := copyFixtures(t, cradlePart, cradlePart2, mistbornBook+"/01 - The Final Empire.m4b")
+	copyFixture(t, root, cradlePart, cradleTwoF)
+	lib, err := e.cat.CreateLibrary(ctx, catalog.Library{Name: "Copy", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, e, lib)
+	other := newFixtureLibrary(t, e)
+	m := &memberEnv{testEnv: e, lib: lib.ID, other: other.ID}
+	m.adam, m.adamTok = newUserWithSession(t, e, "adam", false)
+	m.bob, m.bobTok = newUserWithSession(t, e, "bob", false)
+	share, err := e.cat.CreateShare(ctx, catalog.Share{Name: "Adam's", Paths: []catalog.PathRule{{LibraryID: lib.ID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.adamShare = share.ID
+	if err := e.cat.GrantShare(ctx, m.adam, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.GrantWholeLibrary(ctx, m.bob, lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	if m.adminTok, err = e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "admin phone", 0); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// createdMember is POST /me/household/members' answer.
+type createdMember struct {
+	Member  householdMember `json:"member"`
+	Session *struct {
+		Token    string    `json:"token"`
+		User     auth.User `json:"user"`
+		ServerID string    `json:"server_id"`
+	} `json:"session"`
+}
+
+func (m *memberEnv) add(t *testing.T, tok, body string) (int, string) {
+	t.Helper()
+	resp, b := m.do(t, "POST", "/api/v1/me/household/members", tok, body)
+	return resp.StatusCode, b
+}
+
+// mustAdd adds a member as tok, wanting 201.
+func (m *memberEnv) mustAdd(t *testing.T, tok, body string) createdMember {
+	t.Helper()
+	status, b := m.add(t, tok, body)
+	if status != http.StatusCreated {
+		t.Fatalf("add %s = %d %s", body, status, b)
+	}
+	var out createdMember
+	if err := json.Unmarshal([]byte(b), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// kid adds a kid on collections signed in on tok's device, sharing cols; it
+// returns the member and its session token.
+func (m *memberEnv) kid(t *testing.T, tok, name string, cols ...int64) (householdMember, string) {
+	t.Helper()
+	ids, _ := json.Marshal(append([]int64{}, cols...))
+	out := m.mustAdd(t, tok, fmt.Sprintf(`{"name":%q,"kind":"kid","access":"collections","sign_in_here":true,"collection_ids":%s}`, name, ids))
+	if out.Session == nil {
+		t.Fatal("kid has no session")
+	}
+	return out.Member, out.Session.Token
+}
+
+// grownup adds a grown-up with access, signed in through the owner's session
+// route; it returns the member and a session token.
+func (m *memberEnv) grownup(t *testing.T, tok, name, access string) (householdMember, string) {
+	t.Helper()
+	out := m.mustAdd(t, tok, fmt.Sprintf(`{"name":%q,"kind":"grownup","access":%q}`, name, access))
+	if out.Session != nil {
+		t.Fatal("grown-up added with a session")
+	}
+	return out.Member, m.memberSession(t, tok, out.Member.ID)
+}
+
+func (m *memberEnv) memberSession(t *testing.T, tok string, id int64) string {
+	t.Helper()
+	resp, b := m.do(t, "POST", memberURL(id, "session"), tok, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("member session = %d %s", resp.StatusCode, b)
+	}
+	var env struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal([]byte(b), &env)
+	return env.Token
+}
+
+func memberURL(id int64, rest string) string {
+	u := "/api/v1/me/household/members/" + strconv.FormatInt(id, 10)
+	if rest != "" {
+		u += "/" + rest
+	}
+	return u
+}
+
+// collection makes tok's collection holding paths of lib and returns its id.
+func (m *memberEnv) collection(t *testing.T, tok, name string, paths ...string) int64 {
+	t.Helper()
+	resp, b := m.do(t, "POST", "/api/v1/me/collections", tok, fmt.Sprintf(`{"name":%q}`, name))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create collection = %d %s", resp.StatusCode, b)
+	}
+	var out struct {
+		Collection catalog.Collection `json:"collection"`
+	}
+	_ = json.Unmarshal([]byte(b), &out)
+	for _, p := range paths {
+		m.addItem(t, tok, out.Collection.ID, p)
+	}
+	return out.Collection.ID
+}
+
+func (m *memberEnv) addItem(t *testing.T, tok string, col int64, path string) {
+	t.Helper()
+	resp, b := m.do(t, "POST", fmt.Sprintf("/api/v1/me/collections/%d/items", col), tok,
+		fmt.Sprintf(`{"library_id":%d,"path":%q}`, m.lib, path))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("add %s = %d %s", path, resp.StatusCode, b)
+	}
+}
+
+// status is the answer's status code for method path as tok.
+func (m *memberEnv) status(t *testing.T, method, path, tok, body string) int {
+	t.Helper()
+	resp, _ := m.do(t, method, path, tok, body)
+	return resp.StatusCode
+}
+
+// item is GET /libraries/{lib}/item?path= as tok.
+func (m *memberEnv) item(t *testing.T, tok string, lib int64, path string) int {
+	t.Helper()
+	return m.status(t, "GET", bookURL(lib, "item", path), tok, "")
+}
+
+func (m *memberEnv) me(t *testing.T, tok string) auth.User {
+	t.Helper()
+	resp, b := m.do(t, "GET", "/api/v1/me", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /me = %d %s", resp.StatusCode, b)
+	}
+	var u auth.User
+	_ = json.Unmarshal([]byte(b), &u)
+	return u
+}
+
+func (m *memberEnv) list(t *testing.T, tok string) householdMembers {
+	t.Helper()
+	resp, b := m.do(t, "GET", "/api/v1/me/household/members", tok, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET members = %d %s", resp.StatusCode, b)
+	}
+	var out householdMembers
+	if err := json.Unmarshal([]byte(b), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func codeOf(body string) string {
+	var e struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal([]byte(body), &e)
+	return e.Code
+}
+
+// Create (allowed): an ordinary user adds a kid signed in here and a grown-up
+// with no session; each works on GET /me and shows managed_by and member_kind.
+func TestMembers_Create_Allowed(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	evie := m.mustAdd(t, m.adamTok, `{"name":"Evie","kind":"kid","access":"collections","sign_in_here":true,"collection_ids":[]}`)
+	if evie.Session == nil || evie.Session.Token == "" ||
+		evie.Session.User.ManagedBy == nil || evie.Session.User.ManagedBy.Username != "adam" {
+		t.Fatalf("kid session = %+v", evie.Session)
+	}
+	if evie.Member.Name != "Evie" || evie.Member.Username != "evie" || evie.Member.Kind != "kid" || evie.Member.Access != "collections" ||
+		evie.Member.Collections == nil || len(*evie.Member.Collections) != 0 || evie.Member.Devices != 1 || evie.Member.LastListenedAt != nil {
+		t.Fatalf("kid = %+v", evie.Member)
+	}
+	u := m.me(t, evie.Session.Token)
+	if u.ManagedBy == nil || u.ManagedBy.ID != m.adam || u.MemberKind == nil || *u.MemberKind != "kid" || u.HasPassword || u.Role != "user" {
+		t.Fatalf("kid /me = %+v", u)
+	}
+	// The kid's session was made on adam's phone and is named like it.
+	devices, _ := myDevicesOf(t, m.testEnv, evie.Session.Token)
+	if len(devices) != 1 || devices[0].Name != "adam's phone" {
+		t.Fatalf("kid devices = %+v", devices)
+	}
+
+	ellis := m.mustAdd(t, m.adamTok, `{"name":"Ellis","kind":"grownup","access":"all"}`)
+	if ellis.Session != nil || ellis.Member.Kind != "grownup" || ellis.Member.Collections != nil || ellis.Member.Devices != 0 {
+		t.Fatalf("grown-up = %+v", ellis)
+	}
+	tok := m.memberSession(t, m.adamTok, ellis.Member.ID)
+	if u := m.me(t, tok); u.ManagedBy == nil || *u.MemberKind != "grownup" {
+		t.Fatalf("grown-up /me = %+v", u)
+	}
+	// The raw wire: null for a non-member, not omitted; no member_access on /me.
+	_, body := m.do(t, "GET", "/api/v1/me", m.adamTok, "")
+	if !strings.Contains(body, `"managed_by":null`) || !strings.Contains(body, `"member_kind":null`) ||
+		strings.Contains(body, "member_access") || strings.Contains(body, "display_name") {
+		t.Fatalf("owner /me = %s", body)
+	}
+	list := m.list(t, m.adamTok)
+	if !list.Allowed || list.Reason != "" || list.Max != 6 || len(list.Members) != 2 || list.Members[0].ID != evie.Member.ID {
+		t.Fatalf("list = %+v", list)
+	}
+}
+
+// Create (denied): feature off, owner switched off, demo, API key, member caller,
+// the cap, an unknown field, another user's collection, anonymous, and a kid's
+// password login.
+func TestMembers_Create_Denied(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ctx := context.Background()
+	kid := `{"name":"Evie","kind":"kid","access":"collections"}`
+
+	_, demoTok := newUserWithSession(t, m.testEnv, "demo_1", true)
+	if status, b := m.add(t, demoTok, kid); status != http.StatusForbidden || codeOf(b) != "demo_account" {
+		t.Errorf("demo = %d %s", status, b)
+	}
+	key, _, err := m.auth.IssueAPIToken(ctx, m.adam, "script")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := m.add(t, key, kid); status != http.StatusForbidden {
+		t.Errorf("API key = %d", status)
+	}
+	if status, _ := m.add(t, "", kid); status != http.StatusUnauthorized {
+		t.Errorf("anonymous = %d", status)
+	}
+	if status, b := m.add(t, m.adamTok, `{"name":"Evie","kind":"kid","access":"all","role":"admin"}`); status != http.StatusBadRequest {
+		t.Errorf("role field = %d %s", status, b)
+	}
+	for body, code := range map[string]string{
+		`{"name":"","kind":"kid","access":"all"}`:           "invalid_name",
+		`{"name":"Evie","kind":"teen","access":"all"}`:      "",
+		`{"name":"Evie","kind":"kid","access":"most"}`:      "",
+		`{"name":"Ev\u0007ie","kind":"kid","access":"all"}`: "invalid_name",
+	} {
+		if status, b := m.add(t, m.adamTok, body); status != http.StatusBadRequest || codeOf(b) != code {
+			t.Errorf("%s = %d %s", body, status, b)
+		}
+	}
+	bobs := m.collection(t, m.bobTok, "Bob's")
+	if status, b := m.add(t, m.adamTok, fmt.Sprintf(`{"name":"Evie","kind":"kid","access":"collections","collection_ids":[%d]}`, bobs)); status != http.StatusBadRequest || codeOf(b) != "invalid_collections" {
+		t.Errorf("bob's collection = %d %s", status, b)
+	}
+	if n := len(m.list(t, m.adamTok).Members); n != 0 {
+		t.Fatalf("refused creates made %d members", n)
+	}
+
+	// A member caller.
+	evie, evieTok := m.kid(t, m.adamTok, "Evie")
+	if status, b := m.add(t, evieTok, kid); status != http.StatusForbidden || codeOf(b) != "member_cannot_manage" {
+		t.Errorf("member caller = %d %s", status, b)
+	}
+	// The kid has no password to log in with.
+	if resp, _ := m.do(t, "POST", "/api/v1/auth/login", "", `{"username":"evie","password":""}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("kid password login = %d", resp.StatusCode)
+	}
+	_ = evie
+
+	// The admin's switch for adam, then the server's.
+	if status, b := m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(m.adam, 10), m.adminTok, `{"can_add_members":false}`); status.StatusCode != http.StatusOK {
+		t.Fatalf("switch off = %d %s", status.StatusCode, b)
+	}
+	if status, b := m.add(t, m.adamTok, kid); status != http.StatusForbidden || codeOf(b) != "not_allowed" {
+		t.Errorf("switched off = %d %s", status, b)
+	}
+	if l := m.list(t, m.adamTok); l.Allowed || l.Reason != "not_allowed" || len(l.Members) != 1 {
+		t.Errorf("list switched off = %+v", l)
+	}
+	if status, _ := m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(m.adam, 10), m.adminTok, `{"can_add_members":true}`); status.StatusCode != http.StatusOK {
+		t.Fatal("switch on")
+	}
+	if resp, b := m.do(t, "PATCH", "/api/v1/admin/settings", m.adminTok, `{"household":{"members_enabled":false}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("feature off = %d %s", resp.StatusCode, b)
+	}
+	if status, b := m.add(t, m.adamTok, kid); status != http.StatusForbidden || codeOf(b) != "feature_off" {
+		t.Errorf("feature off = %d %s", status, b)
+	}
+	if l := m.list(t, m.adamTok); l.Allowed || l.Reason != "feature_off" {
+		t.Errorf("list feature off = %+v", l)
+	}
+	// The existing member's routes keep working with the feature off.
+	if status := m.status(t, "PATCH", memberURL(evie.ID, ""), m.adamTok, `{"name":"Evelyn"}`); status != http.StatusOK {
+		t.Errorf("rename with the feature off = %d", status)
+	}
+
+	// The cap.
+	if resp, b := m.do(t, "PATCH", "/api/v1/admin/settings", m.adminTok, `{"household":{"members_enabled":true,"max_members":2}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("cap = %d %s", resp.StatusCode, b)
+	}
+	m.mustAdd(t, m.adamTok, `{"name":"Ellis","kind":"grownup","access":"all"}`)
+	if status, b := m.add(t, m.adamTok, kid); status != http.StatusConflict || codeOf(b) != "member_limit" {
+		t.Errorf("at the cap = %d %s", status, b)
+	}
+	if l := m.list(t, m.adamTok); !l.Allowed || l.Max != 2 || len(l.Members) != 2 {
+		t.Errorf("list at the cap = %+v", l)
+	}
+	// The list for a demo, a member and an API key.
+	if l := m.list(t, demoTok); l.Allowed || l.Reason != "demo" || len(l.Members) != 0 {
+		t.Errorf("demo list = %+v", l)
+	}
+	if l := m.list(t, evieTok); l.Allowed || l.Reason != "member" || len(l.Members) != 0 {
+		t.Errorf("member list = %+v", l)
+	}
+	if status := m.status(t, "GET", "/api/v1/me/household/members", key, ""); status != http.StatusForbidden {
+		t.Errorf("API key list = %d", status)
+	}
+}
+
+// Collections access (allowed): the member streams, browses and searches a book
+// in the owner's collection shared with them, and GET /libraries lists it.
+func TestMembers_CollectionsAccess_Allowed(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	col := m.collection(t, m.adamTok, "Evie's books", cradleBook)
+	_, tok := m.kid(t, m.adamTok, "Evie", col)
+
+	if s := m.status(t, "GET", bookURL(m.lib, "stream", cradlePart), tok, ""); s != http.StatusOK && s != http.StatusPartialContent {
+		t.Fatalf("stream = %d", s)
+	}
+	if s := m.item(t, tok, m.lib, cradleBook); s != http.StatusOK {
+		t.Fatalf("item = %d", s)
+	}
+	_, body := m.do(t, "GET", fmt.Sprintf("/api/v1/libraries/%d/books", m.lib), tok, "")
+	var page catalog.Page
+	_ = json.Unmarshal([]byte(body), &page)
+	if len(page.Books) != 1 || page.Books[0].RelPath != cradleBook {
+		t.Fatalf("browse = %s", body)
+	}
+	_, body = m.do(t, "GET", "/api/v1/search?q=Wight", tok, "")
+	var found struct{ Books []catalog.Book }
+	_ = json.Unmarshal([]byte(body), &found)
+	if len(found.Books) != 1 || found.Books[0].RelPath != cradleBook {
+		t.Fatalf("search = %s", body)
+	}
+	_, body = m.do(t, "GET", "/api/v1/libraries", tok, "")
+	var libs struct{ Libraries []catalog.Library }
+	_ = json.Unmarshal([]byte(body), &libs)
+	if len(libs.Libraries) != 1 || libs.Libraries[0].ID != m.lib {
+		t.Fatalf("libraries = %s", body)
+	}
+	// The member list shows the shared collection, counted.
+	l := m.list(t, m.adamTok)
+	if c := l.Members[0].Collections; c == nil || len(*c) != 1 || (*c)[0].ID != col || (*c)[0].Items != 1 || (*c)[0].Name != "Evie's books" {
+		t.Fatalf("member collections = %+v", l.Members[0])
+	}
+}
+
+// Collections access (denied): a book not in a shared collection, one in a
+// collection a non-owner shared, one the owner lost access to (the live
+// intersection: the owner's grant narrowed to a folder that doesn't hold it),
+// the segment-boundary sibling and a ".." path.
+func TestMembers_CollectionsAccess_Denied(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	col := m.collection(t, m.adamTok, "Ellis's books", cradleBook, mistbornBook)
+	ellis, tok := m.grownup(t, m.adamTok, "Ellis", "collections")
+	if s := m.status(t, "PATCH", memberURL(ellis.ID, ""), m.adamTok, fmt.Sprintf(`{"collection_ids":[%d]}`, col)); s != http.StatusOK {
+		t.Fatalf("share = %d", s)
+	}
+	bobs := m.collection(t, m.bobTok, "Bob's", cradleTwo)
+	if s := m.status(t, "PUT", fmt.Sprintf("/api/v1/me/collections/%d/shares", bobs), m.bobTok, fmt.Sprintf(`{"user_ids":[%d]}`, ellis.ID)); s != http.StatusOK {
+		t.Fatalf("bob shares with ellis = %d", s)
+	}
+	if m.item(t, tok, m.lib, cradleBook) != http.StatusOK || m.item(t, tok, m.lib, mistbornBook) != http.StatusOK {
+		t.Fatal("shared books unreachable")
+	}
+	for _, p := range []string{cradleTwo, cradleTwoF, "Will Wight/Cradle/../Cradle 2", "Will Wight"} {
+		if s := m.item(t, tok, m.lib, p); s != http.StatusForbidden {
+			t.Errorf("%q = %d, want 403", p, s)
+		}
+	}
+	if s := m.status(t, "GET", bookURL(m.lib, "stream", "Will Wight/Cradle/../Cradle 2/01 - Unsouled.m4b"), tok, ""); s != http.StatusForbidden {
+		t.Errorf(".. stream = %d", s)
+	}
+	if s := m.item(t, tok, m.other, cradleBook); s != http.StatusForbidden {
+		t.Errorf("another library = %d", s)
+	}
+	// The owner keeps only the "Will Wight" folder: Mistborn, outside it, drops out.
+	ctx := context.Background()
+	if err := m.cat.RevokeShare(ctx, m.adam, m.adamShare); err != nil {
+		t.Fatal(err)
+	}
+	grantWightOnly(t, m.testEnv, m.lib, m.adam)
+	if s := m.item(t, tok, m.lib, mistbornBook); s != http.StatusForbidden {
+		t.Errorf("a book the owner lost = %d", s)
+	}
+	if s := m.item(t, tok, m.lib, cradleBook); s != http.StatusOK {
+		t.Errorf("a book the owner keeps = %d", s)
+	}
+	if l := m.list(t, m.adamTok); (*l.Members[0].Collections)[0].Items != 1 {
+		t.Errorf("count after the owner lost a book = %+v", l.Members[0].Collections)
+	}
+}
+
+// Everything access: a kid or grown-up reaches every book the owner reaches,
+// including a library granted afterwards; a library revoked from the owner is
+// 403 at once.
+func TestMembers_EverythingAccess(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ellis, ellisTok := m.grownup(t, m.adamTok, "Ellis", "all")
+	_ = ellis
+	evie := m.mustAdd(t, m.adamTok, `{"name":"Evie","kind":"kid","access":"all","sign_in_here":true}`)
+	for _, tok := range []string{ellisTok, evie.Session.Token} {
+		for _, p := range []string{cradleBook, cradleTwo, mistbornBook} {
+			if s := m.item(t, tok, m.lib, p); s != http.StatusOK {
+				t.Errorf("%q = %d", p, s)
+			}
+		}
+		if s := m.item(t, tok, m.other, cradleBook); s != http.StatusForbidden {
+			t.Errorf("before the grant = %d", s)
+		}
+	}
+	ctx := context.Background()
+	if err := m.cat.GrantWholeLibrary(ctx, m.adam, m.other); err != nil {
+		t.Fatal(err)
+	}
+	if s := m.item(t, ellisTok, m.other, cradleBook); s != http.StatusOK {
+		t.Errorf("a library granted afterwards = %d", s)
+	}
+	if err := m.cat.RevokeShare(ctx, m.adam, m.adamShare); err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range []string{ellisTok, evie.Session.Token} {
+		if s := m.item(t, tok, m.lib, cradleBook); s != http.StatusForbidden {
+			t.Errorf("after the revoke = %d", s)
+		}
+	}
+}
+
+// Everything access, admin owner: the member reaches every library (as content)
+// and gets 403 on every /admin route group.
+func TestMembers_EverythingAccess_AdminOwner(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	_, tok := m.grownup(t, m.adminTok, "Ellis", "all")
+	for _, lib := range []int64{m.lib, m.other} {
+		if s := m.item(t, tok, lib, cradleBook); s != http.StatusOK {
+			t.Errorf("library %d = %d", lib, s)
+		}
+	}
+	for _, p := range []string{"users", "stats", "settings", "libraries", "shares", "audit", "books", "devices", "system",
+		"backups", "notifications", "issues", "jobs", "imports", "match-runs", "invites", "logs", "events", "support"} {
+		if s := m.status(t, "GET", "/api/v1/admin/"+p, tok, ""); s != http.StatusForbidden {
+			t.Errorf("/admin/%s = %d", p, s)
+		}
+	}
+	if s := m.status(t, "POST", "/api/v1/admin/users", tok, `{"username":"x"}`); s != http.StatusForbidden {
+		t.Errorf("admin write = %d", s)
+	}
+}
+
+// Access and kind changes: collections to everything is wider at once and back
+// narrower; a kind change leaves access; grown-up to kid clears the password and
+// API keys while devices stay signed in. Denied: the member can't change their
+// own, another person gets 404.
+func TestMembers_AccessAndKindChanges(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	col := m.collection(t, m.adamTok, "Evie's books", cradleBook)
+	evie, evieTok := m.kid(t, m.adamTok, "Evie", col)
+	patch := func(tok string, id int64, body string) (int, householdMember) {
+		t.Helper()
+		resp, b := m.do(t, "PATCH", memberURL(id, ""), tok, body)
+		var out householdMember
+		_ = json.Unmarshal([]byte(b), &out)
+		return resp.StatusCode, out
+	}
+	if m.item(t, evieTok, m.lib, mistbornBook) != http.StatusForbidden {
+		t.Fatal("collections member reaches an unshared book")
+	}
+	if s, out := patch(m.adamTok, evie.ID, `{"access":"all"}`); s != http.StatusOK || out.Access != "all" || out.Collections != nil {
+		t.Fatalf("to all = %d %+v", s, out)
+	}
+	if m.item(t, evieTok, m.lib, mistbornBook) != http.StatusOK {
+		t.Fatal("not wider at once")
+	}
+	if s, _ := patch(m.adamTok, evie.ID, `{"access":"collections"}`); s != http.StatusOK || m.item(t, evieTok, m.lib, mistbornBook) != http.StatusForbidden {
+		t.Fatal("not narrower at once")
+	}
+	if s, out := patch(m.adamTok, evie.ID, `{"kind":"grownup"}`); s != http.StatusOK || out.Access != "collections" || out.Kind != "grownup" {
+		t.Fatalf("kind change = %d %+v", s, out)
+	}
+	// As a grown-up: a password and an API key, then back to a kid.
+	if s := m.status(t, "POST", "/api/v1/auth/password", evieTok, `{"password":"evie-password"}`); s != http.StatusNoContent {
+		t.Fatalf("grown-up password = %d", s)
+	}
+	resp, b := m.do(t, "POST", "/api/v1/auth/tokens", evieTok, `{"label":"dash"}`)
+	var key struct{ Token string }
+	_ = json.Unmarshal([]byte(b), &key)
+	if resp.StatusCode != http.StatusOK || key.Token == "" {
+		t.Fatalf("grown-up key = %d %s", resp.StatusCode, b)
+	}
+	if s, out := patch(m.adamTok, evie.ID, `{"kind":"kid"}`); s != http.StatusOK || out.Kind != "kid" || out.Access != "collections" {
+		t.Fatalf("to kid = %d %+v", s, out)
+	}
+	if u := m.me(t, evieTok); u.HasPassword || *u.MemberKind != "kid" {
+		t.Fatalf("kid keeps a password: %+v", u)
+	}
+	if s := m.status(t, "GET", "/api/v1/me", key.Token, ""); s != http.StatusUnauthorized {
+		t.Fatalf("kid's API key = %d", s)
+	}
+	if resp, _ := m.do(t, "POST", "/api/v1/auth/login", "", `{"username":"evie","password":"evie-password"}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatal("kid logs in with the old password")
+	}
+
+	// Denied.
+	if s, _ := patch(evieTok, evie.ID, `{"access":"all"}`); s != http.StatusForbidden {
+		t.Errorf("own access change = %d", s)
+	}
+	if s, _ := patch(m.bobTok, evie.ID, `{"kind":"grownup"}`); s != http.StatusNotFound {
+		t.Errorf("bob's change = %d", s)
+	}
+	for _, body := range []string{`{}`, `{"role":"admin"}`, `{"kind":"teen"}`, `{"name":""}`} {
+		if s, _ := patch(m.adamTok, evie.ID, body); s != http.StatusBadRequest {
+			t.Errorf("%s = %d", body, s)
+		}
+	}
+	if u := m.me(t, evieTok); *u.MemberKind != "kid" {
+		t.Fatal("a refused change changed the kid")
+	}
+}
+
+// Live changes: a book added to the kid's collection is reachable with no
+// restart; removed, unshared or deleted, it is 403 at once, through an existing
+// cast token too.
+func TestMembers_LiveChanges(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	col := m.collection(t, m.adamTok, "Evie's books", cradleBook)
+	evie, tok := m.kid(t, m.adamTok, "Evie", col)
+	if m.item(t, tok, m.lib, mistbornBook) != http.StatusForbidden {
+		t.Fatal("unshared book reachable")
+	}
+	m.addItem(t, m.adamTok, col, mistbornBook)
+	if s := m.item(t, tok, m.lib, mistbornBook); s != http.StatusOK {
+		t.Fatalf("added book = %d", s)
+	}
+	cast := func() string {
+		t.Helper()
+		resp, b := m.do(t, "POST", "/api/v1/cast/token", tok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, m.lib, cradleBook))
+		var out struct{ Token string }
+		_ = json.Unmarshal([]byte(b), &out)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("mint = %d %s", resp.StatusCode, b)
+		}
+		return out.Token
+	}
+	castStream := func(ct string) int {
+		t.Helper()
+		return m.status(t, "GET", mediaURL(m.lib, "stream", cradlePart, ct), "", "")
+	}
+	ct := cast()
+	if s := castStream(ct); s != http.StatusOK && s != http.StatusPartialContent {
+		t.Fatalf("cast stream = %d", s)
+	}
+	// Removed.
+	resp, _ := m.do(t, "DELETE", fmt.Sprintf("/api/v1/me/collections/%d/items?library_id=%d&path=%s", col, m.lib, url.QueryEscape(cradleBook)), m.adamTok, "")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("remove = %d", resp.StatusCode)
+	}
+	if s := m.item(t, tok, m.lib, cradleBook); s != http.StatusForbidden {
+		t.Errorf("removed book = %d", s)
+	}
+	if s := castStream(ct); s != http.StatusForbidden {
+		t.Errorf("removed book through the cast token = %d", s)
+	}
+	// Unshared (an empty collection_ids), then deleted.
+	if s := m.item(t, tok, m.lib, mistbornBook); s != http.StatusOK {
+		t.Fatal("other book lost")
+	}
+	if s := m.status(t, "PATCH", memberURL(evie.ID, ""), m.adamTok, `{"collection_ids":[]}`); s != http.StatusOK {
+		t.Fatal("unshare")
+	}
+	if s := m.item(t, tok, m.lib, mistbornBook); s != http.StatusForbidden {
+		t.Errorf("unshared = %d", s)
+	}
+	if s := m.status(t, "PATCH", memberURL(evie.ID, ""), m.adamTok, fmt.Sprintf(`{"collection_ids":[%d]}`, col)); s != http.StatusOK ||
+		m.item(t, tok, m.lib, mistbornBook) != http.StatusOK {
+		t.Fatal("reshare")
+	}
+	if s := m.status(t, "DELETE", fmt.Sprintf("/api/v1/me/collections/%d", col), m.adamTok, ""); s != http.StatusNoContent {
+		t.Fatal("delete collection")
+	}
+	if s := m.item(t, tok, m.lib, mistbornBook); s != http.StatusForbidden {
+		t.Errorf("deleted collection = %d", s)
+	}
+}
+
+// Ownership: adam's list, rename, pair, session, devices and delete on his
+// members; bob's requests on them answer 404 on every route.
+func TestMembers_Ownership(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	evie, evieTok := m.kid(t, m.adamTok, "Evie")
+	devices, _ := myDevicesOf(t, m.testEnv, evieTok)
+
+	routes := []struct{ method, path, body string }{
+		{"PATCH", memberURL(evie.ID, ""), `{"name":"Evelyn"}`},
+		{"POST", memberURL(evie.ID, "session"), ""},
+		{"POST", memberURL(evie.ID, "pair"), ""},
+		{"GET", memberURL(evie.ID, "devices"), ""},
+		{"DELETE", memberURL(evie.ID, "devices/") + strconv.FormatInt(devices[0].ID, 10), ""},
+		{"DELETE", memberURL(evie.ID, ""), ""},
+	}
+	for _, r := range routes {
+		if s := m.status(t, r.method, r.path, m.bobTok, r.body); s != http.StatusNotFound {
+			t.Errorf("bob %s %s = %d", r.method, r.path, s)
+		}
+		if s := m.status(t, r.method, strings.Replace(r.path, strconv.FormatInt(evie.ID, 10), "99999", 1), m.adamTok, r.body); s != http.StatusNotFound {
+			t.Errorf("unknown %s %s = %d", r.method, r.path, s)
+		}
+	}
+	if l := m.list(t, m.bobTok); len(l.Members) != 0 {
+		t.Fatalf("bob lists adam's members: %+v", l)
+	}
+	if u := m.me(t, evieTok); u.ManagedBy == nil {
+		t.Fatal("bob's requests changed evie")
+	}
+
+	// Adam's, in the same order.
+	resp, b := m.do(t, "PATCH", memberURL(evie.ID, ""), m.adamTok, `{"name":"Evelyn"}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(b, `"name":"Evelyn"`) || !strings.Contains(b, `"username":"evie"`) {
+		t.Fatalf("rename = %d %s", resp.StatusCode, b)
+	}
+	second := m.memberSession(t, m.adamTok, evie.ID)
+	resp, b = m.do(t, "POST", memberURL(evie.ID, "pair"), m.adamTok, "")
+	var pair PairingPayload
+	_ = json.Unmarshal([]byte(b), &pair)
+	if resp.StatusCode != http.StatusOK || pair.PairingToken == "" {
+		t.Fatalf("pair = %d %s", resp.StatusCode, b)
+	}
+	if status, body := m.exchangeToken(t, pair.PairingToken, "Evie's tablet"); status != http.StatusOK || !strings.Contains(body, `"member_kind":"kid"`) {
+		t.Fatalf("exchange = %d %s", status, body)
+	}
+	if status, _ := m.exchangeToken(t, pair.PairingToken, "again"); status != http.StatusUnauthorized {
+		t.Fatal("member pairing token reused")
+	}
+	resp, b = m.do(t, "GET", memberURL(evie.ID, "devices"), m.adamTok, "")
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(b), &got); err != nil || resp.StatusCode != http.StatusOK || len(got) != 3 {
+		t.Fatalf("devices = %d %s", resp.StatusCode, b)
+	}
+	for _, d := range got {
+		if d["current"] != false || d["member_sign_ins"] != nil {
+			t.Fatalf("member device = %v", d)
+		}
+	}
+	if s := m.status(t, "DELETE", memberURL(evie.ID, "devices/")+strconv.FormatInt(devices[0].ID, 10), m.adamTok, ""); s != http.StatusNoContent {
+		t.Fatalf("revoke = %d", s)
+	}
+	if s := m.status(t, "GET", "/api/v1/me", evieTok, ""); s != http.StatusUnauthorized {
+		t.Fatal("revoked device still signed in")
+	}
+	if s := m.status(t, "DELETE", memberURL(evie.ID, "devices/")+strconv.FormatInt(devices[0].ID, 10), m.adamTok, ""); s != http.StatusNotFound {
+		t.Fatal("revoking twice")
+	}
+	adamDevices, _ := myDevicesOf(t, m.testEnv, m.adamTok)
+	if s := m.status(t, "DELETE", memberURL(evie.ID, "devices/")+strconv.FormatInt(adamDevices[0].ID, 10), m.adamTok, ""); s != http.StatusNotFound {
+		t.Fatal("revoked the owner's own device through the member's route")
+	}
+	if s := m.status(t, "DELETE", memberURL(evie.ID, ""), m.adamTok, ""); s != http.StatusNoContent {
+		t.Fatalf("delete = %d", s)
+	}
+	if s := m.status(t, "GET", "/api/v1/me", second, ""); s != http.StatusUnauthorized {
+		t.Fatal("deleted member still signed in")
+	}
+	resp, b = m.do(t, "GET", memberURL(evie.ID, "devices"), m.adamTok, "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted member's devices = %d %s", resp.StatusCode, b)
+	}
+	// A member with no devices answers [], not null.
+	ellis := m.mustAdd(t, m.adamTok, `{"name":"Ellis","kind":"grownup","access":"all"}`)
+	if _, b := m.do(t, "GET", memberURL(ellis.Member.ID, "devices"), m.adamTok, ""); strings.TrimSpace(b) != "[]" {
+		t.Fatalf("no devices = %s", b)
+	}
+}
+
+// Member limits (allowed): members play, save progress and bookmark; a grown-up
+// sets a password, pairs, creates an API key and shares a collection.
+func TestMembers_MemberLimits_Allowed(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	col := m.collection(t, m.adamTok, "Evie's books", cradleBook)
+	_, kidTok := m.kid(t, m.adamTok, "Evie", col)
+	_, gTok := m.grownup(t, m.adamTok, "Ellis", "all")
+	for _, tok := range []string{kidTok, gTok} {
+		if s := m.status(t, "PUT", bookURL(m.lib, "progress", cradleBook), tok, `{"position":10,"duration":120}`); s != http.StatusOK {
+			t.Errorf("progress = %d", s)
+		}
+		if s := m.status(t, "POST", bookURL(m.lib, "bookmarks", cradleBook), tok, `{"position":5}`); s != http.StatusCreated {
+			t.Errorf("bookmark = %d", s)
+		}
+		// A kid may still make its own collections.
+		if s := m.status(t, "POST", "/api/v1/me/collections", tok, `{"name":"Mine"}`); s != http.StatusCreated {
+			t.Errorf("own collection = %d", s)
+		}
+	}
+	if s := m.status(t, "POST", "/api/v1/auth/password", gTok, `{"password":"ellis-password"}`); s != http.StatusNoContent {
+		t.Errorf("grown-up password = %d", s)
+	}
+	if s := m.status(t, "POST", "/api/v1/auth/pair", gTok, ""); s != http.StatusOK {
+		t.Errorf("grown-up pair = %d", s)
+	}
+	if s := m.status(t, "POST", "/api/v1/auth/recovery", gTok, ""); s != http.StatusCreated {
+		t.Errorf("grown-up recovery = %d", s)
+	}
+	if s := m.status(t, "POST", "/api/v1/auth/tokens", gTok, `{"label":"x"}`); s != http.StatusOK {
+		t.Errorf("grown-up key = %d", s)
+	}
+	if s := m.status(t, "PUT", "/api/v1/me/household", gTok, `{"share_listening":true}`); s != http.StatusOK {
+		t.Errorf("grown-up house sharing = %d", s)
+	}
+	gcol := m.collection(t, gTok, "Ellis's", cradleBook)
+	if s := m.status(t, "PUT", fmt.Sprintf("/api/v1/me/collections/%d/shares", gcol), gTok, fmt.Sprintf(`{"user_ids":[%d]}`, m.bob)); s != http.StatusOK {
+		t.Errorf("grown-up share = %d", s)
+	}
+}
+
+// Member limits (denied): a member adding members, a kid's password, API key,
+// pair, recovery, house sharing and collection sharing (403 kid_account), and the
+// admin making a member an admin (409).
+func TestMembers_MemberLimits_Denied(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	_, kidTok := m.kid(t, m.adamTok, "Evie")
+	ellis, gTok := m.grownup(t, m.adamTok, "Ellis", "all")
+	for _, tok := range []string{kidTok, gTok} {
+		if s, b := m.add(t, tok, `{"name":"X","kind":"kid","access":"all"}`); s != http.StatusForbidden || codeOf(b) != "member_cannot_manage" {
+			t.Errorf("member adds = %d %s", s, b)
+		}
+	}
+	kidCol := m.collection(t, kidTok, "Mine")
+	for _, r := range []struct{ method, path, body string }{
+		{"POST", "/api/v1/auth/password", `{"password":"kid-password"}`},
+		{"POST", "/api/v1/auth/tokens", `{"label":"x"}`},
+		{"POST", "/api/v1/auth/pair", ""},
+		{"POST", "/api/v1/auth/recovery", ""},
+		{"PUT", "/api/v1/me/household", `{"share_listening":true}`},
+		{"PUT", fmt.Sprintf("/api/v1/me/collections/%d/shares", kidCol), fmt.Sprintf(`{"user_ids":[%d]}`, m.adam)},
+	} {
+		resp, b := m.do(t, r.method, r.path, kidTok, r.body)
+		if resp.StatusCode != http.StatusForbidden || codeOf(b) != "kid_account" || !strings.Contains(b, "not available for a kid's account") {
+			t.Errorf("kid %s %s = %d %s", r.method, r.path, resp.StatusCode, b)
+		}
+	}
+	if u := m.me(t, kidTok); u.HasPassword || u.HasRecovery {
+		t.Fatal("refused kid routes wrote")
+	}
+	if _, b := m.do(t, "GET", "/api/v1/me/household", kidTok, ""); strings.TrimSpace(b) != `{"share_listening":false}` {
+		t.Errorf("kid's household = %s", b)
+	}
+	resp, b := m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(ellis.ID, 10), m.adminTok, `{"role":"admin","password":"ellis-password"}`)
+	if resp.StatusCode != http.StatusConflict || codeOf(b) != "member_not_admin" {
+		t.Errorf("admin promotes a member = %d %s", resp.StatusCode, b)
+	}
+	if u := m.me(t, gTok); u.Role != "user" {
+		t.Fatal("member became an admin")
+	}
+}
+
+// Sign-ins: a member's session keeps working after adam's phone is signed out
+// without also_members; with it, the member tokens made on that phone answer 401
+// and their tokens elsewhere stay 200.
+func TestMembers_SignIns(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ctx := context.Background()
+	evie, evieHere := m.kid(t, m.adamTok, "Evie")
+	ellis, ellisHere := m.grownup(t, m.adamTok, "Ellis", "all")
+	evieElsewhere, err := m.auth.IssueToken(ctx, evie.ID, auth.KindSession, "Evie's tablet", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices, _ := myDevicesOf(t, m.testEnv, m.adamTok)
+	phone := devices[0]
+	resp, b := m.do(t, "GET", "/api/v1/me/devices", m.adamTok, "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(b, fmt.Sprintf(`"member_sign_ins":[{"id":%d,"name":"Evie"},{"id":%d,"name":"Ellis"}]`, evie.ID, ellis.ID)) {
+		t.Fatalf("devices = %s", b)
+	}
+	// Bob's devices never name adam's members.
+	if _, b := m.do(t, "GET", "/api/v1/me/devices", m.bobTok, ""); !strings.Contains(b, `"member_sign_ins":[]`) {
+		t.Fatalf("bob's devices = %s", b)
+	}
+
+	// A second adam device, signed out without also_members (any other value is off).
+	tablet, _ := m.auth.IssueToken(ctx, m.adam, auth.KindSession, "adam's tablet", 0)
+	tdev, _ := myDevicesOf(t, m.testEnv, tablet)
+	var tabletID int64
+	for _, d := range tdev {
+		if d.Name == "adam's tablet" {
+			tabletID = d.ID
+		}
+	}
+	evieTablet := m.memberSession(t, tablet, evie.ID)
+	resp, b = m.do(t, "DELETE", fmt.Sprintf("/api/v1/me/devices/%d?also_members=yes", tabletID), m.adamTok, "")
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(b) != `{"current":false,"members_signed_out":0}` {
+		t.Fatalf("revoke without = %d %s", resp.StatusCode, b)
+	}
+	if s := m.status(t, "GET", "/api/v1/me", evieTablet, ""); s != http.StatusOK {
+		t.Fatal("member signed out without also_members")
+	}
+
+	// The phone, with also_members (bob's call on it is a 404 and does nothing).
+	if s := m.status(t, "DELETE", fmt.Sprintf("/api/v1/me/devices/%d?also_members=1", phone.ID), m.bobTok, ""); s != http.StatusNotFound {
+		t.Fatalf("bob = %d", s)
+	}
+	resp, b = m.do(t, "DELETE", fmt.Sprintf("/api/v1/me/devices/%d?also_members=1", phone.ID), m.adamTok, "")
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(b) != `{"current":true,"members_signed_out":2}` {
+		t.Fatalf("revoke with = %d %s", resp.StatusCode, b)
+	}
+	for _, tok := range []string{evieHere, ellisHere, m.adamTok} {
+		if s := m.status(t, "GET", "/api/v1/me", tok, ""); s != http.StatusUnauthorized {
+			t.Error("a token made on the phone survived")
+		}
+	}
+	for _, tok := range []string{evieElsewhere, evieTablet} {
+		if s := m.status(t, "GET", "/api/v1/me", tok, ""); s != http.StatusOK {
+			t.Error("a member token made elsewhere was signed out")
+		}
+	}
+}
+
+// Visibility: adam sees evie in his share targets and can share with her; ellis
+// appears like any account. Bob doesn't see evie and can't share with her by id;
+// evie never appears in household listening and can't read it.
+func TestMembers_Visibility(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	evie, evieTok := m.kid(t, m.adamTok, "Evie")
+	ellis, ellisTok := m.grownup(t, m.adamTok, "Ellis", "all")
+	targets := func(tok string) []string {
+		t.Helper()
+		_, b := m.do(t, "GET", "/api/v1/me/share-targets", tok, "")
+		var out struct{ Users []catalog.CollectionUser }
+		_ = json.Unmarshal([]byte(b), &out)
+		names := []string{}
+		for _, u := range out.Users {
+			names = append(names, u.Username)
+		}
+		return names
+	}
+	if got := targets(m.adamTok); !slices.Contains(got, "evie") || !slices.Contains(got, "ellis") {
+		t.Errorf("adam's targets = %v", got)
+	}
+	if got := targets(m.bobTok); slices.Contains(got, "evie") || !slices.Contains(got, "ellis") {
+		t.Errorf("bob's targets = %v", got)
+	}
+	adamCol := m.collection(t, m.adamTok, "Family", cradleBook)
+	if s := m.status(t, "PUT", fmt.Sprintf("/api/v1/me/collections/%d/shares", adamCol), m.adamTok, fmt.Sprintf(`{"user_ids":[%d,%d]}`, evie.ID, ellis.ID)); s != http.StatusOK {
+		t.Errorf("adam shares with evie = %d", s)
+	}
+	bobCol := m.collection(t, m.bobTok, "Bob's", cradleBook)
+	if s := m.status(t, "PUT", fmt.Sprintf("/api/v1/me/collections/%d/shares", bobCol), m.bobTok, fmt.Sprintf(`{"user_ids":[%d]}`, evie.ID)); s != http.StatusBadRequest {
+		t.Errorf("bob shares with evie = %d", s)
+	}
+	if s := m.status(t, "PUT", fmt.Sprintf("/api/v1/me/collections/%d/shares", bobCol), m.bobTok, fmt.Sprintf(`{"user_ids":[%d]}`, ellis.ID)); s != http.StatusOK {
+		t.Errorf("bob shares with ellis = %d", s)
+	}
+
+	// House listening: adam, ellis and bob share; evie's row (written as if she
+	// shared before becoming a kid) never shows, and she reads nothing.
+	ctx := context.Background()
+	for _, tok := range []string{m.adamTok, ellisTok, m.bobTok} {
+		if s := m.status(t, "PUT", "/api/v1/me/household", tok, `{"share_listening":true}`); s != http.StatusOK {
+			t.Fatalf("share = %d", s)
+		}
+	}
+	if err := m.cat.SetHouseholdSharing(ctx, evie.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range []string{evieTok, ellisTok} {
+		for _, pos := range []string{"10", "20"} {
+			m.status(t, "PUT", bookURL(m.lib, "progress", cradleBook), tok, `{"position":`+pos+`,"duration":120}`)
+		}
+	}
+	_, b := m.do(t, "GET", "/api/v1/household/listening", m.adamTok, "")
+	var house houseListening
+	_ = json.Unmarshal([]byte(b), &house)
+	if got := usernames(house.Listening); !slices.Equal(got, []string{"ellis"}) {
+		t.Errorf("adam's house = %v", got)
+	}
+	_, b = m.do(t, "GET", "/api/v1/household/listening", evieTok, "")
+	if strings.TrimSpace(b) != `{"sharing":false,"listening":[]}` {
+		t.Errorf("evie's house = %s", b)
+	}
+	if _, b := m.do(t, "GET", "/api/v1/me/household", evieTok, ""); strings.TrimSpace(b) != `{"share_listening":false}` {
+		t.Errorf("evie's setting = %s", b)
+	}
+}
+
+// Cast: a cast token minted by evie's session plays her collection book;
+// minting for a book outside her access is 403.
+func TestMembers_Cast(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	col := m.collection(t, m.adamTok, "Evie's books", cradleBook)
+	_, tok := m.kid(t, m.adamTok, "Evie", col)
+	resp, b := m.do(t, "POST", "/api/v1/cast/token", tok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, m.lib, cradleBook))
+	var out struct{ Token string }
+	_ = json.Unmarshal([]byte(b), &out)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("mint = %d %s", resp.StatusCode, b)
+	}
+	if s := m.status(t, "GET", mediaURL(m.lib, "stream", cradlePart, out.Token), "", ""); s != http.StatusOK && s != http.StatusPartialContent {
+		t.Fatalf("cast stream = %d", s)
+	}
+	for _, p := range []string{mistbornBook, cradleTwo} {
+		if s := m.status(t, "POST", "/api/v1/cast/token", tok, fmt.Sprintf(`{"library_id":%d,"path":%q}`, m.lib, p)); s != http.StatusForbidden {
+			t.Errorf("mint %s = %d", p, s)
+		}
+	}
+}
+
+// Deletion: deleting adam deletes his members by default, a kept member stays
+// with null member columns and only their own grants; deleting a member removes
+// their state; the last-admin rule still holds.
+func TestMembers_Deletion(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	ctx := context.Background()
+	evie, evieTok := m.kid(t, m.adamTok, "Evie")
+	ellis, ellisTok := m.grownup(t, m.adamTok, "Ellis", "all")
+	if err := m.cat.GrantWholeLibrary(ctx, ellis.ID, m.other); err != nil {
+		t.Fatal(err)
+	}
+	if m.item(t, ellisTok, m.lib, cradleBook) != http.StatusOK {
+		t.Fatal("derived access missing")
+	}
+	// A member's own state, then deleting the member removes it.
+	m.status(t, "PUT", bookURL(m.lib, "progress", cradleBook), ellisTok, `{"position":10,"duration":120}`)
+	kit, kitTok := m.grownup(t, m.adamTok, "Kit", "all")
+	m.status(t, "PUT", bookURL(m.lib, "progress", cradleBook), kitTok, `{"position":10,"duration":120}`)
+	if s := m.status(t, "DELETE", memberURL(kit.ID, ""), m.adamTok, ""); s != http.StatusNoContent {
+		t.Fatal("delete member")
+	}
+	var rows int
+	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM progress WHERE user_id = ?`, kit.ID).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("deleted member's progress = %d %v", rows, err)
+	}
+
+	userURL := "/api/v1/admin/users/" + strconv.FormatInt(m.adam, 10)
+	for _, bad := range []string{"?keep_members=x", "?keep_members=" + strconv.FormatInt(m.bob, 10)} {
+		resp, b := m.do(t, "DELETE", userURL+bad, m.adminTok, "")
+		if resp.StatusCode != http.StatusBadRequest || codeOf(b) != "invalid_keep_members" {
+			t.Errorf("%s = %d %s", bad, resp.StatusCode, b)
+		}
+	}
+	if s := m.status(t, "DELETE", userURL+"?keep_members="+strconv.FormatInt(ellis.ID, 10), m.adminTok, ""); s != http.StatusNoContent {
+		t.Fatalf("delete adam = %d", s)
+	}
+	if s := m.status(t, "GET", "/api/v1/me", evieTok, ""); s != http.StatusUnauthorized {
+		t.Error("unkept member survived")
+	}
+	u := m.me(t, ellisTok)
+	if u.ManagedBy != nil || u.MemberKind != nil {
+		t.Fatalf("kept member = %+v", u)
+	}
+	if m.item(t, ellisTok, m.lib, cradleBook) != http.StatusForbidden || m.item(t, ellisTok, m.other, cradleBook) != http.StatusOK {
+		t.Fatal("kept member doesn't have only their own grants")
+	}
+	var progress int
+	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM progress WHERE user_id = ?`, ellis.ID).Scan(&progress); err != nil || progress != 1 {
+		t.Fatalf("kept member's progress = %d %v", progress, err)
+	}
+	// The last-admin rule still holds for an owner: the only admin, with a
+	// member, can't be deleted, and the member stays.
+	_, rootKidTok := m.kid(t, m.adminTok, "Rory")
+	if _, err := m.auth.DeleteUser(ctx, m.adminID, nil); !errors.Is(err, auth.ErrLastAdmin) {
+		t.Errorf("the last admin = %v", err)
+	}
+	if s := m.status(t, "GET", "/api/v1/me", rootKidTok, ""); s != http.StatusOK {
+		t.Error("a refused delete took the admin's member")
+	}
+	_ = evie
+}
+
+// Admin: the user list and detail carry the member fields; PATCH assigns, makes
+// independent and switches; the refusals are coded.
+func TestMembers_AdminFields(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	col := m.collection(t, m.adamTok, "Evie's books", cradleBook)
+	evie, _ := m.kid(t, m.adamTok, "Evie", col)
+	_, b := m.do(t, "GET", "/api/v1/admin/users", m.adminTok, "")
+	var list struct{ Users []map[string]any }
+	_ = json.Unmarshal([]byte(b), &list)
+	byName := map[string]map[string]any{}
+	for _, u := range list.Users {
+		byName[u["username"].(string)] = u
+	}
+	if u := byName["evie"]; u["member_kind"] != "kid" || u["member_access"] != "collections" || u["display_name"] != "Evie" ||
+		u["managed_by"].(map[string]any)["username"] != "adam" {
+		t.Fatalf("evie = %v", u)
+	}
+	if u := byName["adam"]; u["members_count"] != float64(1) || u["can_add_members"] != true || u["managed_by"] != nil || u["member_access"] != nil {
+		t.Fatalf("adam = %v", u)
+	}
+	_, b = m.do(t, "GET", "/api/v1/admin/users/"+strconv.FormatInt(evie.ID, 10), m.adminTok, "")
+	var detail struct {
+		AccessibleLibraries []catalog.Library          `json:"accessible_libraries"`
+		Members             []adminMember              `json:"members"`
+		MemberCollections   []catalog.MemberCollection `json:"member_collections"`
+	}
+	_ = json.Unmarshal([]byte(b), &detail)
+	if len(detail.AccessibleLibraries) != 1 || len(detail.Members) != 0 || len(detail.MemberCollections) != 1 || detail.MemberCollections[0].Items != 1 {
+		t.Fatalf("evie's detail = %s", b)
+	}
+	_, b = m.do(t, "GET", "/api/v1/admin/users/"+strconv.FormatInt(m.adam, 10), m.adminTok, "")
+	_ = json.Unmarshal([]byte(b), &detail)
+	if len(detail.Members) != 1 || detail.Members[0].Name != "Evie" || detail.Members[0].Kind != "kid" || len(detail.MemberCollections) != 0 {
+		t.Fatalf("adam's detail = %s", b)
+	}
+
+	patch := func(id int64, body string) (int, string) {
+		resp, b := m.do(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(id, 10), m.adminTok, body)
+		return resp.StatusCode, b
+	}
+	// Assign bob to adam as a grown-up on everything; then make him independent.
+	for body, code := range map[string]string{
+		fmt.Sprintf(`{"managed_by":%d}`, m.adam):                                            "member_fields_required",
+		`{"member_kind":"kid","member_access":"all"}`:                                       "member_fields_required",
+		`{"managed_by":null,"member_kind":"kid"}`:                                           "member_fields_required",
+		fmt.Sprintf(`{"managed_by":%d,"member_kind":"kid","member_access":"all"}`, evie.ID): "owner_is_member",
+		fmt.Sprintf(`{"managed_by":%d,"member_kind":"kid","member_access":"all"}`, m.bob):   "self_managed",
+	} {
+		if s, b := patch(m.bob, body); codeOf(b) != code || (s != http.StatusBadRequest && s != http.StatusConflict) {
+			t.Errorf("%s = %d %s", body, s, b)
+		}
+	}
+	if s, b := patch(m.adam, fmt.Sprintf(`{"managed_by":%d,"member_kind":"kid","member_access":"all"}`, m.bob)); s != http.StatusConflict || codeOf(b) != "has_members" {
+		t.Errorf("an owner assigned = %d %s", s, b)
+	}
+	if s, b := patch(m.adminID, fmt.Sprintf(`{"managed_by":%d,"member_kind":"kid","member_access":"all"}`, m.adam)); s != http.StatusConflict || codeOf(b) != "member_not_admin" {
+		t.Errorf("an admin assigned = %d %s", s, b)
+	}
+	if s, b := patch(m.bob, `{"managed_by":99999,"member_kind":"kid","member_access":"all"}`); s != http.StatusNotFound {
+		t.Errorf("unknown owner = %d %s", s, b)
+	}
+	if s, b := patch(m.bob, `{"managed_by":"x"}`); s != http.StatusBadRequest {
+		t.Errorf("bad owner = %d %s", s, b)
+	}
+	s, b := patch(m.bob, fmt.Sprintf(`{"managed_by":%d,"member_kind":"grownup","member_access":"all"}`, m.adam))
+	if s != http.StatusOK || !strings.Contains(b, `"member_access":"all"`) || !strings.Contains(b, `"managed_by":{"id":`) {
+		t.Fatalf("assign = %d %s", s, b)
+	}
+	// Bob keeps his own grant beside the derived one.
+	if m.item(t, m.bobTok, m.lib, cradleBook) != http.StatusOK {
+		t.Fatal("assigned member lost access")
+	}
+	if s, b := patch(m.bob, `{"managed_by":null}`); s != http.StatusOK || !strings.Contains(b, `"managed_by":null`) {
+		t.Fatalf("make independent = %d %s", s, b)
+	}
+	if s, b := patch(m.bob, `{"managed_by":null}`); s != http.StatusOK {
+		t.Fatalf("make independent again (no-op) = %d %s", s, b)
+	}
+}
+
+// The server reports the capability, and the settings envelope carries the
+// household section.
+func TestMembers_CapabilityAndSettings(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	if !serverCapabilities(t, m.testEnv)["household_members"] {
+		t.Fatal("no household_members capability")
+	}
+	_, b := m.do(t, "GET", "/api/v1/admin/settings", m.adminTok, "")
+	if !strings.Contains(b, `"household":{"max_members":6,"members_enabled":true}`) {
+		t.Fatalf("settings = %s", b)
+	}
+	if resp, b := m.do(t, "PATCH", "/api/v1/admin/settings", m.adminTok, `{"household":{"max_members":0}}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("max 0 = %d %s", resp.StatusCode, b)
+	}
+}
+
+// Audit: each member route writes its event, the owner as actor and the member
+// as target (audit_coverage_test only covers /admin routes).
+func TestMembers_Audit(t *testing.T) {
+	t.Parallel()
+	m := newMemberEnv(t)
+	evie, evieTok := m.kid(t, m.adamTok, "Evie")
+	devices, _ := myDevicesOf(t, m.testEnv, evieTok)
+	for _, r := range []struct{ method, path, body string }{
+		{"PATCH", memberURL(evie.ID, ""), `{"kind":"grownup","collection_ids":[]}`},
+		{"POST", memberURL(evie.ID, "session"), ""},
+		{"POST", memberURL(evie.ID, "pair"), ""},
+		{"DELETE", memberURL(evie.ID, "devices/") + strconv.FormatInt(devices[0].ID, 10), ""},
+		{"DELETE", memberURL(evie.ID, ""), ""},
+	} {
+		if s := m.status(t, r.method, r.path, m.adamTok, r.body); s >= 300 {
+			t.Fatalf("%s %s = %d", r.method, r.path, s)
+		}
+	}
+	_, b := m.do(t, "GET", "/api/v1/admin/audit?area=member&limit=50", m.adminTok, "")
+	var out struct{ Events []catalog.AuditEvent }
+	if err := json.Unmarshal([]byte(b), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]catalog.AuditEvent{}
+	for _, e := range out.Events {
+		if e.ActorID == nil || *e.ActorID != m.adam || e.ActorName != "adam" || e.Target != "evie" || e.Details["member"] != "evie" {
+			t.Errorf("event = %+v", e)
+		}
+		got[e.Action] = e
+	}
+	for _, action := range []string{"member.create", "member.update", "member.session", "member.pair", "member.device_revoke", "member.delete"} {
+		if _, ok := got[action]; !ok {
+			t.Errorf("no %s event", action)
+		}
+	}
+	if d := got["member.create"].Details; d["kind"] != "kid" || d["access"] != "collections" || d["sign_in_here"] != true {
+		t.Errorf("create details = %v", d)
+	}
+	if d := got["member.update"].Details; d["kind"] != "grownup" || d["collections"] != float64(0) {
+		t.Errorf("update details = %v", d)
+	}
+	if d := got["member.device_revoke"].Details; d["device_id"] != float64(devices[0].ID) {
+		t.Errorf("device details = %v", d)
+	}
+	// The admin's own member changes and deletions say what they did.
+	ellis := m.mustAdd(t, m.adamTok, `{"name":"Ellis","kind":"grownup","access":"all"}`)
+	m.status(t, "PATCH", "/api/v1/admin/users/"+strconv.FormatInt(m.adam, 10), m.adminTok, `{"can_add_members":false}`)
+	m.status(t, "DELETE", "/api/v1/admin/users/"+strconv.FormatInt(m.adam, 10)+"?keep_members="+strconv.FormatInt(ellis.Member.ID, 10), m.adminTok, "")
+	_, b = m.do(t, "GET", "/api/v1/admin/audit?area=user&limit=50", m.adminTok, "")
+	_ = json.Unmarshal([]byte(b), &out)
+	var sawUpdate, sawDelete bool
+	for _, e := range out.Events {
+		switch e.Action {
+		case "user.update":
+			sawUpdate = e.Details["can_add_members"] == false
+		case "user.delete":
+			kept, _ := e.Details["members_kept"].([]any)
+			sawDelete = e.Details["members_deleted"] == float64(0) && len(kept) == 1 && kept[0] == "ellis"
+		}
+	}
+	if !sawUpdate || !sawDelete {
+		t.Fatalf("user events = %s", b)
+	}
+}

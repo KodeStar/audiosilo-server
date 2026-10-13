@@ -219,10 +219,13 @@ func (a *API) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Request)
 }
 
 // handleSetCollectionShares replaces who a collection is shared with (owner only;
-// never for a demo account).
+// never for a demo account or a kid: 403 kid_account).
 func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) {
 	id, ok := collectionID(w, r)
-	if !ok || a.nonDemoAccount(w, r) == nil {
+	if !ok {
+		return
+	}
+	if u := a.nonDemoAccount(w, r); u == nil || refuseKid(w, u) {
 		return
 	}
 	var in struct {

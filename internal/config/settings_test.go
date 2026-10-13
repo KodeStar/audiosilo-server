@@ -462,3 +462,37 @@ func TestMetadataMode(t *testing.T) {
 		t.Fatalf("an unknown mode must be a metadata.mode error naming the values, got %v", err)
 	}
 }
+
+// Household members: on with 6 per person unless set; max_members is 1 to 50,
+// set from the console or AUDIOSILO_HOUSEHOLD_MAX_MEMBERS (which then locks it),
+// and a config.yaml written before the section keeps the defaults.
+func TestHouseholdSettings(t *testing.T) {
+	c := Default(t.TempDir())
+	if got := c.Settings()["household"]; got["members_enabled"] != true || got["max_members"] != DefaultMaxMembers {
+		t.Fatalf("defaults = %v", got)
+	}
+	for _, bad := range []string{`0`, `51`, `"6"`} {
+		if _, err := c.WithSettings(patch(map[string]string{"household.max_members": bad}), Checks{}); settingErr(t, err).Setting != "household.max_members" {
+			t.Fatalf("%s accepted", bad)
+		}
+	}
+	next, err := c.WithSettings(patch(map[string]string{"household.max_members": `2`, "household.members_enabled": `false`}), Checks{})
+	if err != nil || next.Household.MaxMembers != 2 || next.Household.MembersEnabled {
+		t.Fatalf("set = %+v, %v", next.Household, err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte("bind: 0.0.0.0:8080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AUDIOSILO_HOUSEHOLD_MAX_MEMBERS", "3")
+	c, _, err = Load(dir)
+	if err != nil || c.Household.MaxMembers != 3 || !c.Household.MembersEnabled ||
+		c.Locked()["household.max_members"] != "AUDIOSILO_HOUSEHOLD_MAX_MEMBERS" {
+		t.Fatalf("from the environment = %+v %v %v", c.Household, c.Locked(), err)
+	}
+	t.Setenv("AUDIOSILO_HOUSEHOLD_MAX_MEMBERS", "99")
+	if _, _, err := Load(dir); err == nil {
+		t.Fatal("max_members 99 from the environment loaded")
+	}
+}

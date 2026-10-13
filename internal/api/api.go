@@ -363,6 +363,16 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/household/listening", a.requireAuth(http.HandlerFunc(a.handleHouseListening)))
 	mux.Handle("POST /api/v1/cast/token", a.requireAuth(http.HandlerFunc(a.handleMintCastToken)))
 
+	// Phase 8b-1: household members (household_members).
+	mux.Handle("GET /api/v1/me/household/members", a.requireAuth(http.HandlerFunc(a.handleListMembers)))
+	mux.Handle("POST /api/v1/me/household/members", a.requireAuth(http.HandlerFunc(a.handleCreateMember)))
+	mux.Handle("PATCH /api/v1/me/household/members/{id}", a.requireAuth(http.HandlerFunc(a.handleUpdateMember)))
+	mux.Handle("DELETE /api/v1/me/household/members/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteMember)))
+	mux.Handle("POST /api/v1/me/household/members/{id}/session", a.requireAuth(http.HandlerFunc(a.handleMemberSession)))
+	mux.Handle("POST /api/v1/me/household/members/{id}/pair", a.requireAuth(http.HandlerFunc(a.handleMemberPair)))
+	mux.Handle("GET /api/v1/me/household/members/{id}/devices", a.requireAuth(http.HandlerFunc(a.handleMemberDevices)))
+	mux.Handle("DELETE /api/v1/me/household/members/{id}/devices/{device_id}", a.requireAuth(http.HandlerFunc(a.handleRevokeMemberDevice)))
+
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))
 	mux.Handle("GET /api/v1/admin/settings", a.requireAdmin(http.HandlerFunc(a.handleGetSettings)))
