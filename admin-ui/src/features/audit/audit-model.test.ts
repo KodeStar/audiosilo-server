@@ -164,4 +164,42 @@ describe('audit model', () => {
     ]);
     expect(actionText(ev('import.undo', { import: 7 }), tr)).toBe('Undid an import');
   });
+
+  it('words household member events and the member fields of an account change', () => {
+    const tr = i18n.getFixedT('en');
+    const create = ev('member.create', {
+      member: 'evie',
+      kind: 'kid',
+      access: 'collections',
+      sign_in_here: true,
+    });
+    expect(actionText(create, tr)).toBe('Added a household member');
+    expect(detailLines(create, tr, fmt)).toEqual([
+      { label: 'Member', value: 'evie' },
+      { label: 'Kind', value: 'kid' },
+      { label: 'Access', value: 'shared collections' },
+      { label: "Signed in on the owner's device", value: 'yes' },
+    ]);
+    expect(actionText(ev('member.device_revoke', {}), tr)).toBe(
+      "Signed out a household member's device",
+    );
+    const update = ev('user.update', {
+      managed_by: 'adam',
+      member_kind: 'grownup',
+      member_access: 'all',
+      can_add_members: false,
+    });
+    expect(detailLines(update, tr, fmt)).toEqual([
+      { label: 'Managed by', value: 'adam' },
+      { label: 'Kid or grown-up', value: 'grown-up' },
+      { label: 'What they can listen to', value: 'everything their owner can listen to' },
+      { label: 'Can add household members', value: 'no' },
+    ]);
+    expect(
+      detailLines(ev('user.delete', { members_deleted: 1, members_kept: ['ellis'] }), tr, fmt),
+    ).toEqual([
+      { label: 'Household members deleted', value: '1' },
+      { label: 'Household members kept', value: 'ellis' },
+    ]);
+  });
 });
