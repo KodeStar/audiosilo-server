@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,7 +113,32 @@ type User struct {
 	// activity, derived from the newest tokens.last_seen across their tokens
 	// (empty if they have never made an authenticated request).
 	LastSeenAt string `json:"last_seen_at,omitempty"`
+	// ManagedBy is the person who added this household member (members.go),
+	// null for everyone who isn't a member. MemberKind is the member's kind
+	// (MemberKid or MemberGrownup), null likewise.
+	ManagedBy  *UserRef `json:"managed_by"`
+	MemberKind *string  `json:"member_kind"`
+
+	// The owner's and the admin's business, off the /me wire: the admin console
+	// adds them to its own user objects (api.adminUser), the members list carries
+	// access and name.
+	MemberAccess  *string `json:"-"` // MemberAll | MemberCollections, nil for a non-member
+	CanAddMembers bool    `json:"-"` // the admin's per-person switch
+	DisplayName   string  `json:"-"` // the name the owner typed for a member, '' otherwise
+	MembersCount  int     `json:"-"` // how many members this person has
 }
+
+// UserRef names another account: a member's owner.
+type UserRef struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+}
+
+// IsMember reports whether u is a household member (someone manages it).
+func (u *User) IsMember() bool { return u.ManagedBy != nil }
+
+// IsKid reports whether u is a kid member.
+func (u *User) IsKid() bool { return u.MemberKind != nil && *u.MemberKind == MemberKid }
 
 // Service provides authentication and account operations backed by the store.
 type Service struct {
@@ -273,14 +299,22 @@ func (s *Service) IssueSession(ctx context.Context, userID int64, deviceName, si
 }
 
 // insertToken writes one tokens row through ex (the database or a transaction)
-// and returns the write Result (for callers that need the new row's id) - the
-// single place the column list lives. expires and authCodeID are nil for "no
-// expiry" / "unlinked"; signInKey is the hashed browser key of a password
-// sign-in ("" otherwise).
+// and returns the write Result (for callers that need the new row's id). expires
+// and authCodeID are nil for "no expiry" / "unlinked"; signInKey is the hashed
+// browser key of a password sign-in ("" otherwise).
 func (s *Service) insertToken(ctx context.Context, ex sqlExecer, userID int64, hash, kind, deviceName string, expires, authCodeID any, signInKey string) (sql.Result, error) {
+	return s.insertTokenOn(ctx, ex, userID, hash, kind, deviceName, expires, authCodeID, signInKey, nil)
+}
+
+// insertTokenOn is insertToken recording createdOn, the owner's token a household
+// member's sign-in was made on (nil: none) - the single place the column list
+// lives.
+func (s *Service) insertTokenOn(ctx context.Context, ex sqlExecer, userID int64, hash, kind, deviceName string,
+	expires, authCodeID any, signInKey string, createdOn any) (sql.Result, error) {
 	return ex.ExecContext(ctx,
-		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id, sign_in_key)
-		 VALUES(?,?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID, signInKey)
+		`INSERT INTO tokens(user_id, token_hash, kind, device_name, created_at, expires_at, auth_code_id, sign_in_key,
+		                    created_on_token_id)
+		 VALUES(?,?,?,?,?,?,?,?,?)`, userID, hash, kind, deviceName, s.ts(), expires, authCodeID, signInKey, createdOn)
 }
 
 // ResolveToken validates a presented token secret of exactly the given kind and
@@ -1004,23 +1038,38 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 // (the newest tokens.last_seen across the account's tokens). ResolveRequest bumps
 // it on authenticated requests (at most once a minute per token), so this
 // reflects last use, not just sign-in, without a dedicated column.
+// The household member columns follow (members.go): the owner's id and
+// username, the kind and access, the admin's switch, the typed name and how many
+// members the person has (idx_users_managed_by).
 const userColumns = `u.id, u.username, u.role, u.disabled, u.password_hash, u.is_demo,
 	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id),
-	EXISTS(SELECT 1 FROM auth_codes c WHERE c.user_id = u.id AND c.kind = '` + CodeRecovery + `')`
+	EXISTS(SELECT 1 FROM auth_codes c WHERE c.user_id = u.id AND c.kind = '` + CodeRecovery + `'),
+	u.managed_by, (SELECT o.username FROM users o WHERE o.id = u.managed_by), u.member_kind, u.member_access,
+	u.can_add_members, u.display_name, (SELECT COUNT(*) FROM users m WHERE m.managed_by = u.id)`
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var (
-		u           User
-		hash        string
-		lastSeen    sql.NullString
-		hasRecovery bool
+		u            User
+		hash         string
+		lastSeen     sql.NullString
+		hasRecovery  bool
+		owner        sql.NullInt64
+		ownerName    sql.NullString
+		kind, access sql.NullString
 	)
-	if err := row.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &u.IsDemo, &lastSeen, &hasRecovery); err != nil {
+	if err := row.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &u.IsDemo, &lastSeen, &hasRecovery,
+		&owner, &ownerName, &kind, &access, &u.CanAddMembers, &u.DisplayName, &u.MembersCount); err != nil {
 		return u, err
 	}
 	u.HasPassword = hash != ""
 	u.LastSeenAt = lastSeen.String
 	u.HasRecovery = hasRecovery
+	// A member is all three columns or none (members.go keeps it so); a row
+	// that says otherwise reads as no member.
+	if owner.Valid && kind.Valid && access.Valid {
+		u.ManagedBy = &UserRef{ID: owner.Int64, Username: ownerName.String}
+		u.MemberKind, u.MemberAccess = &kind.String, &access.String
+	}
 	return u, nil
 }
 
@@ -1132,22 +1181,67 @@ func (s *Service) SetDisabled(ctx context.Context, id int64, disabled bool) erro
 // codes, progress, bookmarks, notes, listening history and share grants - is
 // removed by the schema's ON DELETE CASCADE rules (foreign_keys is ON, see
 // store.Open). Files on disk are untouched (the library is the source of truth).
-func (s *Service) DeleteUser(ctx context.Context, id int64) error {
+//
+// The person's household members go with them, in the same transaction, except
+// the ids in keep: those stay as ordinary accounts (their three member columns
+// cleared, so they keep only their own grants). An id in keep that isn't one of
+// this person's members is ErrInvalidKeepMembers and nothing changes.
+func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (DeletedUser, error) {
 	u, err := s.GetUser(ctx, id)
 	if err != nil {
-		return err
+		return DeletedUser{}, err
 	}
 	if u.Role == RoleAdmin && !u.Disabled {
 		others, err := s.countEnabledAdmins(ctx, id)
 		if err != nil {
-			return err
+			return DeletedUser{}, err
 		}
 		if others == 0 {
-			return ErrLastAdmin
+			return DeletedUser{}, ErrLastAdmin
 		}
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
-	return err
+	var out DeletedUser
+	err = s.db.WithTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
+		members, err := memberNames(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		kept := map[int64]bool{}
+		for _, k := range keep {
+			if _, ok := members[k]; !ok {
+				return ErrInvalidKeepMembers
+			}
+			kept[k] = true
+		}
+		for mid, name := range members {
+			if kept[mid] {
+				if _, err := tx.ExecContext(ctx, `UPDATE users SET managed_by = NULL, member_kind = NULL, member_access = NULL,
+				        updated_at = ? WHERE id = ?`, s.ts(), mid); err != nil {
+					return err
+				}
+				out.MembersKept = append(out.MembersKept, name)
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, mid); err != nil {
+				return err
+			}
+			out.MembersDeleted++
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+		return err
+	})
+	if err != nil {
+		return DeletedUser{}, err
+	}
+	slices.Sort(out.MembersKept)
+	return out, nil
+}
+
+// DeletedUser is what DeleteUser did with the person's household members: how
+// many it deleted and the usernames of those it kept.
+type DeletedUser struct {
+	MembersDeleted int
+	MembersKept    []string
 }
 
 // SetRole changes an account's role. Demoting the last enabled admin is refused.
@@ -1169,6 +1263,9 @@ func (s *Service) SetRole(ctx context.Context, id int64, role string) error {
 		if others == 0 {
 			return ErrLastAdmin
 		}
+	}
+	if role == RoleAdmin && u.IsMember() {
+		return ErrMemberNotAdmin // decision 3: "Make independent" comes first
 	}
 	if role == RoleAdmin && !u.HasPassword {
 		return ErrAdminNeedsPassword

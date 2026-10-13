@@ -502,7 +502,8 @@ func (c *Catalog) RemoveCollectionItem(ctx context.Context, id, userID int64, re
 // SetCollectionShares replaces who a collection userID owns is shared with. Every
 // id must be an existing, enabled, non-demo user other than the owner, or one the
 // collection is already shared with (a viewer disabled since stays in
-// shared_with, so the list the owner was shown can be sent back), else
+// shared_with, so the list the owner was shown can be sent back), and never a kid
+// (household member) but the owner's own, else
 // ErrUnknownUser and nothing changes; more than MaxCollectionShares (after
 // duplicates collapse) is ErrTooManyShares. Who may change it is settled first: a
 // stranger is ErrNotFound and a viewer ErrNotOwner whatever the list holds.
@@ -522,10 +523,13 @@ func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, use
 			return err
 		}
 		var valid int
+		// A kid (household member) only ever from their own owner, whatever the
+		// collection held before: ErrUnknownUser, so it can't probe who is a kid.
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users
 		  WHERE id != ?1 AND id IN (SELECT value FROM json_each(?2))
 		    AND ((disabled = 0 AND is_demo = 0)
-		         OR id IN (SELECT user_id FROM collection_shares WHERE collection_id = ?3))`,
+		         OR id IN (SELECT user_id FROM collection_shares WHERE collection_id = ?3))
+		    AND (member_kind IS NULL OR member_kind <> 'kid' OR managed_by = ?1)`,
 			userID, string(list), id).Scan(&valid); err != nil {
 			return err
 		}
@@ -543,9 +547,13 @@ func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, use
 }
 
 // ShareTargets lists the users userID may share a collection with: enabled,
-// non-demo accounts other than their own, by username.
+// non-demo accounts other than their own, by username; a kid (household member)
+// only to their own owner.
 func (c *Catalog) ShareTargets(ctx context.Context, userID int64) ([]CollectionUser, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, u *CollectionUser) error {
 		return rows.Scan(&u.ID, &u.Username)
-	}, `SELECT id, username FROM users WHERE disabled = 0 AND is_demo = 0 AND id != ? ORDER BY username, id`, userID)
+	}, `SELECT id, username FROM users
+	     WHERE disabled = 0 AND is_demo = 0 AND id != ?1
+	       AND (member_kind IS NULL OR member_kind <> 'kid' OR managed_by = ?1)
+	     ORDER BY username, id`, userID)
 }

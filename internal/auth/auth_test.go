@@ -66,7 +66,7 @@ func TestDeleteUser(t *testing.T) {
 	}
 
 	// Deleting a normal user succeeds and the row is gone.
-	if err := s.DeleteUser(ctx, member.ID); err != nil {
+	if _, err := s.DeleteUser(ctx, member.ID, nil); err != nil {
 		t.Fatalf("delete member: %v", err)
 	}
 	if _, err := s.GetUser(ctx, member.ID); !errors.Is(err, ErrNotFound) {
@@ -74,12 +74,12 @@ func TestDeleteUser(t *testing.T) {
 	}
 
 	// Deleting an unknown id is ErrNotFound.
-	if err := s.DeleteUser(ctx, 999999); !errors.Is(err, ErrNotFound) {
+	if _, err := s.DeleteUser(ctx, 999999, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("delete unknown = %v, want ErrNotFound", err)
 	}
 
 	// The last enabled admin can't be deleted (lockout guard).
-	if err := s.DeleteUser(ctx, admin.ID); !errors.Is(err, ErrLastAdmin) {
+	if _, err := s.DeleteUser(ctx, admin.ID, nil); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("delete last admin = %v, want ErrLastAdmin", err)
 	}
 
@@ -88,7 +88,7 @@ func TestDeleteUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteUser(ctx, admin2.ID); err != nil {
+	if _, err := s.DeleteUser(ctx, admin2.ID, nil); err != nil {
 		t.Fatalf("delete admin2 with another admin present: %v", err)
 	}
 }

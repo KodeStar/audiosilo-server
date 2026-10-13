@@ -406,7 +406,7 @@ func TestCastTokenRevocation(t *testing.T) {
 	c.samTok = tablet
 	tok = c.castToken(t, cradleBook)
 	ok(http.StatusOK, "token from another device")
-	if err := c.auth.DeleteUser(ctx, c.sam); err != nil {
+	if _, err := c.auth.DeleteUser(ctx, c.sam, nil); err != nil {
 		t.Fatal(err)
 	}
 	ok(http.StatusUnauthorized, "deleted user")

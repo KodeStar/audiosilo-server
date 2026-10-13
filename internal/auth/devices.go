@@ -129,7 +129,8 @@ func (s *Service) ListDevices(ctx context.Context, userID int64) ([]Device, erro
 // forgotten (IssueSession). An id naming no live session or key
 // (a pairing token included) returns ErrNotFound.
 func (s *Service) RevokeDevice(ctx context.Context, id int64) error {
-	return s.revokeDevice(ctx, "RevokeDevice", id, 0)
+	_, err := s.revokeDevice(ctx, "RevokeDevice", id, 0, false)
+	return err
 }
 
 // RevokeOwnDevice is RevokeDevice for the device's owner (the player's "My
@@ -138,16 +139,28 @@ func (s *Service) RevokeDevice(ctx context.Context, id int64) error {
 // pairing one, returns ErrNotFound and is left alone, so the answer never says
 // whether someone else's id exists.
 func (s *Service) RevokeOwnDevice(ctx context.Context, userID, id int64) error {
-	if userID <= 0 {
-		return ErrNotFound // 0 would mean "whoever owns it" to revokeDevice
-	}
-	return s.revokeDevice(ctx, "RevokeOwnDevice", id, userID)
+	_, err := s.RevokeOwnDeviceAndMembers(ctx, userID, id, false)
+	return err
 }
 
-// revokeDevice is RevokeDevice and RevokeOwnDevice: owner 0 revokes whoever owns
-// the token, any other owner only a token of theirs.
-func (s *Service) revokeDevice(ctx context.Context, op string, id, owner int64) error {
-	return s.db.WithTx(ctx, op, func(tx *sql.Tx) error {
+// RevokeOwnDeviceAndMembers is RevokeOwnDevice that, with alsoMembers, also signs
+// out on that device the caller's household members whose sessions or API keys
+// were made on it (created_on_token_id), in the same transaction: only members
+// userID manages. It returns how many members it signed out (0 without
+// alsoMembers).
+func (s *Service) RevokeOwnDeviceAndMembers(ctx context.Context, userID, id int64, alsoMembers bool) (int, error) {
+	if userID <= 0 {
+		return 0, ErrNotFound // 0 would mean "whoever owns it" to revokeDevice
+	}
+	return s.revokeDevice(ctx, "RevokeOwnDevice", id, userID, alsoMembers)
+}
+
+// revokeDevice is RevokeDevice and RevokeOwnDeviceAndMembers: owner 0 revokes
+// whoever owns the token, any other owner only a token of theirs (and, with
+// alsoMembers, their members' tokens made on it).
+func (s *Service) revokeDevice(ctx context.Context, op string, id, owner int64, alsoMembers bool) (int, error) {
+	members := 0
+	err := s.db.WithTx(ctx, op, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
 			`UPDATE tokens SET revoked = 1
 			  WHERE id = ?1 AND kind IN (?2, ?3) AND revoked = 0 AND (?4 = 0 OR user_id = ?4)`,
@@ -162,12 +175,29 @@ func (s *Service) revokeDevice(ctx context.Context, op string, id, owner int64) 
 		// admin's call, or the owner's on a device they don't recognise): forget its
 		// browser, on every session of the person that carries the key, so a sign-in
 		// from it is announced as a new device again.
-		_, err = tx.ExecContext(ctx,
+		if _, err = tx.ExecContext(ctx,
 			`UPDATE tokens SET sign_in_key = ''
 			  WHERE sign_in_key <> ''
-			    AND (user_id, sign_in_key) = (SELECT user_id, sign_in_key FROM tokens WHERE id = ?)`, id)
+			    AND (user_id, sign_in_key) = (SELECT user_id, sign_in_key FROM tokens WHERE id = ?)`, id); err != nil {
+			return err
+		}
+		if !alsoMembers || owner == 0 {
+			return nil
+		}
+		const made = ` FROM tokens WHERE created_on_token_id = ?1 AND kind IN (?2, ?3) AND revoked = 0
+		    AND user_id IN (SELECT id FROM users WHERE managed_by = ?4)`
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id)`+made, id, KindSession, KindAPI, owner).
+			Scan(&members); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE tokens SET revoked = 1 WHERE id IN (SELECT id`+made+`)`,
+			id, KindSession, KindAPI, owner)
 		return err
 	})
+	if err != nil {
+		return 0, err
+	}
+	return members, nil
 }
 
 // ForgetRevokedAddresses blanks the last address of every signed-out or expired

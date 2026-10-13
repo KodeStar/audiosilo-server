@@ -154,7 +154,7 @@ func TestCastTokenLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteUser(ctx, u.ID); err != nil {
+	if _, err := s.DeleteUser(ctx, u.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := resolveCast(s, ctx, live, "Author/Book"); !errors.Is(err, ErrInvalidToken) {

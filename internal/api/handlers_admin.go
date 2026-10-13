@@ -162,7 +162,7 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
-	if err := a.auth.DeleteUser(r.Context(), id); err != nil {
+	if _, err := a.auth.DeleteUser(r.Context(), id, nil); err != nil {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
