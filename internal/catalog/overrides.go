@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Metadata overrides: an admin's edits to a book, stored path-keyed in
@@ -545,7 +546,7 @@ func pathFields(m *metadata.Metadata) bookFields {
 }
 
 // refreshEffective rebuilds a book's effective metadata (bookLayers.resolve) into
-// its books row, its chapters (their source: applyChapterSource; then their
+// its books row (with its series keys: series_key, book_more_series), its chapters (their source: applyChapterSource; then their
 // titles), then refreshes its FTS row. UpsertBook,
 // SetEnrichment and every edit call it, so the books row can never disagree with
 // what the durable tables say.
@@ -573,11 +574,14 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	fields := l.resolve()
 	v := func(field string) string { return fields[field].Value }
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE books SET title = ?, author = ?, narrator = ?, series = ?, series_index = ?,
+		`UPDATE books SET title = ?, author = ?, narrator = ?, series = ?, series_key = ?, series_index = ?,
 		     more_series = ?, published = ?, description = ?, asin = ?, isbn = ?
 		 WHERE id = ?`,
-		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), ParseSeriesIndex(v(FieldSeriesIndex)),
+		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), seriesKey(v(FieldSeries)), ParseSeriesIndex(v(FieldSeriesIndex)),
 		cmp.Or(v(FieldMoreSeries), "[]"), v(FieldPublished), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
+		return err
+	}
+	if err := keyOtherSeries(ctx, tx, bookID, l.libID, v(FieldSeries), v(FieldMoreSeries)); err != nil {
 		return err
 	}
 
@@ -599,7 +603,7 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 
 	// Refresh FTS: delete-then-insert keyed by rowid = book id, from the effective
 	// values just written. The series column holds every series the book is in,
-	// so a search (and the series= filter's candidates) find it by any.
+	// so a search finds it by any (the series= filter goes by key instead).
 	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, bookID); err != nil {
 		return err
 	}
@@ -887,8 +891,8 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 		return nil, nil, err
 	}
 	// The listed series the new main one is, in any spelling (seriesKey).
-	at := slices.IndexFunc(list, func(s SeriesRef) bool { return sameSeries(s.Name, name) })
-	if name == "" || sameSeries(name, old) || at < 0 {
+	at := slices.IndexFunc(list, func(s SeriesRef) bool { return match.SameSeries(s.Name, name) })
+	if name == "" || match.SameSeries(name, old) || at < 0 {
 		return nil, nil, nil
 	}
 	swapped := make([]SeriesRef, 0, len(list))
@@ -896,7 +900,7 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 		switch {
 		case i == at && old != "":
 			swapped = append(swapped, SeriesRef{Name: old, Position: index})
-		case i == at, sameSeries(s.Name, old):
+		case i == at, match.SameSeries(s.Name, old):
 		default:
 			swapped = append(swapped, s)
 		}
@@ -926,7 +930,7 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 			// file's own for the new main series only when that is the same
 			// series (in any spelling), not another series that happens to
 			// share the number.
-			same = same && sameSeries(name, unedited[FieldSeries].Value)
+			same = same && match.SameSeries(name, unedited[FieldSeries].Value)
 		}
 		if same {
 			revert = append(revert, field)

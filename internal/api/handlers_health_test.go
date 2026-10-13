@@ -35,6 +35,7 @@ func TestHealthEndpointsRequireAdmin(t *testing.T) {
 	}{
 		{"GET", "/api/v1/admin/issues", "", 200},
 		{"GET", "/api/v1/admin/issues/duplicates", "", 200},
+		{"GET", "/api/v1/admin/issues/series-spellings", "", 200},
 		{"POST", "/api/v1/admin/issues/ignore", ignore, 204},
 		{"DELETE", "/api/v1/admin/issues/ignore", ignore, 204},
 		// The seeded books have no files on disk: the admin's answer is the 404.
@@ -128,6 +129,25 @@ func TestIssuesSummaryAndIgnore(t *testing.T) {
 		t.Fatalf("an un-ignored book isn't back: %s", body)
 	}
 
+	// One series spelled two ways: one group, open until both books are ignored.
+	for path, series := range map[string]string{"HWFWM/1": "He Who Fights With Monsters", "HWFWM/2": "He Who Fights WIth Monsters"} {
+		if _, err := e.cat.UpsertBook(ctx, &catalog.Book{LibraryID: libID, RelPath: path, Title: path, Series: series}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spellings := "/api/v1/admin/issues/series-spellings?library_id=" + strconv.FormatInt(libID, 10)
+	var groups struct {
+		Groups []catalog.SeriesSpellingGroup `json:"groups"`
+	}
+	if resp, body := e.do(t, "GET", spellings, adminTok, ""); resp.StatusCode != 200 ||
+		json.Unmarshal([]byte(body), &groups) != nil || len(groups.Groups) != 1 || groups.Groups[0].Books != 2 ||
+		len(groups.Groups[0].Spellings) != 2 {
+		t.Fatalf("series spellings = %d %s", resp.StatusCode, body)
+	}
+	if _, body := e.do(t, "GET", spellings+"&ignored=true", adminTok, ""); !strings.Contains(body, `"groups":[]`) {
+		t.Fatalf("ignored series spellings = %s, want none", body)
+	}
+
 	many := make([]string, maxBulkBooks+1)
 	for i := range many {
 		many[i] = `{"library_id":1,"path":"p` + strconv.Itoa(i) + `"}`
@@ -141,6 +161,7 @@ func TestIssuesSummaryAndIgnore(t *testing.T) {
 		{"GET", "/api/v1/admin/books?issue=duplicate", ""},
 		{"GET", "/api/v1/admin/books?issue=bogus", ""},
 		{"GET", "/api/v1/admin/books?issue_ignored=true", ""},
+		{"GET", "/api/v1/admin/issues/series-spellings?library_id=x", ""},
 		{"POST", "/api/v1/admin/issues/ignore", `{"kind":"bogus","books":[{"library_id":1,"path":"x"}]}`},
 		{"POST", "/api/v1/admin/issues/ignore", `{"kind":"transcode","books":[]}`},
 		{"POST", "/api/v1/admin/issues/ignore", `{"kind":"transcode","books":[{"library_id":1,"path":".."}]}`},

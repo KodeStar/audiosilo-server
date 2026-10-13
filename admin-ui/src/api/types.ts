@@ -949,6 +949,7 @@ export const ISSUE_KINDS = [
   'duplicate',
   'no_cover',
   'unmatched',
+  'series_spellings',
   'no_chapters',
   'detailed_chapters',
   'transcode',
@@ -988,6 +989,24 @@ export interface IssuesSummary {
   offline: OfflineLibrary[];
   /** When a scan last finished ("" = never). */
   checked_at: string;
+}
+
+/** catalog.SeriesSpelling: one way a series' books spell it. */
+export interface SeriesSpelling {
+  name: string;
+  books: number;
+}
+
+/**
+ * catalog.SeriesSpellingGroup: a series one library's books spell several ways,
+ * the spelling to offer (the Series page's name for it), each spelling most books
+ * first, and how many books it has.
+ */
+export interface SeriesSpellingGroup {
+  library_id: number;
+  suggested: string;
+  spellings: SeriesSpelling[];
+  books: number;
 }
 
 /** catalog.DuplicateMember. */

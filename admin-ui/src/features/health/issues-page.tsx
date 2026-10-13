@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import { BulkMatch } from './bulk-match';
 import { Duplicates } from './duplicates';
 import { IssueBooks } from './issue-books';
+import { SeriesSpellings } from './series-spellings';
 import { CATEGORY_LOOK, attentionTotal, isBookKind, pickCategory } from './issues-model';
 
 /**
@@ -151,6 +152,8 @@ export function IssuesPage() {
           {cat.kind === 'unmatched' && !ignored ? <BulkMatch /> : null}
           {isBookKind(cat.kind) ? (
             <IssueBooks key={`${cat.kind}:${ignored}`} kind={cat.kind} ignored={ignored} />
+          ) : cat.kind === 'series_spellings' ? (
+            <SeriesSpellings ignored={ignored} />
           ) : (
             <Duplicates ignored={ignored} />
           )}

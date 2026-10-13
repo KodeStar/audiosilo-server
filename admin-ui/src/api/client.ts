@@ -26,6 +26,7 @@ import type {
   Device,
   DuplicateGroup,
   IssueKind,
+  SeriesSpellingGroup,
   IssuesSummary,
   Job,
   JobsState,
@@ -564,6 +565,12 @@ export const api = {
   issues: () => request<IssuesSummary>('GET', '/admin/issues'),
   duplicates: (opts: { library_id?: number; ignored?: boolean } = {}) =>
     request<{ groups: DuplicateGroup[] }>('GET', `/admin/issues/duplicates${bookQuery(opts)}`),
+  /** The series a library's books spell several ways (the open ones, or with `ignored` those with an ignored book). */
+  seriesSpellings: (opts: { library_id?: number; ignored?: boolean } = {}) =>
+    request<{ groups: SeriesSpellingGroup[] }>(
+      'GET',
+      `/admin/issues/series-spellings${bookQuery(opts)}`,
+    ),
   /** Stops showing these books under a category (at most BULK_LIMIT). */
   ignoreIssue: (kind: IssueKind, books: BookRef[]) =>
     request<void>('POST', '/admin/issues/ignore', { kind, books }),

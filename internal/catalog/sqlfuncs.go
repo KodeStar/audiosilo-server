@@ -108,22 +108,6 @@ func ftsPhrase(value string) (phrase string, ok bool) {
 	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`, true
 }
 
-// ftsPhrases is the MATCH argument finding any of values (each phrase once, OR'd);
-// ok is false when there are none, or one has no phrase to match.
-func ftsPhrases(values []string) (string, bool) {
-	var phrases []string
-	for _, v := range values {
-		p, ok := ftsPhrase(v)
-		if !ok {
-			return "", false
-		}
-		if !slices.Contains(phrases, p) {
-			phrases = append(phrases, p)
-		}
-	}
-	return strings.Join(phrases, " OR "), len(phrases) > 0
-}
-
 // hasFTSPhrase reports whether a filter on value is looked up in the full-text
 // index (ftsPhrase finds a phrase in it).
 func hasFTSPhrase(value string) bool {

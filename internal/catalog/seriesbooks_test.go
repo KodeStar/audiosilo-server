@@ -35,16 +35,6 @@ func seedSeries(t *testing.T) (*Catalog, context.Context, *Library, *Library) {
 	return c, ctx, first, second
 }
 
-// spelledIn is how library lib spells the series name (Catalog.spellingsOf).
-func spelledIn(t *testing.T, c *Catalog, lib int64, name string) seriesNames {
-	t.Helper()
-	n, err := c.spellingsOf(context.Background(), []int64{lib}, true, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return n
-}
-
 func relPaths(books []Book) []string {
 	out := make([]string, len(books))
 	for i, b := range books {
@@ -119,7 +109,6 @@ func TestNextInOneSeries(t *testing.T) {
 	}
 	all := Scope{LibraryID: lib.ID, AllowAll: true}
 	granted := Scope{LibraryID: lib.ID, Paths: []string{"S", "U"}}
-	spelled := func(name string) seriesNames { return spelledIn(t, c, lib.ID, name) }
 	for name, tc := range map[string]struct {
 		path         string
 		series       string
@@ -137,7 +126,7 @@ func TestNextInOneSeries(t *testing.T) {
 		"unnumbered series":         {"U/a", "U", 1, all, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, spelled(tc.series), tc.index, tc.scope, nil)
+			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +142,7 @@ func TestNextInOneSeries(t *testing.T) {
 	// A skipped book is passed over for the next later one, in position order
 	// (ties by path); skipping every later one is numbered with none later.
 	for skipped, want := range map[string]string{"Hidden/2": "S/3 a", "Hidden/2|S/3 a": "S/3 b", "Hidden/2|S/3 a|S/3 b|S/x|S/5": ""} {
-		next, numbered, err := c.nextInOneSeries(ctx, lib.ID, "S/1", spelled("S"), 1, all, func(b *Book) bool {
+		next, numbered, err := c.nextInOneSeries(ctx, lib.ID, "S/1", "S", 1, all, func(b *Book) bool {
 			return slices.Contains(strings.Split(skipped, "|"), b.RelPath)
 		})
 		if err != nil || !numbered || (next == nil) != (want == "") || (next != nil && next.RelPath != want) {
@@ -196,7 +185,6 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 	}
 	all := Scope{LibraryID: lib.ID, AllowAll: true}
 	granted := Scope{LibraryID: lib.ID, Paths: []string{"gg", "maa", "foc", "foc b", "nw"}}
-	spelled := func(name string) seriesNames { return spelledIn(t, c, lib.ID, name) }
 	for name, tc := range map[string]struct {
 		path         string
 		series       string
@@ -225,7 +213,7 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 		"denied: alone in scope":            {"gg", "City Watch", 1, Scope{LibraryID: lib.ID, Paths: []string{"gg"}}, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, spelled(tc.series), tc.index, tc.scope, nil)
+			next, numbered, err := c.nextInOneSeries(ctx, lib.ID, tc.path, tc.series, tc.index, tc.scope, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -254,7 +242,7 @@ func TestNextInOneSeriesMemberships(t *testing.T) {
 		}
 	}
 	add("twice", "Other", `[{"name":"City Watch","position":0.25},{"name":"city watch","position":0.3}]`)
-	q, args := numberedSeriesMembers(lib.ID, "", spelled("City Watch"), all)
+	q, args := numberedSeriesMembers(lib.ID, "", "City Watch", all)
 	for path, want := range map[string]float64{"nw": 6, "twice": 0.25} {
 		var n int
 		var pos float64
@@ -450,22 +438,21 @@ func TestNextInSeriesNeverStepsBack(t *testing.T) {
 
 // TestNextInSeriesPlan: both branches of the membership query are index
 // searches, never a walk of the library's books: the main series by
-// idx_books_series, the lists by the full-text index's series column, each
-// candidate looked up by rowid in the partial idx_books_more_series (a name with
-// no phrase to match reads that partial index alone).
+// idx_books_series_key, the lists by book_more_series' key index, each book then
+// looked up by rowid; a name with no letter or digit (its own key) alike.
 func TestNextInSeriesPlan(t *testing.T) {
 	t.Parallel()
 	c, _ := newTestCatalog(t)
 	for _, scope := range []Scope{{LibraryID: 1, AllowAll: true}, {LibraryID: 1, Paths: []string{"A", "B"}}} {
-		for series, lists := range map[string][]string{
-			"S":  {"SCAN books_fts VIRTUAL TABLE", "SEARCH b USING INDEX idx_books_more_series (library_id=? AND rowid=?)"},
-			"!!": {"SEARCH b USING INDEX idx_books_more_series (library_id=?)"},
-		} {
-			spelled := seriesNames{main: []string{series, strings.ToLower(series)}, more: []string{series}}
-			q, args := laterSeriesMembers(1, "x", spelled, 1, scope)
+		for _, series := range []string{"S", "!!"} {
+			q, args := laterSeriesMembers(1, "x", series, 1, scope)
 			plan := queryPlan(t, c, q, args)
 			joined := strings.Join(plan, "\n")
-			for _, want := range append([]string{"SEARCH b USING INDEX idx_books_series"}, lists...) {
+			for _, want := range []string{
+				"SEARCH b USING INDEX idx_books_series_key (library_id=? AND series_key=?)",
+				"SEARCH m USING COVERING INDEX idx_book_more_series_key (series_key=? AND library_id=? AND position>?)",
+				"SEARCH b USING INTEGER PRIMARY KEY (rowid=?)",
+			} {
 				if !strings.Contains(joined, want) {
 					t.Errorf("%s: plan does not use %s:\n%s", series, want, joined)
 				}

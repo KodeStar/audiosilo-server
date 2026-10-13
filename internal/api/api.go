@@ -420,6 +420,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/libraries/{id}/book/rescan", a.requireAdmin(http.HandlerFunc(a.handleRescanBook)))
 	mux.Handle("GET /api/v1/admin/issues", a.requireAdmin(http.HandlerFunc(a.handleIssues)))
 	mux.Handle("GET /api/v1/admin/issues/duplicates", a.requireAdmin(http.HandlerFunc(a.handleDuplicates)))
+	mux.Handle("GET /api/v1/admin/issues/series-spellings", a.requireAdmin(http.HandlerFunc(a.handleSeriesSpellings)))
 	mux.Handle("POST /api/v1/admin/issues/ignore", a.requireAdmin(http.HandlerFunc(a.handleIgnoreIssue)))
 	mux.Handle("DELETE /api/v1/admin/issues/ignore", a.requireAdmin(http.HandlerFunc(a.handleUnignoreIssue)))
 	mux.Handle("GET /api/v1/admin/jobs", a.requireAdmin(http.HandlerFunc(a.handleJobs)))

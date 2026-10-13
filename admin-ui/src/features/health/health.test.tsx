@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { AdminBook, DuplicateGroup } from '@/api/types';
+import type { AdminBook, DuplicateGroup, SeriesSpellingGroup } from '@/api/types';
 import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import { issuesSummary, libraries } from '@/test/fixtures';
 import { adminBook } from '@/test/library-fixtures';
@@ -30,6 +30,13 @@ const disc = adminBook({ path: 'Cowell/Dragonese/CD1', title: 'Dragonese' });
 function splitSummary() {
   const summary = issuesSummary();
   summary.categories.splice(2, 0, { kind: 'split_discs', count: 1, ignored: 0, samples: [] });
+  return summary;
+}
+
+/** The issues with one series spelled several ways (its four books). */
+function spellingsSummary() {
+  const summary = issuesSummary();
+  summary.categories.push({ kind: 'series_spellings', count: 4, ignored: 0, samples: [] });
   return summary;
 }
 
@@ -406,6 +413,74 @@ describe('library health', () => {
           { library_id: 1, path: 'Dune' },
           { library_id: 1, path: 'Dune (mp3)' },
         ],
+      }),
+    );
+  });
+
+  it('sets one spelling on every book of a series spelled several ways', async () => {
+    const group: SeriesSpellingGroup = {
+      library_id: 1,
+      suggested: 'He Who Fights with Monsters',
+      books: 4,
+      spellings: [
+        { name: 'He Who Fights With Monsters', books: 2 },
+        { name: 'He Who Fights with Monsters', books: 1 },
+        { name: 'He Who Fights WIth Monsters', books: 1 },
+      ],
+    };
+    const tagged = [
+      adminBook({ path: 'M/1', title: 'One', series: 'He Who Fights with Monsters' }),
+      adminBook({ path: 'M/2', title: 'Two', series: 'He Who Fights With Monsters' }),
+      adminBook({ path: 'M/3', title: 'Three', series: 'He Who Fights WIth Monsters' }),
+      adminBook({ path: 'M/4', title: 'Four', series: 'He Who Fights With Monsters' }),
+      // In the series through its list only: the rename leaves it be.
+      adminBook({ path: 'Other', title: 'Other', series: 'Something Else' }),
+    ];
+    const calls = mockFetch(
+      routes({
+        'GET /admin/issues': { body: spellingsSummary() },
+        'GET /admin/issues/series-spellings': { body: { groups: [group] } },
+        // The series filter finds every spelling, as the server's does.
+        'GET /admin/books': (req) => ({
+          body: { books: req.query.get('series') ? tagged : [] },
+        }),
+        'POST /admin/books/bulk': { body: { updated: 0 } },
+        'POST /admin/issues/ignore': { status: 204 },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=series_spellings');
+    expect(
+      await screen.findByText(
+        '“He Who Fights With Monsters” and “He Who Fights WIth Monsters” look like He Who Fights with Monsters',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/3 books are tagged with the other spelling/)).toBeInTheDocument();
+
+    // Another spelling to keep: the count follows.
+    const keep = screen.getByRole('combobox', { name: 'Spelling to keep' });
+    await user.selectOptions(keep, 'He Who Fights With Monsters');
+    expect(screen.getByText(/2 books are tagged with the other spelling/)).toBeInTheDocument();
+    await user.selectOptions(keep, 'He Who Fights with Monsters');
+
+    await user.click(screen.getByRole('button', { name: 'Use this spelling' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === '/admin/books/bulk')?.body).toEqual({
+        books: [
+          { library_id: 1, path: 'M/2' },
+          { library_id: 1, path: 'M/3' },
+          { library_id: 1, path: 'M/4' },
+        ],
+        set: { series: 'He Who Fights with Monsters' },
+      }),
+    );
+
+    // Ignore stops suggesting it: every book of the series, whatever its spelling.
+    await user.click(screen.getByRole('button', { name: 'Ignore' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === '/admin/issues/ignore')?.body).toEqual({
+        kind: 'series_spellings',
+        books: ['M/1', 'M/2', 'M/3', 'M/4'].map((path) => ({ library_id: 1, path })),
       }),
     );
   });

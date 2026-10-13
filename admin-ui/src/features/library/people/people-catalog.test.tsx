@@ -24,7 +24,7 @@ beforeEach(() => setToken('stored'));
 describe('authors', () => {
   it('shows a tile per author, most books first, and filters them', async () => {
     mockFetch(routes());
-    renderApp('/library/authors');
+    const { router } = renderApp('/library/authors');
     const grid = await screen.findByRole('list', { name: 'Authors' });
     const tiles = within(grid).getAllByRole('link');
     expect(tiles[0]).toHaveTextContent('Brandon Sanderson');
@@ -33,12 +33,42 @@ describe('authors', () => {
     expect(screen.getByText('4 authors, most books first')).toBeInTheDocument();
 
     const user = userEvent.setup();
-    await user.type(screen.getByRole('searchbox', { name: 'Filter authors' }), 'wells');
-    expect(within(grid).getAllByRole('link')).toHaveLength(1);
+    const box = screen.getByRole('textbox', { name: 'Filter authors' });
+    await user.type(box, 'wells');
+    // The search applies once typing pauses, and lives in the URL.
+    await waitFor(() => expect(router.state.location.search).toEqual({ q: 'wells' }));
+    await waitFor(() => expect(within(grid).getAllByRole('link')).toHaveLength(1));
     expect(within(grid).getByRole('link')).toHaveTextContent('Martha Wells');
-    await user.clear(screen.getByRole('searchbox', { name: 'Filter authors' }));
-    await user.type(screen.getByRole('searchbox', { name: 'Filter authors' }), 'austen');
-    expect(screen.getByText('Nothing matches “austen”.')).toBeInTheDocument();
+    await user.clear(box);
+    await user.type(box, 'austen');
+    expect(await screen.findByText('Nothing matches “austen”.')).toBeInTheDocument();
+  });
+
+  it('pages the tiles, keeping the page and search in the URL', async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({
+      name: `Author ${String(i + 1).padStart(3, '0')}`,
+      books: 1,
+      duration: 3600,
+    }));
+    mockFetch(routes({ 'GET /admin/authors': { body: { ...authors, authors: many } } }));
+    const user = userEvent.setup();
+    const { router } = renderApp('/library/authors?q=author');
+    const grid = await screen.findByRole('list', { name: 'Authors' });
+    expect(within(grid).getAllByRole('link')).toHaveLength(120);
+    expect(screen.getByRole('textbox', { name: 'Filter authors' })).toHaveValue('author');
+    const pager = screen.getByRole('navigation', { name: 'Pages' });
+    await user.click(within(pager).getByRole('button', { name: 'Page 3' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ q: 'author', page: 3 }));
+    expect(within(grid).getAllByRole('link')).toHaveLength(10);
+    expect(within(grid).getAllByRole('link')[0]).toHaveTextContent('Author 241');
+    // A new search starts again on the first page.
+    await user.type(screen.getByRole('textbox', { name: 'Filter authors' }), ' 24');
+    await waitFor(() => expect(router.state.location.search).toEqual({ q: 'author 24' }));
+    expect(screen.queryByRole('navigation', { name: 'Pages' })).toBeNull();
+    // A search replaces its history entry, as on Series; Back goes to the entry
+    // before the page was picked.
+    router.history.back();
+    await waitFor(() => expect(router.state.location.search).toEqual({ q: 'author' }));
   });
 
   it('opens the Books list filtered to the author', async () => {
