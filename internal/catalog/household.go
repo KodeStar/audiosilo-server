@@ -15,7 +15,9 @@ import (
 //   - opt-in: off until a person turns it on (household_sharing, no row = off);
 //   - reciprocal: a person who doesn't share sees nobody (HouseListening is empty);
 //   - only other people who share, whose account is enabled and not a demo;
-//   - never a kid (household member), as a row or as a viewer;
+//   - never a kid (household member), as a row or as a viewer: a kid has no
+//     household_sharing row (auth clears it when someone becomes a kid, and the
+//     route refuses a kid's PUT), so the opt-in rule already leaves them out;
 //   - only a session recorded on this server (not imported, not backfilled) with
 //     listening in it, the newest per person, within houseWindow;
 //   - only a book the CALLER may see: a person's newest book outside the caller's
@@ -55,12 +57,9 @@ func (c *Catalog) HouseholdSharing(ctx context.Context, userID int64) (bool, err
 	if userID <= 0 {
 		return false, errNoUser
 	}
-	// A kid (household member) never shares, whatever the row says (a grown-up
-	// who shared and was then switched to a kid).
 	var on bool
 	err := c.db.QueryRowContext(ctx,
-		`SELECT h.share_listening FROM household_sharing h JOIN users u ON u.id = h.user_id
-		  WHERE h.user_id = ? AND (u.member_kind IS NULL OR u.member_kind <> 'kid')`, userID).Scan(&on)
+		`SELECT share_listening FROM household_sharing WHERE user_id = ?`, userID).Scan(&on)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -116,14 +115,12 @@ func (c *Catalog) HouseListening(ctx context.Context, callerID int64, callerScop
 	      FROM household_sharing me
 	     CROSS JOIN household_sharing h ON h.share_listening = 1 AND h.user_id <> me.user_id
 	     CROSS JOIN users u ON u.id = h.user_id AND u.disabled = 0 AND u.is_demo = 0
-	                AND (u.member_kind IS NULL OR u.member_kind <> 'kid')
 	      JOIN listening_sessions w ON w.id = (
 	           SELECT s.id FROM listening_sessions s
 	            WHERE s.user_id = h.user_id AND s.last_at >= ?1 AND s.import_id = 0 AND s.backfilled = 0 AND `+listenedSQL+`
 	            ORDER BY s.last_at DESC, s.id DESC LIMIT 1)
 	      LEFT JOIN books b ON b.library_id = w.library_id AND b.rel_path = w.rel_path
 	     WHERE me.user_id = ?2 AND me.share_listening = 1
-	       AND NOT EXISTS(SELECT 1 FROM users k WHERE k.id = ?2 AND k.member_kind = 'kid')
 	     ORDER BY w.last_at DESC, h.user_id`,
 		formatSessionTime(c.now().Add(-houseWindow)), callerID)
 	if err != nil {

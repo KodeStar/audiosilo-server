@@ -17,10 +17,20 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/web/spa"
 )
 
+// callerOf is u as catalog computes access for them: the id, the admin role and
+// a household member's rule, which u carries from its token lookup (or GetUser),
+// so the scope reads cost no statement for it.
+func callerOf(u *auth.User) catalog.Caller {
+	who := catalog.Caller{ID: u.ID, Admin: u.Role == auth.RoleAdmin}
+	if r := u.MemberRule; r != nil {
+		who.Member = &catalog.MemberRule{Owner: r.Owner, Access: r.Access, OwnerAdmin: r.OwnerAdmin}
+	}
+	return who
+}
+
 // handleListLibraries lists libraries the caller can reach (via any share).
 func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
-	u := userFrom(r.Context())
-	libs, err := a.cat.AccessibleLibraries(r.Context(), u.ID, u.Role == "admin")
+	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(userFrom(r.Context())))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list libraries")
 		return
@@ -31,8 +41,7 @@ func (a *API) handleListLibraries(w http.ResponseWriter, r *http.Request) {
 // libraryScope loads a library and the caller's effective access scope for it.
 // A non-admin with no granting share gets 403.
 func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, catalog.Scope, int, string) {
-	u := userFrom(r.Context())
-	scope, err := a.cat.UserScope(r.Context(), u.ID, libraryID, u.Role == "admin")
+	scope, err := a.cat.CallerScope(r.Context(), callerOf(userFrom(r.Context())), libraryID)
 	if err != nil {
 		return nil, scope, http.StatusInternalServerError, "access check failed"
 	}
@@ -44,7 +53,7 @@ func (a *API) libraryScope(r *http.Request, libraryID int64) (*catalog.Library, 
 // failure it answers 500 with msg and returns false.
 func (a *API) callerScopes(w http.ResponseWriter, r *http.Request, msg string) ([]catalog.Scope, bool) {
 	u := userFrom(r.Context())
-	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
+	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(u))
 	if err != nil {
 		a.log.Warn("load user scopes failed", "user", u.ID, "err", err)
 		writeError(w, http.StatusInternalServerError, msg)
@@ -295,8 +304,7 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 // handleSearch runs a full-text search across the caller's accessible content,
 // scoped per-library to their share path rules.
 func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
-	u := userFrom(r.Context())
-	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == "admin")
+	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(userFrom(r.Context())))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "search failed")
 		return
@@ -314,8 +322,7 @@ func (a *API) handleSearch(w http.ResponseWriter, r *http.Request) {
 // endpoint so clients render one merged "recently added" list (rather than
 // fanning out to each library's /books and concatenating).
 func (a *API) handleRecentBooks(w http.ResponseWriter, r *http.Request) {
-	u := userFrom(r.Context())
-	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == "admin")
+	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(userFrom(r.Context())))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load books")
 		return

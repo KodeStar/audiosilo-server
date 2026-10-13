@@ -22,7 +22,7 @@ func mustUser(t *testing.T, s *Service, ctx context.Context, name, password, rol
 
 func mustMember(t *testing.T, s *Service, ctx context.Context, owner int64, in NewMember) Member {
 	t.Helper()
-	m, _, err := s.CreateMember(ctx, owner, in, testPolicy)
+	m, _, _, err := s.CreateMember(ctx, owner, in, testPolicy)
 	if err != nil {
 		t.Fatalf("create %q: %v", in.Name, err)
 	}
@@ -62,10 +62,10 @@ func TestMembers_Create(t *testing.T) {
 	}
 	_, cred, _ := s.ResolveRequest(ctx, phone, Presence{}, KindSession)
 
-	evie, secret, err := s.CreateMember(ctx, adam.ID, NewMember{Name: " Evie ", Kind: MemberKid, Access: MemberCollections,
+	evie, secret, signedIn, err := s.CreateMember(ctx, adam.ID, NewMember{Name: " Evie ", Kind: MemberKid, Access: MemberCollections,
 		SignInHere: true, DeviceName: cred.DeviceName, OnToken: cred.ID}, testPolicy)
-	if err != nil || secret == "" {
-		t.Fatalf("create kid = %v %q", err, secret)
+	if err != nil || secret == "" || signedIn == nil || signedIn.ID != evie.ID || !signedIn.IsKid() {
+		t.Fatalf("create kid = %v %q %+v", err, secret, signedIn)
 	}
 	if evie.Name != "Evie" || evie.Username != "evie" || evie.Kind != MemberKid || evie.Access != MemberCollections || evie.Devices != 1 ||
 		len(evie.CreatedAt) != len("2006-01-02T15:04:05.000Z") {
@@ -85,8 +85,8 @@ func TestMembers_Create(t *testing.T) {
 		t.Fatalf("kid account = %+v %v", full, err)
 	}
 
-	ellis, secret, err := s.CreateMember(ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll}, testPolicy)
-	if err != nil || secret != "" || ellis.Devices != 0 {
+	ellis, secret, signedIn, err := s.CreateMember(ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll}, testPolicy)
+	if err != nil || secret != "" || signedIn != nil || ellis.Devices != 0 {
 		t.Fatalf("create grown-up = %+v %q %v", ellis, secret, err)
 	}
 
@@ -139,14 +139,14 @@ func TestMembers_CreateRefused(t *testing.T) {
 		{"share fails", adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll,
 			Share: func(*sql.Tx, int64) error { return ErrNotFound }}, testPolicy, ErrNotFound},
 	} {
-		if _, _, err := s.CreateMember(ctx, c.owner, c.in, c.policy); !errors.Is(err, c.want) {
+		if _, _, _, err := s.CreateMember(ctx, c.owner, c.in, c.policy); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", c.name, err, c.want)
 		}
 	}
-	if err := s.SetCanAddMembers(ctx, adam.ID, false); err != nil {
+	if err := s.UpdateUser(ctx, adam.ID, UserChanges{CanAddMembers: new(false)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.CreateMember(ctx, adam.ID, kid, testPolicy); !errors.Is(err, ErrNotAllowed) {
+	if _, _, _, err := s.CreateMember(ctx, adam.ID, kid, testPolicy); !errors.Is(err, ErrNotAllowed) {
 		t.Errorf("switched off: %v", err)
 	}
 	if list, _ := s.ListMembers(ctx, adam.ID); len(list) != 1 {
@@ -252,16 +252,16 @@ func TestMembers_Ownership(t *testing.T) {
 	if d, err := s.MemberDevices(ctx, adam.ID, evie.ID); err != nil || len(d) != 1 {
 		t.Fatalf("devices = %v %v", d, err)
 	}
-	if p, err := s.MemberPairing(ctx, adam.ID, evie.ID); err != nil || p == "" {
+	if m, p, err := s.MemberPairing(ctx, adam.ID, evie.ID); err != nil || p == "" || m.ID != evie.ID {
 		t.Fatalf("pairing = %v", err)
 	}
 	for _, who := range []int64{bob.ID, evie.ID, 0} {
 		for name, err := range map[string]error{
 			"member":  func() error { _, err := s.Member(ctx, who, evie.ID); return err }(),
 			"session": func() error { _, _, err := s.MemberSession(ctx, who, evie.ID, "x", 0); return err }(),
-			"pair":    func() error { _, err := s.MemberPairing(ctx, who, evie.ID); return err }(),
+			"pair":    func() error { _, _, err := s.MemberPairing(ctx, who, evie.ID); return err }(),
 			"devices": func() error { _, err := s.MemberDevices(ctx, who, evie.ID); return err }(),
-			"revoke":  s.RevokeMemberDevice(ctx, who, evie.ID, cred.ID),
+			"revoke":  func() error { _, err := s.RevokeMemberDevice(ctx, who, evie.ID, cred.ID); return err }(),
 			"delete":  func() error { _, err := s.DeleteMember(ctx, who, evie.ID); return err }(),
 		} {
 			if !errors.Is(err, ErrNotMember) {
@@ -272,10 +272,10 @@ func TestMembers_Ownership(t *testing.T) {
 	if _, err := s.Member(ctx, adam.ID, 99999); !errors.Is(err, ErrNotMember) {
 		t.Error("unknown id")
 	}
-	if err := s.RevokeMemberDevice(ctx, adam.ID, evie.ID, 99999); !errors.Is(err, ErrNotFound) {
+	if _, err := s.RevokeMemberDevice(ctx, adam.ID, evie.ID, 99999); !errors.Is(err, ErrNotFound) {
 		t.Error("a device not the member's")
 	}
-	if err := s.RevokeMemberDevice(ctx, adam.ID, evie.ID, cred.ID); err != nil {
+	if m, err := s.RevokeMemberDevice(ctx, adam.ID, evie.ID, cred.ID); err != nil || m.ID != evie.ID {
 		t.Fatal(err)
 	}
 	if _, err := s.ResolveToken(ctx, tok, KindSession); !errors.Is(err, ErrInvalidToken) {
@@ -299,7 +299,7 @@ func TestMembers_SignIns(t *testing.T) {
 	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
 	phone, _ := s.IssueToken(ctx, adam.ID, KindSession, "phone", 0)
 	_, pc, _ := s.ResolveRequest(ctx, phone, Presence{}, KindSession)
-	evie, evieHere, _ := s.CreateMember(ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll,
+	evie, evieHere, _, _ := s.CreateMember(ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll,
 		SignInHere: true, DeviceName: "phone", OnToken: pc.ID}, testPolicy)
 	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
 	ellisHere, _, err := s.MemberSession(ctx, adam.ID, ellis.ID, "phone", pc.ID)
@@ -411,11 +411,11 @@ func TestMembers_AdminAssign(t *testing.T) {
 		"unknown person":  {99999, adam.ID, MemberKid, ErrNotFound},
 		"bad kind":        {bob.ID, adam.ID, "teen", ErrInvalidKind},
 	} {
-		if err := s.AssignMember(ctx, c.id, c.owner, c.kind, MemberAll); !errors.Is(err, c.want) {
+		if err := s.UpdateUser(ctx, c.id, UserChanges{Household: &HouseholdChange{Owner: c.owner, Kind: c.kind, Access: MemberAll}}); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
 		}
 	}
-	if err := s.AssignMember(ctx, bob.ID, adam.ID, MemberKid, MemberCollections); err != nil {
+	if err := s.UpdateUser(ctx, bob.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: MemberKid, Access: MemberCollections}}); err != nil {
 		t.Fatal(err)
 	}
 	u, _ := s.GetUser(ctx, bob.ID)
@@ -425,19 +425,19 @@ func TestMembers_AdminAssign(t *testing.T) {
 	if _, err := s.ResolveToken(ctx, key, KindAPI); !errors.Is(err, ErrInvalidToken) {
 		t.Fatal("assigned kid keeps an API key")
 	}
-	if err := s.SetRole(ctx, ellis.ID, RoleAdmin); !errors.Is(err, ErrMemberNotAdmin) {
+	if err := s.UpdateUser(ctx, ellis.ID, UserChanges{Role: new(RoleAdmin)}); !errors.Is(err, ErrMemberNotAdmin) {
 		t.Fatalf("member promoted: %v", err)
 	}
-	if err := s.MakeIndependent(ctx, ellis.ID); err != nil {
+	if err := s.UpdateUser(ctx, ellis.ID, UserChanges{Household: &HouseholdChange{}}); err != nil {
 		t.Fatal(err)
 	}
 	if u, _ := s.GetUser(ctx, ellis.ID); u.IsMember() || u.MemberKind != nil {
 		t.Fatalf("independent = %+v", u)
 	}
-	if err := s.MakeIndependent(ctx, root.ID); err != nil {
+	if err := s.UpdateUser(ctx, root.ID, UserChanges{Household: &HouseholdChange{}}); err != nil {
 		t.Fatalf("no-op on a non-member: %v", err)
 	}
-	if err := s.MakeIndependent(ctx, 99999); !errors.Is(err, ErrNotFound) {
+	if err := s.UpdateUser(ctx, 99999, UserChanges{Household: &HouseholdChange{}}); !errors.Is(err, ErrNotFound) {
 		t.Fatal("unknown id")
 	}
 }

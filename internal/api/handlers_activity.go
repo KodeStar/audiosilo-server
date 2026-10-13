@@ -287,7 +287,7 @@ func (a *API) handleEditProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	// The user's own scope, not the admin's: an edit may start progress only on a
 	// book the user can see (EditProgress applies it to new rows only).
-	scope, err := a.cat.UserScope(r.Context(), user.ID, lib.ID, user.Role == auth.RoleAdmin)
+	scope, err := a.cat.CallerScope(r.Context(), callerOf(user), lib.ID)
 	if err != nil {
 		a.log.Warn("user scope failed", "err", err, "user", userID)
 		writeError(w, http.StatusInternalServerError, "access check failed")

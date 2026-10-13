@@ -205,15 +205,72 @@ func scopesFilterSQL(libCol, pathCol string, scopes []Scope) (string, []any) {
 	return "(" + strings.Join(ors, " OR ") + ")", args
 }
 
+// Caller is the person access is computed for: their id, whether they are an
+// admin and, for a household member, their member rule. The transport builds it
+// from the request's user (api.callerOf), whose token lookup read the rule in
+// its own statement, so a request's scopes cost no statement for the rule;
+// UserScope, UserScopes and AccessibleLibraries read the rule themselves
+// (memberRuleOf) for a caller known only by id.
+type Caller struct {
+	ID    int64
+	Admin bool
+	// Member is a household member's rule (members.go), nil for anyone else.
+	Member *MemberRule
+}
+
 // UserScope returns a user's effective scope within one library. Admins get
 // AllowAll. A non-admin with no grants gets an empty scope (no access). A
 // household member also gets what their owner gives them (the member rule,
-// memberScopes).
+// memberScopes). It reads the rule; CallerScope is it for a Caller.
 func (c *Catalog) UserScope(ctx context.Context, userID, libraryID int64, isAdmin bool) (Scope, error) {
+	who, err := c.callerByID(ctx, userID, isAdmin)
+	if err != nil {
+		return Scope{}, err
+	}
+	return c.CallerScope(ctx, who, libraryID)
+}
+
+// UserScopes returns the user's scope for every library they can reach (admins:
+// every library, AllowAll), with a household member's derived access (the
+// member rule). Used by cross-library search and every cross-library list. It
+// reads the rule; CallerScopes is it for a Caller.
+func (c *Catalog) UserScopes(ctx context.Context, userID int64, isAdmin bool) ([]Scope, error) {
+	who, err := c.callerByID(ctx, userID, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+	return c.CallerScopes(ctx, who)
+}
+
+// AccessibleLibraries returns libraries the user can reach (admins: all; a
+// household member, the libraries their own and derived access reach). It reads
+// the rule; CallerLibraries is it for a Caller.
+func (c *Catalog) AccessibleLibraries(ctx context.Context, userID int64, isAdmin bool) ([]Library, error) {
+	who, err := c.callerByID(ctx, userID, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+	return c.CallerLibraries(ctx, who)
+}
+
+// callerByID is userID as a Caller, with their member rule read (none for an
+// admin, whose scopes it can't change).
+func (c *Catalog) callerByID(ctx context.Context, userID int64, isAdmin bool) (Caller, error) {
+	who := Caller{ID: userID, Admin: isAdmin}
 	if isAdmin {
+		return who, nil
+	}
+	var err error
+	who.Member, err = c.memberRuleOf(ctx, userID)
+	return who, err
+}
+
+// CallerScope is UserScope for who.
+func (c *Catalog) CallerScope(ctx context.Context, who Caller, libraryID int64) (Scope, error) {
+	if who.Admin {
 		return Scope{LibraryID: libraryID, AllowAll: true}, nil
 	}
-	scopes, err := c.userScopes(ctx, userID, libraryID)
+	scopes, err := c.userScopes(ctx, who, libraryID)
 	if err != nil {
 		return Scope{}, err
 	}
@@ -223,18 +280,33 @@ func (c *Catalog) UserScope(ctx context.Context, userID, libraryID int64, isAdmi
 	return Scope{LibraryID: libraryID}, nil
 }
 
-// UserScopes returns the user's scope for every library they can reach (admins:
-// every library, AllowAll), with a household member's derived access (the
-// member rule). Used by cross-library search and every cross-library list.
-func (c *Catalog) UserScopes(ctx context.Context, userID int64, isAdmin bool) ([]Scope, error) {
-	if isAdmin {
+// CallerScopes is UserScopes for who.
+func (c *Catalog) CallerScopes(ctx context.Context, who Caller) ([]Scope, error) {
+	if who.Admin {
 		return c.allLibraryScopes(ctx)
 	}
-	scopes, err := c.userScopes(ctx, userID, 0)
+	scopes, err := c.userScopes(ctx, who, 0)
 	if err != nil {
 		return nil, err
 	}
 	return flattenScopes(scopes), nil
+}
+
+// CallerLibraries is AccessibleLibraries for who: every library for an admin,
+// else those who's scopes reach.
+func (c *Catalog) CallerLibraries(ctx context.Context, who Caller) ([]Library, error) {
+	libs, err := c.ListLibraries(ctx)
+	if err != nil || who.Admin {
+		return libs, err
+	}
+	scopes, err := c.userScopes(ctx, who, 0)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(libs, func(l Library) bool {
+		s := scopes[l.ID]
+		return s == nil || !s.AllowAll && len(s.Paths) == 0
+	}), nil
 }
 
 // allLibraryScopes is every library, AllowAll: an admin's scopes.
@@ -252,16 +324,12 @@ func (c *Catalog) allLibraryScopes(ctx context.Context) ([]Scope, error) {
 
 // userScopes is a non-admin's scopes by library (in libraryID only, or every
 // library for 0): their own grants, plus a household member's derived access.
-func (c *Catalog) userScopes(ctx context.Context, userID, libraryID int64) (map[int64]*Scope, error) {
-	own, err := c.grantScopes(ctx, userID, libraryID)
-	if err != nil {
-		return nil, err
-	}
-	rule, err := c.memberRuleOf(ctx, userID)
-	if err != nil || rule == nil {
+func (c *Catalog) userScopes(ctx context.Context, who Caller, libraryID int64) (map[int64]*Scope, error) {
+	own, err := c.grantScopes(ctx, who.ID, libraryID)
+	if err != nil || who.Member == nil {
 		return own, err
 	}
-	derived, err := c.memberScopes(ctx, userID, libraryID, rule)
+	derived, err := c.memberScopes(ctx, who.ID, libraryID, who.Member)
 	if err != nil {
 		return nil, err
 	}
@@ -274,29 +342,33 @@ func (c *Catalog) userScopes(ctx context.Context, userID, libraryID int64) (map[
 // grantScopes is the scopes a user's own share grants give them, by library (in
 // libraryID only, or every library for 0): the admin's grants, nothing derived.
 func (c *Catalog) grantScopes(ctx context.Context, userID, libraryID int64) (map[int64]*Scope, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT sp.library_id, sp.path FROM share_paths sp
-		   JOIN user_share_access usa ON usa.share_id = sp.share_id
-		  WHERE usa.user_id = ?1 AND (?2 = 0 OR sp.library_id = ?2)`, userID, libraryID)
+	grants, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *Ref) error {
+		return rows.Scan(&r.LibraryID, &r.Path)
+	}, `SELECT DISTINCT sp.library_id, sp.path FROM share_paths sp
+	      JOIN user_share_access usa ON usa.share_id = sp.share_id
+	     WHERE usa.user_id = ?1 AND (?2 = 0 OR sp.library_id = ?2)`, userID, libraryID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	byLib := map[int64]*Scope{}
-	for rows.Next() {
-		var s Scope
-		var p string
-		if err := rows.Scan(&s.LibraryID, &p); err != nil {
-			return nil, err
+	for _, g := range grants {
+		s := byLib[g.LibraryID]
+		if s == nil {
+			s = &Scope{LibraryID: g.LibraryID}
+			byLib[g.LibraryID] = s
 		}
-		if p == "" {
+		if g.Path == "" {
 			s.AllowAll = true
 		} else {
-			s.Paths = []string{p}
+			s.Paths = append(s.Paths, g.Path)
 		}
-		mergeScope(byLib, s)
 	}
-	return byLib, rows.Err()
+	for _, s := range byLib {
+		if s.AllowAll {
+			s.Paths = nil
+		}
+	}
+	return byLib, nil
 }
 
 // mergeScope adds s to the scopes by library: the union (AllowAll wins and drops
@@ -311,7 +383,7 @@ func mergeScope(byLib map[int64]*Scope, s Scope) {
 		cur.AllowAll, cur.Paths = true, nil
 		return
 	}
-	seen := make(map[string]bool, len(cur.Paths)+len(s.Paths))
+	seen := make(map[string]bool, len(cur.Paths))
 	for _, p := range cur.Paths {
 		seen[p] = true
 	}
@@ -364,44 +436,6 @@ func (c *Catalog) UserShares(ctx context.Context, userID int64) ([]Share, error)
 		}
 	}
 	return out, nil
-}
-
-// AccessibleLibraries returns libraries the user can reach (admins: all; a
-// household member, the libraries their own and derived access reach).
-func (c *Catalog) AccessibleLibraries(ctx context.Context, userID int64, isAdmin bool) ([]Library, error) {
-	if isAdmin {
-		return c.ListLibraries(ctx)
-	}
-	rule, err := c.memberRuleOf(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if rule != nil {
-		scopes, err := c.userScopes(ctx, userID, 0)
-		if err != nil {
-			return nil, err
-		}
-		libs, err := c.ListLibraries(ctx)
-		if err != nil {
-			return nil, err
-		}
-		reach := flattenScopes(scopes)
-		return slices.DeleteFunc(libs, func(l Library) bool {
-			return !slices.ContainsFunc(reach, func(s Scope) bool { return s.LibraryID == l.ID })
-		}), nil
-	}
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT DISTINCT l.id, l.name, l.root, l.default_view, l.sort_order, l.scan_schedule, l.ignore_patterns,
-		        l.metadata_source
-		   FROM libraries l
-		   JOIN share_paths sp ON sp.library_id = l.id
-		   JOIN user_share_access usa ON usa.share_id = sp.share_id
-		  WHERE usa.user_id = ? ORDER BY l.sort_order, l.name`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return collectLibraries(rows)
 }
 
 // --- Share CRUD + membership + grants ---

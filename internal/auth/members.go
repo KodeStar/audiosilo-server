@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,9 +26,9 @@ import (
 //
 // Rules kept here:
 //   - one level: an owner is never a member, and a member never has members;
-//   - a member never gets the admin role (SetRole, AssignMember);
-//   - a kid holds no password, API key, pairing token or recovery code
-//     (clearKidCredentials), and its existing sign-ins stay;
+//   - a member never gets the admin role (UpdateUser);
+//   - a kid holds no password, API key, pairing token, recovery code or house
+//     sharing (clearKidCredentials), and its existing sign-ins stay;
 //   - the owner's routes answer ErrNotMember for anyone who isn't their member,
 //     so another person's member is indistinguishable from no such account.
 
@@ -189,8 +190,8 @@ func usernameBase(name string) string {
 
 // deriveUsername picks the member's username: the name's base, then the base
 // with the owner's username, then numbered (-2 .. -99); the first one no account
-// has in any case. Past -99 it is ErrUsernameTaken. Runs inside the create's
-// transaction.
+// has in any case (one read of which are taken). Past -99 it is
+// ErrUsernameTaken. Runs inside the create's transaction.
 func deriveUsername(ctx context.Context, tx *sql.Tx, name, ownerUsername string) (string, error) {
 	base := usernameBase(name)
 	candidates := []string{base}
@@ -200,13 +201,31 @@ func deriveUsername(ctx context.Context, tx *sql.Tx, name, ownerUsername string)
 	for n := 2; n <= 99; n++ {
 		candidates = append(candidates, fmt.Sprintf("%s-%d", base, n))
 	}
-	for _, c := range candidates {
-		var taken bool
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM users WHERE lower(username) = lower(?))`, c).Scan(&taken); err != nil {
+	list, err := json.Marshal(candidates)
+	if err != nil {
+		return "", err
+	}
+	// The candidates are lower case ASCII (usernameSlug), so lower() on the
+	// stored side is the whole case fold.
+	rows, err := tx.QueryContext(ctx,
+		`SELECT lower(username) FROM users WHERE lower(username) IN (SELECT value FROM json_each(?))`, string(list))
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	taken := map[string]bool{}
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
 			return "", err
 		}
-		if !taken {
+		taken[u] = true
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	for _, c := range candidates {
+		if !taken[c] {
 			return c, nil
 		}
 	}
@@ -220,15 +239,23 @@ func stampMillis(s string) string {
 	if err != nil {
 		return s
 	}
-	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+	return t.UTC().Format(millisUTC)
 }
 
-// memberSelect reads Member rows (memberRow): ?1 is now (RFC3339) for the
+// memberSelect reads Member rows (scanMember): ?1 is now (RFC3339) for the
 // devices count, which takes the live sessions and API keys.
-const memberSelect = `SELECT u.id, u.display_name, u.username, u.member_kind, u.member_access, u.created_at, u.disabled,
-	       (SELECT COUNT(*) FROM tokens t WHERE t.user_id = u.id AND t.kind IN ('` + KindSession + `', '` + KindAPI + `')
-	          AND t.revoked = 0 AND (t.expires_at IS NULL OR t.expires_at > ?1))
+const memberSelect = `SELECT u.id, ` + memberNameSQL + `, u.username, u.member_kind, u.member_access, u.created_at, u.disabled,
+	       (SELECT COUNT(*) FROM tokens t WHERE t.user_id = u.id AND ` + liveDeviceSQL + `)
 	  FROM users u`
+
+// memberNameSQL is a member u's name as their owner sees it: the name the owner
+// typed, else the username.
+const memberNameSQL = `CASE WHEN u.display_name <> '' THEN u.display_name ELSE u.username END`
+
+// liveDeviceSQL keeps the tokens t that are a device: a live (not revoked, not
+// expired at ?1, now in RFC3339) session or API key.
+const liveDeviceSQL = `t.kind IN ('` + KindSession + `', '` + KindAPI + `') AND t.revoked = 0
+	AND (t.expires_at IS NULL OR t.expires_at > ?1)`
 
 // memberWhere keeps the rows that are members (all three columns set).
 const memberWhere = ` u.managed_by IS NOT NULL AND u.member_kind IS NOT NULL AND u.member_access IS NOT NULL`
@@ -238,9 +265,6 @@ type rowScanner interface{ Scan(...any) error }
 func scanMember(row rowScanner) (Member, error) {
 	var m Member
 	err := row.Scan(&m.ID, &m.Name, &m.Username, &m.Kind, &m.Access, &m.CreatedAt, &m.Disabled, &m.Devices)
-	if m.Name == "" {
-		m.Name = m.Username
-	}
 	m.CreatedAt = stampMillis(m.CreatedAt)
 	return m, err
 }
@@ -255,7 +279,7 @@ type rowQuerier interface {
 func (s *Service) memberOf(ctx context.Context, q rowQuerier, owner, id int64) (Member, error) {
 	m, err := scanMember(q.QueryRowContext(ctx,
 		memberSelect+` WHERE u.id = ?2 AND u.managed_by = ?3 AND`+memberWhere, s.ts(), id, owner))
-	if errors.Is(err, sql.ErrNoRows) || owner <= 0 {
+	if errors.Is(err, sql.ErrNoRows) {
 		return Member{}, ErrNotMember
 	}
 	return m, err
@@ -285,37 +309,40 @@ func (s *Service) ListMembers(ctx context.Context, owner int64) ([]Member, error
 	return out, rows.Err()
 }
 
-// checkOwner settles whether owner may add a member under policy, inside the
-// create's transaction, in the order the transport answers them: a demo
-// account, a member, the server's switch, the admin's switch (a disabled account
-// too), the cap. It returns the owner's username.
-func checkOwner(ctx context.Context, tx *sql.Tx, owner int64, policy MemberPolicy) (string, error) {
-	var (
-		username                    string
-		demo, member, canAdd, inact bool
-		count                       int
-	)
-	err := tx.QueryRowContext(ctx,
-		`SELECT username, is_demo, managed_by IS NOT NULL, can_add_members, disabled,
-		        (SELECT COUNT(*) FROM users m WHERE m.managed_by = ?1)
-		   FROM users WHERE id = ?1`, owner).Scan(&username, &demo, &member, &canAdd, &inact, &count)
+// MayAddMembers settles whether u may add a household member under policy,
+// leaving out the cap (which a list shows as a count, not a refusal), in the
+// order the transport answers them: a demo account (ErrDemoAccount), a member
+// (ErrMemberCannotManage), the server's switch (ErrFeatureOff), the admin's
+// switch or a disabled account (ErrNotAllowed). It reads nothing: u is the
+// account as GetUser reads it.
+func MayAddMembers(u *User, policy MemberPolicy) error {
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return "", ErrNotFound
-	case err != nil:
-		return "", err
-	case demo:
-		return "", ErrDemoAccount
-	case member:
-		return "", ErrMemberCannotManage
+	case u.IsDemo:
+		return ErrDemoAccount
+	case u.IsMember():
+		return ErrMemberCannotManage
 	case !policy.Enabled:
-		return "", ErrFeatureOff
-	case !canAdd || inact:
-		return "", ErrNotAllowed
-	case count >= policy.Max:
-		return "", ErrMemberLimit
+		return ErrFeatureOff
+	case !u.CanAddMembers || u.Disabled:
+		return ErrNotAllowed
 	}
-	return username, nil
+	return nil
+}
+
+// checkOwner is MayAddMembers then the cap (ErrMemberLimit) for owner, read
+// inside the create's transaction. It returns the owner's account.
+func checkOwner(ctx context.Context, tx *sql.Tx, owner int64, policy MemberPolicy) (*User, error) {
+	u, err := getUser(ctx, tx, owner)
+	if err != nil {
+		return nil, err
+	}
+	if err := MayAddMembers(u, policy); err != nil {
+		return nil, err
+	}
+	if u.MembersCount >= policy.Max {
+		return nil, ErrMemberLimit
+	}
+	return u, nil
 }
 
 // CreateMember adds a household member for owner, in one transaction: it checks
@@ -323,14 +350,16 @@ func checkOwner(ctx context.Context, tx *sql.Tx, owner int64, policy MemberPolic
 // unique username, inserts the account (role user, no password, the three member
 // columns, the typed name), shares the owner's collections (in.Share) and, with
 // in.SignInHere, signs the member in on the owner's device. It returns the member
-// and the session's secret ("" without SignInHere).
-func (s *Service) CreateMember(ctx context.Context, owner int64, in NewMember, policy MemberPolicy) (Member, string, error) {
+// and, with SignInHere, the session's secret and the member's account (for the
+// session envelope); "" and nil without.
+func (s *Service) CreateMember(ctx context.Context, owner int64, in NewMember, policy MemberPolicy) (Member, string, *User, error) {
 	var (
 		m      Member
 		secret string
+		u      *User
 	)
 	err := s.db.WithTx(ctx, "CreateMember", func(tx *sql.Tx) error {
-		ownerName, err := checkOwner(ctx, tx, owner, policy)
+		o, err := checkOwner(ctx, tx, owner, policy)
 		if err != nil {
 			return err
 		}
@@ -344,7 +373,7 @@ func (s *Service) CreateMember(ctx context.Context, owner int64, in NewMember, p
 		if err := checkAccess(in.Access); err != nil {
 			return err
 		}
-		username, err := deriveUsername(ctx, tx, name, ownerName)
+		username, err := deriveUsername(ctx, tx, name, o.Username)
 		if err != nil {
 			return err
 		}
@@ -370,14 +399,17 @@ func (s *Service) CreateMember(ctx context.Context, owner int64, in NewMember, p
 			if secret, err = s.memberSessionTx(ctx, tx, id, in.DeviceName, in.OnToken); err != nil {
 				return err
 			}
+			if u, err = getUser(ctx, tx, id); err != nil {
+				return err
+			}
 		}
 		m, err = s.memberOf(ctx, tx, owner, id)
 		return err
 	})
 	if err != nil {
-		return Member{}, "", err
+		return Member{}, "", nil, err
 	}
-	return m, secret, nil
+	return m, secret, u, nil
 }
 
 // memberSessionTx issues a session for member, named deviceName and recording
@@ -423,12 +455,25 @@ func (s *Service) MemberSession(ctx context.Context, owner, id int64, deviceName
 }
 
 // MemberPairing mints a pairing token for owner's member id, for the member's
-// own device: unlinked, single use, memberPairingTTL, like /auth/pair's.
-func (s *Service) MemberPairing(ctx context.Context, owner, id int64) (string, error) {
-	if _, err := s.Member(ctx, owner, id); err != nil {
-		return "", err
+// own device: unlinked, single use, memberPairingTTL, like /auth/pair's. It
+// returns the member with the token.
+func (s *Service) MemberPairing(ctx context.Context, owner, id int64) (Member, string, error) {
+	var (
+		m     Member
+		token string
+	)
+	err := s.db.WithTx(ctx, "MemberPairing", func(tx *sql.Tx) error {
+		var err error
+		if m, err = s.memberOf(ctx, tx, owner, id); err != nil {
+			return err
+		}
+		token, err = s.issueToken(ctx, tx, id, KindPairing, "", memberPairingTTL)
+		return err
+	})
+	if err != nil {
+		return Member{}, "", err
 	}
-	return s.IssueToken(ctx, id, KindPairing, "", memberPairingTTL)
+	return m, token, nil
 }
 
 // MemberDevices lists owner's member id's live sessions and API keys.
@@ -439,14 +484,23 @@ func (s *Service) MemberDevices(ctx context.Context, owner, id int64) ([]Device,
 	return s.ListDevices(ctx, id)
 }
 
-// RevokeMemberDevice signs one of owner's member id's devices out: ErrNotMember
-// for anyone else's member, ErrNotFound for a device that isn't the member's
-// live session or API key.
-func (s *Service) RevokeMemberDevice(ctx context.Context, owner, id, deviceID int64) error {
-	if _, err := s.Member(ctx, owner, id); err != nil {
+// RevokeMemberDevice signs one of owner's member id's devices out, in one
+// transaction, and returns the member: ErrNotMember for anyone else's member,
+// ErrNotFound for a device that isn't the member's live session or API key.
+func (s *Service) RevokeMemberDevice(ctx context.Context, owner, id, deviceID int64) (Member, error) {
+	var m Member
+	err := s.db.WithTx(ctx, "RevokeMemberDevice", func(tx *sql.Tx) error {
+		var err error
+		if m, err = s.memberOf(ctx, tx, owner, id); err != nil {
+			return err
+		}
+		_, err = revokeDeviceTx(ctx, tx, deviceID, id, false)
 		return err
+	})
+	if err != nil {
+		return Member{}, err
 	}
-	return s.RevokeOwnDevice(ctx, id, deviceID)
+	return m, nil
 }
 
 // MemberUpdate is an owner's change to a member: nil leaves a field.
@@ -480,13 +534,15 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 		}
 		kind, access := cur.Kind, cur.Access
 		if in.Kind != nil {
-			if kind = *in.Kind; checkKind(kind) != nil {
-				return ErrInvalidKind
+			kind = *in.Kind
+			if err := checkKind(kind); err != nil {
+				return err
 			}
 		}
 		if in.Access != nil {
-			if access = *in.Access; checkAccess(access) != nil {
-				return ErrInvalidAccess
+			access = *in.Access
+			if err := checkAccess(access); err != nil {
+				return err
 			}
 		}
 		if name != cur.Name {
@@ -528,11 +584,16 @@ func (s *Service) UpdateMember(ctx context.Context, owner, id int64, in MemberUp
 // that a kid can't have (plan decision 1): the password (and the browsers it
 // signed in from), API keys, open pairing tokens and the recovery code (whose
 // linked pairing tokens cascade). Sessions stay: their devices stay signed in.
+// It also clears their household listening choice (household_sharing): a kid
+// never shares nor sees the house (catalog's household.go relies on no kid
+// having a row, which the routes keep: a kid can't set one), so a kid made a
+// grown-up again starts from off and opts in again.
 func clearKidCredentials(ctx context.Context, tx *sql.Tx, id int64) error {
 	for _, q := range []string{
 		`UPDATE users SET password_hash = '' WHERE id = ?1`,
 		`UPDATE tokens SET revoked = 1 WHERE user_id = ?1 AND kind IN ('` + KindAPI + `', '` + KindPairing + `') AND revoked = 0`,
 		`DELETE FROM auth_codes WHERE user_id = ?1 AND kind = '` + CodeRecovery + `'`,
+		`DELETE FROM household_sharing WHERE user_id = ?1`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {
 			return err
@@ -556,27 +617,6 @@ func (s *Service) DeleteMember(ctx context.Context, owner, id int64) (Member, er
 	return m, err
 }
 
-// memberNames maps a person's members' ids to their usernames.
-func memberNames(ctx context.Context, tx *sql.Tx, owner int64) (map[int64]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, username FROM users WHERE managed_by = ?`, owner)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[int64]string{}
-	for rows.Next() {
-		var (
-			id   int64
-			name string
-		)
-		if err := rows.Scan(&id, &name); err != nil {
-			return nil, err
-		}
-		out[id] = name
-	}
-	return out, rows.Err()
-}
-
 // MemberSignIn names a member signed in on one of their owner's devices.
 type MemberSignIn struct {
 	ID   int64  `json:"id"`
@@ -588,11 +628,10 @@ type MemberSignIn struct {
 // Only owner's own members appear.
 func (s *Service) MemberSignIns(ctx context.Context, owner int64) (map[int64][]MemberSignIn, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT DISTINCT t.created_on_token_id, u.id, CASE WHEN u.display_name <> '' THEN u.display_name ELSE u.username END
+		`SELECT DISTINCT t.created_on_token_id, u.id, `+memberNameSQL+`
 		   FROM tokens t JOIN users u ON u.id = t.user_id
-		  WHERE u.managed_by = ? AND t.created_on_token_id IS NOT NULL AND t.kind IN (?, ?) AND t.revoked = 0
-		    AND (t.expires_at IS NULL OR t.expires_at > ?)
-		  ORDER BY t.created_on_token_id, u.created_at, u.id`, owner, KindSession, KindAPI, s.ts())
+		  WHERE u.managed_by = ?2 AND t.created_on_token_id IS NOT NULL AND `+liveDeviceSQL+`
+		  ORDER BY t.created_on_token_id, u.created_at, u.id`, s.ts(), owner)
 	if err != nil {
 		return nil, err
 	}
@@ -611,27 +650,9 @@ func (s *Service) MemberSignIns(ctx context.Context, owner int64) (map[int64][]M
 	return out, rows.Err()
 }
 
-// SetCanAddMembers sets the admin's per-person switch.
-func (s *Service) SetCanAddMembers(ctx context.Context, id int64, on bool) error {
-	return s.UpdateUser(ctx, id, UserChanges{CanAddMembers: &on})
-}
-
-// AssignMember makes account id a household member of owner, with kind and
-// access (the admin's "Assign to someone"). Refused: an unknown account or owner
-// (ErrNotFound), the same person (ErrSelfManaged), an owner who is a member
-// (ErrOwnerIsMember) or a demo account (ErrOwnerIsDemo), a demo account as the
-// member (ErrMemberIsDemo), an admin as the member (ErrMemberNotAdmin), a person
-// with members of their own (ErrHasMembers: no chains). The owner's cap and
-// switch don't apply: the admin decides. As a kid, the person's credentials are
-// cleared (clearKidCredentials). Their own grants stay (the member rule is a
-// union). UpdateUser applies it.
-func (s *Service) AssignMember(ctx context.Context, id, owner int64, kind, access string) error {
-	return s.UpdateUser(ctx, id, UserChanges{Household: &HouseholdChange{Owner: owner, Kind: kind, Access: access}})
-}
-
-// checkAssign settles AssignMember's refusals of u joining owner's household,
-// inside UpdateUser's transaction (the input and ErrSelfManaged are checked
-// before it).
+// checkAssign settles HouseholdChange's refusals of u joining owner's
+// household, inside UpdateUser's transaction (the input and ErrSelfManaged are
+// checked before it).
 func checkAssign(ctx context.Context, tx *sql.Tx, u *User, owner int64) error {
 	var ownerMember, ownerDemo bool
 	err := tx.QueryRowContext(ctx, `SELECT managed_by IS NOT NULL, is_demo FROM users WHERE id = ?`, owner).
@@ -653,11 +674,4 @@ func checkAssign(ctx context.Context, tx *sql.Tx, u *User, owner int64) error {
 		return ErrHasMembers
 	}
 	return nil
-}
-
-// MakeIndependent turns member id into an ordinary account (the admin's "Make
-// independent"): the three member columns cleared, so they keep only their own
-// grants. A no-op for an account that isn't a member; ErrNotFound for no account.
-func (s *Service) MakeIndependent(ctx context.Context, id int64) error {
-	return s.UpdateUser(ctx, id, UserChanges{Household: &HouseholdChange{}})
 }

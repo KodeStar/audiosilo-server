@@ -94,8 +94,7 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	isAdmin := u.Role == auth.RoleAdmin
-	libs, err := a.cat.AccessibleLibraries(r.Context(), id, isAdmin)
+	libs, err := a.cat.CallerLibraries(r.Context(), callerOf(u))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load access")
 		return
@@ -141,18 +140,11 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 // else [].
 func (a *API) memberCollectionsOf(ctx context.Context, u *auth.User) ([]catalog.MemberCollection, error) {
 	out := []catalog.MemberCollection{}
-	if u.ManagedBy == nil || u.MemberAccess == nil || *u.MemberAccess != auth.MemberCollections {
+	r := u.MemberRule
+	if r == nil || r.Access != auth.MemberCollections {
 		return out, nil
 	}
-	owner, err := a.auth.GetUser(ctx, u.ManagedBy.ID)
-	if err != nil {
-		return nil, err
-	}
-	scopes, err := a.cat.UserScopes(ctx, owner.ID, owner.Role == auth.RoleAdmin)
-	if err != nil {
-		return nil, err
-	}
-	shared, err := a.cat.MemberCollections(ctx, owner.ID, []int64{u.ID}, scopes)
+	shared, err := a.cat.MemberCollections(ctx, r.Owner, r.OwnerAdmin, []int64{u.ID})
 	if err != nil {
 		return nil, err
 	}
@@ -298,11 +290,7 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		a.writeUserError(w, err, "could not delete user")
 		return
 	}
-	kept := done.MembersKept
-	if kept == nil {
-		kept = []string{}
-	}
-	a.audit(r, "user.delete", target.Username, map[string]any{"members_deleted": done.MembersDeleted, "members_kept": kept})
+	a.audit(r, "user.delete", target.Username, map[string]any{"members_deleted": done.MembersDeleted, "members_kept": done.MembersKept})
 	w.WriteHeader(http.StatusNoContent)
 }
 

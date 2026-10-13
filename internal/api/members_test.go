@@ -78,9 +78,9 @@ func newMemberEnvWith(t *testing.T, configure func(*config.Config)) *memberEnv {
 type createdMember struct {
 	Member  householdMember `json:"member"`
 	Session *struct {
-		Token    string    `json:"token"`
-		User     auth.User `json:"user"`
-		ServerID string    `json:"server_id"`
+		Token    string `json:"token"`
+		User     meUser `json:"user"`
+		ServerID string `json:"server_id"`
 	} `json:"session"`
 }
 
@@ -187,13 +187,13 @@ func (m *memberEnv) item(t *testing.T, tok string, lib int64, path string) int {
 	return m.status(t, "GET", bookURL(lib, "item", path), tok, "")
 }
 
-func (m *memberEnv) me(t *testing.T, tok string) auth.User {
+func (m *memberEnv) me(t *testing.T, tok string) meUser {
 	t.Helper()
 	resp, b := m.do(t, "GET", "/api/v1/me", tok, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /me = %d %s", resp.StatusCode, b)
 	}
-	var u auth.User
+	var u meUser
 	_ = json.Unmarshal([]byte(b), &u)
 	return u
 }
@@ -965,17 +965,22 @@ func TestMembers_Visibility(t *testing.T) {
 		t.Errorf("bob shares with ellis = %d", s)
 	}
 
-	// House listening: adam, ellis and bob share; evie's row (written as if she
-	// shared before becoming a kid) never shows, and she reads nothing.
-	ctx := context.Background()
-	for _, tok := range []string{m.adamTok, ellisTok, m.bobTok} {
+	// House listening: adam, ellis and bob share; evie shared as a grown-up and
+	// was then switched to a kid, which clears her choice, so she never shows and
+	// reads nothing.
+	kind := func(k string) {
+		t.Helper()
+		if s := m.status(t, "PATCH", memberURL(evie.ID, ""), m.adamTok, `{"kind":"`+k+`"}`); s != http.StatusOK {
+			t.Fatalf("switch evie to %s = %d", k, s)
+		}
+	}
+	kind("grownup")
+	for _, tok := range []string{m.adamTok, ellisTok, m.bobTok, evieTok} {
 		if s := m.status(t, "PUT", "/api/v1/me/household", tok, `{"share_listening":true}`); s != http.StatusOK {
 			t.Fatalf("share = %d", s)
 		}
 	}
-	if err := m.cat.SetHouseholdSharing(ctx, evie.ID, true); err != nil {
-		t.Fatal(err)
-	}
+	kind("kid")
 	for _, tok := range []string{evieTok, ellisTok} {
 		for _, pos := range []string{"10", "20"} {
 			m.status(t, "PUT", bookURL(m.lib, "progress", cradleBook), tok, `{"position":`+pos+`,"duration":120}`)
@@ -993,6 +998,11 @@ func TestMembers_Visibility(t *testing.T) {
 	}
 	if _, b := m.do(t, "GET", "/api/v1/me/household", evieTok, ""); strings.TrimSpace(b) != `{"share_listening":false}` {
 		t.Errorf("evie's setting = %s", b)
+	}
+	// A grown-up again, she starts from off and opts in again.
+	kind("grownup")
+	if _, b := m.do(t, "GET", "/api/v1/me/household", evieTok, ""); strings.TrimSpace(b) != `{"share_listening":false}` {
+		t.Errorf("evie's setting as a grown-up again = %s", b)
 	}
 }
 

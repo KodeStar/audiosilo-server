@@ -249,25 +249,25 @@ func TestSetRoleGuards(t *testing.T) {
 	kid, _ := s.CreateUser(ctx, "kid", "", RoleUser)
 
 	// Promoting a password-less account to admin is refused until it has a password.
-	if err := s.SetRole(ctx, kid.ID, RoleAdmin); err != ErrAdminNeedsPassword {
+	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Role: new(RoleAdmin)}); err != ErrAdminNeedsPassword {
 		t.Fatalf("expected ErrAdminNeedsPassword, got %v", err)
 	}
 	if err := s.SetPassword(ctx, kid.ID, "kid-password"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRole(ctx, kid.ID, RoleAdmin); err != nil {
+	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Role: new(RoleAdmin)}); err != nil {
 		t.Fatalf("promote after setting password: %v", err)
 	}
 
 	// Now there are two admins; demoting the original is allowed.
-	if err := s.SetRole(ctx, admin.ID, RoleUser); err != nil {
+	if err := s.UpdateUser(ctx, admin.ID, UserChanges{Role: new(RoleUser)}); err != nil {
 		t.Fatalf("demote with another admin present: %v", err)
 	}
 	// kid is the last admin - demoting/disabling must be refused.
-	if err := s.SetRole(ctx, kid.ID, RoleUser); err != ErrLastAdmin {
+	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Role: new(RoleUser)}); err != ErrLastAdmin {
 		t.Fatalf("expected ErrLastAdmin on demote, got %v", err)
 	}
-	if err := s.SetDisabled(ctx, kid.ID, true); err != ErrLastAdmin {
+	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Disabled: new(true)}); err != ErrLastAdmin {
 		t.Fatalf("expected ErrLastAdmin on disable, got %v", err)
 	}
 }
@@ -700,7 +700,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 	// Mint the linked pairing token while enabled: the disable must gate the
 	// exchange step too, not just redeem.
 	tok := pairThrough(t, s, ctx, invite)
-	if err := s.SetDisabled(ctx, u.ID, true); err != nil {
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ResolveAuthCode(ctx, invite); err != ErrInvalidCode {
@@ -719,7 +719,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 	}
 	// Re-enabling restores access: the held QR token exchanges and claims the
 	// invite's use, and the recovery code resolves again.
-	if err := s.SetDisabled(ctx, u.ID, false); err != nil {
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := consumePairing(s, ctx, tok); err != nil {

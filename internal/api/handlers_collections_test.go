@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -385,7 +386,7 @@ func TestCollectionSharesKeepADisabledViewer(t *testing.T) {
 	if resp, b := l.do(t, "PUT", colURL(col.ID, "/shares"), l.oliveTok, fmt.Sprintf(`{"user_ids":[%d]}`, l.kid)); resp.StatusCode != http.StatusOK {
 		t.Fatalf("share = %d %s", resp.StatusCode, b)
 	}
-	if err := l.auth.SetDisabled(context.Background(), l.kid, true); err != nil {
+	if err := l.auth.UpdateUser(context.Background(), l.kid, auth.UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 	kid := fmt.Sprintf(`{"id":%d,"username":"kid"}`, l.kid)

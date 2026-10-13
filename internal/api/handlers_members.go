@@ -176,15 +176,9 @@ func (a *API) decorateMembers(ctx context.Context, owner *auth.User, members []a
 			coll = append(coll, m.ID)
 		}
 	}
-	shared := map[int64][]catalog.MemberCollection{}
-	if len(coll) > 0 {
-		scopes, err := a.cat.UserScopes(ctx, owner.ID, owner.Role == auth.RoleAdmin)
-		if err != nil {
-			return nil, err
-		}
-		if shared, err = a.cat.MemberCollections(ctx, owner.ID, coll, scopes); err != nil {
-			return nil, err
-		}
+	shared, err := a.cat.MemberCollections(ctx, owner.ID, owner.Role == auth.RoleAdmin, coll)
+	if err != nil {
+		return nil, err
 	}
 	last, err := a.cat.LastListened(ctx, ids)
 	if err != nil {
@@ -279,7 +273,7 @@ func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 	}
 	cred := credentialFrom(r.Context())
 	policy := a.config().Household
-	m, secret, err := a.auth.CreateMember(r.Context(), owner.ID, auth.NewMember{
+	m, secret, signedIn, err := a.auth.CreateMember(r.Context(), owner.ID, auth.NewMember{
 		Name: in.Name, Kind: in.Kind, Access: in.Access,
 		SignInHere: in.SignInHere, DeviceName: cred.DeviceName, OnToken: cred.ID,
 		Share: a.shareWith(r.Context(), owner.ID, in.CollectionIDs),
@@ -297,16 +291,8 @@ func (a *API) handleCreateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"member": member}
-	if secret != "" {
-		u, err := a.auth.GetUser(r.Context(), m.ID)
-		if errors.Is(err, auth.ErrNotFound) {
-			err = auth.ErrNotMember // deleted since: the member is gone
-		}
-		if err != nil {
-			a.writeMemberError(w, err, "load member failed", "could not load the member", "member", m.ID)
-			return
-		}
-		out["session"] = a.sessionEnvelope(r, secret, u)
+	if signedIn != nil {
+		out["session"] = a.sessionEnvelope(r, secret, signedIn)
 	}
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -344,12 +330,7 @@ func (a *API) handleMemberPair(w http.ResponseWriter, r *http.Request) {
 	if owner == nil {
 		return
 	}
-	m, err := a.auth.Member(r.Context(), owner.ID, id)
-	if err != nil {
-		a.writeMemberError(w, err, "member pairing failed", "could not set up the device", "member", id)
-		return
-	}
-	token, err := a.auth.MemberPairing(r.Context(), owner.ID, id)
+	m, token, err := a.auth.MemberPairing(r.Context(), owner.ID, id)
 	if err != nil {
 		a.writeMemberError(w, err, "member pairing failed", "could not set up the device", "member", id)
 		return
@@ -404,10 +385,7 @@ func (a *API) handleRevokeMemberDevice(w http.ResponseWriter, r *http.Request) {
 	if owner == nil {
 		return
 	}
-	m, err := a.auth.Member(r.Context(), owner.ID, id)
-	if err == nil {
-		err = a.auth.RevokeMemberDevice(r.Context(), owner.ID, id, device)
-	}
+	m, err := a.auth.RevokeMemberDevice(r.Context(), owner.ID, id, device)
 	if errors.Is(err, auth.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "device not found")
 		return

@@ -171,10 +171,11 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 }
 
 // sessionEnvelope is the answer to a sign-in (exchange, login, demo): the session
-// token, the account, the server's stable id (so the client keys its per-server
-// state at pairing time) and, when any is known, its home/away addresses.
+// token, the account (meUser), the server's stable id (so the client keys its
+// per-server state at pairing time) and, when any is known, its home/away
+// addresses.
 func (a *API) sessionEnvelope(r *http.Request, token string, user *auth.User) map[string]any {
-	out := map[string]any{"token": token, "user": user, "server_id": a.config().ServerID}
+	out := map[string]any{"token": token, "user": toMeUser(user), "server_id": a.config().ServerID}
 	if ad := a.pairingAddresses(r); ad != nil {
 		out["addresses"] = ad
 	}
@@ -270,6 +271,23 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// meUser is an account as the player sees its own (/me and the session
+// envelopes): auth.User's wire plus, for a household member only, the name the
+// owner typed (display_name), so the member's own device greets them by it. A
+// former member's stored name stays off it (the admin's adminUser carries it).
+type meUser struct {
+	*auth.User
+	MemberName string `json:"display_name,omitempty"`
+}
+
+func toMeUser(u *auth.User) meUser {
+	v := meUser{User: u}
+	if u.IsMember() {
+		v.MemberName = u.DisplayName
+	}
+	return v
+}
+
 // handleMe returns the authenticated user, reloaded so the derived
 // has_password/has_recovery/last_seen_at fields are present.
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +297,7 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return
 	}
-	writeJSON(w, http.StatusOK, full)
+	writeJSON(w, http.StatusOK, toMeUser(full))
 }
 
 // handleSetPassword lets the signed-in user set or change their own password -

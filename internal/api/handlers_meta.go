@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 )
@@ -132,8 +131,7 @@ func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.E
 	if len(env.Series) == 0 {
 		return env.Series, nil, nil
 	}
-	u := userFrom(ctx)
-	scopes, err := a.cat.UserScopes(ctx, u.ID, u.Role == auth.RoleAdmin)
+	scopes, err := a.cat.CallerScopes(ctx, callerOf(userFrom(ctx)))
 	if err != nil {
 		return nil, nil, err
 	}

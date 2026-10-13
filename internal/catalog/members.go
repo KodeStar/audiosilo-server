@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"slices"
 
@@ -26,30 +25,34 @@ import (
 // One level only: a member's owner is never a member (auth refuses it); if the
 // data says otherwise, nothing is derived from that owner. A disabled owner
 // changes nothing (research G). Everything that reads access goes through
-// UserScope, UserScopes or AccessibleLibraries, so browse, search, media, cast,
-// next book, the car and household listening all follow.
+// UserScope, UserScopes or AccessibleLibraries (or their Caller forms, which the
+// transport uses with the rule its token lookup read), so browse, search, media,
+// cast, next book, the car and household listening all follow.
 
 // ErrInvalidCollections is a member's collection_ids naming a collection that
 // isn't the owner's own.
 var ErrInvalidCollections = errors.New("collection_ids must all be your own collections")
 
-// memberRule is a household member's derivation: whose access, how much of it,
-// and whether that owner is an admin.
-type memberRule struct {
-	owner      int64
-	access     string // "all" | "collections"
-	ownerAdmin bool
+// MemberRule is a household member's derivation: whose access (Owner), how much
+// of it (Access: "all" | "collections") and whether that owner is an admin. The
+// transport's comes from auth's token lookup (auth.MemberRule, read by the same
+// columns' rule as memberRuleOf: all three member columns set, an owner who is
+// neither the member nor a member).
+type MemberRule struct {
+	Owner      int64
+	Access     string
+	OwnerAdmin bool
 }
 
 // memberRuleOf reads userID's member rule, nil for anyone who isn't a member (or
 // whose owner is themselves, or a member: nothing derives from those).
-func (c *Catalog) memberRuleOf(ctx context.Context, userID int64) (*memberRule, error) {
-	var r memberRule
+func (c *Catalog) memberRuleOf(ctx context.Context, userID int64) (*MemberRule, error) {
+	var r MemberRule
 	err := c.db.QueryRowContext(ctx,
 		`SELECT u.managed_by, u.member_access, o.role = 'admin'
 		   FROM users u JOIN users o ON o.id = u.managed_by
 		  WHERE u.id = ? AND u.member_kind IS NOT NULL AND u.member_access IS NOT NULL
-		    AND o.id <> u.id AND o.managed_by IS NULL`, userID).Scan(&r.owner, &r.access, &r.ownerAdmin)
+		    AND o.id <> u.id AND o.managed_by IS NULL`, userID).Scan(&r.Owner, &r.Access, &r.OwnerAdmin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -62,9 +65,9 @@ func (c *Catalog) memberRuleOf(ctx context.Context, userID int64) (*memberRule, 
 // ownerScopes is the owner's current scopes by library (in libraryID only, or
 // every library for 0): every library AllowAll for an admin, else their own
 // grants (an owner is never a member, so nothing more).
-func (c *Catalog) ownerScopes(ctx context.Context, r *memberRule, libraryID int64) (map[int64]*Scope, error) {
-	if !r.ownerAdmin {
-		return c.grantScopes(ctx, r.owner, libraryID)
+func (c *Catalog) ownerScopes(ctx context.Context, owner int64, ownerAdmin bool, libraryID int64) (map[int64]*Scope, error) {
+	if !ownerAdmin {
+		return c.grantScopes(ctx, owner, libraryID)
 	}
 	out := map[int64]*Scope{}
 	if libraryID > 0 {
@@ -80,12 +83,12 @@ func (c *Catalog) ownerScopes(ctx context.Context, r *memberRule, libraryID int6
 
 // memberScopes is what a member's owner gives them (see the rules above), in
 // libraryID only or every library for 0.
-func (c *Catalog) memberScopes(ctx context.Context, memberID, libraryID int64, r *memberRule) ([]Scope, error) {
-	owner, err := c.ownerScopes(ctx, r, libraryID)
+func (c *Catalog) memberScopes(ctx context.Context, memberID, libraryID int64, r *MemberRule) ([]Scope, error) {
+	owner, err := c.ownerScopes(ctx, r.Owner, r.OwnerAdmin, libraryID)
 	if err != nil {
 		return nil, err
 	}
-	if r.access == "all" {
+	if r.Access == "all" {
 		return flattenScopes(owner), nil
 	}
 	refs, err := queryRows(ctx, c.db, func(rows *sql.Rows, ref *Ref) error {
@@ -94,7 +97,7 @@ func (c *Catalog) memberScopes(ctx context.Context, memberID, libraryID int64, r
 	      FROM collection_shares s
 	      JOIN collections col ON col.id = s.collection_id AND col.user_id = ?1
 	      JOIN collection_items ci ON ci.collection_id = col.id
-	     WHERE s.user_id = ?2 AND (?3 = 0 OR ci.library_id = ?3)`, r.owner, memberID, libraryID)
+	     WHERE s.user_id = ?2 AND (?3 = 0 OR ci.library_id = ?3)`, r.Owner, memberID, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,8 +128,7 @@ func (c *Catalog) memberScopes(ctx context.Context, memberID, libraryID int64, r
 // would pass MaxCollectionShares is ErrTooManyShares, both before anything
 // changes. An empty ids takes the member off all of owner's collections.
 func (c *Catalog) SetMemberCollections(ctx context.Context, tx *sql.Tx, owner, member int64, ids []int64) error {
-	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
-	list, err := json.Marshal(append([]int64{}, ids...)) // [] for none, never null
+	ids, list, err := idList(ids)
 	if err != nil {
 		return err
 	}
@@ -167,32 +169,45 @@ type MemberCollection struct {
 
 // MemberCollections maps each of members to the collections owner owns and
 // shares with them, in the owner's own order (newest updated first, as
-// Collections lists them); ownerScopes is the owner's UserScopes, which filter
-// the counts. A member with none is absent.
-func (c *Catalog) MemberCollections(ctx context.Context, owner int64, members []int64, ownerScopes []Scope) (map[int64][]MemberCollection, error) {
+// Collections lists them), each item count filtered by the owner's current
+// scopes (ownerScopes: ownerAdmin is the owner's role). A member with none is
+// absent.
+func (c *Catalog) MemberCollections(ctx context.Context, owner int64, ownerAdmin bool, members []int64) (map[int64][]MemberCollection, error) {
 	out := map[int64][]MemberCollection{}
-	filter, fargs := scopesFilterSQL("ci.library_id", "ci.rel_path", ownerScopes)
-	err := inChunks(members, func(in string, args []any) error {
-		type row struct {
-			member int64
-			MemberCollection
-		}
+	type row struct {
+		member int64
+		MemberCollection
+	}
+	var shared []row
+	if err := inChunks(members, func(in string, args []any) error {
 		rows, err := queryRows(ctx, c.db, func(rs *sql.Rows, r *row) error {
-			return rs.Scan(&r.member, &r.ID, &r.Name, &r.Items)
-		}, `SELECT s.user_id, col.id, col.name,
-		           (SELECT COUNT(*) FROM collection_items ci WHERE ci.collection_id = col.id AND `+filter+`)
+			return rs.Scan(&r.member, &r.ID, &r.Name)
+		}, `SELECT s.user_id, col.id, col.name
 		      FROM collection_shares s JOIN collections col ON col.id = s.collection_id
 		     WHERE col.user_id = ? AND s.user_id IN (`+in+`)
-		     ORDER BY col.updated_at DESC, col.id DESC`, append(append(fargs, owner), args...)...)
-		if err != nil {
-			return err
-		}
-		for _, r := range rows {
-			out[r.member] = append(out[r.member], r.MemberCollection)
-		}
-		return nil
-	})
-	return out, err
+		     ORDER BY col.updated_at DESC, col.id DESC`, append([]any{owner}, args...)...)
+		shared = append(shared, rows...)
+		return err
+	}); err != nil || len(shared) == 0 {
+		return out, err
+	}
+	byLib, err := c.ownerScopes(ctx, owner, ownerAdmin, 0)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(shared))
+	for _, r := range shared {
+		ids = append(ids, r.ID)
+	}
+	counts, err := c.scopedItemCounts(ctx, slices.Compact(slices.Sorted(slices.Values(ids))), flattenScopes(byLib))
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range shared {
+		r.Items = counts[r.ID]
+		out[r.member] = append(out[r.member], r.MemberCollection)
+	}
+	return out, nil
 }
 
 // LastListened maps each of users to the end of their newest listening session

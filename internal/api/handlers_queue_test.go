@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -51,7 +52,7 @@ func newListsEnv(t *testing.T) *listsEnv {
 		}
 	}
 	l.share = grantWightOnly(t, e, lib.ID, l.kid)
-	if err := e.auth.SetDisabled(ctx, l.dora, true); err != nil {
+	if err := e.auth.UpdateUser(ctx, l.dora, auth.UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 	return l

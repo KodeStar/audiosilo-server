@@ -5,6 +5,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"slices"
@@ -118,26 +119,37 @@ type User struct {
 	// (MemberKid or MemberGrownup), null likewise.
 	ManagedBy  *UserRef `json:"managed_by"`
 	MemberKind *string  `json:"member_kind"`
-	// MemberName is the name the owner typed for this member (DisplayName), on
-	// the /me and session wire so the member's own device greets them by it;
-	// empty, and so absent, for everyone who isn't a member (a former member's
-	// stored name stays off it). The admin console's user objects carry
-	// display_name for everyone (api.adminUser, whose field wins over this one).
-	MemberName string `json:"display_name,omitempty"`
 
-	// The owner's and the admin's business, off the /me wire: the admin console
-	// adds them to its own user objects (api.adminUser), the members list carries
-	// access and name.
+	// The owner's and the admin's business, off this wire: the player's /me view
+	// adds a member's display name (api.meUser), the admin console its own
+	// fields (api.adminUser), the members list access and name.
 	MemberAccess  *string `json:"-"` // MemberAll | MemberCollections, nil for a non-member
 	CanAddMembers bool    `json:"-"` // the admin's per-person switch
 	DisplayName   string  `json:"-"` // the name the owner typed for a member, '' otherwise
-	MembersCount  int     `json:"-"` // how many members this person has
+	MembersCount  int     `json:"-"` // how many members this person has (0 on a request's user)
+	// MemberRule is what a household member derives access from (catalog's
+	// member rule), read with the account so a request computes a member's scopes
+	// with no statement of its own; nil for anyone who isn't a member, and for a
+	// member whose owner is themselves or a member (bad data derives nothing).
+	MemberRule *MemberRule `json:"-"`
 }
 
 // UserRef names another account: a member's owner.
 type UserRef struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
+	// DisplayName is the owner's own typed name (users.display_name, '' unless
+	// they were once a member): the admin console's business (api.adminUser).
+	DisplayName string `json:"-"`
+}
+
+// MemberRule is a household member's derivation: whose access (Owner), how much
+// of it (Access: MemberAll or MemberCollections) and whether that owner is an
+// admin (an admin owner gives every library).
+type MemberRule struct {
+	Owner      int64
+	Access     string
+	OwnerAdmin bool
 }
 
 // IsMember reports whether u is a household member (someone manages it).
@@ -263,11 +275,16 @@ const dummyHash = "$argon2id$v=19$m=65536,t=2,p=4$YWFhYWFhYWFhYWFhYWFhYQ$3KhZ0r0
 // unlinked (no parent auth code); pairing tokens derived from a redeemed code
 // go through IssuePairingToken instead.
 func (s *Service) IssueToken(ctx context.Context, userID int64, kind, deviceName string, ttl time.Duration) (string, error) {
+	return s.issueToken(ctx, s.db, userID, kind, deviceName, ttl)
+}
+
+// issueToken is IssueToken through ex (the database or a transaction).
+func (s *Service) issueToken(ctx context.Context, ex sqlExecer, userID int64, kind, deviceName string, ttl time.Duration) (string, error) {
 	secret, hash, err := generateToken()
 	if err != nil {
 		return "", err
 	}
-	if _, err := s.insertToken(ctx, s.db, userID, hash, kind, deviceName, s.expiresAt(ttl), nil, ""); err != nil {
+	if _, err := s.insertToken(ctx, ex, userID, hash, kind, deviceName, s.expiresAt(ttl), nil, ""); err != nil {
 		return "", err
 	}
 	return secret, nil
@@ -416,11 +433,14 @@ type tokenRow struct {
 }
 
 // lookupToken resolves a token hash whose kind is one of the accepted kinds to
-// its (partial) user and token row, applying the shared validity checks:
-// unknown, revoked and expired tokens and disabled users all return
-// ErrInvalidToken, and so does a cast token without its grant or whose parent
-// (the token that minted it) is signed out or expired (castGrantOf). The single
-// definition of "is this token valid", shared by ResolveRequest and
+// its (partial) user and token row, applying the shared validity checks. The
+// user carries the household member fields (managed_by, member_kind, the member
+// rule), read through ownerJoin in the same statement, so a kid's refusal and a
+// member's scopes need no read of their own. Unknown, revoked and expired
+// tokens and disabled users all return ErrInvalidToken, and so does a cast token
+// without its grant or whose parent (the token that minted it) is signed out or
+// expired (castGrantOf). The single definition of "is this token valid", shared
+// by ResolveRequest and
 // ResolveCastRequest (every authenticated request) and ConsumePairing
 // (exchange). token_hash is globally unique, so the kind filter only rejects a
 // real token presented where its kind is not accepted.
@@ -436,13 +456,16 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	for _, k := range kinds {
 		args = append(args, k)
 	}
+	var member memberScan
 	err := s.db.QueryRowContext(ctx,
 		`SELECT u.id, u.username, u.role, u.disabled, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
-		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip
-		   FROM tokens t JOIN users u ON u.id = t.user_id
+		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip,
+		        `+memberColumns+`
+		   FROM tokens t JOIN users u ON u.id = t.user_id`+ownerJoin+`
 		  WHERE t.token_hash = ? AND t.kind IN (`+inPlaceholders(len(kinds))+`)`, args...).
-		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &row.id, &row.kind, &expires, &revoked, &row.codeID,
-			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP)
+		Scan(append([]any{&u.ID, &u.Username, &u.Role, &u.Disabled, &row.id, &row.kind, &expires, &revoked, &row.codeID,
+			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP},
+			member.dest()...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tokenRow{}, ErrInvalidToken
 	}
@@ -452,6 +475,7 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	if revoked || u.Disabled || s.pastExpiry(expires) {
 		return nil, tokenRow{}, ErrInvalidToken
 	}
+	member.apply(&u)
 	row.deviceID = row.id
 	// Only a cast token has a grant and a parent to read: every other token's
 	// lookup (each authenticated request) stays this one two-table query.
@@ -1043,40 +1067,73 @@ func (s *Service) ConsumePairing(ctx context.Context, secret string) (*User, str
 // userColumns selects the user fields plus a derived last-activity timestamp
 // (the newest tokens.last_seen across the account's tokens). ResolveRequest bumps
 // it on authenticated requests (at most once a minute per token), so this
-// reflects last use, not just sign-in, without a dedicated column.
-// The household member columns follow (members.go): the owner's id and
-// username, the kind and access, the admin's switch, the typed name and how many
-// members the person has (idx_users_managed_by).
+// reflects last use, not just sign-in, without a dedicated column. The household
+// member columns follow (memberColumns, then the admin's switch, the typed name
+// and how many members the person has: idx_users_managed_by). Read FROM
+// userTables.
 const userColumns = `u.id, u.username, u.role, u.disabled, u.password_hash, u.is_demo,
 	(SELECT MAX(t.last_seen) FROM tokens t WHERE t.user_id = u.id),
 	EXISTS(SELECT 1 FROM auth_codes c WHERE c.user_id = u.id AND c.kind = '` + CodeRecovery + `'),
-	u.managed_by, (SELECT o.username FROM users o WHERE o.id = u.managed_by), u.member_kind, u.member_access,
+	` + memberColumns + `,
 	u.can_add_members, u.display_name, (SELECT COUNT(*) FROM users m WHERE m.managed_by = u.id)`
+
+// userTables is the account u with its owner o (ownerJoin).
+const userTables = `users u` + ownerJoin
+
+// ownerJoin joins a member's owner o to u (no row for everyone else): the
+// primary key, so the request's own token lookup reads the member rule in its
+// one statement.
+const ownerJoin = ` LEFT JOIN users o ON o.id = u.managed_by`
+
+// memberColumns reads u's household member columns and its owner o's (scanned by
+// memberScan): the owner's id, username and typed name, the kind and access, and
+// the member rule's two owner facts (an admin; a real owner: not u itself, not a
+// member).
+const memberColumns = `u.managed_by, o.username, o.display_name, u.member_kind, u.member_access,
+	COALESCE(o.role = '` + RoleAdmin + `', 0), COALESCE(o.id <> u.id AND o.managed_by IS NULL, 0)`
+
+// memberScan holds memberColumns as scanned.
+type memberScan struct {
+	owner                   sql.NullInt64
+	ownerName, ownerDisplay sql.NullString
+	kind, access            sql.NullString
+	ownerAdmin, realOwner   bool
+}
+
+func (m *memberScan) dest() []any {
+	return []any{&m.owner, &m.ownerName, &m.ownerDisplay, &m.kind, &m.access, &m.ownerAdmin, &m.realOwner}
+}
+
+// apply sets u's member fields. A member is all three columns or none
+// (members.go keeps it so); a row that says otherwise reads as no member.
+func (m *memberScan) apply(u *User) {
+	if !m.owner.Valid || !m.kind.Valid || !m.access.Valid {
+		return
+	}
+	u.ManagedBy = &UserRef{ID: m.owner.Int64, Username: m.ownerName.String, DisplayName: m.ownerDisplay.String}
+	u.MemberKind, u.MemberAccess = &m.kind.String, &m.access.String
+	if m.realOwner {
+		u.MemberRule = &MemberRule{Owner: m.owner.Int64, Access: m.access.String, OwnerAdmin: m.ownerAdmin}
+	}
+}
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var (
-		u            User
-		hash         string
-		lastSeen     sql.NullString
-		hasRecovery  bool
-		owner        sql.NullInt64
-		ownerName    sql.NullString
-		kind, access sql.NullString
+		u           User
+		hash        string
+		lastSeen    sql.NullString
+		hasRecovery bool
+		member      memberScan
 	)
-	if err := row.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &u.IsDemo, &lastSeen, &hasRecovery,
-		&owner, &ownerName, &kind, &access, &u.CanAddMembers, &u.DisplayName, &u.MembersCount); err != nil {
+	dest := append([]any{&u.ID, &u.Username, &u.Role, &u.Disabled, &hash, &u.IsDemo, &lastSeen, &hasRecovery},
+		member.dest()...)
+	if err := row.Scan(append(dest, &u.CanAddMembers, &u.DisplayName, &u.MembersCount)...); err != nil {
 		return u, err
 	}
 	u.HasPassword = hash != ""
 	u.LastSeenAt = lastSeen.String
 	u.HasRecovery = hasRecovery
-	// A member is all three columns or none (members.go keeps it so); a row
-	// that says otherwise reads as no member.
-	if owner.Valid && kind.Valid && access.Valid {
-		u.ManagedBy = &UserRef{ID: owner.Int64, Username: ownerName.String}
-		u.MemberKind, u.MemberAccess = &kind.String, &access.String
-		u.MemberName = u.DisplayName
-	}
+	member.apply(&u)
 	return u, nil
 }
 
@@ -1089,7 +1146,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 // ErrNotFound when there is none.
 func getUser(ctx context.Context, q rowQuerier, id int64) (*User, error) {
 	u, err := scanUser(q.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users u WHERE u.id = ?`, id))
+		`SELECT `+userColumns+` FROM `+userTables+` WHERE u.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1099,7 +1156,7 @@ func getUser(ctx context.Context, q rowQuerier, id int64) (*User, error) {
 // ListUsers returns all accounts ordered by username.
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+userColumns+` FROM users u ORDER BY u.username`)
+		`SELECT `+userColumns+` FROM `+userTables+` ORDER BY u.username`)
 	if err != nil {
 		return nil, err
 	}
@@ -1147,23 +1204,6 @@ func (s *Service) ReapIdleDemoUsers(ctx context.Context, cutoff time.Time) (int6
 	return n, nil
 }
 
-// countEnabledAdmins returns the number of enabled admin accounts, optionally
-// excluding one user id (pass 0 to exclude none). Used to prevent locking the
-// last admin out of the console by demotion or disabling.
-func countEnabledAdmins(ctx context.Context, q rowQuerier, exclude int64) (int, error) {
-	var n int
-	err := q.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM users WHERE role = ? AND disabled = 0 AND id != ?`,
-		RoleAdmin, exclude).Scan(&n)
-	return n, err
-}
-
-// SetDisabled enables or disables an account. Disabling the last enabled admin
-// is refused so the console can never be locked out (UpdateUser).
-func (s *Service) SetDisabled(ctx context.Context, id int64, disabled bool) error {
-	return s.UpdateUser(ctx, id, UserChanges{Disabled: &disabled})
-}
-
 // DeleteUser permanently removes an account. Deleting the last enabled admin is
 // refused (ErrLastAdmin) so the console can never be locked out; deleting an
 // unknown id is ErrNotFound. All of the user's durable state - sessions, auth
@@ -1185,33 +1225,29 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 			return DeletedUser{}, err
 		}
 	}
+	keep = slices.Compact(slices.Sorted(slices.Values(keep)))
+	list, err := json.Marshal(append([]int64{}, keep...)) // [] for none, never null
+	if err != nil {
+		return DeletedUser{}, err
+	}
 	var out DeletedUser
 	err = s.db.WithTx(ctx, "DeleteUser", func(tx *sql.Tx) error {
-		members, err := memberNames(ctx, tx, id)
+		var err error
+		if out.MembersKept, err = s.keepMembers(ctx, tx, id, string(list)); err != nil {
+			return err
+		}
+		if len(out.MembersKept) != len(keep) {
+			return ErrInvalidKeepMembers
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE managed_by = ?`, id)
 		if err != nil {
 			return err
 		}
-		kept := map[int64]bool{}
-		for _, k := range keep {
-			if _, ok := members[k]; !ok {
-				return ErrInvalidKeepMembers
-			}
-			kept[k] = true
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
 		}
-		for mid, name := range members {
-			if kept[mid] {
-				if _, err := tx.ExecContext(ctx, `UPDATE users SET managed_by = NULL, member_kind = NULL, member_access = NULL,
-				        updated_at = ? WHERE id = ?`, s.ts(), mid); err != nil {
-					return err
-				}
-				out.MembersKept = append(out.MembersKept, name)
-				continue
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, mid); err != nil {
-				return err
-			}
-			out.MembersDeleted++
-		}
+		out.MembersDeleted = int(n)
 		_, err = tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
 		return err
 	})
@@ -1222,23 +1258,38 @@ func (s *Service) DeleteUser(ctx context.Context, id int64, keep []int64) (Delet
 	return out, nil
 }
 
+// keepMembers makes the ids in list (a JSON array) that are owner's members
+// ordinary accounts, their three member columns cleared together (members.go),
+// and returns their usernames ([] for none).
+func (s *Service) keepMembers(ctx context.Context, tx *sql.Tx, owner int64, list string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `UPDATE users SET managed_by = NULL, member_kind = NULL, member_access = NULL,
+	        updated_at = ?
+	  WHERE managed_by = ? AND id IN (SELECT value FROM json_each(?)) RETURNING username`, s.ts(), owner, list)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	kept := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		kept = append(kept, name)
+	}
+	return kept, rows.Err()
+}
+
 // DeletedUser is what DeleteUser did with the person's household members: how
-// many it deleted and the usernames of those it kept.
+// many it deleted and the usernames of those it kept ([] for none).
 type DeletedUser struct {
 	MembersDeleted int
 	MembersKept    []string
 }
 
-// SetRole changes an account's role. Demoting the last enabled admin is refused.
-// Promoting a password-less account to admin requires a password to be set first
-// (see SetPassword) - admins must be able to sign in to the console. A household
-// member never becomes an admin (UpdateUser).
-func (s *Service) SetRole(ctx context.Context, id int64, role string) error {
-	return s.UpdateUser(ctx, id, UserChanges{Role: &role})
-}
-
 // SetPassword sets (or clears) an account's password. A non-empty password is
 // hashed with argon2id; an empty password clears it (only valid for non-admins).
+// A kid's is refused (ErrKidNoPassword: UpdateUser).
 func (s *Service) SetPassword(ctx context.Context, id int64, password string) error {
 	return s.UpdateUser(ctx, id, UserChanges{Password: &password})
 }
@@ -1249,17 +1300,26 @@ type UserChanges struct {
 	// Password sets a password, or clears it with "".
 	Password *string
 	// Role is RoleAdmin or anything else (RoleUser).
-	Role          *string
-	Disabled      *bool
+	Role     *string
+	Disabled *bool
+	// CanAddMembers is the admin's per-person switch: may they add members?
 	CanAddMembers *bool
 	// Household changes who manages the person: an owner makes them that
 	// owner's member ("Assign to someone"), no owner makes them independent.
 	Household *HouseholdChange
 }
 
-// HouseholdChange is UserChanges.Household: Owner > 0 assigns the person to
-// Owner as a Kind member with Access (AssignMember's rules), 0 makes them
-// independent (MakeIndependent).
+// HouseholdChange is UserChanges.Household. Owner > 0 makes the person Owner's
+// Kind member with Access (the admin's "Assign to someone"), refused for: an
+// unknown owner (ErrNotFound), the same person (ErrSelfManaged), an owner who is
+// a member (ErrOwnerIsMember) or a demo account (ErrOwnerIsDemo), a demo account
+// as the member (ErrMemberIsDemo), an admin (ErrMemberNotAdmin), a person with
+// members of their own (ErrHasMembers: no chains). The owner's cap and switch
+// don't apply: the admin decides. As a kid, the person's credentials are cleared
+// (clearKidCredentials); their own grants stay (the member rule is a union).
+// Owner 0 makes them independent (the admin's "Make independent"): the three
+// member columns cleared, so they keep only their own grants; a no-op for
+// someone who isn't a member.
 type HouseholdChange struct {
 	Owner        int64
 	Kind, Access string
@@ -1271,11 +1331,11 @@ type HouseholdChange struct {
 // before it leave it: the password (an admin's can't be cleared:
 // ErrAdminNeedsPassword; a kid's, or one beside assigning the person as a kid,
 // is ErrKidNoPassword, since a kid holds none, while clearing one is fine), the
-// household (AssignMember's refusals), the role
-// (not the last enabled admin's demotion: ErrLastAdmin; to admin only with a
-// password, ErrAdminNeedsPassword, and never a member, ErrMemberNotAdmin), the
-// disabled state (not the last enabled admin: ErrLastAdmin) and the admin's
-// can_add_members switch. An unknown account is ErrNotFound. A new password, a
+// household (HouseholdChange's refusals), the role (not the last enabled admin's
+// demotion: ErrLastAdmin; to admin only with a password, ErrAdminNeedsPassword,
+// and never a member, ErrMemberNotAdmin), the disabled state (not the last
+// enabled admin: ErrLastAdmin) and the admin's can_add_members switch. An
+// unknown account is ErrNotFound. The write is one UPDATE; a new password, a
 // disabled account and a kid's assignment forget the person's browsers.
 func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error {
 	hash := ""
@@ -1292,7 +1352,8 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		}
 	}
 	h := c.Household
-	if h != nil && h.Owner > 0 {
+	assign := h != nil && h.Owner > 0
+	if assign {
 		if err := checkKind(h.Kind); err != nil {
 			return err
 		}
@@ -1301,9 +1362,6 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		}
 		if h.Owner == id {
 			return ErrSelfManaged
-		}
-		if h.Kind == MemberKid && hash != "" {
-			return ErrKidNoPassword
 		}
 	}
 	role := ""
@@ -1318,31 +1376,35 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 		if err != nil {
 			return err
 		}
+		// A kid holds no password (decision 1): not one set on a kid, nor one
+		// beside assigning the person as a kid; clearing is fine, and so is one
+		// beside a change that leaves them no kid.
+		kid := u.IsKid()
+		if h != nil {
+			kid = assign && h.Kind == MemberKid
+		}
+		if hash != "" && kid {
+			return ErrKidNoPassword
+		}
 		// Check every change against the account as the changes before it
 		// leave it, then write.
 		hasPassword, member, curRole := u.HasPassword, u.IsMember(), u.Role
-		// A kid holds no password (decision 1): not one set on a kid, nor one
-		// beside assigning the person as a kid (checked above); clearing is
-		// fine, and so is one beside a change that leaves them no kid.
-		if hash != "" && h == nil && u.IsKid() {
-			return ErrKidNoPassword
-		}
 		if c.Password != nil {
 			if hash == "" && curRole == RoleAdmin {
 				return ErrAdminNeedsPassword
 			}
 			hasPassword = hash != ""
 		}
-		if h != nil && h.Owner > 0 {
+		if h != nil {
+			member = assign
+		}
+		if assign {
 			if err := checkAssign(ctx, tx, u, h.Owner); err != nil {
 				return err
 			}
-			member = true
-			if h.Kind == MemberKid {
+			if kid {
 				hasPassword = false
 			}
-		} else if h != nil {
-			member = false
 		}
 		if c.Role != nil {
 			if curRole == RoleAdmin && role != RoleAdmin {
@@ -1364,65 +1426,61 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, c UserChanges) error
 			}
 		}
 
-		now := s.ts()
-		set := func(q string, args ...any) error {
-			_, err := tx.ExecContext(ctx, q, args...)
+		// One UPDATE: a column whose change is absent keeps its value. The
+		// household is 0 (no change), 1 (assign) or 2 (make independent, which
+		// alone changes nothing for someone who isn't a member, so it bumps
+		// updated_at only for a member: SQLite reads the row before the SET).
+		household := 0
+		if assign {
+			household = 1
+		} else if h != nil {
+			household = 2
+		}
+		other := c.Password != nil || assign || c.Role != nil || c.Disabled != nil || c.CanAddMembers != nil
+		if !other && household == 0 {
+			return nil
+		}
+		var roleArg any
+		if c.Role != nil {
+			roleArg = role
+		}
+		var owner, kind, access any
+		if assign {
+			owner, kind, access = h.Owner, h.Kind, h.Access
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET
+		        password_hash   = CASE WHEN ?1 THEN ?2 ELSE password_hash END,
+		        managed_by      = CASE ?3 WHEN 1 THEN ?4 WHEN 2 THEN NULL ELSE managed_by END,
+		        member_kind     = CASE ?3 WHEN 1 THEN ?5 WHEN 2 THEN NULL ELSE member_kind END,
+		        member_access   = CASE ?3 WHEN 1 THEN ?6 WHEN 2 THEN NULL ELSE member_access END,
+		        role            = COALESCE(?7, role),
+		        disabled        = COALESCE(?8, disabled),
+		        can_add_members = COALESCE(?9, can_add_members),
+		        updated_at      = CASE WHEN ?10 OR (?3 = 2 AND managed_by IS NOT NULL) THEN ?11 ELSE updated_at END
+		  WHERE id = ?12`,
+			c.Password != nil, hash, household, owner, kind, access, roleArg, c.Disabled, c.CanAddMembers,
+			other, s.ts(), id); err != nil {
 			return err
 		}
-		if c.Password != nil {
-			if err := set(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, now, id); err != nil {
-				return err
-			}
+		if c.Password != nil || c.Disabled != nil && *c.Disabled {
 			if err := forgetBrowsers(ctx, tx, id); err != nil {
 				return err
 			}
 		}
-		if h != nil && h.Owner > 0 {
-			if err := set(`UPDATE users SET managed_by = ?, member_kind = ?, member_access = ?, updated_at = ? WHERE id = ?`,
-				h.Owner, h.Kind, h.Access, now, id); err != nil {
-				return err
-			}
-			if h.Kind == MemberKid {
-				if err := clearKidCredentials(ctx, tx, id); err != nil {
-					return err
-				}
-			}
-		} else if h != nil {
-			if err := set(`UPDATE users SET managed_by = NULL, member_kind = NULL, member_access = NULL,
-			        updated_at = CASE WHEN managed_by IS NULL THEN updated_at ELSE ? END
-			  WHERE id = ?`, now, id); err != nil {
-				return err
-			}
-		}
-		if c.Role != nil {
-			if err := set(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, role, now, id); err != nil {
-				return err
-			}
-		}
-		if c.Disabled != nil {
-			if err := set(`UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?`, *c.Disabled, now, id); err != nil {
-				return err
-			}
-			if *c.Disabled {
-				if err := forgetBrowsers(ctx, tx, id); err != nil {
-					return err
-				}
-			}
-		}
-		if c.CanAddMembers != nil {
-			if err := set(`UPDATE users SET can_add_members = ?, updated_at = ? WHERE id = ?`, *c.CanAddMembers, now, id); err != nil {
-				return err
-			}
+		if assign && kid {
+			return clearKidCredentials(ctx, tx, id)
 		}
 		return nil
 	})
 }
 
 // lastAdminGuard is ErrLastAdmin when no enabled admin but id exists (so
-// demoting, disabling or deleting id would leave none).
+// demoting, disabling or deleting id would leave none to sign in to the
+// console).
 func lastAdminGuard(ctx context.Context, q rowQuerier, id int64) error {
-	others, err := countEnabledAdmins(ctx, q, id)
-	if err != nil {
+	var others int
+	if err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE role = ? AND disabled = 0 AND id != ?`, RoleAdmin, id).Scan(&others); err != nil {
 		return err
 	}
 	if others == 0 {

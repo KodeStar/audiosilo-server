@@ -249,10 +249,10 @@ func TestIssueSessionKnowsTheBrowser(t *testing.T) {
 	if known(ann, key) {
 		t.Fatal("a browser is still known after a new password")
 	}
-	if err := s.SetDisabled(ctx, bob.ID, true); err != nil {
+	if err := s.UpdateUser(ctx, bob.ID, UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetDisabled(ctx, bob.ID, false); err != nil {
+	if err := s.UpdateUser(ctx, bob.ID, UserChanges{Disabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}
 	if known(bob, key) {

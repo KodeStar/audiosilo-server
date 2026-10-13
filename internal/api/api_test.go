@@ -578,7 +578,7 @@ func TestExchangeDisabledUserRefusedNoBurn(t *testing.T) {
 		t.Fatalf("redeem: %d", status)
 	}
 
-	if err := e.auth.SetDisabled(ctx, member.ID, true); err != nil {
+	if err := e.auth.UpdateUser(ctx, member.ID, auth.UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 	if status, _ := e.exchangeToken(t, ptok, "d"); status != http.StatusUnauthorized {
@@ -588,7 +588,7 @@ func TestExchangeDisabledUserRefusedNoBurn(t *testing.T) {
 	if len(codes) != 1 || codes[0].Uses != 0 {
 		t.Fatalf("refused exchange must not burn a use: %+v", codes)
 	}
-	if err := e.auth.SetDisabled(ctx, member.ID, false); err != nil {
+	if err := e.auth.UpdateUser(ctx, member.ID, auth.UserChanges{Disabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}
 	if status, _ := e.exchangeToken(t, ptok, "d"); status != http.StatusOK {
