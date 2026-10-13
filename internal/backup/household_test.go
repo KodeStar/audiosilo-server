@@ -8,8 +8,8 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/store"
 )
 
-// A backup carries the household choices (migration 0041) and the cast tokens'
-// grants (0042; the tokens themselves are tokens rows, hashes only), like every
+// A backup carries the household choices (migration 0042) and the cast tokens'
+// grants (0043; the tokens themselves are tokens rows, hashes only), like every
 // other table.
 func TestBackupHoldsHouseholdAndCastTokens(t *testing.T) {
 	t.Parallel()

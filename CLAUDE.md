@@ -228,8 +228,8 @@ count visible rows: a new book the hidden rows alone would overflow evicts the o
 rows (`added_at`), 409 only when the visible rows are at the cap (a whole-list PUT replaces
 everything, hidden rows included, and its length check is unchanged); a move or join carries them
 (`carryListeningState`, the destination entry kept on a collision).
-Player redesign Phase 8: `household_sharing` (`0041`: `user_id` PK -> users CASCADE,
-`share_listening` 0/1; no row = off; names no book) and `cast_grants` (`0042`: a cast token is a
+Player redesign Phase 8: `household_sharing` (`0042`: `user_id` PK -> users CASCADE,
+`share_listening` 0/1; no row = off; names no book) and `cast_grants` (`0043`: a cast token is a
 `tokens` row of kind `cast`, expires_at set; its grant is `token_id` PK -> tokens CASCADE,
 `library_id` + `rel_path` of the book, `parent_token_id` -> tokens CASCADE (the sender's token that
 minted it); path-keyed, no FK to the index, short-lived, not moved with a book).
