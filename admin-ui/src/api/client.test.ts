@@ -26,6 +26,29 @@ describe('api client', () => {
     expect(forbidden).toHaveBeenCalledTimes(1);
   });
 
+  it("deletes a person, keeping the household members it's told to as ?keep_members=", async () => {
+    setToken('tok-1');
+    const calls = mockFetch({ 'DELETE /admin/users/1': { status: 204 } });
+    await api.deleteUser(1);
+    await api.deleteUser(1, []);
+    await api.deleteUser(1, [3, 7]);
+    expect(calls.map((c) => c.query.get('keep_members'))).toEqual([null, null, '3,7']);
+    expect(calls.every((c) => c.body === undefined)).toBe(true);
+  });
+
+  it('sends household member changes to a person as one PATCH', async () => {
+    setToken('tok-1');
+    const calls = mockFetch({ 'PATCH /admin/users/2': { body: {} } });
+    await api.updateUser(2, { managed_by: 1, member_kind: 'kid', member_access: 'collections' });
+    await api.updateUser(2, { managed_by: null });
+    await api.updateUser(2, { can_add_members: false });
+    expect(calls.map((c) => c.body)).toEqual([
+      { managed_by: 1, member_kind: 'kid', member_access: 'collections' },
+      { managed_by: null },
+      { can_add_members: false },
+    ]);
+  });
+
   it('treats a successful non-JSON body (a proxy page) as no data, not a failure', async () => {
     setToken('tok-1');
     mockFetch({ 'DELETE /admin/libraries/1': { raw: '<html>ok</html>' } });

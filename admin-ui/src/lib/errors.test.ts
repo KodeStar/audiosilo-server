@@ -24,6 +24,26 @@ describe('errorMessage', () => {
     );
   });
 
+  it('words every household member refusal the server sends', () => {
+    const codes = [
+      'member_not_admin',
+      'owner_is_member',
+      'owner_is_demo',
+      'self_managed',
+      'has_members',
+      'member_fields_required',
+      'invalid_keep_members',
+    ];
+    for (const code of codes) {
+      const text = errorMessage(new ApiError(409, 'server words', code), t);
+      expect(text, code).not.toBe('server words');
+      expect(text, code).not.toMatch(/^errors\./);
+    }
+    expect(errorMessage(new ApiError(409, 'x', 'member_not_admin'), t)).toBe(
+      "A household member can't be an admin. Make them independent first.",
+    );
+  });
+
   it('words every import code the server sends', () => {
     const codes = [
       'invalid_url',

@@ -51,6 +51,7 @@ import type {
   SeriesCount,
   AdminLibrary,
   AdminSettings,
+  AdminUser,
   AdminShare,
   LogPage,
   SettingsPatch,
@@ -77,6 +78,7 @@ import type {
   ServerInfo,
   Share,
   User,
+  UserPatch,
   UserDetail,
   UserProgress,
 } from './types';
@@ -432,13 +434,21 @@ export const api = {
   /** The server's folders, for choosing a library root (absolute paths; "" = the filesystem root). */
   dirs: (path: string) => request<DirListing>('GET', `/admin/fs/dirs${pathQuery(path)}`),
 
-  users: () => request<{ users: User[] }>('GET', '/admin/users'),
+  users: () => request<{ users: AdminUser[] }>('GET', '/admin/users'),
   user: (id: number) => request<UserDetail>('GET', `/admin/users/${id}`),
   createUser: (u: { username: string; password: string; role: User['role'] }) =>
-    request<User>('POST', '/admin/users', u),
-  updateUser: (id: number, patch: { role?: User['role']; password?: string; disabled?: boolean }) =>
-    request<User>('PATCH', `/admin/users/${id}`, patch),
-  deleteUser: (id: number) => request<void>('DELETE', `/admin/users/${id}`),
+    request<AdminUser>('POST', '/admin/users', u),
+  updateUser: (id: number, patch: UserPatch) =>
+    request<AdminUser>('PATCH', `/admin/users/${id}`, patch),
+  /**
+   * Deletes a person, and their household members with them except the ids in
+   * `keepMembers`, who become independent accounts.
+   */
+  deleteUser: (id: number, keepMembers: readonly number[] = []) =>
+    request<void>(
+      'DELETE',
+      `/admin/users/${id}${keepMembers.length ? `?keep_members=${keepMembers.join(',')}` : ''}`,
+    ),
   clearRecovery: (id: number) => request<void>('DELETE', `/admin/users/${id}/recovery`),
   invites: () => request<{ invites: Invite[] }>('GET', '/admin/invites'),
   /** Mints an invite; `max_uses` 0 = unlimited, `ttl_days` 0 = never expires. */

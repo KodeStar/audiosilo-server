@@ -8,6 +8,7 @@ import { describeSchedule } from '@/features/settings/backups-model';
 /** The action areas the log can be narrowed to (an action's first part), in menu order. */
 export const AUDIT_AREAS = [
   'user',
+  'member',
   'invite',
   'device',
   'share',
@@ -25,7 +26,19 @@ export const AUDIT_AREAS = [
 type Translate = (key: string, opts?: Record<string, unknown>) => string;
 
 /** Details whose values are codes with words of their own (`audit.enum.<key>.<value>`). */
-const ENUMS = new Set(['password', 'mode', 'kind', 'source', 'role', 'error', 'scope', 'choice']);
+const ENUMS = new Set([
+  'password',
+  'mode',
+  'kind',
+  'source',
+  'role',
+  'error',
+  'scope',
+  'choice',
+  'access',
+  'member_kind',
+  'member_access',
+]);
 
 /** Details whose values are seconds of listening, written as a length. */
 const DURATIONS = new Set(['listened']);

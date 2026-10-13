@@ -1,8 +1,8 @@
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { KeyRound, Smartphone, UserPlus, Users } from 'lucide-react';
+import { House, KeyRound, Smartphone, UserPlus, Users } from 'lucide-react';
 import { useDevices, useLiveSessions, useStats, useUsers } from '@/api/hooks';
-import type { Device, ListeningRow, ListeningSession, User } from '@/api/types';
+import type { AdminUser, Device, ListeningRow, ListeningSession } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
 import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button';
 import { formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { InviteDialog } from './invite-dialog';
+import { householdOrder, ownerName } from './household-model';
+import { MemberChips } from './member-chips';
 import { currentBook, groupDevices } from './people-model';
 
 const MONTH_MS = 30 * 24 * 3600 * 1000;
@@ -78,11 +80,13 @@ export function PeoplePage() {
           action={inviteButton}
         />
       ) : (
+        // Household members follow their owner, so a household reads as a run of cards.
         <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {list.map((u) => (
+          {householdOrder(list).map((u) => (
             <li key={u.id} className="min-w-0">
               <PersonCard
                 user={u}
+                owner={ownerName(u, list)}
                 listening={stats.data?.listening ?? []}
                 live={live.data ?? []}
                 devices={devicesOf && (devicesOf.get(u.id) ?? [])}
@@ -99,12 +103,15 @@ export function PeoplePage() {
 
 function PersonCard({
   user: u,
+  owner,
   listening,
   live,
   devices,
   now,
 }: {
-  user: User;
+  user: AdminUser;
+  /** A household member's owner, by name. */
+  owner: string | undefined;
   listening: ListeningRow[];
   live: ListeningSession[];
   /** The person's signed-in devices (undefined while loading). */
@@ -145,6 +152,7 @@ function PersonCard({
             {u.role === 'admin' ? <Badge variant="ink">{t('people.role.admin')}</Badge> : null}
             {u.is_demo ? <Badge variant="outline">{t('people.badge.demo')}</Badge> : null}
           </div>
+          <MemberChips user={u} owner={owner} />
           <span className="text-[12.5px] text-muted-foreground">
             {status ?? (
               <span className="inline-flex items-center gap-1.5">
@@ -166,6 +174,12 @@ function PersonCard({
               </>
             )}
           </span>
+          {u.members_count > 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-subtle-foreground">
+              <House className="size-3.5" aria-hidden="true" />
+              {t('people.card.members', { count: u.members_count })}
+            </span>
+          ) : null}
         </div>
       </div>
       <div className="mt-auto flex min-h-[63px] items-center gap-3 border-t px-5 py-3">
