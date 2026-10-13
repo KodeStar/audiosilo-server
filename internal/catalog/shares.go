@@ -147,10 +147,17 @@ func pathsORFilterSQL(col string, paths []string) (string, []any) {
 }
 
 // pathsJSONFilterSQL is pathFilterSQL's single-parameter form: the paths as one
-// JSON array, walked by json_each inside one EXISTS, with the same exact-match
-// and byte-range arms (|| binds tighter than the comparisons). ok is false when a
-// path isn't valid UTF-8, which JSON can't carry exactly (encoding/json would
-// replace the bad bytes, naming another path): the caller uses the OR form.
+// JSON array. A row passes when its path, or one of its prefixes ending just
+// before a '/' (its ancestors), is one of the paths: exactly the OR form's
+// exact-match and byte-range arms (relpath.Within). The ancestors come from the
+// row's own path (a recursive CTE, a few rows each) and are looked up in the
+// list, which SQLite builds once per statement as an index (an uncorrelated
+// IN), so a row costs its depth, not the length of the list: a json_each walk
+// per row cost a 1,000-item member about a hundred times an ordinary listener
+// (BenchmarkMemberScopes), and 1,000 OR arms pass SQLite's expression depth.
+// ok is false when a path isn't valid UTF-8, which JSON can't carry exactly
+// (encoding/json would replace the bad bytes, naming another path): the caller
+// uses the OR form.
 func pathsJSONFilterSQL(col string, paths []string) (string, []any, bool) {
 	for _, p := range paths {
 		if !utf8.ValidString(p) {
@@ -161,8 +168,11 @@ func pathsJSONFilterSQL(col string, paths []string) (string, []any, bool) {
 	if err != nil {
 		return "", nil, false
 	}
-	return "EXISTS(SELECT 1 FROM json_each(?) j WHERE " + col + " = j.value OR (" + col + " >= j.value || '/' AND " +
-		col + " < j.value || '0'))", []any{string(list)}, true
+	return "EXISTS(WITH RECURSIVE anc(p, rest) AS (" +
+		"SELECT " + col + ", NULL UNION ALL " +
+		"SELECT substr(" + col + ", 1, instr(" + col + ", '/') - 1), substr(" + col + ", instr(" + col + ", '/') + 1) WHERE instr(" + col + ", '/') > 0 UNION ALL " +
+		"SELECT p || '/' || substr(rest, 1, instr(rest, '/') - 1), substr(rest, instr(rest, '/') + 1) FROM anc WHERE instr(rest, '/') > 0) " +
+		"SELECT 1 FROM anc WHERE p IN (SELECT value FROM json_each(?)))", []any{string(list)}, true
 }
 
 // escapeLike escapes the SQLite LIKE wildcards ('%', '_') and the backslash
