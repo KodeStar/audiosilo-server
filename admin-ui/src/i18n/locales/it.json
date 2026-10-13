@@ -2574,7 +2574,6 @@
   "user.household.moveBody": "Sposta {{name}} nella famiglia di un'altra persona.",
   "user.household.assignBody": "Rende {{name}} membro della famiglia di un'altra persona, gestito dal player.",
   "user.household.blocked.hasMembers": "{{name}} ha già dei membri della propria famiglia, quindi non può entrare nella famiglia di un'altra persona.",
-  "user.household.blocked.admin": "{{name}} è amministratore, e un amministratore non può essere membro di una famiglia.",
   "user.household.blocked.demo": "Un account demo non può entrare in una famiglia.",
   "user.household.assignTitle": "Assegna {{name}} a qualcuno",
   "user.household.assignDescription": "Scegli in quale famiglia entra, se è bambino o adulto e cosa può ascoltare. Da quel momento l'account è gestito dalla persona che scegli.",
@@ -2612,7 +2611,6 @@
   "user.household.accessAll": "Tutto ciò che {{owner}} può ascoltare",
   "user.household.accessAllBody": "{{name}} fa parte della famiglia di {{owner}}, quindi può ascoltare ciò che può {{owner}}, man mano che cambia. Solo {{owner}} lo modifica, dal player.",
   "user.household.accessAllAdmin": "{{name}} fa parte della famiglia di {{owner}}. {{owner}} è amministratore, quindi sono tutte le librerie. Solo {{owner}} lo modifica, dal player.",
-  "user.household.ownerUnknown": "Non è stato possibile caricarlo. Aggiorna la pagina per riprovare.",
   "user.household.ownerNothing": "{{owner}} non ha ancora accesso, quindi tramite la famiglia non arriva niente.",
   "user.household.accessCollections": "Raccolte condivise da {{owner}}",
   "user.household.accessCollectionsBody": "{{name}} può ascoltare i libri di queste raccolte finché {{owner}} può raggiungerli. Solo {{owner}} lo modifica, dal player.",
@@ -2659,10 +2657,6 @@
   "audit.detail.members_kept": "Membri della famiglia tenuti",
   "audit.enum.kind.kid": "bambino",
   "audit.enum.kind.grownup": "adulto",
-  "audit.enum.member_kind.kid": "bambino",
-  "audit.enum.member_kind.grownup": "adulto",
   "audit.enum.access.all": "tutto ciò che può ascoltare chi lo gestisce",
-  "audit.enum.access.collections": "raccolte condivise",
-  "audit.enum.member_access.all": "tutto ciò che può ascoltare chi lo gestisce",
-  "audit.enum.member_access.collections": "raccolte condivise"
+  "audit.enum.access.collections": "raccolte condivise"
 }

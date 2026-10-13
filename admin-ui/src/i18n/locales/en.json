@@ -2437,7 +2437,6 @@
   "user.household.moveBody": "Moves {{name}} to another person's household.",
   "user.household.assignBody": "Makes {{name}} a member of another person's household, managed from the player.",
   "user.household.blocked.hasMembers": "{{name}} has household members of their own, so they can't join someone else's household.",
-  "user.household.blocked.admin": "{{name}} is an admin, and an admin can't be a household member.",
   "user.household.blocked.demo": "A demo account can't join a household.",
   "user.household.assignTitle": "Assign {{name}} to someone",
   "user.household.assignDescription": "Pick whose household they join, kid or grown-up, and what they can listen to. The person you pick manages the account from then on.",
@@ -2475,7 +2474,6 @@
   "user.household.accessAll": "Everything {{owner}} can listen to",
   "user.household.accessAllBody": "{{name}} is in {{owner}}'s household, so they can listen to what {{owner}} can, as it changes. Only {{owner}} changes this, from the player.",
   "user.household.accessAllAdmin": "{{name}} is in {{owner}}'s household. {{owner}} is an admin, so that's every library. Only {{owner}} changes this, from the player.",
-  "user.household.ownerUnknown": "This couldn't load. Refresh the page to try again.",
   "user.household.ownerNothing": "{{owner}} has no access yet, so nothing comes through the household.",
   "user.household.accessCollections": "Collections {{owner}} shares with them",
   "user.household.accessCollectionsBody": "{{name}} can listen to the books in these collections while {{owner}} can still reach them. Only {{owner}} changes this, from the player.",
@@ -2518,10 +2516,6 @@
   "audit.detail.members_kept": "Household members kept",
   "audit.enum.kind.kid": "kid",
   "audit.enum.kind.grownup": "grown-up",
-  "audit.enum.member_kind.kid": "kid",
-  "audit.enum.member_kind.grownup": "grown-up",
   "audit.enum.access.all": "everything their owner can listen to",
-  "audit.enum.access.collections": "shared collections",
-  "audit.enum.member_access.all": "everything their owner can listen to",
-  "audit.enum.member_access.collections": "shared collections"
+  "audit.enum.access.collections": "shared collections"
 }

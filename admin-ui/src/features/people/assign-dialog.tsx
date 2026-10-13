@@ -12,7 +12,13 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { errorMessage } from '@/lib/errors';
 import { toast } from '@/lib/toast';
-import { assignPatch, assignTargets, defaultAccess, displayName } from './household-model';
+import {
+  assignPatch,
+  assignTargets,
+  defaultAccess,
+  displayName,
+  namedApart,
+} from './household-model';
 
 /**
  * "Assign to someone": put a person in another person's household, choosing
@@ -108,9 +114,9 @@ function AssignForm({ user, onDone }: { user: AdminUser; onDone: () => void }) {
                 </option>
                 {targets.map((u) => (
                   <option key={u.id} value={String(u.id)}>
-                    {displayName(u) === u.username
-                      ? u.username
-                      : `${displayName(u)} (${u.username})`}
+                    {namedApart(displayName(u), u.username)
+                      ? `${displayName(u)} (${u.username})`
+                      : u.username}
                   </option>
                 ))}
               </NativeSelect>

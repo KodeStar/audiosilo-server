@@ -447,7 +447,7 @@ export const api = {
   deleteUser: (id: number, keepMembers: readonly number[] = []) =>
     request<void>(
       'DELETE',
-      `/admin/users/${id}${keepMembers.length ? `?keep_members=${keepMembers.join(',')}` : ''}`,
+      `/admin/users/${id}${bookQuery({ keep_members: keepMembers.join(',') })}`,
     ),
   clearRecovery: (id: number) => request<void>('DELETE', `/admin/users/${id}/recovery`),
   invites: () => request<{ invites: Invite[] }>('GET', '/admin/invites'),

@@ -16,7 +16,7 @@ const evie: AdminUser = {
   id: 6,
   username: 'evie',
   display_name: 'Evie',
-  managed_by: { id: 5, username: 'adam' },
+  managed_by: { id: 5, username: 'adam', display_name: '' },
   member_kind: 'kid',
   member_access: 'collections',
   can_add_members: false,
@@ -57,7 +57,9 @@ function routes(over: Record<string, MockRoute> = {}) {
         ],
       }),
     },
-    'GET /admin/users/7': { body: detail(ellis) },
+    'GET /admin/users/7': {
+      body: detail(ellis, { owner_libraries: [libraries()[1]], owner_is_admin: false }),
+    },
     'GET /admin/invites': { body: { invites: [] } },
     ...over,
   });
@@ -120,8 +122,11 @@ describe("an owner's page", () => {
     const user = userEvent.setup();
     const toggle = within(household).getByRole('switch', { name: 'Can add household members' });
     expect(toggle).toBeChecked();
-    expect(toggle).toHaveAccessibleDescription(
-      'adam can add kids and grown-ups from the player, up to 6.',
+    // The cap comes with the server's settings.
+    await waitFor(() =>
+      expect(toggle).toHaveAccessibleDescription(
+        'adam can add kids and grown-ups from the player, up to 6.',
+      ),
     );
     await user.click(toggle);
     await waitFor(() =>
@@ -147,7 +152,15 @@ describe("an owner's page", () => {
     mockFetch(
       routes({
         'GET /admin/settings': {
-          body: settingsWith({ household: { members_enabled: false, max_members: 6 } }),
+          body: settingsWith({
+            household: {
+              members_enabled: false,
+              max_members: 6,
+              max_members_default: 6,
+              max_members_min: 1,
+              max_members_max: 50,
+            },
+          }),
         },
       }),
     );

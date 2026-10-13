@@ -2574,7 +2574,6 @@
   "user.household.moveBody": "Move {{name}} para a casa de outra pessoa.",
   "user.household.assignBody": "Torna {{name}} membro da casa de outra pessoa, gerido a partir do leitor.",
   "user.household.blocked.hasMembers": "{{name}} tem os seus próprios membros da casa, por isso não pode juntar-se à casa de outra pessoa.",
-  "user.household.blocked.admin": "{{name}} é administrador, e um administrador não pode ser membro de uma casa.",
   "user.household.blocked.demo": "Uma conta de demonstração não pode juntar-se a uma casa.",
   "user.household.assignTitle": "Atribuir {{name}} a alguém",
   "user.household.assignDescription": "Escolha a que casa se junta, se é criança ou adulto e o que pode ouvir. A pessoa escolhida passa a gerir a conta.",
@@ -2612,7 +2611,6 @@
   "user.household.accessAll": "Tudo o que {{owner}} pode ouvir",
   "user.household.accessAllBody": "{{name}} está na casa de {{owner}}, por isso pode ouvir o mesmo que {{owner}}, à medida que muda. Só {{owner}} altera isto, a partir do leitor.",
   "user.household.accessAllAdmin": "{{name}} está na casa de {{owner}}. {{owner}} é administrador, por isso são todas as bibliotecas. Só {{owner}} altera isto, a partir do leitor.",
-  "user.household.ownerUnknown": "Não foi possível carregar. Atualize a página para tentar de novo.",
   "user.household.ownerNothing": "{{owner}} ainda não tem acesso, por isso nada chega através da casa.",
   "user.household.accessCollections": "Coleções que {{owner}} partilha",
   "user.household.accessCollectionsBody": "{{name}} pode ouvir os livros destas coleções enquanto {{owner}} lhes tiver acesso. Só {{owner}} altera isto, a partir do leitor.",
@@ -2659,10 +2657,6 @@
   "audit.detail.members_kept": "Membros da casa mantidos",
   "audit.enum.kind.kid": "criança",
   "audit.enum.kind.grownup": "adulto",
-  "audit.enum.member_kind.kid": "criança",
-  "audit.enum.member_kind.grownup": "adulto",
   "audit.enum.access.all": "tudo o que quem o gere pode ouvir",
-  "audit.enum.access.collections": "coleções partilhadas",
-  "audit.enum.member_access.all": "tudo o que quem o gere pode ouvir",
-  "audit.enum.member_access.collections": "coleções partilhadas"
+  "audit.enum.access.collections": "coleções partilhadas"
 }

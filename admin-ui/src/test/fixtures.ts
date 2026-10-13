@@ -259,7 +259,13 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
       available: true,
     },
     demo: { enabled: false, library: '', max_users: null, max_users_default: 200, idle_ttl: '' },
-    household: { members_enabled: true, max_members: 6 },
+    household: {
+      members_enabled: true,
+      max_members: 6,
+      max_members_default: 6,
+      max_members_min: 1,
+      max_members_max: 50,
+    },
     backups: { schedule: 'daily:03:00', keep: 7, dir: '' },
     locked: { 'players.web_dir': 'AUDIOSILO_WEB_DIR' },
     restart_settings: [

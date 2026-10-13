@@ -33,7 +33,13 @@ export type SettingId = {
 }[SettingsSection];
 
 /** Facts the envelope carries beside the settings; not settings themselves. */
-type ReadOnlyFact = 'available' | 'web_player' | 'max_users_default';
+type ReadOnlyFact =
+  | 'available'
+  | 'web_player'
+  | 'max_users_default'
+  | 'max_members_default'
+  | 'max_members_min'
+  | 'max_members_max';
 
 /** Why the console can't change a setting, if it can't: the variable that sets it, or "launcher". */
 export function lockOf(s: AdminSettings, id: SettingId): string | undefined {

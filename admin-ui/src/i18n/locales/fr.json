@@ -2574,7 +2574,6 @@
   "user.household.moveBody": "Déplace {{name}} dans le foyer d'une autre personne.",
   "user.household.assignBody": "Fait de {{name}} un membre du foyer d'une autre personne, géré depuis le lecteur.",
   "user.household.blocked.hasMembers": "{{name}} a ses propres membres du foyer et ne peut donc pas rejoindre le foyer de quelqu'un d'autre.",
-  "user.household.blocked.admin": "{{name}} est administrateur, et un administrateur ne peut pas être membre d'un foyer.",
   "user.household.blocked.demo": "Un compte de démo ne peut pas rejoindre un foyer.",
   "user.household.assignTitle": "Attribuer {{name}} à quelqu'un",
   "user.household.assignDescription": "Choisissez le foyer à rejoindre, enfant ou adulte, et ce qui peut être écouté. La personne choisie gère ensuite le compte.",
@@ -2612,7 +2611,6 @@
   "user.household.accessAll": "Tout ce que {{owner}} peut écouter",
   "user.household.accessAllBody": "{{name}} fait partie du foyer de {{owner}} et peut donc écouter ce que {{owner}} peut écouter, au fil des changements. Seul {{owner}} le modifie, depuis le lecteur.",
   "user.household.accessAllAdmin": "{{name}} fait partie du foyer de {{owner}}. {{owner}} est administrateur, ce sont donc toutes les bibliothèques. Seul {{owner}} le modifie, depuis le lecteur.",
-  "user.household.ownerUnknown": "Impossible de charger. Actualisez la page pour réessayer.",
   "user.household.ownerNothing": "{{owner}} n'a encore aucun accès, donc rien ne vient du foyer.",
   "user.household.accessCollections": "Collections partagées par {{owner}}",
   "user.household.accessCollectionsBody": "{{name}} peut écouter les livres de ces collections tant que {{owner}} y a accès. Seul {{owner}} le modifie, depuis le lecteur.",
@@ -2659,10 +2657,6 @@
   "audit.detail.members_kept": "Membres du foyer conservés",
   "audit.enum.kind.kid": "enfant",
   "audit.enum.kind.grownup": "adulte",
-  "audit.enum.member_kind.kid": "enfant",
-  "audit.enum.member_kind.grownup": "adulte",
   "audit.enum.access.all": "tout ce que la personne qui le gère peut écouter",
-  "audit.enum.access.collections": "collections partagées",
-  "audit.enum.member_access.all": "tout ce que la personne qui le gère peut écouter",
-  "audit.enum.member_access.collections": "collections partagées"
+  "audit.enum.access.collections": "collections partagées"
 }

@@ -47,25 +47,19 @@ export function displayName(u: Pick<AdminUser, 'username' | 'display_name'>): st
 }
 
 /**
- * The name a member's "Managed by" chip shows: the owner's display name when
- * the owner is among `users`, else the username the member's record carries.
+ * The name a member's owner goes by (the record's managed_by carries the
+ * owner's display name), undefined for anyone who isn't a member.
  */
-export function ownerName(u: AdminUser, users: readonly AdminUser[]): string | undefined {
-  if (!u.managed_by) return undefined;
-  const owner = users.find((o) => o.id === u.managed_by?.id);
-  return owner ? displayName(owner) : u.managed_by.username;
+export function ownerName(u: Pick<AdminUser, 'managed_by'>): string | undefined {
+  return u.managed_by ? displayName(u.managed_by) : undefined;
 }
 
 /**
- * Why a person can't be put in someone's household (an i18n key under
- * user.household.blocked), or undefined when they can. The server refuses the
- * same cases (member_is_demo, member_not_admin, has_members).
+ * Whether a household name says more than the username beside it: it differs
+ * other than in case ("Evie" adds nothing to "evie").
  */
-export function assignBlocked(u: AdminUser): 'admin' | 'hasMembers' | 'demo' | undefined {
-  if (u.is_demo) return 'demo';
-  if (u.role === 'admin') return 'admin';
-  if (u.members_count > 0) return 'hasMembers';
-  return undefined;
+export function namedApart(name: string, username: string): boolean {
+  return name.trim().toLowerCase() !== username.toLowerCase();
 }
 
 /**
@@ -93,12 +87,13 @@ export function assignPatch(ownerId: number, kind: MemberKind, access: MemberAcc
 export const independentPatch: UserPatch = { managed_by: null };
 
 /**
- * The members a delete keeps (`?keep_members=`): every member of the person
- * not ticked to be deleted with them, in list order.
+ * The members a delete keeps (`?keep_members=`): those of the person's members
+ * unticked to stay as independent accounts, in list order (an id that isn't one
+ * of theirs is never sent).
  */
 export function keptMembers(
   members: readonly Pick<AdminMember, 'id'>[],
-  deleting: ReadonlySet<number>,
+  keeping: ReadonlySet<number>,
 ): number[] {
-  return members.filter((m) => !deleting.has(m.id)).map((m) => m.id);
+  return members.filter((m) => keeping.has(m.id)).map((m) => m.id);
 }

@@ -45,6 +45,12 @@ export interface UserRef {
   username: string;
 }
 
+/** A member's owner as the console's user objects name them (api.adminOwner). */
+export interface AdminOwner extends UserRef {
+  /** The owner's own household name, "" for most (only a former member has one). */
+  display_name: string;
+}
+
 /** A household member is a kid (kids mode, no password) or a grown-up. */
 export type MemberKind = 'kid' | 'grownup';
 
@@ -60,6 +66,7 @@ export type MemberAccess = 'all' | 'collections';
  * `member_access` is null exactly when `managed_by` is.
  */
 export interface AdminUser extends User {
+  managed_by: AdminOwner | null;
   member_access: MemberAccess | null;
   /** The admin's per-person switch: may add household members (members never can). */
   can_add_members: boolean;
@@ -506,8 +513,12 @@ export interface AdminSettings {
   household: {
     /** People may add household members (each still needs their own switch, can_add_members). */
     members_enabled: boolean;
-    /** The most household members one person may add (1-50). */
+    /** The most household members one person may add (max_members_min to max_members_max). */
     max_members: number;
+    /** Read-only facts: the cap's default and range. */
+    max_members_default: number;
+    max_members_min: number;
+    max_members_max: number;
   };
   backups: {
     /** "" (off), "daily:HH:MM" or "weekly:DAY:HH:MM" in server time (backup.ParseSchedule). */
@@ -1255,6 +1266,9 @@ export interface UserDetail {
   members: AdminMember[] | null;
   /** A `collections` member's books: their owner's collections shared with them ([] otherwise). */
   member_collections: MemberCollection[] | null;
+  /** A household member only: the libraries their owner reaches, and whether the owner is an admin. */
+  owner_libraries?: Library[];
+  owner_is_admin?: boolean;
 }
 
 /**

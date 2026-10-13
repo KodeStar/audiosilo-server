@@ -15,7 +15,7 @@ import {
   UserX,
 } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
-import { invalidatePeople, useDevices, useLibraries, useUser, useUsers } from '@/api/hooks';
+import { invalidatePeople, useDevices, useLibraries, useUser } from '@/api/hooks';
 import type { User, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DangerZone } from '@/components/danger-zone';
@@ -36,6 +36,7 @@ import { toastError } from '@/lib/errors';
 import { formatRelative } from '@/lib/format';
 import { useCurrentUser } from '@/lib/session';
 import { toast } from '@/lib/toast';
+import { AccessRow } from './access-row';
 import { GiveAccessDialog } from './give-access-dialog';
 import { DeleteMembers, HouseholdCard, MemberAccessCard } from './household';
 import { keptMembers, ownerName } from './household-model';
@@ -98,7 +99,6 @@ function UserView({ detail }: { detail: UserDetail }) {
   const navigate = useNavigate({ from: '/people/user/$userId' });
   const tab: UserTab = search.tab ?? 'listening';
   const devices = useDevices(u.id);
-  const users = useUsers();
   const [inviting, setInviting] = useState(false);
 
   const facts = [
@@ -121,7 +121,7 @@ function UserView({ detail }: { detail: UserDetail }) {
             {u.disabled ? <Badge variant="outline">{t('user.disabled')}</Badge> : null}
             {u.is_demo ? <Badge variant="outline">{t('people.badge.demo')}</Badge> : null}
           </div>
-          <MemberChips user={u} owner={ownerName(u, users.data ?? [])} />
+          <MemberChips user={u} />
           <span className="text-muted-foreground">{facts.join(' · ')}</span>
         </div>
         <Button variant="outline" onClick={() => setInviting(true)} disabled={u.disabled}>
@@ -161,7 +161,7 @@ function UserView({ detail }: { detail: UserDetail }) {
           <InvitesTab user={u} detail={detail} onInvite={() => setInviting(true)} />
         </TabsPanel>
         <TabsPanel value="sign-in">
-          <SignInTab user={u} owner={ownerName(u, users.data ?? []) ?? ''} />
+          <SignInTab user={u} owner={ownerName(u) ?? ''} />
         </TabsPanel>
         <TabsPanel value="account">
           <AccountTab detail={detail} />
@@ -287,34 +287,29 @@ function AccessTab({ detail }: { detail: UserDetail }) {
             {grants.map((share) => {
               const library = wholeLibraryOf(share) !== undefined;
               const label = shareLabel(share, libs);
-              const Icon = library ? LibraryBig : Share2;
               return (
-                <li key={share.id} className="flex items-center gap-3 px-5 py-3">
-                  <span
-                    className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-muted text-muted-foreground"
-                    aria-hidden="true"
-                  >
-                    <Icon className="size-[17px]" />
-                  </span>
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <b className="truncate font-semibold">{label}</b>
-                    <span className="truncate text-[12.5px] text-muted-foreground">
-                      {library
-                        ? t('user.access.wholeLibrary')
-                        : (share.paths ?? []).map((r) => ruleLabel(r, libs)).join(', ') ||
-                          t('user.access.emptyShare')}
-                    </span>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-destructive"
-                    onClick={() => void revoke(share.id, label)}
-                    aria-label={t('user.access.removeAria', { what: label })}
-                  >
-                    {t('user.access.remove')}
-                  </Button>
-                </li>
+                <AccessRow
+                  key={share.id}
+                  icon={library ? LibraryBig : Share2}
+                  title={label}
+                  detail={
+                    library
+                      ? t('user.access.wholeLibrary')
+                      : (share.paths ?? []).map((r) => ruleLabel(r, libs)).join(', ') ||
+                        t('user.access.emptyShare')
+                  }
+                  action={
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive"
+                      onClick={() => void revoke(share.id, label)}
+                      aria-label={t('user.access.removeAria', { what: label })}
+                    >
+                      {t('user.access.remove')}
+                    </Button>
+                  }
+                />
               );
             })}
           </ul>
@@ -432,13 +427,12 @@ function AccountTab({ detail }: { detail: UserDetail }) {
   const members = detail.members ?? [];
   const qc = useQueryClient();
   const me = useCurrentUser();
-  const users = useUsers();
   const navigate = useNavigate();
   const self = me.id === u.id;
   const [promoting, setPromoting] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // The members the delete takes with it: all of them until one is unticked.
-  const [deletingMembers, setDeletingMembers] = useState<Set<number>>(() => new Set());
+  // The members the delete keeps (unticked): none until one is unticked.
+  const [keeping, setKeeping] = useState<Set<number>>(() => new Set());
   const [disabling, setDisabling] = useState(false);
   const member = Boolean(u.managed_by);
 
@@ -473,10 +467,7 @@ function AccountTab({ detail }: { detail: UserDetail }) {
             self
               ? t('user.account.roleSelf')
               : member
-                ? t('user.account.roleMember', {
-                    name: u.username,
-                    owner: ownerName(u, users.data ?? []),
-                  })
+                ? t('user.account.roleMember', { name: u.username, owner: ownerName(u) })
                 : t('user.account.roleBody')
           }
         >
@@ -538,7 +529,7 @@ function AccountTab({ detail }: { detail: UserDetail }) {
             variant="destructive"
             disabled={self}
             onClick={() => {
-              setDeletingMembers(new Set(members.map((m) => m.id)));
+              setKeeping(new Set());
               setDeleting(true);
             }}
           >
@@ -571,7 +562,7 @@ function AccountTab({ detail }: { detail: UserDetail }) {
         confirmLabel={t('user.danger.deleteAction')}
         typeToConfirm={u.username}
         onConfirm={async () => {
-          const keep = keptMembers(members, deletingMembers);
+          const keep = keptMembers(members, keeping);
           await api.deleteUser(u.id, keep);
           invalidatePeople(qc);
           toast.add({
@@ -582,7 +573,7 @@ function AccountTab({ detail }: { detail: UserDetail }) {
           void navigate({ to: '/people/{-$section}', params: { section: undefined } });
         }}
       >
-        <DeleteMembers members={members} deleting={deletingMembers} onChange={setDeletingMembers} />
+        <DeleteMembers members={members} keeping={keeping} onChange={setKeeping} />
         {!u.disabled ? (
           <p className="text-[13px] text-muted-foreground">
             {t('user.danger.reversible')}{' '}

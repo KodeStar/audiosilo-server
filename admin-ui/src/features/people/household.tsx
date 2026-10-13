@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { FolderHeart, LibraryBig, Unlink, UserRoundPlus, type LucideIcon } from 'lucide-react';
+import { FolderHeart, LibraryBig, Unlink, UserRoundPlus } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidatePeople, useSettings, useUser, useUsers } from '@/api/hooks';
+import { invalidatePeople, useSettings } from '@/api/hooks';
 import type { AdminMember, AdminUser, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { Monogram } from '@/components/monogram';
@@ -15,19 +15,15 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { toastError } from '@/lib/errors';
-import { formatNumber } from '@/lib/format';
+import { counted, formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
+import { AccessRow } from './access-row';
 import { AssignDialog } from './assign-dialog';
-import { assignBlocked, independentPatch, ownerName } from './household-model';
+import { independentPatch, namedApart, ownerName } from './household-model';
+import { KindBadge } from './member-chips';
 
 // A person's household on their page: the Account tab's Household card, the
 // Access tab's "through their owner" card, and the delete dialog's member list.
-
-/** The name of a member's owner: their display name when People has loaded, else the username. */
-function useOwnerName(u: AdminUser): string {
-  const users = useUsers();
-  return ownerName(u, users.data ?? []) ?? '';
-}
 
 /**
  * Account tab: for a household member, who manages them, with Make independent
@@ -55,7 +51,7 @@ export function HouseholdCard({ detail }: { detail: UserDetail }) {
 function MemberRows({ user: u }: { user: AdminUser }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const owner = useOwnerName(u);
+  const owner = ownerName(u) ?? '';
   const [freeing, setFreeing] = useState(false);
   const [assigning, setAssigning] = useState(false);
   if (!u.managed_by) return null;
@@ -73,9 +69,7 @@ function MemberRows({ user: u }: { user: AdminUser }) {
           >
             {owner}
           </Link>
-          {u.member_kind ? (
-            <Badge variant="secondary">{t(`people.kind.${u.member_kind}`)}</Badge>
-          ) : null}
+          {u.member_kind ? <KindBadge kind={u.member_kind} /> : null}
         </div>
       </SettingRow>
       <SettingRow
@@ -133,7 +127,10 @@ function OwnerRows({ detail }: { detail: UserDetail }) {
   const u = detail.user;
   const members = detail.members ?? [];
   const household = settings.data?.household;
-  const blocked = assignBlocked(u);
+  // Someone with members of their own can't join another household (the
+  // server's has_members); an admin is never offered it (member_not_admin), and
+  // a demo account has no Household card at all.
+  const hasMembers = u.members_count > 0;
 
   const setCanAdd = async (on: boolean) => {
     try {
@@ -170,14 +167,14 @@ function OwnerRows({ detail }: { detail: UserDetail }) {
                 {t('user.household.featureOffLink')}
               </Link>
             </>
-          ) : u.can_add_members ? (
+          ) : !u.can_add_members ? (
+            t('user.household.canAddBodyOff', { name: u.username })
+          ) : household ? (
             t('user.household.canAddBody', {
               name: u.username,
-              max: formatNumber(household?.max_members ?? 6, i18n.resolvedLanguage ?? 'en'),
+              max: formatNumber(household.max_members, i18n.resolvedLanguage ?? 'en'),
             })
-          ) : (
-            t('user.household.canAddBodyOff', { name: u.username })
-          )
+          ) : undefined
         }
       >
         <Switch
@@ -201,16 +198,16 @@ function OwnerRows({ detail }: { detail: UserDetail }) {
           </ul>
         )}
       </section>
-      {blocked !== 'admin' ? (
+      {u.role !== 'admin' ? (
         <SettingRow
           title={t('user.household.assign')}
           description={
-            blocked
-              ? t(`user.household.blocked.${blocked}`, { name: u.username })
+            hasMembers
+              ? t('user.household.blocked.hasMembers', { name: u.username })
               : t('user.household.assignBody', { name: u.username })
           }
         >
-          <Button variant="outline" disabled={Boolean(blocked)} onClick={() => setAssigning(true)}>
+          <Button variant="outline" disabled={hasMembers} onClick={() => setAssigning(true)}>
             <UserRoundPlus aria-hidden="true" />
             {t('user.household.assignAction')}
           </Button>
@@ -235,13 +232,13 @@ function MemberLink({ member: m, owner }: { member: AdminMember; owner: string }
         <span className="flex min-w-0 flex-1 flex-col">
           <b className="truncate font-semibold">{m.name}</b>
           <span className="truncate text-[12.5px] text-muted-foreground">
-            {m.name.toLowerCase() === m.username.toLowerCase()
-              ? t(`user.household.accessShort.${m.access}`, { owner })
-              : `${m.username} · ${t(`user.household.accessShort.${m.access}`, { owner })}`}
+            {namedApart(m.name, m.username)
+              ? `${m.username} · ${t(`user.household.accessShort.${m.access}`, { owner })}`
+              : t(`user.household.accessShort.${m.access}`, { owner })}
           </span>
         </span>
         <span className="flex shrink-0 flex-wrap justify-end gap-1.5">
-          <Badge variant="secondary">{t(`people.kind.${m.kind}`)}</Badge>
+          <KindBadge kind={m.kind} />
           {m.disabled ? <Badge variant="outline">{t('user.disabled')}</Badge> : null}
         </span>
       </Link>
@@ -261,34 +258,28 @@ export function MemberAccessCard({ detail }: { detail: UserDetail }) {
   return u.member_access === 'collections' ? (
     <CollectionsAccess detail={detail} />
   ) : (
-    <OwnerAccess user={u} />
+    <OwnerAccess detail={detail} />
   );
 }
 
-function OwnerAccess({ user: u }: { user: AdminUser }) {
+/** A member on `all`: their owner's libraries, which the member's detail carries. */
+function OwnerAccess({ detail }: { detail: UserDetail }) {
   const { t } = useTranslation();
-  const owner = useOwnerName(u);
-  const ownerDetail = useUser(u.managed_by?.id ?? 0);
-  const libs = ownerDetail.data?.accessible_libraries ?? [];
-  const ownerIsAdmin = ownerDetail.data?.user.role === 'admin';
+  const u = detail.user;
+  const owner = ownerName(u) ?? '';
+  const libs = detail.owner_libraries ?? [];
   return (
     <Card aria-labelledby="member-access-title">
       <CardHeader
         titleId="member-access-title"
         title={t('user.household.accessAll', { owner })}
         description={
-          ownerIsAdmin
+          detail.owner_is_admin
             ? t('user.household.accessAllAdmin', { name: u.username, owner })
             : t('user.household.accessAllBody', { name: u.username, owner })
         }
       />
-      {ownerDetail.isError ? (
-        <p className="px-5 pb-5 text-muted-foreground">{t('user.household.ownerUnknown')}</p>
-      ) : !ownerDetail.data ? (
-        <div className="px-5 pb-5">
-          <span className="skel block h-12" role="status" aria-label={t('common.loading')} />
-        </div>
-      ) : libs.length === 0 ? (
+      {libs.length === 0 ? (
         <p className="px-5 pb-5 text-muted-foreground">
           {t('user.household.ownerNothing', { owner })}
         </p>
@@ -306,7 +297,7 @@ function OwnerAccess({ user: u }: { user: AdminUser }) {
 function CollectionsAccess({ detail }: { detail: UserDetail }) {
   const { t, i18n } = useTranslation();
   const u = detail.user;
-  const owner = useOwnerName(u);
+  const owner = ownerName(u) ?? '';
   const collections = detail.member_collections ?? [];
   return (
     <Card aria-labelledby="member-access-title">
@@ -326,10 +317,7 @@ function CollectionsAccess({ detail }: { detail: UserDetail }) {
               key={c.id}
               icon={FolderHeart}
               title={c.name}
-              detail={t('user.household.items', {
-                count: c.items,
-                formatted: formatNumber(c.items, i18n.resolvedLanguage ?? 'en'),
-              })}
+              detail={t('user.household.items', counted(c.items, i18n.resolvedLanguage ?? 'en'))}
             />
           ))}
         </ul>
@@ -338,53 +326,26 @@ function CollectionsAccess({ detail }: { detail: UserDetail }) {
   );
 }
 
-function AccessRow({
-  icon: Icon,
-  title,
-  detail,
-}: {
-  icon: LucideIcon;
-  title: string;
-  detail?: string;
-}) {
-  return (
-    <li className="flex items-center gap-3 px-5 py-3">
-      <span
-        className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-muted text-muted-foreground"
-        aria-hidden="true"
-      >
-        <Icon className="size-[17px]" />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <b className="truncate font-semibold">{title}</b>
-        {detail ? (
-          <span className="truncate text-[12.5px] text-muted-foreground">{detail}</span>
-        ) : null}
-      </div>
-    </li>
-  );
-}
-
 /**
  * The delete dialog's member list: each of the person's household members,
  * ticked to be deleted with them. An unticked member is kept as an
- * independent account (`keep_members`).
+ * independent account (`keeping`, sent as `keep_members`).
  */
 export function DeleteMembers({
   members,
-  deleting,
+  keeping,
   onChange,
 }: {
   members: AdminMember[];
-  deleting: ReadonlySet<number>;
+  keeping: ReadonlySet<number>;
   onChange: (next: Set<number>) => void;
 }) {
   const { t } = useTranslation();
   if (members.length === 0) return null;
-  const toggle = (id: number, on: boolean) => {
-    const next = new Set(deleting);
-    if (on) next.add(id);
-    else next.delete(id);
+  const toggle = (id: number, deleting: boolean) => {
+    const next = new Set(keeping);
+    if (deleting) next.delete(id);
+    else next.add(id);
     onChange(next);
   };
   return (
@@ -396,13 +357,13 @@ export function DeleteMembers({
       {members.map((m) => (
         <label key={m.id} className="flex items-center gap-2.5 text-[13.5px]">
           <Checkbox
-            checked={deleting.has(m.id)}
+            checked={!keeping.has(m.id)}
             onCheckedChange={(on) => toggle(m.id, Boolean(on))}
           />
           <span className="min-w-0 flex-1 truncate">
             {t('user.danger.deleteMember', { name: m.name })}
           </span>
-          <Badge variant="secondary">{t(`people.kind.${m.kind}`)}</Badge>
+          <KindBadge kind={m.kind} />
         </label>
       ))}
     </fieldset>

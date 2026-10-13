@@ -1,7 +1,6 @@
 import type { AdminUser } from '@/api/types';
 import { sam } from '@/test/fixtures';
 import {
-  assignBlocked,
   assignPatch,
   assignTargets,
   defaultAccess,
@@ -10,6 +9,7 @@ import {
   type PeopleEntry,
   independentPatch,
   keptMembers,
+  namedApart,
   ownerName,
 } from './household-model';
 
@@ -25,7 +25,7 @@ function memberOf(
   kind: 'kid' | 'grownup' = 'kid',
 ): AdminUser {
   return person(id, username, {
-    managed_by: { id: owner.id, username: owner.username },
+    managed_by: { id: owner.id, username: owner.username, display_name: owner.display_name },
     member_kind: kind,
     member_access: kind === 'kid' ? 'collections' : 'all',
     can_add_members: false,
@@ -89,11 +89,16 @@ describe('names', () => {
     expect(displayName({ username: 'evie', display_name: '  ' })).toBe('evie');
   });
 
-  it("names a member's owner by display name when known, else by the record's username", () => {
-    const named = { ...adam, display_name: 'Adam' };
-    expect(ownerName(evie, [named, evie])).toBe('Adam');
-    expect(ownerName(evie, [evie])).toBe('adam');
-    expect(ownerName(bea, [adam, bea])).toBeUndefined();
+  it("names a member's owner by the owner's display name, else their username", () => {
+    expect(ownerName(memberOf({ ...adam, display_name: 'Adam' }, 3, 'evie'))).toBe('Adam');
+    expect(ownerName(evie)).toBe('adam');
+    expect(ownerName(bea)).toBeUndefined();
+  });
+
+  it('shows a household name only when it says more than the username', () => {
+    expect(namedApart('Evie Rose', 'evie-rose')).toBe(true);
+    expect(namedApart('Evie', 'evie')).toBe(false);
+    expect(namedApart(' evie ', 'evie')).toBe(false);
   });
 });
 
@@ -105,14 +110,6 @@ describe('assigning', () => {
     expect(ids(assignTargets(everyone, bea))).toEqual(['adam', 'chris']);
     // A member moves to someone new: their own owner isn't offered.
     expect(ids(assignTargets(everyone, evie))).toEqual(['bea', 'chris']);
-  });
-
-  it('refuses admins, people with members of their own, and demo accounts', () => {
-    expect(assignBlocked(person(6, 'chris', { role: 'admin' }))).toBe('admin');
-    expect(assignBlocked(adam)).toBe('hasMembers');
-    expect(assignBlocked(person(5, 'guest', { is_demo: true }))).toBe('demo');
-    expect(assignBlocked(bea)).toBeUndefined();
-    expect(assignBlocked(evie)).toBeUndefined();
   });
 
   it('starts a kid on shared collections and a grown-up on everything', () => {
@@ -133,14 +130,14 @@ describe('assigning', () => {
 describe('keptMembers', () => {
   const members = [{ id: 3 }, { id: 4 }, { id: 7 }];
 
-  it('keeps every member not ticked to be deleted, in list order', () => {
-    expect(keptMembers(members, new Set([3, 4, 7]))).toEqual([]);
-    expect(keptMembers(members, new Set([4]))).toEqual([3, 7]);
-    expect(keptMembers(members, new Set())).toEqual([3, 4, 7]);
+  it('keeps the members unticked to stay, in list order', () => {
+    expect(keptMembers(members, new Set())).toEqual([]);
+    expect(keptMembers(members, new Set([7, 3]))).toEqual([3, 7]);
+    expect(keptMembers(members, new Set([3, 4, 7]))).toEqual([3, 4, 7]);
   });
 
-  it('ignores ticks for ids that are not members', () => {
-    expect(keptMembers(members, new Set([3, 4, 7, 99]))).toEqual([]);
+  it('never sends an id that is not one of their members', () => {
+    expect(keptMembers(members, new Set([4, 99]))).toEqual([4]);
     expect(keptMembers([], new Set([1]))).toEqual([]);
   });
 });

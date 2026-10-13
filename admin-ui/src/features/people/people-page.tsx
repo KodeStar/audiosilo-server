@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { InviteDialog } from './invite-dialog';
-import { displayName, ownerName, peopleGroups } from './household-model';
+import { displayName, peopleGroups } from './household-model';
 import { MemberChips } from './member-chips';
 import { currentBook, groupDevices } from './people-model';
 
@@ -88,7 +88,6 @@ export function PeoplePage() {
               <li key={u.id} className="min-w-0">
                 <PersonCard
                   user={u}
-                  owner={ownerName(u, list)}
                   listening={stats.data?.listening ?? []}
                   live={live.data ?? []}
                   devices={devicesOf && (devicesOf.get(u.id) ?? [])}
@@ -130,15 +129,12 @@ function HouseholdGroup({ name, children }: { name: string; children: React.Reac
 
 function PersonCard({
   user: u,
-  owner,
   listening,
   live,
   devices,
   now,
 }: {
   user: AdminUser;
-  /** A household member's owner, by name. */
-  owner: string | undefined;
   listening: ListeningRow[];
   live: ListeningSession[];
   /** The person's signed-in devices (undefined while loading). */
@@ -179,7 +175,7 @@ function PersonCard({
             {u.role === 'admin' ? <Badge variant="ink">{t('people.role.admin')}</Badge> : null}
             {u.is_demo ? <Badge variant="outline">{t('people.badge.demo')}</Badge> : null}
           </div>
-          <MemberChips user={u} owner={owner} />
+          <MemberChips user={u} />
           <span className="text-[12.5px] text-muted-foreground">
             {status ?? (
               <span className="inline-flex items-center gap-1.5">

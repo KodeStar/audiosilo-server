@@ -2437,7 +2437,6 @@
   "user.household.moveBody": "Verschiebt {{name}} in den Haushalt einer anderen Person.",
   "user.household.assignBody": "Macht {{name}} zum Mitglied im Haushalt einer anderen Person, verwaltet im Player.",
   "user.household.blocked.hasMembers": "{{name}} hat eigene Haushaltsmitglieder und kann deshalb keinem anderen Haushalt beitreten.",
-  "user.household.blocked.admin": "{{name}} ist Admin, und ein Admin kann kein Haushaltsmitglied sein.",
   "user.household.blocked.demo": "Ein Demo-Konto kann keinem Haushalt beitreten.",
   "user.household.assignTitle": "{{name}} jemandem zuordnen",
   "user.household.assignDescription": "Wähle, wessen Haushalt das Konto beitritt, ob Kind oder erwachsen, und was es hören kann. Die gewählte Person verwaltet das Konto ab dann.",
@@ -2475,7 +2474,6 @@
   "user.household.accessAll": "Alles, was {{owner}} hören kann",
   "user.household.accessAllBody": "{{name}} gehört zum Haushalt von {{owner}} und kann hören, was {{owner}} hören kann, auch wenn sich das ändert. Nur {{owner}} ändert das, im Player.",
   "user.household.accessAllAdmin": "{{name}} gehört zum Haushalt von {{owner}}. {{owner}} ist Admin, also sind das alle Bibliotheken. Nur {{owner}} ändert das, im Player.",
-  "user.household.ownerUnknown": "Das konnte nicht geladen werden. Lade die Seite neu, um es noch einmal zu versuchen.",
   "user.household.ownerNothing": "{{owner}} hat noch keinen Zugriff, also kommt über den Haushalt nichts.",
   "user.household.accessCollections": "Sammlungen, die {{owner}} teilt",
   "user.household.accessCollectionsBody": "{{name}} kann die Bücher in diesen Sammlungen hören, solange {{owner}} sie erreichen kann. Nur {{owner}} ändert das, im Player.",
@@ -2518,10 +2516,6 @@
   "audit.detail.members_kept": "Behaltene Haushaltsmitglieder",
   "audit.enum.kind.kid": "Kind",
   "audit.enum.kind.grownup": "erwachsen",
-  "audit.enum.member_kind.kid": "Kind",
-  "audit.enum.member_kind.grownup": "erwachsen",
   "audit.enum.access.all": "alles, was die verwaltende Person hören kann",
-  "audit.enum.access.collections": "geteilte Sammlungen",
-  "audit.enum.member_access.all": "alles, was die verwaltende Person hören kann",
-  "audit.enum.member_access.collections": "geteilte Sammlungen"
+  "audit.enum.access.collections": "geteilte Sammlungen"
 }

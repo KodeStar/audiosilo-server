@@ -579,7 +579,13 @@ describe('settings', () => {
       routes({
         'GET /admin/settings': {
           body: settingsWith({
-            household: { members_enabled: false, max_members: 4 },
+            household: {
+              members_enabled: false,
+              max_members: 4,
+              max_members_default: 6,
+              max_members_min: 1,
+              max_members_max: 50,
+            },
             locked: {
               'household.members_enabled': 'AUDIOSILO_HOUSEHOLD_MEMBERS_ENABLED',
               'household.max_members': 'AUDIOSILO_HOUSEHOLD_MAX_MEMBERS',

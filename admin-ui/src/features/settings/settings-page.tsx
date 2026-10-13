@@ -571,6 +571,7 @@ function TranscodingTopic() {
  */
 function HouseholdTopic({ settings }: { settings: AdminSettings }) {
   const { t } = useTranslation();
+  const h = settings.household;
   return (
     <SettingsForm
       settings={settings}
@@ -579,7 +580,12 @@ function HouseholdTopic({ settings }: { settings: AdminSettings }) {
       description={t('settings.household.cardBody')}
       fields={[
         { name: 'members_enabled', kind: 'switch' },
-        { name: 'max_members', kind: 'number', placeholder: '6', range: { min: 1, max: 50 } },
+        {
+          name: 'max_members',
+          kind: 'number',
+          placeholder: String(h.max_members_default),
+          range: { min: h.max_members_min, max: h.max_members_max },
+        },
       ]}
     />
   );
