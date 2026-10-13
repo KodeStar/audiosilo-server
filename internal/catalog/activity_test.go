@@ -21,15 +21,19 @@ func (f *sessionFixture) addUser(t *testing.T, name, created string, demo bool) 
 	return id
 }
 
-func (f *sessionFixture) addSession(t *testing.T, user, token int64, ref Ref, start time.Time, length time.Duration, listened float64, codec string, transcoded bool) {
+// addSession records a session and returns its id.
+func (f *sessionFixture) addSession(t *testing.T, user, token int64, ref Ref, start time.Time, length time.Duration, listened float64, codec string, transcoded bool) int64 {
 	t.Helper()
-	if _, err := f.c.db.ExecContext(f.ctx,
+	res, err := f.c.db.ExecContext(f.ctx,
 		`INSERT INTO listening_sessions(user_id, library_id, rel_path, token_id, started_at, last_at, listened, codec, transcoded)
 		 VALUES(?,?,?,?,?,?,?,?,?)`,
 		user, ref.LibraryID, ref.Path, token, formatSessionTime(start), formatSessionTime(start.Add(length)),
-		listened, codec, transcoded); err != nil {
+		listened, codec, transcoded)
+	if err != nil {
 		t.Fatal(err)
 	}
+	id, _ := res.LastInsertId()
+	return id
 }
 
 func (f *sessionFixture) addClientSession(t *testing.T, user, token int64, app, version, platform string) {

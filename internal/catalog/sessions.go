@@ -290,7 +290,7 @@ func (c *Catalog) LiveSessions(ctx context.Context) ([]Session, error) {
 	}
 	out := []Session{}
 	seen := map[int64]bool{}
-	chapters := map[int64][]metadata.Chapter{} // per book, loaded once
+	chapters := c.newChapterCache()
 	for _, l := range all {
 		// Each device's newest session decides what it is on, even one with nothing
 		// listened yet (it just moved to another book), so the device's previous book
@@ -302,23 +302,46 @@ func (c *Catalog) LiveSessions(ctx context.Context) ([]Session, error) {
 		if l.Listened <= 0 {
 			continue
 		}
-		if l.bookID != 0 {
-			chs, ok := chapters[l.bookID]
-			if !ok {
-				b := Book{ID: l.bookID}
-				if err := c.loadChapters(ctx, &b); err != nil {
-					return nil, err
-				}
-				chs, chapters[l.bookID] = b.Chapters, b.Chapters
-			}
-			if len(chs) > 1 {
-				i := chapterAt(chs, l.EndPos)
-				l.Chapter, l.ChapterIndex = metadata.ChapterTitle(chs[i].Title), &i
-			}
+		var err error
+		if l.Chapter, l.ChapterIndex, err = chapters.at(ctx, l.bookID, l.EndPos); err != nil {
+			return nil, err
 		}
 		out = append(out, l.Session)
 	}
 	return out, nil
+}
+
+// chapterCache reads the chapter at a position for sessions, loading each book's
+// chapters once.
+type chapterCache struct {
+	c     *Catalog
+	books map[int64][]metadata.Chapter
+}
+
+func (c *Catalog) newChapterCache() chapterCache {
+	return chapterCache{c: c, books: map[int64][]metadata.Chapter{}}
+}
+
+// at is the chapter holding pos in the indexed book bookID: its title as
+// metadata.ChapterTitle shows it ("" for one that names nothing) and its index.
+// A book that isn't indexed (bookID 0) or has a single chapter has neither.
+func (cc chapterCache) at(ctx context.Context, bookID int64, pos float64) (string, *int, error) {
+	if bookID == 0 {
+		return "", nil, nil
+	}
+	chs, ok := cc.books[bookID]
+	if !ok {
+		b := Book{ID: bookID}
+		if err := cc.c.loadChapters(ctx, &b); err != nil {
+			return "", nil, err
+		}
+		chs, cc.books[bookID] = b.Chapters, b.Chapters
+	}
+	if len(chs) <= 1 {
+		return "", nil, nil
+	}
+	i := chapterAt(chs, pos)
+	return metadata.ChapterTitle(chs[i].Title), &i, nil
 }
 
 // chapterAt is the index of the chapter holding pos on the whole-book timeline

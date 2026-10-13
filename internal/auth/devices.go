@@ -51,12 +51,17 @@ type Presence struct {
 
 // Credential is the token that authenticated a request: its id (what the admin
 // console calls a device), its kind, the device name given at sign-in, and the
-// app it last reported.
+// app it last reported. DeviceID is the device the request acts for: ID itself,
+// or for a cast token (KindCast) the sender's token that minted it, so what a
+// receiver streams counts toward the sender's listening session. Book is a cast
+// token's book (its grant's library-relative path), "" for every other kind.
 type Credential struct {
 	ID         int64
 	Kind       string
+	DeviceID   int64
 	DeviceName string
 	Client     ClientInfo
+	Book       string
 }
 
 // Device is a signed-in token as the admin console lists it: a session (a paired

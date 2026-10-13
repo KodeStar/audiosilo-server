@@ -612,24 +612,10 @@ func TestCustomCoverFollowsTheBook(t *testing.T) {
 	e := newTestEnv(t)
 	adminTok, _, _ := adminAndMember(t, e)
 	ctx := context.Background()
-	root := t.TempDir()
-	fixtures, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "library"))
-	for _, rel := range []string{
+	root := copyFixtures(t,
 		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b",
 		"Brandon Sanderson/Mistborn/01 - The Final Empire.m4b", // keeps the library non-empty once Cradle goes
-	} {
-		data, err := os.ReadFile(filepath.Join(fixtures, filepath.FromSlash(rel)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		dst := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	)
 	jpeg := "\xff\xd8\xff\xe0\x00\x10JFIF\x00" + strings.Repeat("\x00", 16)
 	if err := os.WriteFile(filepath.Join(root, "Will Wight", "Cradle", "cover.jpg"), []byte(jpeg), 0o644); err != nil {
 		t.Fatal(err)

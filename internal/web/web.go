@@ -185,11 +185,25 @@ func noSniff(next http.Handler) http.Handler {
 
 var inlineScriptRE = regexp.MustCompile(`(?is)<script([^>]*)>(.*?)</script>`)
 
+// castSenderScripts are the Google Cast Web Sender's scripts, which the web
+// player loads on Chromium to cast (capability cast): cast_sender.js (the
+// player adds ?loadCastFramework=1, which a source's path ignores), the Cast
+// framework it loads, and the Chrome sender API it loads from eureka/clank
+// (<chrome version>/cast_sender.js, else the unversioned one). They are the only
+// scripts from anywhere but the player's own origin, and they are paths, never
+// the whole origin: www.gstatic.com serves many other scripts, AngularJS among
+// them, a known CSP allowlist bypass that would let an HTML injection run script.
+var castSenderScripts = []string{
+	"https://www.gstatic.com/cv/js/sender/v1/cast_sender.js",
+	"https://www.gstatic.com/cast/sdk/libs/sender/1.0/cast_framework.js",
+	"https://www.gstatic.com/eureka/clank/",
+}
+
 // htmlCSP builds the player's Content-Security-Policy for one HTML document.
-// Scripts stay strict ('self' plus a sha256 hash of each inline <script> in the
-// doc, so no 'unsafe-inline'); styles allow 'unsafe-inline' because
-// react-native-web/Uniwind inject styles at runtime, which cannot be hashed
-// ahead of time. Everything else is same-origin.
+// Scripts stay strict ('self', the Cast Web Sender's scripts and a sha256 hash
+// of each inline <script> in the doc, so no 'unsafe-inline'); styles allow
+// 'unsafe-inline' because react-native-web/Uniwind inject styles at runtime,
+// which cannot be hashed ahead of time. Everything else is same-origin.
 func htmlCSP(html []byte) string {
 	hashes := map[string]struct{}{}
 	for _, m := range inlineScriptRE.FindAllSubmatch(html, -1) {
@@ -199,7 +213,7 @@ func htmlCSP(html []byte) string {
 		sum := sha256.Sum256(m[2])
 		hashes["'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'"] = struct{}{}
 	}
-	scriptSrc := append([]string{"'self'"}, sortedKeys(hashes)...)
+	scriptSrc := append(append([]string{"'self'"}, castSenderScripts...), sortedKeys(hashes)...)
 	return strings.Join([]string{
 		"default-src 'self'",
 		"img-src 'self' data: blob:",

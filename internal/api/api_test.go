@@ -881,7 +881,7 @@ func TestContentPathTraversalIsNeutralized(t *testing.T) {
 
 // TestScopedPathTraversalDenied is the security regression for the ".." scope
 // bypass: a non-admin granted only a subtree cannot use ".." to climb out of it and
-// reach a sibling's content. Before normalization, pathAllowedBy's literal prefix
+// reach a sibling's content. Before normalization, relpath.Within's literal prefix
 // match accepted "AuthorA/../AuthorB/..." under an "AuthorA" grant and SafeJoin then
 // collapsed the "..", streaming the out-of-scope file.
 func TestScopedPathTraversalDenied(t *testing.T) {

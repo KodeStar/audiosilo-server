@@ -291,8 +291,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/meta/work", a.requireAuth(http.HandlerFunc(a.handleMetaWork)))
 	// Media GETs accept the session token as a ?token= query param (browser
 	// <img>/<audio> can't set headers); other routes do not (see requireMediaAuth).
-	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireMediaAuth(http.HandlerFunc(a.handleCover)))
-	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireMediaAuth(http.HandlerFunc(a.handleStream)))
+	// A book's own cover and stream also take a cast token (requireBookMediaAuth).
+	mux.Handle("GET /api/v1/libraries/{id}/cover", a.requireBookMediaAuth(http.HandlerFunc(a.handleCover)))
+	mux.Handle("GET /api/v1/libraries/{id}/stream", a.requireBookMediaAuth(http.HandlerFunc(a.handleStream)))
 	// A community cover the book's /meta envelope hands out, as a thumbnail from
 	// this server (the web player's CSP takes images only from it).
 	mux.Handle("GET /api/v1/libraries/{id}/meta/cover", a.requireMediaAuth(http.HandlerFunc(a.handleMetaCover)))
@@ -355,6 +356,12 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("PATCH /api/v1/notes/{id}", a.requireAuth(http.HandlerFunc(a.handleEditNote)))
 	mux.Handle("GET /api/v1/me/bookmarks", a.requireAuth(http.HandlerFunc(a.handleListMyBookmarks)))
 	mux.Handle("GET /api/v1/me/notes", a.requireAuth(http.HandlerFunc(a.handleListMyNotes)))
+
+	// Phase 8: listening in the house (household) and casting (cast).
+	mux.Handle("GET /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handleGetHousehold)))
+	mux.Handle("PUT /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handlePutHousehold)))
+	mux.Handle("GET /api/v1/household/listening", a.requireAuth(http.HandlerFunc(a.handleHouseListening)))
+	mux.Handle("POST /api/v1/cast/token", a.requireAuth(http.HandlerFunc(a.handleMintCastToken)))
 
 	// Admin.
 	mux.Handle("GET /api/v1/admin/stats", a.requireAdmin(http.HandlerFunc(a.handleStats)))

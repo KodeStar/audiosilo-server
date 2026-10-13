@@ -35,11 +35,18 @@ func userFrom(ctx context.Context) *auth.User {
 
 // credentialFrom returns the token that authenticated the request (its id is
 // what the admin console calls a device; its Kind, auth.KindSession or
-// auth.KindAPI, is what denyAPIKey checks), or the zero Credential when the
-// request is unauthenticated. Set by the authenticate middleware.
+// auth.KindAPI, is what denyAPIKey checks; auth.KindCast only on a book's cover
+// and stream), or the zero Credential when the request is unauthenticated. Set
+// by the authenticate middleware (withCredential).
 func credentialFrom(ctx context.Context) auth.Credential {
 	c, _ := ctx.Value(credentialKey).(auth.Credential)
 	return c
+}
+
+// withCredential returns ctx carrying the authenticated user and the credential
+// that proved it (userFrom, credentialFrom).
+func withCredential(ctx context.Context, u *auth.User, cred auth.Credential) context.Context {
+	return context.WithValue(context.WithValue(ctx, userKey, u), credentialKey, cred)
 }
 
 // writeJSON writes v as JSON with the given status.

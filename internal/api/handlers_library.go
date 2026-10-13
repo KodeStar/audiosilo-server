@@ -513,7 +513,8 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "server busy transcoding; try again shortly")
 			return
 		}
-		a.streams.Note(credentialFrom(r.Context()).ID, lib.ID, rel, time.Now())
+		// Marks the device's session transcoded: a cast token's is its sender's.
+		a.streams.Note(credentialFrom(r.Context()).DeviceID, lib.ID, rel, time.Now())
 		start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
 		media.Transcode(w, r, abs, a.ffmpeg, start, a.log)
 		return

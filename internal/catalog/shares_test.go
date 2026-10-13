@@ -8,7 +8,7 @@ import (
 // TestCleanRelPath pins the canonicalization every user-supplied rel path goes
 // through before a scope check or a persisted path key. The denied cases are the
 // security-critical ones: ".." must clamp at the root, never escape it, and must
-// collapse before the literal prefix match in pathAllowedBy sees the path.
+// collapse before the literal prefix match in relpath.Within sees the path.
 func TestCleanRelPath(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
