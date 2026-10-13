@@ -36,11 +36,11 @@ func (a *API) handleGetHousehold(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePutHousehold sets the caller's choice from {share_listening: bool} (the
-// field is required) and answers as GET. Refused for demo accounts and kids
-// (403 kid_account: a kid never shares, and HouseholdSharing reads false for one).
+// field is required) and answers as GET. Refused for demo accounts, and for kids
+// before it (notKid: a kid never shares, and has no row to read).
 func (a *API) handlePutHousehold(w http.ResponseWriter, r *http.Request) {
 	u := a.nonDemoAccount(w, r)
-	if u == nil || refuseKid(w, u) {
+	if u == nil {
 		return
 	}
 	var body struct {

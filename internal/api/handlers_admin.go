@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,27 +15,39 @@ import (
 
 // adminUser is an account as the admin console shows it: the /me fields plus the
 // household member fields only the admin (and the owner's own list) sees.
+// ManagedBy is the one field it replaces: the embedded managed_by with the
+// owner's own typed name added, which the player's managed_by never carries.
 type adminUser struct {
 	*auth.User
-	MemberAccess  *string `json:"member_access"` // "all" | "collections", null for a non-member
-	CanAddMembers bool    `json:"can_add_members"`
-	MembersCount  int     `json:"members_count"`
-	DisplayName   string  `json:"display_name"`
+	ManagedBy     *adminOwner `json:"managed_by"`
+	MemberAccess  *string     `json:"member_access"` // "all" | "collections", null for a non-member
+	CanAddMembers bool        `json:"can_add_members"`
+	MembersCount  int         `json:"members_count"`
+	DisplayName   string      `json:"display_name"`
+}
+
+// adminOwner is a member's owner as the console names them (display_name, else
+// the username).
+type adminOwner struct {
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
 }
 
 func toAdminUser(u *auth.User) adminUser {
-	return adminUser{User: u, MemberAccess: u.MemberAccess, CanAddMembers: u.CanAddMembers,
+	v := adminUser{User: u, MemberAccess: u.MemberAccess, CanAddMembers: u.CanAddMembers,
 		MembersCount: u.MembersCount, DisplayName: u.DisplayName}
+	if o := u.ManagedBy; o != nil {
+		v.ManagedBy = &adminOwner{ID: o.ID, Username: o.Username, DisplayName: o.DisplayName}
+	}
+	return v
 }
 
-// adminMember is one of a person's household members on their console page.
+// adminMember is one of a person's household members on their console page:
+// the owner's list's member (auth.Member) with whether the account is disabled.
 type adminMember struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Access   string `json:"access"`
-	Disabled bool   `json:"disabled"`
+	auth.Member
+	Disabled bool `json:"disabled"`
 }
 
 func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +94,9 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 // needs to manage it: the libraries it can reach (a household member's derived
 // access included), the shares granted to it, its issued auth codes (metadata
 // only - the plaintext codes are never stored), its own household members and,
-// for a member on "collections", the owner's collections shared with it.
+// for a member on "collections", the owner's collections shared with it. A
+// member's detail also carries what their owner reaches (owner_libraries,
+// owner_is_admin), so the console's Access tab needs no second detail.
 func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
@@ -117,7 +130,7 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	own := make([]adminMember, len(members))
 	for i, m := range members {
-		own[i] = adminMember{ID: m.ID, Username: m.Username, Name: m.Name, Kind: m.Kind, Access: m.Access, Disabled: m.Disabled}
+		own[i] = adminMember{Member: m, Disabled: m.Disabled}
 	}
 	shared, err := a.memberCollectionsOf(r.Context(), u)
 	if err != nil {
@@ -125,14 +138,27 @@ func (a *API) handleGetUserDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load household members")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"user":                 toAdminUser(u),
 		"accessible_libraries": libs,
 		"shares":               shares,
 		"auth_codes":           codes,
 		"members":              own,
 		"member_collections":   shared,
-	})
+	}
+	if u.IsMember() {
+		ownerLibs, ownerAdmin := []catalog.Library{}, false
+		if rule := u.MemberRule; rule != nil {
+			ownerAdmin = rule.OwnerAdmin
+			if ownerLibs, err = a.cat.CallerLibraries(r.Context(), catalog.Caller{ID: rule.Owner, Admin: ownerAdmin}); err != nil {
+				a.log.Warn("owner libraries failed", "user", id, "err", err)
+				writeError(w, http.StatusInternalServerError, "could not load access")
+				return
+			}
+		}
+		out["owner_libraries"], out["owner_is_admin"] = ownerLibs, ownerAdmin
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // memberCollectionsOf is the owner's collections shared with u when u is a
@@ -301,8 +327,8 @@ func parseIDList(s string) ([]int64, bool) {
 	}
 	var out []int64
 	for part := range strings.SplitSeq(s, ",") {
-		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
-		if err != nil || id <= 0 {
+		id, ok := parseOptionalID(strings.TrimSpace(part))
+		if !ok || id == 0 {
 			return nil, false
 		}
 		out = append(out, id)

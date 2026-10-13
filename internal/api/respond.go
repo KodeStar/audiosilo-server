@@ -261,6 +261,15 @@ func pathInt(r *http.Request, name string) (int64, bool) {
 	return id, true
 }
 
+// pathID is pathInt answering 400 msg when the segment isn't a number.
+func pathID(w http.ResponseWriter, r *http.Request, name, msg string) (int64, bool) {
+	id, ok := pathInt(r, name)
+	if !ok {
+		writeError(w, http.StatusBadRequest, msg)
+	}
+	return id, ok
+}
+
 // queryInt returns an int query parameter or def when absent/invalid.
 func queryInt(r *http.Request, name string, def int) int {
 	v := r.URL.Query().Get(name)

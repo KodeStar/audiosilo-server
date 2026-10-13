@@ -16,11 +16,7 @@ import (
 
 // collectionID reads {id}, answering 400 when it is not a number.
 func collectionID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, ok := pathInt(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid collection id")
-	}
-	return id, ok
+	return pathID(w, r, "id", "invalid collection id")
 }
 
 // codeNotOwner is a viewer's write to a collection shared with them.
@@ -219,13 +215,10 @@ func (a *API) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Request)
 }
 
 // handleSetCollectionShares replaces who a collection is shared with (owner only;
-// never for a demo account or a kid: 403 kid_account).
+// never for a demo account; a kid's is refused before it, notKid).
 func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) {
 	id, ok := collectionID(w, r)
-	if !ok {
-		return
-	}
-	if u := a.nonDemoAccount(w, r); u == nil || refuseKid(w, u) {
+	if !ok || a.nonDemoAccount(w, r) == nil {
 		return
 	}
 	var in struct {

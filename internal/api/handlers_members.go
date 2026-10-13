@@ -41,13 +41,14 @@ const (
 	codeKidNoPassword      = "kid_no_password"
 )
 
-// The list's reasons a caller may not add members (householdMembers.Reason).
-const (
-	reasonDemo       = "demo"
-	reasonMember     = "member"
-	reasonFeatureOff = "feature_off"
-	reasonNotAllowed = "not_allowed"
-)
+// addReasons names auth.MayAddMembers' refusals as the list's reasons
+// (householdMembers.Reason).
+var addReasons = map[error]string{
+	auth.ErrDemoAccount:        "demo",
+	auth.ErrMemberCannotManage: "member",
+	auth.ErrFeatureOff:         "feature_off",
+	auth.ErrNotAllowed:         "not_allowed",
+}
 
 // householdMember is a member as their owner's list shows it: the account
 // (auth.Member), the owner's collections shared with them (present, maybe empty,
@@ -69,15 +70,18 @@ type householdMembers struct {
 	Members []householdMember `json:"members"`
 }
 
-// refuseKid answers 403 kid_account and returns true when u is a kid member, on
-// the routes a kid's account can't use (a password, API keys, pairing, a
-// recovery code, house sharing, sharing collections).
-func refuseKid(w http.ResponseWriter, u *auth.User) bool {
-	if u.IsKid() {
-		writeErrorCode(w, http.StatusForbidden, codeKidAccount, "not available for a kid's account")
-		return true
-	}
-	return false
+// notKid wraps the routes a kid's account can't use (a password, API keys,
+// pairing, a recovery code, house sharing, sharing collections; api.go): a kid
+// is 403 kid_account before the handler runs. It reads nothing: the request's
+// user carries member_kind from its token lookup.
+func notKid(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u := userFrom(r.Context()); u != nil && u.IsKid() {
+			writeErrorCode(w, http.StatusForbidden, codeKidAccount, "not available for a kid's account")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // refuseMember answers 403 member_cannot_manage and returns true when u is a
@@ -112,11 +116,7 @@ func (a *API) memberOwner(w http.ResponseWriter, r *http.Request, limited bool) 
 
 // memberID reads {id}, answering 400 when it is not a number.
 func memberID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, ok := pathInt(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid member id")
-	}
-	return id, ok
+	return pathID(w, r, "id", "invalid member id")
 }
 
 // writeMemberError maps the member routes' errors; anything else goes to
@@ -225,12 +225,11 @@ func (a *API) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	policy := a.config().Household
 	out := householdMembers{Max: policy.MaxMembers, Members: []householdMember{}}
-	switch {
-	case u.IsDemo:
-		out.Reason = reasonDemo
-	case u.IsMember():
-		out.Reason = reasonMember
-	default:
+	refused := auth.MayAddMembers(u, auth.MemberPolicy{Enabled: policy.MembersEnabled, Max: policy.MaxMembers})
+	out.Allowed, out.Reason = refused == nil, addReasons[refused]
+	// A demo account or a member has no members to list; anyone else's list
+	// shows even while adding is off.
+	if !u.IsDemo && !u.IsMember() {
 		members, err := a.auth.ListMembers(r.Context(), u.ID)
 		if err == nil {
 			out.Members, err = a.decorateMembers(r.Context(), u, members)
@@ -238,14 +237,6 @@ func (a *API) handleListMembers(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			a.writeMemberError(w, err, "list members failed", "could not load your household", "user", u.ID)
 			return
-		}
-		switch {
-		case !policy.MembersEnabled:
-			out.Reason = reasonFeatureOff
-		case !u.CanAddMembers:
-			out.Reason = reasonNotAllowed
-		default:
-			out.Allowed = true
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -376,9 +367,8 @@ func (a *API) handleRevokeMemberDevice(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	device, ok := pathInt(r, "device_id")
+	device, ok := pathID(w, r, "device_id", "invalid device id")
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid device id")
 		return
 	}
 	owner := a.memberOwner(w, r, false)

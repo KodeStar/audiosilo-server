@@ -97,7 +97,7 @@ var fields = []field{
 	{key: "household.members_enabled", env: "AUDIOSILO_HOUSEHOLD_MEMBERS_ENABLED", setting: "household.members_enabled",
 		ptr: func(c *Config) any { return &c.Household.MembersEnabled }},
 	{key: "household.max_members", env: "AUDIOSILO_HOUSEHOLD_MAX_MEMBERS", setting: "household.max_members",
-		ptr: func(c *Config) any { return &c.Household.MaxMembers }, fix: fixMaxMembers},
+		ptr: func(c *Config) any { return &c.Household.MaxMembers }},
 
 	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
 		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
@@ -608,13 +608,6 @@ const MaxDemoUsers = 100000
 func fixMaxUsers(c *Config) error {
 	if n := c.Demo.MaxUsers; n != nil && (*n < 0 || *n > MaxDemoUsers) {
 		return fmt.Errorf("must be from 0 (no limit) to %d", MaxDemoUsers)
-	}
-	return nil
-}
-
-func fixMaxMembers(c *Config) error {
-	if n := c.Household.MaxMembers; n < MinMaxMembers || n > MaxMaxMembers {
-		return fmt.Errorf("must be from %d to %d", MinMaxMembers, MaxMaxMembers)
 	}
 	return nil
 }

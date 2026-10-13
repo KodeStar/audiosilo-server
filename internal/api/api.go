@@ -256,16 +256,16 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /.well-known/assetlinks.json", a.handleAssetLinks)
 
 	// Authenticated (session token).
-	mux.Handle("POST /api/v1/auth/pair", a.requireAuth(http.HandlerFunc(a.handlePair)))
+	mux.Handle("POST /api/v1/auth/pair", a.requireAuth(notKid(http.HandlerFunc(a.handlePair))))
 	mux.Handle("POST /api/v1/auth/logout", a.requireAuth(http.HandlerFunc(a.handleLogout)))
 	// Self-service recovery: set your own password and/or mint a durable recovery
 	// code so you can get back in after signing out without an admin.
-	mux.Handle("POST /api/v1/auth/password", a.requireAuth(http.HandlerFunc(a.handleSetPassword)))
-	mux.Handle("POST /api/v1/auth/recovery", a.requireAuth(http.HandlerFunc(a.handleGenerateRecovery)))
+	mux.Handle("POST /api/v1/auth/password", a.requireAuth(notKid(http.HandlerFunc(a.handleSetPassword))))
+	mux.Handle("POST /api/v1/auth/recovery", a.requireAuth(notKid(http.HandlerFunc(a.handleGenerateRecovery))))
 	mux.Handle("DELETE /api/v1/auth/recovery", a.requireAuth(http.HandlerFunc(a.handleDeleteRecovery)))
 	// Personal API keys: user-minted, non-expiring bearer credentials for headless
 	// integrations. Owner-scoped mint/list/revoke; each key acts as its owner.
-	mux.Handle("POST /api/v1/auth/tokens", a.requireAuth(http.HandlerFunc(a.handleCreateAPIToken)))
+	mux.Handle("POST /api/v1/auth/tokens", a.requireAuth(notKid(http.HandlerFunc(a.handleCreateAPIToken))))
 	mux.Handle("GET /api/v1/auth/tokens", a.requireAuth(http.HandlerFunc(a.handleListAPITokens)))
 	mux.Handle("DELETE /api/v1/auth/tokens/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeAPIToken)))
 	mux.Handle("GET /api/v1/me", a.requireAuth(http.HandlerFunc(a.handleMe)))
@@ -330,7 +330,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleSetCollectionItems)))
 	mux.Handle("POST /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleAddCollectionItem)))
 	mux.Handle("DELETE /api/v1/me/collections/{id}/items", a.requireAuth(http.HandlerFunc(a.handleRemoveCollectionItem)))
-	mux.Handle("PUT /api/v1/me/collections/{id}/shares", a.requireAuth(http.HandlerFunc(a.handleSetCollectionShares)))
+	mux.Handle("PUT /api/v1/me/collections/{id}/shares", a.requireAuth(notKid(http.HandlerFunc(a.handleSetCollectionShares))))
 	mux.Handle("GET /api/v1/me/share-targets", a.requireAuth(http.HandlerFunc(a.handleShareTargets)))
 
 	// Phase 1b: your listening (capability user_stats): the caller's own stats,
@@ -359,7 +359,7 @@ func (a *API) Handler() http.Handler {
 
 	// Phase 8: listening in the house (household) and casting (cast).
 	mux.Handle("GET /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handleGetHousehold)))
-	mux.Handle("PUT /api/v1/me/household", a.requireAuth(http.HandlerFunc(a.handlePutHousehold)))
+	mux.Handle("PUT /api/v1/me/household", a.requireAuth(notKid(http.HandlerFunc(a.handlePutHousehold))))
 	mux.Handle("GET /api/v1/household/listening", a.requireAuth(http.HandlerFunc(a.handleHouseListening)))
 	mux.Handle("POST /api/v1/cast/token", a.requireAuth(http.HandlerFunc(a.handleMintCastToken)))
 

@@ -1358,7 +1358,7 @@ func TestMembers_NotFoundAnswers(t *testing.T) {
 }
 
 // The server reports the capability, and the settings envelope carries the
-// household section.
+// household section with the cap's default and range as read-only facts.
 func TestMembers_CapabilityAndSettings(t *testing.T) {
 	t.Parallel()
 	m := newMemberEnv(t)
@@ -1366,7 +1366,7 @@ func TestMembers_CapabilityAndSettings(t *testing.T) {
 		t.Fatal("no household_members capability")
 	}
 	_, b := m.do(t, "GET", "/api/v1/admin/settings", m.adminTok, "")
-	if !strings.Contains(b, `"household":{"max_members":6,"members_enabled":true}`) {
+	if !strings.Contains(b, `"household":{"max_members":6,"max_members_default":6,"max_members_max":50,"max_members_min":1,"members_enabled":true}`) {
 		t.Fatalf("settings = %s", b)
 	}
 	if resp, b := m.do(t, "PATCH", "/api/v1/admin/settings", m.adminTok, `{"household":{"max_members":0}}`); resp.StatusCode != http.StatusBadRequest {

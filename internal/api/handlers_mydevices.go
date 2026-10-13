@@ -44,11 +44,14 @@ func (a *API) handleListMyDevices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load devices")
 		return
 	}
-	signIns, err := a.auth.MemberSignIns(r.Context(), u.ID)
-	if err != nil {
-		a.log.Warn("list member sign-ins failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not load devices")
-		return
+	// A member has no members of their own, so nothing to read for them.
+	signIns := map[int64][]auth.MemberSignIn{}
+	if !u.IsMember() {
+		if signIns, err = a.auth.MemberSignIns(r.Context(), u.ID); err != nil {
+			a.log.Warn("list member sign-ins failed", "err", err)
+			writeError(w, http.StatusInternalServerError, "could not load devices")
+			return
+		}
 	}
 	current := credentialFrom(r.Context()).ID
 	out := make([]myDevice, len(devices))

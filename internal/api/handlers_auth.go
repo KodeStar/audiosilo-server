@@ -240,15 +240,6 @@ func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	full, err := a.auth.GetUser(r.Context(), u.ID)
-	if err != nil {
-		a.log.Warn("load account failed", "user", u.ID, "err", err)
-		writeError(w, http.StatusInternalServerError, "could not load account")
-		return
-	}
-	if refuseKid(w, full) {
-		return
-	}
 	token, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindPairing, "", pairingTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue pairing token")
@@ -312,7 +303,7 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := a.gateSelfService(w, r)
-	if full == nil || refuseKid(w, full) {
+	if full == nil {
 		return
 	}
 	var req struct {
@@ -351,7 +342,7 @@ func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := a.gateSelfService(w, r)
-	if full == nil || refuseKid(w, full) {
+	if full == nil {
 		return
 	}
 	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID)
@@ -436,7 +427,7 @@ func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := a.gateSelfService(w, r)
-	if full == nil || refuseKid(w, full) {
+	if full == nil {
 		return
 	}
 	var req struct {
