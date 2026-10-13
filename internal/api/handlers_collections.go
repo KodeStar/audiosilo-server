@@ -215,7 +215,8 @@ func (a *API) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Request)
 }
 
 // handleSetCollectionShares replaces who a collection is shared with (owner only;
-// never for a demo account; a kid's is refused before it, notKid).
+// never for a demo account; a kid's is refused before it, notKid, and again in
+// the write for a request racing the owner's switch to kid).
 func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) {
 	id, ok := collectionID(w, r)
 	if !ok || a.nonDemoAccount(w, r) == nil {
@@ -236,6 +237,9 @@ func (a *API) handleSetCollectionShares(w http.ResponseWriter, r *http.Request) 
 	}
 	u := userFrom(r.Context())
 	if err := a.cat.SetCollectionShares(r.Context(), id, u.ID, *in.UserIDs); err != nil {
+		if writeKidRefusal(w, err) {
+			return
+		}
 		a.writeCollectionError(w, err, "set collection shares failed", "could not share the collection", "collection", id)
 		return
 	}

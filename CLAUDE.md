@@ -1372,8 +1372,9 @@ admin overrides; see Metadata overrides below).
   recovery`, `PUT /me/household`, `PUT /me/collections/{id}/shares`, from one route wrapper
   (`api.notKid` in `api.go`, before the handler; wrap any new route a kid can't use), and the writes
   refuse a kid themselves inside their transaction (`auth.refuseKid` in `IssueAPIToken`,
-  `GenerateRecoveryCode`, `IssueOwnPairingToken`; `catalog.SetHouseholdSharing`), so a request that
-  passed `notKid` just before the owner's switch to kid committed can't leave the kid holding one (403
+  `GenerateRecoveryCode`, `IssueOwnPairingToken`; `catalog.SetHouseholdSharing`, `SetCollectionShares`;
+  `SetPassword`'s `ErrKidNoPassword`, which `/auth/password` answers as 403 `kid_account`), so a request
+  that passed `notKid` just before the owner's switch to kid committed can't leave the kid holding one (403
   `kid_account`); switching a grown-up to a kid (or the admin assigning a kid) clears the password,
   API keys, pairing tokens,
   recovery code, still-redeemable invites (`supersedeActiveInvites`), the collections shared between

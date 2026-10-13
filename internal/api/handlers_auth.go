@@ -330,6 +330,13 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.auth.SetPassword(r.Context(), full.ID, req.Password); err != nil {
+		// notKid refused a kid before this; a request that passed it just
+		// before the owner's switch to kid committed is refused in the write
+		// (ErrKidNoPassword, the admin PATCH's 400) and answers as notKid does.
+		if errors.Is(err, auth.ErrKidNoPassword) {
+			writeErrorCode(w, http.StatusForbidden, codeKidAccount, "not available for a kid's account")
+			return
+		}
 		a.writeUserError(w, err, "could not update password")
 		return
 	}

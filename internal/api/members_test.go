@@ -1787,8 +1787,9 @@ func TestMembers_Routes_Denied(t *testing.T) {
 // The kid refusals hold in the writes too, not only in notKid's look at the
 // request's token: a grown-up's request that passed notKid and lands after the
 // owner's switch to kid (here a slow client, whose body arrives after the
-// switch) is 403 kid_account and leaves no API key or house sharing behind.
-// Allowed: the same requests before the switch work.
+// switch) is 403 kid_account and leaves no API key, house sharing, password or
+// collection share with anyone but the owner behind. Allowed: the same requests
+// before the switch work.
 func TestMembers_KidRefusalRacesTheSwitch(t *testing.T) {
 	t.Parallel()
 	m := newMemberEnv(t)
@@ -1799,6 +1800,12 @@ func TestMembers_KidRefusalRacesTheSwitch(t *testing.T) {
 	}
 	if s := m.status(t, "PUT", "/api/v1/me/household", ellisTok, `{"share_listening":true}`); s != http.StatusOK {
 		t.Fatalf("grown-up's sharing = %d", s)
+	}
+	col := m.collection(t, ellisTok, "Ellis's", cradleBook)
+	sharesURL := fmt.Sprintf("/api/v1/me/collections/%d/shares", col)
+	bobBody := fmt.Sprintf(`{"user_ids":[%d]}`, m.bob)
+	if s := m.status(t, "PUT", sharesURL, ellisTok, bobBody); s != http.StatusOK {
+		t.Fatalf("grown-up's share = %d", s)
 	}
 	// slow starts method path on a fresh session of ellis's (last_seen NULL, so
 	// the request's token touch shows it got past the lookup) and returns a func
@@ -1850,6 +1857,8 @@ func TestMembers_KidRefusalRacesTheSwitch(t *testing.T) {
 	}
 	key := slow("POST", "/api/v1/auth/tokens")
 	share := slow("PUT", "/api/v1/me/household")
+	password := slow("POST", "/api/v1/auth/password")
+	colShare := slow("PUT", sharesURL)
 	if s := m.status(t, "PATCH", memberURL(ellis.ID, ""), m.adamTok, `{"kind":"kid"}`); s != http.StatusOK {
 		t.Fatalf("to kid = %d", s)
 	}
@@ -1858,6 +1867,24 @@ func TestMembers_KidRefusalRacesTheSwitch(t *testing.T) {
 	}
 	if s, b := share(`{"share_listening":true}`); s != http.StatusForbidden || codeOf(b) != "kid_account" {
 		t.Errorf("house sharing across the switch = %d %s", s, b)
+	}
+	// The self-service password answers as notKid does (403 kid_account), not
+	// the admin PATCH's 400 kid_no_password.
+	if s, b := password(`{"password":"late-password-1"}`); s != http.StatusForbidden || codeOf(b) != "kid_account" {
+		t.Errorf("password across the switch = %d %s", s, b)
+	}
+	if s, b := colShare(bobBody); s != http.StatusForbidden || codeOf(b) != "kid_account" {
+		t.Errorf("collection share across the switch = %d %s", s, b)
+	}
+	if u, err := m.auth.GetUser(ctx, ellis.ID); err != nil || u.HasPassword {
+		t.Errorf("the kid holds a password: %+v %v", u, err)
+	}
+	var shared int
+	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM collection_shares WHERE collection_id = ?`, col).Scan(&shared); err != nil {
+		t.Fatal(err)
+	}
+	if shared != 0 {
+		t.Errorf("the kid's collection is shared with %d people", shared)
 	}
 	var keys, rows int
 	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ? AND kind = 'api' AND revoked = 0`, ellis.ID).Scan(&keys); err != nil {

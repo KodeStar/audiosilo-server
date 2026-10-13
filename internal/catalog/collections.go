@@ -526,7 +526,9 @@ func (c *Catalog) RemoveCollectionItem(ctx context.Context, id, userID int64, re
 // (household member) but the owner's own, else
 // ErrUnknownUser and nothing changes; more than MaxCollectionShares (after
 // duplicates collapse) is ErrTooManyShares. Who may change it is settled first: a
-// stranger is ErrNotFound and a viewer ErrNotOwner whatever the list holds.
+// kid is ErrKidAccount (read in the write's transaction, so a request racing the
+// owner's switch to kid can't re-share a kid's collection), a stranger
+// ErrNotFound and a viewer ErrNotOwner, whatever the list holds.
 func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, userIDs []int64) error {
 	// The ids go in as one JSON array (json_each), so the statements stay
 	// constant: set-based, with nothing concatenated into SQL in a transaction.
@@ -535,6 +537,14 @@ func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, use
 		return err
 	}
 	return c.db.WithTx(ctx, "SetCollectionShares", func(tx *sql.Tx) error {
+		var kid bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE id = ? AND `+isKidSQL+`)`,
+			userID).Scan(&kid); err != nil {
+			return err
+		}
+		if kid {
+			return ErrKidAccount
+		}
 		if err := requireOwner(ctx, tx, id, userID); err != nil {
 			return err
 		}

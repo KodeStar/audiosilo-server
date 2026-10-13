@@ -83,7 +83,7 @@ function MemberRows({ user: u }: { user: AdminUser }) {
       </SettingRow>
       <SettingRow
         title={t('user.household.assign')}
-        description={t('user.household.moveBody', { name: u.username, owner })}
+        description={t('user.household.moveBody', { name: u.username })}
       >
         <Button variant="outline" onClick={() => setAssigning(true)}>
           <UserRoundPlus aria-hidden="true" />

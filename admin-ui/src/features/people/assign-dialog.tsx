@@ -82,8 +82,8 @@ function AssignForm({ user, onDone }: { user: AdminUser; onDone: () => void }) {
     try {
       await api.updateUser(user.id, assignPatch(owner.id, kind, chosenAccess));
       invalidatePeople(qc);
-      // A kid loses their API keys, and a move signs them out of the devices
-      // their old owner set up: the device lists change too.
+      // A kid loses their API keys, and a move signs them out on other
+      // people's devices but the new owner's: the device lists change too.
       invalidateDevices(qc);
       toast.add({
         title: t('user.household.assigned', { name: user.username, owner: displayName(owner) }),
