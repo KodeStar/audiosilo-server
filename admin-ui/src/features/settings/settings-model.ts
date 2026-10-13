@@ -65,12 +65,12 @@ export function listToText(list: readonly string[]): string {
 
 /**
  * Whether a number field's text is outside its whole-number range, checked
- * before saving (the server refuses the same). Blank is not: it means the
- * default.
+ * before saving (the server refuses the same). Blank is too: a ranged setting
+ * always holds a number (the server refuses null for it, "enter a value").
  */
 export function outOfRange(text: string, min: number, max: number): boolean {
   const s = text.trim();
-  if (s === '') return false;
+  if (s === '') return true;
   const n = Number(s);
   return !Number.isInteger(n) || n < min || n > max;
 }

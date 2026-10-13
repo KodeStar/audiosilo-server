@@ -35,7 +35,9 @@ export function AuditPage() {
     [area, actor, q],
   );
   const audit = useAudit(filter);
-  const admins = (useUsers().data ?? []).filter((u) => u.role === 'admin');
+  // Who acts in the log: the admins, and the people who manage household
+  // members from the player (member.*): anyone but a demo account or a member.
+  const actors = (useUsers().data ?? []).filter((u) => !u.is_demo && !u.managed_by);
   const events = audit.data?.pages.flatMap((p) => p.events) ?? [];
   const filtered = Boolean(area || actor || q);
 
@@ -63,7 +65,7 @@ export function AuditPage() {
           aria-label={t('audit.filter.person')}
         >
           <option value="">{t('audit.filter.everyone')}</option>
-          {admins.map((u) => (
+          {actors.map((u) => (
             <option key={u.id} value={u.id}>
               {u.username}
             </option>

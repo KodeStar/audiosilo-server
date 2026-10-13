@@ -83,7 +83,7 @@ function MemberRows({ user: u }: { user: AdminUser }) {
       </SettingRow>
       <SettingRow
         title={t('user.household.assign')}
-        description={t('user.household.moveBody', { name: u.username })}
+        description={t('user.household.moveBody', { name: u.username, owner })}
       >
         <Button variant="outline" onClick={() => setAssigning(true)}>
           <UserRoundPlus aria-hidden="true" />
@@ -124,6 +124,9 @@ function OwnerRows({ detail }: { detail: UserDetail }) {
   const qc = useQueryClient();
   const settings = useSettings();
   const [assigning, setAssigning] = useState(false);
+  // The switch shows the server's value: it stays disabled while the save runs,
+  // so a second click can't send the same change twice.
+  const [saving, setSaving] = useState(false);
   const u = detail.user;
   const members = detail.members ?? [];
   const household = settings.data?.household;
@@ -133,6 +136,7 @@ function OwnerRows({ detail }: { detail: UserDetail }) {
   const hasMembers = u.members_count > 0;
 
   const setCanAdd = async (on: boolean) => {
+    setSaving(true);
     try {
       await api.updateUser(u.id, { can_add_members: on });
       invalidatePeople(qc);
@@ -145,6 +149,8 @@ function OwnerRows({ detail }: { detail: UserDetail }) {
       });
     } catch (err) {
       toastError(t('user.account.failed'), err);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -180,6 +186,7 @@ function OwnerRows({ detail }: { detail: UserDetail }) {
         <Switch
           id="can-add-members"
           checked={u.can_add_members}
+          disabled={saving}
           onCheckedChange={(on) => void setCanAdd(on)}
           aria-describedby="can-add-members-desc"
         />

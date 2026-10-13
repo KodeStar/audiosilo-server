@@ -296,9 +296,15 @@ function FieldRow({
   onChange: (v: DraftValue) => void;
   error?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const label = t(`settings.${settingId}`);
-  const body = t(`settings.${settingId}Body`, { defaultValue: '' });
+  // A ranged number's description names its range from the server's facts.
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const range =
+    spec.kind === 'number' && spec.range
+      ? { min: formatNumber(spec.range.min, lang), max: formatNumber(spec.range.max, lang) }
+      : {};
+  const body = t(`settings.${settingId}Body`, { defaultValue: '', ...range });
   const locked = Boolean(lockOf(settings, settingId));
   const ariaDescribedBy = describedBy(id, Boolean(error), Boolean(body));
   const wide = spec.kind === 'list' || spec.kind === 'radio';

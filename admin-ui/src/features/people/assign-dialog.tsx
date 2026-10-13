@@ -3,9 +3,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { House, Info, TriangleAlert } from 'lucide-react';
 import { api } from '@/api/client';
-import { invalidatePeople, useUsers } from '@/api/hooks';
+import { invalidateDevices, invalidatePeople, useUsers } from '@/api/hooks';
 import type { AdminUser, MemberAccess, MemberKind } from '@/api/types';
 import { Notice } from '@/components/notice';
+import { QueryError } from '@/components/query-error';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { Field, FormError } from '@/components/ui/field';
 import { NativeSelect } from '@/components/ui/native-select';
@@ -81,6 +82,9 @@ function AssignForm({ user, onDone }: { user: AdminUser; onDone: () => void }) {
     try {
       await api.updateUser(user.id, assignPatch(owner.id, kind, chosenAccess));
       invalidatePeople(qc);
+      // A kid loses their API keys, and a move signs them out of the devices
+      // their old owner set up: the device lists change too.
+      invalidateDevices(qc);
       toast.add({
         title: t('user.household.assigned', { name: user.username, owner: displayName(owner) }),
         type: 'success',
@@ -97,6 +101,12 @@ function AssignForm({ user, onDone }: { user: AdminUser; onDone: () => void }) {
       <DialogBody className="flex flex-col gap-4">
         {users.isPending ? (
           <div className="skel h-24" role="status" aria-label={t('common.loading')} />
+        ) : users.isError && !users.data ? (
+          <QueryError
+            title={t('people.error')}
+            error={users.error}
+            onRetry={() => void users.refetch()}
+          />
         ) : targets.length === 0 ? (
           <p className="text-muted-foreground">
             {t('user.household.noOwners', { name: user.username })}

@@ -23,7 +23,10 @@ export interface ServerInfo {
   demo: { enabled: boolean };
 }
 
-/** auth.User (internal/auth/auth.go). Returned by /me and login. */
+/**
+ * auth.User (internal/auth/auth.go), as /me and login answer it (api.meUser,
+ * handlers_auth.go).
+ */
 export interface User {
   id: number;
   username: string;
@@ -37,6 +40,8 @@ export interface User {
   managed_by: UserRef | null;
   /** A household member's kind (null for anyone else). */
   member_kind: MemberKind | null;
+  /** A household member's name as their owner typed it (api.meUser; absent for anyone else). */
+  display_name?: string;
 }
 
 /** auth.UserRef: a person named by id and username. */
@@ -76,7 +81,10 @@ export interface AdminUser extends User {
   display_name: string;
 }
 
-/** One of a person's own household members, in GET /admin/users/{id}'s `members`. */
+/**
+ * One of a person's own household members, in GET /admin/users/{id}'s `members`
+ * (api.adminMember, handlers_admin.go: auth.Member plus `disabled`).
+ */
 export interface AdminMember {
   id: number;
   username: string;
@@ -84,6 +92,10 @@ export interface AdminMember {
   name: string;
   kind: MemberKind;
   access: MemberAccess;
+  /** When the member was added: fixed-width millisecond UTC. */
+  created_at: string;
+  /** Their live sessions and API keys. */
+  devices: number;
   disabled: boolean;
 }
 

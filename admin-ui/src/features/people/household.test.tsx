@@ -33,8 +33,26 @@ const ellis: AdminUser = {
 const everyone = [admin, ellis, evie, sam, adam];
 
 const adamMembers: AdminMember[] = [
-  { id: 6, username: 'evie', name: 'Evie', kind: 'kid', access: 'collections', disabled: false },
-  { id: 7, username: 'ellis', name: 'Ellis', kind: 'grownup', access: 'all', disabled: false },
+  {
+    id: 6,
+    username: 'evie',
+    name: 'Evie',
+    kind: 'kid',
+    access: 'collections',
+    created_at: '2026-10-01T09:00:00.000Z',
+    devices: 1,
+    disabled: false,
+  },
+  {
+    id: 7,
+    username: 'ellis',
+    name: 'Ellis',
+    kind: 'grownup',
+    access: 'all',
+    created_at: '2026-10-02T09:00:00.000Z',
+    devices: 0,
+    disabled: false,
+  },
 ];
 
 function detail(user: AdminUser, over: Partial<UserDetail> = {}): UserDetail {
@@ -350,7 +368,9 @@ describe('assigning someone to a household', () => {
       within(dialog).getByRole('radio', { name: /^Only collections adam shares/ }),
     ).toBeChecked();
     expect(within(dialog).getByText(/removes their password/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/sees no books from adam until adam/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/gets books from adam only through the collections adam shares/),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Assign to someone' }));
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
