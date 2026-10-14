@@ -5,6 +5,7 @@ import { useDuplicates, useLibraryRoots } from '@/api/hooks';
 import type { DuplicateGroup, DuplicateMember } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { QueryError } from '@/components/query-error';
+import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { audioLine } from '@/features/book/book-model';
@@ -89,7 +90,9 @@ function GroupCard({
             {t(`health.dup.reason.${g.reason}`, { count: g.books.length })}
           </span>
           {unsure && (
-            <span className="text-[12.5px] text-warning">{t('health.dup.lengthDiffers')}</span>
+            <StatusText tone="warn" colored className="text-[12.5px]">
+              {t('health.dup.lengthDiffers')}
+            </StatusText>
           )}
         </div>
         <Badge variant="info">

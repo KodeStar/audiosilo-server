@@ -321,6 +321,12 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	c := &cands[0]
 	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
 	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region))
+	// The record the book's own identifier names, but another edition by length
+	// (an unabridged book holding its dramatization's ASIN): its details are not
+	// written unasked.
+	if !lengthFits(item.Proposal, b.Duration) {
+		item.Outcome = catalog.OutcomeReview
+	}
 	// The book keeps its own identifiers (switching marketplace is a repick's):
 	// a proposal without them writes none, and the review shows none of the
 	// community's (another marketplace's ASIN, say) as if applying set them.

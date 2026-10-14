@@ -15,7 +15,6 @@
 package matchrun
 
 import (
-	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -28,13 +27,12 @@ import (
 // What a match must have to be applied unasked: a score of at least AutoScore,
 // AutoLead ahead of the next candidate (two works that both fit are a choice for
 // the admin), an ASIN or ISBN to attach (the book counts as matched by it), and,
-// when both lengths are known, a recording within AutoRuntimeOff of the book's
+// when both lengths are known, a recording within meta.PlausibleRuntimeOff of the book's
 // length (the closest recording of a work can still be another edition: the
 // unabridged book of a work that holds only its dramatization).
 const (
-	AutoScore      = 90
-	AutoLead       = 10
-	AutoRuntimeOff = 0.10
+	AutoScore = 90
+	AutoLead  = 10
 )
 
 // How much applying a run may write.
@@ -322,6 +320,14 @@ func PlanRepick(st *catalog.MatchState, p catalog.MatchProposal) map[string]stri
 	return map[string]string{catalog.FieldASIN: asin}
 }
 
+// lengthFits reports whether a proposal's recording may be the book's edition by
+// length: within meta.PlausibleRuntimeOff of the book's seconds, or either length
+// unknown. Nothing is applied unasked otherwise (Classify, a refresh).
+func lengthFits(p catalog.MatchProposal, seconds float64) bool {
+	off, known := meta.RuntimeOff(p.RuntimeMin, seconds)
+	return !known || off <= meta.PlausibleRuntimeOff
+}
+
 // Classify sorts a book's candidates (best first) into an outcome: confident
 // (OutcomeAuto), worth a look (OutcomeReview) or none, with the best score and the
 // next one's. p is the proposal of the best and seconds the book's length (0 =
@@ -335,9 +341,7 @@ func Classify(cands []meta.MatchCandidate, p catalog.MatchProposal, seconds floa
 		runnerUp = cands[1].Score
 	}
 	identified := p.Values[catalog.FieldASIN] != "" || p.Values[catalog.FieldISBN] != ""
-	lengthFits := p.RuntimeMin <= 0 || seconds <= 0 ||
-		math.Abs(float64(p.RuntimeMin)*60-seconds) <= AutoRuntimeOff*seconds
-	if score >= AutoScore && score-runnerUp >= AutoLead && identified && lengthFits {
+	if score >= AutoScore && score-runnerUp >= AutoLead && identified && lengthFits(p, seconds) {
 		return catalog.OutcomeAuto, score, runnerUp
 	}
 	return catalog.OutcomeReview, score, runnerUp

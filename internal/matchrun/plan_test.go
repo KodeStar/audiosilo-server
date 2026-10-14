@@ -393,3 +393,22 @@ func TestPlanOverwriteRevertsOnlyWhatItCan(t *testing.T) {
 		t.Fatalf("a list that can't be stored = revert %v, want the book's kept", w.Revert)
 	}
 }
+
+func TestLengthFits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		runtimeMin int
+		seconds    float64
+		want       bool
+	}{
+		{634, 634 * 60, true},
+		{600, 634 * 60, true},  // 5% short
+		{357, 433 * 60, false}, // the dramatization against the unabridged book
+		{0, 634 * 60, true},    // the recording states no runtime
+		{634, 0, true},         // the book's length is unknown
+	} {
+		if got := lengthFits(catalog.MatchProposal{RuntimeMin: tc.runtimeMin}, tc.seconds); got != tc.want {
+			t.Errorf("lengthFits(%d min, %v s) = %v, want %v", tc.runtimeMin, tc.seconds, got, tc.want)
+		}
+	}
+}

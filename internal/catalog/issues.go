@@ -196,10 +196,10 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 
 // DuplicateGroup is a set of books in one library that look like the same book.
 // Books[0] is the copy worth keeping (format, single file, bitrate, listeners),
-// except under DupIDLengthDiffers, where the order says nothing about which to keep.
+// except under dupIDLengthDiffers, where the order says nothing about which to keep.
 type DuplicateGroup struct {
 	// Reason is the strongest claim the group's joins support (dupSet.reason): one
-	// of DupIDLengthDiffers, DupSameFiles, DupSameID or DupSameBook.
+	// of dupIDLengthDiffers, dupSameFiles, dupSameID or dupSameBook.
 	Reason  string            `json:"reason"`
 	Ignored bool              `json:"ignored"`
 	Books   []DuplicateMember `json:"books"`
@@ -235,26 +235,26 @@ func (r *dupRow) quality() Book {
 // The reasons a duplicate group gives (DuplicateGroup.Reason), from the joins
 // that formed it (dupJoin).
 const (
-	// DupSameFiles: byte-identical audio (fingerprint and size).
-	DupSameFiles = "same_files"
-	// DupSameID: a shared ASIN or ISBN, of a matching length (sameLength).
-	DupSameID = "same_id"
-	// DupIDLengthDiffers: a shared ASIN or ISBN of lengths that don't match: not
+	// dupSameFiles: byte-identical audio (fingerprint and size).
+	dupSameFiles = "same_files"
+	// dupSameID: a shared ASIN or ISBN, of a matching length (sameLength).
+	dupSameID = "same_id"
+	// dupIDLengthDiffers: a shared ASIN or ISBN of lengths that don't match: not
 	// plain copies (one may be matched to the wrong recording, or is incomplete).
-	DupIDLengthDiffers = "id_length_differs"
-	// DupSameBook: author/title/narrator (metaKey) of a matching length.
-	DupSameBook = "same_book"
+	dupIDLengthDiffers = "id_length_differs"
+	// dupSameBook: author/title/narrator (metaKey) of a matching length.
+	dupSameBook = "same_book"
 )
 
-// dupJoin is a bit set of the kinds of join that put a copy in its group. A join
-// marks both its ends, so a group's joins are its members' bits ORed together.
+// dupJoin is a bit set of the kinds of join that put a copy in its group, marked on
+// one copy of each join, so a group's joins are its members' bits ORed together. A
+// join by author/title/narrator marks nothing: it is the reason when no other is.
 type dupJoin uint8
 
 const (
 	joinFiles     dupJoin = 1 << iota // identical audio: hash and size
 	joinID                            // shared ASIN/ISBN, matching length
 	joinIDDiffers                     // shared ASIN/ISBN, lengths that don't match
-	joinMeta                          // metaKey, matching length
 )
 
 // dupSet is one group of copies: indexes into the rows, best copy first.
@@ -272,13 +272,13 @@ type dupSet struct {
 func (s dupSet) reason() string {
 	switch {
 	case s.joins&joinIDDiffers != 0:
-		return DupIDLengthDiffers
+		return dupIDLengthDiffers
 	case s.joins&joinFiles != 0:
-		return DupSameFiles
+		return dupSameFiles
 	case s.joins&joinID != 0:
-		return DupSameID
+		return dupSameID
 	default:
-		return DupSameBook
+		return dupSameBook
 	}
 }
 
@@ -293,13 +293,48 @@ func sameLength(a, b float64) bool {
 	return math.Abs(a-b) <= math.Max(60, 0.02*math.Max(a, b))
 }
 
+// idHolders is what duplicate detection keeps of the books sharing one ASIN or
+// ISBN: the first (every other joins it), how many, and the range of their known
+// lengths.
+type idHolders struct {
+	first, n int
+	min, max float64 // the known lengths' range
+	known    bool
+}
+
+func (h *idHolders) add(duration float64) {
+	h.n++
+	if duration <= 0 {
+		return
+	}
+	if !h.known || duration < h.min {
+		h.min = duration
+	}
+	if !h.known || duration > h.max {
+		h.max = duration
+	}
+	h.known = true
+}
+
+// join is how the holders joined: joinIDDiffers when two known lengths are not
+// sameLength, else joinID. sameLength of the shortest and the longest is that: its
+// tolerance grows with the longer length, so the extremes passing means every pair
+// does. An unknown length (no ffprobe) says nothing either way, so it never makes
+// the lengths differ.
+func (h idHolders) join() dupJoin {
+	if h.known && !sameLength(h.min, h.max) {
+		return joinIDDiffers
+	}
+	return joinID
+}
+
 // duplicateSets finds the groups of copies within each library (of one library,
 // or all with libraryID 0): books sharing an identity signal (identitySignals),
 // except that audio must also match in size (an identical first part is not a
 // copy) and author/title/narrator only joins copies of a matching length (an
 // abridged edition is not a copy). A shared ASIN or ISBN joins whatever the
-// lengths, each pair of its holders compared so the group's reason can say when
-// they differ (dupSet.reason). Copies in different libraries are deliberate,
+// lengths, and the group's reason says when any two of its holders differ
+// (dupSet.reason; idHolders). Copies in different libraries are deliberate,
 // and players already show one, so they never group. The discs of a book split
 // across disc folders look alike (one title, similar lengths) but are listed under
 // their own issue, whose fix joins them, so they never group either.
@@ -321,14 +356,9 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 	}
 	set := newDisjointSet(len(rows))
 	joins := make([]dupJoin, len(rows))
-	join := func(a, b int, kind dupJoin) {
-		set.union(a, b)
-		joins[a] |= kind
-		joins[b] |= kind
-	}
-	files := map[string]int{}    // the first book with this audio
-	byID := map[string][]int{}   // every book with this ASIN/ISBN
-	byMeta := map[string][]int{} // every book with this author/title/narrator
+	files := map[string]int{}      // the first book with this audio
+	byID := map[string]idHolders{} // the books with this ASIN/ISBN
+	byMeta := map[string][]int{}   // every book with this author/title/narrator
 	for i := range rows {
 		r := &rows[i]
 		lib := strconv.FormatInt(r.libraryID, 10) + ":"
@@ -339,32 +369,35 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 			case strings.HasPrefix(sig, "h:"):
 				key := lib + sig + ":" + strconv.FormatInt(r.size, 10)
 				if j, ok := files[key]; ok {
-					join(i, j, joinFiles)
+					set.union(i, j)
+					joins[i] |= joinFiles
 				} else {
 					files[key] = i
 				}
 			default: // "a:" or "i:"
-				byID[lib+sig] = append(byID[lib+sig], i)
+				key := lib + sig
+				h, ok := byID[key]
+				if !ok {
+					h.first = i
+				} else {
+					set.union(h.first, i)
+				}
+				h.add(r.duration)
+				byID[key] = h
 			}
 		}
 		r.author, r.narrator, r.asin, r.isbn, r.hash = "", "", "", "", ""
 	}
-	for _, idx := range byID {
-		for x := range idx {
-			for _, y := range idx[x+1:] {
-				kind := joinIDDiffers
-				if sameLength(rows[idx[x]].duration, rows[y].duration) {
-					kind = joinID
-				}
-				join(idx[x], y, kind)
-			}
+	for _, h := range byID {
+		if h.n > 1 {
+			joins[h.first] |= h.join()
 		}
 	}
 	for _, idx := range byMeta {
 		for x := range idx {
 			for _, y := range idx[x+1:] {
 				if sameLength(rows[idx[x]].duration, rows[y].duration) {
-					join(idx[x], y, joinMeta)
+					set.union(idx[x], y)
 				}
 			}
 		}

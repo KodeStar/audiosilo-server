@@ -642,3 +642,21 @@ func TestRefreshSkipsABookMatchedAgain(t *testing.T) {
 		t.Fatalf("title = %q, want the new match's kept", b.Title)
 	}
 }
+
+// TestRefreshHoldsAnotherEdition: a book whose own ASIN names a recording of
+// another length (an unabridged book holding its dramatization's ASIN) is not
+// refreshed unasked: the record is offered for review, not applied.
+func TestRefreshHoldsAnotherEdition(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.book(t, "A/Unabridged", "Martian", "B0US000001", nil) // 634 min
+	hit := cand("the-martian", 100, "")
+	hit.RecordingID = "bray"
+	hit.Recordings[0].RuntimeMin = 500 // 21% short
+	e.matcher.byASIN["B0US000001"] = []meta.MatchCandidate{hit}
+
+	run := e.start(t, catalog.MatchModeRefresh, "")
+	if run.Counts.Auto != 0 || run.Counts.Review != 1 {
+		t.Fatalf("refresh run = %+v, want the book held for review", run)
+	}
+}

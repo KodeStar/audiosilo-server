@@ -198,10 +198,10 @@ func TestDuplicateGroups(t *testing.T) {
 		}
 		byKeep[g.Books[0].Path] = g
 	}
-	if g := byKeep["Dune"]; g.Reason != DupSameFiles || g.Books[1].Path != "Dune (copy)" {
+	if g := byKeep["Dune"]; g.Reason != dupSameFiles || g.Books[1].Path != "Dune (copy)" {
 		t.Fatalf("Dune group = %+v", g)
 	}
-	if g := byKeep["Hail Mary"]; g.Reason != DupSameBook || g.Books[1].Path != "Hail Mary mp3" {
+	if g := byKeep["Hail Mary"]; g.Reason != dupSameBook || g.Books[1].Path != "Hail Mary mp3" {
 		t.Fatalf("Hail Mary group = %+v (the m4b is the copy to keep)", g)
 	}
 
@@ -246,50 +246,50 @@ func TestDuplicateReasons(t *testing.T) {
 				Author: "William W. Johnstone", Narrator: "full cast", ASIN: "B00X", Duration: h57},
 			{RelPath: "Last Gunfighter/The Burning", Title: "The Burning", Author: "William W. Johnstone",
 				Narrator: "George Guidall", ASIN: "B00X", Duration: h13},
-		}, DupIDLengthDiffers, 2},
+		}, dupIDLengthDiffers, 2},
 		{"a shared ASIN of matching lengths", []Book{
 			{RelPath: "a", Title: "One title", Author: "A", ASIN: "B01", Duration: 36000},
 			{RelPath: "b", Title: "Another title", Author: "B", ASIN: "b01", Duration: 36030},
-		}, DupSameID, 2},
+		}, dupSameID, 2},
 		{"a shared ISBN of matching lengths", []Book{
 			{RelPath: "a", Title: "One", Author: "A", ISBN: "9780000000002", Duration: 36000},
 			{RelPath: "b", Title: "Two", Author: "B", ISBN: "9780000000002", Duration: 36000},
-		}, DupSameID, 2},
+		}, dupSameID, 2},
 		{"a shared ASIN, both lengths unknown", []Book{
 			{RelPath: "a", Title: "One", ASIN: "B02"},
 			{RelPath: "b", Title: "Two", ASIN: "B02"},
-		}, DupSameID, 2},
-		{"a shared ASIN, one length unknown", []Book{
+		}, dupSameID, 2},
+		{"a shared ASIN, one length unknown (no evidence they differ)", []Book{
 			{RelPath: "a", Title: "One", ASIN: "B03"},
 			{RelPath: "b", Title: "Two", ASIN: "B03", Duration: 36000},
-		}, DupIDLengthDiffers, 2},
+		}, dupSameID, 2},
 		// Each within the tolerance of the next, but not the first of the last.
 		{"every pair of an ASIN's holders compared", []Book{
 			{RelPath: "a", Title: "One", ASIN: "B04", Duration: 6000},
 			{RelPath: "b", Title: "Two", ASIN: "B04", Duration: 6100},
 			{RelPath: "c", Title: "Three", ASIN: "B04", Duration: 6200},
-		}, DupIDLengthDiffers, 3},
+		}, dupIDLengthDiffers, 3},
 		{"author/title/narrator of matching lengths", []Book{
 			{RelPath: "a", Title: "Dune", Author: "Frank Herbert", Duration: 36000},
 			{RelPath: "b", Title: "Dune", Author: "Frank Herbert", Duration: 36020},
-		}, DupSameBook, 2},
+		}, dupSameBook, 2},
 		{"a shared ASIN outranks author/title/narrator", []Book{
 			{RelPath: "a", Title: "Dune", Author: "Frank Herbert", ASIN: "B05", Duration: 36000},
 			{RelPath: "b", Title: "Dune rip", Author: "X", ASIN: "B05", Duration: 36010},
 			{RelPath: "c", Title: "Dune rip", Author: "X", Duration: 36020},
-		}, DupSameID, 3},
+		}, dupSameID, 3},
 		{"identical audio outranks a shared ASIN", []Book{
 			{RelPath: "a", Title: "One", ASIN: "B06", ContentHash: "h", Size: 10, Duration: 36000},
 			{RelPath: "b", Title: "Two", ASIN: "B06", ContentHash: "h", Size: 10, Duration: 36000},
 			{RelPath: "c", Title: "Three", ASIN: "B06", Duration: 36030},
-		}, DupSameFiles, 3},
+		}, dupSameFiles, 3},
 		// The third shares the copies' ASIN at another length: a different recording
 		// in the group, so it is never worded as identical copies.
 		{"different lengths outrank identical audio", []Book{
 			{RelPath: "a", Title: "One", ContentHash: "h", Size: 10, Duration: 36000},
 			{RelPath: "b", Title: "Two", ASIN: "B07", ContentHash: "h", Size: 10, Duration: 36000},
 			{RelPath: "c", Title: "Three", ASIN: "B07", Duration: 20000},
-		}, DupIDLengthDiffers, 3},
+		}, dupIDLengthDiffers, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
