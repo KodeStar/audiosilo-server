@@ -1643,6 +1643,8 @@
   "settings.network.mode.selfsignedBody": "Verschlüsselt, aber Browser warnen beim ersten Mal. Gut für ein Heimnetz.",
   "settings.network.mode.autocert": "Let's Encrypt",
   "settings.network.mode.autocertBody": "Kostenlose vertrauenswürdige Zertifikate, automatisch erneuert. Erfordert aus dem Internet erreichbare Ports 80 und 443.",
+  "settings.network.tls_home_http": "Einfaches HTTP im Heimnetz",
+  "settings.network.tls_home_httpBody": "Die Handy-Apps können einem selbstsignierten Zertifikat nicht vertrauen, deshalb beantwortet dieser Port Geräten in deinem Heimnetz auch einfaches HTTP. Alles andere wird zu HTTPS umgeleitet. Unterwegs brauchen die Apps Let's Encrypt oder einen Reverse Proxy.",
   "settings.network.tls_hosts": "Zertifikatsnamen",
   "settings.network.tls_hostsBody": "Einer pro Zeile, z. B. books.example.com. Jeder muss auf diesen Server zeigen.",
   "settings.network.cert.title": "Zertifikat",

@@ -182,6 +182,37 @@ func TestApplyEnvOverrides(t *testing.T) {
 	}
 }
 
+// tls.home_http is on by default, also for a config.yaml written before it
+// existed (a tls section without the key); a file or AUDIOSILO_TLS_HOME_HTTP turns
+// it off.
+func TestHomeHTTPDefault(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte("tls:\n  mode: selfsigned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.TLS.HomeHTTP || !c.ServesHomeHTTP() {
+		t.Fatal("home_http must default to on when config.yaml doesn't set it")
+	}
+
+	if err := os.WriteFile(Path(dir), []byte("tls:\n  mode: selfsigned\n  home_http: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, err = Load(dir); err != nil || c.TLS.HomeHTTP {
+		t.Fatalf("home_http: false in config.yaml must turn it off (err %v)", err)
+	}
+
+	t.Setenv("AUDIOSILO_TLS_HOME_HTTP", "false")
+	c = Default(t.TempDir())
+	applyEnv(c)
+	if c.TLS.HomeHTTP || c.ServesHomeHTTP() {
+		t.Fatal("AUDIOSILO_TLS_HOME_HTTP=false must turn home HTTP off")
+	}
+}
+
 func TestSplitList(t *testing.T) {
 	got := splitList(" a , ,b,c ")
 	if !reflect.DeepEqual(got, []string{"a", "b", "c"}) {

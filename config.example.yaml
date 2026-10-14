@@ -31,7 +31,8 @@ public_url: ""
 # switch to it by themselves when they can reach it, using public_url when away.
 # If empty, the address a request arrived on is used when it is a home-network
 # one (a private or link-local IP, a .local/.lan/.home.arpa/.internal or single-label
-# name; never localhost).                             [AUDIOSILO_LAN_URL]
+# name; never localhost), as http:// when tls.home_http serves plain HTTP there.
+#                                                     [AUDIOSILO_LAN_URL]
 lan_url: ""
 
 tls:
@@ -39,6 +40,14 @@ tls:
   # selfsigned - generate & persist a self-signed cert (default; good for LAN)
   # autocert   - automatic Let's Encrypt certificates (requires public hostname)
   mode: "selfsigned"                                # [AUDIOSILO_TLS_MODE]
+  # selfsigned only (and only with the generated certificate: off when cert_file
+  # is set): the port also answers plain HTTP, but only to clients on a
+  # home-network address that use the server's home address (its LAN IP, a
+  # .local name); any other plain HTTP client is redirected to https. The phone
+  # apps can't trust a self-signed certificate, so this is how they connect at
+  # home (they learn the http:// home address when they pair). Away from home
+  # needs autocert or a reverse proxy.
+  home_http: true                                   # [AUDIOSILO_TLS_HOME_HTTP]
   hosts: []          # autocert: hostnames to obtain certs for [AUDIOSILO_TLS_HOSTS]
   cache_dir: ""      # autocert cert cache (default <data>/certs)
   cert_file: ""      # selfsigned: optional explicit cert path

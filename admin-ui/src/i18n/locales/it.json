@@ -1765,6 +1765,8 @@
   "settings.network.mode.selfsignedBody": "Cifrato, ma i browser avvisano la prima volta. Va bene per una rete domestica.",
   "settings.network.mode.autocert": "Let's Encrypt",
   "settings.network.mode.autocertBody": "Certificati affidabili gratuiti, rinnovati automaticamente. Richiede le porte 80 e 443 aperte a internet.",
+  "settings.network.tls_home_http": "HTTP semplice a casa",
+  "settings.network.tls_home_httpBody": "Le app per telefono non possono fidarsi di un certificato autofirmato, quindi questa porta risponde anche in HTTP semplice ai dispositivi della rete di casa. Tutto il resto viene inviato a HTTPS. Fuori casa, le app hanno bisogno di Let's Encrypt o di un reverse proxy.",
   "settings.network.tls_hosts": "Nomi del certificato",
   "settings.network.tls_hostsBody": "Uno per riga, come books.example.com. Ognuno deve puntare a questo server.",
   "settings.network.cert.title": "Certificato",

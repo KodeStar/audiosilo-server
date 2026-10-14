@@ -260,9 +260,14 @@ function NetworkTopic({ settings }: { settings: AdminSettings }) {
               description: t(`settings.network.mode.${m}Body`),
             })),
           },
+          { name: 'tls_home_http', kind: 'switch' },
           { name: 'tls_hosts', kind: 'list', placeholder: 'books.example.com' },
         ]}
-        visible={(name, draft) => name !== 'tls_hosts' || draft.tls_mode === 'autocert'}
+        visible={(name, draft) =>
+          name === 'tls_home_http'
+            ? draft.tls_mode === 'selfsigned'
+            : name !== 'tls_hosts' || draft.tls_mode === 'autocert'
+        }
       >
         <CertificateRow />
       </SettingsForm>

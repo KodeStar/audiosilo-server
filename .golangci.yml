@@ -72,6 +72,14 @@ linters:
         linters:
           - gosec
         text: G118
+      # Home HTTP's gate sends a plain HTTP client that isn't on the home network
+      # to the same URL on https: the target is the Host the client itself just
+      # addressed (checked to be a bare host[:port] by httpsURL), so it can only
+      # ever send the client back where it already was. Not an open redirect.
+      - path: internal/server/homehttp\.go
+        linters:
+          - gosec
+        text: G710
       # toolfetch writes the ffmpeg/ffprobe binaries it downloads, which MUST be
       # executable - G302 (file perms ≤0600) cannot apply to a tool binary.
       - path: internal/toolfetch/toolfetch\.go

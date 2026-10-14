@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
+
+	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
 // PairingPayload is returned by the redeem/pair endpoints so a client can render
@@ -20,7 +22,13 @@ import (
 // QR can pair several devices); from a recovery code it carries a short TTL of its
 // own; from /auth/pair or the demo flow it is single-use and lasts pairingTTL.
 type PairingPayload struct {
-	ServerName   string   `json:"server_name"`
+	ServerName string `json:"server_name"`
+	// ServerID is the server's stable id (GET /server's server_id), also carried
+	// by URI and WebURL as sid=, so an app that falls back to the link's home
+	// address can check the server answering there is this one before it sends
+	// the token (over plain http, where any box on a foreign network may hold the
+	// same private address).
+	ServerID     string   `json:"server_id"`
 	BaseURL      string   `json:"base_url"`
 	PairingToken string   `json:"pairing_token"`
 	URI          string   `json:"uri"`     // audiosilo://connect?... custom-scheme deep link
@@ -102,6 +110,15 @@ func (ad *Addresses) query() string {
 	return "&" + v.Encode()
 }
 
+// sidQuery is the server's id as a link param ("&sid=..."), "" for a server
+// without one (the launcher always mints it; only a bare test config lacks it).
+func sidQuery(id string) string {
+	if id == "" {
+		return ""
+	}
+	return "&" + url.Values{"sid": {id}}.Encode()
+}
+
 // AppLinks points clients at the ways to connect. Mobile app stores are
 // placeholders until those apps ship.
 type AppLinks struct {
@@ -119,10 +136,24 @@ func (a *API) inviteURL(r *http.Request, code string) string {
 }
 
 // baseURL determines the externally reachable base URL: configured PublicURL
-// wins; otherwise it is derived from the request.
+// wins; otherwise it is derived from the request. A server that serves home HTTP
+// is still an https server: a request that came over plain HTTP gets the https
+// base (the same port answers TLS; a Host without a port came in on 80), and
+// the http address rides only as the home one (config.Addresses), so a link
+// copied from a console opened over http doesn't take every browser that opens
+// it to plain HTTP. A proxied request's port-less Host is the proxy's own
+// address, so it keeps https's default port (where a proxy terminates TLS)
+// rather than 80, which never answers TLS on a proxy.
 func (a *API) baseURL(r *http.Request) string {
-	if u := a.config().PublicURL; u != "" {
+	cfg := a.config()
+	if u := cfg.PublicURL; u != "" {
 		return strings.TrimRight(u, "/")
+	}
+	if r.TLS == nil && cfg.ServesHomeHTTP() {
+		if proxied(r) {
+			return "https://" + r.Host
+		}
+		return "https://" + config.HostWithPort(r.Host, "80")
 	}
 	return requestScheme(r) + "://" + r.Host
 }
@@ -137,6 +168,7 @@ func requestScheme(r *http.Request) string {
 
 // buildPairing constructs the pairing payload (and QR PNG) for a token.
 func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, error) {
+	cfg := a.config()
 	base := a.baseURL(r)
 	addrs := a.pairingAddresses(r)
 	// HTTPS handoff encoded in the QR: scanning it opens the native app when the
@@ -144,7 +176,9 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	// the embedded web player's connect route, which exchanges the pairing token.
 	// The home/away params come after the existing ones, so a link without them
 	// reads exactly as before (older clients ignore params they don't know).
-	webURL := base + "/web/connect?" + url.Values{"token": {token}}.Encode() + addrs.query()
+	// sid= (the server's id) comes last, after them.
+	tail := addrs.query() + sidQuery(cfg.ServerID)
+	webURL := base + "/web/connect?" + url.Values{"token": {token}}.Encode() + tail
 	// Custom-scheme deep link for an explicit "Open in app" button. Custom schemes
 	// are not domain-bound, so this launches an installed app on any self-hosted
 	// domain. How many devices can exchange the token is governed by its origin
@@ -152,14 +186,15 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	appURI := "audiosilo://connect?" + url.Values{
 		"server": {base},
 		"token":  {token},
-	}.Encode() + addrs.query()
+	}.Encode() + tail
 
 	png, err := qrcode.Encode(webURL, qrcode.Medium, 512)
 	if err != nil {
 		return nil, err
 	}
 	return &PairingPayload{
-		ServerName:   a.config().DisplayName(),
+		ServerName:   cfg.DisplayName(),
+		ServerID:     cfg.ServerID,
 		BaseURL:      base,
 		PairingToken: token,
 		URI:          appURI,

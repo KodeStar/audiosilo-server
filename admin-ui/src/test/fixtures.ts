@@ -240,6 +240,7 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
     network: {
       bind: '0.0.0.0:8080',
       tls_mode: 'selfsigned',
+      tls_home_http: true,
       tls_hosts: [],
       trusted_proxies: [],
       cors_origins: [],
@@ -271,6 +272,7 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
     restart_settings: [
       'network.bind',
       'network.tls_mode',
+      'network.tls_home_http',
       'network.tls_hosts',
       'players.web_dir',
       'metadata.base_url',

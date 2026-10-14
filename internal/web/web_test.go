@@ -108,6 +108,25 @@ func TestHTMLCSPCastSender(t *testing.T) {
 	}
 }
 
+// TestCSPAllowsPlainHTTP: a self-signed server also serves the console and the
+// player over plain HTTP to the home network (tls.home_http), so no policy may
+// upgrade or block http subresources: on an http page, upgrade-insecure-requests
+// would send every same-origin request to https, where the port's certificate
+// isn't trusted, and the page would break.
+func TestCSPAllowsPlainHTTP(t *testing.T) {
+	t.Parallel()
+	for name, csp := range map[string]string{
+		"player":  htmlCSP([]byte(`<script>1</script>`)),
+		"console": contentSecurityPolicy,
+	} {
+		for _, bad := range []string{"upgrade-insecure-requests", "block-all-mixed-content"} {
+			if strings.Contains(csp, bad) {
+				t.Errorf("the %s CSP carries %s, which breaks it over plain HTTP: %s", name, bad, csp)
+			}
+		}
+	}
+}
+
 // TestHTMLCSPImagesStaySameOrigin: the player loads community covers through the
 // server (GET /libraries/{id}/meta/cover), never from their own hosts, so its
 // img-src admits no other origin. Widening it would let a listener's browser

@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 )
 
 type pairingWire struct {
+	ServerID     string     `json:"server_id"`
 	BaseURL      string     `json:"base_url"`
 	PairingToken string     `json:"pairing_token"`
 	URI          string     `json:"uri"`
@@ -39,6 +42,7 @@ func TestPairingCarriesAddresses(t *testing.T) {
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.PublicURL = "https://books.example.com"
 		c.LANURL = "http://192.168.1.20:8080"
+		c.ServerID = "srv-test-id"
 	})
 	resp, body := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`)
 	if resp.StatusCode != http.StatusOK {
@@ -57,7 +61,8 @@ func TestPairingCarriesAddresses(t *testing.T) {
 		t.Fatalf("web_url %q must start with the unchanged %q", p.WebURL, prefix)
 	}
 	q := linkQuery(t, p.WebURL)
-	if q.Get("token") != p.PairingToken || q.Get("home") != want.Home || q.Get("away") != want.Away {
+	if q.Get("token") != p.PairingToken || q.Get("home") != want.Home || q.Get("away") != want.Away ||
+		q.Get("sid") != "srv-test-id" {
 		t.Fatalf("web_url params = %v", q)
 	}
 
@@ -66,8 +71,17 @@ func TestPairingCarriesAddresses(t *testing.T) {
 	}
 	q = linkQuery(t, p.URI)
 	if q.Get("server") != "https://books.example.com" || q.Get("token") != p.PairingToken ||
-		q.Get("home") != want.Home || q.Get("away") != want.Away {
+		q.Get("home") != want.Home || q.Get("away") != want.Away || q.Get("sid") != "srv-test-id" {
 		t.Fatalf("uri params = %v", q)
+	}
+	if p.ServerID != "srv-test-id" {
+		t.Fatalf("server_id = %q, want srv-test-id", p.ServerID)
+	}
+	// sid= comes last, after home=/away=.
+	for _, link := range []string{p.WebURL, p.URI} {
+		if !strings.HasSuffix(link, "&sid=srv-test-id") {
+			t.Fatalf("%q must end with &sid=srv-test-id", link)
+		}
 	}
 }
 
@@ -97,7 +111,7 @@ func TestPairingAddressesDerivedFromLANRequest(t *testing.T) {
 // addresses field and links exactly as before.
 func TestPairingWithoutAddresses(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newTestEnvWith(t, func(c *config.Config) { c.ServerID = "srv-test-id" })
 	for _, host := range []string{"", "books.example.com", "100.64.1.2:8080", "localhost:8080"} {
 		resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, map[string]string{"Host": host})
 		if resp.StatusCode != http.StatusOK {
@@ -108,11 +122,11 @@ func TestPairingWithoutAddresses(t *testing.T) {
 		if strings.Contains(body, `"addresses"`) || p.Addresses != nil {
 			t.Fatalf("%q: no addresses expected: %s", host, body)
 		}
-		if q := linkQuery(t, p.WebURL); len(q) != 1 || q.Get("token") != p.PairingToken {
-			t.Fatalf("%q: web_url %q must carry only token", host, p.WebURL)
+		if q := linkQuery(t, p.WebURL); len(q) != 2 || q.Get("token") != p.PairingToken || q.Get("sid") != "srv-test-id" {
+			t.Fatalf("%q: web_url %q must carry only token and sid", host, p.WebURL)
 		}
-		if q := linkQuery(t, p.URI); len(q) != 2 {
-			t.Fatalf("%q: uri %q must carry only server and token", host, p.URI)
+		if q := linkQuery(t, p.URI); len(q) != 3 || q.Get("sid") != "srv-test-id" {
+			t.Fatalf("%q: uri %q must carry only server, token and sid", host, p.URI)
 		}
 	}
 }
@@ -314,5 +328,164 @@ func TestServerAdvertisesAddresses(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(body), &info); err != nil || !info.Capabilities["addresses"] {
 		t.Fatalf("capabilities.addresses must be true: %s", body)
+	}
+}
+
+// overTLS sends a request to e's handler over HTTPS (as a client of the
+// self-signed port would) with the given Host, and returns the status and body.
+func overTLS(t *testing.T, e *testEnv, method, path, token, body, host string) (int, string) {
+	t.Helper()
+	srv := httptest.NewTLSServer(e.api.Handler())
+	defer srv.Close()
+	req, err := http.NewRequestWithContext(context.Background(), method, srv.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = host
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// Home HTTP (tls.home_http, on by default on a self-signed server): a request
+// that came over https on a home-network host still teaches the http home
+// address, the one the native apps can use, in the pairing payload and its
+// links, the exchange answer and GET /addresses. base_url, web_url and the
+// uri's server= keep the request's own https.
+func TestHomeHTTPAddresses(t *testing.T) {
+	t.Parallel()
+	const host = "192.168.1.205:8080"
+	e := newTestEnvWith(t, func(c *config.Config) { c.ServerID = "srv-test-id" })
+	status, body := overTLS(t, e, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, host)
+	if status != http.StatusOK {
+		t.Fatalf("redeem = %d %s", status, body)
+	}
+	var p pairingWire
+	_ = json.Unmarshal([]byte(body), &p)
+	want := Addresses{Home: "http://" + host}
+	if p.Addresses == nil || *p.Addresses != want {
+		t.Fatalf("pairing addresses = %+v, want %+v (%s)", p.Addresses, want, body)
+	}
+	if p.BaseURL != "https://"+host || !strings.HasPrefix(p.WebURL, "https://"+host+"/web/connect?token=") {
+		t.Fatalf("base_url %q / web_url %q must stay https", p.BaseURL, p.WebURL)
+	}
+	if q := linkQuery(t, p.WebURL); q.Get("home") != want.Home {
+		t.Fatalf("web_url home = %q", q.Get("home"))
+	}
+	if q := linkQuery(t, p.URI); q.Get("server") != "https://"+host || q.Get("home") != want.Home || q.Get("sid") != "srv-test-id" {
+		t.Fatalf("uri params = %v", q)
+	}
+
+	status, body = overTLS(t, e, "POST", "/api/v1/auth/exchange", "",
+		`{"pairing_token":"`+p.PairingToken+`","device_name":"phone"}`, host)
+	var ex struct {
+		Token     string     `json:"token"`
+		Addresses *Addresses `json:"addresses"`
+	}
+	_ = json.Unmarshal([]byte(body), &ex)
+	if status != http.StatusOK || ex.Addresses == nil || *ex.Addresses != want {
+		t.Fatalf("exchange = %d %s", status, body)
+	}
+
+	if status, body = overTLS(t, e, "GET", "/api/v1/addresses", ex.Token, "", host); status != http.StatusOK ||
+		body != `{"home":"http://192.168.1.205:8080"}`+"\n" {
+		t.Fatalf("GET /addresses = %d %q", status, body)
+	}
+	// https on its default port: the http home keeps 443, the port that answers it.
+	if _, body = overTLS(t, e, "GET", "/api/v1/addresses", ex.Token, "", "192.168.1.205"); body != `{"home":"http://192.168.1.205:443"}`+"\n" {
+		t.Fatalf("GET /addresses on 443 = %q", body)
+	}
+	// A public request over https derives no home.
+	if _, body = overTLS(t, e, "GET", "/api/v1/addresses", ex.Token, "", "books.example.com"); body != "{}\n" {
+		t.Fatalf("public GET /addresses = %q, want {}", body)
+	}
+}
+
+// Without home HTTP (switched off, or another TLS mode) the derived home keeps
+// the request's scheme; a configured lan_url is always used as it is.
+func TestHomeHTTPAddressesOff(t *testing.T) {
+	t.Parallel()
+	const host = "192.168.1.205:8080"
+	cases := []struct {
+		name      string
+		configure func(*config.Config)
+		wantHome  string
+	}{
+		{"home_http off", func(c *config.Config) { c.TLS.HomeHTTP = false }, "https://" + host},
+		{"autocert", func(c *config.Config) { c.TLS.Mode, c.TLS.Hosts = config.TLSAutocert, []string{"books.example.com"} },
+			"https://" + host},
+		{"a configured lan_url", func(c *config.Config) { c.LANURL = "https://nas.local:8080" }, "https://nas.local:8080"},
+	}
+	for _, tc := range cases {
+		e := newTestEnvWith(t, tc.configure)
+		_, member := opsTokens(t, e)
+		_, body := overTLS(t, e, "GET", "/api/v1/addresses", member, "", host)
+		if body != `{"home":"`+tc.wantHome+`"}`+"\n" {
+			t.Errorf("%s: GET /addresses = %q, want home %q", tc.name, body, tc.wantHome)
+		}
+	}
+}
+
+// A server without an id (a bare config the launcher never touched) puts no
+// sid= on its links; the payload's server_id is then "".
+func TestPairingWithoutServerID(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	_, body := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`)
+	var p pairingWire
+	_ = json.Unmarshal([]byte(body), &p)
+	if !strings.Contains(body, `"server_id":""`) || strings.Contains(p.WebURL, "sid=") || strings.Contains(p.URI, "sid=") {
+		t.Fatalf("no server id: %s", body)
+	}
+}
+
+// A pairing asked for over plain HTTP on a server that serves home HTTP keeps
+// https links: the base is the https one on the same port (80 for a Host without
+// one), and only home is http. With home HTTP off the base follows the request.
+func TestHomeHTTPPairingOverPlainHTTP(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t) // plain HTTP; the default config serves home HTTP
+	for host, wantBase := range map[string]string{
+		"192.168.1.205:8080": "https://192.168.1.205:8080",
+		"192.168.1.205":      "https://192.168.1.205:80",
+	} {
+		resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, map[string]string{"Host": host})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("redeem = %d %s", resp.StatusCode, body)
+		}
+		var p pairingWire
+		_ = json.Unmarshal([]byte(body), &p)
+		if p.BaseURL != wantBase || !strings.HasPrefix(p.WebURL, wantBase+"/web/connect?") ||
+			linkQuery(t, p.URI).Get("server") != wantBase {
+			t.Fatalf("%s: base_url %q web_url %q, want %s", host, p.BaseURL, p.WebURL, wantBase)
+		}
+		if p.Addresses == nil || p.Addresses.Home != "http://"+host {
+			t.Fatalf("%s: addresses = %+v, want the http home", host, p.Addresses)
+		}
+	}
+
+	// Through a reverse proxy the port-less Host is the proxy's, which never
+	// answers TLS on 80: the base keeps https's default port.
+	resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`,
+		map[string]string{"Host": "books.example.com", "X-Forwarded-Proto": "https"})
+	var proxiedP pairingWire
+	_ = json.Unmarshal([]byte(body), &proxiedP)
+	if resp.StatusCode != http.StatusOK || proxiedP.BaseURL != "https://books.example.com" {
+		t.Fatalf("proxied: base_url = %q (%d), want https://books.example.com", proxiedP.BaseURL, resp.StatusCode)
+	}
+
+	off := newTestEnvWith(t, func(c *config.Config) { c.TLS.HomeHTTP = false })
+	resp, body = off.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+off.authCode+`"}`, map[string]string{"Host": "192.168.1.205:8080"})
+	var p pairingWire
+	_ = json.Unmarshal([]byte(body), &p)
+	if resp.StatusCode != http.StatusOK || p.BaseURL != "http://192.168.1.205:8080" {
+		t.Fatalf("home HTTP off: base_url = %q (%d)", p.BaseURL, resp.StatusCode)
 	}
 }

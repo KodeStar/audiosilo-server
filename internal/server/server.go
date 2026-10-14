@@ -1,6 +1,8 @@
 // Package server runs the HTTP(S) server with the configured TLS mode and
 // supports graceful shutdown. TLS is configurable: off (behind a reverse
-// proxy), a self-signed certificate (LAN), or Let's Encrypt via autocert.
+// proxy), a self-signed certificate (LAN), or Let's Encrypt via autocert. A
+// self-signed server also answers plain HTTP on its port to home-network
+// clients (tls.home_http; see homehttp.go).
 package server
 
 import (
@@ -14,6 +16,10 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/config"
 )
+
+// readHeaderTimeout bounds a client's request headers, and with home HTTP its
+// first byte (splitListener's peek).
+const readHeaderTimeout = 10 * time.Second
 
 // Run starts the server and blocks until ctx is cancelled, then drains
 // connections gracefully.
@@ -37,7 +43,7 @@ func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slo
 		Addr:              cfg.Bind,
 		Handler:           handler,
 		TLSConfig:         tlsCfg,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: readHeaderTimeout,
 		// ReadTimeout bounds reading the whole request (headers + body), so a slow
 		// client can't hold a control-plane connection open indefinitely. It is
 		// safe for streaming, which is a GET with no request body. There is
@@ -48,15 +54,28 @@ func Run(ctx context.Context, cfg *config.Config, handler http.Handler, log *slo
 	}
 
 	errCh := make(chan error, 1)
-	go func() {
-		if tlsCfg != nil {
-			log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
-			errCh <- srv.ListenAndServeTLS("", "") // certs come from TLSConfig
-		} else {
-			log.Info("listening", "addr", cfg.Bind, "tls", "off")
-			errCh <- srv.ListenAndServe()
+	switch {
+	case cfg.ServesHomeHTTP():
+		// One port, both protocols: the TLS connections get the certificate here
+		// (so ALPN must offer HTTP/2 itself, as ServeTLS would), and the plain ones
+		// pass homeHTTPGate.
+		ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Bind)
+		if err != nil {
+			return err
 		}
-	}()
+		tlsCfg.NextProtos = []string{"h2", "http/1.1"}
+		srv.Handler = homeHTTPGate(handler)
+		log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
+		log.Info("plain HTTP is served on the same port to home-network clients (tls.home_http); "+
+			"other plain HTTP clients are redirected to https", "addr", cfg.Bind)
+		go func() { errCh <- srv.Serve(newSplitListener(ln, tlsCfg, readHeaderTimeout)) }()
+	case tlsCfg != nil:
+		log.Info("listening", "addr", cfg.Bind, "tls", cfg.TLS.Mode)
+		go func() { errCh <- srv.ListenAndServeTLS("", "") }() // certs come from TLSConfig
+	default:
+		log.Info("listening", "addr", cfg.Bind, "tls", "off")
+		go func() { errCh <- srv.ListenAndServe() }()
+	}
 
 	select {
 	case <-ctx.Done():

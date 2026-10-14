@@ -124,7 +124,7 @@ export function SettingsForm<S extends SettingsSection>({
   title: string;
   description?: string;
   fields: FieldSpec[];
-  /** Hides a field for the current draft (TLS hosts outside Let's Encrypt). */
+  /** Hides a field for the current draft (TLS hosts outside Let's Encrypt, home HTTP outside self-signed). */
   visible?: (name: string, draft: Record<string, DraftValue>) => boolean;
   confirmRestart?: boolean;
   /** Read-only rows after the fields (a certificate's status). */

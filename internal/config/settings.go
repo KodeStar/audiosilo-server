@@ -53,6 +53,8 @@ var fields = []field{
 		ptr: func(c *Config) any { return &c.Bind }, fix: fixBind},
 	{key: "tls.mode", env: "AUDIOSILO_TLS_MODE", setting: "network.tls_mode", restart: true,
 		ptr: func(c *Config) any { return &c.TLS.Mode }},
+	{key: "tls.home_http", env: "AUDIOSILO_TLS_HOME_HTTP", setting: "network.tls_home_http", restart: true,
+		ptr: func(c *Config) any { return &c.TLS.HomeHTTP }},
 	{key: "tls.hosts", env: "AUDIOSILO_TLS_HOSTS", setting: "network.tls_hosts", restart: true,
 		ptr: func(c *Config) any { return &c.TLS.Hosts }, fix: fixHosts},
 	{key: "trusted_proxies", env: "AUDIOSILO_TRUSTED_PROXIES", setting: "network.trusted_proxies",

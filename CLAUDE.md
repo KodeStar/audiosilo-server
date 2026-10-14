@@ -127,7 +127,7 @@ internal/backup/      database backups: VACUUM INTO the backups folder on a sche
 internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file
 internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
-internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), graceful shutdown
+internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), home HTTP on the self-signed port, graceful shutdown
 internal/web/         baked-in connect/setup pages (vanilla HTML/CSS/JS, no build step), mounts the
                       admin console at /admin and the web player at /web from web_dir (not vendored here)
 internal/web/adminui/ embeds the admin console (admin-ui/ build output in dist/, gitignored)
@@ -291,7 +291,9 @@ admin overrides; see Metadata overrides below).
   (`<base>/web/connect?token=` - encoded in the QR; opens the app via a Universal/
   App Link when the domain is claimed, else the embedded web player) and `uri`
   (`audiosilo://connect?...` - custom scheme, launches an installed app on any
-  domain). **The QR is as redeemable as the invite**: a pairing token minted by
+  domain). Both end with `sid=<server_id>` (after `home=`/`away=`; also the payload's
+  `server_id`), so an app falling back to the link's http home checks `GET /server`'s
+  `server_id` there before sending the token in cleartext. **The QR is as redeemable as the invite**: a pairing token minted by
   redeeming a code is linked to it (`tokens.auth_code_id`) and inherits the
   invite's uses/expiry, so each device being set up can scan the same QR (the
   redeem response's `uses_remaining`/`code_expires_at` advertise the budget);
@@ -314,6 +316,25 @@ admin overrides; see Metadata overrides below).
   envelopes (`sessionEnvelope`), and at `GET /addresses` (any signed-in user, `{}` when
   neither) so an already-paired device learns a newly set address. Native apps probe the
   home address and check its `server_id` before sending a token there.
+- **Home HTTP (`tls.home_http`, security-relevant)**: the apps can't trust a self-signed
+  certificate, so on `tls.mode: selfsigned` with `home_http` on (the default;
+  `AUDIOSILO_TLS_HOME_HTTP`, console `network.tls_home_http`, restart; `config.ServesHomeHTTP`)
+  the bind port answers both protocols. `server.splitListener` peeks each connection's first
+  byte in its own goroutine (bounded by the 10 s header timeout; Close drops a peeking
+  conn): `0x16` becomes a `*tls.Conn`, anything else stays plain, and ONE `http.Server`
+  serves both (ALPN `h2` set by hand, as `ServeTLS` would). `server.homeHTTPGate` serves a
+  plain request only when the connection's own `RemoteAddr` (never `X-Forwarded-For`) is
+  loopback, or `config.HomeNetworkIP` (private/ULA/link-local; not CGNAT) AND the Host is
+  `config.HomeNetworkHost` (`homeRequest`: a NAT/proxy gateway's private source, Docker's
+  IPv6 proxy say, still carries the internet client's public Host); anyone else gets a 308
+  to the same URL on https (`:80` for a port-less Host, as `baseURL`; 400 for an unusable
+  Host). Off whenever `tls.cert_file` is set (`ServesHomeHTTP`: a supplied cert may be trusted).
+  `config.Addresses` then derives the home address as `http://` even for an https request,
+  keeping the request's port (`:443` added when the Host has none, the port that answers
+  http); a configured `lan_url` is used as is, and `base_url`/`web_url`/`uri server=` are
+  always https (`api.baseURL`: a plain-HTTP request gets the https base on its port, 80 for a
+  Host without one, `config.HostWithPort`; a proxied one keeps its port-less Host, https's 443), so a link copied from a console opened over http stays https. No HSTS on self-signed and no `upgrade-insecure-requests` in any
+  CSP (`TestCSPAllowsPlainHTTP`), so the console and player work over http on the LAN.
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
   `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
   expires). Both pair through the same `ResolveAuthCode` → `IssuePairingToken` →
