@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -98,6 +100,23 @@ func TestSeriesRangeWire(t *testing.T) {
 		"one": "Saga/1", "two": "Saga/2", "three": "", "omni": "Saga/Omnibus", "four": "Saga/4",
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("rail locals = %v, want %v", got, want)
+	}
+	// A favourite and a folder listing carry the range too.
+	libPath := "/api/v1/libraries/" + strconv.FormatInt(e.lib.ID, 10)
+	if resp, b := e.do(t, "POST", libPath+"/favourites?path=Saga%2FOmnibus", e.adminTok, ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("favourite = %d %s", resp.StatusCode, b)
+	}
+	if _, favs := e.do(t, "GET", "/api/v1/me/favourites", e.adminTok, ""); !strings.Contains(favs, `"series_index":1,"series_index_end":3,`) {
+		t.Errorf("favourites = %s, want the omnibus' range", favs)
+	}
+	for _, dir := range []string{"Omnibus", "2"} {
+		if err := os.MkdirAll(filepath.Join(e.lib.Root, "Saga", dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, fs := e.do(t, "GET", libPath+"/fs?path=Saga", e.adminTok, ""); strings.Count(fs, `"series_index_end":3`) != 1 ||
+		!strings.Contains(fs, `"series_index":2`) {
+		t.Errorf("fs = %s, want the omnibus' range once", fs)
 	}
 	// The series aggregate (a player's gaps) holds every slot of the omnibus.
 	var series struct {

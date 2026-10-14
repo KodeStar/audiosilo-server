@@ -37,7 +37,9 @@ type Entry struct {
 	Author      string  `json:"author,omitempty"`
 	Series      string  `json:"series,omitempty"`
 	SeriesIndex float64 `json:"series_index,omitempty"`
-	Duration    float64 `json:"duration,omitempty"`
+	// SeriesIndexEnd is the end of a range position (an omnibus of 1-3), as on a Book.
+	SeriesIndexEnd float64 `json:"series_index_end,omitempty"`
+	Duration       float64 `json:"duration,omitempty"`
 
 	// Override is the explicit per-folder detection override set for this
 	// directory ("book" or "collection"), empty when auto-detected. Surfaced so
@@ -227,7 +229,7 @@ func MarkBooks(entries []Entry, books map[string]catalog.Book) {
 			e.Title = b.Title
 			e.Author = b.Author
 			e.Series = b.Series
-			e.SeriesIndex = b.SeriesIndex
+			e.SeriesIndex, e.SeriesIndexEnd = b.SeriesIndex, b.SeriesIndexEnd
 			e.Duration = b.Duration
 		}
 	}
