@@ -2,12 +2,13 @@ package api
 
 import (
 	"encoding/base64"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
+
+	"github.com/kodestar/audiosilo-server/internal/config"
 )
 
 // PairingPayload is returned by the redeem/pair endpoints so a client can render
@@ -111,8 +112,7 @@ func (ad *Addresses) query() string {
 
 // sidQuery is the server's id as a link param ("&sid=..."), "" for a server
 // without one (the launcher always mints it; only a bare test config lacks it).
-func (a *API) sidQuery() string {
-	id := a.config().ServerID
+func sidQuery(id string) string {
 	if id == "" {
 		return ""
 	}
@@ -141,18 +141,19 @@ func (a *API) inviteURL(r *http.Request, code string) string {
 // base (the same port answers TLS; a Host without a port came in on 80), and
 // the http address rides only as the home one (config.Addresses), so a link
 // copied from a console opened over http doesn't take every browser that opens
-// it to plain HTTP.
+// it to plain HTTP. A proxied request's port-less Host is the proxy's own
+// address, so it keeps https's default port (where a proxy terminates TLS)
+// rather than 80, which never answers TLS on a proxy.
 func (a *API) baseURL(r *http.Request) string {
 	cfg := a.config()
 	if u := cfg.PublicURL; u != "" {
 		return strings.TrimRight(u, "/")
 	}
 	if r.TLS == nil && cfg.ServesHomeHTTP() {
-		host := r.Host
-		if _, _, err := net.SplitHostPort(host); err != nil {
-			host = net.JoinHostPort(strings.Trim(host, "[]"), "80")
+		if proxied(r) {
+			return "https://" + r.Host
 		}
-		return "https://" + host
+		return "https://" + config.HostWithPort(r.Host, "80")
 	}
 	return requestScheme(r) + "://" + r.Host
 }
@@ -167,6 +168,7 @@ func requestScheme(r *http.Request) string {
 
 // buildPairing constructs the pairing payload (and QR PNG) for a token.
 func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, error) {
+	cfg := a.config()
 	base := a.baseURL(r)
 	addrs := a.pairingAddresses(r)
 	// HTTPS handoff encoded in the QR: scanning it opens the native app when the
@@ -175,7 +177,7 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	// The home/away params come after the existing ones, so a link without them
 	// reads exactly as before (older clients ignore params they don't know).
 	// sid= (the server's id) comes last, after them.
-	tail := addrs.query() + a.sidQuery()
+	tail := addrs.query() + sidQuery(cfg.ServerID)
 	webURL := base + "/web/connect?" + url.Values{"token": {token}}.Encode() + tail
 	// Custom-scheme deep link for an explicit "Open in app" button. Custom schemes
 	// are not domain-bound, so this launches an installed app on any self-hosted
@@ -191,8 +193,8 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 		return nil, err
 	}
 	return &PairingPayload{
-		ServerName:   a.config().DisplayName(),
-		ServerID:     a.config().ServerID,
+		ServerName:   cfg.DisplayName(),
+		ServerID:     cfg.ServerID,
 		BaseURL:      base,
 		PairingToken: token,
 		URI:          appURI,

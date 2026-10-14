@@ -89,6 +89,7 @@ func TestHomeNetworkHost(t *testing.T) {
 // HomeNetworkIP is the address predicate under isHomeNetworkHost, and what the
 // listener's home HTTP gate builds on (adding loopback there).
 func TestHomeNetworkIP(t *testing.T) {
+	t.Parallel()
 	cases := map[string]bool{
 		"10.1.2.3": true, "172.16.0.1": true, "192.168.1.205": true, "169.254.1.1": true,
 		"fd00::1": true, "fe80::1": true, "::ffff:192.168.1.5": true,
@@ -181,6 +182,7 @@ func TestLANURLSetting(t *testing.T) {
 // is http even for a request that came over https; a configured lan_url, a
 // public request and the other TLS modes are as before.
 func TestAddressesHomeHTTP(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name            string
 		mode            TLSMode
@@ -221,5 +223,24 @@ func TestAddressesHomeHTTP(t *testing.T) {
 		if home != tc.wantHome || away != tc.wantA {
 			t.Errorf("%s: Addresses = (%q, %q), want (%q, %q)", tc.name, home, away, tc.wantHome, tc.wantA)
 		}
+	}
+}
+
+// Home HTTP needs the server's own generated certificate: with a supplied one
+// (tls.cert_file, perhaps trusted by the devices) or another TLS mode it is off.
+func TestServesHomeHTTP(t *testing.T) {
+	t.Parallel()
+	c := Default(t.TempDir())
+	if !c.ServesHomeHTTP() {
+		t.Fatal("the default self-signed server must serve home HTTP")
+	}
+	c.TLS.CertFile = "/certs/nas.lan.pem"
+	if c.ServesHomeHTTP() {
+		t.Fatal("a supplied certificate must keep the devices on https")
+	}
+	c = Default(t.TempDir())
+	c.TLS.Mode = TLSOff
+	if c.ServesHomeHTTP() {
+		t.Fatal("tls.mode off has no TLS port to share")
 	}
 }

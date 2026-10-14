@@ -175,6 +175,8 @@ func TestHomeHTTPGate(t *testing.T) {
 		{name: "IPv4-mapped private", remote: "[::ffff:192.168.1.20]:5000", wantCode: 200},
 		{name: "loopback", remote: "127.0.0.1:5000", wantCode: 200},
 		{name: "IPv6 loopback", remote: "[::1]:5000", wantCode: 200},
+		{name: "loopback, any Host", remote: "127.0.0.1:5000", host: "books.example.com", wantCode: 200},
+		{name: "a home name", remote: "192.168.1.20:5000", host: "nas.local:8080", wantCode: 200},
 		// Allowed: anyone over TLS.
 		{name: "public over TLS", remote: "203.0.113.9:5000", tls: true, wantCode: 200},
 		// Denied: redirected to the same URL on https.
@@ -192,6 +194,15 @@ func TestHomeHTTPGate(t *testing.T) {
 			wantLocation: "https://[2001:db8::5]:8080/api/v1/server?a=1"},
 		{name: "unparseable remote address", remote: "nonsense", wantCode: 308,
 			wantLocation: "https://192.168.1.205:8080/api/v1/server?a=1"},
+		// Denied: a private address naming the server publicly is an internet client
+		// a gateway handed over (Docker's IPv6 proxy, a router rewriting the source).
+		{name: "a gateway's private address, a public Host", remote: "172.17.0.1:5000", host: "books.example.com:8080",
+			wantCode: 308, wantLocation: "https://books.example.com:8080/api/v1/server?a=1"},
+		{name: "a gateway's private address, a public IP Host", remote: "10.0.0.1:5000", host: "203.0.113.50:8080",
+			wantCode: 308, wantLocation: "https://203.0.113.50:8080/api/v1/server?a=1"},
+		// A Host without a port came in on 80, which answers TLS too.
+		{name: "a port-less public Host", remote: "203.0.113.9:5000", host: "books.example.com", wantCode: 308,
+			wantLocation: "https://books.example.com:80/api/v1/server?a=1"},
 		// Denied, and no usable Host to redirect to.
 		{name: "no Host", remote: "203.0.113.9:5000", host: "-", wantCode: 400},
 		{name: "a Host with userinfo", remote: "203.0.113.9:5000", host: "evil@example.com", wantCode: 400},
@@ -295,6 +306,38 @@ func TestRunHomeHTTPOff(t *testing.T) {
 	}
 	if code, body := get(t, plainClient(), "http://"+cfg.Bind+"/"); code != 400 || strings.Contains(body, "plain") {
 		t.Fatalf("plain with home_http off: %d %q, want 400 from the TLS server", code, body)
+	}
+}
+
+// A peeked connection still offers CloseWrite (http.Server half-closes before
+// hanging up on a refused upload): the client sees EOF and can still send.
+func TestPeekedConnCloseWrite(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	client, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	raw, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	var c interface{ CloseWrite() error } = &peekedConn{Conn: raw, first: 'G', unread: true}
+	if err := c.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if n, err := client.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatalf("client read after CloseWrite = %d, %v; want EOF", n, err)
+	}
+	if _, err := client.Write([]byte("body")); err != nil {
+		t.Fatalf("client write after the server's half-close: %v", err)
 	}
 }
 

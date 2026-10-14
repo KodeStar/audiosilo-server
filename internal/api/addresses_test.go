@@ -471,8 +471,18 @@ func TestHomeHTTPPairingOverPlainHTTP(t *testing.T) {
 		}
 	}
 
+	// Through a reverse proxy the port-less Host is the proxy's, which never
+	// answers TLS on 80: the base keeps https's default port.
+	resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`,
+		map[string]string{"Host": "books.example.com", "X-Forwarded-Proto": "https"})
+	var proxiedP pairingWire
+	_ = json.Unmarshal([]byte(body), &proxiedP)
+	if resp.StatusCode != http.StatusOK || proxiedP.BaseURL != "https://books.example.com" {
+		t.Fatalf("proxied: base_url = %q (%d), want https://books.example.com", proxiedP.BaseURL, resp.StatusCode)
+	}
+
 	off := newTestEnvWith(t, func(c *config.Config) { c.TLS.HomeHTTP = false })
-	resp, body := off.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+off.authCode+`"}`, map[string]string{"Host": "192.168.1.205:8080"})
+	resp, body = off.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+off.authCode+`"}`, map[string]string{"Host": "192.168.1.205:8080"})
 	var p pairingWire
 	_ = json.Unmarshal([]byte(body), &p)
 	if resp.StatusCode != http.StatusOK || p.BaseURL != "http://192.168.1.205:8080" {

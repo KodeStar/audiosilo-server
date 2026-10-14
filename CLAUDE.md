@@ -324,14 +324,16 @@ admin overrides; see Metadata overrides below).
   conn): `0x16` becomes a `*tls.Conn`, anything else stays plain, and ONE `http.Server`
   serves both (ALPN `h2` set by hand, as `ServeTLS` would). `server.homeHTTPGate` serves a
   plain request only when the connection's own `RemoteAddr` (never `X-Forwarded-For`) is
-  `config.HomeNetworkIP` (private/ULA/link-local; not CGNAT) or loopback; anyone else gets a
-  308 to the same URL on https (400 for an unusable Host). Docker Desktop / rootless Docker
-  can make every client look like the bridge gateway (private), the documented trade-off.
+  loopback, or `config.HomeNetworkIP` (private/ULA/link-local; not CGNAT) AND the Host is
+  `config.HomeNetworkHost` (`homeRequest`: a NAT/proxy gateway's private source, Docker's
+  IPv6 proxy say, still carries the internet client's public Host); anyone else gets a 308
+  to the same URL on https (`:80` for a port-less Host, as `baseURL`; 400 for an unusable
+  Host). Off whenever `tls.cert_file` is set (`ServesHomeHTTP`: a supplied cert may be trusted).
   `config.Addresses` then derives the home address as `http://` even for an https request,
   keeping the request's port (`:443` added when the Host has none, the port that answers
   http); a configured `lan_url` is used as is, and `base_url`/`web_url`/`uri server=` are
   always https (`api.baseURL`: a plain-HTTP request gets the https base on its port, 80 for a
-  Host without one), so a link copied from a console opened over http stays https. No HSTS on self-signed and no `upgrade-insecure-requests` in any
+  Host without one, `config.HostWithPort`; a proxied one keeps its port-less Host, https's 443), so a link copied from a console opened over http stays https. No HSTS on self-signed and no `upgrade-insecure-requests` in any
   CSP (`TestCSPAllowsPlainHTTP`), so the console and player work over http on the LAN.
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
   `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never

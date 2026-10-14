@@ -28,9 +28,7 @@ func (c *Config) Addresses(scheme, host string) (home, away string) {
 		}
 		if c.ServesHomeHTTP() && scheme == "https" {
 			scheme = "http"
-			if _, _, err := net.SplitHostPort(host); err != nil {
-				host += ":443" // https's default port, which now answers http, never 80
-			}
+			host = HostWithPort(host, "443") // https's default port, which now answers http, never 80
 		}
 		home = scheme + "://" + host
 	}
@@ -75,11 +73,28 @@ func isHomeNetworkHost(hostport string) bool {
 	return !strings.Contains(name, ".")
 }
 
-// ServesHomeHTTP reports whether the listening port also answers plain HTTP to
-// home-network clients: tls.home_http on a self-signed server.
-func (c *Config) ServesHomeHTTP() bool {
-	return c.TLS.Mode == TLSSelfSigned && c.TLS.HomeHTTP
+// HostWithPort is a request's Host ("name", "1.2.3.4", "[::1]" or a bare IPv6
+// address, with or without a port) with port added when it has none, an IPv6
+// address bracketed.
+func HostWithPort(host, port string) string {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), port)
 }
+
+// ServesHomeHTTP reports whether the listening port also answers plain HTTP to
+// home-network clients: tls.home_http on a self-signed server using its own
+// generated certificate. A certificate the admin supplied (tls.cert_file) may be
+// one the devices trust (a private CA, mkcert), so they keep https.
+func (c *Config) ServesHomeHTTP() bool {
+	return c.TLS.Mode == TLSSelfSigned && c.TLS.HomeHTTP && c.TLS.CertFile == ""
+}
+
+// HomeNetworkHost reports whether a request's Host names the server on a home
+// network (isHomeNetworkHost): a private or link-local IP, a .local/.lan/
+// .home.arpa/.internal name or a single-label one.
+func HomeNetworkHost(hostport string) bool { return isHomeNetworkHost(hostport) }
 
 // HomeNetworkIP reports whether ip is a home-network address: private (RFC 1918,
 // IPv6 ULA fc00::/7) or link-local, an IPv4-mapped IPv6 address judged as its

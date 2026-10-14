@@ -137,13 +137,24 @@ func (c *peekedConn) ReadFrom(r io.Reader) (int64, error) {
 	return io.Copy(c.Conn, r)
 }
 
-// homeHTTPGate serves a request that came over TLS, or over plain HTTP from a
-// home-network client (homeClient); any other plain HTTP request is redirected
-// to the same URL on https (308, so a POST stays a POST), or refused with a 400
-// when its Host can't make that URL.
+// CloseWrite half-closes the TCP connection. http.Server looks for it on the
+// connection it was handed before hanging up on a plain-HTTP client still
+// sending a body it refused (a 413 on an over-limit upload, a 431): the client
+// then reads the response instead of a reset that can drop it.
+func (c *peekedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+// homeHTTPGate serves a request that came over TLS, or over plain HTTP from home
+// (homeRequest); any other plain HTTP request is redirected to the same URL on
+// https (308, so a POST stays a POST), or refused with a 400 when its Host can't
+// make that URL.
 func homeHTTPGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS != nil || homeClient(r.RemoteAddr) {
+		if r.TLS != nil || homeRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -156,21 +167,25 @@ func homeHTTPGate(next http.Handler) http.Handler {
 	})
 }
 
-// homeClient reports whether a connection's remote address ("ip:port", the
-// connection's own, never a forwarding header, which the client writes itself)
-// is on the home network: config.HomeNetworkIP (private or link-local), or
-// loopback, this machine itself.
-func homeClient(remoteAddr string) bool {
-	ap, err := netip.ParseAddrPort(remoteAddr)
+// homeRequest reports whether a plain HTTP request comes from home: from this
+// machine (loopback), or from a home-network address (config.HomeNetworkIP) that
+// names the server by a home-network host (config.HomeNetworkHost). The address
+// is the connection's own, never a forwarding header, which the client writes
+// itself. The Host check keeps an internet client on https when a NAT or proxy
+// gateway hands its connection over from a private address (Docker's IPv6 proxy,
+// a router rewriting a forwarded port's source): it names the server by its
+// public name or address.
+func homeRequest(r *http.Request) bool {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
 		return false
 	}
 	ip := ap.Addr().Unmap()
-	return ip.IsLoopback() || config.HomeNetworkIP(ip)
+	return ip.IsLoopback() || config.HomeNetworkIP(ip) && config.HomeNetworkHost(r.Host)
 }
 
-// httpsURL is r's URL on https: the same Host (and so the same port, which
-// answers TLS too) and request URI. ok is false when the Host is missing or
+// httpsURL is r's URL on https: the same Host and port, which answers TLS too
+// (a Host without one came in on 80, as api.baseURL's links say), and request URI. ok is false when the Host is missing or
 // isn't a plain host[:port], or the request isn't for a path.
 func httpsURL(r *http.Request) (target string, ok bool) {
 	if r.Host == "" || !strings.HasPrefix(r.URL.Path, "/") {
@@ -180,5 +195,5 @@ func httpsURL(r *http.Request) (target string, ok bool) {
 	if err != nil || u.Host != r.Host || u.User != nil || u.Hostname() == "" || u.Path != "/" {
 		return "", false
 	}
-	return "https://" + r.Host + r.URL.RequestURI(), true
+	return "https://" + config.HostWithPort(r.Host, "80") + r.URL.RequestURI(), true
 }
