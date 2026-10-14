@@ -43,6 +43,21 @@ describe('checkField', () => {
     }
   });
 
+  it('takes a range of series numbers (an omnibus), stored as "1-3"', () => {
+    for (const [raw, want] of [
+      ['1-3', '1-3'],
+      [' 1 - 3 ', '1-3'],
+      ['1\u20133', '1-3'],
+      ['2.50-4.0', '2.5-4'],
+      ['1-101', '1-101'],
+    ]) {
+      expect(checkField('series_index', raw)).toEqual({ value: want });
+    }
+    for (const bad of ['3-1', '3-3', '0-2', '1-102', '99999-100001', '1-3-5', '1\u20143']) {
+      expect(checkField('series_index', bad).error).toBe('book.invalid.seriesIndex');
+    }
+  });
+
   it('takes real YYYY, YYYY-MM and YYYY-MM-DD dates', () => {
     for (const ok of ['2010', '2010-08', '2012-02-29', '0001']) {
       expect(checkField('published', ok).error).toBeUndefined();

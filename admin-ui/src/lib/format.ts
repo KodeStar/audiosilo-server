@@ -119,19 +119,36 @@ export function formatClock(seconds: number, withHours = seconds >= 3600): strin
 /** A translate function (i18next's `t`, or a stub in tests). */
 type Translate = (key: string, opts: Record<string, unknown>) => string;
 
-/** A position in a series as "#2" ("" for none, 0). */
-export function seriesIndexLabel(index: number, lang: string, t: Translate): string {
-  return index > 0 ? t('books.tile.seriesIndex', { index: formatNumber(index, lang) }) : '';
+/**
+ * A series position as written: "2", or for a range (an omnibus, `end` above
+ * `position`) its start and end, "1-3"; `fmt` writes each number.
+ */
+export function formatSeriesPosition(
+  position: number,
+  end = 0,
+  fmt: (n: number) => string = String,
+): string {
+  return end > position ? `${fmt(position)}-${fmt(end)}` : fmt(position);
 }
 
-/** A series with the book's place in it, "Mars #2" ("" with no series). */
+/** A position in a series as "#2", or "#1-3" for a range ("" for none, 0). */
+export function seriesIndexLabel(index: number, lang: string, t: Translate, end = 0): string {
+  return index > 0
+    ? t('books.tile.seriesIndex', {
+        index: formatSeriesPosition(index, end, (n) => formatNumber(n, lang)),
+      })
+    : '';
+}
+
+/** A series with the book's place in it, "Mars #2" or "Mars #1-3" ("" with no series). */
 export function seriesLabel(
   series: string | undefined,
   index: number,
   lang: string,
   t: Translate,
+  end = 0,
 ): string {
-  return series ? [series, seriesIndexLabel(index, lang, t)].filter(Boolean).join(' ') : '';
+  return series ? [series, seriesIndexLabel(index, lang, t, end)].filter(Boolean).join(' ') : '';
 }
 
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [

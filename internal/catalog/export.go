@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/names"
 )
 
@@ -152,7 +153,7 @@ func exportBook(b *Book, chapters int) ExportBook {
 		Authors:        names.Split(b.Author),
 		Narrators:      names.Split(b.Narrator),
 		Series:         strings.TrimSpace(b.Series),
-		SeriesPosition: FormatSeriesPosition(b.SeriesIndex),
+		SeriesPosition: FormatSeriesRange(b.SeriesIndex, b.SeriesIndexEnd),
 		ASIN:           strings.TrimSpace(b.ASIN),
 		ISBN:           strings.TrimSpace(b.ISBN),
 		RuntimeMin:     runtimeMinutes(b.Duration),
@@ -238,6 +239,18 @@ func FormatSeriesPosition(idx float64) string {
 		return ""
 	}
 	return strconv.FormatFloat(idx, 'f', -1, 64)
+}
+
+// FormatSeriesRange renders a series position that may be a range: "1-3" for an
+// omnibus of books 1 to 3 (end above start, metadata.ValidSeriesRange), else the
+// start alone as FormatSeriesPosition renders it. The stored form of a range in
+// the series_index field, and the export's series_position (the community
+// importer's grammar takes a range).
+func FormatSeriesRange(start, end float64) string {
+	if !metadata.ValidSeriesRange(start, end) {
+		return FormatSeriesPosition(start)
+	}
+	return FormatSeriesPosition(start) + "-" + FormatSeriesPosition(end)
 }
 
 // slugify reduces a library name to a filename-safe slug: lowercase ASCII words

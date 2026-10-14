@@ -496,6 +496,9 @@ func TestMatchParamsPairsThePositionWithItsSeries(t *testing.T) {
 		{"an agreeing series folder", MatchQuery{Series: "richard sharpe", SeriesIndex: 8, IsFolder: true, Path: sharpeBook.Path}, "8"},
 		{"no series folder", MatchQuery{Series: "Dune Chronicles", SeriesIndex: 1, IsFolder: true, Path: "Frank Herbert/Dune"}, "1"},
 		{"no series tag", MatchQuery{SeriesIndex: 8, IsFolder: true, Path: sharpeBook.Path}, "8"},
+		// An omnibus goes up as its range, never as the "1" of book 1.
+		{"a range", MatchQuery{Series: "Dune Chronicles", SeriesIndex: 1, SeriesIndexEnd: 3, IsFolder: true,
+			Path: "Frank Herbert/Dune Omnibus"}, "1-3"},
 		{"an agreeing numbered series folder", MatchQuery{Series: "Tawny Man", SeriesIndex: 2, IsFolder: true,
 			Path: "Robin Hobb/03 - Tawny Man/Golden Fool"}, "2"},
 		// A bare-number leaf is the volume of the series folder holding it.

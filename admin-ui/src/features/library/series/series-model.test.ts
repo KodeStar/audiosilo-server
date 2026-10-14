@@ -5,13 +5,14 @@ import { seriesKey } from '@/lib/series-key';
 import { adminBook } from '@/test/library-fixtures';
 import {
   formatPositions,
+  formatSpan,
   filterSeries,
   metaCandidate,
   pickRail,
   placeBooks,
-  positionIn,
   railEntries,
   sameTitle,
+  spanIn,
   seriesStatus,
   spineColors,
   spineHeight,
@@ -47,13 +48,13 @@ const book = (series_index: number, title: string, over = {}) =>
 /** Work ids for some owned books, as the works endpoint answers them. */
 const resolved = (pairs: [AdminBook, string][]) => new Map(pairs.map(([b, id]) => [refKey(b), id]));
 
-/** A spine row as text: "#n Title" for books, "gap n" for missing entries. */
+/** A spine row as text: "#n Title" for books, "gap n" for missing entries ("1-3" for a range). */
 const shelf = (row: ReturnType<typeof spineRow>) =>
   row.map((s) =>
     s.kind === 'gap'
-      ? `gap ${s.entry.position}`
+      ? `gap ${formatSpan(s.entry)}`
       : s.position > 0
-        ? `#${s.position} ${s.book.title}`
+        ? `#${formatSpan(s)} ${s.book.title}`
         : s.book.title,
   );
 
@@ -182,7 +183,7 @@ describe('seriesStatus', () => {
     const owned = [book(1, 'The Way of Kings'), book(2, 'Words of Radiance'), book(4, 'RoW')];
     const st = seriesStatus(stormlight, placeBooks(owned, stormlight));
     expect(st.total).toBe(5);
-    expect(st.have).toEqual([1, 2, 4]);
+    expect(st.have.map((e) => e.position)).toEqual([1, 2, 4]);
     expect(st.missing).toEqual([
       { position: 3, title: 'Oathbringer' },
       { position: 5, title: 'Wind and Truth' },
@@ -221,7 +222,7 @@ describe('placing books by title', () => {
   it('puts an unnumbered book on the missing entry its title is', () => {
     const placed = placeBooks([legion, many, worlds], bobiverse, resolved([[many, 'bv-2']]));
     const st = seriesStatus(bobiverse, placed);
-    expect(st.have).toEqual([1, 2, 3]);
+    expect(st.have.map((e) => e.position)).toEqual([1, 2, 3]);
     expect(st.missing).toEqual([{ position: 4, title: "Heaven's River" }]);
     expect(shelf(spineRow(placed, st.missing))).toEqual([
       '#1 BV01 - We Are Legion (We Are Bob)',
@@ -280,13 +281,15 @@ describe('placeBooks', () => {
     const works = resolved(skillBooks.map((b, i) => [b, `ats-${i + 1}`]));
     const placed = placeBooks(skillBooks, skills, works);
     const st = seriesStatus(skills, placed);
-    expect(st).toEqual({ total: 6, have: [1, 2, 3, 4, 5, 6], missing: [] });
+    expect(st.total).toBe(6);
+    expect(st.have.map((e) => e.position)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(st.missing).toEqual([]);
     expect(shelf(spineRow(placed, st.missing))).toEqual(
       [1, 2, 3, 4, 5, 6].map((i) => `#${i} Skills ${i}`),
     );
     // By series index alone (no works yet) only book 1 holds an entry.
     const byIndex = seriesStatus(skills, placeBooks(skillBooks, skills));
-    expect(byIndex.have).toEqual([1]);
+    expect(byIndex.have.map((e) => e.position)).toEqual([1]);
     expect(shelf(spineRow(placeBooks(skillBooks, skills), byIndex.missing))).toEqual([
       '#1 Skills 1',
       'gap 2',
@@ -313,7 +316,7 @@ describe('placeBooks', () => {
     ];
     const placed = placeBooks(owned, alice, resolved([[owned[0], 'alice-1']]));
     const st = seriesStatus(alice, placed);
-    expect(st.have).toEqual([1]);
+    expect(st.have.map((e) => e.position)).toEqual([1]);
     expect(st.missing.map((e) => e.position)).toEqual([2, 3]);
     expect(shelf(spineRow(placed, st.missing))).toEqual([
       '#1 Alice in Wonderland',
@@ -337,7 +340,7 @@ describe('placeBooks', () => {
     ]);
     const placed = placeBooks(owned, stormlight, works);
     const st = seriesStatus(stormlight, placed);
-    expect(st.have).toEqual([1, 2, 3]);
+    expect(st.have.map((e) => e.position)).toEqual([1, 2, 3]);
     expect(st.missing.map((e) => e.position)).toEqual([4, 5]);
     expect(shelf(spineRow(placed, st.missing))).toEqual([
       '#1 The Way of Kings',
@@ -372,7 +375,7 @@ describe('placeBooks', () => {
     );
     const st = seriesStatus(twice, placed);
     // Both copies of book 2 sit at 2; the omnibus holds its first entry only.
-    expect(st.have).toEqual([1, 2]);
+    expect(st.have.map((e) => e.position)).toEqual([1, 2]);
     expect(st.missing.map((e) => e.position)).toEqual([3]);
     expect(shelf(spineRow(placed, st.missing))).toEqual([
       '#1 Omnibus',
@@ -391,16 +394,17 @@ describe('placeBooks', () => {
 });
 
 describe('formatPositions', () => {
+  const at = (...ns: number[]) => ns.map((position) => ({ position }));
   it('collapses runs of three or more whole numbers', () => {
-    expect(formatPositions([1, 2, 4])).toBe('1, 2, 4');
-    expect(formatPositions([3, 5])).toBe('3, 5');
-    expect(formatPositions([3, 4, 5])).toBe('3-5');
-    expect(formatPositions([1, 2, 3, 4, 6, 7.5, 8, 9, 10])).toBe('1-4, 6, 7.5, 8-10');
+    expect(formatPositions(at(1, 2, 4))).toBe('1, 2, 4');
+    expect(formatPositions(at(3, 5))).toBe('3, 5');
+    expect(formatPositions(at(3, 4, 5))).toBe('3-5');
+    expect(formatPositions(at(1, 2, 3, 4, 6, 7.5, 8, 9, 10))).toBe('1-4, 6, 7.5, 8-10');
     expect(formatPositions([])).toBe('');
   });
 
   it('formats each number with the given formatter', () => {
-    expect(formatPositions([1.5, 2], (n) => String(n).replace('.', ','))).toBe('1,5, 2');
+    expect(formatPositions(at(1.5, 2), (n) => String(n).replace('.', ','))).toBe('1,5, 2');
   });
 });
 
@@ -446,10 +450,10 @@ describe('a book in several series', () => {
   });
 
   it('has its own position in each', () => {
-    expect(positionIn(guards)).toBe(8);
-    expect(positionIn(guards, 'Discworld')).toBe(8);
-    expect(positionIn(guards, 'City Watch')).toBe(1);
-    expect(positionIn(guards, 'Mort')).toBe(0);
+    expect(spanIn(guards).position).toBe(8);
+    expect(spanIn(guards, 'Discworld').position).toBe(8);
+    expect(spanIn(guards, 'City Watch').position).toBe(1);
+    expect(spanIn(guards, 'Mort').position).toBe(0);
   });
 
   it("sits on a series' shelf at its place there", () => {
@@ -480,16 +484,16 @@ describe('filterSeries', () => {
   });
 });
 
-describe('positionIn', () => {
+describe('spanIn', () => {
   it("reads a book's place in the series however the series is spelled", () => {
     const b = adminBook({
       series: 'He Who Fights With Monsters',
       series_index: 4,
       series_list: [{ name: 'He Who Fights With Monsters', position: 4 }],
     });
-    expect(positionIn(b, 'He Who Fights with Monsters')).toBe(4);
-    expect(positionIn(b, 'He Who Fights WIth Monsters')).toBe(4);
-    expect(positionIn(b, 'Monsters')).toBe(0);
+    expect(spanIn(b, 'He Who Fights with Monsters').position).toBe(4);
+    expect(spanIn(b, 'He Who Fights WIth Monsters').position).toBe(4);
+    expect(spanIn(b, 'Monsters').position).toBe(0);
   });
 
   it('keeps names with no letter or number apart, as the server does', () => {
@@ -501,8 +505,8 @@ describe('positionIn', () => {
         { name: '?!', position: 5 },
       ],
     });
-    expect(positionIn(b, '?!')).toBe(5);
-    expect(positionIn(b, '!!')).toBe(2);
+    expect(spanIn(b, '?!').position).toBe(5);
+    expect(spanIn(b, '!!').position).toBe(2);
   });
 });
 
@@ -554,5 +558,96 @@ describe('spineColors', () => {
   it('falls back to the procedural cover palette without a cover colour', () => {
     const [body, band, , ink] = coverModel(b.title, b.author).palette;
     expect(spineColors(b)).toEqual({ body, band, ink });
+  });
+});
+
+describe('ranges (an omnibus, "1-3")', () => {
+  const books13 = rail('Saga', [
+    work('1', 'One'),
+    work('2', 'Two'),
+    work('3', 'Three'),
+    work('1-3', 'Books 1-3'),
+    work('4', 'Four'),
+  ]);
+  const omnibus = (over = {}) =>
+    adminBook({
+      series: 'Saga',
+      series_index: 1,
+      series_index_end: 3,
+      series_list: [{ name: 'Saga', position: 1, position_end: 3 }],
+      title: 'Saga Omnibus',
+      path: 'Saga/Omnibus',
+      ...over,
+    });
+  const single = (n: number, title: string) =>
+    adminBook({
+      series: 'Saga',
+      series_index: n,
+      series_list: [{ name: 'Saga', position: n }],
+      title,
+      path: `Saga/${title}`,
+    });
+
+  it('reads a range entry, a slot of its own only where no single entry lies in it', () => {
+    expect(railEntries(books13).map((e) => formatSpan(e))).toEqual(['1', '2', '3', '4']);
+    const boxes = rail('Boxes', [
+      work('1 - 3', 'Books 1-3'),
+      work('4–6', 'Books 4-6'),
+      work('5', 'Five'),
+    ]);
+    expect(railEntries(boxes)).toEqual([
+      { position: 1, end: 3, title: 'Books 1-3' },
+      { position: 5, title: 'Five' },
+    ]);
+    // A range wider than the server stores is unnumbered.
+    expect(railEntries(rail('Wide', [work('1-500', 'Everything')]))).toEqual([]);
+  });
+
+  it("reads a book's range in its main series and in a listed one", () => {
+    expect(spanIn(omnibus())).toEqual({ position: 1, end: 3 });
+    expect(spanIn(omnibus(), 'saga')).toEqual({ position: 1, end: 3 });
+    expect(spanIn(single(2, 'Two'))).toEqual({ position: 2 });
+  });
+
+  it('holds every entry inside the range by its series index', () => {
+    const placed = placeBooks([omnibus(), single(4, 'Four')], books13, undefined, 'Saga');
+    const st = seriesStatus(books13, placed);
+    expect(st.have.map((e) => e.position)).toEqual([1, 2, 3, 4]);
+    expect(st.missing).toEqual([]);
+    expect(shelf(spineRow(placed, st.missing))).toEqual(['#1-3 Saga Omnibus', '#4 Four']);
+  });
+
+  it('holds every entry inside the range by its community work', () => {
+    const omni = omnibus({ series_index: 0, series_index_end: undefined, series_list: [] });
+    const placed = placeBooks([omni], books13, resolved([[omni, 'books-1-3']]));
+    const st = seriesStatus(books13, placed);
+    expect(formatPositions(st.have)).toBe('1-3');
+    expect(st.missing.map((e) => e.position)).toEqual([4]);
+    expect(shelf(spineRow(placed, st.missing))).toEqual(['#1-3 Saga Omnibus', 'gap 4']);
+  });
+
+  it('lets an omnibus hold no more than its range, beside the single books', () => {
+    const placed = placeBooks([omnibus(), single(2, 'Two')], books13);
+    expect(seriesStatus(books13, placed).missing.map((e) => e.position)).toEqual([4]);
+    expect(shelf(spineRow(placed, []))).toEqual(['#1-3 Saga Omnibus', '#2 Two']);
+  });
+
+  it('shows a range entry the books leave missing as one gap', () => {
+    const boxes = rail('Boxes', [work('1-3', 'Books 1-3'), work('4', 'Four')]);
+    const placed = placeBooks([single(4, 'Four')], boxes);
+    const st = seriesStatus(boxes, placed);
+    expect(formatPositions(st.missing)).toBe('1-3');
+    expect(shelf(spineRow(placed, st.missing))).toEqual(['gap 1-3', '#4 Four']);
+    // A single book at its start doesn't hold it; the omnibus does.
+    expect(seriesStatus(boxes, placeBooks([single(1, 'One')], boxes)).have).toEqual([]);
+    expect(formatPositions(seriesStatus(boxes, placeBooks([omnibus()], boxes)).have)).toBe('1-3');
+  });
+
+  it('writes a range as one in a position list', () => {
+    expect(
+      formatPositions([{ position: 1, end: 3 }, { position: 4 }, { position: 5 }, { position: 6 }]),
+    ).toBe('1-3, 4-6');
+    expect(formatPositions([{ position: 1, end: 3 }, { position: 4 }])).toBe('1-3, 4');
+    expect(formatSpan({ position: 2.5, end: 4 }, (n) => String(n).replace('.', ','))).toBe('2,5-4');
   });
 });

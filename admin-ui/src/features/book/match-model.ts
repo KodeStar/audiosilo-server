@@ -10,6 +10,7 @@ import {
 import type { MatchBy } from '@/api/client';
 import { seriesKey } from '@/lib/series-key';
 import { ISBN, checkField } from './book-model';
+import { seriesRef } from './more-series';
 
 // The match dialog's logic (STYLEGUIDE.md "Match with community"): what the
 // search box asks for, which recording of a work is meant, what each field
@@ -81,11 +82,12 @@ export function communityValues(
   };
 }
 
-/** Community series as a more_series value (a position that is no plain number is none). */
+/**
+ * Community series as a more_series value (a position the series_index field
+ * would refuse is none; a range, "1-3", is kept).
+ */
 function otherSeries(series: { name: string; position: string }[]): string {
-  return JSON.stringify(
-    series.map((s) => ({ name: s.name, position: Number(clean('series_index', s.position)) || 0 })),
-  );
+  return JSON.stringify(series.map((s) => seriesRef(s.name, clean('series_index', s.position))));
 }
 
 /** One row of the compare table. */

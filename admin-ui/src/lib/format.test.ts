@@ -90,6 +90,10 @@ describe('format', () => {
     expect(seriesLabel('Mars', 2, 'en', t)).toBe('Mars books.tile.seriesIndex:2');
     expect(seriesLabel('Mars', Number(undefined), 'en', t)).toBe('Mars');
     expect(seriesLabel(undefined, 2, 'en', t)).toBe('');
+    // A range (an omnibus): "#1-3"; an end not above the start is no range.
+    expect(seriesIndexLabel(1, 'en', t, 3)).toBe('books.tile.seriesIndex:1-3');
+    expect(seriesLabel('Mars', 1, 'de', t, 2.5)).toBe('Mars books.tile.seriesIndex:1-2,5');
+    expect(seriesIndexLabel(2, 'en', t, 2)).toBe('books.tile.seriesIndex:2');
   });
 
   it('formats listening in hours, one decimal under 10', () => {

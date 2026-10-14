@@ -18,8 +18,10 @@ type Favourite struct {
 	Author      string  `json:"author"`
 	Series      string  `json:"series"`
 	SeriesIndex float64 `json:"series_index"`
-	Duration    float64 `json:"duration"`
-	CreatedAt   string  `json:"created_at"`
+	// SeriesIndexEnd is the end of a range position (an omnibus of 1-3), as on a Book.
+	SeriesIndexEnd float64 `json:"series_index_end,omitempty"`
+	Duration       float64 `json:"duration"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 // AddFavourite marks a path as a favourite for a user. Idempotent: re-favouriting
@@ -69,7 +71,7 @@ func (c *Catalog) ListAllFavourites(ctx context.Context, userID int64, scopes []
 		`SELECT f.library_id, f.rel_path,
 		        b.id IS NOT NULL,
 		        COALESCE(b.title, ''), COALESCE(b.author, ''),
-		        COALESCE(b.series, ''), COALESCE(b.series_index, 0),
+		        COALESCE(b.series, ''), COALESCE(b.series_index, 0), COALESCE(b.series_index_end, 0),
 		        COALESCE(b.duration, 0), f.created_at
 		   FROM favourites f
 		   LEFT JOIN books b ON b.library_id = f.library_id AND b.rel_path = f.rel_path
@@ -83,7 +85,7 @@ func (c *Catalog) ListAllFavourites(ctx context.Context, userID int64, scopes []
 	for rows.Next() {
 		var fav Favourite
 		if err := rows.Scan(&fav.LibraryID, &fav.Path, &fav.IsBook,
-			&fav.Title, &fav.Author, &fav.Series, &fav.SeriesIndex,
+			&fav.Title, &fav.Author, &fav.Series, &fav.SeriesIndex, &fav.SeriesIndexEnd,
 			&fav.Duration, &fav.CreatedAt); err != nil {
 			return nil, err
 		}

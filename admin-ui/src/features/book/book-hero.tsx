@@ -42,6 +42,7 @@ import {
   formatListParts,
   formatNumber,
   formatRelative,
+  formatSeriesPosition,
 } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
 import { toast } from '@/lib/toast';
@@ -191,12 +192,18 @@ function Byline({ book: b, lang }: { book: AdminBook; lang: string }) {
   );
 }
 
-/** "book 8 in Discworld and book 1 in City Watch": each series, listed the language's way. */
+/**
+ * "book 8 in Discworld and book 1 in City Watch" ("book 1-3 in Saga" for an
+ * omnibus): each series, listed the language's way.
+ */
 function SeriesCredits({ series, lang }: { series: SeriesRef[]; lang: string }) {
   const one = (s: SeriesRef) => (
     <Trans
       i18nKey={s.position > 0 ? 'book.hero.inSeriesBook' : 'book.hero.inSeries'}
-      values={{ series: s.name, n: formatNumber(s.position, lang) }}
+      values={{
+        series: s.name,
+        n: formatSeriesPosition(s.position, s.position_end, (n) => formatNumber(n, lang)),
+      }}
       components={{ b: <NameLinks field="series" names={[s.name]} lang={lang} /> }}
     />
   );

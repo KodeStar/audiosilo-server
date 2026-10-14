@@ -144,7 +144,7 @@ func (a *API) localRails(ctx context.Context, requested catalog.Ref, env *meta.E
 	for _, b := range books {
 		for _, s := range b.AllSeries() {
 			cands = append(cands, meta.LocalBook{MetaLocal: meta.MetaLocal{LibraryID: b.LibraryID, Path: b.RelPath},
-				Series: s.Name, SeriesIndex: s.Position, ASIN: b.ASIN, ISBN: b.ISBN})
+				Series: s.Name, SeriesIndex: s.Position, SeriesIndexEnd: s.PositionEnd, ASIN: b.ASIN, ISBN: b.ISBN})
 		}
 	}
 	return a.meta.PlaceOwned(ctx, env, meta.MetaLocal(requested), cands), books, nil

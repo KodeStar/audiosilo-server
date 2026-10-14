@@ -53,6 +53,28 @@ describe('more_series', () => {
     expect(checkField('more_series', 'A\u0000B').error).toBe('book.invalid.control');
   });
 
+  it('reads a range as a position (an omnibus), stored with position_end', () => {
+    expect(checkField('more_series', 'Omnibus #1-3; Box #2 – 4; Saga #1–2.5').value).toBe(
+      '[{"name":"Omnibus","position":1,"position_end":3},{"name":"Box","position":2,"position_end":4},{"name":"Saga","position":1,"position_end":2.5}]',
+    );
+    const stored = '[{"name":"Omnibus","position":1,"position_end":3}]';
+    expect(checkField('more_series', stored)).toEqual({ value: stored });
+    expect(displayValue('more_series', stored)).toBe('Omnibus #1-3');
+    expect(commitDraft({}, 'more_series', displayValue('more_series', stored), stored)).toEqual({});
+    for (const bad of [
+      'A #3-1',
+      'A #0-2',
+      'A #1-500',
+      '[{"name":"A","position":3,"position_end":1}]',
+      '[{"name":"A","position":0,"position_end":2}]',
+      '[{"name":"A","position":1,"position_end":"3"}]',
+      // A range's start is a number, as the server reads a stored entry.
+      '[{"name":"A","position":"1","position_end":3}]',
+    ]) {
+      expect(checkField('more_series', bad).error).toBe('book.invalid.moreSeries');
+    }
+  });
+
   it('shows a stored list as its line', () => {
     expect(
       displayValue(
@@ -97,6 +119,19 @@ describe('seriesSwap', () => {
     expect(seriesSwap(swapFields('Discworld', '8', shadowed), 'City Watch')?.more_series).toBe(
       '[{"name":"Discworld","position":8}]',
     );
+  });
+
+  it('carries a range across the swap, both ways', () => {
+    const omni = '[{"name":"Collected","position":5}]';
+    expect(seriesSwap(swapFields('Saga', '1-3', omni), 'Collected')).toEqual({
+      more_series: '[{"name":"Saga","position":1,"position_end":3}]',
+      series_index: '5',
+    });
+    const listed = '[{"name":"Saga","position":1,"position_end":3}]';
+    expect(seriesSwap(swapFields('Collected', '5', listed), 'Saga')).toEqual({
+      more_series: '[{"name":"Collected","position":5}]',
+      series_index: '1-3',
+    });
   });
 
   it('takes another spelling of a listed series for it, as the server groups series', () => {

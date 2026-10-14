@@ -84,6 +84,20 @@ describe('book page', () => {
     );
   });
 
+  it('numbers an omnibus by its range', async () => {
+    const detail = bookDetail();
+    detail.book = {
+      ...detail.book,
+      series_index_end: 3,
+      series_list: [{ name: 'The Stormlight Archive', position: 1, position_end: 3 }],
+    };
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(
+      (await screen.findByRole('link', { name: 'The Stormlight Archive' })).closest('p'),
+    ).toHaveTextContent(/· book 1-3 in The Stormlight Archive$/);
+  });
+
   it('shows the book with where each value came from', async () => {
     mockFetch(routes(bookDetail()));
     renderApp(URL);

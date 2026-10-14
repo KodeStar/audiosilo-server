@@ -38,7 +38,7 @@ import {
 import { RadioCards } from '@/components/ui/radio-cards';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { scoreTone } from '@/features/book/match-model';
-import { moreSeriesRefs } from '@/features/book/more-series';
+import { moreSeriesRefs, seriesRef } from '@/features/book/more-series';
 import { bookRoute } from '@/lib/book-route';
 import { regionName, regionTag, storeOf } from '@/lib/regions';
 import { toastError } from '@/lib/errors';
@@ -568,7 +568,7 @@ function ItemRow({
   const candidate = item.outcome === 'auto' || item.outcome === 'review';
   const seriesLine = (refs: SeriesRef[]) =>
     refs
-      .map((r) => seriesLabel(r.name, r.position, lang, t))
+      .map((r) => seriesLabel(r.name, r.position, lang, t, r.position_end))
       .filter(Boolean)
       .join('; ');
   // What the scope does to the book's series, old -> new (a series it removes
@@ -581,7 +581,7 @@ function ItemRow({
     : '';
   // The community's main series, then any others the work is in ("Discworld #8; City Watch #1").
   const series = seriesLine([
-    { name: p.values.series ?? '', position: Number(p.values.series_index) },
+    seriesRef(p.values.series ?? '', p.values.series_index ?? ''),
     ...moreSeriesRefs(p.values.more_series ?? ''),
   ]);
   // The path tells two books of one title apart, read out with the row's controls

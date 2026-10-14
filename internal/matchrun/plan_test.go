@@ -241,14 +241,14 @@ func TestPlanSeries(t *testing.T) {
 		Series: []meta.MatchSeries{{Name: "Discworld", Position: "8"}, {Name: watch, Position: "1"}, {Name: "Omnibus", Position: "1-3"}},
 	}
 	p := Propose(&guards, nil)
-	if got := p.Values["more_series"]; got != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
+	if got := p.Values["more_series"]; got != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":1,"position_end":3}]` {
 		t.Fatalf("proposed more_series = %s", got)
 	}
 
 	// No series yet: the work's main one, and the rest beside it.
 	set, _ := planSet(ScopeFill, state(map[string]string{"title": "Guards! Guards!"}, nil, false), p)
 	if set["series"] != "Discworld" || set["series_index"] != "8" ||
-		set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
+		set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":1,"position_end":3}]` {
 		t.Fatalf("fill on no series = %v", set)
 	}
 
@@ -257,7 +257,7 @@ func TestPlanSeries(t *testing.T) {
 	st := state(map[string]string{"title": "Guards! Guards!", "series": watch}, nil, false)
 	set, _ = planSet(ScopeFill, st, p)
 	if _, ok := set["series"]; ok || set["series_index"] != "1" ||
-		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]` {
+		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":1,"position_end":3}]` {
 		t.Fatalf("fill on City Watch = %v", set)
 	}
 
@@ -265,7 +265,7 @@ func TestPlanSeries(t *testing.T) {
 	// offers it), numbered there.
 	st = state(map[string]string{"title": "Guards! Guards!", "series": watch, "series_index": "8"}, nil, false)
 	if set, _ := planSet(ScopeOverwrite, st, p); set["series"] != "" || set["series_index"] != "1" ||
-		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]` {
+		set["more_series"] != `[{"name":"Discworld","position":8},{"name":"Omnibus","position":1,"position_end":3}]` {
 		t.Fatalf("overwrite on City Watch = %v", set)
 	}
 
@@ -289,7 +289,7 @@ func TestPlanSeries(t *testing.T) {
 	// say): most likely the main one spelled otherwise, so only the work's other
 	// series go beside it.
 	st = state(map[string]string{"title": "Guards! Guards!", "series": "Pratchett Discworld"}, nil, false)
-	if set, _ := planSet(ScopeFill, st, p); set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":0}]` {
+	if set, _ := planSet(ScopeFill, st, p); set["more_series"] != `[{"name":"`+watch+`","position":1},{"name":"Omnibus","position":1,"position_end":3}]` {
 		t.Fatalf("fill beside an unlisted series = %v", set)
 	}
 
@@ -300,7 +300,7 @@ func TestPlanSeries(t *testing.T) {
 	}
 	// A list the book already has isn't "set".
 	st = state(map[string]string{"title": "Guards! Guards!", "series": "Discworld", "series_index": "8",
-		"more_series": `[{"name":"` + watch + `","position":1},{"name":"Omnibus","position":0}]`}, nil, false)
+		"more_series": `[{"name":"` + watch + `","position":1},{"name":"Omnibus","position":1,"position_end":3}]`}, nil, false)
 	if set, _ := planSet(ScopeOverwrite, st, p); len(set) != 0 {
 		t.Fatalf("overwrite on a book that has it all = %v", set)
 	}
@@ -410,5 +410,35 @@ func TestLengthFits(t *testing.T) {
 		if got := lengthFits(catalog.MatchProposal{RuntimeMin: tc.runtimeMin}, tc.seconds); got != tc.want {
 			t.Errorf("lengthFits(%d min, %v s) = %v, want %v", tc.runtimeMin, tc.seconds, got, tc.want)
 		}
+	}
+}
+
+// TestPlanSeriesRange: a community position that is a range (an omnibus, "1-3")
+// is written as the range, the main series' position or another series' entry,
+// and the review shows it with its end.
+func TestPlanSeriesRange(t *testing.T) {
+	omnibus := meta.MatchCandidate{
+		WorkID: "saga-1-3", Title: "Saga: Books 1-3",
+		Series: []meta.MatchSeries{{Name: "Saga", Position: "1-3"}, {Name: "Box Sets", Position: "2 - 4"}, {Name: "Huge", Position: "1-500"}},
+	}
+	p := Propose(&omnibus, nil)
+	if p.Values["series_index"] != "1-3" ||
+		p.Values["more_series"] != `[{"name":"Box Sets","position":2,"position_end":4},{"name":"Huge","position":0}]` {
+		t.Fatalf("proposed = %v", p.Values)
+	}
+	st := state(map[string]string{"title": "Saga Omnibus"}, nil, false)
+	w := Plan(ScopeFill, st, p)
+	if w.Set["series"] != "Saga" || w.Set["series_index"] != "1-3" {
+		t.Fatalf("fill = %v", w.Set)
+	}
+	ch := changeOf(st, w)
+	if ch.Series == nil || ch.Series.To[0] != (catalog.SeriesRef{Name: "Saga", Position: 1, PositionEnd: 3}) {
+		t.Fatalf("review = %+v", ch.Series)
+	}
+	// Filed under Box Sets already: its position there is the range 2-4.
+	st = state(map[string]string{"title": "Saga Omnibus", "series": "Box Sets"}, nil, false)
+	if set, _ := planSet(ScopeFill, st, p); set["series_index"] != "2-4" ||
+		set["more_series"] != `[{"name":"Saga","position":1,"position_end":3},{"name":"Huge","position":0}]` {
+		t.Fatalf("fill under Box Sets = %v", set)
 	}
 }

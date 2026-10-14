@@ -72,7 +72,8 @@ func ScopesFor(mode string) []string {
 // facts, as both the match dialog and a bulk run send them.
 func QueryFor(b *catalog.Book, region string) meta.MatchQuery {
 	return meta.MatchQuery{
-		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, Author: b.Author, Duration: b.Duration,
+		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, SeriesIndexEnd: b.SeriesIndexEnd,
+		Author: b.Author, Duration: b.Duration,
 		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: b.ASIN, BookISBN: b.ISBN, Region: region,
 	}
 }
@@ -102,11 +103,11 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 	if len(series) > 0 {
 		raw[catalog.FieldSeries], raw[catalog.FieldSeriesIndex] = series[0].Name, series[0].Position
 		// The work's other series (Plan decides which is the book's main one). A
-		// position that is no plain number (a range, "1-3") is no position.
+		// position the series_index field would refuse is no position; a range
+		// ("1-3", an omnibus) is kept as one.
 		more := make([]catalog.SeriesRef, 0, len(series)-1)
 		for _, s := range series[1:] {
-			pos := catalog.ParseSeriesIndex(catalog.CleanOverride(catalog.FieldSeriesIndex, s.Position))
-			more = append(more, catalog.SeriesRef{Name: s.Name, Position: pos})
+			more = append(more, catalog.SeriesAt(s.Name, catalog.CleanOverride(catalog.FieldSeriesIndex, s.Position)))
 		}
 		raw[catalog.FieldMoreSeries] = catalog.EncodeMoreSeries(more)
 	}
@@ -236,7 +237,7 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 	}
 	var work []catalog.SeriesRef
 	if name := p.Values[catalog.FieldSeries]; name != "" {
-		work = append(work, catalog.SeriesRef{Name: name, Position: catalog.ParseSeriesIndex(p.Values[catalog.FieldSeriesIndex])})
+		work = append(work, catalog.SeriesAt(name, p.Values[catalog.FieldSeriesIndex]))
 	}
 	work = append(work, catalog.ParseMoreSeries(p.Values[catalog.FieldMoreSeries])...)
 	own := st.Fields[catalog.FieldSeries].Value
@@ -257,7 +258,7 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 			}
 		} else if !found {
 			// A work listed twice in its main series keeps its first position.
-			mainPos, found = catalog.FormatSeriesPosition(s.Position), true
+			mainPos, found = catalog.FormatSeriesRange(s.Position, s.PositionEnd), true
 		}
 	}
 	plan(scope, catalog.FieldSeriesIndex, mainPos, st.Fields[catalog.FieldSeriesIndex], set)

@@ -5,8 +5,10 @@ import type {
   MetaSeriesWork,
   SeriesCount,
 } from '@/api/types';
+import { parseSeriesRange } from '@/features/book/field-rules';
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
+import { formatSeriesPosition } from '@/lib/format';
 import { hashString } from '@/lib/monogram';
 import { sameSeries, seriesKey } from '@/lib/series-key';
 
@@ -14,13 +16,24 @@ import { sameSeries, seriesKey } from '@/lib/series-key';
 // book's community series rail to a local series, placing the owned books on
 // it, the gaps (rail positions the server doesn't hold), "1, 2, 4-6" position
 // lists and the spine row that interleaves owned books with missing entries.
+//
+// A position may be a range, an omnibus of books 1-3 (a book's series_index_end
+// or series_list position_end; a rail entry's "1-3"): a book at a range holds
+// every rail entry inside it, and a range entry is a slot of its own only on a
+// rail that numbers none of the books inside it.
 
 /** Series cards on a page. */
 export const SERIES_PAGE = 24;
 
-/** One numbered entry of a community series rail. */
-export interface RailEntry {
+/** A place in a series: a position and, for a range (an omnibus, "1-3"), its end. */
+export interface Span {
   position: number;
+  /** A range's end, above position; absent for a single position. */
+  end?: number;
+}
+
+/** One numbered entry of a community series rail. */
+export interface RailEntry extends Span {
   title: string;
 }
 
@@ -28,8 +41,8 @@ export interface RailEntry {
 export interface SeriesStatus {
   /** Numbered entries in the rail. */
   total: number;
-  /** Rail positions the server holds, ascending. */
-  have: number[];
+  /** Rail entries the server holds, ascending. */
+  have: RailEntry[];
   /** Rail entries it doesn't, ascending. */
   missing: RailEntry[];
 }
@@ -38,12 +51,12 @@ export interface SeriesStatus {
 export type WorkIds = ReadonlyMap<string, string>;
 
 /** An owned book's place on the shelf. */
-export interface Placed {
+export interface Placed extends Span {
   book: AdminBook;
   /**
    * 'rail': it holds `position` on the rail (by its work, else by its series
-   * index). 'end': drawn after the rail, holding nothing (unnumbered, or known to
-   * be a work this rail doesn't list).
+   * index), and every entry up to `end` for a range. 'end': drawn after the rail,
+   * holding nothing (unnumbered, or known to be a work this rail doesn't list).
    */
   slot: 'rail' | 'end';
   /** The number it shows: its rail position when placed by its work, else its series index (0 = none). */
@@ -53,6 +66,15 @@ export interface Placed {
 export type Spine = ({ kind: 'book' } & Placed) | { kind: 'gap'; entry: RailEntry };
 
 const samePosition = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+const atOrBefore = (a: number, b: number) => a < b || samePosition(a, b);
+
+/** A span with its end only when it is a range. */
+const span = (position: number, end = 0): Span =>
+  end > position ? { position, end } : { position };
+
+/** Whether a book placed at `p` holds rail entry `e`: the entry lies inside its span. */
+const holds = (p: Span, e: Span) =>
+  atOrBefore(p.position, e.position) && atOrBefore(e.end ?? e.position, p.end ?? p.position);
 
 /**
  * The series whose name or author holds the search, compared as series keys
@@ -141,28 +163,44 @@ export function pickRail(
   return best?.rail;
 }
 
-/** A rail work's position, NaN when it is unnumbered (blank, or not a number). */
-const railPosition = (w: MetaSeriesWork) => (w.position.trim() === '' ? NaN : Number(w.position));
+/**
+ * A rail work's place: a number, or a range ("1-3", an omnibus; the server's
+ * metadata.ParseSeriesRange); undefined when it is unnumbered (blank, or neither).
+ */
+function railSpan(w: MetaSeriesWork): Span | undefined {
+  if (w.position.trim() === '') return undefined;
+  const n = Number(w.position);
+  if (Number.isFinite(n)) return { position: n };
+  const range = parseSeriesRange(w.position);
+  return range && { position: range.start, end: range.end };
+}
 
-/** A rail's numbered entries, ascending, one per position (the first title wins). */
+/**
+ * A rail's numbered entries, ascending, one per position (the first title wins).
+ * A range entry ("1-3") is one only when no single entry lies inside it: the
+ * books inside it are the slots, which a book at the range holds.
+ */
 export function railEntries(rail: MetaSeries): RailEntry[] {
+  const spans = rail.works.map((w) => ({ w, s: railSpan(w) }));
+  const singles = spans.flatMap(({ s }) => (s && s.end === undefined ? [s.position] : []));
   const out: RailEntry[] = [];
-  for (const w of rail.works) {
-    const position = railPosition(w);
-    if (!Number.isFinite(position) || out.some((e) => samePosition(e.position, position))) continue;
-    out.push({ position, title: w.title });
+  for (const { w, s } of spans) {
+    if (!s || out.some((e) => samePosition(e.position, s.position))) continue;
+    if (s.end !== undefined && singles.some((p) => holds(s, { position: p }))) continue;
+    out.push({ ...s, title: w.title });
   }
   return out.sort((a, b) => a.position - b.position);
 }
 
 /**
- * A book's position in the named series (its main series' index without a name):
- * a book in several series has its own position in each (series_list). The
- * series is matched as the server groups its spellings (sameSeries).
+ * A book's place in the named series (its main series' without a name): a book
+ * in several series has its own position in each (series_list), a range with its
+ * end. The series is matched as the server groups its spellings (sameSeries).
  */
-export function positionIn(book: AdminBook, series?: string): number {
-  if (series === undefined) return book.series_index;
-  return book.series_list.find((s) => sameSeries(s.name, series))?.position ?? 0;
+export function spanIn(book: AdminBook, series?: string): Span {
+  if (series === undefined) return span(book.series_index, book.series_index_end);
+  const s = book.series_list.find((r) => sameSeries(r.name, series));
+  return span(s?.position ?? 0, s?.position_end);
 }
 
 /**
@@ -204,11 +242,12 @@ export function sameTitle(a: string, b: string): boolean {
 
 /**
  * Where each owned book sits on the shelf of `series` (the books' main one when
- * absent). A book whose community work is on the rail holds that work's position,
- * whatever its own position says (local numbering is often missing or
- * different). A book known to be another work holds none and goes to the end;
- * one that didn't resolve (no identifier, no match, or no rail yet) falls back to
- * its position in the series. Without one, it holds the rail entry its title is
+ * absent). A book whose community work is on the rail holds that work's position
+ * (a range: every entry inside it), whatever its own position says (local
+ * numbering is often missing or different). A book known to be another work holds
+ * none and goes to the end; one that didn't resolve (no identifier, no match, or
+ * no rail yet) falls back to its position in the series (a range, an omnibus of
+ * 1-3, holds 1, 2 and 3). Without one, it holds the rail entry its title is
  * (sameTitle: "BV03 - All These Worlds" is All These Worlds), when no other book
  * holds that entry, and else goes to the end.
  */
@@ -219,27 +258,27 @@ export function placeBooks(
   series?: string,
 ): Placed[] {
   const byIndex = (book: AdminBook): Placed => {
-    const position = positionIn(book, series);
-    return { book, slot: position > 0 ? 'rail' : 'end', position };
+    const at = spanIn(book, series);
+    return { book, slot: at.position > 0 ? 'rail' : 'end', ...at };
   };
   if (!rail) return owned.map(byIndex);
-  // Each work's position on the rail: its first numbered one.
-  const positions = new Map<string, number>();
+  // Each work's place on the rail: its first numbered one.
+  const spans = new Map<string, Span>();
   for (const w of rail.works) {
-    const position = railPosition(w);
-    if (Number.isFinite(position) && !positions.has(w.id)) positions.set(w.id, position);
+    const at = railSpan(w);
+    if (at && !spans.has(w.id)) spans.set(w.id, at);
   }
   const placed = owned.map((book): Placed => {
     const work = works?.get(refKey(book));
     if (work === undefined) return byIndex(book);
-    const position = positions.get(work);
-    return position === undefined
-      ? { book, slot: 'end', position: positionIn(book, series) }
-      : { book, slot: 'rail', position };
+    const at = spans.get(work);
+    return at === undefined
+      ? { book, slot: 'end', ...spanIn(book, series) }
+      : { book, slot: 'rail', ...at };
   });
-  const held = placed.filter((p) => p.slot === 'rail').map((p) => p.position);
+  const held = placed.filter((p) => p.slot === 'rail');
   const free = railEntries(rail)
-    .filter((e) => !held.some((i) => samePosition(i, e.position)))
+    .filter((e) => !held.some((p) => holds(p, e)))
     .map((entry) => ({ entry, keys: titleKeys(entry.title) }));
   return placed.map((p) => {
     if (p.slot === 'rail' || works?.has(refKey(p.book))) return p;
@@ -247,43 +286,52 @@ export function placeBooks(
     const at = free.findIndex((f) => f.keys.some((k) => keys.includes(k)));
     if (at < 0) return p;
     const [{ entry }] = free.splice(at, 1);
-    return { ...p, slot: 'rail', position: entry.position };
+    return { book: p.book, slot: 'rail', ...span(entry.position, entry.end) };
   });
 }
 
-/** The rail against the books the server holds, placed by placeBooks. */
+/**
+ * The rail against the books the server holds, placed by placeBooks: an entry is
+ * held when a book on the rail holds it (a book at a range, every entry inside it).
+ */
 export function seriesStatus(rail: MetaSeries, placed: Placed[]): SeriesStatus {
-  const held = placed.filter((p) => p.slot === 'rail').map((p) => p.position);
+  const held = placed.filter((p) => p.slot === 'rail');
   const entries = railEntries(rail);
-  const isHeld = (e: RailEntry) => held.some((i) => samePosition(i, e.position));
+  const isHeld = (e: RailEntry) => held.some((p) => holds(p, e));
   return {
     total: entries.length,
-    have: entries.filter(isHeld).map((e) => e.position),
+    have: entries.filter(isHeld),
     missing: entries.filter((e) => !isHeld(e)),
   };
 }
 
+/** A place as it is written: "2", or "1-3" for a range. */
+export function formatSpan(s: Span, fmt: (n: number) => string = String): string {
+  return formatSeriesPosition(s.position, s.end, fmt);
+}
+
 /**
  * Positions as a short list: a run of three or more whole numbers collapses
- * to "3-5" ("1, 2, 4-6, 7.5").
+ * to "3-5" ("1, 2, 4-6, 7.5"); a range is written as one ("1-3").
  */
-export function formatPositions(ns: number[], fmt: (n: number) => string = String): string {
+export function formatPositions(ns: Span[], fmt: (n: number) => string = String): string {
+  const whole = (s: Span) => s.end === undefined && Number.isInteger(s.position);
   const parts: string[] = [];
   let i = 0;
   while (i < ns.length) {
     let j = i;
     while (
       j + 1 < ns.length &&
-      Number.isInteger(ns[j]) &&
-      Number.isInteger(ns[j + 1]) &&
-      ns[j + 1] === ns[j] + 1
+      whole(ns[j]) &&
+      whole(ns[j + 1]) &&
+      ns[j + 1].position === ns[j].position + 1
     ) {
       j++;
     }
     if (j - i >= 2) {
-      parts.push(`${fmt(ns[i])}-${fmt(ns[j])}`);
+      parts.push(`${fmt(ns[i].position)}-${fmt(ns[j].position)}`);
     } else {
-      for (let k = i; k <= j; k++) parts.push(fmt(ns[k]));
+      for (let k = i; k <= j; k++) parts.push(formatSpan(ns[k], fmt));
     }
     i = j + 1;
   }

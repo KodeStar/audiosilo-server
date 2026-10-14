@@ -503,7 +503,7 @@ func readNames(relPath string, isFolder bool, md *metadata.Metadata) *metadata.M
 		n.Series = md.Series
 	}
 	if md.SeriesIndex != 0 {
-		n.SeriesIndex = md.SeriesIndex
+		n.SeriesIndex, n.SeriesIndexEnd = md.SeriesIndex, md.SeriesIndexEnd
 	}
 	return n
 }
@@ -519,7 +519,7 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 		noteProblem(b, primary, b.Size, md)
 	}
 	n := readNames(b.RelPath, b.IsFolder, md)
-	b.Title, b.Author, b.Series, b.SeriesIndex = n.Title, n.Author, n.Series, n.SeriesIndex
+	b.Title, b.Author, b.Series, b.SeriesIndex, b.SeriesIndexEnd = n.Title, n.Author, n.Series, n.SeriesIndex, n.SeriesIndexEnd
 	if md != nil {
 		b.Narrator = md.Narrator
 		b.Released = md.Released

@@ -76,6 +76,10 @@ type Book struct {
 	Author      string  `json:"author"`
 	Series      string  `json:"series"`
 	SeriesIndex float64 `json:"series_index"`
+	// SeriesIndexEnd is the end of a main series position that is a range (an
+	// omnibus of books 1-3: SeriesIndex 1, SeriesIndexEnd 3); 0, and omitted,
+	// when it isn't one, so a client that knows only SeriesIndex reads the start.
+	SeriesIndexEnd float64 `json:"series_index_end,omitempty"`
 	// SeriesList is every series the book is in, its main one (Series) first,
 	// with its position in each - present only for a book in more than one (see
 	// FieldMoreSeries); a client otherwise reads Series/SeriesIndex.

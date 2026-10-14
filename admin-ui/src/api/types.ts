@@ -1195,6 +1195,8 @@ export interface Book {
   author: string;
   series: string;
   series_index: number;
+  /** The end of a series position that is a range (an omnibus, "1-3"); absent otherwise. */
+  series_index_end?: number;
   narrator: string;
   duration: number;
   asin?: string;
@@ -1347,7 +1349,10 @@ export interface AdminBook {
   authors: string[];
   narrators: string[];
   series: string;
+  /** The main series position; a range's start. */
   series_index: number;
+  /** The end of a main series position that is a range (an omnibus of books 1-3); absent otherwise. */
+  series_index_end?: number;
   /** Every series the book is in, its main one (`series`) first, with its position in each. */
   series_list: SeriesRef[];
   published: string;
@@ -1480,16 +1485,20 @@ export interface SeriesCount {
   author: string;
   books: number;
   duration: number;
-  /** Distinct non-zero positions held, ascending. */
+  /** Distinct non-zero positions held (every one inside a range), ascending. */
   positions: number[];
   /** How many of `books` are in it beyond their main series (catalog more_series). */
   extra_books: number;
 }
 
-/** One series a book is in, with its position there (0 = none): catalog.SeriesRef. */
+/**
+ * One series a book is in, with its position there (0 = none) and, for a range
+ * (an omnibus of books 1-3), its end: catalog.SeriesRef.
+ */
 export interface SeriesRef {
   name: string;
   position: number;
+  position_end?: number;
 }
 
 /** The overridable book fields (catalog.OverrideFields), in display order. */

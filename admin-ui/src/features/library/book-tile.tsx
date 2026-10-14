@@ -10,7 +10,7 @@ import { bookRoute } from '@/lib/book-route';
 import { seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { tileFlags, type TileFlag } from './books/books-model';
-import { positionIn } from './series/series-model';
+import { spanIn } from './series/series-model';
 
 const FLAG_ICONS: Record<TileFlag, LucideIcon> = {
   cover: ImageOff,
@@ -52,8 +52,8 @@ export const BookTile = memo(function BookTile({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const flags = note ? [] : tileFlags(book, metadataOn);
-  const position = series ? positionIn(book, series) : book.series ? book.series_index : 0;
-  const index = seriesIndexLabel(position, lang, t);
+  const at = series ? spanIn(book, series) : book.series ? spanIn(book) : { position: 0 };
+  const index = seriesIndexLabel(at.position, lang, t, at.end);
 
   // While a selection is active, a click on the tile's links toggles the book instead.
   const toggleInstead = (e: React.MouseEvent) => {

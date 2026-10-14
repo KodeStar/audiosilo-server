@@ -503,7 +503,7 @@ func changeOf(st *catalog.MatchState, w Writes) Change {
 		}
 	}
 	series := func(value func(string) string) []catalog.SeriesRef {
-		return catalog.SeriesList(value(catalog.FieldSeries), catalog.ParseSeriesIndex(value(catalog.FieldSeriesIndex)), value(catalog.FieldMoreSeries))
+		return catalog.SeriesList(catalog.SeriesAt(value(catalog.FieldSeries), value(catalog.FieldSeriesIndex)), value(catalog.FieldMoreSeries))
 	}
 	from := series(func(f string) string { return st.Fields[f].Value })
 	if to := series(func(f string) string { return w.after(st, f) }); !slices.Equal(from, to) {
