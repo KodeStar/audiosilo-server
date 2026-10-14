@@ -255,7 +255,7 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 	if len(cands) > 0 {
 		item.Proposal = Propose(&cands[0], meta.DefaultRecording(&cands[0], b.Duration, o.Region))
 	}
-	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal)
+	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration)
 	return item, nil
 }
 

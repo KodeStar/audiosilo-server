@@ -191,6 +191,9 @@ func TestPlanRepick(t *testing.T) {
 
 func TestClassify(t *testing.T) {
 	ids := catalog.MatchProposal{Values: map[string]string{"asin": "B0UK000001"}}
+	withRuntime := func(minutes int) catalog.MatchProposal {
+		return catalog.MatchProposal{Values: ids.Values, RuntimeMin: minutes}
+	}
 	cands := func(scores ...int) []meta.MatchCandidate {
 		out := make([]meta.MatchCandidate, len(scores))
 		for i, s := range scores {
@@ -209,13 +212,22 @@ func TestClassify(t *testing.T) {
 		"too low":           {cands(89), ids, catalog.OutcomeReview},
 		"no identifier":     {cands(100), catalog.MatchProposal{Values: map[string]string{"title": "x"}}, catalog.OutcomeReview},
 		"nothing":           {nil, ids, catalog.OutcomeNone},
+		// The unabridged The Burning (7h 13m) against a work holding only its
+		// dramatization (357 min, 18% short), as metaserve scored it (#129).
+		"another edition's length": {cands(90), withRuntime(357), catalog.OutcomeReview},
+		"a length within 10%":      {cands(90), withRuntime(400), catalog.OutcomeAuto},
+		"a recording of no length": {cands(90), withRuntime(0), catalog.OutcomeAuto},
 	} {
-		if got, _, _ := Classify(tc.cands, tc.p); got != tc.want {
+		if got, _, _ := Classify(tc.cands, tc.p, 7*3600+13*60); got != tc.want {
 			t.Errorf("%s: %s, want %s", name, got, tc.want)
 		}
 	}
-	if _, score, runnerUp := Classify(cands(95, 85), ids); score != 95 || runnerUp != 85 {
+	if _, score, runnerUp := Classify(cands(95, 85), ids, 0); score != 95 || runnerUp != 85 {
 		t.Fatalf("scores = %d %d", score, runnerUp)
+	}
+	// A book of unknown length isn't held back by the recording's.
+	if got, _, _ := Classify(cands(90), withRuntime(357), 0); got != catalog.OutcomeAuto {
+		t.Fatalf("an unknown length: %s", got)
 	}
 }
 
