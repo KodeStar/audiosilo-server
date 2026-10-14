@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -170,7 +171,7 @@ func TestHouseListening(t *testing.T) {
 	if err := h.cat.SetHouseholdSharing(ctx, h.demo, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.auth.SetDisabled(ctx, h.dora, true); err != nil {
+	if err := h.auth.UpdateUser(ctx, h.dora, auth.UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 

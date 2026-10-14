@@ -42,13 +42,17 @@ func (a *API) metadataOff(w http.ResponseWriter) bool {
 // Read-only facts ride along in their sections: metadata.available (the service
 // exists, so the switch can turn on), players.web_player (where /web is served
 // from: "embedded", "dir" or ""), demo.max_users_default (the cap while max_users
-// is null).
+// is null), household.max_members_default/_min/_max (the cap's default and
+// range).
 func (a *API) settingsEnvelope() map[string]any {
 	saved := a.config().saved
 	sections := saved.Settings()
 	sections["metadata"]["available"] = a.meta != nil
 	sections["players"]["web_player"] = a.playerSource
 	sections["demo"]["max_users_default"] = config.DefaultDemoMaxUsers
+	sections["household"]["max_members_default"] = config.DefaultMaxMembers
+	sections["household"]["max_members_min"] = config.MinMaxMembers
+	sections["household"]["max_members_max"] = config.MaxMaxMembers
 	out := map[string]any{
 		"locked":           saved.Locked(),
 		"restart_settings": config.RestartSettings(),

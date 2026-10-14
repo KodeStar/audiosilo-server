@@ -94,6 +94,11 @@ var fields = []field{
 	{key: "demo.idle_ttl", env: "AUDIOSILO_DEMO_IDLE_TTL", setting: "demo.idle_ttl", restart: true,
 		ptr: func(c *Config) any { return &c.Demo.IdleTTL }, fix: fixIdleTTL},
 
+	{key: "household.members_enabled", env: "AUDIOSILO_HOUSEHOLD_MEMBERS_ENABLED", setting: "household.members_enabled",
+		ptr: func(c *Config) any { return &c.Household.MembersEnabled }},
+	{key: "household.max_members", env: "AUDIOSILO_HOUSEHOLD_MAX_MEMBERS", setting: "household.max_members",
+		ptr: func(c *Config) any { return &c.Household.MaxMembers }},
+
 	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
 		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
 	{key: "backups.keep", env: "AUDIOSILO_BACKUP_KEEP", setting: "backups.keep",

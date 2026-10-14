@@ -50,6 +50,20 @@ const BY_CODE: Record<string, string> = {
   import_applied: 'errors.importApplied',
   // A match run is working (starting another, applying, clearing matches).
   match_run_busy: 'errors.matchRunBusy',
+  // Household members: assigning someone, making them an admin, deleting an owner.
+  member_not_admin: 'errors.memberNotAdmin',
+  owner_is_member: 'errors.ownerIsMember',
+  owner_is_demo: 'errors.ownerIsDemo',
+  self_managed: 'errors.selfManaged',
+  has_members: 'errors.hasMembers',
+  member_fields_required: 'errors.memberFieldsRequired',
+  // The person page disables Assign for a demo account; this is the server's
+  // answer when the page was stale.
+  member_is_demo: 'user.household.blocked.demo',
+  kid_no_password: 'errors.kidNoPassword',
+  // Minting or rotating an invite for a kid (409): a kid holds none.
+  kid_account: 'errors.kidAccount',
+  invalid_keep_members: 'errors.invalidKeepMembers',
 };
 
 /** A failure as one sentence for a toast or a field. */

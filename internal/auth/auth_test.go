@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -66,7 +67,7 @@ func TestDeleteUser(t *testing.T) {
 	}
 
 	// Deleting a normal user succeeds and the row is gone.
-	if err := s.DeleteUser(ctx, member.ID); err != nil {
+	if _, err := s.DeleteUser(ctx, member.ID, nil); err != nil {
 		t.Fatalf("delete member: %v", err)
 	}
 	if _, err := s.GetUser(ctx, member.ID); !errors.Is(err, ErrNotFound) {
@@ -74,12 +75,12 @@ func TestDeleteUser(t *testing.T) {
 	}
 
 	// Deleting an unknown id is ErrNotFound.
-	if err := s.DeleteUser(ctx, 999999); !errors.Is(err, ErrNotFound) {
+	if _, err := s.DeleteUser(ctx, 999999, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("delete unknown = %v, want ErrNotFound", err)
 	}
 
 	// The last enabled admin can't be deleted (lockout guard).
-	if err := s.DeleteUser(ctx, admin.ID); !errors.Is(err, ErrLastAdmin) {
+	if _, err := s.DeleteUser(ctx, admin.ID, nil); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("delete last admin = %v, want ErrLastAdmin", err)
 	}
 
@@ -88,8 +89,55 @@ func TestDeleteUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteUser(ctx, admin2.ID); err != nil {
+	if _, err := s.DeleteUser(ctx, admin2.ID, nil); err != nil {
 		t.Fatalf("delete admin2 with another admin present: %v", err)
+	}
+}
+
+// Two admins deleting each other at once can't both pass the last-admin guard:
+// DeleteUser reads the account and the guard inside its write, which the
+// store's one writer orders, so one delete is ErrLastAdmin and an enabled admin
+// stays. The writer is held first, as a long scan would, so both requests are in
+// flight before either writes.
+func TestDeleteUserLastAdminGuardInTheWrite(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	alice := mustUser(t, s, ctx, "alice", "alice-password", RoleAdmin)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleAdmin)
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.db.WithTx(ctx, "hold", func(*sql.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, id := range []int64{bob.ID, alice.ID} {
+		wg.Go(func() { _, errs[i] = s.DeleteUser(ctx, id, nil) })
+	}
+	time.Sleep(100 * time.Millisecond) // both requests wait for the writer
+	close(release)
+	<-done
+	wg.Wait()
+	refused := 0
+	for _, err := range errs {
+		switch {
+		case errors.Is(err, ErrLastAdmin):
+			refused++
+		case err != nil:
+			t.Fatal(err)
+		}
+	}
+	var left int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if refused != 1 || left != 1 {
+		t.Fatalf("errors %v, enabled admins left %d", errs, left)
 	}
 }
 
@@ -249,25 +297,25 @@ func TestSetRoleGuards(t *testing.T) {
 	kid, _ := s.CreateUser(ctx, "kid", "", RoleUser)
 
 	// Promoting a password-less account to admin is refused until it has a password.
-	if err := s.SetRole(ctx, kid.ID, RoleAdmin); err != ErrAdminNeedsPassword {
+	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Role: new(RoleAdmin)}); err != ErrAdminNeedsPassword {
 		t.Fatalf("expected ErrAdminNeedsPassword, got %v", err)
 	}
 	if err := s.SetPassword(ctx, kid.ID, "kid-password"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRole(ctx, kid.ID, RoleAdmin); err != nil {
+	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Role: new(RoleAdmin)}); err != nil {
 		t.Fatalf("promote after setting password: %v", err)
 	}
 
 	// Now there are two admins; demoting the original is allowed.
-	if err := s.SetRole(ctx, admin.ID, RoleUser); err != nil {
+	if err := s.UpdateUser(ctx, admin.ID, UserChanges{Role: new(RoleUser)}); err != nil {
 		t.Fatalf("demote with another admin present: %v", err)
 	}
 	// kid is the last admin - demoting/disabling must be refused.
-	if err := s.SetRole(ctx, kid.ID, RoleUser); err != ErrLastAdmin {
+	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Role: new(RoleUser)}); err != ErrLastAdmin {
 		t.Fatalf("expected ErrLastAdmin on demote, got %v", err)
 	}
-	if err := s.SetDisabled(ctx, kid.ID, true); err != ErrLastAdmin {
+	if err := s.UpdateUser(ctx, kid.ID, UserChanges{Disabled: new(true)}); err != ErrLastAdmin {
 		t.Fatalf("expected ErrLastAdmin on disable, got %v", err)
 	}
 }
@@ -700,7 +748,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 	// Mint the linked pairing token while enabled: the disable must gate the
 	// exchange step too, not just redeem.
 	tok := pairThrough(t, s, ctx, invite)
-	if err := s.SetDisabled(ctx, u.ID, true); err != nil {
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ResolveAuthCode(ctx, invite); err != ErrInvalidCode {
@@ -719,7 +767,7 @@ func TestRedeemDisabledRejectedWithoutBurningUse(t *testing.T) {
 	}
 	// Re-enabling restores access: the held QR token exchanges and claims the
 	// invite's use, and the recovery code resolves again.
-	if err := s.SetDisabled(ctx, u.ID, false); err != nil {
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := consumePairing(s, ctx, tok); err != nil {

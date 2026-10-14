@@ -16,6 +16,7 @@ import { RadioCards, type RadioCardOption } from '@/components/ui/radio-cards';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { errorMessage, toastError } from '@/lib/errors';
+import { formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { ScheduleInput } from './schedule-input';
 import { useSaveSettings } from './use-save-settings';
@@ -25,6 +26,7 @@ import {
   listToText,
   lockOf,
   needsRestart,
+  outOfRange,
   patchIds,
   sectionPatch,
   textToList,
@@ -60,7 +62,15 @@ export function SettingBadges({ settings, id }: { settings: AdminSettings; id: S
 
 /** A form field of a settings card. Labels are `settings.<section>.<name>` (+ `Body`). */
 export type FieldSpec =
-  | { name: string; kind: 'text' | 'number'; placeholder?: string; mono?: boolean }
+  | { name: string; kind: 'text'; placeholder?: string; mono?: boolean }
+  /** A whole number; with `range`, a value outside it is refused before saving. */
+  | {
+      name: string;
+      kind: 'number';
+      placeholder?: string;
+      mono?: boolean;
+      range?: { min: number; max: number };
+    }
   | { name: string; kind: 'list'; placeholder?: string }
   | { name: string; kind: 'switch' }
   /** A backup schedule: how often, which day, what time (backups-model). */
@@ -120,7 +130,7 @@ export function SettingsForm<S extends SettingsSection>({
   /** Read-only rows after the fields (a certificate's status). */
   children?: React.ReactNode;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const formId = useId();
   const save = useSaveSettings();
   const saved = settings[section] as Record<string, unknown>;
@@ -160,6 +170,16 @@ export function SettingsForm<S extends SettingsSection>({
   // Let's Encrypt) isn't saved behind the admin's back.
   const wire = Object.fromEntries(shown.map((f) => [f.name, toWire(f, draft[f.name])]));
   const patch = sectionPatch(section, settings[section], wire as Partial<AdminSettings[S]>);
+  // A number outside its range says so on its field and holds the save.
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const rangeError = (f: FieldSpec): string | undefined =>
+    f.kind === 'number' && f.range && outOfRange(draft[f.name] as string, f.range.min, f.range.max)
+      ? t('settings.numberRange', {
+          min: formatNumber(f.range.min, lang),
+          max: formatNumber(f.range.max, lang),
+        })
+      : undefined;
+  const invalid = shown.some((f) => rangeError(f) !== undefined);
 
   const commit = async (p: SettingsPatch) => {
     setBusy(true);
@@ -185,7 +205,7 @@ export function SettingsForm<S extends SettingsSection>({
   };
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patch) return;
+    if (!patch || invalid) return;
     const risky = patchIds(patch).some((id) => needsRestart(settings, id));
     if (confirmRestart && risky) {
       setConfirming(patch);
@@ -208,7 +228,7 @@ export function SettingsForm<S extends SettingsSection>({
               settings={settings}
               value={draft[f.name]}
               onChange={(v) => setDraft((d) => ({ ...d, [f.name]: v }))}
-              error={errors.field === f.name ? errors.fieldText : undefined}
+              error={rangeError(f) ?? (errors.field === f.name ? errors.fieldText : undefined)}
             />
           ))}
           {children}
@@ -234,7 +254,7 @@ export function SettingsForm<S extends SettingsSection>({
           >
             {t('settings.reset')}
           </Button>
-          <Button type="submit" size="sm" disabled={!patch || busy}>
+          <Button type="submit" size="sm" disabled={!patch || busy || invalid}>
             {busy ? t('settings.saving') : t('settings.save')}
           </Button>
         </div>
@@ -276,9 +296,15 @@ function FieldRow({
   onChange: (v: DraftValue) => void;
   error?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const label = t(`settings.${settingId}`);
-  const body = t(`settings.${settingId}Body`, { defaultValue: '' });
+  // A ranged number's description names its range from the server's facts.
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const range =
+    spec.kind === 'number' && spec.range
+      ? { min: formatNumber(spec.range.min, lang), max: formatNumber(spec.range.max, lang) }
+      : {};
+  const body = t(`settings.${settingId}Body`, { defaultValue: '', ...range });
   const locked = Boolean(lockOf(settings, settingId));
   const ariaDescribedBy = describedBy(id, Boolean(error), Boolean(body));
   const wide = spec.kind === 'list' || spec.kind === 'radio';

@@ -8,6 +8,7 @@ import { describeSchedule } from '@/features/settings/backups-model';
 /** The action areas the log can be narrowed to (an action's first part), in menu order. */
 export const AUDIT_AREAS = [
   'user',
+  'member',
   'invite',
   'device',
   'share',
@@ -24,8 +25,24 @@ export const AUDIT_AREAS = [
 /** i18next's t as far as these rules use it (options are optional, unlike lib/format's). */
 type Translate = (key: string, opts?: Record<string, unknown>) => string;
 
-/** Details whose values are codes with words of their own (`audit.enum.<key>.<value>`). */
-const ENUMS = new Set(['password', 'mode', 'kind', 'source', 'role', 'error', 'scope', 'choice']);
+/**
+ * Details whose values are codes with words of their own (`audit.enum.<words>.<value>`),
+ * by detail key: most have words under their own key; the admin's member fields
+ * share the member routes' words.
+ */
+const ENUMS: Record<string, string> = {
+  password: 'password',
+  mode: 'mode',
+  kind: 'kind',
+  source: 'source',
+  role: 'role',
+  error: 'error',
+  scope: 'scope',
+  choice: 'choice',
+  access: 'access',
+  member_kind: 'kind',
+  member_access: 'access',
+};
 
 /** Details whose values are seconds of listening, written as a length. */
 const DURATIONS = new Set(['listened']);
@@ -122,8 +139,8 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
     let value: string;
     if (key === 'kind' && e.action.startsWith('issue.') && typeof v === 'string')
       value = t(`health.kind.${v}`, { defaultValue: v });
-    else if (ENUMS.has(key) && typeof v === 'string')
-      value = t(`audit.enum.${key}.${v}`, { defaultValue: v });
+    else if (Object.hasOwn(ENUMS, key) && typeof v === 'string')
+      value = t(`audit.enum.${ENUMS[key]}.${v}`, { defaultValue: v });
     else if (key === 'events' && Array.isArray(v))
       value = v.length
         ? v.map((k) => t(`notify.event.${String(k)}`, { defaultValue: String(k) })).join(', ')

@@ -36,7 +36,8 @@ func (a *API) handleGetHousehold(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePutHousehold sets the caller's choice from {share_listening: bool} (the
-// field is required) and answers as GET. Refused for demo accounts.
+// field is required) and answers as GET. Refused for demo accounts, and for kids
+// before it (notKid: a kid never shares, and has no row to read).
 func (a *API) handlePutHousehold(w http.ResponseWriter, r *http.Request) {
 	u := a.nonDemoAccount(w, r)
 	if u == nil {
@@ -49,7 +50,11 @@ func (a *API) handlePutHousehold(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := a.cat.SetHouseholdSharing(r.Context(), u.ID, *body.ShareListening); err != nil {
+	err := a.cat.SetHouseholdSharing(r.Context(), u.ID, *body.ShareListening)
+	if writeKidRefusal(w, err) {
+		return
+	}
+	if err != nil {
 		a.writeCatalogError(w, err, "save household setting failed", "could not save your household setting", "user", u.ID)
 		return
 	}

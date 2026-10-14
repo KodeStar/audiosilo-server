@@ -12,10 +12,12 @@ import (
 )
 
 // pairingTTL bounds how long an UNLINKED pairing token is valid (/auth/pair,
-// demo sessions). Tokens minted by redeeming a code get their lifetime from
-// internal/auth instead: invite-derived ones inherit the invite's own expiry -
-// so the QR built from one stays scannable for as long as the invite is
-// redeemable - and recovery-derived ones carry a short TTL of their own.
+// demo sessions, a household member's own device from POST
+// /me/household/members/{id}/pair). Tokens minted by redeeming a code get their
+// lifetime from internal/auth instead: invite-derived ones inherit the invite's
+// own expiry - so the QR built from one stays scannable for as long as the
+// invite is redeemable - and recovery-derived ones carry a short TTL of their
+// own.
 const pairingTTL = 10 * time.Minute
 
 // handleServerInfo reports server identity and capabilities. Public so a client
@@ -53,6 +55,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
 			"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
 			"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
+			"household_members":  true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
@@ -170,10 +173,11 @@ func (a *API) handleExchange(w http.ResponseWriter, r *http.Request) {
 }
 
 // sessionEnvelope is the answer to a sign-in (exchange, login, demo): the session
-// token, the account, the server's stable id (so the client keys its per-server
-// state at pairing time) and, when any is known, its home/away addresses.
+// token, the account (meUser), the server's stable id (so the client keys its
+// per-server state at pairing time) and, when any is known, its home/away
+// addresses.
 func (a *API) sessionEnvelope(r *http.Request, token string, user *auth.User) map[string]any {
-	out := map[string]any{"token": token, "user": user, "server_id": a.config().ServerID}
+	out := map[string]any{"token": token, "user": toMeUser(user), "server_id": a.config().ServerID}
 	if ad := a.pairingAddresses(r); ad != nil {
 		out["addresses"] = ad
 	}
@@ -238,7 +242,10 @@ func (a *API) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFrom(r.Context())
-	token, err := a.auth.IssueToken(r.Context(), u.ID, auth.KindPairing, "", pairingTTL)
+	token, err := a.auth.IssueOwnPairingToken(r.Context(), u.ID, pairingTTL)
+	if writeKidRefusal(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue pairing token")
 		return
@@ -260,6 +267,23 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// meUser is an account as the player sees its own (/me and the session
+// envelopes): auth.User's wire plus, for a household member only, the name the
+// owner typed (display_name), so the member's own device greets them by it. A
+// former member's stored name stays off it (the admin's adminUser carries it).
+type meUser struct {
+	*auth.User
+	MemberName string `json:"display_name,omitempty"`
+}
+
+func toMeUser(u *auth.User) meUser {
+	v := meUser{User: u}
+	if u.IsMember() {
+		v.MemberName = u.DisplayName
+	}
+	return v
+}
+
 // handleMe returns the authenticated user, reloaded so the derived
 // has_password/has_recovery/last_seen_at fields are present.
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -269,7 +293,7 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load account")
 		return
 	}
-	writeJSON(w, http.StatusOK, full)
+	writeJSON(w, http.StatusOK, toMeUser(full))
 }
 
 // handleSetPassword lets the signed-in user set or change their own password -
@@ -306,6 +330,13 @@ func (a *API) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.auth.SetPassword(r.Context(), full.ID, req.Password); err != nil {
+		// notKid refused a kid before this; a request that passed it just
+		// before the owner's switch to kid committed is refused in the write
+		// (ErrKidNoPassword, the admin PATCH's 400) and answers as notKid does.
+		if errors.Is(err, auth.ErrKidNoPassword) {
+			writeErrorCode(w, http.StatusForbidden, codeKidAccount, "not available for a kid's account")
+			return
+		}
 		a.writeUserError(w, err, "could not update password")
 		return
 	}
@@ -327,6 +358,9 @@ func (a *API) handleGenerateRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code, err := a.auth.GenerateRecoveryCode(r.Context(), full.ID)
+	if writeKidRefusal(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate recovery code")
 		return
@@ -392,7 +426,7 @@ func (a *API) nonDemoAccount(w http.ResponseWriter, r *http.Request) *auth.User 
 		return nil
 	}
 	if full.IsDemo {
-		writeError(w, http.StatusForbidden, "not available for demo accounts")
+		writeErrorCode(w, http.StatusForbidden, codeDemoAccount, "not available for demo accounts")
 		return nil
 	}
 	return full
@@ -428,6 +462,9 @@ func (a *API) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret, meta, err := a.auth.IssueAPIToken(r.Context(), full.ID, label)
+	if writeKidRefusal(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create API key")
 		return

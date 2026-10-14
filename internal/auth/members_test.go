@@ -1,0 +1,637 @@
+package auth
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+var testPolicy = MemberPolicy{Enabled: true, Max: 6}
+
+func mustUser(t *testing.T, s *Service, ctx context.Context, name, password, role string) *User {
+	t.Helper()
+	u, err := s.CreateUser(ctx, name, password, role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func mustMember(t *testing.T, s *Service, ctx context.Context, owner int64, in NewMember) Member {
+	t.Helper()
+	m, _, _, err := s.CreateMember(ctx, owner, in, testPolicy)
+	if err != nil {
+		t.Fatalf("create %q: %v", in.Name, err)
+	}
+	return m
+}
+
+// memberColumnsHold checks the rule SQLite can't hold as a CHECK (migration
+// 0044): in every row, managed_by, member_kind and member_access are all NULL or
+// all set. GetUser can't see a broken row (memberScan reads it as no member), so
+// the writers' tests read the columns themselves.
+func memberColumnsHold(t *testing.T, s *Service, ctx context.Context) {
+	t.Helper()
+	var broken int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users
+	  WHERE (managed_by IS NULL) <> (member_kind IS NULL) OR (member_kind IS NULL) <> (member_access IS NULL)`).Scan(&broken); err != nil {
+		t.Fatal(err)
+	}
+	if broken != 0 {
+		t.Fatalf("%d accounts break the all-or-none member columns", broken)
+	}
+}
+
+func TestUsernameSlug(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ in, want string }{
+		{"Evie", "evie"},
+		{"  Évie  Marie ", "evie-marie"},
+		{"Zoë-Ann!!", "zoe-ann"},
+		{"小明", "member"},
+		{"---", "member"},
+		{"Ångström Ölander Øystein Bartholomew", "angstrom-olander-ystein"},
+		{"ＥＶＩＥ２", "evie2"}, // NFKD folds full-width forms
+	} {
+		if got := usernameBase(c.in); got != c.want {
+			t.Errorf("usernameBase(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if len(usernameBase(strings.Repeat("a", 60))) != maxUsernameBase {
+		t.Error("base not cut to 24 bytes")
+	}
+}
+
+// Create: an ordinary user adds a kid signed in on their device and a grown-up
+// with no session; the account is a password-less user with all three member
+// columns; usernames are derived, then made unique.
+func TestMembers_Create(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "Adam", "adam-password", RoleUser)
+	phone, err := s.IssueToken(ctx, adam.ID, KindSession, "Adam's phone", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cred, _ := s.ResolveRequest(ctx, phone, Presence{}, KindSession)
+
+	evie, secret, signedIn, err := s.CreateMember(ctx, adam.ID, NewMember{Name: " Evie ", Kind: MemberKid, Access: MemberCollections,
+		SignInHere: true, DeviceName: cred.DeviceName, OnToken: cred.ID}, testPolicy)
+	if err != nil || secret == "" || signedIn == nil || signedIn.ID != evie.ID || !signedIn.IsKid() {
+		t.Fatalf("create kid = %v %q %+v", err, secret, signedIn)
+	}
+	if evie.Name != "Evie" || evie.Username != "evie" || evie.Kind != MemberKid || evie.Access != MemberCollections || evie.Devices != 1 ||
+		len(evie.CreatedAt) != len("2006-01-02T15:04:05.000Z") {
+		t.Fatalf("kid = %+v", evie)
+	}
+	u, kcred, err := s.ResolveRequest(ctx, secret, Presence{}, KindSession)
+	if err != nil || u.ID != evie.ID || kcred.DeviceName != "Adam's phone" {
+		t.Fatalf("kid session = %+v %+v %v", u, kcred, err)
+	}
+	var on sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT created_on_token_id FROM tokens WHERE id = ?`, kcred.ID).Scan(&on); err != nil || on.Int64 != cred.ID {
+		t.Fatalf("created_on_token_id = %v %v", on, err)
+	}
+	full, err := s.GetUser(ctx, evie.ID)
+	if err != nil || full.Role != RoleUser || full.HasPassword || full.ManagedBy == nil || full.ManagedBy.ID != adam.ID ||
+		full.ManagedBy.Username != "Adam" || !full.IsKid() || *full.MemberAccess != MemberCollections || full.DisplayName != "Evie" {
+		t.Fatalf("kid account = %+v %v", full, err)
+	}
+
+	ellis, secret, signedIn, err := s.CreateMember(ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll}, testPolicy)
+	if err != nil || secret != "" || signedIn != nil || ellis.Devices != 0 {
+		t.Fatalf("create grown-up = %+v %q %v", ellis, secret, err)
+	}
+
+	// Usernames: the base, then with the owner's, then numbered.
+	second := mustMember(t, s, ctx, adam.ID, NewMember{Name: "EVIE", Kind: MemberKid, Access: MemberAll})
+	third := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Évie", Kind: MemberKid, Access: MemberAll})
+	if second.Username != "evie-adam" || third.Username != "evie-2" {
+		t.Fatalf("usernames = %q %q", second.Username, third.Username)
+	}
+	list, err := s.ListMembers(ctx, adam.ID)
+	if err != nil || len(list) != 4 || list[0].ID != evie.ID || list[3].ID != third.ID {
+		t.Fatalf("list = %+v %v", list, err)
+	}
+	if others, _ := s.ListMembers(ctx, ellis.ID); len(others) != 0 {
+		t.Fatal("a member lists members")
+	}
+	adamNow, _ := s.GetUser(ctx, adam.ID)
+	if adamNow.MembersCount != 4 || adamNow.IsMember() || !adamNow.CanAddMembers {
+		t.Fatalf("owner = %+v", adamNow)
+	}
+	memberColumnsHold(t, s, ctx)
+}
+
+// Usernames have no cap: names with no Latin letters all share the base
+// "member", and an owner whose username has none gets no "-<owner>" form, so on
+// a server with a hundred of them the next is numbered past 99 instead of being
+// refused.
+func TestMembers_UsernamesPastNinetyNine(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	owner := mustUser(t, s, ctx, "Маша", "masha-password", RoleUser)
+	if _, err := s.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 150)
+	  INSERT INTO users(username, password_hash, role, created_at, updated_at)
+	  SELECT 'member' || CASE WHEN i = 1 THEN '' ELSE '-' || i END, '', 'user', 't', 't' FROM n`); err != nil {
+		t.Fatal(err)
+	}
+	m, _, _, err := s.CreateMember(ctx, owner.ID, NewMember{Name: "小明", Kind: MemberKid, Access: MemberAll}, testPolicy)
+	if err != nil || m.Username != "member-151" || m.Name != "小明" {
+		t.Fatalf("member = %+v, %v", m, err)
+	}
+}
+
+// Create refusals, each in the transport's order; nothing is written.
+func TestMembers_CreateRefused(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	demo, err := s.CreateDemoUser(ctx, "demo_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	kid := NewMember{Name: "Evie", Kind: MemberKid, Access: MemberCollections}
+	for _, c := range []struct {
+		name   string
+		owner  int64
+		in     NewMember
+		policy MemberPolicy
+		want   error
+	}{
+		{"demo", demo.ID, kid, MemberPolicy{Enabled: false, Max: 6}, ErrDemoAccount},
+		{"member", ellis.ID, kid, MemberPolicy{Enabled: false, Max: 6}, ErrMemberCannotManage},
+		{"feature off", adam.ID, kid, MemberPolicy{Enabled: false, Max: 6}, ErrFeatureOff},
+		{"at the cap", adam.ID, kid, MemberPolicy{Enabled: true, Max: 1}, ErrMemberLimit},
+		{"no name", adam.ID, NewMember{Name: "  ", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"long name", adam.ID, NewMember{Name: strings.Repeat("é", 41), Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"control", adam.ID, NewMember{Name: "Ev\x07ie", Kind: MemberKid, Access: MemberAll}, testPolicy, ErrInvalidName},
+		{"kind", adam.ID, NewMember{Name: "Evie", Kind: "teen", Access: MemberAll}, testPolicy, ErrInvalidKind},
+		{"access", adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: "some"}, testPolicy, ErrInvalidAccess},
+		{"share fails", adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll,
+			Share: func(*sql.Tx, int64) error { return ErrNotFound }}, testPolicy, ErrNotFound},
+	} {
+		if _, _, _, err := s.CreateMember(ctx, c.owner, c.in, c.policy); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, want %v", c.name, err, c.want)
+		}
+	}
+	if err := s.UpdateUser(ctx, adam.ID, UserChanges{CanAddMembers: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := s.CreateMember(ctx, adam.ID, kid, testPolicy); !errors.Is(err, ErrNotAllowed) {
+		t.Errorf("switched off: %v", err)
+	}
+	if list, _ := s.ListMembers(ctx, adam.ID); len(list) != 1 {
+		t.Fatalf("a refused create wrote: %+v", list)
+	}
+	var users int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&users); err != nil || users != 3 {
+		t.Fatalf("users = %d %v", users, err)
+	}
+}
+
+// A member never logs in with a password: the account has none, so the
+// username/password login refuses it (an empty password included).
+func TestMembers_KidPasswordLoginRefused(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
+	for _, pw := range []string{"", "anything-at-all"} {
+		if _, err := s.Authenticate(ctx, "evie", pw); !errors.Is(err, ErrInvalidCreds) {
+			t.Errorf("login %q = %v", pw, err)
+		}
+	}
+	if _, err := s.Authenticate(ctx, "adam", "adam-password"); err != nil {
+		t.Fatalf("the owner's own login: %v", err)
+	}
+}
+
+// Kind changes: a grown-up switched to a kid loses their password, API keys,
+// pairing tokens and recovery code; their sessions stay. Access is untouched.
+func TestMembers_KindChangeClearsCredentials(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	if err := s.SetPassword(ctx, ellis.ID, "ellis-password"); err != nil {
+		t.Fatal(err)
+	}
+	session, _ := s.IssueToken(ctx, ellis.ID, KindSession, "Ellis's phone", 0)
+	key, _, _ := s.IssueAPIToken(ctx, ellis.ID, "dash")
+	pairing, _ := s.IssueToken(ctx, ellis.ID, KindPairing, "", 10*time.Minute)
+	if _, err := s.GenerateRecoveryCode(ctx, ellis.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	kid := MemberKid
+	m, changes, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Kind: &kid})
+	if err != nil || m.Kind != MemberKid || m.Access != MemberAll || changes["kind"] != MemberKid || len(changes) != 1 {
+		t.Fatalf("switch = %+v %v %v", m, changes, err)
+	}
+	u, _ := s.GetUser(ctx, ellis.ID)
+	if u.HasPassword || u.HasRecovery {
+		t.Fatalf("kid keeps a password or recovery code: %+v", u)
+	}
+	if _, err := s.ResolveToken(ctx, session, KindSession); err != nil {
+		t.Fatalf("session signed out: %v", err)
+	}
+	if _, err := s.ResolveToken(ctx, key, KindAPI); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("API key still works: %v", err)
+	}
+	if _, _, err := s.ConsumePairing(ctx, pairing); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("pairing token still works: %v", err)
+	}
+
+	// Back to a grown-up and the access both ways: nothing else changes.
+	gr, coll, all := MemberGrownup, MemberCollections, MemberAll
+	if m, _, err = s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Kind: &gr, Access: &coll}); err != nil || m.Access != MemberCollections {
+		t.Fatalf("to collections = %+v %v", m, err)
+	}
+	if m, changes, err = s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Access: &all}); err != nil || m.Access != MemberAll || m.Kind != MemberGrownup ||
+		len(changes) != 1 {
+		t.Fatalf("to all = %+v %v %v", m, changes, err)
+	}
+	// Denied: another person can't change them (ErrNotMember), nor bad input.
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	if _, _, err := s.UpdateMember(ctx, bob.ID, ellis.ID, MemberUpdate{Kind: &kid}); !errors.Is(err, ErrNotMember) {
+		t.Fatalf("bob's change = %v", err)
+	}
+	if _, _, err := s.UpdateMember(ctx, ellis.ID, ellis.ID, MemberUpdate{Kind: &gr}); !errors.Is(err, ErrNotMember) {
+		t.Fatalf("own change = %v", err)
+	}
+	bad := "teen"
+	if _, _, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Kind: &bad}); !errors.Is(err, ErrInvalidKind) {
+		t.Fatalf("bad kind = %v", err)
+	}
+	memberColumnsHold(t, s, ctx)
+}
+
+// Ownership: every per-member operation answers ErrNotMember for anyone else's
+// member, the member themselves and an unknown id.
+func TestMembers_Ownership(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
+	tok, _ := s.IssueToken(ctx, evie.ID, KindSession, "tablet", 0)
+	_, cred, _ := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+
+	// Allowed for adam.
+	if _, err := s.Member(ctx, adam.ID, evie.ID); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := s.MemberDevices(ctx, adam.ID, evie.ID); err != nil || len(d) != 1 {
+		t.Fatalf("devices = %v %v", d, err)
+	}
+	if m, p, err := s.MemberPairing(ctx, adam.ID, evie.ID, 10*time.Minute); err != nil || p == "" || m.ID != evie.ID {
+		t.Fatalf("pairing = %v", err)
+	}
+	for _, who := range []int64{bob.ID, evie.ID, 0} {
+		for name, err := range map[string]error{
+			"member":  func() error { _, err := s.Member(ctx, who, evie.ID); return err }(),
+			"session": func() error { _, _, err := s.MemberSession(ctx, who, evie.ID, "x", 0); return err }(),
+			"pair":    func() error { _, _, err := s.MemberPairing(ctx, who, evie.ID, 10*time.Minute); return err }(),
+			"devices": func() error { _, err := s.MemberDevices(ctx, who, evie.ID); return err }(),
+			"revoke":  func() error { _, err := s.RevokeMemberDevice(ctx, who, evie.ID, cred.ID); return err }(),
+			"delete":  func() error { _, err := s.DeleteMember(ctx, who, evie.ID); return err }(),
+		} {
+			if !errors.Is(err, ErrNotMember) {
+				t.Errorf("%d %s = %v", who, name, err)
+			}
+		}
+	}
+	if _, err := s.Member(ctx, adam.ID, 99999); !errors.Is(err, ErrNotMember) {
+		t.Error("unknown id")
+	}
+	if _, err := s.RevokeMemberDevice(ctx, adam.ID, evie.ID, 99999); !errors.Is(err, ErrNotFound) {
+		t.Error("a device not the member's")
+	}
+	if m, err := s.RevokeMemberDevice(ctx, adam.ID, evie.ID, cred.ID); err != nil || m.ID != evie.ID {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveToken(ctx, tok, KindSession); !errors.Is(err, ErrInvalidToken) {
+		t.Fatal("revoked member device still works")
+	}
+	if _, err := s.DeleteMember(ctx, adam.ID, evie.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetUser(ctx, evie.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("deleted member still there")
+	}
+}
+
+// Sign-ins: signing the owner's phone out keeps the members' sessions made on
+// it, unless alsoMembers; their tokens elsewhere, and another owner's member,
+// stay.
+func TestMembers_SignIns(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	phone, _ := s.IssueToken(ctx, adam.ID, KindSession, "phone", 0)
+	_, pc, _ := s.ResolveRequest(ctx, phone, Presence{}, KindSession)
+	evie, evieHere, _, _ := s.CreateMember(ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll,
+		SignInHere: true, DeviceName: "phone", OnToken: pc.ID}, testPolicy)
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	ellisHere, _, err := s.MemberSession(ctx, adam.ID, ellis.ID, "phone", pc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evieElsewhere, _ := s.IssueToken(ctx, evie.ID, KindSession, "tablet", 0)
+	// Bob's member signed in on a token id of adam's (bad data): never adam's.
+	bobKid := mustMember(t, s, ctx, bob.ID, NewMember{Name: "Kit", Kind: MemberKid, Access: MemberAll})
+	bobKidTok, _, _ := s.MemberSession(ctx, bob.ID, bobKid.ID, "x", pc.ID)
+
+	ins, err := s.MemberSignIns(ctx, adam.ID)
+	if err != nil || len(ins[pc.ID]) != 2 || ins[pc.ID][0] != (MemberSignIn{evie.ID, "Evie"}) || ins[pc.ID][1].ID != ellis.ID {
+		t.Fatalf("sign-ins = %+v %v", ins, err)
+	}
+
+	// Without alsoMembers: only the phone.
+	gone, err := s.RevokeOwnDeviceAndMembers(ctx, adam.ID, pc.ID, false)
+	if err != nil || len(gone) != 0 {
+		t.Fatalf("revoke = %v %v", gone, err)
+	}
+	if _, err := s.ResolveToken(ctx, evieHere, KindSession); err != nil {
+		t.Fatal("member signed out without alsoMembers")
+	}
+
+	// A second phone with both members on it, signed out with alsoMembers.
+	phone2, _ := s.IssueToken(ctx, adam.ID, KindSession, "phone 2", 0)
+	_, pc2, _ := s.ResolveRequest(ctx, phone2, Presence{}, KindSession)
+	e2, _, _ := s.MemberSession(ctx, adam.ID, evie.ID, "phone 2", pc2.ID)
+	l2, _, _ := s.MemberSession(ctx, adam.ID, ellis.ID, "phone 2", pc2.ID)
+	gone, err = s.RevokeOwnDeviceAndMembers(ctx, adam.ID, pc2.ID, true)
+	if err != nil || !slices.Equal(gone, []string{ellis.Username, evie.Username}) {
+		t.Fatalf("revoke with members = %v %v", gone, err)
+	}
+	for _, tok := range []string{e2, l2} {
+		if _, err := s.ResolveToken(ctx, tok, KindSession); !errors.Is(err, ErrInvalidToken) {
+			t.Error("member token made on the phone survived")
+		}
+	}
+	for _, tok := range []string{evieElsewhere, evieHere, ellisHere, bobKidTok} {
+		if _, err := s.ResolveToken(ctx, tok, KindSession); err != nil {
+			t.Error("a token made elsewhere (or another owner's member) was signed out")
+		}
+	}
+	// Denied: bob can't use his own call on adam's device.
+	if _, err := s.RevokeOwnDeviceAndMembers(ctx, bob.ID, pc.ID, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bob revoked adam's device: %v", err)
+	}
+}
+
+// Deletion: deleting an owner deletes their members, except those kept, which
+// become ordinary accounts; a keep id that isn't theirs refuses everything.
+func TestMembers_DeleteOwner(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	mustUser(t, s, ctx, "root", "root-password", RoleAdmin)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberCollections})
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	kit := mustMember(t, s, ctx, bob.ID, NewMember{Name: "Kit", Kind: MemberKid, Access: MemberAll})
+
+	if _, err := s.DeleteUser(ctx, adam.ID, []int64{kit.ID}); !errors.Is(err, ErrInvalidKeepMembers) {
+		t.Fatalf("keep another's member = %v", err)
+	}
+	if _, err := s.GetUser(ctx, evie.ID); err != nil {
+		t.Fatal("a refused delete deleted a member")
+	}
+	out, err := s.DeleteUser(ctx, adam.ID, []int64{ellis.ID})
+	if err != nil || out.MembersDeleted != 1 || !slices.Equal(out.MembersKept, []string{"ellis"}) {
+		t.Fatalf("delete = %+v %v", out, err)
+	}
+	if _, err := s.GetUser(ctx, evie.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("unkept member survived")
+	}
+	kept, err := s.GetUser(ctx, ellis.ID)
+	if err != nil || kept.IsMember() || kept.MemberKind != nil || kept.MemberAccess != nil {
+		t.Fatalf("kept = %+v %v", kept, err)
+	}
+	if out, err := s.DeleteUser(ctx, bob.ID, nil); err != nil || out.MembersDeleted != 1 {
+		t.Fatalf("delete bob = %+v %v", out, err)
+	}
+	memberColumnsHold(t, s, ctx)
+}
+
+// The admin's member fields: assign (each refusal), make independent, the role
+// rule both ways.
+func TestMembers_AdminAssign(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	root := mustUser(t, s, ctx, "root", "root-password", RoleAdmin)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	demo, _ := s.CreateDemoUser(ctx, "demo_1")
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	key, _, _ := s.IssueAPIToken(ctx, bob.ID, "dash")
+
+	for name, c := range map[string]struct {
+		id, owner int64
+		kind      string
+		want      error
+	}{
+		"self":            {bob.ID, bob.ID, MemberKid, ErrSelfManaged},
+		"owner is member": {bob.ID, ellis.ID, MemberKid, ErrOwnerIsMember},
+		"owner is demo":   {bob.ID, demo.ID, MemberKid, ErrOwnerIsDemo},
+		"member is demo":  {demo.ID, adam.ID, MemberGrownup, ErrMemberIsDemo},
+		"admin member":    {root.ID, adam.ID, MemberKid, ErrMemberNotAdmin},
+		"has members":     {adam.ID, bob.ID, MemberKid, ErrHasMembers},
+		"unknown owner":   {bob.ID, 99999, MemberKid, ErrNotFound},
+		"unknown person":  {99999, adam.ID, MemberKid, ErrNotFound},
+		"bad kind":        {bob.ID, adam.ID, "teen", ErrInvalidKind},
+	} {
+		if err := s.UpdateUser(ctx, c.id, UserChanges{Household: &HouseholdChange{Owner: c.owner, Kind: c.kind, Access: MemberAll}}); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, want %v", name, err, c.want)
+		}
+	}
+	if err := s.UpdateUser(ctx, bob.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: MemberKid, Access: MemberCollections}}); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := s.GetUser(ctx, bob.ID)
+	if !u.IsKid() || u.ManagedBy.ID != adam.ID || u.HasPassword {
+		t.Fatalf("assigned = %+v", u)
+	}
+	if _, err := s.ResolveToken(ctx, key, KindAPI); !errors.Is(err, ErrInvalidToken) {
+		t.Fatal("assigned kid keeps an API key")
+	}
+	if err := s.UpdateUser(ctx, ellis.ID, UserChanges{Role: new(RoleAdmin)}); !errors.Is(err, ErrMemberNotAdmin) {
+		t.Fatalf("member promoted: %v", err)
+	}
+	if err := s.UpdateUser(ctx, ellis.ID, UserChanges{Household: &HouseholdChange{}}); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.GetUser(ctx, ellis.ID); u.IsMember() || u.MemberKind != nil {
+		t.Fatalf("independent = %+v", u)
+	}
+	if err := s.UpdateUser(ctx, root.ID, UserChanges{Household: &HouseholdChange{}}); err != nil {
+		t.Fatalf("no-op on a non-member: %v", err)
+	}
+	if err := s.UpdateUser(ctx, 99999, UserChanges{Household: &HouseholdChange{}}); !errors.Is(err, ErrNotFound) {
+		t.Fatal("unknown id")
+	}
+	memberColumnsHold(t, s, ctx)
+}
+
+// The request's user (ResolveRequest's token lookup) carries the member fields
+// and the member rule, as GetUser reads them: a kid of an ordinary owner, a
+// grown-up of an admin owner, nothing for anyone else. Denied: a self-managed
+// row and a member managed by a member (bad data) read as members but derive
+// nothing.
+func TestMembers_RequestUserCarriesTheRule(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	root := mustUser(t, s, ctx, "root", "root-password", RoleAdmin)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberCollections})
+	ellis := mustMember(t, s, ctx, root.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	request := func(id int64) *User {
+		t.Helper()
+		tok, err := s.IssueToken(ctx, id, KindSession, "phone", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, _, err := s.ResolveRequest(ctx, tok, Presence{}, KindSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		full, err := s.GetUser(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (u.MemberRule == nil) != (full.MemberRule == nil) || u.MemberRule != nil && *u.MemberRule != *full.MemberRule ||
+			u.IsKid() != full.IsKid() || u.IsMember() != full.IsMember() {
+			t.Fatalf("request user %+v and GetUser %+v disagree", u, full)
+		}
+		return u
+	}
+	if u := request(evie.ID); !u.IsKid() || u.ManagedBy.ID != adam.ID ||
+		*u.MemberRule != (MemberRule{Owner: adam.ID, Access: MemberCollections, OwnerAdmin: false}) {
+		t.Fatalf("kid = %+v %+v", u, u.MemberRule)
+	}
+	if u := request(ellis.ID); u.IsKid() || *u.MemberRule != (MemberRule{Owner: root.ID, Access: MemberAll, OwnerAdmin: true}) {
+		t.Fatalf("grown-up of an admin = %+v %+v", u, u.MemberRule)
+	}
+	if u := request(adam.ID); u.IsMember() || u.MemberRule != nil || u.MemberKind != nil {
+		t.Fatalf("ordinary = %+v", u)
+	}
+
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	kit := mustUser(t, s, ctx, "kit", "", RoleUser)
+	for _, q := range []string{
+		`UPDATE users SET managed_by = id, member_kind = 'kid', member_access = 'all' WHERE username = 'bob'`,
+		`UPDATE users SET managed_by = ?, member_kind = 'kid', member_access = 'all' WHERE username = 'kit'`,
+	} {
+		if _, err := s.db.ExecContext(ctx, q, evie.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []int64{bob.ID, kit.ID} {
+		if u := request(id); !u.IsMember() || u.MemberRule != nil {
+			t.Fatalf("bad data derives: %+v %+v", u, u.MemberRule)
+		}
+	}
+}
+
+// Becoming a kid clears the person's house sharing choice (a kid never shares):
+// the owner's switch and the admin's assignment both. Denied: a grown-up's
+// change of access keeps it.
+func TestMembers_KidClearsHouseSharing(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	bob := mustUser(t, s, ctx, "bob", "bob-password", RoleUser)
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	share := func(id int64) {
+		t.Helper()
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT OR REPLACE INTO household_sharing(user_id, share_listening, updated_at) VALUES(?, 1, 't')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sharing := func(id int64) bool {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM household_sharing WHERE user_id = ?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	}
+	share(ellis.ID)
+	share(bob.ID)
+	coll, kid := MemberCollections, MemberKid
+	if _, _, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Access: &coll}); err != nil || !sharing(ellis.ID) {
+		t.Fatalf("access change cleared sharing (%v)", err)
+	}
+	if _, _, err := s.UpdateMember(ctx, adam.ID, ellis.ID, MemberUpdate{Kind: &kid}); err != nil || sharing(ellis.ID) {
+		t.Fatalf("kid keeps sharing (%v)", err)
+	}
+	if err := s.UpdateUser(ctx, bob.ID, UserChanges{Household: &HouseholdChange{Owner: adam.ID, Kind: MemberKid, Access: MemberAll}}); err != nil || sharing(bob.ID) {
+		t.Fatalf("assigned kid keeps sharing (%v)", err)
+	}
+}
+
+// MayAddMembers' ladder, in the transport's order (the cap is not on it).
+func TestMayAddMembers(t *testing.T) {
+	t.Parallel()
+	member := &User{ManagedBy: &UserRef{ID: 1}, MemberKind: new(MemberGrownup), CanAddMembers: true}
+	for name, c := range map[string]struct {
+		u      *User
+		policy MemberPolicy
+		want   error
+	}{
+		"allowed":      {&User{CanAddMembers: true}, testPolicy, nil},
+		"demo first":   {&User{IsDemo: true}, MemberPolicy{}, ErrDemoAccount},
+		"member":       {member, testPolicy, ErrMemberCannotManage},
+		"server off":   {&User{CanAddMembers: true}, MemberPolicy{Max: 6}, ErrFeatureOff},
+		"switched off": {&User{}, testPolicy, ErrNotAllowed},
+		"disabled":     {&User{CanAddMembers: true, Disabled: true}, testPolicy, ErrNotAllowed},
+		"at the cap":   {&User{CanAddMembers: true, MembersCount: 6}, testPolicy, nil},
+	} {
+		if err := MayAddMembers(c.u, c.policy); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, want %v", name, err, c.want)
+		}
+	}
+}
+
+// A kid's credentials are refused inside the writes that would make them, not
+// only by the transport's notKid (which reads the request's token lookup, before
+// an owner's switch to kid can commit): an API key, a recovery code and the
+// person's own pairing token are each ErrKidAccount for a kid. Allowed: a
+// grown-up gets each, and the owner still pairs the kid's own device.
+func TestMembers_KidRefusedInTheWrite(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	adam := mustUser(t, s, ctx, "adam", "adam-password", RoleUser)
+	evie := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Evie", Kind: MemberKid, Access: MemberAll})
+	ellis := mustMember(t, s, ctx, adam.ID, NewMember{Name: "Ellis", Kind: MemberGrownup, Access: MemberAll})
+	mint := map[string]func(id int64) error{
+		"API key":       func(id int64) error { _, _, err := s.IssueAPIToken(ctx, id, "dash"); return err },
+		"recovery code": func(id int64) error { _, err := s.GenerateRecoveryCode(ctx, id); return err },
+		"own pairing":   func(id int64) error { _, err := s.IssueOwnPairingToken(ctx, id, time.Minute); return err },
+	}
+	for what, f := range mint {
+		if err := f(evie.ID); !errors.Is(err, ErrKidAccount) {
+			t.Errorf("kid's %s = %v", what, err)
+		}
+		if err := f(ellis.ID); err != nil {
+			t.Errorf("grown-up's %s = %v", what, err)
+		}
+	}
+	var live int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE user_id = ? AND revoked = 0`, evie.ID).Scan(&live); err != nil || live != 0 {
+		t.Fatalf("the kid holds %d tokens, %v", live, err)
+	}
+	if _, _, err := s.MemberPairing(ctx, adam.ID, evie.ID, 10*time.Minute); err != nil {
+		t.Fatalf("owner's pairing for the kid = %v", err)
+	}
+}

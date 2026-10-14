@@ -42,9 +42,10 @@ const (
 	maxCastTokens = 20
 )
 
-// castTime is the wire format of a cast token's expiry: UTC with milliseconds,
-// fixed width (as catalog's session times).
-const castTime = "2006-01-02T15:04:05.000Z"
+// millisUTC is the wire format of the times auth hands the player (a cast
+// token's expiry, a member's created_at): UTC with milliseconds, fixed width (as
+// catalog's session times).
+const millisUTC = "2006-01-02T15:04:05.000Z"
 
 // castGrant is what a cast token allows (cast_grants): the book it was minted
 // for. libraryID is invalid for a token without a grant, which covers nothing.
@@ -161,7 +162,7 @@ func (s *Service) IssueCastToken(ctx context.Context, userID, parentTokenID, lib
 	if err != nil {
 		return "", "", err
 	}
-	return secret, expires.Format(castTime), nil
+	return secret, expires.Format(millisUTC), nil
 }
 
 // ResolveCastRequest is ResolveRequest for a request reading a book's media at

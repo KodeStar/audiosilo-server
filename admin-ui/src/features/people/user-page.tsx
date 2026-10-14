@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   KeyRound,
   LibraryBig,
@@ -15,7 +16,7 @@ import {
 } from 'lucide-react';
 import { ApiError, api } from '@/api/client';
 import { invalidatePeople, useDevices, useLibraries, useUser } from '@/api/hooks';
-import type { User, UserDetail } from '@/api/types';
+import type { AdminUser, User, UserDetail } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DangerZone } from '@/components/danger-zone';
 import { EmptyState } from '@/components/empty-state';
@@ -35,10 +36,14 @@ import { toastError } from '@/lib/errors';
 import { formatRelative } from '@/lib/format';
 import { useCurrentUser } from '@/lib/session';
 import { toast } from '@/lib/toast';
+import { AccessRow } from './access-row';
 import { GiveAccessDialog } from './give-access-dialog';
+import { DeleteMembers, HouseholdCard, MemberAccessCard } from './household';
+import { keptMembers, ownerName } from './household-model';
 import { InviteDialog } from './invite-dialog';
 import { InviteTable } from './invites-page';
 import { PasswordDialog } from './password-dialog';
+import { MemberChips } from './member-chips';
 import { ListeningTab } from './user-listening';
 import {
   ruleLabel,
@@ -95,6 +100,9 @@ function UserView({ detail }: { detail: UserDetail }) {
   const tab: UserTab = search.tab ?? 'listening';
   const devices = useDevices(u.id);
   const [inviting, setInviting] = useState(false);
+  // A kid holds no invite: only their owner sets up their devices, from the
+  // player (the server answers 409 kid_account), so the page offers no pairing.
+  const kid = u.member_kind === 'kid';
 
   const facts = [
     u.last_seen_at
@@ -116,12 +124,15 @@ function UserView({ detail }: { detail: UserDetail }) {
             {u.disabled ? <Badge variant="outline">{t('user.disabled')}</Badge> : null}
             {u.is_demo ? <Badge variant="outline">{t('people.badge.demo')}</Badge> : null}
           </div>
+          <MemberChips user={u} />
           <span className="text-muted-foreground">{facts.join(' · ')}</span>
         </div>
-        <Button variant="outline" onClick={() => setInviting(true)} disabled={u.disabled}>
-          <QrCode aria-hidden="true" />
-          {t('user.pairDevice')}
-        </Button>
+        {kid ? null : (
+          <Button variant="outline" onClick={() => setInviting(true)} disabled={u.disabled}>
+            <QrCode aria-hidden="true" />
+            {t('user.pairDevice')}
+          </Button>
+        )}
       </div>
 
       <Tabs
@@ -149,31 +160,42 @@ function UserView({ detail }: { detail: UserDetail }) {
           <AccessTab detail={detail} />
         </TabsPanel>
         <TabsPanel value="devices">
-          <DevicesTab user={u} devices={devices} onPair={() => setInviting(true)} />
+          <DevicesTab
+            user={u}
+            devices={devices}
+            onPair={kid ? undefined : () => setInviting(true)}
+          />
         </TabsPanel>
         <TabsPanel value="invites">
-          <InvitesTab user={u} detail={detail} onInvite={() => setInviting(true)} />
+          <InvitesTab
+            user={u}
+            detail={detail}
+            onInvite={kid ? undefined : () => setInviting(true)}
+          />
         </TabsPanel>
         <TabsPanel value="sign-in">
-          <SignInTab user={u} />
+          <SignInTab user={u} owner={ownerName(u) ?? ''} />
         </TabsPanel>
         <TabsPanel value="account">
-          <AccountTab user={u} />
+          <AccountTab detail={detail} />
         </TabsPanel>
       </Tabs>
-      <InviteDialog open={inviting} onOpenChange={setInviting} user={u} codes={codes} />
+      {kid ? null : (
+        <InviteDialog open={inviting} onOpenChange={setInviting} user={u} codes={codes} />
+      )}
     </Page>
   );
 }
 
+/** A person's devices; onPair is undefined for a kid, whose owner pairs them from the player. */
 function DevicesTab({
   user,
   devices,
   onPair,
 }: {
-  user: User;
+  user: AdminUser;
   devices: ReturnType<typeof useDevices>;
-  onPair: () => void;
+  onPair?: () => void;
 }) {
   const { t } = useTranslation();
   if (devices.isError) {
@@ -198,12 +220,18 @@ function DevicesTab({
         <EmptyState
           icon={Smartphone}
           title={t('user.devices.emptyTitle')}
-          body={t('user.devices.emptyBody', { name: user.username })}
+          body={
+            onPair
+              ? t('user.devices.emptyBody', { name: user.username })
+              : t('user.kidDevices', { owner: ownerName(user) ?? '' })
+          }
           action={
-            <Button onClick={onPair} disabled={user.disabled}>
-              <QrCode aria-hidden="true" />
-              {t('user.pairDevice')}
-            </Button>
+            onPair ? (
+              <Button onClick={onPair} disabled={user.disabled}>
+                <QrCode aria-hidden="true" />
+                {t('user.pairDevice')}
+              </Button>
+            ) : undefined
           }
         />
       )}
@@ -235,6 +263,7 @@ function AccessTab({ detail }: { detail: UserDetail }) {
     );
   }
   const grants = detail.shares ?? [];
+  const member = Boolean(u.managed_by);
 
   const revoke = async (shareId: number, label: string) => {
     try {
@@ -251,77 +280,86 @@ function AccessTab({ detail }: { detail: UserDetail }) {
   };
 
   return (
-    <Card aria-labelledby="access-title">
-      <CardHeader
-        titleId="access-title"
-        title={t('user.access.title', { name: u.username })}
-        description={t('user.access.description')}
-        action={
-          <Button size="sm" variant="outline" onClick={() => setGiving(true)}>
-            <Plus aria-hidden="true" />
-            {t('user.access.give')}
-          </Button>
-        }
-      />
-      {grants.length === 0 ? (
-        <p className="px-5 py-6 text-center text-muted-foreground">
-          {t('user.access.none', { name: u.username })}
-        </p>
-      ) : (
-        <ul className="divide-y">
-          {grants.map((share) => {
-            const library = wholeLibraryOf(share) !== undefined;
-            const label = shareLabel(share, libs);
-            const Icon = library ? LibraryBig : Share2;
-            return (
-              <li key={share.id} className="flex items-center gap-3 px-5 py-3">
-                <span
-                  className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-muted text-muted-foreground"
-                  aria-hidden="true"
-                >
-                  <Icon className="size-[17px]" />
-                </span>
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <b className="truncate font-semibold">{label}</b>
-                  <span className="truncate text-[12.5px] text-muted-foreground">
-                    {library
+    <div className="flex flex-col gap-5">
+      <MemberAccessCard detail={detail} />
+      <Card aria-labelledby="access-title">
+        <CardHeader
+          titleId="access-title"
+          title={
+            member ? t('user.access.directTitle') : t('user.access.title', { name: u.username })
+          }
+          description={
+            member
+              ? t('user.access.directDescription', { name: u.username })
+              : t('user.access.description')
+          }
+          action={
+            <Button size="sm" variant="outline" onClick={() => setGiving(true)}>
+              <Plus aria-hidden="true" />
+              {t('user.access.give')}
+            </Button>
+          }
+        />
+        {grants.length === 0 ? (
+          <p className="px-5 py-6 text-center text-muted-foreground">
+            {member ? t('user.access.noneDirect') : t('user.access.none', { name: u.username })}
+          </p>
+        ) : (
+          <ul className="divide-y">
+            {grants.map((share) => {
+              const library = wholeLibraryOf(share) !== undefined;
+              const label = shareLabel(share, libs);
+              return (
+                <AccessRow
+                  key={share.id}
+                  icon={library ? LibraryBig : Share2}
+                  title={label}
+                  detail={
+                    library
                       ? t('user.access.wholeLibrary')
                       : (share.paths ?? []).map((r) => ruleLabel(r, libs)).join(', ') ||
-                        t('user.access.emptyShare')}
-                  </span>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-destructive"
-                  onClick={() => void revoke(share.id, label)}
-                  aria-label={t('user.access.removeAria', { what: label })}
-                >
-                  {t('user.access.remove')}
-                </Button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      <GiveAccessDialog
-        open={giving}
-        onOpenChange={setGiving}
-        user={u}
-        granted={detail.shares ?? []}
-      />
-    </Card>
+                        t('user.access.emptyShare')
+                  }
+                  action={
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive"
+                      onClick={() => void revoke(share.id, label)}
+                      aria-label={t('user.access.removeAria', { what: label })}
+                    >
+                      {t('user.access.remove')}
+                    </Button>
+                  }
+                />
+              );
+            })}
+          </ul>
+        )}
+        <GiveAccessDialog
+          open={giving}
+          onOpenChange={setGiving}
+          user={u}
+          granted={detail.shares ?? []}
+        />
+      </Card>
+    </div>
   );
 }
 
+/**
+ * A person's invites. onInvite is undefined for a kid: their owner sets up their
+ * devices, so there is no invite to make, and the used-up or expired ones kept
+ * as history can't be rotated back to life.
+ */
 function InvitesTab({
   user,
   detail,
   onInvite,
 }: {
-  user: User;
+  user: AdminUser;
   detail: UserDetail;
-  onInvite: () => void;
+  onInvite?: () => void;
 }) {
   const { t } = useTranslation();
   const now = Date.now();
@@ -334,24 +372,32 @@ function InvitesTab({
       <EmptyState
         icon={Smartphone}
         title={t('user.invites.emptyTitle')}
-        body={t('user.invites.emptyBody', { name: user.username })}
+        body={
+          onInvite
+            ? t('user.invites.emptyBody', { name: user.username })
+            : t('user.kidDevices', { owner: ownerName(user) ?? '' })
+        }
         action={
-          <Button onClick={onInvite} disabled={user.disabled}>
-            <QrCode aria-hidden="true" />
-            {t('user.pairDevice')}
-          </Button>
+          onInvite ? (
+            <Button onClick={onInvite} disabled={user.disabled}>
+              <QrCode aria-hidden="true" />
+              {t('user.pairDevice')}
+            </Button>
+          ) : undefined
         }
       />
     );
   }
-  return <InviteTable invites={invites} now={now} showFor={false} />;
+  return <InviteTable invites={invites} now={now} showFor={false} canRotate={Boolean(onInvite)} />;
 }
 
-function SignInTab({ user: u }: { user: User }) {
+/** How a person signs in. A kid holds no password (the server refuses one), so their card says how they do sign in instead. */
+function SignInTab({ user: u, owner }: { user: User; owner: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [password, setPassword] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const kid = u.member_kind === 'kid';
   return (
     <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
       <Card className="flex flex-col gap-3 p-5" aria-labelledby="password-title">
@@ -359,14 +405,20 @@ function SignInTab({ user: u }: { user: User }) {
           {t('user.signIn.password')}
         </h2>
         <p className="text-[13.5px] text-muted-foreground">
-          {u.has_password ? t('user.signIn.passwordSet') : t('user.signIn.passwordNone')}
+          {kid
+            ? t('user.signIn.passwordKid', { owner })
+            : u.has_password
+              ? t('user.signIn.passwordSet')
+              : t('user.signIn.passwordNone')}
         </p>
-        <div>
-          <Button size="sm" variant="outline" onClick={() => setPassword(true)}>
-            <KeyRound aria-hidden="true" />
-            {u.has_password ? t('user.signIn.change') : t('user.signIn.set')}
-          </Button>
-        </div>
+        {kid ? null : (
+          <div>
+            <Button size="sm" variant="outline" onClick={() => setPassword(true)}>
+              <KeyRound aria-hidden="true" />
+              {u.has_password ? t('user.signIn.change') : t('user.signIn.set')}
+            </Button>
+          </div>
+        )}
       </Card>
       {u.has_recovery ? (
         <Card className="flex flex-col gap-3 p-5" aria-labelledby="recovery-title">
@@ -384,7 +436,7 @@ function SignInTab({ user: u }: { user: User }) {
           </div>
         </Card>
       ) : null}
-      <PasswordDialog open={password} onOpenChange={setPassword} user={u} />
+      {kid ? null : <PasswordDialog open={password} onOpenChange={setPassword} user={u} />}
       <ConfirmDialog
         open={clearing}
         onOpenChange={setClearing}
@@ -402,15 +454,20 @@ function SignInTab({ user: u }: { user: User }) {
   );
 }
 
-function AccountTab({ user: u }: { user: User }) {
+function AccountTab({ detail }: { detail: UserDetail }) {
   const { t } = useTranslation();
+  const u = detail.user;
+  const members = detail.members ?? [];
   const qc = useQueryClient();
   const me = useCurrentUser();
   const navigate = useNavigate();
   const self = me.id === u.id;
   const [promoting, setPromoting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // The members the delete keeps (unticked): none until one is unticked.
+  const [keeping, setKeeping] = useState<Set<number>>(() => new Set());
   const [disabling, setDisabling] = useState(false);
+  const member = Boolean(u.managed_by);
 
   const patch = async (change: Parameters<typeof api.updateUser>[1], done: string) => {
     try {
@@ -439,7 +496,13 @@ function AccountTab({ user: u }: { user: User }) {
         <SettingRow
           title={t('user.account.role')}
           htmlFor="user-role"
-          description={self ? t('user.account.roleSelf') : t('user.account.roleBody')}
+          description={
+            self
+              ? t('user.account.roleSelf')
+              : member
+                ? t('user.account.roleMember', { name: u.username, owner: ownerName(u) })
+                : t('user.account.roleBody')
+          }
         >
           <NativeSelect
             id="user-role"
@@ -449,10 +512,15 @@ function AccountTab({ user: u }: { user: User }) {
             onChange={(e) => setRole(e.target.value as User['role'])}
           >
             <option value="user">{t('people.role.user')}</option>
-            <option value="admin">{t('people.role.admin')}</option>
+            {/* A household member can't be an admin (the server answers 409 member_not_admin). */}
+            <option value="admin" disabled={member && u.role !== 'admin'}>
+              {t('people.role.admin')}
+            </option>
           </NativeSelect>
         </SettingRow>
       </Card>
+
+      <HouseholdCard detail={detail} />
 
       <DangerZone>
         <SettingRow
@@ -490,7 +558,14 @@ function AccountTab({ user: u }: { user: User }) {
             self ? t('user.danger.deleteSelf') : t('user.danger.deleteBody', { name: u.username })
           }
         >
-          <Button variant="destructive" disabled={self} onClick={() => setDeleting(true)}>
+          <Button
+            variant="destructive"
+            disabled={self}
+            onClick={() => {
+              setKeeping(new Set());
+              setDeleting(true);
+            }}
+          >
             <UserX aria-hidden="true" />
             {t('user.danger.deleteAction')}
           </Button>
@@ -520,12 +595,18 @@ function AccountTab({ user: u }: { user: User }) {
         confirmLabel={t('user.danger.deleteAction')}
         typeToConfirm={u.username}
         onConfirm={async () => {
-          await api.deleteUser(u.id);
+          const keep = keptMembers(members, keeping);
+          await api.deleteUser(u.id, keep);
           invalidatePeople(qc);
-          toast.add({ title: t('user.danger.deleted', { name: u.username }), type: 'success' });
+          toast.add({
+            title: t('user.danger.deleted', { name: u.username }),
+            description: membersOutcome(members.length - keep.length, keep.length, t),
+            type: 'success',
+          });
           void navigate({ to: '/people/{-$section}', params: { section: undefined } });
         }}
       >
+        <DeleteMembers members={members} keeping={keeping} onChange={setKeeping} />
         {!u.disabled ? (
           <p className="text-[13px] text-muted-foreground">
             {t('user.danger.reversible')}{' '}
@@ -544,4 +625,13 @@ function AccountTab({ user: u }: { user: User }) {
       </ConfirmDialog>
     </div>
   );
+}
+
+/** What a delete did to the person's household members, for its toast (undefined: they had none). */
+function membersOutcome(deleted: number, kept: number, t: TFunction): string | undefined {
+  const parts = [
+    deleted ? t('user.danger.deletedMembers', { count: deleted }) : '',
+    kept ? t('user.danger.keptMembers', { count: kept }) : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join(' ') : undefined;
 }

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
 
@@ -18,7 +17,7 @@ import (
 // so durable state for a since-revoked share isn't read back.
 func (a *API) handleListProgress(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
+	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(u))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load progress")
 		return
@@ -247,7 +246,7 @@ func (a *API) handleAddHistory(w http.ResponseWriter, r *http.Request) {
 // catalog query, so a since-revoked share's favourites aren't read back.
 func (a *API) handleListFavourites(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	scopes, err := a.cat.UserScopes(r.Context(), u.ID, u.Role == auth.RoleAdmin)
+	scopes, err := a.cat.CallerScopes(r.Context(), callerOf(u))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load favourites")
 		return

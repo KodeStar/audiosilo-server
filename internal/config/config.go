@@ -110,6 +110,21 @@ func (a ActivityConfig) SessionRetention() time.Duration {
 	return time.Duration(a.SessionDays) * 24 * time.Hour
 }
 
+// HouseholdConfig configures household members (player redesign Phase 8b-1):
+// whether people may add members from the player, and how many each. Both apply
+// on the next request (read through the API's live config).
+type HouseholdConfig struct {
+	MembersEnabled bool `yaml:"members_enabled"` // anyone but a demo account may add members (default true)
+	MaxMembers     int  `yaml:"max_members"`     // members per person, MinMaxMembers to MaxMaxMembers (default 6)
+}
+
+// Household member limits.
+const (
+	DefaultMaxMembers = 6
+	MinMaxMembers     = 1
+	MaxMaxMembers     = 50
+)
+
 // DemoConfig configures public demo mode: when enabled, an unauthenticated
 // visitor can mint a throwaway account via POST /api/v1/demo/session (granted the
 // named library), and idle demo accounts are reaped in the background.
@@ -231,20 +246,21 @@ type Config struct {
 	// Settings > General switch turns it off.
 	UpdateCheck bool `yaml:"update_check"`
 
-	Bind           string         `yaml:"bind"`       // host:port to listen on
-	PublicURL      string         `yaml:"public_url"` // externally reachable base URL, used in QR payloads
-	LANURL         string         `yaml:"lan_url"`    // the server's home-network address, the apps' home address ("" = derived per request; see Addresses)
-	TLS            TLSConfig      `yaml:"tls"`
-	TrustedProxies []string       `yaml:"trusted_proxies"`  // CIDRs whose X-Forwarded-For is trusted
-	CORSOrigins    []string       `yaml:"cors_origins"`     // allowed web origins ("*" to disable check)
-	MaxUploadBytes int64          `yaml:"max_upload_bytes"` // reserved for Phase B uploads; not yet enforced (JSON bodies use a fixed 1 MiB cap)
-	WebDir         string         `yaml:"web_dir"`          // directory of the prebuilt web player served at /web; empty disables it
-	AppLinks       AppLinkConfig  `yaml:"app_links"`        // optional native deep-link association (well-known files)
-	Libraries      []Library      `yaml:"libraries"`
-	Demo           DemoConfig     `yaml:"demo"`     // public demo mode (throwaway accounts)
-	Metadata       MetadataConfig `yaml:"metadata"` // community metadata lookup (Phase 1.5)
-	Backups        BackupConfig   `yaml:"backups"`  // database backups (internal/backup)
-	Activity       ActivityConfig `yaml:"activity"` // listening history retention
+	Bind           string          `yaml:"bind"`       // host:port to listen on
+	PublicURL      string          `yaml:"public_url"` // externally reachable base URL, used in QR payloads
+	LANURL         string          `yaml:"lan_url"`    // the server's home-network address, the apps' home address ("" = derived per request; see Addresses)
+	TLS            TLSConfig       `yaml:"tls"`
+	TrustedProxies []string        `yaml:"trusted_proxies"`  // CIDRs whose X-Forwarded-For is trusted
+	CORSOrigins    []string        `yaml:"cors_origins"`     // allowed web origins ("*" to disable check)
+	MaxUploadBytes int64           `yaml:"max_upload_bytes"` // reserved for Phase B uploads; not yet enforced (JSON bodies use a fixed 1 MiB cap)
+	WebDir         string          `yaml:"web_dir"`          // directory of the prebuilt web player served at /web; empty disables it
+	AppLinks       AppLinkConfig   `yaml:"app_links"`        // optional native deep-link association (well-known files)
+	Libraries      []Library       `yaml:"libraries"`
+	Demo           DemoConfig      `yaml:"demo"`      // public demo mode (throwaway accounts)
+	Metadata       MetadataConfig  `yaml:"metadata"`  // community metadata lookup (Phase 1.5)
+	Backups        BackupConfig    `yaml:"backups"`   // database backups (internal/backup)
+	Activity       ActivityConfig  `yaml:"activity"`  // listening history retention
+	Household      HouseholdConfig `yaml:"household"` // household members
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the
@@ -293,6 +309,7 @@ func Default(dataDir string) *Config {
 		UpdateCheck:    true,
 		Backups:        BackupConfig{Schedule: DefaultBackupSchedule, Keep: DefaultBackupKeep},
 		Activity:       ActivityConfig{SessionDays: DefaultSessionDays},
+		Household:      HouseholdConfig{MembersEnabled: true, MaxMembers: DefaultMaxMembers},
 	}
 }
 
@@ -513,6 +530,9 @@ func (c *Config) Validate() error {
 	}
 	if d := c.Activity.SessionDays; d < MinSessionDays || d > MaxSessionDays {
 		return fieldErr("activity.session_days", fmt.Errorf("keep listening sessions from %d to %d days", MinSessionDays, MaxSessionDays))
+	}
+	if n := c.Household.MaxMembers; n < MinMaxMembers || n > MaxMaxMembers {
+		return fieldErr("household.max_members", fmt.Errorf("household.max_members must be from %d to %d", MinMaxMembers, MaxMaxMembers))
 	}
 	if d := c.Backups.Dir; d != "" && !filepath.IsAbs(d) {
 		return fieldErr("backups.dir", fmt.Errorf("backups.dir must be an absolute path, got %q", d))

@@ -95,15 +95,21 @@ const STATUS_BADGE: Record<InviteStatus, 'success' | 'outline' | 'warning'> = {
   expired: 'warning',
 };
 
-/** The invite list, shared with a person's own Invites tab (`showFor` off). */
+/**
+ * The invite list, shared with a person's own Invites tab (`showFor` off).
+ * `canRotate` off hides Rotate: a kid's page, as a kid holds no invite (the
+ * server answers 409 kid_account, which this list maps if it is ever asked).
+ */
 export function InviteTable({
   invites,
   now,
   showFor = true,
+  canRotate = true,
 }: {
   invites: Invite[];
   now: number;
   showFor?: boolean;
+  canRotate?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -173,7 +179,7 @@ export function InviteTable({
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex justify-end gap-1">
-                    {status !== 'usedUp' ? (
+                    {canRotate && status !== 'usedUp' ? (
                       <Button
                         variant="outline"
                         size="sm"

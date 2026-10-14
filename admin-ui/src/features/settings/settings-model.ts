@@ -16,6 +16,7 @@ export const SETTINGS_PAGES = [
   'players',
   'metadata',
   'transcoding',
+  'household',
   'demo',
   'backups',
   'notifications',
@@ -32,7 +33,13 @@ export type SettingId = {
 }[SettingsSection];
 
 /** Facts the envelope carries beside the settings; not settings themselves. */
-type ReadOnlyFact = 'available' | 'web_player' | 'max_users_default';
+type ReadOnlyFact =
+  | 'available'
+  | 'web_player'
+  | 'max_users_default'
+  | 'max_members_default'
+  | 'max_members_min'
+  | 'max_members_max';
 
 /** Why the console can't change a setting, if it can't: the variable that sets it, or "launcher". */
 export function lockOf(s: AdminSettings, id: SettingId): string | undefined {
@@ -54,6 +61,18 @@ export function textToList(text: string): string[] {
 
 export function listToText(list: readonly string[]): string {
   return list.join('\n');
+}
+
+/**
+ * Whether a number field's text is outside its whole-number range, checked
+ * before saving (the server refuses the same). Blank is too: a ranged setting
+ * always holds a number (the server refuses null for it, "enter a value").
+ */
+export function outOfRange(text: string, min: number, max: number): boolean {
+  const s = text.trim();
+  if (s === '') return true;
+  const n = Number(s);
+  return !Number.isInteger(n) || n < min || n > max;
 }
 
 function same(a: unknown, b: unknown): boolean {

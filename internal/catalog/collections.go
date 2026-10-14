@@ -258,31 +258,51 @@ func inChunks(ids []int64, read func(in string, args []any) error) error {
 	return nil
 }
 
-// countAndPreview fills cols' item counts and previews (the first
-// collectionPreviewSize indexed items) as the reader sees them (scopes).
-func (c *Catalog) countAndPreview(ctx context.Context, cols []Collection, scopes []Scope) error {
-	byID := make(map[int64]*Collection, len(cols))
-	ids := make([]int64, len(cols))
-	for i := range cols {
-		byID[cols[i].ID], ids[i] = &cols[i], cols[i].ID
-	}
+// scopedItemCounts counts each of ids' items the reader's scopes allow (a
+// collection with none is absent).
+func (c *Catalog) scopedItemCounts(ctx context.Context, ids []int64, scopes []Scope) (map[int64]int, error) {
+	out := make(map[int64]int, len(ids))
 	filter, fargs := scopesFilterSQL("ci.library_id", "ci.rel_path", scopes)
-	if err := inChunks(ids, func(in string, args []any) error {
-		type countRow struct{ id, n int64 }
+	err := inChunks(ids, func(in string, args []any) error {
+		type countRow struct {
+			id int64
+			n  int
+		}
 		counts, err := queryRows(ctx, c.db, func(rows *sql.Rows, r *countRow) error {
 			return rows.Scan(&r.id, &r.n)
 		}, `SELECT ci.collection_id, COUNT(*) FROM collection_items ci
 		  WHERE ci.collection_id IN (`+in+`) AND `+filter+` GROUP BY ci.collection_id`, append(args, fargs...)...)
-		if err != nil {
-			return err
-		}
 		for _, r := range counts {
-			byID[r.id].ItemCount = int(r.n)
+			out[r.id] = r.n
 		}
-		return nil
-	}); err != nil {
+		return err
+	})
+	return out, err
+}
+
+// idList dedupes and sorts ids and binds them as one JSON array (for json_each,
+// so a set-based statement stays constant): "[]" for none, never "null".
+func idList(ids []int64) ([]int64, string, error) {
+	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
+	list, err := json.Marshal(append([]int64{}, ids...))
+	return ids, string(list), err
+}
+
+// countAndPreview fills cols' item counts and previews (the first
+// collectionPreviewSize indexed items) as the reader sees them (scopes).
+func (c *Catalog) countAndPreview(ctx context.Context, cols []Collection, scopes []Scope) error {
+	ids := make([]int64, len(cols))
+	for i := range cols {
+		ids[i] = cols[i].ID
+	}
+	counts, err := c.scopedItemCounts(ctx, ids, scopes)
+	if err != nil {
 		return err
 	}
+	for i := range cols {
+		cols[i].ItemCount = counts[cols[i].ID]
+	}
+	filter, fargs := scopesFilterSQL("ci.library_id", "ci.rel_path", scopes)
 
 	// The previews, one bounded read per collection: its items in stored order
 	// (idx_collection_items_order), stopping at the first collectionPreviewSize
@@ -502,50 +522,71 @@ func (c *Catalog) RemoveCollectionItem(ctx context.Context, id, userID int64, re
 // SetCollectionShares replaces who a collection userID owns is shared with. Every
 // id must be an existing, enabled, non-demo user other than the owner, or one the
 // collection is already shared with (a viewer disabled since stays in
-// shared_with, so the list the owner was shown can be sent back), else
+// shared_with, so the list the owner was shown can be sent back), and never a kid
+// (household member) but the owner's own, else
 // ErrUnknownUser and nothing changes; more than MaxCollectionShares (after
 // duplicates collapse) is ErrTooManyShares. Who may change it is settled first: a
-// stranger is ErrNotFound and a viewer ErrNotOwner whatever the list holds.
+// kid is ErrKidAccount (read in the write's transaction, so a request racing the
+// owner's switch to kid can't re-share a kid's collection), a stranger
+// ErrNotFound and a viewer ErrNotOwner, whatever the list holds.
 func (c *Catalog) SetCollectionShares(ctx context.Context, id, userID int64, userIDs []int64) error {
-	ids := slices.Compact(slices.Sorted(slices.Values(userIDs)))
+	// The ids go in as one JSON array (json_each), so the statements stay
+	// constant: set-based, with nothing concatenated into SQL in a transaction.
+	ids, list, err := idList(userIDs)
+	if err != nil {
+		return err
+	}
 	return c.db.WithTx(ctx, "SetCollectionShares", func(tx *sql.Tx) error {
+		var kid bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE id = ? AND `+isKidSQL+`)`,
+			userID).Scan(&kid); err != nil {
+			return err
+		}
+		if kid {
+			return ErrKidAccount
+		}
 		if err := requireOwner(ctx, tx, id, userID); err != nil {
 			return err
 		}
 		if len(ids) > MaxCollectionShares {
 			return ErrTooManyShares
 		}
-		// The ids go in as one JSON array (json_each), so the statements stay
-		// constant: set-based, with nothing concatenated into SQL in a transaction.
-		list, err := json.Marshal(append([]int64{}, ids...)) // [] for none, never null
-		if err != nil {
-			return err
-		}
 		var valid int
+		// A kid (household member) only ever from their own owner, whatever the
+		// collection held before: ErrUnknownUser, so it can't probe who is a kid.
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users
 		  WHERE id != ?1 AND id IN (SELECT value FROM json_each(?2))
 		    AND ((disabled = 0 AND is_demo = 0)
-		         OR id IN (SELECT user_id FROM collection_shares WHERE collection_id = ?3))`,
-			userID, string(list), id).Scan(&valid); err != nil {
+		         OR id IN (SELECT user_id FROM collection_shares WHERE collection_id = ?3))
+		    AND `+kidOnlyToOwnerSQL,
+			userID, list, id).Scan(&valid); err != nil {
 			return err
 		}
 		if valid != len(ids) {
 			return ErrUnknownUser
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM collection_shares
-		  WHERE collection_id = ? AND user_id NOT IN (SELECT value FROM json_each(?))`, id, string(list)); err != nil {
+		  WHERE collection_id = ? AND user_id NOT IN (SELECT value FROM json_each(?))`, id, list); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO collection_shares(collection_id, user_id, created_at)
-		  SELECT ?, value, ? FROM json_each(?)`, id, c.stamp(), string(list))
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO collection_shares(collection_id, user_id, created_at)
+		  SELECT ?, value, ? FROM json_each(?)`, id, c.stamp(), list)
 		return err
 	})
 }
 
 // ShareTargets lists the users userID may share a collection with: enabled,
-// non-demo accounts other than their own, by username.
+// non-demo accounts other than their own, by username; a kid (household member)
+// only to their own owner.
 func (c *Catalog) ShareTargets(ctx context.Context, userID int64) ([]CollectionUser, error) {
 	return queryRows(ctx, c.db, func(rows *sql.Rows, u *CollectionUser) error {
 		return rows.Scan(&u.ID, &u.Username)
-	}, `SELECT id, username FROM users WHERE disabled = 0 AND is_demo = 0 AND id != ? ORDER BY username, id`, userID)
+	}, `SELECT id, username FROM users
+	     WHERE disabled = 0 AND is_demo = 0 AND id != ?1 AND `+kidOnlyToOwnerSQL+`
+	     ORDER BY username, id`, userID)
 }
+
+// kidOnlyToOwnerSQL keeps the users rows a person ?1 may share a collection
+// with as far as kids go: anyone who isn't a kid (household member; auth's
+// MemberKid), and a kid only to their own owner.
+const kidOnlyToOwnerSQL = `(member_kind IS NULL OR member_kind <> 'kid' OR managed_by = ?1)`

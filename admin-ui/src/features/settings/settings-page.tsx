@@ -5,6 +5,7 @@ import {
   ArrowRight,
   BellRing,
   Globe,
+  House,
   Import,
   Info,
   MonitorSmartphone,
@@ -53,6 +54,7 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   players: MonitorSmartphone,
   metadata: Globe,
   transcoding: Repeat2,
+  household: House,
   demo: Ticket,
   backups: Archive,
   notifications: BellRing,
@@ -133,6 +135,8 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
       return <MetadataTopic settings={settings} />;
     case 'transcoding':
       return <TranscodingTopic />;
+    case 'household':
+      return <HouseholdTopic settings={settings} />;
     case 'demo':
       return <DemoTopic settings={settings} />;
     case 'backups':
@@ -558,6 +562,32 @@ function TranscodingTopic() {
         {t('settings.transcoding.how')}
       </Notice>
     </Card>
+  );
+}
+
+/**
+ * Household members: whether people may add them from the player, and how many
+ * each. A person's own switch is on their page (Account tab).
+ */
+function HouseholdTopic({ settings }: { settings: AdminSettings }) {
+  const { t } = useTranslation();
+  const h = settings.household;
+  return (
+    <SettingsForm
+      settings={settings}
+      section="household"
+      title={t('settings.household.card')}
+      description={t('settings.household.cardBody')}
+      fields={[
+        { name: 'members_enabled', kind: 'switch' },
+        {
+          name: 'max_members',
+          kind: 'number',
+          placeholder: String(h.max_members_default),
+          range: { min: h.max_members_min, max: h.max_members_max },
+        },
+      ]}
+    />
   );
 }
 

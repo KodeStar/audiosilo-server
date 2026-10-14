@@ -75,7 +75,7 @@ func TestCastTokenLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := now.UTC().Add(castTokenTTL).Truncate(time.Second).Format(castTime); expires != want || len(expires) != len(castTime) {
+	if want := now.UTC().Add(castTokenTTL).Truncate(time.Second).Format(millisUTC); expires != want || len(expires) != len(millisUTC) {
 		t.Fatalf("expires_at = %q, want %q (fixed-width ms UTC)", expires, want)
 	}
 	// Only the hash is stored, as a tokens row of kind cast with its grant.
@@ -115,13 +115,13 @@ func TestCastTokenLifecycle(t *testing.T) {
 	}
 
 	// Denied: a disabled user; allowed again once enabled.
-	if err := s.SetDisabled(ctx, u.ID, true); err != nil {
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("disabled user's token = %v, want ErrInvalidToken", err)
 	}
-	if err := s.SetDisabled(ctx, u.ID, false); err != nil {
+	if err := s.UpdateUser(ctx, u.ID, UserChanges{Disabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := resolveCast(s, ctx, secret, "Author/Book"); err != nil {
@@ -154,7 +154,7 @@ func TestCastTokenLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteUser(ctx, u.ID); err != nil {
+	if _, err := s.DeleteUser(ctx, u.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := resolveCast(s, ctx, live, "Author/Book"); !errors.Is(err, ErrInvalidToken) {

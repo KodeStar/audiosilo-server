@@ -74,7 +74,7 @@ func TestMyDevices(t *testing.T) {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	if strings.Join(keys, ",") != "client,created_at,current,id,kind,last_ip,last_seen,name" {
+	if strings.Join(keys, ",") != "client,created_at,current,id,kind,last_ip,last_seen,member_sign_ins,name" {
 		t.Fatalf("MyDevice keys = %v", keys)
 	}
 	admins, _ := myDevicesOf(t, e, adminTok)
@@ -114,7 +114,7 @@ func TestMyDevices(t *testing.T) {
 	}
 
 	// Allowed: an own other device (here from an API key, which may only reduce access).
-	if status, body := del(key, names["Laptop"].ID); status != http.StatusOK || strings.TrimSpace(body) != `{"current":false}` {
+	if status, body := del(key, names["Laptop"].ID); status != http.StatusOK || strings.TrimSpace(body) != `{"current":false,"members_signed_out":0}` {
 		t.Fatalf("revoke own laptop = %d %s", status, body)
 	}
 	if resp, _ := e.do(t, "GET", "/api/v1/me", laptop, ""); resp.StatusCode != http.StatusUnauthorized {
@@ -125,7 +125,7 @@ func TestMyDevices(t *testing.T) {
 	}
 
 	// Allowed: the current device; its token is dead for the next request.
-	if status, body := del(phone, names["Phone"].ID); status != http.StatusOK || strings.TrimSpace(body) != `{"current":true}` {
+	if status, body := del(phone, names["Phone"].ID); status != http.StatusOK || strings.TrimSpace(body) != `{"current":true,"members_signed_out":0}` {
 		t.Fatalf("revoke the current device = %d %s", status, body)
 	}
 	if resp, _ := e.do(t, "GET", "/api/v1/me/devices", phone, ""); resp.StatusCode != http.StatusUnauthorized {

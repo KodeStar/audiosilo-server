@@ -186,7 +186,7 @@ func TestMyRatingsOwnAndScoped(t *testing.T) {
 	}
 
 	// A deleted account takes its ratings with it.
-	if err := e.auth.DeleteUser(ctx, e.eveID); err != nil {
+	if _, err := e.auth.DeleteUser(ctx, e.eveID, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{cradleBook, mistbornBook} {

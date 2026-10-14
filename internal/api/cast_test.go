@@ -366,11 +366,11 @@ func TestCastTokenRevocation(t *testing.T) {
 	}
 	ok(http.StatusOK, "fresh")
 
-	if err := c.auth.SetDisabled(ctx, c.sam, true); err != nil {
+	if err := c.auth.UpdateUser(ctx, c.sam, auth.UserChanges{Disabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 	ok(http.StatusUnauthorized, "disabled user")
-	if err := c.auth.SetDisabled(ctx, c.sam, false); err != nil {
+	if err := c.auth.UpdateUser(ctx, c.sam, auth.UserChanges{Disabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}
 	ok(http.StatusOK, "re-enabled user")
@@ -406,7 +406,7 @@ func TestCastTokenRevocation(t *testing.T) {
 	c.samTok = tablet
 	tok = c.castToken(t, cradleBook)
 	ok(http.StatusOK, "token from another device")
-	if err := c.auth.DeleteUser(ctx, c.sam); err != nil {
+	if _, err := c.auth.DeleteUser(ctx, c.sam, nil); err != nil {
 		t.Fatal(err)
 	}
 	ok(http.StatusUnauthorized, "deleted user")

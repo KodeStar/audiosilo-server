@@ -382,3 +382,42 @@ func TestCollectionSharesAndTargets(t *testing.T) {
 		t.Fatalf("share targets = %s, want sam,vic", got)
 	}
 }
+
+// A kid (household member) never sets who a collection they own is shared
+// with, read in the write itself: ErrKidAccount for any list, their owner's
+// and an empty one included, and nothing changes. Allowed: the same person as
+// a grown-up member, and made independent again.
+func TestCollectionSharesRefuseAKid(t *testing.T) {
+	t.Parallel()
+	e := newCollectionsEnv(t)
+	c, ctx := e.c, t.Context()
+	col, _ := c.CreateCollection(ctx, e.viewer, "Vic's", "")
+	if err := c.SetCollectionShares(ctx, col.ID, e.viewer, []int64{e.stranger}); err != nil {
+		t.Fatal(err)
+	}
+	set := func(kind, access, owner any) {
+		t.Helper()
+		if _, err := c.db.ExecContext(ctx, `UPDATE users SET managed_by = ?, member_kind = ?, member_access = ? WHERE id = ?`,
+			owner, kind, access, e.viewer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("kid", "all", e.owner)
+	for _, ids := range [][]int64{{e.stranger}, {e.owner}, nil} {
+		if err := c.SetCollectionShares(ctx, col.ID, e.viewer, ids); !errors.Is(err, ErrKidAccount) {
+			t.Errorf("kid shares %v = %v, want ErrKidAccount", ids, err)
+		}
+	}
+	got, _ := c.Collection(ctx, col.ID, e.viewer, e.all)
+	if len(*got.SharedWith) != 1 || (*got.SharedWith)[0].ID != e.stranger {
+		t.Fatalf("a refused kid's share changed the list: %+v", *got.SharedWith)
+	}
+	set("grownup", "all", e.owner)
+	if err := c.SetCollectionShares(ctx, col.ID, e.viewer, []int64{e.owner}); err != nil {
+		t.Errorf("grown-up member shares = %v", err)
+	}
+	set(nil, nil, nil)
+	if err := c.SetCollectionShares(ctx, col.ID, e.viewer, []int64{e.stranger}); err != nil {
+		t.Errorf("independent shares = %v", err)
+	}
+}

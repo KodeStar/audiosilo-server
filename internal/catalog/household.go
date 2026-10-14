@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -15,6 +16,9 @@ import (
 //   - opt-in: off until a person turns it on (household_sharing, no row = off);
 //   - reciprocal: a person who doesn't share sees nobody (HouseListening is empty);
 //   - only other people who share, whose account is enabled and not a demo;
+//   - never a kid (household member), as a row or as a viewer: a kid has no
+//     household_sharing row (auth clears it when someone becomes a kid, and the
+//     route refuses a kid's PUT), so the opt-in rule already leaves them out;
 //   - only a session recorded on this server (not imported, not backfilled) with
 //     listening in it, the newest per person, within houseWindow;
 //   - only a book the CALLER may see: a person's newest book outside the caller's
@@ -69,12 +73,32 @@ func (c *Catalog) SetHouseholdSharing(ctx context.Context, userID int64, share b
 	if userID <= 0 {
 		return errNoUser
 	}
-	_, err := c.db.ExecContext(ctx,
-		`INSERT INTO household_sharing(user_id, share_listening, updated_at) VALUES(?, ?, ?)
+	// A kid never shares (the rules above rely on no kid having a row): refused
+	// in the write itself, so a request racing the owner's switch to kid can't
+	// leave one behind.
+	res, err := c.db.ExecContext(ctx,
+		`INSERT INTO household_sharing(user_id, share_listening, updated_at)
+		 SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = ?1 AND `+isKidSQL+`)
 		 ON CONFLICT(user_id) DO UPDATE SET share_listening = excluded.share_listening, updated_at = excluded.updated_at`,
 		userID, share, c.stamp())
-	return err
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return cmp.Or(err, ErrKidAccount)
+	}
+	return nil
 }
+
+// ErrKidAccount is a write a kid can't make, refused inside it
+// (SetHouseholdSharing, SetCollectionShares): the transport's notKid answers
+// first, but a request that passed it just before the owner's switch to kid
+// committed lands here.
+var ErrKidAccount = errors.New("not available for a kid's account")
+
+// isKidSQL keeps the users rows that are kids: all three member columns, as
+// auth's User.IsKid reads them.
+const isKidSQL = `(member_kind = 'kid' AND managed_by IS NOT NULL AND member_access IS NOT NULL)`
 
 // HouseListening is what the other people who share are listening to, as
 // callerID sees it (callerScopes, as UserScopes gives them), newest first: empty

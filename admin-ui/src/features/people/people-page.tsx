@@ -1,8 +1,9 @@
+import { useId } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { KeyRound, Smartphone, UserPlus, Users } from 'lucide-react';
+import { House, KeyRound, Smartphone, UserPlus, Users } from 'lucide-react';
 import { useDevices, useLiveSessions, useStats, useUsers } from '@/api/hooks';
-import type { Device, ListeningRow, ListeningSession, User } from '@/api/types';
+import type { AdminUser, Device, ListeningRow, ListeningSession } from '@/api/types';
 import { AvatarRing } from '@/components/avatar-ring';
 import { BookCover } from '@/components/book-cover';
 import { ProgressBar } from '@/components/progress-bar';
@@ -17,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { InviteDialog } from './invite-dialog';
+import { displayName, peopleGroups } from './household-model';
+import { MemberChips } from './member-chips';
 import { currentBook, groupDevices } from './people-model';
 
 const MONTH_MS = 30 * 24 * 3600 * 1000;
@@ -78,22 +81,49 @@ export function PeoplePage() {
           action={inviteButton}
         />
       ) : (
+        // A household (an owner and their members) is one block across the grid.
         <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {list.map((u) => (
-            <li key={u.id} className="min-w-0">
-              <PersonCard
-                user={u}
-                listening={stats.data?.listening ?? []}
-                live={live.data ?? []}
-                devices={devicesOf && (devicesOf.get(u.id) ?? [])}
-                now={now}
-              />
-            </li>
-          ))}
+          {peopleGroups(list).map((e) => {
+            const card = (u: AdminUser) => (
+              <li key={u.id} className="min-w-0">
+                <PersonCard
+                  user={u}
+                  listening={stats.data?.listening ?? []}
+                  live={live.data ?? []}
+                  devices={devicesOf && (devicesOf.get(u.id) ?? [])}
+                  now={now}
+                />
+              </li>
+            );
+            return e.kind === 'person' ? (
+              card(e.user)
+            ) : (
+              <li key={`household-${e.owner.id}`} className="col-span-full min-w-0">
+                <HouseholdGroup name={displayName(e.owner)}>
+                  {[e.owner, ...e.members].map(card)}
+                </HouseholdGroup>
+              </li>
+            );
+          })}
         </ul>
       )}
       <InviteDialog open={inviting} onOpenChange={setInviting} />
     </Page>
+  );
+}
+
+/** One household on People: a heading, then the owner's and the members' cards. */
+function HouseholdGroup({ name, children }: { name: string; children: React.ReactNode }) {
+  const { t } = useTranslation();
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className="rounded-2xl border bg-muted/50 p-3 md:p-4">
+      <h2 id={id} className="h3 mb-3 flex min-w-0 items-center gap-2 px-1">
+        <House className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="truncate">{t('user.household.members', { name })}</span>
+      </h2>
+      <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">{children}</ul>
+    </section>
   );
 }
 
@@ -104,7 +134,7 @@ function PersonCard({
   devices,
   now,
 }: {
-  user: User;
+  user: AdminUser;
   listening: ListeningRow[];
   live: ListeningSession[];
   /** The person's signed-in devices (undefined while loading). */
@@ -145,6 +175,7 @@ function PersonCard({
             {u.role === 'admin' ? <Badge variant="ink">{t('people.role.admin')}</Badge> : null}
             {u.is_demo ? <Badge variant="outline">{t('people.badge.demo')}</Badge> : null}
           </div>
+          <MemberChips user={u} />
           <span className="text-[12.5px] text-muted-foreground">
             {status ?? (
               <span className="inline-flex items-center gap-1.5">
@@ -166,6 +197,12 @@ function PersonCard({
               </>
             )}
           </span>
+          {u.members_count > 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-subtle-foreground">
+              <House className="size-3.5" aria-hidden="true" />
+              {t('people.card.members', { count: u.members_count })}
+            </span>
+          ) : null}
         </div>
       </div>
       <div className="mt-auto flex min-h-[63px] items-center gap-3 border-t px-5 py-3">

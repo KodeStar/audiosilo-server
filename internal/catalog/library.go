@@ -198,8 +198,7 @@ func (c *Catalog) DeleteLibrary(ctx context.Context, id int64) error {
 	return err
 }
 
-// libraryCols is what scanLibrary reads (AccessibleLibraries spells it out with
-// its table alias).
+// libraryCols is what scanLibrary reads.
 const libraryCols = `id, name, root, default_view, sort_order, scan_schedule, ignore_patterns, metadata_source`
 
 func scanLibrary(row interface{ Scan(...any) error }) (*Library, error) {

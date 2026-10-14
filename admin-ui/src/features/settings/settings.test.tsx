@@ -529,4 +529,78 @@ describe('settings', () => {
       '200 (default)',
     );
   });
+
+  it('saves the household member settings, only what changed', async () => {
+    const base = settingsWith();
+    const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));
+    renderApp('/server?topic=household');
+    const user = userEvent.setup();
+    const toggle = await screen.findByRole('switch', { name: 'People can add household members' });
+    expect(toggle).toBeChecked();
+    const max = screen.getByRole('textbox', { name: 'Members per person' });
+    expect(max).toHaveValue('6');
+    await user.click(toggle);
+    await user.clear(max);
+    await user.type(max, '3');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+        household: { members_enabled: false, max_members: 3 },
+      }),
+    );
+    expect(await screen.findByText('Household members saved')).toBeInTheDocument();
+  });
+
+  it('refuses a member cap outside 1 to 50 before saving', async () => {
+    const calls = mockFetch(routes());
+    renderApp('/server?topic=household');
+    const user = userEvent.setup();
+    const max = await screen.findByRole('textbox', { name: 'Members per person' });
+    const save = screen.getByRole('button', { name: 'Save changes' });
+    for (const bad of ['0', '51', '2.5', 'six']) {
+      await user.clear(max);
+      await user.type(max, bad);
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Enter a whole number from 1 to 50.',
+      );
+      expect(max).toHaveAttribute('aria-invalid', 'true');
+      expect(save).toBeDisabled();
+    }
+    await user.type(max, '{Enter}');
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+    await user.clear(max);
+    await user.type(max, '50');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(save).toBeEnabled();
+  });
+
+  it('locks the household settings the environment sets', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/settings': {
+          body: settingsWith({
+            household: {
+              members_enabled: false,
+              max_members: 4,
+              max_members_default: 6,
+              max_members_min: 1,
+              max_members_max: 50,
+            },
+            locked: {
+              'household.members_enabled': 'AUDIOSILO_HOUSEHOLD_MEMBERS_ENABLED',
+              'household.max_members': 'AUDIOSILO_HOUSEHOLD_MAX_MEMBERS',
+            },
+          }),
+        },
+      }),
+    );
+    renderApp('/server?topic=household');
+    const toggle = await screen.findByRole('switch', { name: 'People can add household members' });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('textbox', { name: 'Members per person' })).toBeDisabled();
+    expect(screen.getByText('Set by AUDIOSILO_HOUSEHOLD_MAX_MEMBERS')).toBeInTheDocument();
+    // Every field is set elsewhere: nothing to save here.
+    expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument();
+  });
 });
