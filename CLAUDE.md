@@ -616,8 +616,8 @@ admin overrides; see Metadata overrides below).
   jobs start, and a server started in remote mode deletes the folder.
   Covers are unchanged (their own hosts in both modes). Admin wire below (Server settings).
   **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
-  (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one,
-  nearest first, max 5, failures left out) and `?spoilers=hide` gates the current
+  (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one
+  (an omnibus "1-3" only when it ends before this one starts), nearest first, max 5, failures left out) and `?spoilers=hide` gates the current
   work by the CALLER's saved progress (`meta.ChapterAt` + `meta.HideSpoilers`,
   mirroring the player's `meta-gating.ts`; previous works lose only
   `recap_summary.ending`). Both work on a per-request copy - the cached envelope

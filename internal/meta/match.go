@@ -51,14 +51,18 @@ type MatchQuery struct {
 	Title       string
 	Series      string
 	SeriesIndex float64
-	Author      string
-	Duration    float64 // seconds; 0 when unknown
-	Path        string  // the book's rel_path
-	IsFolder    bool
-	BookASIN    string
-	BookISBN    string
-	Region      string
-	Limit       int
+	// SeriesIndexEnd is the end of a SeriesIndex that is a range (an omnibus of
+	// books 1-3; 0 when it isn't one): the position goes up as "1-3", which
+	// metaserve compares as a span, never as the "1" of book 1.
+	SeriesIndexEnd float64
+	Author         string
+	Duration       float64 // seconds; 0 when unknown
+	Path           string  // the book's rel_path
+	IsFolder       bool
+	BookASIN       string
+	BookISBN       string
+	Region         string
+	Limit          int
 	// NoSeries says the caller reads no candidate's series (a repick), so the
 	// series records the series rules read aren't fetched for it.
 	NoSeries bool
@@ -517,7 +521,11 @@ func matchParams(q MatchQuery, text, asin, isbn string) url.Values {
 	case p.Position != "":
 		v.Set("position", p.Position)
 	case q.SeriesIndex > 0:
-		v.Set("position", strconv.FormatFloat(q.SeriesIndex, 'f', -1, 64))
+		pos := strconv.FormatFloat(q.SeriesIndex, 'f', -1, 64)
+		if metadata.ValidSeriesRange(q.SeriesIndex, q.SeriesIndexEnd) {
+			pos += "-" + strconv.FormatFloat(q.SeriesIndexEnd, 'f', -1, 64)
+		}
+		v.Set("position", pos)
 	}
 	if q.Duration >= 1 {
 		v.Set("runtime", strconv.Itoa(int(math.Round(q.Duration))))

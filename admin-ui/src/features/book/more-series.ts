@@ -119,9 +119,11 @@ function checkRefs(entries: RawEntry[]): {
     const end = e.position_end ?? 0;
     if (typeof end !== 'number') return { value: '', error: 'book.invalid.moreSeries' };
     const position = raw ? Number(raw) : 0;
-    if (end !== 0 && typeof e.position !== 'string') {
-      // A stored entry's range.
-      if (!validSeriesRange(position, end)) return { value: '', error: 'book.invalid.moreSeries' };
+    if (end !== 0) {
+      // A stored entry's range (a line has no position_end; its range is "1-3").
+      if (typeof e.position !== 'number' || !validSeriesRange(position, end)) {
+        return { value: '', error: 'book.invalid.moreSeries' };
+      }
       out.push({ name, position, position_end: end });
       continue;
     }

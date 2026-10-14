@@ -355,11 +355,11 @@ func (c *Catalog) MatchItemsToApply(ctx context.Context, runID int64, include, e
 
 // matchSubjectCols are the facts a match reads of a book.
 const matchSubjectCols = `b.id, b.library_id, b.rel_path, b.is_folder, b.title, b.author, b.series,
-	b.series_index, b.narrator, b.duration, b.asin, b.isbn`
+	b.series_index, b.series_index_end, b.narrator, b.duration, b.asin, b.isbn`
 
 func scanMatchSubject(rows *sql.Rows, b *Book) error {
 	return rows.Scan(&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author, &b.Series,
-		&b.SeriesIndex, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN)
+		&b.SeriesIndex, &b.SeriesIndexEnd, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN)
 }
 
 // UnmatchedBooks lists the books a match run works through: those with no ASIN

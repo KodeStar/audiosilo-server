@@ -36,6 +36,18 @@ func TestParseSeriesRange(t *testing.T) {
 	}
 }
 
+func TestParseSeriesPosition(t *testing.T) {
+	for in, want := range map[string][3]float64{
+		"3": {3, 0, 1}, " 3 ": {0, 0, 0}, "2.5": {2.5, 0, 1}, "1-3": {1, 3, 1}, " 1 - 3 ": {1, 3, 1},
+		"": {0, 0, 0}, "one": {0, 0, 0}, "3-1": {0, 0, 0},
+	} {
+		start, end, ok := ParseSeriesPosition(in)
+		if start != want[0] || end != want[1] || ok != (want[2] == 1) {
+			t.Errorf("ParseSeriesPosition(%q) = %v, %v, %v; want %v", in, start, end, ok, want)
+		}
+	}
+}
+
 func TestApplyProbeSeriesPartRange(t *testing.T) {
 	m := &Metadata{}
 	applyProbe(m, &probeResult{Tags: map[string]string{"series": "Omnibus", "series-part": "1-3"}})

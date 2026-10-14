@@ -72,7 +72,8 @@ func ScopesFor(mode string) []string {
 // facts, as both the match dialog and a bulk run send them.
 func QueryFor(b *catalog.Book, region string) meta.MatchQuery {
 	return meta.MatchQuery{
-		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, Author: b.Author, Duration: b.Duration,
+		Title: b.Title, Series: b.Series, SeriesIndex: b.SeriesIndex, SeriesIndexEnd: b.SeriesIndexEnd,
+		Author: b.Author, Duration: b.Duration,
 		Path: b.RelPath, IsFolder: b.IsFolder, BookASIN: b.ASIN, BookISBN: b.ISBN, Region: region,
 	}
 }

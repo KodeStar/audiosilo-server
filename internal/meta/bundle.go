@@ -26,11 +26,14 @@ const maxPrevious = 5
 // first, at most maxPrevious. They come from each rail's MAIN view only (never
 // an alternate ordering: a chronological order's earlier books are the
 // reading-order spoiler the main view exists to avoid): every entry whose
-// numeric position is below the current work's position on that rail.
-// "Nearest" is the numeric distance below the current position, ties kept in
-// rail order and then entry order, and an id found on two rails counts once, at
-// its nearest. A rail whose own position does not parse as a number contributes
-// nothing, nor does an entry whose position does not ("1-3" omnibus, blank).
+// numeric position is below the current work's position on that rail. A range
+// (an omnibus, "1-3": parseSpan) is previous only when it ends before the
+// current work starts (one holding the current book would spoil it), and a
+// current range counts from its start. "Nearest" is the numeric distance from an
+// entry's start up to the current position, ties kept in rail order and then
+// entry order, and an id found on two rails counts once, at its nearest. A rail
+// whose own position is neither a number nor a range contributes nothing, nor
+// does such an entry (blank, not a number).
 func previousWorkIDs(env *Enrichment) []string {
 	if env == nil {
 		return nil
@@ -45,13 +48,13 @@ func previousWorkIDs(env *Enrichment) []string {
 	}
 	var cands []candidate
 	for _, rail := range env.Series {
-		at, ok := parsePosition(rail.Position)
+		at, _, ok := parseSpan(rail.Position)
 		if !ok {
 			continue
 		}
 		for _, w := range rail.Works {
-			p, ok := parsePosition(w.Position)
-			if !ok || p >= at || w.ID == "" || w.ID == current {
+			p, end, ok := parseSpan(w.Position)
+			if !ok || end >= at || w.ID == "" || w.ID == current {
 				continue
 			}
 			cands = append(cands, candidate{id: w.ID, distance: at - p})

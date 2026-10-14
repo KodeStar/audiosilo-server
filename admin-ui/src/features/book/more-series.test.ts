@@ -68,6 +68,8 @@ describe('more_series', () => {
       '[{"name":"A","position":3,"position_end":1}]',
       '[{"name":"A","position":0,"position_end":2}]',
       '[{"name":"A","position":1,"position_end":"3"}]',
+      // A range's start is a number, as the server reads a stored entry.
+      '[{"name":"A","position":"1","position_end":3}]',
     ]) {
       expect(checkField('more_series', bad).error).toBe('book.invalid.moreSeries');
     }

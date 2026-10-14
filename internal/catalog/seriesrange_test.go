@@ -3,6 +3,7 @@ package catalog
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -120,6 +121,15 @@ func TestSeriesRangeEditAndRevert(t *testing.T) {
 	}
 	if b := mustBook(t, c, ctx, lib.ID, "Saga/Omnibus"); b.SeriesIndex != 1 || b.SeriesIndexEnd != 3 {
 		t.Errorf("after a rescan = %v-%v, want 1-3", b.SeriesIndex, b.SeriesIndexEnd)
+	}
+	// A bulk match reads the range too (its query sends "1-3", not book 1's "1").
+	unmatched, err := c.UnmatchedBooks(ctx, lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(unmatched, func(b Book) bool { return b.RelPath == "Saga/Omnibus" }); i < 0 ||
+		unmatched[i].SeriesIndex != 1 || unmatched[i].SeriesIndexEnd != 3 {
+		t.Errorf("match subjects = %+v, want Saga/Omnibus at 1-3", unmatched)
 	}
 	// The aggregate holds every position inside a range; the export carries it.
 	series, err := c.Series(ctx, lib.ID, nil, true)

@@ -49,8 +49,9 @@ func ValidSeriesRange(start, end float64) bool {
 	return start > 0 && end > start && end <= MaxSeriesPosition && end-start <= MaxSeriesSpan
 }
 
-// ParseSeriesPosition reads a series position: a number (ParseFloat's, end 0) or
-// a range (ParseSeriesRange: its start and end). ok is false for anything else.
+// ParseSeriesPosition reads a series position: a number (ParseFloat's, end 0, as
+// a series-part tag and a stored series_index were always read: no spaces) or a
+// range (ParseSeriesRange: its start and end). ok is false for anything else.
 func ParseSeriesPosition(s string) (start, end float64, ok bool) {
 	if v, err := strconv.ParseFloat(s, 64); err == nil {
 		return v, 0, true

@@ -50,13 +50,21 @@ func TestPreviousWorkIDs(t *testing.T) {
 		},
 		"unparsable positions contribute nothing": {
 			series: []MetaSeries{
-				rail("1-3", "a@1"),        // the rail's own position
 				rail("", "b@1"),           // blank
 				rail("NaN", "c@1"),        // ParseFloat accepts it; we do not
 				rail("4", "d@x", "e@3"),   // an entry's
 				rail("Inf", "f@1", "g@2"), // nor the infinities
 			},
 			want: []string{"e"},
+		},
+		"a range is previous when it ends before the current work starts": {
+			series: []MetaSeries{
+				rail("4-6", "o@1-3", "b@3", "cur@4-6", "c@5"), // the current work a range: from its start
+				rail("2", "h@1-3", "a@1", "cur@2"),            // an omnibus holding the current book spoils it
+				rail("1-3", "z@1"),                            // nothing before a range's start
+			},
+			// distances: b=1, a=1, o=3 (from its start).
+			want: []string{"b", "a", "o"},
 		},
 		"the current work and later ones are never previous": {
 			series: []MetaSeries{rail("2", "cur@1", "cur@2", "later@3")},
