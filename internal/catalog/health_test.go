@@ -264,7 +264,7 @@ func TestDuplicateReasons(t *testing.T) {
 			{RelPath: "b", Title: "Two", ASIN: "B03", Duration: 36000},
 		}, dupSameID, 2},
 		// Each within the tolerance of the next, but not the first of the last.
-		{"every pair of an ASIN's holders compared", []Book{
+		{"the shortest and longest of a group compared", []Book{
 			{RelPath: "a", Title: "One", ASIN: "B04", Duration: 6000},
 			{RelPath: "b", Title: "Two", ASIN: "B04", Duration: 6100},
 			{RelPath: "c", Title: "Three", ASIN: "B04", Duration: 6200},
@@ -289,6 +289,13 @@ func TestDuplicateReasons(t *testing.T) {
 			{RelPath: "a", Title: "One", ContentHash: "h", Size: 10, Duration: 36000},
 			{RelPath: "b", Title: "Two", ASIN: "B07", ContentHash: "h", Size: 10, Duration: 36000},
 			{RelPath: "c", Title: "Three", ASIN: "B07", Duration: 20000},
+		}, dupIDLengthDiffers, 3},
+		// A book of unknown length sharing an ASIN with a 10 h book and an ISBN with a
+		// 5 h one: the lengths are the group's, so the two never read as copies.
+		{"an unknown length doesn't bridge two lengths into copies", []Book{
+			{RelPath: "a", Title: "One", ASIN: "B08", Duration: 36000},
+			{RelPath: "b", Title: "Two", ASIN: "B08", ISBN: "9780000000008"},
+			{RelPath: "c", Title: "Three", ISBN: "9780000000008", Duration: 18000},
 		}, dupIDLengthDiffers, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

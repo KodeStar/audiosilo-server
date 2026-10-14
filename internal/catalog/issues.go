@@ -237,7 +237,8 @@ func (r *dupRow) quality() Book {
 const (
 	// dupSameFiles: byte-identical audio (fingerprint and size).
 	dupSameFiles = "same_files"
-	// dupSameID: a shared ASIN or ISBN, of a matching length (sameLength).
+	// dupSameID: a shared ASIN or ISBN whose holders' known lengths match
+	// (sameLength; an unknown length is no evidence they differ).
 	dupSameID = "same_id"
 	// dupIDLengthDiffers: a shared ASIN or ISBN of lengths that don't match: not
 	// plain copies (one may be matched to the wrong recording, or is incomplete).
@@ -252,26 +253,31 @@ const (
 type dupJoin uint8
 
 const (
-	joinFiles     dupJoin = 1 << iota // identical audio: hash and size
-	joinID                            // shared ASIN/ISBN, matching length
-	joinIDDiffers                     // shared ASIN/ISBN, lengths that don't match
+	joinFiles dupJoin = 1 << iota // identical audio: hash and size
+	joinID                        // a shared ASIN/ISBN, whatever the lengths
 )
 
 // dupSet is one group of copies: indexes into the rows, best copy first.
 type dupSet struct {
 	members []int
 	joins   dupJoin
-	ignored bool // every member ignored as a duplicate
+	// lengthsDiffer: the group's shortest and longest known lengths are not
+	// sameLength (so some two are not); an unknown length (no ffprobe) is no
+	// evidence either way.
+	lengthsDiffer bool
+	ignored       bool // every member ignored as a duplicate
 }
 
-// reason is the group's DuplicateGroup.Reason. Any shared identifier of a
-// different length wins, even over identical audio elsewhere in the group: the
-// group then holds a different recording, and naming it a copy would invite
-// deleting it. Then identical audio, a shared identifier, and author/title/narrator,
-// strongest evidence first.
+// reason is the group's DuplicateGroup.Reason. A group a shared identifier joined
+// whose lengths differ wins, even over identical audio elsewhere in the group: it
+// then holds a different recording, and naming it a copy would invite deleting it.
+// The lengths are the whole group's, not one identifier's holders', so a book of
+// unknown length sharing one identifier with each of two different recordings
+// can't make them look like copies. Then identical audio, a shared identifier,
+// and author/title/narrator, strongest evidence first.
 func (s dupSet) reason() string {
 	switch {
-	case s.joins&joinIDDiffers != 0:
+	case s.joins&joinID != 0 && s.lengthsDiffer:
 		return dupIDLengthDiffers
 	case s.joins&joinFiles != 0:
 		return dupSameFiles
@@ -293,48 +299,13 @@ func sameLength(a, b float64) bool {
 	return math.Abs(a-b) <= math.Max(60, 0.02*math.Max(a, b))
 }
 
-// idHolders is what duplicate detection keeps of the books sharing one ASIN or
-// ISBN: the first (every other joins it), how many, and the range of their known
-// lengths.
-type idHolders struct {
-	first, n int
-	min, max float64 // the known lengths' range
-	known    bool
-}
-
-func (h *idHolders) add(duration float64) {
-	h.n++
-	if duration <= 0 {
-		return
-	}
-	if !h.known || duration < h.min {
-		h.min = duration
-	}
-	if !h.known || duration > h.max {
-		h.max = duration
-	}
-	h.known = true
-}
-
-// join is how the holders joined: joinIDDiffers when two known lengths are not
-// sameLength, else joinID. sameLength of the shortest and the longest is that: its
-// tolerance grows with the longer length, so the extremes passing means every pair
-// does. An unknown length (no ffprobe) says nothing either way, so it never makes
-// the lengths differ.
-func (h idHolders) join() dupJoin {
-	if h.known && !sameLength(h.min, h.max) {
-		return joinIDDiffers
-	}
-	return joinID
-}
-
 // duplicateSets finds the groups of copies within each library (of one library,
 // or all with libraryID 0): books sharing an identity signal (identitySignals),
 // except that audio must also match in size (an identical first part is not a
 // copy) and author/title/narrator only joins copies of a matching length (an
 // abridged edition is not a copy). A shared ASIN or ISBN joins whatever the
 // lengths, and the group's reason says when any two of its holders differ
-// (dupSet.reason; idHolders). Copies in different libraries are deliberate,
+// (dupSet.reason). Copies in different libraries are deliberate,
 // and players already show one, so they never group. The discs of a book split
 // across disc folders look alike (one title, similar lengths) but are listed under
 // their own issue, whose fix joins them, so they never group either.
@@ -356,9 +327,9 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 	}
 	set := newDisjointSet(len(rows))
 	joins := make([]dupJoin, len(rows))
-	files := map[string]int{}      // the first book with this audio
-	byID := map[string]idHolders{} // the books with this ASIN/ISBN
-	byMeta := map[string][]int{}   // every book with this author/title/narrator
+	files := map[string]int{}    // the first book with this audio
+	byID := map[string]int{}     // the first book with this ASIN/ISBN
+	byMeta := map[string][]int{} // every book with this author/title/narrator
 	for i := range rows {
 		r := &rows[i]
 		lib := strconv.FormatInt(r.libraryID, 10) + ":"
@@ -375,23 +346,15 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 					files[key] = i
 				}
 			default: // "a:" or "i:"
-				key := lib + sig
-				h, ok := byID[key]
-				if !ok {
-					h.first = i
+				if j, ok := byID[lib+sig]; ok {
+					set.union(i, j)
+					joins[i] |= joinID
 				} else {
-					set.union(h.first, i)
+					byID[lib+sig] = i
 				}
-				h.add(r.duration)
-				byID[key] = h
 			}
 		}
 		r.author, r.narrator, r.asin, r.isbn, r.hash = "", "", "", "", ""
-	}
-	for _, h := range byID {
-		if h.n > 1 {
-			joins[h.first] |= h.join()
-		}
 	}
 	for _, idx := range byMeta {
 		for x := range idx {
@@ -408,10 +371,18 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 			continue
 		}
 		ds := dupSet{members: members, ignored: true}
+		shortest, longest := 0.0, 0.0 // known lengths; 0 = none known
 		for _, i := range members {
 			ds.joins |= joins[i]
 			ds.ignored = ds.ignored && rows[i].ignored
+			if d := rows[i].duration; d > 0 {
+				if longest == 0 {
+					shortest = d
+				}
+				shortest, longest = min(shortest, d), max(longest, d)
+			}
 		}
+		ds.lengthsDiffer = longest > 0 && !sameLength(shortest, longest)
 		sort.SliceStable(ds.members, func(a, b int) bool { return betterCopy(rows[ds.members[a]], rows[ds.members[b]]) })
 		sets = append(sets, ds)
 	}

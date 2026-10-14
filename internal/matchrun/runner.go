@@ -299,8 +299,9 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 }
 
 // refreshBook looks the book up by its own ASIN or ISBN alone: the record it
-// names is the book (confident, whatever the score), its recording the one the
-// identifier resolved to. The lookup takes the ASIN when there is one, so an ISBN
+// names is the book (confident, whatever the score, unless its recording is
+// another edition by length: lengthFits), its recording the one the identifier
+// resolved to. The lookup takes the ASIN when there is one, so an ISBN
 // beside an ASIN the community doesn't know gets a look of its own. An identifier
 // the community doesn't know is no match: a book that names its record is never
 // offered another by title.

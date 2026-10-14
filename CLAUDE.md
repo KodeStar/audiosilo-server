@@ -979,11 +979,13 @@ admin overrides; see Metadata overrides below).
   changes the book's series, which the review shows as "old -> new". A retired work slug
   is a redirect the client follows, so the names written are the merged record's.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
-  the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`; a refresh holds such a book for review too). A repick only touches an
-  ASIN whose override is `source=community`. A **refresh** run (`mode: "refresh"`,
-  `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each book up by its own
-  identifier alone (the ISBN when the ASIN finds nothing) and takes that record as
-  confident (`identifier_unknown` = no match, never a fuzzy work); it fills or
+  the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`). A
+  repick only touches an ASIN whose override is `source=community`. A **refresh** run
+  (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
+  book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
+  that record as confident, unless its recording is over 10% off the book's length
+  (`lengthFits`: then it is held for review) (`identifier_unknown` = no match, never a
+  fuzzy work); it fills or
   overwrites the details but never writes an identifier (`planFor` drops them, the
   proposal carries none), so `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite (else `ErrScope`, 400); audited
@@ -1159,8 +1161,9 @@ admin overrides; see Metadata overrides below).
   or `metaKey` with a length within 1 min / 2% (`sameLength`), an unknown length matching only
   another unknown one; copies across libraries are deliberate). Each join marks its kind on one
   copy and a group's `reason` is the strongest its joins support (`dupSet.reason`):
-  `id_length_differs` (a shared ASIN/ISBN whose holders' shortest and longest known lengths
-  `sameLength` rejects (`idHolders`, one pass; an unknown length is no evidence either way); outranks even identical audio, as the group holds a different
+  `id_length_differs` (a group a shared ASIN/ISBN joined whose shortest and longest known
+  lengths `sameLength` rejects, the whole group's so an unknown-length book can't bridge two
+  recordings; an unknown length is no evidence either way); outranks even identical audio, as the group holds a different
   recording, and the console then calls no copy the one to keep) > `same_files` > `same_id` >
   `same_book`. A group is hidden while every member is ignored, so a new copy brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
   libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open

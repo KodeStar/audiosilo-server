@@ -418,19 +418,22 @@ describe('library health', () => {
   });
 
   it('words each duplicate reason, and suggests no copy to keep when the lengths differ', async () => {
-    const pair = (title: string, a: string, b: string) => [
-      { ...adminBook({ path: a, title, duration: 21420 }), listeners: 0 },
-      { ...adminBook({ path: b, title, duration: 25980 }), listeners: 1 },
+    const pair = (title: string, a: string, b: string, lengths = [36000, 36000]) => [
+      { ...adminBook({ path: a, title, duration: lengths[0] }), listeners: 0 },
+      { ...adminBook({ path: b, title, duration: lengths[1] }), listeners: 1 },
     ];
+    // The reported pair: one ASIN, 5h 57m against 7h 13m.
+    const burning = [21420, 25980];
     const groups: DuplicateGroup[] = [
-      // The reported pair: one ASIN, 5h 57m against 7h 13m.
       {
         reason: 'id_length_differs',
         ignored: false,
-        books: pair('The Burning', 'The Burning [Dramatized Adaptation]', 'The Burning'),
+        books: pair('The Burning', 'The Burning [Dramatized Adaptation]', 'The Burning', burning),
       },
       { reason: 'same_id', ignored: false, books: pair('Dune', 'Dune', 'Dune (mp3)') },
       { reason: 'same_files', ignored: false, books: pair('Emma', 'Emma', 'Emma (copy)') },
+      // Said to be different books: what to check is moot.
+      { reason: 'id_length_differs', ignored: true, books: pair('Mythos', 'A', 'B', burning) },
     ];
     mockFetch(routes({ 'GET /admin/issues/duplicates': { body: { groups } } }));
     renderApp('/health?issue=duplicate');
@@ -458,6 +461,13 @@ describe('library health', () => {
     const sameFiles = await card('Emma');
     expect(within(sameFiles).getByText('2 copies with identical audio files')).toBeInTheDocument();
     expect(within(sameFiles).getByText('Another copy')).toBeInTheDocument();
+
+    const ignored = await card('Mythos');
+    expect(
+      within(ignored).getByRole('button', { name: 'Suggest as duplicates again' }),
+    ).toBeInTheDocument();
+    expect(within(ignored).queryByText(/may be different recordings/)).not.toBeInTheDocument();
+    expect(within(ignored).queryByText('Worth keeping')).not.toBeInTheDocument();
   });
 
   it('sets one spelling on every book of a series spelled several ways', async () => {

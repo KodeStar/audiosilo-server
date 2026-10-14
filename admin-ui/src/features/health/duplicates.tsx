@@ -89,7 +89,8 @@ function GroupCard({
           <span className="text-[12.5px] text-muted-foreground">
             {t(`health.dup.reason.${g.reason}`, { count: g.books.length })}
           </span>
-          {unsure && (
+          {/* What to check: moot once the admin has said they're different books. */}
+          {unsure && !g.ignored && (
             <StatusText tone="warn" colored className="text-[12.5px]">
               {t('health.dup.lengthDiffers')}
             </StatusText>
