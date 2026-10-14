@@ -24,7 +24,8 @@ import (
 // Metadata overrides: an admin's edits to a book, stored path-keyed in
 // book_overrides / chapter_overrides (no FK to the rebuildable index) and layered
 // onto the books row. A books row always holds the EFFECTIVE values - what the scan
-// found (the `scanned` column), then any enrichment (asin/isbn), then any overrides -
+// found (the `scanned` column, then an Audiobookshelf metadata.json's values:
+// abs_file), then any enrichment (asin/isbn), then any overrides -
 // so every reader (players, search, export) sees edited values with no join.
 // refreshEffective is the one place that layering happens; UpsertBook runs it in the
 // same transaction as the scan's write, which is what makes an override a lock: a
@@ -54,10 +55,13 @@ var OverrideFields = []string{
 // folders metadata.FromPathLayout) and SourceTag otherwise; an override is
 // SourceEdited (typed by an admin) or SourceCommunity (accepted from a
 // community-metadata match); an ASIN/ISBN attached by enrichment reads as
-// SourceCommunity too (it was matched to an external record). "" means no value.
+// SourceCommunity too (it was matched to an external record). A value an
+// Audiobookshelf metadata.json in the book's folder gives is SourceABS (see
+// overABS). "" means no value.
 const (
 	SourceTag       = "tag"
 	SourcePath      = "path"
+	SourceABS       = "abs"
 	SourceEdited    = "edited"
 	SourceCommunity = "community"
 )
@@ -380,6 +384,7 @@ type bookLayers struct {
 	preferPath bool
 	scanned    bookFields
 	enrichment bookFields // asin/isbn only, blanks left out
+	abs        bookFields // what an ABS metadata.json says (absFields), blanks left out
 	overrides  map[string]storedOverride
 	indexedAt  string // the row's
 	// pathRev is the revision of the path baseline scanned was read with
@@ -393,17 +398,20 @@ type bookLayers struct {
 
 func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, error) {
 	l := &bookLayers{enrichment: bookFields{}}
-	var raw, indexedAt, source string
+	var raw, indexedAt, source, absRaw string
 	var row Book
 	if err := q.QueryRowContext(ctx,
 		`SELECT b.library_id, b.rel_path, b.is_folder, b.scanned, b.indexed_at,
-		        b.title, b.author, b.narrator, b.series, b.series_index, b.series_index_end, l.metadata_source
+		        b.title, b.author, b.narrator, b.series, b.series_index, b.series_index_end, l.metadata_source,
+		        b.abs_file
 		   FROM books b JOIN libraries l ON l.id = b.library_id WHERE b.id = ?`, bookID).
 		Scan(&l.libID, &l.path, &l.isFolder, &raw, &indexedAt,
-			&row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex, &row.SeriesIndexEnd, &source); err != nil {
+			&row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex, &row.SeriesIndexEnd, &source,
+			&absRaw); err != nil {
 		return nil, err
 	}
 	l.preferPath = source == MetadataFromPath
+	l.abs = parseABSFile(absRaw)
 	scanned, stamp, rev, err := parseScanned(raw)
 	if err != nil {
 		return nil, err
@@ -437,7 +445,8 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 }
 
 // resolve layers the fields - what the scan found (the folder layout first in a
-// library that prefers it, see scannedFields), then enrichment, then the overrides -
+// library that prefers it, then an ABS metadata.json; see scannedFields), then
+// enrichment, then the overrides -
 // each with where its value came from. It is the single statement of that
 // precedence: refreshEffective writes its values to the books row and the book page
 // shows it as provenance, so the two can never disagree.
@@ -448,6 +457,8 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 		fv := FieldValue{Value: scanned[field], Scanned: scanned[field]}
 		switch fv.Value {
 		case "":
+		case l.abs[field]:
+			fv.Source = SourceABS
 		case baseline[field], layout[field]:
 			fv.Source = SourcePath
 		default:
@@ -477,13 +488,15 @@ func (l *bookLayers) resolve() map[string]FieldValue {
 // series, by any case), so a tag's position stays beside the tag's series even
 // when it equals the leaf's number ("Brandon Sanderson/01 - The Way of Kings"
 // tagged The Stormlight Archive #1), and goes with a series the layout replaced
-// or dropped.
+// or dropped. An Audiobookshelf metadata.json's values then go over all of it
+// (overABS).
 //
 // A series with no position takes the one its title gives
 // (titlePosition), so the untagged copies of a numbered series still sit in it
 // by number.
 func (l *bookLayers) scannedFields() (scanned, baseline, layout bookFields) {
 	scanned, baseline, layout = l.readScanned()
+	scanned = l.overABS(scanned)
 	scanned, baseline = titlePosition(scanned, baseline, layout)
 	return scanned, baseline, layout
 }

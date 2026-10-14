@@ -107,7 +107,7 @@ internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go
 internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
-internal/metadata/    dhowden/tag + ffprobe extraction (a `series-part` tag "1-3" is a range: seriesrange.go, ParseSeriesRange, the one grammar of a range position, and ParseSeriesPosition, a number or a range; incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
+internal/metadata/    dhowden/tag + ffprobe extraction (a `series-part` tag "1-3" is a range: seriesrange.go, ParseSeriesRange, the one grammar of a range position, and ParseSeriesPosition, a number or a range; incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); absfile.go: ParseABSFile/ReadABSFile (an Audiobookshelf metadata.json, see Metadata overrides); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below)
@@ -240,7 +240,10 @@ SQLite can't add that CHECK), `users.can_add_members` (the admin's per-person sw
 `users.display_name` (the name an owner typed for a member) and `tokens.created_on_token_id` (-> tokens
 SET NULL: which of the owner's devices a member's sign-in was made on; information only). See
 "Household members" below. `0045` adds `books.series_index_end` and `book_more_series.position_end`
-(a range's end, 0 for none; see Series ranges below; the list's key index now covers it).
+(a range's end, 0 for none; see Series ranges below; the list's key index now covers it). `0046` adds
+`books.abs_sig` / `abs_indexed_at` / `abs_file` (an Audiobookshelf `metadata.json` in a folder book's
+folder: its signature, the index it was read for, what it says; derived from the file; see Audiobookshelf
+metadata.json below).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -250,8 +253,8 @@ stays in `shared_with` and may be sent back; capabilities `queue`, `collections`
 
 Book identity carries `author`/`series`/`title` plus optional `asin`/`isbn` so a
 future metadata site can attach enrichment without reshaping the schema. The
-`books` metadata columns are the effective values (scan, then enrichment, then
-admin overrides; see Metadata overrides below).
+`books` metadata columns are the effective values (scan, then an Audiobookshelf
+`metadata.json`, then enrichment, then admin overrides; see Metadata overrides below).
 
 ## Conventions
 
@@ -819,7 +822,8 @@ admin overrides; see Metadata overrides below).
   edits never touch files. A `books` row holds the **effective** values - what the scan
   found (kept in `books.scanned`, JSON field -> value, stamped with the upsert's
   `indexed_at`: a snapshot whose stamp isn't the row's was left by an older server, so
-  `loadLayers` reads the scan's values off the row instead), then `book_enrichment`
+  `loadLayers` reads the scan's values off the row instead), then an Audiobookshelf
+  `metadata.json`'s values (`books.abs_file`, below), then `book_enrichment`
   (asin/isbn), then `book_overrides`. `bookLayers.resolve` is the ONE statement of that
   precedence (and of each field's source); `refreshEffective` writes its values to the
   row (plus chapter titles from `chapters.scanned_title` + `chapter_overrides`, and FTS)
@@ -832,9 +836,44 @@ admin overrides; see Metadata overrides below).
   `published` on every book and `description` only on `GET /libraries/{id}/item` (api's
   `itemBook` adds it; `catalog.Book` keeps it `json:"-"` so list, search and recent pages
   stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Validation: `normalizeOverride`; sources: a scanned value is `path` when
-  it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
+  it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; one an ABS
+  file gives is `abs`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
-  override + `refreshEffective` (restores the scanned value; no reindex, no disk).
+  override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
+  reindex, no disk).
+  **Audiobookshelf metadata.json** (`metadata/absfile.go`, `catalog/absfile.go`, migration `0046`):
+  ABS keeps a `metadata.json` in a book's folder ("Store metadata with item"), its record of the book
+  with its matches and its users' corrections, often holding the ASIN/ISBN the tags don't. A folder
+  book's file (a regular file named exactly that, not ignored: an ignore rule `metadata.json` turns it
+  off for a library; never for a file book, nor a loose file at the root) is a layer OVER the scanned
+  values, tags and path alike, path-first libraries included (ABS's own default ranks it above the
+  tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
+  lenient (a wrongly typed value costs that value; <= 4 MiB): title (no subtitle), authors and
+  narrators joined with ", " (strings or `{name}`), series `"Name #seq"` (the first is the main series
+  with its position, the rest `more_series`; a series without a position keeps the tag's only while
+  it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
+  HTML description as plain text, asin, isbn; genres, tags, publisher, language and chapters are not
+  read. An empty value says nothing (never clears a tag's). `absFields` stores each as an edit of its
+  field would (`CleanOverride`; a refused value left out), so an ABS ASIN makes a book matched (Health,
+  `/meta`, the community chapter check, a refresh run). `books.abs_file` holds those fields (JSON,
+  `''` for none), `abs_sig` the file's signature (`metadata.ABSSignature`: size + mtime ns, `''` for
+  none) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
+  first so `Signatures` reads no JSON; `UpsertBook` writes all three (`absColumns`; nothing for a
+  file book). Discovery records each folder's file signature from the walk itself (`audioDirs`'
+  `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`), and `enrich` reads
+  the file only when there is one (`Scanner.readABS`). An unchanged book whose signature differs,
+  or that has a file not read for this index (`abs_indexed_at` NULL, or another index's: an older
+  server re-indexed it), is read without a re-index: `Signature.ABSSig`/`ABSUnchecked`,
+  `Catalog.SetABSFiles` in batches of 250 beside the path backfill (`eachPathBatch`, shared with
+  `SetPathReading`); a book with no file and none before is left unwritten, so the first scan
+  after the upgrade touches only books that have one. `setABSFile` re-resolves a book unless the
+  reading equals the one recorded for this very index (an older server's re-index resolved the
+  row without it). `metadata.ReadABSFile` reads a regular file only, never through a link (one
+  swapped in after the walk included: `os.SameFile` on the opened file). A file that can't be used
+  (not JSON, too large, not a regular file: `metadata.ErrABSFileInvalid`) keeps its signature (read
+  again once it changes); one that can't be read right now (gone since the walk, a flaky mount) is
+  left as it was by the backfill and recorded as none by a re-index, so the next scan reads it
+  again (`readABS`' `read`); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
   **Series ranges** (an omnibus of books 1-3): the `series_index` field may hold a range,
   canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
   end <= 100000, a span of at most `metadata.MaxSeriesSpan` = 100, since the slots a range covers
@@ -1719,7 +1758,7 @@ admin overrides; see Metadata overrides below).
   /admin/libraries/{id}/book/community-chapters?path=` (check now, in the
   background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
   choice made); admin rows carry `chapters_source` + `chapters_check`. Note the scan
-  reads no ASIN from tags: a book is checked once matched.
+  reads no ASIN from tags (only from an Audiobookshelf metadata.json): a book is checked once matched.
 - ffprobe is optional; code paths must degrade gracefully when it is absent
   (path-derived metadata still works; codec is left unknown → `direct_playable`
   defaults to true). ffmpeg is likewise optional (transcoding off without it).

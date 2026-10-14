@@ -256,14 +256,24 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	splitBackfill := map[string]string{}
 	releasedBackfill := map[string]string{}
 	pathBackfill := map[string]*metadata.Metadata{}
-	// The path backfill is written as it goes: a large one (most of a library
-	// laid out Author/Title) can take a while, and a scan stopped part way keeps
-	// what it read (written past the Stop: at most pathFlushEvery books).
-	flushPaths := func() {
+	// Folder books whose metadata.json is new, changed, gone or never read, while
+	// their audio is unchanged: read here and recorded without a re-index
+	// (SetABSFiles), flushed like the path readings.
+	absBackfill := map[string]catalog.ABSReading{}
+	// The path and ABS backfills are written as they go: a large one (most of a
+	// library laid out Author/Title, or every folder book of a library ABS has
+	// managed, read once after an upgrade) can take a while, and a scan stopped
+	// part way keeps what it read (written past the Stop: at most pathFlushEvery
+	// books).
+	flushBackfills := func() {
 		if err := s.cat.SetPathReading(context.WithoutCancel(ctx), lib.ID, pathBackfill); err != nil {
 			s.log.Warn("record path readings failed", "library", lib.Name, "err", err)
 		}
 		clear(pathBackfill)
+		if err := s.cat.SetABSFiles(context.WithoutCancel(ctx), lib.ID, absBackfill); err != nil {
+			s.log.Warn("record Audiobookshelf metadata failed", "library", lib.Name, "err", err)
+		}
+		clear(absBackfill)
 	}
 	lastLog := time.Now()
 	report := func(done int) {
@@ -274,7 +284,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	}
 	for i, b := range books {
 		if err := ctx.Err(); err != nil {
-			flushPaths()
+			flushBackfills()
 			return res, err
 		}
 		report(i)
@@ -332,8 +342,16 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 						}
 					}
 				}
-				if len(pathBackfill) >= pathFlushEvery {
-					flushPaths()
+				// A file new, changed or gone since the last read, or one not read for
+				// this index (none to read leaves an unread row as it is: nothing to add).
+				// One that can't be read right now keeps the row's reading for the next scan.
+				if b.IsFolder && (old.ABSSig != b.ABS.Sig || (old.ABSUnchecked && b.ABS.Sig != "")) {
+					if f, read := s.readABS(lib, b.RelPath, b.ABS.Sig); read {
+						absBackfill[b.RelPath] = catalog.ABSReading{Sig: b.ABS.Sig, File: f}
+					}
+				}
+				if len(pathBackfill)+len(absBackfill) >= pathFlushEvery {
+					flushBackfills()
 				}
 				continue
 			}
@@ -388,7 +406,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	if err := s.cat.SetReleased(ctx, lib.ID, releasedBackfill); err != nil {
 		s.log.Warn("record release dates failed", "library", lib.Name, "err", err)
 	}
-	flushPaths()
+	flushBackfills()
 
 	// Only prune when discovery saw the whole tree. If a subtree was unreadable
 	// (partialDiscovery), its books are missing from `keep` through a mount/permission
@@ -509,7 +527,8 @@ func readNames(relPath string, isFolder bool, md *metadata.Metadata) *metadata.M
 }
 
 // enrich fills metadata for a book from its primary file (tags + ffprobe) and
-// folder context (path heuristics, sibling cover art).
+// folder context (path heuristics, sibling cover art, an Audiobookshelf
+// metadata.json in a folder book's folder, when the walk found one: b.ABS.Sig).
 func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	primary := primaryPath(b)
 	abs := absOf(lib, primary)
@@ -524,6 +543,13 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 		b.Narrator = md.Narrator
 		b.Released = md.Released
 		b.Codec = md.Codec
+	}
+
+	if b.IsFolder {
+		var read bool
+		if b.ABS.File, read = s.readABS(lib, b.RelPath, b.ABS.Sig); !read {
+			b.ABS.Sig = "" // recorded as none for now, so the next scan reads it again
+		}
 	}
 
 	// Move-detection fingerprint (reused content_hash column); skip if already
@@ -772,11 +798,17 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 	if resolved, rerr := filepath.EvalSymlinks(lib.Root); rerr == nil {
 		walkRoot = resolved
 	}
-	dirs, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl)
+	dirs, absFiles, hadErrors, err := audioDirs(ctx, lib, walkRoot, "", ignore, log, rl)
 	if err != nil {
 		return nil, hadErrors, err
 	}
-	return booksOf(lib, dirs, overrides), hadErrors, nil
+	books = booksOf(lib, dirs, overrides)
+	for _, b := range books {
+		if b.IsFolder {
+			b.ABS.Sig = absFiles[b.RelPath]
+		}
+	}
+	return books, hadErrors, nil
 }
 
 // booksOf turns the folders that directly hold audio (dirs: library-relative, with
@@ -813,9 +845,11 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // each with its audio files in name order: the files audioEntries would list, read
 // in the same walk rather than again. Hidden and ignored entries are skipped as
 // discovery does; see discoverAuto for hadErrors and rl. walkFrom itself is never
-// skipped, even when its own name begins with a dot.
-func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog) (dirs map[string][]audioFile, hadErrors bool, err error) {
-	dirs = map[string][]audioFile{}
+// skipped, even when its own name begins with a dot. absFiles is the signature
+// (metadata.ABSSignature) of each folder's Audiobookshelf metadata.json, read in
+// the same walk (a regular file, not ignored), by library-relative folder.
+func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog) (dirs map[string][]audioFile, absFiles map[string]string, hadErrors bool, err error) {
+	dirs, absFiles = map[string][]audioFile{}, map[string]string{}
 	err = filepath.WalkDir(walkFrom, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -843,6 +877,12 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			}
 			return nil
 		}
+		if isABSEntry(d, rel, ignore) {
+			if info, ierr := d.Info(); ierr == nil {
+				absFiles[dirOf(rel)] = metadata.ABSSignature(info)
+			}
+			return nil
+		}
 		if !isAudioEntry(d, rel, ignore) {
 			return nil
 		}
@@ -850,7 +890,46 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 		dirs[dir] = append(dirs[dir], audioFile{abs: absOf(lib, rel), de: d})
 		return nil
 	})
-	return dirs, hadErrors, err
+	return dirs, absFiles, hadErrors, err
+}
+
+// isABSEntry reports whether a directory entry (at library-relative rel) is an
+// Audiobookshelf metadata.json the scan reads: a regular file of that name, not
+// ignored (so an ignore rule naming it turns the file off for a library).
+func isABSEntry(de fs.DirEntry, rel string, ignore *Ignore) bool {
+	return de.Name() == metadata.ABSFileName && de.Type().IsRegular() &&
+		(ignore.Empty() || !ignore.Match(rel, false))
+}
+
+// absSigAt is the signature of the Audiobookshelf metadata.json the scan reads
+// (isABSEntry) in the folder at library-relative rel, "" for none: what the walk
+// records for a folder (audioDirs), for a book indexed without one (IndexPath).
+func absSigAt(lib catalog.Library, rel string, ignore *Ignore) string {
+	info, err := os.Lstat(filepath.Join(absOf(lib, rel), metadata.ABSFileName))
+	if err != nil || !isABSEntry(fs.FileInfoToDirEntry(info), path.Join(rel, metadata.ABSFileName), ignore) {
+		return ""
+	}
+	return metadata.ABSSignature(info)
+}
+
+// readABS reads the Audiobookshelf metadata.json in the folder at
+// library-relative rel, whose signature is sig ("" for none: nothing to read).
+// The file is nil when there is none or it can't be used (not JSON, too large:
+// metadata.ErrABSFileInvalid, logged), and that reading is recorded with its
+// signature, so it isn't read again until it changes. read is false when it
+// couldn't be read right now (gone since the walk, a flaky mount; logged): the
+// caller records nothing for it, so the next scan reads it again rather than
+// taking the book's ASIN and the rest away until ABS next rewrites the file.
+func (s *Scanner) readABS(lib catalog.Library, rel, sig string) (f *metadata.ABSFile, read bool) {
+	if sig == "" {
+		return nil, true
+	}
+	f, err := metadata.ReadABSFile(filepath.Join(absOf(lib, rel), metadata.ABSFileName))
+	if err != nil {
+		s.log.Warn("unreadable Audiobookshelf metadata.json", "library", lib.Name, "path", path.Join(rel, metadata.ABSFileName), "err", err)
+		return nil, errors.Is(err, metadata.ErrABSFileInvalid)
+	}
+	return f, true
 }
 
 // isAudioEntry reports whether a directory entry (at library-relative rel) is an
@@ -1073,7 +1152,7 @@ func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relP
 		} else if len(own) == 0 || !isDiscFolder(path.Base(dirRel)) {
 			return false
 		}
-		dirs, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, s.log, nil)
+		dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, p), p, ignore, s.log, nil)
 		if err != nil {
 			walkErr = err
 			return false
@@ -1102,6 +1181,10 @@ func (s *Scanner) IndexPathWithin(ctx context.Context, lib catalog.Library, relP
 		return nil, err
 	}
 
+	if book.IsFolder {
+		// No walk found it, so look for its metadata.json here.
+		book.ABS.Sig = absSigAt(lib, book.RelPath, ignore)
+	}
 	s.enrich(lib, book)
 	// UpsertBook layers any path-keyed enrichment and metadata overrides onto the
 	// scanned values in the same transaction.
@@ -1121,7 +1204,7 @@ func (s *Scanner) splitParentOf(ctx context.Context, lib catalog.Library, b *cat
 	if !b.IsFolder || parent == "" || !isDiscFolder(path.Base(b.RelPath)) {
 		return "", nil
 	}
-	dirs, _, err := audioDirs(ctx, lib, absOf(lib, parent), parent, ignore, s.log, nil)
+	dirs, _, _, err := audioDirs(ctx, lib, absOf(lib, parent), parent, ignore, s.log, nil)
 	if err != nil {
 		return "", err
 	}

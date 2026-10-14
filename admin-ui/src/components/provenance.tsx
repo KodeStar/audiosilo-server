@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { FolderOpen, Globe, Lock, Tag, type LucideIcon } from 'lucide-react';
+import { FileBraces, FolderOpen, Globe, Lock, Tag, type LucideIcon } from 'lucide-react';
 import type { FieldSource } from '@/api/types';
 import { cn } from '@/lib/utils';
 
@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 const SOURCES: Record<Exclude<FieldSource, ''>, { icon: LucideIcon; className: string }> = {
   tag: { icon: Tag, className: 'bg-prov-tag-soft text-prov-tag' },
   path: { icon: FolderOpen, className: 'bg-prov-path-soft text-prov-path' },
+  abs: { icon: FileBraces, className: 'bg-prov-abs-soft text-prov-abs' },
   edited: { icon: Lock, className: 'bg-prov-edit-soft text-prov-edit' },
   community: { icon: Globe, className: 'bg-prov-community-soft text-prov-community' },
 };
