@@ -417,6 +417,49 @@ describe('library health', () => {
     );
   });
 
+  it('words each duplicate reason, and suggests no copy to keep when the lengths differ', async () => {
+    const pair = (title: string, a: string, b: string) => [
+      { ...adminBook({ path: a, title, duration: 21420 }), listeners: 0 },
+      { ...adminBook({ path: b, title, duration: 25980 }), listeners: 1 },
+    ];
+    const groups: DuplicateGroup[] = [
+      // The reported pair: one ASIN, 5h 57m against 7h 13m.
+      {
+        reason: 'id_length_differs',
+        ignored: false,
+        books: pair('The Burning', 'The Burning [Dramatized Adaptation]', 'The Burning'),
+      },
+      { reason: 'same_id', ignored: false, books: pair('Dune', 'Dune', 'Dune (mp3)') },
+      { reason: 'same_files', ignored: false, books: pair('Emma', 'Emma', 'Emma (copy)') },
+    ];
+    mockFetch(routes({ 'GET /admin/issues/duplicates': { body: { groups } } }));
+    renderApp('/health?issue=duplicate');
+    const card = async (title: string) =>
+      (await screen.findByRole('heading', { name: title })).closest('section')!;
+
+    const differs = await card('The Burning');
+    expect(
+      within(differs).getByText('2 books sharing an ASIN or ISBN, but of different lengths'),
+    ).toBeInTheDocument();
+    expect(within(differs).getByText(/may be different recordings/)).toBeInTheDocument();
+    expect(within(differs).queryByText('Worth keeping')).not.toBeInTheDocument();
+    expect(within(differs).queryByText('Another copy')).not.toBeInTheDocument();
+    expect(
+      within(differs).getByRole('button', { name: "They're different books" }),
+    ).toBeInTheDocument();
+
+    const sameId = await card('Dune');
+    expect(
+      within(sameId).getByText('2 copies sharing an ASIN or ISBN, of the same length'),
+    ).toBeInTheDocument();
+    expect(within(sameId).getByText('Worth keeping')).toBeInTheDocument();
+    expect(within(sameId).queryByText(/may be different recordings/)).not.toBeInTheDocument();
+
+    const sameFiles = await card('Emma');
+    expect(within(sameFiles).getByText('2 copies with identical audio files')).toBeInTheDocument();
+    expect(within(sameFiles).getByText('Another copy')).toBeInTheDocument();
+  });
+
   it('sets one spelling on every book of a series spelled several ways', async () => {
     const group: SeriesSpellingGroup = {
       library_id: 1,

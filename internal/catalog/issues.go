@@ -195,11 +195,11 @@ func (c *Catalog) IssueCounts(ctx context.Context, kinds []string) ([]IssueCount
 }
 
 // DuplicateGroup is a set of books in one library that look like the same book.
-// Books[0] is the copy worth keeping (format, single file, bitrate, listeners).
+// Books[0] is the copy worth keeping (format, single file, bitrate, listeners),
+// except under DupIDLengthDiffers, where the order says nothing about which to keep.
 type DuplicateGroup struct {
-	// Reason is "same_files" when the copies' audio is byte-identical (fingerprint
-	// and size), else "same_book" (identifiers, or author/title/narrator with a
-	// matching length).
+	// Reason is the strongest claim the group's joins support (dupSet.reason): one
+	// of DupIDLengthDiffers, DupSameFiles, DupSameID or DupSameBook.
 	Reason  string            `json:"reason"`
 	Ignored bool              `json:"ignored"`
 	Books   []DuplicateMember `json:"books"`
@@ -232,11 +232,54 @@ func (r *dupRow) quality() Book {
 		ContentHash: r.hash, Format: r.format, Duration: r.duration, Size: r.size}
 }
 
+// The reasons a duplicate group gives (DuplicateGroup.Reason), from the joins
+// that formed it (dupJoin).
+const (
+	// DupSameFiles: byte-identical audio (fingerprint and size).
+	DupSameFiles = "same_files"
+	// DupSameID: a shared ASIN or ISBN, of a matching length (sameLength).
+	DupSameID = "same_id"
+	// DupIDLengthDiffers: a shared ASIN or ISBN of lengths that don't match: not
+	// plain copies (one may be matched to the wrong recording, or is incomplete).
+	DupIDLengthDiffers = "id_length_differs"
+	// DupSameBook: author/title/narrator (metaKey) of a matching length.
+	DupSameBook = "same_book"
+)
+
+// dupJoin is a bit set of the kinds of join that put a copy in its group. A join
+// marks both its ends, so a group's joins are its members' bits ORed together.
+type dupJoin uint8
+
+const (
+	joinFiles     dupJoin = 1 << iota // identical audio: hash and size
+	joinID                            // shared ASIN/ISBN, matching length
+	joinIDDiffers                     // shared ASIN/ISBN, lengths that don't match
+	joinMeta                          // metaKey, matching length
+)
+
 // dupSet is one group of copies: indexes into the rows, best copy first.
 type dupSet struct {
-	members   []int
-	sameFiles bool
-	ignored   bool // every member ignored as a duplicate
+	members []int
+	joins   dupJoin
+	ignored bool // every member ignored as a duplicate
+}
+
+// reason is the group's DuplicateGroup.Reason. Any shared identifier of a
+// different length wins, even over identical audio elsewhere in the group: the
+// group then holds a different recording, and naming it a copy would invite
+// deleting it. Then identical audio, a shared identifier, and author/title/narrator,
+// strongest evidence first.
+func (s dupSet) reason() string {
+	switch {
+	case s.joins&joinIDDiffers != 0:
+		return DupIDLengthDiffers
+	case s.joins&joinFiles != 0:
+		return DupSameFiles
+	case s.joins&joinID != 0:
+		return DupSameID
+	default:
+		return DupSameBook
+	}
 }
 
 // sameLength reports whether two durations could be one recording (within a
@@ -254,7 +297,9 @@ func sameLength(a, b float64) bool {
 // or all with libraryID 0): books sharing an identity signal (identitySignals),
 // except that audio must also match in size (an identical first part is not a
 // copy) and author/title/narrator only joins copies of a matching length (an
-// abridged edition is not a copy). Copies in different libraries are deliberate,
+// abridged edition is not a copy). A shared ASIN or ISBN joins whatever the
+// lengths, each pair of its holders compared so the group's reason can say when
+// they differ (dupSet.reason). Copies in different libraries are deliberate,
 // and players already show one, so they never group. The discs of a book split
 // across disc folders look alike (one title, similar lengths) but are listed under
 // their own issue, whose fix joins them, so they never group either.
@@ -275,35 +320,51 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 		return nil, nil, err
 	}
 	set := newDisjointSet(len(rows))
-	viaFiles := make([]bool, len(rows)) // joined to another copy by identical audio
-	exact := map[string]int{}
-	byMeta := map[string][]int{}
+	joins := make([]dupJoin, len(rows))
+	join := func(a, b int, kind dupJoin) {
+		set.union(a, b)
+		joins[a] |= kind
+		joins[b] |= kind
+	}
+	files := map[string]int{}    // the first book with this audio
+	byID := map[string][]int{}   // every book with this ASIN/ISBN
+	byMeta := map[string][]int{} // every book with this author/title/narrator
 	for i := range rows {
 		r := &rows[i]
 		lib := strconv.FormatInt(r.libraryID, 10) + ":"
 		for _, sig := range identitySignals(r.quality()) {
-			files := strings.HasPrefix(sig, "h:")
 			switch {
 			case strings.HasPrefix(sig, "m:"):
 				byMeta[lib+sig] = append(byMeta[lib+sig], i)
-				continue
-			case files:
-				sig += ":" + strconv.FormatInt(r.size, 10)
-			}
-			if j, ok := exact[lib+sig]; ok {
-				set.union(i, j)
-				viaFiles[i], viaFiles[j] = viaFiles[i] || files, viaFiles[j] || files
-			} else {
-				exact[lib+sig] = i
+			case strings.HasPrefix(sig, "h:"):
+				key := lib + sig + ":" + strconv.FormatInt(r.size, 10)
+				if j, ok := files[key]; ok {
+					join(i, j, joinFiles)
+				} else {
+					files[key] = i
+				}
+			default: // "a:" or "i:"
+				byID[lib+sig] = append(byID[lib+sig], i)
 			}
 		}
 		r.author, r.narrator, r.asin, r.isbn, r.hash = "", "", "", "", ""
+	}
+	for _, idx := range byID {
+		for x := range idx {
+			for _, y := range idx[x+1:] {
+				kind := joinIDDiffers
+				if sameLength(rows[idx[x]].duration, rows[y].duration) {
+					kind = joinID
+				}
+				join(idx[x], y, kind)
+			}
+		}
 	}
 	for _, idx := range byMeta {
 		for x := range idx {
 			for _, y := range idx[x+1:] {
 				if sameLength(rows[idx[x]].duration, rows[y].duration) {
-					set.union(idx[x], y)
+					join(idx[x], y, joinMeta)
 				}
 			}
 		}
@@ -315,7 +376,7 @@ func (c *Catalog) duplicateSets(ctx context.Context, libraryID int64) ([]dupRow,
 		}
 		ds := dupSet{members: members, ignored: true}
 		for _, i := range members {
-			ds.sameFiles = ds.sameFiles || viaFiles[i]
+			ds.joins |= joins[i]
 			ds.ignored = ds.ignored && rows[i].ignored
 		}
 		sort.SliceStable(ds.members, func(a, b int) bool { return betterCopy(rows[ds.members[a]], rows[ds.members[b]]) })
@@ -366,10 +427,7 @@ func (c *Catalog) DuplicateGroups(ctx context.Context, libraryID int64, ignored 
 	}
 	out := make([]DuplicateGroup, 0, len(sets))
 	for _, s := range sets {
-		g := DuplicateGroup{Reason: "same_book", Ignored: s.ignored}
-		if s.sameFiles {
-			g.Reason = "same_files"
-		}
+		g := DuplicateGroup{Reason: s.reason(), Ignored: s.ignored}
 		for _, i := range s.members {
 			if b, ok := books[rows[i].id]; ok {
 				g.Books = append(g.Books, DuplicateMember{AdminBook: b, Listeners: rows[i].listeners})
