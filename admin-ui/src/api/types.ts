@@ -1517,7 +1517,7 @@ export const OVERRIDE_FIELDS = [
 export type OverrideField = (typeof OVERRIDE_FIELDS)[number];
 
 /** Where a field's value came from (catalog.Source*), in the legend's order. */
-export const FIELD_SOURCES = ['tag', 'path', 'edited', 'community'] as const;
+export const FIELD_SOURCES = ['tag', 'path', 'abs', 'edited', 'community'] as const;
 /** A field's source; "" = no value. */
 export type FieldSource = (typeof FIELD_SOURCES)[number] | '';
 

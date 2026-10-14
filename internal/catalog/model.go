@@ -95,8 +95,9 @@ type Book struct {
 	MTime       int64       `json:"-"`
 	AddedAt     string      `json:"added_at,omitempty"` // RFC3339; filesystem birth time (scanner)
 	ContentHash string      `json:"-"`
-	// Published (YYYY[-MM[-DD]]) and Description come only from an edit or a
-	// community match today. Published rides on every player book; Description can
+	// Published (YYYY[-MM[-DD]]) and Description come only from an Audiobookshelf
+	// metadata.json, an edit or a community match today (never a tag: a tag's date
+	// is Released). Published rides on every player book; Description can
 	// be long, so only GetBook (the single-book read behind the item endpoint)
 	// loads it, leaving list, search and recent pages small.
 	Published   string `json:"published,omitempty"`
@@ -123,13 +124,17 @@ type Book struct {
 	// nil = not checked). SplitParent is the folder holding it when it is one disc of
 	// a book split across disc folders ("" = not; see books.split_parent). Set by the
 	// scanner; read by the Health page.
-	ScanError       string             `json:"-"`
-	ScanErrorFile   string             `json:"-"`
-	ScanErrorDetail string             `json:"-"`
-	SuspectParts    *int               `json:"-"`
-	SplitParent     string             `json:"-"`
-	Files           []BookFile         `json:"files,omitempty"`
-	Chapters        []metadata.Chapter `json:"chapters,omitempty"`
+	ScanError       string `json:"-"`
+	ScanErrorFile   string `json:"-"`
+	ScanErrorDetail string `json:"-"`
+	SuspectParts    *int   `json:"-"`
+	SplitParent     string `json:"-"`
+	// ABS is the Audiobookshelf metadata.json in a folder book's folder: its
+	// signature from the scan's walk, then what it says from enrich. Set by the
+	// scanner for folder books only; UpsertBook records it (books.abs_*).
+	ABS      ABSReading         `json:"-"`
+	Files    []BookFile         `json:"files,omitempty"`
+	Chapters []metadata.Chapter `json:"chapters,omitempty"`
 	// ChaptersSource is "community" when Chapters are a community chapter list
 	// fitted onto the audio rather than the files' own (books.chapters_source);
 	// omitted otherwise. Set by GetBook (single-book reads).

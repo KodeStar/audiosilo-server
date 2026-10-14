@@ -62,6 +62,8 @@
   --prov-edit-soft: #fce7f1;
   --prov-community: #6a3fd4;
   --prov-community-soft: #efe9fd;
+  --prov-abs: #95560a;
+  --prov-abs-soft: #fbf0dc;
 
   --chart-1: #db2777;
   --chart-2: #3b5bdb;
@@ -163,6 +165,8 @@
   --prov-edit-soft: #3a1530;
   --prov-community: #b59cff;
   --prov-community-soft: #251b45;
+  --prov-abs: #e8b56a;
+  --prov-abs-soft: #33240c;
   --chart-1: #e4458b;
   --chart-2: #6680ec;
   --chart-3: #17a093;
@@ -242,6 +246,8 @@
   --color-prov-edit-soft: var(--prov-edit-soft);
   --color-prov-community: var(--prov-community);
   --color-prov-community-soft: var(--prov-community-soft);
+  --color-prov-abs: var(--prov-abs);
+  --color-prov-abs-soft: var(--prov-abs-soft);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);

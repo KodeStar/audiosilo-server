@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -60,24 +61,34 @@ const pathReadingBatch = 250
 // book's path and tags gives (PathRead); nil takes it from the snapshot itself
 // (PathFromSnapshot). It commits every pathReadingBatch books.
 func (c *Catalog) SetPathReading(ctx context.Context, libraryID int64, readings map[string]*metadata.Metadata) error {
-	paths := make([]string, 0, len(readings))
-	for p := range readings {
-		paths = append(paths, p)
-	}
-	for len(paths) > 0 {
-		batch := paths[:min(pathReadingBatch, len(paths))]
-		paths = paths[len(batch):]
-		if err := c.db.WithTx(ctx, "SetPathReading", func(tx *sql.Tx) error {
+	return c.eachPathBatch(ctx, "SetPathReading", slices.Collect(maps.Keys(readings)),
+		func(tx *sql.Tx, relPath string) (bool, error) {
+			return true, setPathReading(ctx, tx, libraryID, relPath, readings[relPath])
+		})
+}
+
+// eachPathBatch runs fn on each of paths, pathReadingBatch to a transaction so a
+// large backfill never holds the writer for long, and announces a change
+// (c.changed) after each batch in which fn reported one.
+func (c *Catalog) eachPathBatch(ctx context.Context, name string, paths []string,
+	fn func(tx *sql.Tx, relPath string) (changed bool, err error)) error {
+	for batch := range slices.Chunk(paths, pathReadingBatch) {
+		changed := false
+		if err := c.db.WithTx(ctx, name, func(tx *sql.Tx) error {
 			for _, relPath := range batch {
-				if err := setPathReading(ctx, tx, libraryID, relPath, readings[relPath]); err != nil {
+				ch, err := fn(tx, relPath)
+				if err != nil {
 					return err
 				}
+				changed = changed || ch
 			}
 			return nil
 		}); err != nil {
 			return err
 		}
-		c.changed()
+		if changed {
+			c.changed()
+		}
 	}
 	return nil
 }

@@ -38,6 +38,10 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	absSig, absReadAt, absFile, err := absColumns(b, indexedAt)
+	if err != nil {
+		return 0, err
+	}
 	// has_cover holds whenever there is a sibling cover; the scanner reports
 	// embedded art. Unknown (nil) stays NULL until a scan checks.
 	hasCover := b.HasCover
@@ -53,8 +57,9 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
 			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
 			     released, released_checked,
-			     scanned_chapters, chapters_hash, chapters_source, chapters_fit)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,'','')
+			     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
+			     abs_sig, abs_indexed_at, abs_file)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,'','',?,?,?)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -71,7 +76,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     -- The rows below are the scan's: refreshEffective puts a community
 			     -- list back over them when it should.
 			     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
-			     chapters_source='', chapters_fit=''
+			     chapters_source='', chapters_fit='',
+			     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -80,7 +86,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.Format, b.Codec, b.Size, b.MTime, b.ContentHash, indexedAt, b.AddedAt,
 			b.Published, b.Description, hasCover, scanned,
 			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
-			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters))).Scan(&id); err != nil {
+			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
+			absSig, absReadAt, absFile).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
@@ -243,6 +250,12 @@ type Signature struct {
 	// SplitParent is books.split_parent as stored, so a scan records a change to it
 	// (a disc folder's sibling added or gone) without re-indexing the book.
 	SplitParent string
+	// ABSSig is the signature of the Audiobookshelf metadata.json last read for a
+	// folder book ("" for none), and ABSUnchecked says it needs reading anyway
+	// (absUncheckedExpr), so a scan re-reads a new, changed or gone file without
+	// re-indexing the book (SetABSFiles).
+	ABSSig       string
+	ABSUnchecked bool
 }
 
 // Signatures returns the stored mtime/size for every book in a library, keyed
@@ -251,7 +264,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
-		        released_checked = 0, `+pathCheckExpr+`
+		        released_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -264,7 +277,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked,
-			&sig.PathCheck); err != nil {
+			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked); err != nil {
 			return nil, err
 		}
 		out[rel] = sig

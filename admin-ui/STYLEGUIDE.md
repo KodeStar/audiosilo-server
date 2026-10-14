@@ -124,6 +124,8 @@ Sub bar (48px, per destination):      Title  [segmented control of sections]    
   --prov-edit-soft: #fce7f1;
   --prov-community: #6a3fd4;
   --prov-community-soft: #efe9fd;
+  --prov-abs: #95560a;
+  --prov-abs-soft: #fbf0dc;
 
   /* charts: categorical, fixed order, CVD-validated (light surface) */
   --chart-1: #db2777;
@@ -210,6 +212,8 @@ Sub bar (48px, per destination):      Title  [segmented control of sections]    
   --prov-edit-soft: #3a1530;
   --prov-community: #b59cff;
   --prov-community-soft: #251b45;
+  --prov-abs: #e8b56a;
+  --prov-abs-soft: #33240c;
   --chart-1: #e4458b;
   --chart-2: #6680ec;
   --chart-3: #17a093;
@@ -496,10 +500,11 @@ before → Edited).
 
 ### Provenance marker + Field row _custom, signature_
 
-`[icon] File tag | Path | Edited | Community` in a 20px soft pill (`--prov-*` tokens); `Unsaved` is a
+`[icon] File tag | Path | Audiobookshelf | Edited | Community` in a 20px soft pill (`--prov-*` tokens); `Unsaved` is a
 dashed pink outline. Field row = label (130px) · click-to-edit value · marker (+ "Revert" for edited
 fields, whose tooltip shows the file-tag value). Editing locks the field against rescans; the legend
-under the Details card explains the four sources.
+under the Details card explains the five sources (Audiobookshelf: a
+`metadata.json` ABS keeps in the book's folder, over the tags).
 
 ### Chapter ribbon _custom_
 
