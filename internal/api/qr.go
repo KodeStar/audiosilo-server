@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/base64"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -135,10 +136,23 @@ func (a *API) inviteURL(r *http.Request, code string) string {
 }
 
 // baseURL determines the externally reachable base URL: configured PublicURL
-// wins; otherwise it is derived from the request.
+// wins; otherwise it is derived from the request. A server that serves home HTTP
+// is still an https server: a request that came over plain HTTP gets the https
+// base (the same port answers TLS; a Host without a port came in on 80), and
+// the http address rides only as the home one (config.Addresses), so a link
+// copied from a console opened over http doesn't take every browser that opens
+// it to plain HTTP.
 func (a *API) baseURL(r *http.Request) string {
-	if u := a.config().PublicURL; u != "" {
+	cfg := a.config()
+	if u := cfg.PublicURL; u != "" {
 		return strings.TrimRight(u, "/")
+	}
+	if r.TLS == nil && cfg.ServesHomeHTTP() {
+		host := r.Host
+		if _, _, err := net.SplitHostPort(host); err != nil {
+			host = net.JoinHostPort(strings.Trim(host, "[]"), "80")
+		}
+		return "https://" + host
 	}
 	return requestScheme(r) + "://" + r.Host
 }

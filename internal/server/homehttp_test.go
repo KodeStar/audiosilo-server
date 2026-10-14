@@ -297,3 +297,18 @@ func TestRunHomeHTTPOff(t *testing.T) {
 		t.Fatalf("plain with home_http off: %d %q, want 400 from the TLS server", code, body)
 	}
 }
+
+// A peeked connection still offers io.ReaderFrom (http.Server's sendfile path
+// for file responses), writing through to the connection it wraps.
+func TestPeekedConnReadFrom(t *testing.T) {
+	t.Parallel()
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	var c io.ReaderFrom = &peekedConn{Conn: a, first: 'G', unread: true}
+	go func() { _, _ = c.ReadFrom(strings.NewReader("audio")) }()
+	got := make([]byte, 5)
+	if _, err := io.ReadFull(b, got); err != nil || string(got) != "audio" {
+		t.Fatalf("read %q, %v; want audio", got, err)
+	}
+}

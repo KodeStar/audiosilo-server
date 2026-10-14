@@ -69,15 +69,14 @@ func (l *splitListener) Close() error {
 }
 
 // acceptLoop accepts until Close. An accept error other than the listener being
-// closed goes to Accept, so http.Server decides as it would on its own listener
-// (back off on a temporary one, stop on any other); the loop backs off too, as
-// http.Server does, rather than spin on a failing listener.
+// closed goes to Accept, so http.Server decides as it would on its own listener:
+// it backs off before asking again on a temporary one (and the hand-over waits
+// for it to ask, so the loop never spins), and stops, closing this listener, on
+// any other.
 func (l *splitListener) acceptLoop() {
-	var delay time.Duration
 	for {
 		c, err := l.Listener.Accept()
 		if err == nil {
-			delay = 0
 			go l.classify(c)
 			continue
 		}
@@ -86,12 +85,6 @@ func (l *splitListener) acceptLoop() {
 		}
 		select {
 		case l.conns <- accepted{err: err}:
-		case <-l.ctx.Done():
-			return
-		}
-		delay = min(max(2*delay, 5*time.Millisecond), time.Second)
-		select {
-		case <-time.After(delay):
 		case <-l.ctx.Done():
 			return
 		}
@@ -137,6 +130,13 @@ func (c *peekedConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
+// ReadFrom writes r to the connection through the TCP connection's own ReadFrom,
+// so a plain-HTTP file response (audio streaming) keeps the kernel's sendfile
+// path: http.Server looks for io.ReaderFrom on the connection it was handed.
+func (c *peekedConn) ReadFrom(r io.Reader) (int64, error) {
+	return io.Copy(c.Conn, r)
+}
+
 // homeHTTPGate serves a request that came over TLS, or over plain HTTP from a
 // home-network client (homeClient); any other plain HTTP request is redirected
 // to the same URL on https (308, so a POST stays a POST), or refused with a 400
@@ -165,7 +165,8 @@ func homeClient(remoteAddr string) bool {
 	if err != nil {
 		return false
 	}
-	return ap.Addr().Unmap().IsLoopback() || config.HomeNetworkIP(ap.Addr())
+	ip := ap.Addr().Unmap()
+	return ip.IsLoopback() || config.HomeNetworkIP(ip)
 }
 
 // httpsURL is r's URL on https: the same Host (and so the same port, which

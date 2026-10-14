@@ -445,3 +445,37 @@ func TestPairingWithoutServerID(t *testing.T) {
 		t.Fatalf("no server id: %s", body)
 	}
 }
+
+// A pairing asked for over plain HTTP on a server that serves home HTTP keeps
+// https links: the base is the https one on the same port (80 for a Host without
+// one), and only home is http. With home HTTP off the base follows the request.
+func TestHomeHTTPPairingOverPlainHTTP(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t) // plain HTTP; the default config serves home HTTP
+	for host, wantBase := range map[string]string{
+		"192.168.1.205:8080": "https://192.168.1.205:8080",
+		"192.168.1.205":      "https://192.168.1.205:80",
+	} {
+		resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, map[string]string{"Host": host})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("redeem = %d %s", resp.StatusCode, body)
+		}
+		var p pairingWire
+		_ = json.Unmarshal([]byte(body), &p)
+		if p.BaseURL != wantBase || !strings.HasPrefix(p.WebURL, wantBase+"/web/connect?") ||
+			linkQuery(t, p.URI).Get("server") != wantBase {
+			t.Fatalf("%s: base_url %q web_url %q, want %s", host, p.BaseURL, p.WebURL, wantBase)
+		}
+		if p.Addresses == nil || p.Addresses.Home != "http://"+host {
+			t.Fatalf("%s: addresses = %+v, want the http home", host, p.Addresses)
+		}
+	}
+
+	off := newTestEnvWith(t, func(c *config.Config) { c.TLS.HomeHTTP = false })
+	resp, body := off.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+off.authCode+`"}`, map[string]string{"Host": "192.168.1.205:8080"})
+	var p pairingWire
+	_ = json.Unmarshal([]byte(body), &p)
+	if resp.StatusCode != http.StatusOK || p.BaseURL != "http://192.168.1.205:8080" {
+		t.Fatalf("home HTTP off: base_url = %q (%d)", p.BaseURL, resp.StatusCode)
+	}
+}

@@ -329,8 +329,9 @@ admin overrides; see Metadata overrides below).
   can make every client look like the bridge gateway (private), the documented trade-off.
   `config.Addresses` then derives the home address as `http://` even for an https request,
   keeping the request's port (`:443` added when the Host has none, the port that answers
-  http); a configured `lan_url` is used as is, and `base_url`/`web_url`/`uri server=` keep
-  the request's scheme. No HSTS on self-signed and no `upgrade-insecure-requests` in any
+  http); a configured `lan_url` is used as is, and `base_url`/`web_url`/`uri server=` are
+  always https (`api.baseURL`: a plain-HTTP request gets the https base on its port, 80 for a
+  Host without one), so a link copied from a console opened over http stays https. No HSTS on self-signed and no `upgrade-insecure-requests` in any
   CSP (`TestCSPAllowsPlainHTTP`), so the console and player work over http on the LAN.
 - **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
   `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
