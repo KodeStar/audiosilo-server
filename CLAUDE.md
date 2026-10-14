@@ -291,7 +291,9 @@ admin overrides; see Metadata overrides below).
   (`<base>/web/connect?token=` - encoded in the QR; opens the app via a Universal/
   App Link when the domain is claimed, else the embedded web player) and `uri`
   (`audiosilo://connect?...` - custom scheme, launches an installed app on any
-  domain). **The QR is as redeemable as the invite**: a pairing token minted by
+  domain). Both end with `sid=<server_id>` (after `home=`/`away=`; also the payload's
+  `server_id`), so an app falling back to the link's http home checks `GET /server`'s
+  `server_id` there before sending the token in cleartext. **The QR is as redeemable as the invite**: a pairing token minted by
   redeeming a code is linked to it (`tokens.auth_code_id`) and inherits the
   invite's uses/expiry, so each device being set up can scan the same QR (the
   redeem response's `uses_remaining`/`code_expires_at` advertise the budget);

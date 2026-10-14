@@ -16,6 +16,7 @@ import (
 )
 
 type pairingWire struct {
+	ServerID     string     `json:"server_id"`
 	BaseURL      string     `json:"base_url"`
 	PairingToken string     `json:"pairing_token"`
 	URI          string     `json:"uri"`
@@ -41,6 +42,7 @@ func TestPairingCarriesAddresses(t *testing.T) {
 	e := newTestEnvWith(t, func(c *config.Config) {
 		c.PublicURL = "https://books.example.com"
 		c.LANURL = "http://192.168.1.20:8080"
+		c.ServerID = "srv-test-id"
 	})
 	resp, body := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`)
 	if resp.StatusCode != http.StatusOK {
@@ -59,7 +61,8 @@ func TestPairingCarriesAddresses(t *testing.T) {
 		t.Fatalf("web_url %q must start with the unchanged %q", p.WebURL, prefix)
 	}
 	q := linkQuery(t, p.WebURL)
-	if q.Get("token") != p.PairingToken || q.Get("home") != want.Home || q.Get("away") != want.Away {
+	if q.Get("token") != p.PairingToken || q.Get("home") != want.Home || q.Get("away") != want.Away ||
+		q.Get("sid") != "srv-test-id" {
 		t.Fatalf("web_url params = %v", q)
 	}
 
@@ -68,8 +71,17 @@ func TestPairingCarriesAddresses(t *testing.T) {
 	}
 	q = linkQuery(t, p.URI)
 	if q.Get("server") != "https://books.example.com" || q.Get("token") != p.PairingToken ||
-		q.Get("home") != want.Home || q.Get("away") != want.Away {
+		q.Get("home") != want.Home || q.Get("away") != want.Away || q.Get("sid") != "srv-test-id" {
 		t.Fatalf("uri params = %v", q)
+	}
+	if p.ServerID != "srv-test-id" {
+		t.Fatalf("server_id = %q, want srv-test-id", p.ServerID)
+	}
+	// sid= comes last, after home=/away=.
+	for _, link := range []string{p.WebURL, p.URI} {
+		if !strings.HasSuffix(link, "&sid=srv-test-id") {
+			t.Fatalf("%q must end with &sid=srv-test-id", link)
+		}
 	}
 }
 
@@ -99,7 +111,7 @@ func TestPairingAddressesDerivedFromLANRequest(t *testing.T) {
 // addresses field and links exactly as before.
 func TestPairingWithoutAddresses(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newTestEnvWith(t, func(c *config.Config) { c.ServerID = "srv-test-id" })
 	for _, host := range []string{"", "books.example.com", "100.64.1.2:8080", "localhost:8080"} {
 		resp, body := e.doHeaders(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, map[string]string{"Host": host})
 		if resp.StatusCode != http.StatusOK {
@@ -110,11 +122,11 @@ func TestPairingWithoutAddresses(t *testing.T) {
 		if strings.Contains(body, `"addresses"`) || p.Addresses != nil {
 			t.Fatalf("%q: no addresses expected: %s", host, body)
 		}
-		if q := linkQuery(t, p.WebURL); len(q) != 1 || q.Get("token") != p.PairingToken {
-			t.Fatalf("%q: web_url %q must carry only token", host, p.WebURL)
+		if q := linkQuery(t, p.WebURL); len(q) != 2 || q.Get("token") != p.PairingToken || q.Get("sid") != "srv-test-id" {
+			t.Fatalf("%q: web_url %q must carry only token and sid", host, p.WebURL)
 		}
-		if q := linkQuery(t, p.URI); len(q) != 2 {
-			t.Fatalf("%q: uri %q must carry only server and token", host, p.URI)
+		if q := linkQuery(t, p.URI); len(q) != 3 || q.Get("sid") != "srv-test-id" {
+			t.Fatalf("%q: uri %q must carry only server, token and sid", host, p.URI)
 		}
 	}
 }
@@ -350,7 +362,7 @@ func overTLS(t *testing.T, e *testEnv, method, path, token, body, host string) (
 func TestHomeHTTPAddresses(t *testing.T) {
 	t.Parallel()
 	const host = "192.168.1.205:8080"
-	e := newTestEnv(t)
+	e := newTestEnvWith(t, func(c *config.Config) { c.ServerID = "srv-test-id" })
 	status, body := overTLS(t, e, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, host)
 	if status != http.StatusOK {
 		t.Fatalf("redeem = %d %s", status, body)
@@ -367,7 +379,7 @@ func TestHomeHTTPAddresses(t *testing.T) {
 	if q := linkQuery(t, p.WebURL); q.Get("home") != want.Home {
 		t.Fatalf("web_url home = %q", q.Get("home"))
 	}
-	if q := linkQuery(t, p.URI); q.Get("server") != "https://"+host || q.Get("home") != want.Home {
+	if q := linkQuery(t, p.URI); q.Get("server") != "https://"+host || q.Get("home") != want.Home || q.Get("sid") != "srv-test-id" {
 		t.Fatalf("uri params = %v", q)
 	}
 
@@ -418,5 +430,18 @@ func TestHomeHTTPAddressesOff(t *testing.T) {
 		if body != `{"home":"`+tc.wantHome+`"}`+"\n" {
 			t.Errorf("%s: GET /addresses = %q, want home %q", tc.name, body, tc.wantHome)
 		}
+	}
+}
+
+// A server without an id (a bare config the launcher never touched) puts no
+// sid= on its links; the payload's server_id is then "".
+func TestPairingWithoutServerID(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	_, body := e.do(t, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`)
+	var p pairingWire
+	_ = json.Unmarshal([]byte(body), &p)
+	if !strings.Contains(body, `"server_id":""`) || strings.Contains(p.WebURL, "sid=") || strings.Contains(p.URI, "sid=") {
+		t.Fatalf("no server id: %s", body)
 	}
 }

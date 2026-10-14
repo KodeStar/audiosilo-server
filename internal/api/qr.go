@@ -20,7 +20,13 @@ import (
 // QR can pair several devices); from a recovery code it carries a short TTL of its
 // own; from /auth/pair or the demo flow it is single-use and lasts pairingTTL.
 type PairingPayload struct {
-	ServerName   string   `json:"server_name"`
+	ServerName string `json:"server_name"`
+	// ServerID is the server's stable id (GET /server's server_id), also carried
+	// by URI and WebURL as sid=, so an app that falls back to the link's home
+	// address can check the server answering there is this one before it sends
+	// the token (over plain http, where any box on a foreign network may hold the
+	// same private address).
+	ServerID     string   `json:"server_id"`
 	BaseURL      string   `json:"base_url"`
 	PairingToken string   `json:"pairing_token"`
 	URI          string   `json:"uri"`     // audiosilo://connect?... custom-scheme deep link
@@ -102,6 +108,16 @@ func (ad *Addresses) query() string {
 	return "&" + v.Encode()
 }
 
+// sidQuery is the server's id as a link param ("&sid=..."), "" for a server
+// without one (the launcher always mints it; only a bare test config lacks it).
+func (a *API) sidQuery() string {
+	id := a.config().ServerID
+	if id == "" {
+		return ""
+	}
+	return "&" + url.Values{"sid": {id}}.Encode()
+}
+
 // AppLinks points clients at the ways to connect. Mobile app stores are
 // placeholders until those apps ship.
 type AppLinks struct {
@@ -144,7 +160,9 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	// the embedded web player's connect route, which exchanges the pairing token.
 	// The home/away params come after the existing ones, so a link without them
 	// reads exactly as before (older clients ignore params they don't know).
-	webURL := base + "/web/connect?" + url.Values{"token": {token}}.Encode() + addrs.query()
+	// sid= (the server's id) comes last, after them.
+	tail := addrs.query() + a.sidQuery()
+	webURL := base + "/web/connect?" + url.Values{"token": {token}}.Encode() + tail
 	// Custom-scheme deep link for an explicit "Open in app" button. Custom schemes
 	// are not domain-bound, so this launches an installed app on any self-hosted
 	// domain. How many devices can exchange the token is governed by its origin
@@ -152,7 +170,7 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	appURI := "audiosilo://connect?" + url.Values{
 		"server": {base},
 		"token":  {token},
-	}.Encode() + addrs.query()
+	}.Encode() + tail
 
 	png, err := qrcode.Encode(webURL, qrcode.Medium, 512)
 	if err != nil {
@@ -160,6 +178,7 @@ func (a *API) buildPairing(r *http.Request, token string) (*PairingPayload, erro
 	}
 	return &PairingPayload{
 		ServerName:   a.config().DisplayName(),
+		ServerID:     a.config().ServerID,
 		BaseURL:      base,
 		PairingToken: token,
 		URI:          appURI,
