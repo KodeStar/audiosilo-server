@@ -11,6 +11,7 @@ import {
   type FolderMode,
   type OverrideField,
 } from '@/api/types';
+import { formatSeriesPosition } from '@/lib/format';
 import type { Phrase } from '@/lib/phrase';
 import { sameSeries } from '@/lib/series-key';
 import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER, parseSeriesRange } from './field-rules';
@@ -77,7 +78,7 @@ export function checkField(field: OverrideField, raw: string): FieldCheck {
       if (!v) return { value: '' };
       // A range, an omnibus of books 1-3: stored as "1-3".
       const range = parseSeriesRange(v);
-      if (range) return { value: positionText({ position: range.start, position_end: range.end }) };
+      if (range) return { value: formatSeriesPosition(range.start, range.end) };
       const n = Number(v);
       if (!NUMBER.test(v) || n < 0 || n > MAX_SERIES_INDEX) {
         return { value: v, error: 'book.invalid.seriesIndex' };

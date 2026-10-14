@@ -120,18 +120,23 @@ export function formatClock(seconds: number, withHours = seconds >= 3600): strin
 type Translate = (key: string, opts: Record<string, unknown>) => string;
 
 /**
- * A series position as a number, "2", or for a range (an omnibus, `end` above
- * `index`) its start and end, "1-3".
+ * A series position as written: "2", or for a range (an omnibus, `end` above
+ * `position`) its start and end, "1-3"; `fmt` writes each number.
  */
-export function formatSeriesPosition(index: number, lang: string, end = 0): string {
-  const start = formatNumber(index, lang);
-  return end > index ? `${start}-${formatNumber(end, lang)}` : start;
+export function formatSeriesPosition(
+  position: number,
+  end = 0,
+  fmt: (n: number) => string = String,
+): string {
+  return end > position ? `${fmt(position)}-${fmt(end)}` : fmt(position);
 }
 
 /** A position in a series as "#2", or "#1-3" for a range ("" for none, 0). */
 export function seriesIndexLabel(index: number, lang: string, t: Translate, end = 0): string {
   return index > 0
-    ? t('books.tile.seriesIndex', { index: formatSeriesPosition(index, lang, end) })
+    ? t('books.tile.seriesIndex', {
+        index: formatSeriesPosition(index, end, (n) => formatNumber(n, lang)),
+      })
     : '';
 }
 

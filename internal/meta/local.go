@@ -217,19 +217,22 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 	if !ok {
 		return MetaLocal{}, false
 	}
+	// A book at exactly this place, else (a single entry) the first omnibus
+	// starting there.
+	var omnibus MetaLocal
+	found := false
 	for _, b := range byIndex {
-		if samePosition(b.SeriesIndex, start) && samePosition(b.last(), end) {
+		if !samePosition(b.SeriesIndex, start) {
+			continue
+		}
+		if samePosition(b.last(), end) {
 			return b.MetaLocal, true
 		}
-	}
-	if start == end {
-		for _, b := range byIndex {
-			if b.SeriesIndexEnd > b.SeriesIndex && samePosition(b.SeriesIndex, start) {
-				return b.MetaLocal, true
-			}
+		if start == end && !found && b.SeriesIndexEnd > b.SeriesIndex {
+			omnibus, found = b.MetaLocal, true
 		}
 	}
-	return MetaLocal{}, false
+	return omnibus, found
 }
 
 // nextEntry is the entry after the current work on rail, read as the series

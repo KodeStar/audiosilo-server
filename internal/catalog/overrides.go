@@ -199,15 +199,10 @@ func ParseSeriesIndex(s string) float64 {
 }
 
 // ParseSeriesPosition reads a stored series_index value: its start (0 for none)
-// and, for a range ("1-3", metadata.ParseSeriesRange), its end (else 0).
+// and, for a range ("1-3", metadata.ParseSeriesPosition), its end (else 0).
 func ParseSeriesPosition(s string) (start, end float64) {
-	if v, err := strconv.ParseFloat(s, 64); err == nil {
-		return v, 0
-	}
-	if start, end, ok := metadata.ParseSeriesRange(s); ok {
-		return start, end
-	}
-	return 0, 0
+	start, end, _ = metadata.ParseSeriesPosition(s)
+	return start, end
 }
 
 // scannedStampKey is the `scanned` key holding the indexed_at of the upsert that
@@ -559,7 +554,7 @@ func (l *bookLayers) pathBaseline() bookFields {
 func pathFields(m *metadata.Metadata) bookFields {
 	return bookFields{
 		FieldTitle: m.Title, FieldAuthor: m.Author, FieldSeries: m.Series,
-		FieldSeriesIndex: FormatSeriesPosition(m.SeriesIndex),
+		FieldSeriesIndex: FormatSeriesRange(m.SeriesIndex, m.SeriesIndexEnd),
 	}
 }
 
@@ -887,12 +882,13 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 	if edit.Source == SourceCommunity || touches(edit, FieldMoreSeries) || !touches(edit, FieldSeries) {
 		return nil, nil, nil
 	}
-	var old, stored string
-	var index, indexEnd float64
+	var main SeriesRef
+	var stored string
 	if err := tx.QueryRowContext(ctx, `SELECT series, series_index, series_index_end, more_series FROM books WHERE id = ?`, bookID).
-		Scan(&old, &index, &indexEnd, &stored); err != nil {
+		Scan(&main.Name, &main.Position, &main.PositionEnd, &stored); err != nil {
 		return nil, nil, err
 	}
+	old := main.Name
 	list := ParseMoreSeries(stored)
 	if len(list) == 0 {
 		return nil, nil, nil // nothing listed to swap in: no need to resolve the layers
@@ -918,7 +914,7 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 	for i, s := range list {
 		switch {
 		case i == at && old != "":
-			swapped = append(swapped, SeriesRef{Name: old, Position: index, PositionEnd: indexEnd})
+			swapped = append(swapped, main)
 		case i == at, match.SameSeries(s.Name, old):
 		default:
 			swapped = append(swapped, s)

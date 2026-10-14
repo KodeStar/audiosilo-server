@@ -24,9 +24,15 @@ export function parseSeriesRange(raw: string): { start: number; end: number } | 
     const [a, b] = [v.slice(0, i).trim(), v.slice(i + 1).trim()];
     if (!NUMBER.test(a) || !NUMBER.test(b)) continue; // "1e-3-4": a dash inside a number
     const [start, end] = [Number(a), Number(b)];
-    const ok =
-      start > 0 && end > start && end <= MAX_SERIES_INDEX && end - start <= MAX_SERIES_SPAN;
-    return ok ? { start, end } : undefined;
+    return validSeriesRange(start, end) ? { start, end } : undefined;
   }
   return undefined;
+}
+
+/**
+ * Whether start-end is a range a series position may hold: 0 < start < end <=
+ * 100000, at most MAX_SERIES_SPAN apart (metadata.ValidSeriesRange).
+ */
+export function validSeriesRange(start: number, end: number): boolean {
+  return start > 0 && end > start && end <= MAX_SERIES_INDEX && end - start <= MAX_SERIES_SPAN;
 }

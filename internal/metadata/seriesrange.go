@@ -1,9 +1,9 @@
 package metadata
 
 import (
-	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // A series position can be a range: an omnibus of books 1 to 3 is "1-3" in its
@@ -30,7 +30,7 @@ func ParseSeriesRange(s string) (start, end float64, ok bool) {
 			continue
 		}
 		a, errA := strconv.ParseFloat(strings.TrimSpace(s[:i]), 64)
-		b, errB := strconv.ParseFloat(strings.TrimSpace(s[i+len(string(r)):]), 64)
+		b, errB := strconv.ParseFloat(strings.TrimSpace(s[i+utf8.RuneLen(r):]), 64)
 		if errA != nil || errB != nil {
 			continue // "1e-3-4": the dash inside a number isn't the separator
 		}
@@ -44,7 +44,16 @@ func ParseSeriesRange(s string) (start, end float64, ok bool) {
 
 // ValidSeriesRange reports whether start-end is a range a series position may
 // hold: 0 < start < end <= MaxSeriesPosition, end - start <= MaxSeriesSpan.
+// (NaN and the infinities fail these comparisons too.)
 func ValidSeriesRange(start, end float64) bool {
-	finite := !math.IsNaN(start) && !math.IsNaN(end) && !math.IsInf(start, 0) && !math.IsInf(end, 0)
-	return finite && start > 0 && end > start && end <= MaxSeriesPosition && end-start <= MaxSeriesSpan
+	return start > 0 && end > start && end <= MaxSeriesPosition && end-start <= MaxSeriesSpan
+}
+
+// ParseSeriesPosition reads a series position: a number (ParseFloat's, end 0) or
+// a range (ParseSeriesRange: its start and end). ok is false for anything else.
+func ParseSeriesPosition(s string) (start, end float64, ok bool) {
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		return v, 0, true
+	}
+	return ParseSeriesRange(s)
 }

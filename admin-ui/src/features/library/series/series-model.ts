@@ -8,6 +8,7 @@ import type {
 import { parseSeriesRange } from '@/features/book/field-rules';
 import { refKey } from '@/lib/book-route';
 import { coverModel } from '@/lib/cover-model';
+import { formatSeriesPosition } from '@/lib/format';
 import { hashString } from '@/lib/monogram';
 import { sameSeries, seriesKey } from '@/lib/series-key';
 
@@ -202,11 +203,6 @@ export function spanIn(book: AdminBook, series?: string): Span {
   return span(s?.position ?? 0, s?.position_end);
 }
 
-/** A book's position in the named series (spanIn's; a range's start). */
-export function positionIn(book: AdminBook, series?: string): number {
-  return spanIn(book, series).position;
-}
-
 /**
  * The numbering a file's title often carries before the title, as the server's
  * match cuts it: "01 - ", "7. ", "Book 3: ", "#4 "; a short code glued to its
@@ -311,18 +307,14 @@ export function seriesStatus(rail: MetaSeries, placed: Placed[]): SeriesStatus {
 
 /** A place as it is written: "2", or "1-3" for a range. */
 export function formatSpan(s: Span, fmt: (n: number) => string = String): string {
-  return s.end === undefined ? fmt(s.position) : `${fmt(s.position)}-${fmt(s.end)}`;
+  return formatSeriesPosition(s.position, s.end, fmt);
 }
 
 /**
  * Positions as a short list: a run of three or more whole numbers collapses
  * to "3-5" ("1, 2, 4-6, 7.5"); a range is written as one ("1-3").
  */
-export function formatPositions(
-  items: (number | Span)[],
-  fmt: (n: number) => string = String,
-): string {
-  const ns = items.map((n): Span => (typeof n === 'number' ? { position: n } : n));
+export function formatPositions(ns: Span[], fmt: (n: number) => string = String): string {
   const whole = (s: Span) => s.end === undefined && Number.isInteger(s.position);
   const parts: string[] = [];
   let i = 0;

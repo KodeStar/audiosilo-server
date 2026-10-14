@@ -10,7 +10,6 @@ import {
   metaCandidate,
   pickRail,
   placeBooks,
-  positionIn,
   railEntries,
   sameTitle,
   spanIn,
@@ -395,16 +394,17 @@ describe('placeBooks', () => {
 });
 
 describe('formatPositions', () => {
+  const at = (...ns: number[]) => ns.map((position) => ({ position }));
   it('collapses runs of three or more whole numbers', () => {
-    expect(formatPositions([1, 2, 4])).toBe('1, 2, 4');
-    expect(formatPositions([3, 5])).toBe('3, 5');
-    expect(formatPositions([3, 4, 5])).toBe('3-5');
-    expect(formatPositions([1, 2, 3, 4, 6, 7.5, 8, 9, 10])).toBe('1-4, 6, 7.5, 8-10');
+    expect(formatPositions(at(1, 2, 4))).toBe('1, 2, 4');
+    expect(formatPositions(at(3, 5))).toBe('3, 5');
+    expect(formatPositions(at(3, 4, 5))).toBe('3-5');
+    expect(formatPositions(at(1, 2, 3, 4, 6, 7.5, 8, 9, 10))).toBe('1-4, 6, 7.5, 8-10');
     expect(formatPositions([])).toBe('');
   });
 
   it('formats each number with the given formatter', () => {
-    expect(formatPositions([1.5, 2], (n) => String(n).replace('.', ','))).toBe('1,5, 2');
+    expect(formatPositions(at(1.5, 2), (n) => String(n).replace('.', ','))).toBe('1,5, 2');
   });
 });
 
@@ -450,10 +450,10 @@ describe('a book in several series', () => {
   });
 
   it('has its own position in each', () => {
-    expect(positionIn(guards)).toBe(8);
-    expect(positionIn(guards, 'Discworld')).toBe(8);
-    expect(positionIn(guards, 'City Watch')).toBe(1);
-    expect(positionIn(guards, 'Mort')).toBe(0);
+    expect(spanIn(guards).position).toBe(8);
+    expect(spanIn(guards, 'Discworld').position).toBe(8);
+    expect(spanIn(guards, 'City Watch').position).toBe(1);
+    expect(spanIn(guards, 'Mort').position).toBe(0);
   });
 
   it("sits on a series' shelf at its place there", () => {
@@ -484,16 +484,16 @@ describe('filterSeries', () => {
   });
 });
 
-describe('positionIn', () => {
+describe('spanIn', () => {
   it("reads a book's place in the series however the series is spelled", () => {
     const b = adminBook({
       series: 'He Who Fights With Monsters',
       series_index: 4,
       series_list: [{ name: 'He Who Fights With Monsters', position: 4 }],
     });
-    expect(positionIn(b, 'He Who Fights with Monsters')).toBe(4);
-    expect(positionIn(b, 'He Who Fights WIth Monsters')).toBe(4);
-    expect(positionIn(b, 'Monsters')).toBe(0);
+    expect(spanIn(b, 'He Who Fights with Monsters').position).toBe(4);
+    expect(spanIn(b, 'He Who Fights WIth Monsters').position).toBe(4);
+    expect(spanIn(b, 'Monsters').position).toBe(0);
   });
 
   it('keeps names with no letter or number apart, as the server does', () => {
@@ -505,8 +505,8 @@ describe('positionIn', () => {
         { name: '?!', position: 5 },
       ],
     });
-    expect(positionIn(b, '?!')).toBe(5);
-    expect(positionIn(b, '!!')).toBe(2);
+    expect(spanIn(b, '?!').position).toBe(5);
+    expect(spanIn(b, '!!').position).toBe(2);
   });
 });
 
@@ -644,7 +644,9 @@ describe('ranges (an omnibus, "1-3")', () => {
   });
 
   it('writes a range as one in a position list', () => {
-    expect(formatPositions([{ position: 1, end: 3 }, 4, 5, 6])).toBe('1-3, 4-6');
+    expect(
+      formatPositions([{ position: 1, end: 3 }, { position: 4 }, { position: 5 }, { position: 6 }]),
+    ).toBe('1-3, 4-6');
     expect(formatPositions([{ position: 1, end: 3 }, { position: 4 }])).toBe('1-3, 4');
     expect(formatSpan({ position: 2.5, end: 4 }, (n) => String(n).replace('.', ','))).toBe('2,5-4');
   });

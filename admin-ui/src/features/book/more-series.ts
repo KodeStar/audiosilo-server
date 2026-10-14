@@ -1,5 +1,13 @@
 import type { SeriesRef } from '@/api/types';
-import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER, parseSeriesRange } from './field-rules';
+import { formatSeriesPosition } from '@/lib/format';
+import {
+  CONTROL,
+  MAX_SERIES_INDEX,
+  MAX_SHORT,
+  NUMBER,
+  parseSeriesRange,
+  validSeriesRange,
+} from './field-rules';
 
 // A book's other series (the more_series field, catalog/moreseries.go): stored
 // as canonical JSON, [{"name": ..., "position": ..., "position_end": ...}] ("" for
@@ -16,9 +24,7 @@ const ENTRY = /^(.*?)(?:\s*#\s*([^#\s]+(?:\s*[-\u2013]\s*[^#\s]+)?))?$/;
  * for a range, "" for none (catalog.FormatSeriesRange).
  */
 export function positionText(ref: Pick<SeriesRef, 'position' | 'position_end'>): string {
-  if (!(ref.position > 0)) return '';
-  const end = ref.position_end ?? 0;
-  return end > ref.position ? `${ref.position}-${end}` : String(ref.position);
+  return ref.position > 0 ? formatSeriesPosition(ref.position, ref.position_end) : '';
 }
 
 /** The series `name` at a stored series_index value ("2", "1-3", "" for none). */
@@ -112,23 +118,19 @@ function checkRefs(entries: RawEntry[]): {
     const raw = String(e.position ?? '').trim();
     const end = e.position_end ?? 0;
     if (typeof end !== 'number') return { value: '', error: 'book.invalid.moreSeries' };
-    const range =
-      typeof e.position === 'string'
-        ? parseSeriesRange(raw)
-        : end
-          ? parseSeriesRange(`${raw}-${end}`)
-          : undefined;
+    const position = raw ? Number(raw) : 0;
+    if (end !== 0 && typeof e.position !== 'string') {
+      // A stored entry's range.
+      if (!validSeriesRange(position, end)) return { value: '', error: 'book.invalid.moreSeries' };
+      out.push({ name, position, position_end: end });
+      continue;
+    }
+    const range = parseSeriesRange(raw); // a line's "1-3"
     if (range) {
       out.push({ name, position: range.start, position_end: range.end });
       continue;
     }
-    const position = raw ? Number(raw) : 0;
-    if (
-      (raw && !NUMBER.test(raw)) ||
-      position < 0 ||
-      position > MAX_SERIES_INDEX ||
-      (end !== 0 && typeof e.position !== 'string')
-    ) {
+    if ((raw && !NUMBER.test(raw)) || position < 0 || position > MAX_SERIES_INDEX) {
       return { value: '', error: 'book.invalid.moreSeries' };
     }
     out.push({ name, position });
