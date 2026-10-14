@@ -37,7 +37,7 @@ func TestMoreSeries(t *testing.T) {
 	if got := d.Fields[FieldMoreSeries]; got.Value != `[{"name":"City Watch","position":1}]` || got.Source != SourceEdited {
 		t.Fatalf("stored = %+v", got)
 	}
-	if want := []SeriesRef{{"Discworld", 8}, {watch, 1}}; !reflect.DeepEqual(d.Book.SeriesList, want) {
+	if want := []SeriesRef{{"Discworld", 8, 0}, {watch, 1, 0}}; !reflect.DeepEqual(d.Book.SeriesList, want) {
 		t.Fatalf("series_list = %+v, want %+v", d.Book.SeriesList, want)
 	}
 	// Written as the console writes it (no HTML escaping), so its drafts compare.
@@ -156,7 +156,7 @@ func TestMoreSeriesPlayer(t *testing.T) {
 	for _, b := range page.Books {
 		switch b.RelPath {
 		case "gg":
-			if want := []SeriesRef{{"Discworld", 8}, {"City Watch", 1}}; !reflect.DeepEqual(b.SeriesList, want) {
+			if want := []SeriesRef{{"Discworld", 8, 0}, {"City Watch", 1, 0}}; !reflect.DeepEqual(b.SeriesList, want) {
 				t.Errorf("gg series_list = %+v", b.SeriesList)
 			}
 		case "maa", "foc":
@@ -263,7 +263,7 @@ func TestSeriesSwap(t *testing.T) {
 			t.Errorf("derived %s = %+v, want an edit by u", field, f)
 		}
 	}
-	if got, want := detail("gg").Book.SeriesList, []SeriesRef{{watch, 1}, {"Omnibus", 0}, {disc, 8}, {"Extra", 2}}; !reflect.DeepEqual(got, want) {
+	if got, want := detail("gg").Book.SeriesList, []SeriesRef{{watch, 1, 0}, {"Omnibus", 0, 0}, {disc, 8, 0}, {"Extra", 2, 0}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("series_list = %+v, want %+v", got, want)
 	}
 	// Back again swaps back.
@@ -279,7 +279,7 @@ func TestSeriesSwap(t *testing.T) {
 	if f := fields("gg")[FieldSeries]; f.Locked || f.Source != SourceTag {
 		t.Errorf("series after the revert = %+v, want the scanned tag", f)
 	}
-	if got, want := detail("gg").Book.SeriesList, []SeriesRef{{disc, 8}, {"Omnibus", 0}, {watch, 1}, {"Extra", 2}}; !reflect.DeepEqual(got, want) {
+	if got, want := detail("gg").Book.SeriesList, []SeriesRef{{disc, 8, 0}, {"Omnibus", 0, 0}, {watch, 1, 0}, {"Extra", 2, 0}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("series_list after reverting series = %+v, want %+v", got, want)
 	}
 	edit("gg", BookEdit{Set: setSeries(watch)})

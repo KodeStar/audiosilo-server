@@ -59,7 +59,11 @@ export function usePaletteSearch(
   const books = (settled === q ? (booksQuery.data?.books ?? []) : []).map<PaletteEntry>((b) => ({
     id: `book:${refKey(b)}`,
     title: b.title,
-    subtitle: [b.author, seriesLabel(b.series, b.series_index, lang, t), b.library_name]
+    subtitle: [
+      b.author,
+      seriesLabel(b.series, b.series_index, lang, t, b.series_index_end),
+      b.library_name,
+    ]
       .filter(Boolean)
       .join(' · '),
     visual: (

@@ -12,6 +12,7 @@ import (
 
 	unorm "golang.org/x/text/unicode/norm"
 
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -29,27 +30,41 @@ import (
 const FieldMoreSeries = "more_series"
 
 // SeriesRef is one series a book belongs to, with its position in it (0 = none,
-// as for series_index).
+// as for series_index) and, when that position is a range (an omnibus of books
+// 1-3), its end (PositionEnd; 0, and omitted, when it isn't one).
 type SeriesRef struct {
-	Name     string  `json:"name"`
-	Position float64 `json:"position"`
+	Name        string  `json:"name"`
+	Position    float64 `json:"position"`
+	PositionEnd float64 `json:"position_end,omitempty"`
 }
+
+// SeriesAt is the series named name at a stored series_index value (index: "2",
+// "1-3" for a range, "" for none; ParseSeriesPosition).
+func SeriesAt(name, index string) SeriesRef {
+	start, end := ParseSeriesPosition(index)
+	return SeriesRef{Name: name, Position: start, PositionEnd: end}
+}
+
+// last is the last position s holds in its series: a range's end, else its
+// position. The next book in the series comes after it.
+func (s SeriesRef) last() float64 { return max(s.Position, s.PositionEnd) }
 
 // maxMoreSeries bounds the list: real books sit in a handful of series.
 const maxMoreSeries = 20
 
 // normalizeMoreSeries validates a more_series value (a JSON list of {name,
-// position}) and returns its canonical form: names trimmed and checked like the
-// series field, blank names dropped, each series once (the first spelling,
-// seriesKey), positions from 0
-// to 100000. "" for an empty list.
+// position[, position_end]}) and returns its canonical form: names trimmed and
+// checked like the series field, blank names dropped, each series once (the
+// first spelling, seriesKey), positions from 0 to 100000, a range's end
+// (position_end) as the series_index field takes one (metadata.ValidSeriesRange).
+// "" for an empty list.
 func normalizeMoreSeries(v string) (string, error) {
 	if v == "" {
 		return "", nil
 	}
 	var in []SeriesRef
 	if err := json.Unmarshal([]byte(v), &in); err != nil {
-		return "", invalid(FieldMoreSeries, "must be a list of {name, position} with a numeric position")
+		return "", invalid(FieldMoreSeries, "must be a list of {name, position, position_end} with numeric positions")
 	}
 	out := make([]SeriesRef, 0, len(in))
 	seen := map[string]bool{}
@@ -64,6 +79,9 @@ func normalizeMoreSeries(v string) (string, error) {
 		seen[seriesKey(s.Name)] = true
 		if s.Position < 0 || s.Position > maxSeriesIndex {
 			return "", invalid(FieldMoreSeries, "a position must be a number from 0 to 100000")
+		}
+		if s.PositionEnd != 0 && !metadata.ValidSeriesRange(s.Position, s.PositionEnd) {
+			return "", invalid(FieldMoreSeries, "a range must end above its start and span at most 100")
 		}
 		out = append(out, s)
 	}
@@ -104,15 +122,21 @@ func (b *Book) AllSeries() []SeriesRef {
 	if b.SeriesList != nil {
 		return b.SeriesList
 	}
-	return SeriesList(b.Series, b.SeriesIndex, "")
+	return SeriesList(b.mainSeries(), "")
 }
 
-// SeriesList is every series a book belongs to: the main one first (when it has
-// one), then the others, each series once (seriesKey: the first spelling).
-func SeriesList(series string, index float64, more string) []SeriesRef {
+// mainSeries is the book's main series with its position (Name "" for none).
+func (b *Book) mainSeries() SeriesRef {
+	return SeriesRef{Name: b.Series, Position: b.SeriesIndex, PositionEnd: b.SeriesIndexEnd}
+}
+
+// SeriesList is every series a book belongs to: the main one (Name "" for none)
+// first, then the others (more, a stored more_series value), each series once
+// (seriesKey: the first spelling).
+func SeriesList(main SeriesRef, more string) []SeriesRef {
 	out := []SeriesRef{}
-	if series != "" {
-		out = append(out, SeriesRef{Name: series, Position: index})
+	if main.Name != "" {
+		out = append(out, main)
 	}
 	for _, s := range ParseMoreSeries(more) {
 		// A series once, however the list spells it again.
@@ -141,7 +165,7 @@ var seriesKeys = &memo[string]{f: func(name string) string { return cmp.Or(match
 // otherSeries is the series a book is in besides its main one (SeriesList less
 // the main series): what book_more_series holds for it.
 func otherSeries(series, more string) []SeriesRef {
-	all := SeriesList(series, 0, more)
+	all := SeriesList(SeriesRef{Name: series}, more)
 	if series != "" {
 		all = all[1:]
 	}
@@ -163,8 +187,8 @@ func keyOtherSeries(ctx context.Context, tx *sql.Tx, bookID, libID int64, series
 func insertOtherSeries(ctx context.Context, tx *sql.Tx, bookID, libID int64, series, more string) error {
 	for _, s := range otherSeries(series, more) {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO book_more_series(book_id, library_id, series_key, position) VALUES(?, ?, ?, ?)`,
-			bookID, libID, seriesKey(s.Name), s.Position); err != nil {
+			`INSERT OR IGNORE INTO book_more_series(book_id, library_id, series_key, position, position_end) VALUES(?, ?, ?, ?, ?)`,
+			bookID, libID, seriesKey(s.Name), s.Position, s.PositionEnd); err != nil {
 			return err
 		}
 	}
@@ -230,7 +254,7 @@ func sqlQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") +
 // ftsSeries is the full-text index's series text: every series name, a line each.
 func ftsSeries(series, more string) string {
 	names := []string{}
-	for _, s := range SeriesList(series, 0, more) {
+	for _, s := range SeriesList(SeriesRef{Name: series}, more) {
 		names = append(names, s.Name)
 	}
 	return strings.Join(names, "\n")

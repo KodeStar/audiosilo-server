@@ -82,6 +82,33 @@ func TestPlaceLocalIndexFallback(t *testing.T) {
 	}
 }
 
+// TestPlaceLocalRanges: a range entry ("1-3", an omnibus) holds a book at the
+// same range; an entry at one number holds a book at it, else a book whose range
+// starts there; a book at one number never holds a range entry.
+func TestPlaceLocalRanges(t *testing.T) {
+	t.Parallel()
+	omni := mine(1, "S/omni", "S", 1, "")
+	omni.SeriesIndexEnd = 3
+	other := mine(1, "S/omni 1-4", "S", 1, "")
+	other.SeriesIndexEnd = 4
+	rails := []MetaSeries{named("S", "1", "one@1", "two@2", "omni@1-3", "four@4")}
+	for name, tc := range map[string]struct {
+		books []LocalBook
+		want  []string
+	}{
+		"the omnibus at its range and its start": {[]LocalBook{omni, mine(1, "S/2", "S", 2, "")}, []string{"S/omni", "S/2", "S/omni", ""}},
+		"a book at the start first":              {[]LocalBook{omni, mine(1, "S/1", "S", 1, "")}, []string{"S/1", "", "S/omni", ""}},
+		"another range only at its start":        {[]LocalBook{other}, []string{"S/omni 1-4", "", "", ""}},
+		"a single book holds no range entry":     {[]LocalBook{mine(1, "S/1", "S", 1, ""), mine(1, "S/3", "S", 3, "")}, []string{"S/1", "", "", ""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := locals(PlaceLocal(rails, "", MetaLocal{}, tc.books)[0].Works); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("locals = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPlaceLocalOnePerEntryTieOrder(t *testing.T) {
 	rails := []MetaSeries{named("S", "1", "one@1", "two@2", "three@3")}
 	// In preference order as SeriesBooks returns them: library 2 sorts first.
@@ -198,18 +225,26 @@ func TestNextEntry(t *testing.T) {
 		want    string // "" = none left
 		wantOK  bool
 	}{
-		"next by position":       {rail("2", "c@3", "a@1", "cur@2", "d@4"), "", "c", true},
-		"a novella counts":       {rail("1", "a@1", "b@2", "half@1.5"), "", "half", true},
-		"unnumbered skipped":     {rail("1", "cur@1", "omni@1-3", "x@", "b@2"), "", "b", true},
-		"last":                   {rail("3", "a@1", "b@2", "cur@3"), "", "", true},
-		"ties keep rail order":   {rail("1", "cur@1", "b@2", "b2@2"), "", "b", true},
-		"own entry when blank":   {rail("", "a@1", "cur@2", "c@3"), "", "c", true},
-		"unreadable position":    {rail("1-3", "cur@1-3", "b@4"), "", "", false},
-		"current work skipped":   {rail("1", "cur@1", "cur@2", "b@3"), "", "b", true},
-		"equal position skipped": {rail("2", "a@2", "cur@2", "b@3"), "", "b", true},
-		"skip passes over":       {rail("1", "cur@1", "d@4", "b@2", "c@3"), "b", "c", true},
-		"skip within a tie":      {rail("1", "cur@1", "b@2", "b2@2", "c@3"), "b", "b2", true},
-		"every later one skips":  {rail("1", "cur@1", "b@2", "c@3"), "b|c", "", true},
+		"next by position":     {rail("2", "c@3", "a@1", "cur@2", "d@4"), "", "c", true},
+		"a novella counts":     {rail("1", "a@1", "b@2", "half@1.5"), "", "half", true},
+		"unnumbered skipped":   {rail("1", "cur@1", "omni@1-3", "x@", "b@2"), "", "b", true},
+		"last":                 {rail("3", "a@1", "b@2", "cur@3"), "", "", true},
+		"ties keep rail order": {rail("1", "cur@1", "b@2", "b2@2"), "", "b", true},
+		"own entry when blank": {rail("", "a@1", "cur@2", "c@3"), "", "c", true},
+		"unreadable position":  {rail("one", "cur@one", "b@4"), "", "", false},
+		// A range ("1-3", an omnibus): the current work by its end, an entry by
+		// its start, a single position before a range at one start.
+		"after a range's end":           {rail("1-3", "cur@1-3", "b@2", "c@4"), "", "c", true},
+		"own range entry when blank":    {rail("", "b@2", "cur@1-3", "c@4"), "", "c", true},
+		"a range entry is next":         {rail("0.5", "cur@0.5", "omni@1-3", "d@4"), "", "omni", true},
+		"a single before a range":       {rail("1", "cur@1", "omni@2-4", "b@2"), "", "b", true},
+		"an omnibus swallows no book":   {rail("2", "omni@1-3", "cur@2", "c@3"), "", "c", true},
+		"a range past the bound is not": {rail("1", "cur@1", "big@2-500", "c@3"), "", "c", true},
+		"current work skipped":          {rail("1", "cur@1", "cur@2", "b@3"), "", "b", true},
+		"equal position skipped":        {rail("2", "a@2", "cur@2", "b@3"), "", "b", true},
+		"skip passes over":              {rail("1", "cur@1", "d@4", "b@2", "c@3"), "b", "c", true},
+		"skip within a tie":             {rail("1", "cur@1", "b@2", "b2@2", "c@3"), "b", "b2", true},
+		"every later one skips":         {rail("1", "cur@1", "b@2", "c@3"), "b|c", "", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var skip func(MetaSeriesWork) bool
@@ -307,7 +342,7 @@ func TestNextRail(t *testing.T) {
 		named("Alpha", "1", "cur@1", "a2@2"),
 		named("Ended", "2", "x@1", "cur@2"),
 		named("Beta", "1", "cur@1", "b2@2"),
-		named("Odd", "1-3", "cur@1-3", "z@4"),
+		named("Odd", "one", "cur@one", "z@4"),
 	}
 	chrono := named("Narnia", "6", "mn@1", "lww@2", "hhb@3", "pc@4", "vdt@5", "cur@6", "lb@7")
 	ended := named("Narnia", "6", "mn@1", "lww@2", "hhb@3", "pc@4", "vdt@5", "cur@6")
@@ -339,6 +374,11 @@ func TestNextRail(t *testing.T) {
 		// A step back judged only on rails ranked above: ranked first, the
 		// publication order decides with The Horse and His Boy.
 		"no rail above": {[]MetaSeries{publication, ended}, []string{"Narnia (Publication)", "Narnia"}, 0, "hhb"},
+		// A range: the omnibus the listener is in (1-3 on the rail above, ended
+		// there) holds b2, so the next rail's b2 steps back and e decides; on a
+		// rail of its own the omnibus is followed after its end.
+		"steps back inside a range above": {[]MetaSeries{named("Main", "1-3", "b1@1", "cur@1-3", "b2@2"), named("Other", "1", "cur@1", "b2@2", "e@5")}, []string{"Main", "Other"}, 1, "e"},
+		"after a range":                   {[]MetaSeries{named("Main", "1-3", "cur@1-3", "b2@2", "d@4")}, []string{"Main"}, 0, "d"},
 		// Unnumbered on the rail above: no step back to judge.
 		"unnumbered on the rail above": {[]MetaSeries{named("Beta", "1", "cur@1", "b2@2"), named("Alpha", "", "cur@", "b2@")}, []string{"Alpha", "Beta"}, 0, "b2"},
 	} {

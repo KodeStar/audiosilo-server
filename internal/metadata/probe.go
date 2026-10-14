@@ -147,6 +147,8 @@ func applyProbe(m *Metadata, p *probeResult) {
 	if v := t["series-part"]; v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			m.SeriesIndex = f
+		} else if start, end, ok := ParseSeriesRange(v); ok {
+			m.SeriesIndex, m.SeriesIndexEnd = start, end // an omnibus, "1-3"
 		}
 	}
 }

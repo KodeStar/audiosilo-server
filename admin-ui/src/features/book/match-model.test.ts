@@ -97,13 +97,14 @@ describe('compare', () => {
     expect(communityValues(c, undefined)).toMatchObject({
       series: 'Discworld',
       series_index: '8',
-      more_series: `[{"name":"${watch}","position":1},{"name":"Omnibus","position":0}]`,
+      more_series: `[{"name":"${watch}","position":1},{"name":"Omnibus","position":1,"position_end":3}]`,
     });
     // Filed under City Watch: that one, numbered as City Watch numbers it.
     expect(communityValues(c, undefined, 'discworld: ankh-morpork city watch')).toMatchObject({
       series: watch,
       series_index: '1',
-      more_series: '[{"name":"Discworld","position":8},{"name":"Omnibus","position":0}]',
+      more_series:
+        '[{"name":"Discworld","position":8},{"name":"Omnibus","position":1,"position_end":3}]',
     });
   });
 
@@ -180,10 +181,12 @@ describe('compare', () => {
     expect(communityValues(c, undefined)).toMatchObject({ series_index: '8', more_series: '' });
   });
 
-  it('drops values the server would refuse (a range as a series position)', () => {
-    const c = candidate({ series: [{ name: 'Mistborn', position: '1-3' }] });
-    expect(communityValues(c, undefined).series_index).toBe('');
+  it('keeps a range as a series position, and drops values the server would refuse', () => {
+    const c = candidate({ series: [{ name: 'Mistborn', position: '1 - 3' }] });
+    expect(communityValues(c, undefined).series_index).toBe('1-3');
     expect(communityValues(c, undefined).narrator).toBe('');
+    const wide = candidate({ series: [{ name: 'Mistborn', position: '1-500' }] });
+    expect(communityValues(wide, undefined).series_index).toBe('');
   });
 
   it('offers what differs, and leaves the admin’s own edits unticked', () => {

@@ -85,7 +85,7 @@ func invalid(field, reason string) error { return &OverrideError{Field: field, R
 const (
 	maxShortField   = 500
 	maxDescription  = 20000
-	maxSeriesIndex  = 100000
+	maxSeriesIndex  = metadata.MaxSeriesPosition
 	maxChapterTitle = 500
 )
 
@@ -122,9 +122,12 @@ func normalizeOverride(field, value string) (string, error) {
 		if v == "" {
 			return "", nil
 		}
+		if start, end, ok := metadata.ParseSeriesRange(v); ok {
+			return FormatSeriesRange(start, end), nil // an omnibus: "1-3"
+		}
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil || math.IsNaN(f) || f < 0 || f > maxSeriesIndex {
-			return "", invalid(field, "must be a number from 0 to 100000")
+			return "", invalid(field, "must be a number from 0 to 100000, or a range like 1-3")
 		}
 		return FormatSeriesPosition(f), nil
 	case FieldMoreSeries:
@@ -173,23 +176,38 @@ func validDatePrefix(v string) bool {
 
 // bookFields is the overridable slice of a book, keyed by field name, with every
 // value in its wire form (series_index included) so one map serves every field.
-// A series index is rendered by FormatSeriesPosition ("" for none, and for a
-// non-finite value a tag can carry, which is no position either).
+// A series index is rendered by FormatSeriesRange ("" for none, and for a
+// non-finite value a tag can carry, which is no position either; "1-3" for a
+// range).
 type bookFields map[string]string
 
 // fieldsOf reads a book's overridable fields.
 func fieldsOf(b *Book) bookFields {
 	return bookFields{
 		FieldTitle: b.Title, FieldAuthor: b.Author, FieldNarrator: b.Narrator,
-		FieldSeries: b.Series, FieldSeriesIndex: FormatSeriesPosition(b.SeriesIndex),
+		FieldSeries: b.Series, FieldSeriesIndex: FormatSeriesRange(b.SeriesIndex, b.SeriesIndexEnd),
 		FieldPublished: b.Published, FieldDescription: b.Description,
 		FieldASIN: b.ASIN, FieldISBN: b.ISBN,
 	}
 }
 
+// ParseSeriesIndex reads a stored series_index value as the position a client
+// knows: the number, or a range's start ("1-3" is 1); 0 for none.
 func ParseSeriesIndex(s string) float64 {
-	v, _ := strconv.ParseFloat(s, 64)
-	return v
+	start, _ := ParseSeriesPosition(s)
+	return start
+}
+
+// ParseSeriesPosition reads a stored series_index value: its start (0 for none)
+// and, for a range ("1-3", metadata.ParseSeriesRange), its end (else 0).
+func ParseSeriesPosition(s string) (start, end float64) {
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		return v, 0
+	}
+	if start, end, ok := metadata.ParseSeriesRange(s); ok {
+		return start, end
+	}
+	return 0, 0
 }
 
 // scannedStampKey is the `scanned` key holding the indexed_at of the upsert that
@@ -244,7 +262,7 @@ func parseScanned(raw string) (fields bookFields, stamp, rev string, err error) 
 	// Rows backfilled by migration 0016 cast series_index with SQL ("2.0", "0.0");
 	// normalize so a revert writes the same form a scan would.
 	if si, ok := out[FieldSeriesIndex]; ok {
-		out[FieldSeriesIndex] = FormatSeriesPosition(ParseSeriesIndex(si))
+		out[FieldSeriesIndex] = FormatSeriesRange(ParseSeriesPosition(si))
 	}
 	return out, stamp, rev, nil
 }
@@ -384,10 +402,10 @@ func loadLayers(ctx context.Context, q querier, bookID int64) (*bookLayers, erro
 	var row Book
 	if err := q.QueryRowContext(ctx,
 		`SELECT b.library_id, b.rel_path, b.is_folder, b.scanned, b.indexed_at,
-		        b.title, b.author, b.narrator, b.series, b.series_index, l.metadata_source
+		        b.title, b.author, b.narrator, b.series, b.series_index, b.series_index_end, l.metadata_source
 		   FROM books b JOIN libraries l ON l.id = b.library_id WHERE b.id = ?`, bookID).
 		Scan(&l.libID, &l.path, &l.isFolder, &raw, &indexedAt,
-			&row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex, &source); err != nil {
+			&row.Title, &row.Author, &row.Narrator, &row.Series, &row.SeriesIndex, &row.SeriesIndexEnd, &source); err != nil {
 		return nil, err
 	}
 	l.preferPath = source == MetadataFromPath
@@ -573,12 +591,13 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	}
 	fields := l.resolve()
 	v := func(field string) string { return fields[field].Value }
+	start, end := ParseSeriesPosition(v(FieldSeriesIndex))
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE books SET title = ?, author = ?, narrator = ?, series = ?, series_key = ?, series_index = ?,
-		     more_series = ?, published = ?, description = ?, asin = ?, isbn = ?
+		     series_index_end = ?, more_series = ?, published = ?, description = ?, asin = ?, isbn = ?
 		 WHERE id = ?`,
-		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), seriesKey(v(FieldSeries)), ParseSeriesIndex(v(FieldSeriesIndex)),
-		cmp.Or(v(FieldMoreSeries), "[]"), v(FieldPublished), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
+		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), seriesKey(v(FieldSeries)), start,
+		end, cmp.Or(v(FieldMoreSeries), "[]"), v(FieldPublished), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
 		return err
 	}
 	if err := keyOtherSeries(ctx, tx, bookID, l.libID, v(FieldSeries), v(FieldMoreSeries)); err != nil {
@@ -869,9 +888,9 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 		return nil, nil, nil
 	}
 	var old, stored string
-	var index float64
-	if err := tx.QueryRowContext(ctx, `SELECT series, series_index, more_series FROM books WHERE id = ?`, bookID).
-		Scan(&old, &index, &stored); err != nil {
+	var index, indexEnd float64
+	if err := tx.QueryRowContext(ctx, `SELECT series, series_index, series_index_end, more_series FROM books WHERE id = ?`, bookID).
+		Scan(&old, &index, &indexEnd, &stored); err != nil {
 		return nil, nil, err
 	}
 	list := ParseMoreSeries(stored)
@@ -899,7 +918,7 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 	for i, s := range list {
 		switch {
 		case i == at && old != "":
-			swapped = append(swapped, SeriesRef{Name: old, Position: index})
+			swapped = append(swapped, SeriesRef{Name: old, Position: index, PositionEnd: indexEnd})
 		case i == at, match.SameSeries(s.Name, old):
 		default:
 			swapped = append(swapped, s)
@@ -915,7 +934,7 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 	}
 	derived := map[string]string{FieldMoreSeries: more}
 	if !touches(edit, FieldSeriesIndex) {
-		derived[FieldSeriesIndex] = FormatSeriesPosition(list[at].Position)
+		derived[FieldSeriesIndex] = FormatSeriesRange(list[at].Position, list[at].PositionEnd)
 	}
 	l, err := load()
 	if err != nil {
@@ -943,12 +962,14 @@ func seriesSwap(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (s
 }
 
 // sameFieldValue reports whether a and b, two values of field, say the same: a
-// series position or an other series list compared as read (so "" and an empty
-// list, or "5" and "5.0", agree), anything else exactly.
+// series position (a range's start and end) or an other series list compared as
+// read (so "" and an empty list, or "5" and "5.0", agree), anything else exactly.
 func sameFieldValue(field, a, b string) bool {
 	switch field {
 	case FieldSeriesIndex:
-		return ParseSeriesIndex(a) == ParseSeriesIndex(b)
+		as, ae := ParseSeriesPosition(a)
+		bs, be := ParseSeriesPosition(b)
+		return as == bs && ae == be
 	case FieldMoreSeries:
 		return slices.Equal(ParseMoreSeries(a), ParseMoreSeries(b))
 	}

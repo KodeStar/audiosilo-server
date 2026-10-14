@@ -13,8 +13,14 @@ import {
 } from '@/api/types';
 import type { Phrase } from '@/lib/phrase';
 import { sameSeries } from '@/lib/series-key';
-import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER } from './field-rules';
-import { moreSeriesRefs, moreSeriesText, parseMoreSeries } from './more-series';
+import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER, parseSeriesRange } from './field-rules';
+import {
+  moreSeriesRefs,
+  moreSeriesText,
+  parseMoreSeries,
+  positionText,
+  seriesRef,
+} from './more-series';
 
 // The book page's logic, kept out of the components so it is unit-tested: field
 // validation (the server's normalizeOverride rules, so a value is refused here
@@ -69,6 +75,9 @@ export function checkField(field: OverrideField, raw: string): FieldCheck {
       return { value: v };
     case 'series_index': {
       if (!v) return { value: '' };
+      // A range, an omnibus of books 1-3: stored as "1-3".
+      const range = parseSeriesRange(v);
+      if (range) return { value: positionText({ position: range.start, position_end: range.end }) };
       const n = Number(v);
       if (!NUMBER.test(v) || n < 0 || n > MAX_SERIES_INDEX) {
         return { value: v, error: 'book.invalid.seriesIndex' };
@@ -157,13 +166,13 @@ export function seriesSwap(
   const list = moreSeriesRefs(fields.more_series.value);
   const at = list.findIndex((s) => sameSeries(s.name, name));
   if (!name || sameSeries(name, old) || at < 0) return undefined;
-  const oldMain = old ? [{ name: old, position: Number(fields.series_index.value) || 0 }] : [];
+  const oldMain = old ? [seriesRef(old, fields.series_index.value)] : [];
   const swapped = list.flatMap((s, i) => (i === at ? oldMain : sameSeries(s.name, old) ? [] : [s]));
   const more = parseMoreSeries(JSON.stringify(swapped));
   if (more.error) return undefined;
   return {
     more_series: more.value,
-    series_index: checkField('series_index', String(list[at].position)).value,
+    series_index: checkField('series_index', positionText(list[at])).value,
   };
 }
 

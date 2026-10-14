@@ -147,8 +147,9 @@ func (c *Catalog) seriesMembers(ctx context.Context, scopes []Scope, keys []stri
 // following the other numbering would loop back - so that book is passed over
 // and the series' next later book is judged, in position order: after The Silver
 // Chair (chronological #6, publication #4) the publication order passes over The
-// Horse and His Boy (chronological #3) and answers with The Last Battle. When
-// none answers, numbered reports whether any of them holds another numbered book
+// Horse and His Boy (chronological #3) and answers with The Last Battle. A book
+// at a range of positions (an omnibus of books 1-3) is followed by the first book
+// after its end, and a book inside it is no step forward. When none answers, numbered reports whether any of them holds another numbered book
 // in scope - the end of a numbered series - and false means its series give no
 // order to follow at all (the book unnumbered, or alone in its series). numbered
 // is true whenever next is found.
@@ -158,7 +159,7 @@ func (c *Catalog) NextInSeries(ctx context.Context, libraryID int64, book *Book,
 		if s.Position <= 0 {
 			continue
 		}
-		next, num, err := c.nextInOneSeries(ctx, libraryID, book.RelPath, s.Name, s.Position, scope,
+		next, num, err := c.nextInOneSeries(ctx, libraryID, book.RelPath, s.Name, s.last(), scope,
 			func(b *Book) bool { return stepsBack(all[:k], b) })
 		if err != nil {
 			return nil, false, err
@@ -174,11 +175,12 @@ func (c *Catalog) NextInSeries(ctx context.Context, libraryID int64, book *Book,
 // stepsBack reports whether candidate, a later book in one of the current book's
 // series, sits at or before the current book in one of earlier (the current
 // book's series ranked above that one, with its positions): a series both are
-// numbered in where candidate's position is not above the current book's.
+// numbered in where candidate's position (a range's start) is not above the
+// current book's last (a range's end: a book inside an omnibus steps back).
 func stepsBack(earlier []SeriesRef, candidate *Book) bool {
 	theirs := candidate.AllSeries()
 	for _, s := range earlier {
-		if p := positionIn(theirs, s.Name); s.Position > 0 && p > 0 && p <= s.Position {
+		if p := positionIn(theirs, s.Name); s.Position > 0 && p > 0 && p <= s.last() {
 			return true
 		}
 	}
@@ -187,7 +189,9 @@ func stepsBack(earlier []SeriesRef, candidate *Book) bool {
 
 // nextInOneSeries returns the book after the one at relPath in the series named
 // series (any spelling) within one library and scope: of the books in that series, the one with the
-// smallest position in it above index (ties by path) that skip doesn't report
+// smallest position in it above index (a range by its start; ties: a single
+// position before a range, so an omnibus never takes the place of the book it
+// starts with, then by path) that skip doesn't report
 // (nil skips none), list shape. A book is in the series through its main series
 // (at its series_index) or through an entry of its more_series (at that entry's
 // position), so the book after Guards! Guards! in City Watch is found whichever
@@ -224,17 +228,18 @@ func (c *Catalog) nextInOneSeries(ctx context.Context, libraryID int64, relPath 
 
 // laterSeriesMembers is nextInOneSeries' query, and its args: the numbered
 // members of series (numberedSeriesMembers), those above index first, each group
-// by position then path. Unbounded: SQLite sorts every member before the first
+// by position, then a range's end (0 for none, so a single position first), then
+// path. Unbounded: SQLite sorts every member before the first
 // row anyway, and nextInOneSeries stops reading at the first book it takes.
 func laterSeriesMembers(libraryID int64, relPath string, series string, index float64, scope Scope) (string, []any) {
 	q, args := numberedSeriesMembers(libraryID, relPath, series, scope)
-	return `SELECT ` + bookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, rel_path`, append(args, index)
+	return `SELECT ` + bookCols + `, pos FROM (` + q + `) ORDER BY pos <= ?, pos, pos_end, rel_path`, append(args, index)
 }
 
 // numberedSeriesMembers is the query, and its args, of the books in the series
 // named series (any spelling: its seriesKey) within one library and scope, other
 // than relPath, with a position in it (above 0): bookCols, then pos, their
-// position. Its two branches are each found by an index: the books whose main
+// position (a range's start), and pos_end, a range's end (else 0). Its two branches are each found by an index: the books whose main
 // series it is by idx_books_series_key (library_id, series_key, ...),
 // and the books in it only through their list by book_more_series' key index
 // (which never holds a book's main series, so a list repeating it counts once).
@@ -243,10 +248,10 @@ func laterSeriesMembers(libraryID int64, relPath string, series string, index fl
 func numberedSeriesMembers(libraryID int64, relPath string, series string, scope Scope) (string, []any) {
 	frag, fargs := pathFilterSQL("b.rel_path", scope)
 	key := seriesKey(series)
-	q := `SELECT ` + prefixCols("b.") + `, b.series_index AS pos FROM books b
+	q := `SELECT ` + prefixCols("b.") + `, b.series_index AS pos, b.series_index_end AS pos_end FROM books b
 		 WHERE b.library_id = ? AND b.series_key = ? AND b.series_index > 0 AND b.rel_path <> ? AND ` + frag + `
 		UNION ALL
-		SELECT ` + prefixCols("b.") + `, m.position AS pos FROM book_more_series m CROSS JOIN books b ON b.id = m.book_id
+		SELECT ` + prefixCols("b.") + `, m.position AS pos, m.position_end AS pos_end FROM book_more_series m CROSS JOIN books b ON b.id = m.book_id
 		 WHERE m.series_key = ? AND m.library_id = ? AND m.position > 0 AND b.rel_path <> ? AND ` + frag
 	return q, slices.Concat(
 		[]any{libraryID, key, relPath}, fargs,

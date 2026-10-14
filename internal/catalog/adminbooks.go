@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -39,6 +40,9 @@ type AdminBook struct {
 	Narrators   []string `json:"narrators"`
 	Series      string   `json:"series"`
 	SeriesIndex float64  `json:"series_index"`
+	// SeriesIndexEnd is the end of a main series position that is a range
+	// (Book.SeriesIndexEnd); omitted when it isn't one.
+	SeriesIndexEnd float64 `json:"series_index_end,omitempty"`
 	// SeriesList is every series the book is in, the main one (Series) first,
 	// with its position in each (see FieldMoreSeries).
 	SeriesList []SeriesRef `json:"series_list"`
@@ -142,7 +146,7 @@ const (
 var directPlayableExpr = media.DirectPlayableSQL("b.codec")
 
 var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.author,
-	b.narrator, b.series, b.series_index, b.more_series, b.published, b.released, b.duration, b.format, b.codec, ` +
+	b.narrator, b.series, b.series_index, b.series_index_end, b.more_series, b.published, b.released, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
 	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
 	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0), ` +
@@ -185,7 +189,7 @@ func creditFilter(prefix, field, value string) (string, []any) {
 func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 	var art, color string
 	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
-			&b.Narrator, &b.Series, &b.SeriesIndex, &b.moreSeries, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
+			&b.Narrator, &b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &b.moreSeries, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
 			&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
 			&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
 			&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck,
@@ -193,7 +197,7 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 		func() {
 			b.Authors = append([]string{}, creditNames(b.Author)...)
 			b.Narrators = append([]string{}, creditNames(b.Narrator)...)
-			b.SeriesList = SeriesList(b.Series, b.SeriesIndex, b.moreSeries)
+			b.SeriesList = SeriesList(SeriesRef{Name: b.Series, Position: b.SeriesIndex, PositionEnd: b.SeriesIndexEnd}, b.moreSeries)
 			b.CoverColor, _ = storedCoverColor(art, color)
 		}
 }
@@ -834,15 +838,16 @@ type SeriesCount struct {
 	Author    string    `json:"author"` // the most common author among its books
 	Books     int       `json:"books"`
 	Duration  float64   `json:"duration"`
-	Positions []float64 `json:"positions"` // distinct non-zero positions, ascending
+	Positions []float64 `json:"positions"` // distinct non-zero positions held (a range's each: heldPositions), ascending
 	// ExtraBooks is how many of Books are in it beyond their main series (through
 	// more_series); 0 without memberships.
 	ExtraBooks int `json:"extra_books"`
 }
 
 // Series aggregates the series of one library (or all, libraryID 0) within scope
-// (nil = every book): books, the positions held (so the console can mark gaps
-// against community series data) and the dominant author. With memberships a book
+// (nil = every book): books, the positions held (so a client can mark gaps; a
+// book at a range holds every position in it, heldPositions) and the dominant
+// author. With memberships a book
 // counts in every series it is in (its more_series too), at its position there;
 // without, only in its main series (what a client that places books by
 // series_index can show).
@@ -853,10 +858,10 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, mem
 	frag, fargs := aggregateScope(scope)
 	// Without memberships, only main series: the narrower query of the books
 	// that have one, with no list to read.
-	q := `SELECT series, author, series_index, '[]', duration, ` + matchedExpr + ` FROM books b
+	q := `SELECT series, author, series_index, series_index_end, '[]', duration, ` + matchedExpr + ` FROM books b
 		  WHERE series <> '' AND (? = 0 OR library_id = ?) AND %s`
 	if memberships {
-		q = `SELECT series, author, series_index, more_series, duration, ` + matchedExpr + ` FROM books b
+		q = `SELECT series, author, series_index, series_index_end, more_series, duration, ` + matchedExpr + ` FROM books b
 		  WHERE (series <> '' OR more_series <> '[]') AND (? = 0 OR library_id = ?) AND %s`
 	}
 	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(q, frag),
@@ -874,12 +879,12 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, mem
 	bySeries := map[string]*acc{}
 	for rows.Next() {
 		var series, author, more string
-		var idx, dur float64
+		var idx, idxEnd, dur float64
 		var matched bool
-		if err := rows.Scan(&series, &author, &idx, &more, &dur, &matched); err != nil {
+		if err := rows.Scan(&series, &author, &idx, &idxEnd, &more, &dur, &matched); err != nil {
 			return nil, err
 		}
-		for i, s := range SeriesList(series, idx, more) { // each series once
+		for i, s := range SeriesList(SeriesRef{Name: series, Position: idx, PositionEnd: idxEnd}, more) { // each series once
 			k := seriesKey(s.Name)
 			a := bySeries[k]
 			if a == nil {
@@ -895,9 +900,11 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, mem
 			if author != "" {
 				a.authors[author]++
 			}
-			if s.Position > 0 && !a.pos[s.Position] {
-				a.pos[s.Position] = true
-				a.Positions = append(a.Positions, s.Position)
+			for _, p := range heldPositions(s) {
+				if !a.pos[p] {
+					a.pos[p] = true
+					a.Positions = append(a.Positions, p)
+				}
 			}
 			sp := a.spellings[s.Name]
 			sp.books++
@@ -923,6 +930,24 @@ func (c *Catalog) Series(ctx context.Context, libraryID int64, scope *Scope, mem
 	}
 	sort.Slice(out, func(i, j int) bool { return lessFold(out[i].Name, out[j].Name) })
 	return out, nil
+}
+
+// heldPositions is the positions a book at s holds in its series: none for no
+// position, its position, and for a range (an omnibus of books 1-3) its start,
+// every whole number after it up to its end, and its end ("2.5-4" holds 2.5, 3
+// and 4), so a client marking gaps sees none inside an omnibus it holds.
+func heldPositions(s SeriesRef) []float64 {
+	if s.Position <= 0 {
+		return nil
+	}
+	out := []float64{s.Position}
+	if s.PositionEnd <= s.Position {
+		return out
+	}
+	for p := math.Floor(s.Position) + 1; p < s.PositionEnd; p++ {
+		out = append(out, p)
+	}
+	return append(out, s.PositionEnd)
 }
 
 // spelling is how many of a series' books spell it one way, and how many of

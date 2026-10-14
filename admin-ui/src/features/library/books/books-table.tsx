@@ -19,7 +19,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { bookRoute, isBooksField, refKey } from '@/lib/book-route';
 import { formatDuration, formatRelative, seriesIndexLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { positionIn } from '../series/series-model';
+import { spanIn } from '../series/series-model';
 import { LoadingMore, type BookViewProps } from './book-grid';
 import { useIsPhone, useWindowRows } from './use-layout';
 
@@ -70,12 +70,15 @@ function bookColumns(
       // Filtered to one series: the book's place in that one.
       cell: ({ row: { original: b } }) => {
         const name = filtered ?? b.series;
-        const position = filtered ? positionIn(b, filtered) : b.series_index;
+        const at = spanIn(b, filtered || undefined);
         return name ? (
           <>
             {name}
-            {position > 0 ? (
-              <span className="tabular-nums"> {seriesIndexLabel(position, lang, t)}</span>
+            {at.position > 0 ? (
+              <span className="tabular-nums">
+                {' '}
+                {seriesIndexLabel(at.position, lang, t, at.end)}
+              </span>
             ) : null}
           </>
         ) : null;

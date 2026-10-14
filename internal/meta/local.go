@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
@@ -22,15 +23,20 @@ type MetaLocal struct {
 }
 
 // LocalBook is one of the caller's books PlaceLocal may place: its handle, its
-// local series and index, its identifiers, and the community work it is when
-// known ("" when not; PlaceOwned fills it from the identifiers).
+// local series and index (SeriesIndexEnd: a range's end, an omnibus of books 1-3;
+// else 0), its identifiers, and the community work it is when known ("" when
+// not; PlaceOwned fills it from the identifiers).
 type LocalBook struct {
 	MetaLocal
-	Series      string
-	SeriesIndex float64
-	ASIN, ISBN  string
-	WorkID      string
+	Series         string
+	SeriesIndex    float64
+	SeriesIndexEnd float64
+	ASIN, ISBN     string
+	WorkID         string
 }
+
+// last is the last position b holds in its series: a range's end, else its index.
+func (b LocalBook) last() float64 { return max(b.SeriesIndex, b.SeriesIndexEnd) }
 
 // SeriesNames is every name rails go by, each rail's and each of its orderings':
 // the names the caller's books' series are matched against for PlaceOwned.
@@ -77,6 +83,16 @@ func (s *Service) PlaceOwned(ctx context.Context, env *Enrichment, requested Met
 // place (the console's samePosition tolerance, so 2.5 matches "2.5").
 func samePosition(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 
+// parseSpan reads a rail position as the positions it holds: a number ("3", 3 to
+// 3) or a range ("1-3", an omnibus of books 1 to 3: metadata.ParseSeriesRange,
+// the rule the series_index field stores one by). ok is false for anything else.
+func parseSpan(s string) (start, end float64, ok bool) {
+	if p, ok := parsePosition(s); ok {
+		return p, p, true
+	}
+	return metadata.ParseSeriesRange(s)
+}
+
 // PlaceLocal returns a copy of rails with Local set on every entry the caller
 // owns, in the main view and in each alternate ordering. rails is never
 // modified. Each entry gets at most one book:
@@ -86,7 +102,10 @@ func samePosition(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 //  3. else, in an alternate ordering, the book its main view placed for the
 //     same work, so the two views of one work never disagree;
 //  4. else a book of a local series named like this view (match.SeriesKey)
-//     whose series index equals the entry's numeric position.
+//     whose series index equals the entry's numeric position: a range entry
+//     ("1-3") holds a book at that same range, and an entry at one number holds
+//     a book at it, else a book whose range starts there (an omnibus of 1-3
+//     owned, entry 1 not).
 //
 // A book whose work id is known is placed by that id only, never by its index:
 // a book that is another work (a novella numbered like the next volume) holds
@@ -194,13 +213,20 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 			return l, true
 		}
 	}
-	pos, ok := parsePosition(w.Position)
+	start, end, ok := parseSpan(w.Position)
 	if !ok {
 		return MetaLocal{}, false
 	}
 	for _, b := range byIndex {
-		if samePosition(b.SeriesIndex, pos) {
+		if samePosition(b.SeriesIndex, start) && samePosition(b.last(), end) {
 			return b.MetaLocal, true
+		}
+	}
+	if start == end {
+		for _, b := range byIndex {
+			if b.SeriesIndexEnd > b.SeriesIndex && samePosition(b.SeriesIndex, start) {
+				return b.MetaLocal, true
+			}
 		}
 	}
 	return MetaLocal{}, false
@@ -208,12 +234,14 @@ func (p *placer) place(w MetaSeriesWork, byIndex []LocalBook, mains map[string]M
 
 // nextEntry is the entry after the current work on rail, read as the series
 // reads, as an index into rail.Works: of the entries skip doesn't report (nil
-// skips none), the one with the smallest numeric position above the current
-// work's (the rail's Position, else the current work's own entry), ties in rail
-// order. Unnumbered entries ("1-3", blank) and currentWork's own entries are
-// passed over. ok is false when the current position is not a number, so there
-// is nothing to count from; next is -1 with ok true when no entry is left after
-// the current work.
+// skips none), the one with the smallest numeric position (a range's start)
+// above the current work's last (currentPosition: a range's end, so an omnibus
+// of 1-3 is followed by 4), ties in rail order, but a single position before a
+// range starting there (an omnibus never takes the place of the book it starts
+// with). Unnumbered entries (blank, not a number) and currentWork's own entries
+// are passed over. ok is false when the current position is not a number, so
+// there is nothing to count from; next is -1 with ok true when no entry is left
+// after the current work.
 //
 // Pass the rail's MAIN view (MetaSeries.Works): an alternate reading order's
 // "next" is a different book, and the main view is the order a listener is in.
@@ -223,26 +251,28 @@ func nextEntry(rail MetaSeries, currentWork string, skip func(MetaSeriesWork) bo
 		return -1, false
 	}
 	next = -1
-	var best float64
+	var best, bestEnd float64
 	for i, w := range rail.Works {
-		p, numbered := parsePosition(w.Position)
+		p, end, numbered := parseSpan(w.Position)
 		if !numbered || p <= at || samePosition(p, at) || w.ID == currentWork {
 			continue
 		}
-		if (next < 0 || p < best) && (skip == nil || !skip(w)) {
-			next, best = i, p
+		better := next < 0 || p < best || (p == best && end == p && bestEnd > best)
+		if better && (skip == nil || !skip(w)) {
+			next, best, bestEnd = i, p, end
 		}
 	}
 	return next, true
 }
 
-// currentPosition is the current work's numeric position on rail: the rail's
-// Position, else its own entry's. ok is false when neither is a number.
+// currentPosition is the last numeric position the current work holds on rail
+// (a range's end: an omnibus of 1-3 is at 3): the rail's Position, else its own
+// entry's. ok is false when neither is a number or a range.
 func currentPosition(rail MetaSeries, currentWork string) (at float64, ok bool) {
-	at, ok = parsePosition(rail.Position)
+	_, at, ok = parseSpan(rail.Position)
 	for i := 0; !ok && i < len(rail.Works); i++ {
 		if rail.Works[i].ID == currentWork {
-			at, ok = parsePosition(rail.Works[i].Position)
+			_, at, ok = parseSpan(rail.Works[i].Position)
 		}
 	}
 	return at, ok
@@ -313,7 +343,9 @@ func NextRail(rails []MetaSeries, currentWork string, names []string) (rail, ent
 
 // railStepsBack reports whether the work nextWork, the next entry on a rail,
 // sits at or before currentWork on one of the rails ranked above it (earlier,
-// indexes into rails), where both positions are numbers: in a series read in two
+// indexes into rails), where both positions are numbers (a range: nextWork by
+// its start, currentWork by its end, so a work inside an omnibus the listener
+// is in steps back): in a series read in two
 // orders (Narnia's chronological and publication rails) following the second
 // order's next would loop back through the first's. An entry with no id is
 // judged on no other rail.
@@ -327,7 +359,7 @@ func railStepsBack(rails []MetaSeries, earlier []int, currentWork, nextWork stri
 			continue
 		}
 		for _, w := range rails[j].Works {
-			if p, numbered := parsePosition(w.Position); w.ID == nextWork && numbered && (p < at || samePosition(p, at)) {
+			if p, _, numbered := parseSpan(w.Position); w.ID == nextWork && numbered && (p < at || samePosition(p, at)) {
 				return true
 			}
 		}

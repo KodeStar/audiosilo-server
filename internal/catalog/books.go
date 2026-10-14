@@ -425,7 +425,7 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 }
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
-	series_index, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
+	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
 	added_at, content_hash, published, has_cover, cover_art, cover_color`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
@@ -435,7 +435,7 @@ const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 func bookDest(b *Book) (dest []any, finish func()) {
 	var more, art, color string
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
-			&b.Series, &b.SeriesIndex, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
+			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
 			&b.Published, &b.HasCover, &art, &color},
 		func() {
@@ -444,7 +444,7 @@ func bookDest(b *Book) (dest []any, finish func()) {
 			if more != "[]" && more != "" { // most books have no list: no parse
 				// In a series beyond its main one: the whole list. A list that only
 				// repeats the main series (or can't be read) adds none.
-				if l := SeriesList(b.Series, b.SeriesIndex, more); len(l) > 1 || (len(l) == 1 && b.Series == "") {
+				if l := SeriesList(b.mainSeries(), more); len(l) > 1 || (len(l) == 1 && b.Series == "") {
 					b.SeriesList = l
 				}
 			}

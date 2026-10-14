@@ -12,6 +12,7 @@ import { counted, formatNumber } from '@/lib/format';
 import { useMediaQuery } from '@/lib/use-media-query';
 import {
   formatPositions,
+  formatSpan,
   metaCandidate,
   pickRail,
   placeBooks,
@@ -135,10 +136,7 @@ function Summary({ status, fmt }: { status: SeriesStatus; fmt: (n: number) => st
   if (status.missing.length === 0) {
     return t('series.complete', { count: status.total, formatted: fmt(status.total) });
   }
-  const missing = formatPositions(
-    status.missing.map((e) => e.position),
-    fmt,
-  );
+  const missing = formatPositions(status.missing, fmt);
   return (
     <Trans
       i18nKey={status.have.length ? 'series.have' : 'series.haveNone'}
@@ -178,7 +176,8 @@ function Shelf({
       <ul className="spines min-w-max" aria-label={t('series.spinesLabel', { name })}>
         {spines.map((sp) => {
           if (sp.kind === 'gap') {
-            const label = t('series.gap', { index: fmt(sp.entry.position), title: sp.entry.title });
+            const index = formatSpan(sp.entry, fmt);
+            const label = t('series.gap', { index, title: sp.entry.title });
             return (
               <li key={`gap-${sp.entry.position}`} className="flex h-full items-end">
                 <span
@@ -189,7 +188,7 @@ function Shelf({
                   title={label}
                   style={{ height: `${spineHeight(0, sp.entry.title)}%` }}
                 >
-                  <span className="spine-idx">{fmt(sp.entry.position)}</span>
+                  <span className="spine-idx">{index}</span>
                   {sp.entry.title}
                 </span>
               </li>
@@ -197,10 +196,8 @@ function Shelf({
           }
           const b = sp.book;
           const { body, band, ink } = spineColors(b);
-          const label =
-            sp.position > 0
-              ? t('series.spine', { index: fmt(sp.position), title: b.title })
-              : b.title;
+          const index = formatSpan(sp, fmt);
+          const label = sp.position > 0 ? t('series.spine', { index, title: b.title }) : b.title;
           return (
             <li key={refKey(b)} className="flex h-full items-end">
               <button
@@ -218,7 +215,7 @@ function Shelf({
                   } as React.CSSProperties
                 }
               >
-                {sp.position > 0 ? <span className="spine-idx">{fmt(sp.position)}</span> : null}
+                {sp.position > 0 ? <span className="spine-idx">{index}</span> : null}
                 {b.title}
               </button>
             </li>

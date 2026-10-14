@@ -42,7 +42,11 @@ type Metadata struct {
 	Author      string  `json:"author"`
 	Series      string  `json:"series"`
 	SeriesIndex float64 `json:"series_index"`
-	Narrator    string  `json:"narrator"`
+	// SeriesIndexEnd is the end of a position that is a range (an omnibus of
+	// books 1-3: SeriesIndex 1, SeriesIndexEnd 3; see ParseSeriesRange); 0 when
+	// it isn't one.
+	SeriesIndexEnd float64 `json:"series_index_end,omitempty"`
+	Narrator       string  `json:"narrator"`
 	// Released is the date a tag gives, as YYYY[-MM[-DD]] ("" when none or not a
 	// real date; see ReleaseDate): usually the recording's release, not the work's
 	// first publication.

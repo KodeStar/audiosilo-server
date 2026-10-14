@@ -107,7 +107,7 @@ internal/auth/        users, argon2id, opaque hashed tokens, auth codes; hash.go
 internal/relpath/     library-relative path rules shared by catalog and auth: Clean (canonical form) and Within (the segment-boundary rule of share scopes and cast tokens)
 internal/catalog/     libraries, access grants, books, FTS search, listening state (the data layer)
 internal/library/     filesystem view (fsview.go) + background scanner (scanner.go)
-internal/metadata/    dhowden/tag + ffprobe extraction (incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
+internal/metadata/    dhowden/tag + ffprobe extraction (a `series-part` tag "1-3" is a range: seriesrange.go, ParseSeriesRange, the one grammar of a range position; incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
 internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below)
@@ -239,7 +239,8 @@ Player redesign Phase 8b-1 (`0044`): `users.managed_by` (-> users SET NULL), `me
 SQLite can't add that CHECK), `users.can_add_members` (the admin's per-person switch, default 1),
 `users.display_name` (the name an owner typed for a member) and `tokens.created_on_token_id` (-> tokens
 SET NULL: which of the owner's devices a member's sign-in was made on; information only). See
-"Household members" below.
+"Household members" below. `0045` adds `books.series_index_end` and `book_more_series.position_end`
+(a range's end, 0 for none; see Series ranges below; the list's key index now covers it).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -639,7 +640,8 @@ admin overrides; see Metadata overrides below).
   places them: the current work's entry -> the requested book; else the book whose
   work id `CachedWorkID` knows; else (orderings) the main view's book for that work;
   else the series position == the entry's numeric position on a series named like that
-  view. A book with a known work id is never placed by index; one book per entry;
+  view (a range entry "1-3" holds a book at that range; an entry at one number a book at it,
+  else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index; one book per entry;
   ties: the requested book's library, then library sort order, then path.
   **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
   (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
@@ -650,8 +652,9 @@ admin overrides; see Metadata overrides below).
   series or one of that rail's orderings, then like its more_series entries in list
   order, then the rest as listed) the first with an entry after the current work
   that doesn't step back decides, with its first such entry (`nextEntry`: on its
-  MAIN view, the smallest numeric position above the current work's, ties in rail
-  order, passing over each entry that steps back,
+  MAIN view, the smallest numeric position (a range "1-3" by its start) above the current
+  work's last (a range's end), ties in rail order but a single position before a range
+  starting there, passing over each entry that steps back,
   `railStepsBack`: the entry's work at or before the current work's position on an
   earlier-ranked rail, both numeric - after The Silver Chair the publication order
   passes over The Horse and His Boy and The Magician's Nephew, earlier
@@ -668,14 +671,14 @@ admin overrides; see Metadata overrides below).
   first; per series one query
   (`laterSeriesMembers`) over its numbered members in scope - same library, books in
   that series (any spelling: by its key, see Series spellings) by their main series or a more_series entry, at their
-  position IN THAT SERIES - those above the book's position first, then by
-  position, ties by path (unbounded: SQLite sorts every member first anyway):
+  position IN THAT SERIES - those above the book's position (a range's end) first, then by
+  position, then a range's end (a single book before an omnibus starting with it), ties by path (unbounded: SQLite sorts every member first anyway):
   read in that order, the first row above that doesn't step back is the next book,
   and any row at all means numbered (the first at or below ends the walk); a UNION
   ALL of an `idx_books_series_key` branch and a `book_more_series` branch (its key
   index, then each book by rowid); the first series with a later book that doesn't step back
   answers with the first such book (`stepsBack`: it sits at or before the current
-  book in an earlier-ranked series of the current book's, both numbered there; a
+  book (its last position: a book inside an omnibus steps back) in an earlier-ranked series of the current book's, both numbered there; a
   book that steps back is passed over, not the whole series); numbered books in
   some series but none later (or every later one stepping back) in any ->
   `{source:"series"}`), `folder`
@@ -832,6 +835,16 @@ admin overrides; see Metadata overrides below).
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
   override + `refreshEffective` (restores the scanned value; no reindex, no disk).
+  **Series ranges** (an omnibus of books 1-3): the `series_index` field may hold a range,
+  canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
+  end <= 100000, a span of at most `metadata.MaxSeriesSpan` = 100, since the slots a range covers
+  are counted one by one); `refreshEffective` writes its start to `series_index` (what every
+  client reads) and its end to `series_index_end` (`ParseSeriesPosition`; `FormatSeriesRange` the
+  stored text). A `more_series` entry carries one as `position_end` (`SeriesRef.PositionEnd`,
+  omitempty; `book_more_series.position_end`). Player `Book` JSON: `series_index_end` and
+  `series_list[].position_end`, both omitempty; the admin book row `series_index_end`. `seriesSwap`
+  carries a range both ways; the series aggregate's `positions` hold every whole number inside a
+  range (`heldPositions`), so a player marking gaps sees none inside an owned omnibus.
   An admin edit that makes the main series a series its `more_series` lists (any spelling, `match.SameSeries`) -
   by setting `series`, or by reverting it when the series the revert leaves
   (`newMainSeries`: `loadLayers` + `resolve` without the series override) is listed -
@@ -999,6 +1012,8 @@ admin overrides; see Metadata overrides below).
   Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
   changes the book's series, which the review shows as "old -> new". A retired work slug
   is a redirect the client follows, so the names written are the merged record's.
+  A community position that is a range ("1-3") is written as one (`series_index` "1-3", a
+  `more_series` entry's `position_end`); one the field refuses (a span over 100) is none.
   Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
   the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`). A
   repick only touches an ASIN whose override is `source=community`. A **refresh** run
@@ -1603,7 +1618,7 @@ admin overrides; see Metadata overrides below).
   "version":1,…}` envelope the community metadata site imports on its Watching page
   so a user can mark which entries of a series they own. **The file leaves the
   server**, so it carries bibliographic facts only (title, authors, narrators,
-  series + position, asin/isbn, runtime_min, chapters) and **never** a path, size,
+  series + position (`series_position` "1-3" for a range: the importer's grammar takes one), asin/isbn, runtime_min, chapters) and **never** a path, size,
   codec, format or anything else about the filesystem - a regression test asserts
   that. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
   `ListBooks`, never OFFSET; copies of the same book within the library collapse on
@@ -1791,7 +1806,9 @@ Books in several series (capability `series_memberships`): with `memberships=1`,
 as `/admin/books`) and `/series` counts a book in every series it is in (`extra_books`);
 without it both see main series only, as a client that places books by `series_index`
 needs. A player `Book` in more than one series carries `series_list` (every series, the
-main one first, with its position in each; omitted otherwise).
+main one first, with its position in each; omitted otherwise). A position that is a range
+(an omnibus) adds `series_index_end` / an entry's `position_end` (omitempty; `series_index` /
+`position` stay the start).
 The first page of several series' books in one request (capability `series_books`, the
 player's Series cards) is `GET /libraries/{id}/series/books?name=A&name=B[&limit=N]` ->
 `{"series": [{name, books, next_cursor?}]}` (authed, `browseScope` like `/books`; 400 for no
