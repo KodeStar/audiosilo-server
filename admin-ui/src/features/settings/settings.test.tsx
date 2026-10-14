@@ -244,6 +244,36 @@ describe('settings', () => {
     );
   });
 
+  it('offers plain HTTP at home only with a self-signed certificate, saved for the restart', async () => {
+    const base = settingsWith();
+    const calls = mockFetch(
+      routes({
+        'PATCH /admin/settings': patchEcho(base, { restart_pending: ['network.tls_home_http'] }),
+      }),
+    );
+    renderApp('/server?topic=network');
+    const user = userEvent.setup();
+    const toggle = await screen.findByRole('switch', { name: 'Plain HTTP at home' });
+    expect(toggle).toBeChecked();
+    // Other modes have no use for it.
+    await user.click(screen.getByRole('radio', { name: /Let's Encrypt/ }));
+    expect(screen.queryByRole('switch', { name: 'Plain HTTP at home' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: /Self-signed/ }));
+    const again = screen.getByRole('switch', { name: 'Plain HTTP at home' });
+    await user.click(again);
+    const card = again.closest('section') as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: 'Save changes' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save changes' }),
+    );
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+        network: { tls_home_http: false },
+      }),
+    );
+    expect(await screen.findByText(/Plain HTTP at home\. Until then/)).toBeInTheDocument();
+  });
+
   it('turns the update check off at once', async () => {
     const base = settingsWith();
     const calls = mockFetch(routes({ 'PATCH /admin/settings': patchEcho(base) }));

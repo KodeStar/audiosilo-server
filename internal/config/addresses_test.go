@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/netip"
 	"reflect"
 	"slices"
 	"testing"
@@ -85,6 +86,22 @@ func TestHomeNetworkHost(t *testing.T) {
 	}
 }
 
+// HomeNetworkIP is the address predicate under isHomeNetworkHost, and what the
+// listener's home HTTP gate builds on (adding loopback there).
+func TestHomeNetworkIP(t *testing.T) {
+	cases := map[string]bool{
+		"10.1.2.3": true, "172.16.0.1": true, "192.168.1.205": true, "169.254.1.1": true,
+		"fd00::1": true, "fe80::1": true, "::ffff:192.168.1.5": true,
+		"100.64.0.1": false, "100.127.255.254": false, "127.0.0.1": false, "::1": false,
+		"8.8.8.8": false, "2001:db8::1": false, "0.0.0.0": false, "::": false,
+	}
+	for addr, want := range cases {
+		if got := HomeNetworkIP(netip.MustParseAddr(addr)); got != want {
+			t.Errorf("HomeNetworkIP(%s) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
 func TestAddresses(t *testing.T) {
 	cases := []struct {
 		name            string
@@ -111,6 +128,7 @@ func TestAddresses(t *testing.T) {
 	for _, tc := range cases {
 		c := Default(t.TempDir())
 		c.PublicURL, c.LANURL = tc.public, tc.lan
+		c.TLS.HomeHTTP = false // home HTTP's own cases are TestAddressesHomeHTTP
 		home, away := c.Addresses(tc.scheme, tc.host)
 		if home != tc.wantHome || away != tc.wantA {
 			t.Errorf("%s: Addresses = (%q, %q), want (%q, %q)", tc.name, home, away, tc.wantHome, tc.wantA)
@@ -156,5 +174,52 @@ func TestLANURLSetting(t *testing.T) {
 	_, err = loaded.WithSettings(patch(map[string]string{"general.lan_url": `"http://x.lan"`}), ok)
 	if se := settingErr(t, err); se.Reason != ReasonLocked {
 		t.Fatalf("an env lan_url must be locked, got %s", se.Reason)
+	}
+}
+
+// With home HTTP (tls.home_http on a self-signed server) a derived home address
+// is http even for a request that came over https; a configured lan_url, a
+// public request and the other TLS modes are as before.
+func TestAddressesHomeHTTP(t *testing.T) {
+	cases := []struct {
+		name            string
+		mode            TLSMode
+		homeHTTP        bool
+		public, lan     string
+		scheme, host    string
+		wantHome, wantA string
+	}{
+		{"https LAN request derives an http home", TLSSelfSigned, true, "", "", "https", "192.168.1.205:8080",
+			"http://192.168.1.205:8080", ""},
+		{"https's default port is kept, never http's", TLSSelfSigned, true, "", "", "https", "192.168.1.205",
+			"http://192.168.1.205:443", ""},
+		{"a bare IPv6 host on 443", TLSSelfSigned, true, "", "", "https", "fd12::20", "http://[fd12::20]:443", ""},
+		{"a bracketed IPv6 host on 443", TLSSelfSigned, true, "", "", "https", "[fd12::20]", "http://[fd12::20]:443", ""},
+		{"a name on 443", TLSSelfSigned, true, "", "", "https", "nas.local", "http://nas.local:443", ""},
+		{"a plain request without a port stays on 80", TLSSelfSigned, true, "", "", "http", "nas.local", "http://nas.local", ""},
+		{"a plain LAN request too", TLSSelfSigned, true, "", "", "http", "nas.local:8080", "http://nas.local:8080", ""},
+		{"IPv6 ULA host", TLSSelfSigned, true, "", "", "https", "[fd12::20]:8080", "http://[fd12::20]:8080", ""},
+		{"an https public_url on the LAN host keeps the http home", TLSSelfSigned, true,
+			"https://192.168.1.205:8080", "", "https", "192.168.1.205:8080",
+			"http://192.168.1.205:8080", "https://192.168.1.205:8080"},
+		{"a configured lan_url is used as it is", TLSSelfSigned, true, "", "https://nas.local:8080", "https", "192.168.1.205:8080",
+			"https://nas.local:8080", ""},
+		{"a public request derives no home", TLSSelfSigned, true, "", "", "https", "books.example.com", "", ""},
+		{"a loopback request derives no home", TLSSelfSigned, true, "", "", "https", "127.0.0.1:8080", "", ""},
+		{"home_http off keeps the scheme", TLSSelfSigned, false, "", "", "https", "192.168.1.205:8080",
+			"https://192.168.1.205:8080", ""},
+		{"autocert ignores home_http", TLSAutocert, true, "", "", "https", "192.168.1.205:443",
+			"https://192.168.1.205:443", ""},
+		{"mode off ignores home_http", TLSOff, true, "", "", "https", "192.168.1.205:8080",
+			"https://192.168.1.205:8080", ""},
+	}
+	for _, tc := range cases {
+		c := Default(t.TempDir())
+		c.TLS.Mode, c.TLS.HomeHTTP = tc.mode, tc.homeHTTP
+		c.PublicURL, c.LANURL = tc.public, tc.lan
+		home, away := c.Addresses(tc.scheme, tc.host)
+		if home != tc.wantHome || away != tc.wantA {
+			t.Errorf("%s: Addresses = (%q, %q), want (%q, %q)", tc.name, home, away, tc.wantHome, tc.wantA)
+		}
 	}
 }

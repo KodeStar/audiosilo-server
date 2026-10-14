@@ -210,7 +210,15 @@ func TestRestartPending(t *testing.T) {
 	if got := running.RestartPending(running); len(got) != 0 {
 		t.Fatalf("nothing pending against itself, got %v", got)
 	}
-	for _, id := range []string{"network.bind", "network.tls_mode", "players.web_dir", "metadata.base_url", "metadata.mode", "demo.enabled"} {
+	// The listener reads tls.home_http once, at start.
+	homeOff, err := running.WithSettings(patch(map[string]string{"network.tls_home_http": `false`}), ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := homeOff.RestartPending(running); !reflect.DeepEqual(got, []string{"network.tls_home_http"}) {
+		t.Fatalf("RestartPending = %v, want [network.tls_home_http]", got)
+	}
+	for _, id := range []string{"network.bind", "network.tls_mode", "network.tls_home_http", "players.web_dir", "metadata.base_url", "metadata.mode", "demo.enabled"} {
 		if !strings.Contains(strings.Join(RestartSettings(), ","), id) {
 			t.Errorf("%s must be a restart setting", id)
 		}

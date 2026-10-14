@@ -1638,6 +1638,8 @@
   "settings.network.mode.selfsignedBody": "Encrypted, but browsers warn the first time. Fine for a home network.",
   "settings.network.mode.autocert": "Let's Encrypt",
   "settings.network.mode.autocertBody": "Free trusted certificates, renewed automatically. Needs ports 80 and 443 open to the internet.",
+  "settings.network.tls_home_http": "Plain HTTP at home",
+  "settings.network.tls_home_httpBody": "The phone apps can't trust a self-signed certificate, so this port also answers plain HTTP to devices on your home network. Anything else is sent to HTTPS. Away from home, the apps need Let's Encrypt or a reverse proxy.",
   "settings.network.tls_hosts": "Certificate names",
   "settings.network.tls_hostsBody": "One per line, like books.example.com. Each must point at this server.",
   "settings.network.cert.title": "Certificate",

@@ -490,6 +490,8 @@ export interface AdminSettings {
   network: {
     bind: string;
     tls_mode: TLSMode;
+    /** Self-signed only: the port also answers plain HTTP to home-network clients (a restart setting). */
+    tls_home_http: boolean;
     tls_hosts: string[];
     trusted_proxies: string[];
     cors_origins: string[];

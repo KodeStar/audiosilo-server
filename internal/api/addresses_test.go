@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -314,5 +316,107 @@ func TestServerAdvertisesAddresses(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(body), &info); err != nil || !info.Capabilities["addresses"] {
 		t.Fatalf("capabilities.addresses must be true: %s", body)
+	}
+}
+
+// overTLS sends a request to e's handler over HTTPS (as a client of the
+// self-signed port would) with the given Host, and returns the status and body.
+func overTLS(t *testing.T, e *testEnv, method, path, token, body, host string) (int, string) {
+	t.Helper()
+	srv := httptest.NewTLSServer(e.api.Handler())
+	defer srv.Close()
+	req, err := http.NewRequestWithContext(context.Background(), method, srv.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = host
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// Home HTTP (tls.home_http, on by default on a self-signed server): a request
+// that came over https on a home-network host still teaches the http home
+// address, the one the native apps can use, in the pairing payload and its
+// links, the exchange answer and GET /addresses. base_url, web_url and the
+// uri's server= keep the request's own https.
+func TestHomeHTTPAddresses(t *testing.T) {
+	t.Parallel()
+	const host = "192.168.1.205:8080"
+	e := newTestEnv(t)
+	status, body := overTLS(t, e, "POST", "/api/v1/auth/redeem", "", `{"code":"`+e.authCode+`"}`, host)
+	if status != http.StatusOK {
+		t.Fatalf("redeem = %d %s", status, body)
+	}
+	var p pairingWire
+	_ = json.Unmarshal([]byte(body), &p)
+	want := Addresses{Home: "http://" + host}
+	if p.Addresses == nil || *p.Addresses != want {
+		t.Fatalf("pairing addresses = %+v, want %+v (%s)", p.Addresses, want, body)
+	}
+	if p.BaseURL != "https://"+host || !strings.HasPrefix(p.WebURL, "https://"+host+"/web/connect?token=") {
+		t.Fatalf("base_url %q / web_url %q must stay https", p.BaseURL, p.WebURL)
+	}
+	if q := linkQuery(t, p.WebURL); q.Get("home") != want.Home {
+		t.Fatalf("web_url home = %q", q.Get("home"))
+	}
+	if q := linkQuery(t, p.URI); q.Get("server") != "https://"+host || q.Get("home") != want.Home {
+		t.Fatalf("uri params = %v", q)
+	}
+
+	status, body = overTLS(t, e, "POST", "/api/v1/auth/exchange", "",
+		`{"pairing_token":"`+p.PairingToken+`","device_name":"phone"}`, host)
+	var ex struct {
+		Token     string     `json:"token"`
+		Addresses *Addresses `json:"addresses"`
+	}
+	_ = json.Unmarshal([]byte(body), &ex)
+	if status != http.StatusOK || ex.Addresses == nil || *ex.Addresses != want {
+		t.Fatalf("exchange = %d %s", status, body)
+	}
+
+	if status, body = overTLS(t, e, "GET", "/api/v1/addresses", ex.Token, "", host); status != http.StatusOK ||
+		body != `{"home":"http://192.168.1.205:8080"}`+"\n" {
+		t.Fatalf("GET /addresses = %d %q", status, body)
+	}
+	// https on its default port: the http home keeps 443, the port that answers it.
+	if _, body = overTLS(t, e, "GET", "/api/v1/addresses", ex.Token, "", "192.168.1.205"); body != `{"home":"http://192.168.1.205:443"}`+"\n" {
+		t.Fatalf("GET /addresses on 443 = %q", body)
+	}
+	// A public request over https derives no home.
+	if _, body = overTLS(t, e, "GET", "/api/v1/addresses", ex.Token, "", "books.example.com"); body != "{}\n" {
+		t.Fatalf("public GET /addresses = %q, want {}", body)
+	}
+}
+
+// Without home HTTP (switched off, or another TLS mode) the derived home keeps
+// the request's scheme; a configured lan_url is always used as it is.
+func TestHomeHTTPAddressesOff(t *testing.T) {
+	t.Parallel()
+	const host = "192.168.1.205:8080"
+	cases := []struct {
+		name      string
+		configure func(*config.Config)
+		wantHome  string
+	}{
+		{"home_http off", func(c *config.Config) { c.TLS.HomeHTTP = false }, "https://" + host},
+		{"autocert", func(c *config.Config) { c.TLS.Mode, c.TLS.Hosts = config.TLSAutocert, []string{"books.example.com"} },
+			"https://" + host},
+		{"a configured lan_url", func(c *config.Config) { c.LANURL = "https://nas.local:8080" }, "https://nas.local:8080"},
+	}
+	for _, tc := range cases {
+		e := newTestEnvWith(t, tc.configure)
+		_, member := opsTokens(t, e)
+		_, body := overTLS(t, e, "GET", "/api/v1/addresses", member, "", host)
+		if body != `{"home":"`+tc.wantHome+`"}`+"\n" {
+			t.Errorf("%s: GET /addresses = %q, want home %q", tc.name, body, tc.wantHome)
+		}
 	}
 }

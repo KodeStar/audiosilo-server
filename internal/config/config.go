@@ -61,7 +61,12 @@ type AppLinkConfig struct {
 
 // TLSConfig holds TLS-related settings.
 type TLSConfig struct {
-	Mode     TLSMode  `yaml:"mode"`
+	Mode TLSMode `yaml:"mode"`
+	// HomeHTTP (selfsigned only) lets the listening port also answer plain HTTP,
+	// to clients whose own address is on the home network (HomeNetworkIP or
+	// loopback): the native apps can't trust a self-signed certificate. Other
+	// plain HTTP clients are sent to https. On by default.
+	HomeHTTP bool     `yaml:"home_http"`
 	Hosts    []string `yaml:"hosts"`     // autocert: hostnames to obtain certs for
 	CacheDir string   `yaml:"cache_dir"` // autocert: cert cache (default <data>/certs)
 	CertFile string   `yaml:"cert_file"` // selfsigned/manual: optional persisted cert
@@ -300,7 +305,7 @@ func Default(dataDir string) *Config {
 		DataDir:        dataDir,
 		Bind:           "0.0.0.0:8080",
 		PublicURL:      "",
-		TLS:            TLSConfig{Mode: TLSSelfSigned, CacheDir: filepath.Join(dataDir, "certs")},
+		TLS:            TLSConfig{Mode: TLSSelfSigned, HomeHTTP: true, CacheDir: filepath.Join(dataDir, "certs")},
 		TrustedProxies: nil,
 		CORSOrigins:    nil,
 		MaxUploadBytes: 2 << 30, // 2 GiB
