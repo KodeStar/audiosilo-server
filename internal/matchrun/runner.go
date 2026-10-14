@@ -255,7 +255,7 @@ func (r *Runner) matchBook(ctx context.Context, o StartOptions, b *catalog.Book)
 	if len(cands) > 0 {
 		item.Proposal = Propose(&cands[0], meta.DefaultRecording(&cands[0], b.Duration, o.Region))
 	}
-	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal)
+	item.Outcome, item.Score, item.RunnerUp = Classify(cands, item.Proposal, b.Duration)
 	return item, nil
 }
 
@@ -299,8 +299,9 @@ func (r *Runner) repickBook(ctx context.Context, region string, b *catalog.Book,
 }
 
 // refreshBook looks the book up by its own ASIN or ISBN alone: the record it
-// names is the book (confident, whatever the score), its recording the one the
-// identifier resolved to. The lookup takes the ASIN when there is one, so an ISBN
+// names is the book (confident, whatever the score, unless its recording is
+// another edition by length: lengthFits), its recording the one the identifier
+// resolved to. The lookup takes the ASIN when there is one, so an ISBN
 // beside an ASIN the community doesn't know gets a look of its own. An identifier
 // the community doesn't know is no match: a book that names its record is never
 // offered another by title.
@@ -321,6 +322,12 @@ func (r *Runner) refreshBook(ctx context.Context, region string, b *catalog.Book
 	c := &cands[0]
 	item.Outcome, item.Score = catalog.OutcomeAuto, c.Score
 	item.Proposal = Propose(c, meta.DefaultRecording(c, b.Duration, region))
+	// The record the book's own identifier names, but another edition by length
+	// (an unabridged book holding its dramatization's ASIN): its details are not
+	// written unasked.
+	if !lengthFits(item.Proposal, b.Duration) {
+		item.Outcome = catalog.OutcomeReview
+	}
 	// The book keeps its own identifiers (switching marketplace is a repick's):
 	// a proposal without them writes none, and the review shows none of the
 	// community's (another marketplace's ASIN, say) as if applying set them.

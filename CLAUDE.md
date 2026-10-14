@@ -978,11 +978,14 @@ admin overrides; see Metadata overrides below).
   Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
   changes the book's series, which the review shows as "old -> new". A retired work slug
   is a redirect the client follows, so the names written are the merged record's.
-  Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN. A repick only touches an
-  ASIN whose override is `source=community`. A **refresh** run (`mode: "refresh"`,
-  `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each book up by its own
-  identifier alone (the ISBN when the ASIN finds nothing) and takes that record as
-  confident (`identifier_unknown` = no match, never a fuzzy work); it fills or
+  Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
+  the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`). A
+  repick only touches an ASIN whose override is `source=community`. A **refresh** run
+  (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
+  book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
+  that record as confident, unless its recording is over 10% off the book's length
+  (`lengthFits`: then it is held for review) (`identifier_unknown` = no match, never a
+  fuzzy work); it fills or
   overwrites the details but never writes an identifier (`planFor` drops them, the
   proposal carries none), so `matchrun.ScopesFor` (the one statement of which scopes a
   mode takes) allows only fill/overwrite (else `ErrScope`, 400); audited
@@ -1154,10 +1157,15 @@ admin overrides; see Metadata overrides below).
   same from the folder's subtree) and stored by `UpsertBook`; an unchanged book whose value
   differs (a sibling came or went, a pre-0022 row) gets it via `SetSplitParent` without a
   reindex. `duplicate` is groups within one
-  library (`DuplicateGroups`: same fingerprint AND size, same ASIN/ISBN, or `metaKey` with a
-  length within 1 min / 2%, an unknown length matching only another unknown one; copies across
-  libraries are deliberate); a group is hidden while every member is ignored, so a new copy
-  brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
+  library (`DuplicateGroups`: same fingerprint AND size, same ASIN/ISBN (whatever the lengths),
+  or `metaKey` with a length within 1 min / 2% (`sameLength`), an unknown length matching only
+  another unknown one; copies across libraries are deliberate). Each join marks its kind on one
+  copy and a group's `reason` is the strongest its joins support (`dupSet.reason`):
+  `id_length_differs` (a group a shared ASIN/ISBN joined whose shortest and longest known
+  lengths `sameLength` rejects, the whole group's so an unknown-length book can't bridge two
+  recordings; an unknown length is no evidence either way); outranks even identical audio, as the group holds a different
+  recording, and the console then calls no copy the one to keep) > `same_files` > `same_id` >
+  `same_book`. A group is hidden while every member is ignored, so a new copy brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
   libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
   groups, or with `?ignored=true` only the ignored ones), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
   /admin/libraries/{id}/book/rescan?path=` (`IndexPath` now, on a context detached from the

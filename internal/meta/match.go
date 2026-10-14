@@ -683,21 +683,34 @@ func words(s string) map[string]bool {
 	return out
 }
 
+// PlausibleRuntimeOff is how far a recording's runtime may be from a book's length,
+// as a fraction of the book's, and still plausibly be its edition (RuntimeOff).
+const PlausibleRuntimeOff = 0.10
+
+// RuntimeOff is how far a recording of runtimeMin minutes is from a book of seconds,
+// as a fraction of the book's length; ok is false when either is unknown.
+func RuntimeOff(runtimeMin int, seconds float64) (off float64, ok bool) {
+	if runtimeMin <= 0 || seconds <= 0 {
+		return 0, false
+	}
+	return math.Abs(float64(runtimeMin)*60-seconds) / seconds, true
+}
+
 // runtimeFit scores the closest recording's runtime against the book's duration:
-// within 3% is the same edition, within 10% plausibly so; ok is false when no
-// recording states a runtime.
+// within 3% is the same edition, within PlausibleRuntimeOff plausibly so; ok is
+// false when no recording states a runtime.
 func runtimeFit(duration float64, recs []MatchRecording) (float64, bool) {
 	best, ok := 0.0, false
 	for _, r := range recs {
-		if r.RuntimeMin <= 0 {
+		off, known := RuntimeOff(r.RuntimeMin, duration)
+		if !known {
 			continue
 		}
 		ok = true
-		off := math.Abs(float64(r.RuntimeMin)*60-duration) / duration
 		switch {
 		case off <= 0.03:
 			best = 1
-		case off <= 0.10:
+		case off <= PlausibleRuntimeOff:
 			best = math.Max(best, 0.5)
 		}
 	}

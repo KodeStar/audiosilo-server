@@ -5,6 +5,7 @@ import { useDuplicates, useLibraryRoots } from '@/api/hooks';
 import type { DuplicateGroup, DuplicateMember } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { QueryError } from '@/components/query-error';
+import { StatusText } from '@/components/status-text';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { audioLine } from '@/features/book/book-model';
@@ -19,7 +20,9 @@ import { useIssueActions, type IssueActions } from './use-issue-actions';
  * Likely duplicates (STYLEGUIDE.md "Duplicates use a side-by-side compare"): each
  * group's copies side by side, the one worth keeping first. Nothing here touches
  * files; "They're different books" stops the group being suggested (until a new
- * copy turns up). With `ignored`, the groups an admin said are different.
+ * copy turns up). With `ignored`, the groups an admin said are different. Books
+ * sharing an ASIN/ISBN at different lengths may be different recordings, so no
+ * copy is called the one to keep there: the card says what to check instead.
  */
 export function Duplicates({ ignored }: { ignored: boolean }) {
   const { t } = useTranslation();
@@ -74,6 +77,8 @@ function GroupCard({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const keep = g.books[0];
+  // Maybe different recordings: no copy is suggested over another.
+  const unsure = g.reason === 'id_length_differs';
   return (
     <section className="rounded-xl border bg-card" aria-labelledby={`dup-${index}`}>
       <div className="flex flex-wrap items-start justify-between gap-3 border-b px-5 py-4">
@@ -84,6 +89,12 @@ function GroupCard({
           <span className="text-[12.5px] text-muted-foreground">
             {t(`health.dup.reason.${g.reason}`, { count: g.books.length })}
           </span>
+          {/* What to check: moot once the admin has said they're different books. */}
+          {unsure && !g.ignored && (
+            <StatusText tone="warn" colored className="text-[12.5px]">
+              {t('health.dup.lengthDiffers')}
+            </StatusText>
+          )}
         </div>
         <Badge variant="info">
           {t('health.dup.position', {
@@ -98,6 +109,7 @@ function GroupCard({
             key={refKey(b)}
             book={b}
             keep={i === 0}
+            unsure={unsure}
             root={roots[b.library_id]}
             lang={lang}
           />
@@ -122,11 +134,14 @@ function GroupCard({
 function CopyColumn({
   book: b,
   keep,
+  unsure,
   root,
   lang,
 }: {
   book: DuplicateMember;
   keep: boolean;
+  /** Maybe a different recording: neither "worth keeping" nor "another copy". */
+  unsure: boolean;
   root: string | undefined;
   lang: string;
 }) {
@@ -167,9 +182,11 @@ function CopyColumn({
           />
         </Link>
         <div className="flex flex-col items-start gap-1.5">
-          <Badge variant={keep ? 'success' : 'outline'}>
-            {keep ? t('health.dup.keep') : t('health.dup.copy')}
-          </Badge>
+          {!unsure && (
+            <Badge variant={keep ? 'success' : 'outline'}>
+              {keep ? t('health.dup.keep') : t('health.dup.copy')}
+            </Badge>
+          )}
           <Link
             {...bookRoute(b.library_id, b.path)}
             className={buttonVariants({ variant: 'link', size: 'sm' })}

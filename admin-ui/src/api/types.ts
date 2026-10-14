@@ -1100,9 +1100,13 @@ export interface DuplicateMember extends AdminBook {
   listeners: number;
 }
 
-/** catalog.DuplicateGroup: copies of one book in one library; books[0] is the one to keep. */
+/**
+ * catalog.DuplicateGroup: copies of one book in one library; books[0] is the one to
+ * keep, except under `id_length_differs` (one ASIN/ISBN, lengths that don't match:
+ * maybe different recordings, so none is suggested).
+ */
 export interface DuplicateGroup {
-  reason: 'same_files' | 'same_book';
+  reason: 'same_files' | 'same_id' | 'id_length_differs' | 'same_book';
   ignored: boolean;
   books: DuplicateMember[];
 }
