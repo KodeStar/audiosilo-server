@@ -13,19 +13,14 @@ import (
 // the folder holding the file, and there only an epub named like the audio file
 // (the same stem: "Book.m4b" and "Book.epub") counts, since that folder may hold
 // other books. It returns the epub's library-relative path, the first by name,
-// or "" when there is none or the folder can't be read (through SafeJoin, so
-// never outside root).
+// or "" when there is none or the folder can't be read (through ContentJoin, so
+// never outside root or in a hidden folder).
 func BookEbook(root, relPath string, folder bool) string {
 	dir, stem := relPath, ""
 	if !folder {
-		dir = path.Dir(relPath)
-		if dir == "." {
-			dir = ""
-		}
-		base := path.Base(relPath)
-		stem = strings.TrimSuffix(base, path.Ext(base))
+		dir, stem = dirOf(relPath), stemOf(relPath)
 	}
-	full, err := SafeJoin(root, dir)
+	full, err := ContentJoin(root, dir)
 	if err != nil {
 		return ""
 	}
@@ -36,7 +31,7 @@ func BookEbook(root, relPath string, folder bool) string {
 	for _, e := range entries { // sorted by name
 		name := e.Name()
 		ext := path.Ext(name)
-		if strings.HasPrefix(name, ".") || !strings.EqualFold(ext, ".epub") || !e.Type().IsRegular() {
+		if isHidden(name) || !strings.EqualFold(ext, ".epub") || !e.Type().IsRegular() {
 			continue
 		}
 		if !folder && strings.TrimSuffix(name, ext) != stem {

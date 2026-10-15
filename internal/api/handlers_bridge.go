@@ -26,9 +26,14 @@ import (
 // bridge token works on those routes only (requireBridge); admins queue and
 // cancel jobs from the console (/admin/bridge/*).
 
-// SetBridge gives the API the Bridge's status and job queue. Call before
-// Handler(); the launcher always does.
-func (a *API) SetBridge(b *bridge.Service) { a.bridge = b }
+// SetBridge gives the API the Bridge's status and job queue, and has admins
+// told about each job that finishes, fails or needs attention, whatever moved it
+// (the Bridge's update, a lease that ran out). Call before Handler(); the
+// launcher always does.
+func (a *API) SetBridge(b *bridge.Service) {
+	a.bridge = b
+	b.OnTransition = func(ctx context.Context, job bridge.Job, _ string) { a.notifyBridgeJob(ctx, &job) }
+}
 
 // bridgeKinds: the Bridge's own routes take a bridge token and nothing else, and
 // no other route lists that kind, so a bridge token is refused everywhere else.
@@ -136,6 +141,26 @@ func (a *API) libraryFor(w http.ResponseWriter, r *http.Request, id int64, op st
 		return nil, false
 	}
 	return lib, true
+}
+
+// adminBridgeBook resolves the book a Bridge admin route names: the library (404
+// for an unknown one) and the indexed book at path in it (404 "book not found").
+// It answers the error itself and reports whether there was none.
+func (a *API) adminBridgeBook(w http.ResponseWriter, r *http.Request, libraryID int64, path, op string) (*catalog.Library, *catalog.Book, bool) {
+	lib, ok := a.libraryFor(w, r, libraryID, op)
+	if !ok {
+		return nil, nil, false
+	}
+	book, err := a.cat.GetBookByPath(r.Context(), lib.ID, path)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "book not found")
+		return nil, nil, false
+	}
+	if err != nil {
+		a.writeCatalogError(w, err, op, "could not load the book")
+		return nil, nil, false
+	}
+	return lib, book, true
 }
 
 // handleBridgeStatus serves PUT /bridge/status: the Bridge's heartbeat (its
@@ -387,12 +412,9 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid update")
 		return
 	}
-	job, from, err := a.bridge.UpdateHeld(r.Context(), id, u)
+	job, err := a.bridge.UpdateHeld(r.Context(), id, u)
 	if !a.writeBridgeError(w, err, "bridge job update failed") {
 		return
-	}
-	if job.Notable(from) {
-		a.notifyBridgeJob(r.Context(), job)
 	}
 	writeJSON(w, http.StatusOK, job)
 }
@@ -487,11 +509,9 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 		got, ok := rescanAt(a, w, lib, p, func(ctx context.Context) (*library.AttachmentsRefresh, error) {
 			return a.scanner.RefreshAttachments(ctx, *lib, p)
 		})
-		if !ok {
-			return
+		if ok {
+			writeJSON(w, http.StatusOK, got)
 		}
-		writeJSON(w, http.StatusOK, bridgeAttachmentsRescan{Path: got.Path, Attachments: bridgeAttachments{
-			Characters: got.Characters, Recaps: got.Recaps, Bridge: got.Bridge}})
 		return
 	}
 	book, ok := rescanAt(a, w, lib, p, func(ctx context.Context) (*catalog.Book, error) {
@@ -508,19 +528,6 @@ const (
 	rescanFull        = "full"
 	rescanAttachments = "attachments"
 )
-
-// bridgeAttachmentsRescan is POST /bridge/rescan's answer in attachments mode.
-type bridgeAttachmentsRescan struct {
-	Path        string            `json:"path"`
-	Attachments bridgeAttachments `json:"attachments"`
-}
-
-// bridgeAttachments says which of a book's attachments are indexed.
-type bridgeAttachments struct {
-	Characters bool `json:"characters"`
-	Recaps     bool `json:"recaps"`
-	Bridge     bool `json:"bridge"`
-}
 
 // adminBridge is GET /admin/bridge: the pairing, the last heartbeat and whether
 // it is recent enough to count as online, and every server library with the
@@ -659,22 +666,16 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			nj.Path = &p
 		}
 	}
-	if nj.LibraryID != nil {
-		lib, ok := a.libraryFor(w, r, *nj.LibraryID, "bridge queue failed")
+	switch {
+	case nj.LibraryID != nil && nj.Path != nil:
+		_, book, ok := a.adminBridgeBook(w, r, *nj.LibraryID, *nj.Path, "bridge queue failed")
 		if !ok {
 			return
 		}
-		if nj.Path != nil {
-			book, err := a.cat.GetBookByPath(r.Context(), lib.ID, *nj.Path)
-			if errors.Is(err, catalog.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "book not found")
-				return
-			}
-			if err != nil {
-				a.writeCatalogError(w, err, "bridge queue failed", "could not load the book")
-				return
-			}
-			nj.Path = &book.RelPath
+		nj.Path = &book.RelPath
+	case nj.LibraryID != nil:
+		if _, ok := a.libraryFor(w, r, *nj.LibraryID, "bridge queue failed"); !ok {
+			return
 		}
 	}
 	job, created, err := a.bridge.Enqueue(r.Context(), nj)

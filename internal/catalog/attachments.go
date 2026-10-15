@@ -23,23 +23,25 @@ import (
 // Derived from the files, so a move never carries them and a re-index reads
 // them again.
 
-// Attachments is what a book's attachments say, as stored: nil for a file that
-// isn't there or couldn't be used. UpdatedAt is when they were last read.
-type Attachments struct {
-	Characters *model.Characters
-	Recaps     *model.Recaps
-	Provenance *AttachmentProvenance
-	UpdatedAt  string
-}
-
-// AttachmentProvenance is what a book's bridge.json says made its attachments.
-type AttachmentProvenance = metadata.AttachmentProvenance
-
 // AttachmentsReading is a book's attachments as a scan found them: their
 // signature ("" for none) and what they say.
 type AttachmentsReading struct {
 	Sig   string
 	Files metadata.AttachmentFiles
+}
+
+// generatedSig reports whether a book's attachments signature (attachments_sig)
+// names a characters or recaps file: Book.Generated, read from the narrow column
+// so a list never joins book_attachments. A file that failed its checks still
+// counts (its signature is recorded so it isn't read again): a /meta read then
+// finds nothing, which costs a request and no more.
+func generatedSig(sig string) bool {
+	for _, name := range metadata.AttachmentSigNames(sig) {
+		if name == metadata.AttachmentCharacters || name == metadata.AttachmentRecaps {
+			return true
+		}
+	}
+	return false
 }
 
 // attachmentsUncheckedExpr is a books row's Signature.AttachmentsUnchecked: a
@@ -125,28 +127,25 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 		})
 }
 
-// BookAttachments returns the stored attachments of the book at relPath (its own
-// path, as indexed), or nil, nil when it has none (or there is no such book).
-func (c *Catalog) BookAttachments(ctx context.Context, libraryID int64, relPath string) (*Attachments, error) {
-	var chars, recaps, prov, updated string
+// BookAttachments returns the stored attachments of book id (books.id, read
+// inside the server only), or nil, nil when it has none. A column that no longer
+// decodes reads as a file the book doesn't have.
+func (c *Catalog) BookAttachments(ctx context.Context, bookID int64) (*metadata.AttachmentFiles, error) {
+	var chars, recaps, prov string
 	err := c.db.QueryRowContext(ctx,
-		`SELECT a.characters, a.recaps, a.provenance, a.updated_at
-		   FROM book_attachments a JOIN books b ON b.id = a.book_id
-		  WHERE b.library_id = ? AND b.rel_path = ?`,
-		libraryID, CleanRelPath(relPath)).Scan(&chars, &recaps, &prov, &updated)
+		`SELECT characters, recaps, provenance FROM book_attachments WHERE book_id = ?`, bookID).Scan(&chars, &recaps, &prov)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	a := &Attachments{
+	a := &metadata.AttachmentFiles{
 		Characters: decodeAttachment[model.Characters](chars),
 		Recaps:     decodeAttachment[model.Recaps](recaps),
-		Provenance: decodeAttachment[AttachmentProvenance](prov),
-		UpdatedAt:  updated,
+		Provenance: decodeAttachment[metadata.AttachmentProvenance](prov),
 	}
-	if a.Characters == nil && a.Recaps == nil && a.Provenance == nil {
+	if a.Empty() {
 		return nil, nil
 	}
 	return a, nil

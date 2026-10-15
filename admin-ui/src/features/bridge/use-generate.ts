@@ -1,22 +1,23 @@
 import { useEffect, useRef } from 'react';
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { queryOptions, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { TFunction } from 'i18next';
 import { api, ApiError } from '@/api/client';
 import { keys } from '@/api/hooks';
 import type { BridgeJob, BridgeJobRequest } from '@/api/types';
 import { errorMessage } from '@/lib/errors';
+import { formatNumber } from '@/lib/format';
 import { isOpen } from './bridge-model';
-import { generatePollMs, justFinished, KIND_GENERATE, latestGenerateJob } from './generate-model';
+import { generatePollMs, KIND_GENERATE, latestGenerateJob } from './generate-model';
 
 /** How many of a book's newest jobs are read to find its generate job (verify jobs share the list). */
 const BOOK_JOBS = 20;
 
 /**
  * A book's newest `sidecars.generate` job, asked again about every 10 s while
- * it is open and only while the page showing it is mounted (TanStack Query
- * polls for mounted observers only), then not at all. When it moves from open
- * to done, the book, its estimate and its community metadata are fetched again,
- * so the page shows the new local data.
+ * it works and every minute while it is parked, only while the page showing it
+ * is mounted (TanStack Query polls for mounted observers only), then not at
+ * all. When it ends, the book, its estimates and its community metadata are
+ * fetched again, so the page shows what changed.
  */
 export function useBookGenerateJob(libraryId: number, path: string, enabled: boolean) {
   const qc = useQueryClient();
@@ -32,38 +33,48 @@ export function useBookGenerateJob(libraryId: number, path: string, enabled: boo
     const before = seen.current;
     seen.current = job;
     if (!before || !job || before.id !== job.id) return;
-    if (isOpen(before.state) && !isOpen(job.state)) {
-      // What the book has, and whether a job is open, changed with it.
-      void qc.invalidateQueries({ queryKey: keys.bridgeEstimate(libraryId, path) });
-    }
-    if (justFinished(before, job)) {
-      void qc.invalidateQueries({ queryKey: keys.book(libraryId, path), exact: true });
-      void qc.invalidateQueries({ queryKey: keys.bookMeta(libraryId, path) });
-    }
+    if (!isOpen(before.state) || isOpen(job.state)) return;
+    // What the book has, and whether a job is open, changed with it.
+    void qc.invalidateQueries({ queryKey: keys.bridgeEstimate(libraryId, path) });
+    void qc.invalidateQueries({ queryKey: keys.book(libraryId, path), exact: true });
+    void qc.invalidateQueries({ queryKey: keys.bookMeta(libraryId, path) });
   }, [job, qc, libraryId, path]);
-  return { job, isPending: query.isPending && enabled };
+  return { job };
 }
 
 /**
- * What generating would take for a book (the source, ASR hours, the expected
- * agent cost) and what it has already. It also decides the card's action
- * (Generate, Regenerate, or none when the community has both), so it is asked
- * when the page opens and kept for a minute.
+ * A book's generate estimate. The full one (the confirmation dialog) holds the
+ * source, the earlier books of the series and the cost; the `brief` one leaves
+ * out the costly look-ups (`earlier: []`, `source: "audio"`) but still says
+ * what the book has, whether a job is open, whether the library is writable,
+ * and the cost figures: enough for the card's action and the series batch.
+ * Each has its own key.
+ */
+export function estimateQuery(libraryId: number, path: string, { brief }: { brief: boolean }) {
+  return queryOptions({
+    queryKey: [...keys.bridgeEstimate(libraryId, path), brief ? 'brief' : 'full'] as const,
+    queryFn: () => api.bridgeEstimate(libraryId, path, KIND_GENERATE, brief),
+    retry: false,
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * What generating would take for a book, and what it has already. The card
+ * asks for the brief estimate when the page opens (it decides Generate,
+ * Regenerate, or none when the community has both) and keeps it a minute; the
+ * confirmation dialog asks for the full one each time it opens, since it quotes it.
  */
 export function useGenerateEstimate(
   libraryId: number,
   path: string,
   enabled: boolean,
-  /** Ask again on mount however fresh it is (the confirmation dialog, which quotes it). */
-  fresh = false,
+  { brief }: { brief: boolean },
 ) {
   return useQuery({
-    queryKey: keys.bridgeEstimate(libraryId, path),
-    queryFn: () => api.bridgeEstimate(libraryId, path, KIND_GENERATE),
+    ...estimateQuery(libraryId, path, { brief }),
     enabled,
-    retry: false,
-    staleTime: 60_000,
-    refetchOnMount: fresh ? 'always' : true,
+    refetchOnMount: brief ? true : 'always',
   });
 }
 
@@ -114,8 +125,29 @@ export async function queueInOrder(
  * offers the kind is named for what it means here; the rest (a library the
  * Bridge can't write among them) as anywhere else.
  */
-export function generateError(err: unknown, t: TFunction): string {
+function generateError(err: unknown, t: TFunction): string {
   if (err instanceof ApiError && err.code === 'kind_unavailable')
     return t('bridge.generate.kindUnavailable');
   return errorMessage(err, t);
+}
+
+/**
+ * The dialogs' error line for a run of `total` queued jobs, or undefined when
+ * every one was queued: the failure, and how many went before it when some did.
+ */
+export function queueReport(
+  out: QueueOutcome,
+  total: number,
+  t: TFunction,
+  lang: string,
+): string | undefined {
+  if (out.error === undefined) return undefined;
+  const why = generateError(out.error, t);
+  return out.queued
+    ? t('bridge.generate.partial', {
+        done: formatNumber(out.queued, lang),
+        total: formatNumber(total, lang),
+        error: why,
+      })
+    : why;
 }

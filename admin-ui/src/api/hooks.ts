@@ -62,6 +62,7 @@ export const keys = {
     ['admin', 'bridge', 'jobs', 'book', libraryId, path] as const,
   /** Every generate estimate (a prefix: a job that ends changes what a book has). */
   bridgeEstimates: ['admin', 'bridge', 'estimate'] as const,
+  /** One book's estimates (a prefix of its brief and its full answer). */
   bridgeEstimate: (libraryId: number, path: string) =>
     ['admin', 'bridge', 'estimate', libraryId, path] as const,
   events: ['admin', 'events'] as const,

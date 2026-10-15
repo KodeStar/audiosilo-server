@@ -752,6 +752,15 @@ func TestFolderOverrideEndpointRequiresAdmin(t *testing.T) {
 	if ovr, _ := e.cat.FolderOverrides(ctx, lib.ID); ovr["Some/Folder"] != catalog.OverrideBook {
 		t.Fatalf("override not persisted: %+v", ovr)
 	}
+	// Denied: a hidden folder (a book's .audiosilo/) is never content, so it takes
+	// no override (library.ContentJoin).
+	hidden := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/folder-override?path=Some/Folder/.audiosilo"
+	if resp, _ := e.do(t, "PUT", hidden, adminTok, `{"mode":"book"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("hidden folder override = %d, want 400", resp.StatusCode)
+	}
+	if ovr, _ := e.cat.FolderOverrides(ctx, lib.ID); len(ovr) != 1 {
+		t.Fatalf("a hidden folder took an override: %+v", ovr)
+	}
 	if resp, _ := e.do(t, "DELETE", path, adminTok, ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("admin clear override should be 200")
 	}
@@ -796,6 +805,11 @@ func TestEnrichmentEndpoint(t *testing.T) {
 	evil := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/enrichment?path=../../../etc/passwd"
 	if resp, _ := e.do(t, "PUT", evil, adminTok, `{"asin":"B0BAD"}`); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("traversal enrichment = %d, want 400", resp.StatusCode)
+	}
+	// Denied: nor a path in a hidden folder (library.ContentJoin).
+	hidden := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/enrichment?path=Author/Book/.audiosilo/x.m4b"
+	if resp, _ := e.do(t, "PUT", hidden, adminTok, `{"asin":"B0BAD"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("hidden enrichment = %d, want 400", resp.StatusCode)
 	}
 	// A blank payload is a 400, not a silent 200 no-op.
 	if resp, _ := e.do(t, "PUT", url, adminTok, `{}`); resp.StatusCode != http.StatusBadRequest {

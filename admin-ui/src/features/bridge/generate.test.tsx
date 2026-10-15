@@ -78,6 +78,12 @@ function routes(over: Record<string, MockRoute> = {}) {
 const queued = (calls: MockRequest[]) =>
   calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs');
 
+/** The estimates asked for, brief (the card) or full (the dialog). */
+const estimates = (calls: MockRequest[], brief: boolean) =>
+  calls.filter(
+    (c) => c.path === '/admin/bridge/estimate' && (c.query.get('brief') === '1') === brief,
+  );
+
 beforeEach(() => setToken('stored'));
 afterEach(() => vi.unstubAllGlobals());
 
@@ -147,6 +153,9 @@ describe('generate characters and recaps', () => {
       }),
     ).toBeChecked();
     expect(within(dialog).getByText('Prequel')).toBeInTheDocument();
+    // The card asked for the brief estimate; the dialog for the full one, once.
+    expect(estimates(calls, true).length).toBeGreaterThan(0);
+    expect(estimates(calls, false)).toHaveLength(1);
 
     // Contributing says where the results go.
     await user.click(within(dialog).getByRole('switch'));

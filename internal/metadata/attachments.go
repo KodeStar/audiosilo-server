@@ -89,6 +89,18 @@ func AttachmentSignature(name string, info fs.FileInfo) string {
 	return fmt.Sprintf("%s:%d:%d", name, info.Size(), info.ModTime().UnixNano())
 }
 
+// AttachmentSigNames are the known names a book's signature lists (its
+// AttachmentSignature parts, joined by commas).
+func AttachmentSigNames(sig string) []string {
+	var out []string
+	for part := range strings.SplitSeq(sig, ",") {
+		if name, _, ok := strings.Cut(part, ":"); ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // ReadCharacters reads and checks a characters.json (ParseCharacters), a regular
 // file only, never through a link. An error wrapping ErrAttachmentInvalid is
 // about the file itself.

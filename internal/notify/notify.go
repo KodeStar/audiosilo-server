@@ -31,6 +31,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
@@ -397,13 +398,13 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	case KindBridgeJobFinished:
 		m.Title = bridgeJobLabel(str("job_kind")) + " finished: " + bridgeJobBook(ev)
 		m.Text = "The Bridge finished the job."
-		if str("job_kind") == bridgeKindSidecars {
+		if str("job_kind") == bridge.KindSidecars {
 			m.Title = "Characters and recaps ready: " + bridgeJobBook(ev)
 			m.Text = "Listeners see them in the player now."
 		}
 		m.Link, m.Tags = link("/server?topic=bridge"), []string{"white_check_mark"}
 	case KindBridgeJobFailed:
-		if str("state") == bridgeStateParked {
+		if str("state") == bridge.StateNeedsAttention {
 			m.Title = "A Bridge job needs attention: " + bridgeJobBook(ev)
 			m.Color = colorWarn
 		} else {
@@ -422,20 +423,12 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	return m
 }
 
-// The Bridge's job kind and state names the wording reads (internal/bridge's;
-// notify doesn't import it).
-const (
-	bridgeKindSidecars = "sidecars.generate"
-	bridgeKindVerify   = "bridge.verify"
-	bridgeStateParked  = "needs_attention"
-)
-
 // bridgeJobLabel names a Bridge job's kind in a message title.
 func bridgeJobLabel(kind string) string {
 	switch kind {
-	case bridgeKindSidecars:
+	case bridge.KindSidecars:
 		return "Characters and recaps"
-	case bridgeKindVerify:
+	case bridge.KindVerify:
 		return "Bridge check"
 	}
 	return "Bridge job"
@@ -661,7 +654,7 @@ type BridgeJob struct {
 
 // BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
 // or into failed or needs_attention (bridge_job_failed). The caller reports each
-// move once (bridge.Notable). The error is the Bridge's own text (it can name a
+// move once (bridge.Service.OnTransition). The error is the Bridge's own text (it can name a
 // folder on its disk), so it is the bell's detail and is never sent out.
 func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 	if s == nil {
@@ -672,7 +665,7 @@ func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 		"library": j.Library, "library_id": j.LibraryID, "path": j.Path, "title": plainLine(j.Title, 200),
 	}
 	kind := KindBridgeJobFinished
-	if j.State != "done" {
+	if j.State != bridge.StateDone {
 		kind = KindBridgeJobFailed
 		data["code"] = plainLine(j.Code, 64)
 		data["detail"] = j.Error

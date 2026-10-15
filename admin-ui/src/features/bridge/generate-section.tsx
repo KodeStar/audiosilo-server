@@ -27,7 +27,8 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   const server = useServerInfo().data;
   const available = generateAvailable(server);
   const { job } = useBookGenerateJob(book.library_id, book.path, generateJobsKnown(server));
-  const estimate = useGenerateEstimate(book.library_id, book.path, available);
+  // The brief estimate: enough for what the book has and so which action to offer.
+  const estimate = useGenerateEstimate(book.library_id, book.path, available, { brief: true });
   const parked = job?.state === 'needs_attention';
   const uiUrl = useBridgeLink(parked);
   const [open, setOpen] = useState(false);

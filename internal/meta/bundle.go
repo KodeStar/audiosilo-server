@@ -186,32 +186,14 @@ func gateWork(w *MetaWork, chapter int) *MetaWork {
 		}
 	}
 	c.RecapSummary = nil
-	c.Generated = w.Generated.held(&c)
 	if !carriesCommunityContent(&c) {
 		c.Attribution = nil
 	}
 	return &c
 }
 
-// held is g after gating left w (the gated copy) holding what it holds: a
-// dimension still marked generated only while some of it is left, and nil when
-// none is. nil for nil.
-func (g *MetaGenerated) held(w *MetaWork) *MetaGenerated {
-	if g == nil {
-		return nil
-	}
-	h := *g
-	h.Characters = g.Characters && len(w.Characters) > 0
-	h.summary = g.summary && w.RecapSummary != nil
-	h.Recaps = g.Recaps && (len(w.Recaps) > 0 || h.summary)
-	if !h.Characters && !h.Recaps {
-		return nil
-	}
-	return &h
-}
-
-// GateWork is HideSpoilers for one work outside an envelope (an unmatched
-// book's generated work): w gated for a listener at chapter, kept whole once
+// GateWork is HideSpoilers for one work outside an envelope (the generated
+// parts Answer keeps apart): w gated for a listener at chapter, kept whole once
 // finished. w is never modified.
 func GateWork(w *MetaWork, chapter int, finished bool) *MetaWork {
 	if w == nil || finished {

@@ -19,21 +19,18 @@ import (
 // maxEarlier bounds the estimate's earlier books.
 const maxEarlier = 10
 
-// bridgeEstimate is GET /admin/bridge/estimate's answer.
+// bridgeEstimate is GET /admin/bridge/estimate's answer. The cost figures are
+// bridge.EstimateSidecars' (source, asr_hours, agent_cost_usd: null while the
+// Bridge has no history to cost it from, subscription, agent_ready).
 type bridgeEstimate struct {
 	Kind      string `json:"kind"`
 	LibraryID int64  `json:"library_id"`
 	Path      string `json:"path"`
-	// Source is what the run reads: ebook when an .epub sits directly in the
-	// book's folder (Ebook, library-relative), else audio.
-	Source          string  `json:"source"`
+	bridge.SidecarsCost
+	// Ebook is the .epub the run reads (library-relative; source ebook), omitted
+	// for audio.
 	Ebook           string  `json:"ebook,omitempty"`
 	DurationSeconds float64 `json:"duration_seconds"`
-	ASRHours        float64 `json:"asr_hours"`
-	// AgentCostUSD is null while the Bridge has no history to cost it from.
-	AgentCostUSD *float64 `json:"agent_cost_usd"`
-	Subscription bool     `json:"subscription"`
-	AgentReady   bool     `json:"agent_ready"`
 	// Writable: the Bridge last reported the library mapped and writable.
 	Writable bool          `json:"writable"`
 	Has      estimateHas   `json:"has"`
@@ -66,6 +63,10 @@ type earlierBook struct {
 // job on an indexed book. 400 without a library or a path, or for a kind with
 // no estimate; 404 for an unknown library or book; 409 kind_unavailable when the
 // paired Bridge doesn't run the kind.
+//
+// brief=1 is the cheap answer for a label or a batch (the book card, a whole
+// series): the same shape, but no look into the book's folder for an ebook
+// (source audio, ebook omitted) and no scan of the series (earlier []).
 func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	kind := q.Get("kind")
@@ -76,6 +77,7 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "no estimate for that kind")
 		return
 	}
+	brief := q.Get("brief") == "1"
 	libraryID, ok := parseOptionalID(q.Get("library_id"))
 	path := catalog.CleanRelPath(q.Get("path"))
 	if !ok || libraryID <= 0 || path == "" {
@@ -83,17 +85,8 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	ctx := r.Context()
-	lib, ok := a.libraryFor(w, r, libraryID, "bridge estimate failed")
+	lib, book, ok := a.adminBridgeBook(w, r, libraryID, path, "bridge estimate failed")
 	if !ok {
-		return
-	}
-	book, err := a.cat.GetBookByPath(ctx, lib.ID, path)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "book not found")
-		return
-	}
-	if err != nil {
-		a.writeCatalogError(w, err, "bridge estimate failed", "could not load the book")
 		return
 	}
 	h, err := a.bridge.LastHeartbeat(ctx)
@@ -108,23 +101,25 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 
 	out := bridgeEstimate{Kind: kind, LibraryID: lib.ID, Path: book.RelPath, DurationSeconds: book.Duration,
 		Writable: h.Writable(lib.ID), Earlier: []earlierBook{}}
-	out.Ebook = library.BookEbook(lib.Root, book.RelPath, book.IsFolder)
+	if !brief {
+		out.Ebook = library.BookEbook(lib.Root, book.RelPath, book.IsFolder)
+	}
 	var est *bridge.SidecarsEstimates
 	if h.Estimates != nil {
 		est = h.Estimates.Sidecars
 	}
-	cost := bridge.EstimateSidecars(book.Duration, out.Ebook != "", est)
-	out.Source, out.ASRHours, out.AgentCostUSD = cost.Source, cost.ASRHours, cost.AgentCostUSD
-	out.Subscription, out.AgentReady = cost.Subscription, cost.AgentReady
+	out.SidecarsCost = bridge.EstimateSidecars(book.Duration, out.Ebook != "", est)
 
 	out.Has.Community = a.communityContent(ctx, book)
-	if out.Has.Local, err = a.localContent(ctx, lib.ID, book.RelPath); err != nil {
+	if out.Has.Local, err = a.localContent(ctx, book); err != nil {
 		a.writeCatalogError(w, err, "bridge estimate failed", "could not read the book's attachments")
 		return
 	}
-	if out.Earlier, err = a.earlierWithoutRecaps(ctx, lib.ID, book); err != nil {
-		a.writeCatalogError(w, err, "bridge estimate failed", "could not list the series")
-		return
+	if !brief {
+		if out.Earlier, err = a.earlierWithoutRecaps(ctx, book); err != nil {
+			a.writeCatalogError(w, err, "bridge estimate failed", "could not list the series")
+			return
+		}
 	}
 	if out.OpenJob, err = a.bridge.OpenJob(ctx, kind, lib.ID, book.RelPath); err != nil {
 		a.writeCatalogError(w, err, "bridge estimate failed", "could not read the jobs")
@@ -150,40 +145,22 @@ func (a *API) communityContent(ctx context.Context, book *catalog.Book) hasConte
 	return hasContent{Characters: env.HasCharacters(), Recaps: env.HasRecaps()}
 }
 
-// cachedCommunityRecaps reports whether the cached enrichment of book (never a
-// lookup: the series' books are many) holds community recaps.
-func (a *API) cachedCommunityRecaps(ctx context.Context, book *catalog.Book) bool {
-	if !a.metadataOn() {
-		return false
-	}
-	env, _ := a.meta.CachedEnrichment(ctx, book.ASIN, book.ISBN)
-	return env.HasRecaps()
-}
-
-// bookAttachments is the book's indexed .audiosilo/ attachments (nil for none).
-func (a *API) bookAttachments(ctx context.Context, libraryID int64, path string) (*catalog.Attachments, error) {
-	if a.attachments != nil {
-		return a.attachments(ctx, libraryID, path)
-	}
-	return a.cat.BookAttachments(ctx, libraryID, path)
-}
-
-// localContent is what the book's generated attachments carry.
-func (a *API) localContent(ctx context.Context, libraryID int64, path string) (hasContent, error) {
-	att, err := a.bookAttachments(ctx, libraryID, path)
+// localContent is what the book's generated attachments carry (a stored file is
+// never empty: metadata.ParseCharacters and ParseRecaps drop one).
+func (a *API) localContent(ctx context.Context, book *catalog.Book) (hasContent, error) {
+	att, err := a.cat.BookAttachments(ctx, book.ID)
 	if err != nil || att == nil {
 		return hasContent{}, err
 	}
-	return hasContent{Characters: att.Characters != nil && len(att.Characters.Characters) > 0,
-		Recaps: att.Recaps != nil && (len(att.Recaps.Recaps) > 0 || att.Recaps.InShort != "" || att.Recaps.Ending != "")}, nil
+	return hasContent{Characters: att.Characters != nil, Recaps: att.Recaps != nil}, nil
 }
 
 // earlierWithoutRecaps is the books of the library before book in its series
-// (catalog.EarlierInSeries, any spelling of the series), in reading order, that
-// have no recaps yet, community (the cached enrichment only) or generated (their
-// attachments); at most maxEarlier.
-func (a *API) earlierWithoutRecaps(ctx context.Context, libraryID int64, book *catalog.Book) ([]earlierBook, error) {
-	members, err := a.cat.EarlierInSeries(ctx, libraryID, book)
+// with no generated recaps (catalog.EarlierInSeries, any spelling of the
+// series), in reading order, less those whose cached community enrichment holds
+// recaps (never a lookup: the series' books are many); at most maxEarlier.
+func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book) ([]earlierBook, error) {
+	members, err := a.cat.EarlierInSeries(ctx, book.LibraryID, book)
 	if err != nil {
 		return nil, err
 	}
@@ -192,17 +169,10 @@ func (a *API) earlierWithoutRecaps(ctx context.Context, libraryID int64, book *c
 		if len(out) == maxEarlier {
 			break
 		}
-		if a.cachedCommunityRecaps(ctx, &m.Book) {
+		if a.metadataOn() && a.meta.CachedEnrichment(ctx, m.ASIN, m.ISBN).HasRecaps() {
 			continue
 		}
-		local, err := a.localContent(ctx, libraryID, m.RelPath)
-		if err != nil {
-			return nil, err
-		}
-		if local.Recaps {
-			continue
-		}
-		out = append(out, earlierBook{LibraryID: libraryID, Path: m.RelPath, Title: m.Title,
+		out = append(out, earlierBook{LibraryID: m.LibraryID, Path: m.RelPath, Title: m.Title,
 			SeriesIndex: catalog.FormatSeriesRange(m.Position, m.PositionEnd)})
 	}
 	return out, nil

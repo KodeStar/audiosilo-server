@@ -473,20 +473,21 @@ func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
-	added_at, content_hash, published, has_cover, cover_art, cover_color`
+	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
 // selecting bookCols (plain or prefixed) scans it the same way; finish, called
 // after the scan, derives the cover fields and the series list from the columns
 // behind them.
 func bookDest(b *Book) (dest []any, finish func()) {
-	var more, art, color string
+	var more, art, color, attachments string
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
 			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
-			&b.Published, &b.HasCover, &art, &color},
+			&b.Published, &b.HasCover, &art, &color, &attachments},
 		func() {
 			b.CoverVersion = CoverVersion(art)
+			b.Generated = generatedSig(attachments)
 			b.CoverColor, _ = storedCoverColor(art, color)
 			if more != "[]" && more != "" { // most books have no list: no parse
 				// In a series beyond its main one: the whole list. A list that only

@@ -4,24 +4,21 @@ import en from '@/i18n/locales/en.json';
 import { formatUsd } from '@/lib/format';
 import { serverInfo } from '@/test/fixtures';
 import { adminBook } from '@/test/library-fixtures';
-import { BRIDGE_JOB_STATES } from './bridge-model';
 import {
-  baseName,
   batchCheck,
   batchPlan,
   bridgeJobLink,
   destinationKey,
   estimateView,
+  GENERATE_PARKED_POLL_MS,
   GENERATE_POLL_MS,
   generateAction,
   generateAvailable,
   generateJobsKnown,
-  generateLook,
   generatePlan,
   generatePollMs,
   generateProgress,
   generateResult,
-  justFinished,
   KIND_GENERATE,
   KNOWN_PARKS,
   KNOWN_STAGES,
@@ -112,14 +109,20 @@ describe('the action gate', () => {
 });
 
 describe('polling a book', () => {
-  it('polls about every 10 s while a generate job is open, and stops when it ends', () => {
-    for (const s of ['queued', 'claimed', 'running', 'needs_attention'] as const) {
+  it('polls about every 10 s while a generate job works, every minute while parked, then stops', () => {
+    for (const s of ['queued', 'claimed', 'running'] as const) {
       expect(generatePollMs([job(s)])).toBe(GENERATE_POLL_MS);
     }
+    expect(generatePollMs([job('needs_attention')])).toBe(GENERATE_PARKED_POLL_MS);
+    // A working job sets the pace over a parked one.
+    expect(generatePollMs([job('needs_attention'), job('running', { id: 8 })])).toBe(
+      GENERATE_POLL_MS,
+    );
     for (const s of ['done', 'failed', 'cancelled'] as const) {
       expect(generatePollMs([job(s)])).toBe(false);
     }
     expect(GENERATE_POLL_MS).toBe(10_000);
+    expect(GENERATE_PARKED_POLL_MS).toBe(60_000);
     expect(generatePollMs([])).toBe(false);
     expect(generatePollMs(undefined)).toBe(false);
   });
@@ -139,27 +142,6 @@ describe('polling a book', () => {
     ];
     expect(latestGenerateJob(jobs)?.id).toBe(11);
     expect(latestGenerateJob([])).toBeUndefined();
-  });
-
-  it('notices a job moving from open to done, once', () => {
-    expect(justFinished(job('running'), job('done'))).toBe(true);
-    expect(justFinished(job('needs_attention'), job('done'))).toBe(true);
-    expect(justFinished(job('done'), job('done'))).toBe(false);
-    expect(justFinished(job('running'), job('failed'))).toBe(false);
-    expect(justFinished(job('running', { id: 1 }), job('done', { id: 2 }))).toBe(false);
-    expect(justFinished(undefined, job('done'))).toBe(false);
-  });
-
-  it('words every state as the card shows it', () => {
-    expect(BRIDGE_JOB_STATES.map((s) => generateLook({ state: s }))).toEqual([
-      'waiting',
-      'working',
-      'working',
-      'parked',
-      'done',
-      'failed',
-      'cancelled',
-    ]);
   });
 });
 
@@ -228,7 +210,7 @@ describe('parks', () => {
 });
 
 describe('progress and result', () => {
-  it('reads the stage (else the step), counts, ETA, cost and source', () => {
+  it('reads the stage (else the step), message, counts, ETA and cost', () => {
     expect(
       generateProgress({
         step: 'asr',
@@ -238,7 +220,6 @@ describe('progress and result', () => {
         total: 40,
         eta_seconds: 5400,
         cost_usd: 3.42,
-        source: 'audio',
       }),
     ).toEqual({
       stage: 'asr',
@@ -247,14 +228,15 @@ describe('progress and result', () => {
       total: 40,
       etaSeconds: 5400,
       costUsd: 3.42,
-      source: 'audio',
     });
-    expect(generateProgress({ step: 'writing' }).stage).toBe('writing');
+    // The step stands in for the stage, never for the message.
+    expect(generateProgress({ step: 'writing' })).toEqual({ stage: 'writing' });
+    expect(generateProgress({ step: 'asr', stage: 'fact_pass' })).toEqual({ stage: 'fact_pass' });
   });
 
   it('drops what it cannot use', () => {
     expect(
-      generateProgress({ step: 7, done: 1, total: 0, eta_seconds: -5, cost_usd: 'a', source: 'x' }),
+      generateProgress({ step: 7, done: 1, total: 0, eta_seconds: -5, cost_usd: 'a' }),
     ).toEqual({});
     expect(generateProgress(null)).toEqual({});
     expect(generateProgress('running')).toEqual({});
@@ -266,7 +248,6 @@ describe('progress and result', () => {
         characters: 41,
         recaps: 38,
         cost_usd: 12.5,
-        source: 'ebook',
         contributed: {
           characters: 'https://github.com/KodeStar/audiosilo-meta-community/issues/12',
           recaps: 'javascript:alert(1)',
@@ -276,7 +257,6 @@ describe('progress and result', () => {
       characters: 41,
       recaps: 38,
       costUsd: 12.5,
-      source: 'ebook',
       contributed: [
         {
           what: 'characters',
@@ -285,6 +265,7 @@ describe('progress and result', () => {
       ],
     });
     expect(generateResult({})).toBeNull();
+    expect(generateResult({ characters: -1, recaps: 'many' })).toBeNull();
     expect(generateResult({ files: ['characters.json'] })).toBeNull();
   });
 
@@ -308,13 +289,11 @@ describe('the estimate', () => {
   it('words an audio book: transcription hours, the expected cost', () => {
     const v = estimateView(estimate());
     expect(v).toEqual({
-      source: 'audio',
       asrHours: 2.5,
       costUsd: 16,
       subscription: false,
       agentNotReady: false,
       notWritable: false,
-      canConfirm: true,
     });
   });
 
@@ -322,10 +301,10 @@ describe('the estimate', () => {
     const v = estimateView(
       estimate({ source: 'ebook', ebook: 'Author/Book/The Book.epub', asr_hours: 0 }),
     );
-    expect(v.source).toBe('ebook');
     expect(v.ebook).toEqual({ name: 'The Book.epub', path: 'Author/Book/The Book.epub' });
     expect(v.asrHours).toBe(0);
-    expect(baseName('a/b/')).toBe('b');
+    // An audio book names no file, even with an ebook path on the answer.
+    expect(estimateView(estimate({ ebook: 'Author/Book/The Book.epub' })).ebook).toBeUndefined();
   });
 
   it('says there is no estimate yet without history', () => {
@@ -343,9 +322,8 @@ describe('the estimate', () => {
     const v = estimateView(estimate({ writable: false, agent_ready: false }));
     expect(v.notWritable).toBe(true);
     expect(v.agentNotReady).toBe(true);
-    expect(v.canConfirm).toBe(false);
     // An agent not ready only warns: the job waits for it.
-    expect(estimateView(estimate({ agent_ready: false })).canConfirm).toBe(true);
+    expect(estimateView(estimate({ agent_ready: false })).notWritable).toBe(false);
   });
 
   it('says where the results appear', () => {
@@ -363,8 +341,8 @@ describe('queueing', () => {
     { library_id: 1, path: 'A/Series/Book 2' },
   ];
 
-  it('queues the earlier books first, in order, then this one', () => {
-    const plan = generatePlan(book, earlier, { includeEarlier: true, contribute: 'local' });
+  it('queues the books in the order given: the earlier ones first, then this one', () => {
+    const plan = generatePlan([...earlier, book], 'local');
     expect(plan.map((r) => r.path)).toEqual([
       'A/Series/Book 1',
       'A/Series/Book 2',
@@ -380,7 +358,7 @@ describe('queueing', () => {
   });
 
   it('queues only this book when the earlier ones are left out, with the contribute choice', () => {
-    const plan = generatePlan(book, earlier, { includeEarlier: false, contribute: 'issue' });
+    const plan = generatePlan([book], 'issue');
     expect(plan).toEqual([
       {
         kind: KIND_GENERATE,
@@ -392,10 +370,7 @@ describe('queueing', () => {
   });
 
   it('never queues a book twice', () => {
-    const plan = generatePlan(book, [...earlier, book, earlier[0]], {
-      includeEarlier: true,
-      contribute: 'local',
-    });
+    const plan = generatePlan([...earlier, book, earlier[0], book], 'local');
     expect(plan.map((r) => r.path)).toEqual([
       'A/Series/Book 1',
       'A/Series/Book 2',

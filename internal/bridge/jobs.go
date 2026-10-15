@@ -368,14 +368,13 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	}
 	refuse := kinds[j.Kind].writes && !h.Writable(*j.LibraryID)
 	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
-	var expired int64
+	var exp expiry
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
 		now := s.ts()
-		n, err := expireTx(ctx, tx, now)
-		if err != nil {
+		var err error
+		if exp, err = expireTx(ctx, tx, now); err != nil {
 			return err
 		}
-		expired = n
 		var id int64
 		err = tx.QueryRowContext(ctx,
 			`SELECT id FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL, key).Scan(&id)
@@ -406,9 +405,10 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	if err != nil {
 		return nil, false, err
 	}
-	if created || expired > 0 {
+	if created {
 		s.wake.fire()
 	}
+	s.settle(ctx, exp)
 	return job, created, nil
 }
 
@@ -488,10 +488,14 @@ func (s *Service) List(ctx context.Context, f Filter) (jobs []Job, nextBefore in
 	return jobs, nextBefore, nil
 }
 
+// lapsedSQL picks the jobs whose lease ran out (?1 is now).
+const lapsedSQL = `state IN ('claimed', 'running') AND lease_until < ?1`
+
 // expireSQL ends every lease that ran out (?1 is now): a job whose cancel was
-// asked for is cancelled, one on its last attempt failed (both keep what the dead
-// attempt reported), the rest queued again with the dead attempt's progress,
-// result and error dropped, so a waiting job doesn't read as still under way.
+// asked for is cancelled, one on its last attempt (?2) failed (both keep what
+// the dead attempt reported), the rest queued again with the dead attempt's
+// progress, result and error dropped, so a waiting job doesn't read as still
+// under way.
 const expireSQL = `UPDATE bridge_jobs SET
 	    state = CASE WHEN cancel_requested = 1 THEN 'cancelled'
 	                 WHEN attempts >= ?2 THEN 'failed'
@@ -503,20 +507,89 @@ const expireSQL = `UPDATE bridge_jobs SET
 	    result = CASE WHEN cancel_requested = 1 OR attempts >= ?2 THEN result ELSE '{}' END,
 	    finished_at = CASE WHEN cancel_requested = 1 OR attempts >= ?2 THEN ?1 ELSE NULL END,
 	    lease_until = NULL, updated_at = ?1
-	  WHERE state IN ('claimed', 'running') AND lease_until < ?1`
+	  WHERE ` + lapsedSQL
 
-// expireTx ends the leases that ran out, inside a write transaction, and says how
-// many it ended. Every transaction that reads or changes job states runs it
+// expiry is what expireTx ended: how many leases, and the jobs it failed (the
+// lease of their last attempt), each with the state it was in.
+type expiry struct {
+	n      int64
+	failed []transition
+}
+
+// transition is a job's move out of the state from, as OnTransition hears it.
+type transition struct {
+	job  *Job
+	from string
+}
+
+// expireTx ends the leases that ran out, inside a write transaction, and says
+// what it ended. Every transaction that reads or changes job states runs it
 // first, so none acts on a dead claim. A Service method whose transaction ended
-// any wakes the waiting claims once it commits, so a requeued job is picked up
-// at once rather than when a claim's wait runs out (MoveJobs, in the catalog's
-// move, can't: a claim takes its requeue within MaxWait).
-func expireTx(ctx context.Context, tx *sql.Tx, now string) (int64, error) {
+// any settles them once it commits: the waiting claims wake, so a requeued job
+// is picked up at once rather than when a claim's wait runs out, and an admin
+// hears about a failed one. (MoveJobs, in the catalog's move, can't: a claim
+// takes its requeue within MaxWait, and a job it fails goes unannounced.)
+func expireTx(ctx context.Context, tx *sql.Tx, now string) (expiry, error) {
+	var e expiry
+	failing, err := lastAttemptsLapsed(ctx, tx, now)
+	if err != nil {
+		return e, err
+	}
 	res, err := tx.ExecContext(ctx, expireSQL, now, MaxAttempts)
 	if err != nil {
-		return 0, err
+		return e, err
 	}
-	return res.RowsAffected()
+	if e.n, err = res.RowsAffected(); err != nil {
+		return e, err
+	}
+	for _, t := range failing {
+		if t.job, err = getJob(ctx, tx, t.job.ID); err != nil {
+			return e, err
+		}
+		e.failed = append(e.failed, t)
+	}
+	return e, nil
+}
+
+// lastAttemptsLapsed is the jobs expireSQL is about to fail, read before it
+// runs (the update keeps no trace of the state each was in): their ids, with
+// the job itself filled in only once the update is done.
+func lastAttemptsLapsed(ctx context.Context, tx *sql.Tx, now string) ([]transition, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, state FROM bridge_jobs
+		  WHERE `+lapsedSQL+` AND cancel_requested = 0 AND attempts >= ?2`, now, MaxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []transition
+	for rows.Next() {
+		t := transition{job: &Job{}}
+		if err := rows.Scan(&t.job.ID, &t.from); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// settle follows a committed transaction whose expireTx ended e: it wakes the
+// waiting claims for the jobs it requeued and reports the jobs it failed.
+func (s *Service) settle(ctx context.Context, e expiry) {
+	if e.n > 0 {
+		s.wake.fire()
+	}
+	for _, t := range e.failed {
+		s.report(ctx, t.job, t.from)
+	}
+}
+
+// report tells OnTransition about job's move out of from when it is news
+// (Notable), on a context the caller's leaving doesn't cancel: the move has
+// committed, and the admin should hear about it either way.
+func (s *Service) report(ctx context.Context, job *Job, from string) {
+	if s.OnTransition != nil && job.Notable(from) {
+		s.OnTransition(context.WithoutCancel(ctx), *job, from)
+	}
 }
 
 // expireDue is expireTx for the read paths: it takes the one writer only when a
@@ -526,17 +599,19 @@ func (s *Service) expireDue(ctx context.Context) error {
 	now := s.ts()
 	var due bool
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE state IN ('claimed', 'running') AND lease_until < ?)`,
-		now).Scan(&due); err != nil || !due {
+		`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE `+lapsedSQL+`)`, now).Scan(&due); err != nil || !due {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, expireSQL, now, MaxAttempts)
+	var exp expiry
+	err := s.db.WithTx(ctx, "bridge.expire", func(tx *sql.Tx) error {
+		var err error
+		exp, err = expireTx(ctx, tx, now)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		s.wake.fire()
-	}
+	s.settle(ctx, exp)
 	return nil
 }
 
@@ -576,8 +651,8 @@ func (s *Service) ClaimFor(ctx context.Context, token int64, asked []string, wai
 // ErrNotPaired once token is no longer the paired Bridge's.
 func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job, error) {
 	var (
-		job     *Job
-		expired int64
+		job *Job
+		exp expiry
 	)
 	err := s.db.WithTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
 		var live bool
@@ -588,11 +663,10 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 			return ErrNotPaired
 		}
 		now := s.ts()
-		n, err := expireTx(ctx, tx, now)
-		if err != nil {
+		var err error
+		if exp, err = expireTx(ctx, tx, now); err != nil {
 			return err
 		}
-		expired = n
 		args := make([]any, 0, len(kinds))
 		for _, k := range kinds {
 			args = append(args, k)
@@ -615,8 +689,8 @@ func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job,
 		job, err = getJob(ctx, tx, id)
 		return err
 	})
-	if err == nil && expired > 0 {
-		s.wake.fire() // the other waiting claims, for the jobs it requeued
+	if err == nil {
+		s.settle(ctx, exp) // the other waiting claims wake for the jobs it requeued
 	}
 	return job, err
 }
@@ -702,20 +776,23 @@ func checkUpdate(u *Update) error {
 // this claim (u.Attempt) in a state the Bridge reports from, and the new state
 // one it may report; a claimed or running job's lease is renewed, a parked
 // one's dropped, a finished one's ended. It returns the job as stored, whose
-// CancelRequested tells the Bridge an admin asked it to stop, and the state it
-// was in before (Notable says whether the move is one an admin is told about).
-func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (job *Job, from string, err error) {
+// CancelRequested tells the Bridge an admin asked it to stop. A move into a
+// state an admin hears about is reported (OnTransition) once it commits.
+func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, error) {
 	if err := checkUpdate(&u); err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	var expired int64
-	err = s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
+	var (
+		job  *Job
+		from string
+		exp  expiry
+	)
+	err := s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
 		now := s.ts()
-		n, err := expireTx(ctx, tx, now)
-		if err != nil {
+		var err error
+		if exp, err = expireTx(ctx, tx, now); err != nil {
 			return err
 		}
-		expired = n
 		cur, err := getJob(ctx, tx, id)
 		if errors.Is(err, ErrNotFound) {
 			// Gone with its library (or a restored database): no claim holds it.
@@ -763,12 +840,11 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (job *Job,
 		return err
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	if expired > 0 {
-		s.wake.fire()
-	}
-	return job, from, nil
+	s.settle(ctx, exp)
+	s.report(ctx, job, from)
+	return job, nil
 }
 
 // Notable reports whether a job's move from one state to another is one the
@@ -835,16 +911,15 @@ var ErrFinished = errors.New("the job has already finished")
 // its next update; a lease that runs out on such a job cancels it then.
 func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 	var (
-		job     *Job
-		expired int64
+		job *Job
+		exp expiry
 	)
 	err := s.db.WithTx(ctx, "bridge.Cancel", func(tx *sql.Tx) error {
 		now := s.ts()
-		n, err := expireTx(ctx, tx, now)
-		if err != nil {
+		var err error
+		if exp, err = expireTx(ctx, tx, now); err != nil {
 			return err
 		}
-		expired = n
 		cur, err := getJob(ctx, tx, id)
 		if err != nil {
 			return err
@@ -866,8 +941,8 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 		job, err = getJob(ctx, tx, id)
 		return err
 	})
-	if err == nil && expired > 0 {
-		s.wake.fire()
+	if err == nil {
+		s.settle(ctx, exp)
 	}
 	return job, err
 }

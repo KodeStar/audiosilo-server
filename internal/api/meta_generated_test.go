@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
@@ -50,7 +51,7 @@ func setGenerated(t *testing.T, e *testEnv, libID int64, path string) {
 			{Through: model.Position{Chapter: 0}, Text: "Gen before."},
 			{Through: model.Position{Chapter: 3}, Text: "Gen three."},
 		}, InShort: "Gen short.", Ending: "Gen ending."},
-		Provenance: &catalog.AttachmentProvenance{Generator: "audiosilo-bridge", GeneratedAt: "2026-10-15T10:00:00Z"},
+		Provenance: &metadata.AttachmentProvenance{Generator: "audiosilo-bridge", GeneratedAt: "2026-10-15T10:00:00Z"},
 	}
 	if err := e.cat.SetAttachments(context.Background(), libID, map[string]catalog.AttachmentsReading{path: {Sig: "x", Files: files}}); err != nil {
 		t.Fatal(err)
@@ -258,5 +259,44 @@ func TestMetaGeneratedInvalidAttachmentIgnored(t *testing.T) {
 	scanFixture(t, e, lib)
 	if g := getGenerated(t, e, lib.ID, b.RelPath, "", tok); g.Work == nil || len(g.Work.Recaps) != 1 || len(g.Work.Characters) != 0 {
 		t.Errorf("valid recaps = %+v", g.Work)
+	}
+}
+
+// TestItemGenerated: a book with generated characters or recaps says so on the
+// player's book JSON (generated: true), so the player asks /meta for it even
+// without an ASIN or ISBN; a book with only the provenance file, or nothing,
+// leaves the field off.
+func TestItemGenerated(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b", cradlePart)
+	for dir, files := range map[string]map[string]string{
+		mistbornBook: {"characters.json": `{"characters":[{"id":"vin","name":"Vin","reveal":{"chapter":1}}]}`},
+		cradleBook:   {"bridge.json": `{"generator":"audiosilo-bridge","job_id":3}`},
+	} {
+		at := filepath.Join(root, filepath.FromSlash(dir), ".audiosilo")
+		if err := os.MkdirAll(at, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(at, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	lib, err := e.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Copy", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, e, lib)
+	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+	for path, want := range map[string]bool{mistbornBook: true, cradleBook: false} {
+		resp, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/item?path="+escape(path), tok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("item %s: %d %s", path, resp.StatusCode, body)
+		}
+		if got := strings.Contains(body, `"generated":true`); got != want || (!want && strings.Contains(body, `"generated"`)) {
+			t.Errorf("item %s: generated %v, want %v: %s", path, got, want, body)
+		}
 	}
 }

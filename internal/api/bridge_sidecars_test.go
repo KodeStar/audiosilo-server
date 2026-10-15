@@ -15,6 +15,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/names"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 )
@@ -187,7 +188,22 @@ func TestBridgeHeartbeatEstimates(t *testing.T) {
 
 func (b *bridgeEnv) estimate(t *testing.T, tok string, libID int64, path string) (*http.Response, bridgeEstimate, string) {
 	t.Helper()
-	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/admin/bridge/estimate?library_id=%d&path=%s&kind=sidecars.generate", libID, url.QueryEscape(path)), tok, "")
+	return b.estimateQuery(t, tok, libID, path, "")
+}
+
+// briefEstimate is the estimate with brief=1 (the book card's, a series batch's).
+func (b *bridgeEnv) briefEstimate(t *testing.T, libID int64, path string) bridgeEstimate {
+	t.Helper()
+	resp, est, body := b.estimateQuery(t, b.adminTok, libID, path, "&brief=1")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("brief estimate: %d %s", resp.StatusCode, body)
+	}
+	return est
+}
+
+func (b *bridgeEnv) estimateQuery(t *testing.T, tok string, libID int64, path, extra string) (*http.Response, bridgeEstimate, string) {
+	t.Helper()
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/admin/bridge/estimate?library_id=%d&path=%s&kind=sidecars.generate%s", libID, url.QueryEscape(path), extra), tok, "")
 	var out bridgeEstimate
 	if resp.StatusCode == http.StatusOK {
 		decodeInto(t, body, &out)
@@ -231,6 +247,13 @@ func TestBridgeEstimateEbookAndAccess(t *testing.T) {
 	if _, est, body := b.estimate(t, b.adminTok, b.lib.ID, mistbornBook); est.OpenJob == nil || est.OpenJob.Kind != bridge.KindSidecars {
 		t.Fatalf("open job: %s", body)
 	}
+	// brief=1 never looks into the folder: the audio's figures, no ebook; the
+	// open job and the Bridge's state are still there.
+	if est := b.briefEstimate(t, b.lib.ID, mistbornBook); est.Source != bridge.SourceAudio || est.Ebook != "" ||
+		est.AgentCostUSD == nil || *est.AgentCostUSD == 4 || // the per-hour figure, not the ebook's
+		est.OpenJob == nil || !est.Writable || !est.AgentReady || est.Earlier == nil {
+		t.Fatalf("brief estimate = %+v", est)
+	}
 	// Allowed: an admin's API key. Denied: a user (403), the bridge token (401).
 	if resp, _, body := b.estimate(t, b.adminKey, b.lib.ID, mistbornBook); resp.StatusCode != http.StatusOK {
 		t.Fatalf("api key: %d %s", resp.StatusCode, body)
@@ -270,18 +293,7 @@ func ptrFloat(v float64) *float64 { return &v }
 // order: a book with community recaps (cached) or generated ones is left out.
 func TestBridgeEstimateHasAndEarlier(t *testing.T) {
 	t.Parallel()
-	e := newMetaEnv(t, true, 0)
-	local := map[string]*catalog.Attachments{
-		"Mars/2": {Recaps: &model.Recaps{Recaps: []model.Recap{{Text: "So far."}}}},
-		"Mars/4": {Characters: &model.Characters{Characters: []model.Character{{ID: "mark", Name: "Mark"}}}},
-		// Characters alone are no recaps: still offered.
-		"Mars/3": {Characters: &model.Characters{Characters: []model.Character{{ID: "mark", Name: "Mark"}}}},
-	}
-	// Set before the first request (the handlers read it).
-	e.api.attachments = func(_ context.Context, _ int64, path string) (*catalog.Attachments, error) {
-		return local[path], nil
-	}
-	b := newBridgeEnvOn(t, e)
+	b := newBridgeEnvOn(t, newMetaEnv(t, true, 0))
 	ctx := context.Background()
 	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Series", Root: t.TempDir()})
 	if err != nil {
@@ -299,6 +311,15 @@ func TestBridgeEstimateHasAndEarlier(t *testing.T) {
 		if _, err := b.cat.UpsertBook(ctx, &bk); err != nil {
 			t.Fatal(err)
 		}
+	}
+	mark := &model.Characters{Characters: []model.Character{{ID: "mark", Name: "Mark"}}}
+	if err := b.cat.SetAttachments(ctx, lib.ID, map[string]catalog.AttachmentsReading{
+		"Mars/2": {Sig: "r", Files: metadata.AttachmentFiles{Recaps: &model.Recaps{Recaps: []model.Recap{{Text: "So far."}}}}},
+		"Mars/4": {Sig: "c", Files: metadata.AttachmentFiles{Characters: mark}},
+		// Characters alone are no recaps: still offered.
+		"Mars/3": {Sig: "c", Files: metadata.AttachmentFiles{Characters: mark}},
+	}); err != nil {
+		t.Fatal(err)
 	}
 	b.beatWith(t, true, true, sidecarsEstimates)
 	earlier := func(est bridgeEstimate) []string {
@@ -325,6 +346,10 @@ func TestBridgeEstimateHasAndEarlier(t *testing.T) {
 	}
 	if _, est, body := b.estimate(t, b.adminTok, lib.ID, "Mars/0.5"); len(est.Earlier) != 0 {
 		t.Fatalf("the first book: %s", body)
+	}
+	// brief=1 skips the series: no earlier books, but the same has.
+	if brief := b.briefEstimate(t, lib.ID, "Mars/4"); brief.Earlier == nil || len(brief.Earlier) != 0 || brief.Has != est.Has {
+		t.Fatalf("brief = %+v, want no earlier books and has %+v", brief, est.Has)
 	}
 }
 

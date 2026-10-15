@@ -63,7 +63,11 @@ func TestBridgeRescanAttachments(t *testing.T) {
 	if code != http.StatusOK || body != want {
 		t.Fatalf("attachments rescan = %d %s, want %s", code, body, want)
 	}
-	if a, err := b.cat.BookAttachments(context.Background(), b.lib.ID, mistbornBook); err != nil || a == nil || a.Characters == nil || a.Provenance.JobID != 3 {
+	book, err := b.cat.GetBookByPath(context.Background(), b.lib.ID, mistbornBook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, err := b.cat.BookAttachments(context.Background(), book.ID); err != nil || a == nil || a.Characters == nil || a.Provenance.JobID != 3 {
 		t.Errorf("stored = %+v, %v", a, err)
 	}
 	for _, p := range []string{"Nobody/Here", mistbornBook + "/.audiosilo", "../etc"} {

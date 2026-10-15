@@ -7,6 +7,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-meta/pkg/model"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // seedSeries indexes books (lib, path, series, index) and returns the two
@@ -544,5 +548,16 @@ func TestEarlierInSeries(t *testing.T) {
 	}
 	if got := earlier("omnibus"); got != nil {
 		t.Fatalf("before the first = %v, want none", got)
+	}
+	// A book with generated recaps is left out; generated characters alone
+	// don't count.
+	if err := c.SetAttachments(ctx, lib.ID, map[string]AttachmentsReading{
+		"omnibus": {Sig: "r", Files: metadata.AttachmentFiles{Recaps: &model.Recaps{Recaps: []model.Recap{{Text: "So far."}}}}},
+		"cw2":     {Sig: "c", Files: metadata.AttachmentFiles{Characters: &model.Characters{Characters: []model.Character{{ID: "v", Name: "Vimes"}}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := earlier("cw3"), []string{"gg@1", "cw2@2"}; !slices.Equal(got, want) {
+		t.Fatalf("before cw3, with generated recaps = %v, want %v", got, want)
 	}
 }

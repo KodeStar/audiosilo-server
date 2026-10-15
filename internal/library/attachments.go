@@ -35,8 +35,14 @@ func attachmentsPlace(b *catalog.Book) (dir, prefix string) {
 		}
 		return b.RelPath, ""
 	}
-	name := path.Base(b.RelPath)
-	return dirOf(b.RelPath), strings.TrimSuffix(name, path.Ext(name)) + "."
+	return dirOf(b.RelPath), stemOf(b.RelPath) + "."
+}
+
+// stemOf is the file name at rel without its last extension ("A/Book.m4b" ->
+// "Book"): what a single-file book's files beside it are named after.
+func stemOf(rel string) string {
+	name := path.Base(rel)
+	return strings.TrimSuffix(name, path.Ext(name))
 }
 
 // knownAttachment reports whether a file name in a .audiosilo folder is one the
@@ -87,17 +93,6 @@ func attachmentsSig(files attachmentFiles, prefix string) string {
 	return strings.Join(parts, ",")
 }
 
-// sigNames are the known names a signature (attachmentsSig) lists.
-func sigNames(sig string) []string {
-	var out []string
-	for part := range strings.SplitSeq(sig, ",") {
-		if name, _, ok := strings.Cut(part, ":"); ok {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
 // isAttachmentsDir reports whether the folder entry at library-relative rel is a
 // .audiosilo folder the scan lists: a real folder (the walk never follows a link)
 // of exactly that name, not ignored.
@@ -131,7 +126,7 @@ func (s *Scanner) readAttachments(lib catalog.Library, b *catalog.Book, sig stri
 	}
 	dir, prefix := attachmentsPlace(b)
 	read = true
-	for _, name := range sigNames(sig) {
+	for _, name := range metadata.AttachmentSigNames(sig) {
 		rel := path.Join(dir, metadata.AttachmentsDir, prefix+name)
 		p := absOf(lib, rel)
 		var err error
@@ -152,12 +147,18 @@ func (s *Scanner) readAttachments(lib catalog.Library, b *catalog.Book, sig stri
 }
 
 // AttachmentsRefresh is what RefreshAttachments indexed for a book: its path and
-// which attachments it now has.
+// which attachments it now has (POST /bridge/rescan's answer in attachments
+// mode, as is).
 type AttachmentsRefresh struct {
-	Path       string
-	Characters bool
-	Recaps     bool
-	Bridge     bool
+	Path        string          `json:"path"`
+	Attachments AttachmentsHeld `json:"attachments"`
+}
+
+// AttachmentsHeld says which of a book's attachments are indexed.
+type AttachmentsHeld struct {
+	Characters bool `json:"characters"`
+	Recaps     bool `json:"recaps"`
+	Bridge     bool `json:"bridge"`
 }
 
 // RefreshAttachments reads the .audiosilo/ attachments of the indexed book at
@@ -166,11 +167,8 @@ type AttachmentsRefresh struct {
 // part, a disc folder). ErrNotIndexable when no indexed book is there; an error
 // (nothing recorded) when a file couldn't be read right now.
 func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, relPath string) (*AttachmentsRefresh, error) {
-	if _, err := SafeJoin(lib.Root, relPath); err != nil {
+	if _, err := ContentJoin(lib.Root, relPath); err != nil {
 		return nil, err
-	}
-	if HasHiddenPart(relPath) {
-		return nil, fmt.Errorf("%w: %q is in a hidden folder", ErrNotIndexable, relPath)
 	}
 	book, err := s.cat.GetBookByPath(ctx, lib.ID, relPath)
 	if errors.Is(err, catalog.ErrNotFound) {
@@ -192,8 +190,8 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 	}); err != nil {
 		return nil, err
 	}
-	return &AttachmentsRefresh{Path: book.RelPath, Characters: files.Characters != nil,
-		Recaps: files.Recaps != nil, Bridge: files.Provenance != nil}, nil
+	return &AttachmentsRefresh{Path: book.RelPath, Attachments: AttachmentsHeld{Characters: files.Characters != nil,
+		Recaps: files.Recaps != nil, Bridge: files.Provenance != nil}}, nil
 }
 
 // attachmentsOfWalk sets each book's attachments signature from the .audiosilo

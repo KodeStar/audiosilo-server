@@ -139,9 +139,6 @@ type API struct {
 
 	// bridge is the Bridge's status and job queue (SetBridge, before Handler).
 	bridge *bridge.Service
-	// attachments reads a book's indexed .audiosilo/ attachments for the Bridge's
-	// estimate; nil is the catalog's BookAttachments (a test sets its own).
-	attachments func(ctx context.Context, libraryID int64, relPath string) (*catalog.Attachments, error)
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.

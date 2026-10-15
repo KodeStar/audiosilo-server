@@ -1,8 +1,7 @@
 import { useId, useState } from 'react';
-import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Bot, LockKeyhole, Sparkles } from 'lucide-react';
+import { Bot, Sparkles } from 'lucide-react';
 import type { BridgeEstimate } from '@/api/types';
 import { FactList } from '@/components/fact-list';
 import { Notice } from '@/components/notice';
@@ -10,11 +9,11 @@ import { QueryError } from '@/components/query-error';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
-import { Switch } from '@/components/ui/switch';
 import { formatDuration, formatHours, formatNumber, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import { destinationKey, estimateView, generatePlan } from './generate-model';
-import { generateError, queueInOrder, useGenerateEstimate } from './use-generate';
+import { destinationKey, estimateView, generatePlan, type Contribute } from './generate-model';
+import { ContributeSwitch, NotWritableNotice } from './generate-parts';
+import { queueInOrder, queueReport, useGenerateEstimate } from './use-generate';
 
 /**
  * Generate characters and recaps for one book: what it will read (the audio,
@@ -63,18 +62,16 @@ function GenerateForm({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
-  const estimate = useGenerateEstimate(book.library_id, book.path, true, true);
-  const [contribute, setContribute] = useState(false);
+  // The full estimate: the dialog quotes its source, earlier books and cost.
+  const estimate = useGenerateEstimate(book.library_id, book.path, true, { brief: false });
+  const [contribute, setContribute] = useState<Contribute>('local');
   const [includeEarlier, setIncludeEarlier] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const e = estimate.data;
   const earlier = e?.earlier ?? [];
-  const plan = generatePlan(book, earlier, {
-    includeEarlier: includeEarlier && earlier.length > 0,
-    contribute: contribute ? 'issue' : 'local',
-  });
-  const canConfirm = Boolean(e && estimateView(e).canConfirm);
+  const plan = generatePlan([...(includeEarlier ? earlier : []), book], contribute);
+  const canConfirm = e !== undefined && !estimateView(e).notWritable;
 
   const submit = async (ev: React.FormEvent) => {
     ev.preventDefault();
@@ -83,17 +80,9 @@ function GenerateForm({
     setError(undefined);
     const out = await queueInOrder(qc, plan);
     setBusy(false);
-    if (out.error !== undefined) {
-      const why = generateError(out.error, t);
-      setError(
-        out.queued
-          ? t('bridge.generate.partial', {
-              done: formatNumber(out.queued, lang),
-              total: formatNumber(plan.length, lang),
-              error: why,
-            })
-          : why,
-      );
+    const failed = queueReport(out, plan.length, t, lang);
+    if (failed !== undefined) {
+      setError(failed);
       return;
     }
     toast.add({
@@ -160,8 +149,8 @@ function EstimateBody({
 }: {
   estimate: BridgeEstimate;
   regenerate: boolean;
-  contribute: boolean;
-  onContribute: (on: boolean) => void;
+  contribute: Contribute;
+  onContribute: (value: Contribute) => void;
   includeEarlier: boolean;
   onIncludeEarlier: (on: boolean) => void;
 }) {
@@ -176,26 +165,7 @@ function EstimateBody({
 
   return (
     <>
-      {v.notWritable ? (
-        <Notice
-          tone="bad"
-          icon={LockKeyhole}
-          role="alert"
-          title={t('bridge.generate.notWritable')}
-          actions={
-            <Link
-              to="/server/{-$section}"
-              params={{ section: undefined }}
-              search={{ topic: 'bridge' }}
-              className="text-[13px] font-semibold text-brand-ink hover:underline"
-            >
-              {t('bridge.generate.openSettings')}
-            </Link>
-          }
-        >
-          {t('bridge.generate.notWritableBody')}
-        </Notice>
-      ) : null}
+      {v.notWritable ? <NotWritableNotice /> : null}
       {v.agentNotReady ? (
         <Notice tone="warn" icon={Bot} title={t('bridge.generate.agentNotReady')}>
           {t('bridge.generate.agentNotReadyBody')}
@@ -243,7 +213,7 @@ function EstimateBody({
                 ? t('bridge.generate.costUsage', { cost: formatUsd(v.costUsd, lang) })
                 : t('bridge.generate.about', { what: formatUsd(v.costUsd, lang) }),
           ],
-          [t('bridge.generate.where'), t(destinationKey(contribute ? 'issue' : 'local'))],
+          [t('bridge.generate.where'), t(destinationKey(contribute))],
         ]}
       />
       {v.subscription ? (
@@ -254,22 +224,7 @@ function EstimateBody({
       {regenerate ? (
         <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.replaces')}</p>
       ) : null}
-      <label
-        htmlFor={`${id}-contribute`}
-        className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border px-4 py-3"
-      >
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="font-semibold">{t('bridge.generate.contribute')}</span>
-          <span className="text-[12.5px] text-muted-foreground">
-            {t('bridge.generate.contributeBody')}
-          </span>
-        </span>
-        <Switch
-          id={`${id}-contribute`}
-          checked={contribute}
-          onCheckedChange={(on) => onContribute(on)}
-        />
-      </label>
+      <ContributeSwitch value={contribute} onChange={onContribute} />
       {earlier.length ? (
         <div className="flex flex-col gap-2 rounded-lg border px-4 py-3">
           <label htmlFor={`${id}-earlier`} className="flex cursor-pointer items-start gap-2.5">

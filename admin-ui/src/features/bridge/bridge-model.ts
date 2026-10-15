@@ -149,9 +149,11 @@ export function safeHttpUrl(url: string | undefined): string | undefined {
   }
 }
 
-const num = (v: unknown): number | undefined =>
+/** A finite number from an opaque progress or result, else undefined. */
+export const num = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-const text = (v: unknown): string | undefined =>
+/** A non-blank string from an opaque progress or result (trimmed), else undefined. */
+export const text = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim() : undefined;
 
 /**

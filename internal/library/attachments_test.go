@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
@@ -32,9 +33,16 @@ func writeAt(t *testing.T, root, rel, body string, at time.Time) {
 }
 
 // attachmentsAt is the stored attachments of the book at rel (nil for none).
-func attachmentsAt(t *testing.T, cat *catalog.Catalog, libID int64, rel string) *catalog.Attachments {
+func attachmentsAt(t *testing.T, cat *catalog.Catalog, libID int64, rel string) *metadata.AttachmentFiles {
 	t.Helper()
-	a, err := cat.BookAttachments(t.Context(), libID, rel)
+	b, err := cat.GetBookByPath(t.Context(), libID, rel)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := cat.BookAttachments(t.Context(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +101,7 @@ func TestScannerReadsAttachments(t *testing.T) {
 
 	a := attachmentsAt(t, cat, lib.ID, "A/Book")
 	if a == nil || a.Characters == nil || a.Characters.Characters[0].ID != "hero" || a.Recaps == nil || a.Recaps.InShort != "Short." ||
-		a.Provenance == nil || a.Provenance.JobID != 7 || a.Provenance.Kind != "sidecars.generate" || a.UpdatedAt == "" {
+		a.Provenance == nil || a.Provenance.JobID != 7 || a.Provenance.Kind != "sidecars.generate" {
 		t.Fatalf("folder book = %+v", a)
 	}
 	if a := attachmentsAt(t, cat, lib.ID, "Coll/One.m4b"); a == nil || a.Characters == nil || a.Recaps != nil {
@@ -222,7 +230,7 @@ func TestScannerRefusesBadAttachments(t *testing.T) {
 		if _, err := scanner.IndexPath(ctx, *lib, p); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := scanner.RefreshAttachments(ctx, *lib, p); err != nil || got.Characters {
+		if got, err := scanner.RefreshAttachments(ctx, *lib, p); err != nil || got.Attachments.Characters {
 			t.Errorf("refresh %s = %+v, %v; want nothing", p, got, err)
 		}
 		if a := attachmentsAt(t, cat, lib.ID, p); a != nil {
@@ -252,7 +260,7 @@ func TestRefreshAttachments(t *testing.T) {
 	writeAt(t, root, "A/Book/.audiosilo/characters.json", testCharacters, time.Now())
 	writeAt(t, root, "A/Book/.audiosilo/bridge.json", testBridge, time.Now())
 	got, err := scanner.RefreshAttachments(ctx, *lib, "A/Book/02.m4b")
-	if err != nil || *got != (AttachmentsRefresh{Path: "A/Book", Characters: true, Bridge: true}) {
+	if err != nil || *got != (AttachmentsRefresh{Path: "A/Book", Attachments: AttachmentsHeld{Characters: true, Bridge: true}}) {
 		t.Fatalf("refresh = %+v, %v", got, err)
 	}
 	if after := indexedAt(t, db, lib.ID, "A/Book"); after != before {
@@ -267,7 +275,7 @@ func TestRefreshAttachments(t *testing.T) {
 		t.Errorf("signature = %q, %v", sig, err)
 	}
 	writeAt(t, root, ".audiosilo/Loose.characters.json", testCharacters, time.Now())
-	if got, err := scanner.RefreshAttachments(ctx, *lib, "Loose.m4b"); err != nil || !got.Characters {
+	if got, err := scanner.RefreshAttachments(ctx, *lib, "Loose.m4b"); err != nil || !got.Attachments.Characters {
 		t.Errorf("root file = %+v, %v", got, err)
 	}
 	for _, p := range []string{"Nobody/Here", "A/Book/.audiosilo/characters.json", "A"} {

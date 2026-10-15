@@ -145,12 +145,9 @@ var coverNames = []string{"cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", 
 // goes through here.
 func isHidden(name string) bool { return strings.HasPrefix(name, ".") }
 
-// HasHiddenPart reports whether any segment of a library-relative path is hidden
-// (isHidden). The scan never walks into a hidden folder, so nothing may index or
-// list a path through one by name either (IndexPathWithin, listDir): a request
-// for "Book/.audiosilo/x.m4b" would otherwise index a phantom book the next full
-// scan removes again.
-func HasHiddenPart(relPath string) bool {
+// hasHiddenPart reports whether any segment of a library-relative path is hidden
+// (isHidden): ContentPath's rule.
+func hasHiddenPart(relPath string) bool {
 	for _, seg := range strings.Split(filepath.ToSlash(relPath), "/") {
 		if seg != "." && seg != ".." && isHidden(seg) {
 			return true
@@ -1189,11 +1186,8 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	// resolved path here would yield a "../"-laden rel_path whenever any component
 	// of lib.Root is a symlink (e.g. macOS /tmp -> /private/tmp, or a NAS /data ->
 	// /mnt/...).
-	if _, err := SafeJoin(lib.Root, relPath); err != nil {
+	if _, err := ContentJoin(lib.Root, relPath); err != nil {
 		return nil, err
-	}
-	if HasHiddenPart(relPath) {
-		return nil, fmt.Errorf("%w: %q is in a hidden folder", ErrNotIndexable, relPath)
 	}
 	abs := absOf(lib, relPath)
 	info, err := os.Stat(abs)

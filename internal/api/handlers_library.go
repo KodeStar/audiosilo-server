@@ -162,12 +162,11 @@ func pathInScope(lib *catalog.Library, scope catalog.Scope, rawPath string) (*ca
 	if !scope.Allows(rel) {
 		return nil, "", scope, http.StatusForbidden, msgNoPathAccess
 	}
-	// Nothing in a hidden folder (or a hidden file) is content: the scan never
-	// indexes it and /fs never lists it, so no route serves it either, whether it
-	// resolves a book or a file directly (stream, cover): a book's .audiosilo/
-	// attachments, a share's .Trash. It reads as missing, after the scope check so
-	// the answer says nothing more than a missing file's would.
-	if library.HasHiddenPart(rel) {
+	// A hidden path is never content (library.ContentPath), whether a route
+	// resolves a book or a file directly (stream, cover). It reads as missing,
+	// after the scope check so the answer says nothing more than a missing file's
+	// would.
+	if library.ContentPath(rel) != nil {
 		return nil, "", scope, http.StatusNotFound, "not found"
 	}
 	return lib, rel, scope, 0, ""

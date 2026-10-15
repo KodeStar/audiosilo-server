@@ -28,9 +28,9 @@ import (
 //
 // The characters and recaps the Bridge generated for the book (its .audiosilo/
 // attachments, catalog.BookAttachments) fill what the community work lacks
-// (meta.WithGenerated; work.generated names them), and a book with no match but
-// generated content answers {"matched": false, "work": {...}} (meta.GeneratedWork).
-// Per request, after the cache and `local`, never cached.
+// (work.generated names them), and a book with no match but generated content
+// answers {"matched": false, "work": {...}}: meta.Answer, per request, after the
+// cache and `local`, never cached.
 //
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a
@@ -39,8 +39,7 @@ import (
 //     series, nearest first (meta.Service.Previous; a failed one is left out).
 //   - spoilers=hide: gates the current work by the CALLER's saved progress on
 //     this book (meta.HideSpoilers; no progress = not started), and drops each
-//     previous work's ending. An unmatched book's generated work is gated the
-//     same way (meta.GateWork).
+//     previous work's ending. Generated content is gated the same way.
 func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if !a.metadataOn() {
 		writeError(w, http.StatusNotFound, "metadata lookup not enabled")
@@ -50,74 +49,59 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	gen := a.generatedFor(r.Context(), lib.ID, book)
-	var unmatched *meta.MetaWork
-	if env == nil {
-		if unmatched = meta.GeneratedWork(book.Title, gen); unmatched == nil {
-			writeJSON(w, http.StatusOK, meta.Unmatched{})
-			return
-		}
-	}
+	gen := a.generatedFor(r.Context(), book, env)
 
 	// The caller's place in the book is read first: a failure here fails the
 	// request (hiding was asked for, so the full envelope is not a fallback)
 	// before any previous work is fetched upstream.
 	q := r.URL.Query()
-	hide := q.Get("spoilers") == "hide"
-	var (
-		chapter  int
-		finished bool
-		err      error
-	)
-	if hide {
-		if chapter, finished, err = a.listeningChapter(r.Context(), lib.ID, book); err != nil {
+	var hide *meta.Place
+	if q.Get("spoilers") == "hide" {
+		chapter, finished, err := a.listeningChapter(r.Context(), lib.ID, book)
+		if err != nil {
 			a.writeCatalogError(w, err, "load progress for meta failed", "could not load progress", "library", lib.ID, "path", path)
 			return
 		}
-	}
-	if env == nil {
-		if hide {
-			unmatched = meta.GateWork(unmatched, chapter, finished)
-		}
-		writeJSON(w, http.StatusOK, meta.Unmatched{Work: unmatched})
-		return
+		hide = &meta.Place{Chapter: chapter, Finished: finished}
 	}
 
 	// env is shared with the meta cache and every other caller: it is never
 	// modified. Every per-request change below goes onto out, a shallow copy, and
 	// a change to anything nested in it (the work, the rails) replaces that part
 	// with its own copy first, never writes through to env.
-	cp := *env
-	out := &cp
-	// `local` is an extra like `previous`: when the caller's books can't be
-	// placed, the envelope goes out without it (the shared rails, unannotated)
-	// rather than failing a lookup that succeeded - and that a client which never
-	// reads `local` asked for.
-	if rails, _, err := a.localRails(r.Context(), catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, env); err != nil {
-		if r.Context().Err() == nil {
-			a.log.Warn("place owned books for meta failed", "err", err, "library", lib.ID, "path", path)
+	var out *meta.Enrichment
+	if env != nil {
+		cp := *env
+		out = &cp
+		// `local` is an extra like `previous`: when the caller's books can't be
+		// placed, the envelope goes out without it (the shared rails, unannotated)
+		// rather than failing a lookup that succeeded - and that a client which never
+		// reads `local` asked for.
+		if rails, _, err := a.localRails(r.Context(), catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, env); err != nil {
+			if r.Context().Err() == nil {
+				a.log.Warn("place owned books for meta failed", "err", err, "library", lib.ID, "path", path)
+			}
+		} else {
+			out.Series = rails
 		}
-	} else {
-		out.Series = rails
+		if queryHas(q["include"], "previous") {
+			out.Previous = a.meta.Previous(r.Context(), env)
+		}
 	}
-	out = meta.WithGenerated(out, gen)
-	if queryHas(q["include"], "previous") {
-		out.Previous = a.meta.Previous(r.Context(), env)
-	}
-	if hide {
-		out = meta.HideSpoilers(out, chapter, finished)
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, meta.Answer(out, book.Title, gen, hide))
 }
 
-// generatedFor is the book's generated content for /meta (nil for none). It is
-// an extra like `local`: a failure to read it is logged and the answer goes out
-// without it.
-func (a *API) generatedFor(ctx context.Context, libraryID int64, book *catalog.Book) *meta.Generated {
-	att, err := a.cat.BookAttachments(ctx, libraryID, book.RelPath)
+// generatedFor is the book's generated content for /meta (nil for none, or when
+// env's community work leaves nothing for it to fill). It is an extra like
+// `local`: a failure to read it is logged and the answer goes out without it.
+func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.Enrichment) *meta.Generated {
+	if !env.Fillable() {
+		return nil
+	}
+	att, err := a.cat.BookAttachments(ctx, book.ID)
 	if err != nil {
 		if ctx.Err() == nil {
-			a.log.Warn("load generated content for meta failed", "err", err, "library", libraryID, "path", book.RelPath)
+			a.log.Warn("load generated content for meta failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
 		}
 		return nil
 	}

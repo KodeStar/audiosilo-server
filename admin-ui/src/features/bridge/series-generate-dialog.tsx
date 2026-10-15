@@ -1,15 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { LockKeyhole, Sparkles } from 'lucide-react';
-import { api } from '@/api/client';
-import { keys } from '@/api/hooks';
+import { Sparkles } from 'lucide-react';
 import type { AdminBook } from '@/api/types';
-import { Notice } from '@/components/notice';
 import { ProgressBar } from '@/components/progress-bar';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
-import { Switch } from '@/components/ui/switch';
 import { refKey } from '@/lib/book-route';
 import { formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
@@ -18,18 +14,19 @@ import {
   batchPlan,
   destinationKey,
   generatePlan,
-  KIND_GENERATE,
   seriesBatchOrder,
   settleLimited,
   type BatchCheck,
+  type Contribute,
 } from './generate-model';
-import { generateError, queueInOrder } from './use-generate';
+import { ContributeSwitch, NotWritableNotice } from './generate-parts';
+import { estimateQuery, queueInOrder, queueReport } from './use-generate';
 
 /** How many books' estimates are asked for at once. */
 const CHECK_AT_ONCE = 4;
 
 /**
- * Generate for a whole series: each book's estimate is asked for first (a few at
+ * Generate for a whole series: each book's brief estimate is asked for first (a few at
  * a time), so the books that already have recaps (from the community or their
  * own folder) and the ones with a job already open are left out, then the rest
  * are queued in reading order, the earliest first. A book whose estimate fails
@@ -78,7 +75,7 @@ function SeriesForm({
   const ordered = useMemo(() => seriesBatchOrder(books, series), [books, series]);
   const [checked, setChecked] = useState(0);
   const [checks, setChecks] = useState<ReadonlyMap<string, BatchCheck> | null>(null);
-  const [contribute, setContribute] = useState(false);
+  const [contribute, setContribute] = useState<Contribute>('local');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -87,13 +84,9 @@ function SeriesForm({
     void settleLimited(
       ordered,
       CHECK_AT_ONCE,
+      // The brief estimate says what each book has; asked afresh, whatever is cached.
       (b) =>
-        qc.fetchQuery({
-          queryKey: keys.bridgeEstimate(b.library_id, b.path),
-          queryFn: () => api.bridgeEstimate(b.library_id, b.path, KIND_GENERATE),
-          staleTime: 0,
-          retry: false,
-        }),
+        qc.fetchQuery({ ...estimateQuery(b.library_id, b.path, { brief: true }), staleTime: 0 }),
       (n) => !ctl.signal.aborted && setChecked(n),
       ctl.signal,
     ).then((estimates) => {
@@ -112,23 +105,13 @@ function SeriesForm({
     if (!plan || !n || plan.notWritable || busy) return;
     setBusy(true);
     setError(undefined);
-    // Each book on its own, without its earlier books: the batch already holds them, in order.
-    const requests = plan.queue.flatMap((b) =>
-      generatePlan(b, [], { includeEarlier: false, contribute: contribute ? 'issue' : 'local' }),
-    );
+    // The queue is already in reading order, earlier books included.
+    const requests = generatePlan(plan.queue, contribute);
     const out = await queueInOrder(qc, requests);
     setBusy(false);
-    if (out.error !== undefined) {
-      const why = generateError(out.error, t);
-      setError(
-        out.queued
-          ? t('bridge.generate.partial', {
-              done: fmt(out.queued),
-              total: fmt(requests.length),
-              error: why,
-            })
-          : why,
-      );
+    const failed = queueReport(out, requests.length, t, lang);
+    if (failed !== undefined) {
+      setError(failed);
       return;
     }
     toast.add({
@@ -151,16 +134,7 @@ function SeriesForm({
           </div>
         ) : (
           <>
-            {plan.notWritable ? (
-              <Notice
-                tone="bad"
-                icon={LockKeyhole}
-                role="alert"
-                title={t('bridge.generate.notWritable')}
-              >
-                {t('bridge.generate.notWritableBody')}
-              </Notice>
-            ) : null}
+            {plan.notWritable ? <NotWritableNotice /> : null}
             <p className="font-semibold">
               {n ? t('bridge.series.willQueue', { count: n, n: fmt(n) }) : t('bridge.series.none')}
             </p>
@@ -190,25 +164,10 @@ function SeriesForm({
             ) : null}
             {n ? (
               <>
-                <label
-                  htmlFor="series-contribute"
-                  className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border px-4 py-3"
-                >
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="font-semibold">{t('bridge.generate.contribute')}</span>
-                    <span className="text-[12.5px] text-muted-foreground">
-                      {t('bridge.generate.contributeBody')}
-                    </span>
-                  </span>
-                  <Switch
-                    id="series-contribute"
-                    checked={contribute}
-                    onCheckedChange={(on) => setContribute(on)}
-                  />
-                </label>
+                <ContributeSwitch value={contribute} onChange={setContribute} />
                 <p className="text-[12.5px] text-muted-foreground">
                   {t('bridge.generate.whereLabel', {
-                    where: t(destinationKey(contribute ? 'issue' : 'local')),
+                    where: t(destinationKey(contribute)),
                   })}
                 </p>
               </>

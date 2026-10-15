@@ -8,8 +8,9 @@ import type {
   SidecarsGenerateParams,
 } from '@/api/types';
 import { refKey } from '@/lib/book-route';
-import { sameSeries } from '@/lib/series-key';
-import { isOpen, safeHttpUrl } from './bridge-model';
+import { relBaseName } from '@/lib/paths';
+import { spanIn } from '@/features/library/series/series-model';
+import { isOpen, num, progressOf, safeHttpUrl, text } from './bridge-model';
 
 // Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a): the rules the
 // book page's Community card, its generate dialog, the series batch and the
@@ -50,13 +51,20 @@ export function generateAction(has: {
   return has.local.characters || has.local.recaps ? 'regenerate' : 'generate';
 }
 
-/** How often a book's generate jobs are asked again: about every 10 s while one is open, else not. */
+/**
+ * How often a book's generate jobs are asked again: about every 10 s while one
+ * is queued or working, every minute while one is parked (it waits on a person
+ * or a reset), else not at all.
+ */
 export const GENERATE_POLL_MS = 10_000;
+export const GENERATE_PARKED_POLL_MS = 60_000;
 
 export function generatePollMs(
   jobs: readonly Pick<BridgeJob, 'kind' | 'state'>[] | undefined,
 ): number | false {
-  return jobs?.some((j) => j.kind === KIND_GENERATE && isOpen(j.state)) ? GENERATE_POLL_MS : false;
+  const open = jobs?.filter((j) => j.kind === KIND_GENERATE && isOpen(j.state)) ?? [];
+  if (open.some((j) => j.state !== 'needs_attention')) return GENERATE_POLL_MS;
+  return open.length ? GENERATE_PARKED_POLL_MS : false;
 }
 
 /** The book's newest generate job (the list is newest first), if any. */
@@ -64,19 +72,6 @@ export function latestGenerateJob<J extends Pick<BridgeJob, 'kind'>>(
   jobs: readonly J[] | undefined,
 ): J | undefined {
   return jobs?.find((j) => j.kind === KIND_GENERATE);
-}
-
-/**
- * Whether a job just finished: it was open the last time it was seen and is
- * done now. The card then refetches the book, so the new local data shows.
- */
-export function justFinished(
-  before: Pick<BridgeJob, 'id' | 'state'> | undefined,
-  now: Pick<BridgeJob, 'id' | 'state'> | undefined,
-): boolean {
-  return Boolean(
-    before && now && before.id === now.id && isOpen(before.state) && now.state === 'done',
-  );
 }
 
 // The engine's stage names (state.State) and the Bridge's own steps, each with a
@@ -160,12 +155,11 @@ export function bridgeJobLink(uiUrl: string | undefined, jobId: number): string 
   return u.href;
 }
 
-const num = (v: unknown): number | undefined =>
-  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
-const text = (v: unknown): string | undefined =>
-  typeof v === 'string' && v.trim() ? v.trim() : undefined;
-const sourceOf = (v: unknown): 'audio' | 'ebook' | undefined =>
-  v === 'audio' || v === 'ebook' ? v : undefined;
+/** A figure that can't be below zero (a count, an ETA, a cost), else undefined. */
+const amount = (v: unknown): number | undefined => {
+  const n = num(v);
+  return n !== undefined && n >= 0 ? n : undefined;
+};
 
 /** A generate job's progress as the card words it; every field only when the Bridge sent it. */
 export interface GenerateProgress {
@@ -176,7 +170,6 @@ export interface GenerateProgress {
   total?: number;
   etaSeconds?: number;
   costUsd?: number;
-  source?: 'audio' | 'ebook';
   park?: { code: string; hint?: string; retryAt?: string };
 }
 
@@ -184,23 +177,22 @@ export interface GenerateProgress {
 export function generateProgress(progress: unknown): GenerateProgress {
   if (!progress || typeof progress !== 'object') return {};
   const p = progress as Record<string, unknown>;
+  // The message (else the step) and the count, as any kind's progress reads.
+  const { text: said, done, total } = progressOf(p);
+  const step = text(p.step);
   const out: GenerateProgress = {};
-  const stage = text(p.stage) ?? text(p.step);
+  const stage = text(p.stage) ?? step;
   if (stage) out.stage = stage;
-  const message = text(p.message);
-  if (message) out.message = message;
-  const done = num(p.done);
-  const total = num(p.total);
-  if (done !== undefined && total !== undefined && total > 0) {
+  // The step alone is no message: it is the stage when there is none.
+  if (said && said !== step) out.message = said;
+  if (done !== undefined && total !== undefined) {
     out.done = done;
     out.total = total;
   }
-  const eta = num(p.eta_seconds);
+  const eta = amount(p.eta_seconds);
   if (eta !== undefined) out.etaSeconds = eta;
-  const cost = num(p.cost_usd);
+  const cost = amount(p.cost_usd);
   if (cost !== undefined) out.costUsd = cost;
-  const source = sourceOf(p.source);
-  if (source) out.source = source;
   if (p.park && typeof p.park === 'object') {
     const k = p.park as Record<string, unknown>;
     const code = text(k.code);
@@ -220,7 +212,6 @@ export interface GenerateResult {
   characters?: number;
   recaps?: number;
   costUsd?: number;
-  source?: 'audio' | 'ebook';
   /** The community issues filed (http(s) links only), by what each offers. */
   contributed: { what: string; url: string }[];
 }
@@ -230,14 +221,12 @@ export function generateResult(result: unknown): GenerateResult | null {
   if (!result || typeof result !== 'object') return null;
   const r = result as Record<string, unknown>;
   const out: GenerateResult = { contributed: [] };
-  const characters = num(r.characters);
+  const characters = amount(r.characters);
   if (characters !== undefined) out.characters = characters;
-  const recaps = num(r.recaps);
+  const recaps = amount(r.recaps);
   if (recaps !== undefined) out.recaps = recaps;
-  const cost = num(r.cost_usd);
+  const cost = amount(r.cost_usd);
   if (cost !== undefined) out.costUsd = cost;
-  const source = sourceOf(r.source);
-  if (source) out.source = source;
   if (r.contributed && typeof r.contributed === 'object') {
     for (const [what, url] of Object.entries(r.contributed as Record<string, unknown>)) {
       const safe = typeof url === 'string' ? safeHttpUrl(url) : undefined;
@@ -263,19 +252,12 @@ export function roundEta(seconds: number): number {
   return Math.max(step, Math.round(seconds / step) * step);
 }
 
-/** The last segment of a library path ("Author/Book/Book.epub" -> "Book.epub"). */
-export function baseName(path: string): string {
-  const parts = path.split('/').filter(Boolean);
-  return parts[parts.length - 1] ?? path;
-}
-
 /**
- * The confirmation dialog's estimate, as facts the dialog words: the source
- * (and the ebook's file), the transcription it needs, the agent cost the
+ * The confirmation dialog's estimate, as facts the dialog words: the ebook's
+ * file when it reads one, the transcription it needs, the agent cost the
  * Bridge's history predicts, and what stops or warns.
  */
 export interface EstimateView {
-  source: 'audio' | 'ebook';
   ebook?: { name: string; path: string };
   /** Transcription hours; 0 = none needed (an ebook); null = no estimate yet. */
   asrHours: number | null;
@@ -287,41 +269,39 @@ export interface EstimateView {
   agentNotReady: boolean;
   /** The Bridge can't write to the library: nothing can be queued. */
   notWritable: boolean;
-  canConfirm: boolean;
 }
 
 export function estimateView(e: BridgeEstimate): EstimateView {
   const ebook = e.source === 'ebook';
-  const asr = num(e.asr_hours);
+  const asr = amount(e.asr_hours);
   return {
-    source: e.source,
-    ...(ebook && e.ebook ? { ebook: { name: baseName(e.ebook), path: e.ebook } } : {}),
+    ...(ebook && e.ebook ? { ebook: { name: relBaseName(e.ebook), path: e.ebook } } : {}),
     asrHours: ebook ? 0 : asr && asr > 0 ? asr : null,
-    costUsd: num(e.agent_cost_usd) ?? null,
+    costUsd: amount(e.agent_cost_usd) ?? null,
     subscription: e.subscription,
     agentNotReady: !e.agent_ready,
     notWritable: !e.writable,
-    canConfirm: e.writable,
   };
 }
 
 /** Where the results appear, by the contribute choice (decision 6: local by default). */
-export function destinationKey(contribute: 'local' | 'issue'): string {
+export function destinationKey(contribute: Contribute): string {
   return contribute === 'issue' ? 'bridge.generate.whereIssue' : 'bridge.generate.whereLocal';
 }
 
+/** Where generated content goes: this server only, or offered to the community too. */
+export type Contribute = NonNullable<SidecarsGenerateParams['contribute']>;
+
 /**
- * The jobs the dialog queues, in order: the earlier books of the series first
- * (in reading order, when asked to), then this book. Ids ascend, so the Bridge
- * claims them in that order.
+ * The jobs queued for books already in reading order (the book dialog's
+ * earlier books then the book, or the series batch's queue), each book once.
+ * Ids ascend, so the Bridge claims them in that order.
  */
 export function generatePlan(
-  book: { library_id: number; path: string },
-  earlier: readonly { library_id: number; path: string }[],
-  opts: { includeEarlier: boolean; contribute: 'local' | 'issue' },
+  books: readonly { library_id: number; path: string }[],
+  contribute: Contribute,
 ): BridgeJobRequest[] {
-  const params: SidecarsGenerateParams = { source: 'auto', contribute: opts.contribute };
-  const books = [...(opts.includeEarlier ? earlier : []), book];
+  const params: SidecarsGenerateParams = { source: 'auto', contribute };
   const seen = new Set<string>();
   const out: BridgeJobRequest[] = [];
   for (const b of books) {
@@ -343,10 +323,7 @@ export function generatePlan(
  * series (each spelling of it), books without one last in the order they came,
  * each book once.
  */
-export function seriesBatchOrder<B extends Pick<AdminBook, 'library_id' | 'path' | 'series_list'>>(
-  books: readonly B[],
-  series: string,
-): B[] {
+export function seriesBatchOrder<B extends AdminBook>(books: readonly B[], series: string): B[] {
   const seen = new Set<string>();
   const unique = books.filter((b) => {
     const key = refKey(b);
@@ -354,9 +331,8 @@ export function seriesBatchOrder<B extends Pick<AdminBook, 'library_id' | 'path'
     seen.add(key);
     return true;
   });
-  // Its position in this series (series_list holds one per series, the way
-  // series-model's spanIn reads it); 0 when it has none.
-  const pos = (b: B) => b.series_list.find((r) => sameSeries(r.name, series))?.position ?? 0;
+  // Its position in this series; 0 when it has none.
+  const pos = (b: B) => spanIn(b, series).position;
   return unique
     .map((b, i) => ({ b, i, p: pos(b) }))
     .sort((x, y) => {
@@ -405,26 +381,6 @@ export function batchPlan<B extends { library_id: number; path: string }>(
     else queue.push(b);
   }
   return { queue, covered, open, notWritable };
-}
-
-/** A generate job's line on the card: what state it's in, as the card shows it. */
-export type GenerateLook = 'working' | 'waiting' | 'parked' | 'done' | 'failed' | 'cancelled';
-
-export function generateLook(job: Pick<BridgeJob, 'state'>): GenerateLook {
-  switch (job.state) {
-    case 'queued':
-      return 'waiting';
-    case 'needs_attention':
-      return 'parked';
-    case 'done':
-      return 'done';
-    case 'failed':
-      return 'failed';
-    case 'cancelled':
-      return 'cancelled';
-    default:
-      return 'working';
-  }
 }
 
 /**

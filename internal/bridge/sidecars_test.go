@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // beatLibrary records a heartbeat offering kinds with the test library mapped as
@@ -117,18 +118,27 @@ func TestFeaturesIncludeSidecars(t *testing.T) {
 	}
 }
 
-// UpdateHeld reports the state a job was in, and Notable picks the moves an
-// admin is told about: into done, failed or needs_attention (not a park
-// that resumes by itself), once each.
+// heard records what OnTransition is told, as "from>to:park code".
+func (q *testQueue) heard() *[]string {
+	var got []string
+	q.OnTransition = func(_ context.Context, j Job, from string) {
+		got = append(got, from+">"+j.State+":"+j.ParkCode())
+	}
+	return &got
+}
+
+// UpdateHeld reports the moves an admin is told about (OnTransition, by
+// Notable): into done, failed or needs_attention (not a park that resumes by
+// itself), once each; a keepalive is never one.
 func TestUpdateHeldReportsTheMove(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
 	ctx := context.Background()
+	heard := q.heard()
 	job := q.verify(t, "A", 0)
 	if _, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil {
 		t.Fatal(err)
 	}
-	var notable []string
 	for _, step := range []struct {
 		state    string
 		progress string
@@ -147,17 +157,67 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		if step.progress != "" {
 			u.Progress = json.RawMessage(step.progress)
 		}
-		j, from, err := q.UpdateHeld(ctx, job.ID, u)
-		if err != nil {
+		if _, err := q.UpdateHeld(ctx, job.ID, u); err != nil {
 			t.Fatalf("%s: %v", step.state, err)
-		}
-		if j.Notable(from) {
-			notable = append(notable, from+">"+j.State+":"+j.ParkCode())
 		}
 	}
 	want := []string{"running>needs_attention:agent_unavailable", "running>done:"}
-	if !slices.Equal(notable, want) {
-		t.Fatalf("notable = %v, want %v", notable, want)
+	if !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+}
+
+// A lease that runs out on the last attempt fails the job, and an admin hears
+// about it once (whichever call expires it); one that runs out earlier requeues
+// the job, which is not news, and neither is a keepalive.
+func TestLeaseExpiryReportsTheFailure(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	job := q.verify(t, "A", 0)
+	for attempt := 1; attempt <= MaxAttempts; attempt++ {
+		if j, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || j == nil {
+			t.Fatalf("claim %d = %+v, %v", attempt, j, err)
+		}
+		if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, State: ptr(StateRunning)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, Progress: json.RawMessage(`{"step":"hold"}`)}); err != nil {
+			t.Fatal(err)
+		}
+		if len(*heard) != 0 {
+			t.Fatalf("attempt %d: heard %v before the lease ran out", attempt, *heard)
+		}
+		q.advance(Lease + time.Second)
+		// A console read expires it (expireDue), and the reads after it find
+		// nothing more to expire.
+		for range 2 {
+			if _, _, err := q.List(ctx, Filter{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if want := []string{"running>failed:"}; !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+	if j, _ := q.Job(ctx, job.ID); j.State != StateFailed {
+		t.Fatalf("job = %+v", j)
+	}
+
+	// Expired inside a write (here a claim) rather than a read: heard the same.
+	other := q.verify(t, "B", 0)
+	for attempt := 1; attempt <= MaxAttempts; attempt++ {
+		if j, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || j == nil || j.ID != other.ID {
+			t.Fatalf("claim %d = %+v, %v", attempt, j, err)
+		}
+		q.advance(Lease + time.Second)
+	}
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"running>failed:", "claimed>failed:"}; !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
 	}
 }
 

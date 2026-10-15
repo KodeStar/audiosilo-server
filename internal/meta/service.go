@@ -167,8 +167,8 @@ type MetaWork struct {
 	// shows content that needs it.
 	Attribution *MetaAttribution `json:"attribution,omitempty"`
 	// Generated names the parts that came from this server's generated files, not
-	// the community (WithGenerated, GeneratedWork); set per request on a copy,
-	// never on a work the cache holds, and omitted when nothing did.
+	// the community (Answer); set per request on a copy, never on a work the cache
+	// holds, and omitted when nothing did.
 	Generated *MetaGenerated `json:"generated,omitempty"`
 }
 
@@ -645,16 +645,10 @@ func (s *Service) attribution(workID string) *MetaAttribution {
 
 // carriesCommunityContent reports whether w holds any of the CC BY-SA layer -
 // the content its Attribution credits. HideSpoilers re-asks after gating, so a
-// work whose every community entry was held back drops the credit too. What came
-// from the server's generated files (w.Generated) is not the community's, so it
-// never counts.
+// work whose every community entry was held back drops the credit too. It only
+// ever sees community content: Answer lays generated content in after it.
 func carriesCommunityContent(w *MetaWork) bool {
-	var g MetaGenerated
-	if w.Generated != nil {
-		g = *w.Generated
-	}
-	return (len(w.Characters) > 0 && !g.Characters) || (len(w.Recaps) > 0 && !g.Recaps) ||
-		(w.RecapSummary != nil && !g.summary) || w.CommunityDescription != nil
+	return len(w.Characters) > 0 || len(w.Recaps) > 0 || w.RecapSummary != nil || w.CommunityDescription != nil
 }
 
 // pickRecording returns the recording matching recordingID, falling back to the

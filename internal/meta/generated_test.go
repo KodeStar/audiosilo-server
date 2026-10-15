@@ -27,15 +27,24 @@ func communityWork() *MetaWork {
 		Attribution: &MetaAttribution{Credit: attributionContributors}}
 }
 
-// TestWithGeneratedFillsWhatTheCommunityLacks: community wins per dimension;
-// generated recaps (and their summary) fill a work without any; the cached
-// envelope is never written to.
-func TestWithGeneratedFillsWhatTheCommunityLacks(t *testing.T) {
+// matched is Answer's envelope for a matched book.
+func matched(t *testing.T, env *Enrichment, g *Generated, hide *Place) *Enrichment {
+	t.Helper()
+	out, ok := Answer(env, "The Book", g, hide).(*Enrichment)
+	if !ok {
+		t.Fatalf("a matched book answered %T", out)
+	}
+	return out
+}
+
+// TestAnswerFillsWhatTheCommunityLacks: community wins per dimension; generated
+// recaps (and their summary) fill a work without any; the cached envelope is
+// never written to.
+func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	t.Parallel()
 	env := &Enrichment{Matched: true, Work: communityWork()}
 	snapshot, _ := json.Marshal(env)
-	out := WithGenerated(env, testGenerated())
-	w := out.Work
+	w := matched(t, env, testGenerated(), nil).Work
 	if len(w.Characters) != 1 || w.Characters[0].ID != "community-hero" {
 		t.Errorf("characters = %+v, want the community's", w.Characters)
 	}
@@ -52,40 +61,59 @@ func TestWithGeneratedFillsWhatTheCommunityLacks(t *testing.T) {
 		t.Errorf("the shared envelope changed:\n%s\n%s", snapshot, after)
 	}
 
-	// Gated to nothing community, the credit goes; the generated recap at chapter
-	// 0 stays marked.
-	gated := HideSpoilers(&Enrichment{Work: &MetaWork{ID: "w", Characters: []MetaCharacter{{ID: "c", Reveal: MetaPosition{Chapter: 9}}},
-		Attribution: &MetaAttribution{}}}, 0, false)
-	if gated.Work.Attribution != nil {
-		t.Errorf("gated community-free work kept attribution")
-	}
-	hidden := HideSpoilers(out, 0, false).Work
+	// Hidden at the start: the community hero (chapter 1) stays with its credit,
+	// the generated recap at chapter 0 stays marked, no summary.
+	hidden := matched(t, env, testGenerated(), &Place{}).Work
 	if hidden.Attribution == nil || hidden.Generated == nil || !hidden.Generated.Recaps || len(hidden.Recaps) != 1 || hidden.RecapSummary != nil {
 		t.Errorf("hidden = %+v / %+v", hidden, hidden.Generated)
 	}
+	// Community characters all gated away: the credit goes, and the generated
+	// characters don't step in (the community owns that dimension).
+	late := &Enrichment{Work: &MetaWork{ID: "w", Characters: []MetaCharacter{{ID: "c", Reveal: MetaPosition{Chapter: 9}}},
+		Attribution: &MetaAttribution{}}}
+	gated := matched(t, late, testGenerated(), &Place{}).Work
+	if gated.Attribution != nil || len(gated.Characters) != 0 || gated.Generated == nil || gated.Generated.Characters {
+		t.Errorf("gated = %+v / %+v", gated, gated.Generated)
+	}
 
-	// A work with both from the community keeps them: nothing generated.
+	// A work with everything from the community keeps it: nothing generated, and
+	// nothing to load (Fillable).
 	both := communityWork()
 	both.Recaps = []MetaRecap{{Through: MetaPosition{Chapter: 1}, Text: "Community."}}
 	env = &Enrichment{Matched: true, Work: both}
-	if out := WithGenerated(env, testGenerated()); out != env || out.Work.Generated != nil {
+	if out := matched(t, env, testGenerated(), nil); out != env || out.Work.Generated != nil {
 		t.Errorf("both community = %+v", out.Work)
+	}
+	if !env.Fillable() {
+		t.Error("a work without a summary can't be filled")
+	}
+	both.RecapSummary = &MetaRecapSummary{InShort: "Community short."}
+	if env.Fillable() {
+		t.Error("a complete work is fillable")
 	}
 
 	// A community summary stays beside generated recaps, and still counts as
 	// community content.
 	summed := &MetaWork{ID: "w", RecapSummary: &MetaRecapSummary{InShort: "Community short."}, Attribution: &MetaAttribution{}}
-	out = WithGenerated(&Enrichment{Work: summed}, testGenerated())
+	out := matched(t, &Enrichment{Work: summed}, testGenerated(), nil)
 	if out.Work.RecapSummary.InShort != "Community short." || out.Work.Attribution == nil || len(out.Work.Recaps) != 2 {
 		t.Errorf("community summary = %+v", out.Work)
 	}
 }
 
-// TestGeneratedWork: an unmatched book's work is its generated content alone,
+// TestAnswerUnmatched: an unmatched book's work is its generated content alone,
 // with the book's title and no attribution; spoiler gating applies to it.
-func TestGeneratedWork(t *testing.T) {
+func TestAnswerUnmatched(t *testing.T) {
 	t.Parallel()
-	w := GeneratedWork("The Book", testGenerated())
+	unmatched := func(g *Generated, hide *Place) Unmatched {
+		t.Helper()
+		u, ok := Answer(nil, "The Book", g, hide).(Unmatched)
+		if !ok {
+			t.Fatalf("an unmatched book answered %T", u)
+		}
+		return u
+	}
+	w := unmatched(testGenerated(), nil).Work
 	if w == nil || w.ID != "" || w.Title != "The Book" || len(w.Characters) != 2 || len(w.Recaps) != 2 || w.RecapSummary == nil {
 		t.Fatalf("work = %+v", w)
 	}
@@ -95,14 +123,14 @@ func TestGeneratedWork(t *testing.T) {
 	if raw, _ := json.Marshal(Unmatched{Work: w}); !json.Valid(raw) || string(raw[:17]) != `{"matched":false,` {
 		t.Errorf("unmatched = %s", raw)
 	}
-	gated := GateWork(w, 2, false)
+	gated := unmatched(testGenerated(), &Place{Chapter: 2}).Work
 	if len(gated.Characters) != 1 || gated.Characters[0].ID != "local-early" || len(gated.Recaps) != 1 || gated.RecapSummary != nil || gated.Attribution != nil {
 		t.Errorf("gated = %+v", gated)
 	}
-	if GateWork(w, 2, true) != w {
-		t.Error("a finished book's work was gated")
+	if whole := unmatched(testGenerated(), &Place{Chapter: 2, Finished: true}).Work; whole.RecapSummary == nil || len(whole.Characters) != 2 {
+		t.Errorf("a finished book's work was gated: %+v", whole)
 	}
-	if GeneratedWork("T", &Generated{}) != nil || GeneratedWork("T", nil) != nil {
+	if unmatched(&Generated{}, nil).Work != nil || unmatched(nil, nil).Work != nil {
 		t.Error("a work from nothing")
 	}
 }
