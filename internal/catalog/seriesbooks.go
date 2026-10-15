@@ -257,3 +257,52 @@ func numberedSeriesMembers(libraryID int64, relPath string, series string, scope
 		[]any{libraryID, key, relPath}, fargs,
 		[]any{key, libraryID, relPath}, fargs)
 }
+
+// SeriesMember is a book of a series with its place in that series (a range's
+// start and end, End 0 when it isn't one).
+type SeriesMember struct {
+	Book
+	Position    float64
+	PositionEnd float64
+}
+
+// maxEarlierInSeries bounds EarlierInSeries: a long series, read whole.
+const maxEarlierInSeries = 200
+
+// EarlierInSeries returns the books of one library before book in its series, in
+// reading order (position, then a range's end, then path), list shape: the
+// series is book's first numbered one (its main series when that has a position,
+// else the first of its others that does), any spelling of it, and a member is
+// any book numbered below book's own position there, through its main series or
+// its list (numberedSeriesMembers). Nil when book has no numbered series. The
+// Bridge's confirmation dialog offers these to be generated first.
+func (c *Catalog) EarlierInSeries(ctx context.Context, libraryID int64, book *Book) ([]SeriesMember, error) {
+	var series *SeriesRef
+	for _, s := range book.AllSeries() {
+		if s.Position > 0 {
+			series = &s
+			break
+		}
+	}
+	if series == nil {
+		return nil, nil
+	}
+	q, args := numberedSeriesMembers(libraryID, book.RelPath, series.Name, Scope{LibraryID: libraryID, AllowAll: true})
+	rows, err := c.db.QueryContext(ctx, `SELECT `+bookCols+`, pos, pos_end FROM (`+q+`)
+		 WHERE pos < ? ORDER BY pos, pos_end, rel_path LIMIT ?`, append(args, series.Position, maxEarlierInSeries)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SeriesMember
+	for rows.Next() {
+		var m SeriesMember
+		dest, finish := bookDest(&m.Book)
+		if err := rows.Scan(append(dest, &m.Position, &m.PositionEnd)...); err != nil {
+			return nil, err
+		}
+		finish()
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}

@@ -123,7 +123,7 @@ func TestEnqueueChecks(t *testing.T) {
 	ctx := context.Background()
 	lib := q.lib
 	for name, j := range map[string]NewJob{
-		"unknown kind":         {Kind: "sidecars.generate", LibraryID: &lib},
+		"unknown kind":         {Kind: "files.delete", LibraryID: &lib},
 		"no library":           {Kind: KindVerify},
 		"unknown param":        {Kind: KindVerify, LibraryID: &lib, Params: json.RawMessage(`{"rm":"-rf"}`)},
 		"hold out of range":    {Kind: KindVerify, LibraryID: &lib, Params: json.RawMessage(`{"hold_seconds":601}`)},
@@ -255,7 +255,7 @@ func TestLeaseExpiry(t *testing.T) {
 		}
 		// Progress renews the lease.
 		q.advance(Lease - time.Second)
-		if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, State: ptr(StateRunning)}); err != nil {
+		if _, _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, State: ptr(StateRunning)}); err != nil {
 			t.Fatalf("progress %d: %v", attempt, err)
 		}
 		q.advance(Lease - time.Second)
@@ -263,7 +263,7 @@ func TestLeaseExpiry(t *testing.T) {
 			t.Fatalf("renewed lease expired: %s", j.State)
 		}
 		// Then the Bridge goes quiet, having said how far it got.
-		if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, Progress: json.RawMessage(`{"step":"hold"}`)}); err != nil {
+		if _, _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, Progress: json.RawMessage(`{"step":"hold"}`)}); err != nil {
 			t.Fatalf("progress %d: %v", attempt, err)
 		}
 		q.advance(Lease + time.Second)
@@ -279,7 +279,7 @@ func TestLeaseExpiry(t *testing.T) {
 			t.Fatalf("after lease %d ran out: %s %s, want %s %s", attempt, jobs[0].State, jobs[0].Progress, want, progress)
 		}
 		// The dead claim's late report is refused.
-		if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, State: ptr(StateDone)}); !errors.Is(err, ErrNotHeld) {
+		if _, _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, State: ptr(StateDone)}); !errors.Is(err, ErrNotHeld) {
 			t.Fatalf("late report %d: %v, want ErrNotHeld", attempt, err)
 		}
 	}
@@ -293,13 +293,13 @@ func TestUpdateHeld(t *testing.T) {
 	q := newTestQueue(t)
 	ctx := context.Background()
 	job := q.verify(t, "A", 0)
-	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 0, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
+	if _, _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 0, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("report on a queued job: %v, want ErrNotHeld", err)
 	}
 	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 2, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
+	if _, _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 2, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("wrong attempt: %v, want ErrNotHeld", err)
 	}
 	for name, u := range map[string]Update{
@@ -307,25 +307,25 @@ func TestUpdateHeld(t *testing.T) {
 		"progress array":  {Attempt: 1, Progress: json.RawMessage(`[1]`)},
 		"result not json": {Attempt: 1, Result: json.RawMessage(`nope`)},
 	} {
-		if _, err := q.UpdateHeld(ctx, job.ID, u); !errors.Is(err, ErrInvalid) {
+		if _, _, err := q.UpdateHeld(ctx, job.ID, u); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v, want ErrInvalid", name, err)
 		}
 	}
-	j, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateRunning), Progress: json.RawMessage(`{"stage":"stat","percent":50}`)})
+	j, _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateRunning), Progress: json.RawMessage(`{"stage":"stat","percent":50}`)})
 	if err != nil || j.State != StateRunning || string(j.Progress) != `{"stage":"stat","percent":50}` {
 		t.Fatalf("progress = %+v, %v", j, err)
 	}
 	// Parking drops the lease; the job stays the Bridge's.
-	j, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("needs a look")})
+	j, _, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateNeedsAttention), Error: ptr("needs a look")})
 	if err != nil || j.LeaseUntil != nil || j.State != StateNeedsAttention {
 		t.Fatalf("park = %+v, %v", j, err)
 	}
 	q.advance(time.Hour)
-	j, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateDone), Result: json.RawMessage(`{"ok":true}`)})
+	j, _, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateDone), Result: json.RawMessage(`{"ok":true}`)})
 	if err != nil || j.State != StateDone || j.FinishedAt == nil || j.LeaseUntil != nil || string(j.Progress) != `{"stage":"stat","percent":50}` {
 		t.Fatalf("done = %+v, %v", j, err)
 	}
-	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
+	if _, _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("report after done: %v, want ErrNotHeld", err)
 	}
 }
@@ -355,11 +355,11 @@ func TestCancel(t *testing.T) {
 		t.Fatalf("cancel claimed = %+v, %v; want a request", j, err)
 	}
 	// The Bridge hears it on its next report and stops.
-	j, err = q.UpdateHeld(ctx, running.ID, Update{Attempt: 1, State: ptr(StateRunning)})
+	j, _, err = q.UpdateHeld(ctx, running.ID, Update{Attempt: 1, State: ptr(StateRunning)})
 	if err != nil || !j.CancelRequested {
 		t.Fatalf("report after cancel = %+v, %v", j, err)
 	}
-	if j, err = q.UpdateHeld(ctx, running.ID, Update{Attempt: 1, State: ptr(StateCancelled)}); err != nil || j.State != StateCancelled {
+	if j, _, err = q.UpdateHeld(ctx, running.ID, Update{Attempt: 1, State: ptr(StateCancelled)}); err != nil || j.State != StateCancelled {
 		t.Fatalf("bridge stops = %+v, %v", j, err)
 	}
 
@@ -505,7 +505,7 @@ func TestStaleTokenNeitherClaimsNorBeats(t *testing.T) {
 func TestUpdateOfAGoneJob(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
-	if _, err := q.UpdateHeld(context.Background(), 999, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
+	if _, _, err := q.UpdateHeld(context.Background(), 999, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("report on a gone job: %v, want ErrNotHeld", err)
 	}
 }
@@ -554,7 +554,7 @@ func TestUpdateCleansTheError(t *testing.T) {
 	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
-	j, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateFailed), Error: ptr("ffmpeg:\r\n\x1b[31mbad\x00 data\n")})
+	j, _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateFailed), Error: ptr("ffmpeg:\r\n\x1b[31mbad\x00 data\n")})
 	if err != nil || j.State != StateFailed || j.Error != "ffmpeg: \n [31mbad  data\n" {
 		t.Fatalf("failed with a messy error = %+v, %v", j, err)
 	}

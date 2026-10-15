@@ -353,6 +353,52 @@ func TestNilServiceIsSafe(t *testing.T) {
 	s.UpdateFound(context.Background(), "v1", "", "")
 	s.BackupFailed(context.Background(), "scheduled", "failed")
 	s.ScanFinished(context.Background(), library.RunReport{Status: catalog.RunFailed})
+	s.BridgeJobEnded(context.Background(), BridgeJob{State: "done"})
+}
+
+// A Bridge job's end names the book; a failure carries its park code, and its
+// error (the Bridge's own text) stays in the bell.
+func TestBridgeJobEnded(t *testing.T) {
+	s, cat, ctx := newService(t)
+	dest := newFakeDest(t)
+	addTarget(t, cat, TargetWebhook, dest.srv.URL, "", KindBridgeJobFinished, KindBridgeJobFailed)
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 7, Kind: "sidecars.generate", State: "done", Library: "Fiction", LibraryID: 1,
+		Path: "Brandon Sanderson/The Way of Kings", Title: "The Way of Kings"})
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 8, Kind: "sidecars.generate", State: "needs_attention", Library: "Fiction", LibraryID: 1,
+		Path: "Author/Untitled", Code: "book_not_writable", Error: "mkdir /mnt/user/books/Author/Untitled/.audiosilo: permission denied"})
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 9, Kind: "bridge.verify", State: "failed", Library: "Fiction", LibraryID: 1})
+	got := dest.wait(t, 3)
+	titles := map[string]string{}
+	for _, g := range got {
+		titles[g.body["title"].(string)] = g.body["event"].(string)
+		if strings.Contains(string(g.raw), "/mnt/user") {
+			t.Fatalf("the Bridge's error left the server: %s", g.raw)
+		}
+	}
+	for title, kind := range map[string]string{
+		"Characters and recaps ready: The Way of Kings": KindBridgeJobFinished,
+		"A Bridge job needs attention: Author/Untitled": KindBridgeJobFailed,
+		"Bridge check failed: Fiction":                  KindBridgeJobFailed,
+	} {
+		if titles[title] != kind {
+			t.Errorf("no %s titled %q in %v", kind, title, titles)
+		}
+	}
+	events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
+	var parked catalog.ServerEvent
+	for _, ev := range events {
+		if ev.Data["state"] == "needs_attention" {
+			parked = ev
+		}
+	}
+	if parked.Data["code"] != "book_not_writable" || !strings.Contains(parked.Data["detail"].(string), "permission denied") ||
+		parked.Data["path"] != "Author/Untitled" {
+		t.Fatalf("parked event = %+v", parked.Data)
+	}
+	if m := compose(parked, s.server()); m.Text != "The Bridge can't write into the book's folder." ||
+		m.Link != "https://books.example.com/admin/server?topic=bridge" {
+		t.Fatalf("parked message = %+v", m)
+	}
 }
 
 func TestSignedInDeviceIsOneLine(t *testing.T) {
