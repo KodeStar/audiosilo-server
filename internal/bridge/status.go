@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kodestar/audiosilo-server/internal/auth"
 )
 
 // OnlineWindow is how recent the last heartbeat must be for the Bridge to count
@@ -200,40 +202,72 @@ func (s *Service) SaveHeartbeat(ctx context.Context, st Status) error {
 	if err != nil {
 		return err
 	}
+	now := s.now()
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE bridge_status SET heartbeat_at = ?, status = ? WHERE id = 1 AND paired_at IS NOT NULL`, s.ts(), string(body))
+		`UPDATE bridge_status SET heartbeat_at = ?, status = ? WHERE id = 1 AND paired_at IS NOT NULL`, at(now), string(body))
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotPaired
 	}
+	stored, _ := time.Parse(time.RFC3339, at(now)) // the stored precision
+	s.remember(&Heartbeat{Status: st, At: stored})
 	return nil
 }
 
-// LastHeartbeat returns the Bridge's last heartbeat, or nil when no Bridge is
-// paired or none has beaten since it paired.
+// heartbeatTTL is how long a read heartbeat is reused: well inside the 2-minute
+// online window, and how late an unpair or a demoted admin shows on GET /server
+// at most (Forget clears it at once for a pairing or an unpair made here).
+const heartbeatTTL = 5 * time.Second
+
+// remember caches h as the heartbeat read now.
+func (s *Service) remember(h *Heartbeat) {
+	s.hbMu.Lock()
+	defer s.hbMu.Unlock()
+	s.hb, s.hbRead = h, s.now()
+}
+
+// Forget drops the cached heartbeat (after a pairing or an unpair).
+func (s *Service) Forget() {
+	s.hbMu.Lock()
+	defer s.hbMu.Unlock()
+	s.hb, s.hbRead = nil, time.Time{}
+}
+
+// LastHeartbeat returns the paired Bridge's last heartbeat, or nil when no
+// Bridge is paired (auth.BridgeLiveSQL: a live bridge token of an enabled
+// admin) or none has beaten since it paired. The result is shared: never
+// change it.
 func (s *Service) LastHeartbeat(ctx context.Context) (*Heartbeat, error) {
+	s.hbMu.Lock()
+	if !s.hbRead.IsZero() && s.now().Sub(s.hbRead) < heartbeatTTL {
+		h := s.hb
+		s.hbMu.Unlock()
+		return h, nil
+	}
+	s.hbMu.Unlock()
 	var (
 		stamp sql.NullString
 		body  string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT heartbeat_at, status FROM bridge_status WHERE id = 1 AND paired_at IS NOT NULL`).Scan(&stamp, &body)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !stamp.Valid) {
-		return nil, nil
-	}
-	if err != nil {
+		`SELECT heartbeat_at, status FROM bridge_status
+		  WHERE id = 1 AND paired_at IS NOT NULL AND `+auth.BridgeLiveSQL).Scan(&stamp, &body)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	t, err := time.Parse(time.RFC3339, stamp.String)
-	if err != nil {
-		return nil, nil // an unreadable stamp is no heartbeat
+	var h *Heartbeat
+	if err == nil && stamp.Valid {
+		// An unreadable stamp or body is no heartbeat.
+		if t, perr := time.Parse(time.RFC3339, stamp.String); perr == nil {
+			h = &Heartbeat{At: t}
+			if json.Unmarshal([]byte(body), &h.Status) != nil {
+				h = nil
+			}
+		}
 	}
-	h := &Heartbeat{At: t}
-	if err := json.Unmarshal([]byte(body), &h.Status); err != nil {
-		return nil, nil
-	}
+	s.remember(h)
 	return h, nil
 }
 

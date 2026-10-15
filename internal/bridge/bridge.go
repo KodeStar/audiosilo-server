@@ -7,6 +7,7 @@
 package bridge
 
 import (
+	"sync"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -17,8 +18,14 @@ type Service struct {
 	db  *store.DB
 	now func() time.Time
 	// wake is closed (and replaced) when a job is queued, so a claim waiting in
-	// WaitClaim looks again at once.
+	// waitClaim looks again at once.
 	wake *signal
+
+	// hb caches the last heartbeat as read (status.go), so GET /server, which
+	// every client calls often, reads the database at most every heartbeatTTL.
+	hbMu   sync.Mutex
+	hb     *Heartbeat
+	hbRead time.Time
 }
 
 // New returns a Service. now may be nil to use time.Now.

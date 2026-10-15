@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { BridgeJobState } from '@/api/types';
+import type { BridgeJob, BridgeJobState } from '@/api/types';
 import {
   BRIDGE_JOB_STATES,
   codeExchanged,
-  formatCountdown,
   holdParams,
   isOpen,
   jobActions,
   JOBS_POLL_IDLE_MS,
   JOBS_POLL_OPEN_MS,
+  jobRows,
   jobsPollMs,
-  kindKey,
+  kindName,
   mappingState,
   presence,
   progressOf,
@@ -58,8 +58,33 @@ describe('job states', () => {
   });
 
   it('names known kinds and leaves the rest as their code', () => {
-    expect(kindKey('bridge.verify')).toBe('bridge.kind.bridge.verify');
-    expect(kindKey('podcast.fetch')).toBeUndefined();
+    const t = (key: string, opts?: Record<string, unknown>) =>
+      key === 'bridge.kind.bridge.verify' ? 'Verify' : String(opts?.defaultValue);
+    expect(kindName(t, 'bridge.verify')).toBe('Verify');
+    expect(kindName(t, 'podcast.fetch')).toBe('podcast.fetch');
+  });
+});
+
+describe('job list', () => {
+  const ids = (jobs: readonly Pick<BridgeJob, 'id'>[]) => jobs.map((j) => j.id);
+  const page = (from: number, to: number, next_before?: number) => ({
+    jobs: Array.from({ length: from - to + 1 }, (_, i) => ({ id: from - i }) as BridgeJob),
+    next_before,
+  });
+
+  it('lists the loaded pages until the newest page is in', () => {
+    expect(ids(jobRows(undefined, [page(10, 8, 8), page(7, 6)]))).toEqual([10, 9, 8, 7, 6]);
+  });
+
+  it('puts the polled newest page over the loaded ones, nothing twice, nothing skipped', () => {
+    // Loaded: 10-8 then 7-6. Two new jobs since: the newest page is 12-10.
+    expect(ids(jobRows(page(12, 10, 10), [page(10, 8, 8), page(7, 6)]))).toEqual([
+      12, 11, 10, 9, 8, 7, 6,
+    ]);
+  });
+
+  it('takes a newest page without a next_before as every job there is', () => {
+    expect(ids(jobRows(page(9, 8), [page(10, 8, 8), page(7, 6)]))).toEqual([9, 8]);
   });
 });
 
@@ -96,9 +121,6 @@ describe('pairing', () => {
     expect(secondsLeft('2026-10-15T12:15:00Z', now)).toBe(900);
     expect(secondsLeft('2026-10-15T11:59:00Z', now)).toBe(0);
     expect(secondsLeft('nonsense', now)).toBe(0);
-    expect(formatCountdown(900)).toBe('15:00');
-    expect(formatCountdown(65)).toBe('1:05');
-    expect(formatCountdown(0)).toBe('0:00');
   });
 });
 

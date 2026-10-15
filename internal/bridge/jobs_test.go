@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -37,7 +38,34 @@ func newTestQueue(t *testing.T) *testQueue {
 		t.Fatal(err)
 	}
 	q.lib, _ = res.LastInsertId()
+	q.pair(t)
+	q.beat(t, KindVerify)
 	return q
+}
+
+// pair stands in for auth's pairing: a live bridge token of the admin and the
+// bridge_status row.
+func (q *testQueue) pair(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := q.db.ExecContext(ctx, `INSERT INTO tokens(user_id, token_hash, kind, created_at) VALUES(?, 'h', 'bridge', '2026-01-01T00:00:00Z')`, q.admin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.db.ExecContext(ctx, `INSERT INTO bridge_status(id, paired_at, paired_by) VALUES(1, '2026-01-01T00:00:00Z', ?)`, q.admin); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// beat records a heartbeat naming kinds.
+func (q *testQueue) beat(t *testing.T, kinds ...string) {
+	t.Helper()
+	st := Status{Version: "0.1.0", Kinds: kinds}
+	if err := st.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SaveHeartbeat(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (q *testQueue) advance(d time.Duration) { *q.now = q.now.Add(d) }
@@ -47,9 +75,6 @@ func (q *testQueue) verify(t *testing.T, path string, priority int) *Job {
 	j := NewJob{Kind: KindVerify, LibraryID: &q.lib, RequestedBy: q.admin, Priority: priority}
 	if path != "" {
 		j.Path = &path
-	}
-	if err := CheckNew(&j); err != nil {
-		t.Fatal(err)
 	}
 	job, created, err := q.Enqueue(context.Background(), j)
 	if err != nil || !created {
@@ -68,7 +93,7 @@ func TestEnqueueDedupesOpenJobs(t *testing.T) {
 	if first.State != StateQueued || first.RequestedBy == nil || first.RequestedBy.Username != "boss" || string(first.Params) != `{"hold_seconds":0}` {
 		t.Fatalf("queued = %+v", first)
 	}
-	again, created, err := q.Enqueue(ctx, NewJob{Kind: KindVerify, LibraryID: &q.lib, Path: ptr("Author/Book"), Params: first.Params})
+	again, created, err := q.Enqueue(ctx, NewJob{Kind: KindVerify, LibraryID: &q.lib, Path: ptr("Author/Book"), Params: first.Params, RequestedBy: q.admin})
 	if err != nil || created || again.ID != first.ID {
 		t.Fatalf("second press = %v, %v, %v; want the first job", again, created, err)
 	}
@@ -87,9 +112,11 @@ func TestEnqueueDedupesOpenJobs(t *testing.T) {
 	}
 }
 
-func TestCheckNew(t *testing.T) {
+func TestEnqueueChecks(t *testing.T) {
 	t.Parallel()
-	lib := int64(1)
+	q := newTestQueue(t)
+	ctx := context.Background()
+	lib := q.lib
 	for name, j := range map[string]NewJob{
 		"unknown kind":         {Kind: "sidecars.generate", LibraryID: &lib},
 		"no library":           {Kind: KindVerify},
@@ -98,13 +125,72 @@ func TestCheckNew(t *testing.T) {
 		"params not object":    {Kind: KindVerify, LibraryID: &lib, Params: json.RawMessage(`[1]`)},
 		"params trailing junk": {Kind: KindVerify, LibraryID: &lib, Params: json.RawMessage(`{} {}`)},
 	} {
-		if err := CheckNew(&j); !errors.Is(err, ErrInvalid) {
-			t.Errorf("%s: CheckNew = %v, want ErrInvalid", name, err)
+		if _, _, err := q.Enqueue(ctx, j); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Enqueue = %v, want ErrInvalid", name, err)
 		}
 	}
-	ok := NewJob{Kind: KindVerify, LibraryID: &lib, Params: json.RawMessage(`{"hold_seconds":5}`)}
-	if err := CheckNew(&ok); err != nil || string(ok.Params) != `{"hold_seconds":5}` {
-		t.Errorf("valid job: %v, %s", err, ok.Params)
+	job, _, err := q.Enqueue(ctx, NewJob{Kind: KindVerify, LibraryID: &lib, RequestedBy: q.admin, Params: json.RawMessage(`{"hold_seconds":5}`)})
+	if err != nil || string(job.Params) != `{"hold_seconds":5}` {
+		t.Errorf("valid job: %v, %+v", err, job)
+	}
+	// A kind the server knows but the Bridge doesn't run, or no Bridge at all.
+	q.beat(t)
+	q.advance(heartbeatTTL)
+	if _, _, err := q.Enqueue(ctx, NewJob{Kind: KindVerify, LibraryID: &lib}); !errors.Is(err, ErrKindUnavailable) {
+		t.Errorf("unoffered kind: %v, want ErrKindUnavailable", err)
+	}
+}
+
+// The heartbeat is the paired Bridge's only while its token is live: revoking
+// it (or demoting its admin) ends it, within the cache's few seconds.
+func TestHeartbeatNeedsALiveToken(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	if h, err := q.LastHeartbeat(ctx); err != nil || h == nil || !h.Offers(KindVerify) {
+		t.Fatalf("allowed: heartbeat = %+v, %v", h, err)
+	}
+	if _, err := q.db.ExecContext(ctx, `UPDATE users SET role = 'user'`); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := q.LastHeartbeat(ctx); h == nil {
+		t.Fatal("the cache should still answer within its TTL")
+	}
+	q.advance(heartbeatTTL)
+	if h, err := q.LastHeartbeat(ctx); err != nil || h != nil {
+		t.Fatalf("denied: a demoted admin's Bridge = %+v, %v", h, err)
+	}
+	if h, _ := q.Online(ctx); h != nil {
+		t.Fatal("a demoted admin's Bridge is online")
+	}
+	if _, err := q.db.ExecContext(ctx, `UPDATE users SET role = 'admin'`); err != nil {
+		t.Fatal(err)
+	}
+	q.Forget()
+	if h, _ := q.LastHeartbeat(ctx); h == nil {
+		t.Fatal("Forget didn't drop the cached miss")
+	}
+}
+
+// ClaimFor takes the heartbeat's known kinds, narrowed to the ones asked for.
+func TestClaimFor(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	job := q.verify(t, "A", 0)
+	if j, err := q.ClaimFor(ctx, []string{"sidecars.generate"}, MaxWait); err != nil || j != nil {
+		t.Fatalf("a kind not asked for = %+v, %v", j, err)
+	}
+	j, err := q.ClaimFor(ctx, nil, 0)
+	if err != nil || j == nil || j.ID != job.ID {
+		t.Fatalf("no narrowing = %+v, %v", j, err)
+	}
+	if _, err := q.db.ExecContext(ctx, `UPDATE bridge_status SET heartbeat_at = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	q.Forget()
+	if _, err := q.ClaimFor(ctx, nil, 0); !errors.Is(err, ErrNoHeartbeat) {
+		t.Fatalf("before a heartbeat: %v, want ErrNoHeartbeat", err)
 	}
 }
 
@@ -114,18 +200,18 @@ func TestClaimOrderAndKinds(t *testing.T) {
 	ctx := context.Background()
 	low := q.verify(t, "A", 0)
 	high := q.verify(t, "B", 5)
-	if j, err := q.Claim(ctx, []string{"podcast.fetch"}); err != nil || j != nil {
+	if j, err := q.claim(ctx, []string{"podcast.fetch"}); err != nil || j != nil {
 		t.Fatalf("claim of a kind with no jobs = %v, %v", j, err)
 	}
-	j, err := q.Claim(ctx, []string{KindVerify})
+	j, err := q.claim(ctx, []string{KindVerify})
 	if err != nil || j.ID != high.ID || j.State != StateClaimed || j.Attempts != 1 || j.LeaseUntil == nil {
 		t.Fatalf("first claim = %+v, %v; want the high priority job, claimed", j, err)
 	}
-	j, err = q.Claim(ctx, []string{KindVerify})
+	j, err = q.claim(ctx, []string{KindVerify})
 	if err != nil || j.ID != low.ID {
 		t.Fatalf("second claim = %+v, %v", j, err)
 	}
-	if j, err := q.Claim(ctx, []string{KindVerify}); err != nil || j != nil {
+	if j, err := q.claim(ctx, []string{KindVerify}); err != nil || j != nil {
 		t.Fatalf("empty queue claim = %v, %v", j, err)
 	}
 }
@@ -135,7 +221,7 @@ func TestWaitClaimWakesOnEnqueue(t *testing.T) {
 	q := newTestQueue(t)
 	got := make(chan *Job, 1)
 	go func() {
-		j, _ := q.WaitClaim(context.Background(), []string{KindVerify}, MaxWait)
+		j, _ := q.waitClaim(context.Background(), []string{KindVerify}, MaxWait)
 		got <- j
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -158,7 +244,7 @@ func TestLeaseExpiry(t *testing.T) {
 	ctx := context.Background()
 	job := q.verify(t, "A", 0)
 	for attempt := 1; attempt <= MaxAttempts; attempt++ {
-		j, err := q.Claim(ctx, []string{KindVerify})
+		j, err := q.claim(ctx, []string{KindVerify})
 		if err != nil || j == nil || j.Attempts != attempt {
 			t.Fatalf("claim %d = %+v, %v", attempt, j, err)
 		}
@@ -168,15 +254,12 @@ func TestLeaseExpiry(t *testing.T) {
 			t.Fatalf("progress %d: %v", attempt, err)
 		}
 		q.advance(Lease - time.Second)
-		if err := q.ExpireLeases(ctx); err != nil {
-			t.Fatal(err)
-		}
-		if j, _ := q.Get(ctx, job.ID); j.State != StateRunning {
+		if j, _ := q.Job(ctx, job.ID); j.State != StateRunning {
 			t.Fatalf("renewed lease expired: %s", j.State)
 		}
 		// Then the Bridge goes quiet.
 		q.advance(2 * time.Second)
-		jobs, err := q.List(ctx, Filter{})
+		jobs, _, err := q.List(ctx, Filter{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -192,7 +275,7 @@ func TestLeaseExpiry(t *testing.T) {
 			t.Fatalf("late report %d: %v, want ErrNotHeld", attempt, err)
 		}
 	}
-	if j, _ := q.Get(ctx, job.ID); j.FinishedAt == nil || j.Error == "" {
+	if j, _ := q.Job(ctx, job.ID); j.FinishedAt == nil || j.Error == "" {
 		t.Fatalf("failed job = %+v", j)
 	}
 }
@@ -205,7 +288,7 @@ func TestUpdateHeld(t *testing.T) {
 	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 0, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("report on a queued job: %v, want ErrNotHeld", err)
 	}
-	if _, err := q.Claim(ctx, []string{KindVerify}); err != nil {
+	if _, err := q.claim(ctx, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 2, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
@@ -231,9 +314,6 @@ func TestUpdateHeld(t *testing.T) {
 		t.Fatalf("park = %+v, %v", j, err)
 	}
 	q.advance(time.Hour)
-	if err := q.ExpireLeases(ctx); err != nil {
-		t.Fatal(err)
-	}
 	j, err = q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateDone), Result: json.RawMessage(`{"ok":true}`)})
 	if err != nil || j.State != StateDone || j.FinishedAt == nil || j.LeaseUntil != nil || string(j.Progress) != `{"stage":"stat","percent":50}` {
 		t.Fatalf("done = %+v, %v", j, err)
@@ -260,7 +340,7 @@ func TestCancel(t *testing.T) {
 	}
 
 	running := q.verify(t, "B", 0)
-	if _, err := q.Claim(ctx, []string{KindVerify}); err != nil {
+	if _, err := q.claim(ctx, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
 	j, err = q.Cancel(ctx, running.ID)
@@ -279,17 +359,14 @@ func TestCancel(t *testing.T) {
 	// A cancelled job whose Bridge died is cancelled when its lease runs out,
 	// not queued again.
 	orphan := q.verify(t, "C", 0)
-	if _, err := q.Claim(ctx, []string{KindVerify}); err != nil {
+	if _, err := q.claim(ctx, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := q.Cancel(ctx, orphan.ID); err != nil {
 		t.Fatal(err)
 	}
 	q.advance(Lease + time.Second)
-	if err := q.ExpireLeases(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if j, _ := q.Get(ctx, orphan.ID); j.State != StateCancelled {
+	if j, _ := q.Job(ctx, orphan.ID); j.State != StateCancelled {
 		t.Fatalf("orphaned cancel = %s, want cancelled", j.State)
 	}
 }
@@ -303,20 +380,85 @@ func TestListFilters(t *testing.T) {
 	if _, err := q.Cancel(ctx, a.ID); err != nil {
 		t.Fatal(err)
 	}
-	jobs, err := q.List(ctx, Filter{Path: ptr("A")})
-	if err != nil || len(jobs) != 1 || jobs[0].ID != a.ID {
-		t.Fatalf("by path = %+v, %v", jobs, err)
+	jobs, next, err := q.List(ctx, Filter{Path: ptr("A")})
+	if err != nil || len(jobs) != 1 || jobs[0].ID != a.ID || next != 0 {
+		t.Fatalf("by path = %+v, %d, %v", jobs, next, err)
 	}
-	jobs, err = q.List(ctx, Filter{State: StateQueued})
+	jobs, _, err = q.List(ctx, Filter{State: StateQueued})
 	if err != nil || len(jobs) != 1 || jobs[0].ID != b.ID {
 		t.Fatalf("by state = %+v, %v", jobs, err)
 	}
-	jobs, err = q.List(ctx, Filter{Limit: 1})
-	if err != nil || len(jobs) != 1 || jobs[0].ID != b.ID {
-		t.Fatalf("first page = %+v, %v", jobs, err)
+	jobs, next, err = q.List(ctx, Filter{Limit: 1})
+	if err != nil || len(jobs) != 1 || jobs[0].ID != b.ID || next != b.ID {
+		t.Fatalf("first page = %+v, %d, %v", jobs, next, err)
 	}
-	jobs, err = q.List(ctx, Filter{Limit: 1, Before: b.ID})
-	if err != nil || len(jobs) != 1 || jobs[0].ID != a.ID {
-		t.Fatalf("next page = %+v, %v", jobs, err)
+	jobs, next, err = q.List(ctx, Filter{Limit: 1, Before: next})
+	if err != nil || len(jobs) != 1 || jobs[0].ID != a.ID || next != 0 {
+		t.Fatalf("last page = %+v, %d, %v; want no next page", jobs, next, err)
+	}
+	// An out-of-range limit is the default, and an exact last page offers no
+	// next one.
+	jobs, next, _ = q.List(ctx, Filter{Limit: 500})
+	if len(jobs) != 2 || next != 0 {
+		t.Fatalf("limit 500 = %d jobs, next %d", len(jobs), next)
+	}
+	jobs, next, _ = q.List(ctx, Filter{Limit: 2})
+	if len(jobs) != 2 || next != 0 {
+		t.Fatalf("an exact page = %d jobs, next %d", len(jobs), next)
+	}
+}
+
+// A read takes the writer only when a lease has run out.
+func TestReadsExpireOnlyWhenDue(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	job := q.verify(t, "A", 0)
+	if _, err := q.claim(ctx, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := q.Job(ctx, job.ID)
+	q.advance(Lease - time.Second)
+	if j, _ := q.Job(ctx, job.ID); j.State != StateClaimed || j.UpdatedAt != before.UpdatedAt {
+		t.Fatalf("a live lease was touched: %+v", j)
+	}
+	q.advance(2 * time.Second)
+	if j, _ := q.Job(ctx, job.ID); j.State != StateQueued {
+		t.Fatalf("a lapsed lease stayed: %s", j.State)
+	}
+}
+
+// MoveJobs carries a book's jobs, rebuilding their dedupe key, and cancels an
+// open one that collides with an open job of its kind at the new path.
+func TestMoveJobs(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	old := q.verify(t, "Old", 0)
+	clash := q.verify(t, "Taken", 0)
+	move := func(from, to string) {
+		t.Helper()
+		if err := q.db.WithTx(ctx, "move", func(tx *sql.Tx) error {
+			return MoveJobs(ctx, tx, q.lib, from, to, *q.now)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	move("Old", "New")
+	j, _ := q.Job(ctx, old.ID)
+	if j.Path == nil || *j.Path != "New" || j.State != StateQueued {
+		t.Fatalf("moved = %+v", j)
+	}
+	// The second press at the new path finds the moved job (the key moved too).
+	again, created, err := q.Enqueue(ctx, NewJob{Kind: KindVerify, LibraryID: &q.lib, Path: ptr("New"), RequestedBy: q.admin})
+	if err != nil || created || again.ID != old.ID {
+		t.Fatalf("the key didn't move: %+v %v %v", again, created, err)
+	}
+	move("New", "Taken")
+	if j, _ := q.Job(ctx, old.ID); j.State != StateCancelled || *j.Path != "Taken" {
+		t.Fatalf("the colliding job = %+v, want cancelled and moved", j)
+	}
+	if j, _ := q.Job(ctx, clash.ID); j.State != StateQueued {
+		t.Fatalf("the job already there = %s", j.State)
 	}
 }

@@ -15,9 +15,9 @@ import (
 // exchanging a one-time pairing code an admin made in the console
 // (IssueBridgePairCode, ExchangeBridgeCode). It is narrow:
 //
-//   - bridge routes only: only ResolveBridgeRequest accepts it, and the api calls
-//     that only for /api/v1/bridge/*; ResolveRequest and ResolveCastRequest never
-//     do, so every other route refuses it (routes opt in to the kinds they take);
+//   - bridge routes only: routes opt in to the token kinds they take, and only
+//     the Bridge's own (/api/v1/bridge/*) list KindBridge, so every other route
+//     refuses it;
 //   - its pairing admin's: it belongs to the admin who made the code, and works
 //     only while that account exists, is enabled and is still an admin;
 //   - one at a time: pairing revokes every earlier bridge token, and UnpairBridge
@@ -32,6 +32,15 @@ const bridgePairTTL = 15 * time.Minute
 
 // BridgeTokenName is the device name a bridge token carries.
 const BridgeTokenName = "AudioSilo Bridge"
+
+// BridgeLiveSQL is true while a bridge token is live: not revoked, and its admin
+// still an enabled admin. It is the one statement of "a Bridge is paired"; the
+// bridge package's heartbeat reads use it too.
+const BridgeLiveSQL = `EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id = t.user_id
+	WHERE t.kind = '` + KindBridge + `' AND t.revoked = 0 AND tu.disabled = 0 AND tu.role = '` + RoleAdmin + `')`
+
+// revokeBridgeTokensSQL revokes every bridge token (pairing and unpairing).
+const revokeBridgeTokensSQL = `UPDATE tokens SET revoked = 1 WHERE kind = '` + KindBridge + `' AND revoked = 0`
 
 // BridgePairing is the pairing side of the bridge_status row: whether a Bridge
 // is paired, by whom and when, and a code waiting to be exchanged.
@@ -106,8 +115,7 @@ func (s *Service) ExchangeBridgeCode(ctx context.Context, code string) (secret s
 		if u.Disabled || u.Role != RoleAdmin {
 			return ErrInvalidCode
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tokens SET revoked = 1 WHERE kind = '`+KindBridge+`' AND revoked = 0`); err != nil {
+		if _, err := tx.ExecContext(ctx, revokeBridgeTokensSQL); err != nil {
 			return err
 		}
 		if _, err := s.insertToken(ctx, tx, u.ID, hash, KindBridge, BridgeTokenName, nil, nil, ""); err != nil {
@@ -129,8 +137,7 @@ func (s *Service) ExchangeBridgeCode(ctx context.Context, code string) (secret s
 // status and any pairing code waiting. A Bridge's next call is then refused.
 func (s *Service) UnpairBridge(ctx context.Context) error {
 	return s.db.WithTx(ctx, "UnpairBridge", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tokens SET revoked = 1 WHERE kind = '`+KindBridge+`' AND revoked = 0`); err != nil {
+		if _, err := tx.ExecContext(ctx, revokeBridgeTokensSQL); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM bridge_status WHERE id = 1`)
@@ -146,16 +153,12 @@ func (s *Service) GetBridgePairing(ctx context.Context) (BridgePairing, error) {
 		byID     sql.NullInt64
 		byName   sql.NullString
 		expires  sql.NullString
-		hasCode  bool
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT b.paired_at, b.paired_by, u.username, b.pair_expires_at, b.pair_code_hash IS NOT NULL,
-		        EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id = t.user_id
-		                WHERE t.kind = '`+KindBridge+`' AND t.revoked = 0
-		                  AND tu.disabled = 0 AND tu.role = '`+RoleAdmin+`')
+		`SELECT b.paired_at, b.paired_by, u.username, b.pair_expires_at, `+BridgeLiveSQL+`
 		   FROM bridge_status b LEFT JOIN users u ON u.id = b.paired_by
 		  WHERE b.id = 1`).
-		Scan(&pairedAt, &byID, &byName, &expires, &hasCode, &p.Paired)
+		Scan(&pairedAt, &byID, &byName, &expires, &p.Paired)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BridgePairing{}, nil
 	}
@@ -168,16 +171,9 @@ func (s *Service) GetBridgePairing(ctx context.Context) (BridgePairing, error) {
 			p.PairedBy = &UserRef{ID: byID.Int64, Username: byName.String}
 		}
 	}
-	if hasCode && expires.Valid && !s.pastExpiry(expires) {
+	// The code's hash and expiry are set and cleared together.
+	if expires.Valid && !s.pastExpiry(expires) {
 		p.CodeExpiresAt = expires.String
 	}
 	return p, nil
-}
-
-// ResolveBridgeRequest is ResolveRequest for the Bridge's own routes: it accepts
-// a bridge token and nothing else, and only while its admin is still an enabled
-// admin (lookupToken refuses a disabled one; a demoted one is refused here). Any
-// refusal is ErrInvalidToken. The api calls it only for /api/v1/bridge/*.
-func (s *Service) ResolveBridgeRequest(ctx context.Context, secret string, p Presence) (*User, Credential, error) {
-	return s.resolve(ctx, secret, p, resolveFor{bridge: true}, []string{KindBridge})
 }

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"slices"
-	"strconv"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -27,42 +25,24 @@ import (
 // cancel jobs from the console (/admin/bridge/*).
 
 // SetBridge gives the API the Bridge's status and job queue. Call before
-// Handler(); without it the bridge routes answer 503 and the capability is off.
+// Handler(); the launcher always does.
 func (a *API) SetBridge(b *bridge.Service) { a.bridge = b }
 
-// requireBridge authenticates the paired Bridge's token (Authorization header
-// only) and nothing else: a session, an API key or a cast token is refused here,
-// and a bridge token is refused on every other route (auth.ResolveBridgeRequest).
-func (a *API) requireBridge(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.bridge == nil {
-			writeError(w, http.StatusServiceUnavailable, "the bridge is unavailable")
-			return
-		}
-		token := bearerToken(r, false)
-		if token == "" {
-			writeError(w, http.StatusUnauthorized, "missing bearer token")
-			return
-		}
-		u, cred, err := a.auth.ResolveBridgeRequest(r.Context(), token, requestPresence(r))
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid or expired token")
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(withCredential(r.Context(), u, cred)))
-	})
-}
+// bridgeKinds: the Bridge's own routes take a bridge token and nothing else, and
+// no other route lists that kind, so a bridge token is refused everywhere else.
+var bridgeKinds = []string{auth.KindBridge}
 
-// requireBridgeAdmin is requireAdmin for the console's Bridge routes, which need
-// the Bridge's service too.
-func (a *API) requireBridgeAdmin(next http.HandlerFunc) http.Handler {
-	return a.requireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.bridge == nil {
-			writeError(w, http.StatusServiceUnavailable, "the bridge is unavailable")
+// requireBridge authenticates the paired Bridge's token (Authorization header
+// only).
+func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, failure := a.authenticate(r, false, bridgeKinds)
+		if failure != "" {
+			writeError(w, http.StatusUnauthorized, failure)
 			return
 		}
-		next(w, r)
-	}))
+		next(w, r.WithContext(ctx))
+	})
 }
 
 // bridgeInfo is the bridge block of GET /server, present only while the Bridge
@@ -75,9 +55,6 @@ type bridgeInfo struct {
 // bridgeOnline returns the bridge block for GET /server, or nil when no Bridge is
 // online (or its status can't be read, which is logged).
 func (a *API) bridgeOnline(ctx context.Context) *bridgeInfo {
-	if a.bridge == nil {
-		return nil
-	}
 	h, err := a.bridge.Online(ctx)
 	if err != nil {
 		a.log.Warn("bridge status read failed", "err", err)
@@ -93,10 +70,6 @@ func (a *API) bridgeOnline(ctx context.Context) *bridgeInfo {
 // the bridge token (201 {token, server_id, server_name}). Public, and limited
 // like redeeming an auth code; a wrong or expired code is 401.
 func (a *API) handleBridgeExchange(w http.ResponseWriter, r *http.Request) {
-	if a.bridge == nil {
-		writeError(w, http.StatusServiceUnavailable, "the bridge is unavailable")
-		return
-	}
 	ip := clientIP(r)
 	if !allowAttempt(w, a.redeemLimiter.Allowed(ip)) {
 		return
@@ -120,19 +93,15 @@ func (a *API) handleBridgeExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.redeemLimiter.Reset(ip)
-	a.recordBridgeAudit(r.Context(), "bridge.paired", map[string]any{"ip": ip})
+	a.bridge.Forget()
+	// No admin made this request: the pairing is recorded as the server's own.
+	e := catalog.AuditEvent{Action: "bridge.paired", Details: map[string]any{"ip": ip}, Via: catalog.ViaSystem}
+	if err := a.cat.RecordAudit(context.WithoutCancel(r.Context()), e); err != nil {
+		a.log.Warn("audit: record failed", "action", e.Action, "err", err)
+	}
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"token": token, "server_id": a.config().ServerID, "server_name": a.config().DisplayName(),
 	})
-}
-
-// recordBridgeAudit records a Bridge event no admin request made (the pairing
-// exchange), as the server's own.
-func (a *API) recordBridgeAudit(ctx context.Context, action string, details map[string]any) {
-	e := catalog.AuditEvent{Action: action, Details: details, Via: catalog.ViaSystem}
-	if err := a.cat.RecordAudit(context.WithoutCancel(ctx), e); err != nil {
-		a.log.Warn("audit: record failed", "action", action, "err", err)
-	}
 }
 
 // bridgeLibrary is a server library as the Bridge maps it.
@@ -140,6 +109,21 @@ type bridgeLibrary struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 	Root string `json:"root"`
+}
+
+// libraryFor loads library id for a Bridge route, answering 404 (or the catalog
+// error) itself when it can't.
+func (a *API) libraryFor(w http.ResponseWriter, r *http.Request, id int64, op string) (*catalog.Library, bool) {
+	lib, err := a.cat.GetLibrary(r.Context(), id)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "library not found")
+		return nil, false
+	}
+	if err != nil {
+		a.writeCatalogError(w, err, op, "could not load the library")
+		return nil, false
+	}
+	return lib, true
 }
 
 // handleBridgeStatus serves PUT /bridge/status: the Bridge's heartbeat (its
@@ -193,21 +177,18 @@ type bridgeFile struct {
 // library's first indexed book, the mapping check's sample. Only an indexed book
 // answers (never an on-demand index); 404 code no_book when there is none.
 func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
+	id, ok := pathID(w, r, "id", "invalid library id")
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid library id")
 		return
 	}
-	lib, err := a.cat.GetLibrary(r.Context(), id)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "library not found")
+	lib, ok := a.libraryFor(w, r, id, "bridge book failed")
+	if !ok {
 		return
 	}
-	if err != nil {
-		a.writeCatalogError(w, err, "bridge book failed", "could not load the library")
-		return
-	}
-	var book *catalog.Book
+	var (
+		book *catalog.Book
+		err  error
+	)
 	if p := catalog.CleanRelPath(r.URL.Query().Get("path")); p != "" {
 		book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p)
 	} else {
@@ -248,44 +229,24 @@ func (a *API) firstBook(ctx context.Context, libraryID int64) (*catalog.Book, er
 }
 
 // handleBridgeClaim serves GET /bridge/jobs/next?wait=<seconds>&kind=...: the
-// next queued job of a kind the Bridge runs (its last heartbeat's kinds the
-// server knows, narrowed to the kind= values when it sends any: the kinds it has
-// room for now), leased to it (200 job), waiting up to wait (at most
-// bridge.MaxWait) for one; 204 when none came, at once when no kind is left.
+// next queued job of a kind the Bridge runs, narrowed to the kind= values when it
+// sends any (the kinds it has room for now), leased to it (200 job), waiting up
+// to wait (at most bridge.MaxWait) for one; 204 when none came (at once when no
+// kind is left), 409 no_heartbeat before its first heartbeat.
 func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
-	h, err := a.bridge.LastHeartbeat(r.Context())
-	if err != nil {
-		a.log.Warn("bridge claim failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not read the bridge status")
-		return
-	}
-	if h == nil {
-		writeErrorCode(w, http.StatusConflict, "no_heartbeat", "send a status first")
-		return
-	}
-	asked := r.URL.Query()["kind"]
-	var kinds []string
-	for _, k := range h.Kinds {
-		if bridge.Known(k) && (len(asked) == 0 || slices.Contains(asked, k)) {
-			kinds = append(kinds, k)
-		}
-	}
-	if len(kinds) == 0 {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	wait := time.Duration(queryInt(r, "wait", 0)) * time.Second
-	job, err := a.bridge.WaitClaim(r.Context(), kinds, wait)
-	if err != nil {
+	job, err := a.bridge.ClaimFor(r.Context(), r.URL.Query()["kind"], wait)
+	switch {
+	case errors.Is(err, bridge.ErrNoHeartbeat):
+		writeErrorCode(w, http.StatusConflict, "no_heartbeat", "send a status first")
+	case err != nil:
 		a.log.Warn("bridge claim failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not claim a job")
-		return
-	}
-	if job == nil {
+	case job == nil:
 		w.WriteHeader(http.StatusNoContent)
-		return
+	default:
+		writeJSON(w, http.StatusOK, job)
 	}
-	writeJSON(w, http.StatusOK, job)
 }
 
 // handleBridgeUpdate serves PATCH /bridge/jobs/{id} {attempt, state?, progress?,
@@ -294,9 +255,8 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 // 409 code not_held when the claim no longer holds it (it ended, was cancelled,
 // or its lease ran out and it was claimed again).
 func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
+	id, ok := pathID(w, r, "id", "invalid job id")
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid job id")
 		return
 	}
 	var u bridge.Update
@@ -311,8 +271,9 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-// writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held or
-// finished, else 500) and reports whether there was none.
+// writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,
+// finished or a kind the Bridge doesn't run, else 500) and reports whether there
+// was none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
 	case err == nil:
@@ -325,6 +286,8 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeErrorCode(w, http.StatusConflict, "not_held", "the job is no longer held by this claim")
 	case errors.Is(err, bridge.ErrFinished):
 		writeErrorCode(w, http.StatusConflict, "finished", "the job has already finished")
+	case errors.Is(err, bridge.ErrKindUnavailable):
+		writeErrorCode(w, http.StatusConflict, "kind_unavailable", "the paired bridge doesn't run that kind of job")
 	default:
 		a.log.Warn(op, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update the job")
@@ -347,24 +310,12 @@ func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "library_id and path are required")
 		return
 	}
-	lib, err := a.cat.GetLibrary(r.Context(), req.LibraryID)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "library not found")
+	lib, ok := a.libraryFor(w, r, req.LibraryID, "bridge rescan failed")
+	if !ok {
 		return
 	}
-	if err != nil {
-		a.writeCatalogError(w, err, "bridge rescan failed", "could not load the library")
-		return
-	}
-	ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
-	defer cancel()
-	book, err := a.scanner.IndexPath(ctx, *lib, catalog.CleanRelPath(req.Path))
-	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
-		writeErrorCode(w, http.StatusNotFound, codeNotIndexable, "there is no book at that path")
-		return
-	}
-	if err != nil {
-		a.writeCatalogError(w, err, "bridge rescan failed", "could not rescan", "library", lib.ID)
+	book, ok := a.rescanPath(w, lib, catalog.CleanRelPath(req.Path))
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"path": book.RelPath})
@@ -395,9 +346,7 @@ type bridgePairing struct {
 }
 
 type adminBridgeLibrary struct {
-	ID      int64                 `json:"id"`
-	Name    string                `json:"name"`
-	Root    string                `json:"root"`
+	bridgeLibrary
 	Mapping *bridge.LibraryStatus `json:"mapping"`
 }
 
@@ -409,6 +358,7 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "bridge status failed", "could not read the bridge")
 		return
 	}
+	// LastHeartbeat is nil unless the Bridge is paired (the same rule as p.Paired).
 	h, err := a.bridge.LastHeartbeat(ctx)
 	if err != nil {
 		a.writeCatalogError(w, err, "bridge status failed", "could not read the bridge")
@@ -424,14 +374,14 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 	if p.CodeExpiresAt != "" {
 		out.Pairing = &bridgePairing{ExpiresAt: p.CodeExpiresAt}
 	}
-	if p.Paired && h != nil {
+	if h != nil {
 		out.Online = h.Online(time.Now())
 		out.HeartbeatAt = h.At.UTC().Format(time.RFC3339)
 		out.Version, out.Kinds, out.Features, out.Workers, out.UIURL = h.Version, h.Kinds, h.Features(), h.Workers, h.UIURL
 	}
 	for _, l := range libs {
-		al := adminBridgeLibrary{ID: l.ID, Name: l.Name, Root: l.Root}
-		if p.Paired && h != nil {
+		al := adminBridgeLibrary{bridgeLibrary: bridgeLibrary{ID: l.ID, Name: l.Name, Root: l.Root}}
+		if h != nil {
 			al.Mapping = h.Library(l.ID)
 		}
 		out.Libraries = append(out.Libraries, al)
@@ -468,16 +418,17 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not unpair the bridge")
 		return
 	}
+	a.bridge.Forget()
 	a.audit(r, "bridge.unpair", "", nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleAdminBridgeQueue serves POST /admin/bridge/jobs {kind, library_id?,
 // path?, params?}: queue a job (201) or return the open one already queued for
-// that kind, library and path (200). The kind must be one the server knows and
-// the paired Bridge runs (409 code kind_unavailable otherwise; it may be offline:
-// the job waits). A path names an indexed book (404 otherwise) and the job is
-// about that book's own path.
+// that kind, library and path (200). The kind must be one the server knows (400)
+// and the paired Bridge runs (409 code kind_unavailable; it may be offline: the
+// job waits). A path names an indexed book (404 otherwise) and the job is about
+// that book's own path.
 func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind      string          `json:"kind"`
@@ -495,27 +446,9 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			nj.Path = &p
 		}
 	}
-	if err := bridge.CheckNew(&nj); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	h, err := a.bridge.LastHeartbeat(r.Context())
-	if err != nil {
-		a.writeCatalogError(w, err, "bridge queue failed", "could not read the bridge")
-		return
-	}
-	if h == nil || !h.Offers(nj.Kind) {
-		writeErrorCode(w, http.StatusConflict, "kind_unavailable", "the paired bridge doesn't run "+nj.Kind)
-		return
-	}
 	if nj.LibraryID != nil {
-		lib, err := a.cat.GetLibrary(r.Context(), *nj.LibraryID)
-		if errors.Is(err, catalog.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "library not found")
-			return
-		}
-		if err != nil {
-			a.writeCatalogError(w, err, "bridge queue failed", "could not load the library")
+		lib, ok := a.libraryFor(w, r, *nj.LibraryID, "bridge queue failed")
+		if !ok {
 			return
 		}
 		if nj.Path != nil {
@@ -532,19 +465,13 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	job, created, err := a.bridge.Enqueue(r.Context(), nj)
-	if err != nil {
-		a.log.Warn("bridge queue failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not queue the job")
+	if !a.writeBridgeError(w, err, "bridge queue failed") {
 		return
 	}
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
-		target := ""
-		if job.Path != nil {
-			target = *job.Path
-		}
-		a.audit(r, "bridge.job", target, map[string]any{"job": job.ID, "kind": job.Kind, "library": job.LibraryID})
+		a.audit(r, "bridge.job", job.Target(), map[string]any{"job": job.ID, "kind": job.Kind, "library": job.LibraryID})
 	}
 	writeJSON(w, status, job)
 }
@@ -554,51 +481,43 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 // next_before for the next page.
 func (a *API) handleAdminBridgeJobs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := bridge.Filter{State: q.Get("state"), Limit: queryInt(r, "limit", 50)}
-	if v := q.Get("library_id"); v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || id <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid library_id")
-			return
-		}
-		f.LibraryID = &id
+	f := bridge.Filter{State: q.Get("state"), Limit: queryInt(r, "limit", bridge.DefaultListLimit)}
+	libraryID, ok := parseOptionalID(q.Get("library_id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid library_id")
+		return
+	}
+	if libraryID > 0 {
+		f.LibraryID = &libraryID
+	}
+	if f.Before, ok = parseOptionalID(q.Get("before")); !ok {
+		writeError(w, http.StatusBadRequest, "invalid before")
+		return
 	}
 	if q.Has("path") {
 		p := catalog.CleanRelPath(q.Get("path"))
 		f.Path = &p
 	}
-	if v := q.Get("before"); v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || id <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid before")
-			return
-		}
-		f.Before = id
-	}
-	jobs, err := a.bridge.List(r.Context(), f)
+	jobs, next, err := a.bridge.List(r.Context(), f)
 	if err != nil {
 		a.log.Warn("bridge jobs failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not list jobs")
 		return
 	}
 	out := map[string]any{"jobs": jobs}
-	if limit := min(max(f.Limit, 1), 200); f.Limit > 0 && len(jobs) == limit {
-		out["next_before"] = jobs[len(jobs)-1].ID
+	if next > 0 {
+		out["next_before"] = next
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 // handleAdminBridgeJob serves GET /admin/bridge/jobs/{id}.
 func (a *API) handleAdminBridgeJob(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
+	id, ok := pathID(w, r, "id", "invalid job id")
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid job id")
 		return
 	}
-	if err := a.bridge.ExpireLeases(r.Context()); err != nil {
-		a.log.Warn("bridge job failed", "err", err)
-	}
-	job, err := a.bridge.Get(r.Context(), id)
+	job, err := a.bridge.Job(r.Context(), id)
 	if !a.writeBridgeError(w, err, "bridge job failed") {
 		return
 	}
@@ -609,19 +528,14 @@ func (a *API) handleAdminBridgeJob(w http.ResponseWriter, r *http.Request) {
 // queued or parked job at once, or ask the Bridge to stop a running one (200 the
 // job; 409 code finished when it already ended).
 func (a *API) handleAdminBridgeCancel(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathInt(r, "id")
+	id, ok := pathID(w, r, "id", "invalid job id")
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid job id")
 		return
 	}
 	job, err := a.bridge.Cancel(r.Context(), id)
 	if !a.writeBridgeError(w, err, "bridge job cancel failed") {
 		return
 	}
-	target := ""
-	if job.Path != nil {
-		target = *job.Path
-	}
-	a.audit(r, "bridge.cancel", target, map[string]any{"job": job.ID, "kind": job.Kind})
+	a.audit(r, "bridge.cancel", job.Target(), map[string]any{"job": job.ID, "kind": job.Kind})
 	writeJSON(w, http.StatusOK, job)
 }

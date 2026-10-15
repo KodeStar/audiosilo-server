@@ -180,6 +180,7 @@ func TestBridgeCapabilityGoesStale(t *testing.T) {
 	if _, err := b.db.ExecContext(context.Background(), `UPDATE bridge_status SET heartbeat_at = ?`, old); err != nil {
 		t.Fatal(err)
 	}
+	b.api.bridge.Forget() // the heartbeat cache would answer for a few seconds more
 	_, body := b.do(t, "GET", "/api/v1/server", "", "")
 	var info map[string]any
 	decodeInto(t, body, &info)
@@ -443,7 +444,7 @@ func TestBridgeJobsMoveWithTheBook(t *testing.T) {
 	if err := b.cat.MoveDurableState(ctx, b.lib.ID, mistbornBook, "Brandon Sanderson/Mistborn Era 1"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := b.api.bridge.Get(ctx, job.ID)
+	got, err := b.api.bridge.Job(ctx, job.ID)
 	if err != nil || got.Path == nil || *got.Path != "Brandon Sanderson/Mistborn Era 1" || got.State != bridge.StateQueued {
 		t.Fatalf("moved job = %+v, %v", got, err)
 	}

@@ -34,7 +34,7 @@ import { queueJob } from './bridge-actions';
 import { JobsCard } from './bridge-jobs';
 import {
   KIND_VERIFY,
-  kindKey,
+  kindName,
   MAPPING_TONE,
   mappingState,
   presence,
@@ -58,6 +58,12 @@ export function BridgeTopic() {
   const status = bridge.data;
   const [shown, setShown] = useState<ShownCode | null>(null);
   const [making, setMaking] = useState(false);
+  // Each server library's name by id, for the job rows.
+  const libraries = status?.libraries;
+  const libraryNames = useMemo(
+    () => new Map((libraries ?? []).map((l) => [l.id, l.name] as const)),
+    [libraries],
+  );
 
   const makeCode = async () => {
     setMaking(true);
@@ -93,7 +99,12 @@ export function BridgeTopic() {
   return (
     <>
       {status.paired ? (
-        <Paired status={status} onPair={() => void makeCode()} making={making} />
+        <Paired
+          status={status}
+          libraryNames={libraryNames}
+          onPair={() => void makeCode()}
+          making={making}
+        />
       ) : (
         <NotPaired onPair={() => void makeCode()} making={making} />
       )}
@@ -114,7 +125,9 @@ export function BridgeTopic() {
           })}
         </Notice>
       ) : null}
-      {status.paired ? null : <UnpairedJobs status={status} />}
+      {/* Jobs while no Bridge is paired: queued ones survive an unpair and wait for
+          the next Bridge, so they stay visible (and cancellable). Hidden when none. */}
+      {status.paired ? null : <JobsCard libraryNames={libraryNames} hideWhenEmpty />}
       <PairDialog
         shown={shown}
         status={status}
@@ -147,39 +160,24 @@ function NotPaired({ onPair, making }: { onPair: () => void; making: boolean }) 
   );
 }
 
-/** Each server library's name by id, for the job rows. */
-function useLibraryNames(status: BridgeStatus): ReadonlyMap<number, string> {
-  return useMemo(
-    () => new Map(status.libraries.map((l) => [l.id, l.name] as const)),
-    [status.libraries],
-  );
-}
-
-/**
- * Jobs while no Bridge is paired: queued ones survive an unpair and wait for the
- * next Bridge, so they stay visible (and cancellable). Hidden when there are none.
- */
-function UnpairedJobs({ status }: { status: BridgeStatus }) {
-  return <JobsCard libraryNames={useLibraryNames(status)} hideWhenEmpty />;
-}
-
 /** The paired Bridge: its status, libraries, workers, jobs, and Unpair. */
 function Paired({
   status,
+  libraryNames,
   onPair,
   making,
 }: {
   status: BridgeStatus;
+  libraryNames: ReadonlyMap<number, string>;
   onPair: () => void;
   making: boolean;
 }) {
-  const names = useLibraryNames(status);
   return (
     <>
       <StatusCard status={status} onPair={onPair} making={making} />
       <LibrariesCard status={status} />
       <WorkersCard status={status} />
-      <JobsCard libraryNames={names} />
+      <JobsCard libraryNames={libraryNames} />
       <UnpairZone />
     </>
   );
@@ -199,10 +197,7 @@ function StatusCard({
   const p = presence(status);
   const link = safeHttpUrl(status.ui_url);
   const heard = status.heartbeat_at ? formatRelative(status.heartbeat_at, lang) : undefined;
-  const kinds = status.kinds.map((k) => {
-    const key = kindKey(k);
-    return key ? t(key) : k;
-  });
+  const kinds = status.kinds.map((k) => kindName(t, k));
 
   return (
     <Card aria-labelledby="bridge-title">

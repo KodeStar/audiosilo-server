@@ -1,9 +1,20 @@
-import type { BridgeJob, BridgeJobState, BridgeMapping, BridgeStatus } from '@/api/types';
+import type { ComponentProps } from 'react';
+import type {
+  BridgeJob,
+  BridgeJobPage,
+  BridgeJobState,
+  BridgeMapping,
+  BridgeStatus,
+} from '@/api/types';
 import type { StatusTone } from '@/components/status-text';
+import type { Badge } from '@/components/ui/badge';
 
 // Settings > Bridge: the small rules the page shows the Bridge and its jobs by
-// (internal/bridge, handlers_bridge.go). Pure: no React, no i18n calls; the page
-// passes the keys these return to t().
+// (internal/bridge, handlers_bridge.go). Pure: no React, no i18n instance; the
+// page passes the keys these return to t(), or passes t in.
+
+/** i18next's t as far as these rules use it. */
+type Translate = (key: string, opts?: Record<string, unknown>) => string;
 
 /** Every job state, in the order the filter lists them. */
 export const BRIDGE_JOB_STATES = [
@@ -22,12 +33,9 @@ export const KIND_VERIFY = 'bridge.verify';
 /** The longest hold bridge.verify takes (bridge.verifyParams). */
 export const MAX_HOLD_SECONDS = 600;
 
-/** Job kinds this console has words for; any other is shown as its code. */
-const KNOWN_KINDS = new Set([KIND_VERIFY]);
-
-/** The i18n key of a job kind's name, or undefined for a kind this console doesn't know. */
-export function kindKey(kind: string): string | undefined {
-  return KNOWN_KINDS.has(kind) ? `bridge.kind.${kind}` : undefined;
+/** A job kind's name (`bridge.kind.<kind>`), or its code when this console has none. */
+export function kindName(t: Translate, kind: string): string {
+  return t(`bridge.kind.${kind}`, { defaultValue: kind });
 }
 
 /** A state the Bridge can still move a job on from (bridge.IsOpen). */
@@ -48,7 +56,7 @@ export function jobActions(job: Pick<BridgeJob, 'state' | 'cancel_requested'>): 
   return { cancel: isOpen(job.state) && !cancelling, cancelling };
 }
 
-export type BadgeTone = 'secondary' | 'outline' | 'info' | 'success' | 'warning' | 'destructive';
+type BadgeTone = ComponentProps<typeof Badge>['variant'];
 
 /** A job's state badge: its i18n key and tone ("cancelling" over a running state). */
 export function stateLook(job: Pick<BridgeJob, 'state' | 'cancel_requested'>): {
@@ -74,6 +82,23 @@ export const JOBS_POLL_IDLE_MS = 30_000;
 
 export function jobsPollMs(jobs: readonly Pick<BridgeJob, 'state'>[]): number {
   return jobs.some((j) => isOpen(j.state)) ? JOBS_POLL_OPEN_MS : JOBS_POLL_IDLE_MS;
+}
+
+/**
+ * The job list: the newest page as last polled, then the loaded pages' jobs
+ * older than its last one, so none is listed twice or skipped when new jobs push
+ * the pages along. Without a newest page yet, the loaded pages as they are.
+ */
+export function jobRows(
+  newest: BridgeJobPage | undefined,
+  pages: readonly BridgeJobPage[],
+): BridgeJob[] {
+  const loaded = pages.flatMap((p) => p.jobs);
+  if (!newest) return loaded;
+  const floor = newest.next_before;
+  // No next_before: the newest page holds every job there is.
+  if (floor === undefined) return newest.jobs;
+  return [...newest.jobs, ...loaded.filter((j) => j.id < floor)];
 }
 
 /** How often the status asks again: every few seconds while a pairing code waits. */
@@ -103,14 +128,8 @@ export function secondsLeft(expiresAt: string, now: number): number {
   return Math.max(0, Math.ceil((at - now) / 1000));
 }
 
-/** Seconds as a countdown ("14:05"). */
-export function formatCountdown(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
 /** Whether the paired Bridge is heard from now, has gone quiet, or hasn't reported yet. */
-export type Presence = 'online' | 'offline' | 'waiting';
+type Presence = 'online' | 'offline' | 'waiting';
 
 export function presence(status: Pick<BridgeStatus, 'online' | 'heartbeat_at'>): Presence {
   if (status.online) return 'online';
@@ -124,7 +143,7 @@ export const PRESENCE_TONE: Record<Presence, StatusTone> = {
 };
 
 /** How a library's mapping reads at a glance. */
-export type MappingState = 'ready' | 'readOnly' | 'notMapped' | 'unknown';
+type MappingState = 'ready' | 'readOnly' | 'notMapped' | 'unknown';
 
 export function mappingState(m: BridgeMapping | null): MappingState {
   if (!m) return 'unknown';
@@ -174,7 +193,7 @@ export function progressOf(progress: unknown): { text?: string; done?: number; t
 }
 
 /** A result's facts the page words (bridge.verify's), each only when present. */
-export interface ResultSummary {
+interface ResultSummary {
   /** Files checked, and how many matched the size the server recorded. */
   files?: { checked: number; ok: number };
   writable?: boolean;

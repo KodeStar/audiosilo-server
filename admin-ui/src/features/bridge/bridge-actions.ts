@@ -5,7 +5,7 @@ import { keys } from '@/api/hooks';
 import type { BridgeJob, BridgeJobRequest } from '@/api/types';
 import { toastError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
-import { kindKey } from './bridge-model';
+import { kindName } from './bridge-model';
 
 // What the Bridge page's buttons do: queue a job and cancel one, each saying how
 // it went in a toast and refreshing the job lists.
@@ -21,8 +21,7 @@ export async function queueJob(
   ctx: { name: string; online: boolean },
 ): Promise<boolean> {
   const t = i18n.t;
-  const key = kindKey(req.kind);
-  const words = { what: key ? t(key) : req.kind, name: ctx.name };
+  const words = { what: kindName(t, req.kind), name: ctx.name };
   try {
     const { created } = await api.queueBridgeJob(req);
     if (created)

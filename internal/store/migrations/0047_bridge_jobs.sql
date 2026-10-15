@@ -63,3 +63,7 @@ CREATE TABLE bridge_status (
     heartbeat_at    TEXT,
     status          TEXT NOT NULL DEFAULT '{}'
 );
+
+-- The live bridge token (auth.BridgeLiveSQL, read by the console and GET
+-- /server through the heartbeat), found without scanning every session and key.
+CREATE INDEX idx_tokens_bridge ON tokens(user_id) WHERE kind = 'bridge' AND revoked = 0;

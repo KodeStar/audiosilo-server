@@ -57,6 +57,8 @@ export const keys = {
   /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */
   bridgeJobLists: ['admin', 'bridge', 'jobs'] as const,
   bridgeJobs: (state: string) => ['admin', 'bridge', 'jobs', state] as const,
+  /** The newest page of a job list, polled on its own (under its list's key). */
+  bridgeNewestJobs: (state: string) => ['admin', 'bridge', 'jobs', state, 'newest'] as const,
   events: ['admin', 'events'] as const,
   eventList: (kind: ServerEventKind | undefined) =>
     ['admin', 'events', 'list', kind ?? ''] as const,

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Clock, Copy, Link2, LoaderCircle, RefreshCw, TimerOff } from 'lucide-react';
 import type { BridgePairCode, BridgeStatus } from '@/api/types';
+import { CopyField } from '@/components/copy-field';
 import { Notice } from '@/components/notice';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,11 +12,10 @@ import {
   DialogContent,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { copyText } from '@/lib/clipboard';
+import { copyWithToast } from '@/lib/clipboard';
+import { formatClock } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import { codeExchanged, formatCountdown, secondsLeft } from './bridge-model';
+import { codeExchanged, secondsLeft } from './bridge-model';
 
 /** A code this page made, and the pairing it replaces (to tell when a Bridge takes it). */
 export interface ShownCode extends BridgePairCode {
@@ -86,11 +86,6 @@ function PairBody({
   }, []);
   const left = secondsLeft(shown.expires_at, now);
   const env = `AUDIOSILO_BRIDGE_SERVER_URL=${shown.server_url}\nAUDIOSILO_BRIDGE_PAIR_CODE=${shown.code}`;
-  const copy = async (text: string, what: string) => {
-    if (await copyText(text))
-      toast.add({ title: t('bridge.pair.copied', { what }), type: 'success' });
-    else toast.add({ title: t('bridge.pair.copyFailed'), description: text, type: 'warning' });
-  };
 
   return (
     <>
@@ -105,13 +100,13 @@ function PairBody({
             </span>
             <span className="inline-flex items-center gap-1.5 text-[12.5px] text-muted-foreground tabular-nums">
               <Clock className="size-[15px]" aria-hidden="true" />
-              {t('bridge.pair.expiresIn', { time: formatCountdown(left) })}
+              {t('bridge.pair.expiresIn', { time: formatClock(left) })}
             </span>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => void copy(shown.code, t('bridge.pair.code'))}
+              onClick={() => void copyWithToast(shown.code, t('bridge.pair.code'))}
             >
               <Copy aria-hidden="true" />
               {t('bridge.pair.copyCode')}
@@ -137,26 +132,11 @@ function PairBody({
           </Notice>
         )}
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="bridge-server-url">{t('bridge.pair.serverUrl')}</Label>
-          <div className="flex gap-2">
-            <Input
-              id="bridge-server-url"
-              readOnly
-              value={shown.server_url}
-              className="font-mono text-[12.5px]"
-              onFocus={(e) => e.currentTarget.select()}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void copy(shown.server_url, t('bridge.pair.serverUrl'))}
-            >
-              <Copy aria-hidden="true" />
-              {t('bridge.pair.copy')}
-            </Button>
-          </div>
-        </div>
+        <CopyField
+          id="bridge-server-url"
+          label={t('bridge.pair.serverUrl')}
+          value={shown.server_url}
+        />
 
         <ol className="ml-5 flex list-decimal flex-col gap-1.5 text-[13.5px]">
           <li>{t('bridge.pair.step.start')}</li>
@@ -173,7 +153,7 @@ function PairBody({
               variant="ghost"
               size="sm"
               disabled={left === 0}
-              onClick={() => void copy(env, t('bridge.pair.envWhat'))}
+              onClick={() => void copyWithToast(env, t('bridge.pair.envWhat'))}
             >
               <Copy aria-hidden="true" />
               {t('bridge.pair.copyEnv')}

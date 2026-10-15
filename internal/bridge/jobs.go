@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,18 +23,10 @@ const (
 	StateCancelled      = "cancelled"
 )
 
-// openStates are the states a job is still the Bridge's business in; a kind,
-// library and path have at most one job in them (dedupe_key).
-const openStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
-
-// IsOpen reports whether state is one a job can still move on from.
-func IsOpen(state string) bool {
-	switch state {
-	case StateQueued, StateClaimed, StateRunning, StateNeedsAttention:
-		return true
-	}
-	return false
-}
+// OpenStatesSQL are the states a job is still the Bridge's business in, as an
+// SQL list: a kind, library and path have at most one job in them (dedupe_key;
+// migration 0047's partial index names the same four).
+const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
 const (
 	// Lease is how long a claim holds a job without a progress update. The
@@ -47,6 +38,10 @@ const (
 	// MaxWait bounds a claim's long poll, under the server's 30 s request
 	// timeout.
 	MaxWait = 25 * time.Second
+
+	// MaxListLimit and DefaultListLimit bound List's page.
+	MaxListLimit     = 200
+	DefaultListLimit = 50
 
 	maxParamsBytes   = 16 << 10
 	maxProgressBytes = 16 << 10
@@ -136,6 +131,15 @@ type Job struct {
 	FinishedAt      *string    `json:"finished_at"`
 }
 
+// Target is the job's book path for an audit entry ("" for a job about a whole
+// library or none).
+func (j *Job) Target() string {
+	if j.Path == nil {
+		return ""
+	}
+	return *j.Path
+}
+
 // Requester names the admin who queued a job.
 type Requester struct {
 	ID       int64  `json:"id"`
@@ -184,12 +188,25 @@ func nullable(s sql.NullString) *string {
 	return &s.String
 }
 
+// rowQuerier is the reader pool or a write transaction.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// getJob reads one job through q (inside a write transaction: the writer's
+// view, not the reader pool's).
+func getJob(ctx context.Context, q rowQuerier, id int64) (*Job, error) {
+	j, err := scanJob(q.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return j, err
+}
+
 // ErrNotFound is a job id with no job.
 var ErrNotFound = errors.New("job not found")
 
 // DedupeKey is a job's identity among the open jobs: its kind, library and path.
-// catalog.moveBookState rebuilds it in SQL on a move (kind || '|' || library_id
-// || '|' || path); the two must agree.
 func DedupeKey(kind string, libraryID *int64, path *string) string {
 	var b strings.Builder
 	b.WriteString(kind)
@@ -215,11 +232,14 @@ type NewJob struct {
 	Priority    int
 }
 
-// CheckNew validates a request against the kind: known, its params well formed
+// ErrKindUnavailable is a job of a kind the paired Bridge doesn't run (or no
+// Bridge has reported yet): a 409.
+var ErrKindUnavailable = errors.New("the paired bridge doesn't run that kind")
+
+// checkNew validates a request against the kind: known, its params well formed
 // (normalised in place), a library when the kind needs one and a path only when
-// it allows one. It doesn't check that the Bridge offers the kind (the caller
-// holds the heartbeat) or that the book exists (the transport resolves it).
-func CheckNew(j *NewJob) error {
+// it allows one.
+func checkNew(j *NewJob) error {
 	spec, ok := kinds[j.Kind]
 	if !ok {
 		return invalid("unknown kind %q", j.Kind)
@@ -244,21 +264,38 @@ func CheckNew(j *NewJob) error {
 	return nil
 }
 
-// Enqueue queues j (checked by CheckNew) and returns it, or the open job with
-// the same kind, library and path when there is one (created false).
+// Enqueue queues j and returns it, or the open job with the same kind, library
+// and path when there is one (created false). The kind must be one the server
+// knows (ErrInvalid otherwise, as for bad params) and the paired Bridge runs
+// (ErrKindUnavailable); it may be offline, and the job waits. The caller has
+// resolved the library and the book (j.Path is the book's indexed path).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
+	if err := checkNew(&j); err != nil {
+		return nil, false, err
+	}
+	h, err := s.LastHeartbeat(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if h == nil || !h.Offers(j.Kind) {
+		return nil, false, ErrKindUnavailable
+	}
 	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
-	var id int64
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx,
-			`SELECT id FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+openStatesSQL, key).Scan(&id)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
+		now := s.ts()
+		if err := expireTx(ctx, tx, now); err != nil {
 			return err
 		}
-		now := s.ts()
+		var id int64
+		err := tx.QueryRowContext(ctx,
+			`SELECT id FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL, key).Scan(&id)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			job, err = getJob(ctx, tx, id)
+			return err
+		}
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at)
 			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -266,8 +303,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		if err != nil {
 			return err
 		}
-		id, err = res.LastInsertId()
+		if id, err = res.LastInsertId(); err != nil {
+			return err
+		}
 		created = true
+		job, err = getJob(ctx, tx, id)
 		return err
 	})
 	if err != nil {
@@ -276,27 +316,16 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	if created {
 		s.wake.fire()
 	}
-	job, err = s.Get(ctx, id)
-	return job, created, err
+	return job, created, nil
 }
 
-// Get returns one job.
-func (s *Service) Get(ctx context.Context, id int64) (*Job, error) {
-	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.id = ?`, id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
+// Job returns one job, after expiring a lapsed lease (so the console shows what
+// the Bridge is really doing).
+func (s *Service) Job(ctx context.Context, id int64) (*Job, error) {
+	if err := s.expireDue(ctx); err != nil {
+		return nil, err
 	}
-	return j, err
-}
-
-// getTx is Get inside a write transaction (the writer's view, not the reader
-// pool's).
-func getTx(ctx context.Context, tx *sql.Tx, id int64) (*Job, error) {
-	j, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE j.id = ?`, id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	return j, err
+	return getJob(ctx, s.db, id)
 }
 
 // Filter narrows List.
@@ -306,14 +335,15 @@ type Filter struct {
 	State     string
 	// Before is the previous page's last id (0: the first page).
 	Before int64
-	Limit  int
+	// Limit is the page size (1 to MaxListLimit; anything else DefaultListLimit).
+	Limit int
 }
 
-// List returns jobs newest first, after expiring the leases that ran out (so
-// the console shows what the Bridge is really doing).
-func (s *Service) List(ctx context.Context, f Filter) ([]Job, error) {
-	if err := s.ExpireLeases(ctx); err != nil {
-		return nil, err
+// List returns jobs newest first, and the id to pass as Before for the next
+// page (0 on the last page), after expiring lapsed leases.
+func (s *Service) List(ctx context.Context, f Filter) (jobs []Job, nextBefore int64, err error) {
+	if err := s.expireDue(ctx); err != nil {
+		return nil, 0, err
 	}
 	var (
 		where []string
@@ -336,25 +366,33 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Job, error) {
 		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
 	limit := f.Limit
-	if limit <= 0 || limit > 200 {
-		limit = 50
+	if limit <= 0 || limit > MaxListLimit {
+		limit = DefaultListLimit
 	}
+	// One row more than the page says whether there is a next one.
 	q += ` ORDER BY j.id DESC LIMIT ?`
-	args = append(args, limit)
+	args = append(args, limit+1)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	out := []Job{}
+	jobs = []Job{}
 	for rows.Next() {
 		j, err := scanJob(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		out = append(out, *j)
+		jobs = append(jobs, *j)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(jobs) > limit {
+		jobs = jobs[:limit]
+		nextBefore = jobs[limit-1].ID
+	}
+	return jobs, nextBefore, nil
 }
 
 // expireSQL ends every lease that ran out (?1 is now): a job whose cancel was
@@ -370,33 +408,73 @@ const expireSQL = `UPDATE bridge_jobs SET
 	    lease_until = NULL, updated_at = ?1
 	  WHERE state IN ('claimed', 'running') AND lease_until < ?1`
 
-// ExpireLeases ends the leases that ran out (expireSQL). Claims and lists run it
-// first, so a Bridge that died mid-job leaves the job queued again (or failed)
-// by the time anyone looks.
-func (s *Service) ExpireLeases(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, expireSQL, s.ts(), MaxAttempts)
+// expireTx ends the leases that ran out, inside a write transaction. Every
+// transaction that reads or changes job states runs it first, so none acts on a
+// dead claim.
+func expireTx(ctx context.Context, tx *sql.Tx, now string) error {
+	_, err := tx.ExecContext(ctx, expireSQL, now, MaxAttempts)
 	return err
 }
 
-// Claim hands the Bridge the next queued job of one of kinds (highest priority,
-// then oldest), leased for Lease, or nil when there is none.
-func (s *Service) Claim(ctx context.Context, kinds []string) (*Job, error) {
-	if len(kinds) == 0 {
+// expireDue is expireTx for the read paths: it takes the one writer only when a
+// lease has actually run out (a reader-pool check on idx_bridge_jobs_lease
+// first), so the console's polls don't queue behind scans for the writer.
+func (s *Service) expireDue(ctx context.Context) error {
+	now := s.ts()
+	var due bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE state IN ('claimed', 'running') AND lease_until < ?)`,
+		now).Scan(&due); err != nil || !due {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, expireSQL, now, MaxAttempts)
+	return err
+}
+
+// ErrNoHeartbeat is a claim from a Bridge that hasn't reported yet (a 409): the
+// server queues for the kinds its heartbeat names.
+var ErrNoHeartbeat = errors.New("the bridge hasn't reported yet")
+
+// ClaimFor hands the Bridge the next queued job it can run, waiting up to wait
+// (at most MaxWait) for one; nil when none came. The kinds are those its last
+// heartbeat names that the server knows, narrowed to asked when it names any
+// (the kinds its free lanes run); with none left it answers at once.
+func (s *Service) ClaimFor(ctx context.Context, asked []string, wait time.Duration) (*Job, error) {
+	h, err := s.LastHeartbeat(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if h == nil {
+		return nil, ErrNoHeartbeat
+	}
+	var ks []string
+	for _, k := range h.Kinds {
+		if Known(k) && (len(asked) == 0 || slices.Contains(asked, k)) {
+			ks = append(ks, k)
+		}
+	}
+	if len(ks) == 0 {
 		return nil, nil
 	}
+	return s.waitClaim(ctx, ks, wait)
+}
+
+// claim hands the Bridge the next queued job of one of kinds (highest priority,
+// then oldest), leased for Lease, or nil when there is none.
+func (s *Service) claim(ctx context.Context, kinds []string) (*Job, error) {
 	var job *Job
 	err := s.db.WithTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
 		now := s.ts()
-		if _, err := tx.ExecContext(ctx, expireSQL, now, MaxAttempts); err != nil {
+		if err := expireTx(ctx, tx, now); err != nil {
 			return err
 		}
-		args := []any{}
+		args := make([]any, 0, len(kinds))
 		for _, k := range kinds {
 			args = append(args, k)
 		}
 		var id int64
 		err := tx.QueryRowContext(ctx,
-			`SELECT id FROM bridge_jobs WHERE state = 'queued' AND kind IN (`+placeholders(len(kinds))+`)
+			`SELECT id FROM bridge_jobs WHERE state = 'queued' AND kind IN (?`+strings.Repeat(",?", len(kinds)-1)+`)
 			  ORDER BY priority DESC, id LIMIT 1`, args...).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -409,21 +487,21 @@ func (s *Service) Claim(ctx context.Context, kinds []string) (*Job, error) {
 			        updated_at = ? WHERE id = ?`, at(s.now().Add(Lease)), now, now, id); err != nil {
 			return err
 		}
-		job, err = getTx(ctx, tx, id)
+		job, err = getJob(ctx, tx, id)
 		return err
 	})
 	return job, err
 }
 
-// WaitClaim is Claim that waits up to wait (at most MaxWait) for a job to be
+// waitClaim is claim that waits up to wait (at most MaxWait) for a job to be
 // queued when there is none, returning nil when none came or ctx ended.
-func (s *Service) WaitClaim(ctx context.Context, kinds []string, wait time.Duration) (*Job, error) {
+func (s *Service) waitClaim(ctx context.Context, kinds []string, wait time.Duration) (*Job, error) {
 	wait = min(max(wait, 0), MaxWait)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	for {
 		woken := s.wake.wait()
-		job, err := s.Claim(ctx, kinds)
+		job, err := s.claim(ctx, kinds)
 		if job != nil || err != nil {
 			return job, err
 		}
@@ -453,16 +531,16 @@ type Update struct {
 // cancelled, or its lease ran out and a later claim took it (a 409).
 var ErrNotHeld = errors.New("the job is not held by this claim")
 
-// fromHeld are the states the Bridge may report from (it holds the job) and
-// where each may go.
-var fromHeld = map[string][]string{
-	StateClaimed:        {StateRunning, StateDone, StateFailed, StateNeedsAttention, StateCancelled},
-	StateRunning:        {StateRunning, StateDone, StateFailed, StateNeedsAttention, StateCancelled},
-	StateNeedsAttention: {StateRunning, StateDone, StateFailed, StateNeedsAttention, StateCancelled},
-}
+// heldStates are the states the Bridge holds a job in (it may report on it);
+// reportable are the states it may report.
+var (
+	heldStates = []string{StateClaimed, StateRunning, StateNeedsAttention}
+	reportable = []string{StateRunning, StateDone, StateFailed, StateNeedsAttention, StateCancelled}
+)
 
 // checkUpdate bounds what the Bridge sends: progress and result are JSON
-// objects, the error bounded text.
+// objects (the request decoder already checked they are JSON), the error
+// bounded text.
 func checkUpdate(u *Update) error {
 	for name, raw := range map[string]struct {
 		v   json.RawMessage
@@ -474,8 +552,7 @@ func checkUpdate(u *Update) error {
 		if len(raw.v) > raw.max {
 			return invalid("%s too large", name)
 		}
-		var obj map[string]any
-		if err := json.Unmarshal(raw.v, &obj); err != nil || obj == nil {
+		if t := bytes.TrimSpace(raw.v); len(t) == 0 || t[0] != '{' {
 			return invalid("%s must be a JSON object", name)
 		}
 	}
@@ -487,8 +564,8 @@ func checkUpdate(u *Update) error {
 
 // UpdateHeld applies the Bridge's update to job id. The job must be held by
 // this claim (u.Attempt) in a state the Bridge reports from, and the new state
-// one it may go to; a claimed or running job's lease is renewed, a parked one's
-// dropped, a finished one's ended. It returns the job as stored, whose
+// one it may report; a claimed or running job's lease is renewed, a parked
+// one's dropped, a finished one's ended. It returns the job as stored, whose
 // CancelRequested tells the Bridge an admin asked it to stop.
 func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, error) {
 	if err := checkUpdate(&u); err != nil {
@@ -497,20 +574,19 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 	var job *Job
 	err := s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
 		now := s.ts()
-		if _, err := tx.ExecContext(ctx, expireSQL, now, MaxAttempts); err != nil {
+		if err := expireTx(ctx, tx, now); err != nil {
 			return err
 		}
-		cur, err := getTx(ctx, tx, id)
+		cur, err := getJob(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		next, ok := fromHeld[cur.State]
-		if !ok || cur.Attempts != u.Attempt {
+		if !slices.Contains(heldStates, cur.State) || cur.Attempts != u.Attempt {
 			return ErrNotHeld
 		}
 		state := cur.State
 		if u.State != nil {
-			if !slices.Contains(next, *u.State) {
+			if !slices.Contains(reportable, *u.State) {
 				return invalid("state %q from %q", *u.State, cur.State)
 			}
 			state = *u.State
@@ -539,7 +615,7 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			  WHERE id = ?`, state, lease, finished, now, progress, result, errText, id); err != nil {
 			return err
 		}
-		job, err = getTx(ctx, tx, id)
+		job, err = getJob(ctx, tx, id)
 		return err
 	})
 	return job, err
@@ -555,10 +631,10 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 	var job *Job
 	err := s.db.WithTx(ctx, "bridge.Cancel", func(tx *sql.Tx) error {
 		now := s.ts()
-		if _, err := tx.ExecContext(ctx, expireSQL, now, MaxAttempts); err != nil {
+		if err := expireTx(ctx, tx, now); err != nil {
 			return err
 		}
-		cur, err := getTx(ctx, tx, id)
+		cur, err := getJob(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -576,18 +652,64 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 		if err != nil {
 			return err
 		}
-		job, err = getTx(ctx, tx, id)
+		job, err = getJob(ctx, tx, id)
 		return err
 	})
 	return job, err
 }
 
-func placeholders(n int) string {
-	if n <= 0 {
-		return ""
+// MoveJobs carries a book's jobs to its new path inside a move's transaction
+// (catalog.MoveDurableState), finished ones too (the book's history). An open
+// job whose kind already has an open job at the new path is cancelled first,
+// since a kind, library and path hold one open job at a time; the rest move,
+// their dedupe key rebuilt by DedupeKey.
+func MoveJobs(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
+	ts := at(now)
+	if err := expireTx(ctx, tx, ts); err != nil {
+		return err
 	}
-	return "?" + strings.Repeat(",?", n-1)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE bridge_jobs SET state = 'cancelled', error = 'the book moved onto another job of this kind',
+		        lease_until = NULL, finished_at = ?4, updated_at = ?4
+		  WHERE library_id = ?1 AND rel_path = ?2 AND state IN `+OpenStatesSQL+`
+		    AND EXISTS (SELECT 1 FROM bridge_jobs n
+		                 WHERE n.library_id = ?1 AND n.rel_path = ?3 AND n.kind = bridge_jobs.kind
+		                   AND n.state IN `+OpenStatesSQL+`)`,
+		libraryID, oldPath, newPath, ts); err != nil {
+		return err
+	}
+	all, err := jobKinds(ctx, tx, libraryID, oldPath)
+	if err != nil {
+		return err
+	}
+	for _, m := range all {
+		if _, err := tx.ExecContext(ctx, `UPDATE bridge_jobs SET rel_path = ?, dedupe_key = ? WHERE id = ?`,
+			newPath, DedupeKey(m.kind, &libraryID, &newPath), m.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// String is a job's short name in logs.
-func (j *Job) String() string { return fmt.Sprintf("%s#%d", j.Kind, j.ID) }
+type jobKind struct {
+	id   int64
+	kind string
+}
+
+// jobKinds lists the ids and kinds of a book's jobs.
+func jobKinds(ctx context.Context, tx *sql.Tx, libraryID int64, path string) ([]jobKind, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, kind FROM bridge_jobs WHERE library_id = ? AND rel_path = ?`, libraryID, path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []jobKind
+	for rows.Next() {
+		var m jobKind
+		if err := rows.Scan(&m.id, &m.kind); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}

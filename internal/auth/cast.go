@@ -173,5 +173,5 @@ func (s *Service) IssueCastToken(ctx context.Context, userID, parentTokenID, lib
 // whoever calls. Any refusal is ErrInvalidToken. The api calls it only for the
 // ?token= of a book's cover or stream with no Authorization header.
 func (s *Service) ResolveCastRequest(ctx context.Context, secret string, p Presence, libraryID int64, path string, kinds ...string) (*User, Credential, error) {
-	return s.resolve(ctx, secret, p, resolveFor{media: &bookMedia{libraryID, relpath.Clean(path)}}, kinds)
+	return s.resolve(ctx, secret, p, &bookMedia{libraryID, relpath.Clean(path)}, kinds)
 }

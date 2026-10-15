@@ -137,8 +137,7 @@ type API struct {
 	// once, and remembers the ones that failed recently (communityThumbnail).
 	community communityFlights
 
-	// bridge is the Bridge's status and job queue (SetBridge; nil: the bridge
-	// routes answer 503 and the capability is off).
+	// bridge is the Bridge's status and job queue (SetBridge, before Handler).
 	bridge *bridge.Service
 
 	// streams remembers recent transcoded streams per token, so the progress saves
@@ -495,21 +494,21 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/libraries/{id}/cover", a.requireAdmin(http.HandlerFunc(a.handleAdminDeleteCover)))
 
 	// The Bridge (handlers_bridge.go): the console's status, pairing and jobs.
-	mux.Handle("GET /api/v1/admin/bridge", a.requireBridgeAdmin(a.handleAdminBridge))
-	mux.Handle("DELETE /api/v1/admin/bridge", a.requireBridgeAdmin(a.handleAdminBridgeUnpair))
-	mux.Handle("POST /api/v1/admin/bridge/pair", a.requireBridgeAdmin(a.handleAdminBridgePair))
-	mux.Handle("GET /api/v1/admin/bridge/jobs", a.requireBridgeAdmin(a.handleAdminBridgeJobs))
-	mux.Handle("POST /api/v1/admin/bridge/jobs", a.requireBridgeAdmin(a.handleAdminBridgeQueue))
-	mux.Handle("GET /api/v1/admin/bridge/jobs/{id}", a.requireBridgeAdmin(a.handleAdminBridgeJob))
-	mux.Handle("POST /api/v1/admin/bridge/jobs/{id}/cancel", a.requireBridgeAdmin(a.handleAdminBridgeCancel))
+	mux.Handle("GET /api/v1/admin/bridge", a.requireAdmin(http.HandlerFunc(a.handleAdminBridge)))
+	mux.Handle("DELETE /api/v1/admin/bridge", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeUnpair)))
+	mux.Handle("POST /api/v1/admin/bridge/pair", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgePair)))
+	mux.Handle("GET /api/v1/admin/bridge/jobs", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeJobs)))
+	mux.Handle("POST /api/v1/admin/bridge/jobs", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeQueue)))
+	mux.Handle("GET /api/v1/admin/bridge/jobs/{id}", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeJob)))
+	mux.Handle("POST /api/v1/admin/bridge/jobs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeCancel)))
 
 	// The Bridge's own routes: a bridge token only, and a bridge token nowhere
 	// else (requireBridge).
-	mux.Handle("PUT /api/v1/bridge/status", a.requireBridge(http.HandlerFunc(a.handleBridgeStatus)))
-	mux.Handle("GET /api/v1/bridge/libraries/{id}/book", a.requireBridge(http.HandlerFunc(a.handleBridgeBook)))
-	mux.Handle("GET /api/v1/bridge/jobs/next", a.requireBridge(http.HandlerFunc(a.handleBridgeClaim)))
-	mux.Handle("PATCH /api/v1/bridge/jobs/{id}", a.requireBridge(http.HandlerFunc(a.handleBridgeUpdate)))
-	mux.Handle("POST /api/v1/bridge/rescan", a.requireBridge(http.HandlerFunc(a.handleBridgeRescan)))
+	mux.Handle("PUT /api/v1/bridge/status", a.requireBridge(a.handleBridgeStatus))
+	mux.Handle("GET /api/v1/bridge/libraries/{id}/book", a.requireBridge(a.handleBridgeBook))
+	mux.Handle("GET /api/v1/bridge/jobs/next", a.requireBridge(a.handleBridgeClaim))
+	mux.Handle("PATCH /api/v1/bridge/jobs/{id}", a.requireBridge(a.handleBridgeUpdate))
+	mux.Handle("POST /api/v1/bridge/rescan", a.requireBridge(a.handleBridgeRescan))
 
 	// Filesystem-based shares: named sets of path rules, granted to users.
 	mux.Handle("GET /api/v1/admin/shares", a.requireAdmin(http.HandlerFunc(a.handleListShares)))

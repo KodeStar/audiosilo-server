@@ -48,6 +48,11 @@ func TestHeartbeatOnlineWindow(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
 	ctx := context.Background()
+	// Unpaired (auth's UnpairBridge deletes the row): no heartbeat is kept.
+	if _, err := q.db.ExecContext(ctx, `DELETE FROM bridge_status`); err != nil {
+		t.Fatal(err)
+	}
+	q.Forget()
 	if err := q.SaveHeartbeat(ctx, Status{}); !errors.Is(err, ErrNotPaired) {
 		t.Fatalf("heartbeat before pairing: %v, want ErrNotPaired", err)
 	}

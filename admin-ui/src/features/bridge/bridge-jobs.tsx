@@ -15,7 +15,7 @@ import {
   BRIDGE_JOB_STATES,
   hasContent,
   jobActions,
-  kindKey,
+  kindName,
   progressOf,
   resultSummary,
   stateLook,
@@ -37,7 +37,7 @@ export function JobsCard({
   const { t } = useTranslation();
   const [state, setState] = useState('');
   const jobs = useBridgeJobs(state);
-  const rows = jobs.data?.pages.flatMap((p) => p.jobs) ?? [];
+  const rows = jobs.rows;
   // Unfiltered and empty (or not loaded yet): no card. A filter that matches
   // nothing keeps the card, so it can be cleared.
   if (hideWhenEmpty && state === '' && !jobs.isError && rows.length === 0) return null;
@@ -89,15 +89,15 @@ export function JobsCard({
           ))}
         </ul>
       )}
-      {jobs.hasNextPage ? (
+      {jobs.hasOlder ? (
         <div className="flex justify-center border-t px-5 py-3">
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void jobs.fetchNextPage()}
-            disabled={jobs.isFetchingNextPage}
+            onClick={() => void jobs.fetchOlder()}
+            disabled={jobs.isFetchingOlder}
           >
-            {jobs.isFetchingNextPage ? t('common.loading') : t('bridge.jobs.older')}
+            {jobs.isFetchingOlder ? t('common.loading') : t('bridge.jobs.older')}
           </Button>
         </div>
       ) : null}
@@ -119,8 +119,7 @@ function JobRow({
   const [cancelling, setCancelling] = useState(false);
   const actions = jobActions(job);
   const look = stateLook(job);
-  const key = kindKey(job.kind);
-  const kind = key ? t(key) : job.kind;
+  const kind = kindName(t, job.kind);
   const library =
     job.library_id === null
       ? ''
@@ -152,7 +151,12 @@ function JobRow({
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <div className="flex min-w-0 flex-1 basis-64 flex-col gap-0.5">
           <span className="flex flex-wrap items-center gap-2">
-            <b className={key ? 'font-semibold' : 'font-mono text-[12.5px] font-semibold'}>
+            <b
+              className={
+                // A kind without a name of its own reads as its code.
+                kind === job.kind ? 'font-mono text-[12.5px] font-semibold' : 'font-semibold'
+              }
+            >
               {kind}
             </b>
             <Badge variant={look.tone}>{t(look.key)}</Badge>
