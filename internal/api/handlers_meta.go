@@ -26,6 +26,12 @@ import (
 // Every rail entry the caller owns carries `local`, the book to open for it
 // (localRails), resolved for this caller on a copy of the rails.
 //
+// The characters and recaps the Bridge generated for the book (its .audiosilo/
+// attachments, catalog.BookAttachments) fill what the community work lacks
+// (meta.WithGenerated; work.generated names them), and a book with no match but
+// generated content answers {"matched": false, "work": {...}} (meta.GeneratedWork).
+// Per request, after the cache and `local`, never cached.
+//
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a
 // newer client degrades to the full envelope rather than a 400:
@@ -33,7 +39,8 @@ import (
 //     series, nearest first (meta.Service.Previous; a failed one is left out).
 //   - spoilers=hide: gates the current work by the CALLER's saved progress on
 //     this book (meta.HideSpoilers; no progress = not started), and drops each
-//     previous work's ending.
+//     previous work's ending. An unmatched book's generated work is gated the
+//     same way (meta.GateWork).
 func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if !a.metadataOn() {
 		writeError(w, http.StatusNotFound, "metadata lookup not enabled")
@@ -43,9 +50,13 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	gen := a.generatedFor(r.Context(), lib.ID, book)
+	var unmatched *meta.MetaWork
 	if env == nil {
-		writeJSON(w, http.StatusOK, map[string]bool{"matched": false})
-		return
+		if unmatched = meta.GeneratedWork(book.Title, gen); unmatched == nil {
+			writeJSON(w, http.StatusOK, meta.Unmatched{})
+			return
+		}
 	}
 
 	// The caller's place in the book is read first: a failure here fails the
@@ -63,6 +74,13 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 			a.writeCatalogError(w, err, "load progress for meta failed", "could not load progress", "library", lib.ID, "path", path)
 			return
 		}
+	}
+	if env == nil {
+		if hide {
+			unmatched = meta.GateWork(unmatched, chapter, finished)
+		}
+		writeJSON(w, http.StatusOK, meta.Unmatched{Work: unmatched})
+		return
 	}
 
 	// env is shared with the meta cache and every other caller: it is never
@@ -82,6 +100,7 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	} else {
 		out.Series = rails
 	}
+	out = meta.WithGenerated(out, gen)
 	if queryHas(q["include"], "previous") {
 		out.Previous = a.meta.Previous(r.Context(), env)
 	}
@@ -89,6 +108,27 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		out = meta.HideSpoilers(out, chapter, finished)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// generatedFor is the book's generated content for /meta (nil for none). It is
+// an extra like `local`: a failure to read it is logged and the answer goes out
+// without it.
+func (a *API) generatedFor(ctx context.Context, libraryID int64, book *catalog.Book) *meta.Generated {
+	att, err := a.cat.BookAttachments(ctx, libraryID, book.RelPath)
+	if err != nil {
+		if ctx.Err() == nil {
+			a.log.Warn("load generated content for meta failed", "err", err, "library", libraryID, "path", book.RelPath)
+		}
+		return nil
+	}
+	if att == nil || (att.Characters == nil && att.Recaps == nil) {
+		return nil
+	}
+	g := &meta.Generated{Characters: att.Characters, Recaps: att.Recaps}
+	if att.Provenance != nil {
+		g.GeneratedAt = att.Provenance.GeneratedAt
+	}
+	return g
 }
 
 // bookEnvelope is the shared start of the routes over a book's /meta envelope

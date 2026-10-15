@@ -132,9 +132,13 @@ type Book struct {
 	// ABS is the Audiobookshelf metadata.json in a folder book's folder: its
 	// signature from the scan's walk, then what it says from enrich. Set by the
 	// scanner for folder books only; UpsertBook records it (books.abs_*).
-	ABS      ABSReading         `json:"-"`
-	Files    []BookFile         `json:"files,omitempty"`
-	Chapters []metadata.Chapter `json:"chapters,omitempty"`
+	ABS ABSReading `json:"-"`
+	// Attachments are the book's .audiosilo/ files (catalog/attachments.go): their
+	// signature from the scan's walk, then what they say from enrich. Set by the
+	// scanner; UpsertBook records them (books.attachments_*, book_attachments).
+	Attachments AttachmentsReading `json:"-"`
+	Files       []BookFile         `json:"files,omitempty"`
+	Chapters    []metadata.Chapter `json:"chapters,omitempty"`
 	// ChaptersSource is "community" when Chapters are a community chapter list
 	// fitted onto the audio rather than the files' own (books.chapters_source);
 	// omitted otherwise. Set by GetBook (single-book reads).

@@ -370,30 +370,83 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 	return false
 }
 
-// handleBridgeRescan serves POST /bridge/rescan {library_id, path}: read one path
-// again now, after the Bridge changed files there (a placed or renamed book).
-// It indexes what is at the path, a new book included, and answers 200 {path}
-// with the book's indexed path; 404 code not_indexable when nothing indexable is
-// there. It re-reads the audio: Phase 1 adds a cheaper refresh for files the
-// Bridge writes into a book's .audiosilo/.
+// handleBridgeRescan serves POST /bridge/rescan {library_id, path, mode?, from?}:
+// read one path again now, after the Bridge changed files there.
+//   - mode "full" (or none): index what is at the path, a new book included
+//     (re-reading the audio), and answer 200 {path} with the book's indexed path.
+//     With from, the book's path before a move the Bridge made: its durable state
+//     follows it as a scan's move detection would (Scanner.IndexMoved; a from that
+//     isn't that book moved is ignored).
+//   - mode "attachments": read only the book's .audiosilo/ attachments, never its
+//     audio (Scanner.RefreshAttachments), and answer 200 {path, attachments:
+//     {characters, recaps, bridge}} with what is now indexed. from is refused here.
+//
+// 404 code not_indexable when no book is there (for attachments: no indexed one).
 func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		LibraryID int64  `json:"library_id"`
 		Path      string `json:"path"`
+		Mode      string `json:"mode"`
+		From      string `json:"from"`
 	}
-	if err := decodeJSON(r, &req, 4<<10); err != nil || req.LibraryID <= 0 || catalog.CleanRelPath(req.Path) == "" {
+	if err := decodeJSON(r, &req, 8<<10); err != nil || req.LibraryID <= 0 || catalog.CleanRelPath(req.Path) == "" {
 		writeError(w, http.StatusBadRequest, "library_id and path are required")
+		return
+	}
+	from := catalog.CleanRelPath(req.From)
+	switch {
+	case req.Mode != "" && req.Mode != rescanFull && req.Mode != rescanAttachments:
+		writeError(w, http.StatusBadRequest, "mode must be full or attachments")
+		return
+	case req.From != "" && from == "":
+		writeError(w, http.StatusBadRequest, "invalid from")
+		return
+	case from != "" && req.Mode == rescanAttachments:
+		writeError(w, http.StatusBadRequest, "from is only for a full rescan")
 		return
 	}
 	lib, ok := a.libraryFor(w, r, req.LibraryID, "bridge rescan failed")
 	if !ok {
 		return
 	}
-	book, ok := a.rescanPath(w, lib, catalog.CleanRelPath(req.Path))
+	p := catalog.CleanRelPath(req.Path)
+	if req.Mode == rescanAttachments {
+		got, ok := rescanAt(a, w, lib, p, func(ctx context.Context) (*library.AttachmentsRefresh, error) {
+			return a.scanner.RefreshAttachments(ctx, *lib, p)
+		})
+		if !ok {
+			return
+		}
+		writeJSON(w, http.StatusOK, bridgeAttachmentsRescan{Path: got.Path, Attachments: bridgeAttachments{
+			Characters: got.Characters, Recaps: got.Recaps, Bridge: got.Bridge}})
+		return
+	}
+	book, ok := rescanAt(a, w, lib, p, func(ctx context.Context) (*catalog.Book, error) {
+		return a.scanner.IndexMoved(ctx, *lib, p, from)
+	})
 	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"path": book.RelPath})
+}
+
+// The modes of POST /bridge/rescan.
+const (
+	rescanFull        = "full"
+	rescanAttachments = "attachments"
+)
+
+// bridgeAttachmentsRescan is POST /bridge/rescan's answer in attachments mode.
+type bridgeAttachmentsRescan struct {
+	Path        string            `json:"path"`
+	Attachments bridgeAttachments `json:"attachments"`
+}
+
+// bridgeAttachments says which of a book's attachments are indexed.
+type bridgeAttachments struct {
+	Characters bool `json:"characters"`
+	Recaps     bool `json:"recaps"`
+	Bridge     bool `json:"bridge"`
 }
 
 // adminBridge is GET /admin/bridge: the pairing, the last heartbeat and whether

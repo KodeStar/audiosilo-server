@@ -90,12 +90,27 @@ func ABSSignature(info fs.FileInfo) string {
 // ErrABSFileInvalid is about the file itself; any other is a read that may work
 // later.
 func ReadABSFile(path string) (*ABSFile, error) {
+	data, err := readRegularFile(path, maxABSFile, errABSFileNotRegular, ErrABSFileTooLarge)
+	if err != nil {
+		return nil, err
+	}
+	return ParseABSFile(data)
+}
+
+// readRegularFile reads the file at path, at most limit bytes: a regular file
+// only, never through a link, including one swapped in after the file was
+// looked at (os.SameFile on the opened file), so a link can't make the scan read
+// a file outside the library. A link or anything else but a regular file is
+// notRegular, a file over limit tooLarge; any other error is a read that may work
+// later. The metadata files the scan reads beside the audio (ABS's metadata.json,
+// the Bridge's .audiosilo/ attachments) share it.
+func readRegularFile(path string, limit int, notRegular, tooLarge error) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, errABSFileNotRegular
+		return nil, notRegular
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -105,18 +120,18 @@ func ReadABSFile(path string) (*ABSFile, error) {
 	if opened, err := f.Stat(); err != nil {
 		return nil, err
 	} else if !os.SameFile(info, opened) {
-		// Replaced between the two looks (ABS renaming a new version into place, or
-		// a link): the next read sees what is there then.
+		// Replaced between the two looks (a new version renamed into place, or a
+		// link): the next read sees what is there then.
 		return nil, fmt.Errorf("%s: replaced while being opened", path)
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxABSFile+1))
+	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxABSFile {
-		return nil, ErrABSFileTooLarge
+	if len(data) > limit {
+		return nil, tooLarge
 	}
-	return ParseABSFile(data)
+	return data, nil
 }
 
 // ParseABSFile reads an ABS metadata.json. It is lenient about anything it

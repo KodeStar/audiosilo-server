@@ -197,18 +197,28 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 // with no book (gone, or ignored) is a 404 with code not_indexable; it answers
 // the error itself and reports whether there was none.
 func (a *API) rescanPath(w http.ResponseWriter, lib *catalog.Library, p string) (*catalog.Book, bool) {
+	return rescanAt(a, w, lib, p, func(ctx context.Context) (*catalog.Book, error) {
+		return a.scanner.IndexPath(ctx, *lib, p)
+	})
+}
+
+// rescanAt runs read, a re-read of what is at p in lib, as rescanPath does: on a
+// context detached from the request timeout, a path with no book a 404 with code
+// not_indexable, anything else the catalog error's answer. It answers the error
+// itself and reports whether there was none.
+func rescanAt[T any](a *API, w http.ResponseWriter, lib *catalog.Library, p string, read func(context.Context) (T, error)) (T, bool) {
 	ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
 	defer cancel()
-	book, err := a.scanner.IndexPath(ctx, *lib, p)
+	out, err := read(ctx)
 	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
 		writeErrorCode(w, http.StatusNotFound, codeNotIndexable, "there is no book at that path any more")
-		return nil, false
+		return out, false
 	}
 	if err != nil {
 		a.writeCatalogError(w, err, "rescan failed", "could not rescan the book", "library", lib.ID, "path", p)
-		return nil, false
+		return out, false
 	}
-	return book, true
+	return out, true
 }
 
 // scheduledScan is one library's next scheduled scan.
