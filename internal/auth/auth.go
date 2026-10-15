@@ -35,6 +35,10 @@ const (
 	// Chromecast receiver (cast.go). Like a pairing token it is never a device:
 	// the device lists and sign-outs leave it out.
 	KindCast = "cast"
+	// KindBridge is the paired Bridge's credential (bridge.go): accepted only on
+	// /api/v1/bridge/* (ResolveBridgeRequest), only while its admin is an admin.
+	// Never a device either.
+	KindBridge = "bridge"
 )
 
 // Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
@@ -384,17 +388,29 @@ const touchInterval = time.Minute
 // fresh durable credential (see denyAPIKey). It never accepts a cast token, whose
 // check needs the path the request reads: that is ResolveCastRequest.
 func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence, kinds ...string) (*User, Credential, error) {
-	return s.resolve(ctx, secret, p, nil, kinds)
+	return s.resolve(ctx, secret, p, resolveFor{}, kinds)
 }
 
-// resolve is ResolveRequest and ResolveCastRequest: a cast token is valid only
-// when media names the book media the request reads and its grant covers it.
-func (s *Service) resolve(ctx context.Context, secret string, p Presence, media *bookMedia, kinds []string) (*User, Credential, error) {
+// resolveFor is what a request may be resolved for beyond the shared checks:
+// the book media it reads (a cast token's grant must cover it), or a Bridge
+// route (the only place a bridge token is valid).
+type resolveFor struct {
+	media  *bookMedia
+	bridge bool
+}
+
+// resolve is ResolveRequest, ResolveCastRequest and ResolveBridgeRequest: a cast
+// token is valid only when the request reads book media its grant covers, and a
+// bridge token only on a Bridge route and while its admin is still an admin.
+func (s *Service) resolve(ctx context.Context, secret string, p Presence, f resolveFor, kinds []string) (*User, Credential, error) {
 	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
 	if err != nil {
 		return nil, Credential{}, err
 	}
-	if row.kind == KindCast && (media == nil || !row.grant.covers(*media)) {
+	if row.kind == KindCast && (f.media == nil || !row.grant.covers(*f.media)) {
+		return nil, Credential{}, ErrInvalidToken
+	}
+	if row.kind == KindBridge && (!f.bridge || u.Role != RoleAdmin) {
 		return nil, Credential{}, ErrInvalidToken
 	}
 	cred := Credential{ID: row.id, Kind: row.kind, DeviceID: row.deviceID, DeviceName: row.deviceName, Client: row.client,

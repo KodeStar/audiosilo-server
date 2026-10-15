@@ -24,7 +24,8 @@ const pairingTTL = 10 * time.Minute
 // can discover the server before authenticating; a future federation/directory
 // layer can build on it.
 func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	bridgeOn := a.bridgeOnline(r.Context())
+	info := map[string]any{
 		"name":      a.config().DisplayName(),
 		"server_id": a.config().ServerID, // stable per-install identity; clients key per-server state on it
 		"version":   Version,
@@ -56,6 +57,7 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
 			"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
 			"household_members":  true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
+			"bridge":             bridgeOn != nil,      // a Bridge is paired and online (its heartbeat < 2 min old); see "bridge" below
 		},
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
@@ -63,7 +65,13 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"demo": map[string]bool{
 			"enabled": a.config().Demo.Enabled, // clients show a "Try the demo" affordance
 		},
-	})
+	}
+	// The online Bridge's version and job families (features), only while
+	// capabilities.bridge is true.
+	if bridgeOn != nil {
+		info["bridge"] = bridgeOn
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 // healthTimeout bounds the /healthz database probe so it returns promptly even

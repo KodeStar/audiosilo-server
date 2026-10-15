@@ -311,10 +311,7 @@ func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string
 	if token == "" {
 		return nil, "missing bearer token"
 	}
-	// The request's address and app (X-AudioSilo-Client) are recorded on the
-	// token, for the admin console's devices and sessions.
-	presence := auth.Presence{IP: clientIP(r)}
-	presence.Client, _ = auth.ParseClient(r.Header.Get(auth.ClientHeader))
+	presence := requestPresence(r)
 	var (
 		u    *auth.User
 		cred auth.Credential
@@ -341,6 +338,15 @@ func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string
 	// can bar an api key (denyAPIKey) - a leaked key must not spawn a durable
 	// credential.
 	return withCredential(r.Context(), u, cred), ""
+}
+
+// requestPresence is what a request says about its device: its address and app
+// (X-AudioSilo-Client), recorded on the token for the admin console's devices and
+// sessions.
+func requestPresence(r *http.Request) auth.Presence {
+	p := auth.Presence{IP: clientIP(r)}
+	p.Client, _ = auth.ParseClient(r.Header.Get(auth.ClientHeader))
+	return p
 }
 
 // castOwnBook refuses a cast token's request for anything but its own book.

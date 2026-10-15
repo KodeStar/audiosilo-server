@@ -518,6 +518,9 @@ func moveBookState(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, ne
 		newPath, libraryID, oldPath); err != nil {
 		return err
 	}
+	if err := moveBridgeJobs(ctx, tx, libraryID, oldPath, newPath); err != nil {
+		return err
+	}
 	// An admin's edits and custom cover belong to the book and follow it as ONE set.
 	// When the moved book has any of them, whatever the new path already carries in
 	// those tables (stale rows from an earlier book there) is dropped first, in every
@@ -692,4 +695,27 @@ func (c *Catalog) ListHistory(ctx context.Context, userID int64, ref Ref, limit 
 		`SELECT `+historyColumns+` FROM listening_history
 		  WHERE user_id = ? AND library_id = ? AND rel_path = ? ORDER BY ended_at DESC, id DESC LIMIT ?`,
 		userID, ref.LibraryID, ref.Path, clampPageLimit(limit))
+}
+
+// moveBridgeJobs carries a book's Bridge jobs (bridge_jobs, migration 0047) to
+// its new path, finished ones too (the book's history). An open job whose kind
+// already has an open job at the new path is cancelled first, since a kind,
+// library and path hold one open job at a time; the rest move, their dedupe key
+// rebuilt as bridge.DedupeKey builds it (kind|library|path).
+func moveBridgeJobs(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE bridge_jobs SET state = 'cancelled', error = 'the book moved onto another job of this kind',
+		        lease_until = NULL, finished_at = ?4, updated_at = ?4
+		  WHERE library_id = ?1 AND rel_path = ?2
+		    AND state IN ('queued', 'claimed', 'running', 'needs_attention')
+		    AND EXISTS (SELECT 1 FROM bridge_jobs n
+		                 WHERE n.library_id = ?1 AND n.rel_path = ?3 AND n.kind = bridge_jobs.kind
+		                   AND n.state IN ('queued', 'claimed', 'running', 'needs_attention'))`,
+		libraryID, oldPath, newPath, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE bridge_jobs SET rel_path = ?3, dedupe_key = kind || '|' || library_id || '|' || ?3
+		  WHERE library_id = ?1 AND rel_path = ?2`, libraryID, oldPath, newPath)
+	return err
 }

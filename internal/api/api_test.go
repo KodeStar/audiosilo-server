@@ -17,6 +17,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/backup"
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -93,6 +94,7 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	backups := backup.New(db, cfg.DataDir, "", slog.Default())
 	ntf := notify.New(cat, "test", a.NotifyIdentity, slog.Default())
 	a.SetRuntime(Runtime{Backups: backups, Notify: ntf})
+	a.SetBridge(bridge.New(db, time.Now))
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
 	return &testEnv{srv: srv, api: a, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code,
