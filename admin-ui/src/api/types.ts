@@ -2103,3 +2103,109 @@ export interface ImportMapping {
  * the server's time) or a moment (RFC 3339).
  */
 export type ImportCutoff = 'auto' | null | string;
+
+// The Bridge (BRIDGE-PLAN.md Phase 0, handlers_bridge.go, internal/bridge): the
+// optional companion that writes to the libraries and runs jobs. It pairs with a
+// one-time code and then calls in; the server never connects to it.
+
+/** One library's mapping as the Bridge last checked it (bridge.LibraryStatus). */
+export interface BridgeMapping {
+  library_id: number;
+  /** Where the Bridge sees the library's root. */
+  mount_path: string;
+  /** A known indexed book was found there with the size the server recorded. */
+  mapped: boolean;
+  /** A probe file could be written and removed there. */
+  writable: boolean;
+  /** The book the check used. */
+  checked_path: string;
+  /** Why the check failed ("" when it didn't). */
+  error: string;
+}
+
+/** A server library with the Bridge's mapping of it (null: none reported yet). */
+export interface BridgeLibrary {
+  id: number;
+  name: string;
+  root: string;
+  mapping: BridgeMapping | null;
+}
+
+/** An ASR worker the Bridge reports (bridge.Worker; Phase 1b). */
+export interface BridgeWorker {
+  name: string;
+  version: string;
+  platform: string;
+  last_seen: string;
+}
+
+/** GET /admin/bridge (handlers_bridge.go adminBridge). */
+export interface BridgeStatus {
+  paired: boolean;
+  /** RFC 3339, while paired. */
+  paired_at?: string;
+  paired_by: UserRef | null;
+  /** A pairing code waiting to be exchanged (its expiry), else null. */
+  pairing: { expires_at: string } | null;
+  /** The last heartbeat is under two minutes old. */
+  online: boolean;
+  /** The last heartbeat (RFC 3339); absent before the first. */
+  heartbeat_at?: string;
+  version?: string;
+  /** The job kinds it runs ("bridge.verify"). */
+  kinds: string[];
+  /** The job families the server knows among them ("bridge"). */
+  features: string[];
+  libraries: BridgeLibrary[];
+  workers: BridgeWorker[];
+  /** The Bridge's own LAN page (an absolute http(s) URL). */
+  ui_url?: string;
+}
+
+/** POST /admin/bridge/pair: the code, shown once (15 minutes). */
+export interface BridgePairCode {
+  code: string;
+  expires_at: string;
+  /** The address the Bridge should call the server on. */
+  server_url: string;
+}
+
+export type BridgeJobState =
+  'queued' | 'claimed' | 'running' | 'done' | 'failed' | 'needs_attention' | 'cancelled';
+
+/** One Bridge job (bridge.Job). progress and result are the kind's own shapes. */
+export interface BridgeJob {
+  id: number;
+  kind: string;
+  library_id: number | null;
+  path: string | null;
+  params: Record<string, unknown>;
+  state: BridgeJobState;
+  progress: Record<string, unknown>;
+  result: Record<string, unknown>;
+  error: string;
+  requested_by: UserRef | null;
+  priority: number;
+  attempts: number;
+  lease_until: string | null;
+  cancel_requested: boolean;
+  created_at: string;
+  updated_at: string;
+  claimed_at: string | null;
+  finished_at: string | null;
+}
+
+/** GET /admin/bridge/jobs: newest first; next_before continues it. */
+export interface BridgeJobPage {
+  jobs: BridgeJob[];
+  next_before?: number;
+}
+
+/** POST /admin/bridge/jobs. */
+export interface BridgeJobRequest {
+  kind: string;
+  library_id?: number;
+  /** A book (its indexed path); without it the job is about the library. */
+  path?: string;
+  params?: Record<string, unknown>;
+}

@@ -20,6 +20,7 @@ export const AUDIT_AREAS = [
   'settings',
   'backup',
   'notify',
+  'bridge',
 ] as const;
 
 /** i18next's t as far as these rules use it (options are optional, unlike lib/format's). */
@@ -139,6 +140,9 @@ export function detailLines(e: AuditEvent, t: Translate, fmt: Formatters): Detai
     let value: string;
     if (key === 'kind' && e.action.startsWith('issue.') && typeof v === 'string')
       value = t(`health.kind.${v}`, { defaultValue: v });
+    // A Bridge job's kind ("bridge.verify") by the name the Bridge page gives it.
+    else if (key === 'kind' && e.action.startsWith('bridge.') && typeof v === 'string')
+      value = t(`bridge.kind.${v}`, { defaultValue: v });
     else if (Object.hasOwn(ENUMS, key) && typeof v === 'string')
       value = t(`audit.enum.${ENUMS[key]}.${v}`, { defaultValue: v });
     else if (key === 'events' && Array.isArray(v))
