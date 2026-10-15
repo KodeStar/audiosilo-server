@@ -672,8 +672,8 @@ func TestServerInfoWithoutBridge(t *testing.T) {
 	}
 }
 
-// Security-critical: the Bridge forgets its token at the first 401, so only a
-// refused token is one; a token the server can't check (its database failing)
+// Security-critical: a 401 stops the Bridge calling in (it retries every few
+// minutes), so only a refused token is one; a token the server can't check (its database failing)
 // is a 503 the Bridge retries.
 func TestBridgeTokenCheckFailureIsNotUnauthorized(t *testing.T) {
 	t.Parallel()
