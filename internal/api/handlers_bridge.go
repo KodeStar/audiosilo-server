@@ -12,6 +12,8 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/names"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
 // The Bridge (BRIDGE-PLAN.md Phase 0): the optional companion that writes to the
@@ -200,7 +202,8 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 		files []bridgeFile
 		err   error
 	)
-	if p := catalog.CleanRelPath(r.URL.Query().Get("path")); p != "" {
+	p := catalog.CleanRelPath(r.URL.Query().Get("path"))
+	if p != "" {
 		if book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p); err == nil {
 			files, _ = statBookFiles(lib, book)
 		}
@@ -215,7 +218,52 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "bridge book failed", "could not load the book")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"library_id": lib.ID, "path": book.RelPath, "files": files})
+	out := map[string]any{"library_id": lib.ID, "path": book.RelPath, "files": files}
+	if p != "" {
+		// What a job about the book reads (a path was asked for: never the
+		// mapping check's sample).
+		out["book"] = a.bridgeBookFacts(r.Context(), book)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// bridgeBook is a book's facts for a Bridge job (GET /bridge/libraries/{id}/book
+// with a path): the effective values, its credits split as the server reads
+// them (names.Split), its series position as stored ("" for none) and its
+// community work id when the metadata cache knows it ("" otherwise).
+type bridgeBook struct {
+	Title       string   `json:"title"`
+	Authors     []string `json:"authors"`
+	Narrators   []string `json:"narrators"`
+	Series      string   `json:"series"`
+	SeriesIndex string   `json:"series_index"`
+	ASIN        string   `json:"asin"`
+	ISBN        string   `json:"isbn"`
+	Duration    float64  `json:"duration"`
+	WorkID      string   `json:"work_id"`
+}
+
+// bridgeBookFacts is book's bridgeBook. The work id comes from the metadata
+// cache alone (meta.Service.CachedWorkID), never an upstream call: the Bridge
+// asks this for every job, and a book nobody has looked up yet simply has none.
+func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) bridgeBook {
+	out := bridgeBook{
+		Title: book.Title, Authors: orEmpty(names.Split(book.Author)), Narrators: orEmpty(names.Split(book.Narrator)),
+		Series: book.Series, SeriesIndex: catalog.FormatSeriesRange(book.SeriesIndex, book.SeriesIndexEnd),
+		ASIN: book.ASIN, ISBN: book.ISBN, Duration: book.Duration,
+	}
+	if a.metadataOn() {
+		out.WorkID, _ = a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
+	}
+	return out
+}
+
+// orEmpty is ss, or an empty list for none (the wire's lists are never null).
+func orEmpty(ss []string) []string {
+	if ss == nil {
+		return []string{}
+	}
+	return ss
 }
 
 // statBookFiles is a book's files with the size and modification time the
@@ -339,16 +387,39 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid update")
 		return
 	}
-	job, err := a.bridge.UpdateHeld(r.Context(), id, u)
+	job, from, err := a.bridge.UpdateHeld(r.Context(), id, u)
 	if !a.writeBridgeError(w, err, "bridge job update failed") {
 		return
+	}
+	if job.Notable(from) {
+		a.notifyBridgeJob(r.Context(), job)
 	}
 	writeJSON(w, http.StatusOK, job)
 }
 
+// notifyBridgeJob reports a job that just finished, failed or parked
+// (notify.BridgeJobEnded), naming its book: the title as indexed now, else its
+// path. Best effort: a book or library that can't be read is reported by path.
+func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
+	ev := notify.BridgeJob{ID: job.ID, Kind: job.Kind, State: job.State, Path: job.Target(),
+		Code: job.ParkCode(), Error: job.Error}
+	if job.LibraryID != nil {
+		ev.LibraryID = *job.LibraryID
+		if lib, err := a.cat.GetLibrary(ctx, ev.LibraryID); err == nil {
+			ev.Library = lib.Name
+		}
+		if ev.Path != "" {
+			if book, err := a.cat.GetBookByPath(ctx, ev.LibraryID, ev.Path); err == nil {
+				ev.Title = book.Title
+			}
+		}
+	}
+	a.rt.Notify.BridgeJobEnded(ctx, ev)
+}
+
 // writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,
-// finished or a kind the Bridge doesn't run, else 500) and reports whether there
-// was none.
+// finished, a kind the Bridge doesn't run or a library it can't write to, else
+// 500) and reports whether there was none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
 	case err == nil:
@@ -363,6 +434,8 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeErrorCode(w, http.StatusConflict, "finished", "the job has already finished")
 	case errors.Is(err, bridge.ErrKindUnavailable):
 		writeErrorCode(w, http.StatusConflict, "kind_unavailable", "the paired bridge doesn't run that kind of job")
+	case errors.Is(err, bridge.ErrLibraryNotWritable):
+		writeErrorCode(w, http.StatusConflict, "library_not_writable", "the bridge can't write to that library")
 	default:
 		a.log.Warn(op, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update the job")
@@ -466,6 +539,8 @@ type adminBridge struct {
 	Libraries   []adminBridgeLibrary `json:"libraries"`
 	Workers     []bridge.Worker      `json:"workers"`
 	UIURL       string               `json:"ui_url,omitempty"`
+	// Estimates are the Bridge's costing figures (omitted when it sent none).
+	Estimates *bridge.Estimates `json:"estimates,omitempty"`
 }
 
 // bridgePairing is a pairing code waiting to be exchanged.
@@ -506,6 +581,7 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 		out.Online = h.Online(time.Now())
 		out.HeartbeatAt = h.At.UTC().Format(time.RFC3339)
 		out.Version, out.Kinds, out.Features, out.Workers, out.UIURL = h.Version, h.Kinds, h.Features(), h.Workers, h.UIURL
+		out.Estimates = h.Estimates
 	}
 	for _, l := range libs {
 		al := adminBridgeLibrary{bridgeLibrary: bridgeLibrary{ID: l.ID, Name: l.Name, Root: l.Root}}
@@ -562,8 +638,10 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // path?, params?}: queue a job (201) or return the open one already queued for
 // that kind, library and path (200). The kind must be one the server knows (400)
 // and the paired Bridge runs (409 code kind_unavailable; it may be offline: the
-// job waits). A path names an indexed book (404 otherwise) and the job is about
-// that book's own path.
+// job waits), and a kind that writes (sidecars.generate) needs a library the
+// Bridge last reported mapped and writable (409 code library_not_writable). A
+// path names an indexed book (404 otherwise) and the job is about that book's
+// own path.
 func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind      string          `json:"kind"`

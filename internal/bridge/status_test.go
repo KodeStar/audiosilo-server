@@ -49,8 +49,8 @@ func TestStatusValidate(t *testing.T) {
 
 func TestFeaturesAreKnownFamilies(t *testing.T) {
 	t.Parallel()
-	st := Status{Kinds: []string{"sidecars.generate", KindVerify, "bogus.kind"}}
-	// sidecars.generate isn't known to the server in Phase 0, so it's not offered.
+	st := Status{Kinds: []string{"files.delete", KindVerify, "bogus.kind"}}
+	// A kind the server doesn't know is never offered.
 	if got := st.Features(); !slices.Equal(got, []string{"bridge"}) {
 		t.Fatalf("Features = %v", got)
 	}

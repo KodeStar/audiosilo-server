@@ -55,20 +55,86 @@ const (
 // root) through its mapping and reports what it found.
 const KindVerify = "bridge.verify"
 
+// KindSidecars is Phase 1a's job: the Bridge generates a book's characters and
+// recaps and writes them into the book's .audiosilo/ folder.
+const KindSidecars = "sidecars.generate"
+
+// bookRule is whether a kind's job names a book.
+type bookRule int
+
+const (
+	bookNone     bookRule = iota // never a path
+	bookOptional                 // a book, or the library itself
+	bookRequired                 // always a book
+)
+
 // kindSpec is what the server knows about a job kind: whether a job of it is
-// about a library and a book, and how to check its params.
+// about a library and a book, whether it writes into the library, and how to
+// check its params.
 type kindSpec struct {
 	needsLibrary bool
-	// bookOptional: a path may be given (a book) or not (the library itself).
-	bookOptional bool
-	params       func(json.RawMessage) (json.RawMessage, error)
+	book         bookRule
+	// writes: the job writes into the library, so it is queued only for a
+	// library the Bridge's last heartbeat reports mapped and writable.
+	writes bool
+	params func(json.RawMessage) (json.RawMessage, error)
 }
 
 // kinds are the job kinds the server can queue (and check). A kind the Bridge
 // advertises that isn't here is never queued, and neither is one here that the
 // Bridge doesn't advertise.
 var kinds = map[string]kindSpec{
-	KindVerify: {needsLibrary: true, bookOptional: true, params: verifyParams},
+	KindVerify:   {needsLibrary: true, book: bookOptional, params: verifyParams},
+	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams},
+}
+
+// sidecars.generate's param values (auto and local are the defaults),
+// and the longest work id it takes.
+const (
+	SourceAuto      = "auto"
+	SourceAudio     = "audio"
+	SourceEbook     = "ebook"
+	ContributeLocal = "local"
+	ContributeIssue = "issue"
+	maxWorkIDLen    = 200
+)
+
+// SidecarsParams are sidecars.generate's params as stored: what the run reads
+// (auto picks an ebook when one sits beside the audio), whether the results
+// stay on this server or are also offered upstream as an intake issue, and the
+// community work they are for when the caller knows it.
+type SidecarsParams struct {
+	Source     string `json:"source"`
+	Contribute string `json:"contribute"`
+	WorkID     string `json:"work_id,omitempty"`
+}
+
+// sidecarsParams checks sidecars.generate's params strictly (an unknown field
+// is refused) and returns them with the defaults filled in, so the Bridge reads
+// one complete object.
+func sidecarsParams(raw json.RawMessage) (json.RawMessage, error) {
+	var p SidecarsParams
+	if err := decodeStrict(raw, &p); err != nil {
+		return nil, invalid("params: %v", err)
+	}
+	if p.Source == "" {
+		p.Source = SourceAuto
+	}
+	if p.Contribute == "" {
+		p.Contribute = ContributeLocal
+	}
+	if !slices.Contains([]string{SourceAuto, SourceAudio, SourceEbook}, p.Source) {
+		return nil, invalid("source must be auto, audio or ebook")
+	}
+	if !slices.Contains([]string{ContributeLocal, ContributeIssue}, p.Contribute) {
+		return nil, invalid("contribute must be local or issue")
+	}
+	// The work id is the caller's: the same hygiene as GET /meta/work's id (at
+	// most 200 bytes, no control characters), not a slug grammar.
+	if err := checkText("work_id", p.WorkID, maxWorkIDLen); err != nil {
+		return nil, err
+	}
+	return json.Marshal(p)
 }
 
 // verifyParams checks bridge.verify's params: an optional hold_seconds (0-600)
@@ -238,6 +304,18 @@ type NewJob struct {
 // Bridge has reported yet): a 409.
 var ErrKindUnavailable = errors.New("the paired bridge doesn't run that kind")
 
+// ErrLibraryNotWritable is a job that writes into a library the paired Bridge's
+// last heartbeat doesn't report as mapped and writable (or doesn't report at
+// all): a 409 library_not_writable.
+var ErrLibraryNotWritable = errors.New("the bridge can't write to that library")
+
+// Writable reports whether the Bridge last reported library id as mapped and
+// writable, the condition for a job that writes into it.
+func (st Status) Writable(id int64) bool {
+	l := st.Library(id)
+	return l != nil && l.Mapped && l.Writable
+}
+
 // checkNew validates a request against the kind: known, its params well formed
 // (normalised in place), a library when the kind needs one and a path only when
 // it allows one.
@@ -252,8 +330,11 @@ func checkNew(j *NewJob) error {
 	if !spec.needsLibrary && (j.LibraryID != nil || j.Path != nil) {
 		return invalid("this kind takes no library or path")
 	}
-	if j.Path != nil && !spec.bookOptional {
+	if j.Path != nil && spec.book == bookNone {
 		return invalid("this kind takes no path")
+	}
+	if j.Path == nil && spec.book == bookRequired {
+		return invalid("path is required")
 	}
 	if len(j.Params) > maxParamsBytes {
 		return invalid("params too large")
@@ -269,8 +350,11 @@ func checkNew(j *NewJob) error {
 // Enqueue queues j and returns it, or the open job with the same kind, library
 // and path when there is one (created false). The kind must be one the server
 // knows (ErrInvalid otherwise, as for bad params) and the paired Bridge runs
-// (ErrKindUnavailable); it may be offline, and the job waits. The caller has
-// resolved the library and the book (j.Path is the book's indexed path).
+// (ErrKindUnavailable); it may be offline, and the job waits. A kind that writes
+// into the library is queued only when the last heartbeat reports the library
+// mapped and writable (ErrLibraryNotWritable; the open job is still returned).
+// The caller has resolved the library and the book (j.Path is the book's
+// indexed path).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
 	if err := checkNew(&j); err != nil {
 		return nil, false, err
@@ -282,6 +366,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	if h == nil || !h.Offers(j.Kind) {
 		return nil, false, ErrKindUnavailable
 	}
+	refuse := kinds[j.Kind].writes && !h.Writable(*j.LibraryID)
 	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
 	var expired int64
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
@@ -300,6 +385,9 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		if err == nil {
 			job, err = getJob(ctx, tx, id)
 			return err
+		}
+		if refuse {
+			return ErrLibraryNotWritable
 		}
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at)
@@ -614,16 +702,14 @@ func checkUpdate(u *Update) error {
 // this claim (u.Attempt) in a state the Bridge reports from, and the new state
 // one it may report; a claimed or running job's lease is renewed, a parked
 // one's dropped, a finished one's ended. It returns the job as stored, whose
-// CancelRequested tells the Bridge an admin asked it to stop.
-func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, error) {
+// CancelRequested tells the Bridge an admin asked it to stop, and the state it
+// was in before (Notable says whether the move is one an admin is told about).
+func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (job *Job, from string, err error) {
 	if err := checkUpdate(&u); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	var (
-		job     *Job
-		expired int64
-	)
-	err := s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
+	var expired int64
+	err = s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
 		now := s.ts()
 		n, err := expireTx(ctx, tx, now)
 		if err != nil {
@@ -641,6 +727,7 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		if !slices.Contains(heldStates, cur.State) || cur.Attempts != u.Attempt {
 			return ErrNotHeld
 		}
+		from = cur.State
 		state := cur.State
 		if u.State != nil {
 			if !slices.Contains(reportable, *u.State) {
@@ -675,10 +762,69 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		job, err = getJob(ctx, tx, id)
 		return err
 	})
-	if err == nil && expired > 0 {
+	if err != nil {
+		return nil, "", err
+	}
+	if expired > 0 {
 		s.wake.fire()
 	}
-	return job, err
+	return job, from, nil
+}
+
+// Notable reports whether a job's move from one state to another is one the
+// server tells admins about (notifications): INTO done, failed or
+// needs_attention, never a report that leaves the state as it was (a running
+// job's keepalive, a parked job's progress). A park that resumes by itself (its
+// progress names a retry_at: an agent's rate limit or a short outage) is not
+// news: telling an admin about every one would flood a phone.
+func (j *Job) Notable(from string) bool {
+	if from == j.State {
+		return false
+	}
+	switch j.State {
+	case StateDone, StateFailed:
+		return true
+	case StateNeedsAttention:
+		_, resumes := j.park()
+		return !resumes
+	}
+	return false
+}
+
+// ParkCode is the code of the park a job's progress names (progress.park.code,
+// sidecars.generate's), "" when it names none or can't be read.
+func (j *Job) ParkCode() string {
+	code, _ := j.park()
+	return code
+}
+
+// park reads the park a job's progress names: its code (cleaned, "" for none)
+// and whether it resumes by itself (a retry_at).
+func (j *Job) park() (code string, resumes bool) {
+	var p struct {
+		Park *struct {
+			Code    string `json:"code"`
+			RetryAt string `json:"retry_at"`
+		} `json:"park"`
+	}
+	if json.Unmarshal(j.Progress, &p) != nil || p.Park == nil {
+		return "", false
+	}
+	return cleanText(p.Park.Code, maxShortText, false), p.Park.RetryAt != ""
+}
+
+// OpenJob returns the open job of kind for a book (its dedupe key), or nil when
+// there is none, after expiring lapsed leases (a console read).
+func (s *Service) OpenJob(ctx context.Context, kind string, libraryID int64, path string) (*Job, error) {
+	if err := s.expireDue(ctx); err != nil {
+		return nil, err
+	}
+	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+
+		` WHERE j.dedupe_key = ? AND j.state IN `+OpenStatesSQL, DedupeKey(kind, &libraryID, &path)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return j, err
 }
 
 // ErrFinished is a cancel for a job that already ended (a 409).

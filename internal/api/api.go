@@ -139,6 +139,9 @@ type API struct {
 
 	// bridge is the Bridge's status and job queue (SetBridge, before Handler).
 	bridge *bridge.Service
+	// attachments reads a book's indexed .audiosilo/ attachments for the Bridge's
+	// estimate; nil is the catalog's BookAttachments (a test sets its own).
+	attachments func(ctx context.Context, libraryID int64, relPath string) (*catalog.Attachments, error)
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
@@ -501,6 +504,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/bridge/jobs", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeQueue)))
 	mux.Handle("GET /api/v1/admin/bridge/jobs/{id}", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeJob)))
 	mux.Handle("POST /api/v1/admin/bridge/jobs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeCancel)))
+	mux.Handle("GET /api/v1/admin/bridge/estimate", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeEstimate)))
 
 	// The Bridge's own routes: a bridge token only, and a bridge token nowhere
 	// else (requireBridge).

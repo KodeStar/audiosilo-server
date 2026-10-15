@@ -35,7 +35,13 @@ type bridgeEnv struct {
 
 func newBridgeEnv(t *testing.T) *bridgeEnv {
 	t.Helper()
-	e := newTestEnv(t)
+	return newBridgeEnvOn(t, newTestEnv(t))
+}
+
+// newBridgeEnvOn is newBridgeEnv over a test env the caller built (one with
+// metadata on, say).
+func newBridgeEnvOn(t *testing.T, e *testEnv) *bridgeEnv {
+	t.Helper()
 	ctx := context.Background()
 	b := &bridgeEnv{testEnv: e, lib: newFixtureLibrary(t, e)}
 	b.adminTok, _ = e.auth.IssueToken(ctx, e.adminID, auth.KindSession, "console", 0)
@@ -425,6 +431,7 @@ func TestBridgeAdminRoutesAreAdminOnly(t *testing.T) {
 		{"POST", "/api/v1/admin/bridge/jobs", fmt.Sprintf(`{"kind":"bridge.verify","library_id":%d}`, b.lib.ID)},
 		{"GET", "/api/v1/admin/bridge/jobs/1", ""},
 		{"POST", "/api/v1/admin/bridge/jobs/1/cancel", ""},
+		{"GET", fmt.Sprintf("/api/v1/admin/bridge/estimate?library_id=%d&path=%s", b.lib.ID, url.QueryEscape(mistbornBook)), ""},
 		{"DELETE", "/api/v1/admin/bridge", ""}, // last: it unpairs
 	}
 	for _, r := range routes {
