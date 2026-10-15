@@ -1548,7 +1548,9 @@ future metadata site can attach enrichment without reshaping the schema. The
   server never connects to the Bridge**: it stores intents (jobs) and the Bridge's last heartbeat, and
   the Bridge calls in. **Pairing**: an admin's `POST /admin/bridge/pair` (an API key 403, `denyAPIKey`)
   mints a code (`generateAuthCode`, hashed in `bridge_status`, 15 min, replacing one still waiting; a
-  paired Bridge keeps working until it is exchanged) -> `{code, expires_at, server_url}`; the Bridge's
+  paired Bridge keeps working until it is exchanged) -> `{code, expires_at, server_url}` (`server_url` is the
+  home address when there is one: plain http on the LAN, since a Bridge can't verify a self-signed
+  certificate); the Bridge's
   public `POST /bridge/pair {code}` (the redeem limiter) trades it in ONE transaction
   (`auth.ExchangeBridgeCode`: the code, its expiry, and that the admin who made it is still an enabled
   admin; every earlier bridge token revoked, the old status cleared) for a `tokens` row of kind `bridge`
@@ -1602,7 +1604,8 @@ future metadata site can attach enrichment without reshaping the schema. The
   own `next_before` (it reads one row past the page). Cancel (`POST
   /admin/bridge/jobs/{id}/cancel`) ends a queued or parked job at once, else sets `cancel_requested`.
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
-  server sees now (no path: the library's first book, the mapping check's sample; 404 `no_book`; never an
+  server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
+  first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an
   on-demand index); `POST /bridge/rescan {library_id, path}` re-reads one path (`IndexPath`; 404
   `not_indexable`). Console: `GET /admin/bridge` (pairing, online, heartbeat, kinds, features, each
   library with the Bridge's mapping, workers, `ui_url`), `GET`/`POST /admin/bridge/jobs`, `GET

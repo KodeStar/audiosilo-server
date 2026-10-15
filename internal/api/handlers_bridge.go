@@ -33,9 +33,9 @@ func (a *API) SetBridge(b *bridge.Service) { a.bridge = b }
 var bridgeKinds = []string{auth.KindBridge}
 
 // requireBridge authenticates the paired Bridge's token (Authorization header
-// only). Only a missing or refused token is a 401: the Bridge forgets its token
-// at the first one, so a failure to check the token (the database) is a 503,
-// which it retries.
+// only). Only a missing or refused token is a 401 (the Bridge then stops calling
+// in and retries every few minutes), so a failure to check the token (the
+// database) is a 503, which it retries at once.
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, failure, err := a.authenticate(r, false, bridgeKinds)
@@ -222,9 +222,15 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 // server sees now (the indexed size when a file can't be read), and whether
 // every one is there.
 func statBookFiles(lib *catalog.Library, book *catalog.Book) ([]bridgeFile, bool) {
-	files := make([]bridgeFile, 0, len(book.Files))
+	indexed := book.Files
+	if len(indexed) == 0 {
+		// A single-file book (a loose file at the root, a folder of one book per
+		// file) has no book_files rows: the book is its own file.
+		indexed = []catalog.BookFile{{RelPath: book.RelPath, Size: book.Size}}
+	}
+	files := make([]bridgeFile, 0, len(indexed))
 	present := true
-	for _, f := range book.Files {
+	for _, f := range indexed {
 		bf := bridgeFile{Path: f.RelPath, Size: f.Size}
 		info, err := os.Stat(filepathOf(lib, f.RelPath))
 		if err == nil {
@@ -474,8 +480,15 @@ func (a *API) handleAdminBridgePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "bridge.code", "", nil)
+	// The address to give the Bridge: the home address when there is one (plain
+	// http on the LAN for a self-signed server, whose certificate the Bridge can't
+	// verify), else the address this request used.
+	serverURL := a.baseURL(r)
+	if home := a.addresses(r).Home; home != "" {
+		serverURL = home
+	}
 	writeJSON(w, http.StatusCreated, map[string]string{
-		"code": code, "expires_at": expires, "server_url": a.baseURL(r),
+		"code": code, "expires_at": expires, "server_url": serverURL,
 	})
 }
 

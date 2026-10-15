@@ -340,6 +340,33 @@ func TestBridgeSampleBookSkipsAMissingBook(t *testing.T) {
 	}
 }
 
+// A single-file book has no book_files rows: the mapping check gets the book
+// itself as its one file, with its size.
+func TestBridgeBookSingleFile(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b")
+	if err := os.Rename(filepath.Join(root, "Brandon Sanderson", "Mistborn", "01 - The Final Empire.m4b"), filepath.Join(root, "Loose.m4b")); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := b.cat.CreateLibrary(context.Background(), catalog.Library{Name: "Loose", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanFixture(t, b.testEnv, lib)
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book", lib.ID), b.bridgeTok, "")
+	var out struct {
+		Path  string
+		Files []bridgeFile
+	}
+	decodeInto(t, body, &out)
+	info, _ := os.Stat(filepath.Join(root, "Loose.m4b"))
+	if resp.StatusCode != http.StatusOK || out.Path != "Loose.m4b" || len(out.Files) != 1 ||
+		out.Files[0].Path != "Loose.m4b" || out.Files[0].Size != info.Size() {
+		t.Fatalf("single-file book: %d %s", resp.StatusCode, body)
+	}
+}
+
 func TestBridgeRescan(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
