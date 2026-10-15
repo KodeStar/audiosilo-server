@@ -218,8 +218,10 @@ func TestHeartbeatEstimates(t *testing.T) {
 		"negative spent":   `{"month_spent_usd":-1}`,
 		"wrong type":       `{"samples":"twelve"}`,
 	} {
-		if _, err := decodeStatus(t, `{"estimates":{"sidecars":`+est+`}}`); err == nil {
-			t.Errorf("%s: accepted", name)
+		// Dropped, never refused: a refused heartbeat takes the Bridge offline.
+		st, err := decodeStatus(t, `{"estimates":{"sidecars":`+est+`}}`)
+		if err != nil || (st.Estimates != nil && st.Estimates.Sidecars != nil) {
+			t.Errorf("%s: kept %+v, %v", name, st.Estimates, err)
 		}
 	}
 }

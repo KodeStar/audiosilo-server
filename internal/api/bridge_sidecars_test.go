@@ -166,9 +166,17 @@ func TestBridgeHeartbeatEstimates(t *testing.T) {
 		st.Estimates.Sidecars.AgentUSDPerAudioHour != nil || !strings.Contains(body, `"agent_usd_per_audio_hour":null`) {
 		t.Fatalf("admin bridge estimates: %s", body)
 	}
-	resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, `{"version":"0.2.0","estimates":{"sidecars":{"samples":-1}}}`)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("a negative figure: %d %s, want 400", resp.StatusCode, out)
+	// A figure out of bounds or of the wrong type drops the block, never the
+	// heartbeat (a refused heartbeat would take the Bridge offline).
+	for _, bad := range []string{`{"sidecars":{"samples":-1}}`, `{"sidecars":{"asr_seconds_per_audio_hour":"fast"}}`} {
+		resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, `{"version":"0.2.0","kinds":["bridge.verify"],"estimates":`+bad+`}`)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("estimates %s: %d %s, want 200", bad, resp.StatusCode, out)
+		}
+		_, body := b.do(t, "GET", "/api/v1/admin/bridge", b.adminTok, "")
+		if strings.Contains(body, `"sidecars"`) {
+			t.Fatalf("estimates %s kept: %s", bad, body)
+		}
 	}
 	// None sent: none shown.
 	b.beat(t, bridge.KindVerify)

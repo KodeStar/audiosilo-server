@@ -73,43 +73,46 @@ type SidecarsEstimates struct {
 
 // UnmarshalJSON reads estimates leniently: the heartbeat's decoder refuses
 // unknown fields, but the figures are the Bridge's to extend, so a key the server
-// doesn't know is ignored here instead (Validate still bounds what it keeps).
+// doesn't know is ignored here instead, and a block that doesn't decode (a figure
+// of the wrong type) is dropped rather than refusing the heartbeat: estimates only
+// cost a dialog, while a refused heartbeat takes the Bridge offline. Validate
+// still bounds what it keeps.
 func (e *Estimates) UnmarshalJSON(b []byte) error {
 	type lenient Estimates
-	return json.Unmarshal(b, (*lenient)(e))
+	var v lenient
+	if err := json.Unmarshal(b, &v); err != nil {
+		*e = Estimates{}
+		return nil
+	}
+	*e = Estimates(v)
+	return nil
 }
 
 // Bounds on the estimates: far above anything real, so a figure past one is a
-// Bridge bug, refused like a malformed kind.
+// Bridge bug, and its block is dropped.
 const (
 	maxEstimateSeconds = 30 * 24 * 3600 // per audio hour
 	maxEstimateUSD     = 1_000_000
 	maxEstimateSamples = 1_000_000_000
 )
 
-// validate bounds the estimates: every number at least 0 and under its bound,
-// the backend's name cleaned to printable bounded text.
-func (e *Estimates) validate() error {
+// validate bounds the estimates: a block with a number below 0 or over its bound
+// is dropped (the dialog then says there is no estimate), never refused, and the
+// backend's name is cleaned to printable bounded text.
+func (e *Estimates) validate() {
 	if e == nil || e.Sidecars == nil {
-		return nil
+		return
 	}
 	sc := e.Sidecars
-	if !inRange(sc.ASRSecondsPerAudioHour, maxEstimateSeconds) {
-		return invalid("estimates.sidecars.asr_seconds_per_audio_hour")
+	ok := inRange(sc.ASRSecondsPerAudioHour, maxEstimateSeconds) && sc.Samples >= 0 && sc.Samples <= maxEstimateSamples
+	for _, v := range []*float64{sc.AgentUSDPerAudioHour, sc.AgentUSDPerEbook, &sc.MonthlyBudgetUSD, &sc.MonthSpentUSD} {
+		ok = ok && (v == nil || inRange(*v, maxEstimateUSD))
 	}
-	for name, v := range map[string]*float64{
-		"agent_usd_per_audio_hour": sc.AgentUSDPerAudioHour, "agent_usd_per_ebook": sc.AgentUSDPerEbook,
-		"monthly_budget_usd": &sc.MonthlyBudgetUSD, "month_spent_usd": &sc.MonthSpentUSD,
-	} {
-		if v != nil && !inRange(*v, maxEstimateUSD) {
-			return invalid("estimates.sidecars.%s", name)
-		}
-	}
-	if sc.Samples < 0 || sc.Samples > maxEstimateSamples {
-		return invalid("estimates.sidecars.samples")
+	if !ok {
+		e.Sidecars = nil
+		return
 	}
 	sc.AgentBackend = cleanText(sc.AgentBackend, maxShortText, false)
-	return nil
 }
 
 // inRange reports whether v is a number from 0 to max (JSON carries no NaN or
@@ -207,7 +210,7 @@ func invalid(format string, args ...any) error {
 // Validate checks a heartbeat before it is stored: kinds are well formed and
 // listed once, libraries listed once by a positive id, and ui_url, which the
 // console renders as a link, is an absolute http(s) URL or empty (anything else
-// is refused), as is an estimate out of its bounds. Its free text (the version,
+// is refused). An estimate out of its bounds is dropped. Its free text (the version,
 // each mapping's paths and error, the workers, the estimates' backend) is
 // cleaned to printable bounded text instead (cleanText).
 func (st *Status) Validate() error {
@@ -249,9 +252,7 @@ func (st *Status) Validate() error {
 			return invalid("ui_url must be an http(s) URL")
 		}
 	}
-	if err := st.Estimates.validate(); err != nil {
-		return err
-	}
+	st.Estimates.validate()
 	if st.Kinds == nil {
 		st.Kinds = []string{}
 	}
