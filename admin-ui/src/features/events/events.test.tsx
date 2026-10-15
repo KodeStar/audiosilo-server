@@ -64,4 +64,55 @@ describe('events page', () => {
       .selectOptions(screen.getByRole('combobox', { name: 'Kind of event' }), 'backup_failed');
     expect(await screen.findByText('None of these in the last 90 days')).toBeInTheDocument();
   });
+
+  it('words a Bridge job that ended, and filters by the Bridge kinds', async () => {
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/events': {
+          body: {
+            events: [
+              ev(12, {
+                kind: 'bridge_job_finished',
+                data: {
+                  job_kind: 'sidecars.generate',
+                  state: 'done',
+                  title: 'Dune',
+                  path: 'F/Dune',
+                },
+              }),
+              ev(11, {
+                kind: 'bridge_job_failed',
+                data: {
+                  job_kind: 'sidecars.generate',
+                  state: 'needs_attention',
+                  code: 'core_needed',
+                  title: 'Emma',
+                },
+              }),
+            ],
+            next_before: 0,
+          },
+        },
+      }),
+    );
+    renderApp('/server/events');
+    const list = await screen.findByRole('region', { name: 'Events' });
+    expect(within(list).getByText('Characters and recaps ready for Dune')).toBeInTheDocument();
+    expect(within(list).getByText('Bridge job needs attention: Emma')).toBeInTheDocument();
+    expect(
+      within(list).getByText(
+        'The community has no entry for this book yet. Add one on the Bridge to contribute.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(list).getByRole('link', { name: /Characters and recaps ready for Dune/ }),
+    ).toHaveAttribute('href', '/admin/server?topic=bridge');
+    const kinds = screen.getByRole('combobox', { name: 'Kind of event' });
+    expect(
+      within(kinds).getByRole('option', { name: 'A Bridge job finished' }),
+    ).toBeInTheDocument();
+    expect(
+      within(kinds).getByRole('option', { name: 'A Bridge job failed or needs attention' }),
+    ).toBeInTheDocument();
+  });
 });

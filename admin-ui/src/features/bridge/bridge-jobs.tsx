@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, ListChecks, X } from 'lucide-react';
 import type { BridgeJob } from '@/api/types';
@@ -8,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
+import { bookRoute } from '@/lib/book-route';
 import { formatDateTime, formatNumber, formatRelative, formatTook } from '@/lib/format';
 import { CardEmpty } from '@/features/settings/card-empty';
 import { cancelJob } from './bridge-actions';
@@ -20,19 +22,24 @@ import {
   resultSummary,
   stateLook,
 } from './bridge-model';
+import { KIND_GENERATE } from './generate-model';
+import { GenerateStatus } from './generate-status';
 import { useBridgeJobs } from './use-bridge';
 
 /**
  * The Bridge's jobs, newest first, a page at a time, maybe in one state: what
  * each is about, where it stands, who asked, and Cancel for an open one.
  * `hideWhenEmpty` (no Bridge paired) renders nothing until there is a job.
+ * `uiUrl` (the Bridge's own page) links a parked generate job into it.
  */
 export function JobsCard({
   libraryNames,
   hideWhenEmpty = false,
+  uiUrl,
 }: {
   libraryNames: ReadonlyMap<number, string>;
   hideWhenEmpty?: boolean;
+  uiUrl?: string;
 }) {
   const { t } = useTranslation();
   const [state, setState] = useState('');
@@ -85,7 +92,7 @@ export function JobsCard({
       ) : (
         <ul className="flex flex-col divide-y" aria-label={t('bridge.jobs.title')}>
           {rows.map((j) => (
-            <JobRow key={j.id} job={j} libraryNames={libraryNames} />
+            <JobRow key={j.id} job={j} libraryNames={libraryNames} uiUrl={uiUrl} />
           ))}
         </ul>
       )}
@@ -108,9 +115,11 @@ export function JobsCard({
 function JobRow({
   job,
   libraryNames,
+  uiUrl,
 }: {
   job: BridgeJob;
   libraryNames: ReadonlyMap<number, string>;
+  uiUrl?: string;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -125,8 +134,10 @@ function JobRow({
       ? ''
       : (libraryNames.get(job.library_id) ??
         t('bridge.jobs.libraryId', { id: formatNumber(job.library_id, lang) }));
-  const progress = progressOf(job.progress);
-  const summary = resultSummary(job.result);
+  // A generate job words its progress and result its own way (GenerateStatus).
+  const generate = job.kind === KIND_GENERATE;
+  const progress: ReturnType<typeof progressOf> = generate ? {} : progressOf(job.progress);
+  const summary = generate ? null : resultSummary(job.result);
   const details = hasContent(job.result) || hasContent(job.params);
 
   const meta = [
@@ -167,7 +178,17 @@ function JobRow({
               {job.path ? (
                 <>
                   {' · '}
-                  <span className="font-mono text-[12px]">{job.path}</span>
+                  {generate && job.library_id !== null ? (
+                    // A book's job links to its page (the job knows the path, not the title).
+                    <Link
+                      {...bookRoute(job.library_id, job.path)}
+                      className="font-mono text-[12px] hover:underline"
+                    >
+                      {job.path}
+                    </Link>
+                  ) : (
+                    <span className="font-mono text-[12px]">{job.path}</span>
+                  )}
                 </>
               ) : (
                 <span className="text-muted-foreground"> · {t('bridge.jobs.wholeLibrary')}</span>
@@ -220,7 +241,9 @@ function JobRow({
           ) : null}
         </div>
       </div>
-      {job.error ? (
+      {generate ? (
+        <GenerateStatus job={job} uiUrl={uiUrl} />
+      ) : job.error ? (
         <p className="text-[12.5px] text-destructive [overflow-wrap:anywhere]">{job.error}</p>
       ) : null}
       {summary ? <ResultLine summary={summary} lang={lang} /> : null}

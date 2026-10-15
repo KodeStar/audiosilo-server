@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
   Cpu,
@@ -14,7 +15,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/api/client';
 import { keys } from '@/api/hooks';
-import type { BridgeLibrary, BridgeStatus } from '@/api/types';
+import type { BridgeLibrary, BridgeStatus, SidecarsEstimates } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DangerZone } from '@/components/danger-zone';
 import { FactList } from '@/components/fact-list';
@@ -26,7 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { toastError } from '@/lib/errors';
-import { formatDateTime, formatList, formatRelative } from '@/lib/format';
+import { formatDateTime, formatList, formatNumber, formatRelative, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { CardEmpty } from '@/features/settings/card-empty';
@@ -177,7 +178,7 @@ function Paired({
       <StatusCard status={status} onPair={onPair} making={making} />
       <LibrariesCard status={status} />
       <WorkersCard status={status} />
-      <JobsCard libraryNames={libraryNames} />
+      <JobsCard libraryNames={libraryNames} uiUrl={status.ui_url} />
       <UnpairZone />
     </>
   );
@@ -198,6 +199,7 @@ function StatusCard({
   const link = safeHttpUrl(status.ui_url);
   const heard = status.heartbeat_at ? formatRelative(status.heartbeat_at, lang) : undefined;
   const kinds = status.kinds.map((k) => kindName(t, k));
+  const sidecars = status.estimates?.sidecars;
 
   return (
     <Card aria-labelledby="bridge-title">
@@ -271,6 +273,7 @@ function StatusCard({
                 <span className="text-muted-foreground">{t('bridge.status.notYet')}</span>
               ),
             ],
+            ...(sidecars ? estimateRows(sidecars, t, lang) : []),
           ]}
         />
       </div>
@@ -293,6 +296,52 @@ function StatusCard({
       </div>
     </Card>
   );
+}
+
+/**
+ * What the Bridge's last heartbeat says about characters and recaps: its agent
+ * (and whether it's ready), how it is paid for, this month's spend against the
+ * cap, and how many finished books its estimates come from.
+ */
+function estimateRows(
+  e: SidecarsEstimates,
+  t: TFunction,
+  lang: string,
+): [string, React.ReactNode][] {
+  const spent = formatUsd(e.month_spent_usd, lang);
+  return [
+    [
+      t('bridge.estimates.agent'),
+      e.agent_backend ? (
+        <span className="inline-flex flex-wrap items-center gap-x-2">
+          <span className="font-mono text-[12.5px]">{e.agent_backend}</span>
+          <StatusText tone={e.agent_ready ? 'ok' : 'warn'}>
+            {e.agent_ready ? t('bridge.estimates.ready') : t('bridge.estimates.notReady')}
+          </StatusText>
+        </span>
+      ) : (
+        <StatusText tone="off">{t('bridge.estimates.agentNone')}</StatusText>
+      ),
+    ],
+    [
+      t('bridge.estimates.billing'),
+      e.subscription ? t('bridge.estimates.subscription') : t('bridge.estimates.apiKey'),
+    ],
+    [
+      t('bridge.estimates.month'),
+      e.monthly_budget_usd > 0
+        ? t('bridge.estimates.monthOf', { spent, budget: formatUsd(e.monthly_budget_usd, lang) })
+        : t('bridge.estimates.monthNoCap', { spent }),
+    ],
+    [
+      t('bridge.estimates.history'),
+      e.samples > 0 ? (
+        t('bridge.estimates.historyBooks', { count: e.samples, n: formatNumber(e.samples, lang) })
+      ) : (
+        <span className="text-muted-foreground">{t('bridge.estimates.historyNone')}</span>
+      ),
+    ],
+  ];
 }
 
 /** Each server library as the Bridge maps it, with Verify. */

@@ -1,0 +1,310 @@
+import { useId, useState } from 'react';
+import { Link } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { Bot, LockKeyhole, Sparkles } from 'lucide-react';
+import type { BridgeEstimate } from '@/api/types';
+import { FactList } from '@/components/fact-list';
+import { Notice } from '@/components/notice';
+import { QueryError } from '@/components/query-error';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
+import { FormError } from '@/components/ui/field';
+import { Switch } from '@/components/ui/switch';
+import { formatDuration, formatHours, formatNumber, formatUsd } from '@/lib/format';
+import { toast } from '@/lib/toast';
+import { destinationKey, estimateView, generatePlan } from './generate-model';
+import { generateError, queueInOrder, useGenerateEstimate } from './use-generate';
+
+/**
+ * Generate characters and recaps for one book: what it will read (the audio,
+ * or the ebook found beside it), the transcription and agent cost the Bridge's
+ * history predicts, where the results appear, a contribute choice (this server
+ * only by default), and the earlier books of the series without recaps, queued
+ * first. Nothing can be queued while the Bridge can't write to the library.
+ */
+export function GenerateDialog({
+  open,
+  onOpenChange,
+  book,
+  regenerate,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  book: { library_id: number; path: string; title: string };
+  regenerate: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        title={regenerate ? t('bridge.generate.dialogRegen') : t('bridge.generate.dialog')}
+        description={book.title || book.path}
+        icon={Sparkles}
+        tone="community"
+      >
+        {open ? (
+          <GenerateForm book={book} regenerate={regenerate} onDone={() => onOpenChange(false)} />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function GenerateForm({
+  book,
+  regenerate,
+  onDone,
+}: {
+  book: { library_id: number; path: string; title: string };
+  regenerate: boolean;
+  onDone: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const qc = useQueryClient();
+  const estimate = useGenerateEstimate(book.library_id, book.path, true, true);
+  const [contribute, setContribute] = useState(false);
+  const [includeEarlier, setIncludeEarlier] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const e = estimate.data;
+  const earlier = e?.earlier ?? [];
+  const plan = generatePlan(book, earlier, {
+    includeEarlier: includeEarlier && earlier.length > 0,
+    contribute: contribute ? 'issue' : 'local',
+  });
+  const canConfirm = Boolean(e && estimateView(e).canConfirm);
+
+  const submit = async (ev: React.FormEvent) => {
+    ev.preventDefault();
+    if (!canConfirm || busy) return;
+    setBusy(true);
+    setError(undefined);
+    const out = await queueInOrder(qc, plan);
+    setBusy(false);
+    if (out.error !== undefined) {
+      const why = generateError(out.error, t);
+      setError(
+        out.queued
+          ? t('bridge.generate.partial', {
+              done: formatNumber(out.queued, lang),
+              total: formatNumber(plan.length, lang),
+              error: why,
+            })
+          : why,
+      );
+      return;
+    }
+    toast.add({
+      title: t('bridge.generate.queued'),
+      description:
+        plan.length > 1
+          ? t('bridge.generate.queuedMany', {
+              count: plan.length,
+              n: formatNumber(plan.length, lang),
+            })
+          : t('bridge.generate.queuedBody'),
+      type: 'success',
+    });
+    onDone();
+  };
+
+  return (
+    <form onSubmit={(ev) => void submit(ev)} className="contents" noValidate>
+      <DialogBody className="flex flex-col gap-4">
+        {estimate.isError ? (
+          <QueryError
+            title={t('bridge.generate.estimateError')}
+            error={estimate.error}
+            onRetry={() => void estimate.refetch()}
+          />
+        ) : !e ? (
+          <div className="skel h-40 rounded-lg" role="status" aria-label={t('common.loading')} />
+        ) : (
+          <EstimateBody
+            estimate={e}
+            regenerate={regenerate}
+            contribute={contribute}
+            onContribute={setContribute}
+            includeEarlier={includeEarlier}
+            onIncludeEarlier={setIncludeEarlier}
+          />
+        )}
+        <FormError>{error}</FormError>
+      </DialogBody>
+      <DialogFormFooter
+        busy={busy}
+        disabled={!canConfirm}
+        submitLabel={
+          plan.length > 1
+            ? t('bridge.generate.submitMany', {
+                count: plan.length,
+                n: formatNumber(plan.length, lang),
+              })
+            : t('bridge.generate.submit')
+        }
+      />
+    </form>
+  );
+}
+
+/** The estimate's facts, the choices, and what warns or stops. */
+function EstimateBody({
+  estimate,
+  regenerate,
+  contribute,
+  onContribute,
+  includeEarlier,
+  onIncludeEarlier,
+}: {
+  estimate: BridgeEstimate;
+  regenerate: boolean;
+  contribute: boolean;
+  onContribute: (on: boolean) => void;
+  includeEarlier: boolean;
+  onIncludeEarlier: (on: boolean) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const id = useId();
+  const v = estimateView(estimate);
+  const noEstimate = (
+    <span className="text-muted-foreground">{t('bridge.generate.noEstimate')}</span>
+  );
+  const earlier = estimate.earlier;
+
+  return (
+    <>
+      {v.notWritable ? (
+        <Notice
+          tone="bad"
+          icon={LockKeyhole}
+          role="alert"
+          title={t('bridge.generate.notWritable')}
+          actions={
+            <Link
+              to="/server/{-$section}"
+              params={{ section: undefined }}
+              search={{ topic: 'bridge' }}
+              className="text-[13px] font-semibold text-brand-ink hover:underline"
+            >
+              {t('bridge.generate.openSettings')}
+            </Link>
+          }
+        >
+          {t('bridge.generate.notWritableBody')}
+        </Notice>
+      ) : null}
+      {v.agentNotReady ? (
+        <Notice tone="warn" icon={Bot} title={t('bridge.generate.agentNotReady')}>
+          {t('bridge.generate.agentNotReadyBody')}
+        </Notice>
+      ) : null}
+      <FactList
+        rows={[
+          [
+            t('bridge.generate.source'),
+            v.ebook ? (
+              <span className="flex flex-col">
+                <span>{t('bridge.generate.sourceEbook')}</span>
+                <span
+                  className="font-mono text-[12px] font-normal text-muted-foreground"
+                  title={v.ebook.path}
+                >
+                  {v.ebook.name}
+                </span>
+              </span>
+            ) : (
+              t('bridge.generate.sourceAudio')
+            ),
+          ],
+          ...(estimate.duration_seconds > 0
+            ? [
+                [t('bridge.generate.length'), formatDuration(estimate.duration_seconds, lang)] as [
+                  string,
+                  React.ReactNode,
+                ],
+              ]
+            : []),
+          [
+            t('bridge.generate.asr'),
+            v.asrHours === 0
+              ? t('bridge.generate.asrNone')
+              : v.asrHours === null
+                ? noEstimate
+                : t('bridge.generate.about', { what: formatHours(v.asrHours * 3600, lang) }),
+          ],
+          [
+            t('bridge.generate.cost'),
+            v.costUsd === null
+              ? noEstimate
+              : v.subscription
+                ? t('bridge.generate.costUsage', { cost: formatUsd(v.costUsd, lang) })
+                : t('bridge.generate.about', { what: formatUsd(v.costUsd, lang) }),
+          ],
+          [t('bridge.generate.where'), t(destinationKey(contribute ? 'issue' : 'local'))],
+        ]}
+      />
+      {v.subscription ? (
+        <p className="text-[12.5px] text-muted-foreground">
+          {t('bridge.generate.subscriptionNote')}
+        </p>
+      ) : null}
+      {regenerate ? (
+        <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.replaces')}</p>
+      ) : null}
+      <label
+        htmlFor={`${id}-contribute`}
+        className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border px-4 py-3"
+      >
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-semibold">{t('bridge.generate.contribute')}</span>
+          <span className="text-[12.5px] text-muted-foreground">
+            {t('bridge.generate.contributeBody')}
+          </span>
+        </span>
+        <Switch
+          id={`${id}-contribute`}
+          checked={contribute}
+          onCheckedChange={(on) => onContribute(on)}
+        />
+      </label>
+      {earlier.length ? (
+        <div className="flex flex-col gap-2 rounded-lg border px-4 py-3">
+          <label htmlFor={`${id}-earlier`} className="flex cursor-pointer items-start gap-2.5">
+            <Checkbox
+              id={`${id}-earlier`}
+              className="mt-0.5"
+              checked={includeEarlier}
+              onCheckedChange={(on) => onIncludeEarlier(on)}
+            />
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="font-semibold">
+                {t('bridge.generate.earlier', {
+                  count: earlier.length,
+                  n: formatNumber(earlier.length, lang),
+                })}
+              </span>
+              <span className="text-[12.5px] text-muted-foreground">
+                {t('bridge.generate.earlierBody')}
+              </span>
+            </span>
+          </label>
+          <ol className="ml-7 flex flex-col gap-0.5 text-[12.5px]">
+            {earlier.map((b) => (
+              <li key={b.path} className="flex min-w-0 gap-2">
+                {b.series_index ? (
+                  <span className="w-8 shrink-0 text-right text-muted-foreground tabular-nums">
+                    {b.series_index}
+                  </span>
+                ) : null}
+                <span className="min-w-0 [overflow-wrap:anywhere]">{b.title || b.path}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </>
+  );
+}

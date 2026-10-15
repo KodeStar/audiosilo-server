@@ -89,6 +89,21 @@ export function formatTook(seconds: number, lang: string): string {
   return `${unit(Math.floor(m / 60), 'hour', lang)} ${unit(m % 60, 'minute', lang)}`;
 }
 
+/**
+ * US dollars, the currency agent costs are in: "$0.42", "$12.50", "$140" (cents
+ * dropped from $100 up, where they stop meaning anything in an estimate).
+ */
+export function formatUsd(usd: number, lang: string): string {
+  const v = Number.isFinite(usd) ? Math.max(0, usd) : 0;
+  const cents = v < 100 ? 2 : 0;
+  return numberFormat(lang, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: cents,
+    maximumFractionDigits: cents,
+  }).format(v);
+}
+
 const BYTE_UNITS = ['byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const;
 
 /** "1.3 GB": decimal units, one decimal under 10. */
