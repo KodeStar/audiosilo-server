@@ -4,11 +4,13 @@ import {
   Archive,
   Bell,
   BookPlus,
+  CircleAlert,
   MailCheck,
   MonitorSmartphone,
   Package,
   TriangleAlert,
   Unplug,
+  Waypoints,
   type LucideIcon,
 } from 'lucide-react';
 import type { ServerEvent, ServerEventKind } from '@/api/types';
@@ -28,6 +30,8 @@ const ICONS: Record<ServerEventKind, LucideIcon> = {
   invite_redeemed: MailCheck,
   update_available: Package,
   backup_failed: Archive,
+  bridge_job_finished: Waypoints,
+  bridge_job_failed: CircleAlert,
 };
 
 const TONE: Record<EventTone, string> = {

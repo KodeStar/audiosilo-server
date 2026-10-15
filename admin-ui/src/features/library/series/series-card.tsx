@@ -1,12 +1,15 @@
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Trans, useTranslation } from 'react-i18next';
+import { Sparkles } from 'lucide-react';
 import { useBookMeta, useBookWorks } from '@/api/hooks';
 import type { AdminBook, SeriesCount } from '@/api/types';
 import { BooksLink } from '@/components/books-link';
 import { BookCover } from '@/components/book-cover';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { SeriesGenerateDialog } from '@/features/bridge/series-generate-dialog';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { counted, formatNumber } from '@/lib/format';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -37,6 +40,7 @@ export function SeriesCard({
   books,
   complete,
   metadata,
+  generate = false,
 }: {
   series: SeriesCount;
   /** The series' books loaded so far, in series order. */
@@ -45,6 +49,8 @@ export function SeriesCard({
   complete: boolean;
   /** Community metadata is on. */
   metadata: boolean;
+  /** An online Bridge offers characters and recaps: Generate for the series. */
+  generate?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -79,6 +85,8 @@ export function SeriesCard({
   const known = status && status.total > 0 ? status : undefined;
   const unmatched = metadata && complete && (!candidate || meta.data?.matched === false);
   const fmt = (n: number) => formatNumber(n, lang);
+  const [generating, setGenerating] = useState(false);
+  const canGenerate = generate && complete && books.length > 0;
 
   return (
     <section
@@ -105,22 +113,40 @@ export function SeriesCard({
             <span className="text-[12.5px] text-subtle-foreground">{t('series.noMatch')}</span>
           ) : null}
         </div>
-        {known ? (
-          <div className="flex items-center gap-2">
-            <ProvenanceMarker source="community" />
-            <Badge
-              variant={known.missing.length ? 'warning' : 'success'}
-              className="tabular-nums"
-              aria-label={t('series.badge', {
-                have: fmt(known.have.length),
-                total: fmt(known.total),
-              })}
-            >
-              {known.have.length}/{known.total}
-            </Badge>
+        {known || canGenerate ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {canGenerate ? (
+              <Button variant="ghost" size="sm" onClick={() => setGenerating(true)}>
+                <Sparkles aria-hidden="true" />
+                {t('bridge.series.action')}
+              </Button>
+            ) : null}
+            {known ? (
+              <>
+                <ProvenanceMarker source="community" />
+                <Badge
+                  variant={known.missing.length ? 'warning' : 'success'}
+                  className="tabular-nums"
+                  aria-label={t('series.badge', {
+                    have: fmt(known.have.length),
+                    total: fmt(known.total),
+                  })}
+                >
+                  {known.have.length}/{known.total}
+                </Badge>
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>
+      {canGenerate ? (
+        <SeriesGenerateDialog
+          open={generating}
+          onOpenChange={setGenerating}
+          series={s.name}
+          books={books}
+        />
+      ) : null}
       {books.length === 0 && !complete ? (
         <div className="skel h-[200px] rounded-lg" role="status" aria-label={t('common.loading')} />
       ) : (

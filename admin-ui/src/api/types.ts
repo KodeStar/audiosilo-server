@@ -18,7 +18,11 @@ export interface ServerInfo {
     api_keys: boolean;
     export: boolean;
     metadata: boolean;
+    /** A Bridge is paired and online (its heartbeat is under two minutes old); absent before Phase 0. */
+    bridge?: boolean;
   };
+  /** The online Bridge's version and job families ("sidecars"), only while capabilities.bridge. */
+  bridge?: { version: string; features: string[] };
   auth: { methods: string[] };
   demo: { enabled: boolean };
 }
@@ -766,7 +770,9 @@ export type ServerEventKind =
   | 'new_device'
   | 'invite_redeemed'
   | 'update_available'
-  | 'backup_failed';
+  | 'backup_failed'
+  | 'bridge_job_finished'
+  | 'bridge_job_failed';
 
 export type NotifyTargetKind = 'webhook' | 'ntfy' | 'discord';
 
@@ -2160,6 +2166,34 @@ export interface BridgeStatus {
   workers: BridgeWorker[];
   /** The Bridge's own LAN page (an absolute http(s) URL). */
   ui_url?: string;
+  /** What the Bridge's history says jobs cost (its last heartbeat's; absent before it sends any). */
+  estimates?: BridgeEstimates;
+}
+
+/** The heartbeat's `estimates` (PUT /bridge/status), per job family. */
+export interface BridgeEstimates {
+  sidecars?: SidecarsEstimates;
+}
+
+/** What `sidecars.generate` costs on this Bridge, from the books it has finished. */
+export interface SidecarsEstimates {
+  /** ASR wall time per hour of audio. */
+  asr_seconds_per_audio_hour: number;
+  /** Agent spend per hour of audio; null before any history. */
+  agent_usd_per_audio_hour: number | null;
+  /** Agent spend per ebook; null before any history. */
+  agent_usd_per_ebook: number | null;
+  /** Finished books the figures come from. */
+  samples: number;
+  /** "claude", "codex", or "" when none. */
+  agent_backend: string;
+  /** The agent container answers and has a credential. */
+  agent_ready: boolean;
+  /** The credential is a subscription login: costs are an estimate of usage, not a bill. */
+  subscription: boolean;
+  /** 0 = no monthly cap. */
+  monthly_budget_usd: number;
+  month_spent_usd: number;
 }
 
 /** POST /admin/bridge/pair: the code, shown once (15 minutes). */
@@ -2208,4 +2242,100 @@ export interface BridgeJobRequest {
   /** A book (its indexed path); without it the job is about the library. */
   path?: string;
   params?: Record<string, unknown>;
+}
+
+// Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a): the
+// `sidecars.generate` job kind. The server stores progress and result opaquely;
+// these are the shapes the Bridge sends, read leniently (generate-model.ts).
+
+/** sidecars.generate's params (the server fills in the defaults). */
+export interface SidecarsGenerateParams {
+  /** "auto" (the default) reads an .epub beside the audio when there is one. */
+  source?: 'auto' | 'audio' | 'ebook';
+  /** "local" (the default) writes to the book's folder only; "issue" also offers it to the community. */
+  contribute?: 'local' | 'issue';
+  /** The community work, when known. */
+  work_id?: string;
+}
+
+/** Why a parked sidecars.generate job is waiting (progress.park). */
+export interface SidecarsPark {
+  /** The engine's park code ("core_needed", "budget_exceeded", ...). */
+  code: string;
+  hint?: string;
+  /** RFC 3339: an availability park resumes by itself then. */
+  retry_at?: string;
+}
+
+/** sidecars.generate's progress. */
+export interface SidecarsProgress {
+  /** An engine stage name, or "waiting" | "writing" | "rescanning". */
+  step: string;
+  message?: string;
+  done?: number;
+  total?: number;
+  /** The engine state when known. */
+  stage?: string;
+  /** The engine's whole-book ETA. */
+  eta_seconds?: number;
+  /** Agent spend so far. */
+  cost_usd?: number;
+  source?: 'audio' | 'ebook';
+  /** Present only while parked (state needs_attention). */
+  park?: SidecarsPark;
+}
+
+/** sidecars.generate's result on done. */
+export interface SidecarsResult {
+  library_id: number;
+  path: string;
+  source: 'audio' | 'ebook';
+  /** The names written into the book's .audiosilo/ folder. */
+  files: string[];
+  characters: number;
+  recaps: number;
+  cost_usd: number;
+  work_id: string;
+  /** The community issues filed, by what they offer (contribute "issue" only). */
+  contributed?: Record<string, string>;
+}
+
+/** Which characters and recaps a book has, from the community and from its own folder. */
+export interface SidecarsCoverage {
+  characters: boolean;
+  recaps: boolean;
+}
+
+/** An earlier book of the series without recaps (the estimate's `earlier`). */
+export interface EarlierBook {
+  library_id: number;
+  path: string;
+  title: string;
+  /** As the server stores it ("1", "2.5"). */
+  series_index: string;
+}
+
+/** GET /admin/bridge/estimate?library_id=&path=&kind=sidecars.generate. */
+export interface BridgeEstimate {
+  kind: string;
+  library_id: number;
+  path: string;
+  /** "ebook" when an .epub sits directly in the book's folder. */
+  source: 'audio' | 'ebook';
+  /** The ebook's library path (absent for audio). */
+  ebook?: string;
+  duration_seconds: number;
+  /** 0 for an ebook. */
+  asr_hours: number;
+  /** null while the Bridge has no history. */
+  agent_cost_usd: number | null;
+  subscription: boolean;
+  agent_ready: boolean;
+  /** The library is mapped and writable on the Bridge. */
+  writable: boolean;
+  has: { community: SidecarsCoverage; local: SidecarsCoverage };
+  /** Earlier books of the series without recaps, in reading order (at most 10). */
+  earlier: EarlierBook[];
+  /** An open sidecars.generate job for this book. */
+  open_job?: BridgeJob;
 }

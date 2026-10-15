@@ -9,6 +9,7 @@ import type {
   AuditFilter,
   AuditPage,
   BackupsEnvelope,
+  BridgeEstimate,
   BridgeJob,
   BridgeJobPage,
   BridgeJobRequest,
@@ -386,8 +387,25 @@ export const api = {
   /** Revokes the Bridge's token; its jobs stay, queued ones wait for the next Bridge. */
   unpairBridge: () => request<void>('DELETE', '/admin/bridge'),
   /** Jobs newest first; `before` is the previous page's next_before. */
-  bridgeJobs: (opts: { state?: string; before?: number; limit?: number } = {}) =>
-    request<BridgeJobPage>('GET', `/admin/bridge/jobs${bookQuery(opts)}`),
+  bridgeJobs: (
+    opts: {
+      state?: string;
+      before?: number;
+      limit?: number;
+      /** One book's jobs (with `path`), or one library's. */
+      library_id?: number;
+      path?: string;
+    } = {},
+  ) => request<BridgeJobPage>('GET', `/admin/bridge/jobs${bookQuery(opts)}`),
+  /**
+   * What a job would cost for one book (the generate dialog): 404 when the book
+   * isn't indexed, 409 kind_unavailable when the Bridge doesn't offer the kind.
+   */
+  bridgeEstimate: (libraryId: number, path: string, kind: string) =>
+    request<BridgeEstimate>(
+      'GET',
+      `/admin/bridge/estimate${bookQuery({ library_id: libraryId, path, kind })}`,
+    ),
   /** Queued (cancelled at once) or running (asked to stop); 409 finished once it ended. */
   cancelBridgeJob: (id: number) => request<BridgeJob>('POST', `/admin/bridge/jobs/${id}/cancel`),
   /**

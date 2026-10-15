@@ -68,6 +68,9 @@ const BY_CODE: Record<string, string> = {
   // job that already ended.
   kind_unavailable: 'errors.kindUnavailable',
   finished: 'errors.jobFinished',
+  // Queueing a job that writes (sidecars.generate) for a library the Bridge's
+  // last heartbeat doesn't report as mapped and writable.
+  library_not_writable: 'errors.libraryNotWritable',
 };
 
 /** A failure as one sentence for a toast or a field. */
