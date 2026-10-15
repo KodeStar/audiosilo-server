@@ -118,7 +118,8 @@ func TestFeaturesIncludeSidecars(t *testing.T) {
 }
 
 // UpdateHeld reports the state a job was in, and Notable picks the moves an
-// admin is told about: into done, failed or needs_attention, once each.
+// admin is told about: into done, failed or needs_attention (not a park
+// that resumes by itself), once each.
 func TestUpdateHeldReportsTheMove(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
@@ -137,6 +138,9 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_unavailable","hint":"x"}}`},
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_unavailable"}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
+		// A park that resumes by itself is not news.
+		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_rate_limited","retry_at":"2026-10-15T20:00:00Z"}}`},
+		{StateRunning, `{"step":"fact_pass"}`},
 		{StateDone, ``},
 	} {
 		u := Update{Attempt: 1, State: ptr(step.state)}
@@ -147,7 +151,7 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", step.state, err)
 		}
-		if Notable(from, j.State) {
+		if j.Notable(from) {
 			notable = append(notable, from+">"+j.State+":"+j.ParkCode())
 		}
 	}

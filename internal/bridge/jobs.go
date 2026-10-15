@@ -774,23 +774,43 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (job *Job,
 // Notable reports whether a job's move from one state to another is one the
 // server tells admins about (notifications): INTO done, failed or
 // needs_attention, never a report that leaves the state as it was (a running
-// job's keepalive, a parked job's progress).
-func Notable(from, to string) bool {
-	return from != to && (to == StateDone || to == StateFailed || to == StateNeedsAttention)
+// job's keepalive, a parked job's progress). A park that resumes by itself (its
+// progress names a retry_at: an agent's rate limit or a short outage) is not
+// news: telling an admin about every one would flood a phone.
+func (j *Job) Notable(from string) bool {
+	if from == j.State {
+		return false
+	}
+	switch j.State {
+	case StateDone, StateFailed:
+		return true
+	case StateNeedsAttention:
+		_, resumes := j.park()
+		return !resumes
+	}
+	return false
 }
 
 // ParkCode is the code of the park a job's progress names (progress.park.code,
 // sidecars.generate's), "" when it names none or can't be read.
 func (j *Job) ParkCode() string {
+	code, _ := j.park()
+	return code
+}
+
+// park reads the park a job's progress names: its code (cleaned, "" for none)
+// and whether it resumes by itself (a retry_at).
+func (j *Job) park() (code string, resumes bool) {
 	var p struct {
 		Park *struct {
-			Code string `json:"code"`
+			Code    string `json:"code"`
+			RetryAt string `json:"retry_at"`
 		} `json:"park"`
 	}
 	if json.Unmarshal(j.Progress, &p) != nil || p.Park == nil {
-		return ""
+		return "", false
 	}
-	return cleanText(p.Park.Code, maxShortText, false)
+	return cleanText(p.Park.Code, maxShortText, false), p.Park.RetryAt != ""
 }
 
 // OpenJob returns the open job of kind for a book (its dedupe key), or nil when

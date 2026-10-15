@@ -391,7 +391,7 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 	if !a.writeBridgeError(w, err, "bridge job update failed") {
 		return
 	}
-	if bridge.Notable(from, job.State) {
+	if job.Notable(from) {
 		a.notifyBridgeJob(r.Context(), job)
 	}
 	writeJSON(w, http.StatusOK, job)
