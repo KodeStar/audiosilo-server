@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -246,10 +247,11 @@ func (a *API) firstBook(ctx context.Context, libraryID int64) (*catalog.Book, er
 	return a.cat.GetBookByPath(ctx, libraryID, page.Books[0].RelPath)
 }
 
-// handleBridgeClaim serves GET /bridge/jobs/next?wait=<seconds>: the next queued
-// job of a kind the Bridge runs (its last heartbeat's kinds the server knows),
-// leased to it (200 job), waiting up to wait (at most bridge.MaxWait) for one;
-// 204 when none came.
+// handleBridgeClaim serves GET /bridge/jobs/next?wait=<seconds>&kind=...: the
+// next queued job of a kind the Bridge runs (its last heartbeat's kinds the
+// server knows, narrowed to the kind= values when it sends any: the kinds it has
+// room for now), leased to it (200 job), waiting up to wait (at most
+// bridge.MaxWait) for one; 204 when none came, at once when no kind is left.
 func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	h, err := a.bridge.LastHeartbeat(r.Context())
 	if err != nil {
@@ -261,11 +263,16 @@ func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusConflict, "no_heartbeat", "send a status first")
 		return
 	}
+	asked := r.URL.Query()["kind"]
 	var kinds []string
 	for _, k := range h.Kinds {
-		if bridge.Known(k) {
+		if bridge.Known(k) && (len(asked) == 0 || slices.Contains(asked, k)) {
 			kinds = append(kinds, k)
 		}
+	}
+	if len(kinds) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 	wait := time.Duration(queryInt(r, "wait", 0)) * time.Second
 	job, err := a.bridge.WaitClaim(r.Context(), kinds, wait)

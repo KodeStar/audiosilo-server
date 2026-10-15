@@ -228,6 +228,25 @@ func TestBridgeCancelAndLeaseExpiry(t *testing.T) {
 	}
 }
 
+// A claim can narrow the kinds it takes (the Bridge's free lanes): a kind it
+// doesn't ask for stays queued, and asking for none it runs answers 204 at once.
+func TestBridgeClaimNarrowsKinds(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	job := b.queue(t, mistbornBook, `{}`)
+	start := time.Now()
+	resp, _ := b.do(t, "GET", "/api/v1/bridge/jobs/next?wait=5&kind=sidecars.generate", b.bridgeTok, "")
+	if resp.StatusCode != http.StatusNoContent || time.Since(start) > 2*time.Second {
+		t.Fatalf("a kind it doesn't run: %d after %v, want an immediate 204", resp.StatusCode, time.Since(start))
+	}
+	resp, body := b.do(t, "GET", "/api/v1/bridge/jobs/next?wait=1&kind=sidecars.generate&kind=bridge.verify", b.bridgeTok, "")
+	var j bridge.Job
+	decodeInto(t, body, &j)
+	if resp.StatusCode != http.StatusOK || j.ID != job.ID {
+		t.Fatalf("asking for its kind: %d %s", resp.StatusCode, body)
+	}
+}
+
 func TestBridgeQueueChecks(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
