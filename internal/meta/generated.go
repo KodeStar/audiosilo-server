@@ -63,8 +63,8 @@ func (e *Enrichment) Fillable() bool {
 // and hide, when set, the listener's place to gate spoilers at. A matched book
 // answers env with g filling what its work lacks (MetaWork.Generated names
 // what); an unmatched one answers Unmatched, with a work of g's alone (the
-// book's title, no id, no attribution) when g holds anything. env is never
-// modified.
+// book's title, no id, no attribution) when g holds anything once gated. env is
+// never modified.
 func Answer(env *Enrichment, title string, g *Generated, hide *Place) any {
 	var community *MetaWork
 	if env != nil {
@@ -81,6 +81,11 @@ func Answer(env *Enrichment, title string, g *Generated, hide *Place) any {
 		}
 		w := &MetaWork{Title: title, Authors: []MetaPersonRef{}}
 		gen.layInto(w, g.GeneratedAt)
+		if w.Generated == nil {
+			// The spoiler gate left nothing (every character revealed later, every
+			// recap beyond the listener): no work of a title alone.
+			return Unmatched{}
+		}
 		return Unmatched{Work: w}
 	}
 	if env.Work == nil || gen == nil {

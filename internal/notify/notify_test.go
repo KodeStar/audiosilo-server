@@ -360,6 +360,7 @@ func TestNilServiceIsSafe(t *testing.T) {
 // does: its progress may still name the park it was in), and the error (the
 // Bridge's own text) stays in the bell.
 func TestBridgeJobEnded(t *testing.T) {
+	t.Parallel()
 	s, cat, ctx := newService(t)
 	dest := newFakeDest(t)
 	addTarget(t, cat, TargetWebhook, dest.srv.URL, "", KindBridgeJobFinished, KindBridgeJobFailed)
@@ -420,6 +421,22 @@ func TestBridgeJobEnded(t *testing.T) {
 		return
 	}
 	t.Fatal("no event for the failed job")
+}
+
+// Each announced park reads as a sentence of its own: a refused credential
+// says where to replace it; a spent budget fits the book's and the month's
+// alike (the monthly one resumes by itself); an unknown code points at the page.
+func TestBridgeParkReasons(t *testing.T) {
+	t.Parallel()
+	for code, want := range map[string]string{
+		"agent_credential_refused": "The agent's credential was refused. Replace it in the agent container, then retry the job on the Bridge.",
+		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset.",
+		"something_new":            "See the job in Settings > Bridge.",
+	} {
+		if got := bridgeParkReason(code); got != want {
+			t.Errorf("bridgeParkReason(%q) = %q, want %q", code, got, want)
+		}
+	}
 }
 
 func TestSignedInDeviceIsOneLine(t *testing.T) {

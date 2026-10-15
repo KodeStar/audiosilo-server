@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -467,6 +468,43 @@ func TestMoveJobs(t *testing.T) {
 	}
 	if j, _ := q.Job(ctx, clash.ID); j.State != StateQueued {
 		t.Fatalf("the job already there = %s", j.State)
+	}
+}
+
+// A lease that lapsed on its last attempt is failed, and announced, by the next
+// Service call after a move, never inside the move's transaction: there, the
+// failure it caused would never be told to an admin (the move commits in the
+// catalog, which reports nothing).
+func TestMoveJobsLeavesLapsedLeasesToTheService(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	heard := q.heard()
+	q.verify(t, "Old", 0)
+	job := q.verify(t, "Elsewhere", 1) // claimed first
+	for attempt := 1; attempt <= MaxAttempts; attempt++ {
+		if j, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || j == nil || j.ID != job.ID {
+			t.Fatalf("claim %d = %+v, %v", attempt, j, err)
+		}
+		q.advance(Lease + time.Second)
+	}
+	// Another book moves while the last attempt's lease has lapsed.
+	if err := q.db.WithTx(ctx, "move", func(tx *sql.Tx) error {
+		return MoveJobs(ctx, tx, q.lib, "Old", "New", *q.now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*heard) != 0 {
+		t.Fatalf("heard %v during the move", *heard)
+	}
+	if _, _, err := q.List(ctx, Filter{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"claimed>failed:"}; !slices.Equal(*heard, want) {
+		t.Fatalf("heard = %v, want %v", *heard, want)
+	}
+	if j, _ := q.Job(ctx, job.ID); j.State != StateFailed {
+		t.Fatalf("job = %+v", j)
 	}
 }
 

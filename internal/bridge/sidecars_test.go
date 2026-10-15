@@ -15,8 +15,24 @@ import (
 // given.
 func (q *testQueue) beatLibrary(t *testing.T, mapped, writable bool, kinds ...string) {
 	t.Helper()
-	st := Status{Version: "0.2.0", Kinds: kinds,
-		Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/media/books", Mapped: mapped, Writable: writable}}}
+	q.beatStatus(t, Status{Version: "0.2.0", Kinds: kinds,
+		Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/media/books", Mapped: mapped, Writable: writable}}})
+}
+
+// beatContributing records a heartbeat offering sidecars.generate on the test
+// library, mapped and writable, with estimates (nil: none sent).
+func (q *testQueue) beatContributing(t *testing.T, est *SidecarsEstimates) {
+	t.Helper()
+	st := Status{Version: "0.2.0", Kinds: []string{KindVerify, KindSidecars},
+		Libraries: []LibraryStatus{{LibraryID: q.lib, MountPath: "/media/books", Mapped: true, Writable: true}}}
+	if est != nil {
+		st.Estimates = &Estimates{Sidecars: est}
+	}
+	q.beatStatus(t, st)
+}
+
+func (q *testQueue) beatStatus(t *testing.T, st Status) {
+	t.Helper()
 	if err := st.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +58,7 @@ func TestSidecarsParams(t *testing.T) {
 	if err != nil || !created || string(job.Params) != `{"source":"auto","contribute":"local"}` {
 		t.Fatalf("defaults: %v, %v, %+v", err, created, job)
 	}
+	q.beatContributing(t, &SidecarsEstimates{CanContribute: true})
 	job, _, err = q.sidecars(`{"source":"ebook","contribute":"issue","work_id":"the-way-of-kings"}`, ptr("Author/Other"))
 	if err != nil || string(job.Params) != `{"source":"ebook","contribute":"issue","work_id":"the-way-of-kings"}` {
 		t.Fatalf("explicit: %v, %+v", err, job)
@@ -110,6 +127,34 @@ func TestSidecarsNeedsAWritableLibrary(t *testing.T) {
 	}
 }
 
+// A job that offers its results to the community (contribute "issue") is
+// queued only for a Bridge whose last estimates say it can contribute; one that
+// sent no estimates can't. A job kept on this server is queued either way, and
+// the open job is still answered.
+func TestSidecarsContributeNeedsABridgeThatCan(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	issue := `{"contribute":"issue"}`
+	for name, est := range map[string]*SidecarsEstimates{"no estimates": nil, "can't": {AgentReady: true}} {
+		q.beatContributing(t, est)
+		if _, _, err := q.sidecars(issue, ptr("Author/Book")); !errors.Is(err, ErrCannotContribute) {
+			t.Errorf("denied (%s): %v, want ErrCannotContribute", name, err)
+		}
+	}
+	if _, created, err := q.sidecars(`{"contribute":"local"}`, ptr("Author/Local")); err != nil || !created {
+		t.Fatalf("a local job: %v, %v", created, err)
+	}
+	q.beatContributing(t, &SidecarsEstimates{CanContribute: true})
+	first, created, err := q.sidecars(issue, ptr("Author/Book"))
+	if err != nil || !created {
+		t.Fatalf("allowed: %v, %v", created, err)
+	}
+	q.beatContributing(t, nil)
+	if again, created, err := q.sidecars(issue, ptr("Author/Book")); err != nil || created || again.ID != first.ID {
+		t.Fatalf("the open job, once the Bridge can't: %+v, %v, %v", again, created, err)
+	}
+}
+
 func TestFeaturesIncludeSidecars(t *testing.T) {
 	t.Parallel()
 	st := Status{Kinds: []string{KindSidecars, KindVerify}}
@@ -128,9 +173,11 @@ func (q *testQueue) heard() *[]string {
 }
 
 // UpdateHeld reports the moves an admin is told about (OnTransition, by
-// Notable): into done, failed or needs_attention (not a park that resumes by
-// itself, unless it turns into one that needs a person while still parked),
-// once each; a keepalive is never one.
+// Notable): into done or failed, and into needs_attention unless the park is a
+// transient one (the agent's rate limit or a short outage), whatever its
+// retry_at: a monthly budget that resumes next month, or a refused credential,
+// is news. A park that hardens in place (a transient one turning into one that
+// isn't, still parked) is news too, once; a keepalive never is.
 func TestUpdateHeldReportsTheMove(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
@@ -140,21 +187,29 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 	if _, err := q.ClaimFor(ctx, q.token, nil, 0); err != nil {
 		t.Fatal(err)
 	}
+	const later = `"retry_at":"2026-11-01T00:00:00Z"`
 	for _, step := range []struct {
 		state    string
 		progress string
 	}{
 		{StateRunning, `{"step":"asr"}`},
 		{StateRunning, `{"step":"asr","done":2}`}, // a keepalive
+		// Transient parks are not news, with or without a retry_at...
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_unavailable","hint":"x"}}`},
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_unavailable"}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
-		// A park that resumes by itself is not news...
-		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_rate_limited","retry_at":"2026-10-15T20:00:00Z"}}`},
-		// ...until, still parked, it turns into one that needs a person (its
-		// retry ran into the book's budget), once.
+		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_rate_limited",` + later + `}}`},
+		// ...until, still parked, one turns into a park that isn't (its retry ran
+		// into the book's budget), once.
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded"}}`},
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded","hint":"raise it"}}`},
+		{StateRunning, `{"step":"fact_pass"}`},
+		// The monthly budget resumes by itself next month, but a month is long
+		// enough to hear about.
+		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded",` + later + `}}`},
+		{StateRunning, `{"step":"fact_pass"}`},
+		// A refused credential waits on a person, whatever its retry_at says.
+		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_credential_refused",` + later + `}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		{StateDone, ``},
 	} {
@@ -166,7 +221,12 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 			t.Fatalf("%s: %v", step.state, err)
 		}
 	}
-	want := []string{"running>needs_attention:agent_unavailable", "needs_attention>needs_attention:budget_exceeded", "running>done:"}
+	want := []string{
+		"needs_attention>needs_attention:budget_exceeded",
+		"running>needs_attention:budget_exceeded",
+		"running>needs_attention:agent_credential_refused",
+		"running>done:",
+	}
 	if !slices.Equal(*heard, want) {
 		t.Fatalf("heard = %v, want %v", *heard, want)
 	}
@@ -298,10 +358,11 @@ func TestHeartbeatEstimates(t *testing.T) {
 func TestEstimateSidecars(t *testing.T) {
 	t.Parallel()
 	est := &SidecarsEstimates{ASRSecondsPerAudioHour: 900, AgentUSDPerAudioHour: ptr(1.6), AgentUSDPerEbook: ptr(4.0),
-		AgentReady: true, Subscription: true}
+		AgentReady: true, Subscription: true, CanContribute: true}
 	// Ten hours of audio: 2.5 hours of ASR, 16 dollars of agent.
 	c := EstimateSidecars(36000, false, est)
-	if c.Source != SourceAudio || c.ASRHours != 2.5 || c.AgentCostUSD == nil || *c.AgentCostUSD != 16 || !c.AgentReady || !c.Subscription {
+	if c.Source != SourceAudio || c.ASRHours != 2.5 || c.AgentCostUSD == nil || *c.AgentCostUSD != 16 || !c.AgentReady || !c.Subscription ||
+		!c.CanContribute || !c.Figures {
 		t.Fatalf("audio = %+v", c)
 	}
 	// An ebook needs no ASR and costs its flat figure.
@@ -317,8 +378,10 @@ func TestEstimateSidecars(t *testing.T) {
 	if c := EstimateSidecars(5400, true, &SidecarsEstimates{}); c.AgentCostUSD != nil {
 		t.Fatalf("no ebook history = %+v", c)
 	}
-	// No figures at all (an older Bridge): nothing but the source.
-	if c := EstimateSidecars(36000, false, nil); c.Source != SourceAudio || c.ASRHours != 0 || c.AgentCostUSD != nil || c.AgentReady {
+	// No figures at all (an older Bridge, or one just started): nothing but the
+	// source, and said so (figures false), so "not ready" isn't read into it.
+	if c := EstimateSidecars(36000, false, nil); c.Source != SourceAudio || c.ASRHours != 0 || c.AgentCostUSD != nil || c.AgentReady ||
+		c.CanContribute || c.Figures {
 		t.Fatalf("no figures = %+v", c)
 	}
 	// Rounded to hundredths; audio of unknown (or nonsense) length has no

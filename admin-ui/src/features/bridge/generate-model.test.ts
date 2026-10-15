@@ -63,6 +63,8 @@ function estimate(over: Partial<BridgeEstimate> = {}): BridgeEstimate {
     agent_cost_usd: 16,
     subscription: false,
     agent_ready: true,
+    can_contribute: true,
+    figures: true,
     writable: true,
     has: {
       community: { characters: false, recaps: false },
@@ -305,6 +307,8 @@ describe('the estimate', () => {
       costUsd: 16,
       subscription: false,
       agentNotReady: false,
+      noFigures: false,
+      canContribute: true,
       notWritable: false,
     });
   });
@@ -336,6 +340,19 @@ describe('the estimate', () => {
     expect(v.agentNotReady).toBe(true);
     // An agent not ready only warns: the job waits for it.
     expect(estimateView(estimate({ agent_ready: false })).notWritable).toBe(false);
+  });
+
+  it('tells a Bridge that sent no figures yet from an agent that is not ready', () => {
+    // No figures: agent_ready false is a default, not a report.
+    const none = estimateView(
+      estimate({ figures: false, agent_ready: false, can_contribute: false, agent_cost_usd: null }),
+    );
+    expect(none.noFigures).toBe(true);
+    expect(none.agentNotReady).toBe(false);
+    expect(none.canContribute).toBe(false);
+    const notReady = estimateView(estimate({ agent_ready: false }));
+    expect(notReady.noFigures).toBe(false);
+    expect(notReady.agentNotReady).toBe(true);
   });
 
   it('says where the results appear', () => {
@@ -548,6 +565,19 @@ describe('the series batch', () => {
     expect(batchPlan(books, both)).toMatchObject({ costUsd: 20, subscription: true });
     const one = new Map(both).set(`1\0Two`, batchCheck(estimate({ agent_cost_usd: null })));
     expect(batchPlan(books, one).costUsd).toBeNull();
+  });
+
+  it('offers contributing only when the Bridge can for every book it queues', () => {
+    const books = [b('One', 1), b('Two', 2)];
+    const can = new Map<string, BatchCheck>([
+      [`1\0One`, batchCheck(estimate())],
+      [`1\0Two`, batchCheck(estimate())],
+    ]);
+    expect(batchPlan(books, can).canContribute).toBe(true);
+    const cant = new Map(can).set(`1\0Two`, batchCheck(estimate({ can_contribute: false })));
+    expect(batchPlan(books, cant).canContribute).toBe(false);
+    // Nothing to queue: nothing to offer.
+    expect(batchPlan(books, new Map()).canContribute).toBe(false);
   });
 
   it('checks a few books at a time, keeping their order and turning failures into undefined', async () => {

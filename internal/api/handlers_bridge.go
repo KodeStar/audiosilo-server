@@ -144,20 +144,17 @@ func (a *API) libraryFor(w http.ResponseWriter, r *http.Request, id int64, op st
 }
 
 // adminBridgeBook resolves the book a Bridge admin route names: the library (404
-// for an unknown one) and the indexed book at path in it (404 "book not found").
-// It answers the error itself and reports whether there was none.
+// for an unknown one) and the indexed book at path in it (404 book_not_found,
+// which the console words). It answers the error itself and reports whether
+// there was none.
 func (a *API) adminBridgeBook(w http.ResponseWriter, r *http.Request, libraryID int64, path, op string) (*catalog.Library, *catalog.Book, bool) {
 	lib, ok := a.libraryFor(w, r, libraryID, op)
 	if !ok {
 		return nil, nil, false
 	}
 	book, err := a.cat.GetBookByPath(r.Context(), lib.ID, path)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "book not found")
-		return nil, nil, false
-	}
 	if err != nil {
-		a.writeCatalogError(w, err, op, "could not load the book")
+		a.writeBookError(w, err, op, "could not load the book")
 		return nil, nil, false
 	}
 	return lib, book, true
@@ -458,6 +455,8 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeErrorCode(w, http.StatusConflict, "kind_unavailable", "the paired bridge doesn't run that kind of job")
 	case errors.Is(err, bridge.ErrLibraryNotWritable):
 		writeErrorCode(w, http.StatusConflict, "library_not_writable", "the bridge can't write to that library")
+	case errors.Is(err, bridge.ErrCannotContribute):
+		writeErrorCode(w, http.StatusConflict, "cannot_contribute", "the bridge can't contribute to the community")
 	default:
 		a.log.Warn(op, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update the job")

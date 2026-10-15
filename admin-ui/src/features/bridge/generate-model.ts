@@ -137,6 +137,7 @@ export const KNOWN_PARKS = [
   'supervisor_escalated',
   'supervisor_budget',
   'book_not_writable',
+  'agent_credential_refused',
 ] as const;
 
 /** A park code's sentence key: its own, or the generic one (which names the code). */
@@ -273,6 +274,10 @@ export interface EstimateView {
   subscription: boolean;
   /** The agent isn't ready: the job parks until it is. */
   agentNotReady: boolean;
+  /** The Bridge hasn't sent its figures yet: whether the agent is ready isn't known. */
+  noFigures: boolean;
+  /** The Bridge can offer the results to the community: the contribute choice is offered. */
+  canContribute: boolean;
   /** The Bridge can't write to the library: nothing can be queued. */
   notWritable: boolean;
 }
@@ -285,7 +290,9 @@ export function estimateView(e: BridgeEstimate): EstimateView {
     asrHours: ebook ? 0 : asr && asr > 0 ? asr : null,
     costUsd: amount(e.agent_cost_usd) ?? null,
     subscription: e.subscription,
-    agentNotReady: !e.agent_ready,
+    agentNotReady: e.figures && !e.agent_ready,
+    noFigures: !e.figures,
+    canContribute: e.can_contribute,
     notWritable: !e.writable,
   };
 }
@@ -368,6 +375,8 @@ export interface BatchCheck {
   costUsd: number | null;
   /** The Bridge's agent is on a subscription: the cost is an estimate of usage. */
   subscription: boolean;
+  /** The Bridge can offer the results to the community. */
+  canContribute: boolean;
 }
 
 export function batchCheck(e: BridgeEstimate | undefined): BatchCheck {
@@ -379,6 +388,7 @@ export function batchCheck(e: BridgeEstimate | undefined): BatchCheck {
       notWritable: false,
       costUsd: null,
       subscription: false,
+      canContribute: false,
     };
   }
   const covered = e.has.community.recaps || e.has.local.recaps;
@@ -391,6 +401,7 @@ export function batchCheck(e: BridgeEstimate | undefined): BatchCheck {
     notWritable: !e.writable,
     costUsd: amount(e.agent_cost_usd) ?? null,
     subscription: e.subscription,
+    canContribute: e.can_contribute,
   };
 }
 
@@ -405,6 +416,8 @@ export interface BatchPlan<B> {
   /** The queued books' agent cost in all; null when any has no estimate (or none is queued). */
   costUsd: number | null;
   subscription: boolean;
+  /** Every book to be queued may be contributed (the Bridge can): the contribute choice is offered. */
+  canContribute: boolean;
 }
 
 export function batchPlan<B extends { library_id: number; path: string }>(
@@ -419,6 +432,7 @@ export function batchPlan<B extends { library_id: number; path: string }>(
     notWritable: false,
     costUsd: 0,
     subscription: false,
+    canContribute: true,
   };
   for (const b of ordered) {
     const c = checks.get(refKey(b));
@@ -430,10 +444,14 @@ export function batchPlan<B extends { library_id: number; path: string }>(
       if (c.notWritable) plan.notWritable = true;
       plan.costUsd = plan.costUsd === null || c.costUsd === null ? null : plan.costUsd + c.costUsd;
       plan.subscription ||= c.subscription;
+      plan.canContribute &&= c.canContribute;
       plan.queue.push(b);
     }
   }
-  if (!plan.queue.length) plan.costUsd = null;
+  if (!plan.queue.length) {
+    plan.costUsd = null;
+    plan.canContribute = false;
+  }
   return plan;
 }
 

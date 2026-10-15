@@ -446,17 +446,18 @@ func bridgeJobBook(ev catalog.ServerEvent) string {
 }
 
 // bridgeParkReason words a parked job's park code (the Bridge's
-// progress.park.code). Only a park that waits for a person is ever announced (a
-// park that resumes by itself names a retry_at: bridge.Job.Notable), so none of
-// these says the job carries on by itself. The Bridge's own page says more.
+// progress.park.code). A transient park (the agent's rate limit, a short
+// outage) is never announced (bridge.Job.Notable), so none is worded here; an
+// announced park may still resume by itself (a monthly budget at the month's
+// turn), so no sentence promises either way. The Bridge's own page says more.
 func bridgeParkReason(code string) string {
 	switch code {
 	case "book_not_writable":
 		return "The Bridge can't write into the book's folder."
 	case "budget_exceeded":
-		return "The job reached its spending limit. Raise the limit on the Bridge, then retry the job there."
-	case "agent_unavailable":
-		return "The agent isn't available. See the job on the Bridge."
+		return "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset."
+	case "agent_credential_refused":
+		return "The agent's credential was refused. Replace it in the agent container, then retry the job on the Bridge."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	}

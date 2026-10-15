@@ -32,6 +32,20 @@ type AttachmentsReading struct {
 	Sig    string
 	Files  metadata.AttachmentFiles
 	Unread bool
+	// Was, when set, is the row's state the reading was compared with (a scan's
+	// Signatures, read when it began): SetAttachments records the reading only
+	// while the row still holds it, so a scan never lays an older reading over
+	// a fresher one recorded since (the Bridge's attachments refresh). Nil
+	// records it whatever the row holds.
+	Was *AttachmentsState
+}
+
+// AttachmentsState is a books row's attachments columns as a scan read them:
+// the signature, and whether they needed reading anyway (Signature's
+// AttachmentsSig and AttachmentsUnchecked).
+type AttachmentsState struct {
+	Sig       string
+	Unchecked bool
 }
 
 // generatedSig reports whether a book's attachments signature (attachments_sig)
@@ -105,8 +119,10 @@ func decodeAttachment[T any](raw string) *T {
 // SetAttachments records the attachments of the books at these paths (a scan's
 // read of a book whose audio is unchanged but whose attachments are new,
 // changed, gone or not read for this index, and the Bridge's attachments-only
-// rescan). It commits every pathReadingBatch books. Nothing in a book's
-// effective row reads them, so no book is re-resolved.
+// rescan). A reading with Was is recorded only while the row still holds that
+// state (compare and set), else skipped: something recorded a newer reading
+// since. It commits every pathReadingBatch books. Nothing in a book's effective
+// row reads them, so no book is re-resolved.
 func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings map[string]AttachmentsReading) error {
 	now := c.ts()
 	return c.eachPathBatch(ctx, "SetAttachments", slices.Collect(maps.Keys(readings)),
@@ -119,10 +135,21 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 				return false, err
 			}
 			r := readings[relPath]
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE books SET attachments_sig = ?, attachments_indexed_at = indexed_at WHERE id = ?`,
-				r.Sig, id); err != nil {
+			q, args := `UPDATE books SET attachments_sig = ?, attachments_indexed_at = indexed_at WHERE id = ?`, []any{r.Sig, id}
+			if r.Was != nil {
+				unchecked := 0
+				if r.Was.Unchecked {
+					unchecked = 1
+				}
+				q += ` AND attachments_sig = ? AND ` + attachmentsUncheckedExpr + ` = ?`
+				args = append(args, r.Was.Sig, unchecked)
+			}
+			res, err := tx.ExecContext(ctx, q, args...)
+			if err != nil {
 				return false, fmt.Errorf("%s: %w", relPath, err)
+			}
+			if n, err := res.RowsAffected(); err != nil || n == 0 {
+				return false, err // a newer reading was recorded since: it stays
 			}
 			if err := writeAttachments(ctx, tx, id, r.Files, now); err != nil {
 				return false, fmt.Errorf("%s: %w", relPath, err)

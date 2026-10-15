@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Bot, Sparkles } from 'lucide-react';
+import { Bot, Hourglass, Sparkles, Unplug } from 'lucide-react';
 import type { BridgeEstimate } from '@/api/types';
 import { FactList } from '@/components/fact-list';
 import { Notice } from '@/components/notice';
@@ -25,19 +25,24 @@ import { queueInOrder, queueReport, useGenerateEstimate } from './use-generate';
  * Generate characters and recaps for one book: what it will read (the audio,
  * or the ebook found beside it), the transcription and agent cost the Bridge's
  * history predicts, where the results appear, a contribute choice (this server
- * only by default), and the earlier books of the series without recaps, queued
- * first. Nothing can be queued while the Bridge can't write to the library.
+ * only by default; offered only when the Bridge can contribute), and the
+ * earlier books of the series without recaps, queued first. Nothing can be
+ * queued while the Bridge can't write to the library. The Bridge going offline
+ * while it is open (`offline`) doesn't close it: it says so, and what is queued
+ * waits for the Bridge.
  */
 export function GenerateDialog({
   open,
   onOpenChange,
   book,
   regenerate,
+  offline = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   book: { library_id: number; path: string; title: string };
   regenerate: boolean;
+  offline?: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -49,7 +54,12 @@ export function GenerateDialog({
         tone="community"
       >
         {open ? (
-          <GenerateForm book={book} regenerate={regenerate} onDone={() => onOpenChange(false)} />
+          <GenerateForm
+            book={book}
+            regenerate={regenerate}
+            offline={offline}
+            onDone={() => onOpenChange(false)}
+          />
         ) : null}
       </DialogContent>
     </Dialog>
@@ -59,10 +69,12 @@ export function GenerateDialog({
 function GenerateForm({
   book,
   regenerate,
+  offline,
   onDone,
 }: {
   book: { library_id: number; path: string; title: string };
   regenerate: boolean;
+  offline: boolean;
   onDone: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -76,7 +88,9 @@ function GenerateForm({
   const [error, setError] = useState<string>();
   const e = estimate.data;
   const earlier = e?.earlier ?? [];
-  const plan = generatePlan([...(includeEarlier ? earlier : []), book], contribute);
+  // Contributing only when the Bridge can (the server refuses it otherwise).
+  const contributeAs: Contribute = e?.can_contribute ? contribute : 'local';
+  const plan = generatePlan([...(includeEarlier ? earlier : []), book], contributeAs);
   const canConfirm = e !== undefined && !estimateView(e).notWritable;
 
   const submit = async (ev: React.FormEvent) => {
@@ -120,7 +134,8 @@ function GenerateForm({
           <EstimateBody
             estimate={e}
             regenerate={regenerate}
-            contribute={contribute}
+            offline={offline}
+            contribute={contributeAs}
             onContribute={setContribute}
             includeEarlier={includeEarlier}
             onIncludeEarlier={setIncludeEarlier}
@@ -148,6 +163,7 @@ function GenerateForm({
 function EstimateBody({
   estimate,
   regenerate,
+  offline,
   contribute,
   onContribute,
   includeEarlier,
@@ -155,6 +171,7 @@ function EstimateBody({
 }: {
   estimate: BridgeEstimate;
   regenerate: boolean;
+  offline: boolean;
   contribute: Contribute;
   onContribute: (value: Contribute) => void;
   includeEarlier: boolean;
@@ -183,9 +200,18 @@ function EstimateBody({
   return (
     <>
       {v.notWritable ? <NotWritableNotice /> : null}
+      {offline ? (
+        <Notice tone="warn" icon={Unplug} title={t('bridge.generate.offline')}>
+          {t('bridge.generate.offlineBody')}
+        </Notice>
+      ) : null}
       {v.agentNotReady ? (
         <Notice tone="warn" icon={Bot} title={t('bridge.generate.agentNotReady')}>
           {t('bridge.generate.agentNotReadyBody')}
+        </Notice>
+      ) : v.noFigures ? (
+        <Notice tone="info" icon={Hourglass} title={t('bridge.generate.noFigures')}>
+          {t('bridge.generate.noFiguresBody')}
         </Notice>
       ) : null}
       <FactList
@@ -245,7 +271,7 @@ function EstimateBody({
       {regenerate ? (
         <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.replaces')}</p>
       ) : null}
-      <ContributeSwitch value={contribute} onChange={onContribute} />
+      {v.canContribute ? <ContributeSwitch value={contribute} onChange={onContribute} /> : null}
       {earlier.length ? (
         <div className="flex flex-col gap-2 rounded-lg border px-4 py-3">
           <label htmlFor={`${id}-earlier`} className="flex cursor-pointer items-start gap-2.5">

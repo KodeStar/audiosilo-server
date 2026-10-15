@@ -77,6 +77,14 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
     ) : null;
   }
 
+  // Cancelled: why, when the server or the Bridge said (a book moved onto
+  // another job of its kind, say); an admin's own cancel says nothing more.
+  if (job.state === 'cancelled') {
+    return job.error ? (
+      <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">{job.error}</p>
+    ) : null;
+  }
+
   if (job.state === 'needs_attention') {
     const link = bridgeJobLink(uiUrl, job.id);
     const park = p.park;
@@ -95,7 +103,10 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
         ) : null}
         {park?.retryAt ? (
           <p className="text-[12.5px] text-muted-foreground">
-            {t('bridge.generate.retryAt', { when: formatRelative(park.retryAt, lang) })}
+            {/* Once the time has passed the Bridge is retrying: never "tries again ... ago". */}
+            {Date.parse(park.retryAt) > Date.now()
+              ? t('bridge.generate.retryAt', { when: formatRelative(park.retryAt, lang) })
+              : t('bridge.generate.retrying')}
           </p>
         ) : null}
         {link ? (

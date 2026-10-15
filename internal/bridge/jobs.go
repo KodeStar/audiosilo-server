@@ -137,6 +137,13 @@ func sidecarsParams(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
+// contributes reports whether sidecars.generate's params (as checkNew stored
+// them) ask for the results to be offered to the community.
+func contributes(params json.RawMessage) bool {
+	var p SidecarsParams
+	return json.Unmarshal(params, &p) == nil && p.Contribute == ContributeIssue
+}
+
 // verifyParams checks bridge.verify's params: an optional hold_seconds (0-600)
 // the Bridge waits before finishing, so a test can cancel it or kill the Bridge
 // mid-job.
@@ -309,6 +316,12 @@ var ErrKindUnavailable = errors.New("the paired bridge doesn't run that kind")
 // all): a 409 library_not_writable.
 var ErrLibraryNotWritable = errors.New("the bridge can't write to that library")
 
+// ErrCannotContribute is a sidecars.generate job asking to contribute its
+// results (contribute "issue") to a Bridge whose last heartbeat doesn't say it
+// can (estimates.sidecars.can_contribute; none sent counts as can't): a 409
+// cannot_contribute.
+var ErrCannotContribute = errors.New("the bridge can't contribute to the community")
+
 // Writable reports whether the Bridge last reported library id as mapped and
 // writable, the condition for a job that writes into it.
 func (st Status) Writable(id int64) bool {
@@ -352,7 +365,9 @@ func checkNew(j *NewJob) error {
 // knows (ErrInvalid otherwise, as for bad params) and the paired Bridge runs
 // (ErrKindUnavailable); it may be offline, and the job waits. A kind that writes
 // into the library is queued only when the last heartbeat reports the library
-// mapped and writable (ErrLibraryNotWritable; the open job is still returned).
+// mapped and writable (ErrLibraryNotWritable), and a sidecars.generate job that
+// contributes only when it says the Bridge can (ErrCannotContribute); the open
+// job is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
@@ -366,7 +381,13 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	if h == nil || !h.Offers(j.Kind) {
 		return nil, false, ErrKindUnavailable
 	}
-	refuse := kinds[j.Kind].writes && !h.Writable(*j.LibraryID)
+	var refuse error
+	switch {
+	case kinds[j.Kind].writes && !h.Writable(*j.LibraryID):
+		refuse = ErrLibraryNotWritable
+	case j.Kind == KindSidecars && contributes(j.Params) && !h.CanContribute():
+		refuse = ErrCannotContribute
+	}
 	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
 	var exp expiry
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
@@ -385,8 +406,8 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			job, err = getJob(ctx, tx, id)
 			return err
 		}
-		if refuse {
-			return ErrLibraryNotWritable
+		if refuse != nil {
+			return refuse
 		}
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at)
@@ -527,8 +548,8 @@ type transition struct {
 // first, so none acts on a dead claim. A Service method whose transaction ended
 // any settles them once it commits: the waiting claims wake, so a requeued job
 // is picked up at once rather than when a claim's wait runs out, and an admin
-// hears about a failed one. (MoveJobs, in the catalog's move, can't: a claim
-// takes its requeue within MaxWait, and a job it fails goes unannounced.)
+// hears about a failed one. (MoveJobs, in the catalog's move, doesn't run it:
+// nothing there could settle what it ended.)
 func expireTx(ctx context.Context, tx *sql.Tx, now string) (expiry, error) {
 	var e expiry
 	failing, err := lastAttemptsLapsed(ctx, tx, now)
@@ -579,16 +600,16 @@ func (s *Service) settle(ctx context.Context, e expiry) {
 		s.wake.fire()
 	}
 	for _, t := range e.failed {
-		s.report(ctx, t.job, t.from, false)
+		s.report(ctx, t.job, t.from, "")
 	}
 }
 
-// report tells OnTransition about job's move out of from (fromResumes: from's
-// park would have resumed by itself) when it is news (Notable), on a context the
+// report tells OnTransition about job's move out of from (fromCode: the park
+// code from named, "" for none) when it is news (Notable), on a context the
 // caller's leaving doesn't cancel: the move has committed, and the admin should
 // hear about it either way.
-func (s *Service) report(ctx context.Context, job *Job, from string, fromResumes bool) {
-	if s.OnTransition != nil && job.Notable(from, fromResumes) {
+func (s *Service) report(ctx context.Context, job *Job, from, fromCode string) {
+	if s.OnTransition != nil && job.Notable(from, fromCode) {
 		s.OnTransition(context.WithoutCancel(ctx), *job, from)
 	}
 }
@@ -784,10 +805,10 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		return nil, err
 	}
 	var (
-		job         *Job
-		from        string
-		fromResumes bool
-		exp         expiry
+		job      *Job
+		from     string
+		fromCode string
+		exp      expiry
 	)
 	err := s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
 		now := s.ts()
@@ -807,7 +828,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			return ErrNotHeld
 		}
 		from = cur.State
-		_, fromResumes = cur.park()
+		if from == StateNeedsAttention {
+			fromCode = cur.ParkCode()
+		}
 		state := cur.State
 		if u.State != nil {
 			if !slices.Contains(reportable, *u.State) {
@@ -846,53 +869,52 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		return nil, err
 	}
 	s.settle(ctx, exp)
-	s.report(ctx, job, from, fromResumes)
+	s.report(ctx, job, from, fromCode)
 	return job, nil
 }
 
-// Notable reports whether a job's move from the state `from` is one the server
-// tells admins about (notifications): INTO done, failed or needs_attention,
-// never a report that leaves the state as it was (a running job's keepalive, a
-// parked job's progress). A park that resumes by itself (its progress names a
-// retry_at: an agent's rate limit or a short outage) is not news: telling an
-// admin about every one would flood a phone. But a park that would have resumed
-// by itself (fromResumes) turning, still parked, into one that needs a person (a
-// code and no retry_at: a rate limit's retry that ran into the book's budget) is,
-// as the Bridge reports it without a running in between.
-func (j *Job) Notable(from string, fromResumes bool) bool {
-	code, resumes := j.park()
+// transientParks are the park codes that are not news: the agent's rate limit
+// and a short outage of the agent container, which the Bridge resumes by itself
+// once they pass (telling an admin about every one would flood a phone). Any
+// other park waits on something a person sees to, or is long enough to hear
+// about (a monthly budget spent until the month turns, a credential refused),
+// whatever its retry_at says.
+var transientParks = []string{"agent_rate_limited", "agent_unavailable"}
+
+// Notable reports whether a job's move from the state `from` (fromCode: the
+// park code it named there, "" for none) is one the server tells admins about
+// (notifications): INTO done or failed, or INTO needs_attention with a park
+// that isn't transient (transientParks); never a report that leaves the state
+// as it was (a running job's keepalive, a parked job's progress). A park that
+// changes its code in place is news when the new one isn't transient: the
+// Bridge reports a rate limit's retry that ran into the book's budget without a
+// running in between, and that park now waits for a person.
+func (j *Job) Notable(from, fromCode string) bool {
 	switch j.State {
 	case StateDone, StateFailed:
 		return from != j.State
 	case StateNeedsAttention:
-		if resumes {
+		code := j.ParkCode()
+		if slices.Contains(transientParks, code) {
 			return false
 		}
-		return from != j.State || (fromResumes && code != "")
+		return from != j.State || code != fromCode
 	}
 	return false
 }
 
 // ParkCode is the code of the park a job's progress names (progress.park.code,
-// sidecars.generate's), "" when it names none or can't be read.
+// sidecars.generate's, cleaned), "" when it names none or can't be read.
 func (j *Job) ParkCode() string {
-	code, _ := j.park()
-	return code
-}
-
-// park reads the park a job's progress names: its code (cleaned, "" for none)
-// and whether it resumes by itself (a retry_at).
-func (j *Job) park() (code string, resumes bool) {
 	var p struct {
 		Park *struct {
-			Code    string `json:"code"`
-			RetryAt string `json:"retry_at"`
+			Code string `json:"code"`
 		} `json:"park"`
 	}
 	if json.Unmarshal(j.Progress, &p) != nil || p.Park == nil {
-		return "", false
+		return ""
 	}
-	return cleanText(p.Park.Code, maxShortText, false), p.Park.RetryAt != ""
+	return cleanText(p.Park.Code, maxShortText, false)
 }
 
 // OpenJob returns the open job of kind for a book (its dedupe key), or nil when
@@ -957,12 +979,13 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 // (catalog.MoveDurableState), finished ones too (the book's history). An open
 // job whose kind already has an open job at the new path is cancelled first,
 // since a kind, library and path hold one open job at a time; the rest move,
-// their dedupe key rebuilt by DedupeKey.
+// their dedupe key rebuilt by DedupeKey. It expires no lease: a job it moves
+// keeps its claim and lease as they were, and the next Service call expires a
+// lapsed one and settles it once that commits (wakes the claims, reports a job
+// failed on its last attempt). Expired here, in the catalog's transaction, a
+// failure would never be announced.
 func MoveJobs(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
 	ts := at(now)
-	if _, err := expireTx(ctx, tx, ts); err != nil {
-		return err
-	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE bridge_jobs SET state = 'cancelled', error = 'the book moved onto another job of this kind',
 		        lease_until = NULL, finished_at = ?4, updated_at = ?4

@@ -16,10 +16,17 @@ type SidecarsCost struct {
 	// Bridge has no history for this source yet (or sent no figures), or the
 	// audio's length is unknown: no estimate, never a free run.
 	AgentCostUSD *float64 `json:"agent_cost_usd"`
-	// Subscription and AgentReady are the Bridge's: the agent's credential is a
-	// subscription login (the cost is notional), and the agent is ready to run.
-	Subscription bool `json:"subscription"`
-	AgentReady   bool `json:"agent_ready"`
+	// Subscription, AgentReady and CanContribute are the Bridge's: the agent's
+	// credential is a subscription login (the cost is notional), the agent is
+	// ready to run, and the Bridge can offer the results to the community (a
+	// job may ask for contribute "issue").
+	Subscription  bool `json:"subscription"`
+	AgentReady    bool `json:"agent_ready"`
+	CanContribute bool `json:"can_contribute"`
+	// Figures: the Bridge has sent its figures (its heartbeat's estimates).
+	// Without them every field above is only a default, so a false agent_ready
+	// means "not known yet", not "not ready".
+	Figures bool `json:"figures"`
 }
 
 // EstimateSidecars costs a sidecars.generate run over a book of duration
@@ -33,7 +40,8 @@ func EstimateSidecars(duration float64, ebook bool, est *SidecarsEstimates) Side
 	if est == nil {
 		return c
 	}
-	c.Subscription, c.AgentReady = est.Subscription, est.AgentReady
+	c.Figures = true
+	c.Subscription, c.AgentReady, c.CanContribute = est.Subscription, est.AgentReady, est.CanContribute
 	if ebook {
 		if est.AgentUSDPerEbook != nil {
 			c.AgentCostUSD = new(cents(*est.AgentUSDPerEbook))

@@ -115,8 +115,9 @@ function SeriesForm({
     if (!plan || !n || plan.notWritable || busy) return;
     setBusy(true);
     setError(undefined);
-    // The queue is already in reading order, earlier books included.
-    const requests = generatePlan(plan.queue, contribute);
+    // The queue is already in reading order, earlier books included; contributing
+    // only when the Bridge can (the server refuses it otherwise).
+    const requests = generatePlan(plan.queue, plan.canContribute ? contribute : 'local');
     const out = await queueInOrder(qc, requests);
     setBusy(false);
     const failed = queueReport(out, requests.length, t, lang);
@@ -194,10 +195,12 @@ function SeriesForm({
                     ],
                   ]}
                 />
-                <ContributeSwitch value={contribute} onChange={setContribute} />
+                {plan.canContribute ? (
+                  <ContributeSwitch value={contribute} onChange={setContribute} />
+                ) : null}
                 <p className="text-[12.5px] text-muted-foreground">
                   {t('bridge.generate.whereLabel', {
-                    where: t(destinationKey(contribute)),
+                    where: t(destinationKey(plan.canContribute ? contribute : 'local')),
                   })}
                 </p>
               </>

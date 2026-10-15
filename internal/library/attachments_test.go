@@ -439,6 +439,37 @@ func TestIndexMoved(t *testing.T) {
 		t.Errorf("progress copied to the copy: %+v", p)
 	}
 
+	// A source still on disk that can't be checked right now (its folder
+	// unlistable: a permission, a flaky share) counts as present: ignored, its
+	// state stays where it is.
+	if os.Geteuid() != 0 { // root lists any folder
+		copyFixtureM4B(t, filepath.Join(root, "Locked", "Book", "audio.m4b"))
+		if _, err := scanner.IndexPath(ctx, *lib, "Locked/Book"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cat.SaveProgress(ctx, uid, catalog.Progress{Ref: catalog.Ref{LibraryID: lib.ID, Path: "Locked/Book"}, Position: 42}); err != nil {
+			t.Fatal(err)
+		}
+		copyFixtureM4B(t, filepath.Join(root, "Unlocked", "Book", "audio.m4b"))
+		locked := filepath.Join(root, "Locked", "Book")
+		if err := os.Chmod(locked, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		_, err := scanner.IndexMoved(ctx, *lib, "Unlocked/Book", "Locked/Book")
+		if cerr := os.Chmod(locked, 0o755); cerr != nil {
+			t.Fatal(cerr)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := progressAt("Locked/Book"); p == nil || p.Position != 42 {
+			t.Errorf("an unlistable book still on disk lost its progress: %+v", p)
+		}
+		if got := bookPaths(t, cat, lib.ID); !slices.Contains(got, "Locked/Book") {
+			t.Errorf("an unlistable book still on disk lost its row: %q", got)
+		}
+	}
+
 	// Another book's path (its fingerprint differs): ignored too.
 	if err := os.RemoveAll(filepath.Join(root, "Other")); err != nil {
 		t.Fatal(err)

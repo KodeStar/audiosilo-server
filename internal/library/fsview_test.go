@@ -52,9 +52,6 @@ func TestSafeJoin(t *testing.T) {
 	}
 }
 
-// TestSafeJoinSymlinkEscape covers review finding S1: a symlink inside the root
-// that points outside it must be rejected (not followed), while a symlink that
-// stays inside the root is still allowed.
 // ContentJoin is SafeJoin that also refuses a hidden segment, as a missing file
 // (fs.ErrNotExist) and not a book (ErrNotIndexable).
 func TestContentJoin(t *testing.T) {
@@ -76,6 +73,9 @@ func TestContentJoin(t *testing.T) {
 	}
 }
 
+// TestSafeJoinSymlinkEscape covers review finding S1: a symlink inside the root
+// that points outside it must be rejected (not followed), while a symlink that
+// stays inside the root is still allowed.
 func TestSafeJoinSymlinkEscape(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

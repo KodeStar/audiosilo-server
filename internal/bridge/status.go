@@ -65,6 +65,9 @@ type SidecarsEstimates struct {
 	AgentBackend string `json:"agent_backend"`
 	AgentReady   bool   `json:"agent_ready"`
 	Subscription bool   `json:"subscription"`
+	// CanContribute: the Bridge can offer a run's results to the community (it
+	// holds what contributing needs), so a job may ask for contribute "issue".
+	CanContribute bool `json:"can_contribute"`
 	// MonthlyBudgetUSD is the monthly agent cap (0 = none); MonthSpentUSD what
 	// this month has spent.
 	MonthlyBudgetUSD float64 `json:"monthly_budget_usd"`
@@ -171,6 +174,13 @@ func (st Status) Features() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// CanContribute reports whether the Bridge last said it can offer a
+// sidecars.generate run's results to the community (estimates.sidecars
+// .can_contribute); false when it sent no estimates.
+func (st Status) CanContribute() bool {
+	return st.Estimates != nil && st.Estimates.Sidecars != nil && st.Estimates.Sidecars.CanContribute
 }
 
 // Offers reports whether the Bridge implements kind.

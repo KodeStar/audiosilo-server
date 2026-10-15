@@ -373,7 +373,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 				if !b.Attachments.Unread &&
 					(old.AttachmentsSig != b.Attachments.Sig || (old.AttachmentsUnchecked && b.Attachments.Sig != "")) {
 					if files, read := s.readAttachments(lib, b, b.Attachments.Sig); read {
-						attachBackfill[b.RelPath] = catalog.AttachmentsReading{Sig: b.Attachments.Sig, Files: files}
+						// Recorded only over the state read when the scan began: a
+						// refresh by the Bridge since then is newer than this read.
+						attachBackfill[b.RelPath] = catalog.AttachmentsReading{Sig: b.Attachments.Sig, Files: files,
+							Was: &catalog.AttachmentsState{Sig: old.AttachmentsSig, Unchecked: old.AttachmentsUnchecked}}
 					}
 				}
 				if len(pathBackfill)+len(absBackfill)+len(attachBackfill) >= pathFlushEvery {
@@ -679,8 +682,10 @@ var imageExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".web
 // findCover returns a library-relative path to a book's cover image in dir: a
 // conventionally-named file (cover.jpg, folder.png, …) if present, else - only
 // when anyImage is set (a book's own folder, where a stray image is almost
-// certainly its cover) - the first image file alphabetically. Returns "" if none,
-// so the cover handler falls back to embedded art.
+// certainly its cover) - the first image file alphabetically. A hidden file is
+// never a cover (isHidden: macOS writes an AppleDouble "._Book - Cover.jpg"
+// beside each image on a share, a resource fork, not an image, and it sorts
+// first). Returns "" if none, so the cover handler falls back to embedded art.
 func findCover(root, dir string, anyImage bool) string {
 	for _, name := range coverNames {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
@@ -698,7 +703,7 @@ func findCover(root, dir string, anyImage bool) string {
 	var firstImage, coverish string
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !imageExts[strings.ToLower(filepath.Ext(name))] {
+		if e.IsDir() || isHidden(name) || !imageExts[strings.ToLower(filepath.Ext(name))] {
 			continue
 		}
 		if firstImage == "" {
@@ -1362,6 +1367,20 @@ func (s *Scanner) carryFrom(ctx context.Context, lib catalog.Library, from strin
 func (s *Scanner) bookOnDisk(ctx context.Context, lib catalog.Library, rel string) bool {
 	if !dirPresent(lib, rel, map[string]map[string]bool{}) {
 		return false
+	}
+	// A path that can't be stat'ed, or a folder that can't be listed (a
+	// permission, a flaky share), can't be checked: resolveBook would read it as
+	// no book (it wraps a failed stat as ErrNotIndexable, and lists an unreadable
+	// folder as empty), so it counts as present here.
+	abs := absOf(lib, rel)
+	info, err := os.Stat(abs)
+	if err != nil {
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+	if info.IsDir() {
+		if _, err := os.ReadDir(abs); err != nil {
+			return !errors.Is(err, fs.ErrNotExist)
+		}
 	}
 	b, err := s.resolveBook(ctx, lib, rel, nil)
 	if errors.Is(err, ErrNotIndexable) {

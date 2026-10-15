@@ -43,7 +43,8 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   const offer = available && !jobOpen && action !== undefined && action !== 'hidden';
   // A cancelled job says nothing worth a line.
   const showJob = job && job.state !== 'cancelled';
-  if (!showJob && !offer && !generated) return null;
+  // An open dialog stays (it says when the Bridge went away), whatever else changed.
+  if (!open && !showJob && !offer && !generated) return null;
 
   const look = job ? stateLook(job) : undefined;
   const canCancel = job ? jobActions(job).cancel : false;
@@ -96,6 +97,7 @@ export function GenerateSection({ book }: { book: AdminBook }) {
         onOpenChange={setOpen}
         book={{ library_id: book.library_id, path: book.path, title: book.title }}
         regenerate={action === 'regenerate'}
+        offline={!available}
       />
     </section>
   );

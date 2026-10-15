@@ -95,6 +95,54 @@ func TestBridgeSidecarsQueue(t *testing.T) {
 	}
 }
 
+// Contributing (contribute "issue") is queued only for a Bridge whose estimates
+// say it can (409 cannot_contribute otherwise, also when it sent none), and the
+// estimate carries what the dialog needs to offer it: can_contribute, and
+// figures (false while the Bridge has sent none, so agent_ready false reads as
+// unknown, not "not ready"). A book that isn't indexed is 404 book_not_found
+// on both routes, which the console words.
+func TestBridgeSidecarsContribute(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	issue := `{"contribute":"issue"}`
+	for name, est := range map[string]string{"no estimates": "", "can't": sidecarsEstimates} {
+		b.beatWith(t, true, true, est)
+		resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, issue)
+		if resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"cannot_contribute"`) {
+			t.Fatalf("denied (%s): %d %s, want 409 cannot_contribute", name, resp.StatusCode, body)
+		}
+		_, est, body := b.estimate(t, b.adminTok, b.lib.ID, mistbornBook)
+		if est.CanContribute || !strings.Contains(body, `"can_contribute":false`) || est.Figures != (name != "no estimates") {
+			t.Fatalf("estimate (%s): %s", name, body)
+		}
+	}
+	can := strings.Replace(sidecarsEstimates, `"subscription":true`, `"subscription":true,"can_contribute":true`, 1)
+	b.beatWith(t, true, true, can)
+	if _, est, body := b.estimate(t, b.adminTok, b.lib.ID, mistbornBook); !est.CanContribute || !est.Figures || !est.AgentReady {
+		t.Fatalf("estimate (can): %s", body)
+	}
+	if resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, issue); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("allowed: %d %s", resp.StatusCode, body)
+	}
+	// A can_contribute of the wrong type drops the block, never the heartbeat.
+	b.beatWith(t, true, true, `{"sidecars":{"can_contribute":"yes"}}`)
+	if _, est, body := b.estimate(t, b.adminTok, b.lib.ID, mistbornBook); est.CanContribute || est.Figures {
+		t.Fatalf("estimate (bad block): %s", body)
+	}
+
+	for name, resp := range map[string]func() (*http.Response, string){
+		"queue": func() (*http.Response, string) { return b.queueSidecars(t, b.lib.ID, "Nobody/Nothing", `{}`) },
+		"estimate": func() (*http.Response, string) {
+			resp, _, body := b.estimate(t, b.adminTok, b.lib.ID, "Nobody/Nothing")
+			return resp, body
+		},
+	} {
+		if r, body := resp(); r.StatusCode != http.StatusNotFound || !strings.Contains(body, `"code":"book_not_found"`) {
+			t.Errorf("%s of an unknown book: %d %s, want 404 book_not_found", name, r.StatusCode, body)
+		}
+	}
+}
+
 // The book's facts ride on GET /bridge/libraries/{id}/book only when a path was
 // asked for.
 func TestBridgeBookFacts(t *testing.T) {
@@ -445,7 +493,9 @@ func TestBridgeEstimateMetadataOff(t *testing.T) {
 }
 
 // A job's move into done, failed or needs_attention is announced once; a
-// keepalive (running -> running, parked -> parked) is not.
+// keepalive (running -> running, parked -> parked) is not, nor is a transient
+// park (the agent unavailable for a while), but one that hardens in place (a
+// refused credential, whatever its retry_at) is.
 func TestBridgeJobNotifications(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -473,15 +523,16 @@ func TestBridgeJobNotifications(t *testing.T) {
 		`{"attempt":1,"state":"running","progress":{"step":"asr","done":3,"total":40}}`,
 		`{"attempt":1,"progress":{"step":"asr","done":4,"total":40}}`,
 		`{"attempt":1,"state":"needs_attention","error":"no agent","progress":{"step":"waiting","park":{"code":"agent_unavailable","hint":"later"}}}`,
-		`{"attempt":1,"state":"needs_attention","progress":{"step":"waiting","park":{"code":"agent_unavailable"}}}`,
+		`{"attempt":1,"state":"needs_attention","error":"credential refused","progress":{"step":"waiting","park":{"code":"agent_credential_refused","retry_at":"2026-11-01T00:00:00Z"}}}`,
+		`{"attempt":1,"state":"needs_attention","progress":{"step":"waiting","park":{"code":"agent_credential_refused","retry_at":"2026-11-01T00:00:00Z"}}}`,
 		`{"attempt":1,"state":"running","progress":{"step":"fact_pass"}}`,
 		`{"attempt":1,"state":"done","result":{"characters":3}}`,
 	} {
 		if resp, body := b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok, u); resp.StatusCode != http.StatusOK {
 			t.Fatalf("update %d: %d %s", i, resp.StatusCode, body)
 		}
-		if i < 3 && len(events(notify.KindBridgeJobFailed))+len(events(notify.KindBridgeJobFinished)) != 0 {
-			t.Fatalf("a running report (%d) was announced", i)
+		if i < 4 && len(events(notify.KindBridgeJobFailed))+len(events(notify.KindBridgeJobFinished)) != 0 {
+			t.Fatalf("a running report or a transient park (%d) was announced", i)
 		}
 	}
 	failed, finished := events(notify.KindBridgeJobFailed), events(notify.KindBridgeJobFinished)
@@ -489,8 +540,8 @@ func TestBridgeJobNotifications(t *testing.T) {
 		t.Fatalf("announced %d failed and %d finished, want one each", len(failed), len(finished))
 	}
 	book, _ := b.cat.GetBookByPath(ctx, b.lib.ID, mistbornBook)
-	if f := failed[0].Data; f["code"] != "agent_unavailable" || f["state"] != "needs_attention" || f["title"] != book.Title ||
-		f["path"] != mistbornBook || f["library"] != b.lib.Name || f["job_kind"] != bridge.KindSidecars || f["detail"] != "no agent" {
+	if f := failed[0].Data; f["code"] != "agent_credential_refused" || f["state"] != "needs_attention" || f["title"] != book.Title ||
+		f["path"] != mistbornBook || f["library"] != b.lib.Name || f["job_kind"] != bridge.KindSidecars || f["detail"] != "credential refused" {
 		t.Fatalf("failed event = %v", f)
 	}
 	if f := finished[0].Data; f["state"] != "done" || f["title"] != book.Title {

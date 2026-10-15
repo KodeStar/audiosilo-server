@@ -2191,6 +2191,8 @@ export interface SidecarsEstimates {
   agent_ready: boolean;
   /** The credential is a subscription login: costs are an estimate of usage, not a bill. */
   subscription: boolean;
+  /** The Bridge can offer results to the community (absent from an older Bridge: it can't). */
+  can_contribute?: boolean;
   /** 0 = no monthly cap. */
   monthly_budget_usd: number;
   month_spent_usd: number;
@@ -2335,6 +2337,10 @@ export interface BridgeEstimate {
   agent_cost_usd: number | null;
   subscription: boolean;
   agent_ready: boolean;
+  /** The Bridge can offer the results to the community: only then may a job ask for contribute "issue". */
+  can_contribute: boolean;
+  /** The Bridge has sent its figures; without them subscription, agent_ready and can_contribute say nothing yet. */
+  figures: boolean;
   /** The library is mapped and writable on the Bridge. */
   writable: boolean;
   has: {

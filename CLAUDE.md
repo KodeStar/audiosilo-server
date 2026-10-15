@@ -247,7 +247,9 @@ folder: its signature, the index it was read for, what it says; derived from the
 metadata.json below). `0047` adds `bridge_jobs` (the Bridge's jobs: path-keyed, no FK to `books`, FK to
 `libraries` with cascade, `requested_by` -> users SET NULL, a partial unique index on `dedupe_key` among
 open states) and the one-row `bridge_status` (the pairing code's hash and expiry, who paired the Bridge and
-when, its last heartbeat); see The Bridge below.
+when, its last heartbeat); see The Bridge below. `0048` adds `books.attachments_sig` / `attachments_indexed_at`
+and `book_attachments` (book_id -> books CASCADE: the Bridge's checked `.audiosilo/` characters, recaps and
+provenance; derived from the files like `abs_file`, so rebuildable and never carried by a move).
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -631,8 +633,10 @@ future metadata site can attach enrichment without reshaping the schema. The
   mirroring the player's `meta-gating.ts`; previous works lose only
   `recap_summary.ending`). Both work on a per-request copy - the cached envelope
   is shared and immutable. `MetaWork` also carries `community_description`
-  (CC BY-SA, apart from `description`) and `attribution` (present iff the work
-  has characters/recaps/recap_summary/community_description); `MetaRecording`
+  (CC BY-SA, apart from `description`) and `attribution` (present iff the work's
+  COMMUNITY content has characters/recaps/recap_summary/community_description:
+  `carriesCommunityContent`; generated content, laid in after it by
+  `meta.Answer`, never claims the credit); `MetaRecording`
   carries `chapter_count`. `Service.CachedWorkID` answers an identifier's work id
   from the cache alone: memory, else its enrichment's stored row, fresh or stale
   (never the upstream), so placement does not flip with a restart or an eviction.
@@ -1584,8 +1588,12 @@ future metadata site can attach enrichment without reshaping the schema. The
   all booleans).
   **Jobs** (`bridge_jobs`): kinds allow-listed twice, inside `bridge.Service.Enqueue` (the server queues
   only a kind it knows, with per-kind params: 400, AND the Bridge advertised: `ErrKindUnavailable`, 409
-  `kind_unavailable`); Phase 0's one
-  kind is `bridge.verify` (`library_id` required, optional book `path`, params `{hold_seconds 0-600}`).
+  `kind_unavailable`); Phase 0's
+  kind is `bridge.verify` (`library_id` required, optional book `path`, params `{hold_seconds 0-600}`),
+  Phase 1a's `sidecars.generate` (a book `path` required, params `{source, contribute, work_id}`; it writes,
+  so it is refused 409 `library_not_writable` for a library the last heartbeat doesn't report mapped and
+  writable, and `contribute: "issue"` is refused 409 `cannot_contribute` unless the heartbeat's
+  `estimates.sidecars.can_contribute` says the Bridge can; the open job is still returned).
   States queued -> claimed -> running -> done | failed | needs_attention | cancelled. `dedupe_key`
   (kind|library|path) returns the open job on a second press (200, else 201; the console says when that
   job is one still stopping after a cancel, `cancel_requested`, as nothing new can be queued until it ends). `GET /bridge/jobs/next?wait=
@@ -1599,24 +1607,32 @@ future metadata site can attach enrichment without reshaping the schema. The
   to stop.
   Leases are expired (`expireSQL`: requeued with the dead attempt's progress, result and error dropped,
   failed on the last of `MaxAttempts` (3), or cancelled when a cancel was asked; those two keep what was
-  reported) inside every transaction that reads or changes job states (`expireTx`: enqueue, claim,
-  update, cancel, `MoveJobs`), and before a console read only when a lease has actually run out
-  (`expireDue`: a reader-pool check first, so polls don't queue for the one writer); a requeue wakes the
-  waiting claims once it commits (one inside `MoveJobs` is taken within `MaxWait`). `List` returns its
+  reported) inside every `bridge.Service` transaction that reads or changes job states (`expireTx`:
+  enqueue, claim, update, cancel), and before a console read only when a lease has actually run out
+  (`expireDue`: a reader-pool check first, so polls don't queue for the one writer); once it commits, a
+  requeue wakes the waiting claims and a failed job is announced (`settle`). `MoveJobs` (the catalog's
+  move transaction) expires nothing: a lease it finds lapsed is left to the next Service call, which
+  can announce it. `List` returns its
   own `next_before` (it reads one row past the page). Cancel (`POST
   /admin/bridge/jobs/{id}/cancel`) ends a queued or parked job at once, else sets `cancel_requested`.
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
   server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
   first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an
-  on-demand index); `POST /bridge/rescan {library_id, path}` re-reads one path (`IndexPath`; 404
-  `not_indexable`). Console: `GET /admin/bridge` (pairing, online, heartbeat, kinds, features, each
+  on-demand index); `POST /bridge/rescan {library_id, path, mode?, from?}` re-reads one path: mode
+  `full` (or none) indexes it (`IndexPath`; with `from`, the book's path before a move the Bridge made,
+  `Scanner.IndexMoved` carries its durable state when the old book is gone from disk and the
+  fingerprints match, else ignores it), mode `attachments` re-reads only the book's `.audiosilo/` files
+  (`Scanner.RefreshAttachments`, answering `{path, attachments: {characters, recaps, bridge}}`); 404
+  `not_indexable`. Console: `GET /admin/bridge` (pairing, online, heartbeat, kinds, features, each
   library with the Bridge's mapping, workers, `ui_url`), `GET`/`POST /admin/bridge/jobs`, `GET
   /admin/bridge/jobs/{id}`; Settings > Bridge in `admin-ui` (`features/bridge/`). Jobs are carried by
   `bridge.MoveJobs`, which `catalog.moveBookState` calls in its transaction with the catalog's clock (an
   open job colliding with an open one of its kind at the new path is cancelled; `DedupeKey` rebuilds the
-  key), and go with their library. **Hidden folders**: nothing indexes or lists a path through a
-  dot-folder by name (`library.HasHiddenPart` in `IndexPathWithin` and `listDir`), so a book's
-  `.audiosilo/` never becomes a phantom book. Audited `bridge.code`, `bridge.paired` (system),
+  key), and go with their library. **Hidden folders**: no route reaches content through a hidden
+  segment by name (`library.ContentPath`, the one statement of the rule: `ContentJoin` for a path that
+  names content, `IndexPathWithin`, `listDir`, and `scopedPathIn` for every path-taking route, a
+  hidden path reading as missing, 404), so a book's `.audiosilo/` never becomes a phantom book or a
+  streamable file; `findCover` never takes a hidden file (an AppleDouble `._x.jpg`) as a cover. Audited `bridge.code`, `bridge.paired` (system),
   `bridge.unpair`, `bridge.job`, `bridge.cancel`. `SetBridge` before `Handler()` (the launcher always calls it).
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
@@ -1698,7 +1714,10 @@ future metadata site can attach enrichment without reshaping the schema. The
   (`book_added` with up to 5 titles from `ScanResult.AddedTitles`, `scan_failed` (its `detail` is shown in the
   bell but never sent out: `internalData`), `library_unavailable`
   only when the previous run wasn't), login/exchange (`new_device`, not demo accounts; `invite_redeemed`
-  via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`.
+  via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`,
+  `bridge.Service.OnTransition` (`bridge_job_finished` into done, `bridge_job_failed` into failed or into
+  a park that isn't transient: `bridge.Job.Notable`, which leaves out `agent_rate_limited` and
+  `agent_unavailable` whatever their `retry_at`).
   Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
   console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
   `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),

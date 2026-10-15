@@ -45,6 +45,7 @@ func TestCoverages(t *testing.T) {
 // upstream; a cached "no match", a cached failure and a row of another format
 // are no answer. A fresh stored row warms memory.
 func TestCachedEnrichment(t *testing.T) {
+	t.Parallel()
 	m := fullMock()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()

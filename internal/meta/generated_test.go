@@ -134,4 +134,14 @@ func TestAnswerUnmatched(t *testing.T) {
 	if unmatched(&Generated{}, nil).Work != nil || unmatched(nil, nil).Work != nil {
 		t.Error("a work from nothing")
 	}
+	// Gated to nothing (every character revealed later, every recap past the
+	// listener, the summary withheld): plain matched false, no empty work.
+	late := &Generated{Characters: &model.Characters{Characters: []model.Character{{ID: "c", Name: "C", Reveal: model.Position{Chapter: 5}}}},
+		Recaps: &model.Recaps{Recaps: []model.Recap{{Through: model.Position{Chapter: 4}, Text: "Later."}}, InShort: "Short."}}
+	if u := unmatched(late, &Place{Chapter: 1}); u.Work != nil {
+		t.Errorf("gated to nothing = %+v, want no work", u.Work)
+	}
+	if raw, _ := json.Marshal(Answer(nil, "The Book", late, &Place{Chapter: 1})); string(raw) != `{"matched":false}` {
+		t.Errorf("gated to nothing = %s", raw)
+	}
 }

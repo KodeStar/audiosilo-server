@@ -470,6 +470,28 @@ func copyFixtureM4B(t *testing.T, dst string) {
 	}
 }
 
+// TestFindCoverSkipsHiddenFiles: a hidden file is never a book's cover. macOS
+// writes an AppleDouble stub ("._Book - Cover.jpg", a resource fork) beside
+// each image it copies to a share, and the stub sorts before the image and
+// names "cover": the real image wins, and a folder holding only stubs has none.
+func TestFindCoverSkipsHiddenFiles(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	book := filepath.Join(root, "Author", "Book")
+	writeFile(t, root, "Author/Book/._Book - Cover.jpg", []byte("resource fork"))
+	writeFile(t, root, "Author/Book/Book - Cover.jpg", []byte("img"))
+	writeFile(t, root, "Author/Book/.hidden.png", []byte("img"))
+	if got := findCover(root, book, true); got != "Author/Book/Book - Cover.jpg" {
+		t.Fatalf("findCover = %q, want the real image", got)
+	}
+	stubs := filepath.Join(root, "Author", "Stubs")
+	writeFile(t, root, "Author/Stubs/._art.png", []byte("resource fork"))
+	writeFile(t, root, "Author/Stubs/.cover.jpg", []byte("img"))
+	if got := findCover(root, stubs, true); got != "" {
+		t.Fatalf("findCover = %q, want none (only hidden files)", got)
+	}
+}
+
 // TestScannerFindsFolderCover guards the cover-art lookup: a folder book's cover
 // lives INSIDE the folder (the demo bug was looking in the parent), an arbitrary
 // image in a book folder is used as a fallback, and a loose single-file book picks

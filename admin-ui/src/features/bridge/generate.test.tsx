@@ -1,5 +1,6 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type { BridgeEstimate, BridgeJob, BridgeStatus } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
@@ -31,6 +32,8 @@ function estimate(over: Partial<BridgeEstimate> = {}): BridgeEstimate {
     agent_cost_usd: 18.2,
     subscription: false,
     agent_ready: true,
+    can_contribute: true,
+    figures: true,
     writable: true,
     has: {
       community: { characters: false, recaps: false },
@@ -262,6 +265,87 @@ describe('generate characters and recaps', () => {
     expect(queued(calls)).toHaveLength(1);
   });
 
+  it('offers contributing only when the Bridge can, and then queues for this server only', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(
+      routes({
+        'GET /admin/bridge/estimate': { body: estimate({ can_contribute: false }) },
+        'POST /admin/bridge/jobs': { status: 201, body: job({ state: 'queued' }) },
+      }),
+    );
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    expect(await within(dialog).findByText('On this server only')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('switch')).toBeNull();
+    expect(within(dialog).queryByText('Also contribute to the community')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Generate' }));
+    await waitFor(() => expect(queued(calls)).toHaveLength(1));
+    expect(queued(calls)[0].body).toMatchObject({ params: { contribute: 'local' } });
+  });
+
+  it("tells a Bridge that hasn't sent its figures from an agent that isn't ready", async () => {
+    const user = userEvent.setup();
+    mockFetch(
+      routes({
+        'GET /admin/bridge/estimate': {
+          body: estimate({
+            figures: false,
+            agent_ready: false,
+            can_contribute: false,
+            asr_hours: 0,
+            agent_cost_usd: null,
+          }),
+        },
+      }),
+    );
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    expect(
+      await within(dialog).findByText("The Bridge hasn't reported on its agent yet"),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText("The Bridge's agent isn't ready")).toBeNull();
+  });
+
+  it('keeps the open dialog when the Bridge goes offline, and says so', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(
+      routes({ 'POST /admin/bridge/jobs': { status: 201, body: job({ state: 'queued' }) } }),
+    );
+    const { queryClient } = renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    await within(dialog).findByText('On this server only');
+    // The next GET /server says the Bridge is away.
+    act(() => queryClient.setQueryData(keys.server, serverInfo));
+    expect(await within(dialog).findByText('The Bridge is offline')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Generate characters and recaps' })).toBe(dialog);
+    // What is queued waits for it.
+    await user.click(within(dialog).getByRole('button', { name: 'Generate' }));
+    await waitFor(() => expect(queued(calls)).toHaveLength(1));
+  });
+
+  it("words a book that isn't indexed any more", async () => {
+    const user = userEvent.setup();
+    mockFetch(
+      routes({
+        'GET /admin/bridge/estimate': (req) =>
+          req.query.get('brief') === '1'
+            ? { body: estimate() }
+            : { status: 404, body: { error: 'no book', code: 'book_not_found' } },
+      }),
+    );
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    expect(
+      await within(dialog).findByText(
+        "That book isn't in the library any more. It may have moved or been removed.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows a running job live: stage, count, ETA, cost, and Cancel', async () => {
     mockFetch(
       routes({
@@ -338,6 +422,34 @@ describe('generate characters and recaps', () => {
     );
   });
 
+  it("says the Bridge is retrying once a park's retry time has passed, and words a refused credential", async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                state: 'needs_attention',
+                progress: {
+                  step: 'fact_pass',
+                  park: { code: 'agent_credential_refused', retry_at: '2026-01-01T00:00:00Z' },
+                },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByText(
+        "The agent's credential was refused. Replace it in the agent container.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Trying again now.')).toBeInTheDocument();
+    expect(screen.queryByText(/Tries again/)).toBeNull();
+  });
+
   it('says what a finished job made', async () => {
     mockFetch(
       routes({
@@ -371,6 +483,41 @@ describe('generate characters and recaps', () => {
 });
 
 describe('the Bridge page', () => {
+  it('shows why a generate job was cancelled', async () => {
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/bridge': {
+          body: {
+            paired: true,
+            paired_by: null,
+            pairing: null,
+            online: true,
+            kinds: [],
+            features: [],
+            libraries: [],
+            workers: [],
+          },
+        },
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({
+                state: 'cancelled',
+                cancel_requested: true,
+                error: 'the book moved onto another job of this kind',
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    expect(
+      within(jobs).getByText('the book moved onto another job of this kind'),
+    ).toBeInTheDocument();
+  });
+
   it('words a generate job: its book, its park, and a link into the Bridge; and the estimates', async () => {
     const status: BridgeStatus = {
       paired: true,
