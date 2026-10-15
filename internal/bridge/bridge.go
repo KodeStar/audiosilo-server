@@ -23,9 +23,12 @@ type Service struct {
 
 	// hb caches the last heartbeat as read (status.go), so GET /server, which
 	// every client calls often, reads the database at most every heartbeatTTL.
+	// hbGen counts the cache's writes (a heartbeat saved, Forget): a read that
+	// began before one never replaces its newer answer.
 	hbMu   sync.Mutex
 	hb     *Heartbeat
 	hbRead time.Time
+	hbGen  uint64
 }
 
 // New returns a Service. now may be nil to use time.Now.

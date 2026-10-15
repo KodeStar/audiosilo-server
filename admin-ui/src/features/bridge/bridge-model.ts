@@ -1,11 +1,5 @@
 import type { ComponentProps } from 'react';
-import type {
-  BridgeJob,
-  BridgeJobPage,
-  BridgeJobState,
-  BridgeMapping,
-  BridgeStatus,
-} from '@/api/types';
+import type { BridgeJob, BridgeJobState, BridgeMapping, BridgeStatus } from '@/api/types';
 import type { StatusTone } from '@/components/status-text';
 import type { Badge } from '@/components/ui/badge';
 
@@ -82,23 +76,6 @@ export const JOBS_POLL_IDLE_MS = 30_000;
 
 export function jobsPollMs(jobs: readonly Pick<BridgeJob, 'state'>[]): number {
   return jobs.some((j) => isOpen(j.state)) ? JOBS_POLL_OPEN_MS : JOBS_POLL_IDLE_MS;
-}
-
-/**
- * The job list: the newest page as last polled, then the loaded pages' jobs
- * older than its last one, so none is listed twice or skipped when new jobs push
- * the pages along. Without a newest page yet, the loaded pages as they are.
- */
-export function jobRows(
-  newest: BridgeJobPage | undefined,
-  pages: readonly BridgeJobPage[],
-): BridgeJob[] {
-  const loaded = pages.flatMap((p) => p.jobs);
-  if (!newest) return loaded;
-  const floor = newest.next_before;
-  // No next_before: the newest page holds every job there is.
-  if (floor === undefined) return newest.jobs;
-  return [...newest.jobs, ...loaded.filter((j) => j.id < floor)];
 }
 
 /** How often the status asks again: every few seconds while a pairing code waits. */

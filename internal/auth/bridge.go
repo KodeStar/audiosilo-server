@@ -33,11 +33,21 @@ const bridgePairTTL = 15 * time.Minute
 // BridgeTokenName is the device name a bridge token carries.
 const BridgeTokenName = "AudioSilo Bridge"
 
-// BridgeLiveSQL is true while a bridge token is live: not revoked, and its admin
-// still an enabled admin. It is the one statement of "a Bridge is paired"; the
-// bridge package's heartbeat reads use it too.
-const BridgeLiveSQL = `EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id = t.user_id
-	WHERE t.kind = '` + KindBridge + `' AND t.revoked = 0 AND tu.disabled = 0 AND tu.role = '` + RoleAdmin + `')`
+// bridgeLiveWhere is what makes a tokens row t (with its user tu) a live bridge
+// token: not revoked, and its admin still an enabled admin.
+const bridgeLiveWhere = `t.kind = '` + KindBridge + `' AND t.revoked = 0 AND tu.disabled = 0 AND tu.role = '` + RoleAdmin + `'`
+
+// BridgeLiveSQL is true while a bridge token is live. It is the one statement
+// of "a Bridge is paired"; the bridge package's heartbeat reads use it too.
+const BridgeLiveSQL = `EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id = t.user_id WHERE ` + bridgeLiveWhere + `)`
+
+// BridgeTokenLiveSQL is BridgeLiveSQL for one token, its id the statement's
+// next parameter: whether a request's bridge token is still the paired Bridge's.
+// A Bridge's call was authenticated when it arrived; a pairing or an unpair may
+// have revoked its token since (a heartbeat queued for the writer, a claim
+// waiting out its long poll), so the bridge package's writes ask again.
+const BridgeTokenLiveSQL = `EXISTS(SELECT 1 FROM tokens t JOIN users tu ON tu.id = t.user_id
+	WHERE t.id = ? AND ` + bridgeLiveWhere + `)`
 
 // revokeBridgeTokensSQL revokes every bridge token (pairing and unpairing).
 const revokeBridgeTokensSQL = `UPDATE tokens SET revoked = 1 WHERE kind = '` + KindBridge + `' AND revoked = 0`

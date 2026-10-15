@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -15,6 +19,9 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/config"
+	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/store/storetest"
 )
 
 // bridgeEnv: the fixture library, an admin's session and API key, a user's
@@ -303,6 +310,36 @@ func TestBridgeBookForMappingCheck(t *testing.T) {
 	}
 }
 
+// The mapping check's sample skips a book whose files are gone from the
+// server's disk (deleted before a scan pruned it), so one stale entry doesn't
+// make the whole library look unmapped.
+func TestBridgeSampleBookSkipsAMissingBook(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b",
+		"Will Wight/Cradle/01 - Unsouled.m4b", "Will Wight/Cradle/02 - Soulsmith.m4b")
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE libraries SET root = ? WHERE id = ?`, root, b.lib.ID); err != nil {
+		t.Fatal(err)
+	}
+	sample := func() string {
+		t.Helper()
+		resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/bridge/libraries/%d/book", b.lib.ID), b.bridgeTok, "")
+		var out struct{ Path string }
+		decodeInto(t, body, &out)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sample: %d %s", resp.StatusCode, body)
+		}
+		return out.Path
+	}
+	first := sample()
+	if err := os.RemoveAll(filepath.Join(root, filepath.FromSlash(first))); err != nil {
+		t.Fatal(err)
+	}
+	if next := sample(); next == first || next == "" {
+		t.Fatalf("the sample after %q's files went = %q, want another book", first, next)
+	}
+}
+
 func TestBridgeRescan(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -487,5 +524,140 @@ func TestHiddenFoldersAreNotIndexedOnDemand(t *testing.T) {
 	}
 	if counts, err := e.cat.CountBooksByLibrary(context.Background()); err != nil || counts[lib.ID] != 1 {
 		t.Errorf("books = %v, %v; want 1 (no phantom)", counts, err)
+	}
+}
+
+// claimAsync starts a long-poll claim (raw, off the test goroutine) and returns
+// the channel its status code arrives on (0 for a transport error).
+func claimAsync(base, token string, wait int) <-chan int {
+	got := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/bridge/jobs/next?wait=%d", base, wait), nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- 0
+			return
+		}
+		resp.Body.Close()
+		got <- resp.StatusCode
+	}()
+	return got
+}
+
+// A paired Bridge always has a claim waiting; it must not hold up the server's
+// graceful stop (Shutdown never cancels a request), so the wait ends with the
+// server's own context.
+func TestBridgeClaimEndsWithTheServer(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	base, stop := context.WithCancel(context.Background())
+	defer stop()
+	b.api.SetBaseContext(base)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := make(chan struct{}, 1)
+	srv := &http.Server{Handler: b.api.Handler(), ConnState: func(_ net.Conn, st http.ConnState) {
+		if st == http.StateActive {
+			select {
+			case active <- struct{}{}:
+			default:
+			}
+		}
+	}}
+	go func() { _ = srv.Serve(ln) }()
+	got := claimAsync("http://"+ln.Addr().String(), b.bridgeTok, 20)
+	<-active                           // the claim is in
+	time.Sleep(100 * time.Millisecond) // and waiting
+	stop()                             // the launcher's context ends, then it shuts the server down
+	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shut); err != nil {
+		t.Fatalf("graceful shutdown with a claim waiting: %v", err)
+	}
+	if code := <-got; code != http.StatusNoContent {
+		t.Fatalf("the waiting claim answered %d, want 204", code)
+	}
+}
+
+// Security-critical: pairing another Bridge revokes the first one's token, and a
+// claim it had waiting (authenticated before) hands it nothing: 401, the job
+// stays queued for the new Bridge.
+func TestBridgeReplacedBridgeCannotClaim(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	old := b.bridgeTok
+	got := claimAsync(b.srv.URL, old, 10)
+	time.Sleep(200 * time.Millisecond) // the old Bridge's claim is waiting
+	b.bridgeTok = b.pair(t)
+	b.beat(t, bridge.KindVerify)
+	job := b.queue(t, mistbornBook, `{}`)
+	if code := <-got; code != http.StatusUnauthorized {
+		t.Fatalf("denied: the replaced Bridge's waiting claim answered %d, want 401", code)
+	}
+	resp, body := b.do(t, "GET", "/api/v1/bridge/jobs/next", b.bridgeTok, "")
+	var j bridge.Job
+	decodeInto(t, body, &j)
+	if resp.StatusCode != http.StatusOK || j.ID != job.ID || j.Attempts != 1 {
+		t.Fatalf("allowed: the new Bridge's claim: %d %s", resp.StatusCode, body)
+	}
+}
+
+// A heartbeat naming no kind the server knows still answers features as a list
+// (the console reads its length), and a report on a job that is gone is 409
+// not_held, the code that makes the Bridge drop it.
+func TestBridgeEmptyFeaturesAndGoneJob(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beat(t)
+	for _, path := range []string{"/api/v1/admin/bridge", "/api/v1/server"} {
+		_, body := b.do(t, "GET", path, b.adminTok, "")
+		if !strings.Contains(body, `"features":[]`) {
+			t.Errorf("GET %s: %s, want features []", path, body)
+		}
+	}
+	resp, body := b.do(t, "PATCH", "/api/v1/bridge/jobs/999", b.bridgeTok, `{"attempt":1,"state":"failed"}`)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, "not_held") {
+		t.Fatalf("report on a gone job: %d %s, want 409 not_held", resp.StatusCode, body)
+	}
+}
+
+// GET /server answers on an API built without SetBridge (no Bridge, no flag).
+func TestServerInfoWithoutBridge(t *testing.T) {
+	t.Parallel()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	a := New(config.Default(t.TempDir()), auth.New(db, time.Now), cat, library.NewScanner(cat, "", slog.Default()), "", slog.Default())
+	srv := httptest.NewServer(a.Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/api/v1/server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var info struct {
+		Capabilities map[string]bool `json:"capabilities"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil || resp.StatusCode != http.StatusOK || info.Capabilities["bridge"] {
+		t.Fatalf("GET /server = %d, %+v, %v", resp.StatusCode, info, err)
+	}
+}
+
+// Security-critical: the Bridge forgets its token at the first 401, so only a
+// refused token is one; a token the server can't check (its database failing)
+// is a 503 the Bridge retries.
+func TestBridgeTokenCheckFailureIsNotUnauthorized(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	if resp, _ := b.do(t, "PUT", "/api/v1/bridge/status", "nope", `{"version":"0.1.0"}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("denied: a refused token = %d, want 401", resp.StatusCode)
+	}
+	if err := b.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, `{"version":"0.1.0"}`); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a token the server couldn't check = %d %s, want 503", resp.StatusCode, body)
 	}
 }

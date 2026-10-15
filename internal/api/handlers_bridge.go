@@ -33,15 +33,21 @@ func (a *API) SetBridge(b *bridge.Service) { a.bridge = b }
 var bridgeKinds = []string{auth.KindBridge}
 
 // requireBridge authenticates the paired Bridge's token (Authorization header
-// only).
+// only). Only a missing or refused token is a 401: the Bridge forgets its token
+// at the first one, so a failure to check the token (the database) is a 503,
+// which it retries.
 func (a *API) requireBridge(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, failure := a.authenticate(r, false, bridgeKinds)
-		if failure != "" {
+		ctx, failure, err := a.authenticate(r, false, bridgeKinds)
+		switch {
+		case failure == "":
+			next(w, r.WithContext(ctx))
+		case err != nil && !errors.Is(err, auth.ErrInvalidToken):
+			a.log.Warn("bridge token check failed", "err", err)
+			writeError(w, http.StatusServiceUnavailable, "could not check the token, try again")
+		default:
 			writeError(w, http.StatusUnauthorized, failure)
-			return
 		}
-		next(w, r.WithContext(ctx))
 	})
 }
 
@@ -53,8 +59,12 @@ type bridgeInfo struct {
 }
 
 // bridgeOnline returns the bridge block for GET /server, or nil when no Bridge is
-// online (or its status can't be read, which is logged).
+// online (or its status can't be read, which is logged, or the API was built
+// without SetBridge: GET /server is every client's first call and must answer).
 func (a *API) bridgeOnline(ctx context.Context) *bridgeInfo {
+	if a.bridge == nil {
+		return nil
+	}
 	h, err := a.bridge.Online(ctx)
 	if err != nil {
 		a.log.Warn("bridge status read failed", "err", err)
@@ -95,7 +105,7 @@ func (a *API) handleBridgeExchange(w http.ResponseWriter, r *http.Request) {
 	a.redeemLimiter.Reset(ip)
 	a.bridge.Forget()
 	// No admin made this request: the pairing is recorded as the server's own.
-	e := catalog.AuditEvent{Action: "bridge.paired", Details: map[string]any{"ip": ip}, Via: catalog.ViaSystem}
+	e := catalog.AuditEvent{Action: "bridge.paired", Via: catalog.ViaSystem} // the audit log keeps no addresses
 	if err := a.cat.RecordAudit(context.WithoutCancel(r.Context()), e); err != nil {
 		a.log.Warn("audit: record failed", "action", e.Action, "err", err)
 	}
@@ -139,7 +149,7 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := a.bridge.SaveHeartbeat(r.Context(), st); err != nil {
+	if err := a.bridge.SaveHeartbeat(r.Context(), credentialFrom(r.Context()).ID, st); err != nil {
 		if errors.Is(err, bridge.ErrNotPaired) {
 			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
@@ -186,13 +196,16 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
-		book *catalog.Book
-		err  error
+		book  *catalog.Book
+		files []bridgeFile
+		err   error
 	)
 	if p := catalog.CleanRelPath(r.URL.Query().Get("path")); p != "" {
-		book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p)
+		if book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p); err == nil {
+			files, _ = statBookFiles(lib, book)
+		}
 	} else {
-		book, err = a.firstBook(r.Context(), lib.ID)
+		book, files, err = a.sampleBook(r.Context(), lib)
 	}
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeErrorCode(w, http.StatusNotFound, "no_book", "no indexed book there")
@@ -202,43 +215,99 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "bridge book failed", "could not load the book")
 		return
 	}
-	files := make([]bridgeFile, 0, len(book.Files))
-	for _, f := range book.Files {
-		bf := bridgeFile{Path: f.RelPath, Size: f.Size}
-		if full, err := library.SafeJoin(lib.Root, f.RelPath); err == nil {
-			if info, err := os.Stat(full); err == nil {
-				bf.Size, bf.ModTime = info.Size(), info.ModTime().Unix()
-			}
-		}
-		files = append(files, bf)
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"library_id": lib.ID, "path": book.RelPath, "files": files})
 }
 
-// firstBook is a library's first indexed book with its files, the mapping
-// check's sample.
-func (a *API) firstBook(ctx context.Context, libraryID int64) (*catalog.Book, error) {
-	page, err := a.cat.ListBooks(ctx, catalog.ListOptions{LibraryID: libraryID, Sort: "title", Limit: 1})
+// statBookFiles is a book's files with the size and modification time the
+// server sees now (the indexed size when a file can't be read), and whether
+// every one is there.
+func statBookFiles(lib *catalog.Library, book *catalog.Book) ([]bridgeFile, bool) {
+	files := make([]bridgeFile, 0, len(book.Files))
+	present := true
+	for _, f := range book.Files {
+		bf := bridgeFile{Path: f.RelPath, Size: f.Size}
+		info, err := os.Stat(filepathOf(lib, f.RelPath))
+		if err == nil {
+			bf.Size, bf.ModTime = info.Size(), info.ModTime().Unix()
+		} else {
+			present = false
+		}
+		files = append(files, bf)
+	}
+	return files, present
+}
+
+// filepathOf is a library-relative path on the server's disk ("" when it would
+// leave the library, which then fails its stat).
+func filepathOf(lib *catalog.Library, rel string) string {
+	full, err := library.SafeJoin(lib.Root, rel)
 	if err != nil {
-		return nil, err
+		return ""
 	}
-	if len(page.Books) == 0 {
-		return nil, catalog.ErrNotFound
+	return full
+}
+
+// sampleBooks is how many books the mapping check's sample is chosen from.
+const sampleBooks = 5
+
+// sampleBook is the mapping check's sample: the first of the library's first
+// books (by title) whose files are all on the server's disk, so one book deleted
+// before a scan prunes it doesn't make the whole library look unmapped; the
+// first book when none is whole.
+func (a *API) sampleBook(ctx context.Context, lib *catalog.Library) (*catalog.Book, []bridgeFile, error) {
+	page, err := a.cat.ListBooks(ctx, catalog.ListOptions{LibraryID: lib.ID, Sort: "title", Limit: sampleBooks})
+	if err != nil {
+		return nil, nil, err
 	}
-	return a.cat.GetBookByPath(ctx, libraryID, page.Books[0].RelPath)
+	var (
+		first      *catalog.Book
+		firstFiles []bridgeFile
+	)
+	for _, b := range page.Books {
+		book, err := a.cat.GetBookByPath(ctx, lib.ID, b.RelPath)
+		if errors.Is(err, catalog.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		files, present := statBookFiles(lib, book)
+		if present {
+			return book, files, nil
+		}
+		if first == nil {
+			first, firstFiles = book, files
+		}
+	}
+	if first == nil {
+		return nil, nil, catalog.ErrNotFound
+	}
+	return first, firstFiles, nil
 }
 
 // handleBridgeClaim serves GET /bridge/jobs/next?wait=<seconds>&kind=...: the
 // next queued job of a kind the Bridge runs, narrowed to the kind= values when it
 // sends any (the kinds it has room for now), leased to it (200 job), waiting up
 // to wait (at most bridge.MaxWait) for one; 204 when none came (at once when no
-// kind is left), 409 no_heartbeat before its first heartbeat.
+// kind is left, and when the server is stopping), 409 no_heartbeat before its
+// first heartbeat, 401 once a pairing or an unpair revoked its token mid-wait.
 func (a *API) handleBridgeClaim(w http.ResponseWriter, r *http.Request) {
 	wait := time.Duration(queryInt(r, "wait", 0)) * time.Second
-	job, err := a.bridge.ClaimFor(r.Context(), r.URL.Query()["kind"], wait)
+	// The wait ends with the server too: a paired Bridge always has a claim
+	// waiting, which would otherwise hold a graceful shutdown for up to its whole
+	// wait (Shutdown never cancels a request's context).
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	defer context.AfterFunc(a.baseCtx, cancel)()
+	job, err := a.bridge.ClaimFor(ctx, credentialFrom(r.Context()).ID, r.URL.Query()["kind"], wait)
 	switch {
 	case errors.Is(err, bridge.ErrNoHeartbeat):
 		writeErrorCode(w, http.StatusConflict, "no_heartbeat", "send a status first")
+	case errors.Is(err, bridge.ErrNotPaired):
+		writeError(w, http.StatusUnauthorized, "invalid or expired token")
+	case err != nil && ctx.Err() != nil:
+		// The server is stopping (or the Bridge left): nothing was claimed.
+		w.WriteHeader(http.StatusNoContent)
 	case err != nil:
 		a.log.Warn("bridge claim failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not claim a job")

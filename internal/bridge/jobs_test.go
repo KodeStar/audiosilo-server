@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,8 @@ type testQueue struct {
 	now   *time.Time
 	admin int64
 	lib   int64
+	// token is the paired Bridge's token (its tokens row id).
+	token int64
 }
 
 func newTestQueue(t *testing.T) *testQueue {
@@ -48,9 +51,11 @@ func newTestQueue(t *testing.T) *testQueue {
 func (q *testQueue) pair(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := q.db.ExecContext(ctx, `INSERT INTO tokens(user_id, token_hash, kind, created_at) VALUES(?, 'h', 'bridge', '2026-01-01T00:00:00Z')`, q.admin); err != nil {
+	res, err := q.db.ExecContext(ctx, `INSERT INTO tokens(user_id, token_hash, kind, created_at) VALUES(?, 'h', 'bridge', '2026-01-01T00:00:00Z')`, q.admin)
+	if err != nil {
 		t.Fatal(err)
 	}
+	q.token, _ = res.LastInsertId()
 	if _, err := q.db.ExecContext(ctx, `INSERT INTO bridge_status(id, paired_at, paired_by) VALUES(1, '2026-01-01T00:00:00Z', ?)`, q.admin); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +68,7 @@ func (q *testQueue) beat(t *testing.T, kinds ...string) {
 	if err := st.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := q.SaveHeartbeat(context.Background(), st); err != nil {
+	if err := q.SaveHeartbeat(context.Background(), q.token, st); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -90,7 +95,7 @@ func TestEnqueueDedupesOpenJobs(t *testing.T) {
 	q := newTestQueue(t)
 	ctx := context.Background()
 	first := q.verify(t, "Author/Book", 0)
-	if first.State != StateQueued || first.RequestedBy == nil || first.RequestedBy.Username != "boss" || string(first.Params) != `{"hold_seconds":0}` {
+	if first.State != StateQueued || first.RequestedBy == nil || first.RequestedBy.Username != "boss" || string(first.Params) != `{}` {
 		t.Fatalf("queued = %+v", first)
 	}
 	again, created, err := q.Enqueue(ctx, NewJob{Kind: KindVerify, LibraryID: &q.lib, Path: ptr("Author/Book"), Params: first.Params, RequestedBy: q.admin})
@@ -178,10 +183,10 @@ func TestClaimFor(t *testing.T) {
 	q := newTestQueue(t)
 	ctx := context.Background()
 	job := q.verify(t, "A", 0)
-	if j, err := q.ClaimFor(ctx, []string{"sidecars.generate"}, MaxWait); err != nil || j != nil {
+	if j, err := q.ClaimFor(ctx, q.token, []string{"sidecars.generate"}, MaxWait); err != nil || j != nil {
 		t.Fatalf("a kind not asked for = %+v, %v", j, err)
 	}
-	j, err := q.ClaimFor(ctx, nil, 0)
+	j, err := q.ClaimFor(ctx, q.token, nil, 0)
 	if err != nil || j == nil || j.ID != job.ID {
 		t.Fatalf("no narrowing = %+v, %v", j, err)
 	}
@@ -189,7 +194,7 @@ func TestClaimFor(t *testing.T) {
 		t.Fatal(err)
 	}
 	q.Forget()
-	if _, err := q.ClaimFor(ctx, nil, 0); !errors.Is(err, ErrNoHeartbeat) {
+	if _, err := q.ClaimFor(ctx, q.token, nil, 0); !errors.Is(err, ErrNoHeartbeat) {
 		t.Fatalf("before a heartbeat: %v, want ErrNoHeartbeat", err)
 	}
 }
@@ -200,18 +205,18 @@ func TestClaimOrderAndKinds(t *testing.T) {
 	ctx := context.Background()
 	low := q.verify(t, "A", 0)
 	high := q.verify(t, "B", 5)
-	if j, err := q.claim(ctx, []string{"podcast.fetch"}); err != nil || j != nil {
+	if j, err := q.claim(ctx, q.token, []string{"podcast.fetch"}); err != nil || j != nil {
 		t.Fatalf("claim of a kind with no jobs = %v, %v", j, err)
 	}
-	j, err := q.claim(ctx, []string{KindVerify})
+	j, err := q.claim(ctx, q.token, []string{KindVerify})
 	if err != nil || j.ID != high.ID || j.State != StateClaimed || j.Attempts != 1 || j.LeaseUntil == nil {
 		t.Fatalf("first claim = %+v, %v; want the high priority job, claimed", j, err)
 	}
-	j, err = q.claim(ctx, []string{KindVerify})
+	j, err = q.claim(ctx, q.token, []string{KindVerify})
 	if err != nil || j.ID != low.ID {
 		t.Fatalf("second claim = %+v, %v", j, err)
 	}
-	if j, err := q.claim(ctx, []string{KindVerify}); err != nil || j != nil {
+	if j, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil || j != nil {
 		t.Fatalf("empty queue claim = %v, %v", j, err)
 	}
 }
@@ -221,7 +226,7 @@ func TestWaitClaimWakesOnEnqueue(t *testing.T) {
 	q := newTestQueue(t)
 	got := make(chan *Job, 1)
 	go func() {
-		j, _ := q.waitClaim(context.Background(), []string{KindVerify}, MaxWait)
+		j, _ := q.waitClaim(context.Background(), q.token, []string{KindVerify}, MaxWait)
 		got <- j
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -244,7 +249,7 @@ func TestLeaseExpiry(t *testing.T) {
 	ctx := context.Background()
 	job := q.verify(t, "A", 0)
 	for attempt := 1; attempt <= MaxAttempts; attempt++ {
-		j, err := q.claim(ctx, []string{KindVerify})
+		j, err := q.claim(ctx, q.token, []string{KindVerify})
 		if err != nil || j == nil || j.Attempts != attempt {
 			t.Fatalf("claim %d = %+v, %v", attempt, j, err)
 		}
@@ -257,18 +262,21 @@ func TestLeaseExpiry(t *testing.T) {
 		if j, _ := q.Job(ctx, job.ID); j.State != StateRunning {
 			t.Fatalf("renewed lease expired: %s", j.State)
 		}
-		// Then the Bridge goes quiet.
-		q.advance(2 * time.Second)
+		// Then the Bridge goes quiet, having said how far it got.
+		if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, Progress: json.RawMessage(`{"step":"hold"}`)}); err != nil {
+			t.Fatalf("progress %d: %v", attempt, err)
+		}
+		q.advance(Lease + time.Second)
 		jobs, _, err := q.List(ctx, Filter{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := StateQueued
+		want, progress := StateQueued, `{}` // a waiting job doesn't read as under way
 		if attempt == MaxAttempts {
-			want = StateFailed
+			want, progress = StateFailed, `{"step":"hold"}` // how far the last attempt got
 		}
-		if jobs[0].State != want {
-			t.Fatalf("after lease %d ran out: %s, want %s", attempt, jobs[0].State, want)
+		if jobs[0].State != want || string(jobs[0].Progress) != progress {
+			t.Fatalf("after lease %d ran out: %s %s, want %s %s", attempt, jobs[0].State, jobs[0].Progress, want, progress)
 		}
 		// The dead claim's late report is refused.
 		if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: attempt, State: ptr(StateDone)}); !errors.Is(err, ErrNotHeld) {
@@ -288,17 +296,16 @@ func TestUpdateHeld(t *testing.T) {
 	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 0, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("report on a queued job: %v, want ErrNotHeld", err)
 	}
-	if _, err := q.claim(ctx, []string{KindVerify}); err != nil {
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 2, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("wrong attempt: %v, want ErrNotHeld", err)
 	}
 	for name, u := range map[string]Update{
-		"back to queued":   {Attempt: 1, State: ptr(StateQueued)},
-		"progress array":   {Attempt: 1, Progress: json.RawMessage(`[1]`)},
-		"result not json":  {Attempt: 1, Result: json.RawMessage(`nope`)},
-		"error with a nul": {Attempt: 1, Error: ptr("bad\x00")},
+		"back to queued":  {Attempt: 1, State: ptr(StateQueued)},
+		"progress array":  {Attempt: 1, Progress: json.RawMessage(`[1]`)},
+		"result not json": {Attempt: 1, Result: json.RawMessage(`nope`)},
 	} {
 		if _, err := q.UpdateHeld(ctx, job.ID, u); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v, want ErrInvalid", name, err)
@@ -340,7 +347,7 @@ func TestCancel(t *testing.T) {
 	}
 
 	running := q.verify(t, "B", 0)
-	if _, err := q.claim(ctx, []string{KindVerify}); err != nil {
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
 	j, err = q.Cancel(ctx, running.ID)
@@ -359,7 +366,7 @@ func TestCancel(t *testing.T) {
 	// A cancelled job whose Bridge died is cancelled when its lease runs out,
 	// not queued again.
 	orphan := q.verify(t, "C", 0)
-	if _, err := q.claim(ctx, []string{KindVerify}); err != nil {
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := q.Cancel(ctx, orphan.ID); err != nil {
@@ -414,7 +421,7 @@ func TestReadsExpireOnlyWhenDue(t *testing.T) {
 	q := newTestQueue(t)
 	ctx := context.Background()
 	job := q.verify(t, "A", 0)
-	if _, err := q.claim(ctx, []string{KindVerify}); err != nil {
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := q.Job(ctx, job.ID)
@@ -460,5 +467,130 @@ func TestMoveJobs(t *testing.T) {
 	}
 	if j, _ := q.Job(ctx, clash.ID); j.State != StateQueued {
 		t.Fatalf("the job already there = %s", j.State)
+	}
+}
+
+// Security-critical: a claim or a heartbeat is the paired Bridge's only while its
+// token is live. A long poll outlives the request's authentication, so a Bridge
+// that another pairing (or an unpair) replaced mid-wait gets no job and lands no
+// status.
+func TestStaleTokenNeitherClaimsNorBeats(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	job := q.verify(t, "A", 0)
+	if _, err := q.db.ExecContext(ctx, `UPDATE tokens SET revoked = 1 WHERE id = ?`, q.token); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := q.claim(ctx, q.token, []string{KindVerify}); !errors.Is(err, ErrNotPaired) || j != nil {
+		t.Fatalf("denied: a revoked token's claim = %+v, %v; want ErrNotPaired", j, err)
+	}
+	if err := q.SaveHeartbeat(ctx, q.token, Status{Version: "0.0.1", Kinds: []string{KindVerify}}); !errors.Is(err, ErrNotPaired) {
+		t.Fatalf("denied: a revoked token's heartbeat = %v; want ErrNotPaired", err)
+	}
+	// Allowed: the Bridge that replaced it claims the job, still queued.
+	res, err := q.db.ExecContext(ctx, `INSERT INTO tokens(user_id, token_hash, kind, created_at) VALUES(?, 'h2', 'bridge', '2026-01-02T00:00:00Z')`, q.admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := res.LastInsertId()
+	j, err := q.claim(ctx, fresh, []string{KindVerify})
+	if err != nil || j == nil || j.ID != job.ID || j.Attempts != 1 {
+		t.Fatalf("allowed: the live token's claim = %+v, %v", j, err)
+	}
+}
+
+// A job gone under its claim (its library deleted) is not held any more: the
+// Bridge drops it (409 not_held), rather than retrying a 404 forever.
+func TestUpdateOfAGoneJob(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	if _, err := q.UpdateHeld(context.Background(), 999, Update{Attempt: 1, State: ptr(StateRunning)}); !errors.Is(err, ErrNotHeld) {
+		t.Fatalf("report on a gone job: %v, want ErrNotHeld", err)
+	}
+}
+
+// The heartbeat cache never goes back: a read that began before a heartbeat was
+// saved (or before Forget) doesn't replace the newer answer.
+func TestHeartbeatCacheNeverGoesBack(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	readStarts := func() uint64 {
+		q.hbMu.Lock()
+		defer q.hbMu.Unlock()
+		return q.hbGen
+	}
+	// A read that found no heartbeat yet ends after the first one was saved.
+	gen := readStarts()
+	q.beat(t, KindVerify)
+	q.keep(gen, nil)
+	if h, err := q.LastHeartbeat(ctx); err != nil || h == nil {
+		t.Fatalf("a stale read replaced the saved heartbeat: %+v, %v", h, err)
+	}
+	// A read that found the heartbeat ends after an unpair's Forget.
+	old, _ := q.LastHeartbeat(ctx)
+	q.advance(heartbeatTTL)
+	gen = readStarts()
+	if _, err := q.db.ExecContext(ctx, `DELETE FROM bridge_status`); err != nil {
+		t.Fatal(err)
+	}
+	q.Forget()
+	q.keep(gen, old)
+	if h, err := q.LastHeartbeat(ctx); err != nil || h != nil {
+		t.Fatalf("a stale read undid Forget: %+v, %v", h, err)
+	}
+}
+
+// A failed job's report lands whatever its error quotes (a tool's output with a
+// carriage return, an escape code): the error is cleaned, line breaks kept, never
+// the reason the report is refused (the Bridge would retry it for ever, and the
+// job would be re-run until it failed for want of reports).
+func TestUpdateCleansTheError(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	job := q.verify(t, "A", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := q.UpdateHeld(ctx, job.ID, Update{Attempt: 1, State: ptr(StateFailed), Error: ptr("ffmpeg:\r\n\x1b[31mbad\x00 data\n")})
+	if err != nil || j.State != StateFailed || j.Error != "ffmpeg: \n [31mbad  data\n" {
+		t.Fatalf("failed with a messy error = %+v, %v", j, err)
+	}
+}
+
+// A job a lapsed lease puts back in the queue wakes a claim already waiting for
+// one (here through the console's read, expireDue), rather than waiting for that
+// claim's wait to run out.
+func TestWaitClaimWakesOnRequeue(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	ctx := context.Background()
+	// A clock the waiting claim reads while the test moves it.
+	var clock atomic.Int64
+	clock.Store(q.now.Unix())
+	q.Service.now = func() time.Time { return time.Unix(clock.Load(), 0).UTC() }
+	job := q.verify(t, "A", 0)
+	if _, err := q.claim(ctx, q.token, []string{KindVerify}); err != nil { // the lane that dies
+		t.Fatal(err)
+	}
+	got := make(chan *Job, 1)
+	go func() {
+		j, _ := q.waitClaim(ctx, q.token, []string{KindVerify}, MaxWait)
+		got <- j
+	}()
+	time.Sleep(50 * time.Millisecond) // the other lane is waiting
+	clock.Add(int64((Lease + time.Second) / time.Second))
+	if _, _, err := q.List(ctx, Filter{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case j := <-got:
+		if j == nil || j.ID != job.ID || j.Attempts != 2 {
+			t.Fatalf("woken claim = %+v", j)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting claim never woke for the requeued job")
 	}
 }

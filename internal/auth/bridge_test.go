@@ -206,3 +206,27 @@ func TestBridgeTokenIsNotADevice(t *testing.T) {
 		t.Fatalf("devices = %+v, want none", devices)
 	}
 }
+
+// A bridge token's calls (a heartbeat every 30 s) are not its admin's activity:
+// the token is never touched, so last_seen_at reads the admin's own devices.
+func TestBridgeTokenIsNotActivity(t *testing.T) {
+	t.Parallel()
+	s, ctx := newTestService(t)
+	admin, token := pairBridge(t, s, ctx, "boss")
+	if _, _, err := s.ResolveRequest(ctx, token, Presence{IP: "192.0.2.7"}, KindBridge); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.GetUser(ctx, admin.ID); err != nil || u.LastSeenAt != "" {
+		t.Fatalf("denied: the Bridge's call counted as the admin's activity: %q, %v", u.LastSeenAt, err)
+	}
+	sess, err := s.IssueToken(ctx, admin.ID, KindSession, "laptop", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveRequest(ctx, sess, Presence{IP: "192.0.2.8"}, KindSession); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.GetUser(ctx, admin.ID); err != nil || u.LastSeenAt == "" {
+		t.Fatalf("allowed: the admin's own session didn't count: %v", err)
+	}
+}

@@ -1555,34 +1555,50 @@ future metadata site can attach enrichment without reshaping the schema. The
   (`201 {token, server_id, server_name}`; one active Bridge per server). `DELETE /admin/bridge` revokes it
   and forgets the row (`UnpairBridge`). **The bridge token is narrow**: routes opt in to token kinds and only
   the Bridge's own list `auth.KindBridge` (`requireBridge` = `authenticate` with `bridgeKinds`,
-  `/api/v1/bridge/*`, Authorization header only, never `?token=`); `resolve` refuses it once its admin is
-  demoted (lookupToken already refuses a disabled one); it is never a device. "Paired" has ONE statement,
+  `/api/v1/bridge/*`, Authorization header only, never `?token=`; only a missing or refused token is a 401,
+  which makes the Bridge forget its token, so a failure to check one is a 503); `resolve` refuses it once its admin is
+  demoted (lookupToken already refuses a disabled one); it is never a device, and never touched (its calls
+  are not its admin's activity, the newest `last_seen` of their tokens). "Paired" has ONE statement,
   `auth.BridgeLiveSQL` (a live bridge token of an enabled admin, partial index `idx_tokens_bridge`), which
-  both `GetBridgePairing` and the heartbeat reads use. A route-table
+  both `GetBridgePairing` and the heartbeat reads use; `auth.BridgeTokenLiveSQL` is the same for one token,
+  which the heartbeat's write and every claim ask inside their transaction (a call authenticated before a
+  pairing or an unpair revoked its token, a long poll above all, saves nothing and claims nothing: 401).
+  A route-table
   test sends it (header and `?token=`) to every other authenticated route: all 401. **Heartbeat** `PUT
   /bridge/status {version, kinds, libraries[{library_id, mount_path, mapped, writable, checked_path,
-  error}], workers, ui_url}` (bounded and validated: `family.name` kinds, printable bounded text, `ui_url`
-  http(s) only since the console links it; one row, never a history) answers `{server_time,
+  error}], workers, ui_url}` (bounded and checked: `family.name` kinds, library ids, and `ui_url` http(s)
+  only since the console links it, are refused otherwise; free text is cleaned to printable bounded text,
+  `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
+  world's, and a refused report is retried for ever while its job is re-run; one row, never a history)
+  answers `{server_time,
   libraries[{id, name, root}]}`. **Capability**: `capabilities.bridge` is true only while the last
   heartbeat is under `bridge.OnlineWindow` (2 min) old (`bridge.Service` caches the parsed heartbeat for
   `heartbeatTTL`, 5 s, so `GET /server` mostly reads no database; `Forget` drops it on a pairing or an
-  unpair), with a top-level `bridge: {version, features}`
-  beside it (features = the families of the kinds the server knows; `capabilities` stays all booleans).
+  unpair, and a read that began before a save or a `Forget` never replaces its answer: `hbGen`), with a
+  top-level `bridge: {version, features}`
+  beside it (features = the families of the kinds the server knows, `[]` for none; `capabilities` stays
+  all booleans).
   **Jobs** (`bridge_jobs`): kinds allow-listed twice, inside `bridge.Service.Enqueue` (the server queues
   only a kind it knows, with per-kind params: 400, AND the Bridge advertised: `ErrKindUnavailable`, 409
   `kind_unavailable`); Phase 0's one
   kind is `bridge.verify` (`library_id` required, optional book `path`, params `{hold_seconds 0-600}`).
   States queued -> claimed -> running -> done | failed | needs_attention | cancelled. `dedupe_key`
-  (kind|library|path) returns the open job on a second press (200, else 201). `GET /bridge/jobs/next?wait=
-  &kind=` (`bridge.Service.ClaimFor`) long-polls (at most 25 s, woken by an enqueue) for the highest-priority oldest queued job of the
+  (kind|library|path) returns the open job on a second press (200, else 201; the console says when that
+  job is one still stopping after a cancel, `cancel_requested`, as nothing new can be queued until it ends). `GET /bridge/jobs/next?wait=
+  &kind=` (`bridge.Service.ClaimFor`) long-polls (at most 25 s, woken by an enqueue; it ends with the
+  server's base context, so a stop isn't held by the claim a Bridge always has waiting: 204) for the
+  highest-priority oldest queued job of the
   heartbeat's known kinds, narrowed by `kind=` (the Bridge's free lanes; none left answers 204 at once),
   and leases it for 2 min (`attempts` + 1); `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
-  error?}` is bound to the claim's attempt (a dead claim's late report 409 `not_held`; an ended job 409
-  `finished`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge to stop.
-  Leases are expired (`expireSQL`: requeued, failed on the last of `MaxAttempts` (3), or cancelled when a
-  cancel was asked) inside every transaction that reads or changes job states (`expireTx`: enqueue, claim,
+  error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
+  library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
+  to stop.
+  Leases are expired (`expireSQL`: requeued with the dead attempt's progress, result and error dropped,
+  failed on the last of `MaxAttempts` (3), or cancelled when a cancel was asked; those two keep what was
+  reported) inside every transaction that reads or changes job states (`expireTx`: enqueue, claim,
   update, cancel, `MoveJobs`), and before a console read only when a lease has actually run out
-  (`expireDue`: a reader-pool check first, so polls don't queue for the one writer). `List` returns its
+  (`expireDue`: a reader-pool check first, so polls don't queue for the one writer); a requeue wakes the
+  waiting claims once it commits (one inside `MoveJobs` is taken within `MaxWait`). `List` returns its
   own `next_before` (it reads one row past the page). Cancel (`POST
   /admin/bridge/jobs/{id}/cancel`) ends a queued or parked job at once, else sets `cancel_requested`.
   `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
@@ -1885,8 +1901,10 @@ below and Your listening). `transcode` already reflects whether ffmpeg is config
 
 See `internal/api/api.go` for the full route table. Public: `/server`,
 `/auth/redeem`, `/auth/exchange`, `/auth/login`, the well-known association files,
-and the static UI (`/`, `/connect`, `/admin`, `/web/...`). Everything else needs a
-session bearer token; `/admin/*` additionally requires the admin role. The
+and the static UI (`/`, `/connect`, `/admin`, `/web/...`), and the Bridge's pairing exchange
+(`POST /bridge/pair`). Everything else needs a session bearer token (or an API key), except the
+Bridge's own routes (`/bridge/*`), which take only a bridge token; `/admin/*` additionally requires
+the admin role. The
 metadata lookup is `GET /libraries/{id}/meta?path=` (authed, scope-checked like
 the other `?path=` content endpoints; 404 when metadata is disabled), plus
 `GET /meta/work?id=<work id>` (authed, no library scope - global community data;

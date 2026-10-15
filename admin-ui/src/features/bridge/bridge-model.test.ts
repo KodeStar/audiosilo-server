@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BridgeJob, BridgeJobState } from '@/api/types';
+import type { BridgeJobState } from '@/api/types';
 import {
   BRIDGE_JOB_STATES,
   codeExchanged,
@@ -8,7 +8,6 @@ import {
   jobActions,
   JOBS_POLL_IDLE_MS,
   JOBS_POLL_OPEN_MS,
-  jobRows,
   jobsPollMs,
   kindName,
   mappingState,
@@ -62,29 +61,6 @@ describe('job states', () => {
       key === 'bridge.kind.bridge.verify' ? 'Verify' : String(opts?.defaultValue);
     expect(kindName(t, 'bridge.verify')).toBe('Verify');
     expect(kindName(t, 'podcast.fetch')).toBe('podcast.fetch');
-  });
-});
-
-describe('job list', () => {
-  const ids = (jobs: readonly Pick<BridgeJob, 'id'>[]) => jobs.map((j) => j.id);
-  const page = (from: number, to: number, next_before?: number) => ({
-    jobs: Array.from({ length: from - to + 1 }, (_, i) => ({ id: from - i }) as BridgeJob),
-    next_before,
-  });
-
-  it('lists the loaded pages until the newest page is in', () => {
-    expect(ids(jobRows(undefined, [page(10, 8, 8), page(7, 6)]))).toEqual([10, 9, 8, 7, 6]);
-  });
-
-  it('puts the polled newest page over the loaded ones, nothing twice, nothing skipped', () => {
-    // Loaded: 10-8 then 7-6. Two new jobs since: the newest page is 12-10.
-    expect(ids(jobRows(page(12, 10, 10), [page(10, 8, 8), page(7, 6)]))).toEqual([
-      12, 11, 10, 9, 8, 7, 6,
-    ]);
-  });
-
-  it('takes a newest page without a next_before as every job there is', () => {
-    expect(ids(jobRows(page(9, 8), [page(10, 8, 8), page(7, 6)]))).toEqual([9, 8]);
   });
 });
 

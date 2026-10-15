@@ -74,9 +74,10 @@ func (h *Heartbeat) Online(now time.Time) bool {
 
 // Features are the job families the Bridge offers that the server knows: the
 // part of each known kind before its dot ("bridge.verify" is "bridge"), sorted,
-// once each. The bridge capability carries them.
+// once each, and never nil (the wire's features is a list, empty for none). The
+// bridge capability carries them.
 func (st Status) Features() []string {
-	var out []string
+	out := []string{}
 	for _, k := range st.Kinds {
 		if _, ok := kinds[k]; !ok {
 			continue
@@ -124,13 +125,13 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
-// Validate checks a heartbeat before it is stored. Text is bounded and printable,
-// kinds are well formed and listed once, and ui_url, which the console renders as
-// a link, is an absolute http(s) URL or empty.
+// Validate checks a heartbeat before it is stored: kinds are well formed and
+// listed once, libraries listed once by a positive id, and ui_url, which the
+// console renders as a link, is an absolute http(s) URL or empty (anything else
+// is refused). Its free text (the version, each mapping's paths and error, the
+// workers) is cleaned to printable bounded text instead (cleanText).
 func (st *Status) Validate() error {
-	if err := checkText("version", st.Version, maxShortText); err != nil {
-		return err
-	}
+	st.Version = cleanText(st.Version, maxShortText, false)
 	if len(st.Kinds) > maxKinds {
 		return invalid("too many kinds")
 	}
@@ -142,25 +143,22 @@ func (st *Status) Validate() error {
 	if len(st.Libraries) > maxLibraries {
 		return invalid("too many libraries")
 	}
-	for i, l := range st.Libraries {
+	for i := range st.Libraries {
+		l := &st.Libraries[i]
 		if l.LibraryID <= 0 || slices.ContainsFunc(st.Libraries[:i], func(o LibraryStatus) bool { return o.LibraryID == l.LibraryID }) {
 			return invalid("library %d", l.LibraryID)
 		}
-		for name, v := range map[string]string{"mount_path": l.MountPath, "checked_path": l.CheckedPath, "error": l.Error} {
-			if err := checkText(name, v, maxLongText); err != nil {
-				return err
-			}
-		}
+		l.MountPath = cleanText(l.MountPath, maxLongText, false)
+		l.CheckedPath = cleanText(l.CheckedPath, maxLongText, false)
+		l.Error = cleanText(l.Error, maxLongText, false)
 	}
 	if len(st.Workers) > maxWorkers {
 		return invalid("too many workers")
 	}
-	for _, w := range st.Workers {
-		for name, v := range map[string]string{"name": w.Name, "version": w.Version, "platform": w.Platform, "last_seen": w.LastSeen} {
-			if err := checkText(name, v, maxShortText); err != nil {
-				return err
-			}
-		}
+	for i := range st.Workers {
+		w := &st.Workers[i]
+		w.Name, w.Version = cleanText(w.Name, maxShortText, false), cleanText(w.Version, maxShortText, false)
+		w.Platform, w.LastSeen = cleanText(w.Platform, maxShortText, false), cleanText(w.LastSeen, maxShortText, false)
 	}
 	if st.UIURL != "" {
 		if err := checkText("ui_url", st.UIURL, maxLongText); err != nil {
@@ -186,25 +184,57 @@ func (st *Status) Validate() error {
 // checkText bounds one text field: valid UTF-8, at most max bytes, no control
 // characters.
 func checkText(name, v string, max int) error {
-	if len(v) > max || !utf8.ValidString(v) || strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+	if len(v) > max || !utf8.ValidString(v) || strings.ContainsFunc(v, isControl) {
 		return invalid("%s", name)
 	}
 	return nil
 }
 
-// ErrNotPaired is a heartbeat with no paired Bridge to record it on (the row
-// went with an unpair after the request was authenticated).
+// isControl is a control character (C0 or DEL), which free text never keeps.
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
+
+// cleanText is v as printable bounded text: valid UTF-8 (a broken sequence
+// becomes U+FFFD), each control character a space (but a line break when lines
+// keeps them), at most max bytes, cut at a character's boundary. What the Bridge
+// reports is partly the outside world's (a tool's output, a file's name, an OS
+// error), so its free text is cleaned rather than the whole report refused: a
+// refused job report is retried for ever while its job is re-run, and a refused
+// heartbeat leaves the Bridge offline.
+func cleanText(v string, max int, lines bool) string {
+	v = strings.Map(func(r rune) rune {
+		if isControl(r) && !(lines && r == '\n') {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(v, "\uFFFD"))
+	if len(v) <= max {
+		return v
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(v[cut]) {
+		cut--
+	}
+	return v[:cut]
+}
+
+// ErrNotPaired is a call from a Bridge that is no longer the paired one: its
+// token was revoked (an unpair, or another Bridge paired) after the request was
+// authenticated (a 401).
 var ErrNotPaired = errors.New("no bridge is paired")
 
-// SaveHeartbeat records st (already validated) as the Bridge's status now.
-func (s *Service) SaveHeartbeat(ctx context.Context, st Status) error {
+// SaveHeartbeat records st (already validated) as the Bridge's status now. token
+// is the request's bridge token, which must still be the paired Bridge's: a
+// heartbeat that was authenticated before a pairing or an unpair never lands on
+// the pairing that replaced it.
+func (s *Service) SaveHeartbeat(ctx context.Context, token int64, st Status) error {
 	body, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
 	now := s.now()
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE bridge_status SET heartbeat_at = ?, status = ? WHERE id = 1 AND paired_at IS NOT NULL`, at(now), string(body))
+		`UPDATE bridge_status SET heartbeat_at = ?, status = ?
+		  WHERE id = 1 AND paired_at IS NOT NULL AND `+auth.BridgeTokenLiveSQL, at(now), string(body), token)
 	if err != nil {
 		return err
 	}
@@ -221,17 +251,30 @@ func (s *Service) SaveHeartbeat(ctx context.Context, st Status) error {
 // at most (Forget clears it at once for a pairing or an unpair made here).
 const heartbeatTTL = 5 * time.Second
 
-// remember caches h as the heartbeat read now.
+// remember caches h as the heartbeat now (a heartbeat just saved).
 func (s *Service) remember(h *Heartbeat) {
 	s.hbMu.Lock()
 	defer s.hbMu.Unlock()
+	s.hbGen++
 	s.hb, s.hbRead = h, s.now()
+}
+
+// keep caches h, read from the database while the cache was at generation gen,
+// unless a heartbeat was saved or the cache dropped since: their answer is newer
+// than this read's.
+func (s *Service) keep(gen uint64, h *Heartbeat) {
+	s.hbMu.Lock()
+	defer s.hbMu.Unlock()
+	if s.hbGen == gen {
+		s.hb, s.hbRead = h, s.now()
+	}
 }
 
 // Forget drops the cached heartbeat (after a pairing or an unpair).
 func (s *Service) Forget() {
 	s.hbMu.Lock()
 	defer s.hbMu.Unlock()
+	s.hbGen++
 	s.hb, s.hbRead = nil, time.Time{}
 }
 
@@ -246,6 +289,7 @@ func (s *Service) LastHeartbeat(ctx context.Context) (*Heartbeat, error) {
 		s.hbMu.Unlock()
 		return h, nil
 	}
+	gen := s.hbGen
 	s.hbMu.Unlock()
 	var (
 		stamp sql.NullString
@@ -267,7 +311,7 @@ func (s *Service) LastHeartbeat(ctx context.Context) (*Heartbeat, error) {
 			}
 		}
 	}
-	s.remember(h)
+	s.keep(gen, h)
 	return h, nil
 }
 

@@ -411,7 +411,11 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if p.Client.App != "" {
 		cred.Client = p.Client
 	}
-	if !s.needsTouch(row, p) {
+	// A bridge token is never touched: it is no device of its admin's, and its
+	// calls (a heartbeat every 30 s) are not the admin's activity, which is the
+	// newest last_seen of their tokens (userColumns, the inactive accounts). The
+	// heartbeat says when the Bridge was last heard.
+	if row.kind == KindBridge || !s.needsTouch(row, p) {
 		return u, cred, nil
 	}
 	// The app is written only when this request named one, decided in SQL rather

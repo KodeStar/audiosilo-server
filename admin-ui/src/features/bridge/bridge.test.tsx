@@ -255,6 +255,23 @@ describe('bridge page', () => {
     );
   });
 
+  it('says so when the job it would queue is still stopping after a cancel', async () => {
+    const calls = mockFetch(
+      routes({
+        'POST /admin/bridge/jobs': { status: 200, body: job({ cancel_requested: true }) },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const user = userEvent.setup();
+    const libs = await screen.findByRole('list', { name: 'Libraries' });
+    await user.click(within(libs).getAllByRole('button', { name: 'Verify' })[0]);
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs')).toBe(true),
+    );
+    expect(await screen.findByText('Verify for Fiction is still stopping')).toBeInTheDocument();
+    expect(screen.queryByText(/is already queued/)).not.toBeInTheDocument();
+  });
+
   it("says so when the paired Bridge doesn't run the job", async () => {
     mockFetch(
       routes({

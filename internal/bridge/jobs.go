@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kodestar/audiosilo-server/internal/auth"
 )
 
 // Job states (migration 0047).
@@ -30,7 +32,7 @@ const OpenStatesSQL = `('queued', 'claimed', 'running', 'needs_attention')`
 
 const (
 	// Lease is how long a claim holds a job without a progress update. The
-	// Bridge reports at least every 30 s while it works.
+	// Bridge reports at least every 10 s while it works.
 	Lease = 2 * time.Minute
 	// MaxAttempts is how many times a job may be claimed; a lease that runs out
 	// on the last attempt fails the job instead of queueing it again.
@@ -74,7 +76,7 @@ var kinds = map[string]kindSpec{
 // mid-job.
 func verifyParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p struct {
-		HoldSeconds int `json:"hold_seconds"`
+		HoldSeconds int `json:"hold_seconds,omitempty"`
 	}
 	if err := decodeStrict(raw, &p); err != nil {
 		return nil, invalid("params: %v", err)
@@ -281,13 +283,16 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		return nil, false, ErrKindUnavailable
 	}
 	key := DedupeKey(j.Kind, j.LibraryID, j.Path)
+	var expired int64
 	err = s.db.WithTx(ctx, "bridge.Enqueue", func(tx *sql.Tx) error {
 		now := s.ts()
-		if err := expireTx(ctx, tx, now); err != nil {
+		n, err := expireTx(ctx, tx, now)
+		if err != nil {
 			return err
 		}
+		expired = n
 		var id int64
-		err := tx.QueryRowContext(ctx,
+		err = tx.QueryRowContext(ctx,
 			`SELECT id FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL, key).Scan(&id)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
@@ -313,7 +318,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	if err != nil {
 		return nil, false, err
 	}
-	if created {
+	if created || expired > 0 {
 		s.wake.fire()
 	}
 	return job, created, nil
@@ -396,24 +401,34 @@ func (s *Service) List(ctx context.Context, f Filter) (jobs []Job, nextBefore in
 }
 
 // expireSQL ends every lease that ran out (?1 is now): a job whose cancel was
-// asked for is cancelled, one on its last attempt failed, the rest queued again.
+// asked for is cancelled, one on its last attempt failed (both keep what the dead
+// attempt reported), the rest queued again with the dead attempt's progress,
+// result and error dropped, so a waiting job doesn't read as still under way.
 const expireSQL = `UPDATE bridge_jobs SET
 	    state = CASE WHEN cancel_requested = 1 THEN 'cancelled'
 	                 WHEN attempts >= ?2 THEN 'failed'
 	                 ELSE 'queued' END,
 	    error = CASE WHEN cancel_requested = 1 THEN error
 	                 WHEN attempts >= ?2 THEN 'the Bridge stopped reporting on every attempt'
-	                 ELSE error END,
+	                 ELSE '' END,
+	    progress = CASE WHEN cancel_requested = 1 OR attempts >= ?2 THEN progress ELSE '{}' END,
+	    result = CASE WHEN cancel_requested = 1 OR attempts >= ?2 THEN result ELSE '{}' END,
 	    finished_at = CASE WHEN cancel_requested = 1 OR attempts >= ?2 THEN ?1 ELSE NULL END,
 	    lease_until = NULL, updated_at = ?1
 	  WHERE state IN ('claimed', 'running') AND lease_until < ?1`
 
-// expireTx ends the leases that ran out, inside a write transaction. Every
-// transaction that reads or changes job states runs it first, so none acts on a
-// dead claim.
-func expireTx(ctx context.Context, tx *sql.Tx, now string) error {
-	_, err := tx.ExecContext(ctx, expireSQL, now, MaxAttempts)
-	return err
+// expireTx ends the leases that ran out, inside a write transaction, and says how
+// many it ended. Every transaction that reads or changes job states runs it
+// first, so none acts on a dead claim. A Service method whose transaction ended
+// any wakes the waiting claims once it commits, so a requeued job is picked up
+// at once rather than when a claim's wait runs out (MoveJobs, in the catalog's
+// move, can't: a claim takes its requeue within MaxWait).
+func expireTx(ctx context.Context, tx *sql.Tx, now string) (int64, error) {
+	res, err := tx.ExecContext(ctx, expireSQL, now, MaxAttempts)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // expireDue is expireTx for the read paths: it takes the one writer only when a
@@ -427,8 +442,14 @@ func (s *Service) expireDue(ctx context.Context) error {
 		now).Scan(&due); err != nil || !due {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, expireSQL, now, MaxAttempts)
-	return err
+	res, err := s.db.ExecContext(ctx, expireSQL, now, MaxAttempts)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		s.wake.fire()
+	}
+	return nil
 }
 
 // ErrNoHeartbeat is a claim from a Bridge that hasn't reported yet (a 409): the
@@ -436,10 +457,13 @@ func (s *Service) expireDue(ctx context.Context) error {
 var ErrNoHeartbeat = errors.New("the bridge hasn't reported yet")
 
 // ClaimFor hands the Bridge the next queued job it can run, waiting up to wait
-// (at most MaxWait) for one; nil when none came. The kinds are those its last
-// heartbeat names that the server knows, narrowed to asked when it names any
-// (the kinds its free lanes run); with none left it answers at once.
-func (s *Service) ClaimFor(ctx context.Context, asked []string, wait time.Duration) (*Job, error) {
+// (at most MaxWait) for one; nil when none came or ctx ended. The kinds are those
+// its last heartbeat names that the server knows, narrowed to asked when it names
+// any (the kinds its free lanes run); with none left it answers at once. token is
+// the request's bridge token: once a pairing or an unpair revoked it (the long
+// poll outlives the request's authentication), no job is handed out on it
+// (ErrNotPaired).
+func (s *Service) ClaimFor(ctx context.Context, token int64, asked []string, wait time.Duration) (*Job, error) {
 	h, err := s.LastHeartbeat(ctx)
 	if err != nil {
 		return nil, err
@@ -456,24 +480,37 @@ func (s *Service) ClaimFor(ctx context.Context, asked []string, wait time.Durati
 	if len(ks) == 0 {
 		return nil, nil
 	}
-	return s.waitClaim(ctx, ks, wait)
+	return s.waitClaim(ctx, token, ks, wait)
 }
 
-// claim hands the Bridge the next queued job of one of kinds (highest priority,
-// then oldest), leased for Lease, or nil when there is none.
-func (s *Service) claim(ctx context.Context, kinds []string) (*Job, error) {
-	var job *Job
+// claim hands the Bridge holding token the next queued job of one of kinds
+// (highest priority, then oldest), leased for Lease, or nil when there is none;
+// ErrNotPaired once token is no longer the paired Bridge's.
+func (s *Service) claim(ctx context.Context, token int64, kinds []string) (*Job, error) {
+	var (
+		job     *Job
+		expired int64
+	)
 	err := s.db.WithTx(ctx, "bridge.Claim", func(tx *sql.Tx) error {
-		now := s.ts()
-		if err := expireTx(ctx, tx, now); err != nil {
+		var live bool
+		if err := tx.QueryRowContext(ctx, `SELECT `+auth.BridgeTokenLiveSQL, token).Scan(&live); err != nil {
 			return err
 		}
+		if !live {
+			return ErrNotPaired
+		}
+		now := s.ts()
+		n, err := expireTx(ctx, tx, now)
+		if err != nil {
+			return err
+		}
+		expired = n
 		args := make([]any, 0, len(kinds))
 		for _, k := range kinds {
 			args = append(args, k)
 		}
 		var id int64
-		err := tx.QueryRowContext(ctx,
+		err = tx.QueryRowContext(ctx,
 			`SELECT id FROM bridge_jobs WHERE state = 'queued' AND kind IN (?`+strings.Repeat(",?", len(kinds)-1)+`)
 			  ORDER BY priority DESC, id LIMIT 1`, args...).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -490,18 +527,26 @@ func (s *Service) claim(ctx context.Context, kinds []string) (*Job, error) {
 		job, err = getJob(ctx, tx, id)
 		return err
 	})
+	if err == nil && expired > 0 {
+		s.wake.fire() // the other waiting claims, for the jobs it requeued
+	}
 	return job, err
 }
 
 // waitClaim is claim that waits up to wait (at most MaxWait) for a job to be
-// queued when there is none, returning nil when none came or ctx ended.
-func (s *Service) waitClaim(ctx context.Context, kinds []string, wait time.Duration) (*Job, error) {
+// queued when there is none, returning nil when none came or ctx ended (the
+// caller left, or the server is stopping: a claim cut short by it committed
+// nothing).
+func (s *Service) waitClaim(ctx context.Context, token int64, kinds []string, wait time.Duration) (*Job, error) {
 	wait = min(max(wait, 0), MaxWait)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	for {
 		woken := s.wake.wait()
-		job, err := s.claim(ctx, kinds)
+		job, err := s.claim(ctx, token, kinds)
+		if err != nil && ctx.Err() != nil {
+			return nil, nil
+		}
 		if job != nil || err != nil {
 			return job, err
 		}
@@ -528,7 +573,8 @@ type Update struct {
 }
 
 // ErrNotHeld is an update for a job the caller no longer holds: it ended, was
-// cancelled, or its lease ran out and a later claim took it (a 409).
+// cancelled, its lease ran out and a later claim took it, or it is gone (with its
+// library). A 409 not_held, which tells the Bridge to drop it.
 var ErrNotHeld = errors.New("the job is not held by this claim")
 
 // heldStates are the states the Bridge holds a job in (it may report on it);
@@ -539,8 +585,9 @@ var (
 )
 
 // checkUpdate bounds what the Bridge sends: progress and result are JSON
-// objects (the request decoder already checked they are JSON), the error
-// bounded text.
+// objects (the request decoder already checked they are JSON), the error cleaned
+// to printable bounded text, line breaks kept (cleanText: a failed job's report
+// must land whatever its error quotes).
 func checkUpdate(u *Update) error {
 	for name, raw := range map[string]struct {
 		v   json.RawMessage
@@ -556,8 +603,9 @@ func checkUpdate(u *Update) error {
 			return invalid("%s must be a JSON object", name)
 		}
 	}
-	if u.Error != nil && (len(*u.Error) > maxErrorBytes || checkText("error", strings.ReplaceAll(*u.Error, "\n", " "), maxErrorBytes) != nil) {
-		return invalid("error")
+	if u.Error != nil {
+		e := cleanText(*u.Error, maxErrorBytes, true)
+		u.Error = &e
 	}
 	return nil
 }
@@ -571,13 +619,22 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 	if err := checkUpdate(&u); err != nil {
 		return nil, err
 	}
-	var job *Job
+	var (
+		job     *Job
+		expired int64
+	)
 	err := s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
 		now := s.ts()
-		if err := expireTx(ctx, tx, now); err != nil {
+		n, err := expireTx(ctx, tx, now)
+		if err != nil {
 			return err
 		}
+		expired = n
 		cur, err := getJob(ctx, tx, id)
+		if errors.Is(err, ErrNotFound) {
+			// Gone with its library (or a restored database): no claim holds it.
+			return ErrNotHeld
+		}
 		if err != nil {
 			return err
 		}
@@ -618,6 +675,9 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		job, err = getJob(ctx, tx, id)
 		return err
 	})
+	if err == nil && expired > 0 {
+		s.wake.fire()
+	}
 	return job, err
 }
 
@@ -628,12 +688,17 @@ var ErrFinished = errors.New("the job has already finished")
 // working on it), else by asking the Bridge (cancel_requested), which stops at
 // its next update; a lease that runs out on such a job cancels it then.
 func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
-	var job *Job
+	var (
+		job     *Job
+		expired int64
+	)
 	err := s.db.WithTx(ctx, "bridge.Cancel", func(tx *sql.Tx) error {
 		now := s.ts()
-		if err := expireTx(ctx, tx, now); err != nil {
+		n, err := expireTx(ctx, tx, now)
+		if err != nil {
 			return err
 		}
+		expired = n
 		cur, err := getJob(ctx, tx, id)
 		if err != nil {
 			return err
@@ -655,6 +720,9 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 		job, err = getJob(ctx, tx, id)
 		return err
 	})
+	if err == nil && expired > 0 {
+		s.wake.fire()
+	}
 	return job, err
 }
 
@@ -665,7 +733,7 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 // their dedupe key rebuilt by DedupeKey.
 func MoveJobs(ctx context.Context, tx *sql.Tx, libraryID int64, oldPath, newPath string, now time.Time) error {
 	ts := at(now)
-	if err := expireTx(ctx, tx, ts); err != nil {
+	if _, err := expireTx(ctx, tx, ts); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
