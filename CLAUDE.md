@@ -1558,7 +1558,7 @@ future metadata site can attach enrichment without reshaping the schema. The
   and forgets the row (`UnpairBridge`). **The bridge token is narrow**: routes opt in to token kinds and only
   the Bridge's own list `auth.KindBridge` (`requireBridge` = `authenticate` with `bridgeKinds`,
   `/api/v1/bridge/*`, Authorization header only, never `?token=`; only a missing or refused token is a 401,
-  which makes the Bridge forget its token, so a failure to check one is a 503); `resolve` refuses it once its admin is
+  which stops the Bridge calling in until its 5-minute retry, so a failure to check one is a 503); `resolve` refuses it once its admin is
   demoted (lookupToken already refuses a disabled one); it is never a device, and never touched (its calls
   are not its admin's activity, the newest `last_seen` of their tokens). "Paired" has ONE statement,
   `auth.BridgeLiveSQL` (a live bridge token of an enabled admin, partial index `idx_tokens_bridge`), which
