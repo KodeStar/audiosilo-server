@@ -209,7 +209,7 @@ func bearerToken(r *http.Request, allowQuery bool) string {
 // exactly like a session; a pairing token is never accepted here.
 func (a *API) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, failure := a.authenticate(r, false, sessionOrAPI)
+		ctx, failure, _ := a.authenticate(r, false, sessionOrAPI)
 		if failure != "" {
 			writeError(w, http.StatusUnauthorized, failure)
 			return
@@ -260,7 +260,7 @@ func (a *API) mediaAuth(next http.Handler, kinds []string) http.Handler {
 			rateLimited(w)
 			return
 		}
-		ctx, failure := a.authenticate(r, true, kinds)
+		ctx, failure, _ := a.authenticate(r, true, kinds)
 		if failure != "" {
 			a.ipLimiter.Charge(ip)
 			writeError(w, http.StatusUnauthorized, failure)
@@ -304,17 +304,16 @@ var (
 )
 
 // authenticate resolves r's credential, one of kinds, and returns r's context
-// carrying the user and the credential, or the reason for a 401. allowQueryToken
-// also takes the token from ?token= (media GETs only, see bearerToken).
-func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string) (context.Context, string) {
+// carrying the user and the credential, or the reason for a 401 with the error
+// behind it (nil for no token at all; a refused token's, or a failure to check
+// it, which requireBridge tells apart). allowQueryToken also takes the token from
+// ?token= (media GETs only, see bearerToken).
+func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string) (context.Context, string, error) {
 	token := bearerToken(r, allowQueryToken)
 	if token == "" {
-		return nil, "missing bearer token"
+		return nil, "missing bearer token", nil
 	}
-	// The request's address and app (X-AudioSilo-Client) are recorded on the
-	// token, for the admin console's devices and sessions.
-	presence := auth.Presence{IP: clientIP(r)}
-	presence.Client, _ = auth.ParseClient(r.Header.Get(auth.ClientHeader))
+	presence := requestPresence(r)
 	var (
 		u    *auth.User
 		cred auth.Credential
@@ -335,12 +334,21 @@ func (a *API) authenticate(r *http.Request, allowQueryToken bool, kinds []string
 		u, cred, err = a.auth.ResolveRequest(r.Context(), token, presence, kinds...)
 	}
 	if err != nil {
-		return nil, "invalid or expired token"
+		return nil, "invalid or expired token", err
 	}
 	// The credential carries the matched kind, so credential-minting handlers
 	// can bar an api key (denyAPIKey) - a leaked key must not spawn a durable
 	// credential.
-	return withCredential(r.Context(), u, cred), ""
+	return withCredential(r.Context(), u, cred), "", nil
+}
+
+// requestPresence is what a request says about its device: its address and app
+// (X-AudioSilo-Client), recorded on the token for the admin console's devices and
+// sessions.
+func requestPresence(r *http.Request) auth.Presence {
+	p := auth.Presence{IP: clientIP(r)}
+	p.Client, _ = auth.ParseClient(r.Header.Get(auth.ClientHeader))
+	return p
 }
 
 // castOwnBook refuses a cast token's request for anything but its own book.

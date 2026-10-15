@@ -9,6 +9,11 @@ import type {
   AuditFilter,
   AuditPage,
   BackupsEnvelope,
+  BridgeJob,
+  BridgeJobPage,
+  BridgeJobRequest,
+  BridgePairCode,
+  BridgeStatus,
   NotifyTarget,
   NotifyTargetInput,
   NotifyTargetsEnvelope,
@@ -373,6 +378,27 @@ export const api = {
   /** The bell's feed, newest first; `before` is the previous page's next_before. */
   serverEvents: (opts: { before?: number; limit?: number; kind?: ServerEventKind } = {}) =>
     request<ServerEventPage>('GET', `/admin/events${bookQuery(opts)}`),
+
+  // The Bridge (Settings > Bridge): pairing, its status, and its jobs.
+  bridge: () => request<BridgeStatus>('GET', '/admin/bridge'),
+  /** A pairing code, shown once; it replaces one still waiting (403 for an API key). */
+  pairBridge: () => request<BridgePairCode>('POST', '/admin/bridge/pair'),
+  /** Revokes the Bridge's token; its jobs stay, queued ones wait for the next Bridge. */
+  unpairBridge: () => request<void>('DELETE', '/admin/bridge'),
+  /** Jobs newest first; `before` is the previous page's next_before. */
+  bridgeJobs: (opts: { state?: string; before?: number; limit?: number } = {}) =>
+    request<BridgeJobPage>('GET', `/admin/bridge/jobs${bookQuery(opts)}`),
+  /** Queued (cancelled at once) or running (asked to stop); 409 finished once it ended. */
+  cancelBridgeJob: (id: number) => request<BridgeJob>('POST', `/admin/bridge/jobs/${id}/cancel`),
+  /**
+   * Queues a job: `created` is false when the open job already queued for that
+   * kind, library and path came back instead (200, not 201). 409 kind_unavailable
+   * when the paired Bridge doesn't run the kind.
+   */
+  queueBridgeJob: async (req: BridgeJobRequest) => {
+    const res = await send('/admin/bridge/jobs', { method: 'POST', body: req });
+    return { job: (await res.json()) as BridgeJob, created: res.status === 201 };
+  },
 
   // Listening import (Settings > Import). The Audiobookshelf token rides in the
   // request body only; the server never stores or returns it.

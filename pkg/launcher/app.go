@@ -23,6 +23,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/api"
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/backup"
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
@@ -214,6 +215,9 @@ func Run(ctx context.Context, opts Options) error {
 	go backups.Run(ctx)
 
 	a = api.New(cfg, authSvc, cat, scanner, ffmpeg, log)
+	// The Bridge's status and job queue (BRIDGE-PLAN.md): the server keeps them;
+	// the Bridge calls in.
+	a.SetBridge(bridge.New(db, time.Now))
 	// Mirror mode's local copy of the community metadata (nil in remote mode),
 	// in front of the metadata service before the background jobs below use it.
 	// Its checks stop while the live metadata.enabled is off.

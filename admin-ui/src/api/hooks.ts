@@ -53,6 +53,10 @@ export const keys = {
   logs: (level: string, q: string) => ['admin', 'logs', level, q] as const,
   backups: ['admin', 'backups'] as const,
   notifyTargets: ['admin', 'notifications'] as const,
+  bridge: ['admin', 'bridge', 'status'] as const,
+  /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */
+  bridgeJobLists: ['admin', 'bridge', 'jobs'] as const,
+  bridgeJobs: (state: string) => ['admin', 'bridge', 'jobs', state] as const,
   events: ['admin', 'events'] as const,
   eventList: (kind: ServerEventKind | undefined) =>
     ['admin', 'events', 'list', kind ?? ''] as const,

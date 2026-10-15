@@ -186,17 +186,29 @@ func (a *API) handleRescanBook(w http.ResponseWriter, r *http.Request) {
 	// The re-read probes every part, which on a slow share can outlast the request
 	// timeout; it still finishes and is saved then (the book's next look shows it),
 	// rather than being thrown away at its last write.
-	ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
-	defer cancel()
-	if _, err := a.scanner.IndexPath(ctx, *lib, p); err != nil {
-		if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
-			writeErrorCode(w, http.StatusNotFound, codeNotIndexable, "there is no book at that path any more")
-			return
-		}
-		a.writeCatalogError(w, err, "rescan book failed", "could not rescan the book", "library", lib.ID, "path", p)
+	if _, ok := a.rescanPath(w, lib, p); !ok {
 		return
 	}
 	a.writeBookDetail(w, r, lib.ID, p)
+}
+
+// rescanPath indexes what is at p now (IndexPath), on a context detached from the
+// request timeout so a slow re-read is still saved, and returns the book. A path
+// with no book (gone, or ignored) is a 404 with code not_indexable; it answers
+// the error itself and reports whether there was none.
+func (a *API) rescanPath(w http.ResponseWriter, lib *catalog.Library, p string) (*catalog.Book, bool) {
+	ctx, cancel := context.WithTimeout(a.baseCtx, rescanBookTimeout)
+	defer cancel()
+	book, err := a.scanner.IndexPath(ctx, *lib, p)
+	if errors.Is(err, library.ErrNotIndexable) || errors.Is(err, library.ErrOutsideRoot) {
+		writeErrorCode(w, http.StatusNotFound, codeNotIndexable, "there is no book at that path any more")
+		return nil, false
+	}
+	if err != nil {
+		a.writeCatalogError(w, err, "rescan failed", "could not rescan the book", "library", lib.ID, "path", p)
+		return nil, false
+	}
+	return book, true
 }
 
 // scheduledScan is one library's next scheduled scan.

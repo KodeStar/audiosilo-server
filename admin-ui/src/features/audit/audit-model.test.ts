@@ -88,6 +88,17 @@ describe('audit model', () => {
     expect(line.value).toBe('daily → off');
   });
 
+  it('words a Bridge job kind by its name, a kind it lacks words for as its code', () => {
+    const named = (key: string, opts?: Record<string, unknown>) =>
+      key === 'bridge.kind.bridge.verify' ? 'Verify' : t(key, opts);
+    expect(detailLines(ev('bridge.job', { kind: 'bridge.verify' }), named, fmt)).toEqual([
+      { label: 'kind', value: 'Verify' },
+    ]);
+    expect(detailLines(ev('bridge.job', { kind: 'podcast.fetch' }), named, fmt)).toEqual([
+      { label: 'kind', value: 'podcast.fetch' },
+    ]);
+  });
+
   it('names events and writes times', () => {
     expect(
       detailLines(

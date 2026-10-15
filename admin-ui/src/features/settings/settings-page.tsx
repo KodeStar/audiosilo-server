@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Ticket,
   TriangleAlert,
+  Waypoints,
   type LucideIcon,
 } from 'lucide-react';
 import { useLibraries, useMirrorPoll, useSettings, useSystem } from '@/api/hooks';
@@ -34,6 +35,7 @@ import { DEFAULT_SERVER_NAME } from '@/lib/server-label';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { activeMirror, mirrorLook } from '@/features/health/system-model';
+import { BridgeTopic } from '@/features/bridge/bridge-topic';
 import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
@@ -59,6 +61,7 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   backups: Archive,
   notifications: BellRing,
   import: Import,
+  bridge: Waypoints,
 };
 
 /**
@@ -145,6 +148,8 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
       return <NotificationsTopic />;
     case 'import':
       return <ImportTopic />;
+    case 'bridge':
+      return <BridgeTopic />;
     default:
       return <GeneralTopic settings={settings} />;
   }

@@ -25,6 +25,7 @@ import {
   RefreshCw,
   Search,
   UserPlus,
+  Waypoints,
   type LucideIcon,
 } from 'lucide-react';
 import { useServerInfo, useStats } from '@/api/hooks';
@@ -217,6 +218,7 @@ function PaletteBody({ close }: { close: () => void }) {
     topic('backups', Archive, ['backup', 'restore', 'database', 'export', 'download']),
     topic('notifications', BellRing, ['alert', 'webhook', 'ntfy', 'discord', 'notify', 'push']),
     topic('import', Import, ['audiobookshelf', 'abs', 'import', 'history', 'migrate', 'listening']),
+    topic('bridge', Waypoints, ['bridge', 'pair', 'companion', 'jobs', 'verify', 'worker']),
     {
       id: 'scan-settings',
       title: t('palette.setting.scanSettings'),

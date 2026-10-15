@@ -35,6 +35,10 @@ const (
 	// Chromecast receiver (cast.go). Like a pairing token it is never a device:
 	// the device lists and sign-outs leave it out.
 	KindCast = "cast"
+	// KindBridge is the paired Bridge's credential (bridge.go): only the Bridge's
+	// own routes list it, and it works only while its admin is an admin. Never a
+	// device either.
+	KindBridge = "bridge"
 )
 
 // Auth code kinds. An invite is an admin-minted onboarding secret (bounded uses
@@ -388,7 +392,9 @@ func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence,
 }
 
 // resolve is ResolveRequest and ResolveCastRequest: a cast token is valid only
-// when media names the book media the request reads and its grant covers it.
+// when media names the book media the request reads and its grant covers it. A
+// bridge token (only ever listed by the Bridge's own routes) is valid only while
+// its admin is still an admin (lookupToken already refuses a disabled one).
 func (s *Service) resolve(ctx context.Context, secret string, p Presence, media *bookMedia, kinds []string) (*User, Credential, error) {
 	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
 	if err != nil {
@@ -397,12 +403,19 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 	if row.kind == KindCast && (media == nil || !row.grant.covers(*media)) {
 		return nil, Credential{}, ErrInvalidToken
 	}
+	if row.kind == KindBridge && u.Role != RoleAdmin {
+		return nil, Credential{}, ErrInvalidToken
+	}
 	cred := Credential{ID: row.id, Kind: row.kind, DeviceID: row.deviceID, DeviceName: row.deviceName, Client: row.client,
 		Book: row.grant.path}
 	if p.Client.App != "" {
 		cred.Client = p.Client
 	}
-	if !s.needsTouch(row, p) {
+	// A bridge token is never touched: it is no device of its admin's, and its
+	// calls (a heartbeat every 30 s) are not the admin's activity, which is the
+	// newest last_seen of their tokens (userColumns, the inactive accounts). The
+	// heartbeat says when the Bridge was last heard.
+	if row.kind == KindBridge || !s.needsTouch(row, p) {
 		return u, cred, nil
 	}
 	// The app is written only when this request named one, decided in SQL rather

@@ -168,6 +168,11 @@ func ListDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 // listDir is ListDir, with each entry's fs.DirEntry from the directory read,
 // in the same order.
 func listDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
+	// A hidden folder isn't listed, so it can't be opened by name either: the
+	// Bridge's .audiosilo/ (BRIDGE-PLAN.md) and a share's .Trash stay out of view.
+	if HasHiddenPart(relPath) {
+		return nil, nil, &fs.PathError{Op: "open", Path: relPath, Err: fs.ErrNotExist}
+	}
 	full, err := SafeJoin(root, relPath)
 	if err != nil {
 		return nil, nil, err
