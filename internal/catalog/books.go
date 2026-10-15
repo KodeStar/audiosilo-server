@@ -42,6 +42,13 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Attachments that couldn't be read right now (AttachmentsReading.Unread) keep
+	// the stored reading: no indexed_at for them (unchecked, so the next scan reads
+	// them again), the stored signature kept over this one, the stored files left.
+	var attachmentsReadAt any = indexedAt
+	if b.Attachments.Unread {
+		attachmentsReadAt = nil
+	}
 	// has_cover holds whenever there is a sibling cover; the scanner reports
 	// embedded art. Unknown (nil) stays NULL until a scan checks.
 	hasCover := b.HasCover
@@ -78,7 +85,9 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
 			     chapters_source='', chapters_fit='',
 			     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file,
-			     attachments_sig=excluded.attachments_sig, attachments_indexed_at=excluded.attachments_indexed_at
+			     attachments_sig=CASE WHEN excluded.attachments_indexed_at IS NULL THEN books.attachments_sig
+			                          ELSE excluded.attachments_sig END,
+			     attachments_indexed_at=excluded.attachments_indexed_at
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -88,12 +97,14 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.Published, b.Description, hasCover, scanned,
 			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
-			absSig, absReadAt, absFile, b.Attachments.Sig, indexedAt).Scan(&id); err != nil {
+			absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
-		if err := writeAttachments(ctx, tx, id, b.Attachments.Files, indexedAt); err != nil {
-			return err
+		if !b.Attachments.Unread {
+			if err := writeAttachments(ctx, tx, id, b.Attachments.Files, indexedAt); err != nil {
+				return err
+			}
 		}
 		if err := refreshCoverArt(ctx, tx, b.LibraryID, b.RelPath); err != nil {
 			return err

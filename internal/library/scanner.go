@@ -369,8 +369,9 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 					}
 				}
 				// The Bridge's attachments, the same way (any book: a single-file book's
-				// sit beside it).
-				if old.AttachmentsSig != b.Attachments.Sig || (old.AttachmentsUnchecked && b.Attachments.Sig != "") {
+				// sit beside it). A folder that couldn't be listed keeps what is stored.
+				if !b.Attachments.Unread &&
+					(old.AttachmentsSig != b.Attachments.Sig || (old.AttachmentsUnchecked && b.Attachments.Sig != "")) {
 					if files, read := s.readAttachments(lib, b, b.Attachments.Sig); read {
 						attachBackfill[b.RelPath] = catalog.AttachmentsReading{Sig: b.Attachments.Sig, Files: files}
 					}
@@ -580,9 +581,15 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 			b.ABS.Sig = "" // recorded as none for now, so the next scan reads it again
 		}
 	}
-	var read bool
-	if b.Attachments.Files, read = s.readAttachments(lib, b, b.Attachments.Sig); !read {
-		b.Attachments.Sig = "" // likewise
+	// The attachments: one that couldn't be read right now (or whose folder
+	// couldn't be listed) keeps what is stored, for the next scan to read again
+	// (UpsertBook and AttachmentsReading.Unread), never a part of the set.
+	if !b.Attachments.Unread {
+		if files, read := s.readAttachments(lib, b, b.Attachments.Sig); read {
+			b.Attachments.Files = files
+		} else {
+			b.Attachments = catalog.AttachmentsReading{Unread: true}
+		}
 	}
 
 	// Move-detection fingerprint (reused content_hash column); skip if already
@@ -841,7 +848,7 @@ func discoverAuto(ctx context.Context, lib catalog.Library, overrides map[string
 			b.ABS.Sig = side.abs[b.RelPath]
 		}
 	}
-	attachmentsOfWalk(books, side.attachments)
+	attachmentsOfWalk(books, side)
 	return books, hadErrors, nil
 }
 
@@ -883,7 +890,7 @@ func booksOf(lib catalog.Library, dirs map[string][]audioFile, overrides map[str
 // found in the same walk (sidecarFiles).
 func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel string, ignore *Ignore, log *slog.Logger, rl *runLog) (dirs map[string][]audioFile, side sidecarFiles, hadErrors bool, err error) {
 	dirs = map[string][]audioFile{}
-	side = sidecarFiles{abs: map[string]string{}, attachments: map[string]attachmentFiles{}}
+	side = sidecarFiles{abs: map[string]string{}, attachments: map[string]attachmentFiles{}, unlisted: map[string]bool{}}
 	err = filepath.WalkDir(walkFrom, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -906,7 +913,19 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 			// A book's .audiosilo folder is listed once, never walked into: it holds
 			// the Bridge's attachments, never audio.
 			if rel != fromRel && isAttachmentsDir(d, rel, ignore) {
-				if files := listAttachments(p); len(files) > 0 {
+				files, lerr := listAttachments(p)
+				switch {
+				case lerr != nil:
+					// Its books keep what is stored (Unread). No audio lives here, so
+					// discovery isn't partial: the prune is not at stake.
+					side.unlisted[dirOf(rel)] = true
+					log.Warn("could not list a .audiosilo folder", "library", lib.Name, "path", absOf(lib, rel), "err", lerr)
+					if rl != nil {
+						rl.add("warn", "unreadable", func(e *catalog.RunEvent) {
+							e.Path, e.Detail = rel, pathErrText(lerr)
+						})
+					}
+				case len(files) > 0:
 					side.attachments[dirOf(rel)] = files
 				}
 				return fs.SkipDir
@@ -939,10 +958,12 @@ func audioDirs(ctx context.Context, lib catalog.Library, walkFrom, fromRel strin
 // each by the library-relative folder holding it: abs is the signature
 // (metadata.ABSSignature) of each folder's Audiobookshelf metadata.json (a
 // regular file, not ignored), attachments each .audiosilo folder's known files
-// (listAttachments).
+// (listAttachments), and unlisted the folders whose .audiosilo couldn't be
+// listed right now.
 type sidecarFiles struct {
 	abs         map[string]string
 	attachments map[string]attachmentFiles
+	unlisted    map[string]bool
 }
 
 // isABSEntry reports whether a directory entry (at library-relative rel) is an
@@ -1261,7 +1282,12 @@ func (s *Scanner) resolveBook(ctx context.Context, lib catalog.Library, relPath 
 	if book.IsFolder {
 		book.ABS.Sig = absSigAt(lib, book.RelPath, ignore)
 	}
-	book.Attachments.Sig = attachmentsSigAt(lib, book, ignore)
+	if sig, aerr := attachmentsSigAt(lib, book, ignore); aerr != nil {
+		s.log.Warn("could not list the book's .audiosilo folder", "library", lib.Name, "path", book.RelPath, "err", aerr)
+		book.Attachments = catalog.AttachmentsReading{Unread: true} // what is stored stays
+	} else {
+		book.Attachments.Sig = sig
+	}
 	return book, nil
 }
 

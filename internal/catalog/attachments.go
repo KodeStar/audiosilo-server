@@ -24,10 +24,14 @@ import (
 // them again.
 
 // AttachmentsReading is a book's attachments as a scan found them: their
-// signature ("" for none) and what they say.
+// signature ("" for none) and what they say. Unread is a reading that couldn't
+// be had right now (the folder couldn't be listed, or a file couldn't be read):
+// UpsertBook then keeps what is stored and leaves the row unchecked, so the next
+// scan reads them again rather than taking the book's generated content away.
 type AttachmentsReading struct {
-	Sig   string
-	Files metadata.AttachmentFiles
+	Sig    string
+	Files  metadata.AttachmentFiles
+	Unread bool
 }
 
 // generatedSig reports whether a book's attachments signature (attachments_sig)

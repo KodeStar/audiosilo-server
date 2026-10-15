@@ -129,7 +129,8 @@ func (q *testQueue) heard() *[]string {
 
 // UpdateHeld reports the moves an admin is told about (OnTransition, by
 // Notable): into done, failed or needs_attention (not a park that resumes by
-// itself), once each; a keepalive is never one.
+// itself, unless it turns into one that needs a person while still parked),
+// once each; a keepalive is never one.
 func TestUpdateHeldReportsTheMove(t *testing.T) {
 	t.Parallel()
 	q := newTestQueue(t)
@@ -148,8 +149,12 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_unavailable","hint":"x"}}`},
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_unavailable"}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
-		// A park that resumes by itself is not news.
+		// A park that resumes by itself is not news...
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_rate_limited","retry_at":"2026-10-15T20:00:00Z"}}`},
+		// ...until, still parked, it turns into one that needs a person (its
+		// retry ran into the book's budget), once.
+		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded"}}`},
+		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded","hint":"raise it"}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		{StateDone, ``},
 	} {
@@ -161,7 +166,7 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 			t.Fatalf("%s: %v", step.state, err)
 		}
 	}
-	want := []string{"running>needs_attention:agent_unavailable", "running>done:"}
+	want := []string{"running>needs_attention:agent_unavailable", "needs_attention>needs_attention:budget_exceeded", "running>done:"}
 	if !slices.Equal(*heard, want) {
 		t.Fatalf("heard = %v, want %v", *heard, want)
 	}
@@ -316,11 +321,15 @@ func TestEstimateSidecars(t *testing.T) {
 	if c := EstimateSidecars(36000, false, nil); c.Source != SourceAudio || c.ASRHours != 0 || c.AgentCostUSD != nil || c.AgentReady {
 		t.Fatalf("no figures = %+v", c)
 	}
-	// Rounded to hundredths; a nonsense duration costs nothing.
+	// Rounded to hundredths; audio of unknown (or nonsense) length has no
+	// estimate, never a free run.
 	if c := EstimateSidecars(1000, false, &SidecarsEstimates{ASRSecondsPerAudioHour: 1000, AgentUSDPerAudioHour: ptr(1.0)}); c.ASRHours != 0.08 || *c.AgentCostUSD != 0.28 {
 		t.Fatalf("rounding = %+v", c)
 	}
-	if c := EstimateSidecars(-10, false, est); c.ASRHours != 0 || *c.AgentCostUSD != 0 {
+	if c := EstimateSidecars(0, false, est); c.ASRHours != 0 || c.AgentCostUSD != nil || !c.AgentReady {
+		t.Fatalf("unknown length = %+v", c)
+	}
+	if c := EstimateSidecars(-10, false, est); c.ASRHours != 0 || c.AgentCostUSD != nil {
 		t.Fatalf("negative duration = %+v", c)
 	}
 }

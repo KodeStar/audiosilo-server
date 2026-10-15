@@ -24,6 +24,7 @@ import {
   KNOWN_STAGES,
   latestGenerateJob,
   parkKey,
+  planEstimate,
   roundEta,
   seriesBatchOrder,
   settleLimited,
@@ -210,12 +211,14 @@ describe('parks', () => {
 });
 
 describe('progress and result', () => {
-  it('reads the stage (else the step), message, counts, ETA and cost', () => {
+  it('reads the stage (else the step), counts, ETA and cost, and a message only it has no label for', () => {
+    // The Bridge's English wording of a stage this console labels is left out:
+    // the label and the count already say it in the admin's language.
     expect(
       generateProgress({
         step: 'asr',
         stage: 'asr',
-        message: 'Transcribing chapter 12 of 40',
+        message: 'Transcribing (12 of 40)',
         done: 12,
         total: 40,
         eta_seconds: 5400,
@@ -223,15 +226,24 @@ describe('progress and result', () => {
       }),
     ).toEqual({
       stage: 'asr',
-      message: 'Transcribing chapter 12 of 40',
       done: 12,
       total: 40,
       etaSeconds: 5400,
       costUsd: 3.42,
     });
+    // A stage from a newer Bridge keeps its message (the only wording there is).
+    expect(generateProgress({ step: 'proofreading', message: 'Proofreading chapter 3' })).toEqual({
+      stage: 'proofreading',
+      message: 'Proofreading chapter 3',
+    });
     // The step stands in for the stage, never for the message.
     expect(generateProgress({ step: 'writing' })).toEqual({ stage: 'writing' });
     expect(generateProgress({ step: 'asr', stage: 'fact_pass' })).toEqual({ stage: 'fact_pass' });
+    // The Bridge's own last steps say more than the engine's "done".
+    expect(generateProgress({ step: 'writing', stage: 'done' })).toEqual({ stage: 'writing' });
+    expect(generateProgress({ step: 'rescanning', stage: 'done' })).toEqual({
+      stage: 'rescanning',
+    });
   });
 
   it('drops what it cannot use', () => {
@@ -331,6 +343,49 @@ describe('the estimate', () => {
     expect(strings[destinationKey('issue')]).toBe(
       'On this server, and offered to the community metadata',
     );
+  });
+
+  it('quotes the whole plan: this book and the earlier ones it queues first', () => {
+    const earlier = [
+      {
+        library_id: 1,
+        path: 'A/1',
+        title: '1',
+        series_index: '1',
+        asr_hours: 2,
+        agent_cost_usd: 3,
+      },
+      {
+        library_id: 1,
+        path: 'A/2',
+        title: '2',
+        series_index: '2',
+        asr_hours: 1,
+        agent_cost_usd: 1.5,
+      },
+    ];
+    expect(planEstimate(estimate({ earlier }), true)).toEqual({
+      books: 3,
+      asrHours: 5.5,
+      costUsd: 20.5,
+    });
+    // Left out, the book alone.
+    expect(planEstimate(estimate({ earlier }), false)).toEqual({
+      books: 1,
+      asrHours: 2.5,
+      costUsd: 16,
+    });
+    // An ebook needs no transcription; the earlier books' still count.
+    expect(
+      planEstimate(estimate({ source: 'ebook', asr_hours: 0, agent_cost_usd: 4, earlier }), true),
+    ).toEqual({ books: 3, asrHours: 3, costUsd: 8.5 });
+    // One book with no figure makes the total unknown.
+    const unknown = [{ ...earlier[0], asr_hours: 0, agent_cost_usd: null }];
+    expect(planEstimate(estimate({ earlier: unknown }), true)).toEqual({
+      books: 2,
+      asrHours: null,
+      costUsd: null,
+    });
   });
 });
 
@@ -434,13 +489,65 @@ describe('the series batch', () => {
       ],
     ]);
     const plan = batchPlan(books, checks);
-    // A failed estimate is queued anyway; characters alone don't count as covered.
-    expect(plan.queue.map((x) => x.path)).toEqual(['Three', 'Four']);
+    // A failed estimate is left out, never queued on a guess; characters alone
+    // don't count as covered.
+    expect(plan.queue.map((x) => x.path)).toEqual(['Four']);
     expect(plan.covered).toBe(1);
     expect(plan.open).toBe(1);
+    expect(plan.unknown).toBe(1);
     expect(plan.notWritable).toBe(false);
+    expect(plan.costUsd).toBe(16);
     const locked = new Map([[`1\0One`, batchCheck(estimate({ writable: false }))]]);
     expect(batchPlan([books[0]], locked).notWritable).toBe(true);
+  });
+
+  it('only lets a book it would queue stop the batch on a library it cannot write', () => {
+    const books = [b('One', 1), b('Two', 2)];
+    const checks = new Map<string, BatchCheck>([
+      [
+        `1\0One`,
+        batchCheck(
+          estimate({
+            writable: false,
+            has: {
+              community: { characters: false, recaps: true },
+              local: { characters: false, recaps: false },
+            },
+          }),
+        ),
+      ],
+      [`1\0Two`, batchCheck(estimate())],
+    ]);
+    const plan = batchPlan(books, checks);
+    expect(plan.notWritable).toBe(false);
+    expect(plan.queue.map((x) => x.path)).toEqual(['Two']);
+  });
+
+  it('queues a book whose open job is being cancelled, and leaves out one the community could not be asked about', () => {
+    expect(
+      batchCheck(estimate({ open_job: job('running', { cancel_requested: true }) })).open,
+    ).toBe(false);
+    const unasked = {
+      community: { characters: false, recaps: false },
+      local: { characters: false, recaps: false },
+      community_unknown: true,
+    };
+    expect(batchCheck(estimate({ has: unasked })).unknown).toBe(true);
+    // Recaps of its own make it covered, whatever the community says.
+    expect(
+      batchCheck(estimate({ has: { ...unasked, local: { characters: false, recaps: true } } })),
+    ).toMatchObject({ covered: true, unknown: false });
+  });
+
+  it('totals what the queued books cost, unknown when one is', () => {
+    const books = [b('One', 1), b('Two', 2)];
+    const both = new Map<string, BatchCheck>([
+      [`1\0One`, batchCheck(estimate({ agent_cost_usd: 4 }))],
+      [`1\0Two`, batchCheck(estimate({ agent_cost_usd: 16, subscription: true }))],
+    ]);
+    expect(batchPlan(books, both)).toMatchObject({ costUsd: 20, subscription: true });
+    const one = new Map(both).set(`1\0Two`, batchCheck(estimate({ agent_cost_usd: null })));
+    expect(batchPlan(books, one).costUsd).toBeNull();
   });
 
   it('checks a few books at a time, keeping their order and turning failures into undefined', async () => {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -236,6 +237,97 @@ func TestScannerRefusesBadAttachments(t *testing.T) {
 		if a := attachmentsAt(t, cat, lib.ID, p); a != nil {
 			t.Errorf("%s after IndexPath = %+v, want none", p, a)
 		}
+	}
+}
+
+// TestScannerKeepsAttachmentsItCantRead: a .audiosilo folder that can't be listed
+// right now, or a file in it that can't be read, never reads as "no
+// attachments": a scan, IndexPath and the attachments refresh (which answers an
+// error) keep what is stored, never a part of the set, and the next scan that
+// can read them records them; a folder that is gone reads as none.
+func TestScannerKeepsAttachmentsItCantRead(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX permissions that bind (not root)")
+	}
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+	root := t.TempDir()
+	copyFixtureM4B(t, filepath.Join(root, "A", "Book", "audio.m4b"))
+	past := time.Now().Add(-time.Hour)
+	writeAt(t, root, "A/Book/.audiosilo/characters.json", testCharacters, past)
+	writeAt(t, root, "A/Book/.audiosilo/recaps.json", testRecaps, past)
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	stored := func(when, character string) {
+		t.Helper()
+		a := attachmentsAt(t, cat, lib.ID, "A/Book")
+		if a == nil || a.Characters == nil || a.Characters.Characters[0].ID != character || a.Recaps == nil {
+			t.Fatalf("%s: stored = %+v, want %s's characters and the recaps", when, a, character)
+		}
+	}
+	stored("first scan", "hero")
+
+	// The folder can't be listed: a scan, the refresh and IndexPath keep them.
+	dir := filepath.Join(root, "A", "Book", ".audiosilo")
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	stored("a scan that can't list the folder", "hero")
+	if _, err := scanner.RefreshAttachments(ctx, *lib, "A/Book"); err == nil || errors.Is(err, ErrNotIndexable) {
+		t.Errorf("refresh of a folder that can't be listed: %v, want an error", err)
+	}
+	stored("the refresh", "hero")
+	if _, err := scanner.IndexPath(ctx, *lib, "A/Book"); err != nil {
+		t.Fatal(err)
+	}
+	stored("IndexPath", "hero")
+
+	// One file can't be read: the other's new version isn't recorded alone.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	recaps := filepath.Join(dir, "recaps.json")
+	if err := os.Chmod(recaps, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	writeAt(t, root, "A/Book/.audiosilo/characters.json",
+		`{"work":"w","characters":[{"id":"villain","name":"Villain","reveal":{"chapter":4}}]}`, time.Now())
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	stored("a scan that can't read one file", "hero")
+	if _, err := scanner.IndexPath(ctx, *lib, "A/Book"); err != nil {
+		t.Fatal(err)
+	}
+	stored("IndexPath that can't read one file", "hero")
+
+	// Readable again: the next scan reads them all (the row was left unchecked).
+	if err := os.Chmod(recaps, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	stored("readable again", "villain")
+
+	// Gone: none.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	if a := attachmentsAt(t, cat, lib.ID, "A/Book"); a != nil {
+		t.Errorf("after the folder went = %+v, want none", a)
 	}
 }
 

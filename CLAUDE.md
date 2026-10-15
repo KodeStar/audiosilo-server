@@ -493,8 +493,10 @@ future metadata site can attach enrichment without reshaping the schema. The
   or a down upstream isn't hammered; the api handler (`handlers_meta.go`) is
   transport-only. Degradation: disabled -> 404 (and the `metadata` capability is
   false, so clients hide the UI); no asin/isbn or no upstream match -> `200
-  {"matched": false}`; upstream unreachable -> 502. Out of scope for now: no cover
-  remote-fallback, no tag-based ASIN extraction.
+  {"matched": false}` (with a `work` of the book's own when the Bridge generated
+  characters or recaps for it: `meta.Answer`); upstream unreachable -> 502, unless
+  the book has generated content (this server's own), answered as unmatched with
+  it. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
   **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
   each family (key `ordering_of || id`) into ONE rail whose top-level view is the
   MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so

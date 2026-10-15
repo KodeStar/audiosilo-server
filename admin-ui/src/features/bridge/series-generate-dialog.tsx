@@ -3,11 +3,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Sparkles } from 'lucide-react';
 import type { AdminBook } from '@/api/types';
+import { FactList } from '@/components/fact-list';
 import { ProgressBar } from '@/components/progress-bar';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
 import { refKey } from '@/lib/book-route';
-import { formatNumber } from '@/lib/format';
+import { formatNumber, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import {
   batchCheck,
@@ -29,8 +30,9 @@ const CHECK_AT_ONCE = 4;
  * Generate for a whole series: each book's brief estimate is asked for first (a few at
  * a time), so the books that already have recaps (from the community or their
  * own folder) and the ones with a job already open are left out, then the rest
- * are queued in reading order, the earliest first. A book whose estimate fails
- * is queued anyway: the server returns an open job instead of a second one.
+ * are queued in reading order, the earliest first, with what they cost in all. A
+ * book that couldn't be checked (its estimate failed, or the community couldn't
+ * be asked) is left out too and counted, never queued on a guess.
  */
 export function SeriesGenerateDialog({
   open,
@@ -99,6 +101,14 @@ function SeriesForm({
   const plan = checks ? batchPlan(ordered, checks) : undefined;
   const n = plan?.queue.length ?? 0;
   const fmt = (v: number) => formatNumber(v, lang);
+  // What the queued books cost in all, naming how many runs that is.
+  let cost: string | undefined;
+  if (plan && plan.costUsd !== null) {
+    const what = plan.subscription
+      ? t('bridge.generate.costUsage', { cost: formatUsd(plan.costUsd, lang) })
+      : t('bridge.generate.about', { what: formatUsd(plan.costUsd, lang) });
+    cost = n > 1 ? t('bridge.generate.forBooks', { count: n, n: fmt(n), what }) : what;
+  }
 
   const submit = async (ev: React.FormEvent) => {
     ev.preventDefault();
@@ -138,7 +148,7 @@ function SeriesForm({
             <p className="font-semibold">
               {n ? t('bridge.series.willQueue', { count: n, n: fmt(n) }) : t('bridge.series.none')}
             </p>
-            {plan.covered || plan.open ? (
+            {plan.covered || plan.open || plan.unknown ? (
               <ul className="ml-5 flex list-disc flex-col gap-0.5 text-[12.5px] text-muted-foreground">
                 {plan.covered ? (
                   <li>
@@ -150,6 +160,14 @@ function SeriesForm({
                 ) : null}
                 {plan.open ? (
                   <li>{t('bridge.series.skippedOpen', { count: plan.open, n: fmt(plan.open) })}</li>
+                ) : null}
+                {plan.unknown ? (
+                  <li>
+                    {t('bridge.series.skippedUnknown', {
+                      count: plan.unknown,
+                      n: fmt(plan.unknown),
+                    })}
+                  </li>
                 ) : null}
               </ul>
             ) : null}
@@ -164,6 +182,18 @@ function SeriesForm({
             ) : null}
             {n ? (
               <>
+                <FactList
+                  rows={[
+                    [
+                      t('bridge.generate.cost'),
+                      cost ?? (
+                        <span className="text-muted-foreground">
+                          {t('bridge.generate.noEstimate')}
+                        </span>
+                      ),
+                    ],
+                  ]}
+                />
                 <ContributeSwitch value={contribute} onChange={setContribute} />
                 <p className="text-[12.5px] text-muted-foreground">
                   {t('bridge.generate.whereLabel', {

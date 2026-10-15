@@ -53,8 +53,37 @@ func setGenerated(t *testing.T, e *testEnv, libID int64, path string) {
 		}, InShort: "Gen short.", Ending: "Gen ending."},
 		Provenance: &metadata.AttachmentProvenance{Generator: "audiosilo-bridge", GeneratedAt: "2026-10-15T10:00:00Z"},
 	}
-	if err := e.cat.SetAttachments(context.Background(), libID, map[string]catalog.AttachmentsReading{path: {Sig: "x", Files: files}}); err != nil {
+	// The signature names the files, as a scan's does (Book.Generated reads it).
+	sig := "characters.json:1:1,recaps.json:1:1,bridge.json:1:1"
+	if err := e.cat.SetAttachments(context.Background(), libID, map[string]catalog.AttachmentsReading{path: {Sig: sig, Files: files}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestMetaGeneratedWhileTheCommunityIsDown: a community lookup that fails
+// doesn't hide a book's generated content (this server's own): it answers as
+// unmatched with it, gated as asked; a book with none still gets the 502.
+func TestMetaGeneratedWhileTheCommunityIsDown(t *testing.T) {
+	t.Parallel()
+	e := newMetaEnv(t, true, http.StatusServiceUnavailable)
+	lib := seedChapteredBook(t, e, "A/Two", "B0TWO")
+	setGenerated(t, e, lib.ID, "A/Two")
+	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	g := getGenerated(t, e, lib.ID, "A/Two", "", tok)
+	if g.Matched || g.Work == nil || len(g.Work.Characters) != 2 || g.Work.Generated == nil || g.Work.Attribution != nil {
+		t.Fatalf("generated content during an outage = %+v", g.Work)
+	}
+	if g := getGenerated(t, e, lib.ID, "A/Two", "&spoilers=hide", tok); !slices.Equal(ids(g), []string{"gen-early"}) {
+		t.Errorf("hidden during an outage = %+v", g.Work)
+	}
+	plain := &catalog.Book{LibraryID: lib.ID, RelPath: "A/Plain", Title: "Plain", ASIN: "B0PLAIN", AddedAt: "2020-01-01"}
+	if _, err := e.cat.UpsertBook(context.Background(), plain); err != nil {
+		t.Fatal(err)
+	}
+	url := "/api/v1/libraries/" + strconv.FormatInt(lib.ID, 10) + "/meta?path=" + escape("A/Plain")
+	if resp, body := e.do(t, "GET", url, tok, ""); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("no generated content during an outage = %d %s, want 502", resp.StatusCode, body)
 	}
 }
 
@@ -166,8 +195,10 @@ func TestMetaGeneratedUnmatched(t *testing.T) {
 	e := newMetaEnv(t, true, 0)
 	lib := seedChapteredBook(t, e, "A/Two", "") // no ASIN or ISBN: never matched
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
-	if _, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/meta?path="+escape("A/Two"), tok, ""); body != "{\"matched\":false}\n" {
-		t.Fatalf("no generated content = %q", body)
+	for _, q := range []string{"", "&spoilers=hide"} {
+		if _, body := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/meta?path="+escape("A/Two")+q, tok, ""); body != "{\"matched\":false}\n" {
+			t.Fatalf("no generated content (%q) = %q", q, body)
+		}
 	}
 	setGenerated(t, e, lib.ID, "A/Two")
 

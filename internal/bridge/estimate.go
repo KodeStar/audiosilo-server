@@ -10,10 +10,11 @@ type SidecarsCost struct {
 	// the audio, else SourceAudio.
 	Source string `json:"source"`
 	// ASRHours is the ASR wall time in hours (0 for an ebook, which needs none,
-	// and when the Bridge sent no figures).
+	// when the Bridge sent no figures, and when the audio's length is unknown).
 	ASRHours float64 `json:"asr_hours"`
 	// AgentCostUSD is the agent's expected spend; nil (null on the wire) when the
-	// Bridge has no history for this source yet (or sent no figures).
+	// Bridge has no history for this source yet (or sent no figures), or the
+	// audio's length is unknown: no estimate, never a free run.
 	AgentCostUSD *float64 `json:"agent_cost_usd"`
 	// Subscription and AgentReady are the Bridge's: the agent's credential is a
 	// subscription login (the cost is notional), and the agent is ready to run.
@@ -33,13 +34,16 @@ func EstimateSidecars(duration float64, ebook bool, est *SidecarsEstimates) Side
 		return c
 	}
 	c.Subscription, c.AgentReady = est.Subscription, est.AgentReady
-	hours := max(duration, 0) / 3600
 	if ebook {
 		if est.AgentUSDPerEbook != nil {
 			c.AgentCostUSD = new(cents(*est.AgentUSDPerEbook))
 		}
 		return c
 	}
+	if duration <= 0 {
+		return c // audio of unknown length (no probe): nothing to cost it by
+	}
+	hours := duration / 3600
 	c.ASRHours = cents(hours * est.ASRSecondsPerAudioHour / 3600)
 	if est.AgentUSDPerAudioHour != nil {
 		c.AgentCostUSD = new(cents(hours * *est.AgentUSDPerAudioHour))

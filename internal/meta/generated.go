@@ -49,11 +49,12 @@ type Place struct {
 	Finished bool
 }
 
-// Fillable reports whether generated content could fill anything in e's work:
-// it lacks characters, recaps or the summary (or e has no match at all). When it
-// can't, /meta needn't load the book's generated content.
+// Fillable reports whether generated content could fill anything in e's work
+// (parts): it lacks characters or recaps (or e has no match at all); a summary
+// is only ever taken with the recaps. When it can't, /meta needn't load the
+// book's generated content.
 func (e *Enrichment) Fillable() bool {
-	return e == nil || e.Work == nil || len(e.Work.Characters) == 0 || len(e.Work.Recaps) == 0 || e.Work.RecapSummary == nil
+	return e == nil || e.Work == nil || len(e.Work.Characters) == 0 || len(e.Work.Recaps) == 0
 }
 
 // Answer is /meta's per-request answer for a book: env is its matched envelope

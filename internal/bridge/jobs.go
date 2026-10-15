@@ -579,15 +579,16 @@ func (s *Service) settle(ctx context.Context, e expiry) {
 		s.wake.fire()
 	}
 	for _, t := range e.failed {
-		s.report(ctx, t.job, t.from)
+		s.report(ctx, t.job, t.from, false)
 	}
 }
 
-// report tells OnTransition about job's move out of from when it is news
-// (Notable), on a context the caller's leaving doesn't cancel: the move has
-// committed, and the admin should hear about it either way.
-func (s *Service) report(ctx context.Context, job *Job, from string) {
-	if s.OnTransition != nil && job.Notable(from) {
+// report tells OnTransition about job's move out of from (fromResumes: from's
+// park would have resumed by itself) when it is news (Notable), on a context the
+// caller's leaving doesn't cancel: the move has committed, and the admin should
+// hear about it either way.
+func (s *Service) report(ctx context.Context, job *Job, from string, fromResumes bool) {
+	if s.OnTransition != nil && job.Notable(from, fromResumes) {
 		s.OnTransition(context.WithoutCancel(ctx), *job, from)
 	}
 }
@@ -783,9 +784,10 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		return nil, err
 	}
 	var (
-		job  *Job
-		from string
-		exp  expiry
+		job         *Job
+		from        string
+		fromResumes bool
+		exp         expiry
 	)
 	err := s.db.WithTx(ctx, "bridge.UpdateHeld", func(tx *sql.Tx) error {
 		now := s.ts()
@@ -805,6 +807,7 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 			return ErrNotHeld
 		}
 		from = cur.State
+		_, fromResumes = cur.park()
 		state := cur.State
 		if u.State != nil {
 			if !slices.Contains(reportable, *u.State) {
@@ -843,26 +846,29 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 		return nil, err
 	}
 	s.settle(ctx, exp)
-	s.report(ctx, job, from)
+	s.report(ctx, job, from, fromResumes)
 	return job, nil
 }
 
-// Notable reports whether a job's move from one state to another is one the
-// server tells admins about (notifications): INTO done, failed or
-// needs_attention, never a report that leaves the state as it was (a running
-// job's keepalive, a parked job's progress). A park that resumes by itself (its
-// progress names a retry_at: an agent's rate limit or a short outage) is not
-// news: telling an admin about every one would flood a phone.
-func (j *Job) Notable(from string) bool {
-	if from == j.State {
-		return false
-	}
+// Notable reports whether a job's move from the state `from` is one the server
+// tells admins about (notifications): INTO done, failed or needs_attention,
+// never a report that leaves the state as it was (a running job's keepalive, a
+// parked job's progress). A park that resumes by itself (its progress names a
+// retry_at: an agent's rate limit or a short outage) is not news: telling an
+// admin about every one would flood a phone. But a park that would have resumed
+// by itself (fromResumes) turning, still parked, into one that needs a person (a
+// code and no retry_at: a rate limit's retry that ran into the book's budget) is,
+// as the Bridge reports it without a running in between.
+func (j *Job) Notable(from string, fromResumes bool) bool {
+	code, resumes := j.park()
 	switch j.State {
 	case StateDone, StateFailed:
-		return true
+		return from != j.State
 	case StateNeedsAttention:
-		_, resumes := j.park()
-		return !resumes
+		if resumes {
+			return false
+		}
+		return from != j.State || (fromResumes && code != "")
 	}
 	return false
 }

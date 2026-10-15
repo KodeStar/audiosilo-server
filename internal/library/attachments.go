@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
@@ -57,11 +59,13 @@ func knownAttachment(name string) bool {
 }
 
 // listAttachments lists the .audiosilo folder at absDir once: its known regular
-// files (a link or anything else is never read). Nil when it can't be listed.
-func listAttachments(absDir string) attachmentFiles {
+// files (a link or anything else is never read). A folder that is gone lists
+// nothing; one that can't be listed right now (permissions, a flaky mount) is an
+// error, never "no attachments", so what is stored for it stays.
+func listAttachments(absDir string) (attachmentFiles, error) {
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
-		return nil
+		return nil, absentOK(err)
 	}
 	var out attachmentFiles
 	for _, e := range entries {
@@ -77,7 +81,16 @@ func listAttachments(absDir string) attachmentFiles {
 		}
 		out[e.Name()] = info
 	}
-	return out
+	return out, nil
+}
+
+// absentOK is nil for an error that means the file isn't there (or can't be:
+// a parent that isn't a folder, a name too long for the disk), else err.
+func absentOK(err error) error {
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ENAMETOOLONG) {
+		return nil
+	}
+	return err
 }
 
 // attachmentsSig is the signature of the attachments in files named with prefix
@@ -102,24 +115,45 @@ func isAttachmentsDir(de fs.DirEntry, rel string, ignore *Ignore) bool {
 
 // attachmentsSigAt is the signature of book b's attachments, read from disk: for
 // a book indexed with no walk (IndexPath) or refreshed alone (RefreshAttachments).
-func attachmentsSigAt(lib catalog.Library, b *catalog.Book, ignore *Ignore) string {
+// It looks up only b's own names (at most one per known name), not the whole
+// folder, which single-file books share. An error is a folder or file that
+// couldn't be looked at right now (never one that isn't there): the caller keeps
+// what is stored rather than reading it as none.
+func attachmentsSigAt(lib catalog.Library, b *catalog.Book, ignore *Ignore) (string, error) {
 	dir, prefix := attachmentsPlace(b)
 	rel := path.Join(dir, metadata.AttachmentsDir)
 	abs := absOf(lib, rel)
 	info, err := os.Lstat(abs)
-	if err != nil || !isAttachmentsDir(fs.FileInfoToDirEntry(info), rel, ignore) {
-		return ""
+	if err != nil {
+		return "", absentOK(err)
 	}
-	return attachmentsSig(listAttachments(abs), prefix)
+	if !isAttachmentsDir(fs.FileInfoToDirEntry(info), rel, ignore) {
+		return "", nil
+	}
+	files := attachmentFiles{}
+	for _, known := range metadata.AttachmentNames {
+		fi, err := os.Lstat(filepath.Join(abs, prefix+known))
+		if err != nil {
+			if err := absentOK(err); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if fi.Mode().IsRegular() { // as listAttachments: a link or anything else is never read
+			files[prefix+known] = fi
+		}
+	}
+	return attachmentsSig(files, prefix), nil
 }
 
 // readAttachments reads book b's attachments whose signature is sig ("" for
 // none: nothing to read). A file that can't be used (metadata.ErrAttachmentInvalid:
 // not the format, too large, a link; logged) is left out, and that reading is
 // recorded with its signature, so it isn't read again until it changes. read is
-// false when a file couldn't be read right now (gone since the walk, a flaky
-// mount; logged): the caller records nothing for it, or records no signature, so
-// the next scan reads them again.
+// false, with no files, when a file couldn't be read right now (gone since the
+// walk, a flaky mount; logged): the caller records nothing, keeping what is
+// stored, so the next scan reads them again. Never a part of the set: a reading
+// recorded without one of its files would read as complete.
 func (s *Scanner) readAttachments(lib catalog.Library, b *catalog.Book, sig string) (files metadata.AttachmentFiles, read bool) {
 	if sig == "" {
 		return files, true
@@ -143,7 +177,10 @@ func (s *Scanner) readAttachments(lib catalog.Library, b *catalog.Book, sig stri
 			read = read && errors.Is(err, metadata.ErrAttachmentInvalid)
 		}
 	}
-	return files, read
+	if !read {
+		return metadata.AttachmentFiles{}, false
+	}
+	return files, true
 }
 
 // AttachmentsRefresh is what RefreshAttachments indexed for a book: its path and
@@ -165,7 +202,8 @@ type AttachmentsHeld struct {
 // relPath again and records them, never reading its audio: the Bridge's call
 // once it has written them. relPath is the book's path, or a path inside it (a
 // part, a disc folder). ErrNotIndexable when no indexed book is there; an error
-// (nothing recorded) when a file couldn't be read right now.
+// (nothing recorded) when the folder couldn't be listed or a file couldn't be
+// read right now.
 func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, relPath string) (*AttachmentsRefresh, error) {
 	if _, err := ContentJoin(lib.Root, relPath); err != nil {
 		return nil, err
@@ -180,7 +218,10 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 	if err != nil {
 		return nil, err
 	}
-	sig := attachmentsSigAt(lib, book, ParseIgnore(lib.IgnorePatterns))
+	sig, err := attachmentsSigAt(lib, book, ParseIgnore(lib.IgnorePatterns))
+	if err != nil {
+		return nil, fmt.Errorf("the attachments of %q couldn't be listed: %w", book.RelPath, err)
+	}
 	files, read := s.readAttachments(lib, book, sig)
 	if !read {
 		return nil, fmt.Errorf("the attachments of %q couldn't be read", book.RelPath)
@@ -195,13 +236,18 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 }
 
 // attachmentsOfWalk sets each book's attachments signature from the .audiosilo
-// folders the discovery walk listed (audioDirs), by the folder holding them.
-func attachmentsOfWalk(books []*catalog.Book, found map[string]attachmentFiles) {
-	if len(found) == 0 {
+// folders the discovery walk listed (audioDirs), by the folder holding them. A
+// book whose folder couldn't be listed is Unread: what is stored for it stays.
+func attachmentsOfWalk(books []*catalog.Book, side sidecarFiles) {
+	if len(side.attachments) == 0 && len(side.unlisted) == 0 {
 		return
 	}
 	for _, b := range books {
 		dir, prefix := attachmentsPlace(b)
-		b.Attachments.Sig = attachmentsSig(found[dir], prefix)
+		if side.unlisted[dir] {
+			b.Attachments.Unread = true
+			continue
+		}
+		b.Attachments.Sig = attachmentsSig(side.attachments[dir], prefix)
 	}
 }

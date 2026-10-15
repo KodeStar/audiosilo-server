@@ -20,7 +20,8 @@ import (
 //   - metadata disabled: 404 (clients gate on the `metadata` capability, so they
 //     never request this).
 //   - book has neither asin nor isbn, or the lookup found no match: 200 {"matched": false}.
-//   - upstream unreachable/error: 502.
+//   - upstream unreachable/error: 502, unless the book has generated content
+//     (below), which is this server's own: then it answers as unmatched with it.
 //   - match: 200 {"matched": true, ...} (see internal/meta.Enrichment).
 //
 // Every rail entry the caller owns carries `local`, the book to open for it
@@ -45,11 +46,20 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "metadata lookup not enabled")
 		return
 	}
-	lib, path, book, env, ok := a.bookEnvelope(w, r)
+	lib, path, book, env, lookupErr, ok := a.bookEnvelope(w, r)
 	if !ok {
 		return
 	}
 	gen := a.generatedFor(r.Context(), book, env)
+	if env == nil && gen == nil {
+		// Nothing to answer with but the lookup's outcome: no progress to read.
+		if lookupErr != nil {
+			writeLookupFailed(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, meta.Unmatched{})
+		return
+	}
 
 	// The caller's place in the book is read first: a failure here fails the
 	// request (hiding was asked for, so the full envelope is not a fallback)
@@ -94,8 +104,9 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 // generatedFor is the book's generated content for /meta (nil for none, or when
 // env's community work leaves nothing for it to fill). It is an extra like
 // `local`: a failure to read it is logged and the answer goes out without it.
+// A book whose row names no generated file (Book.Generated) isn't looked up.
 func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.Enrichment) *meta.Generated {
-	if !env.Fillable() {
+	if !book.Generated || !env.Fillable() {
 		return nil
 	}
 	att, err := a.cat.BookAttachments(ctx, book.ID)
@@ -118,32 +129,40 @@ func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.En
 // bookEnvelope is the shared start of the routes over a book's /meta envelope
 // (handleMeta, handleMetaCover): the ?path= in the caller's scope, the book at it,
 // and its envelope from the shared cache (meta.Service.Enrich). env is nil when
-// the book can't be matched (no ASIN or ISBN, or none upstream); ok is false when
-// it wrote the error (403/404 for the path, 502 when the lookup failed).
-func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog.Library, path string, book *catalog.Book, env *meta.Enrichment, ok bool) {
+// the book can't be matched (no ASIN or ISBN, or none upstream), and lookupErr
+// set (logged) when the lookup failed: the caller answers that (a 502, unless it
+// has something of its own to serve). ok is false when it wrote the error
+// (403/404 for the path).
+func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog.Library, path string, book *catalog.Book,
+	env *meta.Enrichment, lookupErr error, ok bool) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
-		return nil, "", nil, nil, false
+		return nil, "", nil, nil, nil, false
 	}
 	if book, ok = a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book"); !ok {
-		return nil, "", nil, nil, false
+		return nil, "", nil, nil, nil, false
 	}
 	if book.ASIN == "" && book.ISBN == "" {
-		return lib, path, book, nil, true
+		return lib, path, book, nil, nil, true
 	}
 	env, err := a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
 	switch {
 	case errors.Is(err, meta.ErrNotFound):
-		return lib, path, book, nil, true
+		return lib, path, book, nil, nil, true
 	case err != nil:
 		if r.Context().Err() == nil {
 			a.log.Warn("meta lookup failed", "err", err, "library", lib.ID, "path", path)
 		}
-		writeError(w, http.StatusBadGateway, "metadata service unavailable")
-		return nil, "", nil, nil, false
+		return lib, path, book, nil, err, true
 	}
-	return lib, path, book, env, true
+	return lib, path, book, env, nil, true
+}
+
+// writeLookupFailed answers a community lookup that failed (bookEnvelope's
+// lookupErr).
+func writeLookupFailed(w http.ResponseWriter) {
+	writeError(w, http.StatusBadGateway, "metadata service unavailable")
 }
 
 // localRails is env's rails placed for the caller (meta.Service.PlaceOwned), and

@@ -2313,6 +2313,10 @@ export interface EarlierBook {
   title: string;
   /** As the server stores it ("1", "2.5"). */
   series_index: string;
+  /** Its expected transcription hours (as audio; 0 when its length is unknown). */
+  asr_hours: number;
+  /** Its expected agent cost; null with no history, or when its length is unknown. */
+  agent_cost_usd: number | null;
 }
 
 /** GET /admin/bridge/estimate?library_id=&path=&kind=sidecars.generate. */
@@ -2333,8 +2337,13 @@ export interface BridgeEstimate {
   agent_ready: boolean;
   /** The library is mapped and writable on the Bridge. */
   writable: boolean;
-  has: { community: SidecarsCoverage; local: SidecarsCoverage };
-  /** Earlier books of the series without recaps, in reading order (at most 10). */
+  has: {
+    community: SidecarsCoverage;
+    local: SidecarsCoverage;
+    /** The community couldn't be asked right now: `community` is no answer. */
+    community_unknown?: boolean;
+  };
+  /** The nearest earlier books of the series without recaps, in reading order (at most 10). */
   earlier: EarlierBook[];
   /** An open sidecars.generate job for this book. */
   open_job?: BridgeJob;

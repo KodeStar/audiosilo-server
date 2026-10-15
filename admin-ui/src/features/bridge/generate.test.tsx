@@ -127,9 +127,16 @@ describe('generate characters and recaps', () => {
             source: 'ebook',
             ebook: `${BOOK_PATH}/The Way of Kings.epub`,
             asr_hours: 0,
-            agent_cost_usd: null,
+            agent_cost_usd: 4,
             earlier: [
-              { library_id: 1, path: 'B/Prequel 0', title: 'Prequel', series_index: '0.5' },
+              {
+                library_id: 1,
+                path: 'B/Prequel 0',
+                title: 'Prequel',
+                series_index: '0.5',
+                asr_hours: 2,
+                agent_cost_usd: 3,
+              },
             ],
           }),
         },
@@ -144,15 +151,21 @@ describe('generate characters and recaps', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
     expect(await within(dialog).findByText('The ebook beside it')).toBeInTheDocument();
     expect(within(dialog).getByText('The Way of Kings.epub')).toBeInTheDocument();
-    expect(within(dialog).getByText('None needed')).toBeInTheDocument();
-    expect(within(dialog).getByText('No estimate yet')).toBeInTheDocument();
     expect(within(dialog).getByText('On this server only')).toBeInTheDocument();
-    expect(
-      within(dialog).getByRole('checkbox', {
-        name: /also generate for 1 earlier book in the series first/i,
-      }),
-    ).toBeChecked();
+    const earlierBox = within(dialog).getByRole('checkbox', {
+      name: /also generate for 1 earlier book in the series first/i,
+    });
+    expect(earlierBox).toBeChecked();
     expect(within(dialog).getByText('Prequel')).toBeInTheDocument();
+    // The figures quote every run the button queues: the earlier book's audio
+    // and both agent runs.
+    expect(within(dialog).getByText('About 2h for 2 books')).toBeInTheDocument();
+    expect(within(dialog).getByText('About $7.00 for 2 books')).toBeInTheDocument();
+    // This book alone: the ebook needs no transcription.
+    await user.click(earlierBox);
+    expect(within(dialog).getByText('None needed')).toBeInTheDocument();
+    expect(within(dialog).getByText('About $4.00')).toBeInTheDocument();
+    await user.click(earlierBox);
     // The card asked for the brief estimate; the dialog for the full one, once.
     expect(estimates(calls, true).length).toBeGreaterThan(0);
     expect(estimates(calls, false)).toHaveLength(1);
@@ -212,6 +225,43 @@ describe('generate characters and recaps', () => {
     ).toBeInTheDocument();
   });
 
+  it('never counts a job that is being cancelled as queued, and stops there', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(
+      routes({
+        'GET /admin/bridge/estimate': {
+          body: estimate({
+            agent_cost_usd: null,
+            earlier: [
+              {
+                library_id: 1,
+                path: 'B/Prequel 0',
+                title: 'Prequel',
+                series_index: '0.5',
+                asr_hours: 1,
+                agent_cost_usd: null,
+              },
+            ],
+          }),
+        },
+        // The open job comes back for the earlier book, being cancelled.
+        'POST /admin/bridge/jobs': {
+          status: 200,
+          body: job({ path: 'B/Prequel 0', cancel_requested: true }),
+        },
+      }),
+    );
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    expect(await within(dialog).findByText('No estimate yet')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Generate for 2 books' }));
+    expect(
+      await within(dialog).findByText('Characters and recaps for Prequel 0 is still stopping'),
+    ).toBeInTheDocument();
+    expect(queued(calls)).toHaveLength(1);
+  });
+
   it('shows a running job live: stage, count, ETA, cost, and Cancel', async () => {
     mockFetch(
       routes({
@@ -222,6 +272,8 @@ describe('generate characters and recaps', () => {
                 progress: {
                   step: 'asr',
                   stage: 'asr',
+                  // The Bridge's own English wording of the stage: not shown.
+                  message: 'Transcribing (12 of 40)',
                   done: 12,
                   total: 40,
                   eta_seconds: 5400,
@@ -238,6 +290,7 @@ describe('generate characters and recaps', () => {
     expect(line.closest('p')).toHaveTextContent(
       'Transcribing · 12 of 40 · about 1h 30m left · $3.42 so far',
     );
+    expect(screen.queryByText('Transcribing (12 of 40)')).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Cancel generating characters and recaps' }),
     ).toBeInTheDocument();

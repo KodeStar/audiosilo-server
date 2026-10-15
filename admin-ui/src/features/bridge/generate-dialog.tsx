@@ -11,7 +11,13 @@ import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/component
 import { FormError } from '@/components/ui/field';
 import { formatDuration, formatHours, formatNumber, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import { destinationKey, estimateView, generatePlan, type Contribute } from './generate-model';
+import {
+  destinationKey,
+  estimateView,
+  generatePlan,
+  planEstimate,
+  type Contribute,
+} from './generate-model';
 import { ContributeSwitch, NotWritableNotice } from './generate-parts';
 import { queueInOrder, queueReport, useGenerateEstimate } from './use-generate';
 
@@ -162,6 +168,17 @@ function EstimateBody({
     <span className="text-muted-foreground">{t('bridge.generate.noEstimate')}</span>
   );
   const earlier = estimate.earlier;
+  // The figures quote every run the button queues: this book and the earlier
+  // ones it takes first, naming how many runs that is.
+  const plan = planEstimate(estimate, includeEarlier);
+  const forPlan = (what: string) =>
+    plan.books > 1
+      ? t('bridge.generate.forBooks', {
+          count: plan.books,
+          n: formatNumber(plan.books, lang),
+          what,
+        })
+      : what;
 
   return (
     <>
@@ -199,19 +216,23 @@ function EstimateBody({
             : []),
           [
             t('bridge.generate.asr'),
-            v.asrHours === 0
+            plan.asrHours === 0
               ? t('bridge.generate.asrNone')
-              : v.asrHours === null
+              : plan.asrHours === null
                 ? noEstimate
-                : t('bridge.generate.about', { what: formatHours(v.asrHours * 3600, lang) }),
+                : forPlan(
+                    t('bridge.generate.about', { what: formatHours(plan.asrHours * 3600, lang) }),
+                  ),
           ],
           [
             t('bridge.generate.cost'),
-            v.costUsd === null
+            plan.costUsd === null
               ? noEstimate
-              : v.subscription
-                ? t('bridge.generate.costUsage', { cost: formatUsd(v.costUsd, lang) })
-                : t('bridge.generate.about', { what: formatUsd(v.costUsd, lang) }),
+              : forPlan(
+                  v.subscription
+                    ? t('bridge.generate.costUsage', { cost: formatUsd(plan.costUsd, lang) })
+                    : t('bridge.generate.about', { what: formatUsd(plan.costUsd, lang) }),
+                ),
           ],
           [t('bridge.generate.where'), t(destinationKey(contribute))],
         ]}

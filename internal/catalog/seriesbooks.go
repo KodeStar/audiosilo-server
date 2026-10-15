@@ -270,13 +270,14 @@ type SeriesMember struct {
 const maxEarlierInSeries = 200
 
 // EarlierInSeries returns the books of one library before book in its series
-// that have no generated recaps (book_attachments), in reading order (position,
-// then a range's end, then path), list shape: the series is book's first
-// numbered one (its main series when that has a position, else the first of its
-// others that does), any spelling of it, and a member is any book numbered below
-// book's own position there, through its main series or its list
-// (numberedSeriesMembers). Nil when book has no numbered series. The Bridge's
-// confirmation dialog offers these to be generated first.
+// that have no generated recaps (book_attachments), the nearest
+// maxEarlierInSeries of them in reading order (position, then a range's end,
+// then path), list shape: the series is book's first numbered one (its main
+// series when that has a position, else the first of its others that does), any
+// spelling of it, and a member is any book numbered below book's own position
+// there, through its main series or its list (numberedSeriesMembers). Nil when
+// book has no numbered series. The Bridge's confirmation dialog offers these to
+// be generated first.
 func (c *Catalog) EarlierInSeries(ctx context.Context, libraryID int64, book *Book) ([]SeriesMember, error) {
 	var series *SeriesRef
 	for _, s := range book.AllSeries() {
@@ -289,11 +290,12 @@ func (c *Catalog) EarlierInSeries(ctx context.Context, libraryID int64, book *Bo
 		return nil, nil
 	}
 	q, args := numberedSeriesMembers(libraryID, book.RelPath, series.Name, Scope{LibraryID: libraryID, AllowAll: true})
-	// writeAttachments stores '' for a file a book doesn't have.
+	// writeAttachments stores '' for a file a book doesn't have. The nearest are
+	// read (newest position first), then put back into reading order.
 	rows, err := c.db.QueryContext(ctx, `SELECT `+bookCols+`, pos, pos_end FROM (`+q+`) m
 		   LEFT JOIN book_attachments a ON a.book_id = m.id
 		 WHERE pos < ? AND COALESCE(a.recaps, '') = ''
-		 ORDER BY pos, pos_end, rel_path LIMIT ?`, append(args, series.Position, maxEarlierInSeries)...)
+		 ORDER BY pos DESC, pos_end DESC, rel_path DESC LIMIT ?`, append(args, series.Position, maxEarlierInSeries)...)
 	if err != nil {
 		return nil, err
 	}
@@ -308,5 +310,9 @@ func (c *Catalog) EarlierInSeries(ctx context.Context, libraryID int64, book *Bo
 		finish()
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.Reverse(out)
+	return out, nil
 }

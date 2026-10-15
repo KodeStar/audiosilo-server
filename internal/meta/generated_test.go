@@ -84,12 +84,13 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	if out := matched(t, env, testGenerated(), nil); out != env || out.Work.Generated != nil {
 		t.Errorf("both community = %+v", out.Work)
 	}
-	if !env.Fillable() {
-		t.Error("a work without a summary can't be filled")
-	}
-	both.RecapSummary = &MetaRecapSummary{InShort: "Community short."}
+	// Characters and recaps but no summary: still nothing to fill, as a summary
+	// only ever comes with the recaps.
 	if env.Fillable() {
-		t.Error("a complete work is fillable")
+		t.Error("a work with characters and recaps is fillable")
+	}
+	if !(&Enrichment{Work: &MetaWork{Characters: both.Characters}}).Fillable() || !(*Enrichment)(nil).Fillable() {
+		t.Error("a work without recaps, or no match, can't be filled")
 	}
 
 	// A community summary stays beside generated recaps, and still counts as

@@ -356,8 +356,9 @@ func TestNilServiceIsSafe(t *testing.T) {
 	s.BridgeJobEnded(context.Background(), BridgeJob{State: "done"})
 }
 
-// A Bridge job's end names the book; a failure carries its park code, and its
-// error (the Bridge's own text) stays in the bell.
+// A Bridge job's end names the book; a park carries its code (a failure never
+// does: its progress may still name the park it was in), and the error (the
+// Bridge's own text) stays in the bell.
 func TestBridgeJobEnded(t *testing.T) {
 	s, cat, ctx := newService(t)
 	dest := newFakeDest(t)
@@ -399,6 +400,26 @@ func TestBridgeJobEnded(t *testing.T) {
 		m.Link != "https://books.example.com/admin/server?topic=bridge" {
 		t.Fatalf("parked message = %+v", m)
 	}
+
+	// A failure whose progress still names an earlier park: no code, so no
+	// reason it doesn't have.
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 10, Kind: "sidecars.generate", State: "failed", Library: "Fiction", LibraryID: 1,
+		Path: "Author/Stale", Code: "budget_exceeded", Error: "gave up"})
+	dest.wait(t, 4)
+	events, _, _ = cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
+	for _, ev := range events {
+		if ev.Data["path"] != "Author/Stale" {
+			continue
+		}
+		if _, has := ev.Data["code"]; has {
+			t.Fatalf("failed event carries a park code: %+v", ev.Data)
+		}
+		if m := compose(ev, s.server()); m.Text != "See the job in Settings > Bridge." {
+			t.Fatalf("failed message = %+v", m)
+		}
+		return
+	}
+	t.Fatal("no event for the failed job")
 }
 
 func TestSignedInDeviceIsOneLine(t *testing.T) {

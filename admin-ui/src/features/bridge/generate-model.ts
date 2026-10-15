@@ -181,10 +181,16 @@ export function generateProgress(progress: unknown): GenerateProgress {
   const { text: said, done, total } = progressOf(p);
   const step = text(p.step);
   const out: GenerateProgress = {};
-  const stage = text(p.stage) ?? step;
+  // The Bridge's own last steps (saving the files, the rescan) say what is
+  // happening; the engine's stage by then is only "done".
+  const stage =
+    (step === 'writing' || step === 'rescanning' ? step : undefined) ?? text(p.stage) ?? step;
   if (stage) out.stage = stage;
-  // The step alone is no message: it is the stage when there is none.
-  if (said && said !== step) out.message = said;
+  // The step alone is no message: it is the stage when there is none. Nor is the
+  // Bridge's wording of a stage this console labels (an English restatement of
+  // the stage and its count, already shown in the admin's language).
+  const labelled = stage !== undefined && (KNOWN_STAGES as readonly string[]).includes(stage);
+  if (said && said !== step && !labelled) out.message = said;
   if (done !== undefined && total !== undefined) {
     out.done = done;
     out.total = total;
@@ -348,39 +354,109 @@ export function seriesBatchOrder<B extends AdminBook>(books: readonly B[], serie
 export interface BatchCheck {
   /** It has recaps already, from the community or its own folder: skipped. */
   covered: boolean;
-  /** A generate job is already open for it: skipped (the server would return it). */
+  /** A generate job is already open for it (and not being cancelled): skipped. */
   open: boolean;
+  /**
+   * It couldn't be checked (its estimate failed: a book gone since the list was
+   * read, the Bridge away; or the community couldn't be asked): skipped rather
+   * than queued on a guess, since the community may have its recaps.
+   */
+  unknown: boolean;
   /** The Bridge can't write to its library. */
   notWritable: boolean;
+  /** Its expected agent cost; null when there is no estimate. */
+  costUsd: number | null;
+  /** The Bridge's agent is on a subscription: the cost is an estimate of usage. */
+  subscription: boolean;
 }
 
 export function batchCheck(e: BridgeEstimate | undefined): BatchCheck {
-  // A book whose estimate failed is queued anyway: the server dedupes open jobs.
-  if (!e) return { covered: false, open: false, notWritable: false };
+  if (!e) {
+    return {
+      covered: false,
+      open: false,
+      unknown: true,
+      notWritable: false,
+      costUsd: null,
+      subscription: false,
+    };
+  }
+  const covered = e.has.community.recaps || e.has.local.recaps;
   return {
-    covered: e.has.community.recaps || e.has.local.recaps,
-    open: Boolean(e.open_job && isOpen(e.open_job.state)),
+    covered,
+    // A job being cancelled ends without running, so it doesn't cover the book:
+    // queueing it again says it is still stopping (queueInOrder).
+    open: Boolean(e.open_job && isOpen(e.open_job.state) && !e.open_job.cancel_requested),
+    unknown: !covered && Boolean(e.has.community_unknown),
     notWritable: !e.writable,
+    costUsd: amount(e.agent_cost_usd) ?? null,
+    subscription: e.subscription,
   };
 }
 
-/** The series batch's split: the books to queue (in order), and how many were skipped and why. */
+/** The series batch's plan: the books to queue (in order), what they cost in all, and how many were skipped and why. */
+export interface BatchPlan<B> {
+  queue: B[];
+  covered: number;
+  open: number;
+  unknown: number;
+  /** A book to be queued is in a library the Bridge can't write to: nothing can be. */
+  notWritable: boolean;
+  /** The queued books' agent cost in all; null when any has no estimate (or none is queued). */
+  costUsd: number | null;
+  subscription: boolean;
+}
+
 export function batchPlan<B extends { library_id: number; path: string }>(
   ordered: readonly B[],
   checks: ReadonlyMap<string, BatchCheck>,
-): { queue: B[]; covered: number; open: number; notWritable: boolean } {
-  const queue: B[] = [];
-  let covered = 0;
-  let open = 0;
-  let notWritable = false;
+): BatchPlan<B> {
+  const plan: BatchPlan<B> = {
+    queue: [],
+    covered: 0,
+    open: 0,
+    unknown: 0,
+    notWritable: false,
+    costUsd: 0,
+    subscription: false,
+  };
   for (const b of ordered) {
     const c = checks.get(refKey(b));
-    if (c?.notWritable) notWritable = true;
-    if (c?.covered) covered++;
-    else if (c?.open) open++;
-    else queue.push(b);
+    if (c?.covered) plan.covered++;
+    else if (c?.open) plan.open++;
+    else if (!c || c.unknown) plan.unknown++;
+    else {
+      // Only a book that would be queued can stop the batch.
+      if (c.notWritable) plan.notWritable = true;
+      plan.costUsd = plan.costUsd === null || c.costUsd === null ? null : plan.costUsd + c.costUsd;
+      plan.subscription ||= c.subscription;
+      plan.queue.push(b);
+    }
   }
-  return { queue, covered, open, notWritable };
+  if (!plan.queue.length) plan.costUsd = null;
+  return plan;
+}
+
+/**
+ * What the book dialog's plan costs in all: this book (its estimate) and the
+ * earlier books it queues first (each costed as audio from its length). A total
+ * is null when any book's figure is unknown; `books` counts the runs.
+ */
+export function planEstimate(
+  e: BridgeEstimate,
+  includeEarlier: boolean,
+): { books: number; asrHours: number | null; costUsd: number | null } {
+  const v = estimateView(e);
+  let { asrHours, costUsd } = v;
+  const earlier = includeEarlier ? e.earlier : [];
+  for (const b of earlier) {
+    // An earlier book is costed as audio: no transcription figure is no estimate.
+    const asr = amount(b.asr_hours);
+    asrHours = asrHours === null || !asr ? null : asrHours + asr;
+    const cost = amount(b.agent_cost_usd);
+    costUsd = costUsd === null || cost === undefined ? null : costUsd + cost;
+  }
+  return { books: earlier.length + 1, asrHours, costUsd };
 }
 
 /**

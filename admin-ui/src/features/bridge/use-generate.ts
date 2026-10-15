@@ -6,7 +6,8 @@ import { keys } from '@/api/hooks';
 import type { BridgeJob, BridgeJobRequest } from '@/api/types';
 import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
-import { isOpen } from './bridge-model';
+import { relBaseName } from '@/lib/paths';
+import { isOpen, kindName } from './bridge-model';
 import { generatePollMs, KIND_GENERATE, latestGenerateJob } from './generate-model';
 
 /** How many of a book's newest jobs are read to find its generate job (verify jobs share the list). */
@@ -95,11 +96,25 @@ export interface QueueOutcome {
 }
 
 /**
+ * The open job that came back for a book is one being cancelled: it ends without
+ * running, and nothing new is queued until it has stopped (as the Bridge page's
+ * queueJob says).
+ */
+class StillStopping extends Error {
+  readonly path: string;
+  constructor(path: string) {
+    super('still stopping');
+    this.path = path;
+  }
+}
+
+/**
  * Queues the jobs one after another, in order (ids ascend, so the Bridge claims
  * them in that order), stopping at the first failure: the ones after it would
  * run out of order, and most failures (a library the Bridge can't write, a kind
  * it no longer offers) would refuse them all. A job already open for a book
- * comes back instead of a new one, which counts as queued.
+ * comes back instead of a new one, which counts as queued, unless it is being
+ * cancelled: that book would be left without one, so the run stops there.
  */
 export async function queueInOrder(
   qc: QueryClient,
@@ -108,7 +123,8 @@ export async function queueInOrder(
   let queued = 0;
   try {
     for (const req of requests) {
-      await api.queueBridgeJob(req);
+      const { job, created } = await api.queueBridgeJob(req);
+      if (!created && job.cancel_requested) throw new StillStopping(req.path ?? '');
       queued++;
     }
     return { queued };
@@ -128,6 +144,11 @@ export async function queueInOrder(
 function generateError(err: unknown, t: TFunction): string {
   if (err instanceof ApiError && err.code === 'kind_unavailable')
     return t('bridge.generate.kindUnavailable');
+  if (err instanceof StillStopping)
+    return t('bridge.queue.stopping', {
+      what: kindName(t, KIND_GENERATE),
+      name: relBaseName(err.path),
+    });
   return errorMessage(err, t);
 }
 

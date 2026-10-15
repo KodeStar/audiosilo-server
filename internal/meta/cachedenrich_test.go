@@ -3,10 +3,43 @@ package meta
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 )
+
+// Coverages answers each book from the bounded console path, never a series
+// rail: a lookup then the work by id, cached, so asking again costs nothing; a
+// book with no identifier carries nothing; a failed lookup is unknown, not none.
+func TestCoverages(t *testing.T) {
+	t.Parallel()
+	m := fullMock()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	svc := NewService(srv.URL, nil)
+	ctx := context.Background()
+
+	got := svc.Coverages(ctx, []BookIDs{{ASIN: "B00FLIJJSY"}, {}})
+	if want := []Coverage{{Characters: true, Recaps: true, Known: true}, {Known: true}}; !slices.Equal(got, want) {
+		t.Fatalf("Coverages = %+v, want %+v", got, want)
+	}
+	if m.lookupHits.Load() != 1 || m.workHits.Load() != 1 || m.seriesHits.Load() != 0 {
+		t.Fatalf("upstream: %d lookups, %d works, %d series; want 1, 1, 0", m.lookupHits.Load(), m.workHits.Load(), m.seriesHits.Load())
+	}
+	if again := svc.Coverages(ctx, []BookIDs{{ASIN: " b00flijjsy "}}); !again[0].Known || !again[0].Recaps ||
+		m.lookupHits.Load() != 1 || m.workHits.Load() != 1 {
+		t.Fatalf("asked again: %+v after %d lookups, %d works", again, m.lookupHits.Load(), m.workHits.Load())
+	}
+
+	down := &mockMeta{lookupCode: http.StatusServiceUnavailable}
+	dsrv := httptest.NewServer(down.handler())
+	defer dsrv.Close()
+	if got := NewService(dsrv.URL, nil).Coverages(ctx, []BookIDs{{ASIN: "B00FLIJJSY"}}); got[0] != (Coverage{}) {
+		t.Fatalf("a failed lookup = %+v, want unknown", got[0])
+	}
+}
 
 // CachedEnrichment answers from memory or the store, stale or not, never the
 // upstream; a cached "no match", a cached failure and a row of another format

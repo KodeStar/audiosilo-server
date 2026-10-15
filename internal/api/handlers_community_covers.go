@@ -384,8 +384,12 @@ func (a *API) handleMetaCover(w http.ResponseWriter, r *http.Request) {
 	}
 	// The envelope /meta sent for this book, from the same lookup and cache: what
 	// it hands out is all this route may fetch.
-	_, _, _, env, ok := a.bookEnvelope(w, r)
+	_, _, _, env, lookupErr, ok := a.bookEnvelope(w, r)
 	if !ok {
+		return
+	}
+	if lookupErr != nil {
+		writeLookupFailed(w)
 		return
 	}
 	if !env.HandsOutCover(rawURL) { // nil (an unmatched book) hands out nothing

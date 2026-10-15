@@ -232,12 +232,21 @@ func TestBridgeEstimateEbookAndAccess(t *testing.T) {
 		strings.Contains(body, `"open_job"`) {
 		t.Fatalf("ebook estimate: %d %s", resp.StatusCode, body)
 	}
-	// Audio: the ASR hours and the per-hour cost from the book's duration.
+	// Audio of unknown length (no ffprobe in these tests): no estimate, never a
+	// free run.
 	resp, est, body = b.estimate(t, b.adminTok, b.lib.ID, cradleBook)
-	book, _ := b.cat.GetBookByPath(context.Background(), b.lib.ID, cradleBook)
-	want := bridge.EstimateSidecars(book.Duration, false, &bridge.SidecarsEstimates{ASRSecondsPerAudioHour: 900, AgentUSDPerAudioHour: ptrFloat(1.6)})
 	if resp.StatusCode != http.StatusOK || est.Source != bridge.SourceAudio || est.Ebook != "" || strings.Contains(body, `"ebook"`) ||
-		est.DurationSeconds != book.Duration || est.ASRHours != want.ASRHours || *est.AgentCostUSD != *want.AgentCostUSD {
+		est.ASRHours != 0 || est.AgentCostUSD != nil || !strings.Contains(body, `"agent_cost_usd":null`) {
+		t.Fatalf("audio of unknown length: %d %s", resp.StatusCode, body)
+	}
+	// Audio: the ASR hours and the per-hour cost from the book's duration.
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE books SET duration = 36000 WHERE library_id = ? AND rel_path IN (?, ?)`,
+		b.lib.ID, cradleBook, mistbornBook); err != nil {
+		t.Fatal(err)
+	}
+	resp, est, body = b.estimate(t, b.adminTok, b.lib.ID, cradleBook)
+	if resp.StatusCode != http.StatusOK || est.Source != bridge.SourceAudio || est.DurationSeconds != 36000 ||
+		est.ASRHours != 2.5 || est.AgentCostUSD == nil || *est.AgentCostUSD != 16 {
 		t.Fatalf("audio estimate: %d %s", resp.StatusCode, body)
 	}
 
@@ -286,8 +295,6 @@ func TestBridgeEstimateEbookAndAccess(t *testing.T) {
 	}
 }
 
-func ptrFloat(v float64) *float64 { return &v }
-
 // What a book already has (community from its /meta enrichment, local from its
 // attachments) and the earlier books of its series without recaps, in reading
 // order: a book with community recaps (cached) or generated ones is left out.
@@ -303,7 +310,7 @@ func TestBridgeEstimateHasAndEarlier(t *testing.T) {
 		{RelPath: "Mars/1", Series: "Mars", SeriesIndex: 1, ASIN: "B00FLIJJSY"}, // community recaps, once cached
 		{RelPath: "Mars/0.5", Series: "mars!", SeriesIndex: 0.5, ASIN: "B0UNCACHED"},
 		{RelPath: "Mars/2", Series: "Mars", SeriesIndex: 2},
-		{RelPath: "Mars/3", Series: "Mars", SeriesIndex: 3},
+		{RelPath: "Mars/3", Series: "Mars", SeriesIndex: 3, Duration: 36000},
 		{RelPath: "Mars/4", Series: "Mars", SeriesIndex: 4, ASIN: "B00FLIJJSY", Duration: 36000},
 		{RelPath: "Mars/5", Series: "Mars", SeriesIndex: 5},
 	} {
@@ -329,20 +336,22 @@ func TestBridgeEstimateHasAndEarlier(t *testing.T) {
 		}
 		return out
 	}
-	// Mars/4's own lookup (Enrich) finds its work, which then has characters
-	// and recaps.
+	// Mars/4's own lookup finds its work, which then has characters and recaps.
 	resp, est, body := b.estimate(t, b.adminTok, lib.ID, "Mars/4")
-	if resp.StatusCode != http.StatusOK || !est.Has.Community.Characters || !est.Has.Community.Recaps ||
+	if resp.StatusCode != http.StatusOK || !est.Has.Community.Characters || !est.Has.Community.Recaps || est.Has.CommunityUnknown ||
 		!est.Has.Local.Characters || est.Has.Local.Recaps || est.Writable || est.Source != bridge.SourceAudio || est.ASRHours != 2.5 ||
 		est.AgentCostUSD == nil || *est.AgentCostUSD != 16 {
 		t.Fatalf("estimate: %d %s", resp.StatusCode, body)
 	}
-	// That lookup cached the work under the ASIN Mars/1 shares, so Mars/1 has
-	// community recaps and is left out; Mars/0.5's ASIN was never looked up, so
-	// it is offered (the earlier books are never looked up one by one). Mars/2
-	// has generated recaps; Mars/3 generated characters only.
-	if got, want := earlier(est), []string{"Mars/0.5@0.5", "Mars/3@3"}; !slices.Equal(got, want) {
+	// The earlier books are asked about too (one bounded batch, whatever was
+	// cached before): Mars/1 and Mars/0.5 match a work with recaps, so they are
+	// left out, never looked up or not; Mars/2 has generated recaps; Mars/3 has no
+	// identifier and generated characters only, so it is offered, with its cost.
+	if got, want := earlier(est), []string{"Mars/3@3"}; !slices.Equal(got, want) {
 		t.Fatalf("earlier = %v, want %v (%s)", got, want, body)
+	}
+	if e := est.Earlier[0]; e.ASRHours != 2.5 || e.AgentCostUSD == nil || *e.AgentCostUSD != 16 {
+		t.Fatalf("the earlier book's cost = %+v", e)
 	}
 	if _, est, body := b.estimate(t, b.adminTok, lib.ID, "Mars/0.5"); len(est.Earlier) != 0 {
 		t.Fatalf("the first book: %s", body)
@@ -350,6 +359,72 @@ func TestBridgeEstimateHasAndEarlier(t *testing.T) {
 	// brief=1 skips the series: no earlier books, but the same has.
 	if brief := b.briefEstimate(t, lib.ID, "Mars/4"); brief.Earlier == nil || len(brief.Earlier) != 0 || brief.Has != est.Has {
 		t.Fatalf("brief = %+v, want no earlier books and has %+v", brief, est.Has)
+	}
+}
+
+// A long series offers the nearest earlier books (the ones a book's recaps build
+// on), still in reading order, each with what it costs.
+func TestBridgeEstimateEarlierNearest(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Long", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 14; i++ {
+		bk := catalog.Book{LibraryID: lib.ID, RelPath: fmt.Sprintf("Saga/%02d", i), Title: fmt.Sprintf("Book %d", i),
+			Series: "Saga", SeriesIndex: float64(i), Duration: 3600, AddedAt: "2020-01-01"}
+		if _, err := b.cat.UpsertBook(ctx, &bk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.beatWith(t, true, true, sidecarsEstimates)
+	_, est, body := b.estimate(t, b.adminTok, lib.ID, "Saga/14")
+	var got []string
+	for _, e := range est.Earlier {
+		got = append(got, e.SeriesIndex)
+		if e.ASRHours != 0.25 || e.AgentCostUSD == nil || *e.AgentCostUSD != 1.6 {
+			t.Fatalf("earlier %s costs %+v (%s)", e.Path, e, body)
+		}
+	}
+	if want := []string{"4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}; !slices.Equal(got, want) {
+		t.Fatalf("earlier = %v, want %v", got, want)
+	}
+}
+
+// The community can't be asked (its lookup fails): the estimate says so
+// (community_unknown) rather than reading it as "none", and an earlier book it
+// couldn't ask about isn't offered on a guess; a book with no identifier has
+// nothing to ask about.
+func TestBridgeEstimateCommunityUnknown(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnvOn(t, newMetaEnv(t, true, http.StatusServiceUnavailable))
+	ctx := context.Background()
+	lib, err := b.cat.CreateLibrary(ctx, catalog.Library{Name: "Series", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bk := range []catalog.Book{
+		{RelPath: "S/1", Series: "S", SeriesIndex: 1, ASIN: "B0DOWN0001"},
+		{RelPath: "S/2", Series: "S", SeriesIndex: 2},
+		{RelPath: "S/3", Series: "S", SeriesIndex: 3, ASIN: "B0DOWN0003"},
+	} {
+		bk.LibraryID, bk.Title, bk.AddedAt = lib.ID, bk.RelPath, "2020-01-01"
+		if _, err := b.cat.UpsertBook(ctx, &bk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.beatWith(t, true, true, sidecarsEstimates)
+	if brief := b.briefEstimate(t, lib.ID, "S/3"); !brief.Has.CommunityUnknown || brief.Has.Community.Recaps {
+		t.Fatalf("brief during an outage = %+v, want community unknown", brief.Has)
+	}
+	_, est, body := b.estimate(t, b.adminTok, lib.ID, "S/3")
+	if len(est.Earlier) != 1 || est.Earlier[0].Path != "S/2" || !strings.Contains(body, `"community_unknown":true`) {
+		t.Fatalf("estimate during an outage: %s", body)
+	}
+	if brief := b.briefEstimate(t, lib.ID, "S/2"); brief.Has.CommunityUnknown {
+		t.Fatalf("a book with no identifier = %+v, want known", brief.Has)
 	}
 }
 

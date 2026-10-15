@@ -2,8 +2,8 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -16,8 +16,12 @@ import (
 // and the earlier books of its series that have none, so an admin can queue
 // those first.
 
-// maxEarlier bounds the estimate's earlier books.
-const maxEarlier = 10
+// maxEarlier bounds the estimate's earlier books, and maxEarlierChecked how many
+// of the nearest earlier books are checked against the community to find them.
+const (
+	maxEarlier        = 10
+	maxEarlierChecked = 3 * maxEarlier
+)
 
 // bridgeEstimate is GET /admin/bridge/estimate's answer. The cost figures are
 // bridge.EstimateSidecars' (source, asr_hours, agent_cost_usd: null while the
@@ -38,11 +42,14 @@ type bridgeEstimate struct {
 	OpenJob  *bridge.Job   `json:"open_job,omitempty"`
 }
 
-// estimateHas is what a book already has: community content (the /meta
-// enrichment) and generated content (its indexed .audiosilo/ attachments).
+// estimateHas is what a book already has: community content (its community
+// work, meta.Service.Coverages) and generated content (its indexed .audiosilo/
+// attachments). CommunityUnknown: the community couldn't be asked right now, so
+// community is no answer (never read it as "none").
 type estimateHas struct {
-	Community hasContent `json:"community"`
-	Local     hasContent `json:"local"`
+	Community        hasContent `json:"community"`
+	Local            hasContent `json:"local"`
+	CommunityUnknown bool       `json:"community_unknown,omitempty"`
 }
 
 type hasContent struct {
@@ -50,12 +57,17 @@ type hasContent struct {
 	Recaps     bool `json:"recaps"`
 }
 
-// earlierBook is an earlier book of the series with no recaps yet.
+// earlierBook is an earlier book of the series with no recaps yet, with what
+// generating it is expected to cost (bridge.EstimateSidecars from its audio's
+// length: asr_hours, agent_cost_usd null when unknown), so the dialog can quote
+// the whole run it queues.
 type earlierBook struct {
-	LibraryID   int64  `json:"library_id"`
-	Path        string `json:"path"`
-	Title       string `json:"title"`
-	SeriesIndex string `json:"series_index"`
+	LibraryID    int64    `json:"library_id"`
+	Path         string   `json:"path"`
+	Title        string   `json:"title"`
+	SeriesIndex  string   `json:"series_index"`
+	ASRHours     float64  `json:"asr_hours"`
+	AgentCostUSD *float64 `json:"agent_cost_usd"`
 }
 
 // handleAdminBridgeEstimate serves GET /admin/bridge/estimate?library_id=&path=
@@ -110,13 +122,13 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 	out.SidecarsCost = bridge.EstimateSidecars(book.Duration, out.Ebook != "", est)
 
-	out.Has.Community = a.communityContent(ctx, book)
+	out.Has.Community, out.Has.CommunityUnknown = a.communityContent(ctx, book)
 	if out.Has.Local, err = a.localContent(ctx, book); err != nil {
 		a.writeCatalogError(w, err, "bridge estimate failed", "could not read the book's attachments")
 		return
 	}
 	if !brief {
-		if out.Earlier, err = a.earlierWithoutRecaps(ctx, book); err != nil {
+		if out.Earlier, err = a.earlierWithoutRecaps(ctx, book, est); err != nil {
 			a.writeCatalogError(w, err, "bridge estimate failed", "could not list the series")
 			return
 		}
@@ -128,21 +140,20 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, out)
 }
 
-// communityContent is what the book's community work carries, from its /meta
-// enrichment (the shared, cached lookup). Metadata off, no identifier or no
-// match is nothing; so is a failed lookup (logged): the dialog still opens.
-func (a *API) communityContent(ctx context.Context, book *catalog.Book) hasContent {
+// communityContent is what the book's community work carries
+// (meta.Service.Coverages: its cached enrichment, else the console's bounded
+// lookup, never a full Enrich per book, which a series batch would multiply),
+// and whether that couldn't be had right now (unknown, logged: never to be read
+// as "none"). Metadata off, no identifier or no match is nothing.
+func (a *API) communityContent(ctx context.Context, book *catalog.Book) (has hasContent, unknown bool) {
 	if !a.metadataOn() || (book.ASIN == "" && book.ISBN == "") {
-		return hasContent{}
+		return hasContent{}, false
 	}
-	env, err := a.meta.Enrich(ctx, book.ASIN, book.ISBN)
-	if err != nil {
-		if !errors.Is(err, meta.ErrNotFound) && ctx.Err() == nil {
-			a.log.Warn("meta lookup for the bridge estimate failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
-		}
-		return hasContent{}
+	c := a.meta.Coverages(ctx, []meta.BookIDs{{ASIN: book.ASIN, ISBN: book.ISBN}})[0]
+	if !c.Known && ctx.Err() == nil {
+		a.log.Warn("community lookup for the bridge estimate failed", "library", book.LibraryID, "path", book.RelPath)
 	}
-	return hasContent{Characters: env.HasCharacters(), Recaps: env.HasRecaps()}
+	return hasContent{Characters: c.Characters, Recaps: c.Recaps}, !c.Known
 }
 
 // localContent is what the book's generated attachments carry (a stored file is
@@ -156,24 +167,41 @@ func (a *API) localContent(ctx context.Context, book *catalog.Book) (hasContent,
 }
 
 // earlierWithoutRecaps is the books of the library before book in its series
-// with no generated recaps (catalog.EarlierInSeries, any spelling of the
-// series), in reading order, less those whose cached community enrichment holds
-// recaps (never a lookup: the series' books are many); at most maxEarlier.
-func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book) ([]earlierBook, error) {
+// with no recaps yet, the nearest maxEarlier (a book's recaps build on the ones
+// just before it), in reading order: those with no generated recaps
+// (catalog.EarlierInSeries, any spelling of the series) and, metadata on, whose
+// community work has none either (meta.Service.Coverages, batched a chunk at a
+// time over the nearest maxEarlierChecked at most; a book it can't ask about
+// right now is left out, never offered on a guess). Each carries what generating
+// it is expected to cost, from est (audio: no look into its folder).
+func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book, est *bridge.SidecarsEstimates) ([]earlierBook, error) {
 	members, err := a.cat.EarlierInSeries(ctx, book.LibraryID, book)
 	if err != nil {
 		return nil, err
 	}
-	out := []earlierBook{}
-	for _, m := range members {
-		if len(out) == maxEarlier {
-			break
+	out := []earlierBook{} // nearest first, until reversed
+	for end, checked := len(members), 0; end > 0 && len(out) < maxEarlier && checked < maxEarlierChecked; end -= maxEarlier {
+		chunk := members[max(0, end-maxEarlier):end]
+		checked += len(chunk)
+		var cov []meta.Coverage
+		if a.metadataOn() {
+			ids := make([]meta.BookIDs, len(chunk))
+			for i, m := range chunk {
+				ids[i] = meta.BookIDs{ASIN: m.ASIN, ISBN: m.ISBN}
+			}
+			cov = a.meta.Coverages(ctx, ids)
 		}
-		if a.metadataOn() && a.meta.CachedEnrichment(ctx, m.ASIN, m.ISBN).HasRecaps() {
-			continue
+		for i := len(chunk) - 1; i >= 0 && len(out) < maxEarlier; i-- {
+			if cov != nil && (cov[i].Recaps || !cov[i].Known) {
+				continue
+			}
+			m := chunk[i]
+			c := bridge.EstimateSidecars(m.Duration, false, est)
+			out = append(out, earlierBook{LibraryID: m.LibraryID, Path: m.RelPath, Title: m.Title,
+				SeriesIndex: catalog.FormatSeriesRange(m.Position, m.PositionEnd),
+				ASRHours:    c.ASRHours, AgentCostUSD: c.AgentCostUSD})
 		}
-		out = append(out, earlierBook{LibraryID: m.LibraryID, Path: m.RelPath, Title: m.Title,
-			SeriesIndex: catalog.FormatSeriesRange(m.Position, m.PositionEnd)})
 	}
+	slices.Reverse(out)
 	return out, nil
 }

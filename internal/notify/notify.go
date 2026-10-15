@@ -445,16 +445,18 @@ func bridgeJobBook(ev catalog.ServerEvent) string {
 	return "a book"
 }
 
-// bridgeParkReason words a parked or failed job's park code (the Bridge's
-// progress.park.code). The Bridge's own page says more.
+// bridgeParkReason words a parked job's park code (the Bridge's
+// progress.park.code). Only a park that waits for a person is ever announced (a
+// park that resumes by itself names a retry_at: bridge.Job.Notable), so none of
+// these says the job carries on by itself. The Bridge's own page says more.
 func bridgeParkReason(code string) string {
 	switch code {
 	case "book_not_writable":
 		return "The Bridge can't write into the book's folder."
 	case "budget_exceeded":
-		return "The agent's budget is spent. The job resumes when the budget allows."
+		return "The job reached its spending limit. Raise the limit on the Bridge, then retry the job there."
 	case "agent_unavailable":
-		return "The agent isn't available right now. The job resumes by itself."
+		return "The agent isn't available. See the job on the Bridge."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	}
@@ -637,9 +639,9 @@ func (s *Service) BackupFailed(ctx context.Context, trigger, reason string) {
 }
 
 // BridgeJob is a Bridge job that just finished, failed or parked, for
-// BridgeJobEnded: its kind and new state, the book (library, path, title) and,
-// for a failure or a park, the park code (progress.park.code, "" for none) and
-// the error.
+// BridgeJobEnded: its kind and new state, the book (library, path, title), the
+// park code (progress.park.code, "" for none; only a park's is sent, as a failed
+// job's progress may still name the park it was in before) and the error.
 type BridgeJob struct {
 	ID        int64
 	Kind      string
@@ -667,7 +669,9 @@ func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 	kind := KindBridgeJobFinished
 	if j.State != bridge.StateDone {
 		kind = KindBridgeJobFailed
-		data["code"] = plainLine(j.Code, 64)
+		if j.State == bridge.StateNeedsAttention {
+			data["code"] = plainLine(j.Code, 64)
+		}
 		data["detail"] = j.Error
 	}
 	s.Emit(ctx, Event{Kind: kind, Data: data})
