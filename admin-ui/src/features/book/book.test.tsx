@@ -653,6 +653,12 @@ describe('listen in player', () => {
     web_url: 'https://books.example.com/web/connect?token=pair-tok&sid=srv-1',
   } satisfies PairToken & { web_url: string };
 
+  // The stubbed window.open stays this block's: the real one is back after each test.
+  const realOpen = window.open;
+  afterEach(() => {
+    window.open = realOpen;
+  });
+
   /** The tab window.open hands back (null: the browser blocked it). */
   function stubOpen(blocked = false) {
     const tab = { opener: {} as unknown, location: { href: '' }, close: vi.fn() };
