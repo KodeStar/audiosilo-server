@@ -1,4 +1,5 @@
 import type { ServerEvent, ServerEventKind } from '@/api/types';
+import { KIND_GENERATE, parkKey } from '@/features/bridge/generate-model';
 import type { SettingsPage } from '@/features/settings/settings-model';
 import { readStorage, writeStorage } from './storage';
 
@@ -15,6 +16,8 @@ export const EVENT_KINDS: readonly ServerEventKind[] = [
   'invite_redeemed',
   'update_available',
   'backup_failed',
+  'bridge_job_finished',
+  'bridge_job_failed',
 ];
 
 export type EventTone = 'info' | 'warn' | 'bad';
@@ -111,12 +114,66 @@ export function describeEvent(ev: ServerEvent): EventText {
         tone: 'bad',
         link: { destination: 'server', topic: 'backups' },
       };
+    case 'bridge_job_finished':
+    case 'bridge_job_failed':
+      return describeBridgeJob(ev.kind, d);
   }
   // A kind from a newer server: say what it is called.
   return {
     title: { key: 'events.unknown', values: { kind: String(ev.kind) } },
     tone: 'info',
     link: { destination: 'server', topic: 'notifications' },
+  };
+}
+
+/**
+ * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps ready
+ * for a book, another kind finished, or a job that failed or is parked waiting
+ * for someone (its park code as a sentence, else the Bridge's own detail). Each
+ * leads to Settings > Bridge, where its jobs are listed.
+ */
+function describeBridgeJob(
+  kind: 'bridge_job_finished' | 'bridge_job_failed',
+  d: Record<string, unknown>,
+): EventText {
+  const jobKind = str(d.job_kind);
+  // The book's title, else its path, else the library (a library-wide job).
+  const name = str(d.title) || str(d.path) || str(d.library) || jobKind;
+  const link: EventLink = { destination: 'server', topic: 'bridge' };
+  // A kind this console has no name for reads as its code (bridge.kind.<kind>).
+  const kindBody = jobKind
+    ? { key: `bridge.kind.${jobKind}`, values: { defaultValue: jobKind } }
+    : undefined;
+  if (kind === 'bridge_job_finished') {
+    return jobKind === KIND_GENERATE
+      ? {
+          title: { key: 'events.bridge_job_finished.generate', values: { name } },
+          tone: 'info',
+          link,
+        }
+      : {
+          title: { key: 'events.bridge_job_finished.title', values: { name } },
+          body: kindBody,
+          tone: 'info',
+          link,
+        };
+  }
+  const detail = str(d.detail);
+  const detailBody = detail ? { key: 'events.detail', values: { detail } } : kindBody;
+  if (str(d.state) === 'needs_attention') {
+    const code = str(d.code);
+    return {
+      title: { key: 'events.bridge_job_failed.attention', values: { name } },
+      body: code ? { key: parkKey(code), values: { code } } : detailBody,
+      tone: 'warn',
+      link,
+    };
+  }
+  return {
+    title: { key: 'events.bridge_job_failed.title', values: { name } },
+    body: detailBody,
+    tone: 'bad',
+    link,
   };
 }
 

@@ -805,7 +805,7 @@ func (a *API) handleSetFolderOverride(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
-	if _, err := library.SafeJoin(lib.Root, path); err != nil {
+	if _, err := library.ContentJoin(lib.Root, path); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
@@ -853,7 +853,7 @@ func (a *API) handleSetEnrichment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
-	if _, err := library.SafeJoin(lib.Root, path); err != nil {
+	if _, err := library.ContentJoin(lib.Root, path); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}

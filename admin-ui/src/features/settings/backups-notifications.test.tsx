@@ -311,4 +311,30 @@ describe('notifications', () => {
     expect(await screen.findByText("The test didn't reach My phone")).toBeInTheDocument();
     expect(screen.getByText("the server couldn't connect")).toBeInTheDocument();
   });
+
+  it('offers the Bridge job events beside the others', async () => {
+    const calls = mockFetch(
+      routes({
+        'GET /admin/notifications': { body: targetsEnv([target()]) },
+        'PATCH /admin/notifications/1': {
+          body: target({ events: ['scan_failed', 'bridge_job_failed'] }),
+        },
+      }),
+    );
+    renderApp('/server?topic=notifications');
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole('checkbox', { name: 'Send "A Bridge job finished" to My phone' }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('checkbox', {
+        name: 'Send "A Bridge job failed or needs attention" to My phone',
+      }),
+    );
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+        events: expect.arrayContaining(['bridge_job_failed']),
+      }),
+    );
+  });
 });

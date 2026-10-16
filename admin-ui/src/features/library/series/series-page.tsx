@@ -12,6 +12,7 @@ import { SearchBox } from '@/components/search-box';
 import { buttonVariants } from '@/components/ui/button';
 import type { SeriesCount } from '@/api/types';
 import { counted } from '@/lib/format';
+import { generateAvailable } from '@/features/bridge/generate-model';
 import { pageOf } from '@/lib/pager';
 import { LibraryFilter } from '../library-filter';
 import { useLibraryBookCount, useLibraryParam, useSearchPage } from '../library-param';
@@ -33,6 +34,8 @@ export function SeriesPage() {
   const { q, page: wanted, search, goTo } = useSearchPage();
   const server = useServerInfo();
   const metadata = server.data?.capabilities.metadata ?? false;
+  // An online Bridge with the sidecars feature offers Generate for the series.
+  const generate = generateAvailable(server.data);
   const series = useSeries(library);
   const bookCount = useLibraryBookCount(library);
 
@@ -113,7 +116,13 @@ export function SeriesPage() {
             </p>
           ) : (
             shown.map((s) => (
-              <SeriesShelf key={s.name} series={s} library={library} metadata={metadata} />
+              <SeriesShelf
+                key={s.name}
+                series={s}
+                library={library}
+                metadata={metadata}
+                generate={generate}
+              />
             ))
           )}
           <Pager page={page} count={pages} onPage={goTo} className="mt-4" />
@@ -132,10 +141,12 @@ function SeriesShelf({
   series: s,
   library,
   metadata,
+  generate,
 }: {
   series: SeriesCount;
   library: number | undefined;
   metadata: boolean;
+  generate: boolean;
 }) {
   const { t } = useTranslation();
   // Asked for once the card nears the viewport, like the cards' community rails.
@@ -166,6 +177,7 @@ function SeriesShelf({
           books={books}
           complete={loaded && (!hasNextPage || isError)}
           metadata={metadata}
+          generate={generate}
         />
       )}
     </div>

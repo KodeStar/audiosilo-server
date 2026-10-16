@@ -31,6 +31,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
 )
@@ -44,12 +45,15 @@ const (
 	KindInviteRedeemed     = "invite_redeemed"
 	KindUpdateAvailable    = "update_available"
 	KindBackupFailed       = "backup_failed"
+	KindBridgeJobFinished  = "bridge_job_finished"
+	KindBridgeJobFailed    = "bridge_job_failed"
 )
 
 // Kinds lists the event kinds, in the order the console shows them.
 var Kinds = []string{
 	KindBookAdded, KindScanFailed, KindLibraryUnavailable, KindNewDevice,
 	KindInviteRedeemed, KindUpdateAvailable, KindBackupFailed,
+	KindBridgeJobFinished, KindBridgeJobFailed,
 }
 
 // kindTest is the "Send test" message's kind (sent, never recorded).
@@ -391,6 +395,24 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Title = "A backup failed"
 		m.Text = backupReason(str("error"))
 		m.Link, m.Tags, m.Priority, m.Color = link("/server?topic=backups"), []string{"warning"}, 4, colorBad
+	case KindBridgeJobFinished:
+		m.Title = bridgeJobLabel(str("job_kind")) + " finished: " + bridgeJobBook(ev)
+		m.Text = "The Bridge finished the job."
+		if str("job_kind") == bridge.KindSidecars {
+			m.Title = "Characters and recaps ready: " + bridgeJobBook(ev)
+			m.Text = "Listeners see them in the player now."
+		}
+		m.Link, m.Tags = link("/server?topic=bridge"), []string{"white_check_mark"}
+	case KindBridgeJobFailed:
+		if str("state") == bridge.StateNeedsAttention {
+			m.Title = "A Bridge job needs attention: " + bridgeJobBook(ev)
+			m.Color = colorWarn
+		} else {
+			m.Title = bridgeJobLabel(str("job_kind")) + " failed: " + bridgeJobBook(ev)
+			m.Color = colorBad
+		}
+		m.Text = bridgeParkReason(str("code"))
+		m.Link, m.Tags, m.Priority = link("/server?topic=bridge"), []string{"warning"}, 4
 	case kindTest:
 		m.Title = "Test from " + srv.Name
 		m.Text = "Notifications from this AudioSilo server will arrive here."
@@ -399,6 +421,47 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		m.Title = ev.Kind
 	}
 	return m
+}
+
+// bridgeJobLabel names a Bridge job's kind in a message title.
+func bridgeJobLabel(kind string) string {
+	switch kind {
+	case bridge.KindSidecars:
+		return "Characters and recaps"
+	case bridge.KindVerify:
+		return "Bridge check"
+	}
+	return "Bridge job"
+}
+
+// bridgeJobBook is the book a Bridge job event is about: its title, else its
+// path, else its library's name.
+func bridgeJobBook(ev catalog.ServerEvent) string {
+	for _, k := range []string{"title", "path", "library"} {
+		if s, _ := ev.Data[k].(string); s != "" {
+			return s
+		}
+	}
+	return "a book"
+}
+
+// bridgeParkReason words a parked job's park code (the Bridge's
+// progress.park.code). A transient park (the agent's rate limit, a short
+// outage) is never announced (bridge.Job.Notable), so none is worded here; an
+// announced park may still resume by itself (a monthly budget at the month's
+// turn), so no sentence promises either way. The Bridge's own page says more.
+func bridgeParkReason(code string) string {
+	switch code {
+	case "book_not_writable":
+		return "The Bridge can't write into the book's folder."
+	case "budget_exceeded":
+		return "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset."
+	case "agent_credential_refused":
+		return "The agent's credential was refused. Replace it in the agent container, then retry the job on the Bridge."
+	case "core_needed":
+		return "The book needs a community record before it can be contributed."
+	}
+	return "See the job in Settings > Bridge."
 }
 
 func backupReason(code string) string {
@@ -574,6 +637,45 @@ func (s *Service) BackupFailed(ctx context.Context, trigger, reason string) {
 		return
 	}
 	s.Emit(ctx, Event{Kind: KindBackupFailed, Data: map[string]any{"trigger": trigger, "error": reason}})
+}
+
+// BridgeJob is a Bridge job that just finished, failed or parked, for
+// BridgeJobEnded: its kind and new state, the book (library, path, title), the
+// park code (progress.park.code, "" for none; only a park's is sent, as a failed
+// job's progress may still name the park it was in before) and the error.
+type BridgeJob struct {
+	ID        int64
+	Kind      string
+	State     string
+	Library   string
+	LibraryID int64
+	Path      string
+	Title     string
+	Code      string
+	Error     string
+}
+
+// BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
+// or into failed or needs_attention (bridge_job_failed). The caller reports each
+// move once (bridge.Service.OnTransition). The error is the Bridge's own text (it can name a
+// folder on its disk), so it is the bell's detail and is never sent out.
+func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
+	if s == nil {
+		return
+	}
+	data := map[string]any{
+		"job_id": j.ID, "job_kind": j.Kind, "state": j.State,
+		"library": j.Library, "library_id": j.LibraryID, "path": j.Path, "title": plainLine(j.Title, 200),
+	}
+	kind := KindBridgeJobFinished
+	if j.State != bridge.StateDone {
+		kind = KindBridgeJobFailed
+		if j.State == bridge.StateNeedsAttention {
+			data["code"] = plainLine(j.Code, 64)
+		}
+		data["detail"] = j.Error
+	}
+	s.Emit(ctx, Event{Kind: kind, Data: data})
 }
 
 // plainLine is s without control characters (line breaks included), at most n

@@ -192,6 +192,16 @@ func gateWork(w *MetaWork, chapter int) *MetaWork {
 	return &c
 }
 
+// GateWork is HideSpoilers for one work outside an envelope (the generated
+// parts Answer keeps apart): w gated for a listener at chapter, kept whole once
+// finished. w is never modified.
+func GateWork(w *MetaWork, chapter int, finished bool) *MetaWork {
+	if w == nil || finished {
+		return w
+	}
+	return gateWork(w, chapter)
+}
+
 // withoutEnding is w without its recap_summary's ending, or w itself when it
 // has none. A summary left with nothing in it is dropped whole, as
 // toRecapSummary would have.

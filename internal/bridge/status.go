@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -35,7 +36,91 @@ type Status struct {
 	Workers []Worker `json:"workers"`
 	// UIURL is the Bridge's own LAN page, linked from the console.
 	UIURL string `json:"ui_url"`
+	// Estimates are the Bridge's figures for costing a job before it is queued
+	// (GET /admin/bridge/estimate); nil when it sent none.
+	Estimates *Estimates `json:"estimates,omitempty"`
 }
+
+// Estimates are the Bridge's costing figures, one block per job family. A key the
+// server doesn't know is ignored (see UnmarshalJSON), so a newer Bridge can send
+// more without its heartbeat being refused.
+type Estimates struct {
+	Sidecars *SidecarsEstimates `json:"sidecars,omitempty"`
+}
+
+// SidecarsEstimates are the Bridge's figures for sidecars.generate.
+type SidecarsEstimates struct {
+	// ASRSecondsPerAudioHour is the ASR wall time per hour of audio (its running
+	// average, or a seed before the first book).
+	ASRSecondsPerAudioHour float64 `json:"asr_seconds_per_audio_hour"`
+	// AgentUSDPerAudioHour and AgentUSDPerEbook are the agent's spend per hour of
+	// audio and per ebook book, from history; nil before any.
+	AgentUSDPerAudioHour *float64 `json:"agent_usd_per_audio_hour"`
+	AgentUSDPerEbook     *float64 `json:"agent_usd_per_ebook"`
+	// Samples is how many finished books the figures come from.
+	Samples int `json:"samples"`
+	// AgentBackend is the agent CLI in use ("" when none); AgentReady that the
+	// agent container answers and holds a credential; Subscription that the
+	// credential is a subscription login (so the cost is notional).
+	AgentBackend string `json:"agent_backend"`
+	AgentReady   bool   `json:"agent_ready"`
+	Subscription bool   `json:"subscription"`
+	// CanContribute: the Bridge can offer a run's results to the community (it
+	// holds what contributing needs), so a job may ask for contribute "issue".
+	CanContribute bool `json:"can_contribute"`
+	// MonthlyBudgetUSD is the monthly agent cap (0 = none); MonthSpentUSD what
+	// this month has spent.
+	MonthlyBudgetUSD float64 `json:"monthly_budget_usd"`
+	MonthSpentUSD    float64 `json:"month_spent_usd"`
+}
+
+// UnmarshalJSON reads estimates leniently: the heartbeat's decoder refuses
+// unknown fields, but the figures are the Bridge's to extend, so a key the server
+// doesn't know is ignored here instead, and a block that doesn't decode (a figure
+// of the wrong type) is dropped rather than refusing the heartbeat: estimates only
+// cost a dialog, while a refused heartbeat takes the Bridge offline. Validate
+// still bounds what it keeps.
+func (e *Estimates) UnmarshalJSON(b []byte) error {
+	type lenient Estimates
+	var v lenient
+	if err := json.Unmarshal(b, &v); err != nil {
+		*e = Estimates{}
+		return nil
+	}
+	*e = Estimates(v)
+	return nil
+}
+
+// Bounds on the estimates: far above anything real, so a figure past one is a
+// Bridge bug, and its block is dropped.
+const (
+	maxEstimateSeconds = 30 * 24 * 3600 // per audio hour
+	maxEstimateUSD     = 1_000_000
+	maxEstimateSamples = 1_000_000_000
+)
+
+// validate bounds the estimates: a block with a number below 0 or over its bound
+// is dropped (the dialog then says there is no estimate), never refused, and the
+// backend's name is cleaned to printable bounded text.
+func (e *Estimates) validate() {
+	if e == nil || e.Sidecars == nil {
+		return
+	}
+	sc := e.Sidecars
+	ok := inRange(sc.ASRSecondsPerAudioHour, maxEstimateSeconds) && sc.Samples >= 0 && sc.Samples <= maxEstimateSamples
+	for _, v := range []*float64{sc.AgentUSDPerAudioHour, sc.AgentUSDPerEbook, &sc.MonthlyBudgetUSD, &sc.MonthSpentUSD} {
+		ok = ok && (v == nil || inRange(*v, maxEstimateUSD))
+	}
+	if !ok {
+		e.Sidecars = nil
+		return
+	}
+	sc.AgentBackend = cleanText(sc.AgentBackend, maxShortText, false)
+}
+
+// inRange reports whether v is a number from 0 to max (JSON carries no NaN or
+// infinity, but a figure is checked as one anyway).
+func inRange(v, max float64) bool { return v >= 0 && v <= max && !math.IsNaN(v) }
 
 // LibraryStatus is one library's mapping as the Bridge checked it.
 type LibraryStatus struct {
@@ -91,6 +176,13 @@ func (st Status) Features() []string {
 	return out
 }
 
+// CanContribute reports whether the Bridge last said it can offer a
+// sidecars.generate run's results to the community (estimates.sidecars
+// .can_contribute); false when it sent no estimates.
+func (st Status) CanContribute() bool {
+	return st.Estimates != nil && st.Estimates.Sidecars != nil && st.Estimates.Sidecars.CanContribute
+}
+
 // Offers reports whether the Bridge implements kind.
 func (st Status) Offers(kind string) bool { return slices.Contains(st.Kinds, kind) }
 
@@ -128,8 +220,9 @@ func invalid(format string, args ...any) error {
 // Validate checks a heartbeat before it is stored: kinds are well formed and
 // listed once, libraries listed once by a positive id, and ui_url, which the
 // console renders as a link, is an absolute http(s) URL or empty (anything else
-// is refused). Its free text (the version, each mapping's paths and error, the
-// workers) is cleaned to printable bounded text instead (cleanText).
+// is refused). An estimate out of its bounds is dropped. Its free text (the version,
+// each mapping's paths and error, the workers, the estimates' backend) is
+// cleaned to printable bounded text instead (cleanText).
 func (st *Status) Validate() error {
 	st.Version = cleanText(st.Version, maxShortText, false)
 	if len(st.Kinds) > maxKinds {
@@ -169,6 +262,7 @@ func (st *Status) Validate() error {
 			return invalid("ui_url must be an http(s) URL")
 		}
 	}
+	st.Estimates.validate()
 	if st.Kinds == nil {
 		st.Kinds = []string{}
 	}

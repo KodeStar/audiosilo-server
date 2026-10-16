@@ -501,6 +501,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/bridge/jobs", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeQueue)))
 	mux.Handle("GET /api/v1/admin/bridge/jobs/{id}", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeJob)))
 	mux.Handle("POST /api/v1/admin/bridge/jobs/{id}/cancel", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeCancel)))
+	mux.Handle("GET /api/v1/admin/bridge/estimate", a.requireAdmin(http.HandlerFunc(a.handleAdminBridgeEstimate)))
 
 	// The Bridge's own routes: a bridge token only, and a bridge token nowhere
 	// else (requireBridge).

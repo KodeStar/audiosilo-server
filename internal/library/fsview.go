@@ -6,6 +6,7 @@ package library
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -18,6 +19,42 @@ import (
 
 // ErrOutsideRoot is returned when a requested path escapes the library root.
 var ErrOutsideRoot = errors.New("path escapes library root")
+
+// ErrHidden is a path through a hidden folder, or naming a hidden file
+// (ContentPath). It is fs.ErrNotExist and ErrNotIndexable both: such a path
+// reads everywhere as one with nothing there.
+var ErrHidden error = hiddenPathError{}
+
+type hiddenPathError struct{}
+
+func (hiddenPathError) Error() string { return "the path is in a hidden folder" }
+
+func (hiddenPathError) Is(target error) bool {
+	return target == fs.ErrNotExist || target == ErrNotIndexable
+}
+
+// ContentPath checks that a library-relative path may name content: none of its
+// segments hidden (ErrHidden otherwise). The one statement of the rule: the scan
+// never walks into a hidden folder and /fs never lists one, so no route reaches
+// through one by name either, whether it lists a folder, indexes a book or
+// serves a file (the Bridge's .audiosilo/ attachments, a share's .Trash). A
+// request for "Book/.audiosilo/x.m4b" would otherwise index a phantom book the
+// next full scan removes again, or stream a file no listing shows.
+func ContentPath(relPath string) error {
+	if hasHiddenPart(relPath) {
+		return fmt.Errorf("%q: %w", relPath, ErrHidden)
+	}
+	return nil
+}
+
+// ContentJoin is SafeJoin for a path that names content: ContentPath's rule
+// first, so a hidden path is refused before anything on disk is looked at.
+func ContentJoin(root, relPath string) (string, error) {
+	if err := ContentPath(relPath); err != nil {
+		return "", err
+	}
+	return SafeJoin(root, relPath)
+}
 
 // Entry is one item in a directory listing. The Book* fields are populated by
 // the API layer (annotateWithBooks) when the entry resolves to an indexed book
@@ -168,12 +205,8 @@ func ListDir(root, relPath string, allow func(relPath string) bool, ignore *Igno
 // listDir is ListDir, with each entry's fs.DirEntry from the directory read,
 // in the same order.
 func listDir(root, relPath string, allow func(relPath string) bool, ignore *Ignore) ([]Entry, []fs.DirEntry, error) {
-	// A hidden folder isn't listed, so it can't be opened by name either: the
-	// Bridge's .audiosilo/ (BRIDGE-PLAN.md) and a share's .Trash stay out of view.
-	if HasHiddenPart(relPath) {
-		return nil, nil, &fs.PathError{Op: "open", Path: relPath, Err: fs.ErrNotExist}
-	}
-	full, err := SafeJoin(root, relPath)
+	// A hidden folder isn't listed, so it can't be opened by name either.
+	full, err := ContentJoin(root, relPath)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -166,6 +166,10 @@ type MetaWork struct {
 	// carriesCommunityContent), so a client shows the credit exactly when it
 	// shows content that needs it.
 	Attribution *MetaAttribution `json:"attribution,omitempty"`
+	// Generated names the parts that came from this server's generated files, not
+	// the community (Answer); set per request on a copy, never on a work the cache
+	// holds, and omitted when nothing did.
+	Generated *MetaGenerated `json:"generated,omitempty"`
 }
 
 // MetaRecording is the specific narration/production matched by the lookup.
@@ -641,7 +645,8 @@ func (s *Service) attribution(workID string) *MetaAttribution {
 
 // carriesCommunityContent reports whether w holds any of the CC BY-SA layer -
 // the content its Attribution credits. HideSpoilers re-asks after gating, so a
-// work whose every community entry was held back drops the credit too.
+// work whose every community entry was held back drops the credit too. It only
+// ever sees community content: Answer lays generated content in after it.
 func carriesCommunityContent(w *MetaWork) bool {
 	return len(w.Characters) > 0 || len(w.Recaps) > 0 || w.RecapSummary != nil || w.CommunityDescription != nil
 }

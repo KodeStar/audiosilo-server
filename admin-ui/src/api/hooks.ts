@@ -57,6 +57,14 @@ export const keys = {
   /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */
   bridgeJobLists: ['admin', 'bridge', 'jobs'] as const,
   bridgeJobs: (state: string) => ['admin', 'bridge', 'jobs', state] as const,
+  /** One book's Bridge jobs (under bridgeJobLists, so queueing or cancelling refreshes it). */
+  bookBridgeJobs: (libraryId: number, path: string) =>
+    ['admin', 'bridge', 'jobs', 'book', libraryId, path] as const,
+  /** Every generate estimate (a prefix: a job that ends changes what a book has). */
+  bridgeEstimates: ['admin', 'bridge', 'estimate'] as const,
+  /** One book's estimates (a prefix of its brief and its full answer). */
+  bridgeEstimate: (libraryId: number, path: string) =>
+    ['admin', 'bridge', 'estimate', libraryId, path] as const,
   events: ['admin', 'events'] as const,
   eventList: (kind: ServerEventKind | undefined) =>
     ['admin', 'events', 'list', kind ?? ''] as const,

@@ -12,6 +12,8 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/library"
+	"github.com/kodestar/audiosilo-server/internal/names"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
 // The Bridge (BRIDGE-PLAN.md Phase 0): the optional companion that writes to the
@@ -24,9 +26,14 @@ import (
 // bridge token works on those routes only (requireBridge); admins queue and
 // cancel jobs from the console (/admin/bridge/*).
 
-// SetBridge gives the API the Bridge's status and job queue. Call before
-// Handler(); the launcher always does.
-func (a *API) SetBridge(b *bridge.Service) { a.bridge = b }
+// SetBridge gives the API the Bridge's status and job queue, and has admins
+// told about each job that finishes, fails or needs attention, whatever moved it
+// (the Bridge's update, a lease that ran out). Call before Handler(); the
+// launcher always does.
+func (a *API) SetBridge(b *bridge.Service) {
+	a.bridge = b
+	b.OnTransition = func(ctx context.Context, job bridge.Job, _ string) { a.notifyBridgeJob(ctx, &job) }
+}
 
 // bridgeKinds: the Bridge's own routes take a bridge token and nothing else, and
 // no other route lists that kind, so a bridge token is refused everywhere else.
@@ -136,6 +143,23 @@ func (a *API) libraryFor(w http.ResponseWriter, r *http.Request, id int64, op st
 	return lib, true
 }
 
+// adminBridgeBook resolves the book a Bridge admin route names: the library (404
+// for an unknown one) and the indexed book at path in it (404 book_not_found,
+// which the console words). It answers the error itself and reports whether
+// there was none.
+func (a *API) adminBridgeBook(w http.ResponseWriter, r *http.Request, libraryID int64, path, op string) (*catalog.Library, *catalog.Book, bool) {
+	lib, ok := a.libraryFor(w, r, libraryID, op)
+	if !ok {
+		return nil, nil, false
+	}
+	book, err := a.cat.GetBookByPath(r.Context(), lib.ID, path)
+	if err != nil {
+		a.writeBookError(w, err, op, "could not load the book")
+		return nil, nil, false
+	}
+	return lib, book, true
+}
+
 // handleBridgeStatus serves PUT /bridge/status: the Bridge's heartbeat (its
 // version, the job kinds it runs, its library mappings, workers and LAN page).
 // It answers with the server's libraries, so the Bridge maps any it hasn't yet.
@@ -200,7 +224,8 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 		files []bridgeFile
 		err   error
 	)
-	if p := catalog.CleanRelPath(r.URL.Query().Get("path")); p != "" {
+	p := catalog.CleanRelPath(r.URL.Query().Get("path"))
+	if p != "" {
 		if book, err = a.cat.GetBookByPath(r.Context(), lib.ID, p); err == nil {
 			files, _ = statBookFiles(lib, book)
 		}
@@ -215,7 +240,52 @@ func (a *API) handleBridgeBook(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogError(w, err, "bridge book failed", "could not load the book")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"library_id": lib.ID, "path": book.RelPath, "files": files})
+	out := map[string]any{"library_id": lib.ID, "path": book.RelPath, "files": files}
+	if p != "" {
+		// What a job about the book reads (a path was asked for: never the
+		// mapping check's sample).
+		out["book"] = a.bridgeBookFacts(r.Context(), book)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// bridgeBook is a book's facts for a Bridge job (GET /bridge/libraries/{id}/book
+// with a path): the effective values, its credits split as the server reads
+// them (names.Split), its series position as stored ("" for none) and its
+// community work id when the metadata cache knows it ("" otherwise).
+type bridgeBook struct {
+	Title       string   `json:"title"`
+	Authors     []string `json:"authors"`
+	Narrators   []string `json:"narrators"`
+	Series      string   `json:"series"`
+	SeriesIndex string   `json:"series_index"`
+	ASIN        string   `json:"asin"`
+	ISBN        string   `json:"isbn"`
+	Duration    float64  `json:"duration"`
+	WorkID      string   `json:"work_id"`
+}
+
+// bridgeBookFacts is book's bridgeBook. The work id comes from the metadata
+// cache alone (meta.Service.CachedWorkID), never an upstream call: the Bridge
+// asks this for every job, and a book nobody has looked up yet simply has none.
+func (a *API) bridgeBookFacts(ctx context.Context, book *catalog.Book) bridgeBook {
+	out := bridgeBook{
+		Title: book.Title, Authors: orEmpty(names.Split(book.Author)), Narrators: orEmpty(names.Split(book.Narrator)),
+		Series: book.Series, SeriesIndex: catalog.FormatSeriesRange(book.SeriesIndex, book.SeriesIndexEnd),
+		ASIN: book.ASIN, ISBN: book.ISBN, Duration: book.Duration,
+	}
+	if a.metadataOn() {
+		out.WorkID, _ = a.meta.CachedWorkID(ctx, book.ASIN, book.ISBN)
+	}
+	return out
+}
+
+// orEmpty is ss, or an empty list for none (the wire's lists are never null).
+func orEmpty(ss []string) []string {
+	if ss == nil {
+		return []string{}
+	}
+	return ss
 }
 
 // statBookFiles is a book's files with the size and modification time the
@@ -346,9 +416,29 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+// notifyBridgeJob reports a job that just finished, failed or parked
+// (notify.BridgeJobEnded), naming its book: the title as indexed now, else its
+// path. Best effort: a book or library that can't be read is reported by path.
+func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
+	ev := notify.BridgeJob{ID: job.ID, Kind: job.Kind, State: job.State, Path: job.Target(),
+		Code: job.ParkCode(), Error: job.Error}
+	if job.LibraryID != nil {
+		ev.LibraryID = *job.LibraryID
+		if lib, err := a.cat.GetLibrary(ctx, ev.LibraryID); err == nil {
+			ev.Library = lib.Name
+		}
+		if ev.Path != "" {
+			if book, err := a.cat.GetBookByPath(ctx, ev.LibraryID, ev.Path); err == nil {
+				ev.Title = book.Title
+			}
+		}
+	}
+	a.rt.Notify.BridgeJobEnded(ctx, ev)
+}
+
 // writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,
-// finished or a kind the Bridge doesn't run, else 500) and reports whether there
-// was none.
+// finished, a kind the Bridge doesn't run or a library it can't write to, else
+// 500) and reports whether there was none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
 	case err == nil:
@@ -363,6 +453,10 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeErrorCode(w, http.StatusConflict, "finished", "the job has already finished")
 	case errors.Is(err, bridge.ErrKindUnavailable):
 		writeErrorCode(w, http.StatusConflict, "kind_unavailable", "the paired bridge doesn't run that kind of job")
+	case errors.Is(err, bridge.ErrLibraryNotWritable):
+		writeErrorCode(w, http.StatusConflict, "library_not_writable", "the bridge can't write to that library")
+	case errors.Is(err, bridge.ErrCannotContribute):
+		writeErrorCode(w, http.StatusConflict, "cannot_contribute", "the bridge can't contribute to the community")
 	default:
 		a.log.Warn(op, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update the job")
@@ -370,31 +464,69 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 	return false
 }
 
-// handleBridgeRescan serves POST /bridge/rescan {library_id, path}: read one path
-// again now, after the Bridge changed files there (a placed or renamed book).
-// It indexes what is at the path, a new book included, and answers 200 {path}
-// with the book's indexed path; 404 code not_indexable when nothing indexable is
-// there. It re-reads the audio: Phase 1 adds a cheaper refresh for files the
-// Bridge writes into a book's .audiosilo/.
+// handleBridgeRescan serves POST /bridge/rescan {library_id, path, mode?, from?}:
+// read one path again now, after the Bridge changed files there.
+//   - mode "full" (or none): index what is at the path, a new book included
+//     (re-reading the audio), and answer 200 {path} with the book's indexed path.
+//     With from, the book's path before a move the Bridge made: its durable state
+//     follows it as a scan's move detection would (Scanner.IndexMoved; a from that
+//     isn't that book moved is ignored).
+//   - mode "attachments": read only the book's .audiosilo/ attachments, never its
+//     audio (Scanner.RefreshAttachments), and answer 200 {path, attachments:
+//     {characters, recaps, bridge}} with what is now indexed. from is refused here.
+//
+// 404 code not_indexable when no book is there (for attachments: no indexed one).
 func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		LibraryID int64  `json:"library_id"`
 		Path      string `json:"path"`
+		Mode      string `json:"mode"`
+		From      string `json:"from"`
 	}
-	if err := decodeJSON(r, &req, 4<<10); err != nil || req.LibraryID <= 0 || catalog.CleanRelPath(req.Path) == "" {
+	if err := decodeJSON(r, &req, 8<<10); err != nil || req.LibraryID <= 0 || catalog.CleanRelPath(req.Path) == "" {
 		writeError(w, http.StatusBadRequest, "library_id and path are required")
+		return
+	}
+	from := catalog.CleanRelPath(req.From)
+	switch {
+	case req.Mode != "" && req.Mode != rescanFull && req.Mode != rescanAttachments:
+		writeError(w, http.StatusBadRequest, "mode must be full or attachments")
+		return
+	case req.From != "" && from == "":
+		writeError(w, http.StatusBadRequest, "invalid from")
+		return
+	case from != "" && req.Mode == rescanAttachments:
+		writeError(w, http.StatusBadRequest, "from is only for a full rescan")
 		return
 	}
 	lib, ok := a.libraryFor(w, r, req.LibraryID, "bridge rescan failed")
 	if !ok {
 		return
 	}
-	book, ok := a.rescanPath(w, lib, catalog.CleanRelPath(req.Path))
+	p := catalog.CleanRelPath(req.Path)
+	if req.Mode == rescanAttachments {
+		got, ok := rescanAt(a, w, lib, p, func(ctx context.Context) (*library.AttachmentsRefresh, error) {
+			return a.scanner.RefreshAttachments(ctx, *lib, p)
+		})
+		if ok {
+			writeJSON(w, http.StatusOK, got)
+		}
+		return
+	}
+	book, ok := rescanAt(a, w, lib, p, func(ctx context.Context) (*catalog.Book, error) {
+		return a.scanner.IndexMoved(ctx, *lib, p, from)
+	})
 	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"path": book.RelPath})
 }
+
+// The modes of POST /bridge/rescan.
+const (
+	rescanFull        = "full"
+	rescanAttachments = "attachments"
+)
 
 // adminBridge is GET /admin/bridge: the pairing, the last heartbeat and whether
 // it is recent enough to count as online, and every server library with the
@@ -413,6 +545,8 @@ type adminBridge struct {
 	Libraries   []adminBridgeLibrary `json:"libraries"`
 	Workers     []bridge.Worker      `json:"workers"`
 	UIURL       string               `json:"ui_url,omitempty"`
+	// Estimates are the Bridge's costing figures (omitted when it sent none).
+	Estimates *bridge.Estimates `json:"estimates,omitempty"`
 }
 
 // bridgePairing is a pairing code waiting to be exchanged.
@@ -453,6 +587,7 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 		out.Online = h.Online(time.Now())
 		out.HeartbeatAt = h.At.UTC().Format(time.RFC3339)
 		out.Version, out.Kinds, out.Features, out.Workers, out.UIURL = h.Version, h.Kinds, h.Features(), h.Workers, h.UIURL
+		out.Estimates = h.Estimates
 	}
 	for _, l := range libs {
 		al := adminBridgeLibrary{bridgeLibrary: bridgeLibrary{ID: l.ID, Name: l.Name, Root: l.Root}}
@@ -509,8 +644,10 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // path?, params?}: queue a job (201) or return the open one already queued for
 // that kind, library and path (200). The kind must be one the server knows (400)
 // and the paired Bridge runs (409 code kind_unavailable; it may be offline: the
-// job waits). A path names an indexed book (404 otherwise) and the job is about
-// that book's own path.
+// job waits), and a kind that writes (sidecars.generate) needs a library the
+// Bridge last reported mapped and writable (409 code library_not_writable). A
+// path names an indexed book (404 otherwise) and the job is about that book's
+// own path.
 func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind      string          `json:"kind"`
@@ -528,22 +665,16 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			nj.Path = &p
 		}
 	}
-	if nj.LibraryID != nil {
-		lib, ok := a.libraryFor(w, r, *nj.LibraryID, "bridge queue failed")
+	switch {
+	case nj.LibraryID != nil && nj.Path != nil:
+		_, book, ok := a.adminBridgeBook(w, r, *nj.LibraryID, *nj.Path, "bridge queue failed")
 		if !ok {
 			return
 		}
-		if nj.Path != nil {
-			book, err := a.cat.GetBookByPath(r.Context(), lib.ID, *nj.Path)
-			if errors.Is(err, catalog.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "book not found")
-				return
-			}
-			if err != nil {
-				a.writeCatalogError(w, err, "bridge queue failed", "could not load the book")
-				return
-			}
-			nj.Path = &book.RelPath
+		nj.Path = &book.RelPath
+	case nj.LibraryID != nil:
+		if _, ok := a.libraryFor(w, r, *nj.LibraryID, "bridge queue failed"); !ok {
+			return
 		}
 	}
 	job, created, err := a.bridge.Enqueue(r.Context(), nj)

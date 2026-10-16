@@ -1,7 +1,9 @@
 package library
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +49,27 @@ func TestSafeJoin(t *testing.T) {
 				t.Fatalf("SafeJoin(%q) = %q escaped root %q", tc.rel, got, rootAbs)
 			}
 		})
+	}
+}
+
+// ContentJoin is SafeJoin that also refuses a hidden segment, as a missing file
+// (fs.ErrNotExist) and not a book (ErrNotIndexable).
+func TestContentJoin(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, rel := range []string{"", "Author/Book/01.m4b", "Author/Book.v2/01.m4b", "Author/../Author/Book"} {
+		if _, err := ContentJoin(root, rel); err != nil {
+			t.Errorf("allowed %q: %v", rel, err)
+		}
+	}
+	for _, rel := range []string{"Author/Book/.audiosilo", "Author/Book/.audiosilo/characters.json", ".Trash-1000/x.m4b", "Author/.hidden.m4b"} {
+		_, err := ContentJoin(root, rel)
+		if !errors.Is(err, ErrHidden) || !errors.Is(err, fs.ErrNotExist) || !errors.Is(err, ErrNotIndexable) {
+			t.Errorf("denied %q: %v, want ErrHidden", rel, err)
+		}
+	}
+	if _, err := ContentJoin(root, "../etc"); !errors.Is(err, ErrOutsideRoot) {
+		t.Errorf("traversal: %v, want ErrOutsideRoot", err)
 	}
 }
 

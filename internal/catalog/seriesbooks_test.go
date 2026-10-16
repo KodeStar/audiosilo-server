@@ -7,6 +7,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/kodestar/audiosilo-meta/pkg/model"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // seedSeries indexes books (lib, path, series, index) and returns the two
@@ -487,4 +491,73 @@ func queryPlan(t *testing.T, c *Catalog, q string, args []any) []string {
 		t.Fatal(err)
 	}
 	return plan
+}
+
+// TestEarlierInSeries: the books before a book in its series, in reading order,
+// whichever way they spell the series or name it (main or list), in its own
+// library only; none for a book without a numbered series.
+func TestEarlierInSeries(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Disc", Root: "/tmp/d"})
+	other, _ := c.CreateLibrary(ctx, Library{Name: "Other", Root: "/tmp/o"})
+	for _, b := range []Book{
+		{LibraryID: lib.ID, RelPath: "cw3", Series: "City Watch", SeriesIndex: 3},
+		{LibraryID: lib.ID, RelPath: "cw2", Series: "city  watch!", SeriesIndex: 2},
+		{LibraryID: lib.ID, RelPath: "omnibus", Series: "City Watch", SeriesIndex: 1, SeriesIndexEnd: 2},
+		{LibraryID: lib.ID, RelPath: "gg", Series: "Discworld", SeriesIndex: 8}, // City Watch 1 (list)
+		{LibraryID: lib.ID, RelPath: "cw4", Series: "City Watch", SeriesIndex: 4},
+		{LibraryID: lib.ID, RelPath: "cw3 copy", Series: "City Watch", SeriesIndex: 3},
+		{LibraryID: lib.ID, RelPath: "unnumbered", Series: "City Watch"},
+		{LibraryID: other.ID, RelPath: "elsewhere", Series: "City Watch", SeriesIndex: 1},
+		{LibraryID: lib.ID, RelPath: "loose"},
+	} {
+		b.Title, b.AddedAt = b.RelPath, "2024-01-01T00:00:00Z"
+		if _, err := c.UpsertBook(ctx, &b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.EditBook(ctx, lib.ID, "gg", BookEdit{Set: map[string]string{FieldMoreSeries: `[{"name":"City Watch","position":1}]`}}); err != nil {
+		t.Fatal(err)
+	}
+	earlier := func(path string) []string {
+		t.Helper()
+		b, err := c.GetBookByPath(ctx, lib.ID, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		members, err := c.EarlierInSeries(ctx, lib.ID, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, m := range members {
+			out = append(out, m.RelPath+"@"+FormatSeriesRange(m.Position, m.PositionEnd))
+		}
+		return out
+	}
+	if got, want := earlier("cw3"), []string{"gg@1", "omnibus@1-2", "cw2@2"}; !slices.Equal(got, want) {
+		t.Fatalf("before cw3 = %v, want %v", got, want)
+	}
+	if got := earlier("gg"); got != nil {
+		// gg's first numbered series is its main one, Discworld, alone here.
+		t.Fatalf("before gg = %v, want none", got)
+	}
+	if got := earlier("loose"); got != nil {
+		t.Fatalf("a book with no series = %v", got)
+	}
+	if got := earlier("omnibus"); got != nil {
+		t.Fatalf("before the first = %v, want none", got)
+	}
+	// A book with generated recaps is left out; generated characters alone
+	// don't count.
+	if err := c.SetAttachments(ctx, lib.ID, map[string]AttachmentsReading{
+		"omnibus": {Sig: "r", Files: metadata.AttachmentFiles{Recaps: &model.Recaps{Recaps: []model.Recap{{Text: "So far."}}}}},
+		"cw2":     {Sig: "c", Files: metadata.AttachmentFiles{Characters: &model.Characters{Characters: []model.Character{{ID: "v", Name: "Vimes"}}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := earlier("cw3"), []string{"gg@1", "cw2@2"}; !slices.Equal(got, want) {
+		t.Fatalf("before cw3, with generated recaps = %v, want %v", got, want)
+	}
 }

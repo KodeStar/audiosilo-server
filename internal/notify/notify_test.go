@@ -353,6 +353,90 @@ func TestNilServiceIsSafe(t *testing.T) {
 	s.UpdateFound(context.Background(), "v1", "", "")
 	s.BackupFailed(context.Background(), "scheduled", "failed")
 	s.ScanFinished(context.Background(), library.RunReport{Status: catalog.RunFailed})
+	s.BridgeJobEnded(context.Background(), BridgeJob{State: "done"})
+}
+
+// A Bridge job's end names the book; a park carries its code (a failure never
+// does: its progress may still name the park it was in), and the error (the
+// Bridge's own text) stays in the bell.
+func TestBridgeJobEnded(t *testing.T) {
+	t.Parallel()
+	s, cat, ctx := newService(t)
+	dest := newFakeDest(t)
+	addTarget(t, cat, TargetWebhook, dest.srv.URL, "", KindBridgeJobFinished, KindBridgeJobFailed)
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 7, Kind: "sidecars.generate", State: "done", Library: "Fiction", LibraryID: 1,
+		Path: "Brandon Sanderson/The Way of Kings", Title: "The Way of Kings"})
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 8, Kind: "sidecars.generate", State: "needs_attention", Library: "Fiction", LibraryID: 1,
+		Path: "Author/Untitled", Code: "book_not_writable", Error: "mkdir /mnt/user/books/Author/Untitled/.audiosilo: permission denied"})
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 9, Kind: "bridge.verify", State: "failed", Library: "Fiction", LibraryID: 1})
+	got := dest.wait(t, 3)
+	titles := map[string]string{}
+	for _, g := range got {
+		titles[g.body["title"].(string)] = g.body["event"].(string)
+		if strings.Contains(string(g.raw), "/mnt/user") {
+			t.Fatalf("the Bridge's error left the server: %s", g.raw)
+		}
+	}
+	for title, kind := range map[string]string{
+		"Characters and recaps ready: The Way of Kings": KindBridgeJobFinished,
+		"A Bridge job needs attention: Author/Untitled": KindBridgeJobFailed,
+		"Bridge check failed: Fiction":                  KindBridgeJobFailed,
+	} {
+		if titles[title] != kind {
+			t.Errorf("no %s titled %q in %v", kind, title, titles)
+		}
+	}
+	events, _, _ := cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
+	var parked catalog.ServerEvent
+	for _, ev := range events {
+		if ev.Data["state"] == "needs_attention" {
+			parked = ev
+		}
+	}
+	if parked.Data["code"] != "book_not_writable" || !strings.Contains(parked.Data["detail"].(string), "permission denied") ||
+		parked.Data["path"] != "Author/Untitled" {
+		t.Fatalf("parked event = %+v", parked.Data)
+	}
+	if m := compose(parked, s.server()); m.Text != "The Bridge can't write into the book's folder." ||
+		m.Link != "https://books.example.com/admin/server?topic=bridge" {
+		t.Fatalf("parked message = %+v", m)
+	}
+
+	// A failure whose progress still names an earlier park: no code, so no
+	// reason it doesn't have.
+	s.BridgeJobEnded(ctx, BridgeJob{ID: 10, Kind: "sidecars.generate", State: "failed", Library: "Fiction", LibraryID: 1,
+		Path: "Author/Stale", Code: "budget_exceeded", Error: "gave up"})
+	dest.wait(t, 4)
+	events, _, _ = cat.ListServerEvents(ctx, 0, 10, KindBridgeJobFailed)
+	for _, ev := range events {
+		if ev.Data["path"] != "Author/Stale" {
+			continue
+		}
+		if _, has := ev.Data["code"]; has {
+			t.Fatalf("failed event carries a park code: %+v", ev.Data)
+		}
+		if m := compose(ev, s.server()); m.Text != "See the job in Settings > Bridge." {
+			t.Fatalf("failed message = %+v", m)
+		}
+		return
+	}
+	t.Fatal("no event for the failed job")
+}
+
+// Each announced park reads as a sentence of its own: a refused credential
+// says where to replace it; a spent budget fits the book's and the month's
+// alike (the monthly one resumes by itself); an unknown code points at the page.
+func TestBridgeParkReasons(t *testing.T) {
+	t.Parallel()
+	for code, want := range map[string]string{
+		"agent_credential_refused": "The agent's credential was refused. Replace it in the agent container, then retry the job on the Bridge.",
+		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset.",
+		"something_new":            "See the job in Settings > Bridge.",
+	} {
+		if got := bridgeParkReason(code); got != want {
+			t.Errorf("bridgeParkReason(%q) = %q, want %q", code, got, want)
+		}
+	}
 }
 
 func TestSignedInDeviceIsOneLine(t *testing.T) {

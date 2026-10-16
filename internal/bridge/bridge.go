@@ -7,6 +7,7 @@
 package bridge
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -20,6 +21,12 @@ type Service struct {
 	// wake is closed (and replaced) when a job is queued, so a claim waiting in
 	// waitClaim looks again at once.
 	wake *signal
+
+	// OnTransition, when set (at wiring, before the first request), hears about
+	// every move of a job into a state an admin is told about (Job.Notable): the
+	// Bridge's update, or a lease that ran out on the last attempt. It runs once
+	// the move has committed, on the caller's goroutine.
+	OnTransition func(ctx context.Context, job Job, from string)
 
 	// hb caches the last heartbeat as read (status.go), so GET /server, which
 	// every client calls often, reads the database at most every heartbeatTTL.

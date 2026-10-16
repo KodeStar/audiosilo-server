@@ -20,11 +20,18 @@ import (
 //   - metadata disabled: 404 (clients gate on the `metadata` capability, so they
 //     never request this).
 //   - book has neither asin nor isbn, or the lookup found no match: 200 {"matched": false}.
-//   - upstream unreachable/error: 502.
+//   - upstream unreachable/error: 502, unless the book has generated content
+//     (below), which is this server's own: then it answers as unmatched with it.
 //   - match: 200 {"matched": true, ...} (see internal/meta.Enrichment).
 //
 // Every rail entry the caller owns carries `local`, the book to open for it
 // (localRails), resolved for this caller on a copy of the rails.
+//
+// The characters and recaps the Bridge generated for the book (its .audiosilo/
+// attachments, catalog.BookAttachments) fill what the community work lacks
+// (work.generated names them), and a book with no match but generated content
+// answers {"matched": false, "work": {...}}: meta.Answer, per request, after the
+// cache and `local`, never cached.
 //
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a
@@ -33,18 +40,24 @@ import (
 //     series, nearest first (meta.Service.Previous; a failed one is left out).
 //   - spoilers=hide: gates the current work by the CALLER's saved progress on
 //     this book (meta.HideSpoilers; no progress = not started), and drops each
-//     previous work's ending.
+//     previous work's ending. Generated content is gated the same way.
 func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if !a.metadataOn() {
 		writeError(w, http.StatusNotFound, "metadata lookup not enabled")
 		return
 	}
-	lib, path, book, env, ok := a.bookEnvelope(w, r)
+	lib, path, book, env, lookupErr, ok := a.bookEnvelope(w, r)
 	if !ok {
 		return
 	}
-	if env == nil {
-		writeJSON(w, http.StatusOK, map[string]bool{"matched": false})
+	gen := a.generatedFor(r.Context(), book, env)
+	if env == nil && gen == nil {
+		// Nothing to answer with but the lookup's outcome: no progress to read.
+		if lookupErr != nil {
+			writeLookupFailed(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, meta.Unmatched{})
 		return
 	}
 
@@ -52,74 +65,104 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	// request (hiding was asked for, so the full envelope is not a fallback)
 	// before any previous work is fetched upstream.
 	q := r.URL.Query()
-	hide := q.Get("spoilers") == "hide"
-	var (
-		chapter  int
-		finished bool
-		err      error
-	)
-	if hide {
-		if chapter, finished, err = a.listeningChapter(r.Context(), lib.ID, book); err != nil {
+	var hide *meta.Place
+	if q.Get("spoilers") == "hide" {
+		chapter, finished, err := a.listeningChapter(r.Context(), lib.ID, book)
+		if err != nil {
 			a.writeCatalogError(w, err, "load progress for meta failed", "could not load progress", "library", lib.ID, "path", path)
 			return
 		}
+		hide = &meta.Place{Chapter: chapter, Finished: finished}
 	}
 
 	// env is shared with the meta cache and every other caller: it is never
 	// modified. Every per-request change below goes onto out, a shallow copy, and
 	// a change to anything nested in it (the work, the rails) replaces that part
 	// with its own copy first, never writes through to env.
-	cp := *env
-	out := &cp
-	// `local` is an extra like `previous`: when the caller's books can't be
-	// placed, the envelope goes out without it (the shared rails, unannotated)
-	// rather than failing a lookup that succeeded - and that a client which never
-	// reads `local` asked for.
-	if rails, _, err := a.localRails(r.Context(), catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, env); err != nil {
-		if r.Context().Err() == nil {
-			a.log.Warn("place owned books for meta failed", "err", err, "library", lib.ID, "path", path)
+	var out *meta.Enrichment
+	if env != nil {
+		cp := *env
+		out = &cp
+		// `local` is an extra like `previous`: when the caller's books can't be
+		// placed, the envelope goes out without it (the shared rails, unannotated)
+		// rather than failing a lookup that succeeded - and that a client which never
+		// reads `local` asked for.
+		if rails, _, err := a.localRails(r.Context(), catalog.Ref{LibraryID: lib.ID, Path: book.RelPath}, env); err != nil {
+			if r.Context().Err() == nil {
+				a.log.Warn("place owned books for meta failed", "err", err, "library", lib.ID, "path", path)
+			}
+		} else {
+			out.Series = rails
 		}
-	} else {
-		out.Series = rails
+		if queryHas(q["include"], "previous") {
+			out.Previous = a.meta.Previous(r.Context(), env)
+		}
 	}
-	if queryHas(q["include"], "previous") {
-		out.Previous = a.meta.Previous(r.Context(), env)
+	writeJSON(w, http.StatusOK, meta.Answer(out, book.Title, gen, hide))
+}
+
+// generatedFor is the book's generated content for /meta (nil for none, or when
+// env's community work leaves nothing for it to fill). It is an extra like
+// `local`: a failure to read it is logged and the answer goes out without it.
+// A book whose row names no generated file (Book.Generated) isn't looked up.
+func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.Enrichment) *meta.Generated {
+	if !book.Generated || !env.Fillable() {
+		return nil
 	}
-	if hide {
-		out = meta.HideSpoilers(out, chapter, finished)
+	att, err := a.cat.BookAttachments(ctx, book.ID)
+	if err != nil {
+		if ctx.Err() == nil {
+			a.log.Warn("load generated content for meta failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
+		}
+		return nil
 	}
-	writeJSON(w, http.StatusOK, out)
+	if att == nil || (att.Characters == nil && att.Recaps == nil) {
+		return nil
+	}
+	g := &meta.Generated{Characters: att.Characters, Recaps: att.Recaps}
+	if att.Provenance != nil {
+		g.GeneratedAt = att.Provenance.GeneratedAt
+	}
+	return g
 }
 
 // bookEnvelope is the shared start of the routes over a book's /meta envelope
 // (handleMeta, handleMetaCover): the ?path= in the caller's scope, the book at it,
 // and its envelope from the shared cache (meta.Service.Enrich). env is nil when
-// the book can't be matched (no ASIN or ISBN, or none upstream); ok is false when
-// it wrote the error (403/404 for the path, 502 when the lookup failed).
-func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog.Library, path string, book *catalog.Book, env *meta.Enrichment, ok bool) {
+// the book can't be matched (no ASIN or ISBN, or none upstream), and lookupErr
+// set (logged) when the lookup failed: the caller answers that (a 502, unless it
+// has something of its own to serve). ok is false when it wrote the error
+// (403/404 for the path).
+func (a *API) bookEnvelope(w http.ResponseWriter, r *http.Request) (lib *catalog.Library, path string, book *catalog.Book,
+	env *meta.Enrichment, lookupErr error, ok bool) {
 	lib, path, scope, status, msg := a.authorizedScope(r)
 	if status != 0 {
 		writeError(w, status, msg)
-		return nil, "", nil, nil, false
+		return nil, "", nil, nil, nil, false
 	}
 	if book, ok = a.bookAt(w, r, lib, scope, path, "no book at that path", "could not load book"); !ok {
-		return nil, "", nil, nil, false
+		return nil, "", nil, nil, nil, false
 	}
 	if book.ASIN == "" && book.ISBN == "" {
-		return lib, path, book, nil, true
+		return lib, path, book, nil, nil, true
 	}
 	env, err := a.meta.Enrich(r.Context(), book.ASIN, book.ISBN)
 	switch {
 	case errors.Is(err, meta.ErrNotFound):
-		return lib, path, book, nil, true
+		return lib, path, book, nil, nil, true
 	case err != nil:
 		if r.Context().Err() == nil {
 			a.log.Warn("meta lookup failed", "err", err, "library", lib.ID, "path", path)
 		}
-		writeError(w, http.StatusBadGateway, "metadata service unavailable")
-		return nil, "", nil, nil, false
+		return lib, path, book, nil, err, true
 	}
-	return lib, path, book, env, true
+	return lib, path, book, env, nil, true
+}
+
+// writeLookupFailed answers a community lookup that failed (bookEnvelope's
+// lookupErr).
+func writeLookupFailed(w http.ResponseWriter) {
+	writeError(w, http.StatusBadGateway, "metadata service unavailable")
 }
 
 // localRails is env's rails placed for the caller (meta.Service.PlaceOwned), and

@@ -149,7 +149,8 @@ func (a *API) scopedPathIn(r *http.Request, scopes []catalog.Scope, libraryID in
 	return pathInScope(lib, scope, rawPath)
 }
 
-// pathInScope cleans rawPath and checks scope allows it (400 empty, 403 outside).
+// pathInScope cleans rawPath and checks scope allows it (400 empty, 403 outside,
+// 404 through a hidden folder).
 func pathInScope(lib *catalog.Library, scope catalog.Scope, rawPath string) (*catalog.Library, string, catalog.Scope, int, string) {
 	// Normalize before the scope check so ".." can't smuggle an out-of-scope path
 	// past a subtree grant (see catalog.CleanRelPath). An input that cleans away
@@ -160,6 +161,13 @@ func pathInScope(lib *catalog.Library, scope catalog.Scope, rawPath string) (*ca
 	}
 	if !scope.Allows(rel) {
 		return nil, "", scope, http.StatusForbidden, msgNoPathAccess
+	}
+	// A hidden path is never content (library.ContentPath), whether a route
+	// resolves a book or a file directly (stream, cover). It reads as missing,
+	// after the scope check so the answer says nothing more than a missing file's
+	// would.
+	if library.ContentPath(rel) != nil {
+		return nil, "", scope, http.StatusNotFound, "not found"
 	}
 	return lib, rel, scope, 0, ""
 }

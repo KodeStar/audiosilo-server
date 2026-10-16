@@ -226,35 +226,71 @@ func (db *DB) WithTx(ctx context.Context, name string, fn func(*sql.Tx) error) (
 	return tx.Commit()
 }
 
-// startStatsSampler periodically logs writer-pool contention. A growing WaitCount
-// means callers are queueing for the single writer connection - the direct signal
-// that a slow hold is starving the backend (which previously surfaced only as an
-// unexplained freeze). Stopped by Close.
+// A sample's writer-pool waiting is worth a warning when the average waiter queued
+// contentionWarnMean (a slow hold) or all of them together contentionWarnTotal (one
+// long stall among many short waits). A few milliseconds a waiter is the single
+// writer doing its job: spike 1's Bridge queued a caller in nearly every sample of
+// its seven-hour run, never averaging 6 ms a waiter or totalling 25 ms. Both read
+// sums over a sample, which has no per-wait maximum: enough traffic of the same
+// kind reaches the total (250 waits of 4 ms), and many short waits can average one
+// slow hold below the mean.
+const (
+	contentionWarnMean  = 25 * time.Millisecond
+	contentionWarnTotal = time.Second
+)
+
+// contentionLevel is the log level of one sample: waits callers started to queue,
+// wait is the time of the waits that ended, and inUse whether the writer is held
+// now. database/sql counts a wait when it starts and times it when it ends, so a
+// caller still queued at one tick is timed at a later one, and time that arrives
+// with no new waits is at least one caller's. New callers with none of them timed
+// while the writer is held is how a stall looks at its first tick (callers with no
+// deadline behind a writer that never frees are never timed at all); in ordinary
+// traffic some wait of the sample has ended by the tick.
+func contentionLevel(waits int64, wait time.Duration, inUse int) slog.Level {
+	stalled := waits > 0 && wait == 0 && inUse > 0
+	if stalled || wait >= contentionWarnTotal || wait/time.Duration(max(waits, 1)) >= contentionWarnMean {
+		return slog.LevelWarn
+	}
+	return slog.LevelDebug
+}
+
+// startStatsSampler logs the writer pool's queueing every 30 s (sampleContention),
+// so a slow hold starving the backend shows in the logs instead of only as an
+// unexplained freeze. Stopped by Close.
 func (db *DB) startStatsSampler() {
 	ctx, cancel := context.WithCancel(context.Background())
 	db.stopSampler = cancel
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
-		var lastWaitCount int64
-		var lastWaitDur time.Duration
+		var last sql.DBStats
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				s := db.writer.Stats()
-				if s.WaitCount > lastWaitCount {
-					db.log.Warn("db writer pool contention",
-						"waits", s.WaitCount-lastWaitCount,
-						"wait_time", (s.WaitDuration - lastWaitDur).String(),
-						"in_use", s.InUse)
-				}
-				lastWaitCount = s.WaitCount
-				lastWaitDur = s.WaitDuration
+				last = db.sampleContention(ctx, last)
 			}
 		}
 	}()
+}
+
+// sampleContention logs the writer pool's waiting since last (its stats at the
+// previous tick) at contentionLevel's level, and returns the stats it read. It logs
+// when either counter moved: a caller queued behind a stall is counted at the tick
+// it is waiting through and timed at the tick after it gets the writer or gives
+// up, which can come with no new waits. So a stall warns at its first tick (new
+// callers, none timed, the writer held) and again once its callers' waits end.
+func (db *DB) sampleContention(ctx context.Context, last sql.DBStats) sql.DBStats {
+	s := db.writer.Stats()
+	if waits, wait := s.WaitCount-last.WaitCount, s.WaitDuration-last.WaitDuration; waits > 0 || wait > 0 {
+		db.log.Log(ctx, contentionLevel(waits, wait, s.InUse), "db writer pool contention",
+			"waits", waits,
+			"wait_time", wait.String(),
+			"in_use", s.InUse)
+	}
+	return s
 }
 
 // Close stops the stats sampler and closes both pools.

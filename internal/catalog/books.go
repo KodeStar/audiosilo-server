@@ -42,6 +42,13 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Attachments that couldn't be read right now (AttachmentsReading.Unread) keep
+	// the stored reading: no indexed_at for them (unchecked, so the next scan reads
+	// them again), the stored signature kept over this one, the stored files left.
+	var attachmentsReadAt any = indexedAt
+	if b.Attachments.Unread {
+		attachmentsReadAt = nil
+	}
 	// has_cover holds whenever there is a sibling cover; the scanner reports
 	// embedded art. Unknown (nil) stays NULL until a scan checks.
 	hasCover := b.HasCover
@@ -58,8 +65,8 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
 			     released, released_checked,
 			     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
-			     abs_sig, abs_indexed_at, abs_file)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,'','',?,?,?)
+			     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,'','',?,?,?,?,?)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -77,7 +84,10 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     -- list back over them when it should.
 			     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
 			     chapters_source='', chapters_fit='',
-			     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file
+			     abs_sig=excluded.abs_sig, abs_indexed_at=excluded.abs_indexed_at, abs_file=excluded.abs_file,
+			     attachments_sig=CASE WHEN excluded.attachments_indexed_at IS NULL THEN books.attachments_sig
+			                          ELSE excluded.attachments_sig END,
+			     attachments_indexed_at=excluded.attachments_indexed_at
 			     -- added_at intentionally not updated: it records first-seen, so a
 			     -- re-index of an existing book keeps its original added date.
 			 RETURNING id`,
@@ -87,10 +97,15 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			b.Published, b.Description, hasCover, scanned,
 			b.ScanError, b.ScanErrorFile, b.ScanErrorDetail, b.SuspectParts, b.SplitParent,
 			b.Released, string(scannedChapters), chaptersHash(string(scannedChapters)),
-			absSig, absReadAt, absFile).Scan(&id); err != nil {
+			absSig, absReadAt, absFile, b.Attachments.Sig, attachmentsReadAt).Scan(&id); err != nil {
 			return err
 		}
 		b.ID = id
+		if !b.Attachments.Unread {
+			if err := writeAttachments(ctx, tx, id, b.Attachments.Files, indexedAt); err != nil {
+				return err
+			}
+		}
 		if err := refreshCoverArt(ctx, tx, b.LibraryID, b.RelPath); err != nil {
 			return err
 		}
@@ -256,6 +271,12 @@ type Signature struct {
 	// re-indexing the book (SetABSFiles).
 	ABSSig       string
 	ABSUnchecked bool
+	// AttachmentsSig is the signature of the .audiosilo/ attachments last read
+	// for a book ("" for none), and AttachmentsUnchecked says they need reading
+	// anyway (attachmentsUncheckedExpr), so a scan re-reads new, changed or gone
+	// files without re-indexing the book (SetAttachments).
+	AttachmentsSig       string
+	AttachmentsUnchecked bool
 }
 
 // Signatures returns the stored mtime/size for every book in a library, keyed
@@ -264,7 +285,8 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
-		        released_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`
+		        released_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
+		        attachments_sig, `+attachmentsUncheckedExpr+`
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
@@ -277,7 +299,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
 			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked,
-			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked); err != nil {
+			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked); err != nil {
 			return nil, err
 		}
 		out[rel] = sig
@@ -423,10 +445,7 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 	}
 	if err := c.db.WithTx(ctx, "DeleteBooksNotIn", func(tx *sql.Tx) error {
 		for _, id := range stale {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, id); err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id); err != nil {
+			if err := deleteBook(ctx, tx, id); err != nil {
 				return err
 			}
 		}
@@ -437,22 +456,49 @@ func (c *Catalog) DeleteBooksNotIn(ctx context.Context, libraryID int64, keep ma
 	return paths, nil
 }
 
+// DeleteBookAt removes the indexed book at relPath, if any: a book the scanner
+// knows has gone (one the Bridge moved, whose state went with it). Like the
+// prune it leaves the path-keyed state alone.
+func (c *Catalog) DeleteBookAt(ctx context.Context, libraryID int64, relPath string) error {
+	return c.db.WithTx(ctx, "DeleteBookAt", func(tx *sql.Tx) error {
+		id, err := bookIDByPath(ctx, tx, libraryID, relPath)
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return deleteBook(ctx, tx, id)
+	})
+}
+
+// deleteBook removes book id and its search row inside tx; its files, chapters
+// and other index rows go with it by their foreign keys.
+func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM books WHERE id = ?`, id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, id)
+	return err
+}
+
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
-	added_at, content_hash, published, has_cover, cover_art, cover_color`
+	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
 // selecting bookCols (plain or prefixed) scans it the same way; finish, called
 // after the scan, derives the cover fields and the series list from the columns
 // behind them.
 func bookDest(b *Book) (dest []any, finish func()) {
-	var more, art, color string
+	var more, art, color, attachments string
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
 			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
-			&b.Published, &b.HasCover, &art, &color},
+			&b.Published, &b.HasCover, &art, &color, &attachments},
 		func() {
 			b.CoverVersion = CoverVersion(art)
+			b.Generated = generatedSig(attachments)
 			b.CoverColor, _ = storedCoverColor(art, color)
 			if more != "[]" && more != "" { // most books have no list: no parse
 				// In a series beyond its main one: the whole list. A list that only
