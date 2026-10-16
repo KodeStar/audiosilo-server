@@ -1654,7 +1654,7 @@ future metadata site can attach enrichment without reshaping the schema. The
   library with the Bridge's mapping, workers, `ui_url`), `GET`/`POST /admin/bridge/jobs`, `GET
   /admin/bridge/jobs/{id}`, `GET /admin/bridge/estimate?library_id=&path=&kind=[&brief=1]` (the
   confirmation before `sidecars.generate`, `handlers_bridge_estimate.go`: the source (`library.BookEbook`,
-  the Bridge's own .epub rule, a DRM-marked or unreadable epub counting as none), `bridge.EstimateSidecars` from the heartbeat's figures (`asr_hours`,
+  the Bridge's own .epub rule, an unreadable epub (no zip, no container.xml) counting as none), `bridge.EstimateSidecars` from the heartbeat's figures (`asr_hours`,
   `agent_cost_usd` null while there is no history, `subscription`, `agent_ready`, `figures` false when
   the Bridge sent none, so a false `agent_ready` means "not known"), `writable`, what the book already
   has (`has.community` via `meta.Service.Coverages`, cache first and never a full Enrich per book,
