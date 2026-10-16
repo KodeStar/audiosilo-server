@@ -306,6 +306,35 @@ func TestMetaGeneratedDescriptionMatched(t *testing.T) {
 	}
 }
 
+// TestMetaGeneratedDescriptionBesideCommunityContent: a matched work with
+// community characters and recaps but no community description takes only the
+// generated description (generatedFor reads just that part, Fillable): the
+// community's characters and recaps stay, and the mark names the description
+// alone.
+func TestMetaGeneratedDescriptionBesideCommunityContent(t *testing.T) {
+	t.Parallel()
+	e := generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
+		"characters":[{"id":"community-hero","name":"Hero","reveal":{"chapter":1}}],
+		"recaps":[{"through":{"chapter":1},"text":"Community recap."}]}`)
+	lib := seedChapteredBook(t, e, "A/Two", "B0TWO")
+	setDescription(t, e, lib.ID, "A/Two", "characters.json:1:1,recaps.json:1:1,description.json:1:1", metadata.AttachmentFiles{
+		Characters: &model.Characters{Work: "w", Characters: []model.Character{{ID: "gen", Name: "Gen", Reveal: model.Position{Chapter: 1}}}},
+		Recaps:     &model.Recaps{Work: "w", Recaps: []model.Recap{{Through: model.Position{Chapter: 1}, Text: "Gen recap."}}}})
+	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
+
+	g, body := getDescription(t, e, lib.ID, "A/Two", "", tok)
+	if g.Work == nil || g.Work.GeneratedDescription == nil || g.Work.GeneratedDescription.Text != testDescriptionText {
+		t.Fatalf("work = %s", body)
+	}
+	if gen := g.Work.Generated; gen == nil || !gen.Description || gen.Characters || gen.Recaps {
+		t.Errorf("generated = %+v", gen)
+	}
+	if !strings.Contains(body, `"community-hero"`) || !strings.Contains(body, "Community recap.") ||
+		strings.Contains(body, `"gen"`) || strings.Contains(body, "Gen recap.") {
+		t.Errorf("community content not kept: %s", body)
+	}
+}
+
 // TestMetaGeneratedDescriptionUnmatched: a book with no match and only a
 // generated description answers matched false with a work of the book's title
 // and the description, no attribution, kept under spoilers=hide; beside

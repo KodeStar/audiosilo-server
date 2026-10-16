@@ -13,6 +13,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/auth"
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 const mistbornPart = mistbornBook + "/01 - The Final Empire.m4b"
@@ -67,7 +68,7 @@ func TestBridgeRescanAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a, err := b.cat.BookAttachments(context.Background(), book.ID); err != nil || a == nil || a.Characters == nil || a.Provenance.JobID != 3 {
+	if a, err := b.cat.BookAttachments(context.Background(), book.ID, metadata.AllAttachmentParts); err != nil || a == nil || a.Characters == nil || a.Provenance.JobID != 3 {
 		t.Errorf("stored = %+v, %v", a, err)
 	}
 	// A description the Bridge wrote since is answered too (Phase 1c).

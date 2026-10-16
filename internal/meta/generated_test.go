@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 func testGenerated() *Generated {
@@ -88,17 +90,21 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	}
 	// Characters, recaps and a description but no summary: still nothing to
 	// fill, as a summary only ever comes with the recaps.
-	if env.Fillable() {
-		t.Error("a work with characters, recaps and a description is fillable")
+	if got := env.Fillable(); got.Any() {
+		t.Errorf("a work with characters, recaps and a description fills %+v", got)
 	}
-	// Without the community description there is one thing to fill.
+	// Without the community description there is one thing to fill, and only
+	// that part is loaded.
 	noDesc := *both
 	noDesc.CommunityDescription = nil
-	if !(&Enrichment{Work: &noDesc}).Fillable() {
-		t.Error("a work without a community description can't be filled")
+	if got := (&Enrichment{Work: &noDesc}).Fillable(); got != (metadata.AttachmentParts{Description: true}) {
+		t.Errorf("a work without a community description fills %+v", got)
 	}
-	if !(&Enrichment{Work: &MetaWork{Characters: both.Characters}}).Fillable() || !(*Enrichment)(nil).Fillable() {
-		t.Error("a work without recaps, or no match, can't be filled")
+	if got := (&Enrichment{Work: &MetaWork{Characters: both.Characters}}).Fillable(); got != (metadata.AttachmentParts{Recaps: true, Description: true}) {
+		t.Errorf("a work with characters alone fills %+v", got)
+	}
+	if got := (*Enrichment)(nil).Fillable(); got != metadata.AllAttachmentParts {
+		t.Errorf("no match fills %+v", got)
 	}
 
 	// A community summary stays beside generated recaps, and still counts as

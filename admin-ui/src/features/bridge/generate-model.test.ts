@@ -22,11 +22,11 @@ import {
   generatePollMs,
   generateProgress,
   generateResult,
+  isBookKind,
   KIND_DESCRIBE,
   KIND_GENERATE,
   KNOWN_PARKS,
   KNOWN_STAGES,
-  latestGenerateJob,
   latestJobOf,
   parkKey,
   planEstimate,
@@ -35,7 +35,6 @@ import {
   settleLimited,
   stageLabel,
   titleCase,
-  wordsItsOwnStatus,
   type BatchCheck,
 } from './generate-model';
 
@@ -72,9 +71,10 @@ function estimate(over: Partial<BridgeEstimate> = {}): BridgeEstimate {
     can_contribute: true,
     figures: true,
     writable: true,
+    can_describe: false,
     has: {
-      community: { characters: false, recaps: false },
-      local: { characters: false, recaps: false },
+      community: { characters: false, recaps: false, description: false },
+      local: { characters: false, recaps: false, description: false },
     },
     earlier: [],
     ...over,
@@ -103,17 +103,23 @@ describe('the action gate', () => {
   });
 
   it('hides the action when the community has both, and says Regenerate over local data', () => {
-    const none = { characters: false, recaps: false };
-    const both = { characters: true, recaps: true };
+    const none = { characters: false, recaps: false, description: false };
+    const both = { characters: true, recaps: true, description: false };
     expect(generateAction({ community: none, local: none })).toBe('generate');
     expect(generateAction({ community: both, local: none })).toBe('hidden');
     expect(generateAction({ community: both, local: both })).toBe('hidden');
-    expect(generateAction({ community: { characters: true, recaps: false }, local: none })).toBe(
-      'generate',
-    );
-    expect(generateAction({ community: none, local: { characters: false, recaps: true } })).toBe(
-      'regenerate',
-    );
+    expect(
+      generateAction({
+        community: { characters: true, recaps: false, description: false },
+        local: none,
+      }),
+    ).toBe('generate');
+    expect(
+      generateAction({
+        community: none,
+        local: { characters: false, recaps: true, description: false },
+      }),
+    ).toBe('regenerate');
   });
 });
 
@@ -149,8 +155,8 @@ describe('polling a book', () => {
       job('done', { id: 11 }),
       job('failed', { id: 10 }),
     ];
-    expect(latestGenerateJob(jobs)?.id).toBe(11);
-    expect(latestGenerateJob([])).toBeUndefined();
+    expect(latestJobOf(jobs, KIND_GENERATE)?.id).toBe(11);
+    expect(latestJobOf([], KIND_GENERATE)).toBeUndefined();
   });
 });
 
@@ -491,8 +497,8 @@ describe('the series batch', () => {
         batchCheck(
           estimate({
             has: {
-              community: { characters: false, recaps: true },
-              local: { characters: false, recaps: false },
+              community: { characters: false, recaps: true, description: false },
+              local: { characters: false, recaps: false, description: false },
             },
           }),
         ),
@@ -504,8 +510,8 @@ describe('the series batch', () => {
         batchCheck(
           estimate({
             has: {
-              community: { characters: true, recaps: false },
-              local: { characters: true, recaps: false },
+              community: { characters: true, recaps: false, description: false },
+              local: { characters: true, recaps: false, description: false },
             },
           }),
         ),
@@ -533,8 +539,8 @@ describe('the series batch', () => {
           estimate({
             writable: false,
             has: {
-              community: { characters: false, recaps: true },
-              local: { characters: false, recaps: false },
+              community: { characters: false, recaps: true, description: false },
+              local: { characters: false, recaps: false, description: false },
             },
           }),
         ),
@@ -551,14 +557,18 @@ describe('the series batch', () => {
       batchCheck(estimate({ open_job: job('running', { cancel_requested: true }) })).open,
     ).toBe(false);
     const unasked = {
-      community: { characters: false, recaps: false },
-      local: { characters: false, recaps: false },
+      community: { characters: false, recaps: false, description: false },
+      local: { characters: false, recaps: false, description: false },
       community_unknown: true,
     };
     expect(batchCheck(estimate({ has: unasked })).unknown).toBe(true);
     // Recaps of its own make it covered, whatever the community says.
     expect(
-      batchCheck(estimate({ has: { ...unasked, local: { characters: false, recaps: true } } })),
+      batchCheck(
+        estimate({
+          has: { ...unasked, local: { characters: false, recaps: true, description: false } },
+        }),
+      ),
     ).toMatchObject({ covered: true, unknown: false });
   });
 
@@ -652,9 +662,8 @@ describe('a description (Phase 1c)', () => {
   });
 
   it('is not offered without a Bridge that can, content to write from, or with one already', () => {
-    const local = has({ characters: true, recaps: true });
+    const local = has({ characters: true, recaps: true, description: false });
     expect(describeOffered(undefined, [])).toBe(false);
-    expect(describeOffered({ has: local }, [])).toBe(false);
     expect(describeOffered({ can_describe: false, has: local }, [])).toBe(false);
     expect(describeOffered({ can_describe: true, has: has({}) }, [])).toBe(false);
     expect(
@@ -685,9 +694,9 @@ describe('a description (Phase 1c)', () => {
     const jobs = [open(KIND_DESCRIBE), open(KIND_GENERATE, 'done')];
     expect(latestJobOf(jobs, KIND_GENERATE)).toBe(jobs[1]);
     expect(latestJobOf(jobs, KIND_DESCRIBE)).toBe(jobs[0]);
-    expect(latestGenerateJob(jobs)).toBe(jobs[1]);
-    expect(wordsItsOwnStatus(KIND_DESCRIBE)).toBe(true);
-    expect(wordsItsOwnStatus('bridge.verify')).toBe(false);
+    expect(isBookKind(KIND_DESCRIBE)).toBe(true);
+    expect(isBookKind(KIND_GENERATE)).toBe(true);
+    expect(isBookKind('bridge.verify')).toBe(false);
   });
 
   it("reads a result's description outcome", () => {

@@ -51,12 +51,13 @@ type AttachmentsState struct {
 
 // generatedSig reports whether a book's attachments signature (attachments_sig)
 // names a characters, recaps or description file: Book.Generated, read from the
-// narrow column so a list never joins book_attachments. A file that failed its checks still
+// narrow column so a list never joins book_attachments. A signature lists only
+// known names, so any but bridge.json (provenance) is one. A file that failed its checks still
 // counts (its signature is recorded so it isn't read again): a /meta read then
 // finds nothing, which costs a request and no more.
 func generatedSig(sig string) bool {
 	for _, name := range metadata.AttachmentSigNames(sig) {
-		if name == metadata.AttachmentCharacters || name == metadata.AttachmentRecaps || name == metadata.AttachmentDescription {
+		if name != metadata.AttachmentBridge {
 			return true
 		}
 	}
@@ -164,12 +165,22 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 }
 
 // BookAttachments returns the stored attachments of book id (books.id, read
-// inside the server only), or nil, nil when it has none. A column that no longer
-// decodes reads as a file the book doesn't have.
-func (c *Catalog) BookAttachments(ctx context.Context, bookID int64) (*metadata.AttachmentFiles, error) {
+// inside the server only) with the generated parts want names, and its
+// provenance, or nil, nil when that leaves nothing. A part want leaves out is
+// never read (characters and recaps run to hundreds of KB). A column that no
+// longer decodes reads as a file the book doesn't have.
+func (c *Catalog) BookAttachments(ctx context.Context, bookID int64, want metadata.AttachmentParts) (*metadata.AttachmentFiles, error) {
+	// A part left out reads as none; the column names are constants.
+	col := func(name string, on bool) string {
+		if on {
+			return name
+		}
+		return "''"
+	}
 	var chars, recaps, desc, prov string
 	err := c.db.QueryRowContext(ctx,
-		`SELECT characters, recaps, description, provenance FROM book_attachments WHERE book_id = ?`, bookID).
+		`SELECT `+col("characters", want.Characters)+`, `+col("recaps", want.Recaps)+`, `+
+			col("description", want.Description)+`, provenance FROM book_attachments WHERE book_id = ?`, bookID).
 		Scan(&chars, &recaps, &desc, &prov)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -187,4 +198,18 @@ func (c *Catalog) BookAttachments(ctx context.Context, bookID int64) (*metadata.
 		return nil, nil
 	}
 	return a, nil
+}
+
+// BookAttachmentParts reports which generated parts book id has stored, without
+// reading them (the Bridge estimate's has.local). A stored column is a checked
+// file the server wrote, so a non-empty one is a part the book has.
+func (c *Catalog) BookAttachmentParts(ctx context.Context, bookID int64) (metadata.AttachmentParts, error) {
+	var p metadata.AttachmentParts
+	err := c.db.QueryRowContext(ctx,
+		`SELECT characters <> '', recaps <> '', description <> '' FROM book_attachments WHERE book_id = ?`, bookID).
+		Scan(&p.Characters, &p.Recaps, &p.Description)
+	if errors.Is(err, sql.ErrNoRows) {
+		return metadata.AttachmentParts{}, nil
+	}
+	return p, err
 }

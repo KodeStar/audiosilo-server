@@ -102,22 +102,25 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meta.Answer(out, book.Title, gen, hide))
 }
 
-// generatedFor is the book's generated content for /meta (nil for none, or when
-// env's community work leaves nothing for it to fill). It is an extra like
+// generatedFor is the book's generated content for /meta: the parts env's
+// community work leaves for it to fill (meta.Enrichment.Fillable), nil for none. It is an extra like
 // `local`: a failure to read it is logged and the answer goes out without it.
 // A book whose row names no generated file (Book.Generated) isn't looked up.
 func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.Enrichment) *meta.Generated {
-	if !book.Generated || !env.Fillable() {
+	fill := env.Fillable()
+	if !book.Generated || !fill.Any() {
 		return nil
 	}
-	att, err := a.cat.BookAttachments(ctx, book.ID)
+	// Only the parts the community work lacks: a work with characters and
+	// recaps of its own reads just the description.
+	att, err := a.cat.BookAttachments(ctx, book.ID, fill)
 	if err != nil {
 		if ctx.Err() == nil {
 			a.log.Warn("load generated content for meta failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
 		}
 		return nil
 	}
-	if att == nil || (att.Characters == nil && att.Recaps == nil && att.Description == nil) {
+	if att == nil || !att.Generated() {
 		return nil
 	}
 	g := &meta.Generated{Characters: att.Characters, Recaps: att.Recaps, Description: att.Description}

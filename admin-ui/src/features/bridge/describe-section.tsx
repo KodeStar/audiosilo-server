@@ -1,15 +1,14 @@
 import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { PenLine, X } from 'lucide-react';
-import { keys, useServerInfo } from '@/api/hooks';
+import { PenLine } from 'lucide-react';
+import { useServerInfo } from '@/api/hooks';
 import type { AdminBook, GeneratedDescription } from '@/api/types';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { formatRelative } from '@/lib/format';
-import { cancelJob, queueJob } from './bridge-actions';
-import { isOpen, jobActions, stateLook } from './bridge-model';
+import { queueJob } from './bridge-actions';
+import { jobActions } from './bridge-model';
 import {
   clampsDescription,
   describeOffered,
@@ -17,6 +16,7 @@ import {
   generateJobsKnown,
   KIND_DESCRIBE,
 } from './generate-model';
+import { JobCancelButton, JobSection } from './generate-parts';
 import { GenerateStatus } from './generate-status';
 import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-generate';
 
@@ -37,7 +37,6 @@ export function DescribeSection({
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const qc = useQueryClient();
   const server = useServerInfo().data;
   const available = generateAvailable(server);
   const { job, jobs } = useBookGenerateJob(
@@ -52,7 +51,6 @@ export function DescribeSection({
   const uiUrl = useBridgeLink(parked);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
   const textId = useId();
 
   const offer = available && describeOffered(estimate.data, jobs);
@@ -60,19 +58,15 @@ export function DescribeSection({
   const showJob = job && job.state !== 'cancelled' && !(job.state === 'done' && description);
   if (!open && !showJob && !offer && !description) return null;
 
-  const look = job ? stateLook(job) : undefined;
   const canCancel = job ? jobActions(job).cancel : false;
   const clamps = description ? clampsDescription(description.text) : false;
-  const jobOpen = job ? isOpen(job.state) : false;
 
   return (
-    <section className="flex flex-col gap-2.5 border-t pt-3.5" aria-labelledby="describe-title">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 id="describe-title" className="text-[13px] font-semibold">
-          {t('bridge.describe.title')}
-        </h4>
-        {showJob && look ? <Badge variant={look.tone}>{t(look.key)}</Badge> : null}
-      </div>
+    <JobSection
+      id="describe-title"
+      title={t('bridge.describe.title')}
+      job={showJob ? job : undefined}
+    >
       {description ? (
         <>
           <p className="text-[12.5px] text-muted-foreground">
@@ -109,7 +103,7 @@ export function DescribeSection({
         </>
       ) : null}
       {showJob && job ? <GenerateStatus job={job} uiUrl={uiUrl} /> : null}
-      {(showJob && jobOpen && canCancel) || offer ? (
+      {(showJob && canCancel) || offer ? (
         <div className="flex flex-wrap gap-2">
           {offer ? (
             <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
@@ -117,25 +111,13 @@ export function DescribeSection({
               {t('bridge.describe.action')}
             </Button>
           ) : null}
-          {job && jobOpen && canCancel ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={cancelling}
-              onClick={() => {
-                setCancelling(true);
-                void cancelJob(qc, job).finally(() => setCancelling(false));
-              }}
-              aria-label={t('bridge.describe.cancelAria')}
-            >
-              <X aria-hidden="true" />
-              {t('bridge.jobs.cancel')}
-            </Button>
+          {job && canCancel ? (
+            <JobCancelButton job={job} ariaLabel={t('bridge.describe.cancelAria')} />
           ) : null}
         </div>
       ) : null}
       <DescribeDialog open={open} onOpenChange={setOpen} book={book} />
-    </section>
+    </JobSection>
   );
 }
 
@@ -167,8 +149,6 @@ function DescribeDialog({
       { name: book.title || book.path, online: true },
     );
     setBusy(false);
-    // Whether a job is open changed with it.
-    void qc.invalidateQueries({ queryKey: keys.bridgeEstimate(book.library_id, book.path) });
     if (ok) onOpenChange(false);
   };
 

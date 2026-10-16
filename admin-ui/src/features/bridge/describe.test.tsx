@@ -166,8 +166,7 @@ describe('write a description', () => {
   });
 
   it.each<[string, Partial<BridgeEstimate>]>([
-    ['an older Bridge', { can_describe: undefined }],
-    ['a Bridge that cannot now', { can_describe: false }],
+    ['a Bridge that does not offer it (an older one, or away)', { can_describe: false }],
     [
       'a community description',
       {

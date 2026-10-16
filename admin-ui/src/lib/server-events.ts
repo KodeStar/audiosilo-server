@@ -126,6 +126,12 @@ export function describeEvent(ev: ServerEvent): EventText {
   };
 }
 
+/** The kinds whose finished job has a title of its own (the rest name the kind in the body). */
+const FINISHED_OWN = new Map<string, string>([
+  [KIND_GENERATE, 'events.bridge_job_finished.generate'],
+  [KIND_DESCRIBE, 'events.bridge_job_finished.describe'],
+]);
+
 /**
  * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps ready
  * for a book, another kind finished, or a job that failed or is parked waiting
@@ -145,12 +151,7 @@ function describeBridgeJob(
     ? { key: `bridge.kind.${jobKind}`, values: { defaultValue: jobKind } }
     : undefined;
   if (kind === 'bridge_job_finished') {
-    const own =
-      jobKind === KIND_GENERATE
-        ? 'events.bridge_job_finished.generate'
-        : jobKind === KIND_DESCRIBE
-          ? 'events.bridge_job_finished.describe'
-          : undefined;
+    const own = FINISHED_OWN.get(jobKind);
     return own
       ? { title: { key: own, values: { name } }, tone: 'info', link }
       : {

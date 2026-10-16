@@ -514,7 +514,9 @@ future metadata site can attach enrichment without reshaping the schema. The
   (a shipped 2.0 app shows that first and credits the community; it ignores the new field), and
   `work.generated.description` (bool, always sent beside `characters`/`recaps`) marks it. It fills
   only a work with no `community_description` (the core `description`, the publisher's kind, doesn't
-  block it: the player orders those), so `Fillable` is also true without one; `?spoilers=hide` keeps
+  block it: the player orders those). `Fillable` says which parts a work leaves to fill
+  (`metadata.AttachmentParts`), and `generatedFor` reads only those columns (`catalog.BookAttachments`
+  with a parts mask: a work with community characters and recaps reads just the description); `?spoilers=hide` keeps
   it (spoiler-free by construction: the Bridge writes it from the opening chapters' notes only), and
   attribution never counts it. An unmatched book with only a description answers `{matched: false,
   work: {title, generated_description, generated: {description: true, ...}}}`. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
@@ -928,7 +930,7 @@ future metadata site can attach enrichment without reshaping the schema. The
   never taking a book's generated content away. `Scanner.RefreshAttachments` re-reads one indexed
   book's attachments, never its audio (the Bridge's `POST /bridge/rescan` mode `attachments`). The
   player's `Book.generated` (list, search, item, recent, the next book) is true when the signature names
-  a characters, recaps or description file (`generatedSig`, the narrow column: no join), so the player asks `/meta`
+  a characters, recaps or description file (`generatedSig`: any known name but bridge.json; the narrow column, no join), so the player asks `/meta`
   for a book with no ASIN/ISBN too. Derived from the files: rebuildable, never carried by a move.
   **Series ranges** (an omnibus of books 1-3): the `series_index` field may hold a range,
   canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
@@ -1730,7 +1732,7 @@ future metadata site can attach enrichment without reshaping the schema. The
   `agent_cost_usd` null while there is no history, `subscription`, `agent_ready`, `figures` false when
   the Bridge sent none, so a false `agent_ready` means "not known"), `writable`, what the book already
   has (`has.community` via `meta.Service.Coverages`, cache first and never a full Enrich per book,
-  `community_unknown` when it couldn't be asked; `has.local` from `book_attachments`; each with
+  `community_unknown` when it couldn't be asked; `has.local` from `book_attachments` (`catalog.BookAttachmentParts`: which columns are non-empty, nothing decoded); each with
   `characters`, `recaps` and, since Phase 1c, `description`: the community work's `community_description`
   (`Coverage.Description`; the core description doesn't count) or a stored generated one), `can_describe`
   (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier
@@ -1743,7 +1745,7 @@ future metadata site can attach enrichment without reshaping the schema. The
   each generate or describe job's status; the book page's aside and each series card generate characters and
   recaps, a series card queueing those of its books without recaps in reading order). The admin book
   detail carries `generated_description: {text, generated_at?}` (omitted without one; `generated_at` is
-  bridge.json's description time), which the book page's Community card shows (`describe-section.tsx`:
+  bridge.json's description time; read with the description and provenance columns only), which the book page's Community card shows (`describe-section.tsx`:
   a Description sub-part with the "Generated on this server" mark, the text clamped behind Show more;
   "Write a description" confirms and queues `sidecars.describe` when `describeOffered`: `can_describe`,
   local characters or recaps, no description here or from the community, no open generate or describe

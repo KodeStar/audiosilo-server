@@ -164,13 +164,11 @@ func (a *API) communityContent(ctx context.Context, book *catalog.Book) (has has
 }
 
 // localContent is what the book's generated attachments carry (a stored file is
-// never empty: metadata.ParseCharacters and ParseRecaps drop one).
+// never empty: metadata.ParseCharacters, ParseRecaps and ParseDescription drop
+// one), read without decoding them.
 func (a *API) localContent(ctx context.Context, book *catalog.Book) (hasContent, error) {
-	att, err := a.cat.BookAttachments(ctx, book.ID)
-	if err != nil || att == nil {
-		return hasContent{}, err
-	}
-	return hasContent{Characters: att.Characters != nil, Recaps: att.Recaps != nil, Description: att.Description != nil}, nil
+	p, err := a.cat.BookAttachmentParts(ctx, book.ID)
+	return hasContent{Characters: p.Characters, Recaps: p.Recaps, Description: p.Description}, err
 }
 
 // earlierWithoutRecaps is the books of the library before book in its series

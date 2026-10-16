@@ -35,9 +35,10 @@ function estimate(over: Partial<BridgeEstimate> = {}): BridgeEstimate {
     can_contribute: true,
     figures: true,
     writable: true,
+    can_describe: false,
     has: {
-      community: { characters: false, recaps: false },
-      local: { characters: false, recaps: false },
+      community: { characters: false, recaps: false, description: false },
+      local: { characters: false, recaps: false, description: false },
     },
     earlier: [],
     ...over,
@@ -105,8 +106,8 @@ describe('generate characters and recaps', () => {
         'GET /admin/bridge/estimate': {
           body: estimate({
             has: {
-              community: { characters: true, recaps: true },
-              local: { characters: false, recaps: false },
+              community: { characters: true, recaps: true, description: false },
+              local: { characters: false, recaps: false, description: false },
             },
           }),
         },
@@ -467,8 +468,8 @@ describe('generate characters and recaps', () => {
         'GET /admin/bridge/estimate': {
           body: estimate({
             has: {
-              community: { characters: false, recaps: false },
-              local: { characters: true, recaps: true },
+              community: { characters: false, recaps: false, description: false },
+              local: { characters: true, recaps: true, description: false },
             },
           }),
         },

@@ -433,14 +433,14 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return refuse
 		}
 		if j.Kind == KindDescribe {
-			var open int
-			err := tx.QueryRowContext(ctx, `SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL,
-				DedupeKey(KindSidecars, j.LibraryID, j.Path)).Scan(&open)
-			if err == nil {
-				return ErrGenerateOpen
-			}
-			if !errors.Is(err, sql.ErrNoRows) {
+			var open bool
+			if err := tx.QueryRowContext(ctx,
+				`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL+`)`,
+				DedupeKey(KindSidecars, j.LibraryID, j.Path)).Scan(&open); err != nil {
 				return err
+			}
+			if open {
+				return ErrGenerateOpen
 			}
 		}
 		res, err := tx.ExecContext(ctx,

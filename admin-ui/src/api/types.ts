@@ -2363,7 +2363,7 @@ export interface SidecarsCoverage {
   characters: boolean;
   recaps: boolean;
   /** A description: generated here, or the community's community_description (Phase 1c). */
-  description?: boolean;
+  description: boolean;
 }
 
 /** An earlier book of the series without recaps (the estimate's `earlier`). */
@@ -2402,7 +2402,7 @@ export interface BridgeEstimate {
   /** The library is mapped and writable on the Bridge. */
   writable: boolean;
   /** The Bridge is online and runs sidecars.describe (a description from the notes it kept). */
-  can_describe?: boolean;
+  can_describe: boolean;
   has: {
     community: SidecarsCoverage;
     local: SidecarsCoverage;

@@ -28,6 +28,21 @@ export const KIND_DESCRIBE = 'sidecars.describe';
 const BOOK_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE];
 
 /**
+ * Whether a kind is one the book page follows; its progress and result are
+ * worded by GenerateStatus, on the book page and the Bridge page's job rows.
+ */
+export function isBookKind(kind: string): boolean {
+  return BOOK_KINDS.includes(kind);
+}
+
+/** The book page's kinds' jobs that are still open. */
+function openBookJobs<J extends Pick<BridgeJob, 'kind' | 'state'>>(
+  jobs: readonly J[] | undefined,
+): J[] {
+  return jobs?.filter((j) => isBookKind(j.kind) && isOpen(j.state)) ?? [];
+}
+
+/**
  * Whether the Generate action is offered at all: community metadata is on (the
  * generated content is served through /meta, which needs it) and an online
  * Bridge offers the sidecars family.
@@ -68,7 +83,7 @@ export const GENERATE_PARKED_POLL_MS = 60_000;
 export function generatePollMs(
   jobs: readonly Pick<BridgeJob, 'kind' | 'state'>[] | undefined,
 ): number | false {
-  const open = jobs?.filter((j) => BOOK_KINDS.includes(j.kind) && isOpen(j.state)) ?? [];
+  const open = openBookJobs(jobs);
   if (open.some((j) => j.state !== 'needs_attention')) return GENERATE_POLL_MS;
   return open.length ? GENERATE_PARKED_POLL_MS : false;
 }
@@ -79,18 +94,6 @@ export function latestJobOf<J extends Pick<BridgeJob, 'kind'>>(
   kind: string,
 ): J | undefined {
   return jobs?.find((j) => j.kind === kind);
-}
-
-/** The book's newest generate job, if any. */
-export function latestGenerateJob<J extends Pick<BridgeJob, 'kind'>>(
-  jobs: readonly J[] | undefined,
-): J | undefined {
-  return latestJobOf(jobs, KIND_GENERATE);
-}
-
-/** Whether a job's progress and result are worded by GenerateStatus (generate and describe). */
-export function wordsItsOwnStatus(kind: string): boolean {
-  return BOOK_KINDS.includes(kind);
 }
 
 /**
@@ -109,7 +112,7 @@ export function describeOffered(
   if (!(local.characters || local.recaps) || local.description || community.description) {
     return false;
   }
-  return !(jobs ?? []).some((j) => BOOK_KINDS.includes(j.kind) && isOpen(j.state));
+  return openBookJobs(jobs).length === 0;
 }
 
 /** A generated description long enough to clamp, with a Show more toggle (about four lines). */

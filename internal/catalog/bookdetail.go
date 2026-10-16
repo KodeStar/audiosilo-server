@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path"
 
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/relpath"
 )
 
@@ -173,7 +174,8 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	att, err := c.BookAttachments(ctx, bookID)
+	// The description and its provenance only, never the characters and recaps.
+	att, err := c.BookAttachments(ctx, bookID, metadata.AttachmentParts{Description: true})
 	if err != nil {
 		return nil, err
 	}

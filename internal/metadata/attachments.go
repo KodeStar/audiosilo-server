@@ -94,6 +94,29 @@ func (f AttachmentFiles) Empty() bool {
 	return f.Characters == nil && f.Recaps == nil && f.Description == nil && f.Provenance == nil
 }
 
+// Generated reports whether f holds generated content: characters, recaps or a
+// description (provenance alone is none).
+func (f AttachmentFiles) Generated() bool {
+	return f.Characters != nil || f.Recaps != nil || f.Description != nil
+}
+
+// AttachmentParts names a book's generated parts: which ones a reader wants
+// (catalog.BookAttachments reads only those) or which ones a book has
+// (catalog.BookAttachmentParts).
+type AttachmentParts struct {
+	Characters  bool
+	Recaps      bool
+	Description bool
+}
+
+// AllAttachmentParts is every generated part.
+var AllAttachmentParts = AttachmentParts{Characters: true, Recaps: true, Description: true}
+
+// Any reports whether p names any part.
+func (p AttachmentParts) Any() bool {
+	return p.Characters || p.Recaps || p.Description
+}
+
 // AttachmentSignature is one attachment's part of a book's signature: its known
 // name, size and modification time (ns). The Bridge rewrites these files without
 // touching the audio, so a scan compares them, not the book's own signature.
@@ -264,10 +287,8 @@ func ParseDescription(data []byte) (*model.Description, error) {
 	if n := utf8.RuneCountInString(d.Text); n < minDescriptionText || n > maxDescriptionText {
 		return nil, invalidAttachment("a description of %d characters", n)
 	}
-	for _, r := range d.Text {
-		if r != '\n' && unicode.IsControl(r) {
-			return nil, invalidAttachment("a control character in the description")
-		}
+	if strings.ContainsFunc(d.Text, func(r rune) bool { return unicode.IsControl(r) && r != '\n' }) {
+		return nil, invalidAttachment("a control character in the description")
 	}
 	return &d, nil
 }

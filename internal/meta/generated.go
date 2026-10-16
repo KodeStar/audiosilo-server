@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // Generated content is the characters, recaps and description the Bridge
@@ -63,13 +65,17 @@ type Place struct {
 	Finished bool
 }
 
-// Fillable reports whether generated content could fill anything in e's work
-// (parts): it lacks characters, recaps or a community description (or e has no
-// match at all); a summary is only ever taken with the recaps. When it can't,
-// /meta needn't load the book's generated content.
-func (e *Enrichment) Fillable() bool {
-	return e == nil || e.Work == nil || len(e.Work.Characters) == 0 || len(e.Work.Recaps) == 0 ||
-		e.Work.CommunityDescription == nil
+// Fillable is which generated parts could fill e's work (parts): characters
+// when it has none, recaps when it has no recap list (a summary is only ever
+// taken with the recaps), a description when it has no community description;
+// every part when e has no match at all. /meta loads only those parts of the
+// book's generated content, and none when it is none.
+func (e *Enrichment) Fillable() metadata.AttachmentParts {
+	return metadata.AttachmentParts{
+		Characters:  !e.HasCharacters(),
+		Recaps:      e == nil || e.Work == nil || len(e.Work.Recaps) == 0,
+		Description: !e.HasCommunityDescription(),
+	}
 }
 
 // Answer is /meta's per-request answer for a book: env is its matched envelope
@@ -212,8 +218,10 @@ func (g *Generated) summary() *MetaRecapSummary {
 	return &MetaRecapSummary{InShort: g.Recaps.InShort, Ending: g.Recaps.Ending}
 }
 
-// description is g's description as the envelope carries it, nil when blank
-// (metadata.ParseDescription drops one).
+// description is g's description as the envelope carries it, nil when blank.
+// metadata.ParseDescription already stores the text trimmed and drops a blank
+// one; the trim here is deliberate defence, as summary's is, so a Generated
+// built any other way can't send a blank description.
 func (g *Generated) description() *MetaGeneratedDescription {
 	if g.Description == nil || strings.TrimSpace(g.Description.Text) == "" {
 		return nil

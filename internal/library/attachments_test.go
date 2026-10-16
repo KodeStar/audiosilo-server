@@ -43,7 +43,7 @@ func attachmentsAt(t *testing.T, cat *catalog.Catalog, libID int64, rel string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := cat.BookAttachments(t.Context(), b.ID)
+	a, err := cat.BookAttachments(t.Context(), b.ID, metadata.AllAttachmentParts)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -64,13 +64,13 @@ func TestBookGenerated(t *testing.T) {
 
 	// The stored content is read by the book's id.
 	b, _ := c.GetBookByPath(ctx, lib.ID, "Indexed")
-	if a, err := c.BookAttachments(ctx, b.ID); err != nil || a == nil || a.Characters == nil || a.Recaps != nil {
+	if a, err := c.BookAttachments(ctx, b.ID, metadata.AllAttachmentParts); err != nil || a == nil || a.Characters == nil || a.Recaps != nil {
 		t.Fatalf("attachments = %+v, %v", a, err)
 	}
 	// A description round-trips, and the console's book page shows it with its
 	// own time.
 	described, _ := c.GetBookByPath(ctx, lib.ID, "Described")
-	if a, err := c.BookAttachments(ctx, described.ID); err != nil || a == nil || a.Description == nil ||
+	if a, err := c.BookAttachments(ctx, described.ID, metadata.AllAttachmentParts); err != nil || a == nil || a.Description == nil ||
 		a.Description.Text != "A described book." || a.Characters != nil || a.Provenance.DescriptionAt != "2026-10-16T08:00:00Z" {
 		t.Fatalf("described attachments = %+v, %v", a, err)
 	}
@@ -85,7 +85,7 @@ func TestBookGenerated(t *testing.T) {
 		t.Errorf("detail without a description carries the field: %s", raw)
 	}
 	none, _ := c.GetBookByPath(ctx, lib.ID, "None")
-	if a, err := c.BookAttachments(ctx, none.ID); err != nil || a != nil {
+	if a, err := c.BookAttachments(ctx, none.ID, metadata.AllAttachmentParts); err != nil || a != nil {
 		t.Fatalf("no attachments = %+v, %v", a, err)
 	}
 }
@@ -115,7 +115,7 @@ func TestSetAttachmentsCompareAndSet(t *testing.T) {
 	short := func() string {
 		t.Helper()
 		got, _ := c.GetBookByPath(ctx, lib.ID, "Book")
-		a, err := c.BookAttachments(ctx, got.ID)
+		a, err := c.BookAttachments(ctx, got.ID, metadata.AllAttachmentParts)
 		if err != nil || a == nil || a.Recaps == nil {
 			t.Fatalf("attachments = %+v, %v", a, err)
 		}
@@ -139,5 +139,56 @@ func TestSetAttachmentsCompareAndSet(t *testing.T) {
 	set(AttachmentsReading{Sig: "recaps.json:3:3", Files: recaps("Newer."), Was: &now})
 	if got := short(); got != "Newer." || state().Sig != "recaps.json:3:3" {
 		t.Fatalf("after a current scan write: %q, sig %q", got, state().Sig)
+	}
+}
+
+// BookAttachments reads only the parts asked for (provenance always), and
+// BookAttachmentParts says which parts are stored without reading them.
+func TestBookAttachmentsParts(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	all := Book{LibraryID: lib.ID, RelPath: "All", Title: "All", AddedAt: "2024-01-01T00:00:00Z",
+		Attachments: AttachmentsReading{Sig: "characters.json:1:1,recaps.json:1:1,description.json:1:1,bridge.json:1:1",
+			Files: metadata.AttachmentFiles{
+				Characters:  &model.Characters{Characters: []model.Character{{ID: "hero", Name: "Hero"}}},
+				Recaps:      &model.Recaps{InShort: "Short."},
+				Description: &model.Description{Work: "w", Text: "A described book.", License: "CC-BY-SA-4.0"},
+				Provenance:  &metadata.AttachmentProvenance{Kind: "sidecars.generate"},
+			}}}
+	recapsOnly := Book{LibraryID: lib.ID, RelPath: "Recaps", Title: "Recaps", AddedAt: "2024-01-01T00:00:00Z",
+		Attachments: AttachmentsReading{Sig: "recaps.json:1:1",
+			Files: metadata.AttachmentFiles{Recaps: &model.Recaps{InShort: "Short."}}}}
+	none := Book{LibraryID: lib.ID, RelPath: "None", Title: "None", AddedAt: "2024-01-01T00:00:00Z"}
+	for _, b := range []*Book{&all, &recapsOnly, &none} {
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	allID, _ := c.GetBookByPath(ctx, lib.ID, "All")
+	recapsID, _ := c.GetBookByPath(ctx, lib.ID, "Recaps")
+	noneID, _ := c.GetBookByPath(ctx, lib.ID, "None")
+
+	// The description alone: the characters and recaps stored beside it are never read.
+	a, err := c.BookAttachments(ctx, allID.ID, metadata.AttachmentParts{Description: true})
+	if err != nil || a == nil || a.Description == nil || a.Characters != nil || a.Recaps != nil || a.Provenance == nil {
+		t.Fatalf("description only = %+v, %v", a, err)
+	}
+	// A part the book doesn't have, with no provenance: nothing.
+	if a, err := c.BookAttachments(ctx, recapsID.ID, metadata.AttachmentParts{Description: true}); err != nil || a != nil {
+		t.Fatalf("a part it lacks = %+v, %v", a, err)
+	}
+
+	for _, tc := range []struct {
+		id   int64
+		want metadata.AttachmentParts
+	}{
+		{allID.ID, metadata.AllAttachmentParts},
+		{recapsID.ID, metadata.AttachmentParts{Recaps: true}},
+		{noneID.ID, metadata.AttachmentParts{}},
+	} {
+		if got, err := c.BookAttachmentParts(ctx, tc.id); err != nil || got != tc.want {
+			t.Errorf("parts of %d = %+v, %v; want %+v", tc.id, got, err, tc.want)
+		}
 	}
 }
