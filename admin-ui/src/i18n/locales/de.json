@@ -1183,7 +1183,7 @@
   "health.bulkMatch.item.identifierUnknown": "Die Community kennt die ASIN oder ISBN dieses Buchs nicht",
   "health.bulkMatch.item.error": "Der Community-Dienst hat für dieses Buch nicht geantwortet",
   "health.bulkMatch.item.gone": "Nicht mehr in der Bibliothek",
-  "health.bulkMatch.item.byHand": "Von Hand zugeordnet",
+  "health.bulkMatch.item.matchedSince": "Seit diesem Lauf zugeordnet: Das Übernehmen lässt es, wie es ist",
   "health.bulkMatch.matchByHand": "{{title}} von Hand zuordnen",
   "health.bulkMatch.matchByHandShort": "Von Hand",
   "health.bulkMatch.openBook": "Buchseite von {{title}} in einem neuen Tab öffnen",

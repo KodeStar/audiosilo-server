@@ -448,6 +448,9 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 	}
 	w := planFor(mode, o.Scope, st, it.Proposal)
 	if w.Empty() {
+		if mode == catalog.MatchModeMatch && matchedSince(st) {
+			return catalog.ItemSkipped, "matched_since"
+		}
 		return catalog.ItemSkipped, "nothing_to_change"
 	}
 	edits := len(w.Set) > 0 || len(w.Revert) > 0
@@ -516,9 +519,12 @@ func changeOf(st *catalog.MatchState, w Writes) Change {
 // nothing is indexed at its path any more) and what each scope would change.
 type ItemView struct {
 	catalog.MatchRunItem
-	Book    ItemBook          `json:"book"`
-	Gone    bool              `json:"gone,omitempty"`
-	Changes map[string]Change `json:"changes"`
+	Book ItemBook `json:"book"`
+	Gone bool     `json:"gone,omitempty"`
+	// MatchedSince: a match run's book matched since the run (matchedSince),
+	// which an apply leaves alone; its changes are none.
+	MatchedSince bool              `json:"matched_since,omitempty"`
+	Changes      map[string]Change `json:"changes"`
 }
 
 // ItemBook is the book an item is for, as it is now.
@@ -555,6 +561,7 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 			return nil, 0, err
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author}
+			v.MatchedSince = run.Mode == catalog.MatchModeMatch && it.Applied == "" && matchedSince(st)
 			for _, scope := range scopes {
 				v.Changes[scope] = changeOf(st, planFor(run.Mode, scope, st, it.Proposal))
 			}

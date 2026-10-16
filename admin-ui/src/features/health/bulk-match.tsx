@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight, Check, ExternalLink, LoaderCircle, Sparkles } from 'lucide-react';
 import { api } from '@/api/client';
@@ -8,7 +8,6 @@ import {
   invalidateMatches,
   keys,
   matchRunActive,
-  useAdminBook,
   useLibraryRoots,
   useMatchRunItems,
   useMatchRuns,
@@ -18,6 +17,7 @@ import {
   type MatchOutcome,
   type MatchRun,
   type MatchRunItem,
+  type MatchRunItemPage,
   type MatchRunMode,
   type MatchScope,
   type SeriesRef,
@@ -62,7 +62,7 @@ import {
   bulkPhase,
   isChosen,
   isPickable,
-  matchedByHand,
+  leaveOut,
   runFraction,
   runProgress,
   togglePick,
@@ -360,11 +360,24 @@ function ReviewDialog({
       setByHand(undefined);
     }
   }
-  // A book matched by hand leaves the apply, and its row reads what the match
-  // wrote (each item's changes are worked out against the book as it is now).
+  // A book matched by hand leaves the apply, and its row reads as the server
+  // would now show it (matched since the run, nothing to change), without asking
+  // again for every page the review has loaded.
   const onMatchedByHand = (item: MatchRunItem) => {
-    setPicks((p) => matchedByHand(p, item));
-    void qc.invalidateQueries({ queryKey: keys.matchRunItems(run.id, item.outcome) });
+    setPicks((p) => leaveOut(p, item));
+    qc.setQueryData<InfiniteData<MatchRunItemPage>>(
+      keys.matchRunItems(run.id, item.outcome),
+      (data) =>
+        data && {
+          ...data,
+          pages: data.pages.map((page) => ({
+            ...page,
+            items: (page.items ?? []).map((it) =>
+              it.id === item.id ? { ...it, matched_since: true, changes: {} } : it,
+            ),
+          })),
+        },
+    );
   };
   const count = applyCount(run, picks);
   const country = regionName(run.region, lang);
@@ -472,10 +485,12 @@ function ReviewDialog({
               </Button>
             </DialogFooter>
             {byHand ? (
-              <HandMatch
+              <MatchDialog
                 key={byHand.id}
-                item={byHand}
-                onClose={() => setByHand(undefined)}
+                open
+                onOpenChange={() => setByHand(undefined)}
+                libraryId={byHand.library_id}
+                path={byHand.path}
                 onMatched={() => onMatchedByHand(byHand)}
               />
             ) : null}
@@ -483,40 +498,6 @@ function ReviewDialog({
         ) : null}
       </DialogContent>
     </Dialog>
-  );
-}
-
-/**
- * The book page's match dialog for one of the review's books, over the review:
- * it loads the book (fields with provenance) the dialog compares against.
- */
-function HandMatch({
-  item,
-  onClose,
-  onMatched,
-}: {
-  item: MatchRunItem;
-  onClose: () => void;
-  onMatched: () => void;
-}) {
-  const { t } = useTranslation();
-  const book = useAdminBook(item.library_id, item.path);
-  const failed = book.isError;
-  useEffect(() => {
-    if (failed) {
-      toastError(t('book.error'), book.error);
-      onClose();
-    }
-  }, [failed, book.error, onClose, t]);
-  return (
-    <MatchDialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-      detail={book.data}
-      onMatched={onMatched}
-    />
   );
 }
 
@@ -578,7 +559,6 @@ function ItemList({
             root={roots[item.library_id]}
             scope={scope}
             chosen={isChosen(item, picks)}
-            byHand={picks.hand.has(item.id)}
             onToggle={() => onToggle(item)}
             onMatchByHand={() => onMatchByHand(item)}
           />
@@ -604,7 +584,6 @@ function ItemRow({
   root,
   scope,
   chosen,
-  byHand,
   onToggle,
   onMatchByHand,
 }: {
@@ -613,8 +592,6 @@ function ItemRow({
   root: string | undefined;
   scope: MatchScope;
   chosen: boolean;
-  /** Matched by hand from this review: out of the apply. */
-  byHand: boolean;
   onToggle: () => void;
   onMatchByHand: () => void;
 }) {
@@ -623,6 +600,10 @@ function ItemRow({
   const p = item.proposal;
   const title = item.book.title || item.path;
   const change = item.changes[scope];
+  // What became of the book: applied, skipped or failed, or matched since the run
+  // (an apply leaves it alone, and says so).
+  const status =
+    item.matched_since || item.detail === 'matched_since' ? 'matchedSince' : item.applied;
   const changed = change
     ? [
         ...(change.cover ? [t('book.match.cover')] : []),
@@ -663,17 +644,18 @@ function ItemRow({
       )}
     >
       <span className="grid size-5 shrink-0 place-items-center pt-0.5">
-        {byHand ? (
-          <Check className="size-4 text-success" aria-label={t('health.bulkMatch.item.byHand')} />
-        ) : isPickable(item) ? (
+        {isPickable(item) ? (
           <Checkbox
             checked={chosen}
             onCheckedChange={onToggle}
             aria-label={t('health.bulkMatch.pick', { title })}
             aria-describedby={pathLine}
           />
-        ) : item.applied === 'applied' ? (
-          <Check className="size-4 text-success" aria-label={t('health.bulkMatch.item.applied')} />
+        ) : status === 'applied' || status === 'matchedSince' ? (
+          <Check
+            className="size-4 text-success"
+            aria-label={t(`health.bulkMatch.item.${status}`)}
+          />
         ) : null}
       </span>
       <span className="w-10 shrink-0">
@@ -737,13 +719,9 @@ function ItemRow({
           <span className="text-[12px] text-subtle-foreground">
             {t('health.bulkMatch.item.gone')}
           </span>
-        ) : byHand ? (
+        ) : status ? (
           <span className="text-[12px] text-subtle-foreground">
-            {t('health.bulkMatch.item.byHand')}
-          </span>
-        ) : item.applied ? (
-          <span className="text-[12px] text-subtle-foreground">
-            {t(`health.bulkMatch.item.${item.applied}`)}
+            {t(`health.bulkMatch.item.${status}`)}
           </span>
         ) : candidate ? (
           <span className="text-[12px] text-subtle-foreground">
@@ -781,7 +759,7 @@ function ItemRow({
               {...bookRoute(item.library_id, item.path)}
               search={{ library: item.library_id, path: item.path }}
               target="_blank"
-              rel="noopener"
+              rel="noopener noreferrer"
               className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
               aria-label={t('health.bulkMatch.openBook', { title })}
               aria-describedby={pathLine}

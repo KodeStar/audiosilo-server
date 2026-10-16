@@ -1266,7 +1266,7 @@
   "health.bulkMatch.item.identifierUnknown": "La communauté ne connaît pas l'ASIN ou l'ISBN de ce livre",
   "health.bulkMatch.item.error": "Le service communautaire n'a pas répondu pour ce livre",
   "health.bulkMatch.item.gone": "N'est plus dans la bibliothèque",
-  "health.bulkMatch.item.byHand": "Associé à la main",
+  "health.bulkMatch.item.matchedSince": "Associé depuis cette recherche : l'application le laisse tel quel",
   "health.bulkMatch.matchByHand": "Associer {{title}} à la main",
   "health.bulkMatch.matchByHandShort": "À la main",
   "health.bulkMatch.openBook": "Ouvrir la page de {{title}} dans un nouvel onglet",

@@ -320,16 +320,13 @@ const matchItemCols = `id, run_id, library_id, path, outcome, score, runner_up, 
 // cursor stays an item id: the page reads on from that item's score, which never
 // changes once recorded, so a review paged 50 at a time sees the whole outcome in
 // one order rather than each page sorted on its own. An `after` that isn't one of
-// the run's items reads nothing.
+// the run's items reads nothing (the row it compares with is all NULL).
 func (c *Catalog) ListMatchRunItems(ctx context.Context, runID int64, outcome string, after int64, limit int) ([]MatchRunItem, int64, error) {
-	items, err := queryRows(ctx, c.db, scanMatchItem, `WITH cur AS (
-	         SELECT score FROM match_run_items WHERE id = ? AND run_id = ?)
-	     SELECT `+matchItemCols+` FROM match_run_items
+	items, err := queryRows(ctx, c.db, scanMatchItem, `SELECT `+matchItemCols+` FROM match_run_items
 	     WHERE run_id = ? AND (? = '' OR outcome = ?)
-	       AND (? = 0 OR score < (SELECT score FROM cur)
-	            OR (score = (SELECT score FROM cur) AND id > ?))
+	       AND (? = 0 OR (score, -id) < (SELECT score, -id FROM match_run_items WHERE id = ? AND run_id = ?))
 	     ORDER BY score DESC, id LIMIT ?`,
-		after, runID, runID, outcome, outcome, after, after, limit+1)
+		runID, outcome, outcome, after, after, runID, limit+1)
 	if err != nil {
 		return nil, 0, err
 	}

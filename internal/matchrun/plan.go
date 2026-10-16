@@ -283,8 +283,9 @@ func planSeries(scope string, st *catalog.MatchState, p catalog.MatchProposal, w
 
 // planFor is what applying p to a book in state st writes for a run in mode: a
 // repick's ASIN (whatever the scope), else Plan's (a refresh's proposal carries
-// no identifier, so its Plan writes none: refreshBook), and for a refresh only
-// while the book still has the identifier it was found by.
+// no identifier, so its Plan writes none: refreshBook), for a refresh only while
+// the book still has the identifier it was found by, and for a match only while
+// the book is still unmatched (matchedSince).
 func planFor(mode, scope string, st *catalog.MatchState, p catalog.MatchProposal) Writes {
 	switch mode {
 	case catalog.MatchModeRepick:
@@ -293,8 +294,21 @@ func planFor(mode, scope string, st *catalog.MatchState, p catalog.MatchProposal
 		if !stillFoundBy(st, p.FoundBy) {
 			return Writes{}
 		}
+	case catalog.MatchModeMatch:
+		if matchedSince(st) {
+			return Writes{}
+		}
 	}
 	return Plan(scope, st, p)
+}
+
+// matchedSince reports whether a match run's book has an ASIN or ISBN now. The
+// run took only books with neither (UnmatchedBooks), so one has been matched
+// since: by hand (from the review or the book page), by another admin or the
+// manager, or by a rescan reading one from the tags. The run's match never
+// writes over it, whatever the scope.
+func matchedSince(st *catalog.MatchState) bool {
+	return st.Fields[catalog.FieldASIN].Value != "" || st.Fields[catalog.FieldISBN].Value != ""
 }
 
 // stillFoundBy reports whether the book still has the identifier a refresh

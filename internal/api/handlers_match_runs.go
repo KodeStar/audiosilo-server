@@ -146,9 +146,9 @@ func (a *API) handleGetMatchRun(w http.ResponseWriter, r *http.Request) {
 
 // handleMatchRunItems serves GET /admin/match-runs/{id}/items: a page of the
 // run's books, the best match first (?outcome=auto|review|none|error,
-// ?after=<item id>, ?limit=), each
-// with the best candidate, the book as it is now and what each scope would change;
-// next_after reads the next page (0 = the last).
+// ?after=<item id>, ?limit=), each with the best candidate, the book as it is now
+// and what each scope would change; next_after reads the next page (0 = the
+// last).
 func (a *API) handleMatchRunItems(w http.ResponseWriter, r *http.Request) {
 	if a.metadataOff(w) {
 		return

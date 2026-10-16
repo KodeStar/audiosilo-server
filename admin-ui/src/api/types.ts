@@ -1994,12 +1994,17 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | edit_failed | cover_failed | metadata_unavailable | identifier_unknown. */
+  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown. */
   detail?: string;
   /** The book as it is now. */
   book: { title: string; author: string };
   /** Nothing is indexed at the path any more. */
   gone?: boolean;
+  /**
+   * A match run's book matched since the run (it has an ASIN or ISBN now: by hand,
+   * or elsewhere): an apply leaves it alone, and it has no changes.
+   */
+  matched_since?: boolean;
   /** What each scope would write: fields (in display order) and the cover. */
   changes: Partial<Record<MatchScope, MatchChange>>;
 }

@@ -361,9 +361,11 @@ describe('bulk matching', () => {
       true,
     );
 
-    // Back on the review: the book reads as matched by hand, and the apply leaves it out.
+    // Back on the review: the book reads as matched since the run, and the apply leaves it out.
     const after = (await within(review).findByText('B0UK000001 · UK')).closest('li')!;
-    expect(within(after).getAllByText('Matched by hand').length).toBeGreaterThan(0);
+    expect(
+      within(after).getByText('Matched since this run: an apply leaves it as it is'),
+    ).toBeInTheDocument();
     expect(within(after).queryByRole('checkbox')).toBeNull();
     expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
   });

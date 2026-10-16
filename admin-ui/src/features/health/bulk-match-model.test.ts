@@ -7,7 +7,7 @@ import {
   bulkPhase,
   isChosen,
   isPickable,
-  matchedByHand,
+  leaveOut,
   runFraction,
   togglePick,
 } from './bulk-match-model';
@@ -113,23 +113,16 @@ describe('picks', () => {
   it('counts what an apply takes: pending confident, less left out, plus put in', () => {
     const r = run({}, { auto: 4, pending: 3 });
     expect(applyCount(r, NO_PICKS)).toBe(3);
-    const picks = (exclude: number[], include: number[]) => ({
-      exclude: new Set(exclude),
-      include: new Set(include),
-      hand: new Set<number>(),
-    });
-    expect(applyCount(r, picks([1, 2], [9]))).toBe(2);
-    expect(applyCount(r, picks([1, 2, 3, 4], []))).toBe(0);
+    expect(applyCount(r, { exclude: new Set([1, 2]), include: new Set([9]) })).toBe(2);
+    expect(applyCount(r, { exclude: new Set([1, 2, 3, 4]), include: new Set() })).toBe(0);
   });
 
-  it('leaves a book matched by hand out of the apply', () => {
-    let picks = togglePick(NO_PICKS, doubtful);
-    picks = matchedByHand(picks, doubtful);
-    picks = matchedByHand(picks, confident);
+  it('leaves a book matched by hand out of the apply, and never offers one matched since', () => {
+    const picks = leaveOut(leaveOut(togglePick(NO_PICKS, doubtful), doubtful), confident);
     expect(isChosen(confident, picks)).toBe(false);
     expect(isChosen(doubtful, picks)).toBe(false);
-    expect([...picks.hand]).toEqual([2, 1]);
     expect(applyRequest('fill', picks)).toEqual({ scope: 'fill', exclude: [1], include: [] });
+    expect(isPickable(item({ matched_since: true }))).toBe(false);
   });
 });
 

@@ -255,6 +255,54 @@ func TestApplyExcludesAndSkips(t *testing.T) {
 	}
 }
 
+// TestApplyLeavesABookMatchedSince: a match run's book matched since the run (by
+// hand, here to another work) reads as matched since in the review, with nothing
+// to change under any scope, and an apply, even one that overwrites, leaves it
+// alone while it matches the rest.
+func TestApplyLeavesABookMatchedSince(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/One", "One", "", nil)
+	e.book(t, "A/Two", "Two", "", nil)
+	for _, title := range []string{"One", "Two"} {
+		e.matcher.byTitle[title] = []meta.MatchCandidate{cand("the-martian", 97, "")}
+	}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	if err := e.cat.EditBook(ctx, e.lib, "A/Two", catalog.BookEdit{
+		Set:    map[string]string{catalog.FieldASIN: "B0HAND0001", catalog.FieldTitle: "By Hand"},
+		Source: catalog.SourceCommunity,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
+		hand := it.Path == "A/Two"
+		if it.MatchedSince != hand {
+			t.Errorf("%s matched since = %v, want %v", it.Path, it.MatchedSince, hand)
+		}
+		if hand && len(it.Changes[ScopeOverwrite].Fields) != 0 {
+			t.Errorf("matched since changes = %+v, want none", it.Changes)
+		}
+	}
+
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeOverwrite}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	for _, it := range e.items(t, run, catalog.OutcomeAuto) {
+		want := map[string]string{"A/One": catalog.ItemApplied + "/", "A/Two": catalog.ItemSkipped + "/matched_since"}[it.Path]
+		if got := it.Applied + "/" + it.Detail; got != want {
+			t.Errorf("%s = %s, want %s", it.Path, got, want)
+		}
+		if it.MatchedSince {
+			t.Errorf("%s still reads as matched since once applied", it.Path)
+		}
+	}
+	st, _ := e.cat.BookMatchState(ctx, e.lib, "A/Two")
+	if st.Fields[catalog.FieldASIN].Value != "B0HAND0001" || st.Fields[catalog.FieldTitle].Value != "By Hand" {
+		t.Fatalf("the hand match was overwritten: %+v", st.Fields)
+	}
+}
+
 func TestRunStopsWhenTheServiceIsDown(t *testing.T) {
 	e := newEnv(t)
 	for i := range 12 {
