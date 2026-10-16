@@ -569,6 +569,40 @@ func TestCancelledApplyMarksWhatWentIn(t *testing.T) {
 	}
 }
 
+// TestStoppedCoverIsTakenAgain: a match whose fields went in before a stop cut
+// its cover short stays to apply, not matched since (the ASIN the book has now
+// is the run's own), and the next apply takes the cover.
+func TestStoppedCoverIsTakenAgain(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.book(t, "A/a", "Book", "", no)
+	e.matcher.byTitle["Book"] = []meta.MatchCandidate{cand("the-martian", 97, "https://c/rec.jpg")}
+	run := e.start(t, catalog.MatchModeMatch, "")
+	save := e.runner.saveCover
+	e.runner.saveCover = func(ctx context.Context, _ int64, _, _ string, _ int64) error {
+		e.runner.Cancel(run.ID)
+		return ctx.Err()
+	}
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	it := e.items(t, run, catalog.OutcomeAuto)[0]
+	if it.Applied != "" || it.MatchedSince || !it.Changes[ScopeFill].Cover {
+		t.Fatalf("item after the stop = %+v, want still to apply, its cover to take", it)
+	}
+
+	e.runner.saveCover = save
+	if _, err := e.runner.Apply(ctx, ctx, run.ID, ApplyOptions{Scope: ScopeFill}); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.Wait()
+	it = e.items(t, run, catalog.OutcomeAuto)[0]
+	if it.Applied != catalog.ItemApplied || it.Detail != "" || e.covers.Load() != 1 {
+		t.Fatalf("item = %+v, covers %d; want applied with the cover taken", it.MatchRunItem, e.covers.Load())
+	}
+}
+
 func TestApplyCoverFailureAndInterruptedApply(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()

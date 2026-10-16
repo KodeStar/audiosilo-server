@@ -81,9 +81,11 @@ export function togglePick(picks: Picks, item: MatchRunItem): Picks {
 
 /**
  * Leaves an item out of the apply, as a book matched by hand from the review is
- * (the server leaves it alone anyway: this keeps the apply's count true).
+ * (the server leaves it alone anyway: this keeps the apply's count true). One
+ * already applied is no pick at all (applyCount counts only pending ones).
  */
 export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
+  if (item.applied) return picks;
   return item.outcome === 'auto'
     ? { ...picks, exclude: withId(picks.exclude, item.id) }
     : { ...picks, include: withoutId(picks.include, item.id) };

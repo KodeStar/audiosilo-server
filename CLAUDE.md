@@ -1078,7 +1078,9 @@ future metadata site can attach enrichment without reshaping the schema. The
   applying it is a no-op for a book that no longer has it (matched again since).
   Likewise a match run's book that has an ASIN or ISBN now (`matchedSince`: matched by hand
   from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
-  in the review and is skipped with detail `matched_since`, under any scope. The review's
+  in the review and is skipped with detail `matched_since`, under any scope; a match whose
+  fields went in before a stop cut its cover short stays to apply, detail `cover_pending`, its
+  ASIN the run's own rather than one matched since, so the next apply takes the cover. The review's
   items page best match first (`score DESC, id`), the cursor still an item id whose score
   the next page reads on from.
   Each scope's change carries `series` {from, to} (main first, position 0 = none) when it

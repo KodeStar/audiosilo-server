@@ -123,6 +123,8 @@ describe('picks', () => {
     expect(isChosen(doubtful, picks)).toBe(false);
     expect(applyRequest('fill', picks)).toEqual({ scope: 'fill', exclude: [1], include: [] });
     expect(isPickable(item({ matched_since: true }))).toBe(false);
+    // One already applied isn't pending, so leaving it out doesn't lower the count.
+    expect(leaveOut(NO_PICKS, item({ applied: 'applied' }))).toBe(NO_PICKS);
   });
 });
 

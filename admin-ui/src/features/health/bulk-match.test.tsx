@@ -4,7 +4,7 @@ import { setToken } from '@/api/token';
 import type { MatchRun, MatchRunItem } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { issuesSummary } from '@/test/fixtures';
-import { bookDetail } from '@/test/library-fixtures';
+import { bookDetail, books } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -302,29 +302,47 @@ describe('bulk matching', () => {
     await waitFor(() => expect(issuesAsked()).toBeGreaterThan(before));
   });
 
+  // The match dialog over the review: one candidate, no recordings (so no cover).
+  const byHandRoutes: Record<string, MockRoute> = {
+    'GET /admin/libraries/1/book/match': {
+      body: {
+        candidates: [
+          {
+            work_id: 'the-martian',
+            title: 'The Martian',
+            authors: [{ id: 'a1', name: 'Andy Weir' }],
+            first_published: '2011',
+            series: [],
+            web_url: 'https://meta.audiosilo.app/works/the-martian',
+            recordings: [],
+            score: 100,
+          },
+        ],
+      },
+    },
+    'POST /admin/meta/covers': { body: { covers: [''] } },
+  };
+
+  /** Matches the review's confident book by hand, accepting the default ticks. */
+  async function matchByHand(user: ReturnType<typeof userEvent.setup>, row: HTMLElement) {
+    await user.click(within(row).getByRole('button', { name: 'Match The Martian by hand' }));
+    const match = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    await within(match).findByRole('radio', { name: /The Martian/ });
+    await user.click(within(match).getByRole('button', { name: 'Compare fields' }));
+    const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
+    await user.click(within(compare).getByRole('button', { name: /^Accept \d+ field/ }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Compare with community metadata' })).toBeNull(),
+    );
+  }
+
   it('matches a book by hand over the review, which keeps its place and leaves it out', async () => {
     const detail = bookDetail();
     const calls = mockFetch(
       routes([run()], {
         'GET /admin/libraries/1/book': { body: detail },
         'PATCH /admin/libraries/1/book': { body: detail },
-        'GET /admin/libraries/1/book/match': {
-          body: {
-            candidates: [
-              {
-                work_id: 'the-martian',
-                title: 'The Martian',
-                authors: [{ id: 'a1', name: 'Andy Weir' }],
-                first_published: '2011',
-                series: [],
-                web_url: 'https://meta.audiosilo.app/works/the-martian',
-                recordings: [],
-                score: 100,
-              },
-            ],
-          },
-        },
-        'POST /admin/meta/covers': { body: { covers: [''] } },
+        ...byHandRoutes,
       }),
     );
     const user = userEvent.setup();
@@ -348,15 +366,7 @@ describe('bulk matching', () => {
     );
     expect(screen.getByRole('dialog', { name: 'Review matches' })).toBeInTheDocument();
 
-    await user.click(within(row).getByRole('button', { name: 'Match The Martian by hand' }));
-    const match = await screen.findByRole('dialog', { name: 'Match with community metadata' });
-    await within(match).findByRole('radio', { name: /The Martian/ });
-    await user.click(within(match).getByRole('button', { name: 'Compare fields' }));
-    const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
-    await user.click(within(compare).getByRole('button', { name: /^Accept \d+ field/ }));
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Compare with community metadata' })).toBeNull(),
-    );
+    await matchByHand(user, row);
     expect(calls.some((c) => c.method === 'PATCH' && c.path === '/admin/libraries/1/book')).toBe(
       true,
     );
@@ -367,6 +377,38 @@ describe('bulk matching', () => {
       within(after).getByText('Matched since this run: an apply leaves it as it is'),
     ).toBeInTheDocument();
     expect(within(after).queryByRole('checkbox')).toBeNull();
+    expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
+  });
+
+  it('asks the server again for a book matched by hand that took no ASIN or ISBN', async () => {
+    const unmatched = bookDetail({ book: { ...books[0], asin: '' } });
+    const calls = mockFetch(
+      routes([run()], {
+        'GET /admin/libraries/1/book': { body: unmatched },
+        'PATCH /admin/libraries/1/book': { body: unmatched },
+        ...byHandRoutes,
+      }),
+    );
+    const autoAsked = () =>
+      calls.filter(
+        (c) => c.path === '/admin/match-runs/5/items' && c.query.get('outcome') === 'auto',
+      ).length;
+    const issuesAsked = () => calls.filter((c) => c.path === '/admin/issues').length;
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const review = await screen.findByRole('dialog', { name: 'Review matches' });
+    const row = (await within(review).findByText('B0UK000001 · UK')).closest('li')!;
+    const [items, issues] = [autoAsked(), issuesAsked()];
+    await matchByHand(user, row);
+
+    // Still unmatched to the server, so not "matched since": the review asks again,
+    // the Health page under it too, and the book stays left out of the apply.
+    await waitFor(() => expect(autoAsked()).toBeGreaterThan(items));
+    await waitFor(() => expect(issuesAsked()).toBeGreaterThan(issues));
+    const after = (await within(review).findByText('B0UK000001 · UK')).closest('li')!;
+    expect(within(after).queryByText(/Matched since this run/)).toBeNull();
+    expect(within(after).getByRole('checkbox')).not.toBeChecked();
     expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
   });
 

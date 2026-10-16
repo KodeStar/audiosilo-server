@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowRight, Check, ExternalLink, LoaderCircle, Sparkles } from 'lucide-react';
 import { api } from '@/api/client';
 import {
+  invalidateIssues,
   invalidateMatches,
   keys,
   matchRunActive,
@@ -14,6 +15,7 @@ import {
 } from '@/api/hooks';
 import {
   MATCH_SCOPES,
+  type AdminBookDetail,
   type MatchOutcome,
   type MatchRun,
   type MatchRunItem,
@@ -360,20 +362,31 @@ function ReviewDialog({
       setByHand(undefined);
     }
   }
-  // A book matched by hand leaves the apply, and its row reads as the server
-  // would now show it (matched since the run, nothing to change), without asking
-  // again for every page the review has loaded.
+  // A book matched by hand leaves the apply, and the Health page under the review
+  // reads its issues again. A match run's book that took an ASIN or ISBN is one
+  // the server now calls matched since (matchrun.matchedSince): its row reads so
+  // at once, without asking again for every page the review has loaded. Any
+  // other (another mode, an applied item, a hand match that took no identifier)
+  // the server says what applying would do now.
   const onMatchedByHand = (item: MatchRunItem) => {
     setPicks((p) => leaveOut(p, item));
+    invalidateIssues(qc);
+    const book = qc.getQueryData<AdminBookDetail>(keys.book(item.library_id, item.path))?.book;
+    const itemsKey = keys.matchRunItems(run.id, item.outcome);
+    if (run.mode !== 'match' || item.applied || !(book?.asin || book?.isbn)) {
+      void qc.invalidateQueries({ queryKey: itemsKey });
+      return;
+    }
+    const now = { title: book.title, author: book.author };
     qc.setQueryData<InfiniteData<MatchRunItemPage>>(
-      keys.matchRunItems(run.id, item.outcome),
+      itemsKey,
       (data) =>
         data && {
           ...data,
           pages: data.pages.map((page) => ({
             ...page,
             items: (page.items ?? []).map((it) =>
-              it.id === item.id ? { ...it, matched_since: true, changes: {} } : it,
+              it.id === item.id ? { ...it, matched_since: true, changes: {}, book: now } : it,
             ),
           })),
         },
@@ -757,7 +770,6 @@ function ItemRow({
             {/* The book page in a new tab, to listen or look closer without leaving the review. */}
             <Link
               {...bookRoute(item.library_id, item.path)}
-              search={{ library: item.library_id, path: item.path }}
               target="_blank"
               rel="noopener noreferrer"
               className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
