@@ -127,6 +127,7 @@ export const KNOWN_PARKS = [
   'manifest_changed',
   'fix_loop_exhausted',
   'asr_decode_timeout',
+  'asr_worker_waiting',
   'contrib_unavailable',
   'core_needed',
   'core_pending',
@@ -137,6 +138,7 @@ export const KNOWN_PARKS = [
   'supervisor_escalated',
   'supervisor_budget',
   'book_not_writable',
+  'library_not_writable',
   'agent_credential_refused',
 ] as const;
 

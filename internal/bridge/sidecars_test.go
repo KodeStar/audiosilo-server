@@ -199,6 +199,10 @@ func TestUpdateHeldReportsTheMove(t *testing.T) {
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_unavailable"}}`},
 		{StateRunning, `{"step":"fact_pass"}`},
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_rate_limited",` + later + `}}`},
+		{StateRunning, `{"step":"asr"}`},
+		{StateNeedsAttention, `{"step":"asr","park":{"code":"asr_worker_waiting"}}`},
+		{StateRunning, `{"step":"asr"}`},
+		{StateNeedsAttention, `{"step":"waiting","park":{"code":"agent_rate_limited",` + later + `}}`},
 		// ...until, still parked, one turns into a park that isn't (its retry ran
 		// into the book's budget), once.
 		{StateNeedsAttention, `{"step":"waiting","park":{"code":"budget_exceeded"}}`},
