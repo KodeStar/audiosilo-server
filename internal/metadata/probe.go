@@ -144,6 +144,9 @@ func applyProbe(m *Metadata, p *probeResult) {
 	if v := firstReleaseDate(t["date"], t["year"]); v != "" {
 		m.Released = v
 	}
+	if g := SplitGenres(t["genre"]); g != nil {
+		m.Genres = g // ffprobe reads every container's genre, as for the other tags
+	}
 	if v := t["series-part"]; v != "" {
 		if start, end, ok := ParseSeriesPosition(v); ok {
 			m.SeriesIndex, m.SeriesIndexEnd = start, end // a range: an omnibus, "1-3"
