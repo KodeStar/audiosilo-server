@@ -258,6 +258,14 @@ describe('progress and result', () => {
     expect(generateProgress({ step: 'rescanning', stage: 'done' })).toEqual({
       stage: 'rescanning',
     });
+    // So does a generate job's description step (Phase 1c), labelled, so the
+    // Bridge's English restatement of it isn't shown.
+    expect(
+      generateProgress({ step: 'describing', message: 'Writing a description', stage: 'done' }),
+    ).toEqual({ stage: 'describing' });
+    expect(generateProgress({ step: 'describing', stage: 'contributing' })).toEqual({
+      stage: 'describing',
+    });
   });
 
   it('drops what it cannot use', () => {
@@ -646,15 +654,15 @@ describe('a description (Phase 1c)', () => {
     local: { characters: false, recaps: false, description: false, ...local },
   });
   const open = (kind: string, state: BridgeJobState = 'running') => ({ kind, state });
+  // A Bridge that runs sidecars.describe and can write to the library.
+  const can = { can_describe: true, writable: true };
 
   it('is offered for a book with generated content, no description and nothing open', () => {
-    expect(describeOffered({ can_describe: true, has: has({ characters: true }) }, [])).toBe(true);
-    expect(describeOffered({ can_describe: true, has: has({ recaps: true }) }, undefined)).toBe(
-      true,
-    );
+    expect(describeOffered({ ...can, has: has({ characters: true }) }, [])).toBe(true);
+    expect(describeOffered({ ...can, has: has({ recaps: true }) }, undefined)).toBe(true);
     // A finished or cancelled job is no reason to hold back.
     expect(
-      describeOffered({ can_describe: true, has: has({ recaps: true }) }, [
+      describeOffered({ ...can, has: has({ recaps: true }) }, [
         open(KIND_DESCRIBE, 'failed'),
         open(KIND_GENERATE, 'done'),
       ]),
@@ -664,24 +672,30 @@ describe('a description (Phase 1c)', () => {
   it('is not offered without a Bridge that can, content to write from, or with one already', () => {
     const local = has({ characters: true, recaps: true, description: false });
     expect(describeOffered(undefined, [])).toBe(false);
-    expect(describeOffered({ can_describe: false, has: local }, [])).toBe(false);
-    expect(describeOffered({ can_describe: true, has: has({}) }, [])).toBe(false);
+    expect(describeOffered({ ...can, can_describe: false, has: local }, [])).toBe(false);
+    expect(describeOffered({ ...can, has: has({}) }, [])).toBe(false);
+    expect(describeOffered({ ...can, has: has({ characters: true, description: true }) }, [])).toBe(
+      false,
+    );
     expect(
-      describeOffered(
-        { can_describe: true, has: has({ characters: true, description: true }) },
-        [],
-      ),
-    ).toBe(false);
-    expect(
-      describeOffered(
-        { can_describe: true, has: has({ characters: true }, { description: true }) },
-        [],
-      ),
+      describeOffered({ ...can, has: has({ characters: true }, { description: true }) }, []),
     ).toBe(false);
   });
 
+  it('is not offered where the server would refuse it, or on a guess', () => {
+    const local = has({ characters: true });
+    // A library the Bridge can't write to: the job would be a 409.
+    expect(describeOffered({ ...can, writable: false, has: local }, [])).toBe(false);
+    // The estimate's open generate job, whatever the job list says (or before it loads).
+    expect(describeOffered({ ...can, has: local, open_job: job('running') }, undefined)).toBe(
+      false,
+    );
+    // A community that couldn't be asked may have a description of its own.
+    expect(describeOffered({ ...can, has: { ...local, community_unknown: true } }, [])).toBe(false);
+  });
+
   it('is not offered while a generate or describe job is open', () => {
-    const e = { can_describe: true, has: has({ characters: true }) };
+    const e = { ...can, has: has({ characters: true }) };
     expect(describeOffered(e, [open(KIND_GENERATE)])).toBe(false);
     expect(describeOffered(e, [open(KIND_DESCRIBE, 'needs_attention')])).toBe(false);
     // Another kind (a verify) doesn't count.

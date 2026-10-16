@@ -103,10 +103,12 @@ func TestParseDescription(t *testing.T) {
 		"too long":      fmt.Sprintf(`{"text":%q}`, descriptionText(maxDescriptionText+1)),
 		"a tab":         fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\tx"),
 		"a return":      fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\r\nx"),
-		"a bell":        fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\u0007x"),
-		"a C1 control":  fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\u0085x"),
-		"long work":     fmt.Sprintf(`{"work":%q,"text":%q}`, strings.Repeat("w", maxProvenanceText+1), descriptionText(minDescriptionText)),
-		"many sources":  fmt.Sprintf(`{"text":%q,"sources":[%s]}`, descriptionText(minDescriptionText), strings.TrimSuffix(strings.Repeat(`{"type":"x"},`, maxAttachmentList+1), ",")),
+		// JSON's own escape: %q would write Go's \a, which fails as JSON before
+		// the control-character rule is reached.
+		"a bell":       `{"text":"` + descriptionText(minDescriptionText) + `\u0007x"}`,
+		"a C1 control": fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\u0085x"),
+		"long work":    fmt.Sprintf(`{"work":%q,"text":%q}`, strings.Repeat("w", maxProvenanceText+1), descriptionText(minDescriptionText)),
+		"many sources": fmt.Sprintf(`{"text":%q,"sources":[%s]}`, descriptionText(minDescriptionText), strings.TrimSuffix(strings.Repeat(`{"type":"x"},`, maxAttachmentList+1), ",")),
 	} {
 		if d, err := ParseDescription([]byte(body)); !errors.Is(err, ErrAttachmentInvalid) {
 			t.Errorf("%s: %+v, %v; want ErrAttachmentInvalid", name, d, err)
@@ -155,6 +157,13 @@ func TestParseProvenance(t *testing.T) {
 		"description":{"generated_at":"today"}}`))
 	if err != nil || p == nil || *p != (AttachmentProvenance{Kind: "k"}) {
 		t.Errorf("cleaned = %+v, %v; want only the kind", p, err)
+	}
+	// A description object of another shape costs only its time, never the file.
+	for _, desc := range []string{`"written"`, `{"generated_at":1729065600}`, `[]`, `null`} {
+		p, err := ParseProvenance([]byte(`{"kind":"k","job_id":3,"description":` + desc + `}`))
+		if err != nil || p == nil || *p != (AttachmentProvenance{Kind: "k", JobID: 3}) {
+			t.Errorf("description %s = %+v, %v; want the rest kept", desc, p, err)
+		}
 	}
 	if p, err := ParseProvenance([]byte(`{}`)); p != nil || err != nil {
 		t.Errorf("empty = %+v, %v", p, err)

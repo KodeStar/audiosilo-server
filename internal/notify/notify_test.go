@@ -549,7 +549,7 @@ func TestBridgeDescribeJobWording(t *testing.T) {
 			"title": "The Way of Kings", "code": "budget_exceeded"}}
 	}
 	if m := compose(event(KindBridgeJobFinished, "done"), s.server()); m.Title != "Description ready: The Way of Kings" ||
-		m.Text != "Listeners see it in the book's About in the player now." {
+		m.Text != "Listeners see it in the player's About when the book has no other description." {
 		t.Errorf("finished = %+v", m)
 	}
 	if m := compose(event(KindBridgeJobFailed, "failed"), s.server()); m.Title != "Description failed: The Way of Kings" {

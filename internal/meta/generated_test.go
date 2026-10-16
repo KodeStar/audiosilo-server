@@ -114,6 +114,32 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	if out.Work.RecapSummary.InShort != "Community short." || out.Work.Attribution == nil || len(out.Work.Recaps) != 2 {
 		t.Errorf("community summary = %+v", out.Work)
 	}
+	// So the recaps are loaded for it: a summary alone leaves the recap list to
+	// fill (unlike HasRecaps, which counts the summary).
+	if got := (&Enrichment{Work: summed}).Fillable(); got != metadata.AllAttachmentParts {
+		t.Errorf("a work with a summary alone fills %+v", got)
+	}
+}
+
+// TestAnswerGeneratedAt: the mark is dated by what it names: the characters'
+// and recaps' run, or the description's own time when that is all it names (a
+// description-only job keeps the run's time in bridge.json).
+func TestAnswerGeneratedAt(t *testing.T) {
+	t.Parallel()
+	g := withDescription(testGenerated())
+	g.DescriptionAt = "2026-10-16T08:00:00Z"
+	full := communityWork()
+	full.Recaps = []MetaRecap{{Through: MetaPosition{Chapter: 1}, Text: "Community."}}
+	if at := matched(t, &Enrichment{Matched: true, Work: full}, g, nil).Work.Generated.GeneratedAt; at != g.DescriptionAt {
+		t.Errorf("description alone dated %q, want %q", at, g.DescriptionAt)
+	}
+	if at := matched(t, &Enrichment{Matched: true, Work: communityWork()}, g, nil).Work.Generated.GeneratedAt; at != g.GeneratedAt {
+		t.Errorf("recaps and a description dated %q, want the run's %q", at, g.GeneratedAt)
+	}
+	u, ok := Answer(nil, "The Book", &Generated{Description: g.Description, DescriptionAt: g.DescriptionAt}, nil).(Unmatched)
+	if !ok || u.Work == nil || u.Work.Generated.GeneratedAt != g.DescriptionAt {
+		t.Errorf("unmatched description alone = %+v", u.Work)
+	}
 }
 
 // testDescription is a generated description (its bounds are the parser's,

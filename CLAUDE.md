@@ -110,7 +110,7 @@ internal/library/     filesystem view (fsview.go: SafeJoin, and ContentPath/Cont
 internal/metadata/    dhowden/tag + ffprobe extraction (a `series-part` tag "1-3" is a range: seriesrange.go, ParseSeriesRange, the one grammar of a range position, and ParseSeriesPosition, a number or a range; incl. ReleaseDate: a date tag as YYYY[-MM[-DD]], stored as books.released, never as published); DeriveFromPath (structural path parsing, the scan's baseline: the folder holding the book is the series and the one above it the author, but a lone folder is the author); layout.go: ReadPathLayout (author/series/book LAYOUT, the match's path facts) and FromPathLayout (a path-first library's values); absfile.go: ParseABSFile/ReadABSFile (an Audiobookshelf metadata.json, see Metadata overrides); attachments.go: AttachmentsDir `.audiosilo`, Read/ParseCharacters, Recaps, Description and Provenance (the Bridge's generated files, checked against audiosilo-meta's formats; see Bridge attachments); titlepos.go: PositionInTitle (a series position read from a title that is the series' name then a number, "He Who Fights with Monsters 4: ..."; narrow: set off by a space or comma, 1-3 digits, then the end or a separator, never a range)
 internal/media/       Range streaming, download, embedded cover extraction
 internal/names/       reading people in an Author/Narrator credit: Split (the deliberately shy co-credit rule), Reversed ("Surname, Given"), SortKey (surname first; the catalog registers it as the SQL function name_sort for the admin list's surname sort)
-internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below); generated content laid beside the community work (generated.go: `Answer`, `Unmatched`, `MetaGenerated`, `MetaGeneratedDescription`); cache-only reads for the Bridge's estimate (cachedenrich.go: `CachedEnrichment`, `Coverages`, each with a community description flag)
+internal/meta/        Phase 1.5 community metadata lookup: HTTP client + Service (asin/isbn -> composed enrichment envelope) with a bounded TTL cache and its persistent SQLite level (store.go); the /meta bundle's previous works and spoiler gating (bundle.go); the admin console's match (match.go: metaserve works/match over tag + path facts, metadata.ReadPathLayout; works/search fallback for an older metaserve); community cover fetches (cover.go: public addresses only); owned books' work ids for the Series cards (workids.go); placing the caller's books on rails and the next rail entry (local.go); which of a work's series a book is in (seriesrules.go: the series rules below); generated content laid beside the community work (generated.go: `Answer`, `Unmatched`, `MetaGenerated`, `MetaGeneratedDescription`); cache-only reads for the Bridge's estimate (cachedenrich.go: `CachedEnrichment`; `Coverages`, a `Coverage` per book whose `Description` is the community work's `community_description`)
 internal/chapteralign/ fits a community recording's chapter list onto a book's own audio (pure, no I/O): anchors by title + time, places the rest in proportion, snaps each to its pause (an injected Prober); classifies fill/titles/refine/restructure/same or why not (length_mismatch, structure_mismatch, crosses_files). testdata/mythos is a real 34-vs-174-chapter golden case
 internal/chaptercheck/ the community chapter check: a background pass (every 10 min, and on Catalog.OnBookChange) and on request (Start), meta.RecordingChapters -> chapteralign (ffmpeg silencedetect via media.DetectSilences) -> catalog.SaveCommunityChapters
 internal/covercolors/ the background cover colour pass: Runner reads the colour of every book whose cover may have art and holds none for it (catalog.CoverColorsDue), one at a time, once the start or a burst of OnBookChange kicks has been quiet 30 s (<= 10 min), and hourly; the reading is api.colorCover (a cached thumbnail, else an UNCACHED 160 px one), handed in as its Colorer; art with no colour is recorded as such (cover_color = the version alone; CoverSource.ColorRead, while Colored stays "has a colour", so a thumbnail that decodes still records over it); art files that aren't there (an unmounted share) are covercolors.ErrArtMissing: left due, not a failure
@@ -514,12 +514,18 @@ future metadata site can attach enrichment without reshaping the schema. The
   (a shipped 2.0 app shows that first and credits the community; it ignores the new field), and
   `work.generated.description` (bool, always sent beside `characters`/`recaps`) marks it. It fills
   only a work with no `community_description` (the core `description`, the publisher's kind, doesn't
-  block it: the player orders those). `Fillable` says which parts a work leaves to fill
-  (`metadata.AttachmentParts`), and `generatedFor` reads only those columns (`catalog.BookAttachments`
-  with a parts mask: a work with community characters and recaps reads just the description); `?spoilers=hide` keeps
+  block it: the player orders those). `fillable` (generated.go) is the one statement of which parts a
+  work leaves to fill (`metadata.AttachmentParts`): `Fillable` loads by it and `parts` lays in by it.
+  `generatedFor` reads only the parts it names that the book's signature names too
+  (`Book.GeneratedParts`), plus the provenance (`catalog.BookAttachments` with a parts mask: a work with
+  community characters and recaps reads just the description and its provenance, and none for a book
+  without one); `?spoilers=hide` keeps
   it (spoiler-free by construction: the Bridge writes it from the opening chapters' notes only), and
-  attribution never counts it. An unmatched book with only a description answers `{matched: false,
-  work: {title, generated_description, generated: {description: true, ...}}}`. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
+  attribution never counts it. `generated.generated_at` is bridge.json's `generated_at` (the
+  characters' and recaps' run), or its `description.generated_at` (`Generated.DescriptionAt`) when the
+  description is all the mark names: a description-only job keeps the run's time. An unmatched book
+  with only a description answers `{matched: false, work: {title, generated_description, generated:
+  {description: true, ...}, ...}}`. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
   **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
   each family (key `ordering_of || id`) into ONE rail whose top-level view is the
   MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
@@ -916,11 +922,12 @@ future metadata site can attach enrichment without reshaping the schema. The
   `model.Characters` / `model.Recaps` / `model.Description`, bounded, a regular file only, never through a link) in
   `book_attachments`, and `/meta` serves them (below). A description (`metadata.ParseDescription`) is
   its text trimmed, 200-1500 code points (meta's `description.schema.json` bounds,
-  `TestDescriptionBoundsMatchTheSchema` reads them from `meta.SchemaFS`), no control character but a
-  line break; a blank text is none, anything else fails the file. `AttachmentNames` lists it before
-  `bridge.json`, so a book without one keeps its stored signature byte for byte. bridge.json's
-  `description.generated_at` is read as `AttachmentProvenance.DescriptionAt` (the rest of that object
-  is the Bridge's). The discovery walk lists each `.audiosilo` folder
+  `TestDescriptionBoundsMatchTheSchema` reads them from audiosilo-meta's embedded `SchemaFS`, imported
+  as `metaschema`), no control character but a line break; a blank text is none, anything else fails
+  the file. A signature lists only the names a book has, in `AttachmentNames` order, and adding the
+  name kept the other three in order, so a book without one keeps its stored signature byte for byte.
+  bridge.json's `description.generated_at` is read as `AttachmentProvenance.DescriptionAt` (the rest of
+  that object is the Bridge's; an object of another shape costs only that time, never the file). The discovery walk lists each `.audiosilo` folder
   ONCE (never walks into it; no audio lives there), and a book's signature (`books.attachments_sig`:
   name:size:mtime_ns of its own known names) is compared like `abs_sig`: an unchanged book whose
   attachments are new, changed, gone or not read for this index is read without a re-index
@@ -930,7 +937,8 @@ future metadata site can attach enrichment without reshaping the schema. The
   never taking a book's generated content away. `Scanner.RefreshAttachments` re-reads one indexed
   book's attachments, never its audio (the Bridge's `POST /bridge/rescan` mode `attachments`). The
   player's `Book.generated` (list, search, item, recent, the next book) is true when the signature names
-  a characters, recaps or description file (`generatedSig`: any known name but bridge.json; the narrow column, no join), so the player asks `/meta`
+  a characters, recaps or description file (`sigParts`, an allow-list: bridge.json and any name a later
+  server adds are none; `Book.GeneratedParts`, off the wire, says which; the narrow column, no join), so the player asks `/meta`
   for a book with no ASIN/ISBN too. Derived from the files: rebuildable, never carried by a move.
   **Series ranges** (an omnibus of books 1-3): the `series_index` field may hold a range,
   canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
@@ -1745,13 +1753,21 @@ future metadata site can attach enrichment without reshaping the schema. The
   each generate or describe job's status; the book page's aside and each series card generate characters and
   recaps, a series card queueing those of its books without recaps in reading order). The admin book
   detail carries `generated_description: {text, generated_at?}` (omitted without one; `generated_at` is
-  bridge.json's description time; read with the description and provenance columns only), which the book page's Community card shows (`describe-section.tsx`:
-  a Description sub-part with the "Generated on this server" mark, the text clamped behind Show more;
-  "Write a description" confirms and queues `sidecars.describe` when `describeOffered`: `can_describe`,
-  local characters or recaps, no description here or from the community, no open generate or describe
-  job; the describe job's status through `GenerateStatus`, whose done line for a generate job also says
-  whether its description came (`result.description`, `description_error`)). Notifications word a
-  describe job as the description ("Description ready: <book>"). Jobs are carried by
+  bridge.json's description time; read with the description and provenance columns only, and only when
+  the signature names a description), which the book page's Community card shows (`describe-section.tsx`:
+  a Description sub-part with the "Generated on this server" mark, the text clamped behind Show more, and
+  a note when the player's About shows another description instead: the book's own, or the
+  community's; "Write a description" confirms and queues `sidecars.describe` when `describeOffered`:
+  `can_describe` and `writable`, local characters or recaps, no description here or from the community
+  (and `community_unknown` unset), no open generate (the estimate's `open_job` included) or describe
+  job; and the card itself adds no generated description shown, no description of the book's own, and
+  no estimate being fetched again; its dialog says the player shows it only when the book has no other
+  description, and says when the Bridge went away; the describe job's status through `GenerateStatus`
+  (a finished one hidden once a description shows), whose done line for a generate job also says
+  whether its description came (`result.description`, `description_error`), and whose stage for a
+  generate job's description step is `describing`). Notifications word a describe job as the
+  description ("Description ready: <book>"). A generate job queued while a describe job is open
+  neither refuses nor cancels it (both stay queued). Jobs are carried by
   `bridge.MoveJobs`, which `catalog.moveBookState` calls in its transaction with the catalog's clock (an
   open job colliding with an open one of its kind at the new path is cancelled; `DedupeKey` rebuilds the
   key), and go with their library. **Hidden folders**: no route reaches content through a hidden

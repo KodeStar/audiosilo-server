@@ -99,7 +99,8 @@ func TestBridgeDescribeQueue(t *testing.T) {
 		t.Errorf("the bridge token: %d %s, want 401", resp.StatusCode, body)
 	}
 
-	// A generate job is never refused for the open describe job (it supersedes it).
+	// A generate job is never refused for the open describe job (it writes a
+	// description of its own; the describe job stays queued).
 	if resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("generate beside an open describe: %d %s", resp.StatusCode, body)
 	}
@@ -254,9 +255,10 @@ type descriptionBody struct {
 		} `json:"generated_description"`
 		Attribution *json.RawMessage `json:"attribution"`
 		Generated   *struct {
-			Characters  bool `json:"characters"`
-			Recaps      bool `json:"recaps"`
-			Description bool `json:"description"`
+			Characters  bool   `json:"characters"`
+			Recaps      bool   `json:"recaps"`
+			Description bool   `json:"description"`
+			GeneratedAt string `json:"generated_at"`
 		} `json:"generated"`
 	} `json:"work"`
 }
@@ -310,23 +312,25 @@ func TestMetaGeneratedDescriptionMatched(t *testing.T) {
 // community characters and recaps but no community description takes only the
 // generated description (generatedFor reads just that part, Fillable): the
 // community's characters and recaps stay, and the mark names the description
-// alone.
+// alone, dated by the description's own time (a description-only job keeps the
+// earlier run's in bridge.json's generated_at).
 func TestMetaGeneratedDescriptionBesideCommunityContent(t *testing.T) {
 	t.Parallel()
 	e := generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
 		"characters":[{"id":"community-hero","name":"Hero","reveal":{"chapter":1}}],
 		"recaps":[{"through":{"chapter":1},"text":"Community recap."}]}`)
 	lib := seedChapteredBook(t, e, "A/Two", "B0TWO")
-	setDescription(t, e, lib.ID, "A/Two", "characters.json:1:1,recaps.json:1:1,description.json:1:1", metadata.AttachmentFiles{
+	setDescription(t, e, lib.ID, "A/Two", "characters.json:1:1,recaps.json:1:1,description.json:1:1,bridge.json:1:1", metadata.AttachmentFiles{
 		Characters: &model.Characters{Work: "w", Characters: []model.Character{{ID: "gen", Name: "Gen", Reveal: model.Position{Chapter: 1}}}},
-		Recaps:     &model.Recaps{Work: "w", Recaps: []model.Recap{{Through: model.Position{Chapter: 1}, Text: "Gen recap."}}}})
+		Recaps:     &model.Recaps{Work: "w", Recaps: []model.Recap{{Through: model.Position{Chapter: 1}, Text: "Gen recap."}}},
+		Provenance: &metadata.AttachmentProvenance{GeneratedAt: "2026-07-01T10:00:00Z", DescriptionAt: "2026-10-16T08:00:00Z"}})
 	tok, _ := e.auth.IssueToken(context.Background(), e.adminID, auth.KindSession, "t", 0)
 
 	g, body := getDescription(t, e, lib.ID, "A/Two", "", tok)
 	if g.Work == nil || g.Work.GeneratedDescription == nil || g.Work.GeneratedDescription.Text != testDescriptionText {
 		t.Fatalf("work = %s", body)
 	}
-	if gen := g.Work.Generated; gen == nil || !gen.Description || gen.Characters || gen.Recaps {
+	if gen := g.Work.Generated; gen == nil || !gen.Description || gen.Characters || gen.Recaps || gen.GeneratedAt != "2026-10-16T08:00:00Z" {
 		t.Errorf("generated = %+v", gen)
 	}
 	if !strings.Contains(body, `"community-hero"`) || !strings.Contains(body, "Community recap.") ||

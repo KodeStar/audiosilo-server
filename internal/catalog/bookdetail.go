@@ -110,10 +110,11 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 	relPath = CleanRelPath(relPath)
 	d := &AdminBookDetail{}
 	dest, finish := adminBookDest(&d.Book)
-	err := c.db.QueryRowContext(ctx, `SELECT `+adminBookCols+`, b.description, b.indexed_at
+	var attachmentsSig string
+	err := c.db.QueryRowContext(ctx, `SELECT `+adminBookCols+`, b.description, b.indexed_at, b.attachments_sig
 		FROM books b JOIN libraries l ON l.id = b.library_id
 		WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, relPath).
-		Scan(append(dest, &d.Description, &d.IndexedAt)...)
+		Scan(append(dest, &d.Description, &d.IndexedAt, &attachmentsSig)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -174,15 +175,19 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	// The description and its provenance only, never the characters and recaps.
-	att, err := c.BookAttachments(ctx, bookID, metadata.AttachmentParts{Description: true})
-	if err != nil {
-		return nil, err
-	}
-	if att != nil && att.Description != nil {
-		d.GeneratedDescription = &GeneratedDescription{Text: att.Description.Text}
-		if att.Provenance != nil {
-			d.GeneratedDescription.GeneratedAt = att.Provenance.DescriptionAt
+	// The description and its provenance only, never the characters and recaps,
+	// and only for a book whose signature names one (the signature and the row
+	// are written together, so one it doesn't name isn't stored).
+	if sigParts(attachmentsSig).Description {
+		att, err := c.BookAttachments(ctx, bookID, metadata.AttachmentParts{Description: true})
+		if err != nil {
+			return nil, err
+		}
+		if att != nil && att.Description != nil {
+			d.GeneratedDescription = &GeneratedDescription{Text: att.Description.Text}
+			if att.Provenance != nil {
+				d.GeneratedDescription.GeneratedAt = att.Provenance.DescriptionAt
+			}
 		}
 	}
 	return d, nil

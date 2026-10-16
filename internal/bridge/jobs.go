@@ -56,7 +56,8 @@ const (
 const KindVerify = "bridge.verify"
 
 // KindSidecars is Phase 1a's job: the Bridge generates a book's characters and
-// recaps and writes them into the book's .audiosilo/ folder.
+// recaps (and, since Phase 1c, its description) and writes them into the book's
+// .audiosilo/ folder.
 const KindSidecars = "sidecars.generate"
 
 // KindDescribe is Phase 1c's description-only job: the Bridge writes a book's
@@ -335,7 +336,8 @@ var ErrLibraryNotWritable = errors.New("the bridge can't write to that library")
 // ErrGenerateOpen is a sidecars.describe job for a book with a sidecars.generate
 // job still open: that job writes the description when it finishes, so a second
 // writer is refused (a 409 generate_open). A generate job is never refused for
-// an open describe job: it supersedes it.
+// an open describe job, nor does it cancel one: both stay queued, and the
+// generate job writes a description of its own.
 var ErrGenerateOpen = errors.New("a generate job is open for the book")
 
 // ErrCannotContribute is a sidecars.generate job asking to contribute its

@@ -32,7 +32,8 @@ const (
 )
 
 // AttachmentNames are the known attachment names, in the order a signature
-// lists them. description.json sits before bridge.json, so a book without one
+// lists them. A signature lists only the names a book has, and adding
+// description.json kept the other three in their order, so a book without one
 // keeps the signature it had before the name was known.
 var AttachmentNames = []string{AttachmentCharacters, AttachmentRecaps, AttachmentDescription, AttachmentBridge}
 
@@ -294,18 +295,17 @@ func ParseDescription(data []byte) (*model.Description, error) {
 }
 
 // bridgeJSON is the part of bridge.json the server reads (its inputs list is
-// the Bridge's own business; of its description object, only when).
+// the Bridge's own business; of its description object, only when, read by
+// descriptionAt).
 type bridgeJSON struct {
-	Generator   string `json:"generator"`
-	Version     string `json:"version"`
-	Kind        string `json:"kind"`
-	JobID       int64  `json:"job_id"`
-	GeneratedAt string `json:"generated_at"`
-	Source      string `json:"source"`
-	WorkID      string `json:"work_id"`
-	Description *struct {
-		GeneratedAt string `json:"generated_at"`
-	} `json:"description"`
+	Generator   string          `json:"generator"`
+	Version     string          `json:"version"`
+	Kind        string          `json:"kind"`
+	JobID       int64           `json:"job_id"`
+	GeneratedAt string          `json:"generated_at"`
+	Source      string          `json:"source"`
+	WorkID      string          `json:"work_id"`
+	Description json.RawMessage `json:"description"`
 }
 
 // ParseProvenance decodes a bridge.json. Only a file that isn't a JSON object of
@@ -326,13 +326,24 @@ func ParseProvenance(data []byte) (*AttachmentProvenance, error) {
 		JobID:     max(b.JobID, 0),
 	}
 	p.GeneratedAt = cleanTime(b.GeneratedAt)
-	if b.Description != nil {
-		p.DescriptionAt = cleanTime(b.Description.GeneratedAt)
-	}
+	p.DescriptionAt = descriptionAt(b.Description)
 	if p == (AttachmentProvenance{}) {
 		return nil, nil
 	}
 	return &p, nil
+}
+
+// descriptionAt is bridge.json's description.generated_at (cleanTime), "" when
+// there is no description object or it isn't the shape the server reads: a
+// value like any other, never a reason to refuse the file.
+func descriptionAt(raw json.RawMessage) string {
+	var d struct {
+		GeneratedAt string `json:"generated_at"`
+	}
+	if json.Unmarshal(raw, &d) != nil {
+		return ""
+	}
+	return cleanTime(d.GeneratedAt)
 }
 
 // cleanTime is a bridge.json time as RFC3339 UTC, "" when it isn't RFC3339.
@@ -360,8 +371,9 @@ func cleanProvenance(v string) string {
 	return v
 }
 
-// checkSidecar checks the fields both sidecar formats carry: the work id and
-// license (bounded like a provenance value) and the sources list.
+// checkSidecar checks the fields every sidecar format carries (characters,
+// recaps, description): the work id and license (bounded like a provenance
+// value) and the sources list.
 func checkSidecar(work, license string, sources []model.Source) error {
 	if len(work) > maxProvenanceText || len(license) > maxProvenanceText {
 		return invalidAttachment("work or license too long")

@@ -428,7 +428,7 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 // listeners, what is ready (the title's start) and where they see it.
 var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 	bridge.KindSidecars: {"Characters and recaps", "Characters and recaps ready", "Listeners see them in the player now."},
-	bridge.KindDescribe: {"Description", "Description ready", "Listeners see it in the book's About in the player now."},
+	bridge.KindDescribe: {"Description", "Description ready", "Listeners see it in the player's About when the book has no other description."},
 	bridge.KindVerify:   {label: "Bridge check"},
 }
 

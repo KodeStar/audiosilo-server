@@ -53,9 +53,10 @@ export function generateAvailable(server: ServerInfo | undefined): boolean {
 }
 
 /**
- * Whether the book page should ask for its generate jobs at all: a server that
- * knows the Bridge (it reports the capability, on or off) with metadata on. A
- * job queued while the Bridge was online stays worth showing while it's away.
+ * Whether the book page should ask for its generate and describe jobs at all: a
+ * server that knows the Bridge (it reports the capability, on or off) with
+ * metadata on. A job queued while the Bridge was online stays worth showing
+ * while it's away.
  */
 export function generateJobsKnown(server: ServerInfo | undefined): boolean {
   return Boolean(server?.capabilities.metadata && server.capabilities.bridge !== undefined);
@@ -98,18 +99,26 @@ export function latestJobOf<J extends Pick<BridgeJob, 'kind'>>(
 
 /**
  * Whether the card offers "Write a description": the Bridge can (online, runs
- * sidecars.describe), the book has characters or recaps generated here (their
- * notes are what the description is written from), it has no description yet,
- * here or from the community, and no generate or describe job is open for it
- * (a generate job writes one when it finishes).
+ * sidecars.describe) and can write to the library (the server refuses a job
+ * otherwise), the book has characters or recaps generated here (their notes are
+ * what the description is written from), it has no description yet, here or
+ * from the community (which must have answered: unknown is never "none"), and
+ * no generate or describe job is open for it (a generate job writes one when it
+ * finishes; the estimate's own open generate job counts too, so a job list not
+ * loaded yet can't offer what the server would refuse).
  */
 export function describeOffered(
-  e: Pick<BridgeEstimate, 'can_describe' | 'has'> | undefined,
+  e: Pick<BridgeEstimate, 'can_describe' | 'writable' | 'has' | 'open_job'> | undefined,
   jobs: readonly Pick<BridgeJob, 'kind' | 'state'>[] | undefined,
 ): boolean {
-  if (!e?.can_describe) return false;
-  const { local, community } = e.has;
-  if (!(local.characters || local.recaps) || local.description || community.description) {
+  if (!e?.can_describe || !e.writable || e.open_job) return false;
+  const { local, community, community_unknown } = e.has;
+  if (
+    !(local.characters || local.recaps) ||
+    local.description ||
+    community.description ||
+    community_unknown
+  ) {
     return false;
   }
   return openBookJobs(jobs).length === 0;
@@ -233,10 +242,13 @@ export function generateProgress(progress: unknown): GenerateProgress {
   const { text: said, done, total } = progressOf(p);
   const step = text(p.step);
   const out: GenerateProgress = {};
-  // The Bridge's own last steps (saving the files, the rescan) say what is
-  // happening; the engine's stage by then is only "done".
+  // The Bridge's own last steps (the description, saving the files, the
+  // rescan) say what is happening; the engine's stage by then is only where it
+  // stopped ("done", or "contributing").
   const stage =
-    (step === 'writing' || step === 'rescanning' ? step : undefined) ?? text(p.stage) ?? step;
+    (step === 'describing' || step === 'writing' || step === 'rescanning' ? step : undefined) ??
+    text(p.stage) ??
+    step;
   if (stage) out.stage = stage;
   // The step alone is no message: it is the stage when there is none. Nor is the
   // Bridge's wording of a stage this console labels (an English restatement of

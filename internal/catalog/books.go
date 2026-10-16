@@ -505,7 +505,8 @@ func bookDest(b *Book) (dest []any, finish func()) {
 		func() {
 			b.Genres, b.Tags = ParseLabels(genres), ParseLabels(tags)
 			b.CoverVersion = CoverVersion(art)
-			b.Generated = generatedSig(attachments)
+			b.GeneratedParts = sigParts(attachments)
+			b.Generated = b.GeneratedParts.Any()
 			b.CoverColor, _ = storedCoverColor(art, color)
 			if more != "[]" && more != "" { // most books have no list: no parse
 				// In a series beyond its main one: the whole list. A list that only

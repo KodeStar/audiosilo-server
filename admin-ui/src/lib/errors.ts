@@ -68,8 +68,8 @@ const BY_CODE: Record<string, string> = {
   // job that already ended.
   kind_unavailable: 'errors.kindUnavailable',
   finished: 'errors.jobFinished',
-  // Queueing a job that writes (sidecars.generate) for a library the Bridge's
-  // last heartbeat doesn't report as mapped and writable.
+  // Queueing a job that writes (sidecars.generate, sidecars.describe) for a
+  // library the Bridge's last heartbeat doesn't report as mapped and writable.
   library_not_writable: 'errors.libraryNotWritable',
   // Queueing sidecars.generate with contribute "issue" on a Bridge that last
   // said it can't contribute (or sent no figures).

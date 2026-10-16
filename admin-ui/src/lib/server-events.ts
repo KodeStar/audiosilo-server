@@ -133,10 +133,11 @@ const FINISHED_OWN = new Map<string, string>([
 ]);
 
 /**
- * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps ready
- * for a book, another kind finished, or a job that failed or is parked waiting
- * for someone (its park code as a sentence, else the Bridge's own detail). Each
- * leads to Settings > Bridge, where its jobs are listed.
+ * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps, or a
+ * description, ready for a book (FINISHED_OWN), another kind finished, or a job
+ * that failed or is parked waiting for someone (its park code as a sentence,
+ * else the Bridge's own detail). Each leads to Settings > Bridge, where its
+ * jobs are listed.
  */
 function describeBridgeJob(
   kind: 'bridge_job_finished' | 'bridge_job_failed',

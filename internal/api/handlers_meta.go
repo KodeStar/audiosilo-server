@@ -9,6 +9,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // handleMeta resolves a book's asin/isbn against the community metadata API and
@@ -103,17 +104,23 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 // generatedFor is the book's generated content for /meta: the parts env's
-// community work leaves for it to fill (meta.Enrichment.Fillable), nil for none. It is an extra like
+// community work leaves for it to fill (meta.Enrichment.Fillable) that the
+// book's row names (Book.GeneratedParts), nil for none. It is an extra like
 // `local`: a failure to read it is logged and the answer goes out without it.
-// A book whose row names no generated file (Book.Generated) isn't looked up.
+// A book whose row names none of those parts isn't looked up.
 func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.Enrichment) *meta.Generated {
-	fill := env.Fillable()
-	if !book.Generated || !fill.Any() {
+	fill, have := env.Fillable(), book.GeneratedParts
+	want := metadata.AttachmentParts{
+		Characters:  fill.Characters && have.Characters,
+		Recaps:      fill.Recaps && have.Recaps,
+		Description: fill.Description && have.Description,
+	}
+	if !want.Any() {
 		return nil
 	}
-	// Only the parts the community work lacks: a work with characters and
-	// recaps of its own reads just the description.
-	att, err := a.cat.BookAttachments(ctx, book.ID, fill)
+	// Only the parts the community work lacks and the book has: a work with
+	// characters and recaps of its own reads just the description.
+	att, err := a.cat.BookAttachments(ctx, book.ID, want)
 	if err != nil {
 		if ctx.Err() == nil {
 			a.log.Warn("load generated content for meta failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
@@ -125,7 +132,7 @@ func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.En
 	}
 	g := &meta.Generated{Characters: att.Characters, Recaps: att.Recaps, Description: att.Description}
 	if att.Provenance != nil {
-		g.GeneratedAt = att.Provenance.GeneratedAt
+		g.GeneratedAt, g.DescriptionAt = att.Provenance.GeneratedAt, att.Provenance.DescriptionAt
 	}
 	return g
 }

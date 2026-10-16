@@ -194,7 +194,11 @@ function CommunityCard({
         </>
       )}
       <GenerateSection book={detail.book} />
-      <DescribeSection book={detail.book} description={detail.generated_description} />
+      <DescribeSection
+        book={detail.book}
+        description={detail.generated_description}
+        ownDescription={Boolean(detail.description?.trim())}
+      />
     </Card>
   );
 }

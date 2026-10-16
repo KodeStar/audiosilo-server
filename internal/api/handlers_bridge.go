@@ -477,7 +477,8 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 //     isn't that book moved is ignored).
 //   - mode "attachments": read only the book's .audiosilo/ attachments, never its
 //     audio (Scanner.RefreshAttachments), and answer 200 {path, attachments:
-//     {characters, recaps, bridge}} with what is now indexed. from is refused here.
+//     {characters, recaps, description, bridge}} with what is now indexed. from
+//     is refused here.
 //
 // 404 code not_indexable when no book is there (for attachments: no indexed one).
 func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {

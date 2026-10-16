@@ -21,19 +21,24 @@ import (
 // (attribution, spoiler gating) ever sees generated content.
 
 // Generated is a book's generated content as the catalog stores it: nil for a
-// file it doesn't have. GeneratedAt is when it was generated (RFC3339; "" when
-// unknown).
+// file it doesn't have. GeneratedAt is when its characters and recaps were
+// generated and DescriptionAt when its description was written (RFC3339; ""
+// when unknown): a description-only job keeps the earlier run's time as
+// bridge.json's generated_at.
 type Generated struct {
-	Characters  *model.Characters
-	Recaps      *model.Recaps
-	Description *model.Description
-	GeneratedAt string
+	Characters    *model.Characters
+	Recaps        *model.Recaps
+	Description   *model.Description
+	GeneratedAt   string
+	DescriptionAt string
 }
 
 // MetaGenerated says which parts of a work came from the server's generated
 // files rather than the community (MetaWork.Generated); omitted when none did.
 // Recaps covers the recap list and the whole-book summary alike; Description
-// the work's generated_description.
+// the work's generated_description. GeneratedAt is when what it names was
+// generated: the characters' and recaps' run, or the description's own time
+// when the description is all it names.
 type MetaGenerated struct {
 	Characters  bool   `json:"characters"`
 	Recaps      bool   `json:"recaps"`
@@ -65,17 +70,31 @@ type Place struct {
 	Finished bool
 }
 
-// Fillable is which generated parts could fill e's work (parts): characters
-// when it has none, recaps when it has no recap list (a summary is only ever
-// taken with the recaps), a description when it has no community description;
-// every part when e has no match at all. /meta loads only those parts of the
-// book's generated content, and none when it is none.
-func (e *Enrichment) Fillable() metadata.AttachmentParts {
-	return metadata.AttachmentParts{
-		Characters:  !e.HasCharacters(),
-		Recaps:      e == nil || e.Work == nil || len(e.Work.Recaps) == 0,
-		Description: !e.HasCommunityDescription(),
+// fillable is which generated parts could fill the community work c (the work
+// as published; nil for no match, which every part fills): characters when it
+// has none, recaps when it has no recap list (a summary is only ever taken with
+// the recaps), a description when it has no community description (its core
+// description, the publisher's kind, doesn't block it: the player orders
+// those). The one statement of the rule: /meta loads by it (Fillable) and lays
+// in by it (parts), so a part is never laid in without being loaded.
+func fillable(c *MetaWork) metadata.AttachmentParts {
+	if c == nil {
+		return metadata.AllAttachmentParts
 	}
+	return metadata.AttachmentParts{
+		Characters:  len(c.Characters) == 0,
+		Recaps:      len(c.Recaps) == 0,
+		Description: c.CommunityDescription == nil,
+	}
+}
+
+// Fillable is fillable for e's work: the parts of the book's generated content
+// /meta loads (none when it is none).
+func (e *Enrichment) Fillable() metadata.AttachmentParts {
+	if e == nil {
+		return fillable(nil)
+	}
+	return fillable(e.Work)
 }
 
 // Answer is /meta's per-request answer for a book: env is its matched envelope
@@ -101,7 +120,7 @@ func Answer(env *Enrichment, title string, g *Generated, hide *Place) any {
 			return Unmatched{}
 		}
 		w := &MetaWork{Title: title, Authors: []MetaPersonRef{}}
-		gen.layInto(w, g.GeneratedAt)
+		gen.layInto(w, g)
 		if w.Generated == nil {
 			// The spoiler gate left nothing (every character revealed later, every
 			// recap beyond the listener): no work of a title alone.
@@ -113,7 +132,7 @@ func Answer(env *Enrichment, title string, g *Generated, hide *Place) any {
 		return env
 	}
 	w := *env.Work
-	gen.layInto(&w, g.GeneratedAt)
+	gen.layInto(&w, g)
 	if w.Generated == nil {
 		return env
 	}
@@ -123,30 +142,25 @@ func Answer(env *Enrichment, title string, g *Generated, hide *Place) any {
 }
 
 // parts is the generated content community (the work as published, nil for
-// none) takes, as a work of its own holding just those parts: the characters
-// when community has none; the recaps when it has none, and then the summary
-// too when it has none; the description when it has no community description
-// (its core description, the publisher's kind, doesn't block it: the player
-// orders those). Nil when it takes nothing.
+// none) takes, as a work of its own holding just those parts: each part
+// fillable names, and with the recaps the summary too when community has none.
+// Nil when it takes nothing.
 func (g *Generated) parts(community *MetaWork) *MetaWork {
 	if g == nil {
 		return nil
 	}
-	var c MetaWork
-	if community != nil {
-		c = *community
-	}
+	fill := fillable(community)
 	w := &MetaWork{}
-	if len(c.Characters) == 0 {
+	if fill.Characters {
 		w.Characters = g.characters()
 	}
-	if len(c.Recaps) == 0 {
+	if fill.Recaps {
 		w.Recaps = g.recaps()
-		if c.RecapSummary == nil {
+		if community == nil || community.RecapSummary == nil {
 			w.RecapSummary = g.summary()
 		}
 	}
-	if c.CommunityDescription == nil {
+	if fill.Description {
 		w.GeneratedDescription = g.description()
 	}
 	if len(w.Characters) == 0 && len(w.Recaps) == 0 && w.RecapSummary == nil && w.GeneratedDescription == nil {
@@ -155,10 +169,11 @@ func (g *Generated) parts(community *MetaWork) *MetaWork {
 	return w
 }
 
-// layInto lays the generated parts gen holds (parts, gated as asked) into w, a
-// copy the caller owns, naming them in w.Generated (left nil when gen holds
-// nothing any more).
-func (gen *MetaWork) layInto(w *MetaWork, generatedAt string) {
+// layInto lays the generated parts gen holds (g's parts, gated as asked) into
+// w, a copy the caller owns, naming them in w.Generated (left nil when gen
+// holds nothing any more), dated by what it names: g's run, or the
+// description's own time when that is all.
+func (gen *MetaWork) layInto(w *MetaWork, g *Generated) {
 	var mark MetaGenerated
 	if len(gen.Characters) > 0 {
 		w.Characters, mark.Characters = gen.Characters, true
@@ -173,7 +188,10 @@ func (gen *MetaWork) layInto(w *MetaWork, generatedAt string) {
 		w.GeneratedDescription, mark.Description = gen.GeneratedDescription, true
 	}
 	if mark.Characters || mark.Recaps || mark.Description {
-		mark.GeneratedAt = generatedAt
+		mark.GeneratedAt = g.GeneratedAt
+		if !mark.Characters && !mark.Recaps {
+			mark.GeneratedAt = g.DescriptionAt
+		}
 		w.Generated = &mark
 	}
 }

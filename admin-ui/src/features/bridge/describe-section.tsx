@@ -1,14 +1,15 @@
 import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { PenLine } from 'lucide-react';
+import { PenLine, Unplug } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
 import type { AdminBook, GeneratedDescription } from '@/api/types';
+import { Notice } from '@/components/notice';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { formatRelative } from '@/lib/format';
 import { queueJob } from './bridge-actions';
-import { jobActions } from './bridge-model';
+import { isOpen, jobActions } from './bridge-model';
 import {
   clampsDescription,
   describeOffered,
@@ -22,18 +23,23 @@ import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-ge
 
 /**
  * The Community card's description part (Bridge Phase 1c): the description the
- * Bridge generated for the book (its text, clamped, with Show more), the
- * describe job while one is open or how it failed, and "Write a description",
- * which queues `sidecars.describe` after a confirmation. Offered only when the
- * Bridge can write one (describeOffered). Renders nothing when there is nothing
- * to show.
+ * Bridge generated for the book (its text, clamped, with Show more, and a note
+ * when the player's About shows another description instead), the describe job
+ * while one is open or how it failed, and "Write a description", which queues
+ * `sidecars.describe` after a confirmation. Offered only when the Bridge can
+ * write one (describeOffered) and nothing would be shown in its place: no
+ * description generated here (as this card shows it) and none of the book's
+ * own. Renders nothing when there is nothing to show.
  */
 export function DescribeSection({
   book,
   description,
+  ownDescription = false,
 }: {
   book: AdminBook;
   description?: GeneratedDescription;
+  /** The book has a description of its own, which the player's About shows before a generated one. */
+  ownDescription?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -53,13 +59,25 @@ export function DescribeSection({
   const [expanded, setExpanded] = useState(false);
   const textId = useId();
 
-  const offer = available && describeOffered(estimate.data, jobs);
-  // A cancelled job says nothing; a finished one is the description itself once it shows.
-  const showJob = job && job.state !== 'cancelled' && !(job.state === 'done' && description);
+  // Never beside a description the card shows, nor from an estimate being
+  // fetched again (a job that just ended changed what the book has).
+  const offer =
+    available &&
+    !description &&
+    !ownDescription &&
+    !estimate.isFetching &&
+    describeOffered(estimate.data, jobs);
+  // A cancelled job says nothing, and once a description shows neither does a
+  // finished one: a done job is the description itself, a failed one was made
+  // good since (a later generate job wrote one).
+  const showJob = job && job.state !== 'cancelled' && !(description && !isOpen(job.state));
   if (!open && !showJob && !offer && !description) return null;
 
   const canCancel = job ? jobActions(job).cancel : false;
   const clamps = description ? clampsDescription(description.text) : false;
+  // The player's About shows another description first: the book's own, or the
+  // community's (which /meta serves instead).
+  const shownElsewhere = ownDescription || Boolean(estimate.data?.has.community.description);
 
   return (
     <JobSection
@@ -100,6 +118,9 @@ export function DescribeSection({
               </Button>
             </div>
           ) : null}
+          {shownElsewhere ? (
+            <p className="text-[12.5px] text-muted-foreground">{t('bridge.describe.notShown')}</p>
+          ) : null}
         </>
       ) : null}
       {showJob && job ? <GenerateStatus job={job} uiUrl={uiUrl} /> : null}
@@ -116,7 +137,7 @@ export function DescribeSection({
           ) : null}
         </div>
       ) : null}
-      <DescribeDialog open={open} onOpenChange={setOpen} book={book} />
+      <DescribeDialog open={open} onOpenChange={setOpen} book={book} offline={!available} />
     </JobSection>
   );
 }
@@ -124,16 +145,20 @@ export function DescribeSection({
 /**
  * The confirmation before `sidecars.describe`: what it does, what it reads (the
  * notes the Bridge kept from generating this book, no new speech recognition),
- * that it costs a little agent time, and where the result appears.
+ * that it costs a little agent time, and where the result appears. The Bridge
+ * going away while it is open is said, as the generate dialog says it: the job
+ * still queues, and waits.
  */
 function DescribeDialog({
   open,
   onOpenChange,
   book,
+  offline,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   book: AdminBook;
+  offline: boolean;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -146,7 +171,7 @@ function DescribeDialog({
     const ok = await queueJob(
       qc,
       { kind: KIND_DESCRIBE, library_id: book.library_id, path: book.path, params: {} },
-      { name: book.title || book.path, online: true },
+      { name: book.title || book.path, online: !offline },
     );
     setBusy(false);
     if (ok) onOpenChange(false);
@@ -162,6 +187,11 @@ function DescribeDialog({
       >
         <form onSubmit={(e) => void submit(e)} className="contents" noValidate>
           <DialogBody className="flex flex-col gap-3 text-[13px]">
+            {offline ? (
+              <Notice tone="warn" icon={Unplug} title={t('bridge.generate.offline')}>
+                {t('bridge.generate.offlineBody')}
+              </Notice>
+            ) : null}
             <p>{t('bridge.describe.dialogBody')}</p>
             <p className="text-muted-foreground">{t('bridge.describe.dialogCost')}</p>
             <p className="text-muted-foreground">{t('bridge.describe.dialogWhere')}</p>

@@ -10,7 +10,10 @@ import { relBaseName } from '@/lib/paths';
 import { isOpen, kindName } from './bridge-model';
 import { generatePollMs, KIND_GENERATE, latestJobOf } from './generate-model';
 
-/** How many of a book's newest jobs are read to find its generate job (verify jobs share the list). */
+/**
+ * How many of a book's newest jobs are read to find its generate and describe
+ * jobs, and whether either is open (verify jobs share the list).
+ */
 const BOOK_JOBS = 20;
 
 /**

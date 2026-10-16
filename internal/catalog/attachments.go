@@ -49,19 +49,26 @@ type AttachmentsState struct {
 	Unchecked bool
 }
 
-// generatedSig reports whether a book's attachments signature (attachments_sig)
-// names a characters, recaps or description file: Book.Generated, read from the
-// narrow column so a list never joins book_attachments. A signature lists only
-// known names, so any but bridge.json (provenance) is one. A file that failed its checks still
-// counts (its signature is recorded so it isn't read again): a /meta read then
-// finds nothing, which costs a request and no more.
-func generatedSig(sig string) bool {
+// sigParts is which generated parts a book's attachments signature
+// (attachments_sig) names: Book.GeneratedParts, read from the narrow column so
+// a list never joins book_attachments. An allow-list of the three files that
+// are generated content: bridge.json (provenance) is none, and so is any name
+// a later server adds until it is listed here. A file that failed its checks
+// still counts (its signature is recorded so it isn't read again): a /meta read
+// then finds nothing, which costs a request and no more.
+func sigParts(sig string) metadata.AttachmentParts {
+	var p metadata.AttachmentParts
 	for _, name := range metadata.AttachmentSigNames(sig) {
-		if name != metadata.AttachmentBridge {
-			return true
+		switch name {
+		case metadata.AttachmentCharacters:
+			p.Characters = true
+		case metadata.AttachmentRecaps:
+			p.Recaps = true
+		case metadata.AttachmentDescription:
+			p.Description = true
 		}
 	}
-	return false
+	return p
 }
 
 // attachmentsUncheckedExpr is a books row's Signature.AttachmentsUnchecked: a
@@ -167,8 +174,9 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 // BookAttachments returns the stored attachments of book id (books.id, read
 // inside the server only) with the generated parts want names, and its
 // provenance, or nil, nil when that leaves nothing. A part want leaves out is
-// never read (characters and recaps run to hundreds of KB). A column that no
-// longer decodes reads as a file the book doesn't have.
+// never copied or decoded (characters and recaps run to tens of KB), though
+// SQLite still pages past it to the provenance and description stored after
+// it. A column that no longer decodes reads as a file the book doesn't have.
 func (c *Catalog) BookAttachments(ctx context.Context, bookID int64, want metadata.AttachmentParts) (*metadata.AttachmentFiles, error) {
 	// A part left out reads as none; the column names are constants.
 	col := func(name string, on bool) string {
@@ -203,10 +211,15 @@ func (c *Catalog) BookAttachments(ctx context.Context, bookID int64, want metada
 // BookAttachmentParts reports which generated parts book id has stored, without
 // reading them (the Bridge estimate's has.local). A stored column is a checked
 // file the server wrote, so a non-empty one is a part the book has.
+// octet_length of a bare TEXT column comes from the record header, so the
+// values themselves (and their overflow pages) are never loaded, as comparing
+// each with an empty string would; the columns are NOT NULL text defaulting to
+// an empty string, so the two agree.
 func (c *Catalog) BookAttachmentParts(ctx context.Context, bookID int64) (metadata.AttachmentParts, error) {
 	var p metadata.AttachmentParts
 	err := c.db.QueryRowContext(ctx,
-		`SELECT characters <> '', recaps <> '', description <> '' FROM book_attachments WHERE book_id = ?`, bookID).
+		`SELECT octet_length(characters) > 0, octet_length(recaps) > 0, octet_length(description) > 0
+		   FROM book_attachments WHERE book_id = ?`, bookID).
 		Scan(&p.Characters, &p.Recaps, &p.Description)
 	if errors.Is(err, sql.ErrNoRows) {
 		return metadata.AttachmentParts{}, nil

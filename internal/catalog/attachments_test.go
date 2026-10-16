@@ -12,8 +12,9 @@ import (
 
 // Book.Generated comes from the attachments signature alone: a book whose
 // signature names characters.json, recaps.json or description.json has
-// generated content, one with only bridge.json or none hasn't (and the field is left off the wire), on
-// a single read and on a list alike.
+// generated content, one with only bridge.json, a name this server doesn't
+// count as generated content (a later server's), or none hasn't (and the field
+// is left off the wire), on a single read and on a list alike.
 func TestBookGenerated(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -25,6 +26,7 @@ func TestBookGenerated(t *testing.T) {
 		{RelPath: "Refreshed"},
 		{RelPath: "Described"},
 		{RelPath: "Provenance"},
+		{RelPath: "Later"},
 		{RelPath: "None"},
 	} {
 		b.LibraryID, b.Title, b.AddedAt = lib.ID, b.RelPath, "2024-01-01T00:00:00Z"
@@ -38,10 +40,11 @@ func TestBookGenerated(t *testing.T) {
 			Description: &model.Description{Work: "w", Text: "A described book.", License: "CC-BY-SA-4.0"},
 			Provenance:  &metadata.AttachmentProvenance{Kind: "sidecars.describe", DescriptionAt: "2026-10-16T08:00:00Z"}}},
 		"Provenance": {Sig: "bridge.json:5:1", Files: metadata.AttachmentFiles{Provenance: &metadata.AttachmentProvenance{Kind: "k"}}},
+		"Later":      {Sig: "chapters.json:9:1,bridge.json:5:1", Files: metadata.AttachmentFiles{Provenance: &metadata.AttachmentProvenance{Kind: "k"}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"Indexed": true, "Refreshed": true, "Described": true, "Provenance": false, "None": false}
+	want := map[string]bool{"Indexed": true, "Refreshed": true, "Described": true, "Provenance": false, "Later": false, "None": false}
 	for path, generated := range want {
 		b, err := c.GetBookByPath(ctx, lib.ID, path)
 		if err != nil {
@@ -60,6 +63,11 @@ func TestBookGenerated(t *testing.T) {
 		if b.Generated != want[b.RelPath] {
 			t.Errorf("listed %s: generated = %v", b.RelPath, b.Generated)
 		}
+	}
+
+	// The parts it names ride beside it (what /meta reads), never on the wire.
+	if b, _ := c.GetBookByPath(ctx, lib.ID, "Described"); b.GeneratedParts != (metadata.AttachmentParts{Description: true}) {
+		t.Errorf("described parts = %+v", b.GeneratedParts)
 	}
 
 	// The stored content is read by the book's id.

@@ -2325,9 +2325,13 @@ export interface SidecarsPark {
   retry_at?: string;
 }
 
-/** sidecars.generate's progress. */
+/** sidecars.generate's progress (and sidecars.describe's, step and stage "describing"). */
 export interface SidecarsProgress {
-  /** An engine stage name, or "waiting" | "writing" | "rescanning". */
+  /**
+   * An engine stage name, or "waiting" | "writing" | "rescanning" | "describing"
+   * (the description step, Phase 1c: a generate job's, whose stage is then the
+   * engine's "done", and a describe job's).
+   */
   step: string;
   message?: string;
   done?: number;
@@ -2356,9 +2360,13 @@ export interface SidecarsResult {
   work_id: string;
   /** The community issues filed, by what they offer (contribute "issue" only). */
   contributed?: Record<string, string>;
+  /** Whether the run also wrote the book's description.json (Phase 1c); absent from an older Bridge. */
+  description?: boolean;
+  /** Why no description was written, in a few plain words; only when `description` is false. */
+  description_error?: string;
 }
 
-/** Which characters and recaps a book has, from the community and from its own folder. */
+/** Which characters, recaps and description a book has, from the community and from its own folder. */
 export interface SidecarsCoverage {
   characters: boolean;
   recaps: boolean;
