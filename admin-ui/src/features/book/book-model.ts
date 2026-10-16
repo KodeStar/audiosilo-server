@@ -5,11 +5,13 @@ import {
   type AdminChapter,
   type AdminFile,
   type BookEditRequest,
+  type BookRef,
   type CommunityChaptersDetail,
   type FieldSource,
   type FieldValue,
   type FolderMode,
   type OverrideField,
+  type PairToken,
 } from '@/api/types';
 import { formatSeriesPosition } from '@/lib/format';
 import type { Phrase } from '@/lib/phrase';
@@ -495,4 +497,21 @@ export function audioLine(
   ]
     .filter(Boolean)
     .join(' · ');
+}
+
+/**
+ * Where "Listen in player" sends its tab: the web player's connect page on this
+ * origin (never the pairing's web_url, whose base may be the public_url, another
+ * origin), which exchanges the token, or skips it when that browser is already
+ * signed in as `userId` (sid + uid name the connection), and opens the book.
+ */
+export function playerConnectUrl(pairing: PairToken, userId: number, book: BookRef): string {
+  const q = new URLSearchParams({
+    token: pairing.pairing_token,
+    sid: pairing.server_id,
+    uid: String(userId),
+    book: String(book.library_id),
+    path: book.path,
+  });
+  return `/web/connect?${q.toString()}`;
 }

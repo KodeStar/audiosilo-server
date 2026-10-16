@@ -309,7 +309,10 @@ future metadata site can attach enrichment without reshaping the schema. The
   redeem response's `uses_remaining`/`code_expires_at` advertise the budget);
   recovery-derived tokens instead last `auth.recoveryPairingTTL` (multi-scan
   within it), and
-  `/auth/pair` + demo tokens stay unlinked/single-use. Invite codes minted via
+  `/auth/pair` + demo tokens stay unlinked/single-use (the console's book page
+  "Listen in player" mints one with `/auth/pair` and opens the same-origin
+  `/web/connect?token=&sid=&uid=&book=&path=` in a new tab, never the payload's
+  `web_url`, whose base may be another origin). Invite codes minted via
   the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
   `handlers_admin.go`); explicit values override.
 - **Home and away addresses (`addresses` capability)**: a server

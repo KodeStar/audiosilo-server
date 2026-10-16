@@ -121,6 +121,16 @@ export interface LoginResponse {
   server_id: string;
 }
 
+/**
+ * The fields the console reads of POST /api/v1/auth/pair's pairing payload
+ * (handlers_auth.go handlePair; api.PairingPayload, qr.go buildPairing): a
+ * single-use, ten-minute pairing token for the caller.
+ */
+export interface PairToken {
+  pairing_token: string;
+  server_id: string;
+}
+
 /** One library's book count in GET /admin/stats (handlers_stats.go libStat). */
 export interface LibraryStat {
   id: number;

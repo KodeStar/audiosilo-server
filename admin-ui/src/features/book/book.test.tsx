@@ -2,8 +2,8 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
-import type { AdminBookDetail, BookEditRequest, MatchCandidate } from '@/api/types';
-import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
+import type { AdminBookDetail, BookEditRequest, MatchCandidate, PairToken } from '@/api/types';
+import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
@@ -642,5 +642,119 @@ describe('match with community metadata', () => {
     await user.click(await screen.findByRole('button', { name: 'Compare with community' }));
     await within(await screen.findByRole('dialog')).findByRole('radio');
     expect(document.querySelectorAll('style')).toHaveLength(0);
+  });
+});
+
+describe('listen in player', () => {
+  const pairing = {
+    pairing_token: 'pair-tok',
+    server_id: 'srv-1',
+    // The public_url: another origin, which the tab must not go to.
+    web_url: 'https://books.example.com/web/connect?token=pair-tok&sid=srv-1',
+  } satisfies PairToken & { web_url: string };
+
+  // The stubbed window.open stays this block's: the real one is back after each test.
+  const realOpen = window.open;
+  afterEach(() => {
+    window.open = realOpen;
+  });
+
+  /** The tab window.open hands back (null: the browser blocked it). */
+  function stubOpen(blocked = false) {
+    const tab = { opener: {} as unknown, location: { href: '' }, close: vi.fn() };
+    const open = vi.fn(() => (blocked ? null : tab));
+    vi.stubGlobal('open', open);
+    return { tab, open };
+  }
+
+  const pairs = (calls: MockRequest[]) =>
+    calls.filter((c) => c.method === 'POST' && c.path === '/auth/pair');
+
+  it("opens the book in this origin's web player, signed in as this admin", async () => {
+    const { tab, open } = stubOpen();
+    const calls = mockFetch(routes(bookDetail(), { 'POST /auth/pair': { body: pairing } }));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Listen in player' }));
+    await waitFor(() => expect(tab.location.href).not.toBe(''));
+    // Opened in the click (no pop-up block), cut off from the console.
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(tab.opener).toBeNull();
+    expect(pairs(calls)).toHaveLength(1);
+    const url = new window.URL(tab.location.href, 'http://admin.test');
+    expect(url.origin + url.pathname).toBe('http://admin.test/web/connect');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      token: 'pair-tok',
+      sid: 'srv-1',
+      uid: '1',
+      book: '1',
+      path: BOOK_PATH,
+    });
+    expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it('makes one token however often the button is pressed while it is on its way', async () => {
+    const { tab, open } = stubOpen();
+    let answer!: (r: MockReply) => void;
+    const calls = mockFetch(
+      routes(bookDetail(), {
+        'POST /auth/pair': () => new Promise<MockReply>((r) => (answer = r)),
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    const listen = await screen.findByRole('button', { name: 'Listen in player' });
+    await user.click(listen);
+    await waitFor(() => expect(listen).toBeDisabled());
+    await user.click(listen);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(pairs(calls)).toHaveLength(1);
+    answer({ body: pairing });
+    await waitFor(() => expect(tab.location.href).not.toBe(''));
+    await waitFor(() => expect(listen).toBeEnabled());
+  });
+
+  it('closes the tab and says so when no token comes back', async () => {
+    const { tab } = stubOpen();
+    mockFetch(
+      routes(bookDetail(), {
+        'POST /auth/pair': { status: 403, body: { error: 'API keys cannot pair a device' } },
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Listen in player' }));
+    expect(await screen.findByText("Couldn't open the player")).toBeInTheDocument();
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.href).toBe('');
+  });
+
+  it('asks for pop-ups when the browser blocks the tab, before any token is made', async () => {
+    stubOpen(true);
+    const calls = mockFetch(routes(bookDetail(), { 'POST /auth/pair': { body: pairing } }));
+    renderApp(URL);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Listen in player' }));
+    expect(
+      await screen.findByText(
+        'The browser blocked the new tab. Allow pop-ups for this site, then try again.',
+      ),
+    ).toBeInTheDocument();
+    expect(pairs(calls)).toHaveLength(0);
+  });
+
+  it("isn't offered without the web player", async () => {
+    mockFetch(
+      routes(bookDetail(), {
+        'GET /server': {
+          body: { ...serverInfo, capabilities: { ...serverInfo.capabilities, web_player: false } },
+        },
+      }),
+    );
+    renderApp(URL);
+    await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
+    // The hero's other actions are there: only this one is missing.
+    expect(screen.getByRole('button', { name: 'Compare with community' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Listen in player' })).not.toBeInTheDocument();
   });
 });

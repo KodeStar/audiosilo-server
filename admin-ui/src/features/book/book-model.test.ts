@@ -10,6 +10,7 @@ import {
   draftErrors,
   fileName,
   fileStrip,
+  playerConnectUrl,
   ribbonSegments,
   saveRequest,
   undoRevertRequest,
@@ -185,5 +186,23 @@ describe('the rest of the page', () => {
     expect(coverFileProblem({ type: 'image/jpeg', size: 6 * 1024 * 1024 })).toBe(
       'book.cover.tooLarge',
     );
+  });
+});
+
+describe('playerConnectUrl', () => {
+  it("opens the book in this origin's web player, as this admin", () => {
+    const url = playerConnectUrl({ pairing_token: 'tok+/=', server_id: 'srv-1' }, 1, {
+      library_id: 2,
+      path: 'Brandon Sanderson/Mistborn & Co/01 #1?',
+    });
+    const parsed = new URL(url, 'http://admin.test');
+    expect(parsed.origin + parsed.pathname).toBe('http://admin.test/web/connect');
+    expect(Object.fromEntries(parsed.searchParams)).toEqual({
+      token: 'tok+/=',
+      sid: 'srv-1',
+      uid: '1',
+      book: '2',
+      path: 'Brandon Sanderson/Mistborn & Co/01 #1?',
+    });
   });
 });
