@@ -1,6 +1,8 @@
 package api
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -259,13 +261,35 @@ func (b *bridgeEnv) estimateQuery(t *testing.T, tok string, libID int64, path, e
 	return resp, out, body
 }
 
+// testEpub is the smallest epub the Bridge reads, or with broken one it can't
+// (no META-INF/container.xml).
+func testEpub(t *testing.T, broken bool) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	names := []string{"mimetype", "content.opf"}
+	if !broken {
+		names = append(names, "META-INF/container.xml")
+	}
+	for _, name := range names {
+		if _, err := zw.Create(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
 // An ebook beside the audio makes the run read it (no ASR, the per-ebook cost);
 // the open job is part of the answer; the route is the admin's.
 func TestBridgeEstimateEbookAndAccess(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
 	root := copyFixtures(t, "Brandon Sanderson/Mistborn/01 - The Final Empire.m4b", cradlePart)
-	if err := os.WriteFile(filepath.Join(root, "Brandon Sanderson", "Mistborn", "Mistborn.epub"), []byte("epub"), 0o644); err != nil {
+	epub := filepath.Join(root, "Brandon Sanderson", "Mistborn", "Mistborn.epub")
+	if err := os.WriteFile(epub, testEpub(t, false), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.db.ExecContext(context.Background(), `UPDATE libraries SET root = ? WHERE id = ?`, root, b.lib.ID); err != nil {
@@ -279,6 +303,14 @@ func TestBridgeEstimateEbookAndAccess(t *testing.T) {
 		est.Has.Community.Recaps || est.Has.Local.Recaps || est.Earlier == nil || len(est.Earlier) != 0 || est.OpenJob != nil ||
 		strings.Contains(body, `"open_job"`) {
 		t.Fatalf("ebook estimate: %d %s", resp.StatusCode, body)
+	}
+	// An epub the Bridge can't read makes the run read the audio.
+	if err := os.WriteFile(epub, testEpub(t, true), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, est, body = b.estimate(t, b.adminTok, b.lib.ID, mistbornBook)
+	if resp.StatusCode != http.StatusOK || est.Source != bridge.SourceAudio || est.Ebook != "" {
+		t.Fatalf("unreadable epub estimate: %d %s", resp.StatusCode, body)
 	}
 	// Audio of unknown length (no ffprobe in these tests): no estimate, never a
 	// free run.
