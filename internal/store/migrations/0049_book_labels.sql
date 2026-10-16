@@ -23,21 +23,21 @@ ALTER TABLE books ADD COLUMN tags TEXT NOT NULL DEFAULT '';
 ALTER TABLE books ADD COLUMN genres_checked INTEGER NOT NULL DEFAULT 0;
 
 -- Every metadata.json was read before its subtitle, publisher, language,
--- abridged, genres and tags were: marking each folder book's file unread for
--- this index (0046's abs_indexed_at) has the next scan read it again, without a
--- re-index.
-UPDATE books SET abs_indexed_at = NULL;
+-- abridged, genres and tags were: marking each book that has one (abs_sig) unread
+-- for this index (0046's abs_indexed_at) has the next scan read it again, without
+-- a re-index. A book with none needs nothing: a file that appears is read anyway.
+UPDATE books SET abs_indexed_at = NULL WHERE abs_sig <> '';
 
 -- Each book's labels by key (catalog.labelKey: lowercased, spacing collapsed),
 -- the genre= and tag= filters' and the facet counts' index, with the spelling
--- the book uses. Written by Go (refreshEffective, beside book_more_series) from
+-- the book uses; kind is the label's field. Written by Go (refreshEffective, beside book_more_series) from
 -- the effective lists, never computed in SQL. Derived, rebuildable index data
 -- like the books rows they belong to; every row before this has no labels, so
 -- the table starts empty.
 CREATE TABLE book_labels (
     book_id    INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     library_id INTEGER NOT NULL,
-    kind       TEXT NOT NULL CHECK (kind IN ('genre', 'tag')),
+    kind       TEXT NOT NULL CHECK (kind IN ('genres', 'tags')),
     label_key  TEXT NOT NULL,
     name       TEXT NOT NULL,
     PRIMARY KEY (book_id, kind, label_key)

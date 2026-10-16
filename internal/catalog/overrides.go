@@ -121,10 +121,7 @@ func normalizeOverride(field, value string) (string, error) {
 	case FieldSubtitle, FieldPublisher:
 		return v, checkText(field, v, maxShortField)
 	case FieldLanguage:
-		if utf8.RuneCountInString(v) > maxLanguage || strings.IndexFunc(v, unicode.IsControl) >= 0 {
-			return "", invalid(field, "must be a language name or code, at most 64 characters")
-		}
-		return v, nil
+		return v, checkText(field, v, maxLanguage)
 	case FieldAbridged:
 		switch v = strings.ToLower(v); v {
 		case "", "true", "false":
@@ -230,6 +227,17 @@ func formatAbridged(b *bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// AbridgedClaim is a source's abridged flag (an Audiobookshelf metadata.json's,
+// a community recording's) as the abridged field value it gives: "true", or ""
+// (says nothing) for false. Both write false for every book nobody marked, so
+// their false is also "not said", and taking it would claim a book unabridged.
+func AbridgedClaim(abridged bool) string {
+	if abridged {
+		return "true"
+	}
+	return ""
 }
 
 // abridgedColumn is an abridged field value as books.abridged stores it: 1, 0,
@@ -632,18 +640,10 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 		return err
 	}
 	if l.fromRow != "" {
-		// Record the snapshot read off the row, and likewise the chapter titles: the
-		// older server that indexed the row also wrote its chapters, with titles as
-		// scanned and no scanned_title, so the reset below would blank them.
-		// It was read with the older baseline, so it gets no scannedRevKey.
-		raw, err := encodeScanned(l.scanned, l.fromRow)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE books SET scanned = ? WHERE id = ?`, raw, bookID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE chapters SET scanned_title = title WHERE book_id = ?`, bookID); err != nil {
+		// Record the snapshot read off the row (recordScanned keeps the chapter
+		// titles, which the reset below would otherwise blank). It was read with
+		// the older baseline, so it gets no scannedRevKey.
+		if err := recordScanned(ctx, tx, bookID, l, l.scanned); err != nil {
 			return err
 		}
 	}
@@ -663,7 +663,7 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	if err := keyOtherSeries(ctx, tx, bookID, l.libID, v(FieldSeries), v(FieldMoreSeries)); err != nil {
 		return err
 	}
-	if err := writeLabels(ctx, tx, bookID, l.libID, v(FieldGenres), v(FieldTags)); err != nil {
+	if err := writeLabels(ctx, tx, bookID, l.libID, v); err != nil {
 		return err
 	}
 
@@ -695,6 +695,26 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 		`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`,
 		bookID, v(FieldTitle), v(FieldAuthor), ftsSeries(v(FieldSeries), v(FieldMoreSeries)), v(FieldNarrator),
 		ftsLabels(v(FieldGenres)), ftsLabels(v(FieldTags)))
+	return err
+}
+
+// recordScanned writes snap as book id's scanned snapshot, stamped with the
+// row's indexed_at (l, its loaded layers), for refreshEffective to resolve
+// next. When l's snapshot was read off an older server's row (l.fromRow), that
+// server wrote the book's chapters too, with titles as scanned and no
+// scanned_title: their titles are kept as the scanned ones, since a snapshot
+// recorded here is the row's own and is never read off the row again.
+func recordScanned(ctx context.Context, tx *sql.Tx, id int64, l *bookLayers, snap bookFields) error {
+	if l.fromRow != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE chapters SET scanned_title = title WHERE book_id = ?`, id); err != nil {
+			return err
+		}
+	}
+	raw, err := encodeScanned(snap, l.indexedAt)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE books SET scanned = ? WHERE id = ?`, raw, id)
 	return err
 }
 
@@ -797,20 +817,9 @@ func (e BookEdit) normalize() (BookEdit, error) {
 	default:
 		return e, invalid("chapter_source", `must be "auto", "files" or "community"`)
 	}
-	add, err := normalizeLabelEdits(e, "add", e.Add)
+	add, remove, err := normalizeLabelEdits(e)
 	if err != nil {
 		return e, err
-	}
-	remove, err := normalizeLabelEdits(e, "remove", e.Remove)
-	if err != nil {
-		return e, err
-	}
-	for field, names := range remove {
-		for _, name := range names {
-			if slices.ContainsFunc(add[field], func(a string) bool { return labelKey(a) == labelKey(name) }) {
-				return e, invalid(field, "a label cannot be added and removed at once")
-			}
-		}
 	}
 	e.Set, e.ChapterSet, e.Add, e.Remove = set, chSet, add, remove
 	return e, nil
@@ -894,6 +903,9 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	}
 	if len(swapRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert)
+	}
+	if len(set) == 0 && len(revert) == 0 && edit.ChapterSource == "" && len(edit.ChapterSet) == 0 && len(edit.ChapterRevert) == 0 {
+		return nil // nothing for this book (a bulk add of a tag it already has): its row stays as it is
 	}
 	for field, v := range set {
 		if _, err := tx.ExecContext(ctx,

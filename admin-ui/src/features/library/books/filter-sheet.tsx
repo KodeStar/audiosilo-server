@@ -65,18 +65,16 @@ export function FilterSheet({
   // A label is one label in any case, so the chip of the URL's value is on
   // however the facet spells it.
   const label = (key: 'genre' | 'tag', counts: FacetCount[] | undefined) =>
-    facetOptions(counts, search[key] ? [search[key]] : undefined)
-      .filter((c, i, all) => all.findIndex((o) => labelKey(o.value) === labelKey(c.value)) === i)
-      .map((c): Option => {
-        const on = !!search[key] && labelKey(search[key]) === labelKey(c.value);
-        return {
-          value: c.value,
-          label: c.value,
-          count: c.count,
-          on,
-          toggle: () => update((prev) => ({ ...prev, [key]: on ? undefined : c.value })),
-        };
-      });
+    facetOptions(counts, search[key] ? [search[key]] : undefined, labelKey).map((c): Option => {
+      const on = !!search[key] && labelKey(search[key]) === labelKey(c.value);
+      return {
+        value: c.value,
+        label: c.value,
+        count: c.count,
+        on,
+        toggle: () => update((prev) => ({ ...prev, [key]: on ? undefined : c.value })),
+      };
+    });
   const yesNo = (key: 'cover' | 'matched' | 'chapters' | 'edited', counts?: BoolFacet) =>
     YES_NO.map((v): Option => ({
       value: v,

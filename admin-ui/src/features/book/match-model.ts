@@ -1,6 +1,6 @@
 import {
-  LABEL_FIELDS,
   OVERRIDE_FIELDS,
+  isLabelField,
   type BookEditRequest,
   type FieldSource,
   type FieldValue,
@@ -123,7 +123,7 @@ export function compareRows(
   rec: MatchRecording | undefined,
 ): CompareRow[] {
   const theirs = communityValues(c, rec, fields.series.value);
-  const offerable = OVERRIDE_FIELDS.filter((f) => !(LABEL_FIELDS as readonly string[]).includes(f));
+  const offerable = OVERRIDE_FIELDS.filter((f) => !isLabelField(f));
   return offerable.map((f) => {
     const mine = fields[f].value;
     const same = !!theirs[f] && clean(f, mine) === theirs[f];

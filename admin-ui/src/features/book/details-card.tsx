@@ -7,12 +7,13 @@ import { settleBookEdit } from '@/api/hooks';
 import {
   FIELD_SOURCES,
   OVERRIDE_FIELDS,
+  isLabelField,
   type AdminBookDetail,
   type FieldValue,
   type OverrideField,
 } from '@/api/types';
 import { InlineEdit } from '@/components/inline-edit';
-import { LabelInput } from '@/components/label-input';
+import { LabelChip, LabelInput } from '@/components/label-input';
 import { ProvenanceMarker, UnsavedMarker } from '@/components/provenance';
 import { Card, CardHeader } from '@/components/ui/card';
 import { NativeSelect } from '@/components/ui/native-select';
@@ -159,7 +160,7 @@ function FieldRow({
   const id = `field-${field}`;
   const long = field === 'description';
   const mono = field === 'asin' || field === 'isbn';
-  const labels = field === 'genres' || field === 'tags';
+  const labels = isLabelField(field);
   // A label list's draft is its JSON (LabelInput's list), shown as chips.
   const chips = labels ? parseLabels(draft ?? value.value) : [];
 
@@ -252,12 +253,7 @@ function FieldRow({
           {labels && chips.length ? (
             <span id={`${id}-value`} className="flex flex-wrap gap-1.5">
               {chips.map((c) => (
-                <span
-                  key={c}
-                  className="inline-flex h-[24px] items-center rounded-full bg-secondary px-2.5 text-[12.5px] font-[550] text-secondary-foreground"
-                >
-                  {c}
-                </span>
+                <LabelChip key={c} label={c} />
               ))}
             </span>
           ) : (

@@ -1,6 +1,7 @@
 import {
   FITTED_STATUSES,
   OVERRIDE_FIELDS,
+  isLabelField,
   type AdminBookDetail,
   type AdminChapter,
   type AdminFile,
@@ -126,7 +127,7 @@ export function checkField(field: OverrideField, raw: string): FieldCheck {
  */
 export function displayValue(field: OverrideField, value: string): string {
   if (field === 'more_series') return moreSeriesText(value);
-  if (field === 'genres' || field === 'tags') return labelsText(value);
+  if (isLabelField(field)) return labelsText(value);
   return value;
 }
 

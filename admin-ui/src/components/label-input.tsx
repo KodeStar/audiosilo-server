@@ -1,9 +1,44 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { fieldClasses } from '@/components/ui/field-classes';
-import { collapse, labelKey } from '@/lib/labels';
+import { cleanLabels } from '@/lib/labels';
 import { cn } from '@/lib/utils';
+
+/**
+ * One label as a chip (a secondary pill, 24px; STYLEGUIDE.md "Field row"): with
+ * `onRemove`, an x that takes it out of its list.
+ */
+export function LabelChip({
+  label,
+  onRemove,
+  disabled,
+}: {
+  label: string;
+  onRemove?: () => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Badge
+      className={cn('h-[24px] max-w-full px-2.5 text-[12.5px] font-[550]', onRemove && 'pr-1')}
+    >
+      <span className="truncate">{label}</span>
+      {onRemove ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onRemove}
+          aria-label={t('labels.remove', { label })}
+          className="grid size-5 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X aria-hidden="true" />
+        </button>
+      ) : null}
+    </Badge>
+  );
+}
 
 /**
  * A list of labels (genres, tags) edited as chips: type a label and press Enter
@@ -35,7 +70,6 @@ export function LabelInput({
   autoFocus?: boolean;
   className?: string;
 } & React.AriaAttributes) {
-  const { t } = useTranslation();
   const [text, setText] = useState('');
   const input = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -46,14 +80,7 @@ export function LabelInput({
   }, [autoFocus]);
 
   /** value with the labels typed in `raw` (comma-separated) added. */
-  const withTyped = (raw: string): string[] => {
-    const next = [...value];
-    for (const part of raw.split(',')) {
-      const name = collapse(part);
-      if (name && !next.some((l) => labelKey(l) === labelKey(name))) next.push(name);
-    }
-    return next;
-  };
+  const withTyped = (raw: string): string[] => cleanLabels([...value, ...raw.split(',')]).labels;
 
   const addTyped = (raw: string) => {
     const next = withTyped(raw);
@@ -90,21 +117,7 @@ export function LabelInput({
       }}
     >
       {value.map((label) => (
-        <span
-          key={label}
-          className="inline-flex h-[26px] max-w-full items-center gap-1 rounded-full bg-secondary pr-1 pl-2.5 text-[12.5px] font-[550] text-secondary-foreground"
-        >
-          <span className="truncate">{label}</span>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => remove(label)}
-            aria-label={t('labels.remove', { label })}
-            className="grid size-5 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <X className="size-3" aria-hidden="true" />
-          </button>
-        </span>
+        <LabelChip key={label} label={label} disabled={disabled} onRemove={() => remove(label)} />
       ))}
       <input
         {...aria}

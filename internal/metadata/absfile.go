@@ -52,8 +52,8 @@ type ABSFile struct {
 	Description string // plain text: ABS keeps HTML
 	Publisher   string
 	Language    string
-	// Abridged is the file's abridged flag. ABS writes false for every book it
-	// wasn't told is abridged, so only true says anything.
+	// Abridged is the file's abridged flag, of which only true says anything
+	// (catalog.AbridgedClaim).
 	Abridged bool
 	Genres   []string // as the file lists them, trimmed, blanks left out
 	Tags     []string // likewise
@@ -169,8 +169,8 @@ func ParseABSFile(data []byte) (*ABSFile, error) {
 		Publisher:   absScalar(j.Publisher),
 		Language:    absScalar(j.Language),
 		Abridged:    abridged,
-		Genres:      absStrings(j.Genres),
-		Tags:        absStrings(j.Tags),
+		Genres:      absNames(j.Genres),
+		Tags:        absNames(j.Tags),
 		ASIN:        absScalar(j.ASIN),
 		ISBN:        absScalar(j.ISBN),
 	}
@@ -189,22 +189,9 @@ func absList(v json.RawMessage) []json.RawMessage {
 	return items
 }
 
-// absStrings is a list of strings' items, each trimmed: a blank one and an item
-// that isn't a string are left out (nil for none).
-func absStrings(list json.RawMessage) []string {
-	var out []string
-	for _, item := range absList(list) {
-		var s string
-		if json.Unmarshal(item, &s) == nil {
-			if s = strings.TrimSpace(s); s != "" {
-				out = append(out, s)
-			}
-		}
-	}
-	return out
-}
-
-// absNames is the names in a list of people, each a string or a {name} object.
+// absNames is the names in a list (of people, genres or tags), each a string or
+// a {name} object, trimmed: a blank one and any other item left out (nil for
+// none).
 func absNames(list json.RawMessage) []string {
 	var out []string
 	for _, item := range absList(list) {

@@ -119,52 +119,74 @@ func TestBookLabelsAPI(t *testing.T) {
 	}
 }
 
-// TestExportIncludePaths: the allowed and denied pair for ?include=paths: an
-// admin's export names each row's library and paths only when asked, a member is
-// refused either way, and an unknown include is a 400.
-func TestExportIncludePaths(t *testing.T) {
+// TestExportIncludes: the allowed and denied pairs for ?include=paths,tags: an
+// admin's export names each row's paths and carries its tags only when asked
+// (each with its own value), a member is refused either way, and an unknown
+// include is a 400.
+func TestExportIncludes(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)
 	adminTok, memberTok, _ := adminAndMember(t, e)
 	libID, _ := seedCatalog(t, e)
-	path := "/api/v1/admin/libraries/" + strconv.FormatInt(libID, 10) + "/export"
-
-	resp, body := e.do(t, "GET", path+"?include=paths", adminTok, "")
-	if resp.StatusCode != 200 {
-		t.Fatalf("export with paths = %d %s", resp.StatusCode, body)
-	}
-	var out struct {
-		Books []struct {
-			Title     string   `json:"title"`
-			LibraryID int64    `json:"library_id"`
-			Paths     []string `json:"paths"`
-		} `json:"books"`
-	}
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
+	if err := e.cat.EditBook(context.Background(), libID, "Andy Weir/Artemis", catalog.BookEdit{Set: map[string]string{
+		catalog.FieldTags: `["Owned"]`,
+	}}); err != nil {
 		t.Fatal(err)
 	}
-	got := map[string][]string{}
-	for _, b := range out.Books {
-		if b.LibraryID != libID {
-			t.Errorf("%s: library_id = %d, want %d", b.Title, b.LibraryID, libID)
+	path := "/api/v1/admin/libraries/" + strconv.FormatInt(libID, 10) + "/export"
+	export := func(query string) (paths, tags map[string][]string, body string) {
+		t.Helper()
+		resp, body := e.do(t, "GET", path+query, adminTok, "")
+		if resp.StatusCode != 200 {
+			t.Fatalf("export%s = %d %s", query, resp.StatusCode, body)
 		}
-		got[b.Title] = b.Paths
-	}
-	if !slices.Equal(got["The Martian"], []string{"Andy Weir/The Martian"}) || !slices.Equal(got["Artemis"], []string{"Andy Weir/Artemis"}) {
-		t.Errorf("paths = %v", got)
+		var out struct {
+			Books []struct {
+				Title string   `json:"title"`
+				Paths []string `json:"paths"`
+				Tags  []string `json:"tags"`
+			} `json:"books"`
+		}
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatal(err)
+		}
+		paths, tags = map[string][]string{}, map[string][]string{}
+		for _, b := range out.Books {
+			paths[b.Title], tags[b.Title] = b.Paths, b.Tags
+		}
+		return paths, tags, body
 	}
 
-	_, body = e.do(t, "GET", path, adminTok, "")
-	if strings.Contains(body, `"paths"`) || strings.Contains(body, `"library_id"`) || strings.Contains(body, "Andy Weir/") {
-		t.Errorf("the default export carries paths: %s", body)
+	paths, tags, body := export("?include=paths,tags")
+	if !slices.Equal(paths["The Martian"], []string{"Andy Weir/The Martian"}) || !slices.Equal(paths["Artemis"], []string{"Andy Weir/Artemis"}) {
+		t.Errorf("paths = %v", paths)
 	}
-	if resp, _ := e.do(t, "GET", path+"?include=paths", memberTok, ""); resp.StatusCode != http.StatusForbidden {
+	if !slices.Equal(tags["Artemis"], []string{"Owned"}) || tags["The Martian"] != nil {
+		t.Errorf("tags = %v", tags)
+	}
+	if strings.Contains(body, `"library_id"`) {
+		t.Errorf("a row names its library (the envelope does): %s", body)
+	}
+	if _, _, body := export("?include=paths"); strings.Contains(body, `"tags"`) || !strings.Contains(body, `"paths"`) {
+		t.Errorf("include=paths: %s", body)
+	}
+	if _, _, body := export("?include=tags"); strings.Contains(body, `"paths"`) || !strings.Contains(body, `"tags":["Owned"]`) {
+		t.Errorf("include=tags: %s", body)
+	}
+	if _, _, body := export(""); strings.Contains(body, `"paths"`) || strings.Contains(body, `"tags"`) ||
+		strings.Contains(body, "Owned") || strings.Contains(body, "Andy Weir/") {
+		t.Errorf("the default export carries paths or tags: %s", body)
+	}
+
+	if resp, _ := e.do(t, "GET", path+"?include=paths,tags", memberTok, ""); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("member export with paths = %d, want 403", resp.StatusCode)
 	}
-	if resp, _ := e.do(t, "GET", path+"?include=paths", "", ""); resp.StatusCode != http.StatusUnauthorized {
+	if resp, _ := e.do(t, "GET", path+"?include=paths,tags", "", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("anonymous export with paths = %d, want 401", resp.StatusCode)
 	}
-	if resp, _ := e.do(t, "GET", path+"?include=files", adminTok, ""); resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("unknown include = %d, want 400", resp.StatusCode)
+	for _, q := range []string{"?include=files", "?include=paths,files", "?include=paths,", "?include=Tags"} {
+		if resp, _ := e.do(t, "GET", path+q, adminTok, ""); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("export%s = %d, want 400", q, resp.StatusCode)
+		}
 	}
 }

@@ -677,12 +677,15 @@ export const api = {
 
 /**
  * Downloads a library's book list (GET /admin/libraries/{id}/export) as the file
- * the server names. With `paths`, each row also names its library and the paths
- * of the copies it stands for (?include=paths): a file for the admin's own
- * scripts, not one to share. Returns the file name.
+ * the server names. With `personal`, each row also carries the paths of the
+ * copies it stands for and the book's tags (?include=paths,tags): a file for the
+ * admin's own scripts, not one to share. Returns the file name.
  */
-export function downloadLibraryExport(id: number, opts: { paths?: boolean } = {}): Promise<string> {
-  const query = opts.paths ? '?include=paths' : '';
+export function downloadLibraryExport(
+  id: number,
+  opts: { personal?: boolean } = {},
+): Promise<string> {
+  const query = opts.personal ? '?include=paths,tags' : '';
   return download(`/admin/libraries/${id}/export${query}`, `audiosilo-library-${id}.json`);
 }
 

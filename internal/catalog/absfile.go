@@ -31,8 +31,7 @@ type ABSReading struct {
 // absFields is what an ABS file says as stored field values: each as an edit of
 // that field would store it, a value the field refuses left out (and a label the
 // list refuses, CleanLabels). The first series is the book's, with its
-// position; the others are its more_series. abridged is "true" only: ABS
-// writes false for every book nobody marked, so false says nothing.
+// position; the others are its more_series. abridged is AbridgedClaim's.
 func absFields(f *metadata.ABSFile) bookFields {
 	out := bookFields{}
 	if f == nil {
@@ -50,9 +49,7 @@ func absFields(f *metadata.ABSFile) bookFields {
 	set(FieldPublished, f.Published)
 	set(FieldPublisher, f.Publisher)
 	set(FieldLanguage, f.Language)
-	if f.Abridged {
-		set(FieldAbridged, "true")
-	}
+	set(FieldAbridged, AbridgedClaim(f.Abridged))
 	set(FieldGenres, EncodeLabels(CleanLabels(f.Genres)))
 	set(FieldTags, EncodeLabels(CleanLabels(f.Tags)))
 	set(FieldDescription, f.Description)

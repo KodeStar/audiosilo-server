@@ -665,7 +665,7 @@ type ListOptions struct {
 	Memberships bool
 	Narrator    string // optional, as Author
 	// Genre and Tag are optional: the books with that genre / tag, in any case
-	// (labelFilter).
+	// (labelFilters).
 	Genre  string
 	Tag    string
 	Sort   string // "author" (default) | "title" | "recent"
@@ -742,12 +742,8 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 		cond, a := creditFilter("", "narrator", opt.Narrator)
 		where, args = append(where, cond), append(args, a...)
 	}
-	for kind, name := range map[string]string{labelGenre: opt.Genre, labelTag: opt.Tag} {
-		if name != "" {
-			cond, a := labelFilter("", kind, name)
-			where, args = append(where, cond), append(args, a...)
-		}
-	}
+	labelConds, labelArgs := labelFilters("", opt.LibraryID, opt.Genre, opt.Tag, "")
+	where, args = append(where, labelConds...), append(args, labelArgs...)
 	// Restrict to the caller's access scope (share path rules), if provided.
 	if opt.Scope != nil {
 		frag, fargs := pathFilterSQL("rel_path", *opt.Scope)

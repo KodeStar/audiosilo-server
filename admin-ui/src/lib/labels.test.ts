@@ -16,6 +16,11 @@ describe('labels', () => {
       labels: ['Sci-Fi', 'Space Opera'],
     });
     expect(cleanLabels(['x'.repeat(65)]).error).toBe('book.invalid.labelTooLong');
+    // A refused label stays in the list, so a box keeps what was typed.
+    expect(cleanLabels(['ok', 'x'.repeat(65), 'a\u0007b'])).toEqual({
+      labels: ['ok', 'x'.repeat(65), 'a\u0007b'],
+      error: 'book.invalid.labelTooLong',
+    });
     // Characters, not bytes.
     expect(cleanLabels(['é'.repeat(64)]).error).toBeUndefined();
     expect(cleanLabels(['a\u0007b']).error).toBe('book.invalid.control');
@@ -24,10 +29,11 @@ describe('labels', () => {
     );
   });
 
-  it('takes a stored list or a line apart by commas', () => {
+  it('takes a stored list, cleaned', () => {
     expect(checkLabels('')).toEqual({ value: '' });
-    expect(checkLabels(' Fantasy , epic, FANTASY ')).toEqual({ value: '["Fantasy","epic"]' });
+    expect(checkLabels('[" Fantasy ","epic","FANTASY"]')).toEqual({ value: '["Fantasy","epic"]' });
     expect(checkLabels('["Owned"]')).toEqual({ value: '["Owned"]' });
+    expect(checkLabels('Fantasy, Epic').error).toBe('book.invalid.labels');
     expect(checkLabels('[1]').error).toBe('book.invalid.labels');
     expect(checkLabels('[broken').error).toBe('book.invalid.labels');
   });

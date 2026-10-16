@@ -25,17 +25,15 @@ import (
 // that key (labelKey), which the genre= and tag= filters and the facet counts
 // read by its index. Derived, like book_more_series: rebuilt with the books row.
 
-// The label fields, and the kinds book_labels files them under.
+// The label fields, which are also the kinds book_labels files them under and
+// the facet dimensions of their filters.
 const (
 	FieldGenres = "genres"
 	FieldTags   = "tags"
-
-	labelGenre = "genre"
-	labelTag   = "tag"
 )
 
-// labelKinds maps each label field to its book_labels kind.
-var labelKinds = map[string]string{FieldGenres: labelGenre, FieldTags: labelTag}
+// labelFields is the label fields, in display order.
+var labelFields = []string{FieldGenres, FieldTags}
 
 // Bounds on a label list: a real book has a handful, and a label is a word or
 // a short phrase.
@@ -50,27 +48,40 @@ func labelKey(name string) string { return strings.ToLower(collapseSpace(name)) 
 // collapseSpace trims s and joins its words with one space.
 func collapseSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// cleanLabels is in as a label list: each label trimmed with its inner spacing
-// collapsed, blanks dropped, each label once (labelKey: the first spelling
-// kept). Strict (an edit) refuses a label over maxLabelLen, one with a control
-// character and a list over maxLabels, naming field; lenient (what a file says)
-// leaves such a label out and keeps the first maxLabels, so one odd value never
-// costs a book the rest. Nil for none.
-func cleanLabels(field string, in []string, strict bool) ([]string, error) {
+// hasLabel says whether list holds the label name (labelKey: any case).
+func hasLabel(list []string, name string) bool {
+	return slices.ContainsFunc(list, func(l string) bool { return labelKey(l) == labelKey(name) })
+}
+
+// uniqueLabels is in as names: each trimmed with its inner spacing collapsed,
+// blanks dropped, each label once (labelKey: the first spelling kept). Nil for
+// none.
+func uniqueLabels(in []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, raw := range in {
-		name := collapseSpace(raw)
-		if name == "" || seen[labelKey(name)] {
-			continue
+		if name := collapseSpace(raw); name != "" && !seen[labelKey(name)] {
+			seen[labelKey(name)] = true
+			out = append(out, name)
 		}
+	}
+	return out
+}
+
+// cleanLabels is in as a label list (uniqueLabels), checked. Strict (an edit)
+// refuses a label over maxLabelLen, one with a control character and a list
+// over maxLabels, naming field; lenient (what a file says) leaves such a label
+// out and keeps the first maxLabels, so one odd value never costs a book the
+// rest. Nil for none.
+func cleanLabels(field string, in []string, strict bool) ([]string, error) {
+	var out []string
+	for _, name := range uniqueLabels(in) {
 		if err := checkText(field, name, maxLabelLen); err != nil {
 			if strict {
 				return nil, invalid(field, "a label must be at most 64 characters, with no control characters")
 			}
 			continue
 		}
-		seen[labelKey(name)] = true
 		out = append(out, name)
 	}
 	if len(out) > maxLabels {
@@ -106,30 +117,14 @@ func normalizeLabels(field, v string) (string, error) {
 	return EncodeLabels(out), nil
 }
 
-// EncodeLabels is the canonical value of a label list ("" for none): without
-// HTML escaping, so "Growing Up & Facts of Life" is written as the console's
-// JSON.stringify writes it and the two compare equal.
-func EncodeLabels(labels []string) string {
-	if len(labels) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(labels) // a list of strings always encodes
-	return strings.TrimSuffix(b.String(), "\n")
-}
+// EncodeLabels is the canonical value of a label list ("" for none;
+// encodeCanonical, so "Growing Up & Facts of Life" compares equal to the
+// console's).
+func EncodeLabels(labels []string) string { return encodeCanonical(labels) }
 
 // ParseLabels reads a stored label value (canonical JSON; "" for none). A value
 // it can't read names no label.
-func ParseLabels(v string) []string {
-	if v == "" || v == "[]" {
-		return nil
-	}
-	var out []string
-	_ = json.Unmarshal([]byte(v), &out)
-	return out
-}
+func ParseLabels(v string) []string { return parseCanonical[string](v) }
 
 // mergeLabels is the stored list cur with the labels of add that it lacks
 // appended and those remove names (by labelKey) taken out: how a bulk edit
@@ -143,7 +138,7 @@ func mergeLabels(field, cur string, add, remove []string) (string, error) {
 	}
 	out := slices.DeleteFunc(ParseLabels(cur), func(l string) bool { return drop[labelKey(l)] })
 	for _, a := range add {
-		if !slices.ContainsFunc(out, func(l string) bool { return labelKey(l) == labelKey(a) }) {
+		if !hasLabel(out, a) {
 			out = append(out, a)
 		}
 	}
@@ -153,35 +148,39 @@ func mergeLabels(field, cur string, add, remove []string) (string, error) {
 	return EncodeLabels(out), nil
 }
 
-// normalizeLabelEdits checks a BookEdit's Add or Remove (which, what) and
-// returns it clean: only the label fields take one, never a field the edit also
-// sets or reverts; added labels as an edit stores them, removed ones by name
-// (blank ones dropped).
-func normalizeLabelEdits(e BookEdit, which string, in map[string][]string) (map[string][]string, error) {
-	out := make(map[string][]string, len(in))
-	for field, labels := range in {
-		if _, ok := labelKinds[field]; !ok {
-			return nil, invalid(field, "only genres and tags take "+which)
-		}
-		if touches(e, field) {
-			return nil, invalid(field, "cannot be set or reverted and changed by "+which+" at once")
-		}
-		var clean []string
-		if which == "add" {
-			var err error
-			if clean, err = cleanLabels(field, labels, true); err != nil {
-				return nil, err
+// normalizeLabelEdits checks a BookEdit's Add and Remove and returns them
+// clean: only the label fields take either, never a field the edit also sets or
+// reverts, and never one label both added and removed. Added labels are clean as
+// an edit stores them (the strict cleanLabels); removed ones are names
+// (uniqueLabels), with no bound, since one no book could have removes nothing.
+func normalizeLabelEdits(e BookEdit) (add, remove map[string][]string, err error) {
+	for _, edits := range []map[string][]string{e.Add, e.Remove} {
+		for field := range edits {
+			if !slices.Contains(labelFields, field) {
+				return nil, nil, invalid(field, "only genres and tags take add and remove")
 			}
-		} else {
-			for _, l := range labels {
-				if l = collapseSpace(l); l != "" {
-					clean = append(clean, l)
-				}
+			if touches(e, field) {
+				return nil, nil, invalid(field, "cannot be set or reverted and changed by add or remove at once")
 			}
 		}
-		out[field] = clean
 	}
-	return out, nil
+	add, remove = map[string][]string{}, map[string][]string{}
+	for _, field := range labelFields {
+		if _, ok := e.Add[field]; ok {
+			if add[field], err = cleanLabels(field, e.Add[field], true); err != nil {
+				return nil, nil, err
+			}
+		}
+		if _, ok := e.Remove[field]; ok {
+			remove[field] = uniqueLabels(e.Remove[field])
+		}
+		for _, name := range remove[field] {
+			if hasLabel(add[field], name) {
+				return nil, nil, invalid(field, "a label cannot be added and removed at once")
+			}
+		}
+	}
+	return add, remove, nil
 }
 
 // labelSets is what an edit's Add and Remove make of one book's lists: the new
@@ -198,7 +197,7 @@ func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (ma
 	}
 	cur := map[string]string{FieldGenres: genres, FieldTags: tags}
 	out := map[string]string{}
-	for _, field := range slices.Sorted(maps.Keys(labelKinds)) {
+	for _, field := range labelFields {
 		add, remove := edit.Add[field], edit.Remove[field]
 		if len(add) == 0 && len(remove) == 0 {
 			continue
@@ -214,14 +213,14 @@ func labelSets(ctx context.Context, tx *sql.Tx, bookID int64, edit BookEdit) (ma
 	return out, nil
 }
 
-// writeLabels writes book_labels for a book: each of its genres and tags by key,
-// with the spelling the book uses.
-func writeLabels(ctx context.Context, tx *sql.Tx, bookID, libID int64, genres, tags string) error {
+// writeLabels writes book_labels for a book: each label of its label fields
+// (value: a field's effective value) by key, with the spelling the book uses.
+func writeLabels(ctx context.Context, tx *sql.Tx, bookID, libID int64, value func(field string) string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM book_labels WHERE book_id = ?`, bookID); err != nil {
 		return err
 	}
-	for kind, v := range map[string]string{labelGenre: genres, labelTag: tags} {
-		for _, name := range ParseLabels(v) {
+	for _, kind := range labelFields {
+		for _, name := range ParseLabels(value(kind)) {
 			if _, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO book_labels(book_id, library_id, kind, label_key, name) VALUES(?, ?, ?, ?, ?)`,
 				bookID, libID, kind, labelKey(name), name); err != nil {
@@ -232,12 +231,24 @@ func writeLabels(ctx context.Context, tx *sql.Tx, bookID, libID int64, genres, t
 	return nil
 }
 
-// labelFilter is the WHERE condition, and its args, for a genre= or tag= filter
-// (kind) on the books row whose columns carry prefix: the books that have the
-// label named name, in any case (labelKey), found by book_labels' index.
-func labelFilter(prefix, kind, name string) (string, []any) {
-	return prefix + "id IN (SELECT bl.book_id FROM book_labels bl WHERE bl.kind = ? AND bl.label_key = ?)",
-		[]any{kind, labelKey(name)}
+// labelFilters is the WHERE conditions, and their args, for the genre= and tag=
+// filters (genre, tag: "" for none) on the books row whose columns carry prefix,
+// leaving out the facet dimension skip: the books that have the label named, in
+// any case (labelKey), found by book_labels' index, in library libID (0: any).
+func labelFilters(prefix string, libID int64, genre, tag, skip string) (conds []string, args []any) {
+	for _, f := range []struct{ kind, name string }{{FieldGenres, genre}, {FieldTags, tag}} {
+		if f.name == "" || f.kind == skip {
+			continue
+		}
+		cond := "SELECT bl.book_id FROM book_labels bl WHERE bl.kind = ? AND bl.label_key = ?"
+		args = append(args, f.kind, labelKey(f.name))
+		if libID != 0 {
+			cond += " AND bl.library_id = ?"
+			args = append(args, libID)
+		}
+		conds = append(conds, prefix+"id IN ("+cond+")")
+	}
+	return conds, args
 }
 
 // ftsLabels is the full-text index's text for a label list: a label a line.
@@ -275,23 +286,12 @@ func setGenres(ctx context.Context, tx *sql.Tx, libraryID int64, relPath string,
 	if l.scanned[FieldGenres] == v {
 		return false, nil // most books: no genre, or only a placeholder
 	}
-	if l.fromRow != "" {
-		// The snapshot is read off an older server's row, which wrote its chapters
-		// with no scanned_title: keep their titles, as setPathReading does.
-		if _, err := tx.ExecContext(ctx, `UPDATE chapters SET scanned_title = title WHERE book_id = ?`, id); err != nil {
-			return false, err
-		}
-	}
 	snap := maps.Clone(l.scanned)
 	snap[FieldGenres] = v
 	if l.pathRev != "" {
 		snap[scannedRevKey] = l.pathRev
 	}
-	raw, err := encodeScanned(snap, l.indexedAt)
-	if err != nil {
-		return false, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE books SET scanned = ? WHERE id = ?`, raw, id); err != nil {
+	if err := recordScanned(ctx, tx, id, l, snap); err != nil {
 		return false, err
 	}
 	return true, refreshEffective(ctx, tx, id)

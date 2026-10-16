@@ -52,7 +52,7 @@ type Metadata struct {
 	// first publication.
 	Released string `json:"released,omitempty"`
 	// Genres are the genre tag's genres (SplitGenres: several in one tag, the
-	// placeholders such as "Audiobook" left out); nil for none.
+	// placeholders such as "Audiobook" left out, uncleaned); nil for none.
 	Genres   []string  `json:"genres,omitempty"`
 	Duration float64   `json:"duration"`
 	Format   string    `json:"format"`

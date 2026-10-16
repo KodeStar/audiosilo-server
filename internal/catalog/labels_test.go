@@ -295,10 +295,27 @@ func TestLabelFacets(t *testing.T) {
 	if want := []FacetCount{{"Owned", 2}, {"Favourite", 1}}; !reflect.DeepEqual(f.Tags, want) {
 		t.Errorf("tags = %+v, want %+v", f.Tags, want)
 	}
+
+	// The genre filter keeps to the library, but the library facet counts every
+	// library's books with that genre.
+	other, _ := c.CreateLibrary(t.Context(), Library{Name: "M", Root: "/tmp/m"})
+	if _, err := c.UpsertBook(t.Context(), &Book{LibraryID: other.ID, RelPath: "D", Title: "Book D", Genres: []string{"FANTASY"}}); err != nil {
+		t.Fatal(err)
+	}
+	f, _ = c.BookFacets(t.Context(), BookFilter{LibraryID: lib, Genre: "fantasy"})
+	if want := []LibraryCount{{lib, 2}, {other.ID, 1}}; !reflect.DeepEqual(f.Libraries, want) {
+		t.Errorf("libraries = %+v, want %+v", f.Libraries, want)
+	}
+	if want := []FacetCount{{"Fantasy", 2}, {"Horror", 1}, {"Science Fiction", 1}}; !reflect.DeepEqual(f.Genres, want) {
+		t.Errorf("genres in the library = %+v, want %+v", f.Genres, want)
+	}
+	if got := listPaths(t, c, ListOptions{LibraryID: lib, Genre: "fantasy"}); !slices.Equal(got, []string{"A", "B"}) {
+		t.Errorf("genre filter = %v, want the library's books only", got)
+	}
 }
 
 // TestBulkLabelEdit: adding and removing labels keeps each book's own others,
-// writes nothing on a book it leaves as it was, and refuses to be mixed with a
+// writes nothing on a book it leaves as it was (nor rebuilds its row), and refuses to be mixed with a
 // set or a revert of the same field.
 func TestBulkLabelEdit(t *testing.T) {
 	t.Parallel()
@@ -333,6 +350,30 @@ func TestBulkLabelEdit(t *testing.T) {
 	}
 	if b, _ := c.GetBookByPath(ctx, lib, "C"); b.Genres != nil {
 		t.Errorf("C after a rescan: genres %q, want the removal kept", b.Genres)
+	}
+
+	// Adding a tag every book already has leaves each as it was: no override
+	// written, and the row not even rebuilt (a stale title stays stale).
+	if _, err := c.db.ExecContext(ctx, `UPDATE books SET title = 'stale' WHERE rel_path = 'A'`); err != nil {
+		t.Fatal(err)
+	}
+	stamps := func() string {
+		t.Helper()
+		var out string
+		if err := c.db.QueryRowContext(ctx, `SELECT group_concat(path || field || updated_at) FROM book_overrides`).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	before := stamps()
+	if err := c.EditBooks(ctx, refs, BookEdit{Add: map[string][]string{FieldTags: {"READ"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := c.GetBookByPath(ctx, lib, "A"); b.Title != "stale" {
+		t.Errorf("A's title = %q: the row was rebuilt by an edit that changed nothing on it", b.Title)
+	}
+	if after := stamps(); after != before {
+		t.Errorf("overrides changed by an edit that changed nothing: %s -> %s", before, after)
 	}
 
 	for name, edit := range map[string]BookEdit{

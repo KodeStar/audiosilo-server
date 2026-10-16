@@ -70,12 +70,12 @@ export function LibraryCard({
   // Waiting in the job queue behind another library's scan (a running one wins).
   const queued = !running && !!l.scan.queued;
 
-  // With paths, each row names its library and its books' paths: a file for the
-  // admin's own scripts (the menu warns before it is made), never the default.
-  const exportBooks = async (paths = false) => {
+  // Personal, each row carries its books' paths and tags: a file for the admin's
+  // own scripts (the menu warns before it is made), never the default.
+  const exportBooks = async (personal = false) => {
     setExporting(true);
     try {
-      const file = await downloadLibraryExport(l.id, { paths });
+      const file = await downloadLibraryExport(l.id, { personal });
       toast.add({
         title: t('libraries.toast.exported', { name: l.name }),
         description: file,

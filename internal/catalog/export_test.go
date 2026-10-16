@@ -231,6 +231,10 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A tag is the owner's own note: not for a file that leaves the server either.
+	if err := c.EditBook(ctx, lib.ID, "Author/Secret Folder/book.m4b", BookEdit{Set: map[string]string{FieldTags: `["Private Shelf"]`}}); err != nil {
+		t.Fatal(err)
+	}
 	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +245,7 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 	}
 	// Values that exist on the indexed row but must never reach the file.
 	for _, leak := range []string{"secret-root", "Secret Folder", "book.m4b", "rel_path",
-		"aac", "12345", "deadbeef", "cover", "content_hash"} {
+		"aac", "12345", "deadbeef", "cover", "content_hash", "Private Shelf"} {
 		if strings.Contains(string(raw), leak) {
 			t.Errorf("export leaks %q: %s", leak, raw)
 		}
@@ -284,14 +288,15 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 		t.Fatalf("books = %d, want 1: %s", len(books), raw)
 	}
 	assertKeys("book", books[0], "title", "subtitle", "authors", "narrators",
-		"series", "series_position", "publisher", "language", "abridged", "genres", "tags",
+		"series", "series_position", "publisher", "language", "abridged", "genres",
 		"asin", "isbn", "runtime_min", "chapters")
 }
 
-// TestExportLibraryBooksIncludePaths: asked for paths, each row names its library
-// and the path of every copy collapsed into it, and the leak guard's allowlist
-// holds otherwise; without the option neither key appears (above).
-func TestExportLibraryBooksIncludePaths(t *testing.T) {
+// TestExportLibraryBooksIncludes: asked for paths, each row names the path of
+// every copy collapsed into it; asked for tags, each row carries its tags; each
+// only with its own option, and the leak guard's allowlist holds otherwise
+// (without either, neither key appears: above).
+func TestExportLibraryBooksIncludes(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
 	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/srv/secret-root"})
@@ -305,48 +310,65 @@ func TestExportLibraryBooksIncludePaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{IncludePaths: true})
-	if err != nil {
+	// The tag is on the copy that sorts second: the collapsed row takes it.
+	if err := c.EditBook(ctx, lib.ID, "Lee Child/Die Trying", BookEdit{Set: map[string]string{FieldTags: `["Owned"]`}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(exp.Books) != 2 {
-		t.Fatalf("books = %d, want 2: %+v", len(exp.Books), exp.Books)
+	export := func(opt ExportOptions) ([]ExportBook, []map[string]json.RawMessage) {
+		t.Helper()
+		exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(exp.Books) != 2 {
+			t.Fatalf("books = %d, want 2: %+v", len(exp.Books), exp.Books)
+		}
+		raw, _ := json.Marshal(exp)
+		var doc struct {
+			Library map[string]json.RawMessage   `json:"library"`
+			Books   []map[string]json.RawMessage `json:"books"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := doc.Library["root"]; ok || strings.Contains(string(raw), "secret-root") {
+			t.Errorf("the library root leaked: %s", raw)
+		}
+		return exp.Books, doc.Books
 	}
-	die, other := exp.Books[0], exp.Books[1]
-	if die.LibraryID != lib.ID || !slices.Equal(die.Paths, []string{"Rips/Die Trying.mp3", "Lee Child/Die Trying"}) ||
-		!slices.Equal(die.Genres, []string{"Thriller"}) {
-		t.Errorf("collapsed row = %+v, want both copies' paths and the genre", die)
-	}
-	if other.LibraryID != lib.ID || !slices.Equal(other.Paths, []string{"Other/Book.m4b"}) {
-		t.Errorf("single row = %+v", other)
-	}
-	raw, _ := json.Marshal(exp)
-	var doc struct {
-		Library map[string]json.RawMessage   `json:"library"`
-		Books   []map[string]json.RawMessage `json:"books"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := doc.Library["root"]; ok || strings.Contains(string(raw), "secret-root") {
-		t.Errorf("the library root leaked: %s", raw)
-	}
-	allowed := map[string]bool{"title": true, "authors": true, "asin": true, "genres": true, "library_id": true, "paths": true}
-	for _, b := range doc.Books {
-		for k := range b {
-			if !allowed[k] {
-				t.Errorf("row carries unexpected field %q: %s", k, raw)
+	keys := func(rows []map[string]json.RawMessage, allowed ...string) {
+		t.Helper()
+		for _, row := range rows {
+			for k := range row {
+				if !slices.Contains(allowed, k) {
+					t.Errorf("row carries unexpected field %q: %v", k, row)
+				}
 			}
 		}
 	}
 
-	// The same library without the option: no row names a path or a library.
-	exp, _ = c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{})
-	raw, _ = json.Marshal(exp)
-	if strings.Contains(string(raw), `"paths"`) || strings.Contains(string(raw), `"library_id"`) ||
-		strings.Contains(string(raw), "Rips/") {
-		t.Errorf("an export without paths carries them: %s", raw)
+	books, rows := export(ExportOptions{IncludePaths: true})
+	die, other := books[0], books[1]
+	if !slices.Equal(die.Paths, []string{"Rips/Die Trying.mp3", "Lee Child/Die Trying"}) ||
+		!slices.Equal(die.Genres, []string{"Thriller"}) || die.Tags != nil {
+		t.Errorf("collapsed row = %+v, want both copies' paths and the genre, no tags", die)
 	}
+	if !slices.Equal(other.Paths, []string{"Other/Book.m4b"}) {
+		t.Errorf("single row = %+v", other)
+	}
+	keys(rows, "title", "authors", "asin", "genres", "paths")
+
+	books, rows = export(ExportOptions{IncludeTags: true})
+	if die := books[0]; !slices.Equal(die.Tags, []string{"Owned"}) || die.Paths != nil {
+		t.Errorf("collapsed row = %+v, want the tag, no paths", die)
+	}
+	keys(rows, "title", "authors", "asin", "genres", "tags")
+
+	books, rows = export(ExportOptions{IncludePaths: true, IncludeTags: true})
+	if die := books[0]; !slices.Equal(die.Tags, []string{"Owned"}) || len(die.Paths) != 2 {
+		t.Errorf("collapsed row = %+v, want the tag and both paths", die)
+	}
+	keys(rows, "title", "authors", "asin", "genres", "tags", "paths")
 }
 
 // TestExportLibraryBooksPagesEveryBook checks the keyset paging loop drains a

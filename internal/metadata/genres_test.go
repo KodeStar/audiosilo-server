@@ -14,14 +14,15 @@ func TestSplitGenres(t *testing.T) {
 		{"", nil},
 		{"Fantasy", []string{"Fantasy"}},
 		{"Fantasy;Epic", []string{"Fantasy", "Epic"}},
-		{" Science  Fiction , Space Opera ;; ", []string{"Science Fiction", "Space Opera"}},
+		// Cleaning (trim, spacing, repeats) is catalog.CleanLabels': the parts as spelled.
+		{" Science  Fiction , Space Opera ;; ", []string{" Science  Fiction ", " Space Opera "}},
 		{"Mystery\x00Thriller", []string{"Mystery", "Thriller"}},
 		// The placeholders say only that it is an audiobook, in any case.
 		{"Audiobook", nil},
 		{"AUDIOBOOKS; Audio Book; speech; Spoken Word; other", nil},
 		{"Audiobook;Fantasy", []string{"Fantasy"}},
-		// A genre once, its first spelling kept.
-		{"Fantasy; fantasy; FANTASY; Horror", []string{"Fantasy", "Horror"}},
+		{" audio   BOOK ; Fantasy", []string{" Fantasy"}},
+		{"Fantasy; fantasy", []string{"Fantasy", " fantasy"}},
 		// A word that merely contains a placeholder is a genre.
 		{"Other Worlds", []string{"Other Worlds"}},
 	} {
@@ -45,7 +46,7 @@ func TestGenresFromTagsAndProbe(t *testing.T) {
 	if !reflect.DeepEqual(m.Genres, []string{"Fantasy"}) {
 		t.Errorf("a placeholder from ffprobe replaced the tag's genres: %q", m.Genres)
 	}
-	applyProbe(m, &probeResult{Tags: map[string]string{"genre": "Fantasy; Epic"}})
+	applyProbe(m, &probeResult{Tags: map[string]string{"genre": "Fantasy;Epic"}})
 	if !reflect.DeepEqual(m.Genres, []string{"Fantasy", "Epic"}) {
 		t.Errorf("probe: Genres = %q, want [Fantasy Epic]", m.Genres)
 	}

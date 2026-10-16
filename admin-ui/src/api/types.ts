@@ -1542,6 +1542,9 @@ export type OverrideField = (typeof OVERRIDE_FIELDS)[number];
 /** The label fields (catalog labels.go): a list as canonical JSON, "" for none. */
 export const LABEL_FIELDS = ['genres', 'tags'] as const;
 export type LabelField = (typeof LABEL_FIELDS)[number];
+/** Whether a field is a label field. */
+export const isLabelField = (f: string): f is LabelField =>
+  (LABEL_FIELDS as readonly string[]).includes(f);
 
 /** Where a field's value came from (catalog.Source*), in the legend's order. */
 export const FIELD_SOURCES = ['tag', 'path', 'abs', 'edited', 'community'] as const;

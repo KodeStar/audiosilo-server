@@ -109,15 +109,6 @@ func setPathReading(ctx context.Context, tx *sql.Tx, libraryID int64, relPath st
 		// Re-indexed with today's baseline since the scan read its signature.
 		return nil
 	}
-	if l.fromRow != "" {
-		// The snapshot is read off an older server's row, which wrote its chapters
-		// with no scanned_title: keep their titles, as refreshEffective does when it
-		// records such a snapshot (it won't here, the one written below being the
-		// row's own).
-		if _, err := tx.ExecContext(ctx, `UPDATE chapters SET scanned_title = title WHERE book_id = ?`, id); err != nil {
-			return err
-		}
-	}
 	snap := maps.Clone(l.scanned)
 	if m != nil {
 		maps.Copy(snap, pathFields(m))
@@ -131,11 +122,7 @@ func setPathReading(ctx context.Context, tx *sql.Tx, libraryID int64, relPath st
 		}
 	}
 	snap[scannedRevKey] = scannedRev
-	raw, err := encodeScanned(snap, l.indexedAt)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE books SET scanned = ? WHERE id = ?`, raw, id); err != nil {
+	if err := recordScanned(ctx, tx, id, l, snap); err != nil {
 		return err
 	}
 	return refreshEffective(ctx, tx, id)

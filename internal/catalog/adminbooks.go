@@ -221,7 +221,7 @@ type BookFilter struct {
 	Author         string // the whole effective value, or exactly one person it names (creditFilter)
 	Series         string // the main series, or one more_series names, in any spelling (seriesFilter)
 	Narrator       string // as Author
-	Genre          string // a genre the book has, in any case (labelFilter)
+	Genre          string // a genre the book has, in any case (labelFilters)
 	Tag            string // likewise a tag
 	Formats        []string
 	Codecs         []string
@@ -252,8 +252,7 @@ const (
 	facetHasChapters    = "has_chapters"
 	facetMatched        = "matched"
 	facetEdited         = "edited"
-	facetGenre          = "genre"
-	facetTag            = "tag"
+	// The label filters' dimensions are their fields, FieldGenres and FieldTags.
 )
 
 // where builds the WHERE clause (over `books b`) for f, leaving out the facet
@@ -308,14 +307,12 @@ func (f BookFilter) where(skip string) (string, []any) {
 		cond, a := creditFilter("b.", "narrator", f.Narrator)
 		add(cond, a...)
 	}
-	if f.Genre != "" && skip != facetGenre {
-		cond, a := labelFilter("b.", labelGenre, f.Genre)
-		add(cond, a...)
+	labelLib := f.LibraryID
+	if skip == facetLibrary {
+		labelLib = 0 // the library facet counts every library's books
 	}
-	if f.Tag != "" && skip != facetTag {
-		cond, a := labelFilter("b.", labelTag, f.Tag)
-		add(cond, a...)
-	}
+	labelConds, labelArgs := labelFilters("b.", labelLib, f.Genre, f.Tag, skip)
+	conds, args = append(conds, labelConds...), append(args, labelArgs...)
 	if len(f.Formats) > 0 && skip != facetFormat {
 		in("b.format", f.Formats)
 	}
@@ -633,10 +630,10 @@ func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, er
 		}
 	}
 	for _, d := range []struct {
-		dim, kind string
-		dst       *[]FacetCount
-	}{{facetGenre, labelGenre, &out.Genres}, {facetTag, labelTag, &out.Tags}} {
-		where, args := f.where(d.dim)
+		kind string
+		dst  *[]FacetCount
+	}{{FieldGenres, &out.Genres}, {FieldTags, &out.Tags}} {
+		where, args := f.where(d.kind)
 		if *d.dst, err = c.labelFacet(ctx, d.kind, where, args); err != nil {
 			return nil, err
 		}
@@ -695,37 +692,32 @@ func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, er
 
 // labelFacet counts the books (over `books b` WHERE where) by each label of
 // kind: the most common maxLabelFacets, ties alphabetical, each named by the
-// spelling most of its books use (ties alphabetical too).
+// spelling most of its books use (seriesName; ties alphabetical too).
 func (c *Catalog) labelFacet(ctx context.Context, kind, where string, args []any) ([]FacetCount, error) {
 	type spelled struct {
 		key, name string
 		n         int
 	}
+	// A semi-join: the label index drives it, each book looked up once.
 	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, s *spelled) error { return r.Scan(&s.key, &s.name, &s.n) },
-		`SELECT bl.label_key, bl.name, COUNT(*) FROM book_labels bl JOIN books b ON b.id = bl.book_id
-		  WHERE bl.kind = ? AND `+where+` GROUP BY bl.label_key, bl.name`, append([]any{kind}, args...)...)
+		`SELECT bl.label_key, bl.name, COUNT(*) FROM book_labels bl
+		  WHERE bl.kind = ? AND bl.book_id IN (SELECT b.id FROM books b WHERE `+where+`)
+		  GROUP BY bl.label_key, bl.name`, append([]any{kind}, args...)...)
 	if err != nil {
 		return nil, err
 	}
-	type label struct {
-		FacetCount
-		best int // the books of its most used spelling
-	}
-	byKey := map[string]*label{}
+	byKey := map[string]map[string]spelling{}
+	counts := map[string]int{}
 	for _, r := range rows {
-		l := byKey[r.key]
-		if l == nil {
-			l = &label{}
-			byKey[r.key] = l
+		if byKey[r.key] == nil {
+			byKey[r.key] = map[string]spelling{}
 		}
-		l.Count += r.n
-		if r.n > l.best || (r.n == l.best && r.name < l.Value) {
-			l.Value, l.best = r.name, r.n
-		}
+		byKey[r.key][r.name] = spelling{books: r.n}
+		counts[r.key] += r.n
 	}
 	out := make([]FacetCount, 0, len(byKey))
-	for _, l := range byKey {
-		out = append(out, l.FacetCount)
+	for key, spellings := range byKey {
+		out = append(out, FacetCount{Value: seriesName(spellings), Count: counts[key]})
 	}
 	slices.SortFunc(out, func(a, b FacetCount) int { return cmp.Or(b.Count-a.Count, compareFold(a.Value, b.Value)) })
 	return out[:min(len(out), maxLabelFacets)], nil

@@ -1,4 +1,5 @@
 import { adminBook } from '@/test/library-fixtures';
+import { labelKey } from '@/lib/labels';
 import {
   activeFilters,
   bookFilter,
@@ -199,6 +200,12 @@ describe('facetOptions', () => {
       { value: 'flac', count: 0 },
     ]);
     expect(facetOptions(undefined)).toEqual([]);
+  });
+
+  it('matches the selected value by key', () => {
+    const counts = [{ value: 'Fantasy', count: 2 }];
+    expect(facetOptions(counts, ['FANTASY'], labelKey)).toEqual(counts);
+    expect(facetOptions(counts, ['FANTASY'])).toHaveLength(2);
   });
 });
 

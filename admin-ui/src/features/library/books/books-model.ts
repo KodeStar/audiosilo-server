@@ -165,11 +165,20 @@ export function toggleValue(list: string[] | undefined, value: string): string[]
 /**
  * A repeatable facet's chips: the counted values, plus any selected value the
  * counts no longer hold (so it can still be turned off), with a zero count.
+ * `key` is what a value is one value by (a label's: labelKey, any case).
  */
-export function facetOptions(counts: FacetCount[] | undefined, selected?: string[]) {
+export function facetOptions(
+  counts: FacetCount[] | undefined,
+  selected?: string[],
+  key: (value: string) => string = (v) => v,
+) {
   const list = [...(counts ?? [])];
+  const listed = new Set(list.map((c) => key(c.value)));
   for (const v of selected ?? []) {
-    if (!list.some((c) => c.value === v)) list.push({ value: v, count: 0 });
+    if (!listed.has(key(v))) {
+      listed.add(key(v));
+      list.push({ value: v, count: 0 });
+    }
   }
   return list;
 }
