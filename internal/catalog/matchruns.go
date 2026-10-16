@@ -314,13 +314,19 @@ func scanMatchItem(rows *sql.Rows, it *MatchRunItem) error {
 
 const matchItemCols = `id, run_id, library_id, path, outcome, score, runner_up, proposal, applied, detail`
 
-// ListMatchRunItems returns a page of a run's items in id order: of one outcome
-// ("" = all), after the item `after`, at most limit, and the id the next page
-// reads after (0 when this is the last).
+// ListMatchRunItems returns a page of a run's items, the best match first (score
+// descending, then id): of one outcome ("" = all), after the item `after`, at most
+// limit, and the id the next page reads after (0 when this is the last). The
+// cursor stays an item id: the page reads on from that item's score, which never
+// changes once recorded, so a review paged 50 at a time sees the whole outcome in
+// one order rather than each page sorted on its own. An `after` that isn't one of
+// the run's items reads nothing (the row it compares with is all NULL).
 func (c *Catalog) ListMatchRunItems(ctx context.Context, runID int64, outcome string, after int64, limit int) ([]MatchRunItem, int64, error) {
 	items, err := queryRows(ctx, c.db, scanMatchItem, `SELECT `+matchItemCols+` FROM match_run_items
-	     WHERE run_id = ? AND (? = '' OR outcome = ?) AND id > ? ORDER BY id LIMIT ?`,
-		runID, outcome, outcome, after, limit+1)
+	     WHERE run_id = ? AND (? = '' OR outcome = ?)
+	       AND (? = 0 OR (score, -id) < (SELECT score, -id FROM match_run_items WHERE id = ? AND run_id = ?))
+	     ORDER BY score DESC, id LIMIT ?`,
+		runID, outcome, outcome, after, after, runID, limit+1)
 	if err != nil {
 		return nil, 0, err
 	}
