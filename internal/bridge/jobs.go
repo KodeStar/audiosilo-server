@@ -873,13 +873,14 @@ func (s *Service) UpdateHeld(ctx context.Context, id int64, u Update) (*Job, err
 	return job, nil
 }
 
-// transientParks are the park codes that are not news: the agent's rate limit
-// and a short outage of the agent container, which the Bridge resumes by itself
-// once they pass (telling an admin about every one would flood a phone). Any
-// other park waits on something a person sees to, or is long enough to hear
-// about (a monthly budget spent until the month turns, a credential refused),
-// whatever its retry_at says.
-var transientParks = []string{"agent_rate_limited", "agent_unavailable"}
+// transientParks are the park codes that are not news: the agent's rate limit,
+// a short outage of the agent container, and a wait for an ASR worker (a
+// laptop worker asleep: each book that reaches its transcription would park in
+// turn), which the Bridge resumes by itself once they pass (telling an admin
+// about every one would flood a phone). Any other park waits on something a
+// person sees to, or is long enough to hear about (a monthly budget spent until
+// the month turns, a credential refused), whatever its retry_at says.
+var transientParks = []string{"agent_rate_limited", "agent_unavailable", "asr_worker_waiting"}
 
 // Notable reports whether a job's move from the state `from` (fromCode: the
 // park code it named there, "" for none) is one the server tells admins about

@@ -469,7 +469,7 @@ function LibraryRow({
   );
 }
 
-/** The ASR workers the Bridge reports (Phase 1b), or that they come later. */
+/** The ASR workers the Bridge reports (Phase 1b), or that none has connected yet. */
 function WorkersCard({ status }: { status: BridgeStatus }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
