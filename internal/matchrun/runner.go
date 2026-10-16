@@ -35,6 +35,11 @@ const (
 // know the book's ASIN or ISBN.
 const DetailIdentifierUnknown = "identifier_unknown"
 
+// DetailCoverPending is a match item's detail while its fields went in but a stop
+// cut its cover short: still to apply, so the next apply takes the cover, the
+// ASIN or ISBN the book has now being the run's own (not matchedSince).
+const DetailCoverPending = "cover_pending"
+
 // ErrBusy is a start or apply asked while a run is working: one at a time.
 var ErrBusy = errors.New("a match run is already working")
 
@@ -413,10 +418,17 @@ func (r *Runner) apply(ctx context.Context, run *catalog.MatchRun, items []catal
 	pool.Each(ctx, workers, items, enabled, func(it *catalog.MatchRunItem) {
 		applied, detail := r.applyItem(ctx, run.Mode, it, o)
 		// Stopped mid-item: what the stop may have cut short (a failure, a cover
-		// not taken) is not marked, so the next apply takes it again; what went in
-		// is, so it counts as applied rather than coming back as nothing to change.
+		// not taken) stays to apply, so the next apply takes it again; what went in
+		// is marked, so it counts as applied rather than coming back as nothing to
+		// change.
 		if ctx.Err() != nil && (applied == catalog.ItemFailed || detail == "cover_failed") {
-			return
+			if applied == catalog.ItemFailed || run.Mode != catalog.MatchModeMatch {
+				return
+			}
+			// A match's fields went in, its cover didn't: still to apply, marked
+			// as the run's own, as the ASIN the book has now would otherwise read
+			// as matched since and the cover would never be taken.
+			applied, detail = "", DetailCoverPending
 		}
 		if err := r.cat.MarkMatchItem(context.WithoutCancel(ctx), run.ID, it.ID, applied, detail); err != nil {
 			r.log.Error("mark match item failed", "run", run.ID, "item", it.ID, "err", err)
@@ -446,7 +458,10 @@ func (r *Runner) applyItem(ctx context.Context, mode string, it *catalog.MatchRu
 		}
 		return catalog.ItemFailed, "edit_failed"
 	}
-	w := planFor(mode, o.Scope, st, it.Proposal)
+	if mode == catalog.MatchModeMatch && matchedSince(st, it) {
+		return catalog.ItemSkipped, "matched_since"
+	}
+	w := planFor(mode, o.Scope, st, it)
 	if w.Empty() {
 		return catalog.ItemSkipped, "nothing_to_change"
 	}
@@ -516,9 +531,12 @@ func changeOf(st *catalog.MatchState, w Writes) Change {
 // nothing is indexed at its path any more) and what each scope would change.
 type ItemView struct {
 	catalog.MatchRunItem
-	Book    ItemBook          `json:"book"`
-	Gone    bool              `json:"gone,omitempty"`
-	Changes map[string]Change `json:"changes"`
+	Book ItemBook `json:"book"`
+	Gone bool     `json:"gone,omitempty"`
+	// MatchedSince: a match run's book matched since the run (matchedSince),
+	// which an apply leaves alone; its changes are none.
+	MatchedSince bool              `json:"matched_since,omitempty"`
+	Changes      map[string]Change `json:"changes"`
 }
 
 // ItemBook is the book an item is for, as it is now.
@@ -555,8 +573,9 @@ func (r *Runner) Items(ctx context.Context, run *catalog.MatchRun, outcome strin
 			return nil, 0, err
 		default:
 			v.Book = ItemBook{Title: st.Title, Author: st.Author}
+			v.MatchedSince = run.Mode == catalog.MatchModeMatch && it.Applied == "" && matchedSince(st, &it)
 			for _, scope := range scopes {
-				v.Changes[scope] = changeOf(st, planFor(run.Mode, scope, st, it.Proposal))
+				v.Changes[scope] = changeOf(st, planFor(run.Mode, scope, st, &it))
 			}
 		}
 		out[i] = v

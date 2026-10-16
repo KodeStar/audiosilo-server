@@ -196,7 +196,12 @@ function BookView({ detail, matchOnOpen }: { detail: AdminBookDetail; matchOnOpe
         onSaved={reset}
         onRefused={(field, message) => setRefused((r) => ({ ...r, [field]: message }))}
       />
-      <MatchDialog open={matching} onOpenChange={setMatching} detail={detail} />
+      <MatchDialog
+        open={matching}
+        onOpenChange={setMatching}
+        libraryId={detail.book.library_id}
+        path={detail.book.path}
+      />
       <AddToShareDialog
         open={sharing}
         onOpenChange={setSharing}

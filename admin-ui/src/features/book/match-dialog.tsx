@@ -18,12 +18,14 @@ import {
   cachedCommunityCover,
   invalidateBookCover,
   settleBookEdit,
+  useAdminBook,
   useCommunityCover,
   useMatchCandidates,
 } from '@/api/hooks';
 import type { AdminBookDetail, MatchCandidate, MatchRecording, OverrideField } from '@/api/types';
 import { BookCover, CoverArt } from '@/components/book-cover';
 import { ProvenanceMarker } from '@/components/provenance';
+import { QueryError } from '@/components/query-error';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -64,15 +66,24 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 3)}...`
  * unticked, and so does the community cover for a book with art of its own.
  * Covers are fetched by the server (the console's CSP loads no other host's
  * images). Each opening starts afresh, at the search.
+ *
+ * It reads the book itself, only while open (on the book page that's the page's
+ * own query, already loaded); opened elsewhere (the bulk match's review) it waits
+ * for it, or says why it didn't load. `onMatched` hears that something was
+ * written to the book.
  */
 export function MatchDialog({
   open,
   onOpenChange,
-  detail,
+  libraryId,
+  path,
+  onMatched,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  detail: AdminBookDetail;
+  libraryId: number;
+  path: string;
+  onMatched?: () => void;
 }) {
   const { t } = useTranslation();
   const [step, setStep] = useState<Step>('search');
@@ -94,15 +105,54 @@ export function MatchDialog({
         }
       >
         {open ? (
-          <MatchBody
-            detail={detail}
+          <MatchLoader
+            libraryId={libraryId}
+            path={path}
             step={step}
             onStep={setStep}
-            onDone={() => onOpenChange(false)}
+            onDone={() => {
+              onMatched?.();
+              onOpenChange(false);
+            }}
           />
         ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** The book the dialog matches, loaded (or why it didn't), then the dialog's body. */
+function MatchLoader({
+  libraryId,
+  path,
+  ...body
+}: {
+  libraryId: number;
+  path: string;
+  step: Step;
+  onStep: (step: Step) => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation();
+  const book = useAdminBook(libraryId, path);
+  if (book.data) return <MatchBody detail={book.data} {...body} />;
+  if (book.isError) {
+    return (
+      <DialogBody>
+        <QueryError
+          title={t('book.error')}
+          error={book.error}
+          onRetry={() => void book.refetch()}
+        />
+      </DialogBody>
+    );
+  }
+  return (
+    <DialogBody className="flex flex-col gap-2" role="status" aria-label={t('common.loading')}>
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="skel h-16 rounded-[12px]" />
+      ))}
+    </DialogBody>
   );
 }
 
@@ -117,6 +167,7 @@ function MatchBody({
   detail: AdminBookDetail;
   step: Step;
   onStep: (step: Step) => void;
+  /** Closes the dialog once something was written to the book. */
   onDone: () => void;
 }) {
   const { t } = useTranslation();

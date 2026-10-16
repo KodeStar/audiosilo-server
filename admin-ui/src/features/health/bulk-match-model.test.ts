@@ -7,6 +7,7 @@ import {
   bulkPhase,
   isChosen,
   isPickable,
+  leaveOut,
   runFraction,
   togglePick,
 } from './bulk-match-model';
@@ -114,6 +115,16 @@ describe('picks', () => {
     expect(applyCount(r, NO_PICKS)).toBe(3);
     expect(applyCount(r, { exclude: new Set([1, 2]), include: new Set([9]) })).toBe(2);
     expect(applyCount(r, { exclude: new Set([1, 2, 3, 4]), include: new Set() })).toBe(0);
+  });
+
+  it('leaves a book matched by hand out of the apply, and never offers one matched since', () => {
+    const picks = leaveOut(leaveOut(togglePick(NO_PICKS, doubtful), doubtful), confident);
+    expect(isChosen(confident, picks)).toBe(false);
+    expect(isChosen(doubtful, picks)).toBe(false);
+    expect(applyRequest('fill', picks)).toEqual({ scope: 'fill', exclude: [1], include: [] });
+    expect(isPickable(item({ matched_since: true }))).toBe(false);
+    // One already applied isn't pending, so leaving it out doesn't lower the count.
+    expect(leaveOut(NO_PICKS, item({ applied: 'applied' }))).toBe(NO_PICKS);
   });
 });
 

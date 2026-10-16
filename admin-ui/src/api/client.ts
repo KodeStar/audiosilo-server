@@ -80,6 +80,7 @@ import type {
   Library,
   LoginResponse,
   MetaMirrorStatus,
+  PairToken,
   PathRule,
   ServerInfo,
   Share,
@@ -330,6 +331,11 @@ export const api = {
   /** Revokes the stored session, or `token` when given (never touching storage). */
   logout: (token?: string) => request<void>('POST', '/auth/logout', undefined, token),
   me: () => request<User>('GET', '/me'),
+  /**
+   * A single-use, ten-minute pairing token for the signed-in admin, which "Listen in
+   * player" hands the web player (403 for an API key).
+   */
+  pairSelf: () => request<PairToken>('POST', '/auth/pair'),
   stats: () => request<AdminStats>('GET', '/admin/stats'),
   settings: () => request<AdminSettings>('GET', '/admin/settings'),
   /** Queues a scan (coalesced with one already waiting); answers with the job. */

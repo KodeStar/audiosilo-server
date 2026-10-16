@@ -121,6 +121,16 @@ export interface LoginResponse {
   server_id: string;
 }
 
+/**
+ * The fields the console reads of POST /api/v1/auth/pair's pairing payload
+ * (handlers_auth.go handlePair; api.PairingPayload, qr.go buildPairing): a
+ * single-use, ten-minute pairing token for the caller.
+ */
+export interface PairToken {
+  pairing_token: string;
+  server_id: string;
+}
+
 /** One library's book count in GET /admin/stats (handlers_stats.go libStat). */
 export interface LibraryStat {
   id: number;
@@ -2024,12 +2034,17 @@ export interface MatchRunItem {
   proposal: MatchProposal;
   /** What applying did: '' (not yet) | applied | skipped | failed. */
   applied: '' | 'applied' | 'skipped' | 'failed';
-  /** Why: book_gone | nothing_to_change | edit_failed | cover_failed | metadata_unavailable | identifier_unknown. */
+  /** Why: book_gone | nothing_to_change | matched_since | edit_failed | cover_failed | metadata_unavailable | identifier_unknown; cover_pending while still to apply (a stop cut its cover short). */
   detail?: string;
   /** The book as it is now. */
   book: { title: string; author: string };
   /** Nothing is indexed at the path any more. */
   gone?: boolean;
+  /**
+   * A match run's book matched since the run (it has an ASIN or ISBN now: by hand,
+   * or elsewhere): an apply leaves it alone, and it has no changes.
+   */
+  matched_since?: boolean;
   /** What each scope would write: fields (in display order) and the cover. */
   changes: Partial<Record<MatchScope, MatchChange>>;
 }

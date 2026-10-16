@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,62 @@ func TestRecordMatchItemDeletedLibrary(t *testing.T) {
 	err = c.RecordMatchItem(ctx, scoped, &MatchRunItem{LibraryID: gone.ID, Path: "A/B", Outcome: OutcomeNone})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("record into a deleted run = %v, want ErrNotFound", err)
+	}
+}
+
+// TestListMatchRunItemsBestFirst: a run's items page best match first (score
+// descending, a tie in the order they were recorded) across pages, so a review read
+// a page at a time sees one order; an outcome reads only its own items, and an
+// `after` from another run reads nothing.
+func TestListMatchRunItemsBestFirst(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "One", Root: "/tmp/one"})
+	run, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch, Total: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := c.StartMatchRun(ctx, MatchRun{Mode: MatchModeMatch, Total: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, score := range []int{70, 95, 70, 60, 95, 80} {
+		item := &MatchRunItem{LibraryID: lib.ID, Path: fmt.Sprintf("A/%d-%d", i, score), Outcome: OutcomeReview, Score: score}
+		if err := c.RecordMatchItem(ctx, run, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.RecordMatchItem(ctx, run, &MatchRunItem{LibraryID: lib.ID, Path: "A/none", Outcome: OutcomeNone}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RecordMatchItem(ctx, other, &MatchRunItem{LibraryID: lib.ID, Path: "B/other", Outcome: OutcomeReview, Score: 99}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	var after int64
+	for range 10 {
+		items, next, err := c.ListMatchRunItems(ctx, run, OutcomeReview, after, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range items {
+			got = append(got, it.Path)
+		}
+		if after = next; after == 0 {
+			break
+		}
+	}
+	if want := "A/1-95,A/4-95,A/5-80,A/0-70,A/2-70,A/3-60"; strings.Join(got, ",") != want {
+		t.Errorf("pages = %s, want %s", strings.Join(got, ","), want)
+	}
+
+	foreign, _, err := c.ListMatchRunItems(ctx, other, OutcomeReview, 0, 10)
+	if err != nil || len(foreign) != 1 {
+		t.Fatalf("other run = %d items %v, want its one", len(foreign), err)
+	}
+	if items, next, err := c.ListMatchRunItems(ctx, run, OutcomeReview, foreign[0].ID, 10); err != nil || len(items) != 0 || next != 0 {
+		t.Errorf("after another run's item = %d items next %d %v, want none", len(items), next, err)
 	}
 }
 

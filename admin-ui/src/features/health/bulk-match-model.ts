@@ -44,28 +44,51 @@ export interface Picks {
 
 export const NO_PICKS: Picks = { exclude: new Set(), include: new Set() };
 
+const withId = (set: ReadonlySet<number>, id: number) => new Set(set).add(id);
+const withoutId = (set: ReadonlySet<number>, id: number) => {
+  const next = new Set(set);
+  next.delete(id);
+  return next;
+};
+
 /** Whether an apply takes the item: confident unless left out, a review one only if put in. */
 export function isChosen(item: MatchRunItem, picks: Picks): boolean {
   if (!isPickable(item)) return false;
   return item.outcome === 'auto' ? !picks.exclude.has(item.id) : picks.include.has(item.id);
 }
 
-/** Whether the item has a checkbox at all: a candidate, not applied yet, its book still there. */
+/**
+ * Whether the item has a checkbox at all: a candidate, not applied yet, its book
+ * still there and not matched since the run (an apply leaves that one alone).
+ */
 export function isPickable(item: MatchRunItem): boolean {
-  return (item.outcome === 'auto' || item.outcome === 'review') && !item.applied && !item.gone;
+  return (
+    (item.outcome === 'auto' || item.outcome === 'review') &&
+    !item.applied &&
+    !item.gone &&
+    !item.matched_since
+  );
 }
 
 /** Flips one item's pick. */
 export function togglePick(picks: Picks, item: MatchRunItem): Picks {
-  const flip = (set: ReadonlySet<number>) => {
-    const next = new Set(set);
-    if (next.has(item.id)) next.delete(item.id);
-    else next.add(item.id);
-    return next;
-  };
+  const flip = (set: ReadonlySet<number>) =>
+    set.has(item.id) ? withoutId(set, item.id) : withId(set, item.id);
   return item.outcome === 'auto'
     ? { ...picks, exclude: flip(picks.exclude) }
     : { ...picks, include: flip(picks.include) };
+}
+
+/**
+ * Leaves an item out of the apply, as a book matched by hand from the review is
+ * (the server leaves it alone anyway: this keeps the apply's count true). One
+ * already applied is no pick at all (applyCount counts only pending ones).
+ */
+export function leaveOut(picks: Picks, item: MatchRunItem): Picks {
+  if (item.applied) return picks;
+  return item.outcome === 'auto'
+    ? { ...picks, exclude: withId(picks.exclude, item.id) }
+    : { ...picks, include: withoutId(picks.include, item.id) };
 }
 
 /** How many books an apply writes to: the confident ones still pending, less left out, plus put in. */

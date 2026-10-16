@@ -316,7 +316,10 @@ future metadata site can attach enrichment without reshaping the schema. The
   redeem response's `uses_remaining`/`code_expires_at` advertise the budget);
   recovery-derived tokens instead last `auth.recoveryPairingTTL` (multi-scan
   within it), and
-  `/auth/pair` + demo tokens stay unlinked/single-use. Invite codes minted via
+  `/auth/pair` + demo tokens stay unlinked/single-use (the console's book page
+  "Listen in player" mints one with `/auth/pair` and opens the same-origin
+  `/web/connect?token=&sid=&uid=&book=&path=` in a new tab, never the payload's
+  `web_url`, whose base may be another origin). Invite codes minted via
   the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
   `handlers_admin.go`); explicit values override.
 - **Home and away addresses (`addresses` capability)**: a server
@@ -1117,6 +1120,13 @@ future metadata site can attach enrichment without reshaping the schema. The
   repick records only books with a new ASIN), so a clean library leaves no items. A refresh
   proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:..."), and
   applying it is a no-op for a book that no longer has it (matched again since).
+  Likewise a match run's book that has an ASIN or ISBN now (`matchedSince`: matched by hand
+  from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
+  in the review and is skipped with detail `matched_since`, under any scope; a match whose
+  fields went in before a stop cut its cover short stays to apply, detail `cover_pending`, its
+  ASIN the run's own rather than one matched since, so the next apply takes the cover. The review's
+  items page best match first (`score DESC, id`), the cursor still an item id whose score
+  the next page reads on from.
   Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
   changes the book's series, which the review shows as "old -> new". A retired work slug
   is a redirect the client follows, so the names written are the merged record's.
