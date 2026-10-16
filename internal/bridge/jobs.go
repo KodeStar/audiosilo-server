@@ -336,7 +336,7 @@ var ErrLibraryNotWritable = errors.New("the bridge can't write to that library")
 // ErrGenerateOpen is a sidecars.describe job for a book with a sidecars.generate
 // job still open: that job writes the description when it finishes, so a second
 // writer is refused (a 409 generate_open). A generate job is never refused for
-// an open describe job, nor does it cancel one: both stay queued, and the
+// an open describe job: queueing it cancels that one (cancelOpenTx), and the
 // generate job writes a description of its own.
 var ErrGenerateOpen = errors.New("a generate job is open for the book")
 
