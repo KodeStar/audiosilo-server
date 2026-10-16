@@ -266,6 +266,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	suspectBackfill := map[string]int{}
 	splitBackfill := map[string]string{}
 	releasedBackfill := map[string]string{}
+	// Books indexed before 0049 whose genre tag was never read: the genres a read
+	// of the primary file finds (SetGenres), flushed like the path readings since
+	// each one that has any re-resolves its book.
+	genresBackfill := map[string][]string{}
 	pathBackfill := map[string]*metadata.Metadata{}
 	// Folder books whose metadata.json is new, changed, gone or never read, while
 	// their audio is unchanged: read here and recorded without a re-index
@@ -274,7 +278,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 	// Books whose .audiosilo/ attachments are new, changed, gone or never read,
 	// while their audio is unchanged: likewise (SetAttachments).
 	attachBackfill := map[string]catalog.AttachmentsReading{}
-	// The path, ABS and attachments backfills are written as they go: a large one
+	// The path, genre, ABS and attachments backfills are written as they go: a large one
 	// (most of a library laid out Author/Title, or every folder book of a library
 	// ABS has managed, read once after an upgrade) can take a while, and a scan
 	// stopped part way keeps what it read (written past the Stop: at most
@@ -284,6 +288,10 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 			s.log.Warn("record path readings failed", "library", lib.Name, "err", err)
 		}
 		clear(pathBackfill)
+		if err := s.cat.SetGenres(context.WithoutCancel(ctx), lib.ID, genresBackfill); err != nil {
+			s.log.Warn("record genres failed", "library", lib.Name, "err", err)
+		}
+		clear(genresBackfill)
 		if err := s.cat.SetABSFiles(context.WithoutCancel(ctx), lib.ID, absBackfill); err != nil {
 			s.log.Warn("record Audiobookshelf metadata failed", "library", lib.Name, "err", err)
 		}
@@ -340,20 +348,24 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 						suspectBackfill[b.RelPath] = n
 					}
 				}
-				// Rows indexed before 0037 haven't had their date read, and some books
-				// one folder deep, read when that folder was taken for their series,
-				// need their tags to tell (catalog.PathRead): one read of the primary
-				// file (tags and ffprobe, as enrich reads it) does both, not a re-index
-				// probing every part. Unopenable now, it waits for the next scan; and
+				// Rows indexed before 0037 haven't had their date read, nor rows
+				// before 0049 their genre, and some books one folder deep, read when
+				// that folder was taken for their series, need their tags to tell
+				// (catalog.PathRead): one read of the primary file (tags and ffprobe,
+				// as enrich reads it) does all three, not a re-index probing every
+				// part. Unopenable now, it waits for the next scan; and
 				// the names wait while ffprobe fails where it didn't before, as the
 				// series it alone reads (an MP3's TXXX) would be recorded as none.
 				if old.PathCheck == catalog.PathFromSnapshot {
 					pathBackfill[b.RelPath] = nil
 				}
-				if old.ReleasedUnchecked || old.PathCheck == catalog.PathRead {
+				if old.ReleasedUnchecked || old.GenresUnchecked || old.PathCheck == catalog.PathRead {
 					if md, _ := metadata.Extract(primary, s.ffprobePath); md.OpenErr == nil {
 						if old.ReleasedUnchecked {
 							releasedBackfill[b.RelPath] = md.Released
+						}
+						if old.GenresUnchecked {
+							genresBackfill[b.RelPath] = md.Genres
 						}
 						if old.PathCheck == catalog.PathRead && (md.ProbeErr == nil || old.ScanError == problemProbe) {
 							pathBackfill[b.RelPath] = readNames(b.RelPath, b.IsFolder, md)
@@ -379,7 +391,7 @@ func (s *Scanner) Scan(ctx context.Context, lib catalog.Library) (_ *ScanResult,
 							Was: &catalog.AttachmentsState{Sig: old.AttachmentsSig, Unchecked: old.AttachmentsUnchecked}}
 					}
 				}
-				if len(pathBackfill)+len(absBackfill)+len(attachBackfill) >= pathFlushEvery {
+				if len(pathBackfill)+len(genresBackfill)+len(absBackfill)+len(attachBackfill) >= pathFlushEvery {
 					flushBackfills()
 				}
 				continue
@@ -575,6 +587,7 @@ func (s *Scanner) enrich(lib catalog.Library, b *catalog.Book) {
 	if md != nil {
 		b.Narrator = md.Narrator
 		b.Released = md.Released
+		b.Genres = md.Genres
 		b.Codec = md.Codec
 	}
 

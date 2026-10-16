@@ -6,8 +6,8 @@ import (
 	"unicode"
 )
 
-// Search runs a full-text query over the catalog (title/author/series/narrator)
-// restricted to the caller's access scopes (per-library share path rules). It
+// Search runs a full-text query over the catalog (title/author/series/narrator,
+// and the genres and tags since migration 0049) restricted to the caller's access scopes (per-library share path rules). It
 // uses FTS5 so it stays fast at thousands of books; results are ranked by FTS
 // relevance.
 func (c *Catalog) Search(ctx context.Context, query string, scopes []Scope, limit int) ([]Book, error) {

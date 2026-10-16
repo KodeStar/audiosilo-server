@@ -206,8 +206,8 @@ func TestNormalizeTagsAndRawString(t *testing.T) {
 // accessors applyTags reads are overridden; the rest are never called.
 type fakeTags struct {
 	tag.Metadata
-	album, title, albumArtist, artist, composer string
-	raw                                         map[string]interface{}
+	album, title, albumArtist, artist, composer, genre string
+	raw                                                map[string]interface{}
 }
 
 func (f fakeTags) Album() string               { return f.album }
@@ -215,6 +215,7 @@ func (f fakeTags) Title() string               { return f.title }
 func (f fakeTags) AlbumArtist() string         { return f.albumArtist }
 func (f fakeTags) Artist() string              { return f.artist }
 func (f fakeTags) Composer() string            { return f.composer }
+func (f fakeTags) Genre() string               { return f.genre }
 func (f fakeTags) Picture() *tag.Picture       { return nil }
 func (f fakeTags) Raw() map[string]interface{} { return f.raw }
 

@@ -280,7 +280,48 @@ describe('libraries', () => {
     expect(await screen.findByText('audiosilo-fiction-2026-10-03.json')).toBeInTheDocument();
     const exp = calls.find((c) => c.path === '/admin/libraries/1/export');
     expect(exp?.headers.Authorization).toBe('Bearer stored');
+    // The plain export names no paths and carries no tags.
+    expect(exp?.query.get('include')).toBeNull();
     expect(createObjectURL).toHaveBeenCalled();
+  });
+
+  it('exports with file paths and tags only after a warning', async () => {
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:export'), revokeObjectURL: vi.fn() }),
+    );
+    const calls = mockFetch(
+      routes({
+        'GET /admin/libraries/1/export': {
+          raw: '{"format":"audiosilo-books"}',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Disposition':
+              'attachment; filename="audiosilo-fiction-2026-10-03-private.json"',
+          },
+        },
+      }),
+    );
+    renderApp('/library/libraries');
+    const user = userEvent.setup();
+    const fiction = await screen.findByRole('listitem', { name: 'Fiction' });
+    await user.click(within(fiction).getByRole('button', { name: 'Actions for Fiction' }));
+    await user.click(
+      await screen.findByRole('menuitem', { name: 'Export with file paths and tags...' }),
+    );
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Export Fiction with file paths and tags',
+    });
+    expect(
+      within(dialog).getByText(/Don't attach this file to a public issue/),
+    ).toBeInTheDocument();
+    expect(calls.some((c) => c.path === '/admin/libraries/1/export')).toBe(false);
+    await user.click(within(dialog).getByRole('button', { name: 'Export with paths and tags' }));
+    expect(
+      await screen.findByText('audiosilo-fiction-2026-10-03-private.json'),
+    ).toBeInTheDocument();
+    const exp = calls.find((c) => c.path === '/admin/libraries/1/export');
+    expect(exp?.query.get('include')).toBe('paths,tags');
   });
 
   it('shows the empty state with no libraries', async () => {

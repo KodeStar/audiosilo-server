@@ -44,13 +44,21 @@ var utf8BOM = []byte("\xef\xbb\xbf")
 // catalog checks each against its field's rules.
 type ABSFile struct {
 	Title       string
+	Subtitle    string
 	Author      string // the file's authors, joined with ", "
 	Narrator    string // likewise
 	Series      []ABSSeries
 	Published   string // YYYY[-MM[-DD]] (ReleaseDate) from publishedDate, else publishedYear
 	Description string // plain text: ABS keeps HTML
-	ASIN        string
-	ISBN        string
+	Publisher   string
+	Language    string
+	// Abridged is the file's abridged flag, of which only true says anything
+	// (catalog.AbridgedClaim).
+	Abridged bool
+	Genres   []string // as the file lists them, trimmed, blanks left out
+	Tags     []string // likewise
+	ASIN     string
+	ISBN     string
 }
 
 // ABSSeries is one of the book's series in an ABS file, in the file's order (ABS
@@ -67,12 +75,18 @@ type ABSSeries struct {
 // {name, sequence}) are taken too.
 type absJSON struct {
 	Title         json.RawMessage `json:"title"`
+	Subtitle      json.RawMessage `json:"subtitle"`
 	Authors       json.RawMessage `json:"authors"`
 	Narrators     json.RawMessage `json:"narrators"`
 	Series        json.RawMessage `json:"series"`
 	PublishedYear json.RawMessage `json:"publishedYear"`
 	PublishedDate json.RawMessage `json:"publishedDate"`
 	Description   json.RawMessage `json:"description"`
+	Publisher     json.RawMessage `json:"publisher"`
+	Language      json.RawMessage `json:"language"`
+	Abridged      json.RawMessage `json:"abridged"`
+	Genres        json.RawMessage `json:"genres"`
+	Tags          json.RawMessage `json:"tags"`
 	ISBN          json.RawMessage `json:"isbn"`
 	ASIN          json.RawMessage `json:"asin"`
 }
@@ -143,12 +157,20 @@ func ParseABSFile(data []byte) (*ABSFile, error) {
 	if err := json.Unmarshal(bytes.TrimPrefix(data, utf8BOM), &j); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrABSFileInvalid, err)
 	}
+	var abridged bool
+	_ = json.Unmarshal(j.Abridged, &abridged) // anything but a bool says nothing
 	out := &ABSFile{
 		Title:       absScalar(j.Title),
+		Subtitle:    absScalar(j.Subtitle),
 		Author:      strings.Join(absNames(j.Authors), ", "),
 		Narrator:    strings.Join(absNames(j.Narrators), ", "),
 		Published:   firstReleaseDate(absScalar(j.PublishedDate), absScalar(j.PublishedYear)),
 		Description: htmlText(absScalar(j.Description)),
+		Publisher:   absScalar(j.Publisher),
+		Language:    absScalar(j.Language),
+		Abridged:    abridged,
+		Genres:      absNames(j.Genres),
+		Tags:        absNames(j.Tags),
 		ASIN:        absScalar(j.ASIN),
 		ISBN:        absScalar(j.ISBN),
 	}
@@ -167,7 +189,9 @@ func absList(v json.RawMessage) []json.RawMessage {
 	return items
 }
 
-// absNames is the names in a list of people, each a string or a {name} object.
+// absNames is the names in a list (of people, genres or tags), each a string or
+// a {name} object, trimmed: a blank one and any other item left out (nil for
+// none).
 func absNames(list json.RawMessage) []string {
 	var out []string
 	for _, item := range absList(list) {

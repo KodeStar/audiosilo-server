@@ -505,7 +505,10 @@ before → Edited).
 dashed pink outline. Field row = label (130px) · click-to-edit value · marker (+ "Revert" for edited
 fields, whose tooltip shows the file-tag value). Editing locks the field against rescans; the legend
 under the Details card explains the five sources (Audiobookshelf: a
-`metadata.json` ABS keeps in the book's folder, over the tags).
+`metadata.json` ABS keeps in the book's folder, over the tags). A label list (genres, tags) shows as
+secondary 24px chips and edits as a chip box (`LabelInput`: Enter or a comma adds, a chip's x removes,
+Backspace takes the last back; the bulk edit's add/remove boxes are the same component); abridged is a
+three-way select (not known, abridged, unabridged) that drafts on change.
 
 ### Chapter ribbon _custom_
 

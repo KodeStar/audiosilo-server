@@ -86,7 +86,10 @@ var yearRE = regexp.MustCompile(`^\d{4}`)
 // recording's best for this server (meta.MatchRecording.ASINs is ordered by the
 // preferred marketplace), named with its marketplace. The series are the ones a
 // book that is rec is in (meta.MatchRecording.Series): an edition named for that
-// recording first, never an edition of another recording.
+// recording first, never an edition of another recording. The subtitle and
+// language are the work's, the publisher the recording's, and abridged the
+// recording's claim (catalog.AbridgedClaim). The community's genres are not
+// offered (a match candidate carries none).
 func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProposal {
 	p := catalog.MatchProposal{
 		WorkID: c.WorkID, Title: c.Title, Authors: names(c.Authors), WebURL: c.WebURL,
@@ -94,7 +97,8 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 	}
 	published := c.FirstPublished
 	raw := map[string]string{
-		catalog.FieldTitle: c.Title, catalog.FieldAuthor: p.Authors, catalog.FieldDescription: c.Description,
+		catalog.FieldTitle: c.Title, catalog.FieldSubtitle: c.Subtitle, catalog.FieldAuthor: p.Authors,
+		catalog.FieldLanguage: c.Language, catalog.FieldDescription: c.Description,
 	}
 	series := c.Series
 	if rec != nil && rec.Series != nil {
@@ -113,7 +117,8 @@ func Propose(c *meta.MatchCandidate, rec *meta.MatchRecording) catalog.MatchProp
 	}
 	if rec != nil {
 		p.RecordingID, p.Narrators, p.RuntimeMin = rec.ID, names(rec.Narrators), rec.RuntimeMin
-		raw[catalog.FieldNarrator] = p.Narrators
+		raw[catalog.FieldNarrator], raw[catalog.FieldPublisher] = p.Narrators, rec.Publisher
+		raw[catalog.FieldAbridged] = catalog.AbridgedClaim(rec.Abridged)
 		if published == "" {
 			published = rec.ReleaseDate
 		}

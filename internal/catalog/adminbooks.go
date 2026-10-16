@@ -32,6 +32,7 @@ type AdminBook struct {
 	Path        string `json:"path"`
 	IsFolder    bool   `json:"is_folder"`
 	Title       string `json:"title"`
+	Subtitle    string `json:"subtitle"`
 	Author      string `json:"author"`
 	Narrator    string `json:"narrator"`
 	// Authors and Narrators are the people Author and Narrator name (creditNames;
@@ -48,6 +49,13 @@ type AdminBook struct {
 	SeriesList []SeriesRef `json:"series_list"`
 	moreSeries string
 	Published  string `json:"published"`
+	Publisher  string `json:"publisher"`
+	Language   string `json:"language"`
+	// Abridged is null when nothing says (Book.Abridged).
+	Abridged *bool `json:"abridged"`
+	// Genres and Tags are the book's labels (labels.go), never nil.
+	Genres []string `json:"genres"`
+	Tags   []string `json:"tags"`
 	// Released is the tags' date (Book.Released), for the release-date sort.
 	Released       string  `json:"-"`
 	Duration       float64 `json:"duration"`
@@ -145,12 +153,13 @@ const (
 // directPlayableExpr is media.DirectPlayable in SQL.
 var directPlayableExpr = media.DirectPlayableSQL("b.codec")
 
-var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.author,
+var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.title, b.subtitle, b.author,
 	b.narrator, b.series, b.series_index, b.series_index_end, b.more_series, b.published, b.released, b.duration, b.format, b.codec, ` +
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
 	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
 	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0), ` +
-	chaptersSourceExpr + `, ` + chaptersCheckExpr + `, b.cover_art, b.cover_color`
+	chaptersSourceExpr + `, ` + chaptersCheckExpr + `, b.cover_art, b.cover_color,
+	b.publisher, b.language, b.abridged, b.genres, b.tags`
 
 // scanAdminBook reads one row of adminBookCols into b.
 func scanAdminBook(rows *sql.Rows, b *AdminBook) error {
@@ -183,18 +192,20 @@ func creditFilter(prefix, field, value string) (string, []any) {
 
 // adminBookDest returns the scan destinations for adminBookCols, in order;
 // finish, called after the scan, derives what the row carries beyond its
-// columns: Authors and Narrators from Author and Narrator and SeriesList from the
-// series columns (never nil, so the wire carries [] for none), and CoverColor,
-// when the stored colour is for the current art.
+// columns: Authors and Narrators from Author and Narrator, SeriesList from the
+// series columns and Genres and Tags from theirs (never nil, so the wire carries
+// [] for none), and CoverColor, when the stored colour is for the current art.
 func adminBookDest(b *AdminBook) (dest []any, finish func()) {
-	var art, color string
-	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Author,
+	var art, color, genres, tags string
+	return []any{&b.id, &b.LibraryID, &b.LibraryName, &b.Path, &b.IsFolder, &b.Title, &b.Subtitle, &b.Author,
 			&b.Narrator, &b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &b.moreSeries, &b.Published, &b.Released, &b.Duration, &b.Format, &b.Codec,
 			&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
 			&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
 			&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck,
-			&art, &color},
+			&art, &color, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags},
 		func() {
+			b.Genres = append([]string{}, ParseLabels(genres)...)
+			b.Tags = append([]string{}, ParseLabels(tags)...)
 			b.Authors = append([]string{}, creditNames(b.Author)...)
 			b.Narrators = append([]string{}, creditNames(b.Narrator)...)
 			b.SeriesList = SeriesList(SeriesRef{Name: b.Series, Position: b.SeriesIndex, PositionEnd: b.SeriesIndexEnd}, b.moreSeries)
@@ -210,6 +221,8 @@ type BookFilter struct {
 	Author         string // the whole effective value, or exactly one person it names (creditFilter)
 	Series         string // the main series, or one more_series names, in any spelling (seriesFilter)
 	Narrator       string // as Author
+	Genre          string // a genre the book has, in any case (labelFilters)
+	Tag            string // likewise a tag
 	Formats        []string
 	Codecs         []string
 	DirectPlayable *bool
@@ -239,6 +252,7 @@ const (
 	facetHasChapters    = "has_chapters"
 	facetMatched        = "matched"
 	facetEdited         = "edited"
+	// The label filters' dimensions are their fields, FieldGenres and FieldTags.
 )
 
 // where builds the WHERE clause (over `books b`) for f, leaving out the facet
@@ -268,8 +282,10 @@ func (f BookFilter) where(skip string) (string, []any) {
 		// candidates, and with a series filter the series' own index does; a plain library term would have SQLite walk the
 		// whole library by its library index instead (the unary + rules it out).
 		// A value with no phrase to match isn't looked up there, so the library
-		// index stays the way in.
-		if hasFTSPhrase(f.Author) || hasFTSPhrase(f.Narrator) || f.Series != "" {
+		// index stays the way in; nor is a label the facet being counted leaves
+		// out (labelFilters' skip).
+		labelled := (f.Genre != "" && skip != FieldGenres) || (f.Tag != "" && skip != FieldTags)
+		if hasFTSPhrase(f.Author) || hasFTSPhrase(f.Narrator) || f.Series != "" || labelled {
 			add("+b.library_id = ?", f.LibraryID)
 		} else {
 			add("b.library_id = ?", f.LibraryID)
@@ -293,6 +309,12 @@ func (f BookFilter) where(skip string) (string, []any) {
 		cond, a := creditFilter("b.", "narrator", f.Narrator)
 		add(cond, a...)
 	}
+	labelLib := f.LibraryID
+	if skip == facetLibrary {
+		labelLib = 0 // the library facet counts every library's books
+	}
+	labelConds, labelArgs := labelFilters("b.", labelLib, f.Genre, f.Tag, skip)
+	conds, args = append(conds, labelConds...), append(args, labelArgs...)
 	if len(f.Formats) > 0 && skip != facetFormat {
 		in("b.format", f.Formats)
 	}
@@ -578,7 +600,16 @@ type BookFacets struct {
 	HasChapters    BoolFacet      `json:"has_chapters"`
 	Matched        BoolFacet      `json:"matched"`
 	Edited         BoolFacet      `json:"edited"`
+	// Genres and Tags are the most common labels (at most maxLabelFacets each,
+	// and the one the list is filtered by), each named by the spelling most of
+	// its books use.
+	Genres []FacetCount `json:"genres"`
+	Tags   []FacetCount `json:"tags"`
 }
+
+// maxLabelFacets bounds each label facet: a library can hold thousands of
+// tags, and the filter panel shows the most common.
+const maxLabelFacets = 100
 
 // BookFacets computes the facet counts for f.
 func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, error) {
@@ -598,6 +629,15 @@ func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, er
 		where, args := f.where(d.dim)
 		if *d.dst, err = queryRows(ctx, c.db, scanFacet,
 			`SELECT `+d.col+`, COUNT(*) FROM books b WHERE `+where+` GROUP BY 1 ORDER BY 2 DESC, 1`, args...); err != nil {
+			return nil, err
+		}
+	}
+	for _, d := range []struct {
+		kind, selected string
+		dst            *[]FacetCount
+	}{{FieldGenres, f.Genre, &out.Genres}, {FieldTags, f.Tag, &out.Tags}} {
+		where, args := f.where(d.kind)
+		if *d.dst, err = c.labelFacet(ctx, d.kind, d.selected, where, args); err != nil {
 			return nil, err
 		}
 	}
@@ -651,6 +691,47 @@ func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, er
 		*d.dst = BoolFacet{Yes: n, No: total - n}
 	}
 	return out, nil
+}
+
+// labelFacet counts the books (over `books b` WHERE where) by each label of
+// kind: the most common maxLabelFacets, ties alphabetical, each named by the
+// spelling most of its books use (seriesName; ties alphabetical too), and the
+// label the list is filtered by (selected, any case; "" for none) after them
+// when it is less common, so its choice shows its own count rather than none.
+func (c *Catalog) labelFacet(ctx context.Context, kind, selected, where string, args []any) ([]FacetCount, error) {
+	type spelled struct {
+		key, name string
+		n         int
+	}
+	// A semi-join: the label index drives it, each book looked up once.
+	rows, err := queryRows(ctx, c.db, func(r *sql.Rows, s *spelled) error { return r.Scan(&s.key, &s.name, &s.n) },
+		`SELECT bl.label_key, bl.name, COUNT(*) FROM book_labels bl
+		  WHERE bl.kind = ? AND bl.book_id IN (SELECT b.id FROM books b WHERE `+where+`)
+		  GROUP BY bl.label_key, bl.name`, append([]any{kind}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	byKey := map[string]map[string]spelling{}
+	counts := map[string]int{}
+	for _, r := range rows {
+		if byKey[r.key] == nil {
+			byKey[r.key] = map[string]spelling{}
+		}
+		byKey[r.key][r.name] = spelling{books: r.n}
+		counts[r.key] += r.n
+	}
+	out := make([]FacetCount, 0, len(byKey))
+	for key, spellings := range byKey {
+		out = append(out, FacetCount{Value: seriesName(spellings), Count: counts[key]})
+	}
+	slices.SortFunc(out, func(a, b FacetCount) int { return cmp.Or(b.Count-a.Count, compareFold(a.Value, b.Value)) })
+	top := slices.Clip(out[:min(len(out), maxLabelFacets)])
+	if key := labelKey(selected); key != "" {
+		if i := slices.IndexFunc(out, func(fc FacetCount) bool { return labelKey(fc.Value) == key }); i >= len(top) {
+			top = append(top, out[i])
+		}
+	}
+	return top, nil
 }
 
 // PersonCount is one author or narrator and their books.

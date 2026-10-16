@@ -249,7 +249,14 @@ metadata.json below). `0047` adds `bridge_jobs` (the Bridge's jobs: path-keyed, 
 open states) and the one-row `bridge_status` (the pairing code's hash and expiry, who paired the Bridge and
 when, its last heartbeat); see The Bridge below. `0048` adds `books.attachments_sig` / `attachments_indexed_at`
 and `book_attachments` (book_id -> books CASCADE: the Bridge's checked `.audiosilo/` characters, recaps and
-provenance; derived from the files like `abs_file`, so rebuildable and never carried by a move).
+provenance; derived from the files like `abs_file`, so rebuildable and never carried by a move). `0049`
+adds `books.subtitle` / `publisher` / `language` / `abridged` (NULL unknown) / `genres` / `tags` (effective
+values; the lists canonical JSON), `books.genres_checked` (the genre tag's one-time backfill, as 0037's
+`released_checked`), `book_labels` (book_id -> books CASCADE, `library_id`, kind = the field,
+`genres`|`tags`, `label_key`, the book's spelling: derived, rebuilt by `refreshEffective`), recreates
+`books_fts` with `genres, tags` columns (rows copied) and sets `abs_indexed_at` NULL on every book with
+a metadata.json (`abs_sig <> ''`), so the next scan reads each again for the new fields; see Labels
+below.
 
 Routes `/me/queue`, `/me/collections/**`, `/me/share-targets` (`handlers_queue.go`,
 `handlers_collections.go`; a stranger's collection id is 404, a viewer's write 403
@@ -848,7 +855,9 @@ future metadata site can attach enrichment without reshaping the schema. The
   export read the row, so they see edits with no join. The player's book JSON carries
   `published` on every book and `description` only on `GET /libraries/{id}/item` (api's
   `itemBook` adds it; `catalog.Book` keeps it `json:"-"` so list, search and recent pages
-  stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Validation: `normalizeOverride`; sources: a scanned value is `path` when
+  stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Every player book (list,
+  search and item alike, all `omitempty`) also carries `subtitle`, `publisher`, `language`,
+  `abridged` (a bool, absent while unknown) and `genres` / `tags` (lists). Validation: `normalizeOverride`; sources: a scanned value is `path` when
   it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; one an ABS
   file gives is `abs`; an override is `edited` or
   `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
@@ -861,12 +870,13 @@ future metadata site can attach enrichment without reshaping the schema. The
   off for a library; never for a file book, nor a loose file at the root) is a layer OVER the scanned
   values, tags and path alike, path-first libraries included (ABS's own default ranks it above the
   tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
-  lenient (a wrongly typed value costs that value; <= 4 MiB): title (no subtitle), authors and
+  lenient (a wrongly typed value costs that value; <= 4 MiB): title, subtitle, authors and
   narrators joined with ", " (strings or `{name}`), series `"Name #seq"` (the first is the main series
   with its position, the rest `more_series`; a series without a position keeps the tag's only while
   it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
-  HTML description as plain text, asin, isbn; genres, tags, publisher, language and chapters are not
-  read. An empty value says nothing (never clears a tag's). `absFields` stores each as an edit of its
+  HTML description as plain text, publisher, language, `abridged` (only `true` says anything: ABS
+  writes false for every book nobody marked), genres and tags (lists of strings, a non-string item
+  dropped; `CleanLabels`), asin, isbn; chapters are not read. An empty value says nothing (never clears a tag's). `absFields` stores each as an edit of its
   field would (`CleanOverride`; a refused value left out), so an ABS ASIN makes a book matched (Health,
   `/meta`, the community chapter check, a refresh run). `books.abs_file` holds those fields (JSON,
   `''` for none), `abs_sig` the file's signature (`metadata.ABSSignature`: size + mtime ns, `''` for
@@ -969,6 +979,37 @@ future metadata site can attach enrichment without reshaping the schema. The
   chapter titles) and re-resolves them in batches of 250, flushed every 500 during the scan and
   on a Stop; no re-index. Until then `bookLayers.pathBaseline` resolves a snapshot against the
   baseline it was read with, so a path-first library still drops the folder as a series.
+  **Labels** (`catalog/labels.go`, migration `0049`): `genres` and `tags` are override fields whose
+  value is a canonical JSON list (`""` for none; `normalizeLabels`: trimmed, spacing collapsed, each
+  label once by `labelKey` (lowercased, spacing aside) keeping the first spelling, <= 64 characters,
+  <= 50 labels; an edit over a bound is a 400, a file's list is cleaned leniently instead,
+  `CleanLabels`, which every file source goes through). The value is `encodeCanonical`'s JSON (no
+  HTML escaping), as `more_series`' is. Genres come from the genre tag (`metadata.SplitGenres`: split
+  on `;` and NUL, never `,` (a store category holds one), blanks and placeholders such as "Audiobook", "Speech", "Spoken Word" or
+  "Other" dropped, any case; the rest left to `CleanLabels`; dhowden's then ffprobe's, ffprobe's when
+  it gives any, in the `scanned` snapshot) and the ABS file; tags only from the ABS file and edits.
+  `subtitle`, `publisher`, `language` (<= 64 characters) and `abridged` (`"true"`/`"false"`/`""`,
+  stored 1/0/NULL) are plain override fields from the ABS file, a match (`matchrun.Propose`: the work's
+  subtitle and language, the recording's publisher; community genres are not offered, a match
+  candidate carries none) or an edit. A source's abridged false says nothing (`AbridgedClaim`: ABS and
+  the community write false for every book nobody marked), so only an edit says unabridged.
+  `refreshEffective` writes the lists to `books.genres`/`tags`, to `book_labels` by key
+  (`writeLabels`, beside `keyOtherSeries`) and to the FTS `genres`/`tags` columns (a label a line), so
+  a search finds a book by a label. `labelFilters` (in the library, `book_labels.library_id`; any
+  library for an admin list across them and for the library facet) is the player's `GET
+  /libraries/{id}/books?genre=&tag=` (one value each, any case; both narrow) and the admin
+  `BookFilter.Genre`/`Tag` (`?genre=`/`?tag=`); `BookFacets` counts `genres`/`tags` (the 100 most
+  common by key, then the one the list is filtered by when it is rarer, each named by the spelling
+  most of its books use, `seriesName`; a semi-join over `book_labels`). A bulk edit (and the book PATCH) takes `add` / `remove` (`{"tags": ["Owned"]}`:
+  field -> labels) besides `set` / `revert`: `labelSets` merges them into each book's own EFFECTIVE
+  list and writes the result as an override of the field only where it changes the list; a book the
+  edit changes nothing on (adding a tag it has) is left as it is, its row not even rebuilt (`editTx`).
+  A field can't be set or reverted and added to or removed from at once, nor one label added and
+  removed (`normalizeLabelEdits`).
+  Books indexed before `0049` get their genres from the next scan (`genres_checked`, the primary
+  file read once beside 0037's date read, `Catalog.SetGenres` writing the snapshot and re-resolving,
+  flushed with the path readings) and the ABS fields from its re-read (`abs_indexed_at` NULL), no
+  re-index. Path-keyed like every override, so moves and joins carry them unchanged.
 - **Series spellings (`catalog/moreseries.go`)**: a series is every name with one
   `seriesKey` (`match.SeriesKey`, the rails' key: case, accents, punctuation and spacing
   aside; a name with no letter or number is its own key), so "He Who Fights With Monsters",
@@ -1808,10 +1849,17 @@ future metadata site can attach enrichment without reshaping the schema. The
   as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
   "version":1,…}` envelope the community metadata site imports on its Watching page
   so a user can mark which entries of a series they own. **The file leaves the
-  server**, so it carries bibliographic facts only (title, authors, narrators,
-  series + position (`series_position` "1-3" for a range: the importer's grammar takes one), asin/isbn, runtime_min, chapters) and **never** a path, size,
-  codec, format or anything else about the filesystem - a regression test asserts
-  that. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
+  server**, so by default it carries bibliographic facts only (title, subtitle, authors, narrators,
+  series + position (`series_position` "1-3" for a range: the importer's grammar takes one),
+  publisher, language, abridged, genres, asin/isbn, runtime_min, chapters; `version` stays 1,
+  the meta site's readers ignore keys they don't know) and **never by default** a path, size,
+  codec, format or anything else about the filesystem, nor the book's tags (the owner's own notes,
+  "Owned", "Read") - a regression test asserts that. `?include=` is a comma list, repeatable
+  (`catalog.ExportOptions`; any other value is a 400): `paths` adds each row's `paths` (every copy
+  collapsed into the row, index order; the envelope's `library.id` names the library, one export =
+  one library) and `tags` its `tags` (every copy's, each once), for the admin's own scripts; such a
+  file is named `...-<YYYY-MM-DD>-private.json`, apart from the one to share; the console's "Export
+  with file paths and tags..." asks for both and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
   `ListBooks`, never OFFSET; copies of the same book within the library collapse on
   `exposedDedupKey`, the kept entry taking each fact from whichever copy has it -
   `mergeExportBook`, since the copy that sorts first may be the untagged rip); the
@@ -1994,7 +2042,10 @@ The player's browse lists are `GET /libraries/{id}/authors` (`{authors, unknown}
 granted books; `api/handlers_browse.go`), and `GET /libraries/{id}/books` filters
 by `series=` (any spelling, see Series spellings), and by `author=` / `narrator=` matching the whole credit or exactly
 one person it names (`catalog.creditFilter`: an FTS5 phrase narrows the candidates,
-the `credit_has` SQL function keeps the exact ones; `/admin/books` filters the same way).
+the `credit_has` SQL function keeps the exact ones; `/admin/books` filters the same way),
+and by `genre=` / `tag=` (one value each, any case, `catalog.labelFilters`; see Labels; an older
+server ignores them, so a player filtering a loaded library by the books' own `genres` / `tags`
+needs no capability).
 Books in several series (capability `series_memberships`): with `memberships=1`,
 `/books?series=` also matches a book whose `more_series` names it (`catalog.seriesFilter`,
 as `/admin/books`) and `/series` counts a book in every series it is in (`extra_books`);

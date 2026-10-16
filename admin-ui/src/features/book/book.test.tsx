@@ -267,6 +267,33 @@ describe('book page', () => {
     expect(screen.getByText('2 unsaved changes')).toBeInTheDocument();
   });
 
+  it('edits tags as chips and abridged as a choice, saved as edits', async () => {
+    const detail = bookDetail();
+    detail.fields.tags = { value: '["Owned"]', source: 'abs', scanned: '["Owned"]', locked: false };
+    const calls = mockFetch(routes(detail));
+    renderApp(URL);
+    const user = userEvent.setup();
+    const tags = await screen.findByRole('group', { name: 'Tags' });
+    expect(within(tags).getByText('Owned')).toBeInTheDocument();
+    await user.click(within(tags).getByRole('button'));
+    const box = within(row('Tags')).getByRole('textbox', { name: 'Tags' });
+    expect(box).toHaveFocus();
+    // A label already there (any case) isn't added twice; a comma ends a label.
+    await user.type(box, 'owned, Favourite,');
+    await user.click(within(row('Tags')).getByRole('button', { name: 'Remove Owned' }));
+    await user.type(within(row('Tags')).getByRole('textbox'), '{Enter}');
+    expect(within(row('Tags')).getByText('Favourite')).toBeInTheDocument();
+    expect(within(row('Tags')).queryByText('Owned')).toBeNull();
+
+    await user.selectOptions(within(row('Abridged')).getByRole('combobox'), 'Unabridged');
+    await user.click(screen.getByRole('button', { name: 'Review and save' }));
+    const save = await screen.findByRole('dialog');
+    expect(within(save).getByText('Unabridged')).toBeInTheDocument();
+    await user.click(within(save).getByRole('button', { name: 'Save 2 changes' }));
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect(patches(calls)[0].body).toEqual({ set: { abridged: 'false', tags: '["Favourite"]' } });
+  });
+
   it('reverts a locked field to the file, with an undo', async () => {
     const detail = bookDetail();
     detail.fields.title = {
@@ -511,7 +538,11 @@ describe('match with community metadata', () => {
     const description = within(compare).getByRole('checkbox', { name: 'Accept Description' });
     expect(description).toBeChecked();
     expect(within(compare).queryByRole('checkbox', { name: 'Accept Title' })).toBeNull();
+    // The recording's publisher is offered too.
+    const publisher = within(compare).getByRole('checkbox', { name: 'Accept Publisher' });
+    expect(publisher).toBeChecked();
     await user.click(description);
+    await user.click(publisher);
     await user.click(within(compare).getByRole('button', { name: 'Accept 1 field' }));
 
     expect(await screen.findByText('Accepted 1 field from the community')).toBeInTheDocument();

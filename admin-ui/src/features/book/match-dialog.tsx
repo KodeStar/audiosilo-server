@@ -42,7 +42,7 @@ import { formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { regionTag } from '@/lib/regions';
-import { displayValue } from './book-model';
+import { shownValue } from './book-model';
 import {
   acceptRequest,
   candidateAuthors,
@@ -710,7 +710,7 @@ function CompareTable({
                       )}
                     >
                       {r.mine ? (
-                        clip(displayValue(r.field, r.mine), 120)
+                        clip(shownValue(t, r.field, r.mine), 120)
                       ) : (
                         <i className="text-subtle-foreground">{t('book.match.empty')}</i>
                       )}
@@ -722,7 +722,7 @@ function CompareTable({
                   r.same ? (
                     <span className="text-subtle-foreground">{t('book.match.same')}</span>
                   ) : r.theirs ? (
-                    clip(displayValue(r.field, r.theirs), 150)
+                    clip(shownValue(t, r.field, r.theirs), 150)
                   ) : (
                     <i className="text-subtle-foreground">{t('book.match.notProvided')}</i>
                   )

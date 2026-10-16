@@ -50,7 +50,10 @@ type Metadata struct {
 	// Released is the date a tag gives, as YYYY[-MM[-DD]] ("" when none or not a
 	// real date; see ReleaseDate): usually the recording's release, not the work's
 	// first publication.
-	Released string    `json:"released,omitempty"`
+	Released string `json:"released,omitempty"`
+	// Genres are the genre tag's genres (SplitGenres: several in one tag, the
+	// placeholders such as "Audiobook" left out, uncleaned); nil for none.
+	Genres   []string  `json:"genres,omitempty"`
 	Duration float64   `json:"duration"`
 	Format   string    `json:"format"`
 	Codec    string    `json:"codec"` // audio codec from ffprobe (e.g. aac, mp3, ac3)
@@ -119,6 +122,9 @@ func applyTags(m *Metadata, md tag.Metadata) {
 	}
 	if c := strings.TrimSpace(md.Composer()); c != "" {
 		m.Narrator = c
+	}
+	if g := SplitGenres(md.Genre()); g != nil {
+		m.Genres = g
 	}
 	if raw := md.Raw(); raw != nil {
 		if v := rawString(raw, "series", "©grp", "show", "TXXX:SERIES"); v != "" {

@@ -117,7 +117,8 @@ func TestListAdminBooksRowShape(t *testing.T) {
 	got.id, got.moreSeries = 0, ""
 	want := AdminBook{LibraryID: libA, SeriesList: []SeriesRef{}, LibraryName: "Fiction", Path: "Herbert/Dune", Title: "Dune", Author: "Frank Herbert",
 		Narrator: "Scott Brick", Authors: []string{"Frank Herbert"}, Narrators: []string{"Scott Brick"}, Duration: 9000, Format: "flac", Codec: "ac3", AddedAt: "2023-06-01T00:00:00Z",
-		HasCover: true, FileCount: 1, Edited: true, EditedFields: fieldList{FieldNarrator}, ChaptersSource: ChaptersFromFiles}
+		HasCover: true, FileCount: 1, Edited: true, EditedFields: fieldList{FieldNarrator}, ChaptersSource: ChaptersFromFiles,
+		Genres: []string{}, Tags: []string{}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("row = %+v\nwant  %+v", got, want)
 	}

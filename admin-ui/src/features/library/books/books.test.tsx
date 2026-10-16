@@ -206,6 +206,32 @@ describe('books: search, filters and sort', () => {
     await waitFor(() => expect(router.state.location.search).toEqual({}));
   });
 
+  it('filters by a genre and a tag from the sheet', async () => {
+    const calls = mockFetch(bookRoutes());
+    const { router } = renderApp('/library');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filter books' });
+    const genre = within(sheet).getByRole('region', { name: 'Genre' });
+    await user.click(within(genre).getByRole('button', { name: 'Fantasy 3' }));
+    const tag = within(sheet).getByRole('region', { name: 'Tag' });
+    await user.click(within(tag).getByRole('button', { name: 'Owned 2' }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({ genre: 'Fantasy', tag: 'Owned' }),
+    );
+    await waitFor(() => {
+      const last = calls.filter(isList).at(-1)!;
+      expect(last.query.get('genre')).toBe('Fantasy');
+      expect(last.query.get('tag')).toBe('Owned');
+    });
+    // Pressed again, a label clears.
+    await user.click(within(genre).getByRole('button', { name: 'Fantasy 3' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ tag: 'Owned' }));
+    await user.click(within(sheet).getByRole('button', { name: 'Show 4 books' }));
+    const chips = await screen.findByRole('list', { name: 'Active filters' });
+    expect(within(chips).getByText('Tag: Owned')).toBeInTheDocument();
+  });
+
   it('takes the exact author filter other screens link with, in release order', async () => {
     const calls = mockFetch(bookRoutes());
     const { router } = renderApp('/library?author=Brandon%20Sanderson');
@@ -420,6 +446,72 @@ describe('books: selection and bulk actions', () => {
     });
     // Done: the selection is cleared.
     await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull());
+  });
+
+  it("adds and removes tags and genres over the selection, keeping each book's own", async () => {
+    const calls = mockFetch(
+      bookRoutes(books, { 'POST /admin/books/bulk': { body: { updated: 2 } } }),
+    );
+    renderApp('/library');
+    const user = userEvent.setup();
+    const list = await allBooks();
+    await user.click(
+      await within(list).findByRole('checkbox', { name: 'Select The Way of Kings' }),
+    );
+    await user.click(within(list).getByRole('checkbox', { name: 'Select Words of Radiance' }));
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'Bulk actions' })).getByRole('button', {
+        name: 'Edit fields',
+      }),
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Edit 2 books' });
+    await user.type(within(dialog).getByLabelText('Add tags'), 'Owned{Enter}To Read,');
+    await user.type(within(dialog).getByLabelText('Remove genres'), 'audiobook{Enter}');
+    // The same label added and removed is refused before it is sent.
+    await user.type(within(dialog).getByLabelText('Remove tags'), 'owned{Enter}');
+    expect(within(dialog).getByText(/can't be added and removed at once/)).toBeInTheDocument();
+    const apply = within(dialog).getByRole('button', { name: 'Apply to 2 books' });
+    expect(apply).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: 'Remove owned' }));
+    await user.click(apply);
+
+    expect(await screen.findByText('Updated 2 books')).toBeInTheDocument();
+    expect(calls.find((c) => c.path === '/admin/books/bulk')?.body).toEqual({
+      books: [
+        { library_id: 1, path: books[0].path },
+        { library_id: 1, path: books[1].path },
+      ],
+      set: {},
+      add: { tags: ['Owned', 'To Read'] },
+      remove: { genres: ['audiobook'] },
+    });
+  });
+
+  it('adds a label typed but not entered when its box is left', async () => {
+    const calls = mockFetch(
+      bookRoutes(books, { 'POST /admin/books/bulk': { body: { updated: 1 } } }),
+    );
+    renderApp('/library');
+    const user = userEvent.setup();
+    const list = await allBooks();
+    await user.click(
+      await within(list).findByRole('checkbox', { name: 'Select The Way of Kings' }),
+    );
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'Bulk actions' })).getByRole('button', {
+        name: 'Edit fields',
+      }),
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Edit 1 book' });
+    await user.type(within(dialog).getByLabelText('Add tags'), 'Favourite');
+    await user.tab();
+    expect(within(dialog).getByRole('button', { name: 'Remove Favourite' })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+
+    expect(await screen.findByText('Updated 1 book')).toBeInTheDocument();
+    expect(calls.find((c) => c.path === '/admin/books/bulk')?.body).toMatchObject({
+      add: { tags: ['Favourite'] },
+    });
   });
 
   it('says how many values differ, and shows a failed edit in the dialog', async () => {

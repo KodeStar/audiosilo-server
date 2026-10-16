@@ -39,13 +39,18 @@ func TestParseABSFile(t *testing.T) {
 	}
 	want := &ABSFile{
 		Title:     "With the Might of Angels (Dear America)",
+		Subtitle:  "With the Might of Angels",
 		Author:    "Andrea Davis Pinkney",
 		Narrator:  "Channie Waites",
 		Published: "2011",
 		Description: "In the fall of 1955, twelve-year-old Dawn Rae Johnson learns she will be the only " +
 			"one of her friends attending a previously all-white school.",
-		ASIN: "B005LXU2TA",
-		ISBN: "9780545437059",
+		Publisher: "Scholastic Audio Books",
+		Language:  "English",
+		Genres:    []string{"Children's Audiobooks"},
+		Tags:      []string{"Growing Up & Facts of Life", "Historical Fiction"},
+		ASIN:      "B005LXU2TA",
+		ISBN:      "9780545437059",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ParseABSFile =\n%+v\nwant\n%+v", got, want)
@@ -76,6 +81,22 @@ func TestParseABSFileSeriesAndPeople(t *testing.T) {
 	}
 	if got.Published != "1987-11-12" {
 		t.Errorf("published = %q, want the date over the year", got.Published)
+	}
+}
+
+// The label lists and the abridged flag: an item that isn't a string costs that
+// item, and abridged says something only as true.
+func TestParseABSFileLabels(t *testing.T) {
+	t.Parallel()
+	got, err := ParseABSFile([]byte(`{"genres": ["Fantasy", " ", 3, " Epic "], "tags": "not a list", "abridged": true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Genres, []string{"Fantasy", "Epic"}) || got.Tags != nil || !got.Abridged {
+		t.Errorf("labels = %q / %q, abridged %v", got.Genres, got.Tags, got.Abridged)
+	}
+	if got, _ := ParseABSFile([]byte(`{"abridged": "yes"}`)); got.Abridged {
+		t.Error("a string abridged should say nothing")
 	}
 }
 

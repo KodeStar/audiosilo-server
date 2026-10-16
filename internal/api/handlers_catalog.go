@@ -82,7 +82,8 @@ func (a *API) handleAdminBookFacets(w http.ResponseWriter, r *http.Request) {
 func bookFilterFromQuery(q url.Values) (catalog.BookFilter, string) {
 	f := catalog.BookFilter{
 		Query: strings.TrimSpace(q.Get("q")), Author: q.Get("author"), Series: q.Get("series"),
-		Narrator: q.Get("narrator"), Formats: q["format"], Codecs: q["codec"],
+		Narrator: q.Get("narrator"), Genre: strings.TrimSpace(q.Get("genre")), Tag: strings.TrimSpace(q.Get("tag")),
+		Formats: q["format"], Codecs: q["codec"],
 	}
 	var ok bool
 	if f.LibraryID, ok = parseOptionalID(q.Get("library_id")); !ok {
@@ -261,9 +262,14 @@ func (a *API) handleCheckCommunityChapters(w http.ResponseWriter, r *http.Reques
 // editRequest is the body of a book edit (PATCH) and, without chapters, of a bulk
 // edit.
 type editRequest struct {
-	Set      map[string]string `json:"set"`
-	Revert   []string          `json:"revert"`
-	Source   string            `json:"source"`
+	Set    map[string]string `json:"set"`
+	Revert []string          `json:"revert"`
+	// Add and Remove change a label list (genres, tags) by name instead of
+	// setting it, so a bulk edit keeps each book's own labels
+	// (catalog.BookEdit.Add).
+	Add      map[string][]string `json:"add"`
+	Remove   map[string][]string `json:"remove"`
+	Source   string              `json:"source"`
 	Chapters *struct {
 		Set    map[int]string `json:"set"`
 		Revert []int          `json:"revert"`
@@ -274,7 +280,8 @@ type editRequest struct {
 }
 
 func (e editRequest) toEdit(userID int64) catalog.BookEdit {
-	edit := catalog.BookEdit{Set: e.Set, Revert: e.Revert, Source: e.Source, ChapterSource: e.ChapterSource, UserID: userID}
+	edit := catalog.BookEdit{Set: e.Set, Revert: e.Revert, Add: e.Add, Remove: e.Remove, Source: e.Source,
+		ChapterSource: e.ChapterSource, UserID: userID}
 	if e.Chapters != nil {
 		edit.ChapterSet, edit.ChapterRevert = e.Chapters.Set, e.Chapters.Revert
 	}
@@ -282,7 +289,8 @@ func (e editRequest) toEdit(userID int64) catalog.BookEdit {
 }
 
 // details are the edit for the audit log: the values set (a long one cut short),
-// the fields reverted, where they came from, and how many chapter titles changed.
+// the fields reverted, the labels added and removed, where they came from, and
+// how many chapter titles changed.
 func (e editRequest) details() map[string]any {
 	d := map[string]any{}
 	if len(e.Set) > 0 {
@@ -297,6 +305,12 @@ func (e editRequest) details() map[string]any {
 	}
 	if len(e.Revert) > 0 {
 		d["revert"] = e.Revert
+	}
+	if len(e.Add) > 0 {
+		d["add"] = e.Add
+	}
+	if len(e.Remove) > 0 {
+		d["remove"] = e.Remove
 	}
 	if e.Source != "" {
 		d["source"] = e.Source
@@ -313,7 +327,7 @@ func (e editRequest) details() map[string]any {
 }
 
 func (e editRequest) empty() bool {
-	return len(e.Set) == 0 && len(e.Revert) == 0 && e.ChapterSource == "" &&
+	return len(e.Set) == 0 && len(e.Revert) == 0 && len(e.Add) == 0 && len(e.Remove) == 0 && e.ChapterSource == "" &&
 		(e.Chapters == nil || (len(e.Chapters.Set) == 0 && len(e.Chapters.Revert) == 0))
 }
 

@@ -7,17 +7,21 @@ import { settleBookEdit } from '@/api/hooks';
 import {
   FIELD_SOURCES,
   OVERRIDE_FIELDS,
+  isLabelField,
   type AdminBookDetail,
   type FieldValue,
   type OverrideField,
 } from '@/api/types';
 import { InlineEdit } from '@/components/inline-edit';
+import { LabelChip, LabelInput } from '@/components/label-input';
 import { ProvenanceMarker, UnsavedMarker } from '@/components/provenance';
 import { Card, CardHeader } from '@/components/ui/card';
+import { NativeSelect } from '@/components/ui/native-select';
 import { toastError } from '@/lib/errors';
+import { encodeLabels, parseLabels } from '@/lib/labels';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { displayValue, undoRevertRequest, type Drafts } from './book-model';
+import { displayValue, shownValue, undoRevertRequest, type Drafts } from './book-model';
 
 /** How much of a value a toast quotes. */
 const QUOTE = 60;
@@ -68,7 +72,7 @@ export function DetailsCard({
     try {
       const next = await api.editBook(b.library_id, b.path, { revert: [field] });
       settleBookEdit(qc, next);
-      const now = displayValue(field, next.fields[field]?.value ?? '');
+      const now = shownValue(t, field, next.fields[field]?.value ?? '');
       toast.add({
         title: t('book.revert.done', { field: label }),
         description: now
@@ -122,7 +126,13 @@ export function DetailsCard({
   );
 }
 
-/** One field: label, the click-to-edit value, and where the value came from. */
+/** The values the abridged field takes, unknown first. */
+const ABRIDGED = ['', 'true', 'false'] as const;
+
+/**
+ * One field: label, the value (click to edit; a label list as chips, edited as
+ * chips; abridged a choice of three), and where the value came from.
+ */
 function FieldRow({
   field,
   value,
@@ -150,6 +160,9 @@ function FieldRow({
   const id = `field-${field}`;
   const long = field === 'description';
   const mono = field === 'asin' || field === 'isbn';
+  const labels = isLabelField(field);
+  // A label list's draft is its JSON (LabelInput's list), shown as chips.
+  const chips = labels ? parseLabels(draft ?? value.value) : [];
 
   // After Enter or Escape, keyboard focus goes back to the value.
   useEffect(() => {
@@ -180,7 +193,33 @@ function FieldRow({
       >
         {label}
       </span>
-      {editing ? (
+      {field === 'abridged' ? (
+        <NativeSelect
+          id={id}
+          value={draft ?? value.value}
+          onChange={(e) => onCommit(e.target.value)}
+          aria-labelledby={`${id}-label`}
+          aria-invalid={!!error || undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+          className="max-w-[240px]"
+        >
+          {ABRIDGED.map((v) => (
+            <option key={v} value={v}>
+              {t(`book.abridged.${v || 'unknown'}`)}
+            </option>
+          ))}
+        </NativeSelect>
+      ) : editing && labels ? (
+        <LabelsEdit
+          id={id}
+          initial={chips}
+          label={label}
+          error={error}
+          onDone={(next, keyboard) =>
+            finish(next === undefined ? undefined : encodeLabels(next), keyboard)
+          }
+        />
+      ) : editing ? (
         <InlineEdit
           id={id}
           initial={shown}
@@ -211,9 +250,17 @@ function FieldRow({
             !empty && mono && 'font-mono text-[13px]',
           )}
         >
-          <span id={`${id}-value`} className={cn(long && 'line-clamp-4 whitespace-pre-line')}>
-            {empty ? t('book.field.empty') : shown}
-          </span>
+          {labels && chips.length ? (
+            <span id={`${id}-value`} className="flex flex-wrap gap-1.5">
+              {chips.map((c) => (
+                <LabelChip key={c} label={c} />
+              ))}
+            </span>
+          ) : (
+            <span id={`${id}-value`} className={cn(long && 'line-clamp-4 whitespace-pre-line')}>
+              {empty ? t('book.field.empty') : shown}
+            </span>
+          )}
         </button>
       )}
       <span className="flex items-center gap-1">
@@ -224,7 +271,7 @@ function FieldRow({
             onClick={onRevert}
             title={
               value.scanned
-                ? t('book.revert.tagHint', { value: quote(displayValue(field, value.scanned)) })
+                ? t('book.revert.tagHint', { value: quote(shownValue(t, field, value.scanned)) })
                 : t('book.revert.noTag')
             }
             aria-label={t('book.revert.aria', { field: label })}
@@ -245,5 +292,39 @@ function FieldRow({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A label list being edited in place: the chips and the box to add to them,
+ * committed as a whole when the editor ends (LabelInput's onDone).
+ */
+function LabelsEdit({
+  id,
+  initial,
+  label,
+  error,
+  onDone,
+}: {
+  id: string;
+  initial: string[];
+  label: string;
+  error: string | undefined;
+  onDone: (value: string[] | undefined, keyboard: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const [list, setList] = useState(initial);
+  return (
+    <LabelInput
+      id={id}
+      value={list}
+      onChange={setList}
+      onDone={onDone}
+      autoFocus
+      placeholder={t('labels.placeholder')}
+      aria-label={label}
+      aria-invalid={!!error || undefined}
+      aria-describedby={error ? `${id}-error` : undefined}
+    />
   );
 }

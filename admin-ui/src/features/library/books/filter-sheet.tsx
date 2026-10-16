@@ -1,10 +1,11 @@
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check } from 'lucide-react';
-import type { AdminLibrary, BookFacets, BoolFacet } from '@/api/types';
+import type { AdminLibrary, BookFacets, BoolFacet, FacetCount } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { Sheet } from '@/components/ui/sheet';
 import { counted, formatNumber } from '@/lib/format';
+import { labelKey } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 import {
   ADDED,
@@ -30,6 +31,7 @@ interface Option {
  * each with how many books it would match given the other filters (the facet
  * counts leave each dimension's own filter out). Repeatable groups (format,
  * codec) toggle values; the others hold one value, and pressing it again clears it.
+ * The genre and tag groups list the most common labels (the server's facet).
  */
 export function FilterSheet({
   open,
@@ -60,6 +62,19 @@ export function FilterSheet({
     on: !!search[key]?.includes(value),
     toggle: () => update((prev) => ({ ...prev, [key]: toggleValue(prev[key], value) })),
   });
+  // A label is one label in any case, so the chip of the URL's value is on
+  // however the facet spells it.
+  const label = (key: 'genre' | 'tag', counts: FacetCount[] | undefined) =>
+    facetOptions(counts, search[key] ? [search[key]] : undefined, labelKey).map((c): Option => {
+      const on = !!search[key] && labelKey(search[key]) === labelKey(c.value);
+      return {
+        value: c.value,
+        label: c.value,
+        count: c.count,
+        on,
+        toggle: () => update((prev) => ({ ...prev, [key]: on ? undefined : c.value })),
+      };
+    });
   const yesNo = (key: 'cover' | 'matched' | 'chapters' | 'edited', counts?: BoolFacet) =>
     YES_NO.map((v): Option => ({
       value: v,
@@ -125,6 +140,8 @@ export function FilterSheet({
       options: yesNo('chapters', facets?.has_chapters),
     },
     { key: 'edited', title: t('books.facet.edited'), options: yesNo('edited', facets?.edited) },
+    { key: 'genre', title: t('books.facet.genre'), options: label('genre', facets?.genres) },
+    { key: 'tag', title: t('books.facet.tag'), options: label('tag', facets?.tags) },
     {
       key: 'length',
       title: t('books.facet.length'),

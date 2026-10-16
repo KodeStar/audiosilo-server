@@ -37,6 +37,9 @@ export interface LibrarySearch {
   author?: string;
   series?: string;
   narrator?: string;
+  /** Books: a genre and a tag the book has (any case; the sheet's label facets). */
+  genre?: string;
+  tag?: string;
   /** Books: facet filters. */
   format?: string[];
   codec?: string[];
@@ -79,6 +82,8 @@ export function validateLibrarySearch(s: Record<string, unknown>): LibrarySearch
     author: text(s.author),
     series: text(s.series),
     narrator: text(s.narrator),
+    genre: text(s.genre),
+    tag: text(s.tag),
     format: list(s.format),
     codec: list(s.codec),
     playback: oneOf(PLAYBACK, s.playback),

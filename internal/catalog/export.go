@@ -1,8 +1,10 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,9 +18,15 @@ import (
 //
 // The file is meant to LEAVE the server - a user downloads it and uploads it to
 // the community metadata site (meta.audiosilo.app) to mark which entries of a
-// series they own. So it carries bibliographic facts only: titles, contributors,
-// series position, identifiers, runtime. Never a path, size, codec, format or
-// anything else that describes the filesystem or the install.
+// series they own. So by default it carries bibliographic facts only: titles,
+// contributors, series position, identifiers, runtime, genres. Never by default
+// a path, size, codec, format or anything else that describes the filesystem or
+// the install, nor the book's tags: the file is made to be shared, a path names
+// folders on the server (people's names, a share layout) and a tag is the
+// owner's own note ("Owned", "Read"), neither of which its owner may mean to
+// publish. Only an admin asking for them (ExportOptions, for their own scripts,
+// which tie a row back to a book) gets each row's paths or tags, and the
+// console warns them the file is then theirs alone.
 //
 // The envelope is the shape the metadata site's importer already parses; treat
 // it as a wire contract (additive changes only, `omitempty` everywhere).
@@ -46,6 +54,9 @@ type LibraryExport struct {
 	Library       ExportLibrary `json:"library"`
 	ExportedAt    string        `json:"exported_at"`
 	Books         []ExportBook  `json:"books"`
+	// private is set when the export holds paths or tags (ExportOptions): its
+	// file is named apart from the shareable one (Filename).
+	private bool
 }
 
 // ExportLibrary identifies the exported library. Deliberately name + id only -
@@ -55,31 +66,55 @@ type ExportLibrary struct {
 	Name string `json:"name"`
 }
 
-// ExportBook is one book as the importer sees it: bibliographic facts only.
-// Every field but the title is optional and omitted when unknown. (The importer
-// also accepts a `subtitle`, which the index has no column for; the envelope is
-// additive, so that field appears here the day the index grows one.)
+// ExportBook is one book as the importer sees it: bibliographic facts only,
+// unless the export was asked for paths or tags. Every field but the title is
+// optional and omitted when unknown. The importer reads subtitle, publisher,
+// language and abridged and ignores keys it doesn't know (genres, tags, paths),
+// so the envelope's version stays 1.
 type ExportBook struct {
 	Title          string   `json:"title"`
+	Subtitle       string   `json:"subtitle,omitempty"`
 	Authors        []string `json:"authors,omitempty"`
 	Narrators      []string `json:"narrators,omitempty"`
 	Series         string   `json:"series,omitempty"`
 	SeriesPosition string   `json:"series_position,omitempty"`
+	Publisher      string   `json:"publisher,omitempty"`
+	Language       string   `json:"language,omitempty"`
+	Abridged       *bool    `json:"abridged,omitempty"` // absent when unknown
+	Genres         []string `json:"genres,omitempty"`
+	Tags           []string `json:"tags,omitempty"` // only with ExportOptions.IncludeTags
 	ASIN           string   `json:"asin,omitempty"`
 	ISBN           string   `json:"isbn,omitempty"`
 	RuntimeMin     int      `json:"runtime_min,omitempty"`
 	Chapters       int      `json:"chapters,omitempty"`
+	// Paths tie the row back to the books it stands for: the path of every copy
+	// that collapsed into it (index order), in the envelope's library. Only with
+	// ExportOptions.IncludePaths; absent otherwise.
+	Paths []string `json:"paths,omitempty"`
+}
+
+// ExportOptions is what an export holds beyond the bibliographic facts: for
+// the admin's own scripts, never for a file meant to be shared.
+type ExportOptions struct {
+	IncludePaths bool // each row's paths (ExportBook.Paths)
+	IncludeTags  bool // each row's tags (ExportBook.Tags)
 }
 
 // Filename is the file name to offer the download as:
-// audiosilo-<library-slug>-<YYYY-MM-DD>.json.
+// audiosilo-<library-slug>-<YYYY-MM-DD>.json, with "-private" before the
+// extension for an export holding paths or tags, so that file is never taken
+// for the one to share.
 func (e *LibraryExport) Filename() string {
 	date, _, _ := strings.Cut(e.ExportedAt, "T") // RFC3339: the date is what precedes the T
 	slug := slugify(e.Library.Name)
 	if slug == "" {
 		slug = "library"
 	}
-	return "audiosilo-" + slug + "-" + date + ".json"
+	suffix := ""
+	if e.private {
+		suffix = "-private"
+	}
+	return "audiosilo-" + slug + "-" + date + suffix + ".json"
 }
 
 // ExportLibraryBooks composes a library's export envelope. It pages over the
@@ -88,7 +123,7 @@ func (e *LibraryExport) Filename() string {
 //
 // serverVersion is passed in rather than read from the api package: catalog must
 // not depend on the transport layer.
-func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serverVersion string) (*LibraryExport, error) {
+func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serverVersion string, opt ExportOptions) (*LibraryExport, error) {
 	lib, err := c.GetLibrary(ctx, libraryID)
 	if err != nil {
 		return nil, err
@@ -101,6 +136,7 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 		Library:       ExportLibrary{ID: lib.ID, Name: lib.Name},
 		ExportedAt:    c.now().UTC().Format(time.RFC3339),
 		Books:         []ExportBook{},
+		private:       opt.IncludePaths || opt.IncludeTags,
 	}
 
 	counts, err := c.chapterCounts(ctx, libraryID)
@@ -127,6 +163,12 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 		for i := range page.Books {
 			b := &page.Books[i]
 			eb := exportBook(b, counts[b.ID])
+			if opt.IncludePaths {
+				eb.Paths = []string{b.RelPath}
+			}
+			if opt.IncludeTags {
+				eb.Tags = b.Tags
+			}
 			if key := exposedDedupKey(*b); key != "" {
 				if at, ok := seen[key]; ok {
 					mergeExportBook(&out.Books[at], eb)
@@ -150,10 +192,15 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 func exportBook(b *Book, chapters int) ExportBook {
 	return ExportBook{
 		Title:          strings.TrimSpace(b.Title),
+		Subtitle:       strings.TrimSpace(b.Subtitle),
 		Authors:        names.Split(b.Author),
 		Narrators:      names.Split(b.Narrator),
 		Series:         strings.TrimSpace(b.Series),
 		SeriesPosition: FormatSeriesRange(b.SeriesIndex, b.SeriesIndexEnd),
+		Publisher:      strings.TrimSpace(b.Publisher),
+		Language:       strings.TrimSpace(b.Language),
+		Abridged:       b.Abridged,
+		Genres:         b.Genres,
 		ASIN:           strings.TrimSpace(b.ASIN),
 		ISBN:           strings.TrimSpace(b.ISBN),
 		RuntimeMin:     runtimeMinutes(b.Duration),
@@ -166,35 +213,34 @@ func exportBook(b *Book, chapters int) ExportBook {
 // independently, so the one that happens to sort first can be the sparsely-tagged
 // rip (same asin, but no narrator/series tags) while the fully-tagged copy sorts
 // later; taking each fact from whichever copy has it keeps the export as complete
-// as the library is, without ever overwriting a fact already recorded.
+// as the library is, without ever overwriting a fact already recorded. The
+// copy's paths are added to the entry's (an export with paths names every copy
+// a row stands for), and likewise its tags (each copy's own notes; each label
+// once, uniqueLabels), so a row holds what every copy it names was tagged.
 func mergeExportBook(dst *ExportBook, src ExportBook) {
-	if dst.Title == "" {
-		dst.Title = src.Title
+	dst.Paths = append(dst.Paths, src.Paths...)
+	if len(src.Tags) > 0 {
+		dst.Tags = uniqueLabels(slices.Concat(dst.Tags, src.Tags))
 	}
-	if len(dst.Authors) == 0 {
-		dst.Authors = src.Authors
+	list := func(dst *[]string, src []string) {
+		if len(*dst) == 0 {
+			*dst = src
+		}
 	}
-	if len(dst.Narrators) == 0 {
-		dst.Narrators = src.Narrators
-	}
-	if dst.Series == "" {
-		dst.Series = src.Series
-	}
-	if dst.SeriesPosition == "" {
-		dst.SeriesPosition = src.SeriesPosition
-	}
-	if dst.ASIN == "" {
-		dst.ASIN = src.ASIN
-	}
-	if dst.ISBN == "" {
-		dst.ISBN = src.ISBN
-	}
-	if dst.RuntimeMin == 0 {
-		dst.RuntimeMin = src.RuntimeMin
-	}
-	if dst.Chapters == 0 {
-		dst.Chapters = src.Chapters
-	}
+	list(&dst.Authors, src.Authors)
+	list(&dst.Narrators, src.Narrators)
+	list(&dst.Genres, src.Genres)
+	dst.Title = cmp.Or(dst.Title, src.Title)
+	dst.Subtitle = cmp.Or(dst.Subtitle, src.Subtitle)
+	dst.Series = cmp.Or(dst.Series, src.Series)
+	dst.SeriesPosition = cmp.Or(dst.SeriesPosition, src.SeriesPosition)
+	dst.Publisher = cmp.Or(dst.Publisher, src.Publisher)
+	dst.Language = cmp.Or(dst.Language, src.Language)
+	dst.Abridged = cmp.Or(dst.Abridged, src.Abridged)
+	dst.ASIN = cmp.Or(dst.ASIN, src.ASIN)
+	dst.ISBN = cmp.Or(dst.ISBN, src.ISBN)
+	dst.RuntimeMin = cmp.Or(dst.RuntimeMin, src.RuntimeMin)
+	dst.Chapters = cmp.Or(dst.Chapters, src.Chapters)
 }
 
 // chapterCounts returns the number of indexed chapters per book id for a whole

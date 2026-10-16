@@ -10,18 +10,22 @@ import {
   Clock,
   Download,
   Ellipsis,
+  FileWarning,
   FolderTree,
   GripVertical,
   Pencil,
   RefreshCw,
   Split,
   Trash2,
+  TriangleAlert,
   Unplug,
 } from 'lucide-react';
 import { downloadLibraryExport } from '@/api/client';
 import { useRecentBooks } from '@/api/hooks';
 import type { AdminLibrary, ScanProgress } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
+import { ConfirmDialog } from '@/components/confirm-dialog';
+import { Notice } from '@/components/notice';
 import { ProgressBar } from '@/components/progress-bar';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -43,7 +47,7 @@ import { OfflineNotice } from './offline-notice';
 import { rescanLibrary } from './rescan';
 import { scheduleLabel } from './scan-settings';
 
-type OpenDialog = 'edit' | 'detect' | 'delete' | null;
+type OpenDialog = 'edit' | 'detect' | 'delete' | 'exportPaths' | null;
 
 /** One library: covers, name, status, folder, and everything an admin does to it. */
 export function LibraryCard({
@@ -66,10 +70,12 @@ export function LibraryCard({
   // Waiting in the job queue behind another library's scan (a running one wins).
   const queued = !running && !!l.scan.queued;
 
-  const exportBooks = async () => {
+  // Personal, each row carries its books' paths and tags: a file for the admin's
+  // own scripts (the menu warns before it is made), never the default.
+  const exportBooks = async (personal = false) => {
     setExporting(true);
     try {
-      const file = await downloadLibraryExport(l.id);
+      const file = await downloadLibraryExport(l.id, { personal });
       toast.add({
         title: t('libraries.toast.exported', { name: l.name }),
         description: file,
@@ -212,6 +218,10 @@ export function LibraryCard({
                 <Download aria-hidden="true" />
                 {exporting ? t('libraries.menu.exporting') : t('libraries.menu.export')}
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setDialog('exportPaths')} disabled={exporting}>
+                <FileWarning aria-hidden="true" />
+                {t('libraries.menu.exportPaths')}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onClick={() => setDialog('delete')}>
                 <Trash2 aria-hidden="true" />
@@ -245,6 +255,21 @@ export function LibraryCard({
         open={dialog === 'delete'}
         onOpenChange={(o) => setDialog(o ? 'delete' : null)}
       />
+      <ConfirmDialog
+        open={dialog === 'exportPaths'}
+        onOpenChange={(o) => setDialog(o ? 'exportPaths' : null)}
+        icon={FileWarning}
+        tone="info"
+        destructive={false}
+        title={t('libraries.exportPaths.title', { name: l.name })}
+        description={t('libraries.exportPaths.description')}
+        confirmLabel={t('libraries.exportPaths.confirm')}
+        onConfirm={() => exportBooks(true)}
+      >
+        <Notice tone="warn" icon={TriangleAlert} title={t('libraries.exportPaths.warnTitle')}>
+          {t('libraries.exportPaths.warnBody')}
+        </Notice>
+      </ConfirmDialog>
     </li>
   );
 }

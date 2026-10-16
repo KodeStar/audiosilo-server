@@ -247,6 +247,9 @@ export interface BookFilter {
   author?: string;
   series?: string;
   narrator?: string;
+  /** A genre or a tag the book has, in any case. */
+  genre?: string;
+  tag?: string;
   format?: string[];
   codec?: string[];
   direct_playable?: boolean;
@@ -680,10 +683,18 @@ export const api = {
 
 /**
  * Downloads a library's book list (GET /admin/libraries/{id}/export) as the file
- * the server names. Returns the file name.
+ * the server names. With `personal`, each row also carries the paths of the
+ * copies it stands for and the book's tags (?include=paths,tags): a file for the
+ * admin's own scripts, not one to share. Returns the file name.
  */
-export function downloadLibraryExport(id: number): Promise<string> {
-  return download(`/admin/libraries/${id}/export`, `audiosilo-library-${id}.json`);
+export function downloadLibraryExport(
+  id: number,
+  opts: { personal?: boolean } = {},
+): Promise<string> {
+  const query = opts.personal ? '?include=paths,tags' : '';
+  // The fallback name keeps the server's "-private" mark (catalog.Filename).
+  const fallback = `audiosilo-library-${id}${opts.personal ? '-private' : ''}.json`;
+  return download(`/admin/libraries/${id}/export${query}`, fallback);
 }
 
 /** Downloads a backup (GET /admin/backups/{name}). Returns the file name. */

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/auth"
@@ -298,6 +299,8 @@ func (a *API) handleListBooks(w http.ResponseWriter, r *http.Request) {
 		Author:      r.URL.Query().Get("author"),
 		Series:      r.URL.Query().Get("series"),
 		Narrator:    r.URL.Query().Get("narrator"),
+		Genre:       strings.TrimSpace(r.URL.Query().Get("genre")),
+		Tag:         strings.TrimSpace(r.URL.Query().Get("tag")),
 		Memberships: r.URL.Query().Get("memberships") == "1",
 		Sort:        r.URL.Query().Get("sort"),
 		Limit:       queryInt(r, "limit", 50),

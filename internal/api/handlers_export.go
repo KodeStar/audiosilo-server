@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 )
@@ -19,15 +20,38 @@ import (
 // straight to the response with an encoder rather than buffering a string of
 // its own.
 //
-// The file carries bibliographic facts only - no paths, sizes, codecs or anything
-// else describing the filesystem - because it is meant to leave the server.
+// By default the file carries bibliographic facts only - no paths, sizes, codecs
+// or anything else describing the filesystem, nor the owner's own tags - because
+// it is meant to leave the server. ?include= takes a comma list for the admin's
+// own scripts (catalog.ExportOptions): paths adds each row's paths, tags its
+// tags; any other value is a 400, so a typo never silently drops what was asked
+// for.
 func (a *API) handleExportLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid library id")
 		return
 	}
-	exp, err := a.cat.ExportLibraryBooks(r.Context(), id, Version)
+	var opt catalog.ExportOptions
+	// Every include= counts (?include=paths&include=tags as much as
+	// ?include=paths,tags), so none asked for is dropped.
+	for _, include := range r.URL.Query()["include"] {
+		if include == "" {
+			continue
+		}
+		for v := range strings.SplitSeq(include, ",") {
+			switch v {
+			case "paths":
+				opt.IncludePaths = true
+			case "tags":
+				opt.IncludeTags = true
+			default:
+				writeError(w, http.StatusBadRequest, `include must be a comma list of "paths" and "tags"`)
+				return
+			}
+		}
+	}
+	exp, err := a.cat.ExportLibraryBooks(r.Context(), id, Version, opt)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "library not found")
 		return

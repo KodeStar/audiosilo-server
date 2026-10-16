@@ -91,27 +91,35 @@ func normalizeMoreSeries(v string) (string, error) {
 	return EncodeMoreSeries(out), nil
 }
 
-// EncodeMoreSeries is the canonical more_series value for refs ("" for none):
-// without HTML escaping, so "Tom & Jerry" is written as the console's
-// JSON.stringify writes it and the two compare equal.
-func EncodeMoreSeries(refs []SeriesRef) string {
-	if len(refs) == 0 {
+// EncodeMoreSeries is the canonical more_series value for refs ("" for none;
+// encodeCanonical).
+func EncodeMoreSeries(refs []SeriesRef) string { return encodeCanonical(refs) }
+
+// ParseMoreSeries reads a stored more_series value (canonical JSON; "" or "[]"
+// for none). A value it can't read names no series.
+func ParseMoreSeries(v string) []SeriesRef { return parseCanonical[SeriesRef](v) }
+
+// encodeCanonical is the canonical value of a list field (more_series, a label
+// list; "" for none): its JSON without HTML escaping, so "Tom & Jerry" is
+// written as the console's JSON.stringify writes it and the two compare equal.
+func encodeCanonical[T any](list []T) string {
+	if len(list) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(refs) // a slice of plain structs always encodes
+	_ = enc.Encode(list) // a slice of strings or plain structs always encodes
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// ParseMoreSeries reads a stored more_series value (canonical JSON; "" or "[]"
-// for none). A value it can't read names no series.
-func ParseMoreSeries(v string) []SeriesRef {
+// parseCanonical reads a stored list field (encodeCanonical's form; "" or "[]"
+// for none). A value it can't read is an empty list.
+func parseCanonical[T any](v string) []T {
 	if v == "" || v == "[]" {
 		return nil // most books: no parse
 	}
-	var out []SeriesRef
+	var out []T
 	_ = json.Unmarshal([]byte(v), &out)
 	return out
 }

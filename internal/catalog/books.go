@@ -63,10 +63,10 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     series_index, narrator, duration, asin, isbn, cover_path, format, codec, size,
 			     mtime, content_hash, indexed_at, added_at, published, description, has_cover, scanned,
 			     scan_error, scan_error_file, scan_error_detail, suspect_parts, split_parent,
-			     released, released_checked,
+			     released, released_checked, genres_checked,
 			     scanned_chapters, chapters_hash, chapters_source, chapters_fit,
 			     abs_sig, abs_indexed_at, abs_file, attachments_sig, attachments_indexed_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,'','',?,?,?,?,?)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,'','',?,?,?,?,?)
 			 ON CONFLICT(library_id, rel_path) DO UPDATE SET
 			     is_folder=excluded.is_folder, title=excluded.title, author=excluded.author,
 			     series=excluded.series, series_index=excluded.series_index,
@@ -79,7 +79,7 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 			     scan_error=excluded.scan_error, scan_error_file=excluded.scan_error_file,
 			     scan_error_detail=excluded.scan_error_detail,
 			     suspect_parts=excluded.suspect_parts, split_parent=excluded.split_parent,
-			     released=excluded.released, released_checked=1,
+			     released=excluded.released, released_checked=1, genres_checked=1,
 			     -- The rows below are the scan's: refreshEffective puts a community
 			     -- list back over them when it should.
 			     scanned_chapters=excluded.scanned_chapters, chapters_hash=excluded.chapters_hash,
@@ -256,6 +256,10 @@ type Signature struct {
 	// (indexed before migration 0037; see books.released_checked), which the next
 	// scan reads (SetReleased).
 	ReleasedUnchecked bool
+	// GenresUnchecked: a book whose genre tag hasn't been read (indexed before
+	// migration 0049; see books.genres_checked), which the next scan reads
+	// (SetGenres).
+	GenresUnchecked bool
 	// PathCheck: what a book's snapshot needs from the next scan now that the path
 	// baseline reads a lone folder as the author (pathCheckExpr; SetPathReading).
 	PathCheck PathCheck
@@ -285,7 +289,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT rel_path, mtime, size, duration, codec, content_hash, cover_path, has_cover,
 		        is_folder, suspect_parts IS NULL, scan_error, scan_error_file, split_parent,
-		        released_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
+		        released_checked = 0, genres_checked = 0, `+pathCheckExpr+`, abs_sig, `+absUncheckedExpr+`,
 		        attachments_sig, `+attachmentsUncheckedExpr+`
 		   FROM books WHERE library_id = ?`, libraryID)
 	if err != nil {
@@ -298,7 +302,7 @@ func (c *Catalog) Signatures(ctx context.Context, libraryID int64) (map[string]S
 		var sig Signature
 		if err := rows.Scan(&rel, &sig.MTime, &sig.Size, &sig.Duration, &sig.Codec, &sig.ContentHash,
 			&sig.CoverPath, &sig.HasCover, &sig.IsFolder, &sig.SuspectUnchecked,
-			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked,
+			&sig.ScanError, &sig.ScanErrorFile, &sig.SplitParent, &sig.ReleasedUnchecked, &sig.GenresUnchecked,
 			&sig.PathCheck, &sig.ABSSig, &sig.ABSUnchecked, &sig.AttachmentsSig, &sig.AttachmentsUnchecked); err != nil {
 			return nil, err
 		}
@@ -484,19 +488,22 @@ func deleteBook(ctx context.Context, tx *sql.Tx, id int64) error {
 
 const bookCols = `id, library_id, rel_path, is_folder, title, author, series,
 	series_index, series_index_end, more_series, narrator, duration, asin, isbn, cover_path, format, codec, size, mtime,
-	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig`
+	added_at, content_hash, published, has_cover, cover_art, cover_color, attachments_sig,
+	subtitle, publisher, language, abridged, genres, tags`
 
 // bookDest returns the scan destinations for bookCols, in order, so every query
 // selecting bookCols (plain or prefixed) scans it the same way; finish, called
-// after the scan, derives the cover fields and the series list from the columns
-// behind them.
+// after the scan, derives the cover fields, the series list and the labels from
+// the columns behind them.
 func bookDest(b *Book) (dest []any, finish func()) {
-	var more, art, color, attachments string
+	var more, art, color, attachments, genres, tags string
 	return []any{&b.ID, &b.LibraryID, &b.RelPath, &b.IsFolder, &b.Title, &b.Author,
 			&b.Series, &b.SeriesIndex, &b.SeriesIndexEnd, &more, &b.Narrator, &b.Duration, &b.ASIN, &b.ISBN,
 			&b.CoverPath, &b.Format, &b.Codec, &b.Size, &b.MTime, &b.AddedAt, &b.ContentHash,
-			&b.Published, &b.HasCover, &art, &color, &attachments},
+			&b.Published, &b.HasCover, &art, &color, &attachments,
+			&b.Subtitle, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags},
 		func() {
+			b.Genres, b.Tags = ParseLabels(genres), ParseLabels(tags)
 			b.CoverVersion = CoverVersion(art)
 			b.Generated = generatedSig(attachments)
 			b.CoverColor, _ = storedCoverColor(art, color)
@@ -657,10 +664,14 @@ type ListOptions struct {
 	// client that places books by series_index alone leaves it off.
 	Memberships bool
 	Narrator    string // optional, as Author
-	Sort        string // "author" (default) | "title" | "recent"
-	Limit       int
-	Cursor      string // opaque keyset cursor from a previous page
-	Scope       *Scope // optional access scope; nil = unrestricted (admin/internal)
+	// Genre and Tag are optional: the books with that genre / tag, in any case
+	// (labelFilters).
+	Genre  string
+	Tag    string
+	Sort   string // "author" (default) | "title" | "recent"
+	Limit  int
+	Cursor string // opaque keyset cursor from a previous page
+	Scope  *Scope // optional access scope; nil = unrestricted (admin/internal)
 }
 
 // Page is a page of books plus the cursor for the next page ("" when exhausted).
@@ -714,9 +725,9 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 
 	where := []string{"library_id = ?"}
 	args := []any{opt.LibraryID}
-	if hasFTSPhrase(opt.Author) || hasFTSPhrase(opt.Narrator) || opt.Series != "" {
-		// The full-text candidates or the series' own index drive these filters,
-		// not the library index (as in BookFilter.where).
+	if hasFTSPhrase(opt.Author) || hasFTSPhrase(opt.Narrator) || opt.Series != "" || opt.Genre != "" || opt.Tag != "" {
+		// The full-text candidates, the series' own index or the labels' drive
+		// these filters, not the library index (as in BookFilter.where).
 		where[0] = "+library_id = ?"
 	}
 	if opt.Author != "" {
@@ -731,6 +742,8 @@ func (c *Catalog) ListBooks(ctx context.Context, opt ListOptions) (*Page, error)
 		cond, a := creditFilter("", "narrator", opt.Narrator)
 		where, args = append(where, cond), append(args, a...)
 	}
+	labelConds, labelArgs := labelFilters("", opt.LibraryID, opt.Genre, opt.Tag, "")
+	where, args = append(where, labelConds...), append(args, labelArgs...)
 	// Restrict to the caller's access scope (share path rules), if provided.
 	if opt.Scope != nil {
 		frag, fargs := pathFilterSQL("rel_path", *opt.Scope)

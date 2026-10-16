@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,6 +74,11 @@ func TestSlugifyAndFilename(t *testing.T) {
 	if got := exp.Filename(); got != "audiosilo-library-2026-09-21.json" {
 		t.Errorf("Filename() fallback = %q", got)
 	}
+	// An export with paths or tags is named apart from the one to share.
+	exp.private = true
+	if got := exp.Filename(); got != "audiosilo-library-2026-09-21-private.json" {
+		t.Errorf("Filename() private = %q", got)
+	}
 }
 
 // TestExportLibraryBooks covers the composed envelope end to end: the header
@@ -119,7 +125,7 @@ func TestExportLibraryBooks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "1.2.3")
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "1.2.3", ExportOptions{})
 	if err != nil {
 		t.Fatalf("ExportLibraryBooks: %v", err)
 	}
@@ -200,7 +206,7 @@ func TestExportLibraryBooksMergesDuplicateCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev")
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +236,11 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev")
+	// A tag is the owner's own note: not for a file that leaves the server either.
+	if err := c.EditBook(ctx, lib.ID, "Author/Secret Folder/book.m4b", BookEdit{Set: map[string]string{FieldTags: `["Private Shelf"]`}}); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +250,7 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 	}
 	// Values that exist on the indexed row but must never reach the file.
 	for _, leak := range []string{"secret-root", "Secret Folder", "book.m4b", "rel_path",
-		"aac", "12345", "deadbeef", "cover", "content_hash"} {
+		"aac", "12345", "deadbeef", "cover", "content_hash", "Private Shelf"} {
 		if strings.Contains(string(raw), leak) {
 			t.Errorf("export leaks %q: %s", leak, raw)
 		}
@@ -283,7 +293,95 @@ func TestExportLibraryBooksLeaksNoFilesystem(t *testing.T) {
 		t.Fatalf("books = %d, want 1: %s", len(books), raw)
 	}
 	assertKeys("book", books[0], "title", "subtitle", "authors", "narrators",
-		"series", "series_position", "asin", "isbn", "runtime_min", "chapters")
+		"series", "series_position", "publisher", "language", "abridged", "genres",
+		"asin", "isbn", "runtime_min", "chapters")
+}
+
+// TestExportLibraryBooksIncludes: asked for paths, each row names the path of
+// every copy collapsed into it; asked for tags, each row carries its tags; each
+// only with its own option, and the leak guard's allowlist holds otherwise
+// (without either, neither key appears: above).
+func TestExportLibraryBooksIncludes(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "Main", Root: "/srv/secret-root"})
+	for _, b := range []*Book{
+		{LibraryID: lib.ID, RelPath: "Rips/Die Trying.mp3", Title: "Die Trying", Author: "Lee Child", ASIN: "B0TESTASIN", Size: 10},
+		{LibraryID: lib.ID, RelPath: "Lee Child/Die Trying", IsFolder: true, Title: "Die Trying", Author: "Lee Child",
+			ASIN: "B0TESTASIN", Genres: []string{"Thriller"}, Size: 100},
+		{LibraryID: lib.ID, RelPath: "Other/Book.m4b", Title: "Other", Author: "Someone", Size: 5},
+	} {
+		if _, err := c.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The tag is on the copy that sorts second: the collapsed row takes it.
+	if err := c.EditBook(ctx, lib.ID, "Lee Child/Die Trying", BookEdit{Set: map[string]string{FieldTags: `["Owned"]`}}); err != nil {
+		t.Fatal(err)
+	}
+	export := func(opt ExportOptions) ([]ExportBook, []map[string]json.RawMessage) {
+		t.Helper()
+		exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(exp.Books) != 2 {
+			t.Fatalf("books = %d, want 2: %+v", len(exp.Books), exp.Books)
+		}
+		raw, _ := json.Marshal(exp)
+		var doc struct {
+			Library map[string]json.RawMessage   `json:"library"`
+			Books   []map[string]json.RawMessage `json:"books"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := doc.Library["root"]; ok || strings.Contains(string(raw), "secret-root") {
+			t.Errorf("the library root leaked: %s", raw)
+		}
+		return exp.Books, doc.Books
+	}
+	keys := func(rows []map[string]json.RawMessage, allowed ...string) {
+		t.Helper()
+		for _, row := range rows {
+			for k := range row {
+				if !slices.Contains(allowed, k) {
+					t.Errorf("row carries unexpected field %q: %v", k, row)
+				}
+			}
+		}
+	}
+
+	books, rows := export(ExportOptions{IncludePaths: true})
+	die, other := books[0], books[1]
+	if !slices.Equal(die.Paths, []string{"Rips/Die Trying.mp3", "Lee Child/Die Trying"}) ||
+		!slices.Equal(die.Genres, []string{"Thriller"}) || die.Tags != nil {
+		t.Errorf("collapsed row = %+v, want both copies' paths and the genre, no tags", die)
+	}
+	if !slices.Equal(other.Paths, []string{"Other/Book.m4b"}) {
+		t.Errorf("single row = %+v", other)
+	}
+	keys(rows, "title", "authors", "asin", "genres", "paths")
+
+	books, rows = export(ExportOptions{IncludeTags: true})
+	if die := books[0]; !slices.Equal(die.Tags, []string{"Owned"}) || die.Paths != nil {
+		t.Errorf("collapsed row = %+v, want the tag, no paths", die)
+	}
+	keys(rows, "title", "authors", "asin", "genres", "tags")
+
+	books, rows = export(ExportOptions{IncludePaths: true, IncludeTags: true})
+	if die := books[0]; !slices.Equal(die.Tags, []string{"Owned"}) || len(die.Paths) != 2 {
+		t.Errorf("collapsed row = %+v, want the tag and both paths", die)
+	}
+	keys(rows, "title", "authors", "asin", "genres", "tags", "paths")
+
+	// Both copies tagged: the row holds every copy's tags, each once.
+	if err := c.EditBook(ctx, lib.ID, "Rips/Die Trying.mp3", BookEdit{Set: map[string]string{FieldTags: `["Rip","owned"]`}}); err != nil {
+		t.Fatal(err)
+	}
+	if books, _ = export(ExportOptions{IncludeTags: true}); !slices.Equal(books[0].Tags, []string{"Rip", "owned"}) {
+		t.Errorf("collapsed row tags = %q, want both copies' tags, each once", books[0].Tags)
+	}
 }
 
 // TestExportLibraryBooksPagesEveryBook checks the keyset paging loop drains a
@@ -301,7 +399,7 @@ func TestExportLibraryBooksPagesEveryBook(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev")
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +418,7 @@ func TestExportLibraryBooksPagesEveryBook(t *testing.T) {
 func TestExportLibraryBooksUnknownLibrary(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
-	if _, err := c.ExportLibraryBooks(ctx, 999, "dev"); !errors.Is(err, ErrNotFound) {
+	if _, err := c.ExportLibraryBooks(ctx, 999, "dev", ExportOptions{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

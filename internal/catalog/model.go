@@ -102,6 +102,18 @@ type Book struct {
 	// loads it, leaving list, search and recent pages small.
 	Published   string `json:"published,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Subtitle, Publisher and Language come from an Audiobookshelf metadata.json,
+	// an edit or a community match. Abridged likewise: nil (omitted) when nothing
+	// says, so a client never reads "unknown" as "unabridged". Genres come from
+	// the genre tag too (metadata.SplitGenres), Tags only from the ABS file or an
+	// edit (see labels.go); both ride on every player book, list pages included,
+	// so a client can filter a library it has loaded by them.
+	Subtitle  string   `json:"subtitle,omitempty"`
+	Publisher string   `json:"publisher,omitempty"`
+	Language  string   `json:"language,omitempty"`
+	Abridged  *bool    `json:"abridged,omitempty"`
+	Genres    []string `json:"genres,omitempty"`
+	Tags      []string `json:"tags,omitempty"`
 	// Released is the date the file's tags give (metadata.ReleaseDate), usually
 	// the recording's: scanned, never edited, and only the admin list's
 	// release-date sort reads it (where a book has no Published).
