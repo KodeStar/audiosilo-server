@@ -51,7 +51,7 @@ func (b *bridgeEnv) queueDescribe(t *testing.T, tok, path, params string) (*http
 // field is a 400), needs a book, a Bridge that runs it (409 kind_unavailable)
 // and a library it can write to (409 library_not_writable), and is refused while
 // a sidecars.generate job is open for the book (409 generate_open), which writes
-// the description itself; a generate job is never refused for an open describe.
+// the description itself (TestBridgeGenerateCancelsDescribe: the other way round).
 // The route is the admin's: a user is 403, the bridge token 401.
 func TestBridgeDescribeQueue(t *testing.T) {
 	t.Parallel()
@@ -99,11 +99,6 @@ func TestBridgeDescribeQueue(t *testing.T) {
 		t.Errorf("the bridge token: %d %s, want 401", resp.StatusCode, body)
 	}
 
-	// A generate job is never refused for the open describe job (it writes a
-	// description of its own; the describe job stays queued).
-	if resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
-		t.Fatalf("generate beside an open describe: %d %s", resp.StatusCode, body)
-	}
 	// Denied: a describe for a book whose generate job is open.
 	if resp, body := b.queueSidecars(t, b.lib.ID, cradleBook, `{}`); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("generate: %d %s", resp.StatusCode, body)
@@ -126,10 +121,54 @@ func TestBridgeDescribeQueue(t *testing.T) {
 	}
 }
 
+// TestBridgeGenerateCancelsDescribe: a generate job queued for a book with an
+// open describe job is created, and the describe job gives way: a queued one is
+// cancelled at once (with why), a claimed one is asked to stop. Another book's
+// describe job is left alone.
+func TestBridgeGenerateCancelsDescribe(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatDescribe(t, true)
+	queued := func(path string) bridge.Job {
+		t.Helper()
+		resp, body := b.queueDescribe(t, b.adminTok, path, `{}`)
+		var j bridge.Job
+		decodeInto(t, body, &j)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("describe %s: %d %s", path, resp.StatusCode, body)
+		}
+		return j
+	}
+	ctx := context.Background()
+	waiting, other := queued(mistbornBook), queued(cradleBook)
+	if resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("generate beside a queued describe: %d %s", resp.StatusCode, body)
+	}
+	if j, err := b.api.bridge.Job(ctx, waiting.ID); err != nil || j.State != bridge.StateCancelled || j.Error == "" {
+		t.Fatalf("the queued describe = %+v, %v; want cancelled with a reason", j, err)
+	}
+	if j, err := b.api.bridge.Job(ctx, other.ID); err != nil || j.State != bridge.StateQueued {
+		t.Fatalf("another book's describe = %+v, %v; want still queued", j, err)
+	}
+	// A describe job the Bridge holds is asked to stop, not ended under it.
+	resp, body := b.do(t, "GET", "/api/v1/bridge/jobs/next?wait=1&kind=sidecars.describe", b.bridgeTok, "")
+	var claimed bridge.Job
+	decodeInto(t, body, &claimed)
+	if resp.StatusCode != http.StatusOK || claimed.ID != other.ID {
+		t.Fatalf("claim: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := b.queueSidecars(t, b.lib.ID, cradleBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("generate beside a claimed describe: %d %s", resp.StatusCode, body)
+	}
+	if j, err := b.api.bridge.Job(ctx, other.ID); err != nil || j.State != bridge.StateClaimed || !j.CancelRequested {
+		t.Fatalf("the claimed describe = %+v, %v; want claimed with a cancel asked", j, err)
+	}
+}
+
 // TestBridgeEstimateDescribe: the estimate (brief or full) says whether the
 // Bridge can write a description (online and running sidecars.describe) and
 // whether the book has one, generated (its attachments) or from the community
-// (community_description; the core description doesn't count).
+// (its community_description or its core description).
 func TestBridgeEstimateDescribe(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnvOn(t, generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
@@ -180,9 +219,10 @@ func TestBridgeEstimateDescribe(t *testing.T) {
 	}
 }
 
-// TestBridgeEstimateNoCommunityDescription: a community work with only the core
-// description has no community description (the console offers one).
-func TestBridgeEstimateNoCommunityDescription(t *testing.T) {
+// TestBridgeEstimateCoreDescription: a community work with only the core
+// description counts as having one (the player shows it before a generated
+// one, so the console offers none).
+func TestBridgeEstimateCoreDescription(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnvOn(t, generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
 		"description":"The publisher's blurb."}`))
@@ -191,7 +231,7 @@ func TestBridgeEstimateNoCommunityDescription(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.beatDescribe(t, true)
-	if est := b.briefEstimate(t, b.lib.ID, "A/Matched"); est.Has.Community.Description || est.Has.CommunityUnknown {
+	if est := b.briefEstimate(t, b.lib.ID, "A/Matched"); !est.Has.Community.Description || est.Has.CommunityUnknown {
 		t.Fatalf("core description only = %+v", est.Has)
 	}
 }

@@ -1742,7 +1742,7 @@ future metadata site can attach enrichment without reshaping the schema. The
   has (`has.community` via `meta.Service.Coverages`, cache first and never a full Enrich per book,
   `community_unknown` when it couldn't be asked; `has.local` from `book_attachments` (`catalog.BookAttachmentParts`: which columns are non-empty, nothing decoded); each with
   `characters`, `recaps` and, since Phase 1c, `description`: the community work's `community_description`
-  (`Coverage.Description`; the core description doesn't count) or a stored generated one), `can_describe`
+  (`Coverage.Description`: its `community_description` or its core description, either shown before a generated one) or a stored generated one), `can_describe`
   (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier
   books of its series in the library with no recaps (`catalog.EarlierInSeries`, each costed), and any
   open job; `brief=1` skips the folder look and the series scan, for a card or a batch); 409
@@ -1767,7 +1767,8 @@ future metadata site can attach enrichment without reshaping the schema. The
   whether its description came (`result.description`, `description_error`), and whose stage for a
   generate job's description step is `describing`). Notifications word a describe job as the
   description ("Description ready: <book>"). A generate job queued while a describe job is open
-  neither refuses nor cancels it (both stay queued). Jobs are carried by
+  cancels it in the same transaction (`cancelOpenTx`: at once when queued or parked, else
+  `cancel_requested`), since the generate run writes the description itself. Jobs are carried by
   `bridge.MoveJobs`, which `catalog.moveBookState` calls in its transaction with the catalog's clock (an
   open job colliding with an open one of its kind at the new path is cancelled; `DedupeKey` rebuilds the
   key), and go with their library. **Hidden folders**: no route reaches content through a hidden

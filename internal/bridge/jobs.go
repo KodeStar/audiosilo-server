@@ -456,6 +456,15 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return err
 		}
 		created = true
+		if j.Kind == KindSidecars {
+			// The generate run writes the description too, from fresher notes: a
+			// describe job open for the book gives way (at once when no Bridge is
+			// on it, else at its next update), so the two never race for it.
+			if err := cancelOpenTx(ctx, tx, DedupeKey(KindDescribe, j.LibraryID, j.Path), now,
+				"a generate job for the book replaced it"); err != nil {
+				return err
+			}
+		}
 		job, err = getJob(ctx, tx, id)
 		return err
 	})
@@ -1010,6 +1019,22 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 		s.settle(ctx, exp)
 	}
 	return job, err
+}
+
+// cancelOpenTx cancels the open job with dedupe key key, inside tx, as Cancel
+// does: at once when it is queued or parked, else by asking the Bridge
+// (cancel_requested). reason is its error. No open job is no change.
+func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE bridge_jobs SET state = 'cancelled', cancel_requested = 1, lease_until = NULL, error = ?3,
+		        finished_at = ?2, updated_at = ?2
+		  WHERE dedupe_key = ?1 AND state IN ('queued', 'needs_attention')`, key, now, reason); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE bridge_jobs SET cancel_requested = 1, updated_at = ?2
+		  WHERE dedupe_key = ?1 AND state IN ('claimed', 'running')`, key, now)
+	return err
 }
 
 // MoveJobs carries a book's jobs to its new path inside a move's transaction

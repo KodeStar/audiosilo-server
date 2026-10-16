@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/kodestar/audiosilo-server/pkg/match"
@@ -36,8 +37,10 @@ func (s *Service) CachedEnrichment(ctx context.Context, asin, isbn string) *Enri
 }
 
 // Coverage is what a book's community work carries: characters, recaps (as
-// HasCharacters and HasRecaps read them), a community description, and whether
-// that is known. Known is false when it couldn't be had right now (a lookup or
+// HasCharacters and HasRecaps read them), a description (its
+// community_description or its core description: either is shown before a
+// generated one, so a generated one would never be read), and whether that is
+// known. Known is false when it couldn't be had right now (a lookup or
 // work fetch that failed): unknown, not "none".
 type Coverage struct {
 	Characters, Recaps, Description, Known bool
@@ -45,7 +48,7 @@ type Coverage struct {
 
 // coverageOf is a matched envelope's Coverage (known).
 func coverageOf(e *Enrichment) Coverage {
-	return Coverage{Characters: e.HasCharacters(), Recaps: e.HasRecaps(), Description: e.HasCommunityDescription(), Known: true}
+	return Coverage{Characters: e.HasCharacters(), Recaps: e.HasRecaps(), Description: e.HasCommunityDescription() || (e != nil && e.Work != nil && strings.TrimSpace(e.Work.Description) != ""), Known: true}
 }
 
 // Coverages answers Coverage for many books at once (the Bridge's estimate: a
