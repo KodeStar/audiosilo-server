@@ -1,12 +1,15 @@
 package metadata
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	metaschema "github.com/kodestar/audiosilo-meta"
 )
 
 // TestParseCharacters: a pipeline-shaped file is read (unknown fields allowed, a
@@ -66,18 +69,90 @@ func TestParseRecaps(t *testing.T) {
 	}
 }
 
+// descriptionText is a description of n code points (an accented letter each,
+// so bytes and code points differ).
+func descriptionText(n int) string { return strings.Repeat("é", n) }
+
+// TestParseDescription: a pipeline-shaped file is read (unknown fields allowed,
+// a byte order mark skipped, the text trimmed); a text out of its bounds (in code
+// points), with a control character other than a line break, or a file that
+// isn't the format fails; a blank text is nothing.
+func TestParseDescription(t *testing.T) {
+	t.Parallel()
+	text := "A quiet harbour town.\n" + descriptionText(minDescriptionText)
+	d, err := ParseDescription([]byte("\xef\xbb\xbf" + fmt.Sprintf(`{"work":"the-way-of-kings","text":%q,"license":"CC-BY-SA-4.0",
+		"sources":[{"type":"bridge"}],"new_field":1}`, "  "+text+"\n")))
+	if err != nil || d == nil || d.Work != "the-way-of-kings" || d.Text != text || d.License != "CC-BY-SA-4.0" || len(d.Sources) != 1 {
+		t.Fatalf("valid file = %+v, %v", d, err)
+	}
+	for name, n := range map[string]int{"shortest": minDescriptionText, "longest": maxDescriptionText} {
+		if d, err := ParseDescription([]byte(fmt.Sprintf(`{"text":%q}`, descriptionText(n)))); err != nil || d == nil {
+			t.Errorf("%s: %+v, %v", name, d, err)
+		}
+	}
+	for _, body := range []string{`{"work":"w","text":"   "}`, `{"work":"w"}`} {
+		if d, err := ParseDescription([]byte(body)); d != nil || err != nil {
+			t.Errorf("blank %s = %+v, %v; want nil, nil", body, d, err)
+		}
+	}
+	for name, body := range map[string]string{
+		"not JSON":      `not json`,
+		"not an object": `["text"]`,
+		"wrong type":    `{"text":12}`,
+		"too short":     fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText-1)),
+		"too long":      fmt.Sprintf(`{"text":%q}`, descriptionText(maxDescriptionText+1)),
+		"a tab":         fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\tx"),
+		"a return":      fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\r\nx"),
+		"a bell":        fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\u0007x"),
+		"a C1 control":  fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText)+"\u0085x"),
+		"long work":     fmt.Sprintf(`{"work":%q,"text":%q}`, strings.Repeat("w", maxProvenanceText+1), descriptionText(minDescriptionText)),
+		"many sources":  fmt.Sprintf(`{"text":%q,"sources":[%s]}`, descriptionText(minDescriptionText), strings.TrimSuffix(strings.Repeat(`{"type":"x"},`, maxAttachmentList+1), ",")),
+	} {
+		if d, err := ParseDescription([]byte(body)); !errors.Is(err, ErrAttachmentInvalid) {
+			t.Errorf("%s: %+v, %v; want ErrAttachmentInvalid", name, d, err)
+		}
+	}
+}
+
+// TestDescriptionBoundsMatchTheSchema: the text bounds are audiosilo-meta's
+// (description.schema.json's minLength and maxLength), so a newer meta that
+// moves them shows up here rather than as files the server refuses.
+func TestDescriptionBoundsMatchTheSchema(t *testing.T) {
+	t.Parallel()
+	raw, err := metaschema.SchemaFS.ReadFile("schema/description.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Text struct {
+				MinLength int `json:"minLength"`
+				MaxLength int `json:"maxLength"`
+			} `json:"text"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if got := schema.Properties.Text; got.MinLength != minDescriptionText || got.MaxLength != maxDescriptionText {
+		t.Fatalf("schema bounds = %d-%d, the server's = %d-%d", got.MinLength, got.MaxLength, minDescriptionText, maxDescriptionText)
+	}
+}
+
 // TestParseProvenance: each value is cleaned on its own (a bad one is left out,
 // never the file); the time is normalized to UTC.
 func TestParseProvenance(t *testing.T) {
 	t.Parallel()
 	p, err := ParseProvenance([]byte(`{"generator":"audiosilo-bridge","version":"0.2.0","kind":"sidecars.generate","job_id":12,
-		"generated_at":"2026-10-15T12:00:00+02:00","source":"audio","work_id":"","inputs":[{"path":"A/B/01.mp3","size":1,"mod_time":2}]}`))
+		"generated_at":"2026-10-15T12:00:00+02:00","source":"audio","work_id":"","inputs":[{"path":"A/B/01.mp3","size":1,"mod_time":2}],
+		"description":{"job_id":14,"generated_at":"2026-10-16T09:30:00+01:00","from":"opening_notes","chapters":3,"checked_against":"none"}}`))
 	want := AttachmentProvenance{Generator: "audiosilo-bridge", Version: "0.2.0", Kind: "sidecars.generate", JobID: 12,
-		GeneratedAt: "2026-10-15T10:00:00Z", Source: "audio"}
+		GeneratedAt: "2026-10-15T10:00:00Z", Source: "audio", DescriptionAt: "2026-10-16T08:30:00Z"}
 	if err != nil || p == nil || *p != want {
 		t.Fatalf("provenance = %+v, %v; want %+v", p, err, want)
 	}
-	p, err = ParseProvenance([]byte(`{"generator":"bad\u0007name","version":"` + strings.Repeat("v", maxProvenanceText+1) + `","job_id":-3,"generated_at":"yesterday","kind":"k"}`))
+	p, err = ParseProvenance([]byte(`{"generator":"bad\u0007name","version":"` + strings.Repeat("v", maxProvenanceText+1) + `","job_id":-3,"generated_at":"yesterday","kind":"k",
+		"description":{"generated_at":"today"}}`))
 	if err != nil || p == nil || *p != (AttachmentProvenance{Kind: "k"}) {
 		t.Errorf("cleaned = %+v, %v; want only the kind", p, err)
 	}
@@ -115,6 +190,20 @@ func TestReadAttachmentFiles(t *testing.T) {
 	}
 	if _, err := ReadRecaps(big); !errors.Is(err, ErrAttachmentInvalid) {
 		t.Errorf("too large: %v, want ErrAttachmentInvalid", err)
+	}
+	desc := filepath.Join(dir, "description.json")
+	if err := os.WriteFile(desc, []byte(fmt.Sprintf(`{"text":%q}`, descriptionText(minDescriptionText))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := ReadDescription(desc); err != nil || d == nil {
+		t.Fatalf("description: %+v, %v", d, err)
+	}
+	descLink := filepath.Join(dir, "linked.description.json")
+	if err := os.Symlink(desc, descLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadDescription(descLink); !errors.Is(err, ErrAttachmentInvalid) {
+		t.Errorf("a linked description: %v, want ErrAttachmentInvalid", err)
 	}
 	if _, err := ReadProvenance(filepath.Join(dir, "missing.json")); err == nil || errors.Is(err, ErrAttachmentInvalid) {
 		t.Errorf("missing: %v, want a read error that isn't ErrAttachmentInvalid", err)

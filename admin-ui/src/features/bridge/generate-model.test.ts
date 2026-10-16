@@ -8,6 +8,9 @@ import {
   batchCheck,
   batchPlan,
   bridgeJobLink,
+  clampsDescription,
+  DESCRIPTION_CLAMP_CHARS,
+  describeOffered,
   destinationKey,
   estimateView,
   GENERATE_PARKED_POLL_MS,
@@ -19,10 +22,12 @@ import {
   generatePollMs,
   generateProgress,
   generateResult,
+  KIND_DESCRIBE,
   KIND_GENERATE,
   KNOWN_PARKS,
   KNOWN_STAGES,
   latestGenerateJob,
+  latestJobOf,
   parkKey,
   planEstimate,
   roundEta,
@@ -30,6 +35,7 @@ import {
   settleLimited,
   stageLabel,
   titleCase,
+  wordsItsOwnStatus,
   type BatchCheck,
 } from './generate-model';
 
@@ -618,5 +624,99 @@ describe('the series batch', () => {
       ctl.signal,
     );
     expect(started).toEqual([1, 2]);
+  });
+});
+
+describe('a description (Phase 1c)', () => {
+  const has = (
+    local: Partial<Record<string, boolean>>,
+    community: Partial<Record<string, boolean>> = {},
+  ) => ({
+    community: { characters: false, recaps: false, description: false, ...community },
+    local: { characters: false, recaps: false, description: false, ...local },
+  });
+  const open = (kind: string, state: BridgeJobState = 'running') => ({ kind, state });
+
+  it('is offered for a book with generated content, no description and nothing open', () => {
+    expect(describeOffered({ can_describe: true, has: has({ characters: true }) }, [])).toBe(true);
+    expect(describeOffered({ can_describe: true, has: has({ recaps: true }) }, undefined)).toBe(
+      true,
+    );
+    // A finished or cancelled job is no reason to hold back.
+    expect(
+      describeOffered({ can_describe: true, has: has({ recaps: true }) }, [
+        open(KIND_DESCRIBE, 'failed'),
+        open(KIND_GENERATE, 'done'),
+      ]),
+    ).toBe(true);
+  });
+
+  it('is not offered without a Bridge that can, content to write from, or with one already', () => {
+    const local = has({ characters: true, recaps: true });
+    expect(describeOffered(undefined, [])).toBe(false);
+    expect(describeOffered({ has: local }, [])).toBe(false);
+    expect(describeOffered({ can_describe: false, has: local }, [])).toBe(false);
+    expect(describeOffered({ can_describe: true, has: has({}) }, [])).toBe(false);
+    expect(
+      describeOffered(
+        { can_describe: true, has: has({ characters: true, description: true }) },
+        [],
+      ),
+    ).toBe(false);
+    expect(
+      describeOffered(
+        { can_describe: true, has: has({ characters: true }, { description: true }) },
+        [],
+      ),
+    ).toBe(false);
+  });
+
+  it('is not offered while a generate or describe job is open', () => {
+    const e = { can_describe: true, has: has({ characters: true }) };
+    expect(describeOffered(e, [open(KIND_GENERATE)])).toBe(false);
+    expect(describeOffered(e, [open(KIND_DESCRIBE, 'needs_attention')])).toBe(false);
+    // Another kind (a verify) doesn't count.
+    expect(describeOffered(e, [open('bridge.verify')])).toBe(true);
+  });
+
+  it('polls a describe job like a generate one, and finds each kind', () => {
+    expect(generatePollMs([open(KIND_DESCRIBE)])).toBe(GENERATE_POLL_MS);
+    expect(generatePollMs([open(KIND_DESCRIBE, 'needs_attention')])).toBe(GENERATE_PARKED_POLL_MS);
+    const jobs = [open(KIND_DESCRIBE), open(KIND_GENERATE, 'done')];
+    expect(latestJobOf(jobs, KIND_GENERATE)).toBe(jobs[1]);
+    expect(latestJobOf(jobs, KIND_DESCRIBE)).toBe(jobs[0]);
+    expect(latestGenerateJob(jobs)).toBe(jobs[1]);
+    expect(wordsItsOwnStatus(KIND_DESCRIBE)).toBe(true);
+    expect(wordsItsOwnStatus('bridge.verify')).toBe(false);
+  });
+
+  it("reads a result's description outcome", () => {
+    expect(generateResult({ description: true, checked_against: 'none' })).toEqual({
+      description: true,
+      contributed: [],
+    });
+    expect(
+      generateResult({ characters: 1, description: false, description_error: ' rate limited ' }),
+    ).toEqual({
+      characters: 1,
+      description: false,
+      descriptionError: 'rate limited',
+      contributed: [],
+    });
+    // An error beside a written description says nothing.
+    expect(generateResult({ description: true, description_error: 'x' })?.descriptionError).toBe(
+      undefined,
+    );
+    expect(generateResult({ description: 'yes' })).toBeNull();
+  });
+
+  it('clamps a long description only', () => {
+    expect(clampsDescription('x'.repeat(DESCRIPTION_CLAMP_CHARS))).toBe(false);
+    expect(clampsDescription('x'.repeat(DESCRIPTION_CLAMP_CHARS + 1))).toBe(true);
+  });
+
+  it('labels the describing stage', () => {
+    expect(KNOWN_STAGES).toContain('describing');
+    expect(strings['bridge.stage.describing']).toBe('Writing the description');
   });
 });

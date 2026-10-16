@@ -15,9 +15,10 @@ import (
 )
 
 // A book's .audiosilo/ attachments (metadata.AttachmentsDir) are the files the
-// Bridge generates for it: characters, recaps and their provenance. They are not
+// Bridge generates for it: characters, recaps, a description and their
+// provenance. They are not
 // a metadata layer: nothing in the effective row reads them. The scan stores
-// them checked in book_attachments (migration 0048), with the files' signature
+// them checked in book_attachments (migrations 0048, 0050), with the files' signature
 // on the book row (attachments_sig) and the indexed_at they were read with
 // (attachments_indexed_at), and /meta serves them beside the community data.
 // Derived from the files, so a move never carries them and a re-index reads
@@ -49,13 +50,13 @@ type AttachmentsState struct {
 }
 
 // generatedSig reports whether a book's attachments signature (attachments_sig)
-// names a characters or recaps file: Book.Generated, read from the narrow column
-// so a list never joins book_attachments. A file that failed its checks still
+// names a characters, recaps or description file: Book.Generated, read from the
+// narrow column so a list never joins book_attachments. A file that failed its checks still
 // counts (its signature is recorded so it isn't read again): a /meta read then
 // finds nothing, which costs a request and no more.
 func generatedSig(sig string) bool {
 	for _, name := range metadata.AttachmentSigNames(sig) {
-		if name == metadata.AttachmentCharacters || name == metadata.AttachmentRecaps {
+		if name == metadata.AttachmentCharacters || name == metadata.AttachmentRecaps || name == metadata.AttachmentDescription {
 			return true
 		}
 	}
@@ -84,13 +85,17 @@ func writeAttachments(ctx context.Context, tx *sql.Tx, id int64, files metadata.
 	if err != nil {
 		return err
 	}
+	desc, err := encodeAttachment(files.Description)
+	if err != nil {
+		return err
+	}
 	prov, err := encodeAttachment(files.Provenance)
 	if err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO book_attachments(book_id, characters, recaps, provenance, updated_at) VALUES(?,?,?,?,?)`,
-		id, chars, recaps, prov, now)
+		`INSERT INTO book_attachments(book_id, characters, recaps, description, provenance, updated_at) VALUES(?,?,?,?,?,?)`,
+		id, chars, recaps, desc, prov, now)
 	return err
 }
 
@@ -162,9 +167,10 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 // inside the server only), or nil, nil when it has none. A column that no longer
 // decodes reads as a file the book doesn't have.
 func (c *Catalog) BookAttachments(ctx context.Context, bookID int64) (*metadata.AttachmentFiles, error) {
-	var chars, recaps, prov string
+	var chars, recaps, desc, prov string
 	err := c.db.QueryRowContext(ctx,
-		`SELECT characters, recaps, provenance FROM book_attachments WHERE book_id = ?`, bookID).Scan(&chars, &recaps, &prov)
+		`SELECT characters, recaps, description, provenance FROM book_attachments WHERE book_id = ?`, bookID).
+		Scan(&chars, &recaps, &desc, &prov)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -172,9 +178,10 @@ func (c *Catalog) BookAttachments(ctx context.Context, bookID int64) (*metadata.
 		return nil, err
 	}
 	a := &metadata.AttachmentFiles{
-		Characters: decodeAttachment[model.Characters](chars),
-		Recaps:     decodeAttachment[model.Recaps](recaps),
-		Provenance: decodeAttachment[metadata.AttachmentProvenance](prov),
+		Characters:  decodeAttachment[model.Characters](chars),
+		Recaps:      decodeAttachment[model.Recaps](recaps),
+		Description: decodeAttachment[model.Description](desc),
+		Provenance:  decodeAttachment[metadata.AttachmentProvenance](prov),
 	}
 	if a.Empty() {
 		return nil, nil

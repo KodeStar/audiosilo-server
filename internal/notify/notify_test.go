@@ -538,3 +538,25 @@ func TestSameOrigin(t *testing.T) {
 		}
 	}
 }
+
+// A description-only job (sidecars.describe) is worded as the description,
+// finished or failed; a park still reads its code's sentence.
+func TestBridgeDescribeJobWording(t *testing.T) {
+	t.Parallel()
+	s, _, _ := newService(t)
+	event := func(kind, state string) catalog.ServerEvent {
+		return catalog.ServerEvent{Kind: kind, Data: map[string]any{"job_kind": "sidecars.describe", "state": state,
+			"title": "The Way of Kings", "code": "budget_exceeded"}}
+	}
+	if m := compose(event(KindBridgeJobFinished, "done"), s.server()); m.Title != "Description ready: The Way of Kings" ||
+		m.Text != "Listeners see it in the book's About in the player now." {
+		t.Errorf("finished = %+v", m)
+	}
+	if m := compose(event(KindBridgeJobFailed, "failed"), s.server()); m.Title != "Description failed: The Way of Kings" {
+		t.Errorf("failed = %+v", m)
+	}
+	if m := compose(event(KindBridgeJobFailed, "needs_attention"), s.server()); m.Title != "A Bridge job needs attention: The Way of Kings" ||
+		!strings.Contains(m.Text, "spending limit") {
+		t.Errorf("parked = %+v", m)
+	}
+}

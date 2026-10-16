@@ -400,3 +400,70 @@ func TestEstimateSidecars(t *testing.T) {
 		t.Fatalf("negative duration = %+v", c)
 	}
 }
+
+func (q *testQueue) describe(params string, path *string) (*Job, bool, error) {
+	j := NewJob{Kind: KindDescribe, LibraryID: &q.lib, Path: path, RequestedBy: q.admin}
+	if params != "" {
+		j.Params = json.RawMessage(params)
+	}
+	return q.Enqueue(context.Background(), j)
+}
+
+// sidecars.describe takes no params (none or {} is stored as {}; anything else
+// is refused), needs a book, a Bridge that runs it and a writable library, and
+// is refused while a sidecars.generate job is open for the book (it writes the
+// description itself); a generate job is never refused for an open describe.
+func TestDescribeQueueRules(t *testing.T) {
+	t.Parallel()
+	q := newTestQueue(t)
+	q.beatLibrary(t, true, true, KindVerify, KindSidecars)
+	if _, _, err := q.describe("", ptr("Author/Book")); !errors.Is(err, ErrKindUnavailable) {
+		t.Fatalf("a Bridge without the kind: %v, want ErrKindUnavailable", err)
+	}
+	q.beatLibrary(t, true, true, KindVerify, KindSidecars, KindDescribe)
+	for _, params := range []string{"", `{}`, `null`} {
+		job, _, err := q.describe(params, ptr("Author/Book"))
+		if err != nil || string(job.Params) != `{}` {
+			t.Fatalf("params %q: %v, %+v", params, err, job)
+		}
+	}
+	for name, params := range map[string]string{
+		"a field":       `{"source":"audio"}`,
+		"not an object": `[]`,
+		"trailing data": `{} {}`,
+	} {
+		if _, _, err := q.describe(params, ptr("Author/Other")); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, _, err := q.describe("", nil); !errors.Is(err, ErrInvalid) {
+		t.Errorf("no path: %v, want ErrInvalid", err)
+	}
+	// A generate job beside the open describe job is queued.
+	if _, created, err := q.sidecars("", ptr("Author/Book")); err != nil || !created {
+		t.Fatalf("generate beside a describe: %v, %v", created, err)
+	}
+	// A describe for a book whose generate job is open is refused; once it ends,
+	// it is queued.
+	gen, _, err := q.sidecars("", ptr("Author/Third"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.describe("", ptr("Author/Third")); !errors.Is(err, ErrGenerateOpen) {
+		t.Fatalf("describe with a generate open: %v, want ErrGenerateOpen", err)
+	}
+	if _, err := q.Cancel(context.Background(), gen.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := q.describe("", ptr("Author/Third")); err != nil || !created {
+		t.Fatalf("describe once the generate ended: %v, %v", created, err)
+	}
+	// A library the Bridge can't write to.
+	q.beatLibrary(t, true, false, KindVerify, KindSidecars, KindDescribe)
+	if _, _, err := q.describe("", ptr("Author/Fourth")); !errors.Is(err, ErrLibraryNotWritable) {
+		t.Errorf("read-only library: %v, want ErrLibraryNotWritable", err)
+	}
+	if got := (Status{Kinds: []string{KindDescribe}}).Features(); !slices.Equal(got, []string{"sidecars"}) {
+		t.Errorf("features = %v", got)
+	}
+}

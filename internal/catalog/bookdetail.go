@@ -37,6 +37,17 @@ type AdminBookDetail struct {
 	// (meta.SearchPrefill: the title and author, or the folders' when the tags
 	// look swapped or junk).
 	MatchQuery string `json:"match_query"`
+	// GeneratedDescription is the description the Bridge generated for the book
+	// (its .audiosilo/description.json, as stored), omitted when it has none.
+	GeneratedDescription *GeneratedDescription `json:"generated_description,omitempty"`
+}
+
+// GeneratedDescription is a book's generated description on the console's book
+// page: the text, and when it was written (bridge.json's description time;
+// omitted when unknown).
+type GeneratedDescription struct {
+	Text        string `json:"text"`
+	GeneratedAt string `json:"generated_at,omitempty"`
 }
 
 // AdminChapter is a chapter with its edit state.
@@ -161,6 +172,16 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 		Scan(&d.Folder.Override)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
+	}
+	att, err := c.BookAttachments(ctx, bookID)
+	if err != nil {
+		return nil, err
+	}
+	if att != nil && att.Description != nil {
+		d.GeneratedDescription = &GeneratedDescription{Text: att.Description.Text}
+		if att.Provenance != nil {
+			d.GeneratedDescription.GeneratedAt = att.Provenance.DescriptionAt
+		}
 	}
 	return d, nil
 }

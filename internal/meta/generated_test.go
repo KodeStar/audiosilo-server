@@ -2,6 +2,7 @@ package meta
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
@@ -80,14 +81,21 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	// nothing to load (Fillable).
 	both := communityWork()
 	both.Recaps = []MetaRecap{{Through: MetaPosition{Chapter: 1}, Text: "Community."}}
+	both.CommunityDescription = &MetaCommunityDescription{Text: "Community description."}
 	env = &Enrichment{Matched: true, Work: both}
-	if out := matched(t, env, testGenerated(), nil); out != env || out.Work.Generated != nil {
-		t.Errorf("both community = %+v", out.Work)
+	if out := matched(t, env, withDescription(testGenerated()), nil); out != env || out.Work.Generated != nil {
+		t.Errorf("all community = %+v", out.Work)
 	}
-	// Characters and recaps but no summary: still nothing to fill, as a summary
-	// only ever comes with the recaps.
+	// Characters, recaps and a description but no summary: still nothing to
+	// fill, as a summary only ever comes with the recaps.
 	if env.Fillable() {
-		t.Error("a work with characters and recaps is fillable")
+		t.Error("a work with characters, recaps and a description is fillable")
+	}
+	// Without the community description there is one thing to fill.
+	noDesc := *both
+	noDesc.CommunityDescription = nil
+	if !(&Enrichment{Work: &noDesc}).Fillable() {
+		t.Error("a work without a community description can't be filled")
 	}
 	if !(&Enrichment{Work: &MetaWork{Characters: both.Characters}}).Fillable() || !(*Enrichment)(nil).Fillable() {
 		t.Error("a work without recaps, or no match, can't be filled")
@@ -99,6 +107,84 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	out := matched(t, &Enrichment{Work: summed}, testGenerated(), nil)
 	if out.Work.RecapSummary.InShort != "Community short." || out.Work.Attribution == nil || len(out.Work.Recaps) != 2 {
 		t.Errorf("community summary = %+v", out.Work)
+	}
+}
+
+// testDescription is a generated description (its bounds are the parser's,
+// not Answer's).
+const testDescription = "A harbour town on the edge of a long winter."
+
+// withDescription is g with a generated description.
+func withDescription(g *Generated) *Generated {
+	g.Description = &model.Description{Work: "w", Text: testDescription, License: "CC-BY-SA-4.0"}
+	return g
+}
+
+// TestAnswerDescription: a generated description fills generated_description
+// (never community_description) only when the community work has no community
+// description; the core description doesn't block it; it survives
+// spoilers=hide (spoiler-free by contract); it never brings an attribution.
+func TestAnswerDescription(t *testing.T) {
+	t.Parallel()
+	// Matched, with community characters and recaps but no community
+	// description: the description alone is generated.
+	full := communityWork()
+	full.Recaps = []MetaRecap{{Through: MetaPosition{Chapter: 1}, Text: "Community."}}
+	full.Description = "The publisher's blurb."
+	env := &Enrichment{Matched: true, Work: full}
+	snapshot, _ := json.Marshal(env)
+	w := matched(t, env, withDescription(testGenerated()), nil).Work
+	if w.GeneratedDescription == nil || w.GeneratedDescription.Text != testDescription || w.CommunityDescription != nil ||
+		w.Description != "The publisher's blurb." {
+		t.Fatalf("description = %+v / %+v / %q", w.GeneratedDescription, w.CommunityDescription, w.Description)
+	}
+	if g := w.Generated; g == nil || !g.Description || g.Characters || g.Recaps {
+		t.Errorf("generated = %+v, want the description alone", g)
+	}
+	if w.Attribution == nil || len(w.Characters) != 1 || w.Characters[0].ID != "community-hero" {
+		t.Errorf("the community's parts changed: %+v", w)
+	}
+	if after, _ := json.Marshal(env); string(after) != string(snapshot) {
+		t.Errorf("the shared envelope changed:\n%s\n%s", snapshot, after)
+	}
+	raw, _ := json.Marshal(w)
+	if !strings.Contains(string(raw), `"generated_description":{"text":"`+testDescription+`"}`) ||
+		!strings.Contains(string(raw), `"generated":{"characters":false,"recaps":false,"description":true`) {
+		t.Errorf("wire = %s", raw)
+	}
+	// spoilers=hide keeps it, from the start.
+	if hidden := matched(t, env, withDescription(testGenerated()), &Place{}).Work; hidden.GeneratedDescription == nil ||
+		hidden.Generated == nil || !hidden.Generated.Description {
+		t.Errorf("hidden = %+v / %+v", hidden.GeneratedDescription, hidden.Generated)
+	}
+
+	// The community has a description: it wins, nothing generated in its place.
+	withCommunity := *full
+	withCommunity.CommunityDescription = &MetaCommunityDescription{Text: "Community description."}
+	cenv := &Enrichment{Matched: true, Work: &withCommunity}
+	if out := matched(t, cenv, withDescription(testGenerated()), nil); out != cenv || out.Work.GeneratedDescription != nil {
+		t.Errorf("community description = %+v", out.Work)
+	}
+
+	// Unmatched, a description only: matched false with a work of the title, the
+	// description, no attribution, kept under spoilers=hide.
+	for _, hide := range []*Place{nil, {}} {
+		u, ok := Answer(nil, "The Book", withDescription(&Generated{}), hide).(Unmatched)
+		if !ok || u.Work == nil || u.Work.Title != "The Book" || u.Work.GeneratedDescription == nil || u.Work.Attribution != nil ||
+			u.Work.Generated == nil || !u.Work.Generated.Description || u.Work.Generated.Characters || u.Work.Generated.Recaps {
+			t.Errorf("unmatched description only (hide %v) = %+v", hide, u.Work)
+		}
+	}
+	// A work of only a generated description carries no attribution, even
+	// matched to a community work with nothing of the CC BY-SA layer.
+	bare := &Enrichment{Matched: true, Work: &MetaWork{ID: "w", Title: "W", Description: "Blurb."}}
+	if w := matched(t, bare, withDescription(&Generated{}), nil).Work; w.Attribution != nil || w.GeneratedDescription == nil {
+		t.Errorf("bare work = %+v", w)
+	}
+	// A blank description is none.
+	blank := &Generated{Description: &model.Description{Text: "  "}}
+	if u := Answer(nil, "The Book", blank, nil).(Unmatched); u.Work != nil {
+		t.Errorf("blank description = %+v", u.Work)
 	}
 }
 

@@ -11,8 +11,8 @@ import (
 )
 
 // Book.Generated comes from the attachments signature alone: a book whose
-// signature names characters.json or recaps.json has generated content, one
-// with only bridge.json or none hasn't (and the field is left off the wire), on
+// signature names characters.json, recaps.json or description.json has
+// generated content, one with only bridge.json or none hasn't (and the field is left off the wire), on
 // a single read and on a list alike.
 func TestBookGenerated(t *testing.T) {
 	t.Parallel()
@@ -23,6 +23,7 @@ func TestBookGenerated(t *testing.T) {
 		{RelPath: "Indexed", Attachments: AttachmentsReading{Sig: "characters.json:10:1,bridge.json:5:1",
 			Files: metadata.AttachmentFiles{Characters: chars}}},
 		{RelPath: "Refreshed"},
+		{RelPath: "Described"},
 		{RelPath: "Provenance"},
 		{RelPath: "None"},
 	} {
@@ -32,12 +33,15 @@ func TestBookGenerated(t *testing.T) {
 		}
 	}
 	if err := c.SetAttachments(ctx, lib.ID, map[string]AttachmentsReading{
-		"Refreshed":  {Sig: "recaps.json:7:1", Files: metadata.AttachmentFiles{Recaps: &model.Recaps{InShort: "Short."}}},
+		"Refreshed": {Sig: "recaps.json:7:1", Files: metadata.AttachmentFiles{Recaps: &model.Recaps{InShort: "Short."}}},
+		"Described": {Sig: "description.json:300:1,bridge.json:5:1", Files: metadata.AttachmentFiles{
+			Description: &model.Description{Work: "w", Text: "A described book.", License: "CC-BY-SA-4.0"},
+			Provenance:  &metadata.AttachmentProvenance{Kind: "sidecars.describe", DescriptionAt: "2026-10-16T08:00:00Z"}}},
 		"Provenance": {Sig: "bridge.json:5:1", Files: metadata.AttachmentFiles{Provenance: &metadata.AttachmentProvenance{Kind: "k"}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"Indexed": true, "Refreshed": true, "Provenance": false, "None": false}
+	want := map[string]bool{"Indexed": true, "Refreshed": true, "Described": true, "Provenance": false, "None": false}
 	for path, generated := range want {
 		b, err := c.GetBookByPath(ctx, lib.ID, path)
 		if err != nil {
@@ -62,6 +66,23 @@ func TestBookGenerated(t *testing.T) {
 	b, _ := c.GetBookByPath(ctx, lib.ID, "Indexed")
 	if a, err := c.BookAttachments(ctx, b.ID); err != nil || a == nil || a.Characters == nil || a.Recaps != nil {
 		t.Fatalf("attachments = %+v, %v", a, err)
+	}
+	// A description round-trips, and the console's book page shows it with its
+	// own time.
+	described, _ := c.GetBookByPath(ctx, lib.ID, "Described")
+	if a, err := c.BookAttachments(ctx, described.ID); err != nil || a == nil || a.Description == nil ||
+		a.Description.Text != "A described book." || a.Characters != nil || a.Provenance.DescriptionAt != "2026-10-16T08:00:00Z" {
+		t.Fatalf("described attachments = %+v, %v", a, err)
+	}
+	d, err := c.AdminBookDetail(ctx, lib.ID, "Described")
+	if err != nil || d.GeneratedDescription == nil ||
+		*d.GeneratedDescription != (GeneratedDescription{Text: "A described book.", GeneratedAt: "2026-10-16T08:00:00Z"}) {
+		t.Fatalf("detail = %+v, %v", d.GeneratedDescription, err)
+	}
+	if d, err := c.AdminBookDetail(ctx, lib.ID, "Indexed"); err != nil || d.GeneratedDescription != nil {
+		t.Fatalf("detail without a description = %+v, %v", d.GeneratedDescription, err)
+	} else if raw, _ := json.Marshal(d); strings.Contains(string(raw), "generated_description") {
+		t.Errorf("detail without a description carries the field: %s", raw)
 	}
 	none, _ := c.GetBookByPath(ctx, lib.ID, "None")
 	if a, err := c.BookAttachments(ctx, none.ID); err != nil || a != nil {

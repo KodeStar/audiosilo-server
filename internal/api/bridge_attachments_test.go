@@ -59,7 +59,7 @@ func TestBridgeRescanAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, body := b.rescan(t, fmt.Sprintf(`{"library_id":%d,"path":%q,"mode":"attachments"}`, b.lib.ID, mistbornBook))
-	want := fmt.Sprintf(`{"path":%q,"attachments":{"characters":true,"recaps":false,"bridge":true}}`, mistbornBook) + "\n"
+	want := fmt.Sprintf(`{"path":%q,"attachments":{"characters":true,"recaps":false,"description":false,"bridge":true}}`, mistbornBook) + "\n"
 	if code != http.StatusOK || body != want {
 		t.Fatalf("attachments rescan = %d %s, want %s", code, body, want)
 	}
@@ -69,6 +69,14 @@ func TestBridgeRescanAttachments(t *testing.T) {
 	}
 	if a, err := b.cat.BookAttachments(context.Background(), book.ID); err != nil || a == nil || a.Characters == nil || a.Provenance.JobID != 3 {
 		t.Errorf("stored = %+v, %v", a, err)
+	}
+	// A description the Bridge wrote since is answered too (Phase 1c).
+	if err := os.WriteFile(filepath.Join(dir, "description.json"), []byte(fmt.Sprintf(`{"work":"w","text":%q}`, testDescriptionText)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, body = b.rescan(t, fmt.Sprintf(`{"library_id":%d,"path":%q,"mode":"attachments"}`, b.lib.ID, mistbornBook))
+	if want := `"attachments":{"characters":true,"recaps":false,"description":true,"bridge":true}`; code != http.StatusOK || !strings.Contains(body, want) {
+		t.Fatalf("attachments rescan with a description = %d %s, want %s", code, body, want)
 	}
 	for _, p := range []string{"Nobody/Here", mistbornBook + "/.audiosilo", "../etc"} {
 		if code, body := b.rescan(t, fmt.Sprintf(`{"library_id":%d,"path":%q,"mode":"attachments"}`, b.lib.ID, p)); code != http.StatusNotFound {

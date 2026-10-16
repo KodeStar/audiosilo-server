@@ -180,6 +180,73 @@ func TestScannerReadsAttachments(t *testing.T) {
 	}
 }
 
+// testDescription is a description.json the server takes (200 code points or
+// more), and testShortDescription one it refuses (too short).
+var (
+	testDescription      = `{"work":"w","text":"` + strings.Repeat("A harbour town waits. ", 12) + `","license":"CC-BY-SA-4.0","sources":[]}`
+	testShortDescription = `{"work":"w","text":"Too short.","license":"CC-BY-SA-4.0","sources":[]}`
+)
+
+// TestScannerReadsDescription: description.json is a known attachment for a
+// folder book and, by stem, for a single-file book; a book with only a
+// description has generated content (Book.Generated); one that fails its checks
+// is left out; the refresh answers it. A book without one keeps the signature it
+// had before the name was known (characters, recaps, bridge, in that order).
+func TestScannerReadsDescription(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+	root := t.TempDir()
+	past := time.Now().Add(-time.Hour)
+	for _, p := range []string{"A/Book/audio.m4b", "A/Other/audio.m4b", "Loose.m4b", "Bad/Book/audio.m4b"} {
+		copyFixtureM4B(t, filepath.Join(root, filepath.FromSlash(p)))
+	}
+	writeAt(t, root, "A/Book/.audiosilo/description.json", testDescription, past)
+	writeAt(t, root, ".audiosilo/Loose.description.json", testDescription, past)
+	writeAt(t, root, "Bad/Book/.audiosilo/description.json", testShortDescription, past)
+	writeAt(t, root, "Bad/Book/.audiosilo/recaps.json", testRecaps, past)
+	for _, name := range []string{"characters.json", "recaps.json", "bridge.json"} {
+		body := map[string]string{"characters.json": testCharacters, "recaps.json": testRecaps, "bridge.json": testBridge}[name]
+		writeAt(t, root, "A/Other/.audiosilo/"+name, body, past)
+	}
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"A/Book", "Loose.m4b"} {
+		a := attachmentsAt(t, cat, lib.ID, rel)
+		if a == nil || a.Description == nil || a.Description.Work != "w" || a.Characters != nil || a.Recaps != nil {
+			t.Fatalf("%s = %+v, want the description alone", rel, a)
+		}
+		if b, err := cat.GetBookByPath(ctx, lib.ID, rel); err != nil || !b.Generated {
+			t.Errorf("%s: generated = %v, %v; want true for a description alone", rel, b != nil && b.Generated, err)
+		}
+	}
+	if a := attachmentsAt(t, cat, lib.ID, "Bad/Book"); a == nil || a.Description != nil || a.Recaps == nil {
+		t.Errorf("a refused description = %+v, want the recaps beside it only", a)
+	}
+	var sig string
+	if err := db.QueryRowContext(ctx, `SELECT attachments_sig FROM books WHERE rel_path = 'A/Other'`).Scan(&sig); err != nil {
+		t.Fatal(err)
+	}
+	if got := metadata.AttachmentSigNames(sig); !slices.Equal(got, []string{"characters.json", "recaps.json", "bridge.json"}) {
+		t.Errorf("signature without a description names %q", got)
+	}
+	writeAt(t, root, "A/Other/.audiosilo/description.json", testDescription, time.Now())
+	got, err := scanner.RefreshAttachments(ctx, *lib, "A/Other")
+	if err != nil || got.Attachments != (AttachmentsHeld{Characters: true, Recaps: true, Description: true, Bridge: true}) {
+		t.Fatalf("refresh = %+v, %v", got, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT attachments_sig FROM books WHERE rel_path = 'A/Other'`).Scan(&sig); err != nil {
+		t.Fatal(err)
+	}
+	if got := metadata.AttachmentSigNames(sig); !slices.Equal(got, []string{"characters.json", "recaps.json", "description.json", "bridge.json"}) {
+		t.Errorf("signature with a description names %q", got)
+	}
+}
+
 // TestScannerRefusesBadAttachments: a link (to a valid file) is never read, nor
 // is a file over the size cap or one that fails its checks; the other files
 // beside them still are. A link to a whole .audiosilo folder is never listed.

@@ -27,11 +27,12 @@ import (
 // Every rail entry the caller owns carries `local`, the book to open for it
 // (localRails), resolved for this caller on a copy of the rails.
 //
-// The characters and recaps the Bridge generated for the book (its .audiosilo/
-// attachments, catalog.BookAttachments) fill what the community work lacks
-// (work.generated names them), and a book with no match but generated content
-// answers {"matched": false, "work": {...}}: meta.Answer, per request, after the
-// cache and `local`, never cached.
+// The characters, recaps and description the Bridge generated for the book (its
+// .audiosilo/ attachments, catalog.BookAttachments) fill what the community work
+// lacks (work.generated names them; the description rides in
+// work.generated_description, never community_description), and a book with no
+// match but generated content answers {"matched": false, "work": {...}}:
+// meta.Answer, per request, after the cache and `local`, never cached.
 //
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a
@@ -116,10 +117,10 @@ func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.En
 		}
 		return nil
 	}
-	if att == nil || (att.Characters == nil && att.Recaps == nil) {
+	if att == nil || (att.Characters == nil && att.Recaps == nil && att.Description == nil) {
 		return nil
 	}
-	g := &meta.Generated{Characters: att.Characters, Recaps: att.Recaps}
+	g := &meta.Generated{Characters: att.Characters, Recaps: att.Recaps, Description: att.Description}
 	if att.Provenance != nil {
 		g.GeneratedAt = att.Provenance.GeneratedAt
 	}

@@ -80,6 +80,14 @@ describe('Bridge job events', () => {
     });
   });
 
+  it('words a finished description job as the description', () => {
+    expect(
+      describeEvent(
+        ev('bridge_job_finished', { ...job, job_kind: 'sidecars.describe', state: 'done' }),
+      ).title,
+    ).toEqual({ key: 'events.bridge_job_finished.describe', values: { name: 'The Way of Kings' } });
+  });
+
   it('words another kind generically, naming the kind', () => {
     const d = describeEvent(
       ev('bridge_job_finished', { ...job, job_kind: 'bridge.verify', title: '', state: 'done' }),

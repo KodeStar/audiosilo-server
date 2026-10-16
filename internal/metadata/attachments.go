@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
@@ -19,18 +20,21 @@ import (
 // scan never takes it for a book, and only these known names are read from it.
 const AttachmentsDir = ".audiosilo"
 
-// The files the server reads from an AttachmentsDir. characters.json and
-// recaps.json are audiosilo-meta's own sidecar formats (model.Characters,
-// model.Recaps); bridge.json says what made them.
+// The files the server reads from an AttachmentsDir. characters.json,
+// recaps.json and description.json are audiosilo-meta's own sidecar formats
+// (model.Characters, model.Recaps, model.Description); bridge.json says what
+// made them.
 const (
-	AttachmentCharacters = "characters.json"
-	AttachmentRecaps     = "recaps.json"
-	AttachmentBridge     = "bridge.json"
+	AttachmentCharacters  = "characters.json"
+	AttachmentRecaps      = "recaps.json"
+	AttachmentDescription = "description.json"
+	AttachmentBridge      = "bridge.json"
 )
 
 // AttachmentNames are the known attachment names, in the order a signature
-// lists them.
-var AttachmentNames = []string{AttachmentCharacters, AttachmentRecaps, AttachmentBridge}
+// lists them. description.json sits before bridge.json, so a book without one
+// keeps the signature it had before the name was known.
+var AttachmentNames = []string{AttachmentCharacters, AttachmentRecaps, AttachmentDescription, AttachmentBridge}
 
 // The bounds an attachment is checked against: the pipeline's real output is a
 // few hundred KB at most, so these only stop a file that isn't the pipeline's
@@ -41,6 +45,10 @@ const (
 	maxAttachmentText    = 20000   // bytes in any one string
 	maxAttachmentList    = 100     // aliases of a character, sources of a file
 	maxProvenanceText    = 200     // bytes in a bridge.json value
+	// A description's text, in code points once trimmed: audiosilo-meta's
+	// description.schema.json bounds (minLength, maxLength).
+	minDescriptionText = 200
+	maxDescriptionText = 1500
 )
 
 // ErrAttachmentInvalid marks an attachment that was there but can't be used (not
@@ -57,29 +65,33 @@ var (
 
 // AttachmentProvenance is what bridge.json says made a book's attachments: the
 // generator and its version, the job kind and id, when, from what source (audio
-// or ebook) and for which community work ("" when unresolved). Every value is
-// cleaned and bounded; a value that fails is left out, never the file.
+// or ebook) and for which community work ("" when unresolved), and when the
+// description was written (DescriptionAt, its own time: a description-only job
+// keeps the characters' run as the file's generated_at). Every value is cleaned
+// and bounded; a value that fails is left out, never the file.
 type AttachmentProvenance struct {
-	Generator   string `json:"generator,omitempty"`
-	Version     string `json:"version,omitempty"`
-	Kind        string `json:"kind,omitempty"`
-	GeneratedAt string `json:"generated_at,omitempty"`
-	Source      string `json:"source,omitempty"`
-	WorkID      string `json:"work_id,omitempty"`
-	JobID       int64  `json:"job_id,omitempty"`
+	Generator     string `json:"generator,omitempty"`
+	Version       string `json:"version,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	GeneratedAt   string `json:"generated_at,omitempty"`
+	Source        string `json:"source,omitempty"`
+	WorkID        string `json:"work_id,omitempty"`
+	JobID         int64  `json:"job_id,omitempty"`
+	DescriptionAt string `json:"description_at,omitempty"`
 }
 
 // AttachmentFiles is what a book's attachments say once checked: nil for a file
 // that isn't there, is empty, or can't be used.
 type AttachmentFiles struct {
-	Characters *model.Characters
-	Recaps     *model.Recaps
-	Provenance *AttachmentProvenance
+	Characters  *model.Characters
+	Recaps      *model.Recaps
+	Description *model.Description
+	Provenance  *AttachmentProvenance
 }
 
 // Empty reports whether there is nothing to store.
 func (f AttachmentFiles) Empty() bool {
-	return f.Characters == nil && f.Recaps == nil && f.Provenance == nil
+	return f.Characters == nil && f.Recaps == nil && f.Description == nil && f.Provenance == nil
 }
 
 // AttachmentSignature is one attachment's part of a book's signature: its known
@@ -119,6 +131,15 @@ func ReadRecaps(path string) (*model.Recaps, error) {
 		return nil, err
 	}
 	return ParseRecaps(data)
+}
+
+// ReadDescription is ReadCharacters for a description.json (ParseDescription).
+func ReadDescription(path string) (*model.Description, error) {
+	data, err := readAttachment(path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDescription(data)
 }
 
 // ReadProvenance is ReadCharacters for a bridge.json (ParseProvenance).
@@ -223,8 +244,36 @@ func ParseRecaps(data []byte) (*model.Recaps, error) {
 	return &r, nil
 }
 
+// ParseDescription decodes and checks a description.json: the work, license
+// and sources as the other sidecars, and a text of minDescriptionText to
+// maxDescriptionText code points once trimmed (stored trimmed) with no control
+// character but a line break. The text is shown as is in the player's About, so
+// anything else fails the file. nil, nil for a blank text.
+func ParseDescription(data []byte) (*model.Description, error) {
+	var d model.Description
+	if err := decodeAttachment(data, &d); err != nil {
+		return nil, err
+	}
+	if err := checkSidecar(d.Work, d.License, d.Sources); err != nil {
+		return nil, err
+	}
+	d.Text = strings.TrimSpace(d.Text)
+	if d.Text == "" {
+		return nil, nil
+	}
+	if n := utf8.RuneCountInString(d.Text); n < minDescriptionText || n > maxDescriptionText {
+		return nil, invalidAttachment("a description of %d characters", n)
+	}
+	for _, r := range d.Text {
+		if r != '\n' && unicode.IsControl(r) {
+			return nil, invalidAttachment("a control character in the description")
+		}
+	}
+	return &d, nil
+}
+
 // bridgeJSON is the part of bridge.json the server reads (its inputs list is
-// the Bridge's own business).
+// the Bridge's own business; of its description object, only when).
 type bridgeJSON struct {
 	Generator   string `json:"generator"`
 	Version     string `json:"version"`
@@ -233,6 +282,9 @@ type bridgeJSON struct {
 	GeneratedAt string `json:"generated_at"`
 	Source      string `json:"source"`
 	WorkID      string `json:"work_id"`
+	Description *struct {
+		GeneratedAt string `json:"generated_at"`
+	} `json:"description"`
 }
 
 // ParseProvenance decodes a bridge.json. Only a file that isn't a JSON object of
@@ -252,13 +304,23 @@ func ParseProvenance(data []byte) (*AttachmentProvenance, error) {
 		WorkID:    cleanProvenance(b.WorkID),
 		JobID:     max(b.JobID, 0),
 	}
-	if at, err := time.Parse(time.RFC3339, strings.TrimSpace(b.GeneratedAt)); err == nil {
-		p.GeneratedAt = at.UTC().Format(time.RFC3339)
+	p.GeneratedAt = cleanTime(b.GeneratedAt)
+	if b.Description != nil {
+		p.DescriptionAt = cleanTime(b.Description.GeneratedAt)
 	}
 	if p == (AttachmentProvenance{}) {
 		return nil, nil
 	}
 	return &p, nil
+}
+
+// cleanTime is a bridge.json time as RFC3339 UTC, "" when it isn't RFC3339.
+func cleanTime(v string) string {
+	at, err := time.Parse(time.RFC3339, strings.TrimSpace(v))
+	if err != nil {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339)
 }
 
 // cleanProvenance is a bridge.json value trimmed, or "" when it is longer than

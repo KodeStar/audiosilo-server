@@ -36,11 +36,16 @@ func (s *Service) CachedEnrichment(ctx context.Context, asin, isbn string) *Enri
 }
 
 // Coverage is what a book's community work carries: characters, recaps (as
-// HasCharacters and HasRecaps read them), and whether that is known. Known is
-// false when it couldn't be had right now (a lookup or work fetch that failed):
-// unknown, not "none".
+// HasCharacters and HasRecaps read them), a community description, and whether
+// that is known. Known is false when it couldn't be had right now (a lookup or
+// work fetch that failed): unknown, not "none".
 type Coverage struct {
-	Characters, Recaps, Known bool
+	Characters, Recaps, Description, Known bool
+}
+
+// coverageOf is a matched envelope's Coverage (known).
+func coverageOf(e *Enrichment) Coverage {
+	return Coverage{Characters: e.HasCharacters(), Recaps: e.HasRecaps(), Description: e.HasCommunityDescription(), Known: true}
 }
 
 // Coverages answers Coverage for many books at once (the Bridge's estimate: a
@@ -58,7 +63,7 @@ func (s *Service) Coverages(ctx context.Context, books []BookIDs) []Coverage {
 	)
 	for i, b := range books {
 		if env := s.CachedEnrichment(ctx, b.ASIN, b.ISBN); env != nil {
-			out[i] = Coverage{Characters: env.HasCharacters(), Recaps: env.HasRecaps(), Known: true}
+			out[i] = coverageOf(env)
 			continue
 		}
 		ask, at = append(ask, b), append(at, i)
@@ -81,8 +86,7 @@ func (s *Service) Coverages(ctx context.Context, books []BookIDs) []Coverage {
 				case errors.Is(err, ErrNotFound):
 					out[i] = Coverage{Known: true}
 				case err == nil:
-					e := &Enrichment{Work: w}
-					out[i] = Coverage{Characters: e.HasCharacters(), Recaps: e.HasRecaps(), Known: true}
+					out[i] = coverageOf(&Enrichment{Work: w})
 				}
 			})
 		}
@@ -99,4 +103,10 @@ func (e *Enrichment) HasCharacters() bool {
 
 func (e *Enrichment) HasRecaps() bool {
 	return e != nil && e.Work != nil && (len(e.Work.Recaps) > 0 || e.Work.RecapSummary != nil)
+}
+
+// HasCommunityDescription reports whether a matched envelope's work carries the
+// community's description (community_description).
+func (e *Enrichment) HasCommunityDescription() bool {
+	return e != nil && e.Work != nil && e.Work.CommunityDescription != nil
 }

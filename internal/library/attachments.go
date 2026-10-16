@@ -169,6 +169,8 @@ func (s *Scanner) readAttachments(lib catalog.Library, b *catalog.Book, sig stri
 			files.Characters, err = metadata.ReadCharacters(p)
 		case metadata.AttachmentRecaps:
 			files.Recaps, err = metadata.ReadRecaps(p)
+		case metadata.AttachmentDescription:
+			files.Description, err = metadata.ReadDescription(p)
 		case metadata.AttachmentBridge:
 			files.Provenance, err = metadata.ReadProvenance(p)
 		}
@@ -193,9 +195,10 @@ type AttachmentsRefresh struct {
 
 // AttachmentsHeld says which of a book's attachments are indexed.
 type AttachmentsHeld struct {
-	Characters bool `json:"characters"`
-	Recaps     bool `json:"recaps"`
-	Bridge     bool `json:"bridge"`
+	Characters  bool `json:"characters"`
+	Recaps      bool `json:"recaps"`
+	Description bool `json:"description"`
+	Bridge      bool `json:"bridge"`
 }
 
 // RefreshAttachments reads the .audiosilo/ attachments of the indexed book at
@@ -232,7 +235,7 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 		return nil, err
 	}
 	return &AttachmentsRefresh{Path: book.RelPath, Attachments: AttachmentsHeld{Characters: files.Characters != nil,
-		Recaps: files.Recaps != nil, Bridge: files.Provenance != nil}}, nil
+		Recaps: files.Recaps != nil, Description: files.Description != nil, Bridge: files.Provenance != nil}}, nil
 }
 
 // attachmentsOfWalk sets each book's attachments signature from the .audiosilo

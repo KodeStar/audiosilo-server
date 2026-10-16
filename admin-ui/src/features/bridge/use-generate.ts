@@ -8,19 +8,26 @@ import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { relBaseName } from '@/lib/paths';
 import { isOpen, kindName } from './bridge-model';
-import { generatePollMs, KIND_GENERATE, latestGenerateJob } from './generate-model';
+import { generatePollMs, KIND_GENERATE, latestJobOf } from './generate-model';
 
 /** How many of a book's newest jobs are read to find its generate job (verify jobs share the list). */
 const BOOK_JOBS = 20;
 
 /**
- * A book's newest `sidecars.generate` job, asked again about every 10 s while
- * it works and every minute while it is parked, only while the page showing it
- * is mounted (TanStack Query polls for mounted observers only), then not at
- * all. When it ends, the book, its estimates and its community metadata are
- * fetched again, so the page shows what changed.
+ * A book's newest job of a kind (`sidecars.generate` unless told otherwise),
+ * and the book's newest jobs, asked again about every 10 s while a generate or
+ * describe job works and every minute while one is parked, only while the page
+ * showing it is mounted (TanStack Query polls for mounted observers only), then
+ * not at all. Every kind shares one query. When the job ends, the book, its
+ * estimates and its community metadata are fetched again, so the page shows
+ * what changed.
  */
-export function useBookGenerateJob(libraryId: number, path: string, enabled: boolean) {
+export function useBookGenerateJob(
+  libraryId: number,
+  path: string,
+  enabled: boolean,
+  kind: string = KIND_GENERATE,
+) {
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: keys.bookBridgeJobs(libraryId, path),
@@ -28,7 +35,7 @@ export function useBookGenerateJob(libraryId: number, path: string, enabled: boo
     enabled,
     refetchInterval: (q) => generatePollMs(q.state.data?.jobs),
   });
-  const job = latestGenerateJob(query.data?.jobs);
+  const job = latestJobOf(query.data?.jobs, kind);
   const seen = useRef<BridgeJob | undefined>(undefined);
   useEffect(() => {
     const before = seen.current;
@@ -40,7 +47,7 @@ export function useBookGenerateJob(libraryId: number, path: string, enabled: boo
     void qc.invalidateQueries({ queryKey: keys.book(libraryId, path), exact: true });
     void qc.invalidateQueries({ queryKey: keys.bookMeta(libraryId, path) });
   }, [job, qc, libraryId, path]);
-  return { job };
+  return { job, jobs: query.data?.jobs };
 }
 
 /**

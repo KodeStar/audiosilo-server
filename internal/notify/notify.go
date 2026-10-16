@@ -398,9 +398,13 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	case KindBridgeJobFinished:
 		m.Title = bridgeJobLabel(str("job_kind")) + " finished: " + bridgeJobBook(ev)
 		m.Text = "The Bridge finished the job."
-		if str("job_kind") == bridge.KindSidecars {
+		switch str("job_kind") {
+		case bridge.KindSidecars:
 			m.Title = "Characters and recaps ready: " + bridgeJobBook(ev)
 			m.Text = "Listeners see them in the player now."
+		case bridge.KindDescribe:
+			m.Title = "Description ready: " + bridgeJobBook(ev)
+			m.Text = "Listeners see it in the book's About in the player now."
 		}
 		m.Link, m.Tags = link("/server?topic=bridge"), []string{"white_check_mark"}
 	case KindBridgeJobFailed:
@@ -428,6 +432,8 @@ func bridgeJobLabel(kind string) string {
 	switch kind {
 	case bridge.KindSidecars:
 		return "Characters and recaps"
+	case bridge.KindDescribe:
+		return "Description"
 	case bridge.KindVerify:
 		return "Bridge check"
 	}

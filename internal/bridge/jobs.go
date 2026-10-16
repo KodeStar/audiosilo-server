@@ -59,6 +59,11 @@ const KindVerify = "bridge.verify"
 // recaps and writes them into the book's .audiosilo/ folder.
 const KindSidecars = "sidecars.generate"
 
+// KindDescribe is Phase 1c's description-only job: the Bridge writes a book's
+// own-words description from the notes it kept from generating its characters
+// and recaps (no new speech recognition), into the same .audiosilo/ folder.
+const KindDescribe = "sidecars.describe"
+
 // bookRule is whether a kind's job names a book.
 type bookRule int
 
@@ -86,6 +91,7 @@ type kindSpec struct {
 var kinds = map[string]kindSpec{
 	KindVerify:   {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams},
+	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, params: describeParams},
 }
 
 // sidecars.generate's param values (auto and local are the defaults),
@@ -142,6 +148,16 @@ func sidecarsParams(raw json.RawMessage) (json.RawMessage, error) {
 func contributes(params json.RawMessage) bool {
 	var p SidecarsParams
 	return json.Unmarshal(params, &p) == nil && p.Contribute == ContributeIssue
+}
+
+// describeParams checks sidecars.describe's params: it takes none, so only an
+// empty object (or none) passes, and any field is refused.
+func describeParams(raw json.RawMessage) (json.RawMessage, error) {
+	var p struct{}
+	if err := decodeStrict(raw, &p); err != nil {
+		return nil, invalid("params: %v", err)
+	}
+	return json.RawMessage(`{}`), nil
 }
 
 // verifyParams checks bridge.verify's params: an optional hold_seconds (0-600)
@@ -316,6 +332,12 @@ var ErrKindUnavailable = errors.New("the paired bridge doesn't run that kind")
 // all): a 409 library_not_writable.
 var ErrLibraryNotWritable = errors.New("the bridge can't write to that library")
 
+// ErrGenerateOpen is a sidecars.describe job for a book with a sidecars.generate
+// job still open: that job writes the description when it finishes, so a second
+// writer is refused (a 409 generate_open). A generate job is never refused for
+// an open describe job: it supersedes it.
+var ErrGenerateOpen = errors.New("a generate job is open for the book")
+
 // ErrCannotContribute is a sidecars.generate job asking to contribute its
 // results (contribute "issue") to a Bridge whose last heartbeat doesn't say it
 // can (estimates.sidecars.can_contribute; none sent counts as can't): a 409
@@ -365,9 +387,10 @@ func checkNew(j *NewJob) error {
 // knows (ErrInvalid otherwise, as for bad params) and the paired Bridge runs
 // (ErrKindUnavailable); it may be offline, and the job waits. A kind that writes
 // into the library is queued only when the last heartbeat reports the library
-// mapped and writable (ErrLibraryNotWritable), and a sidecars.generate job that
-// contributes only when it says the Bridge can (ErrCannotContribute); the open
-// job is still returned either way.
+// mapped and writable (ErrLibraryNotWritable), a sidecars.generate job that
+// contributes only when it says the Bridge can (ErrCannotContribute), and a
+// sidecars.describe job only while no sidecars.generate job is open for the book
+// (ErrGenerateOpen); the open job is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
@@ -408,6 +431,17 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		}
 		if refuse != nil {
 			return refuse
+		}
+		if j.Kind == KindDescribe {
+			var open int
+			err := tx.QueryRowContext(ctx, `SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL,
+				DedupeKey(KindSidecars, j.LibraryID, j.Path)).Scan(&open)
+			if err == nil {
+				return ErrGenerateOpen
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
 		}
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at)

@@ -74,6 +74,9 @@ const BY_CODE: Record<string, string> = {
   // Queueing sidecars.generate with contribute "issue" on a Bridge that last
   // said it can't contribute (or sent no figures).
   cannot_contribute: 'errors.cannotContribute',
+  // Queueing sidecars.describe while a sidecars.generate job is open for the
+  // book (it writes the description when it finishes).
+  generate_open: 'errors.generateOpen',
 };
 
 /** A failure as one sentence for a toast or a field. */

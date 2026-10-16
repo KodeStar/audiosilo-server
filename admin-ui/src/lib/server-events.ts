@@ -1,5 +1,5 @@
 import type { ServerEvent, ServerEventKind } from '@/api/types';
-import { KIND_GENERATE, parkKey } from '@/features/bridge/generate-model';
+import { KIND_DESCRIBE, KIND_GENERATE, parkKey } from '@/features/bridge/generate-model';
 import type { SettingsPage } from '@/features/settings/settings-model';
 import { readStorage, writeStorage } from './storage';
 
@@ -145,12 +145,14 @@ function describeBridgeJob(
     ? { key: `bridge.kind.${jobKind}`, values: { defaultValue: jobKind } }
     : undefined;
   if (kind === 'bridge_job_finished') {
-    return jobKind === KIND_GENERATE
-      ? {
-          title: { key: 'events.bridge_job_finished.generate', values: { name } },
-          tone: 'info',
-          link,
-        }
+    const own =
+      jobKind === KIND_GENERATE
+        ? 'events.bridge_job_finished.generate'
+        : jobKind === KIND_DESCRIBE
+          ? 'events.bridge_job_finished.describe'
+          : undefined;
+    return own
+      ? { title: { key: own, values: { name } }, tone: 'info', link }
       : {
           title: { key: 'events.bridge_job_finished.title', values: { name } },
           body: kindBody,

@@ -107,3 +107,17 @@ func TestCachedEnrichment(t *testing.T) {
 		t.Fatal("a nil envelope has content")
 	}
 }
+
+// A Coverage says whether the community work has a community description (the
+// Bridge's estimate: a generated description is offered only without one); the
+// core description doesn't count.
+func TestCoverageDescription(t *testing.T) {
+	t.Parallel()
+	with := &Enrichment{Work: &MetaWork{CommunityDescription: &MetaCommunityDescription{Text: "Community."}}}
+	if c := coverageOf(with); !c.Description || !c.Known || c.Characters || c.Recaps {
+		t.Errorf("with a community description = %+v", c)
+	}
+	if c := coverageOf(&Enrichment{Work: &MetaWork{Description: "Blurb."}}); c.Description || !c.Known {
+		t.Errorf("with a core description only = %+v", c)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
@@ -36,15 +37,18 @@ type bridgeEstimate struct {
 	Ebook           string  `json:"ebook,omitempty"`
 	DurationSeconds float64 `json:"duration_seconds"`
 	// Writable: the Bridge last reported the library mapped and writable.
-	Writable bool          `json:"writable"`
-	Has      estimateHas   `json:"has"`
-	Earlier  []earlierBook `json:"earlier"`
-	OpenJob  *bridge.Job   `json:"open_job,omitempty"`
+	Writable bool `json:"writable"`
+	// CanDescribe: the Bridge is online and runs sidecars.describe (a
+	// description from the notes it kept, Phase 1c); an older Bridge doesn't.
+	CanDescribe bool          `json:"can_describe"`
+	Has         estimateHas   `json:"has"`
+	Earlier     []earlierBook `json:"earlier"`
+	OpenJob     *bridge.Job   `json:"open_job,omitempty"`
 }
 
 // estimateHas is what a book already has: community content (its community
-// work, meta.Service.Coverages) and generated content (its indexed .audiosilo/
-// attachments). CommunityUnknown: the community couldn't be asked right now, so
+// work, meta.Service.Coverages: characters, recaps, a community description)
+// and generated content (its indexed .audiosilo/ attachments). CommunityUnknown: the community couldn't be asked right now, so
 // community is no answer (never read it as "none").
 type estimateHas struct {
 	Community        hasContent `json:"community"`
@@ -53,8 +57,9 @@ type estimateHas struct {
 }
 
 type hasContent struct {
-	Characters bool `json:"characters"`
-	Recaps     bool `json:"recaps"`
+	Characters  bool `json:"characters"`
+	Recaps      bool `json:"recaps"`
+	Description bool `json:"description"`
 }
 
 // earlierBook is an earlier book of the series with no recaps yet, with what
@@ -78,7 +83,9 @@ type earlierBook struct {
 //
 // brief=1 is the cheap answer for a label or a batch (the book card, a whole
 // series): the same shape, but no look into the book's folder for an ebook
-// (source audio, ebook omitted) and no scan of the series (earlier []).
+// (source audio, ebook omitted) and no scan of the series (earlier []). Both
+// carry can_describe and has.*.description, which the book card's "Write a
+// description" reads.
 func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	kind := q.Get("kind")
@@ -112,7 +119,7 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	out := bridgeEstimate{Kind: kind, LibraryID: lib.ID, Path: book.RelPath, DurationSeconds: book.Duration,
-		Writable: h.Writable(lib.ID), Earlier: []earlierBook{}}
+		Writable: h.Writable(lib.ID), CanDescribe: h.Online(time.Now()) && h.Offers(bridge.KindDescribe), Earlier: []earlierBook{}}
 	if !brief {
 		out.Ebook = library.BookEbook(lib.Root, book.RelPath, book.IsFolder)
 	}
@@ -153,7 +160,7 @@ func (a *API) communityContent(ctx context.Context, book *catalog.Book) (has has
 	if !c.Known && ctx.Err() == nil {
 		a.log.Warn("community lookup for the bridge estimate failed", "library", book.LibraryID, "path", book.RelPath)
 	}
-	return hasContent{Characters: c.Characters, Recaps: c.Recaps}, !c.Known
+	return hasContent{Characters: c.Characters, Recaps: c.Recaps, Description: c.Description}, !c.Known
 }
 
 // localContent is what the book's generated attachments carry (a stored file is
@@ -163,7 +170,7 @@ func (a *API) localContent(ctx context.Context, book *catalog.Book) (hasContent,
 	if err != nil || att == nil {
 		return hasContent{}, err
 	}
-	return hasContent{Characters: att.Characters != nil, Recaps: att.Recaps != nil}, nil
+	return hasContent{Characters: att.Characters != nil, Recaps: att.Recaps != nil, Description: att.Description != nil}, nil
 }
 
 // earlierWithoutRecaps is the books of the library before book in its series
