@@ -2,12 +2,13 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ArrowRight, Check, LoaderCircle, Sparkles } from 'lucide-react';
+import { ArrowRight, Check, ExternalLink, LoaderCircle, Sparkles } from 'lucide-react';
 import { api } from '@/api/client';
 import {
   invalidateMatches,
   keys,
   matchRunActive,
+  useAdminBook,
   useLibraryRoots,
   useMatchRunItems,
   useMatchRuns,
@@ -37,6 +38,7 @@ import {
 } from '@/components/ui/dialog';
 import { RadioCards } from '@/components/ui/radio-cards';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { MatchDialog } from '@/features/book/match-dialog';
 import { scoreTone } from '@/features/book/match-model';
 import { moreSeriesRefs, seriesRef } from '@/features/book/more-series';
 import { bookRoute } from '@/lib/book-route';
@@ -60,6 +62,7 @@ import {
   bulkPhase,
   isChosen,
   isPickable,
+  matchedByHand,
   runFraction,
   runProgress,
   togglePick,
@@ -343,6 +346,9 @@ function ReviewDialog({
   const [picks, setPicks] = useState<Picks>(NO_PICKS);
   const [scope, setScope] = useState<MatchScope>('fill');
   const [busy, setBusy] = useState(false);
+  // The book being matched by hand, in a dialog over the review (which keeps its
+  // tab, picks and loaded pages underneath).
+  const [byHand, setByHand] = useState<MatchRunItem>();
   // Each opening starts afresh (the run may have changed since).
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
@@ -351,8 +357,15 @@ function ReviewDialog({
       setTab(firstTab);
       setPicks(NO_PICKS);
       setScope('fill');
+      setByHand(undefined);
     }
   }
+  // A book matched by hand leaves the apply, and its row reads what the match
+  // wrote (each item's changes are worked out against the book as it is now).
+  const onMatchedByHand = (item: MatchRunItem) => {
+    setPicks((p) => matchedByHand(p, item));
+    void qc.invalidateQueries({ queryKey: keys.matchRunItems(run.id, item.outcome) });
+  };
   const count = applyCount(run, picks);
   const country = regionName(run.region, lang);
   const headings: Record<MatchRunMode, { title: string; description: string }> = {
@@ -446,6 +459,7 @@ function ReviewDialog({
                 scope={repick ? 'ids' : scope}
                 picks={picks}
                 onToggle={(item) => setPicks((p) => togglePick(p, item))}
+                onMatchByHand={setByHand}
               />
             </DialogBody>
             <DialogFooter>
@@ -457,10 +471,52 @@ function ReviewDialog({
                 {t('health.bulkMatch.apply', counted(count, lang))}
               </Button>
             </DialogFooter>
+            {byHand ? (
+              <HandMatch
+                key={byHand.id}
+                item={byHand}
+                onClose={() => setByHand(undefined)}
+                onMatched={() => onMatchedByHand(byHand)}
+              />
+            ) : null}
           </>
         ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The book page's match dialog for one of the review's books, over the review:
+ * it loads the book (fields with provenance) the dialog compares against.
+ */
+function HandMatch({
+  item,
+  onClose,
+  onMatched,
+}: {
+  item: MatchRunItem;
+  onClose: () => void;
+  onMatched: () => void;
+}) {
+  const { t } = useTranslation();
+  const book = useAdminBook(item.library_id, item.path);
+  const failed = book.isError;
+  useEffect(() => {
+    if (failed) {
+      toastError(t('book.error'), book.error);
+      onClose();
+    }
+  }, [failed, book.error, onClose, t]);
+  return (
+    <MatchDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      detail={book.data}
+      onMatched={onMatched}
+    />
   );
 }
 
@@ -471,12 +527,14 @@ function ItemList({
   scope,
   picks,
   onToggle,
+  onMatchByHand,
 }: {
   run: MatchRun;
   outcome: MatchOutcome;
   scope: MatchScope;
   picks: Picks;
   onToggle: (item: MatchRunItem) => void;
+  onMatchByHand: (item: MatchRunItem) => void;
 }) {
   const { t } = useTranslation();
   const list = useMatchRunItems(run.id, outcome);
@@ -520,7 +578,9 @@ function ItemList({
             root={roots[item.library_id]}
             scope={scope}
             chosen={isChosen(item, picks)}
+            byHand={picks.hand.has(item.id)}
             onToggle={() => onToggle(item)}
+            onMatchByHand={() => onMatchByHand(item)}
           />
         ))}
       </ul>
@@ -544,14 +604,19 @@ function ItemRow({
   root,
   scope,
   chosen,
+  byHand,
   onToggle,
+  onMatchByHand,
 }: {
   item: MatchRunItem;
   /** The library's folder: the book's whole path is the path's tooltip. */
   root: string | undefined;
   scope: MatchScope;
   chosen: boolean;
+  /** Matched by hand from this review: out of the apply. */
+  byHand: boolean;
   onToggle: () => void;
+  onMatchByHand: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
@@ -598,7 +663,9 @@ function ItemRow({
       )}
     >
       <span className="grid size-5 shrink-0 place-items-center pt-0.5">
-        {isPickable(item) ? (
+        {byHand ? (
+          <Check className="size-4 text-success" aria-label={t('health.bulkMatch.item.byHand')} />
+        ) : isPickable(item) ? (
           <Checkbox
             checked={chosen}
             onCheckedChange={onToggle}
@@ -670,6 +737,10 @@ function ItemRow({
           <span className="text-[12px] text-subtle-foreground">
             {t('health.bulkMatch.item.gone')}
           </span>
+        ) : byHand ? (
+          <span className="text-[12px] text-subtle-foreground">
+            {t('health.bulkMatch.item.byHand')}
+          </span>
         ) : item.applied ? (
           <span className="text-[12px] text-subtle-foreground">
             {t(`health.bulkMatch.item.${item.applied}`)}
@@ -694,16 +765,30 @@ function ItemRow({
           </span>
         ) : null}
         {item.gone ? null : (
-          <Link
-            {...bookRoute(item.library_id, item.path)}
-            search={{ library: item.library_id, path: item.path, match: true }}
-            className={buttonVariants({ variant: 'ghost', size: 'sm' })}
-            aria-label={t('health.bulkMatch.matchByHand', { title })}
-            aria-describedby={pathLine}
-          >
-            <span className="max-md:hidden">{t('health.bulkMatch.matchByHandShort')}</span>
-            <ArrowRight aria-hidden="true" className="md:hidden" />
-          </Link>
+          <span className="flex items-center gap-0.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onMatchByHand}
+              aria-label={t('health.bulkMatch.matchByHand', { title })}
+              aria-describedby={pathLine}
+            >
+              <span className="max-md:hidden">{t('health.bulkMatch.matchByHandShort')}</span>
+              <Sparkles aria-hidden="true" className="md:hidden" />
+            </Button>
+            {/* The book page in a new tab, to listen or look closer without leaving the review. */}
+            <Link
+              {...bookRoute(item.library_id, item.path)}
+              search={{ library: item.library_id, path: item.path }}
+              target="_blank"
+              rel="noopener"
+              className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
+              aria-label={t('health.bulkMatch.openBook', { title })}
+              aria-describedby={pathLine}
+            >
+              <ExternalLink aria-hidden="true" />
+            </Link>
+          </span>
         )}
       </div>
     </li>

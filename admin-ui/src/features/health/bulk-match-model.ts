@@ -34,15 +34,17 @@ export function runFraction(run: MatchRun): number | undefined {
 }
 
 /**
- * The admin's picks in the review: confident books left out, and books that
- * needed review put in.
+ * The admin's picks in the review: confident books left out, books that needed
+ * review put in, and books matched by hand from the review (which an apply leaves
+ * alone, so it doesn't write the run's match over the admin's).
  */
 export interface Picks {
   exclude: ReadonlySet<number>;
   include: ReadonlySet<number>;
+  hand: ReadonlySet<number>;
 }
 
-export const NO_PICKS: Picks = { exclude: new Set(), include: new Set() };
+export const NO_PICKS: Picks = { exclude: new Set(), include: new Set(), hand: new Set() };
 
 /** Whether an apply takes the item: confident unless left out, a review one only if put in. */
 export function isChosen(item: MatchRunItem, picks: Picks): boolean {
@@ -66,6 +68,15 @@ export function togglePick(picks: Picks, item: MatchRunItem): Picks {
   return item.outcome === 'auto'
     ? { ...picks, exclude: flip(picks.exclude) }
     : { ...picks, include: flip(picks.include) };
+}
+
+/** Marks an item matched by hand: left out of the apply, and no longer pickable. */
+export function matchedByHand(picks: Picks, item: MatchRunItem): Picks {
+  const exclude = new Set(picks.exclude);
+  const include = new Set(picks.include);
+  if (item.outcome === 'auto') exclude.add(item.id);
+  include.delete(item.id);
+  return { exclude, include, hand: new Set(picks.hand).add(item.id) };
 }
 
 /** How many books an apply writes to: the confident ones still pending, less left out, plus put in. */

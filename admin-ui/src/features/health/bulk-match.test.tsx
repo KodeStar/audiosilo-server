@@ -4,6 +4,7 @@ import { setToken } from '@/api/token';
 import type { MatchRun, MatchRunItem } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { issuesSummary } from '@/test/fixtures';
+import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
 
@@ -299,6 +300,72 @@ describe('bulk matching', () => {
     // Once it's done the books it matched leave the list: the Health summary is asked again.
     expect(await screen.findByText(/Last run applied/)).toBeInTheDocument();
     await waitFor(() => expect(issuesAsked()).toBeGreaterThan(before));
+  });
+
+  it('matches a book by hand over the review, which keeps its place and leaves it out', async () => {
+    const detail = bookDetail();
+    const calls = mockFetch(
+      routes([run()], {
+        'GET /admin/libraries/1/book': { body: detail },
+        'PATCH /admin/libraries/1/book': { body: detail },
+        'GET /admin/libraries/1/book/match': {
+          body: {
+            candidates: [
+              {
+                work_id: 'the-martian',
+                title: 'The Martian',
+                authors: [{ id: 'a1', name: 'Andy Weir' }],
+                first_published: '2011',
+                series: [],
+                web_url: 'https://meta.audiosilo.app/works/the-martian',
+                recordings: [],
+                score: 100,
+              },
+            ],
+          },
+        },
+        'POST /admin/meta/covers': { body: { covers: [''] } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/health?issue=unmatched');
+    await user.click(await screen.findByRole('button', { name: 'Review and apply' }));
+    const review = await screen.findByRole('dialog', { name: 'Review matches' });
+    const row = (await within(review).findByText('B0UK000001 · UK')).closest('li')!;
+    // The book page is a new tab away, for a closer look without leaving the review.
+    expect(
+      within(row).getByRole('link', { name: 'Open the book page for The Martian in a new tab' }),
+    ).toHaveAttribute('target', '_blank');
+
+    // Escape closes the match, not the review under it.
+    await user.click(within(row).getByRole('button', { name: 'Match The Martian by hand' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Match with community metadata' }),
+    ).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Match with community metadata' })).toBeNull(),
+    );
+    expect(screen.getByRole('dialog', { name: 'Review matches' })).toBeInTheDocument();
+
+    await user.click(within(row).getByRole('button', { name: 'Match The Martian by hand' }));
+    const match = await screen.findByRole('dialog', { name: 'Match with community metadata' });
+    await within(match).findByRole('radio', { name: /The Martian/ });
+    await user.click(within(match).getByRole('button', { name: 'Compare fields' }));
+    const compare = await screen.findByRole('dialog', { name: 'Compare with community metadata' });
+    await user.click(within(compare).getByRole('button', { name: /^Accept \d+ field/ }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Compare with community metadata' })).toBeNull(),
+    );
+    expect(calls.some((c) => c.method === 'PATCH' && c.path === '/admin/libraries/1/book')).toBe(
+      true,
+    );
+
+    // Back on the review: the book reads as matched by hand, and the apply leaves it out.
+    const after = (await within(review).findByText('B0UK000001 · UK')).closest('li')!;
+    expect(within(after).getAllByText('Matched by hand').length).toBeGreaterThan(0);
+    expect(within(after).queryByRole('checkbox')).toBeNull();
+    expect(within(review).getByRole('button', { name: 'Apply to 0 books' })).toBeDisabled();
   });
 
   it("shows a gone book's path once, as its title", async () => {

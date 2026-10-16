@@ -64,15 +64,21 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 3)}...`
  * unticked, and so does the community cover for a book with art of its own.
  * Covers are fetched by the server (the console's CSP loads no other host's
  * images). Each opening starts afresh, at the search.
+ *
+ * Opened from elsewhere (the bulk match's review), the book may still be loading:
+ * without a `detail` the dialog holds a placeholder until it arrives. `onMatched`
+ * hears that something was written to the book.
  */
 export function MatchDialog({
   open,
   onOpenChange,
   detail,
+  onMatched,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  detail: AdminBookDetail;
+  detail: AdminBookDetail | undefined;
+  onMatched?: () => void;
 }) {
   const { t } = useTranslation();
   const [step, setStep] = useState<Step>('search');
@@ -93,13 +99,24 @@ export function MatchDialog({
           step === 'search' ? t('book.match.description') : t('book.match.compareDescription')
         }
       >
-        {open ? (
+        {open && detail ? (
           <MatchBody
             detail={detail}
             step={step}
             onStep={setStep}
+            onMatched={onMatched}
             onDone={() => onOpenChange(false)}
           />
+        ) : open ? (
+          <DialogBody
+            className="flex flex-col gap-2"
+            role="status"
+            aria-label={t('common.loading')}
+          >
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="skel h-16 rounded-[12px]" />
+            ))}
+          </DialogBody>
         ) : null}
       </DialogContent>
     </Dialog>
@@ -112,11 +129,13 @@ function MatchBody({
   detail,
   step,
   onStep: setStep,
+  onMatched,
   onDone,
 }: {
   detail: AdminBookDetail;
   step: Step;
   onStep: (step: Step) => void;
+  onMatched?: () => void;
   onDone: () => void;
 }) {
   const { t } = useTranslation();
@@ -180,8 +199,10 @@ function MatchBody({
         coverErr,
       );
       // With nothing taken, stay, so the admin can try again or untick it.
-      if (ticks.size) onDone();
-      else setBusy(false);
+      if (ticks.size) {
+        onMatched?.();
+        onDone();
+      } else setBusy(false);
       return;
     }
     const tookEdits = rows.some((r) => ticks.has(r.field) && r.offered && r.source === 'edited');
@@ -192,6 +213,7 @@ function MatchBody({
         : t('book.match.acceptedBody'),
       type: 'success',
     });
+    onMatched?.();
     onDone();
   };
 
