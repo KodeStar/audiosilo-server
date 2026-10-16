@@ -56,6 +56,44 @@ func TestPropose(t *testing.T) {
 	}
 }
 
+// TestProposeEditionFields: the work's subtitle and language and the recording's
+// publisher are offered; abridged only when the recording is marked so (the
+// community's false is also "not recorded"). Fill fills them on a book without
+// them, overwrite replaces a file's, and an admin's own stays either way.
+func TestProposeEditionFields(t *testing.T) {
+	t.Parallel()
+	c := martian
+	c.Subtitle, c.Language = "A Novel", "en"
+	c.Recordings = slices.Clone(martian.Recordings)
+	c.Recordings[0].Publisher = "Podium Publishing"
+	p := Propose(&c, &c.Recordings[0])
+	for field, want := range map[string]string{"subtitle": "A Novel", "language": "en", "publisher": "Podium Publishing"} {
+		if p.Values[field] != want {
+			t.Errorf("%s = %q, want %q", field, p.Values[field], want)
+		}
+	}
+	if _, ok := p.Values["abridged"]; ok {
+		t.Errorf("an unmarked recording offered abridged: %v", p.Values)
+	}
+	c.Recordings[0].Abridged = true
+	if p = Propose(&c, &c.Recordings[0]); p.Values["abridged"] != "true" {
+		t.Errorf("abridged = %q, want true", p.Values["abridged"])
+	}
+	if p := Propose(&c, nil); p.Values["publisher"] != "" || p.Values["subtitle"] != "A Novel" {
+		t.Errorf("no recording: %v, want the work's subtitle and no publisher", p.Values)
+	}
+
+	st := state(map[string]string{"title": "The Martian", "language": "English", "publisher": "Mine"}, []string{"publisher"}, false)
+	set, _ := planSet(ScopeFill, st, p)
+	if set["subtitle"] != "A Novel" || set["abridged"] != "true" || set["language"] != "" || set["publisher"] != "" {
+		t.Errorf("fill = %v, want the subtitle and abridged only", set)
+	}
+	set, _ = planSet(ScopeOverwrite, st, p)
+	if set["language"] != "en" || set["publisher"] != "" {
+		t.Errorf("overwrite = %v, want the language replaced and the admin's publisher kept", set)
+	}
+}
+
 // TestProposeSeriesForTheRecording: the series proposed are the chosen
 // recording's (an edition named for it first, as the community service's
 // candidate lists them per recording); with no recording, the work's own.

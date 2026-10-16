@@ -19,15 +19,27 @@ import (
 // straight to the response with an encoder rather than buffering a string of
 // its own.
 //
-// The file carries bibliographic facts only - no paths, sizes, codecs or anything
-// else describing the filesystem - because it is meant to leave the server.
+// By default the file carries bibliographic facts only - no paths, sizes, codecs
+// or anything else describing the filesystem - because it is meant to leave the
+// server. ?include=paths adds each row's library id and paths, for the admin's
+// own scripts (catalog.ExportOptions); any other include is a 400, so a typo
+// never silently drops what was asked for.
 func (a *API) handleExportLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid library id")
 		return
 	}
-	exp, err := a.cat.ExportLibraryBooks(r.Context(), id, Version)
+	var opt catalog.ExportOptions
+	switch r.URL.Query().Get("include") {
+	case "":
+	case "paths":
+		opt.IncludePaths = true
+	default:
+		writeError(w, http.StatusBadRequest, `include must be "paths"`)
+		return
+	}
+	exp, err := a.cat.ExportLibraryBooks(r.Context(), id, Version, opt)
 	if errors.Is(err, catalog.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "library not found")
 		return

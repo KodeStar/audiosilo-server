@@ -136,7 +136,7 @@ func TestSeriesRangeEditAndRevert(t *testing.T) {
 	if err != nil || len(series) != 1 || !reflect.DeepEqual(series[0].Positions, []float64{1, 2, 3, 4, 5, 6}) {
 		t.Errorf("series = %+v, %v; want positions 1 to 6", series, err)
 	}
-	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev")
+	exp, err := c.ExportLibraryBooks(ctx, lib.ID, "dev", ExportOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

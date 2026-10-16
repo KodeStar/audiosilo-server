@@ -34,11 +34,16 @@ import (
 // Overridable book fields (the wire names the console uses).
 const (
 	FieldTitle       = "title"
+	FieldSubtitle    = "subtitle"
 	FieldAuthor      = "author"
 	FieldNarrator    = "narrator"
 	FieldSeries      = "series"
 	FieldSeriesIndex = "series_index"
 	FieldPublished   = "published"
+	FieldPublisher   = "publisher"
+	FieldLanguage    = "language"
+	// FieldAbridged is "true", "false", or "" when unknown (books.abridged NULL).
+	FieldAbridged    = "abridged"
 	FieldDescription = "description"
 	FieldASIN        = "asin"
 	FieldISBN        = "isbn"
@@ -46,8 +51,9 @@ const (
 
 // OverrideFields lists every overridable field, in display order.
 var OverrideFields = []string{
-	FieldTitle, FieldAuthor, FieldNarrator, FieldSeries, FieldSeriesIndex, FieldMoreSeries,
-	FieldPublished, FieldDescription, FieldASIN, FieldISBN,
+	FieldTitle, FieldSubtitle, FieldAuthor, FieldNarrator, FieldSeries, FieldSeriesIndex, FieldMoreSeries,
+	FieldPublished, FieldPublisher, FieldLanguage, FieldAbridged, FieldGenres, FieldTags,
+	FieldDescription, FieldASIN, FieldISBN,
 }
 
 // Where a field's value came from. A scanned value is SourcePath when it is what
@@ -88,6 +94,7 @@ func invalid(field, reason string) error { return &OverrideError{Field: field, R
 // to second-guess real titles.
 const (
 	maxShortField   = 500
+	maxLanguage     = 64
 	maxDescription  = 20000
 	maxSeriesIndex  = metadata.MaxSeriesPosition
 	maxChapterTitle = 500
@@ -111,6 +118,21 @@ func normalizeOverride(field, value string) (string, error) {
 			return "", invalid(field, "a book needs a title")
 		}
 		return v, nil
+	case FieldSubtitle, FieldPublisher:
+		return v, checkText(field, v, maxShortField)
+	case FieldLanguage:
+		if utf8.RuneCountInString(v) > maxLanguage || strings.IndexFunc(v, unicode.IsControl) >= 0 {
+			return "", invalid(field, "must be a language name or code, at most 64 characters")
+		}
+		return v, nil
+	case FieldAbridged:
+		switch v = strings.ToLower(v); v {
+		case "", "true", "false":
+			return v, nil
+		}
+		return "", invalid(field, `must be "true", "false" or empty`)
+	case FieldGenres, FieldTags:
+		return normalizeLabels(field, v)
 	case FieldDescription:
 		// A description keeps its line breaks (normalized to \n); any other
 		// control character is refused.
@@ -185,14 +207,41 @@ func validDatePrefix(v string) bool {
 // range).
 type bookFields map[string]string
 
-// fieldsOf reads a book's overridable fields.
+// fieldsOf reads a book's overridable fields. A label list (genres, tags) is
+// cleaned as a file's is (CleanLabels): this is what a scan records.
 func fieldsOf(b *Book) bookFields {
 	return bookFields{
-		FieldTitle: b.Title, FieldAuthor: b.Author, FieldNarrator: b.Narrator,
+		FieldTitle: b.Title, FieldSubtitle: b.Subtitle, FieldAuthor: b.Author, FieldNarrator: b.Narrator,
 		FieldSeries: b.Series, FieldSeriesIndex: FormatSeriesRange(b.SeriesIndex, b.SeriesIndexEnd),
-		FieldPublished: b.Published, FieldDescription: b.Description,
+		FieldPublished: b.Published, FieldPublisher: b.Publisher, FieldLanguage: b.Language,
+		FieldAbridged: formatAbridged(b.Abridged), FieldGenres: EncodeLabels(CleanLabels(b.Genres)),
+		FieldTags: EncodeLabels(CleanLabels(b.Tags)), FieldDescription: b.Description,
 		FieldASIN: b.ASIN, FieldISBN: b.ISBN,
 	}
+}
+
+// formatAbridged is an abridged flag in its field form: "true", "false", or ""
+// when unknown (nil).
+func formatAbridged(b *bool) string {
+	switch {
+	case b == nil:
+		return ""
+	case *b:
+		return "true"
+	}
+	return "false"
+}
+
+// abridgedColumn is an abridged field value as books.abridged stores it: 1, 0,
+// or NULL when unknown.
+func abridgedColumn(v string) any {
+	switch v {
+	case "true":
+		return 1
+	case "false":
+		return 0
+	}
+	return nil
 }
 
 // ParseSeriesIndex reads a stored series_index value as the position a client
@@ -572,7 +621,8 @@ func pathFields(m *metadata.Metadata) bookFields {
 }
 
 // refreshEffective rebuilds a book's effective metadata (bookLayers.resolve) into
-// its books row (with its series keys: series_key, book_more_series), its chapters (their source: applyChapterSource; then their
+// its books row (with its series keys: series_key, book_more_series; and its
+// labels: book_labels), its chapters (their source: applyChapterSource; then their
 // titles), then refreshes its FTS row. UpsertBook,
 // SetEnrichment and every edit call it, so the books row can never disagree with
 // what the durable tables say.
@@ -601,14 +651,19 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 	v := func(field string) string { return fields[field].Value }
 	start, end := ParseSeriesPosition(v(FieldSeriesIndex))
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE books SET title = ?, author = ?, narrator = ?, series = ?, series_key = ?, series_index = ?,
-		     series_index_end = ?, more_series = ?, published = ?, description = ?, asin = ?, isbn = ?
+		`UPDATE books SET title = ?, subtitle = ?, author = ?, narrator = ?, series = ?, series_key = ?, series_index = ?,
+		     series_index_end = ?, more_series = ?, published = ?, publisher = ?, language = ?, abridged = ?,
+		     genres = ?, tags = ?, description = ?, asin = ?, isbn = ?
 		 WHERE id = ?`,
-		v(FieldTitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), seriesKey(v(FieldSeries)), start,
-		end, cmp.Or(v(FieldMoreSeries), "[]"), v(FieldPublished), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
+		v(FieldTitle), v(FieldSubtitle), v(FieldAuthor), v(FieldNarrator), v(FieldSeries), seriesKey(v(FieldSeries)), start,
+		end, cmp.Or(v(FieldMoreSeries), "[]"), v(FieldPublished), v(FieldPublisher), v(FieldLanguage), abridgedColumn(v(FieldAbridged)),
+		v(FieldGenres), v(FieldTags), v(FieldDescription), v(FieldASIN), v(FieldISBN), bookID); err != nil {
 		return err
 	}
 	if err := keyOtherSeries(ctx, tx, bookID, l.libID, v(FieldSeries), v(FieldMoreSeries)); err != nil {
+		return err
+	}
+	if err := writeLabels(ctx, tx, bookID, l.libID, v(FieldGenres), v(FieldTags)); err != nil {
 		return err
 	}
 
@@ -630,13 +685,16 @@ func refreshEffective(ctx context.Context, tx *sql.Tx, bookID int64) error {
 
 	// Refresh FTS: delete-then-insert keyed by rowid = book id, from the effective
 	// values just written. The series column holds every series the book is in,
-	// so a search finds it by any (the series= filter goes by key instead).
+	// so a search finds it by any (the series= filter goes by key instead), and
+	// the genres and tags columns a label a line, so a search finds a book by its
+	// labels too (the genre= and tag= filters go by book_labels).
 	if _, err := tx.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid = ?`, bookID); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO books_fts(rowid, title, author, series, narrator) VALUES(?,?,?,?,?)`,
-		bookID, v(FieldTitle), v(FieldAuthor), ftsSeries(v(FieldSeries), v(FieldMoreSeries)), v(FieldNarrator))
+		`INSERT INTO books_fts(rowid, title, author, series, narrator, genres, tags) VALUES(?,?,?,?,?,?,?)`,
+		bookID, v(FieldTitle), v(FieldAuthor), ftsSeries(v(FieldSeries), v(FieldMoreSeries)), v(FieldNarrator),
+		ftsLabels(v(FieldGenres)), ftsLabels(v(FieldTags)))
 	return err
 }
 
@@ -664,8 +722,15 @@ func queryOverrides(ctx context.Context, q rowQuerier, libID int64, path string)
 // revert to what the scan found, and the same for chapter titles (by index).
 // Source says where the set values came from (SourceEdited or SourceCommunity).
 type BookEdit struct {
-	Set           map[string]string
-	Revert        []string
+	Set    map[string]string
+	Revert []string
+	// Add and Remove change a label list (genres, tags) rather than set it: each
+	// book's own effective list gains the labels Add names that it lacks and
+	// loses those Remove names (any case), written as an override of the field
+	// when that changes it (labelSets). A field is never both set or reverted and
+	// added to or removed from.
+	Add           map[string][]string
+	Remove        map[string][]string
 	ChapterSet    map[int]string
 	ChapterRevert []int
 	// ChapterSource picks where the chapters come from: ChaptersFromFiles,
@@ -732,7 +797,22 @@ func (e BookEdit) normalize() (BookEdit, error) {
 	default:
 		return e, invalid("chapter_source", `must be "auto", "files" or "community"`)
 	}
-	e.Set, e.ChapterSet = set, chSet
+	add, err := normalizeLabelEdits(e, "add", e.Add)
+	if err != nil {
+		return e, err
+	}
+	remove, err := normalizeLabelEdits(e, "remove", e.Remove)
+	if err != nil {
+		return e, err
+	}
+	for field, names := range remove {
+		for _, name := range names {
+			if slices.ContainsFunc(add[field], func(a string) bool { return labelKey(a) == labelKey(name) }) {
+				return e, invalid(field, "a label cannot be added and removed at once")
+			}
+		}
+	}
+	e.Set, e.ChapterSet, e.Add, e.Remove = set, chSet, add, remove
 	return e, nil
 }
 
@@ -800,12 +880,17 @@ func (c *Catalog) editTx(ctx context.Context, tx *sql.Tx, ref Ref, edit BookEdit
 	if err != nil {
 		return err
 	}
+	labels, err := labelSets(ctx, tx, bookID, edit)
+	if err != nil {
+		return err
+	}
 	// This book's own copies: EditBooks shares the edit across books. The swap
-	// writes only fields the edit leaves alone, each either set or reverted, so
-	// no field is both.
-	if len(swapSet) > 0 {
+	// and the label changes write only fields the edit leaves alone, each either
+	// set or reverted, so no field is both.
+	if len(swapSet) > 0 || len(labels) > 0 {
 		set = maps.Clone(edit.Set)
 		maps.Copy(set, swapSet)
+		maps.Copy(set, labels)
 	}
 	if len(swapRevert) > 0 {
 		revert = slices.Concat(edit.Revert, swapRevert)
