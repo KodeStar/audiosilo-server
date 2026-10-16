@@ -12,6 +12,7 @@ import {
   type OverrideField,
 } from '@/api/types';
 import { formatSeriesPosition } from '@/lib/format';
+import { checkLabels, labelsText } from '@/lib/labels';
 import type { Phrase } from '@/lib/phrase';
 import { sameSeries } from '@/lib/series-key';
 import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER, parseSeriesRange } from './field-rules';
@@ -38,6 +39,7 @@ export interface FieldCheck {
 }
 
 const MAX_DESCRIPTION = 20000;
+const MAX_LANGUAGE = 64;
 // A description keeps line breaks and tabs.
 // eslint-disable-next-line no-control-regex
 const CONTROL_IN_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
@@ -62,13 +64,27 @@ export function checkField(field: OverrideField, raw: string): FieldCheck {
   let v = raw.trim();
   switch (field) {
     case 'title':
+    case 'subtitle':
     case 'author':
     case 'narrator':
     case 'series':
+    case 'publisher':
       if (runes(v) > MAX_SHORT) return { value: v, error: 'book.invalid.tooLong' };
       if (CONTROL.test(v)) return { value: v, error: 'book.invalid.control' };
       if (field === 'title' && !v) return { value: v, error: 'book.invalid.title' };
       return { value: v };
+    case 'language':
+      if (runes(v) > MAX_LANGUAGE || CONTROL.test(v)) {
+        return { value: v, error: 'book.invalid.language' };
+      }
+      return { value: v };
+    case 'abridged':
+      v = v.toLowerCase();
+      if (v && v !== 'true' && v !== 'false') return { value: v, error: 'book.invalid.abridged' };
+      return { value: v };
+    case 'genres':
+    case 'tags':
+      return checkLabels(v);
     case 'description':
       v = v.replaceAll('\r', '');
       if (runes(v) > MAX_DESCRIPTION) return { value: v, error: 'book.invalid.tooLong' };
@@ -103,9 +119,25 @@ export function checkField(field: OverrideField, raw: string): FieldCheck {
   }
 }
 
-/** A stored value as it is shown and edited: more_series as its line, the rest as they are. */
+/**
+ * A stored value as it is shown and edited: more_series as its line, a label
+ * list as its labels apart by commas, the rest as they are (abridged's words:
+ * shownValue).
+ */
 export function displayValue(field: OverrideField, value: string): string {
-  return field === 'more_series' ? moreSeriesText(value) : value;
+  if (field === 'more_series') return moreSeriesText(value);
+  if (field === 'genres' || field === 'tags') return labelsText(value);
+  return value;
+}
+
+/** A stored value in words: displayValue, with abridged's "true"/"false" said. */
+export function shownValue(
+  t: (key: string) => string,
+  field: OverrideField,
+  value: string,
+): string {
+  if (field === 'abridged') return value ? t(`book.abridged.${value}`) : '';
+  return displayValue(field, value);
 }
 
 /**

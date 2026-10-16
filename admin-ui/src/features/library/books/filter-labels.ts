@@ -12,6 +12,8 @@ export function valueLabel(t: TFunction, f: ActiveFilter, libraries: AdminLibrar
     case 'author':
     case 'series':
     case 'narrator':
+    case 'genre':
+    case 'tag':
     case 'codec':
       return f.value;
     default:
@@ -27,6 +29,8 @@ export function chipLabel(t: TFunction, f: ActiveFilter, libraries: AdminLibrary
     case 'author':
     case 'series':
     case 'narrator':
+    case 'genre':
+    case 'tag':
     case 'format':
     case 'codec':
     case 'added':

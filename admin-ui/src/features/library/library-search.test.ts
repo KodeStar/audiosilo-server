@@ -7,4 +7,8 @@ describe('validateLibrarySearch', () => {
     expect(validateLibrarySearch({ added: '30' })).toEqual({ added: '30' });
     expect(validateLibrarySearch({ added: 8 })).toEqual({});
   });
+
+  it('keeps a genre and a tag, and drops a blank one', () => {
+    expect(validateLibrarySearch({ genre: 'Fantasy', tag: ' ' })).toEqual({ genre: 'Fantasy' });
+  });
 });

@@ -72,16 +72,33 @@ describe('compare', () => {
   it('maps a candidate onto the fields', () => {
     expect(communityValues(candidate(), recording())).toEqual({
       title: 'The Way of Kings',
+      subtitle: '',
       author: 'Brandon Sanderson',
       narrator: 'Michael Kramer, Kate Reading',
       series: 'The Stormlight Archive',
       series_index: '1',
       more_series: '',
       published: '2010',
+      publisher: 'Macmillan Audio',
+      language: '',
+      abridged: '',
+      genres: '',
+      tags: '',
       description: 'Roshar is a world of stone and storms.',
       asin: 'B003P2WO5E',
       isbn: '',
     });
+  });
+
+  it('offers the subtitle, the language and abridged only when the recording says so', () => {
+    const c = candidate({ subtitle: 'Book One', language: 'en' });
+    const values = communityValues(c, recording({ abridged: true }));
+    expect(values).toMatchObject({ subtitle: 'Book One', language: 'en', abridged: 'true' });
+    // The community's false is also "not recorded".
+    expect(communityValues(c, recording({ abridged: false })).abridged).toBe('');
+    // The label fields have no row: the community offers neither.
+    const rows = compareRows(bookDetail().fields, c, recording());
+    expect(rows.some((r) => r.field === 'genres' || r.field === 'tags')).toBe(false);
   });
 
   it('offers a work in several series as one main series and the rest', () => {
@@ -194,13 +211,17 @@ describe('compare', () => {
     detail.fields.narrator = { ...detail.fields.narrator, source: 'edited', locked: true };
     const rows = compareRows(detail.fields, candidate(), recording());
     const offered = rows.filter((r) => r.offered).map((r) => r.field);
-    expect(offered).toEqual(['narrator', 'published', 'description']);
+    expect(offered).toEqual(['narrator', 'published', 'publisher', 'description']);
     expect(rows.find((r) => r.field === 'title')?.same).toBe(true);
     expect(rows.find((r) => r.field === 'isbn')).toMatchObject({ same: false, offered: false });
     const ticks = defaultTicks(rows);
-    expect([...ticks]).toEqual(['published', 'description']);
+    expect([...ticks]).toEqual(['published', 'publisher', 'description']);
     expect(acceptRequest(rows, ticks)).toEqual({
-      set: { published: '2010', description: 'Roshar is a world of stone and storms.' },
+      set: {
+        published: '2010',
+        publisher: 'Macmillan Audio',
+        description: 'Roshar is a world of stone and storms.',
+      },
       source: 'community',
     });
   });

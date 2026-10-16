@@ -1,6 +1,14 @@
 import type { BookFilter, BookListParams } from '@/api/client';
-import type { AdminBook, AdminBookSort, FacetCount } from '@/api/types';
+import {
+  LABEL_FIELDS,
+  type AdminBook,
+  type AdminBookSort,
+  type BookEditRequest,
+  type FacetCount,
+  type LabelField,
+} from '@/api/types';
 import { refKey } from '@/lib/book-route';
+import { cleanLabels, labelKey } from '@/lib/labels';
 import { compact } from '@/lib/utils';
 import type { Length, LibrarySearch, YesNo } from '../library-search';
 
@@ -49,6 +57,8 @@ export function bookFilter(s: LibrarySearch, now: number): BookFilter {
     author: s.author,
     series: s.series,
     narrator: s.narrator,
+    genre: s.genre,
+    tag: s.tag,
     format: s.format,
     codec: s.codec,
     direct_playable: s.playback === undefined ? undefined : s.playback === 'direct',
@@ -84,6 +94,8 @@ export const FILTER_KEYS = [
   'author',
   'series',
   'narrator',
+  'genre',
+  'tag',
   'format',
   'codec',
   'playback',
@@ -174,6 +186,35 @@ export function commonValue(
   return values.size <= 1
     ? { same: true, value: books[0]?.[field] ?? '' }
     : { same: false, distinct: values.size };
+}
+
+/** The labels a bulk edit adds to each book's own lists, and takes out. */
+export interface BulkLabels {
+  add: Partial<Record<LabelField, string[]>>;
+  remove: Partial<Record<LabelField, string[]>>;
+}
+
+/**
+ * The bulk edit's `add` and `remove` (only the lists with a label in them), or
+ * the i18n key of why the server would refuse them: a label it won't store, or
+ * one both added and taken out.
+ */
+export function bulkLabelEdit(labels: BulkLabels): {
+  edit: Pick<BookEditRequest, 'add' | 'remove'>;
+  error?: string;
+} {
+  const edit: Pick<BookEditRequest, 'add' | 'remove'> = {};
+  for (const field of LABEL_FIELDS) {
+    const add = cleanLabels(labels.add[field] ?? []);
+    if (add.error) return { edit, error: add.error };
+    const remove = cleanLabels(labels.remove[field] ?? []).labels;
+    if (remove.some((r) => add.labels.some((a) => labelKey(a) === labelKey(r)))) {
+      return { edit, error: 'books.edit.addAndRemove' };
+    }
+    if (add.labels.length) edit.add = { ...edit.add, [field]: add.labels };
+    if (remove.length) edit.remove = { ...edit.remove, [field]: remove };
+  }
+  return { edit };
 }
 
 /** The bulk edit's `set`: only the fields filled in, trimmed. */

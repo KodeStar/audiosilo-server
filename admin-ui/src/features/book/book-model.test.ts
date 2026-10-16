@@ -12,10 +12,36 @@ import {
   fileStrip,
   ribbonSegments,
   saveRequest,
+  shownValue,
   undoRevertRequest,
+  displayValue,
 } from './book-model';
 
 describe('checkField', () => {
+  it('checks the subtitle, publisher, language and abridged as the server does', () => {
+    expect(checkField('subtitle', '  A Novel ')).toEqual({ value: 'A Novel' });
+    expect(checkField('publisher', 'x'.repeat(501)).error).toBe('book.invalid.tooLong');
+    expect(checkField('language', ' en-GB ')).toEqual({ value: 'en-GB' });
+    expect(checkField('language', 'x'.repeat(65)).error).toBe('book.invalid.language');
+    expect(checkField('abridged', 'TRUE')).toEqual({ value: 'true' });
+    expect(checkField('abridged', '')).toEqual({ value: '' });
+    expect(checkField('abridged', 'yes').error).toBe('book.invalid.abridged');
+  });
+
+  it('keeps a label list canonical, shown as its labels', () => {
+    expect(checkField('tags', '["Owned","owned"," To  Read "]')).toEqual({
+      value: '["Owned","To Read"]',
+    });
+    expect(checkField('genres', '["' + 'x'.repeat(65) + '"]').error).toBe(
+      'book.invalid.labelTooLong',
+    );
+    expect(displayValue('genres', '["Fantasy","Epic"]')).toBe('Fantasy, Epic');
+    const t = (k: string) => `<${k}>`;
+    expect(shownValue(t, 'abridged', 'false')).toBe('<book.abridged.false>');
+    expect(shownValue(t, 'abridged', '')).toBe('');
+    expect(shownValue(t, 'tags', '["Owned"]')).toBe('Owned');
+  });
+
   it('trims, and refuses an empty title', () => {
     expect(checkField('title', '  Dune  ')).toEqual({ value: 'Dune' });
     expect(checkField('title', '   ').error).toBe('book.invalid.title');

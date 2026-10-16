@@ -1,4 +1,5 @@
 import {
+  LABEL_FIELDS,
   OVERRIDE_FIELDS,
   type BookEditRequest,
   type FieldSource,
@@ -51,7 +52,9 @@ export function candidateAuthors(c: MatchCandidate): string {
 }
 
 /**
- * What the community says for each field, from the work and the chosen recording.
+ * What the community says for each field, from the work and the chosen recording
+ * (as matchrun.Propose: the work's subtitle and language, the recording's
+ * publisher, abridged only when it is marked so).
  * A work in several series offers one as the main series - the one the book is
  * filed under (`mainSeries`) when the work is in it, else the recording's first
  * (its own edition, when the community lists one) - and the rest as the book's other series (as matchrun.planSeries
@@ -70,12 +73,20 @@ export function communityValues(
   const year = (c.first_published || rec?.release_date || '').match(/^\d{4}/)?.[0];
   return {
     title: clean('title', c.title),
+    subtitle: clean('subtitle', c.subtitle),
     author: clean('author', candidateAuthors(c)),
     narrator: clean('narrator', (rec?.narrators ?? []).map((n) => n.name).join(', ')),
     series: clean('series', series?.name),
     series_index: clean('series_index', series?.position),
     more_series: clean('more_series', otherSeries(others)),
     published: clean('published', year),
+    publisher: clean('publisher', rec?.publisher),
+    language: clean('language', c.language),
+    // The community's false is also "not recorded": only true says anything.
+    abridged: rec?.abridged ? 'true' : '',
+    // A match candidate carries no genres, and the community has no tags.
+    genres: '',
+    tags: '',
     description: clean('description', c.description),
     asin: clean('asin', rec?.asins?.[0]),
     isbn: clean('isbn', rec?.isbns?.[0]),
@@ -102,13 +113,18 @@ export interface CompareRow {
   offered: boolean;
 }
 
+/**
+ * The compare table's rows, in field order. The label fields are left out: the
+ * community offers neither, so their rows would only ever say so.
+ */
 export function compareRows(
   fields: Record<OverrideField, FieldValue>,
   c: MatchCandidate,
   rec: MatchRecording | undefined,
 ): CompareRow[] {
   const theirs = communityValues(c, rec, fields.series.value);
-  return OVERRIDE_FIELDS.map((f) => {
+  const offerable = OVERRIDE_FIELDS.filter((f) => !(LABEL_FIELDS as readonly string[]).includes(f));
+  return offerable.map((f) => {
     const mine = fields[f].value;
     const same = !!theirs[f] && clean(f, mine) === theirs[f];
     return {

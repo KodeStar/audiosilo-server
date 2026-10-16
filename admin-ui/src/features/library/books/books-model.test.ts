@@ -2,6 +2,7 @@ import { adminBook } from '@/test/library-fixtures';
 import {
   activeFilters,
   bookFilter,
+  bulkLabelEdit,
   bulkSet,
   commonValue,
   curatingShelf,
@@ -36,6 +37,8 @@ describe('bookFilter', () => {
           author: 'Brandon Sanderson',
           series: 'The Stormlight Archive',
           narrator: 'Kate Reading',
+          genre: 'Fantasy',
+          tag: 'Owned',
           format: ['m4b', 'mp3'],
           codec: ['aac'],
           playback: 'transcode',
@@ -54,6 +57,8 @@ describe('bookFilter', () => {
       author: 'Brandon Sanderson',
       series: 'The Stormlight Archive',
       narrator: 'Kate Reading',
+      genre: 'Fantasy',
+      tag: 'Owned',
       format: ['m4b', 'mp3'],
       codec: ['aac'],
       direct_playable: false,
@@ -204,6 +209,22 @@ describe('selection and bulk edits', () => {
     expect(commonValue([a, b], 'author')).toEqual({ same: true, value: 'Brandon Sanderson' });
     expect(commonValue([a, b], 'narrator')).toEqual({ same: false, distinct: 2 });
     expect(commonValue([], 'series')).toEqual({ same: true, value: '' });
+  });
+
+  it('adds and removes labels, refusing one both added and removed', () => {
+    expect(bulkLabelEdit({ add: {}, remove: {} })).toEqual({ edit: {} });
+    expect(
+      bulkLabelEdit({
+        add: { tags: [' Owned ', 'owned', 'To Read'], genres: [] },
+        remove: { genres: ['Audiobook'] },
+      }),
+    ).toEqual({ edit: { add: { tags: ['Owned', 'To Read'] }, remove: { genres: ['Audiobook'] } } });
+    expect(bulkLabelEdit({ add: { tags: ['Owned'] }, remove: { tags: ['OWNED'] } }).error).toBe(
+      'books.edit.addAndRemove',
+    );
+    expect(bulkLabelEdit({ add: { tags: ['x'.repeat(65)] }, remove: {} }).error).toBe(
+      'book.invalid.labelTooLong',
+    );
   });
 
   it('sends only the filled fields, trimmed', () => {

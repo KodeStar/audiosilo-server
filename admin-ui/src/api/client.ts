@@ -246,6 +246,9 @@ export interface BookFilter {
   author?: string;
   series?: string;
   narrator?: string;
+  /** A genre or a tag the book has, in any case. */
+  genre?: string;
+  tag?: string;
   format?: string[];
   codec?: string[];
   direct_playable?: boolean;
@@ -674,10 +677,13 @@ export const api = {
 
 /**
  * Downloads a library's book list (GET /admin/libraries/{id}/export) as the file
- * the server names. Returns the file name.
+ * the server names. With `paths`, each row also names its library and the paths
+ * of the copies it stands for (?include=paths): a file for the admin's own
+ * scripts, not one to share. Returns the file name.
  */
-export function downloadLibraryExport(id: number): Promise<string> {
-  return download(`/admin/libraries/${id}/export`, `audiosilo-library-${id}.json`);
+export function downloadLibraryExport(id: number, opts: { paths?: boolean } = {}): Promise<string> {
+  const query = opts.paths ? '?include=paths' : '';
+  return download(`/admin/libraries/${id}/export${query}`, `audiosilo-library-${id}.json`);
 }
 
 /** Downloads a backup (GET /admin/backups/{name}). Returns the file name. */

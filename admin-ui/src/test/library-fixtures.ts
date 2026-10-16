@@ -28,6 +28,7 @@ export function adminBook(over: Partial<AdminBook> = {}): AdminBook {
     path: 'Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings',
     is_folder: true,
     title: 'The Way of Kings',
+    subtitle: '',
     author,
     narrator,
     // The people the credits name, unless a test says otherwise.
@@ -36,6 +37,11 @@ export function adminBook(over: Partial<AdminBook> = {}): AdminBook {
     series: 'The Stormlight Archive',
     series_index: 1,
     published: '2010',
+    publisher: '',
+    language: '',
+    abridged: null,
+    genres: [] as string[],
+    tags: [] as string[],
     duration: 163800,
     format: 'm4b',
     codec: 'aac',
@@ -122,6 +128,11 @@ export function facets(over: Partial<BookFacets> = {}): BookFacets {
     has_chapters: { yes: 3, no: 1 },
     matched: { yes: 3, no: 1 },
     edited: { yes: 1, no: 3 },
+    genres: [
+      { value: 'Fantasy', count: 3 },
+      { value: 'Science Fiction', count: 1 },
+    ],
+    tags: [{ value: 'Owned', count: 2 }],
     ...over,
   };
 }
@@ -185,12 +196,18 @@ export function bookDetail(over: Partial<AdminBookDetail> = {}): AdminBookDetail
   const book = over.book ?? books[0];
   const fields: Record<OverrideField, FieldValue> = {
     title: field(book.title),
+    subtitle: field(book.subtitle),
     author: field(book.author),
     narrator: field(book.narrator),
     series: field(book.series, { source: 'path' }),
     series_index: field(String(book.series_index), { source: 'path' }),
     more_series: field(''),
     published: field(''),
+    publisher: field(book.publisher),
+    language: field(book.language),
+    abridged: field(book.abridged === null ? '' : String(book.abridged)),
+    genres: field(book.genres.length ? JSON.stringify(book.genres) : ''),
+    tags: field(book.tags.length ? JSON.stringify(book.tags) : ''),
     description: field(''),
     asin: field(book.asin, { source: 'community' }),
     isbn: field(''),

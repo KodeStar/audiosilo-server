@@ -1345,6 +1345,7 @@ export interface AdminBook {
   path: string;
   is_folder: boolean;
   title: string;
+  subtitle: string;
   author: string;
   narrator: string;
   /**
@@ -1362,6 +1363,13 @@ export interface AdminBook {
   /** Every series the book is in, its main one (`series`) first, with its position in each. */
   series_list: SeriesRef[];
   published: string;
+  publisher: string;
+  language: string;
+  /** null while nothing says (catalog.AdminBook.Abridged). */
+  abridged: boolean | null;
+  /** The book's labels (catalog labels.go), [] for none. */
+  genres: string[];
+  tags: string[];
   /** Seconds. */
   duration: number;
   format: string;
@@ -1437,6 +1445,9 @@ export interface BookFacets {
   has_chapters: BoolFacet;
   matched: BoolFacet;
   edited: BoolFacet;
+  /** The most common labels (at most 100 each), named by the spelling most of their books use. */
+  genres: FacetCount[];
+  tags: FacetCount[];
 }
 
 /**
@@ -1510,17 +1521,27 @@ export interface SeriesRef {
 /** The overridable book fields (catalog.OverrideFields), in display order. */
 export const OVERRIDE_FIELDS = [
   'title',
+  'subtitle',
   'author',
   'narrator',
   'series',
   'series_index',
   'more_series',
   'published',
+  'publisher',
+  'language',
+  'abridged',
+  'genres',
+  'tags',
   'description',
   'asin',
   'isbn',
 ] as const;
 export type OverrideField = (typeof OVERRIDE_FIELDS)[number];
+
+/** The label fields (catalog labels.go): a list as canonical JSON, "" for none. */
+export const LABEL_FIELDS = ['genres', 'tags'] as const;
+export type LabelField = (typeof LABEL_FIELDS)[number];
 
 /** Where a field's value came from (catalog.Source*), in the legend's order. */
 export const FIELD_SOURCES = ['tag', 'path', 'abs', 'edited', 'community'] as const;
@@ -1671,6 +1692,12 @@ export interface CommunityChaptersDetail {
 export interface BookEditRequest {
   set?: Partial<Record<OverrideField, string>>;
   revert?: OverrideField[];
+  /**
+   * Labels to add to, or take out of (any case), each book's own list; never a
+   * field the request also sets or reverts (catalog.BookEdit.Add).
+   */
+  add?: Partial<Record<LabelField, string[]>>;
+  remove?: Partial<Record<LabelField, string[]>>;
   /** "community" when the values were accepted from a match; default "edited". */
   source?: 'edited' | 'community';
   chapters?: { set?: Record<number, string>; revert?: number[] };

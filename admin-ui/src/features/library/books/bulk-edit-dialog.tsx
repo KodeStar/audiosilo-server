@@ -4,8 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { Pencil, TriangleAlert } from 'lucide-react';
 import { BULK_LIMIT, api } from '@/api/client';
 import { invalidateBooks } from '@/api/hooks';
-import type { AdminBook } from '@/api/types';
+import { LABEL_FIELDS, type AdminBook } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
+import { LabelInput } from '@/components/label-input';
 import { Notice } from '@/components/notice';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
@@ -15,15 +16,23 @@ import { refKey, refOf } from '@/lib/book-route';
 import { errorMessage } from '@/lib/errors';
 import { counted, formatNumber } from '@/lib/format';
 import { toast } from '@/lib/toast';
-import { BULK_FIELDS, bulkSet, commonValue, type BulkField } from './books-model';
+import {
+  BULK_FIELDS,
+  bulkLabelEdit,
+  bulkSet,
+  commonValue,
+  type BulkField,
+  type BulkLabels,
+} from './books-model';
 
 /** How many covers the dialog fans out before "+N". */
 const FAN = 8;
 
 /**
- * Edit fields over the selection: author, narrator, series. Only filled fields
- * change; each change is saved as an edit (locked against rescans), all or
- * nothing, and the files are never touched.
+ * Edit fields over the selection: author, narrator, series, and tags and genres
+ * added to or taken out of each book's own (a book keeps its other labels).
+ * Only filled fields change; each change is saved as an edit (locked against
+ * rescans), all or nothing, and the files are never touched.
  */
 export function BulkEditDialog({
   open,
@@ -63,21 +72,26 @@ function BulkEditForm({ books, onDone }: { books: AdminBook[]; onDone: () => voi
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const [values, setValues] = useState<Partial<Record<BulkField, string>>>({});
+  const [labels, setLabels] = useState<BulkLabels>({ add: {}, remove: {} });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = bulkSet(values);
-  const changes = Object.keys(set).length;
+  const labelEdit = bulkLabelEdit(labels);
+  const changes =
+    Object.keys(set).length +
+    Object.keys(labelEdit.edit.add ?? {}).length +
+    Object.keys(labelEdit.edit.remove ?? {}).length;
   const tooMany = books.length > BULK_LIMIT;
   const count = books.length;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!changes || tooMany || busy) return;
+    if (!changes || tooMany || busy || labelEdit.error) return;
     setBusy(true);
     setError('');
     try {
       const refs = books.map(refOf);
-      const res = await api.bulkEdit(refs, { set });
+      const res = await api.bulkEdit(refs, { set, ...labelEdit.edit });
       invalidateBooks(qc, refs);
       toast.add({
         title: t('books.edit.done', counted(res.updated, lang)),
@@ -147,13 +161,68 @@ function BulkEditForm({ books, onDone }: { books: AdminBook[]; onDone: () => voi
             />
           </div>
         ))}
-        <FormError>{error ? t('books.edit.failed', { reason: error }) : null}</FormError>
+        <fieldset className="flex flex-col gap-3 border-t pt-4">
+          <legend className="float-left mb-1 text-[13px] font-semibold">
+            {t('books.edit.labels')}
+          </legend>
+          <p className="clear-both text-[12.5px] text-muted-foreground">
+            {t('books.edit.labelsHint')}
+          </p>
+          {LABEL_FIELDS.flatMap((f) =>
+            (['add', 'remove'] as const).map((op) => (
+              <LabelRow
+                key={`${op}-${f}`}
+                id={`bulk-${op}-${f}`}
+                label={t(`books.edit.${op}.${f}`)}
+                value={labels[op][f] ?? []}
+                disabled={tooMany}
+                onChange={(next) => setLabels((l) => ({ ...l, [op]: { ...l[op], [f]: next } }))}
+              />
+            )),
+          )}
+        </fieldset>
+        <FormError>
+          {labelEdit.error
+            ? t(labelEdit.error)
+            : error
+              ? t('books.edit.failed', { reason: error })
+              : null}
+        </FormError>
       </DialogBody>
       <DialogFormFooter
         busy={busy}
-        disabled={!changes || tooMany}
+        disabled={!changes || tooMany || !!labelEdit.error}
         submitLabel={t('books.edit.apply', counted(count, lang))}
       />
     </form>
+  );
+}
+
+/** One add or remove box of the labels section. */
+function LabelRow({
+  id,
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string[];
+  disabled: boolean;
+  onChange: (next: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <LabelInput
+        id={id}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        placeholder={t('labels.placeholder')}
+      />
+    </div>
   );
 }
