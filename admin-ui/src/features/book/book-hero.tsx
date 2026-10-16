@@ -257,10 +257,12 @@ function NameLinks({
 function ListenButton({ book: b }: { book: AdminBook }) {
   const { t } = useTranslation();
   const me = useCurrentUser();
-  // One token per click: a second click while one is on its way is ignored.
+  // One token per click: a second click while one is on its way is ignored (the
+  // ref sees it at once, even within one task; the state disables the button).
   const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
   const listen = async () => {
-    if (busy) return;
+    if (inFlight.current) return;
     // Opened in the click itself, or the browser takes it for a pop-up and blocks it;
     // pointed at the player once the token is back.
     const tab = window.open('', '_blank');
@@ -273,6 +275,7 @@ function ListenButton({ book: b }: { book: AdminBook }) {
       return;
     }
     tab.opener = null;
+    inFlight.current = true;
     setBusy(true);
     try {
       tab.location.href = playerConnectUrl(await api.pairSelf(), me.id, b);
@@ -280,6 +283,7 @@ function ListenButton({ book: b }: { book: AdminBook }) {
       tab.close();
       toastError(t('book.hero.listenFailed'), err);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
