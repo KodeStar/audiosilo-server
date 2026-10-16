@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,9 @@ type LibraryExport struct {
 	Library       ExportLibrary `json:"library"`
 	ExportedAt    string        `json:"exported_at"`
 	Books         []ExportBook  `json:"books"`
+	// private is set when the export holds paths or tags (ExportOptions): its
+	// file is named apart from the shareable one (Filename).
+	private bool
 }
 
 // ExportLibrary identifies the exported library. Deliberately name + id only -
@@ -97,14 +101,20 @@ type ExportOptions struct {
 }
 
 // Filename is the file name to offer the download as:
-// audiosilo-<library-slug>-<YYYY-MM-DD>.json.
+// audiosilo-<library-slug>-<YYYY-MM-DD>.json, with "-private" before the
+// extension for an export holding paths or tags, so that file is never taken
+// for the one to share.
 func (e *LibraryExport) Filename() string {
 	date, _, _ := strings.Cut(e.ExportedAt, "T") // RFC3339: the date is what precedes the T
 	slug := slugify(e.Library.Name)
 	if slug == "" {
 		slug = "library"
 	}
-	return "audiosilo-" + slug + "-" + date + ".json"
+	suffix := ""
+	if e.private {
+		suffix = "-private"
+	}
+	return "audiosilo-" + slug + "-" + date + suffix + ".json"
 }
 
 // ExportLibraryBooks composes a library's export envelope. It pages over the
@@ -126,6 +136,7 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 		Library:       ExportLibrary{ID: lib.ID, Name: lib.Name},
 		ExportedAt:    c.now().UTC().Format(time.RFC3339),
 		Books:         []ExportBook{},
+		private:       opt.IncludePaths || opt.IncludeTags,
 	}
 
 	counts, err := c.chapterCounts(ctx, libraryID)
@@ -204,9 +215,13 @@ func exportBook(b *Book, chapters int) ExportBook {
 // later; taking each fact from whichever copy has it keeps the export as complete
 // as the library is, without ever overwriting a fact already recorded. The
 // copy's paths are added to the entry's (an export with paths names every copy
-// a row stands for).
+// a row stands for), and likewise its tags (each copy's own notes; each label
+// once, uniqueLabels), so a row holds what every copy it names was tagged.
 func mergeExportBook(dst *ExportBook, src ExportBook) {
 	dst.Paths = append(dst.Paths, src.Paths...)
+	if len(src.Tags) > 0 {
+		dst.Tags = uniqueLabels(slices.Concat(dst.Tags, src.Tags))
+	}
 	list := func(dst *[]string, src []string) {
 		if len(*dst) == 0 {
 			*dst = src
@@ -215,7 +230,6 @@ func mergeExportBook(dst *ExportBook, src ExportBook) {
 	list(&dst.Authors, src.Authors)
 	list(&dst.Narrators, src.Narrators)
 	list(&dst.Genres, src.Genres)
-	list(&dst.Tags, src.Tags)
 	dst.Title = cmp.Or(dst.Title, src.Title)
 	dst.Subtitle = cmp.Or(dst.Subtitle, src.Subtitle)
 	dst.Series = cmp.Or(dst.Series, src.Series)

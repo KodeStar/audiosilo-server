@@ -33,7 +33,12 @@ func (a *API) handleExportLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var opt catalog.ExportOptions
-	if include := r.URL.Query().Get("include"); include != "" {
+	// Every include= counts (?include=paths&include=tags as much as
+	// ?include=paths,tags), so none asked for is dropped.
+	for _, include := range r.URL.Query()["include"] {
+		if include == "" {
+			continue
+		}
 		for v := range strings.SplitSeq(include, ",") {
 			switch v {
 			case "paths":

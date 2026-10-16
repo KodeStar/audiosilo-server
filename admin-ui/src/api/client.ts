@@ -686,7 +686,9 @@ export function downloadLibraryExport(
   opts: { personal?: boolean } = {},
 ): Promise<string> {
   const query = opts.personal ? '?include=paths,tags' : '';
-  return download(`/admin/libraries/${id}/export${query}`, `audiosilo-library-${id}.json`);
+  // The fallback name keeps the server's "-private" mark (catalog.Filename).
+  const fallback = `audiosilo-library-${id}${opts.personal ? '-private' : ''}.json`;
+  return download(`/admin/libraries/${id}/export${query}`, fallback);
 }
 
 /** Downloads a backup (GET /admin/backups/{name}). Returns the file name. */

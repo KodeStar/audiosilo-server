@@ -296,7 +296,8 @@ describe('libraries', () => {
           raw: '{"format":"audiosilo-books"}',
           headers: {
             'Content-Type': 'application/json',
-            'Content-Disposition': 'attachment; filename="audiosilo-fiction-2026-10-03.json"',
+            'Content-Disposition':
+              'attachment; filename="audiosilo-fiction-2026-10-03-private.json"',
           },
         },
       }),
@@ -316,7 +317,9 @@ describe('libraries', () => {
     ).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/admin/libraries/1/export')).toBe(false);
     await user.click(within(dialog).getByRole('button', { name: 'Export with paths and tags' }));
-    expect(await screen.findByText('audiosilo-fiction-2026-10-03.json')).toBeInTheDocument();
+    expect(
+      await screen.findByText('audiosilo-fiction-2026-10-03-private.json'),
+    ).toBeInTheDocument();
     const exp = calls.find((c) => c.path === '/admin/libraries/1/export');
     expect(exp?.query.get('include')).toBe('paths,tags');
   });

@@ -15,7 +15,9 @@ func TestSplitGenres(t *testing.T) {
 		{"Fantasy", []string{"Fantasy"}},
 		{"Fantasy;Epic", []string{"Fantasy", "Epic"}},
 		// Cleaning (trim, spacing, repeats) is catalog.CleanLabels': the parts as spelled.
-		{" Science  Fiction , Space Opera ;; ", []string{" Science  Fiction ", " Space Opera "}},
+		{" Science  Fiction ; Space Opera ;; ", []string{" Science  Fiction ", " Space Opera "}},
+		// A comma is part of a store's category name, not a joiner.
+		{"Mystery, Thriller & Suspense", []string{"Mystery, Thriller & Suspense"}},
 		{"Mystery\x00Thriller", []string{"Mystery", "Thriller"}},
 		// The placeholders say only that it is an audiobook, in any case.
 		{"Audiobook", nil},

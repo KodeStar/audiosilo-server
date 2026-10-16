@@ -282,8 +282,10 @@ func (f BookFilter) where(skip string) (string, []any) {
 		// candidates, and with a series filter the series' own index does; a plain library term would have SQLite walk the
 		// whole library by its library index instead (the unary + rules it out).
 		// A value with no phrase to match isn't looked up there, so the library
-		// index stays the way in.
-		if hasFTSPhrase(f.Author) || hasFTSPhrase(f.Narrator) || f.Series != "" || f.Genre != "" || f.Tag != "" {
+		// index stays the way in; nor is a label the facet being counted leaves
+		// out (labelFilters' skip).
+		labelled := (f.Genre != "" && skip != FieldGenres) || (f.Tag != "" && skip != FieldTags)
+		if hasFTSPhrase(f.Author) || hasFTSPhrase(f.Narrator) || f.Series != "" || labelled {
 			add("+b.library_id = ?", f.LibraryID)
 		} else {
 			add("b.library_id = ?", f.LibraryID)
@@ -598,8 +600,9 @@ type BookFacets struct {
 	HasChapters    BoolFacet      `json:"has_chapters"`
 	Matched        BoolFacet      `json:"matched"`
 	Edited         BoolFacet      `json:"edited"`
-	// Genres and Tags are the most common labels (at most maxLabelFacets each),
-	// each named by the spelling most of its books use.
+	// Genres and Tags are the most common labels (at most maxLabelFacets each,
+	// and the one the list is filtered by), each named by the spelling most of
+	// its books use.
 	Genres []FacetCount `json:"genres"`
 	Tags   []FacetCount `json:"tags"`
 }
@@ -630,11 +633,11 @@ func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, er
 		}
 	}
 	for _, d := range []struct {
-		kind string
-		dst  *[]FacetCount
-	}{{FieldGenres, &out.Genres}, {FieldTags, &out.Tags}} {
+		kind, selected string
+		dst            *[]FacetCount
+	}{{FieldGenres, f.Genre, &out.Genres}, {FieldTags, f.Tag, &out.Tags}} {
 		where, args := f.where(d.kind)
-		if *d.dst, err = c.labelFacet(ctx, d.kind, where, args); err != nil {
+		if *d.dst, err = c.labelFacet(ctx, d.kind, d.selected, where, args); err != nil {
 			return nil, err
 		}
 	}
@@ -692,8 +695,10 @@ func (c *Catalog) BookFacets(ctx context.Context, f BookFilter) (*BookFacets, er
 
 // labelFacet counts the books (over `books b` WHERE where) by each label of
 // kind: the most common maxLabelFacets, ties alphabetical, each named by the
-// spelling most of its books use (seriesName; ties alphabetical too).
-func (c *Catalog) labelFacet(ctx context.Context, kind, where string, args []any) ([]FacetCount, error) {
+// spelling most of its books use (seriesName; ties alphabetical too), and the
+// label the list is filtered by (selected, any case; "" for none) after them
+// when it is less common, so its choice shows its own count rather than none.
+func (c *Catalog) labelFacet(ctx context.Context, kind, selected, where string, args []any) ([]FacetCount, error) {
 	type spelled struct {
 		key, name string
 		n         int
@@ -720,7 +725,13 @@ func (c *Catalog) labelFacet(ctx context.Context, kind, where string, args []any
 		out = append(out, FacetCount{Value: seriesName(spellings), Count: counts[key]})
 	}
 	slices.SortFunc(out, func(a, b FacetCount) int { return cmp.Or(b.Count-a.Count, compareFold(a.Value, b.Value)) })
-	return out[:min(len(out), maxLabelFacets)], nil
+	top := slices.Clip(out[:min(len(out), maxLabelFacets)])
+	if key := labelKey(selected); key != "" {
+		if i := slices.IndexFunc(out, func(fc FacetCount) bool { return labelKey(fc.Value) == key }); i >= len(top) {
+			top = append(top, out[i])
+		}
+	}
+	return top, nil
 }
 
 // PersonCount is one author or narrator and their books.

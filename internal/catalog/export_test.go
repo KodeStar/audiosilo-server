@@ -74,6 +74,11 @@ func TestSlugifyAndFilename(t *testing.T) {
 	if got := exp.Filename(); got != "audiosilo-library-2026-09-21.json" {
 		t.Errorf("Filename() fallback = %q", got)
 	}
+	// An export with paths or tags is named apart from the one to share.
+	exp.private = true
+	if got := exp.Filename(); got != "audiosilo-library-2026-09-21-private.json" {
+		t.Errorf("Filename() private = %q", got)
+	}
 }
 
 // TestExportLibraryBooks covers the composed envelope end to end: the header
@@ -369,6 +374,14 @@ func TestExportLibraryBooksIncludes(t *testing.T) {
 		t.Errorf("collapsed row = %+v, want the tag and both paths", die)
 	}
 	keys(rows, "title", "authors", "asin", "genres", "tags", "paths")
+
+	// Both copies tagged: the row holds every copy's tags, each once.
+	if err := c.EditBook(ctx, lib.ID, "Rips/Die Trying.mp3", BookEdit{Set: map[string]string{FieldTags: `["Rip","owned"]`}}); err != nil {
+		t.Fatal(err)
+	}
+	if books, _ = export(ExportOptions{IncludeTags: true}); !slices.Equal(books[0].Tags, []string{"Rip", "owned"}) {
+		t.Errorf("collapsed row tags = %q, want both copies' tags, each once", books[0].Tags)
+	}
 }
 
 // TestExportLibraryBooksPagesEveryBook checks the keyset paging loop drains a

@@ -487,6 +487,33 @@ describe('books: selection and bulk actions', () => {
     });
   });
 
+  it('adds a label typed but not entered when its box is left', async () => {
+    const calls = mockFetch(
+      bookRoutes(books, { 'POST /admin/books/bulk': { body: { updated: 1 } } }),
+    );
+    renderApp('/library');
+    const user = userEvent.setup();
+    const list = await allBooks();
+    await user.click(
+      await within(list).findByRole('checkbox', { name: 'Select The Way of Kings' }),
+    );
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'Bulk actions' })).getByRole('button', {
+        name: 'Edit fields',
+      }),
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Edit 1 book' });
+    await user.type(within(dialog).getByLabelText('Add tags'), 'Favourite');
+    await user.tab();
+    expect(within(dialog).getByRole('button', { name: 'Remove Favourite' })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply to 1 book' }));
+
+    expect(await screen.findByText('Updated 1 book')).toBeInTheDocument();
+    expect(calls.find((c) => c.path === '/admin/books/bulk')?.body).toMatchObject({
+      add: { tags: ['Favourite'] },
+    });
+  });
+
   it('says how many values differ, and shows a failed edit in the dialog', async () => {
     mockFetch(
       bookRoutes(books, {

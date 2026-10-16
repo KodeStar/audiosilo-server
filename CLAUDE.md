@@ -982,7 +982,7 @@ future metadata site can attach enrichment without reshaping the schema. The
   <= 50 labels; an edit over a bound is a 400, a file's list is cleaned leniently instead,
   `CleanLabels`, which every file source goes through). The value is `encodeCanonical`'s JSON (no
   HTML escaping), as `more_series`' is. Genres come from the genre tag (`metadata.SplitGenres`: split
-  on `;`, `,` and NUL, blanks and placeholders such as "Audiobook", "Speech", "Spoken Word" or
+  on `;` and NUL, never `,` (a store category holds one), blanks and placeholders such as "Audiobook", "Speech", "Spoken Word" or
   "Other" dropped, any case; the rest left to `CleanLabels`; dhowden's then ffprobe's, ffprobe's when
   it gives any, in the `scanned` snapshot) and the ABS file; tags only from the ABS file and edits.
   `subtitle`, `publisher`, `language` (<= 64 characters) and `abridged` (`"true"`/`"false"`/`""`,
@@ -996,8 +996,8 @@ future metadata site can attach enrichment without reshaping the schema. The
   library for an admin list across them and for the library facet) is the player's `GET
   /libraries/{id}/books?genre=&tag=` (one value each, any case; both narrow) and the admin
   `BookFilter.Genre`/`Tag` (`?genre=`/`?tag=`); `BookFacets` counts `genres`/`tags` (the 100 most
-  common by key, each named by the spelling most of its books use, `seriesName`; a semi-join over
-  `book_labels`). A bulk edit (and the book PATCH) takes `add` / `remove` (`{"tags": ["Owned"]}`:
+  common by key, then the one the list is filtered by when it is rarer, each named by the spelling
+  most of its books use, `seriesName`; a semi-join over `book_labels`). A bulk edit (and the book PATCH) takes `add` / `remove` (`{"tags": ["Owned"]}`:
   field -> labels) besides `set` / `revert`: `labelSets` merges them into each book's own EFFECTIVE
   list and writes the result as an override of the field only where it changes the list; a book the
   edit changes nothing on (adding a tag it has) is left as it is, its row not even rebuilt (`editTx`).
@@ -1844,11 +1844,12 @@ future metadata site can attach enrichment without reshaping the schema. The
   publisher, language, abridged, genres, asin/isbn, runtime_min, chapters; `version` stays 1,
   the meta site's readers ignore keys they don't know) and **never by default** a path, size,
   codec, format or anything else about the filesystem, nor the book's tags (the owner's own notes,
-  "Owned", "Read") - a regression test asserts that. `?include=` is a comma list
+  "Owned", "Read") - a regression test asserts that. `?include=` is a comma list, repeatable
   (`catalog.ExportOptions`; any other value is a 400): `paths` adds each row's `paths` (every copy
   collapsed into the row, index order; the envelope's `library.id` names the library, one export =
-  one library) and `tags` its `tags`, for the admin's own scripts; the console's "Export with file
-  paths and tags..." asks for both and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
+  one library) and `tags` its `tags` (every copy's, each once), for the admin's own scripts; such a
+  file is named `...-<YYYY-MM-DD>-private.json`, apart from the one to share; the console's "Export
+  with file paths and tags..." asks for both and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
   `ListBooks`, never OFFSET; copies of the same book within the library collapse on
   `exposedDedupKey`, the kept entry taking each fact from whichever copy has it -
   `mergeExportBook`, since the copy that sorts first may be the untagged rip); the

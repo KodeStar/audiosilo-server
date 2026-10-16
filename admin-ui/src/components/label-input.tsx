@@ -29,6 +29,10 @@ export function LabelChip({
         <button
           type="button"
           disabled={disabled}
+          // A click keeps the focus where it is: Safari and Firefox on a Mac never
+          // focus a clicked button, so the box's input would blur with nothing
+          // focused in it and end an in-place edit before the click removed the chip.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={onRemove}
           aria-label={t('labels.remove', { label })}
           className="grid size-5 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -45,7 +49,8 @@ export function LabelChip({
  * or a comma to add it (a pasted "a, b" adds both), Backspace in the empty box
  * takes the last one back, a chip's x removes it. A label already in the list
  * (any case) isn't added twice. Controlled: `value` is the list, `onChange` gets
- * the next one. With `onDone` it is an in-place editor (the Details card):
+ * the next one; leaving the box adds what is typed. With `onDone` it is an
+ * in-place editor (the Details card):
  * focused on open, Enter in the empty box or leaving it commits (whatever is
  * typed is added first), Escape cancels (`onDone(undefined, true)`), and
  * `keyboard` says whether a key ended it, so focus can go back to the value.
@@ -110,10 +115,12 @@ export function LabelInput({
         className,
       )}
       onBlur={(e) => {
-        // Leaving the whole box (not moving to one of its chips' buttons) commits.
-        if (onDone && !box.current?.contains(e.relatedTarget as Node | null)) {
-          end(withTyped(text), false);
-        }
+        // Leaving the whole box (not moving to one of its chips' buttons) commits;
+        // without onDone (the bulk edit's boxes) it adds what is typed, so a label
+        // left unentered isn't dropped by the form's submit.
+        if (box.current?.contains(e.relatedTarget as Node | null)) return;
+        if (onDone) end(withTyped(text), false);
+        else if (text.trim()) addTyped(text);
       }}
     >
       {value.map((label) => (

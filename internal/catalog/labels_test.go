@@ -3,6 +3,7 @@ package catalog
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -311,6 +312,30 @@ func TestLabelFacets(t *testing.T) {
 	}
 	if got := listPaths(t, c, ListOptions{LibraryID: lib, Genre: "fantasy"}); !slices.Equal(got, []string{"A", "B"}) {
 		t.Errorf("genre filter = %v, want the library's books only", got)
+	}
+
+	// Past the most common maxLabelFacets, the label the list is filtered by is
+	// still listed, with its count.
+	many, _ := c.CreateLibrary(t.Context(), Library{Name: "Many", Root: "/tmp/many"})
+	for b := range 3 {
+		tags := make([]string, 0, maxLabels)
+		for i := range maxLabels {
+			tags = append(tags, fmt.Sprintf("t%03d", b*maxLabels+i))
+		}
+		if _, err := c.UpsertBook(t.Context(), &Book{LibraryID: many.ID, RelPath: fmt.Sprint("B", b), Title: "Book"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.EditBook(t.Context(), many.ID, fmt.Sprint("B", b), BookEdit{Set: map[string]string{FieldTags: EncodeLabels(tags)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, _ = c.BookFacets(t.Context(), BookFilter{LibraryID: many.ID})
+	if len(f.Tags) != maxLabelFacets {
+		t.Errorf("tags facet = %d labels, want the %d most common", len(f.Tags), maxLabelFacets)
+	}
+	f, _ = c.BookFacets(t.Context(), BookFilter{LibraryID: many.ID, Tag: "T149"})
+	if len(f.Tags) != maxLabelFacets+1 || f.Tags[maxLabelFacets] != (FacetCount{"t149", 1}) {
+		t.Errorf("tags facet filtered by t149 = %d labels, last %+v; want the chosen one after the rest", len(f.Tags), f.Tags[len(f.Tags)-1])
 	}
 }
 

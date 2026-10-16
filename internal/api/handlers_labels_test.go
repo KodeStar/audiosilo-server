@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -173,9 +174,20 @@ func TestExportIncludes(t *testing.T) {
 	if _, _, body := export("?include=tags"); strings.Contains(body, `"paths"`) || !strings.Contains(body, `"tags":["Owned"]`) {
 		t.Errorf("include=tags: %s", body)
 	}
+	// A repeated include counts each value, as the comma list does.
+	if _, _, body := export("?include=paths&include=tags"); !strings.Contains(body, `"paths"`) || !strings.Contains(body, `"tags":["Owned"]`) {
+		t.Errorf("include=paths&include=tags: %s", body)
+	}
 	if _, _, body := export(""); strings.Contains(body, `"paths"`) || strings.Contains(body, `"tags"`) ||
 		strings.Contains(body, "Owned") || strings.Contains(body, "Andy Weir/") {
 		t.Errorf("the default export carries paths or tags: %s", body)
+	}
+	// The private file is named apart from the shareable one.
+	for query, want := range map[string]string{"": `\d\.json"$`, "?include=paths": `-private\.json"$`, "?include=tags": `-private\.json"$`} {
+		resp, body := e.do(t, "GET", path+query, adminTok, "")
+		if cd := resp.Header.Get("Content-Disposition"); resp.StatusCode != 200 || !regexp.MustCompile(want).MatchString(cd) {
+			t.Errorf("export%s: Content-Disposition %q (%d %s), want it to match %s", query, cd, resp.StatusCode, body, want)
+		}
 	}
 
 	if resp, _ := e.do(t, "GET", path+"?include=paths,tags", memberTok, ""); resp.StatusCode != http.StatusForbidden {
