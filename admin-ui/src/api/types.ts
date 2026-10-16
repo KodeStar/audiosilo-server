@@ -121,6 +121,29 @@ export interface LoginResponse {
   server_id: string;
 }
 
+/**
+ * POST /api/v1/auth/pair (handlers_auth.go handlePair; api.PairingPayload, qr.go
+ * buildPairing): a single-use, ten-minute pairing token for the caller, with the
+ * links and QR a device pairs from.
+ */
+export interface PairingPayload {
+  server_name: string;
+  server_id: string;
+  base_url: string;
+  pairing_token: string;
+  /** audiosilo://connect?... (the native app). */
+  uri: string;
+  /** <base>/web/connect?token=... (the QR); the base may be the public_url, another origin. */
+  web_url: string;
+  qr_png_data_uri: string;
+  links: { web: string; admin: string; ios?: string; android?: string };
+  /** Only for a token an invite minted: never for /auth/pair. */
+  code_expires_at?: string;
+  uses_remaining?: number;
+  /** The server's home and away addresses, when it knows either. */
+  addresses?: { home?: string; away?: string };
+}
+
 /** One library's book count in GET /admin/stats (handlers_stats.go libStat). */
 export interface LibraryStat {
   id: number;

@@ -496,3 +496,26 @@ export function audioLine(
     .filter(Boolean)
     .join(' · ');
 }
+
+/**
+ * Where "Listen in player" sends its tab: the web player's connect page on this
+ * origin (never the pairing's web_url, whose base may be the public_url, another
+ * origin), which exchanges the token, or skips it when that browser is already
+ * signed in as `userId` (sid + uid name the connection), and opens the book.
+ */
+export function playerConnectUrl(p: {
+  token: string;
+  serverId: string;
+  userId: number;
+  libraryId: number;
+  path: string;
+}): string {
+  const q = new URLSearchParams({
+    token: p.token,
+    sid: p.serverId,
+    uid: String(p.userId),
+    book: String(p.libraryId),
+    path: p.path,
+  });
+  return `/web/connect?${q.toString()}`;
+}

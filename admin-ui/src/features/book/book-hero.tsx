@@ -8,6 +8,7 @@ import {
   Ellipsis,
   FileAudio,
   HardDrive,
+  Headphones,
   ImageMinus,
   ImageUp,
   RefreshCw,
@@ -45,16 +46,17 @@ import {
   formatSeriesPosition,
 } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
+import { useCurrentUser } from '@/lib/session';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { COVER_TYPES, audioLine, coverFileProblem } from './book-model';
+import { COVER_TYPES, audioLine, coverFileProblem, playerConnectUrl } from './book-model';
 import { HERO_GRID } from './layout';
 import { useHeroTint } from './use-hero-tint';
 
 /**
  * The book's hero: its cover blurred into a full-bleed backdrop and tinted
  * from the art, the title and byline, the facts that matter to an admin, and
- * the book's actions (match, cover, more).
+ * the book's actions (match, listen, cover, more).
  */
 export function BookHero({
   detail,
@@ -146,6 +148,7 @@ export function BookHero({
                 {b.matched ? t('book.hero.compare') : t('book.hero.match')}
               </Button>
             ) : null}
+            {caps?.web_player ? <ListenButton book={b} /> : null}
             <CoverMenu detail={detail} />
             <MoreMenu detail={detail} root={library?.root} onAddToShare={onAddToShare} />
           </div>
@@ -244,6 +247,48 @@ function NameLinks({
     ) : (
       p.value
     ),
+  );
+}
+
+/**
+ * "Listen in player": the book in the web player, in a new tab, signed in as this
+ * admin with no second sign-in (a one-time pairing token the player exchanges).
+ */
+function ListenButton({ book: b }: { book: AdminBook }) {
+  const { t } = useTranslation();
+  const me = useCurrentUser();
+  const listen = async () => {
+    // Opened in the click itself, or the browser takes it for a pop-up and blocks it;
+    // pointed at the player once the token is back.
+    const tab = window.open('', '_blank');
+    if (!tab) {
+      toast.add({
+        title: t('book.hero.listenFailed'),
+        description: t('book.hero.listenBlocked'),
+        type: 'error',
+      });
+      return;
+    }
+    tab.opener = null;
+    try {
+      const pairing = await api.pairSelf();
+      tab.location.href = playerConnectUrl({
+        token: pairing.pairing_token,
+        serverId: pairing.server_id,
+        userId: me.id,
+        libraryId: b.library_id,
+        path: b.path,
+      });
+    } catch (err) {
+      tab.close();
+      toastError(t('book.hero.listenFailed'), err);
+    }
+  };
+  return (
+    <Button variant="outline" onClick={() => void listen()}>
+      <Headphones aria-hidden="true" />
+      {t('book.hero.listen')}
+    </Button>
   );
 }
 
