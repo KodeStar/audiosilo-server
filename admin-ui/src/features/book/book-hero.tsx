@@ -1,4 +1,4 @@
-import { Fragment, useRef } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -257,7 +257,10 @@ function NameLinks({
 function ListenButton({ book: b }: { book: AdminBook }) {
   const { t } = useTranslation();
   const me = useCurrentUser();
+  // One token per click: a second click while one is on its way is ignored.
+  const [busy, setBusy] = useState(false);
   const listen = async () => {
+    if (busy) return;
     // Opened in the click itself, or the browser takes it for a pop-up and blocks it;
     // pointed at the player once the token is back.
     const tab = window.open('', '_blank');
@@ -270,22 +273,18 @@ function ListenButton({ book: b }: { book: AdminBook }) {
       return;
     }
     tab.opener = null;
+    setBusy(true);
     try {
-      const pairing = await api.pairSelf();
-      tab.location.href = playerConnectUrl({
-        token: pairing.pairing_token,
-        serverId: pairing.server_id,
-        userId: me.id,
-        libraryId: b.library_id,
-        path: b.path,
-      });
+      tab.location.href = playerConnectUrl(await api.pairSelf(), me.id, b);
     } catch (err) {
       tab.close();
       toastError(t('book.hero.listenFailed'), err);
+    } finally {
+      setBusy(false);
     }
   };
   return (
-    <Button variant="outline" onClick={() => void listen()}>
+    <Button variant="outline" disabled={busy} onClick={() => void listen()}>
       <Headphones aria-hidden="true" />
       {t('book.hero.listen')}
     </Button>

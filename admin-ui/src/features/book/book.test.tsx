@@ -2,8 +2,8 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
-import type { AdminBookDetail, BookEditRequest, MatchCandidate, PairingPayload } from '@/api/types';
-import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
+import type { AdminBookDetail, BookEditRequest, MatchCandidate, PairToken } from '@/api/types';
+import { mockFetch, type MockReply, type MockRequest, type MockRoute } from '@/test/fetch-mock';
 import { serverInfo } from '@/test/fixtures';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
@@ -646,17 +646,12 @@ describe('match with community metadata', () => {
 });
 
 describe('listen in player', () => {
-  const pairing: PairingPayload = {
-    server_name: 'AudioSilo',
-    server_id: 'srv-1',
-    base_url: 'https://books.example.com',
+  const pairing = {
     pairing_token: 'pair-tok',
-    uri: 'audiosilo://connect?server=https%3A%2F%2Fbooks.example.com&token=pair-tok&sid=srv-1',
+    server_id: 'srv-1',
     // The public_url: another origin, which the tab must not go to.
     web_url: 'https://books.example.com/web/connect?token=pair-tok&sid=srv-1',
-    qr_png_data_uri: 'data:image/png;base64,',
-    links: { web: 'https://books.example.com/web', admin: 'https://books.example.com/admin' },
-  };
+  } satisfies PairToken & { web_url: string };
 
   /** The tab window.open hands back (null: the browser blocked it). */
   function stubOpen(blocked = false) {
@@ -690,6 +685,27 @@ describe('listen in player', () => {
       path: BOOK_PATH,
     });
     expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it('makes one token however often the button is pressed while it is on its way', async () => {
+    const { tab, open } = stubOpen();
+    let answer!: (r: MockReply) => void;
+    const calls = mockFetch(
+      routes(bookDetail(), {
+        'POST /auth/pair': () => new Promise<MockReply>((r) => (answer = r)),
+      }),
+    );
+    renderApp(URL);
+    const user = userEvent.setup();
+    const listen = await screen.findByRole('button', { name: 'Listen in player' });
+    await user.click(listen);
+    await waitFor(() => expect(listen).toBeDisabled());
+    await user.click(listen);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(pairs(calls)).toHaveLength(1);
+    answer({ body: pairing });
+    await waitFor(() => expect(tab.location.href).not.toBe(''));
+    await waitFor(() => expect(listen).toBeEnabled());
   });
 
   it('closes the tab and says so when no token comes back', async () => {

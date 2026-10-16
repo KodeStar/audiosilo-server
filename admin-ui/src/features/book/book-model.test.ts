@@ -191,11 +191,8 @@ describe('the rest of the page', () => {
 
 describe('playerConnectUrl', () => {
   it("opens the book in this origin's web player, as this admin", () => {
-    const url = playerConnectUrl({
-      token: 'tok+/=',
-      serverId: 'srv-1',
-      userId: 1,
-      libraryId: 2,
+    const url = playerConnectUrl({ pairing_token: 'tok+/=', server_id: 'srv-1' }, 1, {
+      library_id: 2,
       path: 'Brandon Sanderson/Mistborn & Co/01 #1?',
     });
     const parsed = new URL(url, 'http://admin.test');

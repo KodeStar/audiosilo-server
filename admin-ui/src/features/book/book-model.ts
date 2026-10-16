@@ -5,11 +5,13 @@ import {
   type AdminChapter,
   type AdminFile,
   type BookEditRequest,
+  type BookRef,
   type CommunityChaptersDetail,
   type FieldSource,
   type FieldValue,
   type FolderMode,
   type OverrideField,
+  type PairToken,
 } from '@/api/types';
 import { formatSeriesPosition } from '@/lib/format';
 import type { Phrase } from '@/lib/phrase';
@@ -503,19 +505,13 @@ export function audioLine(
  * origin), which exchanges the token, or skips it when that browser is already
  * signed in as `userId` (sid + uid name the connection), and opens the book.
  */
-export function playerConnectUrl(p: {
-  token: string;
-  serverId: string;
-  userId: number;
-  libraryId: number;
-  path: string;
-}): string {
+export function playerConnectUrl(pairing: PairToken, userId: number, book: BookRef): string {
   const q = new URLSearchParams({
-    token: p.token,
-    sid: p.serverId,
-    uid: String(p.userId),
-    book: String(p.libraryId),
-    path: p.path,
+    token: pairing.pairing_token,
+    sid: pairing.server_id,
+    uid: String(userId),
+    book: String(book.library_id),
+    path: book.path,
   });
   return `/web/connect?${q.toString()}`;
 }

@@ -79,8 +79,8 @@ import type {
   InviteCreated,
   Library,
   LoginResponse,
-  PairingPayload,
   MetaMirrorStatus,
+  PairToken,
   PathRule,
   ServerInfo,
   Share,
@@ -332,7 +332,7 @@ export const api = {
    * A single-use, ten-minute pairing token for the signed-in admin, which "Listen in
    * player" hands the web player (403 for an API key).
    */
-  pairSelf: () => request<PairingPayload>('POST', '/auth/pair'),
+  pairSelf: () => request<PairToken>('POST', '/auth/pair'),
   stats: () => request<AdminStats>('GET', '/admin/stats'),
   settings: () => request<AdminSettings>('GET', '/admin/settings'),
   /** Queues a scan (coalesced with one already waiting); answers with the job. */
