@@ -496,6 +496,33 @@ export function communityState(
   return out;
 }
 
+/**
+ * The Chapters card's own chapter-source control, beside the community's (which
+ * covers its own list): back to the file's chapters over the ones found in the
+ * narration (`files`), or back to automatic over a chosen source the book isn't
+ * using the community's for (`auto`: found chapters a files choice keeps out
+ * stand in again, and a choice no longer holds Detect chapters back), with a
+ * note saying what the choice does now. None while the community's part offers
+ * a source of its own, so the card never shows two.
+ */
+export function chapterSourceAction(
+  d: Pick<AdminBookDetail, 'chapter_source' | 'chapter_choice' | 'generated_chapters_fit'>,
+  community: Pick<CommunityState, 'action'> | null,
+): { source: 'files' | 'auto'; label: string; note?: string } | undefined {
+  if (d.chapter_source === 'generated') {
+    return { source: 'files', label: 'book.community.useFiles' };
+  }
+  if (!d.chapter_choice || d.chapter_source === 'community' || community?.action) return undefined;
+  return {
+    source: 'auto',
+    label: 'book.chapters.useAuto',
+    note:
+      d.chapter_choice === 'files' && d.generated_chapters_fit
+        ? 'book.chapters.chosen.hidesFound'
+        : `book.chapters.chosen.${d.chapter_choice}`,
+  };
+}
+
 // ---- the rest of the page ----
 
 /** The i18n key for a folder's detection. */

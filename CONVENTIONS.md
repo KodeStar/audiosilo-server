@@ -1440,11 +1440,20 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Phase 1d's `chapters.detect` (feature `chapters`: the Bridge transcribes a book with no chapter markers and
   finds the chapters in the narration, no agent, then writes `.audiosilo/chapters.json`: a book `path`
   required, params `{}` or none (`noParams`, shared with describe), writes; refused 409 `generate_open` while a
-  `sidecars.generate` job is open for the book (that run finds them itself), and a NEW `sidecars.generate` is
-  refused 409 `detect_open` (`ErrDetectOpen`) while a detect job is open, since cancelling it would throw its
-  transcription away and the generate run after it reuses it; a generate job cancels an open describe job;
-  `kindSpec`'s `refusedWhileOpen` and `cancelsOpen` are the one statement of which open kind refuses or gives
-  way to which). States queued -> claimed -> running -> done | failed | needs_attention | cancelled; the Bridge PARKS
+  `sidecars.generate` job is open for the book (that run finds them itself), 409 `describe_open`
+  (`ErrDescribeOpen`) while a `sidecars.describe` job is (both rewrite the book's bridge.json on the Bridge;
+  a describe is refused 409 `detect_open` while a detect job is open, the other way round), and 409
+  `chapters_chosen` (`ErrChaptersChosen`, checked by the api's queue handler from `catalog.ChapterChoice`)
+  for a book whose chapter source an admin chose (files or community: a found list stands in only with no
+  choice, so it would never be used); a NEW `sidecars.generate` is refused 409 `detect_open` (`ErrDetectOpen`)
+  only while a detect job is queued, claimed or running, since cancelling it would throw its transcription
+  away and the generate run after it reuses it, while a PARKED one (`chapters_not_detected`, a person's
+  decision) is cancelled by the new generate job in its transaction ("it finds the chapters itself"), as
+  an open describe job is. `kindSpec`'s `refusedWhileOpen` and `cancelsOpen` are the one statement of which
+  open kind refuses or gives way to which (`blockerWhere`: a job with `cancel_requested` refuses nothing,
+  as it ends without writing, so a detect job queues behind a generate job being cancelled; a blocker the
+  new kind also cancels refuses only while queued or working; kinds asked in name order), and
+  `Service.Blocker` names the open job that refuses a new job of a kind now). States queued -> claimed -> running -> done | failed | needs_attention | cancelled; the Bridge PARKS
   a job it keeps running (`needs_attention`, the park's code in `progress.park.code`, its message in
   `error`) and unparks it (back to `running`) under the same claim: a held state, so its reports still
   land, but a parked job's lease is dropped (only claimed and running leases expire) and a running
@@ -1490,7 +1499,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Coverage.Description`: its `community_description` or its core description, either shown before a generated one) or a stored generated one), `can_describe`
   (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier
   books of its series in the library with no recaps (`catalog.EarlierInSeries`, each costed), and any
-  open job; `brief=1` skips the folder look and the series scan, for a card or a batch; any other kind is a
+  open job (`open_job`: the book's open generate job, else the job of another kind that refuses a generate
+  job now, `Service.Blocker`, i.e. a queued or working `chapters.detect` job; its `kind` says which, additive);
+  `brief=1` skips the folder look and the series scan, for a card or a batch; any other kind is a
   400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
   and `work_id` from the metadata cache alone, `CachedWorkID`), never on the sample-book answer.
@@ -1514,14 +1525,24 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   description ("Description ready: <book>"). A generate job queued while a describe job is open
   cancels it in the same transaction (`cancelOpenTx`: at once when queued or parked, else
   `cancel_requested`), since the generate run writes the description itself. Notifications word a detect
-  job as the chapters ("Chapters found: <book>"), and its `chapters_not_detected` park (no headings were heard;
+  job as the chapters ("Chapters found: <book>"; the event carries the book's `chapters_source` once done,
+  read after the Bridge's attachments rescan, and the message promises "Listeners see them in the player now."
+  only when it is `generated`, else says they were saved but the book uses other chapters; the bell's body
+  says so too, `detectUnused`), and its `chapters_not_detected` park (no headings were heard;
   a person's decision) says to add markers or match the book to a recording with a chapter list. The
   console's Health `no_chapters` offers **Detect chapters** (row and bulk; `fixFor` + `detectAvailable`: an
   online Bridge with the `chapters` feature): `health/detect-chapters-dialog.tsx` confirms with the
   transcription time from the Bridge's status (`detectPlan`: its figure and library mappings, one request
-  for any selection) and "no agent cost", and queues `chapters.detect` per book, passing over one whose
-  generate job is open; it stays open while it queues (a close is ignored then), so a run's outcome lands
-  in the dialog that started it. The book page's Chapters card follows the book's detect job
+  for any selection) and "no agent cost", and queues `chapters.detect` per book, passing over (named in the
+  toast by `skipNotes`) one refused `generate_open`, `describe_open` or `chapters_chosen` and one whose
+  answer is its own PARKED detect job (`queueInOrder` never counts a returned `needs_attention` job as
+  queued: reason `parked`, "waiting for attention on the Bridge"); a row whose `chapter_choice` is set
+  (admin rows carry it, additive) offers no Detect, says why (`rowFix`, `detectChosenNote`) and is left out
+  of the bar's selection; it stays open while it queues (a close is ignored then), so a run's outcome lands
+  in the dialog that started it. The Community card's `GenerateSection` shows a queued or working detect
+  job's status (`generateBlocker`: the job list, else the estimate's `open_job`) in place of Generate, and
+  the series batch and the generate dialog pass a book refused `detect_open` over by name
+  (`GENERATE_SKIPS`) rather than stopping. The book page's Chapters card follows the book's detect job
   (`useBookGenerateJob` with `KIND_DETECT`, on any server that knows the Bridge, metadata or not:
   `detectJobsKnown`) and fetches the book again when it ends; an open detect job counts in the page's job
   poll (`BOOK_KINDS`) and holds back "Write a description" (the Bridge can't describe a book while its
@@ -1778,10 +1799,14 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   on `/chapters` and the book JSON (an old app shows ordinary chapters with no label); admin book page `chapter_source`, `chapter_choice`,
   `community_chapters` (status, detail, `stale`; not the fitted list),
   `community_checking` (`chapter_source` may be `generated`, which the book page names "Found in the
-  narration on this server"); `PATCH .../book {chapter_source}` (bulk too); `POST
+  narration on this server"), `generated_chapters_fit` (a stored chapters.json fits the files now,
+  `generatedFits` via the same `fitGenerated` as `applyGenerated`; omitted otherwise); the Chapters card's
+  own source control (`chapterSourceAction`, never beside the community part's own action): "Use the
+  file's chapters" over generated ones (PATCH files), "Use automatic" over a choice the book isn't using the
+  community's for (PATCH auto; a files choice that keeps a fitting found list out says so); `PATCH .../book {chapter_source}` (bulk too); `POST
   /admin/libraries/{id}/book/community-chapters?path=` (check now, in the
   background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
-  choice made); admin rows carry `chapters_source` + `chapters_check`. Note the scan
+  choice made); admin rows carry `chapters_source` + `chapters_check` + `chapter_choice` (omitted when automatic). Note the scan
   reads no ASIN from tags (only from an Audiobookshelf metadata.json): a book is checked once matched.
 - ffprobe is optional; code paths must degrade gracefully when it is absent
   (path-derived metadata still works; codec is left unknown → `direct_playable`

@@ -198,6 +198,71 @@ describe('generated chapters on the book page', () => {
     expect(screen.getByTitle('Found: Chapter 2')).toBeInTheDocument();
   });
 
+  it('rejects the found chapters for the file’s', async () => {
+    const calls = mockFetch(routes(bookDetail({ chapter_source: 'generated' })));
+    renderApp(URL);
+    await screen.findByText('Found in the narration on this server.');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Use the file’s chapters' }));
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect(patches(calls)[0].body).toEqual({ chapter_source: 'files' });
+  });
+
+  it('offers automatic again over a files choice that keeps found chapters out', async () => {
+    const calls = mockFetch(
+      routes(
+        bookDetail({
+          chapter_source: 'files',
+          chapter_choice: 'files',
+          generated_chapters_fit: true,
+        }),
+      ),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByText(
+        'Chapters found in the narration are saved for this book, but the file’s were chosen.',
+      ),
+    ).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Use automatic' }));
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect(patches(calls)[0].body).toEqual({ chapter_source: 'auto' });
+  });
+
+  it('clears a files choice with nothing found too, so chapters can be detected', async () => {
+    mockFetch(routes(bookDetail({ chapter_source: 'files', chapter_choice: 'files' })));
+    renderApp(URL);
+    expect(
+      await screen.findByText('The file’s chapters were chosen for this book.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use automatic' })).toBeInTheDocument();
+  });
+
+  it('leaves a files choice to the community’s part when its fill would apply', async () => {
+    mockFetch(
+      routes(
+        bookDetail({
+          chapter_source: 'files',
+          chapter_choice: 'files',
+          generated_chapters_fit: true,
+          community_chapters: check({ status: 'fill' }),
+        }),
+      ),
+    );
+    renderApp(URL);
+    expect(await screen.findByRole('button', { name: 'Use the community’s' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use automatic' })).not.toBeInTheDocument();
+  });
+
+  it('offers nothing over automatic chapters of the files', async () => {
+    mockFetch(routes(bookDetail()));
+    renderApp(URL);
+    await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
+    expect(screen.queryByRole('button', { name: 'Use automatic' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Use the file’s chapters' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('follows the book chapter detection, metadata off too, and shows what it found once it ends', async () => {
     let ended = false;
     const detect: BridgeJob = {

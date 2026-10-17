@@ -383,6 +383,35 @@ describe('generate characters and recaps', () => {
     expect(screen.queryByRole('button', { name: 'Generate characters and recaps' })).toBeNull();
   });
 
+  it("shows the book's chapter detection instead of Generate while it runs, and offers Generate once it is parked", async () => {
+    let state: BridgeJob['state'] = 'running';
+    const detect = () =>
+      job({ id: 44, kind: 'chapters.detect', params: {}, state, progress: { stage: 'asr' } });
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': () => ({ body: { jobs: [detect()] } }),
+        // The estimate names the detect job while it refuses a generate job.
+        'GET /admin/bridge/estimate': () => ({
+          body: estimate({ open_job: state === 'running' ? detect() : undefined }),
+        }),
+      }),
+    );
+    const { queryClient } = renderApp(URL);
+    expect(
+      await screen.findByText(
+        'The book’s chapters are being found. Generate once that has finished: it reuses the transcription.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate characters and recaps' })).toBeNull();
+    // Parked (no chapters heard), it gives way: a generate job cancels it.
+    state = 'needs_attention';
+    await act(() => queryClient.invalidateQueries());
+    expect(
+      await screen.findByRole('button', { name: 'Generate characters and recaps' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/chapters are being found/)).toBeNull();
+  });
+
   it('shows a parked job with its reason, hint, and a link into the Bridge', async () => {
     const status: Partial<BridgeStatus> = {
       paired: true,

@@ -562,17 +562,28 @@ func TestBridgeDescribeJobWording(t *testing.T) {
 }
 
 // A chapter detection job (chapters.detect) is worded as the chapters: found,
-// or failed; a park because no chapters were heard says what to do instead.
+// or failed; a park because no chapters were heard says what to do instead. A
+// finished one promises listeners the chapters only when they are the book's
+// now (chapters_source generated); else, or when that isn't known, it says
+// they were saved but the book uses other chapters.
 func TestBridgeDetectJobWording(t *testing.T) {
 	t.Parallel()
 	s, _, _ := newService(t)
 	event := func(kind, state string) catalog.ServerEvent {
 		return catalog.ServerEvent{Kind: kind, Data: map[string]any{"job_kind": "chapters.detect", "state": state,
-			"title": "The Black Gate", "code": "chapters_not_detected"}}
+			"title": "The Black Gate", "code": "chapters_not_detected", "chapters_source": "generated"}}
 	}
 	if m := compose(event(KindBridgeJobFinished, "done"), s.server()); m.Title != "Chapters found: The Black Gate" ||
 		m.Text != "Listeners see them in the player now." {
 		t.Errorf("finished = %+v", m)
+	}
+	for _, src := range []string{"files", "community", ""} {
+		ev := event(KindBridgeJobFinished, "done")
+		ev.Data["chapters_source"] = src
+		if m := compose(ev, s.server()); m.Title != "Chapters found: The Black Gate" ||
+			strings.Contains(m.Text, "Listeners see") || !strings.Contains(m.Text, "uses other chapters") {
+			t.Errorf("finished on %q chapters = %+v", src, m)
+		}
 	}
 	if m := compose(event(KindBridgeJobFailed, "failed"), s.server()); m.Title != "Chapters failed: The Black Gate" {
 		t.Errorf("failed = %+v", m)

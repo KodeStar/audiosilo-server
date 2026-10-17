@@ -6,6 +6,7 @@ import type {
   BridgeStatus,
   ServerInfo,
 } from '@/api/types';
+import i18n from '@/i18n';
 import en from '@/i18n/locales/en.json';
 import { formatUsd } from '@/lib/format';
 import { serverInfo } from '@/test/fixtures';
@@ -13,6 +14,8 @@ import { adminBook } from '@/test/library-fixtures';
 import {
   batchCheck,
   batchPlan,
+  blocksGenerate,
+  generateBlocker,
   bridgeJobLink,
   clampsDescription,
   DESCRIPTION_CLAMP_CHARS,
@@ -47,6 +50,7 @@ import {
   titleCase,
   type BatchCheck,
 } from './generate-model';
+import { skipNotes } from './use-generate';
 
 const strings = en as Record<string, string>;
 
@@ -830,5 +834,50 @@ describe('detecting chapters', () => {
     );
     expect(parkKey('chapters_not_detected')).toBe('bridge.park.chapters_not_detected');
     expect(strings['bridge.kind.chapters.detect']).toBe('Chapters');
+  });
+});
+
+describe('blocksGenerate', () => {
+  const detect = (over: Partial<BridgeJob>) =>
+    ({ kind: 'chapters.detect', state: 'queued', cancel_requested: false, ...over }) as BridgeJob;
+
+  it('holds Generate back only while a detection is queued or working, as the server does', () => {
+    for (const state of ['queued', 'claimed', 'running'] as BridgeJobState[]) {
+      expect(blocksGenerate(detect({ state }))).toBe(true);
+    }
+    // Parked, it gives way (a generate job cancels it); being cancelled, it ends unwritten.
+    expect(blocksGenerate(detect({ state: 'needs_attention' }))).toBe(false);
+    expect(blocksGenerate(detect({ state: 'running', cancel_requested: true }))).toBe(false);
+    expect(blocksGenerate(detect({ state: 'done' }))).toBe(false);
+    expect(blocksGenerate(detect({ kind: 'sidecars.describe' }))).toBe(false);
+  });
+
+  it("reads the job list once loaded, else the estimate's open job", () => {
+    const running = detect({ state: 'running' });
+    expect(generateBlocker(undefined, running)).toBe(running);
+    expect(generateBlocker([detect({ state: 'done' })], running)).toBeUndefined();
+    expect(generateBlocker([running], undefined)).toBe(running);
+  });
+});
+
+describe('skipNotes', () => {
+  const t = i18n.getFixedT('en');
+  const skip = (reason: string, n: number) => ({
+    request: { kind: 'chapters.detect', library_id: 1, path: `A/Book ${n}` },
+    reason,
+  });
+
+  it('words each reason once, naming its books, the first few then how many more', () => {
+    const out = {
+      skipped: [
+        skip('parked', 1),
+        ...[2, 3, 4, 5, 6, 7].map((n) => skip('generate_open', n)),
+        skip('parked', 8),
+      ],
+    };
+    expect(skipNotes(out, t, 'en')).toEqual([
+      'Waiting for attention on the Bridge: Book 1 and Book 8.',
+      'Being generated, which finds the chapters too: Book 2, Book 3, Book 4, Book 5, and 2 more.',
+    ]);
   });
 });

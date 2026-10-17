@@ -1410,6 +1410,11 @@ export interface AdminBook {
   chapters_source: ChapterSource;
   /** Its last community chapter check's status (absent: never checked). */
   chapters_check?: CommunityChaptersStatus;
+  /**
+   * The admin's choice of chapter source (absent: automatic). Chapters found in the
+   * narration stand in only with none, so Detect chapters isn't offered then.
+   */
+  chapter_choice?: ChapterChoice;
 }
 
 /** GET /admin/books (catalog.AdminPage). */
@@ -1631,6 +1636,12 @@ export interface AdminBookDetail {
   /** Where `chapters` come from now, and the admin's choice of it ("" = automatic). */
   chapter_source: ChapterSource;
   chapter_choice: ChapterChoice | '';
+  /**
+   * The book has chapters found in the narration (its chapters.json) that fit its
+   * files as they are now: they stand in with no choice when the community's don't
+   * apply (true while they do; absent otherwise).
+   */
+  generated_chapters_fit?: boolean;
   /** The last community chapter check (null: never checked), and whether one is running. */
   community_chapters: CommunityChapters | null;
   community_checking: boolean;
@@ -2425,6 +2436,10 @@ export interface BridgeEstimate {
   };
   /** The nearest earlier books of the series without recaps, in reading order (at most 10). */
   earlier: EarlierBook[];
-  /** An open sidecars.generate job for this book. */
+  /**
+   * An open sidecars.generate job for this book, else the open job of another kind
+   * that refuses a new one now (a queued or working chapters.detect job): its kind
+   * says which.
+   */
   open_job?: BridgeJob;
 }

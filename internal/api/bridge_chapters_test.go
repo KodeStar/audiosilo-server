@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
 // Bridge Phase 1d: chapterless books. The chapters.detect kind, and the
@@ -167,8 +169,21 @@ func TestGeneratedChaptersOnTheWire(t *testing.T) {
 		t.Fatalf("item: %d %s", resp.StatusCode, body)
 	}
 	resp, body = b.do(t, "GET", fmt.Sprintf("/api/v1/admin/libraries/%d/book%s", b.lib.ID, q), b.adminTok, "")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"chapter_source":"generated"`) {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"chapter_source":"generated"`) ||
+		!strings.Contains(body, `"generated_chapters_fit":true`) {
 		t.Fatalf("admin book: %d %s", resp.StatusCode, body)
+	}
+	// A files choice keeps them out, and the page still says they fit (so it
+	// can offer automatic again); automatic brings them back.
+	adminBook := fmt.Sprintf("/api/v1/admin/libraries/%d/book%s", b.lib.ID, q)
+	resp, body = b.do(t, "PATCH", adminBook, b.adminTok, `{"chapter_source":"files"}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"chapter_source":"files"`) ||
+		!strings.Contains(body, `"chapter_choice":"files"`) || !strings.Contains(body, `"generated_chapters_fit":true`) {
+		t.Fatalf("files chosen: %d %s", resp.StatusCode, body)
+	}
+	resp, body = b.do(t, "PATCH", adminBook, b.adminTok, `{"chapter_source":"auto"}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"chapter_source":"generated"`) {
+		t.Fatalf("back to automatic: %d %s", resp.StatusCode, body)
 	}
 	// The file going (the Bridge's own delete, then its rescan) takes them away.
 	if err := os.Remove(filepath.Join(dir, metadata.AttachmentChapters)); err != nil {
@@ -179,5 +194,161 @@ func TestGeneratedChaptersOnTheWire(t *testing.T) {
 	}
 	if _, body := b.do(t, "GET", fmt.Sprintf("/api/v1/libraries/%d/chapters%s", b.lib.ID, q), b.adminTok, ""); strings.Contains(body, "chapters_source") {
 		t.Fatalf("chapters after the file went: %s", body)
+	}
+	if _, body := b.do(t, "PATCH", adminBook, b.adminTok, `{"chapter_source":"files"}`); strings.Contains(body, "generated_chapters_fit") {
+		t.Fatalf("files chosen with no chapters.json: %s", body)
+	}
+}
+
+// adminBook is the admin's book page URL for path.
+func (b *bridgeEnv) adminBook(path string) string {
+	return fmt.Sprintf("/api/v1/admin/libraries/%d/book?path=%s", b.lib.ID, url.QueryEscape(path))
+}
+
+// TestBridgeDetectRefusedForChosenChapters: the chapters a detect job finds
+// stand in only when no chapter source was chosen, so a book whose admin chose
+// the files' (or the community's) is refused (409 chapters_chosen), and admin
+// rows carry the choice (chapter_choice) for Health to say so; back to
+// automatic, it is queued.
+func TestBridgeDetectRefusedForChosenChapters(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatDetect(t, true)
+	for _, source := range []string{"files", "community"} {
+		if resp, body := b.do(t, "PATCH", b.adminBook(mistbornBook), b.adminTok, `{"chapter_source":"`+source+`"}`); resp.StatusCode != http.StatusOK {
+			t.Fatalf("choose %s: %d %s", source, resp.StatusCode, body)
+		}
+		// Denied: a chosen source.
+		if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
+			!strings.Contains(body, `"code":"chapters_chosen"`) {
+			t.Fatalf("detect with %s chosen: %d %s, want 409 chapters_chosen", source, resp.StatusCode, body)
+		}
+		_, body := b.do(t, "GET", fmt.Sprintf("/api/v1/admin/books?library_id=%d", b.lib.ID), b.adminTok, "")
+		if !strings.Contains(body, `"chapter_choice":"`+source+`"`) {
+			t.Fatalf("admin rows with %s chosen: %s", source, body)
+		}
+	}
+	if resp, body := b.do(t, "PATCH", b.adminBook(mistbornBook), b.adminTok, `{"chapter_source":"auto"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("back to automatic: %d %s", resp.StatusCode, body)
+	}
+	if _, body := b.do(t, "GET", fmt.Sprintf("/api/v1/admin/books?library_id=%d", b.lib.ID), b.adminTok, ""); strings.Contains(body, `"chapter_choice"`) {
+		t.Fatalf("admin rows with no choice carry one: %s", body)
+	}
+	// Allowed: no choice.
+	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("detect with no choice: %d %s, want 201", resp.StatusCode, body)
+	}
+}
+
+// TestBridgeDescribeAndDetectExclude: a describe job is refused while a detect
+// job is open for the book (409 detect_open) and a detect job while a describe
+// job is (409 describe_open): both rewrite its bridge.json on the Bridge. The
+// estimate's open_job names a queued detect job, which refuses a generate.
+func TestBridgeDescribeAndDetectExclude(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	body := fmt.Sprintf(`{"version":"0.18.0","kinds":["bridge.verify","sidecars.generate","sidecars.describe","chapters.detect"],
+		"libraries":[{"library_id":%d,"mount_path":"/media/books","mapped":true,"writable":true}]}`, b.lib.ID)
+	if resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, body); resp.StatusCode != http.StatusOK {
+		t.Fatalf("heartbeat: %d %s", resp.StatusCode, out)
+	}
+	// The estimate names no open job, then the detect job once queued.
+	if est := b.briefEstimate(t, b.lib.ID, mistbornBook); est.OpenJob != nil {
+		t.Fatalf("open_job before = %+v", est.OpenJob)
+	}
+	resp, out := b.queueDetect(t, b.adminTok, mistbornBook, `{}`)
+	var det bridge.Job
+	decodeInto(t, out, &det)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("detect: %d %s", resp.StatusCode, out)
+	}
+	if est := b.briefEstimate(t, b.lib.ID, mistbornBook); est.OpenJob == nil || est.OpenJob.ID != det.ID || est.OpenJob.Kind != bridge.KindDetectChapters {
+		t.Fatalf("open_job with a detect queued = %+v", est.OpenJob)
+	}
+	// Denied: describe while detect is open.
+	if resp, out := b.queueDescribe(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(out, `"code":"detect_open"`) {
+		t.Fatalf("describe with a detect open: %d %s, want 409 detect_open", resp.StatusCode, out)
+	}
+	// Allowed: describe for another book; denied: detect while it is open.
+	if resp, out := b.queueDescribe(t, b.adminTok, cradleBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("describe: %d %s", resp.StatusCode, out)
+	}
+	if resp, out := b.queueDetect(t, b.adminTok, cradleBook, `{}`); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(out, `"code":"describe_open"`) {
+		t.Fatalf("detect with a describe open: %d %s, want 409 describe_open", resp.StatusCode, out)
+	}
+	// Allowed: describe once the detect job ended.
+	if _, err := b.api.bridge.Cancel(context.Background(), det.ID); err != nil {
+		t.Fatal(err)
+	}
+	if est := b.briefEstimate(t, b.lib.ID, mistbornBook); est.OpenJob != nil {
+		t.Fatalf("open_job after = %+v", est.OpenJob)
+	}
+	if resp, out := b.queueDescribe(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("describe once the detect ended: %d %s", resp.StatusCode, out)
+	}
+}
+
+// TestBridgeDetectParkGivesWayToGenerate: a parked detect job (no chapters
+// heard) refuses no generate job: the generate job is queued and cancels it,
+// and the estimate's open_job no longer names it.
+func TestBridgeDetectParkGivesWayToGenerate(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatDetect(t, true)
+	resp, out := b.queueDetect(t, b.adminTok, mistbornBook, `{}`)
+	var det bridge.Job
+	decodeInto(t, out, &det)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("detect: %d %s", resp.StatusCode, out)
+	}
+	if resp, out := b.do(t, "GET", "/api/v1/bridge/jobs/next", b.bridgeTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim: %d %s", resp.StatusCode, out)
+	}
+	if resp, out := b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", det.ID), b.bridgeTok,
+		`{"attempt":1,"state":"needs_attention","error":"no headings","progress":{"park":{"code":"chapters_not_detected"}}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("park: %d %s", resp.StatusCode, out)
+	}
+	if est := b.briefEstimate(t, b.lib.ID, mistbornBook); est.OpenJob != nil {
+		t.Fatalf("open_job with a parked detect = %+v", est.OpenJob)
+	}
+	if resp, out := b.queueSidecars(t, b.lib.ID, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("generate with a parked detect: %d %s, want 201", resp.StatusCode, out)
+	}
+	if j, err := b.api.bridge.Job(context.Background(), det.ID); err != nil || j.State != bridge.StateCancelled {
+		t.Fatalf("the parked detect = %+v, %v; want cancelled", j, err)
+	}
+}
+
+// TestBridgeDetectFinishedSaysWhereTheChaptersGo: a finished detect job's
+// event carries the book's chapter source now, so the message promises the
+// chapters to listeners only when they are the book's (generated), and says
+// they were saved but unused otherwise.
+func TestBridgeDetectFinishedSaysWhereTheChaptersGo(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	b.beatDetect(t, true)
+	ctx := context.Background()
+	resp, out := b.queueDetect(t, b.adminTok, mistbornBook, `{}`)
+	var det bridge.Job
+	decodeInto(t, out, &det)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("detect: %d %s", resp.StatusCode, out)
+	}
+	if resp, out := b.do(t, "GET", "/api/v1/bridge/jobs/next", b.bridgeTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim: %d %s", resp.StatusCode, out)
+	}
+	// The book's chapters stay its files' (no chapters.json was read).
+	if resp, out := b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", det.ID), b.bridgeTok,
+		`{"attempt":1,"state":"done","result":{"chapters":12}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("done: %d %s", resp.StatusCode, out)
+	}
+	evs, _, err := b.cat.ListServerEvents(ctx, 0, 10, notify.KindBridgeJobFinished)
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("events = %v, %v", evs, err)
+	}
+	if got := evs[0].Data["chapters_source"]; got != catalog.ChaptersFromFiles {
+		t.Fatalf("chapters_source = %v, want files", got)
 	}
 }

@@ -156,6 +156,33 @@ export function generatePollMs(
   return open.length ? GENERATE_PARKED_POLL_MS : false;
 }
 
+/**
+ * Whether a job keeps a new generate job from being queued for its book (the
+ * server's detect_open): a chapter detection queued or working, not being
+ * cancelled. A parked one gives way (the generate job cancels it, and finds the
+ * chapters itself), as one being cancelled does.
+ */
+export function blocksGenerate(j: Pick<BridgeJob, 'kind' | 'state' | 'cancel_requested'>): boolean {
+  return (
+    j.kind === KIND_DETECT &&
+    (j.state === 'queued' || j.state === 'claimed' || j.state === 'running') &&
+    !j.cancel_requested
+  );
+}
+
+/**
+ * The book's job that keeps Generate from being offered now (blocksGenerate):
+ * from its job list once loaded (the live answer), else the estimate's
+ * `open_job`, which names such a job when no generate job is open.
+ */
+export function generateBlocker(
+  jobs: readonly BridgeJob[] | undefined,
+  openJob: BridgeJob | undefined,
+): BridgeJob | undefined {
+  const j = jobs ? latestJobOf(jobs, KIND_DETECT) : openJob;
+  return j && blocksGenerate(j) ? j : undefined;
+}
+
 /** The book's newest job of a kind (the list is newest first), if any. */
 export function latestJobOf<J extends Pick<BridgeJob, 'kind'>>(
   jobs: readonly J[] | undefined,
@@ -507,7 +534,10 @@ export function seriesBatchOrder<B extends AdminBook>(books: readonly B[], serie
 export interface BatchCheck {
   /** It has recaps already, from the community or its own folder: skipped. */
   covered: boolean;
-  /** A generate job is already open for it (and not being cancelled): skipped. */
+  /**
+   * A generate job is already open for it (and not being cancelled), or its
+   * chapters are being found (the estimate's `open_job` names that job): skipped.
+   */
   open: boolean;
   /**
    * It couldn't be checked (its estimate failed: a book gone since the list was

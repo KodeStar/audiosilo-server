@@ -410,6 +410,13 @@ func replaceChapters(ctx context.Context, tx *sql.Tx, bookID int64, chs []metada
 	return nil
 }
 
+// ChapterChoice is the admin's choice of chapter source for the book at
+// (libID, path): ChaptersFromFiles, ChaptersFromCommunity, or "" when it is
+// left automatic (also for a path with no book).
+func (c *Catalog) ChapterChoice(ctx context.Context, libID int64, path string) (string, error) {
+	return chapterChoice(ctx, c.db, libID, CleanRelPath(path))
+}
+
 // chapterChoice is the admin's choice of chapter source for a book ("" =
 // automatic).
 func chapterChoice(ctx context.Context, q querier, libID int64, path string) (string, error) {

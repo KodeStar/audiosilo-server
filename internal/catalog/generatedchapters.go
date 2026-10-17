@@ -42,13 +42,25 @@ func applyGenerated(ctx context.Context, tx *sql.Tx, r *chapterRow) (bool, error
 	if r.holds(ChaptersFromGenerated, key) {
 		return true, nil
 	}
-	list := decodeAttachment[metadata.ChapterList](raw)
-	if list == nil || !sameChapterFiles(list.Files, files, r.book.RelPath) {
-		return false, nil
-	}
-	own, err := scannedChapters(ctx, tx, r.book.ID, r.snapshot)
-	if err != nil {
+	chs, err := fitGenerated(ctx, tx, &r.book, raw, r.snapshot, files)
+	if err != nil || chs == nil {
 		return false, err
+	}
+	return true, useChapters(ctx, tx, r, ChaptersFromGenerated, key, chs)
+}
+
+// fitGenerated is the stored chapters.json raw fitted onto book b's files
+// (playFiles) when it applies to them (see above), else nil: the list's files
+// are the book's and chapteralign answers a fill. snapshot is the book's
+// scanned_chapters.
+func fitGenerated(ctx context.Context, q rowQuerier, b *Book, raw, snapshot string, files []BookFile) ([]metadata.Chapter, error) {
+	list := decodeAttachment[metadata.ChapterList](raw)
+	if list == nil || !sameChapterFiles(list.Files, files, b.RelPath) {
+		return nil, nil
+	}
+	own, err := scannedChapters(ctx, q, b.ID, snapshot)
+	if err != nil {
+		return nil, err
 	}
 	remote := make([]chapteralign.Remote, len(list.Chapters))
 	for i, ch := range list.Chapters {
@@ -56,14 +68,35 @@ func applyGenerated(ctx context.Context, tx *sql.Tx, r *chapterRow) (bool, error
 	}
 	res, err := chapteralign.Align(ctx, AlignFiles(files), own, remote, nil)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	// A fill is chapteralign's word for "the book has no chapters of its own":
 	// any other fitted status means a file holds two chapters or more.
 	if res.Status != chapteralign.Fill {
-		return false, nil
+		return nil, nil
 	}
-	return true, useChapters(ctx, tx, r, ChaptersFromGenerated, key, res.Chapters)
+	return res.Chapters, nil
+}
+
+// generatedFits reports whether the book at bookID has a stored chapters.json
+// that applies to its files as they are now (fitGenerated): the chapters that
+// would stand in were no chapter source chosen and the community's not to
+// apply. The book page reads it to offer "Use automatic" over a choice.
+func generatedFits(ctx context.Context, q querier, bookID int64) (bool, error) {
+	b := Book{ID: bookID}
+	var raw, snapshot string
+	if err := q.QueryRowContext(ctx,
+		`SELECT b.rel_path, b.is_folder, b.size, b.duration, b.scanned_chapters, COALESCE(a.chapters, '')
+		   FROM books b LEFT JOIN book_attachments a ON a.book_id = b.id WHERE b.id = ?`, bookID).
+		Scan(&b.RelPath, &b.IsFolder, &b.Size, &b.Duration, &snapshot, &raw); err != nil || raw == "" {
+		return false, err
+	}
+	files, err := playFiles(ctx, q, &b)
+	if err != nil {
+		return false, err
+	}
+	chs, err := fitGenerated(ctx, q, &b, raw, snapshot, files)
+	return chs != nil, err
 }
 
 // generatedKey names a generated fit (books.chapters_fit) by what it is

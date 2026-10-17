@@ -332,11 +332,83 @@ describe('library health', () => {
       await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
       expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
       expect(
-        screen.getByText('1 book already has a generate job, which finds its chapters.'),
+        screen.getByText('Being generated, which finds the chapters too: Past Tense.'),
       ).toBeInTheDocument();
       expect(
         calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs'),
       ).toHaveLength(2);
+    });
+
+    it('never counts a parked detect job that comes back as queued, and passes over a book being described', async () => {
+      mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': (req) => {
+            const path = (req.body as { path: string }).path;
+            if (path === 'Mosse/Past Tense') {
+              return {
+                status: 409,
+                body: { error: 'a description job is open', code: 'describe_open' },
+              };
+            }
+            // A second press on a parked job answers that job (200, not created).
+            const parked = (queuedJob(path) as { body: BridgeJob }).body;
+            return { status: 200, body: { ...parked, state: 'needs_attention' } };
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Nothing was queued')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'Waiting for attention on the Bridge: The Black Gate. A description is being written (try again once it has finished): Past Tense.',
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Finding the chapters of/)).not.toBeInTheDocument();
+    });
+
+    it('offers no Detect chapters for a book whose chapter source was chosen, and says why', async () => {
+      const chosen = [{ ...plain[0], chapter_choice: 'files' as const }, plain[1]];
+      const calls = mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: { books: req.query.get('issue') === 'no_chapters' ? chosen : [] },
+          }),
+          'POST /admin/bridge/jobs': (req) => queuedJob((req.body as { path: string }).path),
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      const row = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      expect(
+        within(row).queryByRole('button', { name: 'Detect chapters' }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(row).getByText(
+          'Uses the file’s chapters by choice. Set it back to automatic on the book page to detect chapters.',
+        ),
+      ).toBeInTheDocument();
+      const other = screen.getByRole('link', { name: 'Past Tense' }).closest('li')!;
+      expect(within(other).getByRole('button', { name: 'Detect chapters' })).toBeInTheDocument();
+      // The bar asks only for the book it can.
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Past Tense')).toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+      expect(
+        calls
+          .filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs')
+          .map((c) => (c.body as { path: string }).path),
+      ).toEqual(['Mosse/Past Tense']);
     });
 
     it('stays open while it queues, so its outcome lands in the dialog that started it', async () => {

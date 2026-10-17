@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -91,7 +92,10 @@ type kindSpec struct {
 	writes bool
 	params func(json.RawMessage) (json.RawMessage, error)
 	// refusedWhileOpen: a new job is refused with the error while a job of the
-	// kind named is open for the same book.
+	// kind named is open for the same book (blockerWhere): never by one being
+	// cancelled (cancel_requested: it ends without writing), and, when the new
+	// job also cancels that kind (cancelsOpen), only while it is queued or
+	// working: a parked one gives way.
 	refusedWhileOpen map[string]error
 	// cancelsOpen: a new job cancels the open job of each kind named for the
 	// same book (cancelOpenTx, the value its error), in the same transaction.
@@ -101,16 +105,52 @@ type kindSpec struct {
 // kinds are the job kinds the server can queue (and check). A kind the Bridge
 // advertises that isn't here is never queued, and neither is one here that the
 // Bridge doesn't advertise. A describe or detect job waits for an open generate
-// job (ErrGenerateOpen), a generate job for an open detect job (ErrDetectOpen),
-// and a generate job cancels an open describe job.
+// job (ErrGenerateOpen); a generate job waits for a queued or working detect job
+// (ErrDetectOpen) and cancels a parked one, and cancels an open describe job;
+// describe and detect, which both rewrite the book's bridge.json on the Bridge,
+// wait for each other (ErrDetectOpen, ErrDescribeOpen).
 var kinds = map[string]kindSpec{
 	KindVerify: {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams,
-		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen}, cancelsOpen: map[string]string{KindDescribe: "a generate job for the book replaced it"}},
+		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen},
+		cancelsOpen: map[string]string{
+			KindDescribe:       "a generate job for the book replaced it",
+			KindDetectChapters: "a generate job for the book replaced it; it finds the chapters itself",
+		}},
 	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
-		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
+		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDetectChapters: ErrDetectOpen}},
 	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
-		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
+		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDescribe: ErrDescribeOpen}},
+}
+
+// activeStatesSQL are the open states a job isn't parked in.
+const activeStatesSQL = `('queued', 'claimed', 'running')`
+
+// blockerWhere is the condition (on bridge_jobs j, its one argument the dedupe
+// key) for an open job of kind blocker that refuses a new job of spec's kind
+// (refusedWhileOpen): not being cancelled, and parked only when the new job
+// doesn't cancel it.
+func (spec kindSpec) blockerWhere(blocker string) string {
+	states := OpenStatesSQL
+	if _, gives := spec.cancelsOpen[blocker]; gives {
+		states = activeStatesSQL
+	}
+	return `j.dedupe_key = ? AND j.cancel_requested = 0 AND j.state IN ` + states
+}
+
+// blocker is the open job that refuses a new job of kind for the book
+// (refusedWhileOpen, its kinds asked in name order so the answer is stable;
+// the refusal is refusedWhileOpen[job.Kind]), nil when none does.
+func blocker(ctx context.Context, q rowQuerier, kind string, libraryID *int64, path *string) (*Job, error) {
+	spec := kinds[kind]
+	for _, k := range slices.Sorted(maps.Keys(spec.refusedWhileOpen)) {
+		j, err := scanJob(q.QueryRowContext(ctx, `SELECT `+jobColumns+jobFrom+` WHERE `+spec.blockerWhere(k)+
+			` ORDER BY j.id LIMIT 1`, DedupeKey(k, libraryID, path)))
+		if !errors.Is(err, sql.ErrNoRows) {
+			return j, err
+		}
+	}
+	return nil, nil
 }
 
 // sidecars.generate's param values (auto and local are the defaults),
@@ -361,10 +401,22 @@ var ErrLibraryNotWritable = errors.New("the bridge can't write to that library")
 var ErrGenerateOpen = errors.New("a generate job is open for the book")
 
 // ErrDetectOpen is a sidecars.generate job for a book with a chapters.detect
-// job still open: cancelling that one would throw its transcription away, and a
-// generate job queued once it is done reuses it, so the generate job is refused
-// (a 409 detect_open).
+// job queued or working (cancelling that one would throw its transcription
+// away, and a generate job queued once it is done reuses it; a parked one is
+// cancelled instead), or a sidecars.describe job for a book with one open (both
+// rewrite the book's bridge.json): a 409 detect_open.
 var ErrDetectOpen = errors.New("a chapter detection job is open for the book")
+
+// ErrDescribeOpen is a chapters.detect job for a book with a sidecars.describe
+// job still open: both rewrite the book's bridge.json on the Bridge, so the
+// second is refused (a 409 describe_open).
+var ErrDescribeOpen = errors.New("a description job is open for the book")
+
+// ErrChaptersChosen is a chapters.detect job for a book whose chapter source
+// an admin chose (the files' or the community's): the chapters it would find
+// stand in only when none was chosen, so they would never be used (a 409
+// chapters_chosen). The api checks it, as the catalog holds the choice.
+var ErrChaptersChosen = errors.New("an admin chose the book's chapter source")
 
 // ErrCannotContribute is a sidecars.generate job asking to contribute its
 // results (contribute "issue") to a Bridge whose last heartbeat doesn't say it
@@ -416,10 +468,10 @@ func checkNew(j *NewJob) error {
 // (ErrKindUnavailable); it may be offline, and the job waits. A kind that writes
 // into the library is queued only when the last heartbeat reports the library
 // mapped and writable (ErrLibraryNotWritable), a sidecars.generate job that
-// contributes only when it says the Bridge can (ErrCannotContribute) and only
-// while no chapters.detect job is open for the book (ErrDetectOpen), and a
-// sidecars.describe or chapters.detect job only while no sidecars.generate job
-// is open for it (ErrGenerateOpen); the open job is still returned either way.
+// contributes only when it says the Bridge can (ErrCannotContribute), and any
+// job only while no open job of another kind refuses it (kindSpec's
+// refusedWhileOpen: ErrGenerateOpen, ErrDetectOpen, ErrDescribeOpen); the open
+// job of its own kind is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
@@ -462,16 +514,12 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return refuse
 		}
 		spec := kinds[j.Kind]
-		for blocker, refusal := range spec.refusedWhileOpen {
-			var open bool
-			if err := tx.QueryRowContext(ctx,
-				`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL+`)`,
-				DedupeKey(blocker, j.LibraryID, j.Path)).Scan(&open); err != nil {
-				return err
-			}
-			if open {
-				return refusal
-			}
+		b, err := blocker(ctx, tx, j.Kind, j.LibraryID, j.Path)
+		if err != nil {
+			return err
+		}
+		if b != nil {
+			return spec.refusedWhileOpen[b.Kind]
 		}
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at)
@@ -484,9 +532,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return err
 		}
 		created = true
-		// The generate run writes the description too, from fresher notes: a
-		// describe job open for the book gives way (at once when no Bridge is on
-		// it, else at its next update), so the two never race for it.
+		// The generate run writes the description too, from fresher notes, and
+		// finds the chapters itself: a describe job open for the book, and a
+		// parked detect job (a working one refused it above), give way (at once
+		// when no Bridge is on it, else at its next update), so the two never
+		// race for the book's files.
 		for kind, reason := range spec.cancelsOpen {
 			if err := cancelOpenTx(ctx, tx, DedupeKey(kind, j.LibraryID, j.Path), now, reason); err != nil {
 				return err
@@ -988,6 +1038,17 @@ func (j *Job) ParkCode() string {
 		return ""
 	}
 	return cleanText(p.Park.Code, maxShortText, false)
+}
+
+// Blocker returns the open job of another kind that refuses a new job of kind
+// for the book now (kindSpec's refusedWhileOpen: a queued or working chapter
+// detection for a generate job, say), after expiring a lapsed lease; nil when
+// none does.
+func (s *Service) Blocker(ctx context.Context, kind string, libraryID int64, path string) (*Job, error) {
+	if err := s.expireDue(ctx); err != nil {
+		return nil, err
+	}
+	return blocker(ctx, s.db, kind, &libraryID, &path)
 }
 
 // OpenJob returns the open job of kind for a book (its dedupe key), or nil when

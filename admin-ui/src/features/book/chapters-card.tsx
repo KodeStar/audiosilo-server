@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AudioLines, ChevronDown, ChevronUp, Info, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
-import { settleBookEdit, useServerInfo } from '@/api/hooks';
+import { invalidateIssues, settleBookEdit, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, AdminChapter, BookEditRequest, ChapterSource } from '@/api/types';
 import { InlineEdit } from '@/components/inline-edit';
 import { ProvenanceMarker } from '@/components/provenance';
@@ -15,7 +15,13 @@ import { toastError } from '@/lib/errors';
 import { formatClock, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { chapterProblem, fileStrip, ribbonSegments } from './book-model';
+import {
+  chapterProblem,
+  chapterSourceAction,
+  communityState,
+  fileStrip,
+  ribbonSegments,
+} from './book-model';
 import { CommunityChapters } from './community-chapters';
 
 /** Rows shown before "Show all". */
@@ -56,6 +62,25 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   // A rename's "before" is the community's title, or the narration's, when the
   // chapters are theirs (the i18n keys' suffix).
   const origin = CHAPTER_ORIGIN[detail.chapter_source] ?? '';
+  // Rejecting the found chapters, or undoing a choice that keeps them (or a
+  // detection) out; the community's part has its own.
+  const sourceAction = chapterSourceAction(
+    detail,
+    communityState(detail, (sec) => formatDuration(sec, lang)),
+  );
+  const [switching, setSwitching] = useState(false);
+  const switchSource = async (source: 'files' | 'auto') => {
+    setSwitching(true);
+    try {
+      settleBookEdit(qc, await api.editBook(b.library_id, b.path, { chapter_source: source }));
+      invalidateIssues(qc);
+      toast.add({ title: t('book.community.switched'), type: 'success' });
+    } catch (err) {
+      toastError(t('book.community.editFailed'), err);
+    } finally {
+      setSwitching(false);
+    }
+  };
 
   const edit = async (req: BookEditRequest, done: () => void) => {
     try {
@@ -110,11 +135,32 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
       />
       <div className="flex flex-col gap-3.5 p-5">
         <CommunityChapters detail={detail} />
-        {detail.chapter_source === 'generated' ? (
-          <p className="flex items-start gap-2 text-[13.5px] text-muted-foreground">
-            <AudioLines className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            {t('book.chapters.generated')}
-          </p>
+        {detail.chapter_source === 'generated' || sourceAction ? (
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+            <p className="flex min-w-0 flex-1 basis-60 items-start gap-2 text-[13.5px] text-muted-foreground">
+              {detail.chapter_source === 'generated' ? (
+                <>
+                  <AudioLines className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  {t('book.chapters.generated')}
+                </>
+              ) : (
+                <>
+                  <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  {sourceAction?.note ? t(sourceAction.note) : null}
+                </>
+              )}
+            </p>
+            {sourceAction ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={switching}
+                onClick={() => void switchSource(sourceAction.source)}
+              >
+                {t(sourceAction.label)}
+              </Button>
+            ) : null}
+          </div>
         ) : null}
         {problem ? (
           <p className="flex items-start gap-2 text-[13.5px] text-muted-foreground">

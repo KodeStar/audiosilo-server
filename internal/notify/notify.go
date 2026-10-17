@@ -402,6 +402,12 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 			m.Title = w.ready + ": " + bridgeJobBook(ev)
 			m.Text = w.readyText
 		}
+		// Found chapters stand in only when the book has no other source (one
+		// an admin chose, or the community's, keeps them out of the player), so
+		// they are promised to listeners only when they are the book's now.
+		if str("job_kind") == bridge.KindDetectChapters && str("chapters_source") != catalog.ChaptersFromGenerated {
+			m.Text = "The chapters were saved, but the book uses other chapters. Choose its chapter source on the book page."
+		}
 		m.Link, m.Tags = link("/server?topic=bridge"), []string{"white_check_mark"}
 	case KindBridgeJobFailed:
 		if str("state") == bridge.StateNeedsAttention {
@@ -659,6 +665,10 @@ type BridgeJob struct {
 	Title     string
 	Code      string
 	Error     string
+	// ChaptersSource is where the book's chapters come from now
+	// (catalog.ChaptersFrom*; "" when not known), so a finished chapters.detect
+	// job says whether listeners get the chapters it found.
+	ChaptersSource string
 }
 
 // BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
@@ -674,6 +684,9 @@ func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 		"library": j.Library, "library_id": j.LibraryID, "path": j.Path, "title": plainLine(j.Title, 200),
 	}
 	kind := KindBridgeJobFinished
+	if j.Kind == bridge.KindDetectChapters && j.State == bridge.StateDone && j.ChaptersSource != "" {
+		data["chapters_source"] = j.ChaptersSource
+	}
 	if j.State != bridge.StateDone {
 		kind = KindBridgeJobFailed
 		if j.State == bridge.StateNeedsAttention {

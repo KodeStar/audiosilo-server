@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AudioLines } from 'lucide-react';
-import { api, ApiError } from '@/api/client';
+import { api } from '@/api/client';
 import { keys } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { FactList } from '@/components/fact-list';
@@ -16,8 +16,10 @@ import {
   OfflineNotice,
 } from '@/features/bridge/generate-parts';
 import { detectPlan, KIND_DETECT } from '@/features/bridge/generate-model';
-import { queueInOrder, queueReport } from '@/features/bridge/use-generate';
+import { queueInOrder, queueReport, requestTitle, skipNotes } from '@/features/bridge/use-generate';
+import { refKey } from '@/lib/book-route';
 import { counted, formatHours } from '@/lib/format';
+import { relBaseName } from '@/lib/paths';
 import { toast } from '@/lib/toast';
 
 /**
@@ -28,13 +30,24 @@ import { toast } from '@/lib/toast';
  * what happens when no chapters are heard. It reads the Bridge's status (its
  * figures and library mappings) rather than an estimate per book, so a large
  * selection costs one request. Nothing is queued while a book's library can't
- * be written to; a book whose generate job is open is passed over (that run
- * finds its chapters itself), any other failure stops the run and says how far
- * it got (queueInOrder). It stays open while a run queues (Cancel, Escape and
+ * be written to; a book is passed over, and named in the toast (skipNotes),
+ * when its generate job is open (that run finds its chapters itself), its
+ * description job is (both rewrite the Bridge's notes for it), an admin chose
+ * its chapter source since the list was read (the chapters would never be
+ * used), or its detect job is parked waiting for someone; any other failure
+ * stops the run and says how far it got (queueInOrder). It stays open while a run queues (Cancel, Escape and
  * the close button do nothing then), so the run's outcome, its error or its
  * clearing of the bar's selection, lands in the dialog that started it, never
  * in one opened since.
  */
+/**
+ * The refusals that pass a book over rather than stop the run: its generate job
+ * is open (that run finds the chapters itself), its description job is (both
+ * rewrite the Bridge's notes for the book), or its chapter source was chosen
+ * (the chapters found would never be used).
+ */
+const DETECT_SKIPS = ['generate_open', 'describe_open', 'chapters_chosen'] as const;
+
 export function DetectChaptersDialog({
   books,
   onOpenChange,
@@ -81,8 +94,7 @@ export function DetectChaptersDialog({
         path: b.path,
         params: {},
       })),
-      // The book's generate job finds its chapters itself.
-      { skip: (err) => err instanceof ApiError && err.code === 'generate_open' },
+      { skip: DETECT_SKIPS },
     );
     running.current = false;
     setBusy(false);
@@ -91,16 +103,17 @@ export function DetectChaptersDialog({
       setError(failed);
       return;
     }
+    // The books passed over, by title (every request names one of them).
+    const titles = new Map(chosen.map((b) => [refKey(b), b.title || relBaseName(b.path)]));
+    const notes = skipNotes(out, t, lang, (req) => requestTitle(titles, req)).join(' ');
     toast.add(
       out.queued
         ? {
             title: t('health.toast.detectQueued', counted(out.queued, lang)),
-            description: out.skipped
-              ? t('health.toast.detectSkipped', counted(out.skipped, lang))
-              : t('health.toast.detectQueuedBody'),
+            description: notes || t('health.toast.detectQueuedBody'),
             type: 'success',
           }
-        : { title: t('health.toast.detectSkipped', counted(out.skipped, lang)) },
+        : { title: t('bridge.queue.none'), description: notes },
     );
     onQueued?.();
     close(false);

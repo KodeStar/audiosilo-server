@@ -96,6 +96,23 @@ describe('Bridge job events', () => {
     ).toEqual({ key: 'events.bridge_job_finished.detect', values: { name: 'The Way of Kings' } });
   });
 
+  it('says when the chapters a detection found are not the ones the book uses', () => {
+    const done = (chapters_source?: string) =>
+      describeEvent(
+        ev('bridge_job_finished', {
+          ...job,
+          job_kind: 'chapters.detect',
+          state: 'done',
+          ...(chapters_source ? { chapters_source } : {}),
+        }),
+      ).body;
+    expect(done('files')).toEqual({ key: 'events.bridge_job_finished.detectUnused' });
+    expect(done('community')).toEqual({ key: 'events.bridge_job_finished.detectUnused' });
+    expect(done('generated')).toBeUndefined();
+    // A server that names no source says nothing more.
+    expect(done()).toBeUndefined();
+  });
+
   it('words another kind generically, naming the kind', () => {
     const d = describeEvent(
       ev('bridge_job_finished', { ...job, job_kind: 'bridge.verify', title: '', state: 'done' }),

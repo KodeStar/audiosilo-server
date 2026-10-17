@@ -87,6 +87,25 @@ export function fixFor(kind: IssueKind, detect: boolean): IssueFix {
   return fix === 'detect' && !detect ? null : fix;
 }
 
+/**
+ * A row's own fix: the category's (fixFor), except Detect chapters for a book
+ * whose chapter source an admin chose, whose found chapters would never stand in
+ * (the server refuses it: chapters_chosen); `detectChosenNote` says why.
+ */
+export function rowFix(fix: IssueFix, b: Pick<AdminBook, 'chapter_choice'>): IssueFix {
+  return fix === 'detect' && b.chapter_choice ? null : fix;
+}
+
+/** Why a no_chapters row offers no Detect chapters (rowFix): the choice, and where to undo it. */
+export function detectChosenNote(
+  fix: IssueFix,
+  b: Pick<AdminBook, 'chapter_choice'>,
+): string | undefined {
+  return fix === 'detect' && b.chapter_choice
+    ? `health.detect.chosen.${b.chapter_choice}`
+    : undefined;
+}
+
 export { say, type Phrase } from '@/lib/phrase';
 
 /** Hours, rounded down, for "one chapter over N hours". */

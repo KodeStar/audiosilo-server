@@ -159,8 +159,16 @@ function describeBridgeJob(
     : undefined;
   if (kind === 'bridge_job_finished') {
     const own = FINISHED_OWN.get(jobKind);
+    // Found chapters the book doesn't use (a chosen source, or the community's):
+    // the event names the book's chapter source then (a server that sends none
+    // says nothing more).
+    const source = str(d.chapters_source);
+    const unused =
+      jobKind === KIND_DETECT && source !== '' && source !== 'generated'
+        ? { key: 'events.bridge_job_finished.detectUnused' }
+        : undefined;
     return own
-      ? { title: { key: own, values: { name } }, tone: 'info', link }
+      ? { title: { key: own, values: { name } }, body: unused, tone: 'info', link }
       : {
           title: { key: 'events.bridge_job_finished.title', values: { name } },
           body: kindBody,

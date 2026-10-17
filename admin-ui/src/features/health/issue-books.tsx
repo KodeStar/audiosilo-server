@@ -19,8 +19,10 @@ import { DetectChaptersDialog } from './detect-chapters-dialog';
 import {
   FIX_LOOK,
   chaptersCheckNote,
+  detectChosenNote,
   fixFor,
   issueReason,
+  rowFix,
   say,
   type BookIssueKind,
   type IssueFix,
@@ -111,6 +113,8 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   // its own row has left the list but stays selected).
   const listed = new Set(books.map(refKey));
   const selectedListed = selection.books.filter((b) => listed.has(refKey(b)));
+  // The selected books Detect chapters can be asked for (rowFix).
+  const detectable = selectedListed.filter((b) => rowFix(fix, b) === 'detect');
   const chosenBooks = () => {
     selection.clear();
     return selectedListed;
@@ -131,6 +135,8 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
       <ul className="divide-y rounded-xl border bg-card" aria-label={t(`health.kind.${kind}`)}>
         {books.map((b) => {
           const checkNote = chaptersCheckNote(kind, b);
+          const chosenNote = detectChosenNote(fix, b);
+          const ownFix = rowFix(fix, b);
           return (
             <li key={refKey(b)} className="flex items-center gap-3.5 px-3.5 py-3 md:px-[18px]">
               <Checkbox
@@ -166,6 +172,11 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                     {t(checkNote)}
                   </span>
                 ) : null}
+                {chosenNote ? (
+                  <span className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">
+                    {t(chosenNote)}
+                  </span>
+                ) : null}
                 <span className="truncate font-mono text-[11.5px] text-subtle-foreground max-md:hidden">
                   {joinLibraryPath(roots[b.library_id], b.path)}
                 </span>
@@ -182,9 +193,9 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                     <span className="max-md:sr-only">{t('health.ignore')}</span>
                   </Button>
                 )}
-                {fix ? (
+                {ownFix ? (
                   <FixButton
-                    fix={fix}
+                    fix={ownFix}
                     disabled={actions.fixing(b)}
                     onClick={() => void actions.fix(b)}
                   />
@@ -228,11 +239,11 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
             onClick={() => void actions.takeDetailed(chosenBooks())}
           />
         ) : null}
-        {fix === 'detect' ? (
+        {fix === 'detect' && detectable.length ? (
           <BulkAction
             icon={FIX_LOOK.detect.icon}
             label={t(FIX_LOOK.detect.label)}
-            onClick={() => setDetecting({ books: selectedListed, fromBar: true })}
+            onClick={() => setDetecting({ books: detectable, fromBar: true })}
           />
         ) : null}
         <BulkAction

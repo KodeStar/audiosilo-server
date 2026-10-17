@@ -9,6 +9,7 @@ import { QueryError } from '@/components/query-error';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
+import { refKey } from '@/lib/book-route';
 import { formatHours, formatNumber, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import {
@@ -26,7 +27,14 @@ import {
   NotWritableNotice,
   OfflineNotice,
 } from './generate-parts';
-import { queueInOrder, queueReport, useGenerateEstimate } from './use-generate';
+import {
+  GENERATE_SKIPS,
+  queueInOrder,
+  queueReport,
+  requestTitle,
+  skipNotes,
+  useGenerateEstimate,
+} from './use-generate';
 
 /**
  * Generate characters and recaps for one book: what it will read (the audio,
@@ -105,24 +113,33 @@ function GenerateForm({
     if (!canConfirm || busy) return;
     setBusy(true);
     setError(undefined);
-    const out = await queueInOrder(qc, plan);
+    // A book whose chapters are being found is passed over: its generate job is
+    // queued once that has finished, reusing the transcription.
+    const out = await queueInOrder(qc, plan, { skip: GENERATE_SKIPS });
     setBusy(false);
     const failed = queueReport(out, plan.length, t, lang);
     if (failed !== undefined) {
       setError(failed);
       return;
     }
-    toast.add({
-      title: t('bridge.generate.queued'),
-      description:
-        plan.length > 1
-          ? t('bridge.generate.queuedMany', {
-              count: plan.length,
-              n: formatNumber(plan.length, lang),
-            })
-          : t('bridge.generate.queuedBody'),
-      type: 'success',
-    });
+    const titles = new Map([...earlier, book].map((b) => [refKey(b), b.title]));
+    const notes = skipNotes(out, t, lang, (req) => requestTitle(titles, req)).join(' ');
+    toast.add(
+      out.queued
+        ? {
+            title: t('bridge.generate.queued'),
+            description:
+              notes ||
+              (out.queued > 1
+                ? t('bridge.generate.queuedMany', {
+                    count: out.queued,
+                    n: formatNumber(out.queued, lang),
+                  })
+                : t('bridge.generate.queuedBody')),
+            type: 'success',
+          }
+        : { title: t('bridge.queue.none'), description: notes },
+    );
     onDone();
   };
 
