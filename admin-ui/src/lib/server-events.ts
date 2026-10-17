@@ -1,5 +1,5 @@
 import type { ServerEvent, ServerEventKind } from '@/api/types';
-import { KIND_GENERATE, parkKey } from '@/features/bridge/generate-model';
+import { KIND_DESCRIBE, KIND_GENERATE, parkKey } from '@/features/bridge/generate-model';
 import type { SettingsPage } from '@/features/settings/settings-model';
 import { readStorage, writeStorage } from './storage';
 
@@ -126,11 +126,18 @@ export function describeEvent(ev: ServerEvent): EventText {
   };
 }
 
+/** The kinds whose finished job has a title of its own (the rest name the kind in the body). */
+const FINISHED_OWN = new Map<string, string>([
+  [KIND_GENERATE, 'events.bridge_job_finished.generate'],
+  [KIND_DESCRIBE, 'events.bridge_job_finished.describe'],
+]);
+
 /**
- * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps ready
- * for a book, another kind finished, or a job that failed or is parked waiting
- * for someone (its park code as a sentence, else the Bridge's own detail). Each
- * leads to Settings > Bridge, where its jobs are listed.
+ * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps, or a
+ * description, ready for a book (FINISHED_OWN), another kind finished, or a job
+ * that failed or is parked waiting for someone (its park code as a sentence,
+ * else the Bridge's own detail). Each leads to Settings > Bridge, where its
+ * jobs are listed.
  */
 function describeBridgeJob(
   kind: 'bridge_job_finished' | 'bridge_job_failed',
@@ -145,12 +152,9 @@ function describeBridgeJob(
     ? { key: `bridge.kind.${jobKind}`, values: { defaultValue: jobKind } }
     : undefined;
   if (kind === 'bridge_job_finished') {
-    return jobKind === KIND_GENERATE
-      ? {
-          title: { key: 'events.bridge_job_finished.generate', values: { name } },
-          tone: 'info',
-          link,
-        }
+    const own = FINISHED_OWN.get(jobKind);
+    return own
+      ? { title: { key: own, values: { name } }, tone: 'info', link }
       : {
           title: { key: 'events.bridge_job_finished.title', values: { name } },
           body: kindBody,

@@ -9,6 +9,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/meta"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
 // handleMeta resolves a book's asin/isbn against the community metadata API and
@@ -27,11 +28,12 @@ import (
 // Every rail entry the caller owns carries `local`, the book to open for it
 // (localRails), resolved for this caller on a copy of the rails.
 //
-// The characters and recaps the Bridge generated for the book (its .audiosilo/
-// attachments, catalog.BookAttachments) fill what the community work lacks
-// (work.generated names them), and a book with no match but generated content
-// answers {"matched": false, "work": {...}}: meta.Answer, per request, after the
-// cache and `local`, never cached.
+// The characters, recaps and description the Bridge generated for the book (its
+// .audiosilo/ attachments, catalog.BookAttachments) fill what the community work
+// lacks (work.generated names them; the description rides in
+// work.generated_description, never community_description), and a book with no
+// match but generated content answers {"matched": false, "work": {...}}:
+// meta.Answer, per request, after the cache and `local`, never cached.
 //
 // Optional query params (the `meta_bundle` capability), each applied to a
 // per-request copy of the matched envelope; unknown values are ignored, so a
@@ -101,27 +103,36 @@ func (a *API) handleMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meta.Answer(out, book.Title, gen, hide))
 }
 
-// generatedFor is the book's generated content for /meta (nil for none, or when
-// env's community work leaves nothing for it to fill). It is an extra like
+// generatedFor is the book's generated content for /meta: the parts env's
+// community work leaves for it to fill (meta.Enrichment.Fillable) that the
+// book's row names (Book.GeneratedParts), nil for none. It is an extra like
 // `local`: a failure to read it is logged and the answer goes out without it.
-// A book whose row names no generated file (Book.Generated) isn't looked up.
+// A book whose row names none of those parts isn't looked up.
 func (a *API) generatedFor(ctx context.Context, book *catalog.Book, env *meta.Enrichment) *meta.Generated {
-	if !book.Generated || !env.Fillable() {
+	fill, have := env.Fillable(), book.GeneratedParts
+	want := metadata.AttachmentParts{
+		Characters:  fill.Characters && have.Characters,
+		Recaps:      fill.Recaps && have.Recaps,
+		Description: fill.Description && have.Description,
+	}
+	if !want.Any() {
 		return nil
 	}
-	att, err := a.cat.BookAttachments(ctx, book.ID)
+	// Only the parts the community work lacks and the book has: a work with
+	// characters and recaps of its own reads just the description.
+	att, err := a.cat.BookAttachments(ctx, book.ID, want)
 	if err != nil {
 		if ctx.Err() == nil {
 			a.log.Warn("load generated content for meta failed", "err", err, "library", book.LibraryID, "path", book.RelPath)
 		}
 		return nil
 	}
-	if att == nil || (att.Characters == nil && att.Recaps == nil) {
+	if att == nil || !att.Generated() {
 		return nil
 	}
-	g := &meta.Generated{Characters: att.Characters, Recaps: att.Recaps}
+	g := &meta.Generated{Characters: att.Characters, Recaps: att.Recaps, Description: att.Description}
 	if att.Provenance != nil {
-		g.GeneratedAt = att.Provenance.GeneratedAt
+		g.GeneratedAt, g.DescriptionAt = att.Provenance.GeneratedAt, att.Provenance.DescriptionAt
 	}
 	return g
 }

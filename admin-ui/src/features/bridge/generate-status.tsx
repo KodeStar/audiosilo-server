@@ -7,6 +7,7 @@ import {
   bridgeJobLink,
   generateProgress,
   generateResult,
+  KIND_DESCRIBE,
   parkKey,
   roundEta,
   stageLabel,
@@ -14,11 +15,12 @@ import {
 import { isOpen } from './bridge-model';
 
 /**
- * Where a `sidecars.generate` job stands, in a few lines: while it works, the
- * stage, the count, the ETA and the cost so far (with a bar when there is a
- * count); parked, why and the hint, with a link into the Bridge's own page;
- * done, what it made; failed, the error. The book page's Community card and the
- * Bridge page's job rows both show a job this way.
+ * Where a `sidecars.generate` (or `sidecars.describe`) job stands, in a few
+ * lines: while it works, the stage, the count, the ETA and the cost so far (with
+ * a bar when there is a count); parked, why and the hint, with a link into the
+ * Bridge's own page; done, what it made (a generate job's description outcome
+ * too); failed, the error. The book page's Community card and the Bridge page's
+ * job rows both show a job this way.
  */
 export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string }) {
   const { t, i18n } = useTranslation();
@@ -27,17 +29,21 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
 
   if (job.state === 'done') {
     const r = generateResult(job.result);
-    const made = [
-      r?.characters !== undefined
-        ? t('bridge.generate.characters', {
-            count: r.characters,
-            n: formatNumber(r.characters, lang),
-          })
-        : undefined,
-      r?.recaps !== undefined
-        ? t('bridge.generate.recaps', { count: r.recaps, n: formatNumber(r.recaps, lang) })
-        : undefined,
-    ].filter((s): s is string => Boolean(s));
+    const describe = job.kind === KIND_DESCRIBE;
+    const made = describe
+      ? [t('bridge.describe.done')]
+      : [
+          r?.characters !== undefined
+            ? t('bridge.generate.characters', {
+                count: r.characters,
+                n: formatNumber(r.characters, lang),
+              })
+            : undefined,
+          r?.recaps !== undefined
+            ? t('bridge.generate.recaps', { count: r.recaps, n: formatNumber(r.recaps, lang) })
+            : undefined,
+          r?.description ? t('bridge.generate.descriptionMade') : undefined,
+        ].filter((s): s is string => Boolean(s));
     const facts = [
       made.length ? formatList(made, lang) : t('bridge.generate.doneNoCounts'),
       r?.costUsd !== undefined
@@ -53,6 +59,13 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
           <CircleCheck className="mt-px size-[15px] shrink-0" aria-hidden="true" />
           <span className="text-foreground">{facts.join(' · ')}</span>
         </p>
+        {!describe && r?.description === false ? (
+          <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
+            {r.descriptionError
+              ? t('bridge.generate.noDescription', { reason: r.descriptionError })
+              : t('bridge.generate.noDescriptionPlain')}
+          </p>
+        ) : null}
         {r?.contributed.map((c) => (
           <a
             key={c.what}

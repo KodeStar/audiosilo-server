@@ -12,14 +12,35 @@ import { relBaseName } from '@/lib/paths';
 import { spanIn } from '@/features/library/series/series-model';
 import { isOpen, num, progressOf, safeHttpUrl, text } from './bridge-model';
 
-// Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a): the rules the
-// book page's Community card, its generate dialog, the series batch and the
-// Bridge page's job rows follow for `sidecars.generate`. Pure: no React, no i18n
+// Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), and the
+// description written from their notes (Phase 1c): the rules the book page's
+// Community card, its generate dialog, the series batch and the Bridge page's
+// job rows follow for `sidecars.generate` and `sidecars.describe`. Pure: no React, no i18n
 // instance; callers pass the keys these return to t().
 
 /** The job kind, and the feature (job family) the Bridge advertises for it. */
 export const KIND_GENERATE = 'sidecars.generate';
 export const FEATURE_SIDECARS = 'sidecars';
+/** Phase 1c's description-only kind: a description from the notes the Bridge kept. */
+export const KIND_DESCRIBE = 'sidecars.describe';
+
+/** The kinds the book page follows: generate and describe (both in the sidecars family). */
+const BOOK_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE];
+
+/**
+ * Whether a kind is one the book page follows; its progress and result are
+ * worded by GenerateStatus, on the book page and the Bridge page's job rows.
+ */
+export function isBookKind(kind: string): boolean {
+  return BOOK_KINDS.includes(kind);
+}
+
+/** The book page's kinds' jobs that are still open. */
+function openBookJobs<J extends Pick<BridgeJob, 'kind' | 'state'>>(
+  jobs: readonly J[] | undefined,
+): J[] {
+  return jobs?.filter((j) => isBookKind(j.kind) && isOpen(j.state)) ?? [];
+}
 
 /**
  * Whether the Generate action is offered at all: community metadata is on (the
@@ -32,9 +53,10 @@ export function generateAvailable(server: ServerInfo | undefined): boolean {
 }
 
 /**
- * Whether the book page should ask for its generate jobs at all: a server that
- * knows the Bridge (it reports the capability, on or off) with metadata on. A
- * job queued while the Bridge was online stays worth showing while it's away.
+ * Whether the book page should ask for its generate and describe jobs at all: a
+ * server that knows the Bridge (it reports the capability, on or off) with
+ * metadata on. A job queued while the Bridge was online stays worth showing
+ * while it's away.
  */
 export function generateJobsKnown(server: ServerInfo | undefined): boolean {
   return Boolean(server?.capabilities.metadata && server.capabilities.bridge !== undefined);
@@ -52,9 +74,9 @@ export function generateAction(has: {
 }
 
 /**
- * How often a book's generate jobs are asked again: about every 10 s while one
- * is queued or working, every minute while one is parked (it waits on a person
- * or a reset), else not at all.
+ * How often a book's generate and describe jobs are asked again: about every
+ * 10 s while one is queued or working, every minute while one is parked (it
+ * waits on a person or a reset), else not at all.
  */
 export const GENERATE_POLL_MS = 10_000;
 export const GENERATE_PARKED_POLL_MS = 60_000;
@@ -62,16 +84,51 @@ export const GENERATE_PARKED_POLL_MS = 60_000;
 export function generatePollMs(
   jobs: readonly Pick<BridgeJob, 'kind' | 'state'>[] | undefined,
 ): number | false {
-  const open = jobs?.filter((j) => j.kind === KIND_GENERATE && isOpen(j.state)) ?? [];
+  const open = openBookJobs(jobs);
   if (open.some((j) => j.state !== 'needs_attention')) return GENERATE_POLL_MS;
   return open.length ? GENERATE_PARKED_POLL_MS : false;
 }
 
-/** The book's newest generate job (the list is newest first), if any. */
-export function latestGenerateJob<J extends Pick<BridgeJob, 'kind'>>(
+/** The book's newest job of a kind (the list is newest first), if any. */
+export function latestJobOf<J extends Pick<BridgeJob, 'kind'>>(
   jobs: readonly J[] | undefined,
+  kind: string,
 ): J | undefined {
-  return jobs?.find((j) => j.kind === KIND_GENERATE);
+  return jobs?.find((j) => j.kind === kind);
+}
+
+/**
+ * Whether the card offers "Write a description": the Bridge can (online, runs
+ * sidecars.describe) and can write to the library (the server refuses a job
+ * otherwise), the book has characters or recaps generated here (their notes are
+ * what the description is written from), it has no description yet, here or
+ * from the community (which must have answered: unknown is never "none"), and
+ * no generate or describe job is open for it (a generate job writes one when it
+ * finishes; the estimate's own open generate job counts too, so a job list not
+ * loaded yet can't offer what the server would refuse).
+ */
+export function describeOffered(
+  e: Pick<BridgeEstimate, 'can_describe' | 'writable' | 'has' | 'open_job'> | undefined,
+  jobs: readonly Pick<BridgeJob, 'kind' | 'state'>[] | undefined,
+): boolean {
+  if (!e?.can_describe || !e.writable || e.open_job) return false;
+  const { local, community, community_unknown } = e.has;
+  if (
+    !(local.characters || local.recaps) ||
+    local.description ||
+    community.description ||
+    community_unknown
+  ) {
+    return false;
+  }
+  return openBookJobs(jobs).length === 0;
+}
+
+/** A generated description long enough to clamp, with a Show more toggle (about four lines). */
+export const DESCRIPTION_CLAMP_CHARS = 240;
+
+export function clampsDescription(text: string): boolean {
+  return text.trim().length > DESCRIPTION_CLAMP_CHARS;
 }
 
 // The engine's stage names (state.State) and the Bridge's own steps, each with a
@@ -100,6 +157,7 @@ export const KNOWN_STAGES = [
   'waiting',
   'writing',
   'rescanning',
+  'describing',
 ] as const;
 
 /** "qa_sweep" -> "Qa sweep": a name this console has no label for, made readable. */
@@ -184,10 +242,13 @@ export function generateProgress(progress: unknown): GenerateProgress {
   const { text: said, done, total } = progressOf(p);
   const step = text(p.step);
   const out: GenerateProgress = {};
-  // The Bridge's own last steps (saving the files, the rescan) say what is
-  // happening; the engine's stage by then is only "done".
+  // The Bridge's own last steps (the description, saving the files, the
+  // rescan) say what is happening; the engine's stage by then is only where it
+  // stopped ("done", or "contributing").
   const stage =
-    (step === 'writing' || step === 'rescanning' ? step : undefined) ?? text(p.stage) ?? step;
+    (step === 'describing' || step === 'writing' || step === 'rescanning' ? step : undefined) ??
+    text(p.stage) ??
+    step;
   if (stage) out.stage = stage;
   // The step alone is no message: it is the stage when there is none. Nor is the
   // Bridge's wording of a stage this console labels (an English restatement of
@@ -216,11 +277,14 @@ export function generateProgress(progress: unknown): GenerateProgress {
   return out;
 }
 
-/** A finished generate job's result as the card words it. */
+/** A finished generate (or describe) job's result as the card words it. */
 export interface GenerateResult {
   characters?: number;
   recaps?: number;
   costUsd?: number;
+  /** The description was written (true) or not (false, with why); absent from an older Bridge. */
+  description?: boolean;
+  descriptionError?: string;
   /** The community issues filed (http(s) links only), by what each offers. */
   contributed: { what: string; url: string }[];
 }
@@ -236,6 +300,9 @@ export function generateResult(result: unknown): GenerateResult | null {
   if (recaps !== undefined) out.recaps = recaps;
   const cost = amount(r.cost_usd);
   if (cost !== undefined) out.costUsd = cost;
+  if (typeof r.description === 'boolean') out.description = r.description;
+  const why = text(r.description_error);
+  if (out.description === false && why) out.descriptionError = why;
   if (r.contributed && typeof r.contributed === 'object') {
     for (const [what, url] of Object.entries(r.contributed as Record<string, unknown>)) {
       const safe = typeof url === 'string' ? safeHttpUrl(url) : undefined;
@@ -246,6 +313,7 @@ export function generateResult(result: unknown): GenerateResult | null {
     out.characters !== undefined ||
     out.recaps !== undefined ||
     out.costUsd !== undefined ||
+    out.description !== undefined ||
     out.contributed.length > 0;
   return any ? out : null;
 }

@@ -437,8 +437,9 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 }
 
 // writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,
-// finished, a kind the Bridge doesn't run or a library it can't write to, else
-// 500) and reports whether there was none.
+// finished, a kind the Bridge doesn't run, a library it can't write to, a
+// contribution it can't make or a generate job open for a describe, else 500)
+// and reports whether there was none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
 	case err == nil:
@@ -457,6 +458,9 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeErrorCode(w, http.StatusConflict, "library_not_writable", "the bridge can't write to that library")
 	case errors.Is(err, bridge.ErrCannotContribute):
 		writeErrorCode(w, http.StatusConflict, "cannot_contribute", "the bridge can't contribute to the community")
+	case errors.Is(err, bridge.ErrGenerateOpen):
+		writeErrorCode(w, http.StatusConflict, "generate_open",
+			"a generate job is still open for this book; it writes the description when it finishes")
 	default:
 		a.log.Warn(op, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update the job")
@@ -473,7 +477,8 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 //     isn't that book moved is ignored).
 //   - mode "attachments": read only the book's .audiosilo/ attachments, never its
 //     audio (Scanner.RefreshAttachments), and answer 200 {path, attachments:
-//     {characters, recaps, bridge}} with what is now indexed. from is refused here.
+//     {characters, recaps, description, bridge}} with what is now indexed. from
+//     is refused here.
 //
 // 404 code not_indexable when no book is there (for attachments: no indexed one).
 func (a *API) handleBridgeRescan(w http.ResponseWriter, r *http.Request) {
@@ -644,10 +649,12 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // path?, params?}: queue a job (201) or return the open one already queued for
 // that kind, library and path (200). The kind must be one the server knows (400)
 // and the paired Bridge runs (409 code kind_unavailable; it may be offline: the
-// job waits), and a kind that writes (sidecars.generate) needs a library the
-// Bridge last reported mapped and writable (409 code library_not_writable). A
-// path names an indexed book (404 otherwise) and the job is about that book's
-// own path.
+// job waits), and a kind that writes (sidecars.generate, sidecars.describe)
+// needs a library the Bridge last reported mapped and writable (409 code
+// library_not_writable); a sidecars.describe job is refused while a
+// sidecars.generate job is open for the book (409 code generate_open). A path
+// names an indexed book (404 otherwise) and the job is about that book's own
+// path.
 func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind      string          `json:"kind"`

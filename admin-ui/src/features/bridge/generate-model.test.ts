@@ -8,6 +8,9 @@ import {
   batchCheck,
   batchPlan,
   bridgeJobLink,
+  clampsDescription,
+  DESCRIPTION_CLAMP_CHARS,
+  describeOffered,
   destinationKey,
   estimateView,
   GENERATE_PARKED_POLL_MS,
@@ -19,10 +22,12 @@ import {
   generatePollMs,
   generateProgress,
   generateResult,
+  isBookKind,
+  KIND_DESCRIBE,
   KIND_GENERATE,
   KNOWN_PARKS,
   KNOWN_STAGES,
-  latestGenerateJob,
+  latestJobOf,
   parkKey,
   planEstimate,
   roundEta,
@@ -66,9 +71,10 @@ function estimate(over: Partial<BridgeEstimate> = {}): BridgeEstimate {
     can_contribute: true,
     figures: true,
     writable: true,
+    can_describe: false,
     has: {
-      community: { characters: false, recaps: false },
-      local: { characters: false, recaps: false },
+      community: { characters: false, recaps: false, description: false },
+      local: { characters: false, recaps: false, description: false },
     },
     earlier: [],
     ...over,
@@ -97,17 +103,23 @@ describe('the action gate', () => {
   });
 
   it('hides the action when the community has both, and says Regenerate over local data', () => {
-    const none = { characters: false, recaps: false };
-    const both = { characters: true, recaps: true };
+    const none = { characters: false, recaps: false, description: false };
+    const both = { characters: true, recaps: true, description: false };
     expect(generateAction({ community: none, local: none })).toBe('generate');
     expect(generateAction({ community: both, local: none })).toBe('hidden');
     expect(generateAction({ community: both, local: both })).toBe('hidden');
-    expect(generateAction({ community: { characters: true, recaps: false }, local: none })).toBe(
-      'generate',
-    );
-    expect(generateAction({ community: none, local: { characters: false, recaps: true } })).toBe(
-      'regenerate',
-    );
+    expect(
+      generateAction({
+        community: { characters: true, recaps: false, description: false },
+        local: none,
+      }),
+    ).toBe('generate');
+    expect(
+      generateAction({
+        community: none,
+        local: { characters: false, recaps: true, description: false },
+      }),
+    ).toBe('regenerate');
   });
 });
 
@@ -143,8 +155,8 @@ describe('polling a book', () => {
       job('done', { id: 11 }),
       job('failed', { id: 10 }),
     ];
-    expect(latestGenerateJob(jobs)?.id).toBe(11);
-    expect(latestGenerateJob([])).toBeUndefined();
+    expect(latestJobOf(jobs, KIND_GENERATE)?.id).toBe(11);
+    expect(latestJobOf([], KIND_GENERATE)).toBeUndefined();
   });
 });
 
@@ -245,6 +257,14 @@ describe('progress and result', () => {
     expect(generateProgress({ step: 'writing', stage: 'done' })).toEqual({ stage: 'writing' });
     expect(generateProgress({ step: 'rescanning', stage: 'done' })).toEqual({
       stage: 'rescanning',
+    });
+    // So does a generate job's description step (Phase 1c), labelled, so the
+    // Bridge's English restatement of it isn't shown.
+    expect(
+      generateProgress({ step: 'describing', message: 'Writing a description', stage: 'done' }),
+    ).toEqual({ stage: 'describing' });
+    expect(generateProgress({ step: 'describing', stage: 'contributing' })).toEqual({
+      stage: 'describing',
     });
   });
 
@@ -485,8 +505,8 @@ describe('the series batch', () => {
         batchCheck(
           estimate({
             has: {
-              community: { characters: false, recaps: true },
-              local: { characters: false, recaps: false },
+              community: { characters: false, recaps: true, description: false },
+              local: { characters: false, recaps: false, description: false },
             },
           }),
         ),
@@ -498,8 +518,8 @@ describe('the series batch', () => {
         batchCheck(
           estimate({
             has: {
-              community: { characters: true, recaps: false },
-              local: { characters: true, recaps: false },
+              community: { characters: true, recaps: false, description: false },
+              local: { characters: true, recaps: false, description: false },
             },
           }),
         ),
@@ -527,8 +547,8 @@ describe('the series batch', () => {
           estimate({
             writable: false,
             has: {
-              community: { characters: false, recaps: true },
-              local: { characters: false, recaps: false },
+              community: { characters: false, recaps: true, description: false },
+              local: { characters: false, recaps: false, description: false },
             },
           }),
         ),
@@ -545,14 +565,18 @@ describe('the series batch', () => {
       batchCheck(estimate({ open_job: job('running', { cancel_requested: true }) })).open,
     ).toBe(false);
     const unasked = {
-      community: { characters: false, recaps: false },
-      local: { characters: false, recaps: false },
+      community: { characters: false, recaps: false, description: false },
+      local: { characters: false, recaps: false, description: false },
       community_unknown: true,
     };
     expect(batchCheck(estimate({ has: unasked })).unknown).toBe(true);
     // Recaps of its own make it covered, whatever the community says.
     expect(
-      batchCheck(estimate({ has: { ...unasked, local: { characters: false, recaps: true } } })),
+      batchCheck(
+        estimate({
+          has: { ...unasked, local: { characters: false, recaps: true, description: false } },
+        }),
+      ),
     ).toMatchObject({ covered: true, unknown: false });
   });
 
@@ -618,5 +642,104 @@ describe('the series batch', () => {
       ctl.signal,
     );
     expect(started).toEqual([1, 2]);
+  });
+});
+
+describe('a description (Phase 1c)', () => {
+  const has = (
+    local: Partial<Record<string, boolean>>,
+    community: Partial<Record<string, boolean>> = {},
+  ) => ({
+    community: { characters: false, recaps: false, description: false, ...community },
+    local: { characters: false, recaps: false, description: false, ...local },
+  });
+  const open = (kind: string, state: BridgeJobState = 'running') => ({ kind, state });
+  // A Bridge that runs sidecars.describe and can write to the library.
+  const can = { can_describe: true, writable: true };
+
+  it('is offered for a book with generated content, no description and nothing open', () => {
+    expect(describeOffered({ ...can, has: has({ characters: true }) }, [])).toBe(true);
+    expect(describeOffered({ ...can, has: has({ recaps: true }) }, undefined)).toBe(true);
+    // A finished or cancelled job is no reason to hold back.
+    expect(
+      describeOffered({ ...can, has: has({ recaps: true }) }, [
+        open(KIND_DESCRIBE, 'failed'),
+        open(KIND_GENERATE, 'done'),
+      ]),
+    ).toBe(true);
+  });
+
+  it('is not offered without a Bridge that can, content to write from, or with one already', () => {
+    const local = has({ characters: true, recaps: true, description: false });
+    expect(describeOffered(undefined, [])).toBe(false);
+    expect(describeOffered({ ...can, can_describe: false, has: local }, [])).toBe(false);
+    expect(describeOffered({ ...can, has: has({}) }, [])).toBe(false);
+    expect(describeOffered({ ...can, has: has({ characters: true, description: true }) }, [])).toBe(
+      false,
+    );
+    expect(
+      describeOffered({ ...can, has: has({ characters: true }, { description: true }) }, []),
+    ).toBe(false);
+  });
+
+  it('is not offered where the server would refuse it, or on a guess', () => {
+    const local = has({ characters: true });
+    // A library the Bridge can't write to: the job would be a 409.
+    expect(describeOffered({ ...can, writable: false, has: local }, [])).toBe(false);
+    // The estimate's open generate job, whatever the job list says (or before it loads).
+    expect(describeOffered({ ...can, has: local, open_job: job('running') }, undefined)).toBe(
+      false,
+    );
+    // A community that couldn't be asked may have a description of its own.
+    expect(describeOffered({ ...can, has: { ...local, community_unknown: true } }, [])).toBe(false);
+  });
+
+  it('is not offered while a generate or describe job is open', () => {
+    const e = { ...can, has: has({ characters: true }) };
+    expect(describeOffered(e, [open(KIND_GENERATE)])).toBe(false);
+    expect(describeOffered(e, [open(KIND_DESCRIBE, 'needs_attention')])).toBe(false);
+    // Another kind (a verify) doesn't count.
+    expect(describeOffered(e, [open('bridge.verify')])).toBe(true);
+  });
+
+  it('polls a describe job like a generate one, and finds each kind', () => {
+    expect(generatePollMs([open(KIND_DESCRIBE)])).toBe(GENERATE_POLL_MS);
+    expect(generatePollMs([open(KIND_DESCRIBE, 'needs_attention')])).toBe(GENERATE_PARKED_POLL_MS);
+    const jobs = [open(KIND_DESCRIBE), open(KIND_GENERATE, 'done')];
+    expect(latestJobOf(jobs, KIND_GENERATE)).toBe(jobs[1]);
+    expect(latestJobOf(jobs, KIND_DESCRIBE)).toBe(jobs[0]);
+    expect(isBookKind(KIND_DESCRIBE)).toBe(true);
+    expect(isBookKind(KIND_GENERATE)).toBe(true);
+    expect(isBookKind('bridge.verify')).toBe(false);
+  });
+
+  it("reads a result's description outcome", () => {
+    expect(generateResult({ description: true, checked_against: 'none' })).toEqual({
+      description: true,
+      contributed: [],
+    });
+    expect(
+      generateResult({ characters: 1, description: false, description_error: ' rate limited ' }),
+    ).toEqual({
+      characters: 1,
+      description: false,
+      descriptionError: 'rate limited',
+      contributed: [],
+    });
+    // An error beside a written description says nothing.
+    expect(generateResult({ description: true, description_error: 'x' })?.descriptionError).toBe(
+      undefined,
+    );
+    expect(generateResult({ description: 'yes' })).toBeNull();
+  });
+
+  it('clamps a long description only', () => {
+    expect(clampsDescription('x'.repeat(DESCRIPTION_CLAMP_CHARS))).toBe(false);
+    expect(clampsDescription('x'.repeat(DESCRIPTION_CLAMP_CHARS + 1))).toBe(true);
+  });
+
+  it('labels the describing stage', () => {
+    expect(KNOWN_STAGES).toContain('describing');
+    expect(strings['bridge.stage.describing']).toBe('Writing the description');
   });
 });

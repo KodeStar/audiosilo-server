@@ -130,11 +130,14 @@ type Book struct {
 	// one has been made for this version.
 	CoverColor   *CoverColor `json:"cover_color,omitempty"`
 	CoverVersion string      `json:"cover_version,omitempty"`
-	// Generated is set (and true) when the book has characters or recaps the
-	// Bridge generated (.audiosilo/ attachments, read from books.attachments_sig),
-	// so a player asks /meta only for a book with an ASIN/ISBN or this; omitted
-	// otherwise.
+	// Generated is set (and true) when the book has characters, recaps or a
+	// description the Bridge generated (.audiosilo/ attachments, read from
+	// books.attachments_sig: GeneratedParts.Any()), so a player asks /meta only
+	// for a book with an ASIN/ISBN or this; omitted otherwise.
 	Generated bool `json:"generated,omitempty"`
+	// GeneratedParts is which of those parts its signature names (sigParts), so
+	// /meta reads only parts the book has.
+	GeneratedParts metadata.AttachmentParts `json:"-"`
 	// ScanError is what went wrong reading the book's files when it was last indexed
 	// (a code; "" = nothing), in which file (library-relative) and the tool's
 	// message. SuspectParts is how many separate books its parts look like (0 = one;

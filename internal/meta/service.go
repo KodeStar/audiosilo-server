@@ -170,6 +170,10 @@ type MetaWork struct {
 	// the community (Answer); set per request on a copy, never on a work the cache
 	// holds, and omitted when nothing did.
 	Generated *MetaGenerated `json:"generated,omitempty"`
+	// GeneratedDescription is the book's description generated on this server,
+	// laid in by Answer only when the work has no CommunityDescription (see
+	// MetaGeneratedDescription); never on a work the cache holds.
+	GeneratedDescription *MetaGeneratedDescription `json:"generated_description,omitempty"`
 }
 
 // MetaRecording is the specific narration/production matched by the lookup.

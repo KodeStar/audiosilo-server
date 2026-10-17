@@ -22,7 +22,7 @@ import {
   resultSummary,
   stateLook,
 } from './bridge-model';
-import { KIND_GENERATE } from './generate-model';
+import { isBookKind } from './generate-model';
 import { GenerateStatus } from './generate-status';
 import { useBridgeJobs } from './use-bridge';
 
@@ -134,8 +134,8 @@ function JobRow({
       ? ''
       : (libraryNames.get(job.library_id) ??
         t('bridge.jobs.libraryId', { id: formatNumber(job.library_id, lang) }));
-  // A generate job words its progress and result its own way (GenerateStatus).
-  const generate = job.kind === KIND_GENERATE;
+  // A generate or describe job words its progress and result its own way (GenerateStatus).
+  const generate = isBookKind(job.kind);
   const progress: ReturnType<typeof progressOf> = generate ? {} : progressOf(job.progress);
   const summary = generate ? null : resultSummary(job.result);
   const details = hasContent(job.result) || hasContent(job.params);

@@ -4,10 +4,13 @@ import (
 	"strings"
 
 	"github.com/kodestar/audiosilo-meta/pkg/model"
+
+	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
-// Generated content is the characters and recaps the Bridge generated for a book
-// on this server (its .audiosilo/ attachments, BRIDGE-PLAN.md Phase 1a). /meta
+// Generated content is the characters, recaps and description the Bridge
+// generated for a book on this server (its .audiosilo/ attachments,
+// BRIDGE-PLAN.md Phases 1a and 1c). /meta
 // serves it beside the community data, per request and never cached: community
 // data wins per dimension, generated content fills what the community work
 // lacks (or is the whole work of a book with no match), and it never carries the
@@ -18,21 +21,39 @@ import (
 // (attribution, spoiler gating) ever sees generated content.
 
 // Generated is a book's generated content as the catalog stores it: nil for a
-// file it doesn't have. GeneratedAt is when it was generated (RFC3339; "" when
-// unknown).
+// file it doesn't have. GeneratedAt is when its characters and recaps were
+// generated and DescriptionAt when its description was written (RFC3339; ""
+// when unknown): a description-only job keeps the earlier run's time as
+// bridge.json's generated_at.
 type Generated struct {
-	Characters  *model.Characters
-	Recaps      *model.Recaps
-	GeneratedAt string
+	Characters    *model.Characters
+	Recaps        *model.Recaps
+	Description   *model.Description
+	GeneratedAt   string
+	DescriptionAt string
 }
 
 // MetaGenerated says which parts of a work came from the server's generated
 // files rather than the community (MetaWork.Generated); omitted when none did.
-// Recaps covers the recap list and the whole-book summary alike.
+// Recaps covers the recap list and the whole-book summary alike; Description
+// the work's generated_description. GeneratedAt is when what it names was
+// generated: the characters' and recaps' run, or the description's own time
+// when the description is all it names.
 type MetaGenerated struct {
 	Characters  bool   `json:"characters"`
 	Recaps      bool   `json:"recaps"`
+	Description bool   `json:"description"`
 	GeneratedAt string `json:"generated_at,omitempty"`
+}
+
+// MetaGeneratedDescription is a book's own-words description generated on this
+// server (MetaWork.GeneratedDescription). It is never the community's
+// community_description: a shipped 2.0 app shows that one first and credits it
+// to the community, so a generated text rides in its own field, which those apps
+// ignore. Spoiler-free by construction (written from the opening chapters'
+// notes only), so ?spoilers=hide keeps it.
+type MetaGeneratedDescription struct {
+	Text string `json:"text"`
 }
 
 // Unmatched is /meta's answer for a book with no community match: matched false,
@@ -49,12 +70,31 @@ type Place struct {
 	Finished bool
 }
 
-// Fillable reports whether generated content could fill anything in e's work
-// (parts): it lacks characters or recaps (or e has no match at all); a summary
-// is only ever taken with the recaps. When it can't, /meta needn't load the
-// book's generated content.
-func (e *Enrichment) Fillable() bool {
-	return e == nil || e.Work == nil || len(e.Work.Characters) == 0 || len(e.Work.Recaps) == 0
+// fillable is which generated parts could fill the community work c (the work
+// as published; nil for no match, which every part fills): characters when it
+// has none, recaps when it has no recap list (a summary is only ever taken with
+// the recaps), a description when it has no community description (its core
+// description, the publisher's kind, doesn't block it: the player orders
+// those). The one statement of the rule: /meta loads by it (Fillable) and lays
+// in by it (parts), so a part is never laid in without being loaded.
+func fillable(c *MetaWork) metadata.AttachmentParts {
+	if c == nil {
+		return metadata.AllAttachmentParts
+	}
+	return metadata.AttachmentParts{
+		Characters:  len(c.Characters) == 0,
+		Recaps:      len(c.Recaps) == 0,
+		Description: c.CommunityDescription == nil,
+	}
+}
+
+// Fillable is fillable for e's work: the parts of the book's generated content
+// /meta loads (none when it is none).
+func (e *Enrichment) Fillable() metadata.AttachmentParts {
+	if e == nil {
+		return fillable(nil)
+	}
+	return fillable(e.Work)
 }
 
 // Answer is /meta's per-request answer for a book: env is its matched envelope
@@ -80,7 +120,7 @@ func Answer(env *Enrichment, title string, g *Generated, hide *Place) any {
 			return Unmatched{}
 		}
 		w := &MetaWork{Title: title, Authors: []MetaPersonRef{}}
-		gen.layInto(w, g.GeneratedAt)
+		gen.layInto(w, g)
 		if w.Generated == nil {
 			// The spoiler gate left nothing (every character revealed later, every
 			// recap beyond the listener): no work of a title alone.
@@ -92,7 +132,7 @@ func Answer(env *Enrichment, title string, g *Generated, hide *Place) any {
 		return env
 	}
 	w := *env.Work
-	gen.layInto(&w, g.GeneratedAt)
+	gen.layInto(&w, g)
 	if w.Generated == nil {
 		return env
 	}
@@ -102,37 +142,38 @@ func Answer(env *Enrichment, title string, g *Generated, hide *Place) any {
 }
 
 // parts is the generated content community (the work as published, nil for
-// none) takes, as a work of its own holding just those parts: the characters
-// when community has none; the recaps when it has none, and then the summary
-// too when it has none. Nil when it takes nothing.
+// none) takes, as a work of its own holding just those parts: each part
+// fillable names, and with the recaps the summary too when community has none.
+// Nil when it takes nothing.
 func (g *Generated) parts(community *MetaWork) *MetaWork {
 	if g == nil {
 		return nil
 	}
-	var c MetaWork
-	if community != nil {
-		c = *community
-	}
+	fill := fillable(community)
 	w := &MetaWork{}
-	if len(c.Characters) == 0 {
+	if fill.Characters {
 		w.Characters = g.characters()
 	}
-	if len(c.Recaps) == 0 {
+	if fill.Recaps {
 		w.Recaps = g.recaps()
-		if c.RecapSummary == nil {
+		if community == nil || community.RecapSummary == nil {
 			w.RecapSummary = g.summary()
 		}
 	}
-	if len(w.Characters) == 0 && len(w.Recaps) == 0 && w.RecapSummary == nil {
+	if fill.Description {
+		w.GeneratedDescription = g.description()
+	}
+	if len(w.Characters) == 0 && len(w.Recaps) == 0 && w.RecapSummary == nil && w.GeneratedDescription == nil {
 		return nil
 	}
 	return w
 }
 
-// layInto lays the generated parts gen holds (parts, gated as asked) into w, a
-// copy the caller owns, naming them in w.Generated (left nil when gen holds
-// nothing any more).
-func (gen *MetaWork) layInto(w *MetaWork, generatedAt string) {
+// layInto lays the generated parts gen holds (g's parts, gated as asked) into
+// w, a copy the caller owns, naming them in w.Generated (left nil when gen
+// holds nothing any more), dated by what it names: g's run, or the
+// description's own time when that is all.
+func (gen *MetaWork) layInto(w *MetaWork, g *Generated) {
 	var mark MetaGenerated
 	if len(gen.Characters) > 0 {
 		w.Characters, mark.Characters = gen.Characters, true
@@ -143,8 +184,14 @@ func (gen *MetaWork) layInto(w *MetaWork, generatedAt string) {
 	if gen.RecapSummary != nil {
 		w.RecapSummary, mark.Recaps = gen.RecapSummary, true
 	}
-	if mark.Characters || mark.Recaps {
-		mark.GeneratedAt = generatedAt
+	if gen.GeneratedDescription != nil {
+		w.GeneratedDescription, mark.Description = gen.GeneratedDescription, true
+	}
+	if mark.Characters || mark.Recaps || mark.Description {
+		mark.GeneratedAt = g.GeneratedAt
+		if !mark.Characters && !mark.Recaps {
+			mark.GeneratedAt = g.DescriptionAt
+		}
 		w.Generated = &mark
 	}
 }
@@ -187,4 +234,15 @@ func (g *Generated) summary() *MetaRecapSummary {
 		return nil
 	}
 	return &MetaRecapSummary{InShort: g.Recaps.InShort, Ending: g.Recaps.Ending}
+}
+
+// description is g's description as the envelope carries it, nil when blank.
+// metadata.ParseDescription already stores the text trimmed and drops a blank
+// one; the trim here is deliberate defence, as summary's is, so a Generated
+// built any other way can't send a blank description.
+func (g *Generated) description() *MetaGeneratedDescription {
+	if g.Description == nil || strings.TrimSpace(g.Description.Text) == "" {
+		return nil
+	}
+	return &MetaGeneratedDescription{Text: g.Description.Text}
 }

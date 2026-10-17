@@ -1641,6 +1641,17 @@ export interface AdminBookDetail {
    * the tags look swapped or junk (meta.SearchPrefill).
    */
   match_query: string;
+  /**
+   * The description the Bridge generated for the book (its .audiosilo/description.json):
+   * absent when it has none. `generated_at` is when it was written, when known.
+   */
+  generated_description?: GeneratedDescription;
+}
+
+/** A book's generated description on its page (catalog.GeneratedDescription). */
+export interface GeneratedDescription {
+  text: string;
+  generated_at?: string;
 }
 
 /** Where a book's chapters come from: its own files, or a community list fitted onto them. */
@@ -2314,9 +2325,13 @@ export interface SidecarsPark {
   retry_at?: string;
 }
 
-/** sidecars.generate's progress. */
+/** sidecars.generate's progress (and sidecars.describe's, step and stage "describing"). */
 export interface SidecarsProgress {
-  /** An engine stage name, or "waiting" | "writing" | "rescanning". */
+  /**
+   * An engine stage name, or "waiting" | "writing" | "rescanning" | "describing"
+   * (the description step, Phase 1c: a generate job's, whose stage is then the
+   * engine's "done", and a describe job's).
+   */
   step: string;
   message?: string;
   done?: number;
@@ -2345,12 +2360,18 @@ export interface SidecarsResult {
   work_id: string;
   /** The community issues filed, by what they offer (contribute "issue" only). */
   contributed?: Record<string, string>;
+  /** Whether the run also wrote the book's description.json (Phase 1c); absent from an older Bridge. */
+  description?: boolean;
+  /** Why no description was written, in a few plain words; only when `description` is false. */
+  description_error?: string;
 }
 
-/** Which characters and recaps a book has, from the community and from its own folder. */
+/** Which characters, recaps and description a book has, from the community and from its own folder. */
 export interface SidecarsCoverage {
   characters: boolean;
   recaps: boolean;
+  /** A description: generated here, or the community's community_description (Phase 1c). */
+  description: boolean;
 }
 
 /** An earlier book of the series without recaps (the estimate's `earlier`). */
@@ -2388,6 +2409,8 @@ export interface BridgeEstimate {
   figures: boolean;
   /** The library is mapped and writable on the Bridge. */
   writable: boolean;
+  /** The Bridge is online and runs sidecars.describe (a description from the notes it kept). */
+  can_describe: boolean;
   has: {
     community: SidecarsCoverage;
     local: SidecarsCoverage;

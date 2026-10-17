@@ -56,8 +56,14 @@ const (
 const KindVerify = "bridge.verify"
 
 // KindSidecars is Phase 1a's job: the Bridge generates a book's characters and
-// recaps and writes them into the book's .audiosilo/ folder.
+// recaps (and, since Phase 1c, its description) and writes them into the book's
+// .audiosilo/ folder.
 const KindSidecars = "sidecars.generate"
+
+// KindDescribe is Phase 1c's description-only job: the Bridge writes a book's
+// own-words description from the notes it kept from generating its characters
+// and recaps (no new speech recognition), into the same .audiosilo/ folder.
+const KindDescribe = "sidecars.describe"
 
 // bookRule is whether a kind's job names a book.
 type bookRule int
@@ -86,6 +92,7 @@ type kindSpec struct {
 var kinds = map[string]kindSpec{
 	KindVerify:   {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams},
+	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, params: describeParams},
 }
 
 // sidecars.generate's param values (auto and local are the defaults),
@@ -142,6 +149,16 @@ func sidecarsParams(raw json.RawMessage) (json.RawMessage, error) {
 func contributes(params json.RawMessage) bool {
 	var p SidecarsParams
 	return json.Unmarshal(params, &p) == nil && p.Contribute == ContributeIssue
+}
+
+// describeParams checks sidecars.describe's params: it takes none, so only an
+// empty object (or none) passes, and any field is refused.
+func describeParams(raw json.RawMessage) (json.RawMessage, error) {
+	var p struct{}
+	if err := decodeStrict(raw, &p); err != nil {
+		return nil, invalid("params: %v", err)
+	}
+	return json.RawMessage(`{}`), nil
 }
 
 // verifyParams checks bridge.verify's params: an optional hold_seconds (0-600)
@@ -316,6 +333,13 @@ var ErrKindUnavailable = errors.New("the paired bridge doesn't run that kind")
 // all): a 409 library_not_writable.
 var ErrLibraryNotWritable = errors.New("the bridge can't write to that library")
 
+// ErrGenerateOpen is a sidecars.describe job for a book with a sidecars.generate
+// job still open: that job writes the description when it finishes, so a second
+// writer is refused (a 409 generate_open). A generate job is never refused for
+// an open describe job: queueing it cancels that one (cancelOpenTx), and the
+// generate job writes a description of its own.
+var ErrGenerateOpen = errors.New("a generate job is open for the book")
+
 // ErrCannotContribute is a sidecars.generate job asking to contribute its
 // results (contribute "issue") to a Bridge whose last heartbeat doesn't say it
 // can (estimates.sidecars.can_contribute; none sent counts as can't): a 409
@@ -365,9 +389,10 @@ func checkNew(j *NewJob) error {
 // knows (ErrInvalid otherwise, as for bad params) and the paired Bridge runs
 // (ErrKindUnavailable); it may be offline, and the job waits. A kind that writes
 // into the library is queued only when the last heartbeat reports the library
-// mapped and writable (ErrLibraryNotWritable), and a sidecars.generate job that
-// contributes only when it says the Bridge can (ErrCannotContribute); the open
-// job is still returned either way.
+// mapped and writable (ErrLibraryNotWritable), a sidecars.generate job that
+// contributes only when it says the Bridge can (ErrCannotContribute), and a
+// sidecars.describe job only while no sidecars.generate job is open for the book
+// (ErrGenerateOpen); the open job is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
@@ -409,6 +434,17 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		if refuse != nil {
 			return refuse
 		}
+		if j.Kind == KindDescribe {
+			var open bool
+			if err := tx.QueryRowContext(ctx,
+				`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL+`)`,
+				DedupeKey(KindSidecars, j.LibraryID, j.Path)).Scan(&open); err != nil {
+				return err
+			}
+			if open {
+				return ErrGenerateOpen
+			}
+		}
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO bridge_jobs(kind, library_id, rel_path, params, requested_by, priority, dedupe_key, created_at, updated_at)
 			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -420,6 +456,15 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return err
 		}
 		created = true
+		if j.Kind == KindSidecars {
+			// The generate run writes the description too, from fresher notes: a
+			// describe job open for the book gives way (at once when no Bridge is
+			// on it, else at its next update), so the two never race for it.
+			if err := cancelOpenTx(ctx, tx, DedupeKey(KindDescribe, j.LibraryID, j.Path), now,
+				"a generate job for the book replaced it"); err != nil {
+				return err
+			}
+		}
 		job, err = getJob(ctx, tx, id)
 		return err
 	})
@@ -974,6 +1019,22 @@ func (s *Service) Cancel(ctx context.Context, id int64) (*Job, error) {
 		s.settle(ctx, exp)
 	}
 	return job, err
+}
+
+// cancelOpenTx cancels the open job with dedupe key key, inside tx, as Cancel
+// does: at once when it is queued or parked, else by asking the Bridge
+// (cancel_requested). reason is its error. No open job is no change.
+func cancelOpenTx(ctx context.Context, tx *sql.Tx, key, now, reason string) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE bridge_jobs SET state = 'cancelled', cancel_requested = 1, lease_until = NULL, error = ?3,
+		        finished_at = ?2, updated_at = ?2
+		  WHERE dedupe_key = ?1 AND state IN ('queued', 'needs_attention')`, key, now, reason); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE bridge_jobs SET cancel_requested = 1, updated_at = ?2
+		  WHERE dedupe_key = ?1 AND state IN ('claimed', 'running')`, key, now)
+	return err
 }
 
 // MoveJobs carries a book's jobs to its new path inside a move's transaction

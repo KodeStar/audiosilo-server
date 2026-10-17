@@ -398,9 +398,9 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	case KindBridgeJobFinished:
 		m.Title = bridgeJobLabel(str("job_kind")) + " finished: " + bridgeJobBook(ev)
 		m.Text = "The Bridge finished the job."
-		if str("job_kind") == bridge.KindSidecars {
-			m.Title = "Characters and recaps ready: " + bridgeJobBook(ev)
-			m.Text = "Listeners see them in the player now."
+		if w := bridgeKindWords[str("job_kind")]; w.ready != "" {
+			m.Title = w.ready + ": " + bridgeJobBook(ev)
+			m.Text = w.readyText
 		}
 		m.Link, m.Tags = link("/server?topic=bridge"), []string{"white_check_mark"}
 	case KindBridgeJobFailed:
@@ -423,15 +423,18 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 	return m
 }
 
+// bridgeKindWords is how a message words each Bridge job kind it knows: its
+// label in a title and, for a kind whose finished job leaves something for
+// listeners, what is ready (the title's start) and where they see it.
+var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
+	bridge.KindSidecars: {"Characters and recaps", "Characters and recaps ready", "Listeners see them in the player now."},
+	bridge.KindDescribe: {"Description", "Description ready", "Listeners see it in the player's About when the book has no other description."},
+	bridge.KindVerify:   {label: "Bridge check"},
+}
+
 // bridgeJobLabel names a Bridge job's kind in a message title.
 func bridgeJobLabel(kind string) string {
-	switch kind {
-	case bridge.KindSidecars:
-		return "Characters and recaps"
-	case bridge.KindVerify:
-		return "Bridge check"
-	}
-	return "Bridge job"
+	return cmp.Or(bridgeKindWords[kind].label, "Bridge job")
 }
 
 // bridgeJobBook is the book a Bridge job event is about: its title, else its

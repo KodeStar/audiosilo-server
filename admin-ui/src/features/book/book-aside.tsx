@@ -8,12 +8,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { formatNumber, formatPercent, formatRelative, progressFraction } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { DescribeSection } from '@/features/bridge/describe-section';
 import { GenerateSection } from '@/features/bridge/generate-section';
 import { ProgressMenu } from '@/features/people/progress-actions';
 
 /**
  * The right-hand column: who's listening, community metadata (and generating
- * characters and recaps with the Bridge), and who can see the book.
+ * characters, recaps and a description with the Bridge), and who can see the book.
  */
 export function BookAside({
   detail,
@@ -193,6 +194,11 @@ function CommunityCard({
         </>
       )}
       <GenerateSection book={detail.book} />
+      <DescribeSection
+        book={detail.book}
+        description={detail.generated_description}
+        ownDescription={Boolean(detail.description?.trim())}
+      />
     </Card>
   );
 }

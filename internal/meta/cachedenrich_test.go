@@ -22,7 +22,8 @@ func TestCoverages(t *testing.T) {
 	ctx := context.Background()
 
 	got := svc.Coverages(ctx, []BookIDs{{ASIN: "B00FLIJJSY"}, {}})
-	if want := []Coverage{{Characters: true, Recaps: true, Known: true}, {Known: true}}; !slices.Equal(got, want) {
+	// The mock's work carries a core description, which counts (TestCoverageDescription).
+	if want := []Coverage{{Characters: true, Recaps: true, Description: true, Known: true}, {Known: true}}; !slices.Equal(got, want) {
 		t.Fatalf("Coverages = %+v, want %+v", got, want)
 	}
 	if m.lookupHits.Load() != 1 || m.workHits.Load() != 1 || m.seriesHits.Load() != 0 {
@@ -105,5 +106,22 @@ func TestCachedEnrichment(t *testing.T) {
 	var none *Enrichment
 	if none.HasCharacters() || none.HasRecaps() {
 		t.Fatal("a nil envelope has content")
+	}
+}
+
+// A Coverage says whether the community work has a description the player shows
+// before a generated one (the Bridge's estimate: a generated description is
+// offered only without one): its community description or its core one.
+func TestCoverageDescription(t *testing.T) {
+	t.Parallel()
+	with := &Enrichment{Work: &MetaWork{CommunityDescription: &MetaCommunityDescription{Text: "Community."}}}
+	if c := coverageOf(with); !c.Description || !c.Known || c.Characters || c.Recaps {
+		t.Errorf("with a community description = %+v", c)
+	}
+	if c := coverageOf(&Enrichment{Work: &MetaWork{Description: "Blurb."}}); !c.Description || !c.Known {
+		t.Errorf("with a core description only = %+v", c)
+	}
+	if c := coverageOf(&Enrichment{Work: &MetaWork{Description: "  "}}); c.Description || !c.Known {
+		t.Errorf("with a blank core description = %+v", c)
 	}
 }
