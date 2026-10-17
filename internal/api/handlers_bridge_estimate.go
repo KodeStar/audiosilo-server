@@ -75,25 +75,8 @@ type earlierBook struct {
 	AgentCostUSD *float64 `json:"agent_cost_usd"`
 }
 
-// detectEstimate is GET /admin/bridge/estimate's answer for chapters.detect:
-// speech recognition and no agent, so the ASR time alone (null while the
-// Bridge has sent no figures, or the audio's length is unknown), whether the
-// Bridge can write to the library and is online, and the book's open
-// chapters.detect job.
-type detectEstimate struct {
-	Kind            string      `json:"kind"`
-	LibraryID       int64       `json:"library_id"`
-	Path            string      `json:"path"`
-	DurationSeconds float64     `json:"duration_seconds"`
-	ASRHours        *float64    `json:"asr_hours"`
-	Writable        bool        `json:"writable"`
-	Online          bool        `json:"online"`
-	OpenJob         *bridge.Job `json:"open_job,omitempty"`
-}
-
 // handleAdminBridgeEstimate serves GET /admin/bridge/estimate?library_id=&path=
-// &kind=sidecars.generate (kind may be left out) or kind=chapters.detect
-// (detectEstimate; brief means nothing to it): the estimate for queueing that
+// &kind=sidecars.generate (kind may be left out): the estimate for queueing that
 // job on an indexed book. 400 without a library or a path, or for a kind with
 // no estimate; 404 for an unknown library or book; 409 kind_unavailable when the
 // paired Bridge doesn't run the kind.
@@ -109,7 +92,7 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 	if kind == "" {
 		kind = bridge.KindSidecars
 	}
-	if kind != bridge.KindSidecars && kind != bridge.KindDetectChapters {
+	if kind != bridge.KindSidecars {
 		writeError(w, http.StatusBadRequest, "no estimate for that kind")
 		return
 	}
@@ -134,25 +117,15 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 		a.writeBridgeError(w, bridge.ErrKindUnavailable, "bridge estimate failed")
 		return
 	}
-	var est *bridge.SidecarsEstimates
-	if h.Estimates != nil {
-		est = h.Estimates.Sidecars
-	}
-	if kind == bridge.KindDetectChapters {
-		out := detectEstimate{Kind: kind, LibraryID: lib.ID, Path: book.RelPath, DurationSeconds: book.Duration,
-			ASRHours: bridge.EstimateASRHours(book.Duration, est), Writable: h.Writable(lib.ID), Online: h.Online(time.Now())}
-		if out.OpenJob, err = a.bridge.OpenJob(ctx, kind, lib.ID, book.RelPath); err != nil {
-			a.writeCatalogError(w, err, "bridge estimate failed", "could not read the jobs")
-			return
-		}
-		writeJSON(w, http.StatusOK, out)
-		return
-	}
 
 	out := bridgeEstimate{Kind: kind, LibraryID: lib.ID, Path: book.RelPath, DurationSeconds: book.Duration,
 		Writable: h.Writable(lib.ID), CanDescribe: h.Online(time.Now()) && h.Offers(bridge.KindDescribe), Earlier: []earlierBook{}}
 	if !brief {
 		out.Ebook = library.BookEbook(lib.Root, book.RelPath, book.IsFolder)
+	}
+	var est *bridge.SidecarsEstimates
+	if h.Estimates != nil {
+		est = h.Estimates.Sidecars
 	}
 	out.SidecarsCost = bridge.EstimateSidecars(book.Duration, out.Ebook != "", est)
 

@@ -1441,8 +1441,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   required, params `{}` or none (`noParams`, shared with describe), writes; refused 409 `generate_open` while a
   `sidecars.generate` job is open for the book (that run finds them itself), and a NEW `sidecars.generate` is
   refused 409 `detect_open` (`ErrDetectOpen`) while a detect job is open, since cancelling it would throw its
-  transcription away and the generate run after it reuses it; `blockedBy` is the one statement of which open
-  kind refuses which). States queued -> claimed -> running -> done | failed | needs_attention | cancelled; the Bridge PARKS
+  transcription away and the generate run after it reuses it; a generate job cancels an open describe job;
+  `kindSpec`'s `refusedWhileOpen` and `cancelsOpen` are the one statement of which open kind refuses or gives
+  way to which). States queued -> claimed -> running -> done | failed | needs_attention | cancelled; the Bridge PARKS
   a job it keeps running (`needs_attention`, the park's code in `progress.park.code`, its message in
   `error`) and unparks it (back to `running`) under the same claim: a held state, so its reports still
   land, but a parked job's lease is dropped (only claimed and running leases expire) and a running
@@ -1488,10 +1489,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`Coverage.Description`: its `community_description` or its core description, either shown before a generated one) or a stored generated one), `can_describe`
   (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier
   books of its series in the library with no recaps (`catalog.EarlierInSeries`, each costed), and any
-  open job; `brief=1` skips the folder look and the series scan, for a card or a batch; with
-  `kind=chapters.detect` it answers `{kind, library_id, path, duration_seconds, asr_hours, writable, online,
-  open_job?}` instead, `asr_hours` from the heartbeat's ASR figure, null without one or a known length,
-  `bridge.EstimateASRHours`); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
+  open job; `brief=1` skips the folder look and the series scan, for a card or a batch; any other kind is a
+  400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
   and `work_id` from the metadata cache alone, `CachedWorkID`), never on the sample-book answer.
   Settings > Bridge in `admin-ui` (`features/bridge/`: the topic shows the heartbeat's estimates and
@@ -1764,7 +1763,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`sameChapterFiles`: count, order, book-relative path and size) and `chapteralign.Align` with no Prober
   answers `fill` (the book has no chapters of its own: no file holding two); then the rows are the fit,
   `chapters_source = "generated"` (`ChaptersFromGenerated`, never a choice an admin makes: `PATCH
-  {chapter_source}` still takes files|community|auto) and `chapters_fit` its hash. Leaving it (the file gone,
+  {chapter_source}` still takes files|community|auto) and `chapters_fit` a hash of what it was fitted from (`generatedKey`: the
+  stored list, the scan's own chapters and the files' book-relative paths, sizes and lengths), so a refresh of an
+  unchanged book neither decodes nor fits the list again. Leaving it (the file gone,
   other files, a community fill, a files choice) restores the scan's own (`useChapters` is the one write of
   a stand-in list, legacy snapshot included). Wire (additive): `chapters_source: "community"` or `"generated"`
   on `/chapters` and the book JSON (an old app shows ordinary chapters with no label); admin book page `chapter_source`, `chapter_choice`,

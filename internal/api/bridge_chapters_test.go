@@ -11,24 +11,19 @@ import (
 	"testing"
 
 	"github.com/kodestar/audiosilo-server/internal/bridge"
-	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 )
 
-// Bridge Phase 1d: chapterless books. The chapters.detect kind and its
-// estimate, and the generated chapter source on the player's wire.
+// Bridge Phase 1d: chapterless books. The chapters.detect kind, and the
+// generated chapter source on the player's wire.
 
 // beatDetect sends a heartbeat offering verify, generate and detect, the env's
-// library mapped and writable as given, with estimates (a JSON object, "" for
-// none).
-func (b *bridgeEnv) beatDetect(t *testing.T, writable bool, estimates string) {
+// library mapped and writable as given.
+func (b *bridgeEnv) beatDetect(t *testing.T, writable bool) {
 	t.Helper()
 	body := fmt.Sprintf(`{"version":"0.18.0","kinds":["bridge.verify","sidecars.generate","chapters.detect"],
-		"libraries":[{"library_id":%d,"mount_path":"/media/books","mapped":true,"writable":%t}]`, b.lib.ID, writable)
-	if estimates != "" {
-		body += `,"estimates":` + estimates
-	}
-	if resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, body+"}"); resp.StatusCode != http.StatusOK {
+		"libraries":[{"library_id":%d,"mount_path":"/media/books","mapped":true,"writable":%t}]}`, b.lib.ID, writable)
+	if resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, body); resp.StatusCode != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", resp.StatusCode, out)
 	}
 }
@@ -58,7 +53,7 @@ func TestBridgeDetectQueue(t *testing.T) {
 		!strings.Contains(body, `"code":"kind_unavailable"`) {
 		t.Fatalf("an older Bridge: %d %s, want 409 kind_unavailable", resp.StatusCode, body)
 	}
-	b.beatDetect(t, true, "")
+	b.beatDetect(t, true)
 	if _, body := b.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(body, `"features":["bridge","chapters","sidecars"]`) {
 		t.Fatalf("features = %s", body)
 	}
@@ -116,65 +111,13 @@ func TestBridgeDetectQueue(t *testing.T) {
 	}
 
 	// Denied: a library the Bridge can't write to.
-	b.beatDetect(t, false, "")
+	b.beatDetect(t, false)
 	if _, err := b.db.ExecContext(context.Background(), `UPDATE bridge_jobs SET state = 'cancelled'`); err != nil {
 		t.Fatal(err)
 	}
 	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
 		!strings.Contains(body, `"code":"library_not_writable"`) {
 		t.Fatalf("a read-only library: %d %s, want 409 library_not_writable", resp.StatusCode, body)
-	}
-}
-
-// TestBridgeEstimateDetect: the estimate for chapters.detect is the ASR time
-// alone (null without the Bridge's figures), whether the Bridge can write and
-// is online, and the book's open detect job. 409 kind_unavailable from a
-// Bridge that doesn't run it, 404 for a book that isn't indexed, 403 for a user.
-func TestBridgeEstimateDetect(t *testing.T) {
-	t.Parallel()
-	b := newBridgeEnv(t)
-	ctx := context.Background()
-	const p = "A/Plain.mp3"
-	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: b.lib.ID, RelPath: p, Title: "Plain", Duration: 7200,
-		Size: 5000, AddedAt: "2020-01-01T00:00:00Z"}); err != nil {
-		t.Fatal(err)
-	}
-	estimate := func(tok, path string) (*http.Response, string) {
-		return b.do(t, "GET", fmt.Sprintf("/api/v1/admin/bridge/estimate?library_id=%d&path=%s&kind=chapters.detect", b.lib.ID, url.QueryEscape(path)), tok, "")
-	}
-	b.beatWith(t, true, true, sidecarsEstimates)
-	if resp, body := estimate(b.adminTok, p); resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"kind_unavailable"`) {
-		t.Fatalf("an older Bridge: %d %s", resp.StatusCode, body)
-	}
-	b.beatDetect(t, true, "")
-	resp, body := estimate(b.adminTok, p)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"asr_hours":null`) || !strings.Contains(body, `"writable":true`) ||
-		!strings.Contains(body, `"online":true`) || strings.Contains(body, "open_job") || strings.Contains(body, "agent_cost_usd") {
-		t.Fatalf("no figures: %d %s", resp.StatusCode, body)
-	}
-	// 900 s of ASR per audio hour over two hours: half an hour.
-	b.beatDetect(t, true, sidecarsEstimates)
-	if resp, body := b.queueDetect(t, b.adminTok, p, ""); resp.StatusCode != http.StatusCreated {
-		t.Fatalf("queue: %d %s", resp.StatusCode, body)
-	}
-	resp, body = estimate(b.adminTok, p)
-	var est struct {
-		Kind     string      `json:"kind"`
-		Path     string      `json:"path"`
-		Duration float64     `json:"duration_seconds"`
-		ASRHours *float64    `json:"asr_hours"`
-		OpenJob  *bridge.Job `json:"open_job"`
-	}
-	decodeInto(t, body, &est)
-	if resp.StatusCode != http.StatusOK || est.Kind != bridge.KindDetectChapters || est.Path != p || est.Duration != 7200 ||
-		est.ASRHours == nil || *est.ASRHours != 0.5 || est.OpenJob == nil || est.OpenJob.Kind != bridge.KindDetectChapters {
-		t.Fatalf("with figures: %d %s", resp.StatusCode, body)
-	}
-	if resp, body := estimate(b.adminTok, "Nobody/Nothing"); resp.StatusCode != http.StatusNotFound {
-		t.Errorf("no such book: %d %s", resp.StatusCode, body)
-	}
-	if resp, body := estimate(b.userTok, p); resp.StatusCode != http.StatusForbidden {
-		t.Errorf("a user: %d %s", resp.StatusCode, body)
 	}
 }
 

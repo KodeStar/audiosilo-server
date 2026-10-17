@@ -3021,6 +3021,7 @@
   "bridge.detect.chapters_one": "{{n}} capítulo encontrado",
   "bridge.detect.chapters_other": "{{n}} capítulos encontrados",
   "bridge.detect.chapters_many": "{{n}} capítulos encontrados",
+  "bridge.detect.kindUnavailable": "Ahora mismo la Bridge no ofrece la detección de capítulos. Comprueba que esté conectada y actualizada.",
   "bridge.series.action": "Generar para la serie",
   "bridge.series.title": "Generar para {{name}}",
   "bridge.series.description": "Personajes y resúmenes para cada libro sin resúmenes, en orden de lectura.",

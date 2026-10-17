@@ -2866,6 +2866,7 @@
   "bridge.detect.done": "Chapters found",
   "bridge.detect.chapters_one": "{{n}} chapter found",
   "bridge.detect.chapters_other": "{{n}} chapters found",
+  "bridge.detect.kindUnavailable": "The Bridge doesn't offer chapter detection right now. Check that it's online and up to date.",
   "bridge.series.action": "Generate for the series",
   "bridge.series.title": "Generate for {{name}}",
   "bridge.series.description": "Characters and recaps for each book without recaps, in reading order.",

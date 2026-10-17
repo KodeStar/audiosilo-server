@@ -81,8 +81,8 @@ const (
 )
 
 // kindSpec is what the server knows about a job kind: whether a job of it is
-// about a library and a book, whether it writes into the library, and how to
-// check its params.
+// about a library and a book, whether it writes into the library, how to check
+// its params, and how it stands with the other kinds' open jobs for the book.
 type kindSpec struct {
 	needsLibrary bool
 	book         bookRule
@@ -90,16 +90,27 @@ type kindSpec struct {
 	// library the Bridge's last heartbeat reports mapped and writable.
 	writes bool
 	params func(json.RawMessage) (json.RawMessage, error)
+	// refusedWhileOpen: a new job is refused with the error while a job of the
+	// kind named is open for the same book.
+	refusedWhileOpen map[string]error
+	// cancelsOpen: a new job cancels the open job of each kind named for the
+	// same book (cancelOpenTx, the value its error), in the same transaction.
+	cancelsOpen map[string]string
 }
 
 // kinds are the job kinds the server can queue (and check). A kind the Bridge
 // advertises that isn't here is never queued, and neither is one here that the
-// Bridge doesn't advertise.
+// Bridge doesn't advertise. A describe or detect job waits for an open generate
+// job (ErrGenerateOpen), a generate job for an open detect job (ErrDetectOpen),
+// and a generate job cancels an open describe job.
 var kinds = map[string]kindSpec{
-	KindVerify:         {needsLibrary: true, book: bookOptional, params: verifyParams},
-	KindSidecars:       {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams},
-	KindDescribe:       {needsLibrary: true, book: bookRequired, writes: true, params: noParams},
-	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, params: noParams},
+	KindVerify: {needsLibrary: true, book: bookOptional, params: verifyParams},
+	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams,
+		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen}, cancelsOpen: map[string]string{KindDescribe: "a generate job for the book replaced it"}},
+	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
+		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
+	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
+		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
 }
 
 // sidecars.generate's param values (auto and local are the defaults),
@@ -450,7 +461,8 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		if refuse != nil {
 			return refuse
 		}
-		if blocker, refusal := blockedBy(j.Kind); blocker != "" {
+		spec := kinds[j.Kind]
+		for blocker, refusal := range spec.refusedWhileOpen {
 			var open bool
 			if err := tx.QueryRowContext(ctx,
 				`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL+`)`,
@@ -472,12 +484,11 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 			return err
 		}
 		created = true
-		if j.Kind == KindSidecars {
-			// The generate run writes the description too, from fresher notes: a
-			// describe job open for the book gives way (at once when no Bridge is
-			// on it, else at its next update), so the two never race for it.
-			if err := cancelOpenTx(ctx, tx, DedupeKey(KindDescribe, j.LibraryID, j.Path), now,
-				"a generate job for the book replaced it"); err != nil {
+		// The generate run writes the description too, from fresher notes: a
+		// describe job open for the book gives way (at once when no Bridge is on
+		// it, else at its next update), so the two never race for it.
+		for kind, reason := range spec.cancelsOpen {
+			if err := cancelOpenTx(ctx, tx, DedupeKey(kind, j.LibraryID, j.Path), now, reason); err != nil {
 				return err
 			}
 		}
@@ -492,20 +503,6 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	}
 	s.settle(ctx, exp)
 	return job, created, nil
-}
-
-// blockedBy is the kind whose open job for the same book refuses a new job of
-// kind, and the refusal ("" when none does): a describe or detect job waits for
-// an open generate job (ErrGenerateOpen), a generate job for an open detect job
-// (ErrDetectOpen).
-func blockedBy(kind string) (string, error) {
-	switch kind {
-	case KindDescribe, KindDetectChapters:
-		return KindSidecars, ErrGenerateOpen
-	case KindSidecars:
-		return KindDetectChapters, ErrDetectOpen
-	}
-	return "", nil
 }
 
 // Job returns one job, after expiring a lapsed lease (so the console shows what

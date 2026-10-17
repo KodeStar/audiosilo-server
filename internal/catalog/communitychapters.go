@@ -68,14 +68,19 @@ func chaptersHash(raw string) string {
 func bookRelative(chs []metadata.Chapter, bookPath string) []metadata.Chapter {
 	out := make([]metadata.Chapter, len(chs))
 	for i, ch := range chs {
-		if ch.FilePath == bookPath {
-			ch.FilePath = ""
-		} else {
-			ch.FilePath = strings.TrimPrefix(ch.FilePath, bookPath+"/")
-		}
+		ch.FilePath = inBook(ch.FilePath, bookPath)
 		out[i] = ch
 	}
 	return out
+}
+
+// inBook is a library-relative file relative to the book at bookPath, "" for
+// the book's own file.
+func inBook(file, bookPath string) string {
+	if file == bookPath {
+		return ""
+	}
+	return strings.TrimPrefix(file, bookPath+"/")
 }
 
 func libraryRelative(chs []metadata.Chapter, bookPath string) {
@@ -140,32 +145,48 @@ type ChapterInputs struct {
 func (c *Catalog) ChapterInputs(ctx context.Context, libraryID int64, path string) (*ChapterInputs, error) {
 	path = CleanRelPath(path)
 	in := &ChapterInputs{}
-	var (
-		id       int64
-		duration float64
-		snapshot string
-		isFolder bool
-	)
+	b := Book{RelPath: path}
+	var snapshot string
 	err := c.db.QueryRowContext(ctx,
-		`SELECT b.id, b.asin, b.isbn, b.duration, b.is_folder, b.scanned_chapters, `+chapterBasisExpr+`
+		`SELECT b.id, b.asin, b.isbn, b.duration, b.size, b.is_folder, b.scanned_chapters, `+chapterBasisExpr+`
 		   FROM books b WHERE b.library_id = ? AND b.rel_path = ?`, libraryID, path).
-		Scan(&id, &in.ASIN, &in.ISBN, &duration, &isFolder, &snapshot, &in.Basis)
+		Scan(&b.ID, &in.ASIN, &in.ISBN, &b.Duration, &b.Size, &b.IsFolder, &snapshot, &in.Basis)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	b := Book{ID: id}
-	if err := c.loadFiles(ctx, &b); err != nil {
+	if in.Files, err = playFiles(ctx, c.db, &b); err != nil {
 		return nil, err
 	}
-	in.Files = b.Files
-	if len(in.Files) == 0 && !isFolder {
-		in.Files = []BookFile{{RelPath: path, Duration: duration}}
-	}
-	in.Chapters, err = scannedChapters(ctx, c.db, id, snapshot)
+	in.Chapters, err = scannedChapters(ctx, c.db, b.ID, snapshot)
 	return in, err
+}
+
+// playFiles is book b's files in play order (library relative, with size and
+// length): its book_files, or the book's own file for a single-file book. b
+// carries the books row's id, rel_path, is_folder, size and duration.
+func playFiles(ctx context.Context, q rowQuerier, b *Book) ([]BookFile, error) {
+	files, err := queryRows(ctx, q, func(r *sql.Rows, f *BookFile) error {
+		return r.Scan(&f.RelPath, &f.Seq, &f.Size, &f.Duration)
+	}, `SELECT rel_path, seq, size, duration FROM book_files WHERE book_id = ? ORDER BY seq`, b.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 && !b.IsFolder {
+		files = []BookFile{{RelPath: b.RelPath, Size: b.Size, Duration: b.Duration}}
+	}
+	return files, nil
+}
+
+// AlignFiles is a book's files as chapteralign fits chapters onto them.
+func AlignFiles(files []BookFile) []chapteralign.File {
+	out := make([]chapteralign.File, len(files))
+	for i, f := range files {
+		out[i] = chapteralign.File{Path: f.RelPath, Duration: f.Duration}
+	}
+	return out
 }
 
 // scannedChapters is a book's own chapters as the scan found them: its
@@ -252,6 +273,20 @@ func (c *Catalog) GetCommunityChapters(ctx context.Context, libraryID int64, pat
 	return &cc, nil
 }
 
+// chapterRow is what applyChapterSource reads off a book's row: the book
+// (id, rel_path, is_folder, size, duration: enough for playFiles), the source
+// and fit its chapter rows hold, its scanned chapters and whether a
+// chapters.json is stored for it.
+type chapterRow struct {
+	book                   Book
+	current, fit, snapshot string
+	generated              bool
+}
+
+// holds reports whether the book's chapter rows are already source's fit named
+// key.
+func (r *chapterRow) holds(source, key string) bool { return r.current == source && r.fit == key }
+
 // applyChapterSource puts the book's chapters from the source it should have
 // now: the community's when a check of the book as it is now fitted and either
 // the admin chose them (chapter_choices) or, with no choice, the book has no
@@ -262,11 +297,12 @@ func (c *Catalog) GetCommunityChapters(ctx context.Context, libraryID int64, pat
 // refreshEffective applies the renames after. A fit already in the rows is not
 // written again.
 func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, path string) error {
-	var current, fit, snapshot, generatedJSON string
+	r := chapterRow{book: Book{ID: bookID, RelPath: path}}
 	if err := tx.QueryRowContext(ctx,
-		`SELECT b.chapters_source, b.chapters_fit, b.scanned_chapters, COALESCE(a.chapters, '')
+		`SELECT b.is_folder, b.size, b.duration, b.chapters_source, b.chapters_fit, b.scanned_chapters,
+		        COALESCE(a.chapters, '') <> ''
 		   FROM books b LEFT JOIN book_attachments a ON a.book_id = b.id WHERE b.id = ?`, bookID).
-		Scan(&current, &fit, &snapshot, &generatedJSON); err != nil {
+		Scan(&r.book.IsFolder, &r.book.Size, &r.book.Duration, &r.current, &r.fit, &r.snapshot, &r.generated); err != nil {
 		return err
 	}
 	var choice, status, fittedJSON string
@@ -284,17 +320,13 @@ func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, pa
 	community := upToDate && fitted(status) &&
 		(choice == ChaptersFromCommunity || (choice == "" && status == string(chapteralign.Fill)))
 	if community {
-		key := chaptersHash(fittedJSON)
-		if current == ChaptersFromCommunity && fit == key {
-			return nil
-		}
 		var chs []metadata.Chapter
 		if err := json.Unmarshal([]byte(fittedJSON), &chs); err != nil {
 			return fmt.Errorf("community chapters: %w", err)
 		}
 		libraryRelative(chs, path)
-		legacy, err := useChapters(ctx, tx, bookID, ChaptersFromCommunity, key, chs, snapshot)
-		if err != nil || !legacy {
+		legacy := r.snapshot == ""
+		if err := useChapters(ctx, tx, &r, ChaptersFromCommunity, chaptersHash(fittedJSON), chs); err != nil || !legacy {
 			return err
 		}
 		// The snapshot is the chapters the check fitted (the rows it read), so
@@ -304,24 +336,20 @@ func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, pa
 			  WHERE library_id = ? AND path = ?`, bookID, libID, path)
 		return err
 	}
-	if choice == "" && generatedJSON != "" {
-		chs, key, err := generatedFit(ctx, tx, bookID, path, snapshot, generatedJSON)
+	if choice == "" && r.generated {
+		chs, key, err := generatedFit(ctx, tx, &r)
 		if err != nil {
 			return err
 		}
-		if chs != nil {
-			if current == ChaptersFromGenerated && fit == key {
-				return nil
-			}
-			_, err := useChapters(ctx, tx, bookID, ChaptersFromGenerated, key, chs, snapshot)
-			return err
+		if key != "" {
+			return useChapters(ctx, tx, &r, ChaptersFromGenerated, key, chs)
 		}
 	}
-	if current == "" {
+	if r.current == "" {
 		return nil
 	}
 	// Leaving a community or generated list: the scan's own come back.
-	own, err := scannedChapters(ctx, tx, bookID, snapshot)
+	own, err := scannedChapters(ctx, tx, bookID, r.snapshot)
 	if err != nil {
 		return err
 	}
@@ -332,30 +360,33 @@ func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, pa
 	return err
 }
 
-// useChapters puts chs (library-relative, titles as found) in book id's rows
-// as source, its fit named key. snapshot is the book's scanned_chapters; on a
-// row from before the snapshot (legacy: "") the rows are the scan's, so they
+// useChapters puts chs (library-relative, titles as found) in the book's rows
+// as source, its fit named key, unless the rows already hold that fit. On a
+// row from before the snapshot (r.snapshot "") the rows are the scan's, so they
 // are kept as the snapshot before chs replace them.
-func useChapters(ctx context.Context, tx *sql.Tx, bookID int64, source, key string, chs []metadata.Chapter, snapshot string) (legacy bool, err error) {
-	legacy = snapshot == ""
-	if legacy {
-		own, err := scannedChapters(ctx, tx, bookID, "")
+func useChapters(ctx context.Context, tx *sql.Tx, r *chapterRow, source, key string, chs []metadata.Chapter) error {
+	if r.holds(source, key) {
+		return nil
+	}
+	snapshot := r.snapshot
+	if snapshot == "" {
+		own, err := scannedChapters(ctx, tx, r.book.ID, "")
 		if err != nil {
-			return false, err
+			return err
 		}
 		raw, err := json.Marshal(own)
 		if err != nil {
-			return false, err
+			return err
 		}
 		snapshot = string(raw)
 	}
-	if err := replaceChapters(ctx, tx, bookID, chs); err != nil {
-		return false, err
+	if err := replaceChapters(ctx, tx, r.book.ID, chs); err != nil {
+		return err
 	}
-	_, err = tx.ExecContext(ctx,
+	_, err := tx.ExecContext(ctx,
 		`UPDATE books SET chapters_source = ?, chapters_fit = ?, scanned_chapters = ?, chapters_hash = ? WHERE id = ?`,
-		source, key, snapshot, chaptersHash(snapshot), bookID)
-	return legacy, err
+		source, key, snapshot, chaptersHash(snapshot), r.book.ID)
+	return err
 }
 
 // replaceChapters swaps a book's chapter rows for chs (their titles as scanned).

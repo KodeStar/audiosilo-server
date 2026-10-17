@@ -78,46 +78,40 @@ func sigParts(sig string) metadata.AttachmentParts {
 const attachmentsUncheckedExpr = `(attachments_indexed_at IS NOT indexed_at)`
 
 // writeAttachments replaces book id's book_attachments row with files, inside
-// tx: none when there is nothing to store.
-func writeAttachments(ctx context.Context, tx *sql.Tx, id int64, files metadata.AttachmentFiles, now string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM book_attachments WHERE book_id = ?`, id); err != nil {
-		return err
+// tx: none when there is nothing to store. It answers the chapters column as
+// it was and as it is now ("" for none), so a caller can tell whether the
+// book's generated chapters changed.
+func writeAttachments(ctx context.Context, tx *sql.Tx, id int64, files metadata.AttachmentFiles, now string) (was, chapters string, err error) {
+	err = tx.QueryRowContext(ctx, `DELETE FROM book_attachments WHERE book_id = ? RETURNING chapters`, id).Scan(&was)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
 	}
 	if files.Empty() {
-		return nil
+		return was, "", nil
 	}
 	chars, err := encodeAttachment(files.Characters)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	recaps, err := encodeAttachment(files.Recaps)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	desc, err := encodeAttachment(files.Description)
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	chapters, err := encodeAttachment(files.Chapters)
-	if err != nil {
-		return err
+	if chapters, err = encodeAttachment(files.Chapters); err != nil {
+		return "", "", err
 	}
 	prov, err := encodeAttachment(files.Provenance)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO book_attachments(book_id, characters, recaps, description, chapters, provenance, updated_at) VALUES(?,?,?,?,?,?,?)`,
 		id, chars, recaps, desc, chapters, prov, now)
-	return err
-}
-
-// storedChapters is book id's stored chapters.json (its book_attachments
-// column), "" for none.
-func storedChapters(ctx context.Context, q querier, id int64) (string, error) {
-	var raw string
-	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT chapters FROM book_attachments WHERE book_id = ?), '')`, id).Scan(&raw)
-	return raw, err
+	return was, chapters, err
 }
 
 // encodeAttachment is a book_attachments column's value: v as JSON, "" for nil.
@@ -179,15 +173,8 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 			if n, err := res.RowsAffected(); err != nil || n == 0 {
 				return false, err // a newer reading was recorded since: it stays
 			}
-			was, err := storedChapters(ctx, tx, id)
+			was, chapters, err := writeAttachments(ctx, tx, id, r.Files, now)
 			if err != nil {
-				return false, err
-			}
-			chapters, err := encodeAttachment(r.Files.Chapters)
-			if err != nil {
-				return false, err
-			}
-			if err := writeAttachments(ctx, tx, id, r.Files, now); err != nil {
 				return false, fmt.Errorf("%s: %w", relPath, err)
 			}
 			if chapters == was {

@@ -2866,6 +2866,7 @@
   "bridge.detect.done": "Kapitel gefunden",
   "bridge.detect.chapters_one": "{{n}} Kapitel gefunden",
   "bridge.detect.chapters_other": "{{n}} Kapitel gefunden",
+  "bridge.detect.kindUnavailable": "Die Bridge bietet gerade keine Kapitelerkennung an. Prüfe, ob sie online und aktuell ist.",
   "bridge.series.action": "Für die Reihe erstellen",
   "bridge.series.title": "Für {{name}} erstellen",
   "bridge.series.description": "Figuren und Zusammenfassungen für jedes Buch ohne Zusammenfassungen, in Lesereihenfolge.",

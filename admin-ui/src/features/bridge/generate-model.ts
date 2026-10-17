@@ -11,7 +11,7 @@ import type {
 import { refKey } from '@/lib/book-route';
 import { relBaseName } from '@/lib/paths';
 import { spanIn } from '@/features/library/series/series-model';
-import { isOpen, num, progressOf, safeHttpUrl, text } from './bridge-model';
+import { isOpen, mappingState, num, progressOf, safeHttpUrl, text } from './bridge-model';
 
 // Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), the
 // description written from their notes (Phase 1c) and the chapters found in the
@@ -85,8 +85,8 @@ export interface DetectPlan {
  * The Detect chapters confirmation's figures, from the Bridge's status (its
  * heartbeat's ASR figure and library mappings): the transcription time over
  * the books' known lengths, rounded per book to hundredths of an hour as the
- * server's estimate rounds it (bridge.EstimateASRHours), and whether any book's
- * library can't be written to.
+ * server's generate estimate rounds asr_hours, and whether any book's library
+ * can't be written to.
  */
 export function detectPlan(
   status: Pick<BridgeStatus, 'libraries' | 'estimates'> | undefined,
@@ -98,10 +98,8 @@ export function detectPlan(
     perHour === undefined || known.length === 0
       ? null
       : known.reduce((sum, b) => sum + Math.round(((b.duration / 3600) * perHour) / 36) / 100, 0);
-  const writable = (id: number) => {
-    const m = status?.libraries.find((l) => l.id === id)?.mapping;
-    return Boolean(m?.mapped && m.writable);
-  };
+  const writable = (id: number) =>
+    mappingState(status?.libraries.find((l) => l.id === id)?.mapping ?? null) === 'ready';
   return { asrHours, notWritable: status ? books.some((b) => !writable(b.library_id)) : false };
 }
 

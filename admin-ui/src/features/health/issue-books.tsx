@@ -46,13 +46,16 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
     limit: PAGE,
   });
   const selection = useSelection();
-  const actions = useIssueActions(kind);
+  // The books Detect chapters asks about (its confirmation is open while set),
+  // and whether they are the bar's selection.
+  const [detecting, setDetecting] = useState<{ books: AdminBook[]; fromBar: boolean } | null>(null);
+  const actions = useIssueActions(kind, {
+    onDetect: (books) => setDetecting({ books, fromBar: false }),
+  });
   const roots = useLibraryRoots();
   const server = useServerInfo().data;
   const books = list.data?.pages.flatMap((p) => p.books ?? []) ?? [];
   const fix = ignored ? null : fixFor(kind, detectAvailable(server));
-  // The books Detect chapters asks about (its confirmation is open while set).
-  const [detecting, setDetecting] = useState<AdminBook[] | null>(null);
 
   if (list.isError) {
     return (
@@ -158,7 +161,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                   <FixButton
                     fix={fix}
                     disabled={actions.fixing(b)}
-                    onClick={() => (fix === 'detect' ? setDetecting([b]) : void actions.fix(b))}
+                    onClick={() => void actions.fix(b)}
                   />
                 ) : null}
               </div>
@@ -204,7 +207,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
           <BulkAction
             icon={FIX_LOOK.detect.icon}
             label={t(FIX_LOOK.detect.label)}
-            onClick={() => setDetecting(selectedListed)}
+            onClick={() => setDetecting({ books: selectedListed, fromBar: true })}
           />
         ) : null}
         <BulkAction
@@ -214,10 +217,10 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         />
       </BulkBar>
       <DetectChaptersDialog
-        books={detecting}
+        books={detecting?.books ?? null}
         onOpenChange={(open) => !open && setDetecting(null)}
         // A selection queued from the bar is done with.
-        onQueued={() => detecting && detecting.length > 1 && selection.clear()}
+        onQueued={() => detecting?.fromBar && selection.clear()}
       />
     </>
   );

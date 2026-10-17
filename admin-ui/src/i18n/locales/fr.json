@@ -3021,6 +3021,7 @@
   "bridge.detect.chapters_one": "{{n}} chapitre trouvé",
   "bridge.detect.chapters_other": "{{n}} chapitres trouvés",
   "bridge.detect.chapters_many": "{{n}} chapitres trouvés",
+  "bridge.detect.kindUnavailable": "La Bridge ne propose pas la détection des chapitres pour le moment. Vérifiez qu'elle est en ligne et à jour.",
   "bridge.series.action": "Générer pour la série",
   "bridge.series.title": "Générer pour {{name}}",
   "bridge.series.description": "Personnages et résumés pour chaque livre sans résumés, dans l'ordre de lecture.",

@@ -1,9 +1,10 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"fmt"
 	"path"
 	"strings"
 
@@ -23,35 +24,37 @@ import (
 // leaves the scan's own, so a list for other audio, or one beside a book that
 // was tagged with chapters since, never stands in.
 
-// generatedFit is book id's generated chapters fitted onto its files (library
-// relative, titles as found) and the fit's key (a hash of it relative to the
-// book, as a community fit's), or nil when they don't apply (see above). raw is
-// the stored chapters.json; snapshot the book's scanned_chapters.
-func generatedFit(ctx context.Context, tx *sql.Tx, bookID int64, bookPath, snapshot, raw string) ([]metadata.Chapter, string, error) {
+// generatedFit is the book's generated chapters fitted onto its files (library
+// relative, titles as found) and the fit's key (generatedKey: what it was
+// fitted from), or no key when they don't apply (see above). When the rows
+// already hold the fit of that key, the list is neither decoded nor fitted
+// again: the key comes back with no chapters, and useChapters leaves the rows.
+func generatedFit(ctx context.Context, tx *sql.Tx, r *chapterRow) ([]metadata.Chapter, string, error) {
+	var raw string
+	if err := tx.QueryRowContext(ctx, `SELECT chapters FROM book_attachments WHERE book_id = ?`, r.book.ID).Scan(&raw); err != nil {
+		return nil, "", err
+	}
+	files, err := playFiles(ctx, tx, &r.book)
+	if err != nil {
+		return nil, "", err
+	}
+	key := generatedKey(raw, r.snapshot, files, r.book.RelPath)
+	if r.holds(ChaptersFromGenerated, key) {
+		return nil, key, nil
+	}
 	list := decodeAttachment[metadata.ChapterList](raw)
-	if list == nil {
+	if list == nil || !sameChapterFiles(list.Files, files, r.book.RelPath) {
 		return nil, "", nil
 	}
-	files, err := chapterFiles(ctx, tx, bookID)
+	own, err := scannedChapters(ctx, tx, r.book.ID, r.snapshot)
 	if err != nil {
 		return nil, "", err
-	}
-	if !sameChapterFiles(list.Files, files, bookPath) {
-		return nil, "", nil
-	}
-	own, err := scannedChapters(ctx, tx, bookID, snapshot)
-	if err != nil {
-		return nil, "", err
-	}
-	alignFiles := make([]chapteralign.File, len(files))
-	for i, f := range files {
-		alignFiles[i] = chapteralign.File{Path: f.RelPath, Duration: f.Duration}
 	}
 	remote := make([]chapteralign.Remote, len(list.Chapters))
 	for i, ch := range list.Chapters {
-		remote[i] = chapteralign.Remote{Title: ch.Title, StartMS: ch.StartMS, LengthMS: ch.LengthMS}
+		remote[i] = chapteralign.Remote(ch)
 	}
-	res, err := chapteralign.Align(ctx, alignFiles, own, remote, nil)
+	res, err := chapteralign.Align(ctx, AlignFiles(files), own, remote, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -60,36 +63,20 @@ func generatedFit(ctx context.Context, tx *sql.Tx, bookID int64, bookPath, snaps
 	if res.Status != chapteralign.Fill {
 		return nil, "", nil
 	}
-	key, err := json.Marshal(bookRelative(res.Chapters, bookPath))
-	if err != nil {
-		return nil, "", err
-	}
-	return res.Chapters, chaptersHash(string(key)), nil
+	return res.Chapters, key, nil
 }
 
-// chapterFiles is book id's files in play order (library relative, with size
-// and length): its book_files, or the book itself for a single-file book.
-func chapterFiles(ctx context.Context, tx *sql.Tx, bookID int64) ([]BookFile, error) {
-	var (
-		relPath  string
-		isFolder bool
-		size     int64
-		duration float64
-	)
-	if err := tx.QueryRowContext(ctx, `SELECT rel_path, is_folder, size, duration FROM books WHERE id = ?`, bookID).
-		Scan(&relPath, &isFolder, &size, &duration); err != nil {
-		return nil, err
+// generatedKey names a generated fit (books.chapters_fit) by what it is
+// fitted from: the stored chapters.json (raw), the scan's own chapters
+// (snapshot) and the book's files in play order (each one's path relative to
+// the book, size and length). JSON holds no NUL, nor does a path.
+func generatedKey(raw, snapshot string, files []BookFile, bookPath string) string {
+	var b strings.Builder
+	b.WriteString(raw + "\x00" + snapshot)
+	for _, f := range files {
+		fmt.Fprintf(&b, "\x00%s\x00%d\x00%g", bookFileName(f.RelPath, bookPath), f.Size, f.Duration)
 	}
-	files, err := queryRows(ctx, tx, func(r *sql.Rows, f *BookFile) error {
-		return r.Scan(&f.RelPath, &f.Size, &f.Duration)
-	}, `SELECT rel_path, size, duration FROM book_files WHERE book_id = ? ORDER BY seq`, bookID)
-	if err != nil {
-		return nil, err
-	}
-	if len(files) == 0 && !isFolder {
-		files = []BookFile{{RelPath: relPath, Size: size, Duration: duration}}
-	}
-	return files, nil
+	return chaptersHash(b.String())
 }
 
 // sameChapterFiles reports whether a chapters.json's files are the book's
@@ -108,15 +95,9 @@ func sameChapterFiles(listed []metadata.ChapterListFile, files []BookFile, bookP
 }
 
 // bookFileName is a book's file (library relative) as a chapters.json names
-// it: relative to the folder the book's .audiosilo folder is in. A folder
-// book's files are under its own folder (the library root for a book on it); a
-// single-file book's one file is its name.
+// it: relative to the folder the book's .audiosilo folder is in, so a folder
+// book's files as inBook has them, and a single-file book's one file by its
+// name.
 func bookFileName(file, bookPath string) string {
-	switch {
-	case file == bookPath:
-		return path.Base(file)
-	case bookPath == "." || bookPath == "":
-		return file
-	}
-	return strings.TrimPrefix(file, bookPath+"/")
+	return cmp.Or(inBook(file, bookPath), path.Base(file))
 }

@@ -1,18 +1,23 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { AudioLines, Unplug } from 'lucide-react';
+import { AudioLines } from 'lucide-react';
 import { api, ApiError } from '@/api/client';
 import { keys } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { FactList } from '@/components/fact-list';
-import { Notice } from '@/components/notice';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
-import { NotWritableNotice } from '@/features/bridge/generate-parts';
+import {
+  ForBooks,
+  lengthRow,
+  NoEstimate,
+  NotWritableNotice,
+  OfflineNotice,
+} from '@/features/bridge/generate-parts';
 import { detectPlan, KIND_DETECT } from '@/features/bridge/generate-model';
-import { errorMessage } from '@/lib/errors';
-import { counted, formatDuration, formatHours, formatNumber } from '@/lib/format';
+import { queueInOrder, queueReport } from '@/features/bridge/use-generate';
+import { counted, formatHours } from '@/lib/format';
 import { toast } from '@/lib/toast';
 
 /**
@@ -25,7 +30,7 @@ import { toast } from '@/lib/toast';
  * selection costs one request. Nothing is queued while a book's library can't
  * be written to; a book whose generate job is open is passed over (that run
  * finds its chapters itself), any other failure stops the run and says how far
- * it got.
+ * it got (queueInOrder).
  */
 export function DetectChaptersDialog({
   books,
@@ -49,15 +54,6 @@ export function DetectChaptersDialog({
   const plan = detectPlan(status.data, chosen);
   const offline = status.data ? !status.data.online : false;
   const length = chosen.reduce((sum, b) => sum + Math.max(0, b.duration), 0);
-  const many = chosen.length > 1;
-  const forBooks = (what: string) =>
-    many
-      ? t('bridge.generate.forBooks', {
-          count: chosen.length,
-          n: formatNumber(chosen.length, lang),
-          what,
-        })
-      : what;
 
   const close = (next: boolean) => {
     if (!next) setError('');
@@ -69,63 +65,44 @@ export function DetectChaptersDialog({
     if (busy || !chosen.length) return;
     setBusy(true);
     setError('');
-    let queued = 0;
-    let skipped = 0;
-    try {
-      for (const b of chosen) {
-        try {
-          await api.queueBridgeJob({
-            kind: KIND_DETECT,
-            library_id: b.library_id,
-            path: b.path,
-            params: {},
-          });
-          queued++;
-        } catch (err) {
-          // The book's generate job finds its chapters itself.
-          if (err instanceof ApiError && err.code === 'generate_open') skipped++;
-          else throw err;
-        }
-      }
-      toast.add(
-        queued
-          ? {
-              title: t('health.toast.detectQueued', counted(queued, lang)),
-              description: skipped
-                ? t('health.toast.detectSkipped', counted(skipped, lang))
-                : t('health.toast.detectQueuedBody'),
-              type: 'success',
-            }
-          : { title: t('health.toast.detectSkipped', counted(skipped, lang)) },
-      );
-      onQueued?.();
-      close(false);
-    } catch (err) {
-      const why = errorMessage(err, t);
-      setError(
-        queued
-          ? t('bridge.generate.partial', {
-              done: formatNumber(queued, lang),
-              total: formatNumber(chosen.length, lang),
-              error: why,
-            })
-          : why,
-      );
-    } finally {
-      setBusy(false);
-      void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
+    const out = await queueInOrder(
+      qc,
+      chosen.map((b) => ({
+        kind: KIND_DETECT,
+        library_id: b.library_id,
+        path: b.path,
+        params: {},
+      })),
+      // The book's generate job finds its chapters itself.
+      { skip: (err) => err instanceof ApiError && err.code === 'generate_open' },
+    );
+    setBusy(false);
+    const failed = queueReport(out, chosen.length, t, lang);
+    if (failed !== undefined) {
+      setError(failed);
+      return;
     }
+    toast.add(
+      out.queued
+        ? {
+            title: t('health.toast.detectQueued', counted(out.queued, lang)),
+            description: out.skipped
+              ? t('health.toast.detectSkipped', counted(out.skipped, lang))
+              : t('health.toast.detectQueuedBody'),
+            type: 'success',
+          }
+        : { title: t('health.toast.detectSkipped', counted(out.skipped, lang)) },
+    );
+    onQueued?.();
+    close(false);
   };
 
-  const noEstimate = (
-    <span className="text-muted-foreground">{t('bridge.generate.noEstimate')}</span>
-  );
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent
         title={t('health.detect.title')}
         description={
-          many
+          chosen.length > 1
             ? t('health.detect.books', counted(chosen.length, lang))
             : chosen[0]?.title || chosen[0]?.path
         }
@@ -135,33 +112,22 @@ export function DetectChaptersDialog({
         <form onSubmit={(e) => void submit(e)} className="contents" noValidate>
           <DialogBody className="flex flex-col gap-3 text-[13px]">
             {plan.notWritable ? <NotWritableNotice /> : null}
-            {offline ? (
-              <Notice tone="warn" icon={Unplug} title={t('bridge.generate.offline')}>
-                {t('bridge.generate.offlineBody')}
-              </Notice>
-            ) : null}
+            {offline ? <OfflineNotice /> : null}
             <p>{t('health.detect.body')}</p>
             <FactList
               rows={[
-                ...(length > 0
-                  ? [
-                      [t('bridge.generate.length'), formatDuration(length, lang)] as [
-                        string,
-                        React.ReactNode,
-                      ],
-                    ]
-                  : []),
+                ...lengthRow(t, lang, length),
                 [
                   t('bridge.generate.asr'),
-                  status.isPending
-                    ? undefined
-                    : plan.asrHours === null
-                      ? noEstimate
-                      : forBooks(
-                          t('bridge.generate.about', {
-                            what: formatHours(plan.asrHours * 3600, lang),
-                          }),
-                        ),
+                  status.isPending ? undefined : plan.asrHours === null ? (
+                    <NoEstimate />
+                  ) : (
+                    <ForBooks count={chosen.length}>
+                      {t('bridge.generate.about', {
+                        what: formatHours(plan.asrHours * 3600, lang),
+                      })}
+                    </ForBooks>
+                  ),
                 ],
                 [t('bridge.generate.cost'), t('health.detect.noAgent')],
               ]}

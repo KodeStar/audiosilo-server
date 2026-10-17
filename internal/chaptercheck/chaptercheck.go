@@ -337,7 +337,7 @@ func (r *Runner) check(ctx context.Context, ref catalog.Ref, refit bool) (*catal
 				return inner(budget, file, from, to)
 			}
 		}
-		res, err := chapteralign.Align(ctx, files(in.Files), in.Chapters, remotes(rc.Chapters), probe)
+		res, err := chapteralign.Align(ctx, catalog.AlignFiles(in.Files), in.Chapters, remotes(rc.Chapters), probe)
 		if err != nil {
 			return nil, err
 		}
@@ -374,14 +374,6 @@ func (r *Runner) prober(ctx context.Context, libraryID int64) (chapteralign.Prob
 		}
 		return out, nil
 	}, nil
-}
-
-func files(in []catalog.BookFile) []chapteralign.File {
-	out := make([]chapteralign.File, len(in))
-	for i, f := range in {
-		out[i] = chapteralign.File{Path: f.RelPath, Duration: f.Duration}
-	}
-	return out
 }
 
 // listHash names a community list, so a recheck can tell it unchanged.

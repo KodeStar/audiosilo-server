@@ -8,7 +8,7 @@ import { errorMessage } from '@/lib/errors';
 import { formatNumber } from '@/lib/format';
 import { relBaseName } from '@/lib/paths';
 import { isOpen, kindName } from './bridge-model';
-import { generatePollMs, KIND_GENERATE, latestJobOf } from './generate-model';
+import { generatePollMs, KIND_DETECT, KIND_GENERATE, latestJobOf } from './generate-model';
 
 /**
  * How many of a book's newest jobs are read to find its generate and describe
@@ -99,10 +99,15 @@ export function useBridgeLink(enabled: boolean) {
   return q.data?.ui_url;
 }
 
-/** How a run of queued jobs went: how many were queued before the first failure, and that failure. */
+/**
+ * How a run of queued jobs went: how many were queued before the first failure,
+ * how many were passed over, and that failure with the request it stopped at.
+ */
 export interface QueueOutcome {
   queued: number;
+  skipped: number;
   error?: unknown;
+  failed?: BridgeJobRequest;
 }
 
 /**
@@ -111,10 +116,8 @@ export interface QueueOutcome {
  * queueJob says).
  */
 class StillStopping extends Error {
-  readonly path: string;
-  constructor(path: string) {
+  constructor() {
     super('still stopping');
-    this.path = path;
   }
 }
 
@@ -124,42 +127,63 @@ class StillStopping extends Error {
  * run out of order, and most failures (a library the Bridge can't write, a kind
  * it no longer offers) would refuse them all. A job already open for a book
  * comes back instead of a new one, which counts as queued, unless it is being
- * cancelled: that book would be left without one, so the run stops there.
+ * cancelled: that book would be left without one, so the run stops there. A
+ * failure `skip` accepts passes the book over instead (Detect chapters' book
+ * whose generate job is open).
  */
 export async function queueInOrder(
   qc: QueryClient,
   requests: readonly BridgeJobRequest[],
+  { skip }: { skip?: (err: unknown) => boolean } = {},
 ): Promise<QueueOutcome> {
   let queued = 0;
+  let skipped = 0;
+  let req: BridgeJobRequest | undefined;
   try {
-    for (const req of requests) {
-      const { job, created } = await api.queueBridgeJob(req);
-      if (!created && job.cancel_requested) throw new StillStopping(req.path ?? '');
-      queued++;
+    for (req of requests) {
+      try {
+        const { job, created } = await api.queueBridgeJob(req);
+        if (!created && job.cancel_requested) throw new StillStopping();
+        queued++;
+      } catch (err) {
+        if (!skip?.(err)) throw err;
+        skipped++;
+      }
     }
-    return { queued };
+    return { queued, skipped };
   } catch (error) {
-    return { queued, error };
+    return { queued, skipped, error, failed: req };
   } finally {
     void qc.invalidateQueries({ queryKey: keys.bridgeJobLists });
     void qc.invalidateQueries({ queryKey: keys.bridgeEstimates });
   }
 }
 
+/** What a Bridge that no longer offers a kind means in the dialogs that queue it. */
+const KIND_UNAVAILABLE: Record<string, string> = {
+  [KIND_GENERATE]: 'bridge.generate.kindUnavailable',
+  [KIND_DETECT]: 'bridge.detect.kindUnavailable',
+};
+
 /**
- * A queue failure in the generate dialogs' words: a Bridge that no longer
- * offers the kind is named for what it means here; the rest (a library the
- * Bridge can't write among them) as anywhere else.
+ * A queue failure in the dialogs' words: a Bridge that no longer offers the
+ * kind is named for what it means there; the rest (a library the Bridge can't
+ * write among them) as anywhere else.
  */
-function generateError(err: unknown, t: TFunction): string {
-  if (err instanceof ApiError && err.code === 'kind_unavailable')
-    return t('bridge.generate.kindUnavailable');
-  if (err instanceof StillStopping)
+function queueError(out: QueueOutcome, t: TFunction): string {
+  const kind = out.failed?.kind ?? KIND_GENERATE;
+  if (
+    out.error instanceof ApiError &&
+    out.error.code === 'kind_unavailable' &&
+    KIND_UNAVAILABLE[kind]
+  )
+    return t(KIND_UNAVAILABLE[kind]);
+  if (out.error instanceof StillStopping)
     return t('bridge.queue.stopping', {
-      what: kindName(t, KIND_GENERATE),
-      name: relBaseName(err.path),
+      what: kindName(t, kind),
+      name: relBaseName(out.failed?.path ?? ''),
     });
-  return errorMessage(err, t);
+  return errorMessage(out.error, t);
 }
 
 /**
@@ -173,7 +197,7 @@ export function queueReport(
   lang: string,
 ): string | undefined {
   if (out.error === undefined) return undefined;
-  const why = generateError(out.error, t);
+  const why = queueError(out, t);
   return out.queued
     ? t('bridge.generate.partial', {
         done: formatNumber(out.queued, lang),

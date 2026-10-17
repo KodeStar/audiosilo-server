@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Bot, Hourglass, Sparkles, Unplug } from 'lucide-react';
+import { Bot, Hourglass, Sparkles } from 'lucide-react';
 import type { BridgeEstimate } from '@/api/types';
 import { FactList } from '@/components/fact-list';
 import { Notice } from '@/components/notice';
@@ -9,7 +9,7 @@ import { QueryError } from '@/components/query-error';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { FormError } from '@/components/ui/field';
-import { formatDuration, formatHours, formatNumber, formatUsd } from '@/lib/format';
+import { formatHours, formatNumber, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import {
   destinationKey,
@@ -18,7 +18,14 @@ import {
   planEstimate,
   type Contribute,
 } from './generate-model';
-import { ContributeSwitch, NotWritableNotice } from './generate-parts';
+import {
+  ContributeSwitch,
+  ForBooks,
+  lengthRow,
+  NoEstimate,
+  NotWritableNotice,
+  OfflineNotice,
+} from './generate-parts';
 import { queueInOrder, queueReport, useGenerateEstimate } from './use-generate';
 
 /**
@@ -181,30 +188,15 @@ function EstimateBody({
   const lang = i18n.resolvedLanguage ?? 'en';
   const id = useId();
   const v = estimateView(estimate);
-  const noEstimate = (
-    <span className="text-muted-foreground">{t('bridge.generate.noEstimate')}</span>
-  );
   const earlier = estimate.earlier;
   // The figures quote every run the button queues: this book and the earlier
   // ones it takes first, naming how many runs that is.
   const plan = planEstimate(estimate, includeEarlier);
-  const forPlan = (what: string) =>
-    plan.books > 1
-      ? t('bridge.generate.forBooks', {
-          count: plan.books,
-          n: formatNumber(plan.books, lang),
-          what,
-        })
-      : what;
 
   return (
     <>
       {v.notWritable ? <NotWritableNotice /> : null}
-      {offline ? (
-        <Notice tone="warn" icon={Unplug} title={t('bridge.generate.offline')}>
-          {t('bridge.generate.offlineBody')}
-        </Notice>
-      ) : null}
+      {offline ? <OfflineNotice /> : null}
       {v.agentNotReady ? (
         <Notice tone="warn" icon={Bot} title={t('bridge.generate.agentNotReady')}>
           {t('bridge.generate.agentNotReadyBody')}
@@ -232,33 +224,30 @@ function EstimateBody({
               t('bridge.generate.sourceAudio')
             ),
           ],
-          ...(estimate.duration_seconds > 0
-            ? [
-                [t('bridge.generate.length'), formatDuration(estimate.duration_seconds, lang)] as [
-                  string,
-                  React.ReactNode,
-                ],
-              ]
-            : []),
+          ...lengthRow(t, lang, estimate.duration_seconds),
           [
             t('bridge.generate.asr'),
-            plan.asrHours === 0
-              ? t('bridge.generate.asrNone')
-              : plan.asrHours === null
-                ? noEstimate
-                : forPlan(
-                    t('bridge.generate.about', { what: formatHours(plan.asrHours * 3600, lang) }),
-                  ),
+            plan.asrHours === 0 ? (
+              t('bridge.generate.asrNone')
+            ) : plan.asrHours === null ? (
+              <NoEstimate />
+            ) : (
+              <ForBooks count={plan.books}>
+                {t('bridge.generate.about', { what: formatHours(plan.asrHours * 3600, lang) })}
+              </ForBooks>
+            ),
           ],
           [
             t('bridge.generate.cost'),
-            plan.costUsd === null
-              ? noEstimate
-              : forPlan(
-                  v.subscription
-                    ? t('bridge.generate.costUsage', { cost: formatUsd(plan.costUsd, lang) })
-                    : t('bridge.generate.about', { what: formatUsd(plan.costUsd, lang) }),
-                ),
+            plan.costUsd === null ? (
+              <NoEstimate />
+            ) : (
+              <ForBooks count={plan.books}>
+                {v.subscription
+                  ? t('bridge.generate.costUsage', { cost: formatUsd(plan.costUsd, lang) })
+                  : t('bridge.generate.about', { what: formatUsd(plan.costUsd, lang) })}
+              </ForBooks>
+            ),
           ],
           [t('bridge.generate.where'), t(destinationKey(contribute))],
         ]}
