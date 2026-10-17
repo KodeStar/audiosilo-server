@@ -22,6 +22,11 @@ const (
 	ChaptersFromFiles = "files"
 	// ChaptersFromCommunity is a community chapter list fitted onto the audio.
 	ChaptersFromCommunity = "community"
+	// ChaptersFromGenerated is the chapters the Bridge found in the narration of
+	// a book with none of its own (its .audiosilo/chapters.json), fitted onto
+	// the same files. Never an admin's choice: it stands in only when nothing
+	// was chosen and the community's don't.
+	ChaptersFromGenerated = "generated"
 )
 
 // ChapterSourceAuto is BookEdit.ChapterSource's "remove the choice": the source
@@ -250,15 +255,18 @@ func (c *Catalog) GetCommunityChapters(ctx context.Context, libraryID int64, pat
 // applyChapterSource puts the book's chapters from the source it should have
 // now: the community's when a check of the book as it is now fitted and either
 // the admin chose them (chapter_choices) or, with no choice, the book has no
-// chapters of its own (a fill); else the scan's own (books.scanned_chapters).
-// A check of other audio or identifiers is stale and never used: it may name
-// files no longer there. Titles are the scanned ones; refreshEffective applies
-// the renames after. A fit already in the rows is not written again.
+// chapters of its own (a fill); else, with no choice, the generated ones when
+// they fit the book (generatedFit); else the scan's own
+// (books.scanned_chapters). A check of other audio or identifiers is stale and
+// never used: it may name files no longer there. Titles are the scanned ones;
+// refreshEffective applies the renames after. A fit already in the rows is not
+// written again.
 func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, path string) error {
-	var current, fit, snapshot string
+	var current, fit, snapshot, generatedJSON string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT chapters_source, chapters_fit, scanned_chapters FROM books WHERE id = ?`, bookID).
-		Scan(&current, &fit, &snapshot); err != nil {
+		`SELECT b.chapters_source, b.chapters_fit, b.scanned_chapters, COALESCE(a.chapters, '')
+		   FROM books b LEFT JOIN book_attachments a ON a.book_id = b.id WHERE b.id = ?`, bookID).
+		Scan(&current, &fit, &snapshot, &generatedJSON); err != nil {
 		return err
 	}
 	var choice, status, fittedJSON string
@@ -275,60 +283,79 @@ func applyChapterSource(ctx context.Context, tx *sql.Tx, bookID, libID int64, pa
 	}
 	community := upToDate && fitted(status) &&
 		(choice == ChaptersFromCommunity || (choice == "" && status == string(chapteralign.Fill)))
-	switch {
-	case community:
+	if community {
 		key := chaptersHash(fittedJSON)
 		if current == ChaptersFromCommunity && fit == key {
 			return nil
-		}
-		legacy := snapshot == ""
-		if legacy {
-			// A row from before the snapshot: its rows are the scan's, so they
-			// are kept before the community's replace them.
-			own, err := scannedChapters(ctx, tx, bookID, "")
-			if err != nil {
-				return err
-			}
-			raw, err := json.Marshal(own)
-			if err != nil {
-				return err
-			}
-			snapshot = string(raw)
 		}
 		var chs []metadata.Chapter
 		if err := json.Unmarshal([]byte(fittedJSON), &chs); err != nil {
 			return fmt.Errorf("community chapters: %w", err)
 		}
 		libraryRelative(chs, path)
-		if err := replaceChapters(ctx, tx, bookID, chs); err != nil {
+		legacy, err := useChapters(ctx, tx, bookID, ChaptersFromCommunity, key, chs, snapshot)
+		if err != nil || !legacy {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE books SET chapters_source = ?, chapters_fit = ?, scanned_chapters = ?, chapters_hash = ? WHERE id = ?`,
-			ChaptersFromCommunity, key, snapshot, chaptersHash(snapshot), bookID); err != nil {
-			return err
-		}
-		if legacy {
-			// The snapshot is the chapters the check fitted (the rows it read), so
-			// the check stays current under the basis the snapshot changes.
-			_, err := tx.ExecContext(ctx,
-				`UPDATE community_chapters SET basis = (SELECT `+chapterBasisExpr+` FROM books b WHERE b.id = ?)
-				  WHERE library_id = ? AND path = ?`, bookID, libID, path)
-			return err
-		}
-		return nil
-	case current == ChaptersFromCommunity:
-		own, err := scannedChapters(ctx, tx, bookID, snapshot)
+		// The snapshot is the chapters the check fitted (the rows it read), so
+		// the check stays current under the basis the snapshot changes.
+		_, err = tx.ExecContext(ctx,
+			`UPDATE community_chapters SET basis = (SELECT `+chapterBasisExpr+` FROM books b WHERE b.id = ?)
+			  WHERE library_id = ? AND path = ?`, bookID, libID, path)
+		return err
+	}
+	if choice == "" && generatedJSON != "" {
+		chs, key, err := generatedFit(ctx, tx, bookID, path, snapshot, generatedJSON)
 		if err != nil {
 			return err
 		}
-		if err := replaceChapters(ctx, tx, bookID, own); err != nil {
+		if chs != nil {
+			if current == ChaptersFromGenerated && fit == key {
+				return nil
+			}
+			_, err := useChapters(ctx, tx, bookID, ChaptersFromGenerated, key, chs, snapshot)
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE books SET chapters_source = '', chapters_fit = '' WHERE id = ?`, bookID)
+	}
+	if current == "" {
+		return nil
+	}
+	// Leaving a community or generated list: the scan's own come back.
+	own, err := scannedChapters(ctx, tx, bookID, snapshot)
+	if err != nil {
 		return err
 	}
-	return nil
+	if err := replaceChapters(ctx, tx, bookID, own); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE books SET chapters_source = '', chapters_fit = '' WHERE id = ?`, bookID)
+	return err
+}
+
+// useChapters puts chs (library-relative, titles as found) in book id's rows
+// as source, its fit named key. snapshot is the book's scanned_chapters; on a
+// row from before the snapshot (legacy: "") the rows are the scan's, so they
+// are kept as the snapshot before chs replace them.
+func useChapters(ctx context.Context, tx *sql.Tx, bookID int64, source, key string, chs []metadata.Chapter, snapshot string) (legacy bool, err error) {
+	legacy = snapshot == ""
+	if legacy {
+		own, err := scannedChapters(ctx, tx, bookID, "")
+		if err != nil {
+			return false, err
+		}
+		raw, err := json.Marshal(own)
+		if err != nil {
+			return false, err
+		}
+		snapshot = string(raw)
+	}
+	if err := replaceChapters(ctx, tx, bookID, chs); err != nil {
+		return false, err
+	}
+	_, err = tx.ExecContext(ctx,
+		`UPDATE books SET chapters_source = ?, chapters_fit = ?, scanned_chapters = ?, chapters_hash = ? WHERE id = ?`,
+		source, key, snapshot, chaptersHash(snapshot), bookID)
+	return legacy, err
 }
 
 // replaceChapters swaps a book's chapter rows for chs (their titles as scanned).

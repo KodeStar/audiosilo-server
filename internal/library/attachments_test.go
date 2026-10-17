@@ -247,6 +247,60 @@ func TestScannerReadsDescription(t *testing.T) {
 	}
 }
 
+// testChapterList is a chapters.json for Loose.m4b.
+const testChapterList = `{"version":1,"generator":"audiosilo-bridge","from":"narration",
+	"files":[{"path":"Loose.m4b","size":1,"duration_ms":2000}],
+	"chapters":[{"title":"Chapter 1","start_ms":0,"length_ms":1000},{"title":"Chapter 2","start_ms":1000,"length_ms":1000}]}`
+
+// TestScannerReadsChapterList: a scan reads a book's chapters.json (checked)
+// into its attachments and its signature, a file that fails the checks is
+// stored as none (its signature kept, so it isn't read again), and the
+// attachments rescan answers it.
+func TestScannerReadsChapterList(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := storetest.Open(t)
+	cat := catalog.New(db, time.Now)
+	scanner := NewScanner(cat, "", slog.Default())
+	root := t.TempDir()
+	past := time.Now().Add(-time.Hour)
+	for _, p := range []string{"Loose.m4b", "Bad.m4b", "Later.m4b"} {
+		copyFixtureM4B(t, filepath.Join(root, p))
+	}
+	writeAt(t, root, ".audiosilo/Loose.chapters.json", testChapterList, past)
+	writeAt(t, root, ".audiosilo/Bad.chapters.json", strings.Replace(testChapterList, `"version":1`, `"version":9`, 1), past)
+	lib, _ := cat.CreateLibrary(ctx, catalog.Library{Name: "L", Root: root})
+	if _, err := scanner.Scan(ctx, *lib); err != nil {
+		t.Fatal(err)
+	}
+	stored := func(rel string) (sig, chapters string) {
+		t.Helper()
+		if err := db.QueryRowContext(ctx, `SELECT b.attachments_sig, COALESCE(a.chapters, '') FROM books b
+		      LEFT JOIN book_attachments a ON a.book_id = b.id WHERE b.rel_path = ?`, rel).Scan(&sig, &chapters); err != nil {
+			t.Fatal(err)
+		}
+		return sig, chapters
+	}
+	if sig, chapters := stored("Loose.m4b"); !slices.Equal(metadata.AttachmentSigNames(sig), []string{"chapters.json"}) ||
+		!strings.Contains(chapters, `"title":"Chapter 2"`) {
+		t.Fatalf("loose = %q, %q", sig, chapters)
+	}
+	if sig, chapters := stored("Bad.m4b"); !slices.Equal(metadata.AttachmentSigNames(sig), []string{"chapters.json"}) || chapters != "" {
+		t.Fatalf("a refused file = %q, %q; want its signature and no chapters", sig, chapters)
+	}
+	if b, err := cat.GetBookByPath(ctx, lib.ID, "Loose.m4b"); err != nil || b.Generated {
+		t.Errorf("chapters alone: generated = %v, %v; want false", b != nil && b.Generated, err)
+	}
+	writeAt(t, root, ".audiosilo/Later.chapters.json", strings.ReplaceAll(testChapterList, "Loose.m4b", "Later.m4b"), time.Now())
+	got, err := scanner.RefreshAttachments(ctx, *lib, "Later.m4b")
+	if err != nil || got.Attachments != (AttachmentsHeld{Chapters: true}) {
+		t.Fatalf("refresh = %+v, %v", got, err)
+	}
+	if _, chapters := stored("Later.m4b"); chapters == "" {
+		t.Errorf("the refreshed chapters weren't stored")
+	}
+}
+
 // TestScannerRefusesBadAttachments: a link (to a valid file) is never read, nor
 // is a file over the size cap or one that fails its checks; the other files
 // beside them still are. A link to a whole .audiosilo folder is never listed.
