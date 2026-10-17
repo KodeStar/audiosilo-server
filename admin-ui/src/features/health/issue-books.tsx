@@ -56,30 +56,55 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
   const server = useServerInfo().data;
   const books = list.data?.pages.flatMap((p) => p.books ?? []) ?? [];
   const fix = ignored ? null : fixFor(kind, detectAvailable(server));
+  // Rendered whatever the list shows, keyed so each branch's fragment keeps the
+  // same instance: a refetch that fails or empties the list mustn't take an
+  // open confirmation (or a run it is queueing) away.
+  const detectDialog = (
+    <DetectChaptersDialog
+      key="detect-chapters"
+      books={detecting?.books ?? null}
+      onOpenChange={(open) => !open && setDetecting(null)}
+      // A selection queued from the bar is done with.
+      onQueued={() => detecting?.fromBar && selection.clear()}
+    />
+  );
 
   if (list.isError) {
     return (
-      <QueryError
-        title={t('health.listError')}
-        error={list.error}
-        onRetry={() => void list.refetch()}
-      />
+      <>
+        <QueryError
+          title={t('health.listError')}
+          error={list.error}
+          onRetry={() => void list.refetch()}
+        />
+        {detectDialog}
+      </>
     );
   }
   if (list.isPending) {
     return (
-      <div
-        className="flex flex-col gap-2 rounded-xl border bg-card p-4"
-        role="status"
-        aria-label={t('common.loading')}
-      >
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="skel h-14" />
-        ))}
-      </div>
+      <>
+        <div
+          className="flex flex-col gap-2 rounded-xl border bg-card p-4"
+          role="status"
+          aria-label={t('common.loading')}
+        >
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="skel h-14" />
+          ))}
+        </div>
+        {detectDialog}
+      </>
     );
   }
-  if (books.length === 0) return <AllClear ignored={ignored} />;
+  if (books.length === 0) {
+    return (
+      <>
+        <AllClear ignored={ignored} />
+        {detectDialog}
+      </>
+    );
+  }
 
   const allSelected = books.every(selection.isSelected);
   // What the bar acts on: the selected books still listed (one ignored or fixed on
@@ -216,12 +241,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
           onClick={toggleIgnore}
         />
       </BulkBar>
-      <DetectChaptersDialog
-        books={detecting?.books ?? null}
-        onOpenChange={(open) => !open && setDetecting(null)}
-        // A selection queued from the bar is done with.
-        onQueued={() => detecting?.fromBar && selection.clear()}
-      />
+      {detectDialog}
     </>
   );
 }

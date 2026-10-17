@@ -78,40 +78,42 @@ func sigParts(sig string) metadata.AttachmentParts {
 const attachmentsUncheckedExpr = `(attachments_indexed_at IS NOT indexed_at)`
 
 // writeAttachments replaces book id's book_attachments row with files, inside
-// tx: none when there is nothing to store. It answers the chapters column as
-// it was and as it is now ("" for none), so a caller can tell whether the
-// book's generated chapters changed.
-func writeAttachments(ctx context.Context, tx *sql.Tx, id int64, files metadata.AttachmentFiles, now string) (was, chapters string, err error) {
+// tx: none when there is nothing to store. It reports whether the chapters
+// column changed (came, went or says something else), the one file the book's
+// effective row reads.
+func writeAttachments(ctx context.Context, tx *sql.Tx, id int64, files metadata.AttachmentFiles, now string) (chaptersChanged bool, err error) {
+	var was string
 	err = tx.QueryRowContext(ctx, `DELETE FROM book_attachments WHERE book_id = ? RETURNING chapters`, id).Scan(&was)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", "", err
+		return false, err
 	}
 	if files.Empty() {
-		return was, "", nil
+		return was != "", nil
 	}
 	chars, err := encodeAttachment(files.Characters)
 	if err != nil {
-		return "", "", err
+		return false, err
 	}
 	recaps, err := encodeAttachment(files.Recaps)
 	if err != nil {
-		return "", "", err
+		return false, err
 	}
 	desc, err := encodeAttachment(files.Description)
 	if err != nil {
-		return "", "", err
+		return false, err
 	}
-	if chapters, err = encodeAttachment(files.Chapters); err != nil {
-		return "", "", err
+	chapters, err := encodeAttachment(files.Chapters)
+	if err != nil {
+		return false, err
 	}
 	prov, err := encodeAttachment(files.Provenance)
 	if err != nil {
-		return "", "", err
+		return false, err
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO book_attachments(book_id, characters, recaps, description, chapters, provenance, updated_at) VALUES(?,?,?,?,?,?,?)`,
 		id, chars, recaps, desc, chapters, prov, now)
-	return was, chapters, err
+	return chapters != was, err
 }
 
 // encodeAttachment is a book_attachments column's value: v as JSON, "" for nil.
@@ -143,8 +145,11 @@ func decodeAttachment[T any](raw string) *T {
 // state (compare and set), else skipped: something recorded a newer reading
 // since. It commits every pathReadingBatch books. A book whose chapters.json
 // changed (came, went or says something else) is re-resolved (refreshEffective:
-// the generated chapters are a chapter source) and announced (c.changed); the
-// rest of the files are read by nothing in the effective row.
+// the generated chapters are a chapter source) and announced (c.changed), and
+// so is one whose stored reading wasn't made for this index of it (an older
+// server re-indexed it, rebuilding its chapter rows without the generated ones
+// it kept stored); the rest of the files are read by nothing in the effective
+// row.
 func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings map[string]AttachmentsReading) error {
 	now := c.ts()
 	return c.eachPathBatch(ctx, "SetAttachments", slices.Collect(maps.Keys(readings)),
@@ -155,6 +160,11 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 			}
 			if err != nil {
 				return false, err
+			}
+			var unchecked bool
+			if err := tx.QueryRowContext(ctx, `SELECT `+attachmentsUncheckedExpr+` FROM books WHERE id = ?`, id).
+				Scan(&unchecked); err != nil {
+				return false, fmt.Errorf("%s: %w", relPath, err)
 			}
 			r := readings[relPath]
 			q, args := `UPDATE books SET attachments_sig = ?, attachments_indexed_at = indexed_at WHERE id = ?`, []any{r.Sig, id}
@@ -173,11 +183,11 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 			if n, err := res.RowsAffected(); err != nil || n == 0 {
 				return false, err // a newer reading was recorded since: it stays
 			}
-			was, chapters, err := writeAttachments(ctx, tx, id, r.Files, now)
+			changed, err := writeAttachments(ctx, tx, id, r.Files, now)
 			if err != nil {
 				return false, fmt.Errorf("%s: %w", relPath, err)
 			}
-			if chapters == was {
+			if !changed && !unchecked {
 				return false, nil
 			}
 			if err := refreshEffective(ctx, tx, id); err != nil {

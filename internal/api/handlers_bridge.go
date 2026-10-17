@@ -438,8 +438,9 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 
 // writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,
 // finished, a kind the Bridge doesn't run, a library it can't write to, a
-// contribution it can't make or a generate job open for a describe, else 500)
-// and reports whether there was none.
+// contribution it can't make, a generate job open for a describe or a detect,
+// or a detect job open for a generate, else 500) and reports whether there was
+// none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
 	case err == nil:

@@ -19,6 +19,7 @@ import {
   describeOffered,
   destinationKey,
   detectAvailable,
+  detectJobsKnown,
   detectPlan,
   estimateView,
   GENERATE_PARKED_POLL_MS,
@@ -109,6 +110,13 @@ describe('the action gate', () => {
     // A server from before the Bridge, or metadata off: no request at all.
     expect(generateJobsKnown(server({}))).toBe(false);
     expect(generateJobsKnown(server({ bridge: true, metadata: false }))).toBe(false);
+  });
+
+  it('follows a book chapter detection on any server that knows the Bridge, metadata or not', () => {
+    expect(detectJobsKnown(server({ bridge: true }))).toBe(true);
+    expect(detectJobsKnown(server({ bridge: false, metadata: false }))).toBe(true);
+    expect(detectJobsKnown(server({}))).toBe(false);
+    expect(detectJobsKnown(undefined)).toBe(false);
   });
 
   it('hides the action when the community has both, and says Regenerate over local data', () => {
@@ -703,10 +711,13 @@ describe('a description (Phase 1c)', () => {
     expect(describeOffered({ ...can, has: { ...local, community_unknown: true } }, [])).toBe(false);
   });
 
-  it('is not offered while a generate or describe job is open', () => {
+  it('is not offered while a generate, describe or chapter detection job is open', () => {
     const e = { ...can, has: has({ characters: true }) };
     expect(describeOffered(e, [open(KIND_GENERATE)])).toBe(false);
     expect(describeOffered(e, [open(KIND_DESCRIBE, 'needs_attention')])).toBe(false);
+    // A detection, running or parked, holds the book on the Bridge.
+    expect(describeOffered(e, [open(KIND_DETECT)])).toBe(false);
+    expect(describeOffered(e, [open(KIND_DETECT, 'needs_attention')])).toBe(false);
     // Another kind (a verify) doesn't count.
     expect(describeOffered(e, [open('bridge.verify')])).toBe(true);
   });
@@ -785,6 +796,12 @@ describe('detecting chapters', () => {
     expect(detectPlan(status({ estimates: undefined }), books).asrHours).toBeNull();
     expect(detectPlan(status(), [adminBook({ library_id: 1, duration: 0 })]).asrHours).toBeNull();
     expect(detectPlan(undefined, books)).toEqual({ asrHours: null, notWritable: false });
+    // A figure of 0 (the server's float when a Bridge sends none) is no
+    // estimate, as the generate dialog reads it, never "About 0h".
+    const none = status({
+      estimates: { sidecars: { asr_seconds_per_audio_hour: 0 } } as BridgeStatus['estimates'],
+    });
+    expect(detectPlan(none, books).asrHours).toBeNull();
   });
 
   it("refuses a book whose library the Bridge can't write to, or doesn't map", () => {

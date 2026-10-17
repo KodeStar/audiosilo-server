@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { AdminBook, DuplicateGroup, SeriesSpellingGroup } from '@/api/types';
+import type { AdminBook, BridgeJob, DuplicateGroup, SeriesSpellingGroup } from '@/api/types';
 import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
 import { issuesSummary, libraries, serverInfo } from '@/test/fixtures';
 import { adminBook } from '@/test/library-fixtures';
@@ -253,6 +253,30 @@ describe('library health', () => {
       workers: [],
       estimates: { sidecars: { asr_seconds_per_audio_hour: 900 } },
     };
+    // POST /admin/bridge/jobs answers the job itself (201 when it was queued).
+    const queuedJob = (path: string): MockReply => ({
+      status: 201,
+      body: {
+        id: 5,
+        kind: 'chapters.detect',
+        library_id: 1,
+        path,
+        params: {},
+        state: 'queued',
+        progress: {},
+        result: {},
+        error: '',
+        requested_by: { id: 1, username: 'chris' },
+        priority: 0,
+        attempts: 0,
+        lease_until: null,
+        cancel_requested: false,
+        created_at: '2026-10-17T09:00:00Z',
+        updated_at: '2026-10-17T09:00:00Z',
+        claimed_at: null,
+        finished_at: null,
+      } satisfies BridgeJob,
+    });
     function detectRoutes(over: Record<string, MockRoute> = {}) {
       const summary = issuesSummary();
       summary.categories[4] = { kind: 'no_chapters', count: 2, ignored: 0, samples: [] };
@@ -270,7 +294,7 @@ describe('library health', () => {
     it('confirms with the transcription time and no agent cost, then queues chapters.detect', async () => {
       const calls = mockFetch(
         detectRoutes({
-          'POST /admin/bridge/jobs': { status: 201, body: { job: { id: 5 }, created: true } },
+          'POST /admin/bridge/jobs': (req) => queuedJob((req.body as { path: string }).path),
         }),
       );
       const user = userEvent.setup();
@@ -294,7 +318,7 @@ describe('library health', () => {
           'POST /admin/bridge/jobs': (req) =>
             (req.body as { path: string }).path === 'Mosse/Past Tense'
               ? { status: 409, body: { error: 'a generate job is open', code: 'generate_open' } }
-              : { status: 201, body: { job: { id: 5 }, created: true } },
+              : queuedJob((req.body as { path: string }).path),
         }),
       );
       const user = userEvent.setup();
@@ -313,6 +337,38 @@ describe('library health', () => {
       expect(
         calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs'),
       ).toHaveLength(2);
+    });
+
+    it('stays open while it queues, so its outcome lands in the dialog that started it', async () => {
+      // The books' POSTs wait until the test lets them through.
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': async (req) => {
+            await held;
+            return queuedJob((req.body as { path: string }).path);
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const confirm = { name: 'Detect chapters' };
+      const dialog = await screen.findByRole('dialog', confirm);
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      // Cancel and Escape do nothing while it queues.
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await user.keyboard('{Escape}');
+      expect(screen.getByRole('dialog', confirm)).toBeInTheDocument();
+      release();
+      expect(await screen.findByText('Finding the chapters of 2 books')).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('dialog', confirm)).not.toBeInTheDocument());
+      // The bar's selection was queued, so it is done with.
+      expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
     });
 
     it('offers no fix while the Bridge does not offer chapter detection', async () => {

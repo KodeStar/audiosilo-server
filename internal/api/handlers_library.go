@@ -398,7 +398,8 @@ func (a *API) handleChapters(w http.ResponseWriter, r *http.Request) {
 		"direct_playable": media.DirectPlayable(book.Codec),
 	}
 	// Additive: present only when the chapters are a community list fitted onto
-	// the audio, so the player can say where they came from.
+	// the audio ("community") or the ones the Bridge found in the narration
+	// ("generated"), so the player can say where they came from.
 	if book.ChaptersSource != "" {
 		out["chapters_source"] = book.ChaptersSource
 	}

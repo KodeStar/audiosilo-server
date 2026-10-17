@@ -22,9 +22,10 @@ type AdminBookDetail struct {
 	Shares      []BookShare           `json:"shares"`
 	Folder      BookFolder            `json:"folder"`
 	IndexedAt   string                `json:"indexed_at"`
-	// ChapterSource is where Chapters come from now (ChaptersFromFiles or
-	// ChaptersFromCommunity); ChapterChoice is the admin's choice of it, "" when
-	// it is left automatic.
+	// ChapterSource is where Chapters come from now (ChaptersFromFiles,
+	// ChaptersFromCommunity or ChaptersFromGenerated); ChapterChoice is the
+	// admin's choice of it (files or community, never generated), "" when it is
+	// left automatic.
 	ChapterSource string `json:"chapter_source"`
 	ChapterChoice string `json:"chapter_choice"`
 	// CommunityChapters is the book's last community chapter check, null when it

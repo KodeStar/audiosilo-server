@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AudioLines } from 'lucide-react';
@@ -30,7 +30,10 @@ import { toast } from '@/lib/toast';
  * selection costs one request. Nothing is queued while a book's library can't
  * be written to; a book whose generate job is open is passed over (that run
  * finds its chapters itself), any other failure stops the run and says how far
- * it got (queueInOrder).
+ * it got (queueInOrder). It stays open while a run queues (Cancel, Escape and
+ * the close button do nothing then), so the run's outcome, its error or its
+ * clearing of the bar's selection, lands in the dialog that started it, never
+ * in one opened since.
  */
 export function DetectChaptersDialog({
   books,
@@ -49,6 +52,9 @@ export function DetectChaptersDialog({
   const open = books !== null;
   const status = useQuery({ queryKey: keys.bridge, queryFn: api.bridge, enabled: open });
   const [busy, setBusy] = useState(false);
+  // A run in flight, read synchronously (a close or a second press can come
+  // before the re-render that shows busy).
+  const running = useRef(false);
   const [error, setError] = useState('');
   const chosen = books ?? [];
   const plan = detectPlan(status.data, chosen);
@@ -56,13 +62,15 @@ export function DetectChaptersDialog({
   const length = chosen.reduce((sum, b) => sum + Math.max(0, b.duration), 0);
 
   const close = (next: boolean) => {
+    if (!next && running.current) return;
     if (!next) setError('');
     onOpenChange(next);
   };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busy || !chosen.length) return;
+    if (running.current || !chosen.length) return;
+    running.current = true;
     setBusy(true);
     setError('');
     const out = await queueInOrder(
@@ -76,6 +84,7 @@ export function DetectChaptersDialog({
       // The book's generate job finds its chapters itself.
       { skip: (err) => err instanceof ApiError && err.code === 'generate_open' },
     );
+    running.current = false;
     setBusy(false);
     const failed = queueReport(out, chosen.length, t, lang);
     if (failed !== undefined) {

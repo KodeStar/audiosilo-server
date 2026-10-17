@@ -88,10 +88,10 @@ type AdminBook struct {
 	ScanErrorFile   string `json:"scan_error_file,omitempty"`
 	ScanErrorDetail string `json:"scan_error_detail,omitempty"`
 	SuspectParts    int    `json:"suspect_parts,omitempty"`
-	// ChaptersSource is where the chapters come from (ChaptersFromFiles or
-	// ChaptersFromCommunity) and ChaptersCheck the status of the book's last
-	// community chapter check ("" = none), so a list can say why a book has no
-	// community chapters.
+	// ChaptersSource is where the chapters come from (ChaptersFromFiles,
+	// ChaptersFromCommunity or ChaptersFromGenerated) and ChaptersCheck the
+	// status of the book's last community chapter check ("" = none), so a list
+	// can say why a book has no community chapters.
 	ChaptersSource string `json:"chapters_source"`
 	ChaptersCheck  string `json:"chapters_check,omitempty"`
 }

@@ -3,12 +3,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AudioLines, ChevronDown, ChevronUp, Info, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
-import { settleBookEdit } from '@/api/hooks';
+import { settleBookEdit, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, AdminChapter, BookEditRequest, ChapterSource } from '@/api/types';
 import { InlineEdit } from '@/components/inline-edit';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
+import { detectJobsKnown, KIND_DETECT } from '@/features/bridge/generate-model';
+import { useBookGenerateJob } from '@/features/bridge/use-generate';
 import { toastError } from '@/lib/errors';
 import { formatClock, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
@@ -35,6 +37,9 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const b = detail.book;
+  // The book's chapter detection: when its job ends the book is fetched again
+  // (useBookGenerateJob), so the chapters it found show here, metadata or not.
+  useBookGenerateJob(b.library_id, b.path, detectJobsKnown(useServerInfo().data), KIND_DETECT);
   const chapters = detail.chapters ?? [];
   const files = detail.files ?? [];
   const [active, setActive] = useState<number | null>(null);

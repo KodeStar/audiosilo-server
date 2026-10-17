@@ -653,7 +653,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a single-file book with its stem before each name (`Book.characters.json`). They are NOT a metadata
   layer (nothing in the effective row reads them, but `chapters.json`, a chapter source: see Generated
   chapters, so `SetAttachments` re-resolves a book (`refreshEffective`) and fires `changed()` when its
-  stored `chapters` column changes, and only then): the scan stores them checked (audiosilo-meta's
+  stored `chapters` column changes, or when its stored reading wasn't made for this index (an older
+  server re-indexed it, rebuilding its chapter rows without the stored list), and only then): the scan stores them checked (audiosilo-meta's
   `model.Characters` / `model.Recaps` / `model.Description`, bounded, a regular file only, never through a link) in
   `book_attachments`, and `/meta` serves them (below). A description (`metadata.ParseDescription`) is
   its text trimmed, 200-1500 code points (meta's `description.schema.json` bounds,
@@ -1431,7 +1432,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   writable, and `contribute: "issue"` is refused 409 `cannot_contribute` unless the heartbeat's
   `estimates.sidecars.can_contribute` says the Bridge can; the open job is still returned), and Phase 1c's
   `sidecars.describe` (a description from the notes the Bridge kept from generating the book, no new
-  ASR: a book `path` required, params `{}` or none, any field 400 (`describeParams`), stored as `{}`;
+  ASR: a book `path` required, params `{}` or none, any field 400 (`noParams`), stored as `{}`;
   it writes, so the same `library_not_writable`; refused 409 `generate_open` (`ErrGenerateOpen`, checked
   inside Enqueue's transaction after the dedupe) while a `sidecars.generate` job is open for the book,
   which writes the description itself, while a generate job is never refused for an open describe; its
@@ -1503,8 +1504,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   a note when the player's About shows another description instead: the book's own, or the
   community's; "Write a description" confirms and queues `sidecars.describe` when `describeOffered`:
   `can_describe` and `writable`, local characters or recaps, no description here or from the community
-  (and `community_unknown` unset), no open generate (the estimate's `open_job` included) or describe
-  job; and the card itself adds no generated description shown, no description of the book's own, and
+  (and `community_unknown` unset), no open generate (the estimate's `open_job` included), describe or
+  chapter detection job; and the card itself adds no generated description shown, no description of the book's own, and
   no estimate being fetched again; its dialog says the player shows it only when the book has no other
   description, and says when the Bridge went away; the describe job's status through `GenerateStatus`
   (a finished one hidden once a description shows), whose done line for a generate job also says
@@ -1519,8 +1520,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   online Bridge with the `chapters` feature): `health/detect-chapters-dialog.tsx` confirms with the
   transcription time from the Bridge's status (`detectPlan`: its figure and library mappings, one request
   for any selection) and "no agent cost", and queues `chapters.detect` per book, passing over one whose
-  generate job is open; the book page follows detect jobs like generate ones (`BOOK_KINDS`) and the Bridge
-  page words them through `GenerateStatus` ("24 chapters found"). Jobs are carried by
+  generate job is open; it stays open while it queues (a close is ignored then), so a run's outcome lands
+  in the dialog that started it. The book page's Chapters card follows the book's detect job
+  (`useBookGenerateJob` with `KIND_DETECT`, on any server that knows the Bridge, metadata or not:
+  `detectJobsKnown`) and fetches the book again when it ends; an open detect job counts in the page's job
+  poll (`BOOK_KINDS`) and holds back "Write a description" (the Bridge can't describe a book while its
+  detection runs or is parked); the Bridge page words them through `GenerateStatus` ("24 chapters found"). Jobs are carried by
   `bridge.MoveJobs`, which `catalog.moveBookState` calls in its transaction with the catalog's clock (an
   open job colliding with an open one of its kind at the new path is cancelled; `DedupeKey` rebuilds the
   key), and go with their library. **Hidden folders**: no route reaches content through a hidden
@@ -1759,7 +1764,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   from 0 within a second, titles 1-200 bytes with no control character, 1-2000 files each named relative to
   the book's folder (a single-file book's is its file name) with no dot segment, size and length; anything else
   fails the file) is a source between the community's and the files': `applyChapterSource` uses it
-  (`generatedFit`) only with NO choice, when the community's don't apply, the list's files equal the book's
+  (`applyGenerated`) only with NO choice, when the community's don't apply, the list's files equal the book's
   (`sameChapterFiles`: count, order, book-relative path and size) and `chapteralign.Align` with no Prober
   answers `fill` (the book has no chapters of its own: no file holding two); then the rows are the fit,
   `chapters_source = "generated"` (`ChaptersFromGenerated`, never a choice an admin makes: `PATCH
@@ -1767,7 +1772,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   stored list, the scan's own chapters and the files' book-relative paths, sizes and lengths), so a refresh of an
   unchanged book neither decodes nor fits the list again. Leaving it (the file gone,
   other files, a community fill, a files choice) restores the scan's own (`useChapters` is the one write of
-  a stand-in list, legacy snapshot included). Wire (additive): `chapters_source: "community"` or `"generated"`
+  a stand-in list: on a row from before the snapshot it records the rows as the snapshot and, when the book's
+  community check was made of the book as it is now, re-stamps that check's basis, for either source, so the
+  check stays current; a stale one stays stale). Wire (additive): `chapters_source: "community"` or `"generated"`
   on `/chapters` and the book JSON (an old app shows ordinary chapters with no label); admin book page `chapter_source`, `chapter_choice`,
   `community_chapters` (status, detail, `stale`; not the fitted list),
   `community_checking` (`chapter_source` may be `generated`, which the book page names "Found in the

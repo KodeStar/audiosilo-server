@@ -34,7 +34,8 @@ export const FEATURE_CHAPTERS = 'chapters';
 
 /**
  * The kinds the book page follows: generate and describe (both in the sidecars
- * family) and chapter detection, whose end changes the book's chapters.
+ * family; the Community card's sections) and chapter detection, whose end
+ * changes the book's chapters (the Chapters card follows it).
  */
 const BOOK_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT];
 
@@ -75,7 +76,11 @@ export function detectAvailable(server: ServerInfo | undefined): boolean {
 
 /** What the Detect chapters confirmation says about the books it queues. */
 export interface DetectPlan {
-  /** The transcription time in hours, all books together; null without the Bridge's figures or any known length. */
+  /**
+   * The transcription time in hours, all books together; null without the
+   * Bridge's figures (or a figure of 0), any known length, or a total that
+   * rounds to nothing.
+   */
   asrHours: number | null;
   /** A book's library the Bridge can't write to: the server refuses its job. */
   notWritable: boolean;
@@ -85,22 +90,24 @@ export interface DetectPlan {
  * The Detect chapters confirmation's figures, from the Bridge's status (its
  * heartbeat's ASR figure and library mappings): the transcription time over
  * the books' known lengths, rounded per book to hundredths of an hour as the
- * server's generate estimate rounds asr_hours, and whether any book's library
- * can't be written to.
+ * server's generate estimate rounds asr_hours (and, as estimateView reads that,
+ * no time at all is no estimate), and whether any book's library can't be
+ * written to.
  */
 export function detectPlan(
   status: Pick<BridgeStatus, 'libraries' | 'estimates'> | undefined,
   books: readonly Pick<AdminBook, 'library_id' | 'duration'>[],
 ): DetectPlan {
-  const perHour = status?.estimates?.sidecars?.asr_seconds_per_audio_hour;
-  const known = books.filter((b) => b.duration > 0);
-  const asrHours =
-    perHour === undefined || known.length === 0
-      ? null
-      : known.reduce((sum, b) => sum + Math.round(((b.duration / 3600) * perHour) / 36) / 100, 0);
+  const perHour = status?.estimates?.sidecars?.asr_seconds_per_audio_hour ?? 0;
+  const total = books
+    .filter((b) => b.duration > 0)
+    .reduce((sum, b) => sum + Math.round(((b.duration / 3600) * perHour) / 36) / 100, 0);
   const writable = (id: number) =>
     mappingState(status?.libraries.find((l) => l.id === id)?.mapping ?? null) === 'ready';
-  return { asrHours, notWritable: status ? books.some((b) => !writable(b.library_id)) : false };
+  return {
+    asrHours: total > 0 ? total : null,
+    notWritable: status ? books.some((b) => !writable(b.library_id)) : false,
+  };
 }
 
 /**
@@ -111,6 +118,15 @@ export function detectPlan(
  */
 export function generateJobsKnown(server: ServerInfo | undefined): boolean {
   return Boolean(server?.capabilities.metadata && server.capabilities.bridge !== undefined);
+}
+
+/**
+ * Whether the book page should follow its chapter detection jobs: a server
+ * that knows the Bridge (on or off). Detection needs no community metadata, so
+ * unlike generateJobsKnown this doesn't ask for it.
+ */
+export function detectJobsKnown(server: ServerInfo | undefined): boolean {
+  return server?.capabilities.bridge !== undefined;
 }
 
 /** What the card offers: Generate, Regenerate (local data exists), or nothing (the community has both). */
@@ -154,9 +170,11 @@ export function latestJobOf<J extends Pick<BridgeJob, 'kind'>>(
  * otherwise), the book has characters or recaps generated here (their notes are
  * what the description is written from), it has no description yet, here or
  * from the community (which must have answered: unknown is never "none"), and
- * no generate or describe job is open for it (a generate job writes one when it
- * finishes; the estimate's own open generate job counts too, so a job list not
- * loaded yet can't offer what the server would refuse).
+ * no generate, describe or chapter detection job is open for it (a generate job
+ * writes one when it finishes; a detection, running or parked, holds the book
+ * on the Bridge, which fails a describe meanwhile; the estimate's own open
+ * generate job counts too, so a job list not loaded yet can't offer what the
+ * server would refuse).
  */
 export function describeOffered(
   e: Pick<BridgeEstimate, 'can_describe' | 'writable' | 'has' | 'open_job'> | undefined,

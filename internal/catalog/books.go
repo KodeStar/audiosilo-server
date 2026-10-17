@@ -102,7 +102,7 @@ func (c *Catalog) UpsertBook(ctx context.Context, b *Book) (int64, error) {
 		}
 		b.ID = id
 		if !b.Attachments.Unread {
-			if _, _, err := writeAttachments(ctx, tx, id, b.Attachments.Files, indexedAt); err != nil {
+			if _, err := writeAttachments(ctx, tx, id, b.Attachments.Files, indexedAt); err != nil {
 				return err
 			}
 		}

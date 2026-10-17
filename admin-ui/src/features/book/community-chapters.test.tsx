@@ -1,8 +1,10 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
-import type { AdminBookDetail, CommunityChapters } from '@/api/types';
+import type { AdminBookDetail, BridgeJob, CommunityChapters } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
+import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -194,6 +196,59 @@ describe('generated chapters on the book page', () => {
     expect(await screen.findByText('Found in the narration on this server.')).toBeInTheDocument();
     // The edited chapter's revert hint names the title as found.
     expect(screen.getByTitle('Found: Chapter 2')).toBeInTheDocument();
+  });
+
+  it('follows the book chapter detection, metadata off too, and shows what it found once it ends', async () => {
+    let ended = false;
+    const detect: BridgeJob = {
+      id: 41,
+      kind: 'chapters.detect',
+      library_id: 1,
+      path: BOOK_PATH,
+      params: {},
+      state: 'running',
+      progress: {},
+      result: {},
+      error: '',
+      requested_by: { id: 1, username: 'chris' },
+      priority: 0,
+      attempts: 1,
+      lease_until: null,
+      cancel_requested: false,
+      created_at: '2026-10-17T09:00:00Z',
+      updated_at: '2026-10-17T09:00:00Z',
+      claimed_at: '2026-10-17T09:00:05Z',
+      finished_at: null,
+    };
+    const calls = mockFetch(
+      routes(bookDetail(), {
+        'GET /server': {
+          body: {
+            ...serverInfo,
+            capabilities: { ...serverInfo.capabilities, metadata: false, bridge: true },
+          },
+        },
+        'GET /admin/libraries/1/book': () => ({
+          body: ended ? bookDetail({ chapter_source: 'generated' }) : bookDetail(),
+        }),
+        'GET /admin/bridge/jobs': () => ({
+          body: { jobs: [{ ...detect, state: ended ? 'done' : 'running' }] },
+        }),
+      }),
+    );
+    const { queryClient } = renderApp(URL);
+    const jobsKey = keys.bookBridgeJobs(1, BOOK_PATH);
+    // The card asks for the book's jobs (metadata off) and sees the detection running.
+    await waitFor(() => expect(queryClient.getQueryData(jobsKey)).toBeDefined());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(
+      calls.some((c) => c.path === '/admin/bridge/jobs' && c.query.get('path') === BOOK_PATH),
+    ).toBe(true);
+    expect(screen.queryByText('Found in the narration on this server.')).not.toBeInTheDocument();
+    // The job ends; the page's next look at its jobs sees it, and fetches the book again.
+    ended = true;
+    await act(() => queryClient.invalidateQueries({ queryKey: jobsKey }));
+    expect(await screen.findByText('Found in the narration on this server.')).toBeInTheDocument();
   });
 });
 

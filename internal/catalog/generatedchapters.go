@@ -24,31 +24,31 @@ import (
 // leaves the scan's own, so a list for other audio, or one beside a book that
 // was tagged with chapters since, never stands in.
 
-// generatedFit is the book's generated chapters fitted onto its files (library
-// relative, titles as found) and the fit's key (generatedKey: what it was
-// fitted from), or no key when they don't apply (see above). When the rows
-// already hold the fit of that key, the list is neither decoded nor fitted
-// again: the key comes back with no chapters, and useChapters leaves the rows.
-func generatedFit(ctx context.Context, tx *sql.Tx, r *chapterRow) ([]metadata.Chapter, string, error) {
+// applyGenerated puts the book's generated chapters, fitted onto its files
+// (library relative, titles as found), in its rows (useChapters, the fit named
+// by generatedKey: what it was fitted from) and reports whether they apply (see
+// above), false leaving the rows to the caller. When the rows already hold the
+// fit of that key, the list is neither decoded nor fitted again.
+func applyGenerated(ctx context.Context, tx *sql.Tx, r *chapterRow) (bool, error) {
 	var raw string
 	if err := tx.QueryRowContext(ctx, `SELECT chapters FROM book_attachments WHERE book_id = ?`, r.book.ID).Scan(&raw); err != nil {
-		return nil, "", err
+		return false, err
 	}
 	files, err := playFiles(ctx, tx, &r.book)
 	if err != nil {
-		return nil, "", err
+		return false, err
 	}
 	key := generatedKey(raw, r.snapshot, files, r.book.RelPath)
 	if r.holds(ChaptersFromGenerated, key) {
-		return nil, key, nil
+		return true, nil
 	}
 	list := decodeAttachment[metadata.ChapterList](raw)
 	if list == nil || !sameChapterFiles(list.Files, files, r.book.RelPath) {
-		return nil, "", nil
+		return false, nil
 	}
 	own, err := scannedChapters(ctx, tx, r.book.ID, r.snapshot)
 	if err != nil {
-		return nil, "", err
+		return false, err
 	}
 	remote := make([]chapteralign.Remote, len(list.Chapters))
 	for i, ch := range list.Chapters {
@@ -56,14 +56,14 @@ func generatedFit(ctx context.Context, tx *sql.Tx, r *chapterRow) ([]metadata.Ch
 	}
 	res, err := chapteralign.Align(ctx, AlignFiles(files), own, remote, nil)
 	if err != nil {
-		return nil, "", err
+		return false, err
 	}
 	// A fill is chapteralign's word for "the book has no chapters of its own":
 	// any other fitted status means a file holds two chapters or more.
 	if res.Status != chapteralign.Fill {
-		return nil, "", nil
+		return false, nil
 	}
-	return res.Chapters, key, nil
+	return true, useChapters(ctx, tx, r, ChaptersFromGenerated, key, res.Chapters)
 }
 
 // generatedKey names a generated fit (books.chapters_fit) by what it is

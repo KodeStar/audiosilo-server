@@ -202,17 +202,56 @@ func TestGeneratedChaptersAcrossFiles(t *testing.T) {
 	if ch := got.Chapters[3]; ch.FilePath != p+"/CD2/01.mp3" || ch.FileIndex != 1 || ch.Start != 900 || ch.BookOffset != 2700 {
 		t.Fatalf("chapter 3 = %+v", ch)
 	}
-	// Files in another order are other files.
-	b.Files[0].Size, b.Files[1].Size = 20, 10
+	// The same files (each its own size) in another play order are other files.
+	b.Files = []BookFile{{RelPath: p + "/CD2/01.mp3", Seq: 0, Duration: 1800, Size: 20}, {RelPath: p + "/CD1/01.mp3", Seq: 1, Duration: 1800, Size: 10}}
+	b.Chapters = []metadata.Chapter{{Index: 0, Title: "01", FilePath: p + "/CD2/01.mp3", End: 1800},
+		{Index: 1, Title: "01", FileIndex: 1, FilePath: p + "/CD1/01.mp3", End: 1800, BookOffset: 1800}}
 	upsert(t, c, b)
 	if got := mustBook(t, c, ctx, lib.ID, p); got.ChaptersSource != "" || len(got.Chapters) != 2 {
 		t.Fatalf("other files: %q from %q", titlesOf(got), got.ChaptersSource)
 	}
 }
 
+// A row indexed before the snapshot (0035) keeps its community chapter check
+// current when found chapters first stand in (the snapshot written is what the
+// check fitted), while a check of other audio stays stale.
+func TestGeneratedChaptersOnALegacyRow(t *testing.T) {
+	t.Parallel()
+	c, ctx := newTestCatalog(t)
+	lib, _ := c.CreateLibrary(ctx, Library{Name: "L", Root: "/tmp/l"})
+	paths := []string{"A/Plain.mp3", "B/Plain.mp3"}
+	for _, p := range paths {
+		upsert(t, c, plainWith(lib.ID, p, nil))
+		// As 0035 left a row indexed before it: no snapshot, no hash.
+		if _, err := c.db.ExecContext(ctx, `UPDATE books SET scanned_chapters = '', chapters_hash = '' WHERE rel_path = ?`, p); err != nil {
+			t.Fatal(err)
+		}
+		save(t, c, CommunityChapters{LibraryID: lib.ID, Path: p, Status: CommunityNoMatch, Detail: &chapteralign.Detail{}})
+	}
+	// B's check was made of other audio.
+	if _, err := c.db.ExecContext(ctx, `UPDATE community_chapters SET basis = 'other' WHERE path = ?`, paths[1]); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range paths {
+		if err := c.SetAttachments(ctx, lib.ID, map[string]AttachmentsReading{p: {Sig: "chapters.json:1:1",
+			Files: metadata.AttachmentFiles{Chapters: generatedList("Plain.mp3", 5000)}}}); err != nil {
+			t.Fatal(err)
+		}
+		if b := mustBook(t, c, ctx, lib.ID, p); b.ChaptersSource != ChaptersFromGenerated || len(b.Chapters) != 3 {
+			t.Fatalf("%s: %q from %q", p, titlesOf(b), b.ChaptersSource)
+		}
+	}
+	for p, stale := range map[string]bool{paths[0]: false, paths[1]: true} {
+		if cc, err := c.GetCommunityChapters(ctx, lib.ID, p); err != nil || cc == nil || cc.Stale != stale {
+			t.Errorf("%s: check %+v, %v; want stale %v", p, cc, err, stale)
+		}
+	}
+}
+
 // SetAttachments (the scan's backfill and the Bridge's attachments rescan)
 // re-resolves a book and announces it when its chapters.json came, changed or
-// went, and only then.
+// went, or when its stored reading isn't this index's (an older server
+// re-indexed it), and only then.
 func TestSetAttachmentsResolvesChapters(t *testing.T) {
 	t.Parallel()
 	c, ctx := newTestCatalog(t)
@@ -244,8 +283,23 @@ func TestSetAttachmentsResolvesChapters(t *testing.T) {
 	if b := mustBook(t, c, ctx, lib.ID, p); changes.Load() != 2 || !slices.Equal(titlesOf(b), []string{"A", "B", "C"}) {
 		t.Fatalf("chapters changed: %d changes, %q", changes.Load(), titlesOf(b))
 	}
+	// An older server re-indexed the book with its attachments unread: the
+	// rows are the scan's again (none), the stored list kept, the reading not
+	// this index's. The same list read again puts the found chapters back.
+	if _, err := c.db.ExecContext(ctx,
+		`UPDATE books SET chapters_source = '', chapters_fit = '', attachments_indexed_at = NULL WHERE rel_path = ?`, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM chapters WHERE book_id = (SELECT id FROM books WHERE rel_path = ?)`, p); err != nil {
+		t.Fatal(err)
+	}
+	set(metadata.AttachmentFiles{Chapters: generatedList("Plain.mp3", 5000, "A", "B", "C")})
+	if b := mustBook(t, c, ctx, lib.ID, p); changes.Load() != 3 || !slices.Equal(titlesOf(b), []string{"A", "B", "C"}) ||
+		b.ChaptersSource != ChaptersFromGenerated {
+		t.Fatalf("after an older server's re-index: %d changes, %q from %q", changes.Load(), titlesOf(b), b.ChaptersSource)
+	}
 	set(metadata.AttachmentFiles{})
-	if b := mustBook(t, c, ctx, lib.ID, p); changes.Load() != 3 || len(b.Chapters) != 0 || b.ChaptersSource != "" {
+	if b := mustBook(t, c, ctx, lib.ID, p); changes.Load() != 4 || len(b.Chapters) != 0 || b.ChaptersSource != "" {
 		t.Fatalf("chapters went: %d changes, %q from %q", changes.Load(), titlesOf(b), b.ChaptersSource)
 	}
 }
