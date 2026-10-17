@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { BridgeEstimate, BridgeJob, BridgeJobState, ServerInfo } from '@/api/types';
+import type {
+  BridgeEstimate,
+  BridgeJob,
+  BridgeJobState,
+  BridgeStatus,
+  ServerInfo,
+} from '@/api/types';
 import en from '@/i18n/locales/en.json';
 import { formatUsd } from '@/lib/format';
 import { serverInfo } from '@/test/fixtures';
@@ -12,6 +18,8 @@ import {
   DESCRIPTION_CLAMP_CHARS,
   describeOffered,
   destinationKey,
+  detectAvailable,
+  detectPlan,
   estimateView,
   GENERATE_PARKED_POLL_MS,
   GENERATE_POLL_MS,
@@ -24,6 +32,7 @@ import {
   generateResult,
   isBookKind,
   KIND_DESCRIBE,
+  KIND_DETECT,
   KIND_GENERATE,
   KNOWN_PARKS,
   KNOWN_STAGES,
@@ -741,5 +750,68 @@ describe('a description (Phase 1c)', () => {
   it('labels the describing stage', () => {
     expect(KNOWN_STAGES).toContain('describing');
     expect(strings['bridge.stage.describing']).toBe('Writing the description');
+  });
+});
+
+describe('detecting chapters', () => {
+  it('offers Detect chapters only while an online Bridge offers the chapters feature, metadata or not', () => {
+    const features = ['bridge', 'chapters'];
+    expect(detectAvailable(server({ bridge: true, features }))).toBe(true);
+    expect(detectAvailable(server({ bridge: true, metadata: false, features }))).toBe(true);
+    expect(detectAvailable(server({ bridge: false, features }))).toBe(false);
+    expect(detectAvailable(server({ bridge: true }))).toBe(false);
+    expect(detectAvailable(server({ bridge: true, features: null }))).toBe(false);
+    expect(detectAvailable(undefined)).toBe(false);
+  });
+
+  const status = (over: Partial<BridgeStatus> = {}) =>
+    ({
+      libraries: [
+        { id: 1, name: 'Books', root: '/b', mapping: { mapped: true, writable: true } },
+        { id: 2, name: 'Read only', root: '/r', mapping: { mapped: true, writable: false } },
+      ],
+      estimates: { sidecars: { asr_seconds_per_audio_hour: 900 } },
+      ...over,
+    }) as BridgeStatus;
+
+  it("quotes the transcription over the books' known lengths, as the server rounds it", () => {
+    const books = [
+      adminBook({ library_id: 1, duration: 7200 }),
+      adminBook({ library_id: 1, duration: 3 * 3600 + 1 }),
+      adminBook({ library_id: 1, duration: 0 }),
+    ];
+    // 900 s per audio hour: 0.5 h, then 0.75 h (rounded to hundredths per book).
+    expect(detectPlan(status(), books)).toEqual({ asrHours: 1.25, notWritable: false });
+    expect(detectPlan(status({ estimates: undefined }), books).asrHours).toBeNull();
+    expect(detectPlan(status(), [adminBook({ library_id: 1, duration: 0 })]).asrHours).toBeNull();
+    expect(detectPlan(undefined, books)).toEqual({ asrHours: null, notWritable: false });
+  });
+
+  it("refuses a book whose library the Bridge can't write to, or doesn't map", () => {
+    expect(detectPlan(status(), [adminBook({ library_id: 2, duration: 60 })]).notWritable).toBe(
+      true,
+    );
+    expect(detectPlan(status(), [adminBook({ library_id: 3, duration: 60 })]).notWritable).toBe(
+      true,
+    );
+    expect(
+      detectPlan(status(), [
+        adminBook({ library_id: 1, duration: 60 }),
+        adminBook({ library_id: 2, duration: 60 }),
+      ]).notWritable,
+    ).toBe(true);
+  });
+
+  it('reads the chapters a detect job found, and follows its jobs on the book page', () => {
+    expect(generateResult({ chapters: 24, files: ['a'], source: 'audio' })).toEqual({
+      chapters: 24,
+      contributed: [],
+    });
+    expect(isBookKind(KIND_DETECT)).toBe(true);
+    expect(strings[stageLabel('chapter_detecting').key]).toBe(
+      'Finding the chapters in the narration',
+    );
+    expect(parkKey('chapters_not_detected')).toBe('bridge.park.chapters_not_detected');
+    expect(strings['bridge.kind.chapters.detect']).toBe('Chapters');
   });
 });

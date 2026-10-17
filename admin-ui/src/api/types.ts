@@ -1630,7 +1630,7 @@ export interface AdminBookDetail {
   indexed_at: string;
   /** Where `chapters` come from now, and the admin's choice of it ("" = automatic). */
   chapter_source: ChapterSource;
-  chapter_choice: ChapterSource | '';
+  chapter_choice: ChapterChoice | '';
   /** The last community chapter check (null: never checked), and whether one is running. */
   community_chapters: CommunityChapters | null;
   community_checking: boolean;
@@ -1654,8 +1654,14 @@ export interface GeneratedDescription {
   generated_at?: string;
 }
 
-/** Where a book's chapters come from: its own files, or a community list fitted onto them. */
-export type ChapterSource = 'files' | 'community';
+/**
+ * Where a book's chapters come from: its own files, a community list fitted onto
+ * them, or the chapters the Bridge found in the narration of a book with none.
+ */
+export type ChapterSource = 'files' | 'community' | 'generated';
+
+/** An admin's choice of chapter source ("generated" is never chosen: it stands in only with no choice). */
+export type ChapterChoice = 'files' | 'community';
 
 /**
  * A community chapter check's outcome (catalog.CommunityChapters, chapteralign.Status):
@@ -1726,7 +1732,7 @@ export interface BookEditRequest {
   source?: 'edited' | 'community';
   chapters?: { set?: Record<number, string>; revert?: number[] };
   /** Where the chapters come from: the files, the community's, or "auto" (the default). */
-  chapter_source?: ChapterSource | 'auto';
+  chapter_source?: ChapterChoice | 'auto';
 }
 
 /** catalog.Ref: a book by its identity. */

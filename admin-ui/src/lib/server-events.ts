@@ -1,5 +1,10 @@
 import type { ServerEvent, ServerEventKind } from '@/api/types';
-import { KIND_DESCRIBE, KIND_GENERATE, parkKey } from '@/features/bridge/generate-model';
+import {
+  KIND_DESCRIBE,
+  KIND_DETECT,
+  KIND_GENERATE,
+  parkKey,
+} from '@/features/bridge/generate-model';
 import type { SettingsPage } from '@/features/settings/settings-model';
 import { readStorage, writeStorage } from './storage';
 
@@ -130,11 +135,12 @@ export function describeEvent(ev: ServerEvent): EventText {
 const FINISHED_OWN = new Map<string, string>([
   [KIND_GENERATE, 'events.bridge_job_finished.generate'],
   [KIND_DESCRIBE, 'events.bridge_job_finished.describe'],
+  [KIND_DETECT, 'events.bridge_job_finished.detect'],
 ]);
 
 /**
- * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps, or a
- * description, ready for a book (FINISHED_OWN), another kind finished, or a job
+ * A Bridge job that ended (notify.BridgeJobEnded): characters and recaps, a
+ * description, or chapters, ready for a book (FINISHED_OWN), another kind finished, or a job
  * that failed or is parked waiting for someone (its park code as a sentence,
  * else the Bridge's own detail). Each leads to Settings > Bridge, where its
  * jobs are listed.

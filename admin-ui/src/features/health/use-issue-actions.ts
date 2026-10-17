@@ -186,6 +186,8 @@ export function useIssueActions(kind: IssueKind) {
         return once(b, () => join(b));
       case 'chapters':
         return once(b, () => takeDetailed([b]));
+      case 'detect':
+        return; // a confirmation first: the page's DetectChaptersDialog
     }
   };
 

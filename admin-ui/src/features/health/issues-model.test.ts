@@ -1,6 +1,12 @@
 import { adminBook } from '@/test/library-fixtures';
 import { issuesSummary } from '@/test/fixtures';
-import { attentionTotal, chaptersCheckNote, issueReason, pickCategory } from './issues-model';
+import {
+  attentionTotal,
+  chaptersCheckNote,
+  fixFor,
+  issueReason,
+  pickCategory,
+} from './issues-model';
 
 it('says why a book is listed, per category', () => {
   const broken = adminBook({
@@ -63,4 +69,11 @@ it('counts what needs attention, offline libraries included', () => {
     offline: [{ library_id: 2, name: 'Kids', root: '/mnt/kids', books: 3, listeners: 1 }],
   });
   expect(attentionTotal(s)).toBe(1 + 1 + 2 + 1);
+});
+
+it('offers Detect chapters for books without chapters only while the Bridge can', () => {
+  expect(fixFor('no_chapters', true)).toBe('detect');
+  expect(fixFor('no_chapters', false)).toBeNull();
+  expect(fixFor('detailed_chapters', false)).toBe('chapters');
+  expect(fixFor('scan_error', true)).toBe('rescan');
 });

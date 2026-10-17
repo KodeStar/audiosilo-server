@@ -77,6 +77,9 @@ const BY_CODE: Record<string, string> = {
   // Queueing sidecars.describe while a sidecars.generate job is open for the
   // book (it writes the description when it finishes).
   generate_open: 'errors.generateOpen',
+  // Queueing sidecars.generate while a chapters.detect job is open for the
+  // book (the generate run reuses its transcription once it is done).
+  detect_open: 'errors.detectOpen',
 };
 
 /** A failure as one sentence for a toast or a field. */

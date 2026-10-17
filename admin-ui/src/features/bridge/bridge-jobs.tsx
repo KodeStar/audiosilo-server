@@ -134,7 +134,7 @@ function JobRow({
       ? ''
       : (libraryNames.get(job.library_id) ??
         t('bridge.jobs.libraryId', { id: formatNumber(job.library_id, lang) }));
-  // A generate or describe job words its progress and result its own way (GenerateStatus).
+  // A generate, describe or detect job words its progress and result its own way (GenerateStatus).
   const generate = isBookKind(job.kind);
   const progress: ReturnType<typeof progressOf> = generate ? {} : progressOf(job.progress);
   const summary = generate ? null : resultSummary(job.result);

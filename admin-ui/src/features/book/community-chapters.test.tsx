@@ -186,6 +186,17 @@ describe('community chapters on the book page', () => {
   }, 12000);
 });
 
+describe('generated chapters on the book page', () => {
+  it('says the chapters were found in the narration, and names their title in a rename hint', async () => {
+    const detail = bookDetail({ chapter_source: 'generated' });
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(await screen.findByText('Found in the narration on this server.')).toBeInTheDocument();
+    // The edited chapter's revert hint names the title as found.
+    expect(screen.getByTitle('Found: Chapter 2')).toBeInTheDocument();
+  });
+});
+
 describe('communityState', () => {
   const duration = (s: number) => `${Math.round(s / 60)}m`;
 

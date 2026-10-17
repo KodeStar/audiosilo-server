@@ -519,6 +519,53 @@ describe('the Bridge page', () => {
     ).toBeInTheDocument();
   });
 
+  it('words a chapter detection job: its stage, what it found, and why it stopped', async () => {
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/bridge': {
+          body: {
+            paired: true,
+            paired_by: null,
+            pairing: null,
+            online: true,
+            kinds: ['chapters.detect'],
+            features: ['chapters'],
+            libraries: [],
+            workers: [],
+          },
+        },
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({ id: 41, kind: 'chapters.detect', progress: { stage: 'chapter_detecting' } }),
+              job({
+                id: 42,
+                kind: 'chapters.detect',
+                state: 'done',
+                finished_at: '2026-10-15T14:00:00Z',
+                result: { chapters: 24, files: ['x'], source: 'audio' },
+              }),
+              job({
+                id: 43,
+                kind: 'chapters.detect',
+                state: 'needs_attention',
+                progress: { park: { code: 'chapters_not_detected' } },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    expect(within(jobs).getAllByText('Chapters')).toHaveLength(3);
+    expect(within(jobs).getByText('Finding the chapters in the narration')).toBeInTheDocument();
+    expect(within(jobs).getByText(/^24 chapters found/)).toBeInTheDocument();
+    expect(
+      within(jobs).getByText(/^The chapters couldn't be found in the narration\./),
+    ).toBeInTheDocument();
+  });
+
   it('words a generate job: its book, its park, and a link into the Bridge; and the estimates', async () => {
     const status: BridgeStatus = {
       paired: true,

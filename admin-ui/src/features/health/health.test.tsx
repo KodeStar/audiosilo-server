@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
 import type { AdminBook, DuplicateGroup, SeriesSpellingGroup } from '@/api/types';
 import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
-import { issuesSummary, libraries } from '@/test/fixtures';
+import { issuesSummary, libraries, serverInfo } from '@/test/fixtures';
 import { adminBook } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -215,6 +215,111 @@ describe('library health', () => {
     expect(bulk?.body).toEqual({
       books: coarse.map((b) => ({ library_id: b.library_id, path: b.path })),
       chapter_source: 'community',
+    });
+  });
+
+  describe('detect chapters', () => {
+    const plain = [
+      adminBook({ path: 'Mosse/The Black Gate', title: 'The Black Gate', duration: 4 * 3600 }),
+      adminBook({ path: 'Mosse/Past Tense', title: 'Past Tense', duration: 2 * 3600 }),
+    ];
+    const bridgeServer = {
+      ...serverInfo,
+      capabilities: { ...serverInfo.capabilities, bridge: true },
+      bridge: { version: '0.18.0', features: ['bridge', 'chapters', 'sidecars'] },
+    };
+    const bridgeStatus = {
+      paired: true,
+      paired_by: null,
+      pairing: null,
+      online: true,
+      kinds: ['chapters.detect'],
+      features: ['chapters'],
+      libraries: [
+        {
+          id: 1,
+          name: 'Audiobooks',
+          root: '/books',
+          mapping: {
+            library_id: 1,
+            mount_path: '/media/books',
+            mapped: true,
+            writable: true,
+            checked_path: '',
+            error: '',
+          },
+        },
+      ],
+      workers: [],
+      estimates: { sidecars: { asr_seconds_per_audio_hour: 900 } },
+    };
+    function detectRoutes(over: Record<string, MockRoute> = {}) {
+      const summary = issuesSummary();
+      summary.categories[4] = { kind: 'no_chapters', count: 2, ignored: 0, samples: [] };
+      return routes({
+        'GET /server': { body: bridgeServer },
+        'GET /admin/issues': { body: summary },
+        'GET /admin/books': (req) => ({
+          body: { books: req.query.get('issue') === 'no_chapters' ? plain : [] },
+        }),
+        'GET /admin/bridge': { body: bridgeStatus },
+        ...over,
+      });
+    }
+
+    it('confirms with the transcription time and no agent cost, then queues chapters.detect', async () => {
+      const calls = mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': { status: 201, body: { job: { id: 5 }, created: true } },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      const row = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      await user.click(within(row).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('None: no agent is used')).toBeInTheDocument();
+      expect(await within(dialog).findByText(/^About /)).toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+      const queued = calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs');
+      expect(queued.map((c) => c.body)).toEqual([
+        { kind: 'chapters.detect', library_id: 1, path: 'Mosse/The Black Gate', params: {} },
+      ]);
+    });
+
+    it('queues a selection from the bar, passing over a book whose generate job finds them', async () => {
+      const calls = mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': (req) =>
+            (req.body as { path: string }).path === 'Mosse/Past Tense'
+              ? { status: 409, body: { error: 'a generate job is open', code: 'generate_open' } }
+              : { status: 201, body: { job: { id: 5 }, created: true } },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('2 books')).toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+      expect(
+        screen.getByText('1 book already has a generate job, which finds its chapters.'),
+      ).toBeInTheDocument();
+      expect(
+        calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs'),
+      ).toHaveLength(2);
+    });
+
+    it('offers no fix while the Bridge does not offer chapter detection', async () => {
+      mockFetch(detectRoutes({ 'GET /server': { body: serverInfo } }));
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      expect(screen.queryByRole('button', { name: 'Detect chapters' })).not.toBeInTheDocument();
     });
   });
 

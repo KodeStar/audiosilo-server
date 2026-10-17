@@ -3,6 +3,7 @@ import type {
   BridgeEstimate,
   BridgeJob,
   BridgeJobRequest,
+  BridgeStatus,
   ServerInfo,
   SidecarsCoverage,
   SidecarsGenerateParams,
@@ -12,10 +13,11 @@ import { relBaseName } from '@/lib/paths';
 import { spanIn } from '@/features/library/series/series-model';
 import { isOpen, num, progressOf, safeHttpUrl, text } from './bridge-model';
 
-// Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), and the
-// description written from their notes (Phase 1c): the rules the book page's
-// Community card, its generate dialog, the series batch and the Bridge page's
-// job rows follow for `sidecars.generate` and `sidecars.describe`. Pure: no React, no i18n
+// Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), the
+// description written from their notes (Phase 1c) and the chapters found in the
+// narration (Phase 1d): the rules the book page's Community card, its generate
+// dialog, the series batch, Health's Detect chapters and the Bridge page's job
+// rows follow for `sidecars.generate`, `sidecars.describe` and `chapters.detect`. Pure: no React, no i18n
 // instance; callers pass the keys these return to t().
 
 /** The job kind, and the feature (job family) the Bridge advertises for it. */
@@ -23,9 +25,18 @@ export const KIND_GENERATE = 'sidecars.generate';
 export const FEATURE_SIDECARS = 'sidecars';
 /** Phase 1c's description-only kind: a description from the notes the Bridge kept. */
 export const KIND_DESCRIBE = 'sidecars.describe';
+/**
+ * Phase 1d's chapter detection for a book with no chapter markers (speech
+ * recognition, no agent), and its feature (job family).
+ */
+export const KIND_DETECT = 'chapters.detect';
+export const FEATURE_CHAPTERS = 'chapters';
 
-/** The kinds the book page follows: generate and describe (both in the sidecars family). */
-const BOOK_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE];
+/**
+ * The kinds the book page follows: generate and describe (both in the sidecars
+ * family) and chapter detection, whose end changes the book's chapters.
+ */
+const BOOK_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT];
 
 /**
  * Whether a kind is one the book page follows; its progress and result are
@@ -50,6 +61,48 @@ function openBookJobs<J extends Pick<BridgeJob, 'kind' | 'state'>>(
 export function generateAvailable(server: ServerInfo | undefined): boolean {
   if (!server?.capabilities.metadata || !server.capabilities.bridge) return false;
   return server.bridge?.features.includes(FEATURE_SIDECARS) ?? false;
+}
+
+/**
+ * Whether "Detect chapters" is offered (Health's books without chapters): an
+ * online Bridge offers the chapters family (chapters.detect). It needs no
+ * community metadata: the chapters are the book's own.
+ */
+export function detectAvailable(server: ServerInfo | undefined): boolean {
+  if (!server?.capabilities.bridge) return false;
+  return server.bridge?.features.includes(FEATURE_CHAPTERS) ?? false;
+}
+
+/** What the Detect chapters confirmation says about the books it queues. */
+export interface DetectPlan {
+  /** The transcription time in hours, all books together; null without the Bridge's figures or any known length. */
+  asrHours: number | null;
+  /** A book's library the Bridge can't write to: the server refuses its job. */
+  notWritable: boolean;
+}
+
+/**
+ * The Detect chapters confirmation's figures, from the Bridge's status (its
+ * heartbeat's ASR figure and library mappings): the transcription time over
+ * the books' known lengths, rounded per book to hundredths of an hour as the
+ * server's estimate rounds it (bridge.EstimateASRHours), and whether any book's
+ * library can't be written to.
+ */
+export function detectPlan(
+  status: Pick<BridgeStatus, 'libraries' | 'estimates'> | undefined,
+  books: readonly Pick<AdminBook, 'library_id' | 'duration'>[],
+): DetectPlan {
+  const perHour = status?.estimates?.sidecars?.asr_seconds_per_audio_hour;
+  const known = books.filter((b) => b.duration > 0);
+  const asrHours =
+    perHour === undefined || known.length === 0
+      ? null
+      : known.reduce((sum, b) => sum + Math.round(((b.duration / 3600) * perHour) / 36) / 100, 0);
+  const writable = (id: number) => {
+    const m = status?.libraries.find((l) => l.id === id)?.mapping;
+    return Boolean(m?.mapped && m.writable);
+  };
+  return { asrHours, notWritable: status ? books.some((b) => !writable(b.library_id)) : false };
 }
 
 /**
@@ -138,6 +191,7 @@ export const KNOWN_STAGES = [
   'inspecting',
   'splitting',
   'asr',
+  'chapter_detecting',
   'sanitizing',
   'qa_sweep',
   'qa_adjudicating',
@@ -178,6 +232,7 @@ export const KNOWN_PARKS = [
   'agent_rate_limited',
   'agent_validation_exhausted',
   'markers_not_confident',
+  'chapters_not_detected',
   'qa_no_converge',
   'spelling_gate_failure',
   'media_tools_unavailable',
@@ -281,6 +336,8 @@ export function generateProgress(progress: unknown): GenerateProgress {
 export interface GenerateResult {
   characters?: number;
   recaps?: number;
+  /** A chapters.detect job's chapters found. */
+  chapters?: number;
   costUsd?: number;
   /** The description was written (true) or not (false, with why); absent from an older Bridge. */
   description?: boolean;
@@ -289,7 +346,7 @@ export interface GenerateResult {
   contributed: { what: string; url: string }[];
 }
 
-/** Reads a sidecars.generate result leniently, or null when it holds none of its facts. */
+/** Reads a sidecars.generate (or chapters.detect) result leniently, or null when it holds none of its facts. */
 export function generateResult(result: unknown): GenerateResult | null {
   if (!result || typeof result !== 'object') return null;
   const r = result as Record<string, unknown>;
@@ -298,6 +355,8 @@ export function generateResult(result: unknown): GenerateResult | null {
   if (characters !== undefined) out.characters = characters;
   const recaps = amount(r.recaps);
   if (recaps !== undefined) out.recaps = recaps;
+  const chapters = amount(r.chapters);
+  if (chapters !== undefined) out.chapters = chapters;
   const cost = amount(r.cost_usd);
   if (cost !== undefined) out.costUsd = cost;
   if (typeof r.description === 'boolean') out.description = r.description;
@@ -312,6 +371,7 @@ export function generateResult(result: unknown): GenerateResult | null {
   const any =
     out.characters !== undefined ||
     out.recaps !== undefined ||
+    out.chapters !== undefined ||
     out.costUsd !== undefined ||
     out.description !== undefined ||
     out.contributed.length > 0;
