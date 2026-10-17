@@ -427,9 +427,10 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 // label in a title and, for a kind whose finished job leaves something for
 // listeners, what is ready (the title's start) and where they see it.
 var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
-	bridge.KindSidecars: {"Characters and recaps", "Characters and recaps ready", "Listeners see them in the player now."},
-	bridge.KindDescribe: {"Description", "Description ready", "Listeners see it in the player's About when the book has no other description."},
-	bridge.KindVerify:   {label: "Bridge check"},
+	bridge.KindSidecars:       {"Characters and recaps", "Characters and recaps ready", "Listeners see them in the player now."},
+	bridge.KindDescribe:       {"Description", "Description ready", "Listeners see it in the player's About when the book has no other description."},
+	bridge.KindDetectChapters: {"Chapters", "Chapters found", "Listeners see them in the player now."},
+	bridge.KindVerify:         {label: "Bridge check"},
 }
 
 // bridgeJobLabel names a Bridge job's kind in a message title.
@@ -463,6 +464,8 @@ func bridgeParkReason(code string) string {
 		return "The agent's credential was refused. Replace it in the agent container, then retry the job on the Bridge."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
+	case "chapters_not_detected":
+		return "The Bridge couldn't find the chapters in the narration. Add chapter markers to the audio file, or match the book to a recording with a chapter list."
 	}
 	return "See the job in Settings > Bridge."
 }

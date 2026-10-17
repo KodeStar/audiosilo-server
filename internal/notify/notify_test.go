@@ -560,3 +560,25 @@ func TestBridgeDescribeJobWording(t *testing.T) {
 		t.Errorf("parked = %+v", m)
 	}
 }
+
+// A chapter detection job (chapters.detect) is worded as the chapters: found,
+// or failed; a park because no chapters were heard says what to do instead.
+func TestBridgeDetectJobWording(t *testing.T) {
+	t.Parallel()
+	s, _, _ := newService(t)
+	event := func(kind, state string) catalog.ServerEvent {
+		return catalog.ServerEvent{Kind: kind, Data: map[string]any{"job_kind": "chapters.detect", "state": state,
+			"title": "The Black Gate", "code": "chapters_not_detected"}}
+	}
+	if m := compose(event(KindBridgeJobFinished, "done"), s.server()); m.Title != "Chapters found: The Black Gate" ||
+		m.Text != "Listeners see them in the player now." {
+		t.Errorf("finished = %+v", m)
+	}
+	if m := compose(event(KindBridgeJobFailed, "failed"), s.server()); m.Title != "Chapters failed: The Black Gate" {
+		t.Errorf("failed = %+v", m)
+	}
+	if m := compose(event(KindBridgeJobFailed, "needs_attention"), s.server()); m.Title != "A Bridge job needs attention: The Black Gate" ||
+		!strings.Contains(m.Text, "couldn't find the chapters in the narration") {
+		t.Errorf("parked = %+v", m)
+	}
+}

@@ -65,6 +65,12 @@ const KindSidecars = "sidecars.generate"
 // and recaps (no new speech recognition), into the same .audiosilo/ folder.
 const KindDescribe = "sidecars.describe"
 
+// KindDetectChapters is Phase 1d's chapter detection: for a book with no
+// chapter markers, the Bridge transcribes the audio and finds the chapters in
+// the narration (no agent), and writes them into the book's .audiosilo/ folder
+// as chapters.json, which the server then uses as the book's chapters.
+const KindDetectChapters = "chapters.detect"
+
 // bookRule is whether a kind's job names a book.
 type bookRule int
 
@@ -90,9 +96,10 @@ type kindSpec struct {
 // advertises that isn't here is never queued, and neither is one here that the
 // Bridge doesn't advertise.
 var kinds = map[string]kindSpec{
-	KindVerify:   {needsLibrary: true, book: bookOptional, params: verifyParams},
-	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams},
-	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, params: describeParams},
+	KindVerify:         {needsLibrary: true, book: bookOptional, params: verifyParams},
+	KindSidecars:       {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams},
+	KindDescribe:       {needsLibrary: true, book: bookRequired, writes: true, params: noParams},
+	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, params: noParams},
 }
 
 // sidecars.generate's param values (auto and local are the defaults),
@@ -151,9 +158,10 @@ func contributes(params json.RawMessage) bool {
 	return json.Unmarshal(params, &p) == nil && p.Contribute == ContributeIssue
 }
 
-// describeParams checks sidecars.describe's params: it takes none, so only an
-// empty object (or none) passes, and any field is refused.
-func describeParams(raw json.RawMessage) (json.RawMessage, error) {
+// noParams checks the params of a kind that takes none (sidecars.describe,
+// chapters.detect): only an empty object (or none) passes, any field is
+// refused, and it is stored as {}.
+func noParams(raw json.RawMessage) (json.RawMessage, error) {
 	var p struct{}
 	if err := decodeStrict(raw, &p); err != nil {
 		return nil, invalid("params: %v", err)
@@ -333,12 +341,19 @@ var ErrKindUnavailable = errors.New("the paired bridge doesn't run that kind")
 // all): a 409 library_not_writable.
 var ErrLibraryNotWritable = errors.New("the bridge can't write to that library")
 
-// ErrGenerateOpen is a sidecars.describe job for a book with a sidecars.generate
-// job still open: that job writes the description when it finishes, so a second
-// writer is refused (a 409 generate_open). A generate job is never refused for
-// an open describe job: queueing it cancels that one (cancelOpenTx), and the
-// generate job writes a description of its own.
+// ErrGenerateOpen is a sidecars.describe or chapters.detect job for a book with
+// a sidecars.generate job still open: that job writes the description, and
+// finds the chapters of a book without any, itself, so a second writer is
+// refused (a 409 generate_open). A generate job is never refused for an open
+// describe job: queueing it cancels that one (cancelOpenTx), and the generate
+// job writes a description of its own.
 var ErrGenerateOpen = errors.New("a generate job is open for the book")
+
+// ErrDetectOpen is a sidecars.generate job for a book with a chapters.detect
+// job still open: cancelling that one would throw its transcription away, and a
+// generate job queued once it is done reuses it, so the generate job is refused
+// (a 409 detect_open).
+var ErrDetectOpen = errors.New("a chapter detection job is open for the book")
 
 // ErrCannotContribute is a sidecars.generate job asking to contribute its
 // results (contribute "issue") to a Bridge whose last heartbeat doesn't say it
@@ -390,9 +405,10 @@ func checkNew(j *NewJob) error {
 // (ErrKindUnavailable); it may be offline, and the job waits. A kind that writes
 // into the library is queued only when the last heartbeat reports the library
 // mapped and writable (ErrLibraryNotWritable), a sidecars.generate job that
-// contributes only when it says the Bridge can (ErrCannotContribute), and a
-// sidecars.describe job only while no sidecars.generate job is open for the book
-// (ErrGenerateOpen); the open job is still returned either way.
+// contributes only when it says the Bridge can (ErrCannotContribute) and only
+// while no chapters.detect job is open for the book (ErrDetectOpen), and a
+// sidecars.describe or chapters.detect job only while no sidecars.generate job
+// is open for it (ErrGenerateOpen); the open job is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
 // indexed path).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
@@ -434,15 +450,15 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 		if refuse != nil {
 			return refuse
 		}
-		if j.Kind == KindDescribe {
+		if blocker, refusal := blockedBy(j.Kind); blocker != "" {
 			var open bool
 			if err := tx.QueryRowContext(ctx,
 				`SELECT EXISTS(SELECT 1 FROM bridge_jobs WHERE dedupe_key = ? AND state IN `+OpenStatesSQL+`)`,
-				DedupeKey(KindSidecars, j.LibraryID, j.Path)).Scan(&open); err != nil {
+				DedupeKey(blocker, j.LibraryID, j.Path)).Scan(&open); err != nil {
 				return err
 			}
 			if open {
-				return ErrGenerateOpen
+				return refusal
 			}
 		}
 		res, err := tx.ExecContext(ctx,
@@ -476,6 +492,20 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	}
 	s.settle(ctx, exp)
 	return job, created, nil
+}
+
+// blockedBy is the kind whose open job for the same book refuses a new job of
+// kind, and the refusal ("" when none does): a describe or detect job waits for
+// an open generate job (ErrGenerateOpen), a generate job for an open detect job
+// (ErrDetectOpen).
+func blockedBy(kind string) (string, error) {
+	switch kind {
+	case KindDescribe, KindDetectChapters:
+		return KindSidecars, ErrGenerateOpen
+	case KindSidecars:
+		return KindDetectChapters, ErrDetectOpen
+	}
+	return "", nil
 }
 
 // Job returns one job, after expiring a lapsed lease (so the console shows what

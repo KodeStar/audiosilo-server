@@ -460,7 +460,10 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeErrorCode(w, http.StatusConflict, "cannot_contribute", "the bridge can't contribute to the community")
 	case errors.Is(err, bridge.ErrGenerateOpen):
 		writeErrorCode(w, http.StatusConflict, "generate_open",
-			"a generate job is still open for this book; it writes the description when it finishes")
+			"a generate job is still open for this book; it writes this itself when it finishes")
+	case errors.Is(err, bridge.ErrDetectOpen):
+		writeErrorCode(w, http.StatusConflict, "detect_open",
+			"a chapter detection job is still open for this book; generate once it has finished, which reuses its transcription")
 	default:
 		a.log.Warn(op, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update the job")
@@ -476,8 +479,9 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 //     follows it as a scan's move detection would (Scanner.IndexMoved; a from that
 //     isn't that book moved is ignored).
 //   - mode "attachments": read only the book's .audiosilo/ attachments, never its
-//     audio (Scanner.RefreshAttachments), and answer 200 {path, attachments:
-//     {characters, recaps, description, bridge}} with what is now indexed. from
+//     audio (Scanner.RefreshAttachments: a changed chapters.json re-resolves
+//     the book's chapters), and answer 200 {path, attachments: {characters,
+//     recaps, description, chapters, bridge}} with what is now indexed. from
 //     is refused here.
 //
 // 404 code not_indexable when no book is there (for attachments: no indexed one).

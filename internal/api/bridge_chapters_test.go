@@ -1,0 +1,240 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/catalog"
+	"github.com/kodestar/audiosilo-server/internal/metadata"
+)
+
+// Bridge Phase 1d: chapterless books. The chapters.detect kind and its
+// estimate, and the generated chapter source on the player's wire.
+
+// beatDetect sends a heartbeat offering verify, generate and detect, the env's
+// library mapped and writable as given, with estimates (a JSON object, "" for
+// none).
+func (b *bridgeEnv) beatDetect(t *testing.T, writable bool, estimates string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"version":"0.18.0","kinds":["bridge.verify","sidecars.generate","chapters.detect"],
+		"libraries":[{"library_id":%d,"mount_path":"/media/books","mapped":true,"writable":%t}]`, b.lib.ID, writable)
+	if estimates != "" {
+		body += `,"estimates":` + estimates
+	}
+	if resp, out := b.do(t, "PUT", "/api/v1/bridge/status", b.bridgeTok, body+"}"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("heartbeat: %d %s", resp.StatusCode, out)
+	}
+}
+
+func (b *bridgeEnv) queueDetect(t *testing.T, tok, path, params string) (*http.Response, string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"kind":"chapters.detect","library_id":%d,"path":%q`, b.lib.ID, path)
+	if params != "" {
+		body += `,"params":` + params
+	}
+	return b.do(t, "POST", "/api/v1/admin/bridge/jobs", tok, body+"}")
+}
+
+// TestBridgeDetectQueue: chapters.detect takes no params ({} or none; any
+// field is a 400), needs an indexed book (404), a Bridge that runs it (409
+// kind_unavailable) and a library it can write to (409 library_not_writable);
+// a second press is the open job. It is refused while a generate job is open
+// for the book (409 generate_open), and a new generate job is refused while it
+// is open (409 detect_open). The feature chapters appears with the kind. The
+// route is the admin's: a user is 403, the bridge token 401.
+func TestBridgeDetectQueue(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	// Denied: a Bridge that doesn't run the kind (an older one).
+	b.beatWith(t, true, true, "")
+	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(body, `"code":"kind_unavailable"`) {
+		t.Fatalf("an older Bridge: %d %s, want 409 kind_unavailable", resp.StatusCode, body)
+	}
+	b.beatDetect(t, true, "")
+	if _, body := b.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(body, `"features":["bridge","chapters","sidecars"]`) {
+		t.Fatalf("features = %s", body)
+	}
+
+	// Allowed: params absent or {}, stored as {}; a second press is the open job.
+	resp, body := b.queueDetect(t, b.adminTok, mistbornBook, "")
+	var job bridge.Job
+	decodeInto(t, body, &job)
+	if resp.StatusCode != http.StatusCreated || job.Kind != bridge.KindDetectChapters || string(job.Params) != `{}` {
+		t.Fatalf("queue: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusOK || !strings.Contains(body, fmt.Sprintf(`"id":%d,`, job.ID)) {
+		t.Fatalf("second press: %d %s, want the open job", resp.StatusCode, body)
+	}
+	for name, c := range map[string]struct {
+		body string
+		want int
+	}{
+		"a param":       {fmt.Sprintf(`{"kind":"chapters.detect","library_id":%d,"path":%q,"params":{"source":"audio"}}`, b.lib.ID, cradleBook), http.StatusBadRequest},
+		"not an object": {fmt.Sprintf(`{"kind":"chapters.detect","library_id":%d,"path":%q,"params":[]}`, b.lib.ID, cradleBook), http.StatusBadRequest},
+		"no path":       {fmt.Sprintf(`{"kind":"chapters.detect","library_id":%d}`, b.lib.ID), http.StatusBadRequest},
+		"no such book":  {fmt.Sprintf(`{"kind":"chapters.detect","library_id":%d,"path":"Nobody/Nothing"}`, b.lib.ID), http.StatusNotFound},
+	} {
+		if resp, out := b.do(t, "POST", "/api/v1/admin/bridge/jobs", b.adminTok, c.body); resp.StatusCode != c.want {
+			t.Errorf("%s: %d %s, want %d", name, resp.StatusCode, out, c.want)
+		}
+	}
+	// Denied: a user, and the bridge token.
+	if resp, body := b.queueDetect(t, b.userTok, cradleBook, `{}`); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("a user: %d %s, want 403", resp.StatusCode, body)
+	}
+	if resp, body := b.queueDetect(t, b.bridgeTok, cradleBook, `{}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the bridge token: %d %s, want 401", resp.StatusCode, body)
+	}
+
+	// Denied: a generate job while the detect job is open.
+	if resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(body, `"code":"detect_open"`) {
+		t.Fatalf("generate with a detect open: %d %s, want 409 detect_open", resp.StatusCode, body)
+	}
+	// Denied: a detect job while a generate job is open for the book.
+	if resp, body := b.queueSidecars(t, b.lib.ID, cradleBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("generate: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := b.queueDetect(t, b.adminTok, cradleBook, `{}`); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(body, `"code":"generate_open"`) {
+		t.Fatalf("detect with a generate open: %d %s, want 409 generate_open", resp.StatusCode, body)
+	}
+	// Allowed: the generate job once the detect job has ended.
+	if _, err := b.api.bridge.Cancel(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, `{}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("generate once the detect ended: %d %s", resp.StatusCode, body)
+	}
+
+	// Denied: a library the Bridge can't write to.
+	b.beatDetect(t, false, "")
+	if _, err := b.db.ExecContext(context.Background(), `UPDATE bridge_jobs SET state = 'cancelled'`); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := b.queueDetect(t, b.adminTok, mistbornBook, `{}`); resp.StatusCode != http.StatusConflict ||
+		!strings.Contains(body, `"code":"library_not_writable"`) {
+		t.Fatalf("a read-only library: %d %s, want 409 library_not_writable", resp.StatusCode, body)
+	}
+}
+
+// TestBridgeEstimateDetect: the estimate for chapters.detect is the ASR time
+// alone (null without the Bridge's figures), whether the Bridge can write and
+// is online, and the book's open detect job. 409 kind_unavailable from a
+// Bridge that doesn't run it, 404 for a book that isn't indexed, 403 for a user.
+func TestBridgeEstimateDetect(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	ctx := context.Background()
+	const p = "A/Plain.mp3"
+	if _, err := b.cat.UpsertBook(ctx, &catalog.Book{LibraryID: b.lib.ID, RelPath: p, Title: "Plain", Duration: 7200,
+		Size: 5000, AddedAt: "2020-01-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	estimate := func(tok, path string) (*http.Response, string) {
+		return b.do(t, "GET", fmt.Sprintf("/api/v1/admin/bridge/estimate?library_id=%d&path=%s&kind=chapters.detect", b.lib.ID, url.QueryEscape(path)), tok, "")
+	}
+	b.beatWith(t, true, true, sidecarsEstimates)
+	if resp, body := estimate(b.adminTok, p); resp.StatusCode != http.StatusConflict || !strings.Contains(body, `"code":"kind_unavailable"`) {
+		t.Fatalf("an older Bridge: %d %s", resp.StatusCode, body)
+	}
+	b.beatDetect(t, true, "")
+	resp, body := estimate(b.adminTok, p)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"asr_hours":null`) || !strings.Contains(body, `"writable":true`) ||
+		!strings.Contains(body, `"online":true`) || strings.Contains(body, "open_job") || strings.Contains(body, "agent_cost_usd") {
+		t.Fatalf("no figures: %d %s", resp.StatusCode, body)
+	}
+	// 900 s of ASR per audio hour over two hours: half an hour.
+	b.beatDetect(t, true, sidecarsEstimates)
+	if resp, body := b.queueDetect(t, b.adminTok, p, ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("queue: %d %s", resp.StatusCode, body)
+	}
+	resp, body = estimate(b.adminTok, p)
+	var est struct {
+		Kind     string      `json:"kind"`
+		Path     string      `json:"path"`
+		Duration float64     `json:"duration_seconds"`
+		ASRHours *float64    `json:"asr_hours"`
+		OpenJob  *bridge.Job `json:"open_job"`
+	}
+	decodeInto(t, body, &est)
+	if resp.StatusCode != http.StatusOK || est.Kind != bridge.KindDetectChapters || est.Path != p || est.Duration != 7200 ||
+		est.ASRHours == nil || *est.ASRHours != 0.5 || est.OpenJob == nil || est.OpenJob.Kind != bridge.KindDetectChapters {
+		t.Fatalf("with figures: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := estimate(b.adminTok, "Nobody/Nothing"); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("no such book: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := estimate(b.userTok, p); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("a user: %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestGeneratedChaptersOnTheWire: once the Bridge has written a chapterless
+// book's chapters.json and asked for the attachments rescan (which answers
+// chapters: true), the player's /chapters and item say chapters_source
+// "generated" with the found chapters, and the admin's book page does too.
+func TestGeneratedChaptersOnTheWire(t *testing.T) {
+	t.Parallel()
+	b, root := newBridgeEnvCopy(t)
+	ctx := context.Background()
+	// The fixture's book as a chapterless hour (the test scanner runs without
+	// ffprobe, so it reads no length).
+	book, err := b.cat.GetBookByPath(ctx, b.lib.ID, mistbornBook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book.Duration, book.Chapters = 3600, nil
+	for i := range book.Files {
+		book.Files[i].Duration = 3600
+	}
+	if _, err := b.cat.UpsertBook(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, filepath.FromSlash(mistbornBook), ".audiosilo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	list := fmt.Sprintf(`{"version":1,"generator":"audiosilo-bridge","from":"narration",
+		"files":[{"path":%q,"size":%d,"duration_ms":3600000}],
+		"chapters":[{"title":"Prologue","start_ms":0,"length_ms":1200000},{"title":"Chapter 1","start_ms":1200000,"length_ms":2400000}]}`,
+		strings.TrimPrefix(book.Files[0].RelPath, mistbornBook+"/"), book.Files[0].Size)
+	if err := os.WriteFile(filepath.Join(dir, metadata.AttachmentChapters), []byte(list), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, body := b.rescan(t, fmt.Sprintf(`{"library_id":%d,"path":%q,"mode":"attachments"}`, b.lib.ID, mistbornBook))
+	if want := `"attachments":{"characters":false,"recaps":false,"description":false,"chapters":true,"bridge":false}`; code != http.StatusOK || !strings.Contains(body, want) {
+		t.Fatalf("attachments rescan = %d %s, want %s", code, body, want)
+	}
+	q := fmt.Sprintf("?path=%s", url.QueryEscape(mistbornBook))
+	resp, body := b.do(t, "GET", fmt.Sprintf("/api/v1/libraries/%d/chapters%s", b.lib.ID, q), b.adminTok, "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"chapters_source":"generated"`) || !strings.Contains(body, `"title":"Chapter 1"`) {
+		t.Fatalf("chapters: %d %s", resp.StatusCode, body)
+	}
+	resp, body = b.do(t, "GET", fmt.Sprintf("/api/v1/libraries/%d/item%s", b.lib.ID, q), b.adminTok, "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"chapters_source":"generated"`) || strings.Contains(body, `"generated":true`) {
+		t.Fatalf("item: %d %s", resp.StatusCode, body)
+	}
+	resp, body = b.do(t, "GET", fmt.Sprintf("/api/v1/admin/libraries/%d/book%s", b.lib.ID, q), b.adminTok, "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"chapter_source":"generated"`) {
+		t.Fatalf("admin book: %d %s", resp.StatusCode, body)
+	}
+	// The file going (the Bridge's own delete, then its rescan) takes them away.
+	if err := os.Remove(filepath.Join(dir, metadata.AttachmentChapters)); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := b.rescan(t, fmt.Sprintf(`{"library_id":%d,"path":%q,"mode":"attachments"}`, b.lib.ID, mistbornBook)); code != http.StatusOK {
+		t.Fatalf("rescan: %d %s", code, body)
+	}
+	if _, body := b.do(t, "GET", fmt.Sprintf("/api/v1/libraries/%d/chapters%s", b.lib.ID, q), b.adminTok, ""); strings.Contains(body, "chapters_source") {
+		t.Fatalf("chapters after the file went: %s", body)
+	}
+}

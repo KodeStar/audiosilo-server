@@ -51,12 +51,27 @@ func EstimateSidecars(duration float64, ebook bool, est *SidecarsEstimates) Side
 	if duration <= 0 {
 		return c // audio of unknown length (no probe): nothing to cost it by
 	}
-	hours := duration / 3600
-	c.ASRHours = cents(hours * est.ASRSecondsPerAudioHour / 3600)
+	c.ASRHours = asrHours(duration, est)
 	if est.AgentUSDPerAudioHour != nil {
-		c.AgentCostUSD = new(cents(hours * *est.AgentUSDPerAudioHour))
+		c.AgentCostUSD = new(cents(duration / 3600 * *est.AgentUSDPerAudioHour))
 	}
 	return c
+}
+
+// EstimateASRHours is the speech recognition wall time, in hours rounded to
+// hundredths, over duration seconds of audio from the Bridge's figures (a
+// chapters.detect run, which is speech recognition and no agent); nil when the
+// Bridge sent no figures or the audio's length is unknown.
+func EstimateASRHours(duration float64, est *SidecarsEstimates) *float64 {
+	if est == nil || duration <= 0 {
+		return nil
+	}
+	return new(asrHours(duration, est))
+}
+
+// asrHours is the ASR wall time over duration seconds of audio, in hours.
+func asrHours(duration float64, est *SidecarsEstimates) float64 {
+	return cents(duration / 3600 * est.ASRSecondsPerAudioHour / 3600)
 }
 
 // cents is v rounded to two decimal places.
