@@ -303,7 +303,7 @@ describe('library health', () => {
       // The footer says where the found chapters go.
       expect(
         screen.getByText(
-          "Showing 2. Detect chapters saves the chapters it finds in the book's .audiosilo folder; nothing else on disk changes.",
+          "Showing 2. Detect chapters saves the chapters it finds to the book's .audiosilo folder; nothing else on disk changes.",
         ),
       ).toBeInTheDocument();
       await user.click(within(row).getByRole('button', { name: 'Detect chapters' }));
