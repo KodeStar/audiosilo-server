@@ -21,6 +21,7 @@ import {
   chaptersCheckNote,
   detectChosenNote,
   fixFor,
+  footKey,
   issueReason,
   rowFix,
   say,
@@ -217,7 +218,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         </div>
       ) : null}
       <p className="mt-2.5 text-[12.5px] text-subtle-foreground">
-        {t(ignored ? 'health.footIgnored' : 'health.foot', counted(books.length, lang))}
+        {t(footKey(ignored, fix), counted(books.length, lang))}
       </p>
 
       <BulkBar

@@ -300,6 +300,12 @@ describe('library health', () => {
       const user = userEvent.setup();
       renderApp('/health?issue=no_chapters');
       const row = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      // The footer says where the found chapters go.
+      expect(
+        screen.getByText(
+          "Showing 2. Detect chapters saves the chapters it finds in the book's .audiosilo folder; nothing else on disk changes.",
+        ),
+      ).toBeInTheDocument();
       await user.click(within(row).getByRole('button', { name: 'Detect chapters' }));
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByText('None: no agent is used')).toBeInTheDocument();
@@ -448,6 +454,9 @@ describe('library health', () => {
       renderApp('/health?issue=no_chapters');
       await screen.findByRole('link', { name: 'The Black Gate' });
       expect(screen.queryByRole('button', { name: 'Detect chapters' })).not.toBeInTheDocument();
+      expect(
+        screen.getByText('Showing 2. Fixes are saved in AudioSilo; nothing on disk changes.'),
+      ).toBeInTheDocument();
     });
   });
 

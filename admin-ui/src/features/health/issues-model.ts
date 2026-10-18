@@ -106,6 +106,16 @@ export function detectChosenNote(
     : undefined;
 }
 
+/**
+ * The list's footer key: where its fixes are kept. Detect chapters is the one fix
+ * that writes into the library (the book's `.audiosilo` folder); the rest are
+ * saved in AudioSilo.
+ */
+export function footKey(ignored: boolean, fix: IssueFix): string {
+  if (ignored) return 'health.footIgnored';
+  return fix === 'detect' ? 'health.footDetect' : 'health.foot';
+}
+
 export { say, type Phrase } from '@/lib/phrase';
 
 /** Hours, rounded down, for "one chapter over N hours". */

@@ -4,6 +4,7 @@ import {
   attentionTotal,
   chaptersCheckNote,
   fixFor,
+  footKey,
   issueReason,
   pickCategory,
 } from './issues-model';
@@ -76,4 +77,11 @@ it('offers Detect chapters for books without chapters only while the Bridge can'
   expect(fixFor('no_chapters', false)).toBeNull();
   expect(fixFor('detailed_chapters', false)).toBe('chapters');
   expect(fixFor('scan_error', true)).toBe('rescan');
+});
+
+it("says Detect chapters writes to the book's .audiosilo folder, and only on its list", () => {
+  expect(footKey(false, 'detect')).toBe('health.footDetect');
+  expect(footKey(false, null)).toBe('health.foot');
+  expect(footKey(false, 'chapters')).toBe('health.foot');
+  expect(footKey(true, 'detect')).toBe('health.footIgnored');
 });
