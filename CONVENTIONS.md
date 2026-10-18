@@ -1,0 +1,1754 @@
+# AudioSilo Server - conventions
+
+Moved verbatim out of CLAUDE.md so it is read on demand instead of loading into
+every session. CLAUDE.md keeps a one-line index of these topics.
+
+## Conventions
+
+- **Every feature ships with a test.** Handler/integration tests use the
+  `newTestEnv` harness in `internal/api/api_test.go` (a temp-file SQLite, so reads
+  go through the read-only reader pool as in production and a write sent through a
+  read method fails the test, + `testdata/library` fixtures; `catalog`'s
+  `newTestCatalog` is file-backed for the same reason). Never migrate per test: open a test database with
+  `storetest.Open(t)` (`internal/store/storetest`; `storetest.Path(t)` for a file a test opens itself), not
+  `store.Open` on a new file or `:memory:`. Under `-race` running every migration costs about a second, so it
+  migrates once per test binary and copies the file per test (file-backed, so reads use the reader pool).
+  A package creating many password users calls `auth.UseCheapHashingForTests()` from `TestMain`
+  (`internal/api`, `internal/auth` and `internal/matchrun`'s `main_test.go`; a real-cost argon2id hash is ~0.25 s under `-race`; it panics outside a test
+  binary). A new top-level test starts with `t.Parallel()` (each has its own database and
+  temp dirs; the only thing tests share is the read-only `testdata/` fixtures, so copy one into
+  `t.TempDir()` before changing it: `copyFixtures` in `internal/api`) unless it calls `t.Setenv` or `t.Chdir`
+  (which panic in a parallel test) or writes a package-level var (pass the value in instead, as
+  `hashWithCost` does for `TestHashCost`). Pure-logic tests sit next to the code (see
+  `internal/api/middleware_test.go`, `internal/catalog/shares_test.go`,
+  `internal/web/web_test.go`). **Security-critical code requires both an allowed
+  and a denied regression test** - anything touching `library.SafeJoin`,
+  `Scope.Allows`/`VisibleInBrowse`/`pathFilterSQL` (its single-parameter form too), the household member rule
+  (`catalog/members.go`) and the member routes, the rate limiters,
+  `auth.ResolveRequest`/`lookupToken`, the cast token checks (`relpath.Within`/`Clean`, `auth.castGrant.covers`,
+  `ResolveCastRequest`, `api.authenticate`/`castOwnBook`), or `web.htmlCSP`. Keep business logic in the non-`api`
+  packages so it stays unit-testable (`api` is transport-only).
+- **Migrations are append-only**: add `internal/store/migrations/000N_*.sql`;
+  never edit an applied migration. Applied names are tracked in `schema_migrations`.
+- **Secrets** (tokens, auth codes) are stored only as SHA-256 hashes; passwords
+  use argon2id (`auth/hash.go`). Never log or persist plaintext secrets; the
+  first-run banner prints them once and is the only place they appear.
+- **Connect / invite / pairing flow** (`internal/web` connect page + `api/qr.go`):
+  the admin's **Copy invite** button mints an auth code and shares
+  `<base>/connect#code=...` - the code rides in the URL **fragment** so it never
+  reaches the server or its logs. The connect page auto-redeems a fragment code,
+  showing a QR plus **Open in app** / **Open web player** buttons. `buildPairing`
+  emits two carriers for the pairing token: `web_url`
+  (`<base>/web/connect?token=` - encoded in the QR; opens the app via a Universal/
+  App Link when the domain is claimed, else the embedded web player) and `uri`
+  (`audiosilo://connect?...` - custom scheme, launches an installed app on any
+  domain). Both end with `sid=<server_id>` (after `home=`/`away=`; also the payload's
+  `server_id`), so an app falling back to the link's http home checks `GET /server`'s
+  `server_id` there before sending the token in cleartext. **The QR is as redeemable as the invite**: a pairing token minted by
+  redeeming a code is linked to it (`tokens.auth_code_id`) and inherits the
+  invite's uses/expiry, so each device being set up can scan the same QR (the
+  redeem response's `uses_remaining`/`code_expires_at` advertise the budget);
+  recovery-derived tokens instead last `auth.recoveryPairingTTL` (multi-scan
+  within it), and
+  `/auth/pair` + demo tokens stay unlinked/single-use (the console's book page
+  "Listen in player" mints one with `/auth/pair` and opens the same-origin
+  `/web/connect?token=&sid=&uid=&book=&path=` in a new tab, never the payload's
+  `web_url`, whose base may be another origin). Invite codes minted via
+  the admin API default to 5 uses / 1-day expiry (`defaultAuthCode*` in
+  `handlers_admin.go`); explicit values override.
+- **Home and away addresses (`addresses` capability)**: a server
+  has an **away** address (`public_url`, works from anywhere) and may have a **home** one
+  (`lan_url` / `AUDIOSILO_LAN_URL` / console `general.lan_url`, live; else derived from the
+  request's own `Host` when that is a home-network host). The pure core is
+  `config.Addresses(scheme, host)` + `config.isHomeNetworkHost` (private RFC 1918 / ULA
+  `fc00::/7` / link-local IPs, `.local` / `.lan` / `.home.arpa` / `.internal` names, single-label names;
+  NOT loopback, `localhost` or CGNAT `100.64.0.0/10`); a home equal to the away is dropped;
+  `X-Forwarded-*` is not trusted (like `baseURL`), and a proxied request (any forwarding
+  header) derives no home (its Host is the proxy's upstream). `api.addresses(r)` wraps it. It rides on
+  every pairing payload (`addresses`, nil when both empty) and as `home=`/`away=` params
+  APPENDED after the existing ones on `uri` and `web_url` (only when non-empty), on the exchange / login / demo session
+  envelopes (`sessionEnvelope`), and at `GET /addresses` (any signed-in user, `{}` when
+  neither) so an already-paired device learns a newly set address. Native apps probe the
+  home address and check its `server_id` before sending a token there.
+- **Home HTTP (`tls.home_http`, security-relevant)**: the apps can't trust a self-signed
+  certificate, so on `tls.mode: selfsigned` with `home_http` on (the default;
+  `AUDIOSILO_TLS_HOME_HTTP`, console `network.tls_home_http`, restart; `config.ServesHomeHTTP`)
+  the bind port answers both protocols. `server.splitListener` peeks each connection's first
+  byte in its own goroutine (bounded by the 10 s header timeout; Close drops a peeking
+  conn): `0x16` becomes a `*tls.Conn`, anything else stays plain, and ONE `http.Server`
+  serves both (ALPN `h2` set by hand, as `ServeTLS` would). `server.homeHTTPGate` serves a
+  plain request only when the connection's own `RemoteAddr` (never `X-Forwarded-For`) is
+  loopback, or `config.HomeNetworkIP` (private/ULA/link-local; not CGNAT) AND the Host is
+  `config.HomeNetworkHost` (`homeRequest`: a NAT/proxy gateway's private source, Docker's
+  IPv6 proxy say, still carries the internet client's public Host); anyone else gets a 308
+  to the same URL on https (`:80` for a port-less Host, as `baseURL`; 400 for an unusable
+  Host). Off whenever `tls.cert_file` is set (`ServesHomeHTTP`: a supplied cert may be trusted).
+  `config.Addresses` then derives the home address as `http://` even for an https request,
+  keeping the request's port (`:443` added when the Host has none, the port that answers
+  http); a configured `lan_url` is used as is, and `base_url`/`web_url`/`uri server=` are
+  always https (`api.baseURL`: a plain-HTTP request gets the https base on its port, 80 for a
+  Host without one, `config.HostWithPort`; a proxied one keeps its port-less Host, https's 443), so a link copied from a console opened over http stays https. No HSTS on self-signed and no `upgrade-insecure-requests` in any
+  CSP (`TestCSPAllowsPlainHTTP`), so the console and player work over http on the LAN.
+- **Invite vs recovery (`auth_codes.kind`)**: an auth code is either an admin-minted
+  `invite` (bounded) or a user-owned `recovery` code (durable: unlimited uses, never
+  expires). Both pair through the same `ResolveAuthCode` → `IssuePairingToken` →
+  `ConsumePairing` path. **Redeem validates without consuming** (opening an
+  invite link costs nothing); **exchange claims the use** - `ConsumePairing`
+  folds the cap check, the code-expiry check and the first-claim `redeemed_at`
+  stamp into one atomic UPDATE, and rejects a disabled/deleted user first, so a
+  rejected attempt never burns a use or marks an invite accepted (`uses` counts
+  devices that actually paired). Linked pairing tokens die with their code: delete/
+  supersede/recovery-regeneration cascade (`ON DELETE CASCADE`), rotate revokes
+  them explicitly. Recovery decouples
+  re-auth from invitation: a signed-out/password-less user mints a recovery code from
+  the player's Settings (`POST /auth/recovery`) and re-pairs without an admin. Recovery
+  mint/redeem and `POST /auth/password` are gated by `accountLimiter` and **refused for
+  demo accounts** (`User.IsDemo`) so a throwaway session can't forge a durable login.
+  `ListAuthCodes` returns only invites; recovery presence surfaces as
+  `User.HasRecovery`, and the admin can revoke a leaked one via `DELETE
+  /admin/users/{id}/recovery` (`ClearRecoveryCode`) - the only lever, since recovery
+  codes aren't listable. **Invite hygiene**: `CreateInvite` mints and, in one
+  transaction, supersedes the user's other *still-redeemable* invites
+  (`supersedeActiveInvites` - not expired, not used-up) so there's exactly one active
+  invite each; spent/expired ones stay as history. `POST /admin/authcodes/{id}/rotate`
+  (`RotateAuthCode`) regenerates an invite's secret in place (the console's "Rotate"),
+  **preserving** its `max_uses` and renewing its expiry for the original window (never
+  silently downgrading to defaults) and **revoking the invite's outstanding pairing
+  tokens** (a QR already on screen dies with the old secret) and, like a mint, retiring
+  the user's other still-redeemable invites; `redeemed_at` records
+  acceptance (first successful exchange) but the console buckets invites by whether
+  they are still redeemable, not by `redeemed_at`. **Self-
+  service password**: `POST /auth/password` reuses `SetPassword`; setting a first
+  password needs no challenge, but changing an existing one requires `current_password`
+  (`CheckPassword`), an empty password is rejected (clearing is admin-only), and the
+  admin-must-keep-a-password guard still holds.
+- **Personal API keys (`tokens.kind='api'`)**: user-minted, **non-expiring** bearer
+  tokens for headless integrations, owner-scoped mint/list/revoke via
+  `POST`/`GET`/`DELETE /auth/tokens` (`IssueAPIToken`/`ListAPITokens`/
+  `RevokeTokenByID`; label carried in `device_name`, ≤100 chars). `requireAuth` now
+  accepts **session OR api** (`ResolveRequest(..., KindSession, KindAPI)`), so a key
+  authenticates like a session acting as its owner (an admin's key passes
+  `requireAdmin`; media `?token=` accepts it too) but is never valid for pairing
+  `/auth/exchange`; a pairing token is never accepted as a bearer credential.
+  Secrets are stored SHA-256-only and shown once; create/list/revoke go through
+  `gateSelfService` (shared `accountLimiter` + demo refusal). **Containment**: a key
+  authenticates as its owner but cannot mint a *fresh durable credential* -
+  `ResolveRequest` returns the matched kind (`Credential.Kind`) and `denyAPIKey` refuses an api-key
+  caller (403) on `POST /auth/{tokens,recovery,pair,password}`, so revoking a leaked
+  key cuts off everything it could reach (it cannot spawn another key/recovery
+  code/pairing token/password that outlives its own revocation - GitHub's "a token
+  cannot create tokens"). It may still list/revoke keys and clear a recovery code
+  (those only reduce access). Surfaced by the `api_keys` capability.
+- **Web player at `/web`** (`web.go`, served from `cfg.WebDir`): a separate Expo
+  Router project (`~/dev/audiosilo/audiosilo-frontend`) exported as a static site. It is
+  **not vendored** in this repo or the binary - the server serves it at runtime
+  from `web_dir` (env `AUDIOSILO_WEB_DIR`), which the Docker image bakes in at
+  `/app/web` from a pinned prebuilt frontend image (see `Dockerfile`). Empty
+  `web_dir` → `/web` is unmounted and the `web_player` capability is false. The
+  export must be built with `baseUrl=/web` (frontend `app.json experiments.baseUrl`)
+  so asset URLs resolve under the subpath. The handler resolves per-route HTML,
+  falls back to `index.html` for client-routed deep links, 404s missing assets,
+  and sets a **scoped CSP** per HTML response (strict `script-src`: `'self'`, the Cast Web
+  Sender's three scripts on `https://www.gstatic.com` by PATH (`web.castSenderScripts`:
+  `/cv/js/sender/v1/cast_sender.js`, `/cast/sdk/libs/sender/1.0/cast_framework.js`,
+  `/eureka/clank/`; capability `cast`; the ONLY remote sources in the policy, never the whole
+  origin, which also serves AngularJS, a CSP-bypass gadget; `TestHTMLCSPCastSender` pins the
+  whole string) and a sha256
+  hash of that doc's inline scripts; `style-src` allows `'unsafe-inline'` for
+  react-native-web's runtime styles). Admin/connect pages keep the stricter
+  site-wide CSP. Compatibility is by construction (the image pins a matching web
+  build); native apps negotiate via `GET /server` capability flags.
+- **Admin console (`admin-ui/` + `internal/web/adminui`)**: a React SPA in the Shelf design
+  (workspace `ADMIN-CONSOLE-PLAN.md` holds the phases still to come; `admin-ui/STYLEGUIDE.md` the
+  design). It replaced the classic vanilla-JS console at the Phase 1b cutover (no switch, no
+  `/admin/classic`). Vite builds into `internal/web/adminui/dist`, embedded with
+  `//go:embed all:dist` (only `dist/.gitkeep` is committed; a build without it serves a 503
+  "console not built" page). Serving goes through **`internal/web/spa`**, the one SPA handler
+  the console and the web player share: files under the asset dirs are immutable and 404 when
+  missing, other files and HTML revalidate, a missing top-level file with an extension 404s,
+  anything else boots `index.html` for client routing; MIME types are pinned process-wide.
+  Every static file (console, player, connect/setup assets) carries a strong content-hash ETag
+  (a match is a 304, documents included) and text types go out gzipped to clients that accept it
+  (`spa.Files`: worked out once per file and kept, redone when a web_dir file's size or mtime
+  changes; never for a Range request; `Vary: Accept-Encoding`).
+  **The CSP does not change for it**: no inline script/style anywhere (`theme-init.js` is
+  external, Base UI runs under `CSPProvider disableStyleElements`, banned libraries are
+  ESLint-enforced, `admin-ui/scripts/check-csp.mjs` fails the build and `TestEmbeddedBuild`
+  checks the embedded `index.html`). It keeps the classic console's token key
+  (`localStorage["audiosilo_token"]`), so an admin stays signed in across the upgrade. A 403 from
+  an `/admin` endpoint makes the console re-check `/me` and sign a demoted admin out.
+  Admin-only endpoints that exist for it: `GET /admin/libraries` adds `book_count` and
+  `available` (root reachable: `Scanner.RootAvailable`, a 2 s-bounded, 15 s-cached, one-at-a-time
+  probe per root so a hung NFS mount can't stall the page, plus "empty while books are indexed"
+  and "last scan stopped at the guard"); scan status adds `unavailable` and `queued`, and
+  `API.startScan` queues the scan in the job queue (see "Job queue" below), which marks the
+  library queued before the request returns so the first poll sees it; `GET /admin/invites` lists every account's invites (`auth.ListInvites`, never a
+  code); `GET /admin/fs/dirs?path=` is the add-library folder picker (`library.ListDirs`:
+  absolute paths, folder names only, no dot-folders, 1,000-entry cap); `GET /admin/shares` adds
+  `member_ids` (`catalog.ShareMembers`).
+- **Community metadata lookup (Phase 1.5, `internal/meta`)**: `GET
+  /api/v1/libraries/{id}/meta?path=` (authed, scope-checked via `authorizedPath`
+  + `bookForPath`, exactly like `item`) resolves the book's `asin`/`isbn`
+  (backfilled via `book_enrichment`) against the community metadata API
+  (`metaserve`, meta.audiosilo.app) and returns a composed enrichment envelope
+  (work + matched recording + series rails, each carrying its own `web_url`).
+  The `work` also carries the community **characters** and **recaps** (the CC
+  BY-SA expressive layer: spoiler-tagged, position-keyed - `reveal`/`through`
+  are logical work-chapter positions) when metaserve has them, plus a
+  whole-book `recap_summary` (`{in_short, ending}` - both summarize the whole
+  book, and `ending` is a full spoiler by construction); all three are additive/`omitempty`, mirrored on
+  `upstreamWorkDetail` and `MetaWork` and passed through by
+  `toCharacters`/`toRecaps`/`toRecapSummary` (which drops an all-blank summary).
+  **Work-id lookup**: `GET /api/v1/meta/work?id=<work id>` (authed, *not*
+  library-scoped - global read-only community data with no path to authorize;
+  the id is a query param because work-id slugs are not path-segment safe, and
+  `internal/meta` URL-escapes it upstream) returns `{"work": {...}}` with the
+  same `MetaWork` shape. It is the "catch me up on the previous book" path: a
+  series rail carries sibling work ids but no characters/recaps, so a client
+  resolves one of those ids here. `Service.Work` wraps the single
+  `works/{id}` GET and caches under a `"w:"` key space in the SAME bounded
+  cache, with Enrich's TTL policy (24h / 1h not-found / 2min error) and the
+  same "never cache a caller-cancelled failure" rule. Because the work id is the
+  one **caller-chosen** value that becomes a cache key, an outbound GET and a log
+  field, it is bounded on three axes: the handler rejects an id over
+  `maxWorkIDLen` (200 bytes) or carrying control characters (400 `invalid id`,
+  `validWorkID` - transport-level hygiene, not a slug grammar); the `"w:"` key
+  space has its own cache quota (`maxWorkEntries`) so an id flood can only evict
+  other work entries, never the enrichment cache; and uncached upstream fetches
+  go through a small semaphore (`maxConcurrentWorkFetches`, the transcodeSem
+  pattern) as an amplification bound on the shared community service. A
+  wrong-shaped upstream 200 (an id colliding with a literal metaserve route
+  decodes leniently to an empty work) is treated as `ErrNotFound`, never cached
+  or served as a positive blank work. Degradation: metadata off
+  -> 404; missing/blank `id` -> 400; malformed `id` -> 400; unknown work id ->
+  404; upstream error -> 502.
+  Config is `metadata.{enabled,base_url,region,mode}` (env `AUDIOSILO_METADATA_ENABLED` /
+  `AUDIOSILO_METADATA_BASE_URL` / `AUDIOSILO_METADATA_REGION` / `AUDIOSILO_METADATA_MODE`; `base_url` must be an
+  absolute http(s) URL when enabled; `region`, the preferred Audible marketplace, one
+  of `config.Regions` or "", applies live; `mode` is `remote` or `mirror`, read at start, see Mirror
+  mode below) - one key disables ALL outbound calls (lookups and the mirror's downloads). **Runtime toggle**: `meta.Service`
+  is constructed in `api.New` whenever `base_url` is valid (`MetadataConfig.ValidBaseURL`),
+  regardless of `enabled`, and the live config's `metadata.enabled` gates it - so an admin
+  can flip it on/off without a restart (Server settings, below). The handler and the
+  `metadata` capability both gate on `metadataOn()` (`a.meta != nil && enabled`);
+  `a.meta == nil` (empty/invalid `base_url` at start) can't be enabled (400
+  `metadata_unavailable`); a new `base_url` waits for a restart. `meta.Service` owns the compose logic
+  (lookup -> works/{id} -> pick the recording by `recording_id`, first as
+  fallback -> up to 3 series rails, one per ordering family) behind a bounded in-memory TTL cache (24h
+  positive / 1h not-found / 2min transport-error, ~2048-entry cap) so a hot path
+  or a down upstream isn't hammered; the api handler (`handlers_meta.go`) is
+  transport-only. Degradation: disabled -> 404 (and the `metadata` capability is
+  false, so clients hide the UI); no asin/isbn or no upstream match -> `200
+  {"matched": false}` (with a `work` of the book's own when the Bridge generated
+  characters, recaps or a description for it: `meta.Answer`); upstream unreachable -> 502, unless
+  the book has generated content (this server's own), answered as unmatched with
+  it. **Generated description** (Phase 1c): a book's `description.json` rides in the additive
+  `work.generated_description: {text}` (`MetaGeneratedDescription`), NEVER in `community_description`
+  (a shipped 2.0 app shows that first and credits the community; it ignores the new field), and
+  `work.generated.description` (bool, always sent beside `characters`/`recaps`) marks it. It fills
+  only a work with no `community_description` (the core `description`, the publisher's kind, doesn't
+  block it: the player orders those). `fillable` (generated.go) is the one statement of which parts a
+  work leaves to fill (`metadata.AttachmentParts`): `Fillable` loads by it and `parts` lays in by it.
+  `generatedFor` reads only the parts it names that the book's signature names too
+  (`Book.GeneratedParts`), plus the provenance (`catalog.BookAttachments` with a parts mask: a work with
+  community characters and recaps reads just the description and its provenance, and none for a book
+  without one); `?spoilers=hide` keeps
+  it (spoiler-free by construction: the Bridge writes it from the opening chapters' notes only), and
+  attribution never counts it. `generated.generated_at` is bridge.json's `generated_at` (the
+  characters' and recaps' run), or its `description.generated_at` (`Generated.DescriptionAt`) when the
+  description is all the mark names: a description-only job keeps the run's time. An unmatched book
+  with only a description answers `{matched: false, work: {title, generated_description, generated:
+  {description: true, ...}, ...}}`. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
+  **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
+  each family (key `ordering_of || id`) into ONE rail whose top-level view is the
+  MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
+  a shipped player that ignores the new fields never sees a chronological order's
+  earlier books as "previous". The other orders ride along as additive
+  `orderings` (at most `maxOrderingAlternates` = 2 per family, failures make the
+  envelope partial), and `maxSeriesRails` counts FAMILIES. Every main view is
+  fetched before any alternate, so under `composeTimeout` a slow upstream costs
+  alternates, never rails (`TestEnrichMainsBeforeAlternates`). A pre-v7 upstream
+  yields byte-identical rails (`TestEnrichPreV7RailsUnchanged`), except that a
+  work listed at two positions of one series is now one rail rather than two
+  (`TestEnrichRepeatedMembershipIsOneRail`). Server-side because shipped players
+  lag.
+  **Series rules** (`meta/seriesrules.go`): which of a work's series a book of it
+  is in. Never a variant reading order (`ordering_of`), a translation of another of
+  the work's series (`translation_of`; unless that one's derived `language` differs
+  from the work's) or a series whose derived `language` differs from the work's
+  (primary subtags; unknown agrees); an EDITION - a series named
+  exactly like another of the work's plus a bracketed qualifier or a "narrated by"
+  tail ("Discworld (abridged)", "Harry Potter (Full-Cast Editions)") - only for the
+  recordings its qualifier names (`editionHolds`: abridged, full cast = >= 4
+  narrators or one named "Full Cast", the named narrator; "(Unabridged)", a
+  language edition or an ordering note hold none; "narrated by" after a spaced dash
+  or a colon). Editions are read from the name
+  because the community API links no series to a recording. A name that only
+  extends another ("Discworld: Tiffany Aching") is a series of its own. A match
+  candidate's `series` is the work's series every recording is in, and each
+  recording's additive `series` the book's list as that recording, its own edition
+  first (`workSeries.of`), which `matchrun.Propose` and the match dialog's
+  `communityValues` read (so the console has no copy of the rule); series carry an
+  additive `id`. The facts come from `series/{id}`, each series once per request,
+  concurrently through `workSem`, at most `maxSeriesFacts` per match within
+  `seriesFactsTimeout` (none for a work they can't rule on: no language, one
+  series), cached in the `s:` key space (quota `maxSeriesEntries`); an unreadable
+  record drops nothing, and a repick (`MatchQuery.NoSeries`) reads none. Rails take
+  the rules too (`railMains`, before the `maxSeriesRails` cap): an edition named for
+  a kind of recording only for the recording the lookup named (or the work's only
+  one; never `pickRecording`'s first-recording fallback), then first (the book's main
+  series, as a match makes it), so the cap goes to the book's series (a Discworld novel in six series kept its Tiffany
+  Aching rail); other editions keep their place (pre-v7 rails unchanged); a series
+  the cache already knows is foreign is left out before the cap, and a main view
+  whose fetched record is foreign once read, handing its slot to the next family (at
+  most `maxForeignRails` times; a translation judged with every record read).
+  **Persistent meta cache** (`meta_cache`, migration 0024): `meta.Store` is a
+  SQLite second level behind the memory cache (`catalog/metacache.go`, adapted to
+  `meta.Store` by `api.metaStore`, which logs failures; best effort, a failure
+  never fails a lookup). Same keys and TTLs; persisted: enrichments (positive,
+  not-found, incomplete) and positive works only - never transport errors, never
+  work-id misses. A fresh row warms memory for its remaining TTL; a positive row
+  however stale is served when the upstream fails (not on caller cancellation),
+  held in memory for errorTTL. Rows carry `storeVersion` and the metaserve
+  `source`; others are ignored. Derived, rebuildable, not user state; the
+  launcher's retention keeps the newest `catalog.MetaCacheRows` (20 000), works
+  (`w:`, caller-chosen ids) within a share of their own (`catalog.MetaCacheWorkRows`,
+  2 000) so they never push the books' enrichments out. A work's later 404 (remote mode; never in
+  mirror mode, see Mirror mode)
+  replaces its stored row (no new row for an unknown id). Writes are bounded by
+  `storeWriteTimeout` (250 ms): a busy writer costs the row, not the response. No config
+  key: only the service reads or writes it, so `metadata.enabled` off touches nothing.
+  **Mirror mode** (`metadata.mode: mirror`, env `AUDIOSILO_METADATA_MODE`, `remote` the default; read
+  at start, a `restart` setting): the server keeps a local copy of metaserve's own database and
+  answers the SAME questions in-process with metaserve's own code, so no book is looked up over the
+  internet. The copy is audiosilo-meta's data release artifact (`meta.sqlite.gz`, ~450 MB, ~1.8 GB
+  decompressed; the CC0 core and the CC BY-SA community layer in one file), and the module
+  `github.com/kodestar/audiosilo-meta` is a dependency: `pkg/release` (the ONE implementation of
+  the release asset contract: newest non-draft release carrying the asset, allowlisted GitHub hosts,
+  stall watchdog, gz digest verified while streaming, temp file + rename) and `pkg/query` (`Open`,
+  `MaxSchemaVersion`, and `NewHandler`: metaserve's JSON API handler, byte for byte). **Parity by
+  construction**: `meta.Service.SetMirror` swaps the client's transport for `fallbackTransport`
+  (`internal/meta/mirror.go`), which serves each request the client already builds through the local
+  handler (`meta.Mirror.Handler()`; an in-memory ResponseWriter, `localTimeout` 15 s,
+  `maxLocalBody`) while the copy is `Ready`; no copy, or a failed answer (a 5xx, e.g. a query
+  this code can't run on an artifact schema newer than `query.MaxSchemaVersion`; an answer too
+  large; a timeout; a panic), sends the request to `base_url` unchanged through remote mode's own
+  `*http.Client` (its `clientTimeout` covers the body); a failed answer is logged there, at most
+  every 10 min (`SetMirror(m, log)`). A 404 is the copy's answer; a retired slug's 301 is followed
+  on the same host, so it resolves locally. A `base_url` with a path is stripped before the copy's
+  handler and put back on a root-relative `Location`; a caller gone mid-answer is not a fallback. Everything above the client (compose, rails, match, the
+  caches) is unchanged and `meta_cache` rows keep `Source = base_url` (switching modes keeps the
+  cache warm). Two rules differ in mirror mode: the COPY's "no match" never replaces a stored POSITIVE
+  row in `Enrich` or `Work` (`keepStored`: the stored answer is served stale, held in memory for
+  errorTTL, the row untouched; a lagging or broken copy must not blank a companion that worked). It
+  asks whether the copy answered, not whether one is ready: `fallbackTransport` marks the responses
+  it builds with the internal `X-Audiosilo-Mirror` header (`localAnswerHeader`; stripped from remote
+  answers, never sent to any client) and `getJSON` turns such a 404 into `errLocalNotFound`, which
+  wraps `ErrNotFound` (so `errors.Is(err, ErrNotFound)` holds everywhere else). The remote service's
+  "no match" (no ready copy, or a request the copy failed) replaces the row as in remote mode.
+  `Ping` is unchanged: its `/healthz` goes through the same client, so the copy answers it once
+  ready and the remote service until then (parity by construction; cached a minute as before). The
+  runner is `internal/metamirror.Mirror` (`New(dir, Options{Enabled, Now, FreeBytes, Logger,
+  SiteURL, Repo, Release})` - it builds the release client itself, adding
+  `release.WithBaseSize` - then `Run`, `CheckNow`, `Wake`, `Current`, `Ready`, `Handler`, `Status`,
+  `Close`; `Remove(dataDir)`): `<data>/meta-mirror/` (0700; not in backups, which hold the
+  database only) holds exactly one `meta-<tag>.sqlite` (0600) and `state.json` (`jsonfile`: tag,
+  built_at, schema_version, size_bytes, downloaded_at - the one record of the copy's facts,
+  Status reads them there -, etag, checked_at, last_error, and published_at + sha256 as on-disk
+  diagnostics only). `New` is cheap (state + folder): `Run` opens the copy first (`query.Open`'s
+  integrity checks take seconds over 1.8 GB, which must not hold up the listener), so until then
+  the status says `opening` with `fallback` and lookups go remote (a finished download is
+  `opening` too while `query.Open` runs, before the swap: over a working copy that copy still
+  answers, so no `fallback`). Schedule: durable, at most once a
+  day from the `checked_at` on disk (a restart does not re-download), 30 s after start without a
+  copy, an hour after a failed check, and on `CheckNow` (which makes `next_check_at` now; a running
+  check shows none until it ends); never while `metadata.enabled` is off (a check in flight, its download
+  included, stops when it is turned off and records nothing: `checkWhileEnabled`, and a Check now it was
+  answering stays due; while off `Run`
+  looks again each minute, and the settings PATCH that turns metadata back on calls `Wake`, which
+  re-reads the schedule at once but makes nothing due: only a due check runs). The release-list request is conditional (the ETag is sent only while a
+  copy is held, and dropped after any failure following a 200, so a 304 can't hide a release that
+  failed). `update` is list then `install` (tag check, disk guard, download, open, swap) with one
+  ETag reset on its error. A tag that can't name a file is refused (`validTag`); the disk guard
+  needs max(4.5 x the gz size, the current copy) + 512 MiB free (`not enough disk space: need X,
+  have Y`, decimal units as the console's `formatBytes`); the download goes through `release.DownloadData` (temp `.meta-*.tmp` in the folder,
+  `release.WithBaseSize` = the current copy's size), is opened with `query.Open` (integrity checks;
+  a file that doesn't open is deleted), then swapped in atomically; the replaced copy is closed and
+  deleted after a 60 s grace (a release swapped back in within the grace reuses its name: that
+  install closes the retiring handle at once without deleting, and no retire deletes the path an
+  install is writing or the current copy's). Any failure keeps the current copy. At its start `Run` deletes temp
+  files, a half-written state and any copy but the current one, and forgets a copy that is missing,
+  changed size or doesn't open. A copy newer than `MaxSchemaVersion` still opens and answers (flagged
+  `schema_newer`); artifact schema changes must stay additive (CROSS-REPO §17). The launcher
+  (`pkg/launcher/metamirror.go`) builds it only in mirror mode with a metadata service (release
+  client: `release.DefaultRepo`, `User-Agent: AudioSilo/<version>`; tests point it at a fake
+  GitHub through the unexported `Options.metaReleases`), builds it right after `api.New` and hands
+  it over with `API.SetMetaMirror` (which calls `meta.Service.SetMirror`) BEFORE the background
+  jobs start, and a server started in remote mode deletes the folder.
+  Covers are unchanged (their own hosts in both modes). Admin wire below (Server settings).
+  **Bundle** (`meta_bundle` capability): `?include=previous` adds `previous`
+  (`meta.PreviousWorkIDs` / `Service.Previous`: main-view works before this one
+  (an omnibus "1-3" only when it ends before this one starts), nearest first, max 5, failures left out) and `?spoilers=hide` gates the current
+  work by the CALLER's saved progress (`meta.ChapterAt` + `meta.HideSpoilers`,
+  mirroring the player's `meta-gating.ts`; previous works lose only
+  `recap_summary.ending`). Both work on a per-request copy - the cached envelope
+  is shared and immutable. `MetaWork` also carries `community_description`
+  (CC BY-SA, apart from `description`) and `attribution` (present iff the work's
+  COMMUNITY content has characters/recaps/recap_summary/community_description:
+  `carriesCommunityContent`; generated content, laid in after it by
+  `meta.Answer`, never claims the credit); `MetaRecording`
+  carries `chapter_count`. `Service.CachedWorkID` answers an identifier's work id
+  from the cache alone: memory, else its enrichment's stored row, fresh or stale
+  (never the upstream), so placement does not flip with a restart or an eviction.
+  **Owned entries (`local`)**: every rail entry, main view and each
+  `orderings[].works[]`, carries `local` `{library_id, path}` when the CALLER owns
+  that work. Resolved per request AFTER the cache, on a copy of the rails (never
+  stored: the cached envelope is shared): `api.localRails` fetches the caller's
+  candidates (`catalog.SeriesBooks` over their `UserScopes`, scope-filtered: books
+  whose series - the main one (`books.series_key`), or one their `more_series` names
+  (`seriesMembers`, over `book_more_series`, migration 0041) - folds to a
+  rail/ordering name by `match.SeriesKey`, the console's `seriesKey` - NFKD, case,
+  punctuation and spacing ignored; a book in several series is a candidate in each,
+  at its position there) and `meta.PlaceLocal`
+  places them: the current work's entry -> the requested book; else the book whose
+  work id `CachedWorkID` knows; else (orderings) the main view's book for that work;
+  else the series position == the entry's numeric position on a series named like that
+  view (a range entry "1-3" holds a book at that range; an entry at one number a book at it,
+  else a book whose range starts there; `parseSpan`). A book with a known work id is never placed by index; one book per entry;
+  ties: the requested book's library, then library sort order, then path.
+  **Next book** (`next_book` capability): `GET /libraries/{id}/next?path=`
+  (`handlers_next.go`, `authorizedScope` + `bookForPath` like `item`) answers
+  `{source, next?, book?, work?}`; `source` names the step that produced `next`
+  (or decided there is none): `community` (metadata on + matched + a rail:
+  `meta.NextRail` reads, off the shared envelope, the rail that decides: in the
+  book's own order (`railOrder`: the rail named, by `match.SeriesKey`, like its main
+  series or one of that rail's orderings, then like its more_series entries in list
+  order, then the rest as listed) the first with an entry after the current work
+  that doesn't step back decides, with its first such entry (`nextEntry`: on its
+  MAIN view, the smallest numeric position (a range "1-3" by its start) above the current
+  work's last (a range's end), ties in rail order but a single position before a range
+  starting there, passing over each entry that steps back,
+  `railStepsBack`: the entry's work at or before the current work's position on an
+  earlier-ranked rail, both numeric - after The Silver Chair the publication order
+  passes over The Horse and His Boy and The Magician's Nephew, earlier
+  chronologically, and decides with The Last Battle); `NextRail` returns the rail
+  and entry indexes, and `communityNext` reads that same entry off the placed rails
+  by them (`PlaceLocal` keeps every rail and entry at its index; the placed rail's
+  plain next entry could be a passed-over one); `localRails` runs once, only when a rail
+  decides; its entry placed -> next + book + work. A later rail's placed entry never answers
+  instead: an unplaced deciding entry rides along as `work` without `local` beside
+  the steps below, since failing to place (untagged, series named unlike the rail)
+  proves nothing; current work last on every rail (they can lag the library),
+  upstream error/unmatched/no rails/unnumbered -> no `work`), `series`
+  (`catalog.NextInSeries`: every series of `Book.AllSeries()` with a position, main
+  first; per series one query
+  (`laterSeriesMembers`) over its numbered members in scope - same library, books in
+  that series (any spelling: by its key, see Series spellings) by their main series or a more_series entry, at their
+  position IN THAT SERIES - those above the book's position (a range's end) first, then by
+  position, then a range's end (a single book before an omnibus starting with it), ties by path (unbounded: SQLite sorts every member first anyway):
+  read in that order, the first row above that doesn't step back is the next book,
+  and any row at all means numbered (the first at or below ends the walk); a UNION
+  ALL of an `idx_books_series_key` branch and a `book_more_series` branch (its key
+  index, then each book by rowid); the first series with a later book that doesn't step back
+  answers with the first such book (`stepsBack`: it sits at or before the current
+  book (its last position: a book inside an omnibus steps back) in an earlier-ranked series of the current book's, both numbered there; a
+  book that steps back is passed over, not the whole series); numbered books in
+  some series but none later (or every later one stepping back) in any ->
+  `{source:"series"}`), `folder`
+  (`library.NextSibling` over the parent's whole listing, `ListDir`, scope- and
+  ignore-filtered, annotated by `BooksByPaths`, which reads any number of paths in
+  chunks; the player's `findNextSibling`: names compared as its `localeCompare`
+  (numeric, base) does, by `x/text/collate`, and a bare folder only when nothing in
+  the folder, the current book included, is indexed), else `{source:"none"}`. A
+  failure to place the caller's books leaves the next entry unplaced (as `/meta`
+  degrades). `book` is the list shape; everything `next` names is in the caller's
+  scope.
+- **Native deep-link association**: `GET /.well-known/apple-app-site-association`
+  and `/assetlinks.json` are served from `config.AppLinkConfig` (`app_links` in
+  YAML) and 404 when unset. They only enable auto-app-launch for domains the
+  shipped app build claims - self-hosted arbitrary domains fall back to the web
+  player + the custom-scheme "Open in app" button.
+- **SQLite** runs with a single write connection (writers serialize) plus a
+  read-only reader pool, WAL mode. `store.DB.QueryContext`/`QueryRowContext` go to
+  the READER (`query_only`): any statement that writes, including `INSERT ...
+  RETURNING`, must use `ExecContext`, `WriteRowContext` or a `WithTx` transaction.
+  An in-memory DB has reader == writer and would hide a misroute, which is why the
+  test stores are temp files.
+- **Pagination** is keyset/cursor-based (`catalog.ListBooks`); don't switch list
+  endpoints to OFFSET for large tables.
+- **Path safety**: any filesystem access derived from user input goes through
+  `library.SafeJoin`, which rejects traversal outside the library root.
+- **Path-addressed API**: content endpoints are `GET /libraries/{id}/{item,
+  chapters,cover,stream}?path=` and `{GET,PUT} .../progress?path=` etc. The path
+  is the handle (a query param, to avoid encoded-slash issues). `item`/`chapters`/
+  `cover`/`meta`/`next` resolve `(library, path)` to a book in ONE place, `bookForPath`:
+  `GetBookByPath`, then the indexed folder book holding the path
+  (`GetBookHolding`: a part, a disc folder of a joined book), then indexing on
+  demand (`Scanner.IndexPathWithin`) if the scan hasn't reached it. A book found
+  above the requested path must be in the caller's scope too (`library.ErrNotAllowed`,
+  answered as the out-of-scope 403 `no access to this path`, nothing read or
+  indexed for that caller); `stream` serves an
+  audio file path directly, or transcodes it with `?transcode=1` (see below). The
+  `/fs` view lists **audio files and directories only** (non-audio like `.jpg`/
+  `.nfo` are filtered in `BrowseFS` so a click is always playable) and annotates
+  book entries with metadata (`is_book` + title/author/…); the client acts on the
+  entry's `path`.
+- **Recognized audio** is `metadata.AudioExtensions` (`IsAudio`), including `.mp4`
+  (AAC-in-MP4 audiobooks); `media` serves it as `audio/mp4`.
+- **Transcoding**: `GET /libraries/{id}/stream?path=…&transcode=1` pipes the file
+  through ffmpeg to MP3 (`media.Transcode`) for codecs browsers can't decode;
+  `&t=<seconds>` starts mid-file (transcoded output isn't byte-seekable, so seeks
+  re-request). Direct serving + Range stays the default. The scanner records each
+  book's audio `codec` (ffprobe `codec_name`, `0008` migration); `item`/`chapters`
+  expose `direct_playable` (via `media.DirectPlayable`) so a client knows when to
+  transcode. Gated by the `--ffmpeg` flag (the `transcode` capability reflects it).
+- **Sharing & access (shares)**: access is via `shares` = named sets of path
+  rules. `catalog.UserScope`/`UserScopes` build a `Scope` per library
+  (`AllowAll` or specific `Paths`); `Scope.Allows` gates item endpoints,
+  `Scope.VisibleInBrowse` filters `/fs` to a navigable subtree, and
+  `pathFilterSQL` scopes `ListBooks`/`Search` and the player's browse aggregates
+  (`People`/`Series` given a `*Scope`, which also pins them to the scope's library;
+  nil = the admin's unscoped view). Every content handler authorizes
+  the path against the caller's scope (`authorizedPath`). Admins are `AllowAll`.
+  Whole-library access is sugar (`GrantWholeLibrary` → a `""`-rule share).
+- **Move-tracking**: the scanner fingerprints files; when a path vanishes and a
+  new path with a matching fingerprint appears, `Scanner.detectMoves` migrates
+  durable state old→new (`catalog.MoveDurableState`). Re-tagging keeps state via
+  the path key; moving keeps it via the fingerprint. The per-user path-keyed tables are listed
+  ONCE, in `carryListeningState` (`catalog/listening.go`; add a table -> add a line), which both
+  a move (offset 0) and a join (`JoinDurableState`) use: positions shifted onto the new
+  timeline, a listener's progress already at the new path merged by a strategy the caller
+  passes (`progressMerge`), a favourite landing once, so a collision never fails a move. A
+  **move** takes the newest save whole (`mergeNewest`: `updated_at`, then version; a row
+  already at the new path is a removed book's, so its position or finish must not win by
+  being further on); a **join** keeps the furthest (`mergeFurthest`: the rows are parts of one
+  book; finished over not, the newer save's stamp, the earlier start). Both take a version
+  above both rows. A favourite on a navigation folder (author, series) has no book to move:
+  `detectMoves` re-keys it (`catalog.MoveFolderFavourites`) to the folder its moved books
+  went to (`renamedFolders`), only when every move out of it agrees and it is gone from disk
+  by exact name (so a case-only rename, of it or a folder above it, counts).
+- **Auto book/folder detection**: there is **no per-library layout**. The model
+  (`booksInDir` in `library/scanner.go`) matches the dominant "folder per book"
+  convention (and Audiobookshelf): **a directory that directly contains audio is
+  ONE book**, with all those files as its tracks/chapters - whether it holds a
+  single m4b or fifty distinctly-named mp3 chapters (do NOT split a folder's files
+  into separate books by filename; that produced one phantom book per chapter).
+  The only per-file case is the **library root** (loose files there are individual
+  single-file books - the old "flat"). A folder of loose single-file books
+  (`books_in_folder`) is expressed with a **per-folder override**:
+  `folder_overrides(library_id, path, mode)`, `mode ∈ {book, collection}` -
+  `collection` = one book per file, `book` = force folder-is-one-book. Overrides
+  are durable, path-keyed config (no FK to the rebuildable index, like
+  progress/bookmarks). `PUT/DELETE /admin/libraries/{id}/folder-override?path=`
+  sets/clears it and rescans; the admin console's per-library **Folder detection** dialog
+  drives it. `GET /fs` annotates each entry's effective `override`.
+  **Joined books (`library/joined.go`)**: `book` joins only a **disc set** (`discSets`): a
+  folder below the root with no audio of its own whose every folder holding audio beneath
+  it is a disc folder (`isDiscFolder`: cd/disc/disk + number) **directly** in it, at least
+  two (`minDiscs`; one disc already reads as one book). A CD rip (`Book/CD1`, `Book/CD2`,
+  ...) becomes ONE book of its discs' audio (hidden/ignore rules applied), with no books for
+  the discs. Any other folder keeps `book`'s old meaning (its own files; without any, a
+  no-op): overrides the old detection dialog set on author/series folders must never merge
+  a series (or its listeners' progress) on upgrade, and nothing is auto-detected
+  (re-shaping existing books would orphan progress). Order: the disc folders by
+  `discOrder` (natural: CD2 before CD10, "CD 1" = "CD1", ties by path), each disc's files
+  in exactly the order a book of that disc alone has them (byte-wise name order, as
+  `audioEntries`/the walk read them; NOT natural), since the state carry-over maps a disc
+  position as offset + position. Files and chapters keep real paths in the discs
+  (`file_path`, a chapter title led by its disc: "CD2 - 01"); the cover is the folder's own
+  image, then the first disc's; `IndexPath` resolves the folder, a disc folder or a file in
+  it to the joined book, and so does `bookForPath` from the index first (`GetBookHolding`),
+  so the disc paths shipped clients still hold don't re-walk and re-probe every disc on
+  each request. Reaching the joined book through a disc path takes a grant on the book: a
+  share made before the join on one disc folder gets the out-of-scope 403 for it (as for
+  the book's own path) and never triggers the re-read, though it still streams the disc's
+  real files (scoped on the file path). Discovery and `IndexPath` decide a join in one place (`joinRoot`:
+  the folder or its parent, with `book` and a disc set), and the discovery walk
+  (`audioDirs`) reads each folder's audio files once, handing them to
+  `booksInDir`/`joinedBook`. The scan where it takes effect runs `carryJoinedState` before
+  the prune: `catalog.JoinDurableState` moves the disc books' listening state onto the
+  joined timeline (offset = earlier discs' lengths; furthest progress per listener wins;
+  bookmarks/notes/history/sessions offset; favourites once) and copies their
+  edits/cover/enrichment (earliest disc wins per field, chapter renames re-keyed). A disc's
+  listening state is carried only when its offset is **known** (`joinParts`): the first
+  disc's always (0), a later disc's only when every earlier disc's length is (its files',
+  else its indexed length). With ffprobe off or failing, a later disc is `Unplaced`: its
+  listening state stays on its own path (path-keyed, back if the join is undone) rather
+  than landing in disc 1, its config is still copied, and its `joined` event carries code
+  `length_unknown` (the console: "progress stayed with the disc: length unknown"). Each
+  disc is logged `joined`, not `removed`, and the joined book is a reshape, not new
+  content: not counted in `Added`/`AddedTitles` (`joinsIndexed`), so no "books added"
+  notification. Removing the override splits the discs out again; the joined state stays
+  on the folder's path. That un-join is a reshape too (`Scanner.splitFrom`, the
+  `joinsIndexed` counterpart: books in the disc folders of a folder whose stored book was
+  joined, `isJoined`, and is no book now): the discs are not counted in
+  `Added`/`AddedTitles`, and the joined book is logged `split`, not `removed` (nor counted
+  in `Removed`). A folder book with audio of its own that goes is still `removed`. `GET /fs`
+  marks a disc set whose discs are indexed (`split_discs`, from `books.split_parent`) for an
+  **admin** caller only (`annotateWithBooks`; `omitempty`), so the player's listing is
+  unchanged; the console offers "Always one book" on a folder without audio only there or
+  on a joined book.
+- **Metadata overrides (admin redesign Phase 2a, `catalog/overrides.go`)**: an admin's
+  edits never touch files. A `books` row holds the **effective** values - what the scan
+  found (kept in `books.scanned`, JSON field -> value, stamped with the upsert's
+  `indexed_at`: a snapshot whose stamp isn't the row's was left by an older server, so
+  `loadLayers` reads the scan's values off the row instead), then an Audiobookshelf
+  `metadata.json`'s values (`books.abs_file`, below), then `book_enrichment`
+  (asin/isbn), then `book_overrides`. `bookLayers.resolve` is the ONE statement of that
+  precedence (and of each field's source); `refreshEffective` writes its values to the
+  row (plus chapter titles from `chapters.scanned_title` + `chapter_overrides`, and FTS)
+  and the book page shows it as provenance, so the two can't disagree. `UpsertBook` runs
+  `refreshEffective` in the scan's own transaction, which is what makes an edit a lock (a
+  rescan rewrites the scanned values and re-applies the edit before anything can read
+  the row) and why there is no separate post-scan enrichment pass any more.
+  `SetEnrichment` and `EditBook`/`EditBooks` call it too. Players, search, `/fs` and
+  export read the row, so they see edits with no join. The player's book JSON carries
+  `published` on every book and `description` only on `GET /libraries/{id}/item` (api's
+  `itemBook` adds it; `catalog.Book` keeps it `json:"-"` so list, search and recent pages
+  stay small); `has_cover` and per-file codec are admin-only (`json:"-"`). Every player book (list,
+  search and item alike, all `omitempty`) also carries `subtitle`, `publisher`, `language`,
+  `abridged` (a bool, absent while unknown) and `genres` / `tags` (lists). Validation: `normalizeOverride`; sources: a scanned value is `path` when
+  it equals what `DeriveFromPath` (or, path-first, `FromPathLayout`) yields, else `tag`; one an ABS
+  file gives is `abs`; an override is `edited` or
+  `community`; an enrichment-attached ASIN/ISBN reads as `community`. Revert = delete the
+  override + `refreshEffective` (restores the scanned value, the ABS file's where it gives one; no
+  reindex, no disk).
+  **Audiobookshelf metadata.json** (`metadata/absfile.go`, `catalog/absfile.go`, migration `0046`):
+  ABS keeps a `metadata.json` in a book's folder ("Store metadata with item"), its record of the book
+  with its matches and its users' corrections, often holding the ASIN/ISBN the tags don't. A folder
+  book's file (a regular file named exactly that, not ignored: an ignore rule `metadata.json` turns it
+  off for a library; never for a file book, nor a loose file at the root) is a layer OVER the scanned
+  values, tags and path alike, path-first libraries included (ABS's own default ranks it above the
+  tags): `bookLayers.overABS`, in `scannedFields` before `titlePosition`. `metadata.ParseABSFile` is
+  lenient (a wrongly typed value costs that value; <= 4 MiB): title, subtitle, authors and
+  narrators joined with ", " (strings or `{name}`), series `"Name #seq"` (the first is the main series
+  with its position, the rest `more_series`; a series without a position keeps the tag's only while
+  it is the same series, by `seriesKey`), `publishedDate` else `publishedYear` as `published`, the
+  HTML description as plain text, publisher, language, `abridged` (only `true` says anything: ABS
+  writes false for every book nobody marked), genres and tags (lists of strings, a non-string item
+  dropped; `CleanLabels`), asin, isbn; chapters are not read. An empty value says nothing (never clears a tag's). `absFields` stores each as an edit of its
+  field would (`CleanOverride`; a refused value left out), so an ABS ASIN makes a book matched (Health,
+  `/meta`, the community chapter check, a refresh run). `books.abs_file` holds those fields (JSON,
+  `''` for none), `abs_sig` the file's signature (`metadata.ABSSignature`: size + mtime ns, `''` for
+  none) and `abs_indexed_at` the `indexed_at` it was read for (NULL before `0046`), narrow columns
+  first so `Signatures` reads no JSON; `UpsertBook` writes all three (`absColumns`; nothing for a
+  file book). Discovery records each folder's file signature from the walk itself (`audioDirs`'
+  `absFiles`, the walk's own entry, no extra directory read; `IndexPath`, with no walk, stats it: `absSigAt`), and `enrich` reads
+  the file only when there is one (`Scanner.readABS`). An unchanged book whose signature differs,
+  or that has a file not read for this index (`abs_indexed_at` NULL, or another index's: an older
+  server re-indexed it), is read without a re-index: `Signature.ABSSig`/`ABSUnchecked`,
+  `Catalog.SetABSFiles` in batches of 250 beside the path backfill (`eachPathBatch`, shared with
+  `SetPathReading`); a book with no file and none before is left unwritten, so the first scan
+  after the upgrade touches only books that have one. `setABSFile` re-resolves a book unless the
+  reading equals the one recorded for this very index (an older server's re-index resolved the
+  row without it). `metadata.ReadABSFile` reads a regular file only, never through a link (one
+  swapped in after the walk included: `os.SameFile` on the opened file). A file that can't be used
+  (not JSON, too large, not a regular file: `metadata.ErrABSFileInvalid`) keeps its signature (read
+  again once it changes); one that can't be read right now (gone since the walk, a flaky mount) is
+  left as it was by the backfill and recorded as none by a re-index, so the next scan reads it
+  again (`readABS`' `read`); both log a warning. Known gap: a position read from an ABS title (`titlePosition`) shows as `tag`.
+  **Bridge attachments** (`metadata/attachments.go`, `library/attachments.go`, `catalog/attachments.go`,
+  migrations `0048`, `0050`; BRIDGE-PLAN.md Phases 1a and 1c): the Bridge writes a book's generated `characters.json`,
+  `recaps.json`, `description.json` and `bridge.json` (provenance) into `.audiosilo/` in a folder book's own folder, or beside
+  a single-file book with its stem before each name (`Book.characters.json`). They are NOT a metadata
+  layer (nothing in the effective row reads them): the scan stores them checked (audiosilo-meta's
+  `model.Characters` / `model.Recaps` / `model.Description`, bounded, a regular file only, never through a link) in
+  `book_attachments`, and `/meta` serves them (below). A description (`metadata.ParseDescription`) is
+  its text trimmed, 200-1500 code points (meta's `description.schema.json` bounds,
+  `TestDescriptionBoundsMatchTheSchema` reads them from audiosilo-meta's embedded `SchemaFS`, imported
+  as `metaschema`), no control character but a line break; a blank text is none, anything else fails
+  the file. A signature lists only the names a book has, in `AttachmentNames` order, and adding the
+  name kept the other three in order, so a book without one keeps its stored signature byte for byte.
+  bridge.json's `description.generated_at` is read as `AttachmentProvenance.DescriptionAt` (the rest of
+  that object is the Bridge's; an object of another shape costs only that time, never the file). The discovery walk lists each `.audiosilo` folder
+  ONCE (never walks into it; no audio lives there), and a book's signature (`books.attachments_sig`:
+  name:size:mtime_ns of its own known names) is compared like `abs_sig`: an unchanged book whose
+  attachments are new, changed, gone or not read for this index is read without a re-index
+  (`SetAttachments`, compare-and-set against the state the scan began with, so a scan never lays an
+  older reading over the Bridge's refresh since). A file that can't be used keeps its signature (read
+  again once it changes); a folder or file that can't be read right now keeps what is stored (`Unread`),
+  never taking a book's generated content away. `Scanner.RefreshAttachments` re-reads one indexed
+  book's attachments, never its audio (the Bridge's `POST /bridge/rescan` mode `attachments`). The
+  player's `Book.generated` (list, search, item, recent, the next book) is true when the signature names
+  a characters, recaps or description file (`sigParts`, an allow-list: bridge.json and any name a later
+  server adds are none; `Book.GeneratedParts`, off the wire, says which; the narrow column, no join), so the player asks `/meta`
+  for a book with no ASIN/ISBN too. Derived from the files: rebuildable, never carried by a move.
+  **Series ranges** (an omnibus of books 1-3): the `series_index` field may hold a range,
+  canonical `"1-3"` (input `1 - 3` and the en dash too; `metadata.ParseSeriesRange`: 0 < start <
+  end <= 100000, a span of at most `metadata.MaxSeriesSpan` = 100, since the slots a range covers
+  are counted one by one); `refreshEffective` writes its start to `series_index` (what every
+  client reads) and its end to `series_index_end` (`ParseSeriesPosition`; `FormatSeriesRange` the
+  stored text). A `more_series` entry carries one as `position_end` (`SeriesRef.PositionEnd`,
+  omitempty; `book_more_series.position_end`). Player `Book` JSON: `series_index_end` and
+  `series_list[].position_end`, both omitempty; the admin book row `series_index_end`. `seriesSwap`
+  carries a range both ways; the series aggregate's `positions` hold every whole number inside a
+  range (`heldPositions`), so a player marking gaps sees none inside an owned omnibus.
+  An admin edit that makes the main series a series its `more_series` lists (any spelling, `match.SameSeries`) -
+  by setting `series`, or by reverting it when the series the revert leaves
+  (`newMainSeries`: `loadLayers` + `resolve` without the series override) is listed -
+  without setting or reverting `more_series` itself, swaps them (`catalog.seriesSwap`,
+  per book in `editTx`, from the book's effective row): the old main series takes the
+  entry's place in the list and `series_index` becomes the entry's position (unless the
+  edit names `series_index`), written as the edit's own overrides; so reverting a swap
+  swaps back. A derived value equal to what its field resolves to without an override
+  (`bookLayers.unedited`: the scan's or folder layout's value; layers loaded only when a
+  swap happens; a position only when the new main series is the series it numbers, by
+  any case) is written as a revert of that field instead (`seriesSwap` returns sets
+  and reverts, disjoint, never a field the edit names), so swapping back to a
+  path-derived Sherlock Holmes #5 leaves `series_index` read off the path (unlocked,
+  source `path`), while a list that was an edit before the swap stays one, and a
+  listed Other #5 made main on that path-numbered #5 is still an edited 5. An old main
+  series that can't be listed (name too long, position out of range) refuses the edit:
+  `invalid(series)`, a 400, failing a bulk edit whole (`EditBooks` names the refusing
+  book's path in the reason). A community edit never swaps: `matchrun.planSeries` is
+  the one statement of how a match lays out series. The console drafts the same swap before saving (`book-model.ts`
+  `commitField`), so its save sends the values and the server's swap doesn't fire;
+  `saveRequest` sends the saved `more_series` when the admin took the drafted swap back
+  (only for a swap `seriesSwap` can make, so an unlistable old main still gets the 400);
+  as that save names `more_series`, a swap the console drafts writes its values as
+  edits even where one equals the file's (the values shown are the same),
+  and the undo of a series revert that swapped (`undoRevertRequest`) sends the list and
+  position it had. `MoveDurableState` carries overrides and custom covers as one set: when the moved book
+  has any, the new path's own rows in all three tables are dropped first; it moves
+  them (with enrichment) in a transaction of their own, so a failure carrying the per-user
+  state can't strand them. `detectMoves` doesn't pair a folder reclassified as a collection (or
+  back) with its own first part, nor a joined book renamed away from its override with its first disc (`reclassified`).
+  **Metadata source** (`libraries.metadata_source`, `0032`; `catalog.MetadataFromTags`, the
+  default, or `MetadataFromPath`; admin-only on the wire as `metadata_source`, PATCH 400
+  `invalid_metadata_source`): a path-first library resolves the scanned layer with the folder
+  layout over the tags (`bookLayers.scannedFields`: `metadata.FromPathLayout`, where the top
+  folder is the AUTHOR and disc/track folders are parts, unlike `DeriveFromPath`'s two nearest folders; a layout value goes
+  over a tag's wherever it says anything and replaces the baseline's own reading even with
+  nothing; the title always keeps one, and a tag title that IS the folder's name, number and all ("13 Reasons Why"), stays whole with no position read from it; the position goes with the series: the layout's own, else
+  the scanned one only while the series it numbers stays). It is a resolve rule, not a scan one: the snapshot is unchanged,
+  and `UpdateLibrary` re-resolves the library's books (`refreshLibrary`) in the edit's own
+  transaction, no rescan (about 1 s per 5,000 books).
+  `has_cover` holds whenever there is a sibling cover (`UpsertBook` enforces it) and is
+  NULL until checked; the scanner backfills unchanged pre-0016 rows in one transaction
+  with a tag read (`media.EmbeddedCover`, no ffprobe). A `scanned` snapshot carries `@rev` (`scannedRevKey`), the path baseline's revision: one
+  without it (any older server's) was read when a lone folder above the book was its series.
+  `Signatures` classifies such a book one folder deep (`pathCheckExpr`): settled by the snapshot
+  alone (a tag's series and no author, missing or 0016's "": the folder is the author; the folder
+  as series and author: the series was the path's), or only by its tags (the folder as series,
+  another author or none: "Discworld/Mort" may be tagged Discworld; and any stale or blank
+  snapshot, whatever revision it names). The scan reads the latter's primary file once
+  (`readNames`, shared with `enrich`; not while ffprobe newly fails), and `Catalog.SetPathReading`
+  rewrites both kinds' snapshots (skipping one re-indexed meanwhile, keeping an older server's
+  chapter titles) and re-resolves them in batches of 250, flushed every 500 during the scan and
+  on a Stop; no re-index. Until then `bookLayers.pathBaseline` resolves a snapshot against the
+  baseline it was read with, so a path-first library still drops the folder as a series.
+  **Labels** (`catalog/labels.go`, migration `0049`): `genres` and `tags` are override fields whose
+  value is a canonical JSON list (`""` for none; `normalizeLabels`: trimmed, spacing collapsed, each
+  label once by `labelKey` (lowercased, spacing aside) keeping the first spelling, <= 64 characters,
+  <= 50 labels; an edit over a bound is a 400, a file's list is cleaned leniently instead,
+  `CleanLabels`, which every file source goes through). The value is `encodeCanonical`'s JSON (no
+  HTML escaping), as `more_series`' is. Genres come from the genre tag (`metadata.SplitGenres`: split
+  on `;` and NUL, never `,` (a store category holds one), blanks and placeholders such as "Audiobook", "Speech", "Spoken Word" or
+  "Other" dropped, any case; the rest left to `CleanLabels`; dhowden's then ffprobe's, ffprobe's when
+  it gives any, in the `scanned` snapshot) and the ABS file; tags only from the ABS file and edits.
+  `subtitle`, `publisher`, `language` (<= 64 characters) and `abridged` (`"true"`/`"false"`/`""`,
+  stored 1/0/NULL) are plain override fields from the ABS file, a match (`matchrun.Propose`: the work's
+  subtitle and language, the recording's publisher; community genres are not offered, a match
+  candidate carries none) or an edit. A source's abridged false says nothing (`AbridgedClaim`: ABS and
+  the community write false for every book nobody marked), so only an edit says unabridged.
+  `refreshEffective` writes the lists to `books.genres`/`tags`, to `book_labels` by key
+  (`writeLabels`, beside `keyOtherSeries`) and to the FTS `genres`/`tags` columns (a label a line), so
+  a search finds a book by a label. `labelFilters` (in the library, `book_labels.library_id`; any
+  library for an admin list across them and for the library facet) is the player's `GET
+  /libraries/{id}/books?genre=&tag=` (one value each, any case; both narrow) and the admin
+  `BookFilter.Genre`/`Tag` (`?genre=`/`?tag=`); `BookFacets` counts `genres`/`tags` (the 100 most
+  common by key, then the one the list is filtered by when it is rarer, each named by the spelling
+  most of its books use, `seriesName`; a semi-join over `book_labels`). A bulk edit (and the book PATCH) takes `add` / `remove` (`{"tags": ["Owned"]}`:
+  field -> labels) besides `set` / `revert`: `labelSets` merges them into each book's own EFFECTIVE
+  list and writes the result as an override of the field only where it changes the list; a book the
+  edit changes nothing on (adding a tag it has) is left as it is, its row not even rebuilt (`editTx`).
+  A field can't be set or reverted and added to or removed from at once, nor one label added and
+  removed (`normalizeLabelEdits`).
+  Books indexed before `0049` get their genres from the next scan (`genres_checked`, the primary
+  file read once beside 0037's date read, `Catalog.SetGenres` writing the snapshot and re-resolving,
+  flushed with the path readings) and the ABS fields from its re-read (`abs_indexed_at` NULL), no
+  re-index. Path-keyed like every override, so moves and joins carry them unchanged.
+- **Series spellings (`catalog/moreseries.go`)**: a series is every name with one
+  `seriesKey` (`match.SeriesKey`, the rails' key: case, accents, punctuation and spacing
+  aside; a name with no letter or number is its own key), so "He Who Fights With Monsters",
+  "...with..." and "...WIth..." are one series and nothing fuzzier merges ("The Expanse" and
+  "Expanse" stay two). `catalog.Series` groups by it (counts, positions, lengths and authors
+  merged; `SeriesList` and `normalizeMoreSeries` keep a series once however a list spells it again) and names the group `seriesName`: the spelling its
+  matched books use most, else the most books', ties alphabetical. **The key is stored**
+  (migration 0041): `refreshEffective` writes `books.series_key` (`seriesKey`, '' for no
+  series; index `idx_books_series_key (library_id, series_key, series, series_index)`, which
+  replaced `idx_books_series`: spellings adjacent, so Health's `series_spellings` is two range
+  seeks per book) and the book's
+  other series to `book_more_series` (`keyOtherSeries`: `SeriesList` less the main series, one
+  row per key with its position; PK `(book_id, series_key)`, index `(series_key, library_id,
+  position)`, cascades with the book). Both are written by Go, never computed in SQL (the key
+  needs NFKD; the catalogue's SQL functions stay out of the schema), and every write of
+  `books.series` ends in `refreshEffective` (`UpsertBook` runs it in the scan's own transaction),
+  so every path that changes a series keys it. Every series
+  filter asks by key: `seriesFilter` (an `id IN` over `idx_books_series_key` in every library,
+  with memberships a UNION ALL of the list rows too; the caller's library term narrows them),
+  `seriesOrderKeys` (the key as a literal), `numberedSeriesMembers` (the next book),
+  `SeriesBooks`/`seriesMembers` (the rails) and `positionIn` (Go, by key), so the SQL and a
+  keyset cursor agree; each is an index seek (`TestNextInSeriesPlan`; under a millisecond for a
+  25-book series in 50,000 books, `TestSeriesKeyScale`). Rows indexed before 0041 are keyed by
+  `Catalog.KeySeries`, which the launcher runs synchronously before the listener whenever the
+  stored keys are missing or out of date (server_state `series_keys` holds `seriesKeysVersion`:
+  the key rules' number, bumped when `seriesKey`/`match.SeriesKey` changes, plus Go's and
+  x/text's Unicode versions, so a toolchain upgrade re-keys); about a second per 50,000 books, and
+  a failure stops the start, as a migration's does (the next start tries again): it first puts every stored `more_series` override through
+  `normalizeMoreSeries` (a list written before #123 could name one series twice) and rebuilds
+  those books, then keys every book in one transaction. The JSON
+  is unchanged: an older player sees fewer, fuller series. **A position from the title**:
+  `bookLayers.scannedFields` gives a book with a series and no position the one its title gives
+  (`titlePosition`, `metadata.PositionInTitle`), read as the title's source (path when the title is
+  the path's, else tag); an edit or a tag's own position wins. Rows indexed before the rule get it
+  from `Catalog.PlaceByTitles`, which the launcher runs in the background at start, once per database
+  (server_state `title_positions`): the books with a series, no position and a digit in the row's, the
+  snapshot's or the path's title (a match may have replaced the row's) whose resolve gives one,
+  re-resolved by `refreshEffective` in batches of 250.
+- **Admin catalog API** (`api/handlers_catalog.go`, admin-only, transport-only):
+  `GET /admin/books` (keyset over the named orderings in `catalog.adminSorts`, sorted and
+  paged on ids before the per-row columns are computed; the cursor names its ordering;
+  filters in `catalog.BookFilter`, unparseable ones 400; `media.DirectPlayableSQL` is
+  `DirectPlayable` in SQL) + `/admin/books/facets` (each dimension counted without its
+  own filter, the unfiltered yes/no ones in one pass);
+  `POST /admin/books/bulk` (one edit over <= 1000 books, all or nothing);
+  `GET /admin/authors|narrators` (each person a credit names, `catalog.creditNames`
+  over `names.Split`, so a co-credit counts for both; `merge_suggestions` stay over
+  WHOLE credits, from `personKey`, keyed by `match.Fold`, which keeps every script's
+  letters, with `other_books` = the books a merge rewrites) and
+  `/admin/series` (`catalog.People`/`Series` with a nil scope; the player's
+  `/libraries/{id}/authors|narrators|series` take the same aggregates within the
+  caller's scope, without `merge_suggestions`); `GET`/`PATCH /admin/libraries/{id}/book?path=` (book
+  page: per-field provenance, chapters, files, listeners, shares, folder override, and
+  `match_query`, the match dialog's search box prefill set by the api: `meta.SearchPrefill`, the
+  title + author, except that swapped tags (the title is the author folder, or the cleaned author
+  is the path's title; never a tag that matches its own path fact, "Dune/Dune") or a junk title/author
+  (`metadata.NamesNothing`, "Unknown", "Various Artists")
+  take the folders' facts, `metadata.FromPathLayout`);
+  `GET /admin/libraries/{id}/book/match?path=` (`meta.Service.Candidates`: metaserve's
+  STRUCTURED match `works/match`, then up to 6 works expanded, uncached, bounded by
+  `workSem` via `fetchWork`. The match gets the book's facts separately
+  (`matchParams`): the path's LAYOUT (`metadata.ReadPathLayout`: disc/track folders dropped,
+  top folder = author, holding folder = series, leaf = a title guess sent RAW -
+  metaserve is the one place that reads `SW06 - `/`Sharpe - 08 - `/`02. `
+  numbering and takes the position from it) then the tagged title, path + tag
+  authors, the series folder AND the tagged series when they differ (folder first;
+  metaserve judges each, the better counts), the tagged position (only when no
+  DIFFERENT series folder goes up: one position applies to every series guess and
+  replaces the leaf's numbering), runtime, `?q=`, and the asin/isbn (typed;
+  the book's only when nothing was typed), which metaserve looks up itself; candidates carry metaserve's
+  `score` and `reasons`. A typed `?asin=`/`?isbn=` with no text is a plain `lookup`.
+  Fallback, FROZEN until the production metaserve serves `works/match` (then delete
+  it): when the route is missing (404 through `works/{id}`, 405, or a 200 without
+  `results`) `searchHits` runs the old `lookup` + `works/search` unchanged (typed
+  text, else `CleanTitle` + author) scored by the tag-only `scoreCandidate`, and
+  the missing route is remembered for 15 min (`matchUnsupportedUntil`); a 503/5xx
+  from works/match is an outage (502), never a fallback; identifiers normalized for
+  the exact lookup; metadata off -> 404 `metadata_off`). Each recording keeps its
+  ASINs' marketplaces (`asin_refs`) and `asins` is ordered by `metadata.region`
+  (`orderASINs`: the preferred store's, then `us`, then the rest; metaserve lists
+  them by region, so without it `au` beat `uk`), `asin_region` names the first's;
+  `meta.DefaultRecording` (identifier's, else closest runtime, the preferred
+  marketplace breaking a tie) sets each candidate's `default_recording_id`, which
+  the dialog starts from (the console has no copy of the rule). **Bulk matching**
+  (`internal/matchrun`, `handlers_match_runs.go`, migration `0033`):
+  `GET/POST /admin/match-runs`, `GET /admin/match-runs/{id}[/items]`,
+  `POST /admin/match-runs/{id}/apply|cancel`. One run at a time (`matchrun.Runner`,
+  its own goroutine under `baseCtx`, NOT the scan job queue: it waits on the
+  network, and `library` must not import `meta`); 2 workers, `Limit: 2` works
+  expanded per book, 5 failures in a row stop it (`metadata_unavailable`), metadata
+  off stops it (an apply too: back to ready, as a cancel; every endpoint, cancel
+  included, 404s `metadata_off` then). A run only records (`match_run_items`: outcome auto/review/none/error,
+  the best candidate's `catalog.MatchProposal`); apply writes community overrides
+  via `EditBook` and the cover via `saveMatchCover` (the dialog's fetch + keep
+  checks) per `matchrun.Plan(scope)` (ids|fill|overwrite; never an `edited` field,
+  never a position beside another series, a cover only for a book with none), which
+  also computes each item's `changes` for the review, so the two can't disagree. `Plan`
+  returns `Writes` (set, revert, cover): overwrite REPLACES a book's series with the
+  community's for its recording (the series rules), reverting a `series`/`series_index`/
+  `more_series` value the community wrote earlier that it no longer offers (a series it
+  deleted or merged, an edition or translation the rules leave out) back to the files'
+  (a position only beside the files' series, other series only when none are offered);
+  fill and ids never revert; an admin's own series stay, and a community edit's revert
+  deletes only community rows (`editTx`), so an edit made since the run looked survives
+  a revert (a set still overwrites it, as the match dialog's ticked edited field must).
+  `Writes.after` is the one rule for a field's value once written (both `planSeries`
+  and the review use it). A refresh records only books a scope would change (as a
+  repick records only books with a new ASIN), so a clean library leaves no items. A refresh
+  proposal names the identifier it was found by (`found_by`, "asin:..."/"isbn:..."), and
+  applying it is a no-op for a book that no longer has it (matched again since).
+  Likewise a match run's book that has an ASIN or ISBN now (`matchedSince`: matched by hand
+  from the review or anywhere, or a rescan found one) has no changes, reads `matched_since`
+  in the review and is skipped with detail `matched_since`, under any scope; a match whose
+  fields went in before a stop cut its cover short stays to apply, detail `cover_pending`, its
+  ASIN the run's own rather than one matched since, so the next apply takes the cover. The review's
+  items page best match first (`score DESC, id`), the cursor still an item id whose score
+  the next page reads on from.
+  Each scope's change carries `series` {from, to} (main first, position 0 = none) when it
+  changes the book's series, which the review shows as "old -> new". A retired work slug
+  is a redirect the client follows, so the names written are the merged record's.
+  A community position that is a range ("1-3") is written as one (`series_index` "1-3", a
+  `more_series` entry's `position_end`); one the field refuses (a span over 100) is none.
+  Confident = score >= 90, >= 10 ahead, with an ASIN/ISBN, and the recording within 10% of
+  the book's length when both are known (`meta.PlausibleRuntimeOff`, `lengthFits`). A
+  repick only touches an ASIN whose override is `source=community`. A **refresh** run
+  (`mode: "refresh"`, `catalog.MatchedBooks`: every book with an ASIN/ISBN) looks each
+  book up by its own identifier alone (the ISBN when the ASIN finds nothing) and takes
+  that record as confident, unless its recording is over 10% off the book's length
+  (`lengthFits`: then it is held for review) (`identifier_unknown` = no match, never a
+  fuzzy work); it fills or
+  overwrites the details but never writes an identifier (`planFor` drops them, the
+  proposal carries none), so `matchrun.ScopesFor` (the one statement of which scopes a
+  mode takes) allows only fill/overwrite (else `ErrScope`, 400); audited
+  `book.match_refresh`. `InterruptMatchRuns` (launcher, at
+  start) settles runs a stopped server left: matching -> interrupted, applying ->
+  ready. Newest 10 runs kept. `DELETE /admin/community-matches[?library_id=]` (`matchrun.Runner.Clear`,
+  409 `match_run_busy` while a run works; works with metadata off) undoes the community matches so
+  books can be matched from fresh: `catalog.ClearCommunityMatches` drops the `source=community`
+  overrides and covers, rebuilds each book (`refreshEffective`, `refreshCoverArt`) and drops the
+  runs (a library's clear: its runs, and its items in runs over every library), one transaction;
+  edits, uploads, tags and `book_enrichment` stay. Audited `book.match_run|asin_repick|match_refresh|match_apply|match_stop|match_clear`;
+  `POST /admin/books/works` (`{books:[{library_id,path}]}`, <= 100, `catalog.BooksByRefs`) answers
+  `{"works":[{library_id,path,work_id,failed}]}` in request order: each book's community work id
+  (`meta.Service.WorkIDs`: per distinct normalized identifier, first the cached enrichment's
+  work id (a cached "no match" too), so a book a player opened costs the card no lookup, then its
+  own `"l:"` key space (Enrich's TTLs, quota `maxLookupEntries`), which only `fetchLookup` writes
+  (Enrich's compose looks up fresh and records nothing there); only misses go upstream,
+  through `sharedLookup`: bounded across console requests by `lookupSem`, concurrent misses of one
+  identifier sharing one flight whose waiters can each leave without failing the others, the batch
+  under `composeBudget`, and a failure from the caller's, the flight's or the budget's context never
+  cached. One-way: Enrich never reads `"l:"` nor waits on `lookupSem`, so a console batch can't time
+  a player's `/meta` out or age its enrichment); `""` = no identifier, no match or a failed lookup,
+  and per book `failed` says its own lookup failed or ran out of time, so asking again may resolve it
+  (never for a clean miss); metadata off -> 404
+  `metadata_off`. The Series cards place an owned book on a community rail by this work id first and
+  fall back to `series_index`, then to an unheld entry its title is (`sameTitle`: numbering prefix
+  and a trailing bracketed part ignored) (display only: no book is changed). A card's rail
+  (`pickRail`) is the one named like the series (or one of its `orderings`), then one named like
+  it give or take an article or a trailing "Series", then the rail holding >= 2 and more than half
+  of the series' resolved works (never the rail named like the series' name before a colon or a dash: the parent of a
+  sub-series; ties to the smaller rail), else none: no gaps rather than another series' (the rail
+  comes from one matched book's `/meta`, so a work in more than `maxSeriesRails` real series can
+  still lack one);
+  `PUT`/`DELETE /admin/libraries/{id}/cover?path=` (custom cover in the DB;
+  `catalog.SetCover` enforces 5 MiB, sniffed JPEG/PNG/WebP and an indexed book), which
+  `GET /libraries/{id}/cover` serves first (by the requested path, then by the book a
+  part path resolves to; only while a book is indexed there), behind the caller's
+  scope, validated by an ETag from its `updated_at` (not Last-Modified, which the
+  sidecar fallback would answer with a stale 304 after a delete) so a matching
+  `If-None-Match` is a 304 without reading the image; sidecar and embedded art keep
+  `max-age=86400`. Only GET/HEAD of streaming-shaped
+  paths skip the request timeout, so the cover upload stays bounded.
+  Error codes `book_not_found`, `invalid_override` (+ `field`), `too_large`,
+  `unsupported_image`. The internal book id appears only inside the opaque cursor.
+  **Community covers** (`api/handlers_community_covers.go`): a match candidate's `cover_url` is
+  an image on its own host (Audible's CDN, Open Library), which the console's CSP can't load, so
+  the server fetches it (`meta.Service.FetchCover`: http(s) only, every connection's resolved
+  address checked public at dial time, redirects included (`publicAddr`; no proxy), <= 3
+  redirects, 15 s, `maxConcurrentCoverFetches`, never holding `coverReads`).
+  `POST /admin/meta/covers` (`{urls, size}`, <= 12) returns thumbnails as `data:` URLs in
+  order (`""` = couldn't be fetched or decoded; cached in the thumbnail cache by URL, a failed
+  fetch not; each holds `communityReads` from its fetch to the end of its decode; asks for the
+  same thumbnail at once share one fetch, `communityFlights`); `PUT /admin/libraries/{id}/cover/community?path=` (`{url}`) keeps one as the book's
+  custom cover through `saveCustomCover`, the upload's own path, once `keepableCover` has read its
+  header (413 past `media.MaxThumbnailSourcePixels`), re-encoded within 1600 px first when it is
+  over 5 MiB (audited `book.cover_set`, `source: community`); 400 for a URL
+  that isn't http(s), 502 `cover_unavailable`, 413/415 as an upload. Both 404 `metadata_off`
+  while metadata is off (`metadataOff`). Tests swap the fetch through `API.fetchCover`.
+  **The player's community covers** (rail entries, "Previous books", the recording) come
+  through `GET /libraries/{id}/meta/cover?path=&url=&size=160|320|640` (`handleMetaCover`,
+  capability `meta_covers` = `metadataOn()`; media auth, so `?token=`): the web player's
+  CSP takes images only from the server, which stays so (`TestHTMLCSPImagesStaySameOrigin`),
+  and a listener's device never contacts a cover host. Not an open proxy: the path is
+  scope-checked like `/meta` (the same `bookEnvelope` lookup), and `url` must be one the book's cached envelope hands out
+  (`meta.Enrichment.HandsOutCover`: the recording's or any rail view's entry, exact match),
+  else 404 before any fetch. That beats a remembered-URL set (lost on restart, needs a
+  bound) and a signed URL (a new wire field on every cover, a key to keep): the envelope
+  is already cached in memory and in `meta_cache`, so the check is a lookup. Served only as
+  a JPEG thumbnail through `communityThumbnail` (same cache key as the console's batch,
+  `FetchCover`'s guards, `communityReads`), so upstream bytes and content types never
+  reach the client; ETag `"community-<size>-<CoverVersion(url)>"`, `coverCache` (a day).
+  404 `no such cover` (unmatched, untagged, URL not handed out), 502 metadata unavailable,
+  502 `cover_unavailable` (fetch failed, not cached but remembered per URL for
+  `communityRetryAfter`, 1 min, so a broken or hung host isn't fetched on every render; the
+  console's batch ignores that and always retries), 404 `no cover` (not an image, over
+  the pixel bound). It stays under the request timeout (`isStreamingPath` matches
+  only `/libraries/{id}/cover|stream` exactly, `isLibraryMedia`).
+  `POST /admin/covers` (`api/handlers_covers.go`, Phase 2b) is how the console shows
+  covers: `{books:[{library_id,path}], size: 160|320|640}` (<= 60) returns JPEG
+  thumbnails as `data:` URLs in request order (`""` = no art), resolved like
+  `/cover` (custom, sidecar via `SafeJoin`, embedded; never on-demand indexing), from
+  one `catalog.CoverSources` query per library for the whole batch.
+  One request per page of covers instead of one per cover, no token in any URL,
+  ~20 KB a cover instead of full art.
+  `media.Thumbnail` refuses sources over `MaxThumbnailSourcePixels` from the header
+  (decompression bombs), `media.ThumbCache` is a byte-bounded LRU keyed by the art's
+  version (custom `updated_at`, file size + mtime) holding the raw JPEG (the admin
+  batch base64-encodes it), and
+  `coverReads` bounds the art being read or waiting to be decoded and `thumbSem` the
+  decodes, both across requests. The player gets
+  the same thumbnails from `GET /libraries/{id}/cover?size=160|320|640` (capability
+  `cover_sizes`; one code path, `coverArt` + `coverThumbnail`; ETag = size + art version,
+  304 on a match; custom `no-cache`, file art `max-age=86400`; any other size 400).
+  `cover_version` (`catalog.CoverVersion`, a 10-char hash of `books.cover_art`) is set
+  from index data whenever a book is indexed (custom stamp, else mtime, size and
+  sidecar path; `SetCover`, `DeleteCover`, moves and joins recompute it). Every
+  thumbnail (a cache hit too, a 304 revalidation included) records on a book what
+  it lacks for the art it read: `cover_color` (`media.CoverPalette` on the scaled image:
+  dominant bucket = `bg`, the most vibrant bucket nudged in HSL lightness to WCAG 4.5:1
+  against it = `accent`, else none; `on_accent` white/black) and, with it, the art's
+  own version as `cover_art`, so `cover_version` follows a sidecar replaced in place
+  and equals the thumbnail ETag's hash; `catalog.RecordCoverColors` is
+  compare-and-set on the identity it was read under and bounded (250 ms, detached
+  from the request). Both are on the player `Book` JSON (`omitempty`). Admin book rows (list and book page) also carry
+  `cover_color` (the Series spines) and `matched` (the `matched=` filter's rule), and `POST /admin/shares/{id}/paths`
+  also takes `{"rules":[...]}` (<= 1000, one transaction) for adding a selection.
+- **Rate limiting by route class** (`rateLimit` in `api/middleware.go`, buckets in
+  `api/ratelimit.go`), read off the handler `mux.Handler` picks: static files
+  (`web.IsStatic`) are not counted; media routes (`mediaAuth`, behind `requireBookMediaAuth` for
+  cover/stream and `requireMediaAuth` for `/meta/cover`, whose `mediaHandler` marks them) limit
+  themselves: refused while the address's
+  general bucket is empty (`Ready`), a failed authentication charges it (`Charge`:
+  even past empty, down to -burst, so requests that passed `Ready` together all pay), an
+  authenticated one spends from `mediaLimiter` (~200/s, burst 2000, per credential id)
+  and charges the address's bucket when that refuses it (the lookup was already done);
+  everything else spends from `ipLimiter` (~50/s, burst 200, per IP). The brute-force
+  lockouts (`limiter`) are separate. Tests: `ratelimit_routes_test.go`.
+- **Job queue, scan history, schedules, ignore rules (admin redesign Phase 3, `library/jobs.go`,
+  `schedule.go`, `ignore.go`, `problems.go`)**: every scan (startup, schedule, admin rescan, a
+  library or folder-setting change) goes through `Scanner.Enqueue`; `Scanner.Start` runs ONE
+  worker (scans never compete for the disk or the single DB writer) and the scheduler. Coalescing:
+  a library already waiting returns the waiting job; one running gets one follow-up for a manual or
+  change trigger (the running scan may have read the old setting) but not for a schedule or
+  startup. Each run is a `scan_runs` row (`catalog/scanruns.go`: trigger, who, status
+  `running|ok|partial|unavailable|failed|cancelled|interrupted`, counts (a move counts once, as
+  moved), a log of at most 300 `RunEvent`s (problems take at most half, so the moves and removed
+  paths after them keep room; past the cap events are only counted); 100 kept per library; rows
+  left `running` by a stopped server become `interrupted` at startup). `Cancel` drops a queued job
+  or cancels the running scan's context: discovery and the per-book loop stop on it, and a scan
+  stops before its prune, never inside it (the prune, `DeleteBooksNotIn`, is one transaction run
+  to completion once begun). Requested scans are capped at an hour (`jobContext`); the startup
+  scan, a library's full index, isn't. A root that doesn't answer the bounded root probe stops at
+  the unavailable guard instead of holding the one worker. Deleting a library cancels its scans
+  (`CancelLibrary`). **Prune semantics are unchanged**: a vanished
+  book is deleted from the index (no ghost rows) and its path lands in the run log; durable state
+  is path-keyed, so progress comes back if the files do. Schedules (`ParseSchedule`): `""`,
+  `every:{1,3,6,12,24}h` after the newest run started, `daily:HH:MM` in the server's zone; the
+  newest run of any trigger counts, so a server that was off runs a missed daily scan on return;
+  a due slot dropped without a run of its own (cancelled while queued, or folded into a scan of
+  the library already running) counts as a start too (`jobQueue.skipped`), so it isn't re-queued.
+  Ignore rules (`NormalizeIgnore`/`ParseIgnore`) live in the DB because the server never writes to
+  the library: gitignore-lite (no `/` = a name at any depth, a `/` before the end, a leading one
+  included, = anchored to the root, trailing `/` = folders only, case-insensitive, `#` comments,
+  <= 100 patterns of <= 200 bytes); the scan, `BrowseFS` and `IndexPath` all honour them, and rules
+  that skip every indexed book prune it rather than tripping the unavailable guard.
+  `metadata.Extract` reports `OpenErr`/`ProbeErr`
+  (ffprobe runs with `-v error` so its message survives, path prefix stripped); `noteProblem`
+  records the first read problem per book (`unreadable|empty_file|probe_failed`), and a scan
+  re-reads an otherwise unchanged book once the file its problem names opens or probes again
+  (`problemCleared`: a fixed permission changes neither mtime nor size). A folder book
+  whose parts are all >= 1 h with >= 2 distinct titles (tag, else file name) gets
+  `suspect_parts`; rows from before 0017 are checked once with a tag read. `PATCH
+  /admin/libraries/{id}` rescans only when the root or ignore rules change.
+- **Health issues (`catalog/issues.go`, `api/handlers_health.go`)**: computed from the index on
+  request; each book kind is one SQL predicate (`issuePredicates`) shared by the counts and by
+  `GET /admin/books?issue=` (and `&issue_ignored=true`), so they can't disagree: `no_cover`
+  (checked rows only), `no_chapters` (<= 1 chapter, > 2 h), `unmatched` (left out of the summary
+  while metadata is off), `transcode`, `suspect` (not a folder with a `book` override, the
+  category's own fix), `scan_error`, `series_spellings` (`catalog/seriesspellings.go`: another book of
+  its library spells its main series another way, same `series_key`; listed per series by `GET
+  /admin/issues/series-spellings[?library_id=&ignored=true]` -> `{groups: [{library_id, suggested,
+  spellings: [{name, books}], books}]}`, from the same predicate, `suggested` being `seriesName`;
+  open = a book not ignored, ignored view = a book ignored; the console's fix is the author merge's bulk
+  `series` edit), `split_discs` (one book split across disc folders, listed by
+  its first disc: `books.split_parent` set, no override on that folder; the console's fix sets
+  `book` on it, which joins them; its discs never also group as duplicates). `split_parent` is
+  worked out during discovery (`library.markSplitDiscs`: a folder book whose folder is a disc
+  set, the same `discSets` predicate the join uses, so the fix always joins; `IndexPath` the
+  same from the folder's subtree) and stored by `UpsertBook`; an unchanged book whose value
+  differs (a sibling came or went, a pre-0022 row) gets it via `SetSplitParent` without a
+  reindex. `duplicate` is groups within one
+  library (`DuplicateGroups`: same fingerprint AND size, same ASIN/ISBN (whatever the lengths),
+  or `metaKey` with a length within 1 min / 2% (`sameLength`), an unknown length matching only
+  another unknown one; copies across libraries are deliberate). Each join marks its kind on one
+  copy and a group's `reason` is the strongest its joins support (`dupSet.reason`):
+  `id_length_differs` (a group a shared ASIN/ISBN joined whose shortest and longest known
+  lengths `sameLength` rejects, the whole group's so an unknown-length book can't bridge two
+  recordings; an unknown length is no evidence either way); outranks even identical audio, as the group holds a different
+  recording, and the console then calls no copy the one to keep) > `same_files` > `same_id` >
+  `same_book`. A group is hidden while every member is ignored, so a new copy brings it back. Endpoints (admin only): `GET /admin/issues` (counts + samples + offline
+  libraries with books/listeners + `checked_at`), `GET /admin/issues/duplicates` (the open
+  groups, or with `?ignored=true` only the ignored ones), `POST`/`DELETE /admin/issues/ignore` (<= 1000), `POST
+  /admin/libraries/{id}/book/rescan?path=` (`IndexPath` now, on a context detached from the
+  request timeout so a slow re-read is still saved; 404 `not_indexable`), `GET
+  /admin/jobs` (running + queued + schedules), `DELETE /admin/jobs/{id}`, `POST /admin/scan`
+  (queue every library: `Scanner.EnqueueAll`, also the startup scans), `GET /admin/scan-runs`
+  (`?library_id=&before=&limit=`, `next_before`) and `GET /admin/scan-runs/{id}` (with the log).
+  Codes `invalid_schedule`, `invalid_pattern`, `not_indexable`.
+- **Sessions, devices, Activity stats (admin redesign Phase 4a, `catalog/sessions.go`,
+  `activity.go`, `progress_admin.go`, `auth/devices.go`, `api/handlers_activity.go`)**: players name
+  themselves in `X-AudioSilo-Client: <app>[/<version>] [(<platform>)]` (`auth.ParseClient`, strict;
+  the console sends `AudioSilo Admin (web)`, the player `AudioSilo/<version> (<platform>)`, and only
+  same-origin on web). `authenticate` calls `auth.ResolveRequest` (or, for the `?token=` of a book's
+  cover or stream with no `Authorization` header, `auth.ResolveCastRequest`; both are `auth.resolve`),
+  which records the app (only when
+  the request names one, so a headerless `<audio>` fetch keeps it) and the newest IP on the token, and
+  puts the `auth.Credential` (token id, kind, device id, device name, app; a cast token's book) in the context (`credentialFrom`; every
+  context key lives in one iota block in `respond.go`, since the IP key once collided). CORS allows the
+  header. **Sessions are derived from progress saves**, not from the client-posted
+  `listening_history` spans (those arrive only on stop, are dropped offline and carry no device):
+  `handlePutProgress` passes every save to `catalog.RecordHeartbeat`, which extends the token's
+  session on that book when the save comes within `SessionGap` (10 min), or later when the position
+  advanced by about the time that passed (`continuousPlayback`, within `resumeWindow`, 12 h: Android
+  pauses the player's save timer while the screen is off), and otherwise starts a new one; listened
+  time is the position advance / speed, capped by the server time between saves (only server time is
+  used, so a wrong device clock or an offline replay can't inflate it); a session with nothing
+  listened yet (a single save: "Mark finished", the manager's stats sync) is shown nowhere
+  (`listenedSQL`) and deleted by retention; best effort (a failure is logged, the save still
+  succeeds). `catalog.StreamMarks` (in memory) remembers `?transcode=1` streams per token for 10 min
+  so the session is marked transcoded. Session times are fixed-width millisecond UTC strings
+  (`sessionTime`) so they compare as text; hours are taken with `hourOf` (not `time.Date`, which
+  loops on a daylight-saving fall-back). Retention: `pkg/launcher.retention` runs
+  `PruneSessions` at startup and daily, rolling sessions older than the live
+  `activity.session_days` setting (Settings > General `general.session_days`, env
+  `AUDIOSILO_SESSION_DAYS`, 30-3650, default 400; `API.SessionRetention`, read at each run) into
+  `listening_daily` per local day, listener and book, blanks `last_ip` on signed-out or expired tokens
+  (`auth.ForgetRevokedAddresses`), and deletes dead cast tokens with their grants (`auth.PruneCastTokens`:
+  expired, or the sender's token signed out; a cast row's own `revoked`/`expires_at` don't say that). Migration 0021 backfilled listening from before sessions were
+  recorded: `listening_sessions.backfilled` rows (from the players' `listening_history` spans; no
+  device, app or playback mode, so left out of those breakdowns) and `listening_daily.estimated` rows
+  (one per book, in totals and tops only, never in a day, calendar or hour; `Activity.estimated` says
+  how much). Book counts (`totals.books`/`finished`, a top user's, a person's own `/me/stats` totals):
+  `finished` is the distinct books finished in the period (`finishedIn`; a book two people finished
+  counts once on the Activity page) and `books` the books listened to OR finished in it
+  (`bookCounts`), so a book marked finished or imported with no listening recorded still counts and
+  finished is never more than books. `SaveProgress` stamps `progress.started_at` on insert and
+  `finished_at` when `finished` turns on (cleared when it turns off), both from the save's own
+  `updated_at`; a save's own `started_at`/`finished_at` are ignored. The player's progress JSON
+  carries them as `started_at`/`finished_at` (`omitempty`; `catalog.Progress`, player redesign
+  Phase 1b, capability `progress_edit`), and the listener edits their own with `PATCH
+  /libraries/{id}/progress?path=` (`handleEditMyProgress`: the admin's `catalog.EditProgress`, its
+  body decoded by the shared `decodeProgressEdit`, with the caller's own scope from
+  `authorizedScope`: 403 outside it, even for an existing row; 404 `book_not_found` with no row and
+  no book; 400 for a bad body or `ErrInvalidProgressEdit`, and for an exact (RFC3339) date in the
+  future, admin edits too (a day-only start keeps the catalog's day of slack); an edit that sets
+  nothing writes nothing, answering the row as it is or 404 with none; no listening session
+  recorded). An edit's `updated_at` keeps its sub-second time, and `SaveProgress` compares and
+  writes in one writer transaction, so an older device save never overwrites a newer edit. Endpoints
+  (admin only): `GET /admin/sessions/live` (one per device, with chapter and IP; `chapter` is `metadata.ChapterTitle`, the player's filename tidy plus "" for a title that names nothing ("024", "Track 01": `metadata.NamesNothing`, IsGenericTitle for any script; "Chapter 10"/"Part 7" kept), with `chapter_index` so the console says "Chapter N" (`chapterLabel`, shared with the drop-offs); a one-chapter book has neither; drop-offs use the same `ChapterTitle`), `GET
+  /admin/sessions` (`?user_id=&library_id=&path=&before=&limit=`, `next_before`), `GET
+  /admin/devices?user_id=` (session + API-key tokens, `current` marks the caller), `DELETE
+  /admin/devices/{id}` (409 `current_device` for the caller's own token), `GET
+  /admin/users/{id}/progress`, `PATCH /admin/libraries/{id}/progress?path=&user_id=`
+  (`catalog.EditProgress`: finished / position / dates, stamped with server time + version so it
+  beats stale device saves; it starts progress only on a book the *user* can see, by the user's own
+  scope, else 409 `no_access`, while existing rows stay editable after access is taken away; a
+  `YYYY-MM-DD` date is the start of that day for `started_at` and the end of it, or now if sooner, for
+  `finished_at`) and `GET /admin/stats?range=7d|30d|90d|1y|<year>|year` (`year` = the current year in
+  server time, labelled with it, so the browser's clock never picks the year; answers only `{"activity"}`,
+  `catalog.ActivityFor`, bucketed in server time, without the Overview's figures; 400 `invalid_range`),
+  plus `GET /admin/listening?range=&user_id=` (`catalog.ListeningDaysFor`: the same days, of everyone
+  or one person, and nothing else: the year calendar and a person's listening year). Book-page
+  listeners carry `started_at`/`finished_at`. Sessions and roll-ups move
+  with the book (`MoveDurableState`).
+- **Listening imports from Audiobookshelf (admin only, `internal/importer`, `catalog/imports.go`,
+  `api/handlers_import.go`, migration `0034`)**: `POST /admin/imports/abs/users {url, token}` checks the
+  server (`GET /status` must say `audiobookshelf`, sent without the token) and lists its users (a
+  non-admin token: just its own, via `/api/me`) with `suggested_user_id` (same username, any case);
+  `POST /admin/imports/abs {url, token, users:[{abs_user_id, abs_username?, user_id}], cutoff?}` records one import per
+  mapping (`abs_username` names its source until the fetch reads ABS's own) (status `fetching`; 409 `import_running` while that user has one fetching or applying) and
+  fetches in the background on `baseCtx`; then `review` (or `failed` with `error_code`
+  abs_unreachable | abs_unauthorized | not_abs | fetch_failed | interrupted). `GET /admin/imports?user_id=` (each import with `cutoff_utc_offset`: the server's offset at the
+  cutoff, so the console shows and compares it in server time),
+  `GET /admin/imports/{id}` (+ `unmatched_items`, most listened first, <= 500), `PATCH` `{cutoff}` (re-plans
+  from the stored payload, `import_payloads`, gzipped and versioned; deleted once applied), `POST .../apply` (one transaction: the person's previous applied ABS import is
+  undone first, so a re-import never double counts), `POST .../undo`, `DELETE` (not while applied: 409
+  `import_applied`). The token lives only in the fetch's memory (never stored, logged or answered); `Connect` and
+  `Start` refuse an empty one, one over 8 KiB or one with CR/LF/NUL alike (400 `invalid_import`,
+  `checkToken`). The ABS client: GETs only, http/https only, no credentials, query or fragment in the
+  URL, `/status` (sent without the token) must identify ABS before the token goes anywhere, redirects
+  only to the same host (at most 5, never https -> http), every response size-capped, header and
+  whole-request timeouts, every error a fixed sentence (never an ABS body). It does NOT block private
+  or loopback addresses (an ABS on the LAN is the normal case); acceptable because every import route
+  is admin-only. Matching
+  (`match.go`): path components from the end (same relative path, or a unique suffix either way; the
+  ABS side uses its absolute path; a folder vs the lone file in it), then ASIN, ISBN, then
+  `pkg/match.Best` among a matching author's books, every non-identifier tier with the length check
+  (5% + 2 min); only books the target user can access (`no_access` otherwise); two items still in ABS
+  on one book are both `contested` (each has progress), while gone items (deleted in ABS: sessions only;
+  `buildPayload` drops any progress/bookmarks left on them) match it with the one present item, if any,
+  their sessions merging; an ABS item at a folder this server splits into disc books is `split_discs`
+  (join the discs first). Applying writes sessions with `backfilled=1` and `client_app` `Audiobookshelf`
+  (`imported: true` on the wire; never in `LiveSessions`), except a session already past the session
+  retention (`activity.session_days`, read at apply via `importer.New`'s retention func, the zone as the
+  prune's), which goes straight into the `listening_daily` rows `PruneSessions` would make of it
+  (`ImportWrite.RollUpBefore`/`Zone`, `catalog.daySums` shared with the prune; summary counts unchanged),
+  plus one `listening_history` span per session
+  (start/end position over its start and clamped end, `import_id` set) so the book's History tab and
+  `/me/history` (the Journal) show it; their ids are ordinary, so
+  `ListSessions` orders by `started_at` (then id; indexes `idx_sessions_started` /
+  `idx_sessions_user_started`) and resolves its `before` session-id cursor to that pair (the console also sends
+  `before_at`, the session's start, so a gone cursor continues in place; without it a gone cursor
+  continues from its nearest recorded neighbour, `goneCursor`), only sessions starting before the cutoff (default: the user's first
+  listening here, `catalog.ListeningStart`; null = none), long-open sessions clamped (`last_at` =
+  start + listened when the span is over 3x it); progress fill-only (`importer.mergeProgress`: never
+  rewound or un-finished, moved on only when ABS's last update is newer, earliest start); one estimated
+  `listening_daily` row per book where ABS's position outruns its sessions (0021's rules; none for a
+  book finished in ABS with no listening session there, whose position ABS puts at the end); bookmarks
+  deduplicated (same text within 2 s); an undo deletes only the imported bookmarks still as written
+  (`note = import_note`, no label: `bookmarkUntouched`) and hands the edited ones to the person
+  (`import_id` 0). A re-import's undo of the previous import restores its progress rows exactly
+  (their own updated_at, version bumped: `progressPrior.restored`, what the review's `importState`
+  simulates), so the new import moves them on again like a first one; a row it leaves where the old
+  import had moved it is then stamped now (`keepRewound`), as a standalone undo stamps it, so a
+  device holding the old import's row adopts the rewind. `catalog.InterruptImports` (launcher, at start): fetching ->
+  failed `interrupted`, applying -> review. `PruneSessions` rolls imported sessions up per import.
+  Audited `import.start|apply|undo`.
+- **Your listening (player redesign Phase 1b, capability `user_stats`, `catalog/userstats.go`,
+  `goals.go`, `api/handlers_userstats.go`)**: the caller's own stats, from the same accumulator as the
+  Activity page, built for one user by `newUserListenAcc` (the one user-id guard; its reads take the
+  per-user query spellings, served by `idx_sessions_user_last` / `idx_daily_user` / the progress key).
+  `GET /me/stats?range=` → `{"stats": catalog.UserStats}` (totals/previous without
+  `listeners`, `days` as `{date, listened}`, hours, top books/authors/narrators/series, `finished_books`
+  ≤ 100, playback, clients; none of the admin-only steps run). **Privacy**: the types have no field that
+  can carry another user, user 0 is refused (`errNoUser`: 0 is "everyone" to the
+  accumulator), and the rows naming a book pass the caller's CURRENT access (`UserScopes` +
+  `ScopesAllow` / `scopesFilterSQL`): a revoked share's book leaves `top_books`/`finished_books` and the
+  authors/narrators/series (ranked from in-scope books only, `listenAcc.topPeople`), while the totals,
+  days and hours keep all the caller's time. `GET /me/listening?range=` → `catalog.UserListening`
+  (period + `days`, no `by_user`). `GET /me/goal` → `{goal: {books_per_year, updated_at (ms UTC)} | null, year,
+  finished}` (this calendar year in server time, the caller's finishes, counted like `totals.finished`),
+  `PUT /me/goal` `{books_per_year: 1..1000}` (else 400) answers as GET, `DELETE /me/goal` 204, idempotent.
+- **Listening in the house (player redesign Phase 8, capability `household`, `catalog/household.go`,
+  `api/handlers_household.go`)**: people on one server who opt in see what the others who opted in
+  are listening to (the player's Home row and the book page's "In the house" card). `GET /me/household`
+  -> `{"share_listening": bool}` (no row = false); `PUT /me/household` `{"share_listening": bool}`
+  (strict decoder, the field required: `{}` is 400) answers the same shape; demo accounts 403
+  (`nonDemoAccount`; GET stays allowed), an API key may set it (the person's own credential).
+  `GET /household/listening` -> `{"sharing": bool, "listening": [Row]}` (the envelopes are the
+  handler's): the handler asks `HouseholdSharing` first and answers `{false, []}` before loading any
+  scope (non-sharers poll it too), then `catalog.HouseListening`, ONE query driven from
+  `household_sharing` (the caller's own row, so it is reciprocal by itself; each other sharer; a
+  scalar subquery takes their newest session through `idx_sessions_user_last`; `books` joined only
+  for those winners; `CROSS JOIN` pins that order, the verified plan is in the comment).
+  **Privacy rules (all in catalog; each has an allowed and a denied test)**: reciprocal (`listening`
+  is `[]` unless the CALLER shares); other people only (never the caller), enabled, not demo, sharing
+  on; per person ONE row, their newest session with listening in it (`listening_sessions`,
+  `import_id = 0`, `backfilled = 0`, `listened > 0`) within `houseWindow` (24 h); that book must pass
+  the CALLER's current scopes (`ScopesAllow`), else the person is dropped, never shown on an older
+  in-scope book. A row is `{user_id, username, library_id, path, title, author|null, state, position,
+  duration|null, chapter|null, chapter_index|null, updated_at}` (newest first; `state` `playing`
+  within 60 s, `paused` within `SessionGap` (`SessionPlaying`/`SessionPaused`), else `recent`; `title` the index's, else the path's last
+  segment; `duration` the index's, else the session's, null for 0; chapter fields as the live
+  sessions', via the shared `chapterCache`; `updated_at` the newest save, fixed-width ms UTC). It
+  NEVER carries a device, address, app or token: `HouseListeningRow` has no such field, unlike the
+  admin-only `LiveSessions` (never reuse that for anything a non-admin sees). Polling only (the
+  player refetches every 60 s while focused); no realtime channel.
+- **Household members (player redesign Phase 8b-1, capability `household_members`, `auth/members.go`,
+  `catalog/members.go`, `api/handlers_members.go`; security-critical)**: any non-demo person (the owner)
+  adds a member from the player, with no admin: a real account (role user, no password) whose
+  `managed_by` is the owner, with a `member_kind` (`kid`|`grownup`) and `member_access`
+  (`all`|`collections`) only the owner sets. One level only: an owner is never a member, a member never
+  has members, never gets the admin role (`UpdateUser` 409 `member_not_admin`). **Access** (the member
+  rule, in `UserScope`/`UserScopes`/`AccessibleLibraries`, decided per request, no cache): the member's
+  own grants UNION, for `all`, the owner's CURRENT scopes computed with the owner's role (an admin
+  owner gives every library as content scope), or, for `collections`, the items of collections the
+  owner owns and shares with the member, each kept only while the owner's scopes allow it
+  (`relpath.Within`: a folder book covers its subtree; an `""` item never grants a library); a
+  member-owner (bad data) or self-managed row derives nothing; a disabled owner changes nothing.
+  **The rule rides on the request**: `auth.lookupToken` reads `managed_by`, `member_kind` and the
+  rule (`auth.User.MemberRule`: owner, access, owner is an admin) through a primary-key `LEFT JOIN`
+  of the owner in its one statement (`memberColumns`/`memberScan`, which `getUser` shares), and the
+  transport passes it as a `catalog.Caller` (`api.callerOf`) to `CallerScope`/`CallerScopes`/
+  `CallerLibraries`, so a non-member's scopes cost the one grants statement they did before 8b-1
+  and a kid's refusal reads nothing; `UserScope`/`UserScopes`/`AccessibleLibraries` (id + isAdmin)
+  read the rule themselves (`memberRuleOf`, the same conditions) for a caller known only by id
+  (the importer, tests); `TestMembers_RuleReadsAgree` holds both readings to the same scopes for
+  every kind of account, bad data included. New transport code builds scopes from the request's user with `callerOf`,
+  never from an id. Scopes over 32 paths filter SQL in
+  `pathsJSONFilterSQL`'s single-parameter form (a row's path and its ancestors looked up in one JSON
+  list; same rows as the OR form, which can't hold 1,000 arms at all; a path that isn't valid UTF-8,
+  which JSON can't carry exactly, keeps an OR arm of its own beside the list). `BenchmarkMemberScopes`
+  (M1 Ultra, 3,000 books, a 1,000-item kid vs a whole-library listener, the `Caller` path): browse
+  2.4 ms vs 0.26 ms, search 9.1 ms vs 5.6 ms, progress list 4.9 ms vs 1.7 ms, the scope load
+  1.05 ms vs 0.017 ms (0.034 ms by id, which reads the rule).
+  **Routes** (`/me/household/members`; API keys 403 everywhere, demo 403 `demo_account`, a member
+  403 `member_cannot_manage`, someone else's member 404): `GET` -> `{allowed, reason?, max, members}`
+  (200 for everyone signed in: `reason` `demo`|`member`|`feature_off`|`not_allowed`; at the cap is not
+  a reason), `POST {name, kind, access, sign_in_here?, collection_ids?}` (strict; the account limiter, as
+  `gateSelfService`'s, charged after the API-key, demo and member refusals;
+  403 `feature_off`/`not_allowed`, 409 `member_limit`, 400 `invalid_name`/`invalid_collections`;
+  username derived from the name, then `-<owner>`, then `-2`, `-3`, ... with no cap) -> `201 {member, session?}`,
+  `POST {id}/session` (201 envelope), `POST {id}/pair` (unlinked, single use, 10 min; both 409
+  `member_disabled` for a member the admin disabled, whose tokens would never work), `GET
+  {id}/devices` (a bare `[MyDevice]`), `DELETE {id}/devices/{device_id}`, `PATCH {id} {name?, kind?,
+  access?, collection_ids?}` (`{}` 400), `DELETE {id}`. Only adding checks the switches (the server's
+  `household.members_enabled`, the person's `can_add_members`) and the cap (`household.max_members`,
+  1-50, default 6); the other routes keep working on existing members. `collection_ids` is the full set
+  of the caller's own collections shared with the member (`catalog.SetMemberCollections`, run inside
+  `auth`'s transaction through `auth.ShareFunc`). A session made here records `created_on_token_id`
+  and copies the caller's device name. **Kids**: 403 `kid_account` on `POST /auth/password|tokens|pair|
+  recovery`, `PUT /me/household`, `PUT /me/collections/{id}/shares`, from one route wrapper
+  (`api.notKid` in `api.go`, before the handler; wrap any new route a kid can't use), and the writes
+  refuse a kid themselves inside their transaction (`auth.refuseKid` in `IssueAPIToken`,
+  `GenerateRecoveryCode`, `IssueOwnPairingToken`; `catalog.SetHouseholdSharing`, `SetCollectionShares`;
+  `SetPassword`'s `ErrKidNoPassword`, which `/auth/password` answers as 403 `kid_account`), so a request
+  that passed `notKid` just before the owner's switch to kid committed can't leave the kid holding one (403
+  `kid_account`); the admin can't mint or rotate a kid's invite either (`POST /admin/users/{id}/authcode`,
+  `POST /admin/authcodes/{id}/rotate` answer 409 `kid_account`: `auth.refuseKid` in `CreateInvite` and
+  `RotateAuthCode`, the latter so a used-up invite kept as history can't be revived into a kid's account),
+  since only the owner sets up a kid's devices; switching a grown-up to a kid (or the admin assigning a kid) clears the password,
+  API keys, pairing tokens,
+  recovery code, still-redeemable invites (`supersedeActiveInvites`), the collections shared between
+  the kid and anyone but their owner (both ways, so no sharer is left with a kid in a list the server
+  refuses back) and the person's `household_sharing` row (`clearKidCredentials`), sessions stay, so
+  a kid made a grown-up again starts with house sharing off and opts in again; `ShareTargets` lists
+  a kid only to their owner and `SetCollectionShares` refuses one from anyone else
+  (`ErrUnknownUser`, `kidOnlyToOwnerSQL`); `HouseListening` and `HouseholdSharing` leave kids out
+  both ways because a kid has no row (no kid filter of their own). `/me` and the session envelope carry
+  `managed_by` (`{id, username}`|null), `member_kind` and, for a member only, `display_name` (omitted otherwise); `/me/devices` rows carry `member_sign_ins`
+  (always `[]` for a member, with no read) and `DELETE /me/devices/{id}?also_members=1` signs those out in the same transaction
+  (`{current, members_signed_out}`; each member signed out is audited `member.device_revoke`). The list's `reason` is `auth.MayAddMembers` (the one may-add ladder,
+  which `CreateMember` runs too). Admin: user objects add `member_access`, `can_add_members`,
+  `members_count`, `display_name` and, on `managed_by` only there, the owner's own `display_name`
+  (`api.adminUser`/`adminOwner`; the player's `managed_by` never carries it, and `/me`'s
+  `display_name` is `api.meUser`'s, a member's only); the detail adds `members` (each an
+  `auth.Member` plus `disabled`) and `member_collections` and, for a member, `owner_libraries` and
+  `owner_is_admin`; the settings envelope's `household` section carries `max_members_default`,
+  `max_members_min` and `max_members_max` as read-only facts; `PATCH`
+  takes `can_add_members` and `managed_by` (an id with `member_kind` + `member_access`: "Assign to
+  someone", 409 `owner_is_member`/`owner_is_demo`/`self_managed`/`member_is_demo`/`member_not_admin`/
+  `has_members`, 400 `kid_no_password` for a non-empty `password` on a kid or beside assigning one,
+  which `""` (clearing) is not; null: "Make independent"); the whole PATCH is one `auth.UpdateUser` transaction that checks every field before
+  writing, so a refused field changes nothing; `DELETE ?keep_members=<id>,<id>` (or the parameter repeated) deletes the person's
+  other members with them (400 `invalid_keep_members`). Joining another owner's household signs the
+  person out of what another owner set up for them (`auth.leaveOwners`: the sessions and API keys made
+  on anyone else's devices, by `created_on_token_id`, which would otherwise carry the new owner's
+  access to the old owner's phone, and open unlinked pairing tokens); leaving one ("Make independent",
+  or kept by `keep_members`) takes the open pairing tokens only; their own devices stay signed in. Audit `member.create|update|delete|session|pair|device_revoke`
+  (actor the owner, target the member; tested in `members_test.go`, not `audit_coverage_test`).
+- **Cast tokens (player redesign Phase 8, capability `cast`, `auth/cast.go`, `api/handlers_cast.go`;
+  security-critical)**: a Chromecast receiver plays from URLs the player hands it, so the player
+  never hands over its session token: `POST /cast/token` `{"library_id", "path"}` (strict) mints a
+  cast token -> `201 {"token", "expires_at"}` (fixed-width ms UTC). The path resolves through
+  `scopedPath` + `bookAt` exactly like the media routes (400 empty path, 403 outside scope, 404 no
+  book; a part path resolves to its book, whose own `rel_path` is stored, so the token covers every
+  file of it); demo accounts may mint (they can play); an API key may not (403, `denyAPIKey`'s
+  containment: a key never mints another credential, even a cast token, which would die with it). A cast token is a
+  `tokens` row of kind `cast` (`auth.IssueCastToken`: SHA-256 hash only, `expires_at` 24 h in whole
+  seconds, `castTokenTTL`) plus a `cast_grants` row (the book, and `parent_token_id`: the caller's
+  own token); one transaction deletes every dead cast token (`pruneCastTokensSQL`: expired, or no
+  grant, or its parent gone, signed out or expired) and keeps the person's newest
+  `maxCastTokens` (20); the daily retention (`pkg/launcher.retention`) runs the same prune
+  (`auth.PruneCastTokens`), so a dead token's row (the receiver's `last_ip`) and grant (which book
+  was cast) never outlive it by more than a day. **Validity** is `lookupToken`'s one check (unknown, revoked, expired,
+  disabled user) plus, for kind `cast`, a grant and a live parent (`castGrantOf`, a second query run
+  only for a cast token, so every other token's per-request lookup stays one two-table query): **signing out the device that
+  minted it** (logout, My devices, the console) **ends it**, as do the account's delete or
+  disabling, its scope and the 24 h. **Acceptance**: `ResolveRequest` never accepts a cast token;
+  `auth.ResolveCastRequest(secret, presence, libraryID, path, kinds...)` does, only when its
+  grant covers the path (`castGrant.covers`: same library, the book's path itself or below it on a
+  segment boundary via `relpath.Within`, `Book` never reaches `Book 2`; an empty path on either side
+  covers nothing; it cleans the path itself with `relpath.Clean`, which `catalog.CleanRelPath` is, so
+  `Book/../Book 2` never passes whoever calls). `api.authenticate` calls it only on the routes wrapped in `requireBookMediaAuth`
+  (`GET /libraries/{id}/cover` and `/stream`, NOT `/meta/cover`, which keeps `requireMediaAuth`),
+  only for a `?token=` with NO `Authorization` header (a cast token is never a bearer credential,
+  nor accepted beside one, a `Basic` one included), with `catalog.CleanRelPath(?path=)`; ONE lookup decides session, API key or
+  cast. A path below the book's folder can belong to ANOTHER book nested there (a folder book's
+  folder can hold more books: `Series` holding `Series/Book 2`), so for a cast credential
+  `api.castOwnBook` then requires the path to address the token's own book in the index
+  (`catalog.BookPathAt`: the book at the path, else the innermost folder book holding it; a path the
+  index places in no book is refused too). Any refusal is the uniform 401. The
+  context then carries the token's user and a `Credential{Kind: auth.KindCast, ID: <its tokens id>,
+  DeviceID: <the sender's token id>, Book: <its grant's path>}`, and the handler's `authorizedPath` checks the person's
+  CURRENT scope as for every request (a revoked share is a 403). `mediaAuth` sets
+  `Cross-Origin-Resource-Policy: cross-origin` only when the credential is a cast token (the
+  receiver, a gstatic.com web app, loads them as no-cors `<audio>`/`<img>`; `secureHeaders'`
+  `same-site` would make the browser block them); the media limiter keys every credential by its
+  token id (one id space, so a cast token has its own bucket). A cast token is never a device:
+  `ListDevices` (`/me/devices`, `/admin/devices`) and the device sign-outs take only session and
+  API-key kinds, like pairing tokens. **Transcode**: a cast token authenticates `?transcode=1&t=`
+  like a session (the sender asks for it on codecs the Default Media Receiver can't play: ALAC, WMA,
+  AC-3, or a book the web player would transcode); each such stream holds one of the 4
+  `transcodeSem` slots while the receiver reads it, and a full semaphore is the usual 503 +
+  `Retry-After` (the receiver reports a load error; the sender should say "busy, try again"); it
+  marks the SENDER's session transcoded (`StreamMarks.Note` keys on `Credential.DeviceID`, the
+  parent token, whose progress saves make the session).
+- **The Bridge (BRIDGE-PLAN.md Phases 0, 1a and 1c, capability `bridge`, `auth/bridge.go`, `internal/bridge`,
+  `api/handlers_bridge.go`, `handlers_bridge_estimate.go`; security-critical)**: the optional companion (repo `audiosilo-bridge`,
+  private) that writes to the libraries and runs the heavy jobs, so this server stays read-only. **The
+  server never connects to the Bridge**: it stores intents (jobs) and the Bridge's last heartbeat, and
+  the Bridge calls in. **Pairing**: an admin's `POST /admin/bridge/pair` (an API key 403, `denyAPIKey`)
+  mints a code (`generateAuthCode`, hashed in `bridge_status`, 15 min, replacing one still waiting; a
+  paired Bridge keeps working until it is exchanged) -> `{code, expires_at, server_url}` (`server_url` is the
+  home address when there is one: plain http on the LAN, since a Bridge can't verify a self-signed
+  certificate); the Bridge's
+  public `POST /bridge/pair {code}` (the redeem limiter) trades it in ONE transaction
+  (`auth.ExchangeBridgeCode`: the code, its expiry, and that the admin who made it is still an enabled
+  admin; every earlier bridge token revoked, the old status cleared) for a `tokens` row of kind `bridge`
+  (`201 {token, server_id, server_name}`; one active Bridge per server). `DELETE /admin/bridge` revokes it
+  and forgets the row (`UnpairBridge`). **The bridge token is narrow**: routes opt in to token kinds and only
+  the Bridge's own list `auth.KindBridge` (`requireBridge` = `authenticate` with `bridgeKinds`,
+  `/api/v1/bridge/*`, Authorization header only, never `?token=`; only a missing or refused token is a 401,
+  which stops the Bridge calling in until its 5-minute retry, so a failure to check one is a 503); `resolve` refuses it once its admin is
+  demoted (lookupToken already refuses a disabled one); it is never a device, and never touched (its calls
+  are not its admin's activity, the newest `last_seen` of their tokens). "Paired" has ONE statement,
+  `auth.BridgeLiveSQL` (a live bridge token of an enabled admin, partial index `idx_tokens_bridge`), which
+  both `GetBridgePairing` and the heartbeat reads use; `auth.BridgeTokenLiveSQL` is the same for one token,
+  which the heartbeat's write and every claim ask inside their transaction (a call authenticated before a
+  pairing or an unpair revoked its token, a long poll above all, saves nothing and claims nothing: 401).
+  A route-table
+  test sends it (header and `?token=`) to every other authenticated route: all 401. **Heartbeat** `PUT
+  /bridge/status {version, kinds, libraries[{library_id, mount_path, mapped, writable, checked_path,
+  error}], workers, ui_url, estimates?}` (`estimates.sidecars`: the Bridge's costing figures,
+  `asr_seconds_per_audio_hour`, `agent_usd_per_audio_hour` / `agent_usd_per_ebook` (null before any
+  history), `samples`, `agent_backend`, `agent_ready`, `subscription`, `can_contribute`,
+  `monthly_budget_usd`, `month_spent_usd`; read LENIENTLY, an unknown key ignored and a block that doesn't
+  decode or is out of its bounds dropped, never refusing the heartbeat, since a refused heartbeat takes
+  the Bridge offline; bounded and checked: `family.name` kinds, library ids, and `ui_url` http(s)
+  only since the console links it, are refused otherwise; free text is cleaned to printable bounded text,
+  `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
+  world's, and a refused report is retried for ever while its job is re-run; one row, never a history)
+  answers `{server_time,
+  libraries[{id, name, root}]}`. **Capability**: `capabilities.bridge` is true only while the last
+  heartbeat is under `bridge.OnlineWindow` (2 min) old (`bridge.Service` caches the parsed heartbeat for
+  `heartbeatTTL`, 5 s, so `GET /server` mostly reads no database; `Forget` drops it on a pairing or an
+  unpair, and a read that began before a save or a `Forget` never replaces its answer: `hbGen`), with a
+  top-level `bridge: {version, features}`
+  beside it (features = the families of the kinds the server knows, `[]` for none; `capabilities` stays
+  all booleans).
+  **Jobs** (`bridge_jobs`): kinds allow-listed twice, inside `bridge.Service.Enqueue` (the server queues
+  only a kind it knows, with per-kind params: 400, AND the Bridge advertised: `ErrKindUnavailable`, 409
+  `kind_unavailable`); Phase 0's
+  kind is `bridge.verify` (`library_id` required, optional book `path`, params `{hold_seconds 0-600}`),
+  Phase 1a's `sidecars.generate` (a book `path` required, params `{source, contribute, work_id}`; it writes,
+  so it is refused 409 `library_not_writable` for a library the last heartbeat doesn't report mapped and
+  writable, and `contribute: "issue"` is refused 409 `cannot_contribute` unless the heartbeat's
+  `estimates.sidecars.can_contribute` says the Bridge can; the open job is still returned), and Phase 1c's
+  `sidecars.describe` (a description from the notes the Bridge kept from generating the book, no new
+  ASR: a book `path` required, params `{}` or none, any field 400 (`describeParams`), stored as `{}`;
+  it writes, so the same `library_not_writable`; refused 409 `generate_open` (`ErrGenerateOpen`, checked
+  inside Enqueue's transaction after the dedupe) while a `sidecars.generate` job is open for the book,
+  which writes the description itself, while a generate job is never refused for an open describe; its
+  own dedupe key; an older Bridge doesn't advertise it, so it is the usual 409 `kind_unavailable`).
+  States queued -> claimed -> running -> done | failed | needs_attention | cancelled; the Bridge PARKS
+  a job it keeps running (`needs_attention`, the park's code in `progress.park.code`, its message in
+  `error`) and unparks it (back to `running`) under the same claim: a held state, so its reports still
+  land, but a parked job's lease is dropped (only claimed and running leases expire) and a running
+  report renews it. `dedupe_key`
+  (kind|library|path) returns the open job on a second press (200, else 201; the console says when that
+  job is one still stopping after a cancel, `cancel_requested`, as nothing new can be queued until it ends). `GET /bridge/jobs/next?wait=
+  &kind=` (`bridge.Service.ClaimFor`) long-polls (at most 25 s, woken by an enqueue; it ends with the
+  server's base context, so a stop isn't held by the claim a Bridge always has waiting: 204) for the
+  highest-priority oldest queued job of the
+  heartbeat's known kinds, narrowed by `kind=` (the Bridge's free lanes; none left answers 204 at once),
+  and leases it for 2 min (`attempts` + 1); `PATCH /bridge/jobs/{id} {attempt, state?, progress?, result?,
+  error?}` is bound to the claim's attempt (a dead claim's late report, an ended job, or one gone with its
+  library: 409 `not_held`), renews the lease and answers the job, whose `cancel_requested` asks the Bridge
+  to stop.
+  Leases are expired (`expireSQL`: requeued with the dead attempt's progress, result and error dropped,
+  failed on the last of `MaxAttempts` (3), or cancelled when a cancel was asked; those two keep what was
+  reported) inside every `bridge.Service` transaction that reads or changes job states (`expireTx`:
+  enqueue, claim, update, cancel), and before a console read only when a lease has actually run out
+  (`expireDue`: a reader-pool check first, so polls don't queue for the one writer); once it commits, a
+  requeue wakes the waiting claims and a failed job is announced (`settle`). `MoveJobs` (the catalog's
+  move transaction) expires nothing: a lease it finds lapsed is left to the next Service call, which
+  can announce it. `List` returns its
+  own `next_before` (it reads one row past the page). Cancel (`POST
+  /admin/bridge/jobs/{id}/cancel`) ends a queued or parked job at once, else sets `cancel_requested`.
+  `GET /bridge/libraries/{id}/book[?path=]` gives an INDEXED book's files with the size and mtime the
+  server sees now (a single-file book, which has no file rows, is listed as its own file; no path: the
+  first whole book of the library's first five by title, the mapping check's sample; 404 `no_book`; never an
+  on-demand index); `POST /bridge/rescan {library_id, path, mode?, from?}` re-reads one path: mode
+  `full` (or none) indexes it (`IndexPath`; with `from`, the book's path before a move the Bridge made,
+  `Scanner.IndexMoved` carries its durable state when the old book is gone from disk and the
+  fingerprints match, else ignores it), mode `attachments` re-reads only the book's `.audiosilo/` files
+  (`Scanner.RefreshAttachments`, answering `{path, attachments: {characters, recaps, description, bridge}}`); 404
+  `not_indexable`. Console: `GET /admin/bridge` (pairing, online, heartbeat, kinds, features, each
+  library with the Bridge's mapping, workers, `ui_url`), `GET`/`POST /admin/bridge/jobs`, `GET
+  /admin/bridge/jobs/{id}`, `GET /admin/bridge/estimate?library_id=&path=&kind=[&brief=1]` (the
+  confirmation before `sidecars.generate`, `handlers_bridge_estimate.go`: the source (`library.BookEbook`,
+  the Bridge's own .epub rule, an unreadable epub (no zip, no container.xml) counting as none), `bridge.EstimateSidecars` from the heartbeat's figures (`asr_hours`,
+  `agent_cost_usd` null while there is no history, `subscription`, `agent_ready`, `figures` false when
+  the Bridge sent none, so a false `agent_ready` means "not known"), `writable`, what the book already
+  has (`has.community` via `meta.Service.Coverages`, cache first and never a full Enrich per book,
+  `community_unknown` when it couldn't be asked; `has.local` from `book_attachments` (`catalog.BookAttachmentParts`: which columns are non-empty, nothing decoded); each with
+  `characters`, `recaps` and, since Phase 1c, `description`: the community work's `community_description`
+  (`Coverage.Description`: its `community_description` or its core description, either shown before a generated one) or a stored generated one), `can_describe`
+  (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier
+  books of its series in the library with no recaps (`catalog.EarlierInSeries`, each costed), and any
+  open job; `brief=1` skips the folder look and the series scan, for a card or a batch); 409
+  `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
+  (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
+  and `work_id` from the metadata cache alone, `CachedWorkID`), never on the sample-book answer.
+  Settings > Bridge in `admin-ui` (`features/bridge/`: the topic shows the heartbeat's estimates and
+  each generate or describe job's status; the book page's aside and each series card generate characters and
+  recaps, a series card queueing those of its books without recaps in reading order). The admin book
+  detail carries `generated_description: {text, generated_at?}` (omitted without one; `generated_at` is
+  bridge.json's description time; read with the description and provenance columns only, and only when
+  the signature names a description), which the book page's Community card shows (`describe-section.tsx`:
+  a Description sub-part with the "Generated on this server" mark, the text clamped behind Show more, and
+  a note when the player's About shows another description instead: the book's own, or the
+  community's; "Write a description" confirms and queues `sidecars.describe` when `describeOffered`:
+  `can_describe` and `writable`, local characters or recaps, no description here or from the community
+  (and `community_unknown` unset), no open generate (the estimate's `open_job` included) or describe
+  job; and the card itself adds no generated description shown, no description of the book's own, and
+  no estimate being fetched again; its dialog says the player shows it only when the book has no other
+  description, and says when the Bridge went away; the describe job's status through `GenerateStatus`
+  (a finished one hidden once a description shows), whose done line for a generate job also says
+  whether its description came (`result.description`, `description_error`), and whose stage for a
+  generate job's description step is `describing`). Notifications word a describe job as the
+  description ("Description ready: <book>"). A generate job queued while a describe job is open
+  cancels it in the same transaction (`cancelOpenTx`: at once when queued or parked, else
+  `cancel_requested`), since the generate run writes the description itself. Jobs are carried by
+  `bridge.MoveJobs`, which `catalog.moveBookState` calls in its transaction with the catalog's clock (an
+  open job colliding with an open one of its kind at the new path is cancelled; `DedupeKey` rebuilds the
+  key), and go with their library. **Hidden folders**: no route reaches content through a hidden
+  segment by name (`library.ContentPath`, the one statement of the rule: `ContentJoin` for a path that
+  names content, `IndexPathWithin`, `listDir`, and `scopedPathIn` for every path-taking route, a
+  hidden path reading as missing, 404), so a book's `.audiosilo/` never becomes a phantom book or a
+  streamable file; `findCover` never takes a hidden file (an AppleDouble `._x.jpg`) as a cover. Audited `bridge.code`, `bridge.paired` (system),
+  `bridge.unpair`, `bridge.job`, `bridge.cancel`. `SetBridge` before `Handler()` (the launcher always calls it).
+- **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
+  is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
+  `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start
+  (`restart`) and its per-field check (`fix`). `applyEnv` walks the same table and records which keys the
+  environment set (`fromEnv`); those are **locked** in the console (409 `setting_locked`) and `Save` writes
+  config.yaml's own value for them (`file`), so an env value never lands in the file. Launcher overrides (the
+  desktop manager's bind/TLS/public URL) are `Pin`ned and locked as `"launcher"`. `WithSettings` returns a
+  validated copy (all or nothing; `SettingError` with reason unknown/read_only/locked/invalid and the setting
+  id, mapped by `writeCatalogError` to `invalid_setting`/`unknown_setting`/`setting_read_only`/
+  `setting_locked` + `field`). The API never mutates a config: `API.boot` is the config the server started
+  with (restart-only settings read it: bind, TLS, web_dir, metadata.base_url, metadata.mode, demo on/off + idle_ttl) and
+  `API.live` (`liveConfig`, read via `a.config()`) is swapped whole by a save, carrying the parsed trusted
+  proxies and CORS origins, so name, public URL, home address (`lan_url`), CORS, proxies, app links, metadata on/off and the demo
+  library/cap apply on the next request. `restart_pending` lists restart settings whose saved value differs
+  from `boot`. New keys: `name` (`DisplayName`: GET /server `name`, pairing `server_name`; default
+  "AudioSilo") and `update_check` (default true, `AUDIOSILO_UPDATE_CHECK`). `GET /admin/system`
+  (`handlers_system.go`): tools + versions (`toolfetch.Version`, cached), metadata health (`meta.Service.Ping`:
+  metaserve `/healthz`, cached a minute, **only while metadata is on**; in mirror mode through the same
+  client as lookups: the copy once ready, the remote service until then) plus `metadata.mode` (the running mode, both modes) and, in mirror mode only,
+  `metadata.mirror` (`metamirror.Status`: `state` empty|downloading|opening|ready|error - `opening` while
+  a copy is opened (at start, or a download before its swap), `error` only without a usable copy -, tag, built_at, schema_version, schema_newer, size_bytes, checked_at, next_check_at,
+  downloaded_at, `progress` {done, total: compressed bytes, total 0 = unknown} while downloading, the last
+  `error` kept over a working copy, `fallback` = no usable copy so lookups go to `base_url`).
+  `GET /admin/meta/mirror` is the copy's status alone (200 + `metamirror.Status`); `POST
+  /admin/meta/mirror/check` wakes the mirror: 202 + its status after the wake (`next_check_at` now).
+  Both: 404 `metadata_off` (`metadataOff`) while off, 409 `not_mirror_mode` (coded) without a mirror
+  (`mirrorRefused`); the POST is not audited (changes nothing an admin chose).
+  The console: Health > System's community metadata row reads `metadata.mirror` while the copy is in
+  use (`activeMirror` in `system-model.ts`, also Settings' status line and `metadataDown`), and
+  `useMirrorPoll` (Health > System and Settings' status line) polls only `GET /admin/meta/mirror`
+  every 2 s while the copy is busy (downloading, opening, checking, or due now), merging it into the
+  cached system status and refetching `/admin/system` once when it settles (that stays at 30 s); a
+  404 `metadata_off` / 409 `not_mirror_mode` answer stops the poll, drops the copy from the cached
+  status and refetches it once. A running check (no `next_check_at`) keeps the Next check fact as
+  "Checking now". Settings > Community
+  metadata's Source card saves `metadata.mode` (restart). TLS certificates read from their
+  files (`server.Certificates`; never generates or requests one), database size + schema
+  (`catalog.DatabaseInfo`), each root's availability + disk space (`Scanner.RootDisk`: statfs inside the
+  same bounded root probe, so a dead mount can't hang it), web player source, update status. The update check
+  (`internal/updates`, started by the launcher): GitHub's latest release, a minute after start then daily,
+  conditional on the ETag, `User-Agent: AudioSilo/<version>`, nothing else sent, never while off;
+  `GET /admin/update`, `POST /admin/update/check` (409 `update_check_off`; within a minute it answers with
+  the last result). Logs: the launcher wraps its logger in `logring.Handler` (Info and up into a 2,000-line
+  ring; attributes whose key has a secret word (token, password, code, key, secret, cookie, authorization)
+  are redacted); `GET /admin/logs?level=&q=&after=&limit=` (`after` = the live tail's cursor). All admin-only.
+- **Backups, audit log, notifications (admin redesign Phase 5b)**: **Backups** (`internal/backup`) are the
+  whole database written with `VACUUM INTO` (`store.DB.VacuumInto`, on a short-lived connection of its own:
+  the reader pool's query_only refuses it and the one writer would stall writes) into the backups folder
+  (`backups.dir`, config.yaml/env only, default `<data>/backups`) as `audiosilo-<UTC time>-<kind>.db`
+  (`scheduled|manual|before-restore`), written under a hidden temporary name, owner-only (0600: it holds
+  password and token hashes), then renamed. Settings `backups.schedule` (`""`, `daily:HH:MM`,
+  `weekly:DAY:HH:MM`, server time; default `daily:03:00`) and `backups.keep` (scheduled ones kept, default 7;
+  manual and before-restore copies stay until deleted). Only names matching `backup.validName` are listed,
+  served, deleted or restored, and a symlink is never followed. **A restore never swaps a live database**:
+  `RequestRestore` checks the file quickly (`store.Inspect` without `full`: read-only open, an AudioSilo
+  schema whose every applied migration this server knows, else `ErrNewerDatabase`; `quick_check` reads every
+  page, so it runs only at start) and writes `<data>/restore.json`; the launcher's
+  `backup.ApplyPendingRestore` runs before `store.Open`, checks again in full, copies the current database into the
+  folder as `before-restore` (or, if it can't be read, renames its files aside in the data folder), swaps
+  the backup in (removing the old -wal/-shm), writes `<data>/restore-result.json` and always removes the
+  marker (a refused restore is reported once, not retried at every start); `recordRestore` logs it in the
+  restored database's audit log as the server's own act. **Audit log** (`catalog/audit.go`,
+  `api/handlers_audit.go`): `audit_events` (0019; actor id + name copied, no FK; `via` session/api/system;
+  no IP), written by `API.audit` after an admin change succeeds (best effort), kept 365 days / 100k rows
+  (`PruneAudit`, daily in `launcher.retention`); scans and job cancels are not audited (Jobs history has
+  them), backup downloads are. Never a secret in details: a password change reads `set`/`cleared`, a
+  destination's address and secret only as `address_changed`/`secret_changed`. **Notifications**
+  (`internal/notify`): `notification_targets` (kind webhook/ntfy/discord, name, url + secret write-only:
+  the API shows `notify.Redact`'s address and `has_secret`), `server_events` (the bell's feed, 90 days,
+  `dedup_key` announces an update once per version). `notify.Service.Emit` records the event and queues one
+  delivery per enabled subscribed destination (4 workers, queue 256, drop + log when full); a delivery is
+  retried twice on timeout/unreachable/429/5xx (queued again after its delay, never waited out on a
+  worker), never follows a redirect, and records only a short reason
+  (`timeout`, `unreachable`, `http_<status>`, `failed`), never the URL or the answer. Webhooks POST JSON
+  with `X-AudioSilo-Event` and, with a secret, `X-AudioSilo-Timestamp` + `X-AudioSilo-Signature: sha256=`
+  HMAC of `<timestamp>.<body>` (`notify.Sign`); ntfy is a JSON publish to the server root (Bearer token
+  optional); Discord is one embed with `allowed_mentions` empty. Triggers: `Scanner.OnRunFinished`
+  (`book_added` with up to 5 titles from `ScanResult.AddedTitles`, `scan_failed` (its `detail` is shown in the
+  bell but never sent out: `internalData`), `library_unavailable`
+  only when the previous run wasn't), login/exchange (`new_device`, not demo accounts; `invite_redeemed`
+  via `auth.ConsumePairing`'s code kind), `updates.Checker.OnAvailable`, `backup.Service.OnFailure`,
+  `bridge.Service.OnTransition` (`bridge_job_finished` into done, `bridge_job_failed` into failed or into
+  a park that isn't transient: `bridge.Job.Notable`, which leaves out `agent_rate_limited` and
+  `agent_unavailable` whatever their `retry_at`, and counts a park whose code changes in place as news;
+  a failure by an expired last lease is reported too, once its transaction commits; the job's `error`,
+  the Bridge's own text that can name its folders, is the bell's `detail`, never sent out).
+  Private addresses are allowed (LAN webhooks are the common case); destinations are admin-only and the
+  console never sees a response body. Endpoints (admin only): `GET`/`POST /admin/backups`,
+  `GET`/`DELETE /admin/backups/{name}` (download streams, outside the request timeout),
+  `POST /admin/backups/{name}/restore`, `DELETE /admin/restore`, `GET`/`POST /admin/notifications`,
+  `PATCH`/`DELETE /admin/notifications/{id}`, `POST /admin/notifications/{id}/test`,
+  `GET /admin/events?before=&limit=&kind=` (`kind` one of `notify.Kinds`, else 400),
+  `GET /admin/audit`. Codes `backup_running`, `backup_not_found`, `invalid_backup`, `backup_too_new`,
+  `invalid_target` (+ `field`, `reason` = a `notify.Reason*` constant the console words, never renamed,
+  and `max` for a `*_too_long`), `too_many_targets`. A password sign-in's `new_device` is skipped when
+  the browser's `device_id` (`auth.IssueSession`, hashed in `tokens.sign_in_key`, migration 0020) matches
+  an earlier session of that person; an admin's `RevokeDevice`, a new password or disabling the account
+  forgets it.
+- **Support card** (`catalog/support.go`, `api/handlers_support.go`, console `features/overview/support-card.tsx`):
+  a quiet Overview card pointing at GitHub Sponsors (`admin-ui/src/lib/support.ts` `SPONSOR_URL`, also the
+  account menu's "Support AudioSilo" item, About's link row and the update notice's one line; the
+  release footer in `.goreleaser.yml` carries the same line). Admin console only, never the player and no
+  capability flag. `GET /admin/support` → `{show}`; `POST /admin/support` `{action: "donated"|"snoozed"}`
+  (the same words storage and audit use) → `{show: false, until?}` without recomputing, `until` (RFC 3339)
+  only when a snooze was stored; the console's toast words that date. 400 for any other action
+  (`catalog.ErrInvalidSupportChoice` in `writeCatalogError`); admin only; audited `settings.support` with
+  `choice` and a snooze's `returns_at`, not when nothing changed. The answer is server-wide and **taken
+  on trust**: nothing is checked, nothing is sent anywhere, and it unlocks nothing (a donation stays a
+  gift). Stored in `server_state` (migration 0040: key/value server facts that are not config.yaml
+  settings) through the generic `catalog/server_state.go` accessors `getServerState` (an unreadable value
+  counts as none) and `putServerState`; key `support_card`, value `{"choice":"donated"}` or
+  `{"choice":"snoozed","until":<formatSessionTime>}`. `SetSupportChoice` reads and writes in one
+  transaction so a donation is never downgraded by a later snooze. Due when not donated, no snooze
+  running, and the server's age (the earliest non-demo `users.created_at`, so a restored backup keeps its
+  age) is >= `SupportAfterDays` (30), or >= `SupportMinDays` (7) with >= `SupportAfterFinished` (10) books
+  finished here (finishes dated before that first account, e.g. an Audiobookshelf import's, and demo
+  accounts' don't count; the count stops at 10). `SupportSnoozeMonths` 6. Console strings live in one
+  `support.*` i18n group (menu, About, card).
+- **Library export** (`internal/catalog/export.go` + `api/handlers_export.go`):
+  `GET /admin/libraries/{id}/export` (admin only) downloads a library's book list
+  as `audiosilo-<library-slug>-<YYYY-MM-DD>.json` - the `{"format":"audiosilo-books",
+  "version":1,…}` envelope the community metadata site imports on its Watching page
+  so a user can mark which entries of a series they own. **The file leaves the
+  server**, so by default it carries bibliographic facts only (title, subtitle, authors, narrators,
+  series + position (`series_position` "1-3" for a range: the importer's grammar takes one),
+  publisher, language, abridged, genres, asin/isbn, runtime_min, chapters; `version` stays 1,
+  the meta site's readers ignore keys they don't know) and **never by default** a path, size,
+  codec, format or anything else about the filesystem, nor the book's tags (the owner's own notes,
+  "Owned", "Read") - a regression test asserts that. `?include=` is a comma list, repeatable
+  (`catalog.ExportOptions`; any other value is a 400): `paths` adds each row's `paths` (every copy
+  collapsed into the row, index order; the envelope's `library.id` names the library, one export =
+  one library) and `tags` its `tags` (every copy's, each once), for the admin's own scripts; such a
+  file is named `...-<YYYY-MM-DD>-private.json`, apart from the one to share; the console's "Export
+  with file paths and tags..." asks for both and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
+  `ListBooks`, never OFFSET; copies of the same book within the library collapse on
+  `exposedDedupKey`, the kept entry taking each fact from whichever copy has it -
+  `mergeExportBook`, since the copy that sorts first may be the untagged rip); the
+  handler is transport-only and writes it with a `json.Encoder`. The leak guard
+  asserts on the MARSHALLED key sets as an allowlist, so a field added to
+  `ExportBook` fails the test even when its name (`format`, `files`) is invisible
+  to a substring scan. The single `author`/`narrator` string is split into a list only
+  where it clearly holds several names (`;`, ` & `, ` and `, and a comma **only**
+  when every part still has two words, so "Alexandre Dumas, pere" stays whole).
+  Advertised by the additive `export` capability.
+- **Library admin**: `PATCH /admin/libraries/{id}` edits name/root/default_view and the scan
+  settings (`scan_schedule`, `ignore_patterns`) and queues a rescan when the root or ignore rules
+  change; `DELETE /admin/libraries/{id}` removes the library
+  + its index (files on disk untouched). Both are surfaced in the admin console.
+- **User/account admin**: `PATCH /admin/users/{id}` edits role/password/disabled
+  in place (one `auth.UpdateUser` transaction); `DELETE /admin/users/{id}`
+  (`auth.DeleteUser` → `handleDeleteUser`) permanently removes an account and all
+  of its durable state via the schema's `ON DELETE CASCADE` (sessions, auth codes,
+  progress/bookmarks/notes/history, share grants) - files on disk are untouched.
+  Two safety guards live in `auth`: the **last enabled admin** can't be demoted,
+  disabled, or deleted (`ErrLastAdmin`), and an admin must keep a password
+  (`ErrAdminNeedsPassword`); the **delete handler additionally refuses self-delete**
+  (an admin disables its own account instead, never deletes it). Disabling stays the
+  reversible option; deletion is the irreversible one.
+  **Passwords are optional for non-admins** (stored as an empty hash; `Authenticate`
+  rejects empty-hash accounts) - player-only users onboard purely via auth-code
+  pairing. `GET /admin/users/{id}` returns a user + accessible libraries + granted
+  shares + issued auth codes (metadata only; codes are unretrievable by design);
+  `DELETE /admin/authcodes/{id}` revokes a code. A user's **last activity** is
+  derived from `MAX(tokens.last_seen)` (bumped by authenticated requests in
+  `ResolveRequest`, at most once a minute per token unless the request's address or
+  app changed: `touchInterval`) - there is no `last_login` column; don't add one.
+- **Admin stats**: `GET /admin/stats` returns catalog totals, per-library book
+  counts (`catalog.CountBooksByLibrary`) and a cross-user "currently listening"
+  feed (`catalog.ListeningOverview`, progress LEFT-joined to books on the path);
+  with `?range=` it answers the Activity page's `activity` block instead (see Phase 4a above).
+- **Progress reconciliation** is last-write-wins by `updated_at` (version breaks
+  ties) in `catalog.SaveProgress` - the realtime layer (Phase C) must reuse it so
+  REST and WebSocket writes converge.
+- **Chapters are normalized** (`metadata.Chapter`) so single-file m4b chapters and
+  multi-file mp3 parts share one shape: each chapter carries `file_path` (the
+  library-relative file to stream via `/stream?path=`), in-file `start`/`end`, and
+  `book_offset` (its start on the whole-book timeline). For folder books the
+  scanner probes each part and, if a part has its own embedded chapters (a single
+  chaptered m4b in its own book folder), expands those; otherwise the whole part
+  becomes one chapter. `GET /libraries/{id}/chapters?path=` returns
+  `{chapters, files, duration}`; a player renders single- and multi-file books
+  identically.
+- **Community chapters** (`0035`; `internal/chapteralign`, `internal/chaptercheck`,
+  `catalog/communitychapters.go`): a book with an ASIN/ISBN is checked against its
+  EXACT community recording's chapter list (`meta.Service.RecordingChapters`: the
+  lookup's `recording_id`, never `pickRecording`'s first-recording fallback; metaserve
+  `works/{id}/recordings/{rid}/chapters`, 404 = none known). The fit is anchored and
+  piecewise (see the package doc): local chapter starts pair with community ones by
+  title (numbering stripped, word containment, one-letter typos) within
+  `max(120 s, 1%)`, file boundaries and untitled starts by time within 5 s of the
+  neighbouring anchors' offset; the audio's end pins to the community end or to a
+  community boundary near it (what follows, at most `min(20 min, 10%)`, is listed as
+  omitted: a preview, credits); stretches between anchors must agree (weighted median
+  within 1%, any >= 120 s on either timeline within 10%) or it is another edition; every file boundary
+  must be anchored (else `crosses_files`, with the straddling chapter); then each
+  placed boundary snaps to the longest pause (>= 0.4 s at -40 dB) within
+  `4 s + drift`, starting 0.3 s before the speech. Outcome per book in
+  `community_chapters` (path-keyed cache, no FK, moved by `MoveDurableState`; `basis` =
+  asin|isbn|duration ms|`books.chapters_hash` (the scan's chapters)|the files in
+  play order relative to the book ('' for a single-file book), a different one makes
+  it due; a month makes it stale; a check whose basis isn't the book's current one is
+  never applied, and the admin page marks it `stale`, so a rescan of other audio,
+  re-tagged chapters, files renamed in place or a removed match never brings back
+  chapters fitted to the old files. The fit stores its files relative to the book
+  too, so a moved book (the same audio) keeps its check and its chapters; `list_hash` names the community list, so a background recheck
+  finding the same list for the same audio only renews `checked_at`, while a check
+  asked for fits again). A pass the service keeps failing (5 in a row) waits for the
+  next tick whatever kicks it, and a book a check failed for waits an hour, so it
+  can't hold up the books behind it. A kick waits 5 s for the kicks behind it (a
+  scan kicks once per book), so a burst is one pass. The book page's
+  `community_check_failed` says the last check failed (the service, or the 4-minute
+  pause budget of a 5-minute check: past it, the rest are left unsnapped).
+  `refreshEffective` -> `applyChapterSource` puts the community chapters in the
+  `chapters` rows when a current check fitted and either the admin chose them
+  (`chapter_choices`: `files`|`community`, durable, path-keyed, moved with the book's
+  edits by `MoveDurableState`, never copied onto a joined book) or, with no choice,
+  the status is `fill` (no chapters of its own: none, or one per file); else the
+  scan's own, which `UpsertBook` always keeps in `books.scanned_chapters` (as
+  `books.scanned` keeps the metadata; `''` on a row from before 0035, whose rows are
+  the scan's). `books.chapters_fit` (a hash of the fit in the rows) keeps an
+  unchanged fit from being written again. Chapter renames (`chapter_overrides`, by
+  file + start) work on community chapters too. `Catalog.OnBookChange` (fired to every
+  listener after `UpsertBook`, `EditBook(s)`, `SetEnrichment`, `SetCover`/`DeleteCover` commit,
+  and a library's new metadata source re-resolving its books) wakes the background pass, so a
+  scan, an applied match or a typed ASIN is checked without waiting for the
+  10-minute tick. Wire (additive): `chapters_source: "community"` on `/chapters` and
+  the book JSON; admin book page `chapter_source`, `chapter_choice`,
+  `community_chapters` (status, detail, `stale`; not the fitted list),
+  `community_checking`; `PATCH .../book {chapter_source}` (bulk too); `POST
+  /admin/libraries/{id}/book/community-chapters?path=` (check now, in the
+  background; 404 `metadata_off`); Health `detailed_chapters` (status `refine`, no
+  choice made); admin rows carry `chapters_source` + `chapters_check`. Note the scan
+  reads no ASIN from tags (only from an Audiobookshelf metadata.json): a book is checked once matched.
+- ffprobe is optional; code paths must degrade gracefully when it is absent
+  (path-derived metadata still works; codec is left unknown → `direct_playable`
+  defaults to true). ffmpeg is likewise optional (transcoding off without it).
+- **Unavailable-root guard**: the scanner aborts with `ErrLibraryUnavailable`
+  (and does NOT prune) if a library root is missing/unreadable, or if it returns
+  zero audio files while books are still indexed. This protects the index - and
+  the progress/bookmarks that cascade from it - when a network share (SMB/NFS)
+  is unmounted. Library roots are always local paths; mount remote shares first.
+
