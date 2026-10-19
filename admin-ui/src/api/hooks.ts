@@ -41,10 +41,10 @@ import type {
   SystemStatus,
 } from './types';
 
-// Query keys live here so invalidation and the hooks can't drift apart.
 /** What names a book and its community match: the key of its /meta answer. */
 export type BookIdentity = Pick<AdminBook, 'library_id' | 'path' | 'asin' | 'isbn'>;
 
+// Query keys live here so invalidation and the hooks can't drift apart.
 export const keys = {
   server: ['server'] as const,
   stats: ['admin', 'stats'] as const,

@@ -1,7 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 
 /** Rows a book page list shows before "Show all". */
 export const FIRST_ROWS = 10;
@@ -27,7 +26,7 @@ export function ShowAllToggle({
   const { t } = useTranslation();
   if (total <= FIRST_ROWS) return null;
   return (
-    <div className={cn(className)}>
+    <div className={className}>
       <Button variant="ghost" size="sm" onClick={onToggle}>
         {all ? t('book.chapters.fewer') : label}
         {all ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}

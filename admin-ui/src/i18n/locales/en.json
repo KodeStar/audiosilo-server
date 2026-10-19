@@ -763,6 +763,7 @@
   "book.story.recapsHint": "Recaps give the story away. Each stays closed until you open it.",
   "book.story.through": "Through chapter {{n}}",
   "book.story.previously": "Previously, in earlier books",
+  "book.story.beforeBook": "Before this book",
   "book.story.summary": "The whole book",
   "book.story.inShort": "In short",
   "book.story.ending": "The ending",

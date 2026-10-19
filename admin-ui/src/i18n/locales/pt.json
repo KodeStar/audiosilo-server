@@ -804,6 +804,7 @@
   "book.story.recapsHint": "Os resumos revelam a história. Cada um fica fechado até o abrir.",
   "book.story.through": "Até ao capítulo {{n}}",
   "book.story.previously": "Anteriormente, nos livros anteriores",
+  "book.story.beforeBook": "Antes deste livro",
   "book.story.summary": "O livro inteiro",
   "book.story.inShort": "Em resumo",
   "book.story.ending": "O final",

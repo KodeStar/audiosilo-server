@@ -8,7 +8,7 @@ import { formatDate } from '@/lib/format';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
-import { recapRows, roleKey, storySources, summaryParts } from './story-model';
+import { recapHeading, recapRows, roleKey, storySources, summaryParts } from './story-model';
 
 // The book page's Characters and recaps card (Bridge Phase 1e): the entries
 // /meta serves, where each dimension came from, recaps closed until opened,
@@ -139,6 +139,8 @@ describe('the Characters and recaps card', () => {
     expect(within(c).queryByText('Kaladin reaches the Shattered Plains.')).toBeNull();
     expect(within(c).queryByText('Kaladin saves the army.')).toBeNull();
 
+    // The tab counts the whole-book summary's row too.
+    expect(within(c).getByRole('tab', { name: /Recaps/ })).toHaveTextContent('Recaps3');
     expect(rows[0]).toHaveAttribute('aria-expanded', 'false');
     await user.click(rows[0]);
     expect(rows[0]).toHaveAttribute('aria-expanded', 'true');
@@ -281,6 +283,22 @@ describe('story model', () => {
     expect(summaryParts(work({ recap_summary: { in_short: ' Short. ', ending: '' } }))).toEqual({
       inShort: 'Short.',
       ending: '',
+    });
+  });
+
+  it('heads a chapter-0 recap by its scope: earlier books for series, before this book otherwise', () => {
+    expect(recapHeading({ through: { chapter: 4 }, text: 'x' })).toEqual({
+      key: 'book.story.through',
+      n: 4,
+    });
+    expect(recapHeading({ through: { chapter: 0 }, scope: 'series', text: 'x' })).toEqual({
+      key: 'book.story.previously',
+    });
+    expect(recapHeading({ through: { chapter: 0 }, scope: 'book', text: 'x' })).toEqual({
+      key: 'book.story.beforeBook',
+    });
+    expect(recapHeading({ through: { chapter: 0 }, text: 'x' })).toEqual({
+      key: 'book.story.beforeBook',
     });
   });
 });

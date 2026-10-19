@@ -1931,6 +1931,8 @@ export interface MetaWork {
   }[];
   recaps?: { through: MetaPosition; scope?: string; text: string }[];
   recap_summary?: { in_short?: string; ending?: string };
+  /** meta.MetaCommunityDescription: the community's own (CC BY-SA) description; text never empty. */
+  community_description?: { text: string; license?: string };
   /** Present iff the work carries community (CC BY-SA) content. */
   attribution?: MetaAttribution;
   /** The parts generated on this server (Bridge Phase 1a); absent when none are. */

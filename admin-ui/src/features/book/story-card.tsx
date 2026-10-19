@@ -15,6 +15,7 @@ import { bookJobsQuery } from '@/features/bridge/use-generate';
 import { formatDate, formatList } from '@/lib/format';
 import { FIRST_ROWS, ShowAllToggle } from './show-all-toggle';
 import {
+  recapHeading,
   recapRows,
   roleKey,
   STORY_CARD_ID,
@@ -47,6 +48,7 @@ export function StoryCard({ detail }: { detail: AdminBookDetail }) {
   const sources = storySources(work, contributedLinks(jobs));
   const characters = work?.characters ?? [];
   const recaps = recapRows(work);
+  const summary = summaryParts(work);
 
   return (
     <Card id={STORY_CARD_ID} tabIndex={-1} className="outline-none" aria-labelledby="story-title">
@@ -70,7 +72,8 @@ export function StoryCard({ detail }: { detail: AdminBookDetail }) {
             <TabsTab value="characters" count={characters.length}>
               {t('book.story.characters')}
             </TabsTab>
-            <TabsTab value="recaps" count={recaps.length}>
+            {/* The whole-book summary is a row of the list too. */}
+            <TabsTab value="recaps" count={recaps.length + (summary ? 1 : 0)}>
               {t('book.story.recaps')}
             </TabsTab>
           </TabsList>
@@ -85,7 +88,7 @@ export function StoryCard({ detail }: { detail: AdminBookDetail }) {
           <TabsPanel value="recaps">
             <SourceLine dimension={sources.recaps} attribution={work?.attribution} />
             {sources.recaps.source !== 'none' ? (
-              <RecapList recaps={recaps} summary={summaryParts(work)} />
+              <RecapList recaps={recaps} summary={summary} />
             ) : (
               <Empty text={t('book.story.noRecaps')} />
             )}
@@ -226,19 +229,16 @@ function RecapList({
     <>
       <p className="px-5 pb-3 text-[12.5px] text-muted-foreground">{t('book.story.recapsHint')}</p>
       <ul className="divide-y border-t">
-        {shown.map((r, i) => (
-          <li key={`${r.through.chapter}:${i}`}>
-            <Reveal
-              label={
-                r.through.chapter > 0
-                  ? t('book.story.through', { n: r.through.chapter })
-                  : t('book.story.previously')
-              }
-            >
-              <p className="text-[13px] whitespace-pre-line">{r.text}</p>
-            </Reveal>
-          </li>
-        ))}
+        {shown.map((r, i) => {
+          const heading = recapHeading(r);
+          return (
+            <li key={`${r.through.chapter}:${i}`}>
+              <Reveal label={t(heading.key, { n: heading.n })}>
+                <p className="text-[13px] whitespace-pre-line">{r.text}</p>
+              </Reveal>
+            </li>
+          );
+        })}
         {summary ? (
           <li>
             <Reveal label={t('book.story.summary')}>

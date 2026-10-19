@@ -86,6 +86,17 @@ export function recapRows(work: MetaWork | undefined): StoryRecap[] {
   return [...(work?.recaps ?? [])].sort((a, b) => a.through.chapter - b.through.chapter);
 }
 
+/**
+ * A recap row's heading key (with its chapter): through chapter N, else, at
+ * chapter 0, the catch-up on earlier books when its scope is `series` and a
+ * note before this book otherwise (audiosilo-meta's recaps schema; the player
+ * heads them the same way).
+ */
+export function recapHeading(r: StoryRecap): { key: string; n?: number } {
+  if (r.through.chapter > 0) return { key: 'book.story.through', n: r.through.chapter };
+  return { key: r.scope === 'series' ? 'book.story.previously' : 'book.story.beforeBook' };
+}
+
 /** The character roles audiosilo-meta's schema allows, each with a label of its own. */
 const CHARACTER_ROLES = new Set(['protagonist', 'antagonist', 'supporting', 'minor']);
 
