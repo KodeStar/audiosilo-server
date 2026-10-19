@@ -41,7 +41,13 @@ export function SettingBadges({ settings, id }: { settings: AdminSettings; id: S
   return (
     <>
       {lock ? (
-        <Badge variant="outline" title={t('settings.locked.hint')}>
+        // A variable's name can be longer than a phone's row: the pill grows to
+        // more lines and breaks inside the name rather than running under the control.
+        <Badge
+          variant="outline"
+          title={t('settings.locked.hint')}
+          className="h-auto min-h-[22px] max-w-full shrink py-0.5 whitespace-normal [overflow-wrap:anywhere]"
+        >
           <Lock aria-hidden="true" />
           {lock === 'launcher'
             ? t('settings.locked.launcher')
