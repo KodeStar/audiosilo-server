@@ -149,6 +149,15 @@ export function safeHttpUrl(url: string | undefined): string | undefined {
   }
 }
 
+/** A tab of the Bridge's page (`<ui_url>#/<tab>`), only for an http(s) ui_url. */
+export function bridgeTabLink(uiUrl: string | undefined, tab: string): string | undefined {
+  const base = safeHttpUrl(uiUrl);
+  if (!base) return undefined;
+  const u = new URL(base);
+  u.hash = `/${tab}`;
+  return u.href;
+}
+
 /** A finite number from an opaque progress or result, else undefined. */
 export const num = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? v : undefined;

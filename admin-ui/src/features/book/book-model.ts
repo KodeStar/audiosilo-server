@@ -51,7 +51,8 @@ const ASIN = /^[A-Z0-9]{10}$/;
 /** An ISBN-10 or ISBN-13, upper case, without hyphens or spaces. */
 export const ISBN = /^(\d{9}[\dX]|\d{13})$/;
 
-const runes = (s: string) => [...s].length;
+/** A string's length in characters (code points), as the server counts it (utf8.RuneCountInString). */
+export const runes = (s: string) => [...s].length;
 
 /** Whether a YYYY[-MM[-DD]] string names a real date. */
 function realDate(v: string): boolean {

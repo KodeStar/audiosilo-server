@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { CircleCheck, ExternalLink, TriangleAlert } from 'lucide-react';
+import { CircleCheck, TriangleAlert } from 'lucide-react';
 import type { BridgeJob } from '@/api/types';
 import { ProgressBar } from '@/components/progress-bar';
 import { formatDuration, formatList, formatNumber, formatRelative, formatUsd } from '@/lib/format';
@@ -8,6 +8,8 @@ import {
   bridgeJobLink,
   generateProgress,
   generateResult,
+  KIND_CONTRIBUTE,
+  KIND_CORRECT,
   KIND_DESCRIBE,
   KIND_DETECT,
   KIND_GENERATE,
@@ -16,15 +18,18 @@ import {
   stageLabel,
   type GenerateResult,
 } from './generate-model';
+import { ExternalTextLink } from './generate-parts';
 import { isOpen } from './bridge-model';
 
 /**
- * Where a `sidecars.generate` (or `sidecars.describe`, or `chapters.detect`) job stands, in a few
- * lines: while it works, the stage, the count, the ETA and the cost so far (with
- * a bar when there is a count); parked, why and the hint, with a link into the
- * Bridge's own page; done, what it made (a generate job's description outcome
- * too); failed, the error. The book page's Community card and the Bridge page's
- * job rows both show a job this way.
+ * Where a `sidecars.generate` (or `sidecars.describe`, `chapters.detect`,
+ * `sidecars.contribute` or `meta.correct`) job stands, in a few lines: while it
+ * works, the stage, the count, the ETA and the cost so far (with a bar when
+ * there is a count); parked, why and the hint, with a link into the Bridge's
+ * own page; done, what it made (a generate job's description outcome too, the
+ * community issues a share filed, a correction's issue and which fields apply
+ * by themselves); failed, the error. The book page's Community card and the
+ * Bridge page's job rows both show a job this way.
  */
 export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string }) {
   const { t, i18n } = useTranslation();
@@ -56,19 +61,30 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
               : t('bridge.generate.noDescriptionPlain')}
           </p>
         ) : null}
+        {job.kind === KIND_CONTRIBUTE && r?.covered?.length ? (
+          <p className="text-[12.5px] text-muted-foreground">
+            {t('bridge.share.covered', {
+              what: formatList(
+                r.covered.map((w) => t(`bridge.generate.offered.${w}`, { defaultValue: w })),
+                lang,
+              ),
+            })}
+          </p>
+        ) : null}
+        {job.kind === KIND_CORRECT && r ? <CorrectionFields t={t} lang={lang} result={r} /> : null}
+        {r?.issue ? (
+          <ExternalTextLink href={r.issue.url} className="self-start">
+            {r.issue.number
+              ? t('bridge.correct.issueNumber', { n: r.issue.number })
+              : t('bridge.correct.issue')}
+          </ExternalTextLink>
+        ) : null}
         {r?.contributed.map((c) => (
-          <a
-            key={c.what}
-            href={c.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-brand-ink hover:underline"
-          >
+          <ExternalTextLink key={c.what} href={c.url}>
             {t('bridge.generate.contributed', {
               what: t(`bridge.generate.offered.${c.what}`, { defaultValue: c.what }),
             })}
-            <ExternalLink className="size-3.5" aria-hidden="true" />
-          </a>
+          </ExternalTextLink>
         ))}
       </div>
     );
@@ -113,15 +129,9 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
           </p>
         ) : null}
         {link ? (
-          <a
-            href={link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 self-start text-[12.5px] font-semibold text-brand-ink hover:underline"
-          >
+          <ExternalTextLink href={link} className="self-start">
             {t('bridge.generate.openInBridge')}
-            <ExternalLink className="size-3.5" aria-hidden="true" />
-          </a>
+          </ExternalTextLink>
         ) : null}
       </div>
     );
@@ -166,9 +176,48 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
   );
 }
 
+/** A filed correction's fields, by who applies them (the server's field names, worded). */
+function CorrectionFields({
+  t,
+  lang,
+  result: r,
+}: {
+  t: TFunction;
+  lang: string;
+  result: GenerateResult;
+}) {
+  const names = (fields: string[]) =>
+    formatList(
+      fields.map((f) => t(`book.field.${f}`, { defaultValue: f })),
+      lang,
+    );
+  return (
+    <>
+      {r.auto?.length ? (
+        <p className="text-[12.5px] text-muted-foreground">
+          {t('bridge.correct.autoFields', { fields: names(r.auto) })}
+        </p>
+      ) : null}
+      {r.maintainer?.length ? (
+        <p className="text-[12.5px] text-muted-foreground">
+          {t('bridge.correct.maintainerFields', { fields: names(r.maintainer) })}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 /** What a done job made, a line each, by its kind. */
 function madeLines(t: TFunction, lang: string, kind: string, r: GenerateResult | null): string[] {
   switch (kind) {
+    case KIND_CONTRIBUTE:
+      return [r?.contributed.length ? t('bridge.share.done') : t('bridge.share.nothing')];
+    case KIND_CORRECT:
+      return [
+        r?.changes !== undefined
+          ? t('bridge.correct.done', { count: r.changes, n: formatNumber(r.changes, lang) })
+          : t('bridge.correct.donePlain'),
+      ];
     case KIND_DESCRIBE:
       return [t('bridge.describe.done')];
     case KIND_DETECT:

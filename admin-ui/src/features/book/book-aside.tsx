@@ -10,13 +10,16 @@ import { formatNumber, formatPercent, formatRelative, progressFraction } from '@
 import { cn } from '@/lib/utils';
 import { DescribeSection } from '@/features/bridge/describe-section';
 import { GenerateSection } from '@/features/bridge/generate-section';
+import { ShareSection } from '@/features/bridge/share-section';
 import { ProgressMenu } from '@/features/people/progress-actions';
+import { CorrectionsSection } from './corrections-dialog';
 import { StoryCard } from './story-card';
 
 /**
- * The right-hand column: who's listening, community metadata (and generating
- * characters, recaps and a description with the Bridge), the characters and
- * recaps themselves, and who can see the book.
+ * The right-hand column: who's listening, community metadata (and, with the
+ * Bridge, suggesting corrections, generating characters, recaps and a
+ * description, and sharing them with the community), the characters and recaps
+ * themselves, and who can see the book.
  */
 export function BookAside({
   detail,
@@ -196,7 +199,9 @@ function CommunityCard({
           </div>
         </>
       )}
+      {matched ? <CorrectionsSection detail={detail} blocked={matchBlocked} /> : null}
       <GenerateSection book={detail.book} />
+      <ShareSection book={detail.book} />
       <DescribeSection
         book={detail.book}
         description={detail.generated_description}
