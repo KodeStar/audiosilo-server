@@ -70,7 +70,8 @@ type SidecarsEstimates struct {
 	AgentReady   bool   `json:"agent_ready"`
 	Subscription bool   `json:"subscription"`
 	// CanContribute: the Bridge can offer a run's results to the community (it
-	// holds what contributing needs), so a job may ask for contribute "issue".
+	// holds what contributing needs). Phase 2a's answer: a setup block's
+	// can_contribute wins when one was sent (Status.CanContribute).
 	CanContribute bool `json:"can_contribute"`
 	// MonthlyBudgetUSD is the monthly agent cap (0 = none); MonthSpentUSD what
 	// this month has spent.

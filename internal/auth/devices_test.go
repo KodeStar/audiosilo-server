@@ -339,3 +339,47 @@ func TestResolveRequestSkipsUnchangedTouch(t *testing.T) {
 		t.Fatalf("revoked token within the minute = %v, want ErrInvalidToken", err)
 	}
 }
+
+// TestPeekWritesNothing: Peek answers a valid token's user (is_demo included)
+// and never writes its row, however stale its last_seen; it refuses what
+// ResolveRequest refuses (a kind not asked for, a revoked token).
+func TestPeekWritesNothing(t *testing.T) {
+	t.Parallel()
+	s, ctx, now := newTestServiceWithClock(t)
+	u, _ := s.CreateUser(ctx, "sam", "", RoleUser)
+	tok, _ := s.IssueToken(ctx, u.ID, KindSession, "phone", 0)
+	seen := func() string {
+		t.Helper()
+		var v string
+		if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(last_seen, '') FROM tokens WHERE user_id = ?`, u.ID).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	before := seen()
+	*now = now.Add(time.Hour)
+	if got, err := s.Peek(ctx, tok, KindSession, KindAPI); err != nil || got.ID != u.ID || got.IsDemo {
+		t.Fatalf("Peek = %+v, %v", got, err)
+	}
+	if after := seen(); after != before {
+		t.Fatalf("Peek wrote last_seen %q (was %q)", after, before)
+	}
+	demo, err := s.CreateDemoUser(ctx, DemoUsernamePrefix+"guest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	demoTok, _ := s.IssueToken(ctx, demo.ID, KindSession, "web", 0)
+	if got, err := s.Peek(ctx, demoTok, KindSession); err != nil || !got.IsDemo {
+		t.Fatalf("Peek (demo) = %+v, %v", got, err)
+	}
+	// Denied: a kind not asked for, and a revoked token.
+	if _, err := s.Peek(ctx, tok, KindAPI); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Peek (wrong kind) = %v, want ErrInvalidToken", err)
+	}
+	if err := s.RevokeToken(ctx, tok); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Peek(ctx, tok, KindSession); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Peek (revoked) = %v, want ErrInvalidToken", err)
+	}
+}

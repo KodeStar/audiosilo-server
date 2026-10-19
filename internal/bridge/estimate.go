@@ -18,14 +18,15 @@ type SidecarsCost struct {
 	AgentCostUSD *float64 `json:"agent_cost_usd"`
 	// Subscription, AgentReady and CanContribute are the Bridge's: the agent's
 	// credential is a subscription login (the cost is notional), the agent is
-	// ready to run, and the Bridge can offer the results to the community (a
-	// job may ask for contribute "issue").
+	// ready to run, and the Bridge can offer the results to the community
+	// (Status.CanContribute; the estimate's answer also needs the
+	// contributions module on, which the api adds).
 	Subscription  bool `json:"subscription"`
 	AgentReady    bool `json:"agent_ready"`
 	CanContribute bool `json:"can_contribute"`
 	// Figures: the Bridge has sent its figures (its heartbeat's estimates).
-	// Without them every field above is only a default, so a false agent_ready
-	// means "not known yet", not "not ready".
+	// Without them every field above but CanContribute is only a default, so a
+	// false agent_ready means "not known yet", not "not ready".
 	Figures bool `json:"figures"`
 }
 

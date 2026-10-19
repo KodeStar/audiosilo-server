@@ -295,3 +295,42 @@ func TestCommunityRevertKeepsAnEdit(t *testing.T) {
 		t.Fatalf("after an admin revert = %q, want the edit gone", got)
 	}
 }
+
+// Security: EditedValue answers only an admin's own edit (never a tag's, the
+// path's, an ABS file's or the community's value, nor a field with none) that
+// says the same as the value asked about, and returns the book's own spelling
+// of it: a series position or an other series list compared as read, anything
+// else exactly.
+func TestMatchStateEditedValue(t *testing.T) {
+	t.Parallel()
+	more := EncodeMoreSeries([]SeriesRef{{Name: "Cosmere", Position: 2}})
+	st := &MatchState{Fields: map[string]FieldValue{
+		FieldTitle:       {Value: "Mistborn", Source: SourceEdited},
+		FieldAuthor:      {Value: "Brandon Sanderson", Source: SourceCommunity},
+		FieldNarrator:    {Value: "Michael Kramer", Source: SourceTag},
+		FieldSeries:      {Value: "Mistborn", Source: SourcePath},
+		FieldPublished:   {Value: "2006", Source: SourceABS},
+		FieldSeriesIndex: {Value: "1", Source: SourceEdited},
+		FieldMoreSeries:  {Value: more, Source: SourceEdited},
+	}}
+	for _, c := range []struct {
+		field, value, want string
+		ok                 bool
+	}{
+		{FieldTitle, "Mistborn", "Mistborn", true},
+		{FieldTitle, "mistborn", "", false},
+		{FieldSeriesIndex, "1.0", "1", true},
+		{FieldSeriesIndex, "2", "", false},
+		{FieldMoreSeries, `[{"name":"Cosmere","position":2.0}]`, more, true},
+		{FieldMoreSeries, `[{"name":"Cosmere","position":3}]`, "", false},
+		{FieldAuthor, "Brandon Sanderson", "", false},
+		{FieldNarrator, "Michael Kramer", "", false},
+		{FieldSeries, "Mistborn", "", false},
+		{FieldPublished, "2006", "", false},
+		{FieldISBN, "", "", false},
+	} {
+		if got, ok := st.EditedValue(c.field, c.value); got != c.want || ok != c.ok {
+			t.Errorf("EditedValue(%s, %q) = %q, %t; want %q, %t", c.field, c.value, got, ok, c.want, c.ok)
+		}
+	}
+}

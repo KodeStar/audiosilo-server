@@ -1431,14 +1431,16 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   to 256 bytes, library ids positive and once each, a login not GitHub's shape dropped); `GET /admin/bridge`
   carries it (omitted when absent), `GET /server` never does. `Status.CanContribute()` is the setup
   block's `can_contribute` when one was sent, else `estimates.sidecars.can_contribute` (the Bridge sends
-  both); the `contribute` feature, the estimate's `can_contribute` (`Status.EstimateSidecars`) and the
-  `cannot_contribute` refusal all read it. **Capability**: `capabilities.bridge` is true only while the last
+  both); the `contribute` feature, the estimate's `can_contribute` (`Status.EstimateSidecars`; the
+  handler also needs the contributions module on) and the `cannot_contribute` refusal all read it. **Capability**: `capabilities.bridge` is true only while the last
   heartbeat is under `bridge.OnlineWindow` (2 min) old (`bridge.Service` caches the parsed heartbeat for
   `heartbeatTTL`, 5 s, so `GET /server` mostly reads no database; `Forget` drops it on a pairing or an
   unpair, and a read that began before a save or a `Forget` never replaces its answer: `hbGen`), with a
   top-level `bridge: {version, features}`
-  beside it for a signed-in caller only (a session or an API key of any role, `api.signedIn`, asked only
-  while the Bridge is online; an anonymous, refused or bridge token sees the flag alone) (features = the families of the kinds the server knows, plus `contribute` while the last
+  beside it for a signed-in caller only (a session or an API key of any role but a demo account's,
+  `api.signedIn` over `auth.Peek`, which records nothing on the token, so the public route never waits on
+  the writer; asked only while the Bridge is online; an anonymous, refused, demo or bridge token sees the
+  flag alone) (features = the families of the kinds the server knows, plus `contribute` while the last
   heartbeat says it can contribute (`Status.CanContribute`; `bridge.FeatureContribute`), `[]` for none;
   `capabilities` stays all booleans).
   **Jobs** (`bridge_jobs`): kinds allow-listed twice, inside `bridge.Service.Enqueue` (the server queues
@@ -1447,8 +1449,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   kind is `bridge.verify` (`library_id` required, optional book `path`, params `{hold_seconds 0-600}`),
   Phase 1a's `sidecars.generate` (a book `path` required, params `{source, contribute, work_id}`; it writes,
   so it is refused 409 `library_not_writable` for a library the last heartbeat doesn't report mapped and
-  writable, and `contribute: "issue"` is refused 409 `cannot_contribute` unless the heartbeat's
-  `estimates.sidecars.can_contribute` says the Bridge can; the open job is still returned), and Phase 1c's
+  writable, and `contribute: "issue"` needs the contributions module (see Community jobs) and is refused
+  409 `cannot_contribute` unless `Status.CanContribute()` says the Bridge can; the open job is still
+  returned), and Phase 1c's
   `sidecars.describe` (a description from the notes the Bridge kept from generating the book, no new
   ASR: a book `path` required, params `{}` or none, any field 400 (`noParams`), stored as `{}`;
   it writes, so the same `library_not_writable`; refused 409 `generate_open` (`ErrGenerateOpen`, checked
@@ -1508,9 +1511,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   library with the Bridge's mapping, workers, `ui_url`), `GET`/`POST /admin/bridge/jobs`, `GET
   /admin/bridge/jobs/{id}`, `GET /admin/bridge/estimate?library_id=&path=&kind=[&brief=1]` (the
   confirmation before `sidecars.generate`, `handlers_bridge_estimate.go`: the source (`library.BookEbook`,
-  the Bridge's own .epub rule, an unreadable epub (no zip, no container.xml) counting as none), `bridge.EstimateSidecars` from the heartbeat's figures (`asr_hours`,
+  the Bridge's own .epub rule, an unreadable epub (no zip, no container.xml) counting as none), `Status.EstimateSidecars` from the heartbeat's figures (`asr_hours`,
   `agent_cost_usd` null while there is no history, `subscription`, `agent_ready`, `figures` false when
-  the Bridge sent none, so a false `agent_ready` means "not known"), `writable`, what the book already
+  the Bridge sent none, so a false `agent_ready` means "not known"; `can_contribute` the Bridge's answer,
+  false while the contributions module is off), `writable`, what the book already
   has (`has.community` via `meta.Service.Coverages`, cache first and never a full Enrich per book,
   `community_unknown` when it couldn't be asked; `has.local` from `book_attachments` (`catalog.BookAttachmentParts`: which columns are non-empty, nothing decoded); each with
   `characters`, `recaps` (the recap LIST: `coverageOf` reads `fillable`, where a community
@@ -1519,7 +1523,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier
   books of its series in the library with no recaps (`catalog.EarlierInSeries`, each costed), and any
   open job (`open_job`: the book's open generate job, else the job of another kind that refuses a generate
-  job now, `Service.Blocker`, i.e. a queued or working `chapters.detect` job; its `kind` says which, additive);
+  job now, `Service.Blocker`, i.e. a queued or working `chapters.detect` or `sidecars.contribute` job; its
+  `kind` says which, additive: the player's Generate holds back only for `chapters.detect`);
   `brief=1` skips the folder look and the series scan, for a card or a batch; any other kind is a
   400); 409 `kind_unavailable`. With a `path`, `GET /bridge/libraries/{id}/book` also answers a `book` block
   (title, authors and narrators split by `names.Split`, series, `series_index`, asin, isbn, duration,
@@ -1579,7 +1584,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `library_not_writable`). `kindSpec.module` names the managed module a kind needs and `bridge.ModuleFor`
   answers it (also `contributions` for a `sidecars.generate` job with `contribute: "issue"`): the queue
   handler answers **404 `module_off`** for such a job while the module is off, before anything else about
-  it, and `Enqueue` refuses one 409 `cannot_contribute` unless `Status.CanContribute()`.
+  it, and `Enqueue` refuses one 409 `cannot_contribute` unless `Status.CanContribute()`. While the module
+  is off a queued one is **held** (`bridge.Service.ModuleOn`, wired by `SetBridge`): claims pass over it
+  (`nextQueued`) until the module is on again, so turning it off leaves its queued jobs at rest (one a
+  lapsed lease requeued included); a job the Bridge holds (claimed, running or parked) carries on.
   `sidecars.contribute` (family `sidecars`; "Share with the community" after a local run: the Bridge files
   what its engine book holds): a book `path`, params strict `{work_id?, dimensions?}` (`dimensions` from
   `characters`, `recaps`, each once, stored in that order; absent or empty = both); refused 409
@@ -1592,14 +1600,22 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   evidence, source?}` (1-25 changes of `bridge.CorrectionFields` = title, author, narrator, series,
   series_index, more_series, published, isbn, each once; values trimmed, one line, at most 500
   characters, `corrected` set and different from `current`; `evidence` required, at most 2000 characters,
-  line breaks kept, CRLF stored as LF). The handler's `checkCorrections` (security-relevant: the server
+  line breaks kept, CRLF stored as LF, and at most 2000 as the issue carries it (`issueLength`: a line
+  starting with # loses its indent and gains a backslash); `recording_id`, when given, a community slug
+  (`model.ValidSlug`, trimmed); no value holds a control character (`unicode.IsControl`, C1 included):
+  what the Bridge would refuse when filing is a 400 now). The handler's `checkCorrections` (security-relevant: the server
   files only an admin's own edits) then requires each change's field to be `catalog.SourceEdited` on the
   book (`BookMatchState`; never a scanned, path, ABS or accepted-community value) with `corrected` the
   book's value now (`MatchState.EditedValue`), else **400 `not_edited`** naming the `field`, stores the
   book's own spelling of each value and stamps `source` = `audiosilo-server/<version>` whatever was sent.
+  Only the values are bound to the book: the community records the job names (`work_id`, `recording_id`,
+  `asin`, `isbn`, `region`) are the caller's (the console sends the book's community match).
   Result: `{issue_url, issue_number, changes, auto: [fields], maintainer: [fields]}`. Notifications word
   them "Shared with the community" / "Corrections sent" (failed: "Sharing with the community failed",
-  "Corrections failed"), and the Bridge's `contrib_unavailable` park points at its Accounts tab.
+  "Corrections failed"; a contribute job that filed nothing, its result's `contributed` empty and `covered`
+  not, `bridge.Job.SharedNothing`: "Already in the community"), and the Bridge's `contrib_unavailable` and
+  `agent_credential_refused` parks say to fix the credential on the Bridge, wherever it holds it (its
+  Accounts tab, the agent container).
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,
@@ -1640,8 +1656,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   brings goes in `settings-model.ts` `MODULE_PAGES` and `visiblePages` lists it only while the toggle is
   on (a `?topic=` for it opens General). One module ships, `contributions` (needs `contribute`), with no
   routes or `Start` of its own: its actions are the Bridge's community jobs (`bridge.ModuleFor`, see The
-  Bridge). `TestBuiltinModuleRoutePatterns` mounts every builtin module route through the real Registrar,
-  so a bad or clashing pattern fails a test, not a start.
+  Bridge). Every api test's `newTestEnv` mounts the builtin modules through the real `Handler()`, so a bad
+  or clashing route pattern fails the tests, not a start.
   `transcode`, `metadata` and `bridge` stay out of the registry (shipped keys and flags, not a plain
   runtime on/off).
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`

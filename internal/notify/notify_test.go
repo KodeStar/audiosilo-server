@@ -424,13 +424,15 @@ func TestBridgeJobEnded(t *testing.T) {
 }
 
 // Each announced park reads as a sentence of its own: a refused credential
-// and a missing GitHub sign-in say where to fix them (the Bridge's Accounts tab); a spent budget fits the book's and the month's
-// alike (the monthly one resumes by itself); an unknown code points at the page.
+// and a missing GitHub sign-in say where to fix them (wherever the Bridge holds
+// the credential: its Accounts tab, the agent container, its environment); a
+// spent budget fits the book's and the month's alike (the monthly one resumes
+// by itself); an unknown code points at the page.
 func TestBridgeParkReasons(t *testing.T) {
 	t.Parallel()
 	for code, want := range map[string]string{
-		"agent_credential_refused": "The agent's credential was refused. Replace it on the Bridge's Accounts tab, then retry the job on the Bridge.",
-		"contrib_unavailable":      "The Bridge can't send to the community: it isn't signed in to GitHub. Sign in on its Accounts tab, then retry the job on the Bridge.",
+		"agent_credential_refused": "The agent's credential was refused. Replace it where the Bridge gets it (its Accounts tab or the agent container), then retry the job on the Bridge.",
+		"contrib_unavailable":      "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge, then retry the job there.",
 		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset.",
 		"something_new":            "See the job in Settings > Bridge.",
 	} {
@@ -563,7 +565,8 @@ func TestBridgeDescribeJobWording(t *testing.T) {
 }
 
 // The community jobs (sidecars.contribute, meta.correct) are worded as what
-// went to the community, finished or failed.
+// went to the community, finished or failed, and a contribute job that filed
+// nothing never as shared.
 func TestBridgeCommunityJobWording(t *testing.T) {
 	t.Parallel()
 	s, _, _ := newService(t)
@@ -580,6 +583,13 @@ func TestBridgeCommunityJobWording(t *testing.T) {
 		if m := compose(event(KindBridgeJobFailed, "failed"), s.server()); m.Title != want.failed {
 			t.Errorf("%s failed = %+v", kind, m)
 		}
+	}
+	// A contribute job that filed nothing (the community had it all) says so.
+	ev := catalog.ServerEvent{Kind: KindBridgeJobFinished, Data: map[string]any{"job_kind": "sidecars.contribute",
+		"state": "done", "title": "Mistborn", "shared_nothing": true}}
+	if m := compose(ev, s.server()); m.Title != "Already in the community: Mistborn" ||
+		!strings.Contains(m.Text, "nothing was sent") || strings.Contains(m.Text, "for review") {
+		t.Errorf("shared nothing = %+v", m)
 	}
 }
 

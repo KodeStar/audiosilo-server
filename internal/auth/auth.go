@@ -391,20 +391,22 @@ func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence,
 	return s.resolve(ctx, secret, p, nil, kinds)
 }
 
-// resolve is ResolveRequest and ResolveCastRequest: a cast token is valid only
-// when media names the book media the request reads and its grant covers it. A
-// bridge token (only ever listed by the Bridge's own routes) is valid only while
-// its admin is still an admin (lookupToken already refuses a disabled one).
+// Peek is ResolveRequest's answer without its write: secret's user when it is a
+// valid token of one of kinds, recording nothing about the request (no
+// last_seen, address or app), for a public route that only says more to a
+// signed-in caller (GET /server), so it never waits on the writer. Like
+// ResolveRequest, it never accepts a cast token.
+func (s *Service) Peek(ctx context.Context, secret string, kinds ...string) (*User, error) {
+	u, _, err := s.checkToken(ctx, secret, nil, kinds)
+	return u, err
+}
+
+// resolve is ResolveRequest and ResolveCastRequest: the token's checks
+// (checkToken), then the touch.
 func (s *Service) resolve(ctx context.Context, secret string, p Presence, media *bookMedia, kinds []string) (*User, Credential, error) {
-	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
+	u, row, err := s.checkToken(ctx, secret, media, kinds)
 	if err != nil {
 		return nil, Credential{}, err
-	}
-	if row.kind == KindCast && (media == nil || !row.grant.covers(*media)) {
-		return nil, Credential{}, ErrInvalidToken
-	}
-	if row.kind == KindBridge && u.Role != RoleAdmin {
-		return nil, Credential{}, ErrInvalidToken
 	}
 	cred := Credential{ID: row.id, Kind: row.kind, DeviceID: row.deviceID, DeviceName: row.deviceName, Client: row.client,
 		Book: row.grant.path}
@@ -429,6 +431,25 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 		  WHERE id = ?6`,
 		s.ts(), p.IP, p.Client.App, p.Client.Version, p.Client.Platform, row.id)
 	return u, cred, nil
+}
+
+// checkToken is whether secret is a valid token of one of kinds, writing
+// nothing: lookupToken's checks, then a cast token only when media names the
+// book media the request reads and its grant covers it, and a bridge token
+// (only ever listed by the Bridge's own routes) only while its admin is still
+// an admin (lookupToken already refuses a disabled one).
+func (s *Service) checkToken(ctx context.Context, secret string, media *bookMedia, kinds []string) (*User, tokenRow, error) {
+	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
+	if err != nil {
+		return nil, tokenRow{}, err
+	}
+	if row.kind == KindCast && (media == nil || !row.grant.covers(*media)) {
+		return nil, tokenRow{}, ErrInvalidToken
+	}
+	if row.kind == KindBridge && u.Role != RoleAdmin {
+		return nil, tokenRow{}, ErrInvalidToken
+	}
+	return u, row, nil
 }
 
 // needsTouch reports whether a request must write its token's row: last_seen is

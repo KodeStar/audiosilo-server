@@ -25,8 +25,10 @@ const (
 )
 
 // bridgeEstimate is GET /admin/bridge/estimate's answer. The cost figures are
-// bridge.EstimateSidecars' (source, asr_hours, agent_cost_usd: null while the
-// Bridge has no history to cost it from, subscription, agent_ready).
+// bridge.Status.EstimateSidecars' (source, asr_hours, agent_cost_usd: null
+// while the Bridge has no history to cost it from, subscription, agent_ready),
+// and can_contribute is the Bridge's answer while the contributions module is
+// on (false while it is off, as a contributing job would be refused then).
 type bridgeEstimate struct {
 	Kind      string `json:"kind"`
 	LibraryID int64  `json:"library_id"`
@@ -44,8 +46,9 @@ type bridgeEstimate struct {
 	Has         estimateHas   `json:"has"`
 	Earlier     []earlierBook `json:"earlier"`
 	// OpenJob is the book's open generate job, else the open job of another
-	// kind that refuses a new one now (a queued or working chapters.detect job,
-	// bridge.Service.Blocker); its kind says which. Omitted for neither.
+	// kind that refuses a new one now (a queued or working chapters.detect or
+	// sidecars.contribute job, bridge.Service.Blocker); its kind says which.
+	// Omitted for neither.
 	OpenJob *bridge.Job `json:"open_job,omitempty"`
 }
 
@@ -66,9 +69,9 @@ type hasContent struct {
 }
 
 // earlierBook is an earlier book of the series with no recaps yet, with what
-// generating it is expected to cost (bridge.EstimateSidecars from its audio's
-// length: asr_hours, agent_cost_usd null when unknown), so the dialog can quote
-// the whole run it queues.
+// generating it is expected to cost (bridge.Status.EstimateSidecars from its
+// audio's length: asr_hours, agent_cost_usd null when unknown), so the dialog
+// can quote the whole run it queues.
 type earlierBook struct {
 	LibraryID    int64    `json:"library_id"`
 	Path         string   `json:"path"`
@@ -127,6 +130,7 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 		out.Ebook = library.BookEbook(lib.Root, book.RelPath, book.IsFolder)
 	}
 	out.SidecarsCost = h.EstimateSidecars(book.Duration, out.Ebook != "")
+	out.CanContribute = out.CanContribute && a.moduleOn(bridge.ModuleContributions)
 
 	out.Has.Community, out.Has.CommunityUnknown = a.communityContent(ctx, book)
 	if out.Has.Local, err = a.localContent(ctx, book); err != nil {

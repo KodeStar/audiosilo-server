@@ -28,6 +28,13 @@ type Service struct {
 	// the move has committed, on the caller's goroutine.
 	OnTransition func(ctx context.Context, job Job, from string)
 
+	// ModuleOn, when set (at wiring, before the first request), says whether a
+	// managed module is on. A queued job that needs one that is off (ModuleFor)
+	// is held: no claim hands it out until the module is on again, so turning
+	// one off leaves its queued jobs at rest (a job the Bridge holds, claimed,
+	// running or parked, carries on).
+	ModuleOn func(id string) bool
+
 	// hb caches the last heartbeat as read (status.go), so GET /server, which
 	// every client calls often, reads the database at most every heartbeatTTL.
 	// hbGen counts the cache's writes (a heartbeat saved, Forget): a read that

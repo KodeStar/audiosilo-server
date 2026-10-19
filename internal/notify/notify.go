@@ -408,6 +408,12 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		if str("job_kind") == bridge.KindDetectChapters && str("chapters_source") != catalog.ChaptersFromGenerated {
 			m.Text = "The chapters were saved, but the book uses other chapters. Choose its chapter source on the book page."
 		}
+		// A contribute job whose every dimension the community already had
+		// filed nothing, so nothing went for review.
+		if none, _ := ev.Data["shared_nothing"].(bool); none && str("job_kind") == bridge.KindContribute {
+			m.Title = "Already in the community: " + bridgeJobBook(ev)
+			m.Text = "The community already had what this server generated for the book, so nothing was sent."
+		}
 		m.Link, m.Tags = link("/server?topic=bridge"), []string{"white_check_mark"}
 	case KindBridgeJobFailed:
 		if str("state") == bridge.StateNeedsAttention {
@@ -472,9 +478,9 @@ func bridgeParkReason(code string) string {
 	case "budget_exceeded":
 		return "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset."
 	case "agent_credential_refused":
-		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab, then retry the job on the Bridge."
+		return "The agent's credential was refused. Replace it where the Bridge gets it (its Accounts tab or the agent container), then retry the job on the Bridge."
 	case "contrib_unavailable":
-		return "The Bridge can't send to the community: it isn't signed in to GitHub. Sign in on its Accounts tab, then retry the job on the Bridge."
+		return "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge, then retry the job there."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	case "chapters_not_detected":
@@ -676,6 +682,10 @@ type BridgeJob struct {
 	// (catalog.ChaptersFrom*; "" when not known), so a finished chapters.detect
 	// job says whether listeners get the chapters it found.
 	ChaptersSource string
+	// SharedNothing: a finished sidecars.contribute job filed nothing, as the
+	// community already had all it was asked to share
+	// (bridge.Job.SharedNothing), so its message says so.
+	SharedNothing bool
 }
 
 // BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
@@ -693,6 +703,9 @@ func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 	kind := KindBridgeJobFinished
 	if j.Kind == bridge.KindDetectChapters && j.State == bridge.StateDone && j.ChaptersSource != "" {
 		data["chapters_source"] = j.ChaptersSource
+	}
+	if j.Kind == bridge.KindContribute && j.State == bridge.StateDone && j.SharedNothing {
+		data["shared_nothing"] = true
 	}
 	if j.State != bridge.StateDone {
 		kind = KindBridgeJobFailed

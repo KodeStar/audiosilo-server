@@ -45,9 +45,9 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	// The online Bridge's version and features (its job families, plus
 	// contribute), only while capabilities.bridge is true, and only to a
-	// signed-in caller (any role): the clients that read it (the player's
-	// admin-only generate action, the console) ask with their token, and an
-	// anonymous caller learns no more than the flags.
+	// signed-in caller (any role, not a demo account): the clients that read it
+	// (the player's admin-only generate action, the console) ask with their
+	// token, and an anonymous caller learns no more than the flags.
 	if bridgeOn != nil && a.signedIn(r) {
 		info["bridge"] = bridgeOn
 	}
@@ -55,11 +55,18 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // signedIn reports whether r carries a session or an API key the server
-// accepts (Authorization header only), for a public route that says more to a
-// signed-in caller. A missing or refused token is simply anonymous, never a 401.
+// accepts (Authorization header only) of an account that isn't a demo one
+// (anyone can get one of those while the demo is on), for a public route that
+// says more to a signed-in caller. A missing or refused token is simply
+// anonymous, never a 401, and the check records nothing (auth.Peek), so the
+// public route never waits on the writer.
 func (a *API) signedIn(r *http.Request) bool {
-	_, failure, _ := a.authenticate(r, false, sessionOrAPI)
-	return failure == ""
+	tok := bearerToken(r, false)
+	if tok == "" {
+		return false
+	}
+	u, err := a.auth.Peek(r.Context(), tok, sessionOrAPI...)
+	return err == nil && !u.IsDemo
 }
 
 // coreCapabilities are GET /server's capability flags other than the managed

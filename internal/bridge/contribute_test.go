@@ -279,6 +279,11 @@ func TestCorrectQueueRules(t *testing.T) {
 		"evidence control":      `{"work_id":"w","changes":[` + change("title", "a", "b") + `],"evidence":"a\u001bb"}`,
 		"asin too long":         `{"work_id":"w","asin":"` + strings.Repeat("A", maxCorrectIDLen+1) + `","changes":[` + change("title", "a", "b") + `],"evidence":"e"}`,
 		"not an object":         `[]`,
+		// What the Bridge would refuse when it files them is refused now.
+		"a C1 control":            body(change("title", "a\u0085b", "c")),
+		"recording id not a slug": `{"work_id":"w","recording_id":"Not A Slug","changes":[` + change("title", "a", "b") + `],"evidence":"e"}`,
+		"evidence too long as filed": `{"work_id":"w","changes":[` + change("title", "a", "b") + `],"evidence":"#` +
+			strings.Repeat("e", maxEvidence-1) + `"}`,
 	} {
 		if _, _, err := q.correct(params, ptr("Author/Other")); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v, want ErrInvalid", name, err)
@@ -292,6 +297,111 @@ func TestCorrectQueueRules(t *testing.T) {
 	if p, err := CheckCorrect(json.RawMessage(body(all...))); err != nil || len(p.Changes) != len(CorrectionFields) ||
 		p.Changes[0].Corrected != "Ünïcode title" {
 		t.Fatalf("every field: %+v, %v", p, err)
+	}
+	// Allowed: a recording slug (trimmed), and evidence at the bound as filed
+	// (an indented # line loses its indent and gains a backslash).
+	ok := `{"work_id":"w","recording_id":" the-final-empire-kramer ","changes":[` + change("title", "a", "b") +
+		`],"evidence":"  #` + strings.Repeat("e", maxEvidence-3) + `"}`
+	if p, err := CheckCorrect(json.RawMessage(ok)); err != nil || p.RecordingID != "the-final-empire-kramer" {
+		t.Fatalf("a recording slug and evidence at the bound: %+v, %v", p, err)
+	}
+}
+
+// issueLength counts evidence as the community's issue carries it: a line
+// starting with # (after its indent) loses the indent and gains a backslash.
+func TestIssueLength(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]int{
+		"plain":             5,
+		"#1 in series":      13,
+		"a\n  # heading\n#": 1 + 1 + 10 + 1 + 2,
+		"\t#x":              3,
+		"é#":                2,
+	} {
+		if got := issueLength(in); got != want {
+			t.Errorf("issueLength(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// SharedNothing: only a finished contribute job whose result names no
+// contribution and what the community already had.
+func TestSharedNothing(t *testing.T) {
+	t.Parallel()
+	covered := json.RawMessage(`{"work_id":"w","contributed":{},"covered":["characters","recaps"]}`)
+	for name, c := range map[string]struct {
+		job  Job
+		want bool
+	}{
+		"all covered":      {Job{Kind: KindContribute, State: StateDone, Result: covered}, true},
+		"null contributed": {Job{Kind: KindContribute, State: StateDone, Result: json.RawMessage(`{"contributed":null,"covered":["recaps"]}`)}, true},
+		"one filed": {Job{Kind: KindContribute, State: StateDone,
+			Result: json.RawMessage(`{"contributed":{"recaps":"https://github.com/o/r/issues/1"},"covered":["characters"]}`)}, false},
+		"no result":       {Job{Kind: KindContribute, State: StateDone}, false},
+		"nothing covered": {Job{Kind: KindContribute, State: StateDone, Result: json.RawMessage(`{"contributed":{}}`)}, false},
+		"not finished":    {Job{Kind: KindContribute, State: StateFailed, Result: covered}, false},
+		"another kind":    {Job{Kind: KindSidecars, State: StateDone, Result: covered}, false},
+		"result not JSON": {Job{Kind: KindContribute, State: StateDone, Result: json.RawMessage(`[`)}, false},
+	} {
+		if got := c.job.SharedNothing(); got != c.want {
+			t.Errorf("%s: SharedNothing = %t, want %t", name, got, c.want)
+		}
+	}
+}
+
+// A queued job that needs a managed module that is off is held: claims pass
+// over it (other jobs go first) until the module is on again, and with
+// ModuleOn unset nothing is held.
+func TestClaimHoldsJobsOfAnOffModule(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	q := newTestQueue(t)
+	q.beatSetup(t, true, true, KindVerify, KindSidecars, KindContribute, KindCorrect)
+	var held []int64
+	for i, queue := range []func() (*Job, bool, error){
+		func() (*Job, bool, error) { return q.sidecars(`{"contribute":"issue"}`, ptr("Author/One")) },
+		func() (*Job, bool, error) { return q.contribute("", ptr("Author/Two")) },
+		func() (*Job, bool, error) { return q.correct(goodCorrection, ptr("Author/Three")) },
+	} {
+		j, created, err := queue()
+		if err != nil || !created {
+			t.Fatalf("community job %d: %v, %v", i, created, err)
+		}
+		held = append(held, j.ID)
+	}
+	local, _, err := q.sidecars("", ptr("Author/Four"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	on := false
+	q.ModuleOn = func(id string) bool { return id != ModuleContributions || on }
+	all := []string{KindSidecars, KindContribute, KindCorrect}
+	if j, err := q.claim(ctx, q.token, all); err != nil || j == nil || j.ID != local.ID {
+		t.Fatalf("claim with contributions off = %+v, %v; want the local generate job", j, err)
+	}
+	if j, err := q.claim(ctx, q.token, all); err != nil || j != nil {
+		t.Fatalf("a held job was claimed: %+v, %v", j, err)
+	}
+	on = true
+	var got []int64
+	for range held {
+		j, err := q.claim(ctx, q.token, all)
+		if err != nil || j == nil {
+			t.Fatalf("claim with contributions on = %+v, %v", j, err)
+		}
+		got = append(got, j.ID)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, held) {
+		t.Fatalf("claimed %v, want the held jobs %v", got, held)
+	}
+	// Unset, nothing is held.
+	q.ModuleOn = nil
+	if _, created, err := q.contribute("", ptr("Author/Five")); err != nil || !created {
+		t.Fatalf("contribute: %v, %v", created, err)
+	}
+	if j, err := q.claim(ctx, q.token, all); err != nil || j == nil {
+		t.Fatalf("claim with ModuleOn unset = %+v, %v", j, err)
 	}
 }
 

@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
+
+	"github.com/kodestar/audiosilo-meta/pkg/model"
 )
 
 // Phase 2b's community jobs (BRIDGE-PLAN.md "Community contributions"): the
@@ -51,6 +54,20 @@ func contributeParams(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
+// SharedNothing reports whether j is a sidecars.contribute job that finished
+// having filed nothing: its result (the Bridge's) names no contribution
+// because the community already had each dimension it was asked for (covered).
+func (j *Job) SharedNothing() bool {
+	if j.Kind != KindContribute || j.State != StateDone {
+		return false
+	}
+	var r struct {
+		Contributed map[string]json.RawMessage `json:"contributed"`
+		Covered     []string                   `json:"covered"`
+	}
+	return json.Unmarshal(j.Result, &r) == nil && len(r.Contributed) == 0 && len(r.Covered) > 0
+}
+
 // CorrectionFields are the book fields a meta.correct job may correct (the
 // catalog's field names, CORRECTIONS-SPIKE.md section 5): the Bridge maps each
 // to the community's records. The api checks each against the book's own
@@ -93,12 +110,15 @@ type Correction struct {
 }
 
 // correctParams checks meta.correct's params strictly (an unknown field, in
-// the params or a change, is refused): a work id; at most 64 characters for
-// the recording's identifiers and the region; 1 to MaxCorrections changes, each
-// of a CorrectionFields field (once each), its values trimmed, single-line and
-// at most 500 characters, the corrected one set and different from the current
-// one; evidence required, at most 2000 characters (line breaks kept). It returns
-// them as stored, the values trimmed.
+// the params or a change, is refused): a work id; a recording id, when given,
+// a community slug (model.ValidSlug, as the Bridge requires); at most 64
+// characters for the recording's other identifiers and the region; 1 to
+// MaxCorrections changes, each of a CorrectionFields field (once each), its
+// values trimmed, single-line and at most 500 characters, the corrected one set
+// and different from the current one; evidence required, at most 2000
+// characters (line breaks kept) as the community's issue carries it
+// (issueLength). No value holds a control character (unicode.IsControl, the
+// Bridge's test). It returns them as stored, the values trimmed.
 func correctParams(raw json.RawMessage) (json.RawMessage, error) {
 	p, err := parseCorrect(raw)
 	if err != nil {
@@ -130,6 +150,10 @@ func parseCorrect(raw json.RawMessage) (CorrectParams, error) {
 			return p, err
 		}
 	}
+	p.RecordingID = strings.TrimSpace(p.RecordingID)
+	if p.RecordingID != "" && !model.ValidSlug(p.RecordingID) {
+		return p, invalid("recording_id must be a community recording id")
+	}
 	if len(p.Changes) == 0 || len(p.Changes) > MaxCorrections {
 		return p, invalid("changes must list 1 to %d fields", MaxCorrections)
 	}
@@ -158,7 +182,24 @@ func parseCorrect(raw json.RawMessage) (CorrectParams, error) {
 	if err := checkProse("evidence", p.Evidence, maxEvidence, true); err != nil {
 		return p, err
 	}
+	if issueLength(p.Evidence) > maxEvidence {
+		return p, invalid("evidence must be at most %d characters, each line starting with # counting one more", maxEvidence)
+	}
 	return p, nil
+}
+
+// issueLength is evidence's length in characters as the community's issue
+// carries it, which the community and the Bridge bound: each line that starts
+// with # (after its indent) escaped, the indent dropped and a backslash added
+// (the Bridge's contrib.escapeHeadings).
+func issueLength(evidence string) int {
+	n := utf8.RuneCountInString(evidence)
+	for line := range strings.SplitSeq(evidence, "\n") {
+		if t := strings.TrimLeft(line, " \t"); strings.HasPrefix(t, "#") {
+			n += 1 - (len(line) - len(t)) // the indent is spaces and tabs, a byte each
+		}
+	}
+	return n
 }
 
 // CheckCorrect checks meta.correct's params as Enqueue will (correctParams)
@@ -172,10 +213,11 @@ func CheckCorrect(raw json.RawMessage) (CorrectParams, error) {
 }
 
 // checkProse bounds an admin's text: valid UTF-8, at most max characters, no
-// control characters (but line breaks and tabs when lines allows them).
+// control characters (unicode.IsControl, C1 included as the Bridge refuses
+// them; but line breaks and tabs when lines allows them).
 func checkProse(name, v string, max int, lines bool) error {
 	if !utf8.ValidString(v) || utf8.RuneCountInString(v) > max ||
-		strings.ContainsFunc(v, func(r rune) bool { return isControl(r) && !(lines && (r == '\n' || r == '\t')) }) {
+		strings.ContainsFunc(v, func(r rune) bool { return unicode.IsControl(r) && !(lines && (r == '\n' || r == '\t')) }) {
 		return invalid("%s must be at most %d characters of text", name, max)
 	}
 	return nil

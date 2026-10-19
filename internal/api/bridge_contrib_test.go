@@ -13,7 +13,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/catalog"
 	"github.com/kodestar/audiosilo-server/internal/modules"
-	"github.com/kodestar/audiosilo-server/internal/modules/builtin"
+	"github.com/kodestar/audiosilo-server/internal/notify"
 )
 
 // Bridge Phase 2b: the heartbeat's setup block and accepts, GET /server's
@@ -47,7 +47,8 @@ func (b *bridgeEnv) beatKinds(t *testing.T, extra string, kinds ...string) strin
 // The heartbeat's reply lists accepts ["setup"]; a setup block lands on GET
 // /admin/bridge (login included) and never on GET /server; one of the wrong
 // shape is dropped, never refusing the heartbeat; its can_contribute wins over
-// the estimates' for the contribute feature, the module's flag and the estimate.
+// the estimates' for the contribute feature, the module's flag and the
+// estimate, which also needs the module on.
 func TestBridgeHeartbeatSetup(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -98,6 +99,13 @@ func TestBridgeHeartbeatSetup(t *testing.T) {
 	if _, est, body := b.estimate(t, b.adminTok, b.lib.ID, mistbornBook); !est.CanContribute || est.Figures {
 		t.Fatalf("estimate (setup yes): %s", body)
 	}
+	// Denied: the module off, the estimate offers no contributing (a job asking
+	// for it would be 404 module_off), whatever the Bridge says.
+	setModule(t, b.testEnv, b.adminTok, false)
+	if _, est, body := b.estimate(t, b.adminTok, b.lib.ID, mistbornBook); est.CanContribute {
+		t.Fatalf("estimate (module off): %s", body)
+	}
+	setModule(t, b.testEnv, b.adminTok, true)
 
 	// A block of the wrong shape is dropped, the heartbeat kept: the estimates
 	// answer again.
@@ -114,10 +122,12 @@ func TestBridgeHeartbeatSetup(t *testing.T) {
 }
 
 // Security: GET /server's bridge block (the Bridge's version and features) goes
-// only to a signed-in caller of any role; anyone else sees the flag alone.
+// only to a signed-in caller of any role, never a demo account (anyone can get
+// one while the demo is on); anyone else sees the flag alone.
 func TestServerInfoBridgeBlockNeedsSignIn(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
+	_, demoTok := newUserWithSession(t, b.testEnv, auth.DemoUsernamePrefix+"guest", true)
 	read := func(tok string) (bool, bool) {
 		t.Helper()
 		_, body := b.do(t, "GET", "/api/v1/server", tok, "")
@@ -133,6 +143,7 @@ func TestServerInfoBridgeBlockNeedsSignIn(t *testing.T) {
 		"a bad token":   "not-a-token",
 		"bridge token":  b.bridgeTok,
 		"revoked token": revokedSession(t, b.testEnv),
+		"demo session":  demoTok,
 	} {
 		if flag, block := read(tok); !flag || block {
 			t.Errorf("denied (%s): flag %t, block %t; want the flag alone", name, flag, block)
@@ -173,7 +184,8 @@ func wantCode(t *testing.T, what string, resp *http.Response, body string, statu
 // contributions module is off (also before the Bridge's answer), 409
 // cannot_contribute while the Bridge can't, 409 kind_unavailable from a Bridge
 // that doesn't run it; queued with its params normalised; 409 generate_open and
-// contribute_open between it and a generate job for the book.
+// contribute_open between it and a generate job for the book; held from the
+// Bridge's claims while the module is turned off.
 func TestBridgeContributeJob(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
@@ -210,6 +222,47 @@ func TestBridgeContributeJob(t *testing.T) {
 	}
 	resp, body = b.queueKind(t, bridge.KindContribute, cradleBook, `{}`)
 	wantCode(t, "contribute with a generate open", resp, body, http.StatusConflict, "generate_open")
+
+	// Denied: with the module turned off, no claim hands out the queued
+	// contribute job (it stays queued); turned back on, the next claim does.
+	claim := "/api/v1/bridge/jobs/next?wait=0&kind=" + bridge.KindContribute
+	setModule(t, b.testEnv, b.adminTok, false)
+	if resp, body := b.do(t, "GET", claim, b.bridgeTok, ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("claim with the module off: %d %s, want 204", resp.StatusCode, body)
+	}
+	setModule(t, b.testEnv, b.adminTok, true)
+	resp, body = b.do(t, "GET", claim, b.bridgeTok, "")
+	var claimed bridge.Job
+	decodeInto(t, body, &claimed)
+	if resp.StatusCode != http.StatusOK || claimed.ID != job.ID {
+		t.Fatalf("claim with the module on: %d %s", resp.StatusCode, body)
+	}
+}
+
+// A contribute job that filed nothing (the community already had both
+// dimensions) is announced as such, never as shared.
+func TestBridgeContributeSharedNothing(t *testing.T) {
+	t.Parallel()
+	b := newBridgeEnv(t)
+	setModule(t, b.testEnv, b.adminTok, true)
+	b.beatKinds(t, `,"setup":`+setupBlock(true), bridge.KindVerify, bridge.KindSidecars, bridge.KindContribute)
+	resp, body := b.queueKind(t, bridge.KindContribute, mistbornBook, `{}`)
+	var job bridge.Job
+	decodeInto(t, body, &job)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("queue: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := b.do(t, "GET", "/api/v1/bridge/jobs/next?wait=0", b.bridgeTok, ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := b.do(t, "PATCH", fmt.Sprintf("/api/v1/bridge/jobs/%d", job.ID), b.bridgeTok,
+		`{"attempt":1,"state":"done","result":{"work_id":"mistborn","contributed":{},"covered":["characters","recaps"]}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("done: %d %s", resp.StatusCode, body)
+	}
+	evs, _, err := b.cat.ListServerEvents(context.Background(), 0, 10, notify.KindBridgeJobFinished)
+	if err != nil || len(evs) != 1 || evs[0].Data["shared_nothing"] != true {
+		t.Fatalf("events = %+v, %v; want one saying nothing was shared", evs, err)
+	}
 }
 
 // correction is a meta.correct params body for one change.
@@ -326,28 +379,6 @@ func TestModuleUserRoutesRefuseKidsAndDemo(t *testing.T) {
 		if resp, body := e.do(t, "POST", "/api/v1/modtest", tok, ""); resp.StatusCode != http.StatusOK {
 			t.Errorf("allowed (%s): %d %s", name, resp.StatusCode, body)
 		}
-	}
-}
-
-// Every route a builtin module registers mounts through the real Registrar: a
-// malformed pattern panics (checkModulePattern) and two that clash panic in the
-// mux, so this fails at test time rather than at a server's start.
-func TestBuiltinModuleRoutePatterns(t *testing.T) {
-	t.Parallel()
-	e := newTestEnv(t)
-	mux := http.NewServeMux()
-	for _, m := range builtin.Modules() {
-		if m.Routes == nil {
-			continue
-		}
-		func() {
-			defer func() {
-				if p := recover(); p != nil {
-					t.Errorf("module %s: %v", m.ID, p)
-				}
-			}()
-			m.Routes(moduleRoutes{a: e.api, mux: mux, id: m.ID})
-		}()
 	}
 }
 

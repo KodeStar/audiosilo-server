@@ -53,7 +53,8 @@ const (
 	maxSetupDetail = 256
 )
 
-// setupIDPattern is a setup step's id (the module and capability id grammar).
+// setupIDPattern is a setup step's id: the same grammar as a module or
+// capability id (modules.idPattern's copy; bridge can't import modules).
 var setupIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 
 // githubLoginPattern is a GitHub login: letters, digits and single hyphens, at

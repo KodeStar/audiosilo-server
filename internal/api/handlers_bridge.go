@@ -27,13 +27,15 @@ import (
 // bridge token works on those routes only (requireBridge); admins queue and
 // cancel jobs from the console (/admin/bridge/*).
 
-// SetBridge gives the API the Bridge's status and job queue, and has admins
-// told about each job that finishes, fails or needs attention, whatever moved it
-// (the Bridge's update, a lease that ran out). Call before Handler(); the
-// launcher always does.
+// SetBridge gives the API the Bridge's status and job queue, has admins told
+// about each job that finishes, fails or needs attention, whatever moved it
+// (the Bridge's update, a lease that ran out), and holds the queued jobs of a
+// managed module while it is off (bridge.Service.ModuleOn). Call before
+// Handler(); the launcher always does.
 func (a *API) SetBridge(b *bridge.Service) {
 	a.bridge = b
 	b.OnTransition = func(ctx context.Context, job bridge.Job, _ string) { a.notifyBridgeJob(ctx, &job) }
+	b.ModuleOn = a.moduleOn
 }
 
 // bridgeKinds: the Bridge's own routes take a bridge token and nothing else, and
@@ -427,7 +429,7 @@ func (a *API) handleBridgeUpdate(w http.ResponseWriter, r *http.Request) {
 // path. Best effort: a book or library that can't be read is reported by path.
 func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 	ev := notify.BridgeJob{ID: job.ID, Kind: job.Kind, State: job.State, Path: job.Target(),
-		Code: job.ParkCode(), Error: job.Error}
+		Code: job.ParkCode(), Error: job.Error, SharedNothing: job.SharedNothing()}
 	if job.LibraryID != nil {
 		ev.LibraryID = *job.LibraryID
 		if lib, err := a.cat.GetLibrary(ctx, ev.LibraryID); err == nil {
@@ -470,7 +472,7 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeErrorCode(w, http.StatusConflict, "cannot_contribute", "the bridge can't contribute to the community")
 	case errors.Is(err, bridge.ErrGenerateOpen):
 		writeErrorCode(w, http.StatusConflict, "generate_open",
-			"a generate job is still open for this book; it writes this itself when it finishes")
+			"a generate job is still open for this book; queue this once it has finished")
 	case errors.Is(err, bridge.ErrDetectOpen):
 		writeErrorCode(w, http.StatusConflict, "detect_open",
 			"a chapter detection job is still open for this book; queue this once it has finished")
@@ -678,15 +680,16 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // job waits), and a kind that writes (sidecars.generate, sidecars.describe)
 // needs a library the Bridge last reported mapped and writable (409 code
 // library_not_writable); a job is refused while an open job of another kind
-// refuses it (bridge.Enqueue: 409 code generate_open, detect_open or
-// describe_open), and a chapters.detect job for a book whose chapter source an
-// admin chose (409 code chapters_chosen: the list it finds would never be
-// used). A job that files to the community (sidecars.contribute, meta.correct,
-// sidecars.generate with contribute "issue") is 404 code module_off while the
-// contributions module is off, and 409 code cannot_contribute unless the Bridge
-// says it can; a meta.correct job's changes must be the book's own edits (400
-// code not_edited, checkCorrections). A path names an indexed book (404
-// otherwise) and the job is about that book's own path.
+// refuses it (bridge.Enqueue: 409 code generate_open, detect_open,
+// describe_open or contribute_open), and a chapters.detect job for a book
+// whose chapter source an admin chose (409 code chapters_chosen: the list it
+// finds would never be used). A job that files to the community
+// (sidecars.contribute, meta.correct, sidecars.generate with contribute
+// "issue") is 404 code module_off while the contributions module is off, and
+// 409 code cannot_contribute unless the Bridge says it can; a meta.correct
+// job's changes must be the book's own edits (400 code not_edited,
+// checkCorrections). A path names an indexed book (404 otherwise) and the job
+// is about that book's own path.
 func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind      string          `json:"kind"`
