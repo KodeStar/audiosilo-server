@@ -43,8 +43,8 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"enabled": a.config().Demo.Enabled, // clients show a "Try the demo" affordance
 		},
 	}
-	// The online Bridge's version and job families (features), only while
-	// capabilities.bridge is true.
+	// The online Bridge's version and features (its job families, plus
+	// contribute), only while capabilities.bridge is true.
 	if bridgeOn != nil {
 		info["bridge"] = bridgeOn
 	}

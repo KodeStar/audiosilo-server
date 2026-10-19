@@ -1583,10 +1583,13 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   rule; `api.moduleActive` feeds it) is the toggle AND the requirement met (an online Bridge whose features
   hold it), `false` (never absent) while off; `GET /server` computes the
   Bridge block once per request and reuses it. **Background work** (`modules.Runner`; the API holds one): `StartModules(ctx)` at launch (beside
-  `StartChapterChecks`), then `syncModules` (`Runner.Sync`) in `handleUpdateSettings` right after the live config swap,
-  under the settings mutex: a module turned on starts `Start` in its own goroutine (a panic stops that
-  module only), one turned off is cancelled without the save waiting; turned back on meanwhile, the new run
-  waits for the old to return, so runs never overlap. **`GET /admin/modules`** (admin only):
+  `StartChapterChecks`, with `defer StopModules()`: cancel every run and wait, before the database
+  closes), then `syncModules` (`Runner.Sync`) in `handleUpdateSettings` right after the live config swap,
+  under the settings mutex: a module turned on starts `Start` in its own goroutine (a panic ends that
+  run only; a run that ended by itself while on starts again at the next save), one turned off is
+  cancelled without the save waiting; turned back on meanwhile, the new run waits for the old to return
+  (a run's `done` closes only after every earlier run's, so however often it is toggled, runs never
+  overlap). **`GET /admin/modules`** (admin only):
   `{"modules":[{id, enabled, active, requires_bridge?, bridge_state?}]}` in registry order (`[]` when empty;
   `bridge_state` `offline` | `no_feature` | `ready`, both omitted when no Bridge is needed); the lock is the
   settings envelope's `locked["modules.<id>"]`, not repeated. A toggle is an ordinary settings save

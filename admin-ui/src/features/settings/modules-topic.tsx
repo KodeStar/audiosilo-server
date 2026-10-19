@@ -73,6 +73,9 @@ function ModuleCard({ module: m, settings }: { module: AdminModule; settings: Ad
   // The settings envelope is the toggle's truth (a save updates it at once);
   // the module list may lag it by a refetch.
   const enabled = settings.modules[m.id] ?? m.enabled;
+  // Listeners see it while on and its Bridge requirement is met (the server's
+  // modules.Active), read from that toggle, not the list's possibly older one.
+  const offered = enabled && (m.bridge_state === undefined || m.bridge_state === 'ready');
   const titleId = `module-${m.id}-title`;
   const switchId = `module-${m.id}-switch`;
   return (
@@ -120,7 +123,7 @@ function ModuleCard({ module: m, settings }: { module: AdminModule; settings: Ad
           />
         </SettingRow>
       </div>
-      {enabled && !m.active ? (
+      {enabled && !offered ? (
         <Notice tone="info" icon={EyeOff} role="status" className="mx-5 mb-5">
           {t('settings.modules.hidden')}
         </Notice>

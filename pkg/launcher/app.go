@@ -255,6 +255,9 @@ func Run(ctx context.Context, opts Options) error {
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	a.StartChapterChecks(ctx)
 	a.StartModules(ctx)
+	// Before the database closes, and even when the server fails while ctx
+	// lives on (an embedding app's).
+	defer a.StopModules()
 	a.StartCoverColors(ctx)
 	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
 	ntf.Run(ctx)

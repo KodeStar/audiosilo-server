@@ -129,6 +129,23 @@ describe('settings > modules', () => {
     );
   });
 
+  it('never notes a module needing no Bridge as hidden, though the list lags the switch', async () => {
+    const base = settingsWith();
+    // The list still says off (it lags the save): the switch's own state decides.
+    mockFetch(
+      routes([{ id: 'contributions', enabled: false, active: false }], {
+        'PATCH /admin/settings': patchEcho(base),
+      }),
+    );
+    renderApp('/server?topic=modules');
+    const c = await card();
+    const toggle = within(c).getByRole('switch', { name: 'Enable Contributions' });
+    await userEvent.setup().click(toggle);
+    expect(await screen.findByText('Contributions is on')).toBeInTheDocument();
+    expect(toggle).toBeChecked();
+    expect(within(c).queryByText(/hidden from listeners/)).not.toBeInTheDocument();
+  });
+
   it('locks a module the environment sets, naming the variable', async () => {
     mockFetch(
       routes([contributions({ enabled: true })], {

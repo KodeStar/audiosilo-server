@@ -105,6 +105,11 @@ func (a *API) StartModules(ctx context.Context) {
 	a.moduleRuns.Start(ctx, a.modules, modules.Deps{Log: a.log, Catalog: a.cat, Bridge: a.bridge}, a.moduleOn)
 }
 
+// StopModules ends every module's background work and waits for it to return
+// (the launcher defers it after StartModules, so it runs before the database
+// closes); a settings save starts nothing after it.
+func (a *API) StopModules() { a.moduleRuns.Stop() }
+
 // syncModules brings each module's background work in line with the live
 // config (modules.Runner.Sync: it never waits for a stopping module).
 func (a *API) syncModules() { a.moduleRuns.Sync(a.moduleOn) }
