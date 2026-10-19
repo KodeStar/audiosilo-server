@@ -1883,7 +1883,43 @@ export interface MetaPosition {
   chapter: number;
 }
 
-/** meta.MetaWork (only in the meta envelope here; the console reads its series rails). */
+/**
+ * meta.MetaAttribution: the CC BY-SA credit the server writes for a work that
+ * carries community characters, recaps or a community description.
+ */
+export interface MetaAttribution {
+  credit: string;
+  license: string;
+  license_url: string;
+  /** The work's page on the metadata site. */
+  source_url: string;
+}
+
+/**
+ * meta.MetaGenerated: which parts of a work came from this server's generated
+ * files (the Bridge) rather than the community. `recaps` covers the recap list
+ * and the whole-book summary alike.
+ */
+export interface MetaGenerated {
+  characters: boolean;
+  /** The recap list, or the summary, was generated (as older servers sent it). */
+  recaps: boolean;
+  /**
+   * The whole-book summary itself was generated; false when it is the
+   * community's, kept beside a generated list. Always sent by this server (the
+   * console is version-matched); absent only from an older one.
+   */
+  recap_summary?: boolean;
+  description: boolean;
+  /** RFC3339; when what it names was generated. */
+  generated_at?: string;
+}
+
+/**
+ * meta.MetaWork (only in the meta envelope here): the console reads its series
+ * rails, and the book page's Characters and recaps card its characters, recaps
+ * and where each came from.
+ */
 export interface MetaWork {
   id: string;
   title: string;
@@ -1902,6 +1938,14 @@ export interface MetaWork {
   }[];
   recaps?: { through: MetaPosition; scope?: string; text: string }[];
   recap_summary?: { in_short?: string; ending?: string };
+  /** meta.MetaCommunityDescription: the community's own (CC BY-SA) description; text never empty. */
+  community_description?: { text: string; license?: string };
+  /** Present iff the work carries community (CC BY-SA) content. */
+  attribution?: MetaAttribution;
+  /** The parts generated on this server (Bridge Phase 1a); absent when none are. */
+  generated?: MetaGenerated;
+  /** A description generated on this server, laid in only without a community one. */
+  generated_description?: { text: string };
 }
 
 /** meta.MetaRecording. */

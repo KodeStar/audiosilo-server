@@ -57,11 +57,7 @@ export function SeriesCard({
   const headingId = useId();
   const [ref, seen] = useInView<HTMLElement>();
   const candidate = complete ? metaCandidate(books) : undefined;
-  const meta = useBookMeta(
-    candidate?.library_id ?? 0,
-    candidate?.path ?? '',
-    metadata && seen && !!candidate,
-  );
+  const meta = useBookMeta(candidate, metadata && seen);
   const rails = meta.data?.matched ? meta.data.series : undefined;
   // Every matched book is asked about (the rail's own book too), batched with
   // the other cards' books: their works place them, and pick the rail when no

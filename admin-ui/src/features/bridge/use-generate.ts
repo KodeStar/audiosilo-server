@@ -18,6 +18,21 @@ import { generatePollMs, KIND_DETECT, KIND_GENERATE, latestJobOf } from './gener
 const BOOK_JOBS = 20;
 
 /**
+ * The book's newest jobs, polled while a generate or describe job is open. A
+ * reader that only lists them (the Characters and recaps card) uses this
+ * directly: useBookGenerateJob also refreshes the page when a job ends, and a
+ * second observer of that would send each follow-up request twice.
+ */
+export function bookJobsQuery(libraryId: number, path: string, enabled: boolean) {
+  return queryOptions({
+    queryKey: keys.bookBridgeJobs(libraryId, path),
+    queryFn: () => api.bridgeJobs({ library_id: libraryId, path, limit: BOOK_JOBS }),
+    enabled,
+    refetchInterval: (q) => generatePollMs(q.state.data?.jobs),
+  });
+}
+
+/**
  * A book's newest job of a kind (`sidecars.generate` unless told otherwise),
  * and the book's newest jobs, asked again about every 10 s while a generate or
  * describe job works and every minute while one is parked, only while the page
@@ -33,12 +48,7 @@ export function useBookGenerateJob(
   kind: string = KIND_GENERATE,
 ) {
   const qc = useQueryClient();
-  const query = useQuery({
-    queryKey: keys.bookBridgeJobs(libraryId, path),
-    queryFn: () => api.bridgeJobs({ library_id: libraryId, path, limit: BOOK_JOBS }),
-    enabled,
-    refetchInterval: (q) => generatePollMs(q.state.data?.jobs),
-  });
+  const query = useQuery(bookJobsQuery(libraryId, path, enabled));
   const job = latestJobOf(query.data?.jobs, kind);
   const seen = useRef<BridgeJob | undefined>(undefined);
   useEffect(() => {

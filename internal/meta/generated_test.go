@@ -2,6 +2,7 @@ package meta
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -54,7 +55,7 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	if len(w.Recaps) != 2 || w.Recaps[0].Text != "Local before." || w.RecapSummary == nil || w.RecapSummary.Ending != "Local ending." {
 		t.Errorf("recaps = %+v, summary = %+v, want the local ones", w.Recaps, w.RecapSummary)
 	}
-	if g := w.Generated; g == nil || g.Characters || !g.Recaps || g.GeneratedAt != "2026-10-15T10:00:00Z" {
+	if g := w.Generated; g == nil || g.Characters || !g.Recaps || !g.RecapSummary || g.GeneratedAt != "2026-10-15T10:00:00Z" {
 		t.Errorf("generated = %+v", g)
 	}
 	if w.Attribution == nil {
@@ -67,7 +68,7 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	// Hidden at the start: the community hero (chapter 1) stays with its credit,
 	// the generated recap at chapter 0 stays marked, no summary.
 	hidden := matched(t, env, testGenerated(), &Place{}).Work
-	if hidden.Attribution == nil || hidden.Generated == nil || !hidden.Generated.Recaps || len(hidden.Recaps) != 1 || hidden.RecapSummary != nil {
+	if hidden.Attribution == nil || hidden.Generated == nil || !hidden.Generated.Recaps || hidden.Generated.RecapSummary || len(hidden.Recaps) != 1 || hidden.RecapSummary != nil {
 		t.Errorf("hidden = %+v / %+v", hidden, hidden.Generated)
 	}
 	// Community characters all gated away: the credit goes, and the generated
@@ -115,9 +116,15 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 		t.Errorf("community summary = %+v", out.Work)
 	}
 	// So the recaps are loaded for it: a summary alone leaves the recap list to
-	// fill (unlike HasRecaps, which counts the summary).
+	// fill, and the estimate's coverage agrees (Generate is offered for it).
 	if got := (&Enrichment{Work: summed}).Fillable(); got != metadata.AllAttachmentParts {
 		t.Errorf("a work with a summary alone fills %+v", got)
+	}
+	if cov := coverageOf(&Enrichment{Work: summed}); cov.Recaps || !cov.Known {
+		t.Errorf("a work with a summary alone covers %+v, want no recaps", cov)
+	}
+	if cov := coverageOf(&Enrichment{Work: &MetaWork{Recaps: []MetaRecap{{Text: "x"}}}}); !cov.Recaps {
+		t.Errorf("a work with a recap list covers %+v, want recaps", cov)
 	}
 }
 
@@ -181,7 +188,7 @@ func TestAnswerDescription(t *testing.T) {
 	}
 	raw, _ := json.Marshal(w)
 	if !strings.Contains(string(raw), `"generated_description":{"text":"`+testDescription+`"}`) ||
-		!strings.Contains(string(raw), `"generated":{"characters":false,"recaps":false,"description":true`) {
+		!strings.Contains(string(raw), `"generated":{"characters":false,"recaps":false,"recap_summary":false,"description":true`) {
 		t.Errorf("wire = %s", raw)
 	}
 	// spoilers=hide keeps it, from the start.
@@ -236,7 +243,7 @@ func TestAnswerUnmatched(t *testing.T) {
 	if w == nil || w.ID != "" || w.Title != "The Book" || len(w.Characters) != 2 || len(w.Recaps) != 2 || w.RecapSummary == nil {
 		t.Fatalf("work = %+v", w)
 	}
-	if w.Attribution != nil || w.Generated == nil || !w.Generated.Characters || !w.Generated.Recaps {
+	if w.Attribution != nil || w.Generated == nil || !w.Generated.Characters || !w.Generated.Recaps || !w.Generated.RecapSummary {
 		t.Errorf("attribution = %+v, generated = %+v", w.Attribution, w.Generated)
 	}
 	if raw, _ := json.Marshal(Unmatched{Work: w}); !json.Valid(raw) || string(raw[:17]) != `{"matched":false,` {
@@ -261,5 +268,39 @@ func TestAnswerUnmatched(t *testing.T) {
 	}
 	if raw, _ := json.Marshal(Answer(nil, "The Book", late, &Place{Chapter: 1})); string(raw) != `{"matched":false}` {
 		t.Errorf("gated to nothing = %s", raw)
+	}
+}
+
+// TestGeneratedRecapSummaryOnTheWire: recap_summary is always sent, true only
+// when the summary itself was generated.
+func TestGeneratedRecapSummaryOnTheWire(t *testing.T) {
+	t.Parallel()
+	noSummary := testGenerated()
+	noSummary.Recaps.InShort, noSummary.Recaps.Ending = "", ""
+	// A recaps file with a summary and no list: recaps keeps its old meaning
+	// (list or summary), so it is set with no generated list beside it.
+	summaryOnly := testGenerated()
+	summaryOnly.Recaps.Recaps = nil
+	summed := communityWork()
+	summed.RecapSummary = &MetaRecapSummary{InShort: "Community short."}
+	for _, c := range []struct {
+		name    string
+		w       *MetaWork
+		g       *Generated
+		summary bool
+	}{
+		{"no summary", communityWork(), noSummary, false},
+		{"community summary", summed, testGenerated(), false},
+		{"generated summary", communityWork(), testGenerated(), true},
+		{"generated summary alone", communityWork(), summaryOnly, true},
+	} {
+		raw, err := json.Marshal(matched(t, &Enrichment{Matched: true, Work: c.w}, c.g, nil).Work.Generated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf(`{"characters":false,"recaps":true,"recap_summary":%t,"description":false,"generated_at":%q}`, c.summary, c.g.GeneratedAt)
+		if string(raw) != want {
+			t.Errorf("%s: %s, want %s", c.name, raw, want)
+		}
 	}
 }

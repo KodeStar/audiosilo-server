@@ -87,8 +87,9 @@ func TestMetaGeneratedWhileTheCommunityIsDown(t *testing.T) {
 	}
 }
 
-// generatedBody is the slice of /meta the generated tests read.
+// generatedBody is the slice of /meta the generated tests read, and the raw body.
 type generatedBody struct {
+	raw     string
 	Matched bool `json:"matched"`
 	Work    *struct {
 		ID         string `json:"id"`
@@ -105,9 +106,10 @@ type generatedBody struct {
 		} `json:"recap_summary"`
 		Attribution *json.RawMessage `json:"attribution"`
 		Generated   *struct {
-			Characters  bool   `json:"characters"`
-			Recaps      bool   `json:"recaps"`
-			GeneratedAt string `json:"generated_at"`
+			Characters   bool   `json:"characters"`
+			Recaps       bool   `json:"recaps"`
+			RecapSummary bool   `json:"recap_summary"`
+			GeneratedAt  string `json:"generated_at"`
 		} `json:"generated"`
 	} `json:"work"`
 }
@@ -122,6 +124,7 @@ func getGenerated(t *testing.T, e *testEnv, libID int64, path, query, token stri
 	if err := json.Unmarshal([]byte(body), &g); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
+	g.raw = body
 	return g
 }
 
@@ -151,7 +154,7 @@ func TestMetaGeneratedFillsRecaps(t *testing.T) {
 	if len(g.Work.Recaps) != 2 || g.Work.RecapSummary == nil || g.Work.RecapSummary.InShort != "Gen short." {
 		t.Errorf("recaps = %+v, summary = %+v", g.Work.Recaps, g.Work.RecapSummary)
 	}
-	if gen := g.Work.Generated; gen == nil || gen.Characters || !gen.Recaps || gen.GeneratedAt != "2026-10-15T10:00:00Z" {
+	if gen := g.Work.Generated; gen == nil || gen.Characters || !gen.Recaps || !gen.RecapSummary || gen.GeneratedAt != "2026-10-15T10:00:00Z" {
 		t.Errorf("generated = %+v", gen)
 	}
 	if g.Work.Attribution == nil {
@@ -165,6 +168,47 @@ func TestMetaGeneratedFillsRecaps(t *testing.T) {
 	}
 	if g := getGenerated(t, e, lib.ID, "A/Copy", "", tok); g.Work.Generated != nil || len(g.Work.Recaps) != 0 {
 		t.Errorf("the merge leaked into the cache: %+v", g.Work)
+	}
+}
+
+// TestMetaGeneratedBesideCommunitySummary: a community work with a summary but
+// no recap list takes the generated list and keeps its own, credited summary
+// (recap_summary false); the estimate agrees it has no recaps, and offers an
+// earlier book of the series whose work has a summary alone.
+func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
+	t.Parallel()
+	e := generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
+		"characters":[{"id":"community-hero","name":"Hero","reveal":{"chapter":1}}],
+		"recap_summary":{"in_short":"Community short."}}`)
+	// The Bridge's env, for the estimate, holds the library the book goes in.
+	b := newBridgeEnvOn(t, e)
+	lib := b.lib
+	// Every lookup finds the same work, so the earlier book's has a summary alone too.
+	for _, book := range []*catalog.Book{
+		{LibraryID: lib.ID, RelPath: "A/One", Title: "One", Author: "A", Series: "Summed", SeriesIndex: 1, ASIN: "B0ONE", AddedAt: "2020-01-01"},
+		{LibraryID: lib.ID, RelPath: "A/Two", Title: "Two", Author: "A", Series: "Summed", SeriesIndex: 2, ASIN: "B0TWO", AddedAt: "2020-01-01"},
+	} {
+		if _, err := e.cat.UpsertBook(context.Background(), book); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setGenerated(t, e, lib.ID, "A/Two")
+	tok := b.adminTok
+
+	g := getGenerated(t, e, lib.ID, "A/Two", "", tok)
+	if g.Work == nil || len(g.Work.Recaps) != 2 || g.Work.RecapSummary == nil || g.Work.RecapSummary.InShort != "Community short." ||
+		g.Work.Attribution == nil {
+		t.Fatalf("work = %+v", g.Work)
+	}
+	if want := `"generated":{"characters":false,"recaps":true,"recap_summary":false,"description":false,"generated_at":"2026-10-15T10:00:00Z"}`; !strings.Contains(g.raw, want) {
+		t.Errorf("meta = %s, want %s", g.raw, want)
+	}
+
+	b.beatWith(t, true, true, sidecarsEstimates)
+	resp, est, body := b.estimate(t, b.adminTok, lib.ID, "A/Two")
+	if resp.StatusCode != http.StatusOK || !est.Has.Community.Characters || est.Has.Community.Recaps || est.Has.CommunityUnknown ||
+		len(est.Earlier) != 1 || est.Earlier[0].Path != "A/One" {
+		t.Fatalf("estimate: %d %s", resp.StatusCode, body)
 	}
 }
 

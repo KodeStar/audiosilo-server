@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { AudioLines, ChevronDown, ChevronUp, Info, Undo2 } from 'lucide-react';
+import { AudioLines, Info, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
 import { invalidateIssues, settleBookEdit, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, AdminChapter, BookEditRequest, ChapterSource } from '@/api/types';
@@ -23,9 +23,7 @@ import {
   ribbonSegments,
 } from './book-model';
 import { CommunityChapters } from './community-chapters';
-
-/** Rows shown before "Show all". */
-const FIRST_ROWS = 10;
+import { FIRST_ROWS, ShowAllToggle } from './show-all-toggle';
 
 /** A chapter source whose titles a rename's hints name, as the keys' suffix. */
 const CHAPTER_ORIGIN: Partial<Record<ChapterSource, string>> = {
@@ -248,14 +246,12 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
             ))}
           </ol>
         ) : null}
-        {chapters.length > FIRST_ROWS ? (
-          <div>
-            <Button variant="ghost" size="sm" onClick={() => setAll(!all)}>
-              {all ? t('book.chapters.fewer') : t('book.chapters.all', { count: chapters.length })}
-              {all ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
-            </Button>
-          </div>
-        ) : null}
+        <ShowAllToggle
+          all={all}
+          total={chapters.length}
+          label={t('book.chapters.all', { count: chapters.length })}
+          onToggle={() => setAll(!all)}
+        />
       </div>
     </Card>
   );

@@ -35,15 +35,21 @@ type Generated struct {
 
 // MetaGenerated says which parts of a work came from the server's generated
 // files rather than the community (MetaWork.Generated); omitted when none did.
-// Recaps covers the recap list and the whole-book summary alike; Description
-// the work's generated_description. GeneratedAt is when what it names was
-// generated: the characters' and recaps' run, or the description's own time
-// when the description is all it names.
+// Recaps is set when the recap list or the whole-book summary was generated
+// (unchanged for older clients); RecapSummary, always sent, when the summary
+// itself was, so a community summary beside a generated list keeps its credit
+// (CONVENTIONS.md). Description names the work's generated_description. GeneratedAt is when what it names
+// was generated: the characters' and recaps' run, or the description's own
+// time when the description is all it names.
 type MetaGenerated struct {
-	Characters  bool   `json:"characters"`
-	Recaps      bool   `json:"recaps"`
-	Description bool   `json:"description"`
-	GeneratedAt string `json:"generated_at,omitempty"`
+	Characters bool `json:"characters"`
+	Recaps     bool `json:"recaps"`
+	// RecapSummary has no omitempty on purpose (unlike CROSS-REPO §15's usual
+	// new field): a client reads its absence as an older server and falls back
+	// to Recaps, so false must be sent.
+	RecapSummary bool   `json:"recap_summary"`
+	Description  bool   `json:"description"`
+	GeneratedAt  string `json:"generated_at,omitempty"`
 }
 
 // MetaGeneratedDescription is a book's own-words description generated on this
@@ -76,7 +82,8 @@ type Place struct {
 // the recaps), a description when it has no community description (its core
 // description, the publisher's kind, doesn't block it: the player orders
 // those). The one statement of the rule: /meta loads by it (Fillable) and lays
-// in by it (parts), so a part is never laid in without being loaded.
+// in by it (parts), so a part is never laid in without being loaded, and the
+// estimate's coverage is what it leaves unfilled (coverageOf).
 func fillable(c *MetaWork) metadata.AttachmentParts {
 	if c == nil {
 		return metadata.AllAttachmentParts
@@ -182,7 +189,7 @@ func (gen *MetaWork) layInto(w *MetaWork, g *Generated) {
 		w.Recaps, mark.Recaps = gen.Recaps, true
 	}
 	if gen.RecapSummary != nil {
-		w.RecapSummary, mark.Recaps = gen.RecapSummary, true
+		w.RecapSummary, mark.Recaps, mark.RecapSummary = gen.RecapSummary, true, true
 	}
 	if gen.GeneratedDescription != nil {
 		w.GeneratedDescription, mark.Description = gen.GeneratedDescription, true

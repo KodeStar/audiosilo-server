@@ -41,6 +41,8 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
     'GET /admin/shares': { body: { shares: [] } },
     // A person's imported listening (their Listening tab): none, by default.
     'GET /admin/imports': { body: { imports: [] } },
+    // The book page's Characters and recaps card: no community match, nothing generated.
+    'GET /libraries/1/meta': { body: { matched: false } },
     // No cover art by default: every book gets its generated cover.
     'POST /admin/covers': (req) => ({
       body: {
