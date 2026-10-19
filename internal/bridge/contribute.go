@@ -45,10 +45,9 @@ func contributeParams(raw json.RawMessage) (json.RawMessage, error) {
 			return nil, invalid("dimensions are characters and recaps, each once")
 		}
 	}
-	if len(p.Dimensions) == 0 {
-		p.Dimensions = all
-	}
-	p.Dimensions = slices.DeleteFunc(all, func(d string) bool { return !slices.Contains(p.Dimensions, d) })
+	p.Dimensions = slices.DeleteFunc(all, func(d string) bool {
+		return len(p.Dimensions) > 0 && !slices.Contains(p.Dimensions, d)
+	})
 	return json.Marshal(p)
 }
 
@@ -101,13 +100,23 @@ type Correction struct {
 // one; evidence required, at most 2000 characters (line breaks kept). It returns
 // them as stored, the values trimmed.
 func correctParams(raw json.RawMessage) (json.RawMessage, error) {
+	p, err := parseCorrect(raw)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(p)
+}
+
+// parseCorrect is correctParams before it encodes them: the params checked,
+// decoded and trimmed.
+func parseCorrect(raw json.RawMessage) (CorrectParams, error) {
 	var p CorrectParams
 	if err := decodeStrict(raw, &p); err != nil {
-		return nil, invalid("params: %v", err)
+		return p, invalid("params: %v", err)
 	}
 	p.WorkID = strings.TrimSpace(p.WorkID)
 	if p.WorkID == "" {
-		return nil, invalid("work_id is required")
+		return p, invalid("work_id is required")
 	}
 	for _, f := range []struct {
 		name, v string
@@ -118,54 +127,48 @@ func correctParams(raw json.RawMessage) (json.RawMessage, error) {
 		{"source", p.Source, maxSourceLen},
 	} {
 		if err := checkText(f.name, f.v, f.max); err != nil {
-			return nil, err
+			return p, err
 		}
 	}
 	if len(p.Changes) == 0 || len(p.Changes) > MaxCorrections {
-		return nil, invalid("changes must list 1 to %d fields", MaxCorrections)
+		return p, invalid("changes must list 1 to %d fields", MaxCorrections)
 	}
 	for i := range p.Changes {
 		c := &p.Changes[i]
 		if !slices.Contains(CorrectionFields, c.Field) {
-			return nil, invalid("field %q can't be corrected", c.Field)
+			return p, invalid("field %q can't be corrected", c.Field)
 		}
 		if slices.ContainsFunc(p.Changes[:i], func(o Correction) bool { return o.Field == c.Field }) {
-			return nil, invalid("field %q is listed twice", c.Field)
+			return p, invalid("field %q is listed twice", c.Field)
 		}
 		c.Current, c.Corrected = strings.TrimSpace(c.Current), strings.TrimSpace(c.Corrected)
 		for _, v := range []string{c.Current, c.Corrected} {
 			if err := checkProse(c.Field, v, maxCorrectionValue, false); err != nil {
-				return nil, err
+				return p, err
 			}
 		}
 		if c.Corrected == "" || c.Corrected == c.Current {
-			return nil, invalid("%s: the corrected value must be set and differ from the current one", c.Field)
+			return p, invalid("%s: the corrected value must be set and differ from the current one", c.Field)
 		}
 	}
 	p.Evidence = strings.TrimSpace(strings.ReplaceAll(p.Evidence, "\r\n", "\n"))
 	if p.Evidence == "" {
-		return nil, invalid("evidence is required")
+		return p, invalid("evidence is required")
 	}
 	if err := checkProse("evidence", p.Evidence, maxEvidence, true); err != nil {
-		return nil, err
+		return p, err
 	}
-	return json.Marshal(p)
+	return p, nil
 }
 
 // CheckCorrect checks meta.correct's params as Enqueue will (correctParams)
 // and returns them decoded, for the api's checks against the book before it
 // queues them (the edited fields, the stamped source).
 func CheckCorrect(raw json.RawMessage) (CorrectParams, error) {
-	var p CorrectParams
 	if len(raw) > maxParamsBytes {
-		return p, invalid("params too large")
+		return CorrectParams{}, invalid("params too large")
 	}
-	stored, err := correctParams(raw)
-	if err != nil {
-		return p, err
-	}
-	err = json.Unmarshal(stored, &p)
-	return p, err
+	return parseCorrect(raw)
 }
 
 // checkProse bounds an admin's text: valid UTF-8, at most max characters, no

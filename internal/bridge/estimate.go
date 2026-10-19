@@ -39,13 +39,10 @@ func (st Status) EstimateSidecars(duration float64, ebook bool) SidecarsCost {
 	if ebook {
 		c.Source = SourceEbook
 	}
-	var est *SidecarsEstimates
-	if st.Estimates != nil {
-		est = st.Estimates.Sidecars
-	}
-	if est == nil {
+	if st.Estimates == nil || st.Estimates.Sidecars == nil {
 		return c
 	}
+	est := st.Estimates.Sidecars
 	c.Figures = true
 	c.Subscription, c.AgentReady = est.Subscription, est.AgentReady
 	if ebook {

@@ -54,7 +54,7 @@ func (a *API) moduleActive(m modules.Module, bridgeOn *bridgeInfo) bool {
 func (a *API) requireModule(id string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.moduleOn(id) {
-			writeErrorCode(w, http.StatusNotFound, codeModuleOff, "this module is turned off")
+			writeModuleOff(w)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -78,15 +78,21 @@ func (r moduleRoutes) Admin(pattern string, h http.Handler) {
 // (contributing to the community, first of all) are a grown-up's own.
 func (r moduleRoutes) User(pattern string, h http.Handler) {
 	r.mux.Handle(checkModulePattern(r.id, pattern),
-		r.a.requireAuth(notKid(r.a.notDemo(r.a.requireModule(r.id, h)))))
+		r.a.requireAuth(notKid(notDemo(r.a.requireModule(r.id, h)))))
 }
 
-// notDemo answers 403 demo_account for a demo account, else runs next. It reads
-// the account (nonDemoAccount): the token's lookup doesn't load is_demo, so the
-// request's user can't say.
-func (a *API) notDemo(next http.Handler) http.Handler {
+// writeModuleOff answers 404 module_off: a module's route, or a job that needs
+// a module (bridge.ModuleFor), while the module is off.
+func writeModuleOff(w http.ResponseWriter) {
+	writeErrorCode(w, http.StatusNotFound, codeModuleOff, "this module is turned off")
+}
+
+// notDemo answers 403 demo_account for a demo account (the token's lookup
+// loads is_demo), else runs next.
+func notDemo(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.nonDemoAccount(w, r) == nil {
+		if u := userFrom(r.Context()); u != nil && u.IsDemo {
+			writeErrorCode(w, http.StatusForbidden, codeDemoAccount, "not available for demo accounts")
 			return
 		}
 		next.ServeHTTP(w, r)

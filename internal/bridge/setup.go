@@ -75,13 +75,14 @@ func (s *Setup) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// validate bounds the checklist in place: at most maxSetupItems items, each
-// with a well-formed id listed once (an item that isn't is left out), its
-// detail cleaned to printable bounded text, its library ids positive, once
-// each and at most maxLibraries; a login that isn't GitHub's shape is dropped.
-func (s *Setup) validate() {
-	if s == nil {
-		return
+// validate is the checklist as kept: nil for none or a block that didn't
+// decode, else s bounded in place: at most maxSetupItems items, each with a
+// well-formed id listed once (an item that isn't is left out), its detail
+// cleaned to printable bounded text, its library ids positive, once each and at
+// most maxLibraries; a login that isn't GitHub's shape is dropped.
+func (s *Setup) validate() *Setup {
+	if s == nil || s.dropped {
+		return nil
 	}
 	items := make([]SetupItem, 0, min(len(s.Items), maxSetupItems))
 	for _, it := range s.Items {
@@ -106,12 +107,14 @@ func (s *Setup) validate() {
 	if !githubLoginPattern.MatchString(s.GitHubLogin) {
 		s.GitHubLogin = ""
 	}
+	return s
 }
 
-// Optional heartbeat blocks the server reads (PUT /bridge/status), listed in
-// the reply's accepts: a Bridge sends such a block only after a reply named
-// it, as an older server refuses a heartbeat with a field it doesn't know.
+// AcceptSetup names the setup block in a heartbeat reply's accepts.
 const AcceptSetup = "setup"
 
-// HeartbeatAccepts is the reply's accepts list.
+// HeartbeatAccepts is the reply's accepts list: the optional heartbeat blocks
+// the server reads (PUT /bridge/status). A Bridge sends such a block only after
+// a reply named it, as an older server refuses a heartbeat with a field it
+// doesn't know.
 func HeartbeatAccepts() []string { return []string{AcceptSetup} }

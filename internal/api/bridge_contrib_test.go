@@ -340,37 +340,15 @@ func TestBuiltinModuleRoutePatterns(t *testing.T) {
 		if m.Routes == nil {
 			continue
 		}
-		var patterns []string
 		func() {
 			defer func() {
 				if p := recover(); p != nil {
-					t.Errorf("module %s: %v (patterns so far %v)", m.ID, p, patterns)
+					t.Errorf("module %s: %v", m.ID, p)
 				}
 			}()
-			m.Routes(recordingRoutes{moduleRoutes{a: e.api, mux: mux, id: m.ID}, &patterns})
+			m.Routes(moduleRoutes{a: e.api, mux: mux, id: m.ID})
 		}()
-		for _, p := range patterns {
-			if checkModulePattern(m.ID, p) != p {
-				t.Errorf("module %s: pattern %q", m.ID, p)
-			}
-		}
 	}
-}
-
-// recordingRoutes mounts through moduleRoutes and records each pattern.
-type recordingRoutes struct {
-	moduleRoutes
-	patterns *[]string
-}
-
-func (r recordingRoutes) Admin(pattern string, h http.Handler) {
-	*r.patterns = append(*r.patterns, pattern)
-	r.moduleRoutes.Admin(pattern, h)
-}
-
-func (r recordingRoutes) User(pattern string, h http.Handler) {
-	*r.patterns = append(*r.patterns, pattern)
-	r.moduleRoutes.User(pattern, h)
 }
 
 // Every field a meta.correct job may correct is a book field the catalog

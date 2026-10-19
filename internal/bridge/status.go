@@ -282,10 +282,7 @@ func (st *Status) Validate() error {
 		}
 	}
 	st.Estimates.validate()
-	if st.Setup != nil && st.Setup.dropped {
-		st.Setup = nil
-	}
-	st.Setup.validate()
+	st.Setup = st.Setup.validate()
 	if st.Kinds == nil {
 		st.Kinds = []string{}
 	}

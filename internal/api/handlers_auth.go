@@ -58,9 +58,6 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 // accepts (Authorization header only), for a public route that says more to a
 // signed-in caller. A missing or refused token is simply anonymous, never a 401.
 func (a *API) signedIn(r *http.Request) bool {
-	if bearerToken(r, false) == "" {
-		return false
-	}
 	_, failure, _ := a.authenticate(r, false, sessionOrAPI)
 	return failure == ""
 }

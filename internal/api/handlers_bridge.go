@@ -701,7 +701,7 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	// A job that needs a managed module (contributions: filing to the
 	// community) is unknown while the module is off, as the module's routes are.
 	if m := bridge.ModuleFor(req.Kind, req.Params); m != "" && !a.moduleOn(m) {
-		writeErrorCode(w, http.StatusNotFound, codeModuleOff, "this module is turned off")
+		writeModuleOff(w)
 		return
 	}
 	nj := bridge.NewJob{Kind: req.Kind, LibraryID: req.LibraryID, Params: req.Params, RequestedBy: userFrom(r.Context()).ID}
@@ -758,9 +758,9 @@ const codeNotEdited = "not_edited"
 
 // checkCorrections checks a meta.correct job's params against the book
 // (bridge.CheckCorrect first, 400 for what it refuses): each change must be a
-// field an admin edited on this book (catalog.SourceEdited, never a scanned,
-// path, community or ABS value) with the corrected value the book's edited
-// value now (catalog.SameFieldValue), else 400 not_edited naming the field.
+// field an admin edited on this book with the corrected value the book's edited
+// value now (catalog.MatchState.EditedValue), else 400 not_edited naming the
+// field.
 // It returns the params with each corrected value as the book holds it and
 // source stamped as this server (audiosilo-server/<version>), whatever the
 // request said; it answers the error itself and reports whether there was none.
@@ -777,13 +777,13 @@ func (a *API) checkCorrections(w http.ResponseWriter, r *http.Request, book *cat
 	}
 	for i := range p.Changes {
 		c := &p.Changes[i]
-		fv := st.Fields[c.Field]
-		if fv.Source != catalog.SourceEdited || !catalog.SameFieldValue(c.Field, fv.Value, c.Corrected) {
+		v, ok := st.EditedValue(c.Field, c.Corrected)
+		if !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": codeNotEdited, "field": c.Field,
 				"error": c.Field + " isn't an edit made on this server, or the book's value changed since"})
 			return nil, false
 		}
-		c.Corrected = fv.Value
+		c.Corrected = v
 	}
 	p.Source = "audiosilo-server/" + Version
 	out, err := json.Marshal(p)

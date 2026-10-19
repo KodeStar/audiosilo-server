@@ -110,9 +110,7 @@ func TestBridgeSidecarsContribute(t *testing.T) {
 	// Denied: contributing needs the contributions module (Phase 2b), checked
 	// before the Bridge's answer; a local run doesn't.
 	resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, issue)
-	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"code":"module_off"`) {
-		t.Fatalf("module off: %d %s, want 404 module_off", resp.StatusCode, body)
-	}
+	wantCode(t, "module off", resp, body, http.StatusNotFound, "module_off")
 	setModule(t, b.testEnv, b.adminTok, true)
 	for name, est := range map[string]string{"no estimates": "", "can't": sidecarsEstimates} {
 		b.beatWith(t, true, true, est)

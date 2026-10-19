@@ -1595,7 +1595,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   line breaks kept, CRLF stored as LF). The handler's `checkCorrections` (security-relevant: the server
   files only an admin's own edits) then requires each change's field to be `catalog.SourceEdited` on the
   book (`BookMatchState`; never a scanned, path, ABS or accepted-community value) with `corrected` the
-  book's value now (`catalog.SameFieldValue`), else **400 `not_edited`** naming the `field`, stores the
+  book's value now (`MatchState.EditedValue`), else **400 `not_edited`** naming the `field`, stores the
   book's own spelling of each value and stamps `source` = `audiosilo-server/<version>` whatever was sent.
   Result: `{issue_url, issue_number, changes, auto: [fields], maintainer: [fields]}`. Notifications word
   them "Shared with the community" / "Corrections sent" (failed: "Sharing with the community failed",
@@ -1614,8 +1614,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   and the player's registry entry (audiosilo-frontend `src/modules/registry.ts`) if listeners see it; a
   module's own settings are setting `<id>.<name>`, key `modules.<id>.<name>`. **Gating**: every route a
   module registers (`Registrar.Admin` = `requireAdmin`, `.User` = `requireAuth` + `notKid` (403 `kid_account`)
-  + `notDemo` (403 `demo_account`; it reads the account through `nonDemoAccount`, as the token's lookup
-  doesn't load `is_demo`), then `requireModule`; a
+  + `notDemo` (403 `demo_account`; the token's lookup loads `is_demo`, so neither reads the account), then
+  `requireModule`; a
   pattern must be `"METHOD /api/v1/..."`, else `checkModulePattern` panics at start) answers **404
   `module_off`** while the toggle is off, and is always mounted, so a toggle needs no restart. The routes
   gate on the toggle ONLY: an action needing the Bridge keeps its own 409, so routes don't flap with

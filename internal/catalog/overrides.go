@@ -1082,11 +1082,6 @@ func sameFieldValue(field, a, b string) bool {
 	return a == b
 }
 
-// SameFieldValue reports whether a and b, two values of field, say the same
-// (sameFieldValue): the Bridge's meta.correct check compares an admin's
-// corrected value with the book's edited one by it.
-func SameFieldValue(field, a, b string) bool { return sameFieldValue(field, a, b) }
-
 // newMainSeries is the main series edit leaves the book with when it sets or
 // reverts series ("" when it does neither): the value it sets, or the series the
 // book's layers (load) resolve to without its series override (what the scan or

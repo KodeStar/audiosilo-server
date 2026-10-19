@@ -465,8 +465,8 @@ type tokenRow struct {
 // lookupToken resolves a token hash whose kind is one of the accepted kinds to
 // its (partial) user and token row, applying the shared validity checks. The
 // user carries the household member fields (managed_by, member_kind, the member
-// rule), read through ownerJoin in the same statement, so a kid's refusal and a
-// member's scopes need no read of their own. Unknown, revoked and expired
+// rule) and is_demo, read through ownerJoin in the same statement, so a kid's
+// or a demo account's refusal and a member's scopes need no read of their own. Unknown, revoked and expired
 // tokens and disabled users all return ErrInvalidToken, and so does a cast token
 // without its grant or whose parent (the token that minted it) is signed out or
 // expired (castGrantOf). The single definition of "is this token valid", shared
@@ -488,12 +488,12 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	}
 	var member memberScan
 	err := s.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.role, u.disabled, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
+		`SELECT u.id, u.username, u.role, u.disabled, u.is_demo, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
 		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip,
 		        `+memberColumns+`
 		   FROM tokens t JOIN users u ON u.id = t.user_id`+ownerJoin+`
 		  WHERE t.token_hash = ? AND t.kind IN (`+inPlaceholders(len(kinds))+`)`, args...).
-		Scan(append([]any{&u.ID, &u.Username, &u.Role, &u.Disabled, &row.id, &row.kind, &expires, &revoked, &row.codeID,
+		Scan(append([]any{&u.ID, &u.Username, &u.Role, &u.Disabled, &u.IsDemo, &row.id, &row.kind, &expires, &revoked, &row.codeID,
 			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP},
 			member.dest()...)...)
 	if errors.Is(err, sql.ErrNoRows) {
