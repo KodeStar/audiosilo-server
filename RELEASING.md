@@ -123,7 +123,9 @@ Every push to `main` publishes `ghcr.io/kodestar/audiosilo-server:edge`: server
 never moves `:latest`, which only a `v*` tag publishes. Each `main` build that
 finishes is also tagged `sha-<short>`, to pin one commit (a newer push cancels a
 build still running, so a superseded commit gets no tag). The console reports the
-version as `dev-<sha>`, and the update check ignores it.
+version as `dev-<short sha>` (the same 7 characters as the `sha-` tag), and the
+update check ignores it. Release images carry no `sha-` tag: pin a release by its
+version.
 
 - **Player-only changes.** A push to the frontend's `main` refreshes
   `audiosilo-web:latest` but does not rebuild `:edge`. Rebuild it by hand:
