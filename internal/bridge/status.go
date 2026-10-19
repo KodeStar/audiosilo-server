@@ -178,7 +178,7 @@ func (st Status) Features() []string {
 			out = append(out, family)
 		}
 	}
-	if st.CanContribute() && !slices.Contains(out, FeatureContribute) {
+	if st.CanContribute() {
 		out = append(out, FeatureContribute)
 	}
 	slices.Sort(out)

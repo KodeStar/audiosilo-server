@@ -46,3 +46,31 @@ func TestValidate(t *testing.T) {
 		t.Errorf("two problems: %v", err)
 	}
 }
+
+// The capability rule: on, and the Bridge requirement (if any) met.
+func TestBridgeStateAndActive(t *testing.T) {
+	t.Parallel()
+	none := Module{ID: "x"}
+	needs := Module{ID: "y", RequiresBridge: "contribute"}
+	cases := []struct {
+		m        Module
+		online   bool
+		features []string
+		state    string
+	}{
+		{none, false, nil, ""},
+		{needs, false, nil, BridgeOffline},
+		{needs, true, []string{"bridge"}, BridgeNoFeature},
+		{needs, true, []string{"bridge", "contribute"}, BridgeReady},
+	}
+	for _, c := range cases {
+		st := c.m.BridgeState(c.online, c.features)
+		if st != c.state {
+			t.Errorf("%s online=%t %v: state %q, want %q", c.m.ID, c.online, c.features, st, c.state)
+		}
+		want := st == "" || st == BridgeReady
+		if Active(true, st) != want || Active(false, st) {
+			t.Errorf("%s state %q: Active wrong", c.m.ID, st)
+		}
+	}
+}

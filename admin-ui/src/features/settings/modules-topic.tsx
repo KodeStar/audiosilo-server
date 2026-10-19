@@ -72,7 +72,7 @@ function ModuleCard({ module: m, settings }: { module: AdminModule; settings: Ad
   const name = t(`settings.module.${m.id}.name`, { defaultValue: m.id });
   // The settings envelope is the toggle's truth (a save updates it at once);
   // the module list may lag it by a refetch.
-  const enabled = settings.modules?.[m.id] ?? m.enabled;
+  const enabled = settings.modules[m.id] ?? m.enabled;
   const titleId = `module-${m.id}-title`;
   const switchId = `module-${m.id}-switch`;
   return (
@@ -99,7 +99,7 @@ function ModuleCard({ module: m, settings }: { module: AdminModule; settings: Ad
           title={t('settings.modules.toggle', { name })}
           badges={<SettingBadges settings={settings} id={id} />}
           htmlFor={switchId}
-          description={m.bridge_state ? <BridgeLine module={m} /> : undefined}
+          description={m.bridge_state ? <BridgeLine id={m.id} state={m.bridge_state} /> : undefined}
           descriptionId={`${switchId}-desc`}
         >
           <InstantSwitch
@@ -130,12 +130,11 @@ function ModuleCard({ module: m, settings }: { module: AdminModule; settings: Ad
 }
 
 /** Where the module stands with the Bridge feature it needs. */
-function BridgeLine({ module: m }: { module: AdminModule }) {
+function BridgeLine({ id, state }: { id: string; state: ModuleBridgeState }) {
   const { t } = useTranslation();
-  const state = m.bridge_state ?? 'offline';
   const words =
     state === 'no_feature'
-      ? t(`settings.module.${m.id}.needs`, {
+      ? t(`settings.module.${id}.needs`, {
           defaultValue: t('settings.modules.bridge.no_feature'),
         })
       : t(`settings.modules.bridge.${state}`);

@@ -144,28 +144,24 @@ type ModuleConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// moduleKey is the config key of a module's toggle.
-func moduleKey(id string) string { return "modules." + id + ".enabled" }
+// moduleToggle is module id's toggle in c, or nil when it has no config row.
+func (c *Config) moduleToggle(id string) *bool {
+	f := fieldByKey("modules." + id + ".enabled")
+	if f == nil {
+		return nil
+	}
+	on, _ := f.ptr(c).(*bool)
+	return on
+}
 
 // HasModule reports whether module id has its toggle's config row (the
 // registry is checked against it at start).
-func (c *Config) HasModule(id string) bool {
-	f := fieldByKey(moduleKey(id))
-	if f == nil {
-		return false
-	}
-	_, ok := f.ptr(c).(*bool)
-	return ok
-}
+func (c *Config) HasModule(id string) bool { return c.moduleToggle(id) != nil }
 
 // ModuleEnabled reports whether module id is turned on; false for an unknown id.
 func (c *Config) ModuleEnabled(id string) bool {
-	f := fieldByKey(moduleKey(id))
-	if f == nil {
-		return false
-	}
-	on, ok := f.ptr(c).(*bool)
-	return ok && *on
+	on := c.moduleToggle(id)
+	return on != nil && *on
 }
 
 // DemoConfig configures public demo mode: when enabled, an unauthenticated

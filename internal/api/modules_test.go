@@ -56,14 +56,9 @@ func setModule(t *testing.T, e *testEnv, adminTok string, on bool) {
 // (a module's flag is false while off, never missing).
 func capability(t *testing.T, e *testEnv) bool {
 	t.Helper()
-	_, body := e.do(t, "GET", "/api/v1/server", "", "")
-	var info struct {
-		Capabilities map[string]bool `json:"capabilities"`
-	}
-	decodeInto(t, body, &info)
-	on, ok := info.Capabilities["contributions"]
+	on, ok := serverCapabilities(t, e)["contributions"]
 	if !ok {
-		t.Fatalf("no contributions capability: %s", body)
+		t.Fatal("no contributions capability on GET /server")
 	}
 	return on
 }

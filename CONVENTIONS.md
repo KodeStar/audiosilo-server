@@ -1572,17 +1572,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   without a cycle); the launcher's `API.SetModules` refuses to start on a `modules.Validate` error (id
   `^[a-z][a-z0-9_]{0,31}$`, once only, not a core capability name (`coreCapabilities`), its config row
   present: `config.HasModule`). **Adding a module**: its row in `config/settings.go`'s `fields` (+
-  `ModulesConfig` field, `config.example.yaml`), its entry in `builtin`, its console copy in every locale,
+  `ModulesConfig` field, `config.example.yaml`), its entry in `builtin` (`RequiresBridge` names a `bridge` constant, e.g. `bridge.FeatureContribute`), its console copy in every locale,
   and the player's registry entry (audiosilo-frontend `src/modules/registry.ts`) if listeners see it; a
   module's own settings are setting `<id>.<name>`, key `modules.<id>.<name>`. **Gating**: every route a
   module registers (`Registrar.Admin` = `requireAdmin`, `.User` = `requireAuth`, then `requireModule`; a
   pattern must be `"METHOD /api/v1/..."`, else `checkModulePattern` panics at start) answers **404
   `module_off`** while the toggle is off, and is always mounted, so a toggle needs no restart. The routes
   gate on the toggle ONLY: an action needing the Bridge keeps its own 409, so routes don't flap with
-  heartbeat timing. The **capability flag** (`moduleActive`) is the toggle AND the requirement met (an
-  online Bridge whose features hold it), `false` (never absent) while off; `GET /server` computes the
-  Bridge block once per request and reuses it. **Background work**: `StartModules(ctx)` at launch (beside
-  `StartChapterChecks`), then `syncModules` in `handleUpdateSettings` right after the live config swap,
+  heartbeat timing. The **capability flag** (`modules.Active` over `Module.BridgeState`, the framework's
+  rule; `api.moduleActive` feeds it) is the toggle AND the requirement met (an online Bridge whose features
+  hold it), `false` (never absent) while off; `GET /server` computes the
+  Bridge block once per request and reuses it. **Background work** (`modules.Runner`; the API holds one): `StartModules(ctx)` at launch (beside
+  `StartChapterChecks`), then `syncModules` (`Runner.Sync`) in `handleUpdateSettings` right after the live config swap,
   under the settings mutex: a module turned on starts `Start` in its own goroutine (a panic stops that
   module only), one turned off is cancelled without the save waiting; turned back on meanwhile, the new run
   waits for the old to return, so runs never overlap. **`GET /admin/modules`** (admin only):

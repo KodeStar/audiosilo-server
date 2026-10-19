@@ -5,7 +5,10 @@
 // sends only ids.
 package builtin
 
-import "github.com/kodestar/audiosilo-server/internal/modules"
+import (
+	"github.com/kodestar/audiosilo-server/internal/bridge"
+	"github.com/kodestar/audiosilo-server/internal/modules"
+)
 
 // Modules returns the registry.
 func Modules() []modules.Module {
@@ -14,6 +17,6 @@ func Modules() []modules.Module {
 		// generated sidecars to the community metadata database through the Bridge,
 		// which holds the GitHub sign-in. An inert shell until 2b: no routes, no
 		// background work.
-		{ID: "contributions", RequiresBridge: "contribute"},
+		{ID: "contributions", RequiresBridge: bridge.FeatureContribute},
 	}
 }

@@ -3,6 +3,7 @@ package builtin
 import (
 	"testing"
 
+	"github.com/kodestar/audiosilo-server/internal/bridge"
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/modules"
 )
@@ -15,7 +16,7 @@ func TestRegistryValidates(t *testing.T) {
 	if err := modules.Validate(ms, config.Default(t.TempDir()).HasModule, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(ms) == 0 || ms[0].ID != "contributions" || ms[0].RequiresBridge != "contribute" {
+	if len(ms) == 0 || ms[0].ID != "contributions" || ms[0].RequiresBridge != bridge.FeatureContribute {
 		t.Fatalf("registry = %+v, want contributions first, needing contribute", ms)
 	}
 	// Phase 2a's contributions is an inert shell: 2b gives it routes and work.

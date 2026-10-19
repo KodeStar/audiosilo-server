@@ -144,7 +144,7 @@ type API struct {
 	// modules is the managed module registry (SetModules, before Handler) and
 	// moduleRuns their background work while each is on (modules.go).
 	modules    []modules.Module
-	moduleRuns moduleRunner
+	moduleRuns modules.Runner
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.

@@ -1,11 +1,11 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { AdminModule, AdminSettings } from '@/api/types';
+import type { AdminModule } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { settingsWith, systemStatus } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
-import { signedInRoutes } from '@/test/routes';
+import { patchEcho, signedInRoutes } from '@/test/routes';
 import { MODULE_PAGES } from './settings-model';
 
 // Settings > Modules (Bridge Phase 2a): a card per module with its switch, its
@@ -29,18 +29,6 @@ function routes(modules: AdminModule[], over: Record<string, MockRoute> = {}) {
     'GET /admin/modules': { body: { modules } },
     ...over,
   });
-}
-
-/** A PATCH that answers with the settings merged with what it sent. */
-function patchEcho(base: AdminSettings): MockRoute {
-  return (req) => {
-    const body = req.body as Record<string, Record<string, unknown>>;
-    const next = { ...base } as unknown as Record<string, unknown>;
-    for (const [section, fields] of Object.entries(body)) {
-      next[section] = { ...(next[section] as object), ...fields };
-    }
-    return { body: next };
-  };
 }
 
 async function card() {

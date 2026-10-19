@@ -61,6 +61,34 @@ type Deps struct {
 	Bridge  *bridge.Service
 }
 
+// Where a module stands with the Bridge feature it needs (Module.BridgeState,
+// GET /admin/modules bridge_state).
+const (
+	BridgeOffline   = "offline"    // no paired Bridge heard from within bridge.OnlineWindow
+	BridgeNoFeature = "no_feature" // the online Bridge doesn't offer the feature
+	BridgeReady     = "ready"      // the online Bridge offers it
+)
+
+// BridgeState is where m stands with the Bridge feature it needs, given
+// whether a Bridge is online and the features it offers; "" when m needs none.
+func (m Module) BridgeState(online bool, features []string) string {
+	switch {
+	case m.RequiresBridge == "":
+		return ""
+	case !online:
+		return BridgeOffline
+	case !slices.Contains(features, m.RequiresBridge):
+		return BridgeNoFeature
+	}
+	return BridgeReady
+}
+
+// Active is a module's capability flag: on (its toggle), and its Bridge
+// requirement met (bridgeState, from BridgeState: "" or BridgeReady).
+func Active(on bool, bridgeState string) bool {
+	return on && (bridgeState == "" || bridgeState == BridgeReady)
+}
+
 // idPattern is a module id: a capability flag and a config key segment.
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 

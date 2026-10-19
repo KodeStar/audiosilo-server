@@ -1,4 +1,4 @@
-import type { BookRef } from '@/api/types';
+import type { AdminSettings, BookRef } from '@/api/types';
 import type { MockRoute } from './fetch-mock';
 import {
   admin,
@@ -50,5 +50,17 @@ export function signedInRoutes(over: Record<string, MockRoute> = {}): Record<str
       },
     }),
     ...over,
+  };
+}
+
+/** A PATCH that answers with the settings merged with what it sent. */
+export function patchEcho(base: AdminSettings, extra: Partial<AdminSettings> = {}): MockRoute {
+  return (req) => {
+    const body = req.body as Record<string, Record<string, unknown>>;
+    const next = { ...base, ...extra } as unknown as Record<string, unknown>;
+    for (const [section, fields] of Object.entries(body)) {
+      next[section] = { ...(next[section] as object), ...fields };
+    }
+    return { body: next };
   };
 }
