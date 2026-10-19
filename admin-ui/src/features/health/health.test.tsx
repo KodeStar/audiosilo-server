@@ -1,9 +1,9 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { AdminBook, DuplicateGroup, SeriesSpellingGroup } from '@/api/types';
+import type { AdminBook, BridgeJob, DuplicateGroup, SeriesSpellingGroup } from '@/api/types';
 import { mockFetch, type MockReply, type MockRoute } from '@/test/fetch-mock';
-import { issuesSummary, libraries } from '@/test/fixtures';
+import { issuesSummary, libraries, serverInfo } from '@/test/fixtures';
 import { adminBook } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -215,6 +215,248 @@ describe('library health', () => {
     expect(bulk?.body).toEqual({
       books: coarse.map((b) => ({ library_id: b.library_id, path: b.path })),
       chapter_source: 'community',
+    });
+  });
+
+  describe('detect chapters', () => {
+    const plain = [
+      adminBook({ path: 'Mosse/The Black Gate', title: 'The Black Gate', duration: 4 * 3600 }),
+      adminBook({ path: 'Mosse/Past Tense', title: 'Past Tense', duration: 2 * 3600 }),
+    ];
+    const bridgeServer = {
+      ...serverInfo,
+      capabilities: { ...serverInfo.capabilities, bridge: true },
+      bridge: { version: '0.18.0', features: ['bridge', 'chapters', 'sidecars'] },
+    };
+    const bridgeStatus = {
+      paired: true,
+      paired_by: null,
+      pairing: null,
+      online: true,
+      kinds: ['chapters.detect'],
+      features: ['chapters'],
+      libraries: [
+        {
+          id: 1,
+          name: 'Audiobooks',
+          root: '/books',
+          mapping: {
+            library_id: 1,
+            mount_path: '/media/books',
+            mapped: true,
+            writable: true,
+            checked_path: '',
+            error: '',
+          },
+        },
+      ],
+      workers: [],
+      estimates: { sidecars: { asr_seconds_per_audio_hour: 900 } },
+    };
+    // POST /admin/bridge/jobs answers the job itself (201 when it was queued).
+    const queuedJob = (path: string): MockReply => ({
+      status: 201,
+      body: {
+        id: 5,
+        kind: 'chapters.detect',
+        library_id: 1,
+        path,
+        params: {},
+        state: 'queued',
+        progress: {},
+        result: {},
+        error: '',
+        requested_by: { id: 1, username: 'chris' },
+        priority: 0,
+        attempts: 0,
+        lease_until: null,
+        cancel_requested: false,
+        created_at: '2026-10-17T09:00:00Z',
+        updated_at: '2026-10-17T09:00:00Z',
+        claimed_at: null,
+        finished_at: null,
+      } satisfies BridgeJob,
+    });
+    function detectRoutes(over: Record<string, MockRoute> = {}) {
+      const summary = issuesSummary();
+      summary.categories[4] = { kind: 'no_chapters', count: 2, ignored: 0, samples: [] };
+      return routes({
+        'GET /server': { body: bridgeServer },
+        'GET /admin/issues': { body: summary },
+        'GET /admin/books': (req) => ({
+          body: { books: req.query.get('issue') === 'no_chapters' ? plain : [] },
+        }),
+        'GET /admin/bridge': { body: bridgeStatus },
+        ...over,
+      });
+    }
+
+    it('confirms with the transcription time and no agent cost, then queues chapters.detect', async () => {
+      const calls = mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': (req) => queuedJob((req.body as { path: string }).path),
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      const row = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      // The footer says where the found chapters go.
+      expect(
+        screen.getByText(
+          "Showing 2. Detect chapters saves the chapters it finds to the book's .audiosilo folder; nothing else on disk changes.",
+        ),
+      ).toBeInTheDocument();
+      await user.click(within(row).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('None: no agent is used')).toBeInTheDocument();
+      expect(await within(dialog).findByText(/^About /)).toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+      const queued = calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs');
+      expect(queued.map((c) => c.body)).toEqual([
+        { kind: 'chapters.detect', library_id: 1, path: 'Mosse/The Black Gate', params: {} },
+      ]);
+    });
+
+    it('queues a selection from the bar, passing over a book whose generate job finds them', async () => {
+      const calls = mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': (req) =>
+            (req.body as { path: string }).path === 'Mosse/Past Tense'
+              ? { status: 409, body: { error: 'a generate job is open', code: 'generate_open' } }
+              : queuedJob((req.body as { path: string }).path),
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('2 books')).toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+      expect(
+        screen.getByText('Being generated, which finds the chapters too: Past Tense.'),
+      ).toBeInTheDocument();
+      expect(
+        calls.filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs'),
+      ).toHaveLength(2);
+    });
+
+    it('never counts a parked detect job that comes back as queued, and passes over a book being described', async () => {
+      mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': (req) => {
+            const path = (req.body as { path: string }).path;
+            if (path === 'Mosse/Past Tense') {
+              return {
+                status: 409,
+                body: { error: 'a description job is open', code: 'describe_open' },
+              };
+            }
+            // A second press on a parked job answers that job (200, not created).
+            const parked = (queuedJob(path) as { body: BridgeJob }).body;
+            return { status: 200, body: { ...parked, state: 'needs_attention' } };
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Nothing was queued')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'Waiting for attention on the Bridge: The Black Gate. A description is being written (try again once it has finished): Past Tense.',
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Finding the chapters of/)).not.toBeInTheDocument();
+    });
+
+    it('offers no Detect chapters for a book whose chapter source was chosen, and says why', async () => {
+      const chosen = [{ ...plain[0], chapter_choice: 'files' as const }, plain[1]];
+      const calls = mockFetch(
+        detectRoutes({
+          'GET /admin/books': (req) => ({
+            body: { books: req.query.get('issue') === 'no_chapters' ? chosen : [] },
+          }),
+          'POST /admin/bridge/jobs': (req) => queuedJob((req.body as { path: string }).path),
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      const row = (await screen.findByRole('link', { name: 'The Black Gate' })).closest('li')!;
+      expect(
+        within(row).queryByRole('button', { name: 'Detect chapters' }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(row).getByText(
+          'Uses the file’s chapters by choice. Set it back to automatic on the book page to detect chapters.',
+        ),
+      ).toBeInTheDocument();
+      const other = screen.getByRole('link', { name: 'Past Tense' }).closest('li')!;
+      expect(within(other).getByRole('button', { name: 'Detect chapters' })).toBeInTheDocument();
+      // The bar asks only for the book it can.
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Past Tense')).toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      expect(await screen.findByText('Finding the chapters of 1 book')).toBeInTheDocument();
+      expect(
+        calls
+          .filter((c) => c.method === 'POST' && c.path === '/admin/bridge/jobs')
+          .map((c) => (c.body as { path: string }).path),
+      ).toEqual(['Mosse/Past Tense']);
+    });
+
+    it('stays open while it queues, so its outcome lands in the dialog that started it', async () => {
+      // The books' POSTs wait until the test lets them through.
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      mockFetch(
+        detectRoutes({
+          'POST /admin/bridge/jobs': async (req) => {
+            await held;
+            return queuedJob((req.body as { path: string }).path);
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      const bar = await screen.findByRole('toolbar');
+      await user.click(within(bar).getByRole('button', { name: 'Detect chapters' }));
+      const confirm = { name: 'Detect chapters' };
+      const dialog = await screen.findByRole('dialog', confirm);
+      await user.click(within(dialog).getByRole('button', { name: 'Detect chapters' }));
+      // Cancel and Escape do nothing while it queues.
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await user.keyboard('{Escape}');
+      expect(screen.getByRole('dialog', confirm)).toBeInTheDocument();
+      release();
+      expect(await screen.findByText('Finding the chapters of 2 books')).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('dialog', confirm)).not.toBeInTheDocument());
+      // The bar's selection was queued, so it is done with.
+      expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+    });
+
+    it('offers no fix while the Bridge does not offer chapter detection', async () => {
+      mockFetch(detectRoutes({ 'GET /server': { body: serverInfo } }));
+      renderApp('/health?issue=no_chapters');
+      await screen.findByRole('link', { name: 'The Black Gate' });
+      expect(screen.queryByRole('button', { name: 'Detect chapters' })).not.toBeInTheDocument();
+      expect(
+        screen.getByText('Showing 2. Fixes are saved in AudioSilo; nothing on disk changes.'),
+      ).toBeInTheDocument();
     });
   });
 

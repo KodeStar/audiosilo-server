@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { BridgeEstimate, BridgeJob, BridgeJobState, ServerInfo } from '@/api/types';
+import type {
+  BridgeEstimate,
+  BridgeJob,
+  BridgeJobState,
+  BridgeStatus,
+  ServerInfo,
+} from '@/api/types';
+import i18n from '@/i18n';
 import en from '@/i18n/locales/en.json';
 import { formatUsd } from '@/lib/format';
 import { serverInfo } from '@/test/fixtures';
@@ -7,11 +14,16 @@ import { adminBook } from '@/test/library-fixtures';
 import {
   batchCheck,
   batchPlan,
+  blocksGenerate,
+  generateBlocker,
   bridgeJobLink,
   clampsDescription,
   DESCRIPTION_CLAMP_CHARS,
   describeOffered,
   destinationKey,
+  detectAvailable,
+  detectJobsKnown,
+  detectPlan,
   estimateView,
   GENERATE_PARKED_POLL_MS,
   GENERATE_POLL_MS,
@@ -24,6 +36,7 @@ import {
   generateResult,
   isBookKind,
   KIND_DESCRIBE,
+  KIND_DETECT,
   KIND_GENERATE,
   KNOWN_PARKS,
   KNOWN_STAGES,
@@ -37,6 +50,7 @@ import {
   titleCase,
   type BatchCheck,
 } from './generate-model';
+import { skipNotes } from './use-generate';
 
 const strings = en as Record<string, string>;
 
@@ -100,6 +114,13 @@ describe('the action gate', () => {
     // A server from before the Bridge, or metadata off: no request at all.
     expect(generateJobsKnown(server({}))).toBe(false);
     expect(generateJobsKnown(server({ bridge: true, metadata: false }))).toBe(false);
+  });
+
+  it('follows a book chapter detection on any server that knows the Bridge, metadata or not', () => {
+    expect(detectJobsKnown(server({ bridge: true }))).toBe(true);
+    expect(detectJobsKnown(server({ bridge: false, metadata: false }))).toBe(true);
+    expect(detectJobsKnown(server({}))).toBe(false);
+    expect(detectJobsKnown(undefined)).toBe(false);
   });
 
   it('hides the action when the community has both, and says Regenerate over local data', () => {
@@ -694,10 +715,13 @@ describe('a description (Phase 1c)', () => {
     expect(describeOffered({ ...can, has: { ...local, community_unknown: true } }, [])).toBe(false);
   });
 
-  it('is not offered while a generate or describe job is open', () => {
+  it('is not offered while a generate, describe or chapter detection job is open', () => {
     const e = { ...can, has: has({ characters: true }) };
     expect(describeOffered(e, [open(KIND_GENERATE)])).toBe(false);
     expect(describeOffered(e, [open(KIND_DESCRIBE, 'needs_attention')])).toBe(false);
+    // A detection, running or parked, holds the book on the Bridge.
+    expect(describeOffered(e, [open(KIND_DETECT)])).toBe(false);
+    expect(describeOffered(e, [open(KIND_DETECT, 'needs_attention')])).toBe(false);
     // Another kind (a verify) doesn't count.
     expect(describeOffered(e, [open('bridge.verify')])).toBe(true);
   });
@@ -741,5 +765,119 @@ describe('a description (Phase 1c)', () => {
   it('labels the describing stage', () => {
     expect(KNOWN_STAGES).toContain('describing');
     expect(strings['bridge.stage.describing']).toBe('Writing the description');
+  });
+});
+
+describe('detecting chapters', () => {
+  it('offers Detect chapters only while an online Bridge offers the chapters feature, metadata or not', () => {
+    const features = ['bridge', 'chapters'];
+    expect(detectAvailable(server({ bridge: true, features }))).toBe(true);
+    expect(detectAvailable(server({ bridge: true, metadata: false, features }))).toBe(true);
+    expect(detectAvailable(server({ bridge: false, features }))).toBe(false);
+    expect(detectAvailable(server({ bridge: true }))).toBe(false);
+    expect(detectAvailable(server({ bridge: true, features: null }))).toBe(false);
+    expect(detectAvailable(undefined)).toBe(false);
+  });
+
+  const status = (over: Partial<BridgeStatus> = {}) =>
+    ({
+      libraries: [
+        { id: 1, name: 'Books', root: '/b', mapping: { mapped: true, writable: true } },
+        { id: 2, name: 'Read only', root: '/r', mapping: { mapped: true, writable: false } },
+      ],
+      estimates: { sidecars: { asr_seconds_per_audio_hour: 900 } },
+      ...over,
+    }) as BridgeStatus;
+
+  it("quotes the transcription over the books' known lengths, as the server rounds it", () => {
+    const books = [
+      adminBook({ library_id: 1, duration: 7200 }),
+      adminBook({ library_id: 1, duration: 3 * 3600 + 1 }),
+      adminBook({ library_id: 1, duration: 0 }),
+    ];
+    // 900 s per audio hour: 0.5 h, then 0.75 h (rounded to hundredths per book).
+    expect(detectPlan(status(), books)).toEqual({ asrHours: 1.25, notWritable: false });
+    expect(detectPlan(status({ estimates: undefined }), books).asrHours).toBeNull();
+    expect(detectPlan(status(), [adminBook({ library_id: 1, duration: 0 })]).asrHours).toBeNull();
+    expect(detectPlan(undefined, books)).toEqual({ asrHours: null, notWritable: false });
+    // A figure of 0 (the server's float when a Bridge sends none) is no
+    // estimate, as the generate dialog reads it, never "About 0h".
+    const none = status({
+      estimates: { sidecars: { asr_seconds_per_audio_hour: 0 } } as BridgeStatus['estimates'],
+    });
+    expect(detectPlan(none, books).asrHours).toBeNull();
+  });
+
+  it("refuses a book whose library the Bridge can't write to, or doesn't map", () => {
+    expect(detectPlan(status(), [adminBook({ library_id: 2, duration: 60 })]).notWritable).toBe(
+      true,
+    );
+    expect(detectPlan(status(), [adminBook({ library_id: 3, duration: 60 })]).notWritable).toBe(
+      true,
+    );
+    expect(
+      detectPlan(status(), [
+        adminBook({ library_id: 1, duration: 60 }),
+        adminBook({ library_id: 2, duration: 60 }),
+      ]).notWritable,
+    ).toBe(true);
+  });
+
+  it('reads the chapters a detect job found, and follows its jobs on the book page', () => {
+    expect(generateResult({ chapters: 24, files: ['a'], source: 'audio' })).toEqual({
+      chapters: 24,
+      contributed: [],
+    });
+    expect(isBookKind(KIND_DETECT)).toBe(true);
+    expect(strings[stageLabel('chapter_detecting').key]).toBe(
+      'Finding the chapters in the narration',
+    );
+    expect(parkKey('chapters_not_detected')).toBe('bridge.park.chapters_not_detected');
+    expect(strings['bridge.kind.chapters.detect']).toBe('Chapters');
+  });
+});
+
+describe('blocksGenerate', () => {
+  const detect = (over: Partial<BridgeJob>) =>
+    ({ kind: 'chapters.detect', state: 'queued', cancel_requested: false, ...over }) as BridgeJob;
+
+  it('holds Generate back only while a detection is queued or working, as the server does', () => {
+    for (const state of ['queued', 'claimed', 'running'] as BridgeJobState[]) {
+      expect(blocksGenerate(detect({ state }))).toBe(true);
+    }
+    // Parked, it gives way (a generate job cancels it); being cancelled, it ends unwritten.
+    expect(blocksGenerate(detect({ state: 'needs_attention' }))).toBe(false);
+    expect(blocksGenerate(detect({ state: 'running', cancel_requested: true }))).toBe(false);
+    expect(blocksGenerate(detect({ state: 'done' }))).toBe(false);
+    expect(blocksGenerate(detect({ kind: 'sidecars.describe' }))).toBe(false);
+  });
+
+  it("reads the job list once loaded, else the estimate's open job", () => {
+    const running = detect({ state: 'running' });
+    expect(generateBlocker(undefined, running)).toBe(running);
+    expect(generateBlocker([detect({ state: 'done' })], running)).toBeUndefined();
+    expect(generateBlocker([running], undefined)).toBe(running);
+  });
+});
+
+describe('skipNotes', () => {
+  const t = i18n.getFixedT('en');
+  const skip = (reason: string, n: number) => ({
+    request: { kind: 'chapters.detect', library_id: 1, path: `A/Book ${n}` },
+    reason,
+  });
+
+  it('words each reason once, naming its books, the first few then how many more', () => {
+    const out = {
+      skipped: [
+        skip('parked', 1),
+        ...[2, 3, 4, 5, 6, 7].map((n) => skip('generate_open', n)),
+        skip('parked', 8),
+      ],
+    };
+    expect(skipNotes(out, t, 'en')).toEqual([
+      'Waiting for attention on the Bridge: Book 1 and Book 8.',
+      'Being generated, which finds the chapters too: Book 2, Book 3, Book 4, Book 5, and 2 more.',
+    ]);
   });
 });

@@ -171,6 +171,8 @@ func (s *Scanner) readAttachments(lib catalog.Library, b *catalog.Book, sig stri
 			files.Recaps, err = metadata.ReadRecaps(p)
 		case metadata.AttachmentDescription:
 			files.Description, err = metadata.ReadDescription(p)
+		case metadata.AttachmentChapters:
+			files.Chapters, err = metadata.ReadChapterList(p)
 		case metadata.AttachmentBridge:
 			files.Provenance, err = metadata.ReadProvenance(p)
 		}
@@ -198,6 +200,7 @@ type AttachmentsHeld struct {
 	Characters  bool `json:"characters"`
 	Recaps      bool `json:"recaps"`
 	Description bool `json:"description"`
+	Chapters    bool `json:"chapters"`
 	Bridge      bool `json:"bridge"`
 }
 
@@ -235,7 +238,8 @@ func (s *Scanner) RefreshAttachments(ctx context.Context, lib catalog.Library, r
 		return nil, err
 	}
 	return &AttachmentsRefresh{Path: book.RelPath, Attachments: AttachmentsHeld{Characters: files.Characters != nil,
-		Recaps: files.Recaps != nil, Description: files.Description != nil, Bridge: files.Provenance != nil}}, nil
+		Recaps: files.Recaps != nil, Description: files.Description != nil, Chapters: files.Chapters != nil,
+		Bridge: files.Provenance != nil}}, nil
 }
 
 // attachmentsOfWalk sets each book's attachments signature from the .audiosilo

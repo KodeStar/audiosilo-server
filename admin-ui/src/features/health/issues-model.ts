@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  AudioLines,
   Combine,
   Copy,
   Disc3,
@@ -46,10 +47,12 @@ export const CATEGORY_LOOK: Record<IssueKind, { icon: LucideIcon; tile: string }
 /**
  * What fixing a book under a category does: open its page (a cover upload, or the
  * match dialog), open its folder's detection, read its files again, join its
- * folder's disc folders into one book, use the community's detailed chapters, or
- * nothing the console can do (the row only offers Ignore).
+ * folder's disc folders into one book, use the community's detailed chapters,
+ * have the Bridge find the chapters in the narration (only while it offers that:
+ * detectAvailable), or nothing the console can do (the row only offers Ignore).
  */
-export type IssueFix = 'cover' | 'match' | 'folder' | 'rescan' | 'join' | 'chapters' | null;
+export type IssueFix =
+  'cover' | 'match' | 'folder' | 'rescan' | 'join' | 'chapters' | 'detect' | null;
 
 export const FIXES: Record<IssueKind, IssueFix> = {
   scan_error: 'rescan',
@@ -59,7 +62,7 @@ export const FIXES: Record<IssueKind, IssueFix> = {
   no_cover: 'cover',
   unmatched: 'match',
   series_spellings: null, // the spellings view has its own action
-  no_chapters: null,
+  no_chapters: 'detect',
   detailed_chapters: 'chapters',
   transcode: null,
 };
@@ -72,7 +75,46 @@ export const FIX_LOOK: Record<NonNullable<IssueFix>, { icon: LucideIcon; label: 
   rescan: { icon: RefreshCw, label: 'health.fix.rescan' },
   join: { icon: Combine, label: 'health.fix.join' },
   chapters: { icon: ListTree, label: 'health.fix.chapters' },
+  detect: { icon: AudioLines, label: 'health.fix.detect' },
 };
+
+/**
+ * A category's fix as this server can offer it now: Detect chapters only while
+ * an online Bridge offers chapter detection (`detect`), else none.
+ */
+export function fixFor(kind: IssueKind, detect: boolean): IssueFix {
+  const fix = FIXES[kind];
+  return fix === 'detect' && !detect ? null : fix;
+}
+
+/**
+ * A row's own fix: the category's (fixFor), except Detect chapters for a book
+ * whose chapter source an admin chose, whose found chapters would never stand in
+ * (the server refuses it: chapters_chosen); `detectChosenNote` says why.
+ */
+export function rowFix(fix: IssueFix, b: Pick<AdminBook, 'chapter_choice'>): IssueFix {
+  return fix === 'detect' && b.chapter_choice ? null : fix;
+}
+
+/** Why a no_chapters row offers no Detect chapters (rowFix): the choice, and where to undo it. */
+export function detectChosenNote(
+  fix: IssueFix,
+  b: Pick<AdminBook, 'chapter_choice'>,
+): string | undefined {
+  return fix === 'detect' && b.chapter_choice
+    ? `health.detect.chosen.${b.chapter_choice}`
+    : undefined;
+}
+
+/**
+ * The list's footer key: where its fixes are kept. Detect chapters is the one fix
+ * that writes into the library (the book's `.audiosilo` folder); the rest are
+ * saved in AudioSilo.
+ */
+export function footKey(ignored: boolean, fix: IssueFix): string {
+  if (ignored) return 'health.footIgnored';
+  return fix === 'detect' ? 'health.footDetect' : 'health.foot';
+}
 
 export { say, type Phrase } from '@/lib/phrase';
 

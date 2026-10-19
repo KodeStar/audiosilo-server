@@ -1,23 +1,37 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronUp, Info, Undo2 } from 'lucide-react';
+import { AudioLines, ChevronDown, ChevronUp, Info, Undo2 } from 'lucide-react';
 import { api } from '@/api/client';
-import { settleBookEdit } from '@/api/hooks';
-import type { AdminBookDetail, AdminChapter, BookEditRequest } from '@/api/types';
+import { invalidateIssues, settleBookEdit, useServerInfo } from '@/api/hooks';
+import type { AdminBookDetail, AdminChapter, BookEditRequest, ChapterSource } from '@/api/types';
 import { InlineEdit } from '@/components/inline-edit';
 import { ProvenanceMarker } from '@/components/provenance';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
+import { detectJobsKnown, KIND_DETECT } from '@/features/bridge/generate-model';
+import { useBookGenerateJob } from '@/features/bridge/use-generate';
 import { toastError } from '@/lib/errors';
 import { formatClock, formatDuration } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { chapterProblem, fileStrip, ribbonSegments } from './book-model';
+import {
+  chapterProblem,
+  chapterSourceAction,
+  communityState,
+  fileStrip,
+  ribbonSegments,
+} from './book-model';
 import { CommunityChapters } from './community-chapters';
 
 /** Rows shown before "Show all". */
 const FIRST_ROWS = 10;
+
+/** A chapter source whose titles a rename's hints name, as the keys' suffix. */
+const CHAPTER_ORIGIN: Partial<Record<ChapterSource, string>> = {
+  community: 'Community',
+  generated: 'Generated',
+};
 
 /**
  * The Chapters card (STYLEGUIDE.md "Chapter ribbon"): a proportional timeline
@@ -29,6 +43,9 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
   const b = detail.book;
+  // The book's chapter detection: when its job ends the book is fetched again
+  // (useBookGenerateJob), so the chapters it found show here, metadata or not.
+  useBookGenerateJob(b.library_id, b.path, detectJobsKnown(useServerInfo().data), KIND_DETECT);
   const chapters = detail.chapters ?? [];
   const files = detail.files ?? [];
   const [active, setActive] = useState<number | null>(null);
@@ -42,8 +59,28 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
   const shown = all ? chapters : chapters.slice(0, FIRST_ROWS);
   const hovered = chapters.find((c) => c.index === active);
   const withHours = b.duration >= 3600;
-  // A rename's "before" is the community's title when the chapters are theirs.
-  const fromCommunity = detail.chapter_source === 'community';
+  // A rename's "before" is the community's title, or the narration's, when the
+  // chapters are theirs (the i18n keys' suffix).
+  const origin = CHAPTER_ORIGIN[detail.chapter_source] ?? '';
+  // Rejecting the found chapters, or undoing a choice that keeps them (or a
+  // detection) out; the community's part has its own.
+  const sourceAction = chapterSourceAction(
+    detail,
+    communityState(detail, (sec) => formatDuration(sec, lang)),
+  );
+  const [switching, setSwitching] = useState(false);
+  const switchSource = async (source: 'files' | 'auto') => {
+    setSwitching(true);
+    try {
+      settleBookEdit(qc, await api.editBook(b.library_id, b.path, { chapter_source: source }));
+      invalidateIssues(qc);
+      toast.add({ title: t('book.community.switched'), type: 'success' });
+    } catch (err) {
+      toastError(t('book.community.editFailed'), err);
+    } finally {
+      setSwitching(false);
+    }
+  };
 
   const edit = async (req: BookEditRequest, done: () => void) => {
     try {
@@ -68,7 +105,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
         title: t('book.chapters.renamed'),
         description: !c.scanned_title
           ? t('book.chapters.renamedNoTag')
-          : t(fromCommunity ? 'book.chapters.renamedCommunity' : 'book.chapters.renamedBody', {
+          : t(origin ? `book.chapters.renamed${origin}` : 'book.chapters.renamedBody', {
               title: c.scanned_title,
             }),
         type: 'success',
@@ -98,6 +135,33 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
       />
       <div className="flex flex-col gap-3.5 p-5">
         <CommunityChapters detail={detail} />
+        {detail.chapter_source === 'generated' || sourceAction ? (
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+            <p className="flex min-w-0 flex-1 basis-60 items-start gap-2 text-[13.5px] text-muted-foreground">
+              {detail.chapter_source === 'generated' ? (
+                <>
+                  <AudioLines className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  {t('book.chapters.generated')}
+                </>
+              ) : (
+                <>
+                  <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  {sourceAction?.note ? t(sourceAction.note) : null}
+                </>
+              )}
+            </p>
+            {sourceAction ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={switching}
+                onClick={() => void switchSource(sourceAction.source)}
+              >
+                {t(sourceAction.label)}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
         {problem ? (
           <p className="flex items-start gap-2 text-[13.5px] text-muted-foreground">
             <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -179,7 +243,7 @@ export function ChaptersCard({ detail }: { detail: AdminBookDetail }) {
                 onCancel={() => setEditing(null)}
                 onRename={(title) => rename(c, title)}
                 onRevert={() => revert(c)}
-                fromCommunity={fromCommunity}
+                origin={origin}
               />
             ))}
           </ol>
@@ -209,7 +273,7 @@ function ChapterRow({
   onCancel,
   onRename,
   onRevert,
-  fromCommunity,
+  origin,
 }: {
   chapter: AdminChapter;
   n: number;
@@ -222,7 +286,8 @@ function ChapterRow({
   onCancel: () => void;
   onRename: (title: string) => void;
   onRevert: () => void;
-  fromCommunity: boolean;
+  /** Where the chapters' titles came from, as the hint keys' suffix ("" for the files). */
+  origin: string;
 }) {
   const { t, i18n } = useTranslation();
   const row = useRef<HTMLLIElement>(null);
@@ -264,10 +329,7 @@ function ChapterRow({
               <button
                 type="button"
                 onClick={onRevert}
-                title={t(
-                  fromCommunity ? 'book.chapters.revertHintCommunity' : 'book.chapters.revertHint',
-                  { title: c.scanned_title },
-                )}
+                title={t(`book.chapters.revertHint${origin}`, { title: c.scanned_title })}
                 aria-label={t('book.chapters.revert', { title: c.title })}
                 className="grid size-6 shrink-0 place-items-center rounded-[6px] text-muted-foreground hover:bg-accent hover:text-foreground"
               >

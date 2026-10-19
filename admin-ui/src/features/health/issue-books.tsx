@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff } from 'lucide-react';
-import { useAdminBooks, useLibraryRoots } from '@/api/hooks';
+import { useAdminBooks, useLibraryRoots, useServerInfo } from '@/api/hooks';
+import type { AdminBook } from '@/api/types';
 import { BookCover } from '@/components/book-cover';
 import { BulkAction, BulkBar } from '@/components/bulk-bar';
 import { QueryError } from '@/components/query-error';
@@ -11,12 +13,17 @@ import { useSelection } from '@/features/library/books/use-selection';
 import { bookRoute, refKey } from '@/lib/book-route';
 import { counted } from '@/lib/format';
 import { joinLibraryPath } from '@/lib/paths';
+import { detectAvailable } from '@/features/bridge/generate-model';
 import { AllClear } from './all-clear';
+import { DetectChaptersDialog } from './detect-chapters-dialog';
 import {
-  FIXES,
   FIX_LOOK,
   chaptersCheckNote,
+  detectChosenNote,
+  fixFor,
+  footKey,
   issueReason,
+  rowFix,
   say,
   type BookIssueKind,
   type IssueFix,
@@ -42,40 +49,73 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
     limit: PAGE,
   });
   const selection = useSelection();
-  const actions = useIssueActions(kind);
+  // The books Detect chapters asks about (its confirmation is open while set),
+  // and whether they are the bar's selection.
+  const [detecting, setDetecting] = useState<{ books: AdminBook[]; fromBar: boolean } | null>(null);
+  const actions = useIssueActions(kind, {
+    onDetect: (books) => setDetecting({ books, fromBar: false }),
+  });
   const roots = useLibraryRoots();
+  const server = useServerInfo().data;
   const books = list.data?.pages.flatMap((p) => p.books ?? []) ?? [];
-  const fix = ignored ? null : FIXES[kind];
+  const fix = ignored ? null : fixFor(kind, detectAvailable(server));
+  // Rendered whatever the list shows, keyed so each branch's fragment keeps the
+  // same instance: a refetch that fails or empties the list mustn't take an
+  // open confirmation (or a run it is queueing) away.
+  const detectDialog = (
+    <DetectChaptersDialog
+      key="detect-chapters"
+      books={detecting?.books ?? null}
+      onOpenChange={(open) => !open && setDetecting(null)}
+      // A selection queued from the bar is done with.
+      onQueued={() => detecting?.fromBar && selection.clear()}
+    />
+  );
 
   if (list.isError) {
     return (
-      <QueryError
-        title={t('health.listError')}
-        error={list.error}
-        onRetry={() => void list.refetch()}
-      />
+      <>
+        <QueryError
+          title={t('health.listError')}
+          error={list.error}
+          onRetry={() => void list.refetch()}
+        />
+        {detectDialog}
+      </>
     );
   }
   if (list.isPending) {
     return (
-      <div
-        className="flex flex-col gap-2 rounded-xl border bg-card p-4"
-        role="status"
-        aria-label={t('common.loading')}
-      >
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="skel h-14" />
-        ))}
-      </div>
+      <>
+        <div
+          className="flex flex-col gap-2 rounded-xl border bg-card p-4"
+          role="status"
+          aria-label={t('common.loading')}
+        >
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="skel h-14" />
+          ))}
+        </div>
+        {detectDialog}
+      </>
     );
   }
-  if (books.length === 0) return <AllClear ignored={ignored} />;
+  if (books.length === 0) {
+    return (
+      <>
+        <AllClear ignored={ignored} />
+        {detectDialog}
+      </>
+    );
+  }
 
   const allSelected = books.every(selection.isSelected);
   // What the bar acts on: the selected books still listed (one ignored or fixed on
   // its own row has left the list but stays selected).
   const listed = new Set(books.map(refKey));
   const selectedListed = selection.books.filter((b) => listed.has(refKey(b)));
+  // The selected books Detect chapters can be asked for (rowFix).
+  const detectable = selectedListed.filter((b) => rowFix(fix, b) === 'detect');
   const chosenBooks = () => {
     selection.clear();
     return selectedListed;
@@ -96,6 +136,8 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
       <ul className="divide-y rounded-xl border bg-card" aria-label={t(`health.kind.${kind}`)}>
         {books.map((b) => {
           const checkNote = chaptersCheckNote(kind, b);
+          const chosenNote = detectChosenNote(fix, b);
+          const ownFix = rowFix(fix, b);
           return (
             <li key={refKey(b)} className="flex items-center gap-3.5 px-3.5 py-3 md:px-[18px]">
               <Checkbox
@@ -131,6 +173,11 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                     {t(checkNote)}
                   </span>
                 ) : null}
+                {chosenNote ? (
+                  <span className="text-[12px] text-subtle-foreground [overflow-wrap:anywhere]">
+                    {t(chosenNote)}
+                  </span>
+                ) : null}
                 <span className="truncate font-mono text-[11.5px] text-subtle-foreground max-md:hidden">
                   {joinLibraryPath(roots[b.library_id], b.path)}
                 </span>
@@ -147,9 +194,9 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
                     <span className="max-md:sr-only">{t('health.ignore')}</span>
                   </Button>
                 )}
-                {fix ? (
+                {ownFix ? (
                   <FixButton
-                    fix={fix}
+                    fix={ownFix}
                     disabled={actions.fixing(b)}
                     onClick={() => void actions.fix(b)}
                   />
@@ -171,7 +218,7 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
         </div>
       ) : null}
       <p className="mt-2.5 text-[12.5px] text-subtle-foreground">
-        {t(ignored ? 'health.footIgnored' : 'health.foot', counted(books.length, lang))}
+        {t(footKey(ignored, fix), counted(books.length, lang))}
       </p>
 
       <BulkBar
@@ -193,12 +240,20 @@ export function IssueBooks({ kind, ignored }: { kind: BookIssueKind; ignored: bo
             onClick={() => void actions.takeDetailed(chosenBooks())}
           />
         ) : null}
+        {fix === 'detect' && detectable.length ? (
+          <BulkAction
+            icon={FIX_LOOK.detect.icon}
+            label={t(FIX_LOOK.detect.label)}
+            onClick={() => setDetecting({ books: detectable, fromBar: true })}
+          />
+        ) : null}
         <BulkAction
           icon={ignored ? Eye : EyeOff}
           label={ignored ? t('health.unignore') : t('health.ignore')}
           onClick={toggleIgnore}
         />
       </BulkBar>
+      {detectDialog}
     </>
   );
 }

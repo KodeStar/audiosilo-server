@@ -43,7 +43,10 @@ type bridgeEstimate struct {
 	CanDescribe bool          `json:"can_describe"`
 	Has         estimateHas   `json:"has"`
 	Earlier     []earlierBook `json:"earlier"`
-	OpenJob     *bridge.Job   `json:"open_job,omitempty"`
+	// OpenJob is the book's open generate job, else the open job of another
+	// kind that refuses a new one now (a queued or working chapters.detect job,
+	// bridge.Service.Blocker); its kind says which. Omitted for neither.
+	OpenJob *bridge.Job `json:"open_job,omitempty"`
 }
 
 // estimateHas is what a book already has: community content (its community
@@ -140,7 +143,10 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	if out.OpenJob, err = a.bridge.OpenJob(ctx, kind, lib.ID, book.RelPath); err != nil {
+	if out.OpenJob, err = a.bridge.OpenJob(ctx, kind, lib.ID, book.RelPath); err == nil && out.OpenJob == nil {
+		out.OpenJob, err = a.bridge.Blocker(ctx, kind, lib.ID, book.RelPath)
+	}
+	if err != nil {
 		a.writeCatalogError(w, err, "bridge estimate failed", "could not read the jobs")
 		return
 	}

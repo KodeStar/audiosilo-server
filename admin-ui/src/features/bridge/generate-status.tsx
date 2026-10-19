@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { CircleCheck, ExternalLink, TriangleAlert } from 'lucide-react';
 import type { BridgeJob } from '@/api/types';
@@ -8,14 +9,17 @@ import {
   generateProgress,
   generateResult,
   KIND_DESCRIBE,
+  KIND_DETECT,
+  KIND_GENERATE,
   parkKey,
   roundEta,
   stageLabel,
+  type GenerateResult,
 } from './generate-model';
 import { isOpen } from './bridge-model';
 
 /**
- * Where a `sidecars.generate` (or `sidecars.describe`) job stands, in a few
+ * Where a `sidecars.generate` (or `sidecars.describe`, or `chapters.detect`) job stands, in a few
  * lines: while it works, the stage, the count, the ETA and the cost so far (with
  * a bar when there is a count); parked, why and the hint, with a link into the
  * Bridge's own page; done, what it made (a generate job's description outcome
@@ -29,21 +33,7 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
 
   if (job.state === 'done') {
     const r = generateResult(job.result);
-    const describe = job.kind === KIND_DESCRIBE;
-    const made = describe
-      ? [t('bridge.describe.done')]
-      : [
-          r?.characters !== undefined
-            ? t('bridge.generate.characters', {
-                count: r.characters,
-                n: formatNumber(r.characters, lang),
-              })
-            : undefined,
-          r?.recaps !== undefined
-            ? t('bridge.generate.recaps', { count: r.recaps, n: formatNumber(r.recaps, lang) })
-            : undefined,
-          r?.description ? t('bridge.generate.descriptionMade') : undefined,
-        ].filter((s): s is string => Boolean(s));
+    const made = madeLines(t, lang, job.kind, r);
     const facts = [
       made.length ? formatList(made, lang) : t('bridge.generate.doneNoCounts'),
       r?.costUsd !== undefined
@@ -59,7 +49,7 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
           <CircleCheck className="mt-px size-[15px] shrink-0" aria-hidden="true" />
           <span className="text-foreground">{facts.join(' · ')}</span>
         </p>
-        {!describe && r?.description === false ? (
+        {job.kind === KIND_GENERATE && r?.description === false ? (
           <p className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]">
             {r.descriptionError
               ? t('bridge.generate.noDescription', { reason: r.descriptionError })
@@ -174,4 +164,31 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
       {p.total ? <ProgressBar fraction={(p.done ?? 0) / p.total} /> : null}
     </div>
   );
+}
+
+/** What a done job made, a line each, by its kind. */
+function madeLines(t: TFunction, lang: string, kind: string, r: GenerateResult | null): string[] {
+  switch (kind) {
+    case KIND_DESCRIBE:
+      return [t('bridge.describe.done')];
+    case KIND_DETECT:
+      return [
+        r?.chapters !== undefined
+          ? t('bridge.detect.chapters', { count: r.chapters, n: formatNumber(r.chapters, lang) })
+          : t('bridge.detect.done'),
+      ];
+    default:
+      return [
+        r?.characters !== undefined
+          ? t('bridge.generate.characters', {
+              count: r.characters,
+              n: formatNumber(r.characters, lang),
+            })
+          : undefined,
+        r?.recaps !== undefined
+          ? t('bridge.generate.recaps', { count: r.recaps, n: formatNumber(r.recaps, lang) })
+          : undefined,
+        r?.description ? t('bridge.generate.descriptionMade') : undefined,
+      ].filter((s): s is string => Boolean(s));
+  }
 }

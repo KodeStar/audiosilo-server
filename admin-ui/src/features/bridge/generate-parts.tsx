@@ -1,20 +1,22 @@
 import { useId, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { LockKeyhole, X } from 'lucide-react';
+import { LockKeyhole, Unplug, X } from 'lucide-react';
 import type { BridgeJob } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { SettingRow } from '@/components/setting-row';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { formatDuration, formatNumber } from '@/lib/format';
 import { cancelJob } from './bridge-actions';
 import { stateLook } from './bridge-model';
 import type { Contribute } from './generate-model';
 
-// The pieces the book's generate dialog and the series batch share, and the
-// Community card's generate and describe sections.
+// The pieces the book's generate dialog and the series batch share, the
+// Community card's generate and describe sections, and Health's Detect chapters.
 
 /**
  * A Community card section that follows a job: its heading, with the job's
@@ -120,4 +122,35 @@ export function NotWritableNotice() {
       {t('bridge.generate.notWritableBody')}
     </Notice>
   );
+}
+
+/** The Bridge went offline while a confirmation is open: what is queued waits for it. */
+export function OfflineNotice() {
+  const { t } = useTranslation();
+  return (
+    <Notice tone="warn" icon={Unplug} title={t('bridge.generate.offline')}>
+      {t('bridge.generate.offlineBody')}
+    </Notice>
+  );
+}
+
+/** A figure the Bridge's figures can't give yet. */
+export function NoEstimate() {
+  const { t } = useTranslation();
+  return <span className="text-muted-foreground">{t('bridge.generate.noEstimate')}</span>;
+}
+
+/** A confirmation's figure (children) for every run it queues, naming how many books when more than one. */
+export function ForBooks({ count, children }: { count: number; children: string }) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  return count > 1
+    ? t('bridge.generate.forBooks', { count, n: formatNumber(count, lang), what: children })
+    : children;
+}
+
+/** A confirmation's Length fact for seconds of audio, none while the length is unknown. */
+// eslint-disable-next-line react-refresh/only-export-components -- a FactList row, not a component
+export function lengthRow(t: TFunction, lang: string, seconds: number): [string, ReactNode][] {
+  return seconds > 0 ? [[t('bridge.generate.length'), formatDuration(seconds, lang)]] : [];
 }

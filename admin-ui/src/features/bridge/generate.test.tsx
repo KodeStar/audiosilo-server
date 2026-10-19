@@ -383,6 +383,35 @@ describe('generate characters and recaps', () => {
     expect(screen.queryByRole('button', { name: 'Generate characters and recaps' })).toBeNull();
   });
 
+  it("shows the book's chapter detection instead of Generate while it runs, and offers Generate once it is parked", async () => {
+    let state: BridgeJob['state'] = 'running';
+    const detect = () =>
+      job({ id: 44, kind: 'chapters.detect', params: {}, state, progress: { stage: 'asr' } });
+    mockFetch(
+      routes({
+        'GET /admin/bridge/jobs': () => ({ body: { jobs: [detect()] } }),
+        // The estimate names the detect job while it refuses a generate job.
+        'GET /admin/bridge/estimate': () => ({
+          body: estimate({ open_job: state === 'running' ? detect() : undefined }),
+        }),
+      }),
+    );
+    const { queryClient } = renderApp(URL);
+    expect(
+      await screen.findByText(
+        'The book’s chapters are being found. Generate once that has finished: it reuses the transcription.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate characters and recaps' })).toBeNull();
+    // Parked (no chapters heard), it gives way: a generate job cancels it.
+    state = 'needs_attention';
+    await act(() => queryClient.invalidateQueries());
+    expect(
+      await screen.findByRole('button', { name: 'Generate characters and recaps' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/chapters are being found/)).toBeNull();
+  });
+
   it('shows a parked job with its reason, hint, and a link into the Bridge', async () => {
     const status: Partial<BridgeStatus> = {
       paired: true,
@@ -516,6 +545,53 @@ describe('the Bridge page', () => {
     const jobs = await screen.findByRole('list', { name: 'Jobs' });
     expect(
       within(jobs).getByText('the book moved onto another job of this kind'),
+    ).toBeInTheDocument();
+  });
+
+  it('words a chapter detection job: its stage, what it found, and why it stopped', async () => {
+    mockFetch(
+      signedInRoutes({
+        'GET /admin/bridge': {
+          body: {
+            paired: true,
+            paired_by: null,
+            pairing: null,
+            online: true,
+            kinds: ['chapters.detect'],
+            features: ['chapters'],
+            libraries: [],
+            workers: [],
+          },
+        },
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({ id: 41, kind: 'chapters.detect', progress: { stage: 'chapter_detecting' } }),
+              job({
+                id: 42,
+                kind: 'chapters.detect',
+                state: 'done',
+                finished_at: '2026-10-15T14:00:00Z',
+                result: { chapters: 24, files: ['x'], source: 'audio' },
+              }),
+              job({
+                id: 43,
+                kind: 'chapters.detect',
+                state: 'needs_attention',
+                progress: { park: { code: 'chapters_not_detected' } },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp('/server?topic=bridge');
+    const jobs = await screen.findByRole('list', { name: 'Jobs' });
+    expect(within(jobs).getAllByText('Chapters')).toHaveLength(3);
+    expect(within(jobs).getByText('Finding the chapters in the narration')).toBeInTheDocument();
+    expect(within(jobs).getByText(/^24 chapters found/)).toBeInTheDocument();
+    expect(
+      within(jobs).getByText(/^The chapters couldn't be found in the narration\./),
     ).toBeInTheDocument();
   });
 

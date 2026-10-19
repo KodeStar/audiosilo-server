@@ -1,10 +1,9 @@
 import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { PenLine, Unplug } from 'lucide-react';
+import { PenLine } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
 import type { AdminBook, GeneratedDescription } from '@/api/types';
-import { Notice } from '@/components/notice';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { formatRelative } from '@/lib/format';
@@ -17,7 +16,7 @@ import {
   generateJobsKnown,
   KIND_DESCRIBE,
 } from './generate-model';
-import { JobCancelButton, JobSection } from './generate-parts';
+import { JobCancelButton, JobSection, OfflineNotice } from './generate-parts';
 import { GenerateStatus } from './generate-status';
 import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-generate';
 
@@ -187,11 +186,7 @@ function DescribeDialog({
       >
         <form onSubmit={(e) => void submit(e)} className="contents" noValidate>
           <DialogBody className="flex flex-col gap-3 text-[13px]">
-            {offline ? (
-              <Notice tone="warn" icon={Unplug} title={t('bridge.generate.offline')}>
-                {t('bridge.generate.offlineBody')}
-              </Notice>
-            ) : null}
+            {offline ? <OfflineNotice /> : null}
             <p>{t('bridge.describe.dialogBody')}</p>
             <p className="text-muted-foreground">{t('bridge.describe.dialogCost')}</p>
             <p className="text-muted-foreground">{t('bridge.describe.dialogWhere')}</p>

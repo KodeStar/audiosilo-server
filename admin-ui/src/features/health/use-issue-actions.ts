@@ -19,10 +19,14 @@ const RESCAN_CONCURRENCY = 2;
 /**
  * What the Health page does to books: ignore them under a category (with Undo),
  * show them again, and each category's fix (open the book, its match dialog or
- * its folder's detection, read its files again, join its disc folders, or use the
- * community's detailed chapters).
+ * its folder's detection, read its files again, join its disc folders, use the
+ * community's detailed chapters, or ask to detect them: `onDetect`, which opens
+ * the page's confirmation).
  */
-export function useIssueActions(kind: IssueKind) {
+export function useIssueActions(
+  kind: IssueKind,
+  { onDetect }: { onDetect?: (books: AdminBook[]) => void } = {},
+) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
@@ -186,6 +190,8 @@ export function useIssueActions(kind: IssueKind) {
         return once(b, () => join(b));
       case 'chapters':
         return once(b, () => takeDetailed([b]));
+      case 'detect':
+        return onDetect?.([b]);
     }
   };
 

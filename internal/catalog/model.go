@@ -160,8 +160,10 @@ type Book struct {
 	Files       []BookFile         `json:"files,omitempty"`
 	Chapters    []metadata.Chapter `json:"chapters,omitempty"`
 	// ChaptersSource is "community" when Chapters are a community chapter list
-	// fitted onto the audio rather than the files' own (books.chapters_source);
-	// omitted otherwise. Set by GetBook (single-book reads).
+	// fitted onto the audio, "generated" when they are the chapters the Bridge
+	// found in the narration (its chapters.json), rather than the files' own
+	// (books.chapters_source); omitted otherwise. Set by GetBook (single-book
+	// reads).
 	ChaptersSource string `json:"chapters_source,omitempty"`
 
 	// DirectPlayable, when set, reports whether the audio codec plays natively in

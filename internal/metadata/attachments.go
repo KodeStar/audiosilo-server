@@ -22,20 +22,22 @@ const AttachmentsDir = ".audiosilo"
 
 // The files the server reads from an AttachmentsDir. characters.json,
 // recaps.json and description.json are audiosilo-meta's own sidecar formats
-// (model.Characters, model.Recaps, model.Description); bridge.json says what
-// made them.
+// (model.Characters, model.Recaps, model.Description); chapters.json is the
+// chapters the Bridge found in the narration of a book with none of its own
+// (ChapterList, Phase 1d); bridge.json says what made them.
 const (
 	AttachmentCharacters  = "characters.json"
 	AttachmentRecaps      = "recaps.json"
 	AttachmentDescription = "description.json"
+	AttachmentChapters    = "chapters.json"
 	AttachmentBridge      = "bridge.json"
 )
 
 // AttachmentNames are the known attachment names, in the order a signature
 // lists them. A signature lists only the names a book has, and adding
-// description.json kept the other three in their order, so a book without one
-// keeps the signature it had before the name was known.
-var AttachmentNames = []string{AttachmentCharacters, AttachmentRecaps, AttachmentDescription, AttachmentBridge}
+// description.json and chapters.json kept the others in their order, so a book
+// without them keeps the signature it had before the names were known.
+var AttachmentNames = []string{AttachmentCharacters, AttachmentRecaps, AttachmentDescription, AttachmentChapters, AttachmentBridge}
 
 // The bounds an attachment is checked against: the pipeline's real output is a
 // few hundred KB at most, so these only stop a file that isn't the pipeline's
@@ -87,16 +89,18 @@ type AttachmentFiles struct {
 	Characters  *model.Characters
 	Recaps      *model.Recaps
 	Description *model.Description
+	Chapters    *ChapterList
 	Provenance  *AttachmentProvenance
 }
 
 // Empty reports whether there is nothing to store.
 func (f AttachmentFiles) Empty() bool {
-	return f.Characters == nil && f.Recaps == nil && f.Description == nil && f.Provenance == nil
+	return f.Characters == nil && f.Recaps == nil && f.Description == nil && f.Chapters == nil && f.Provenance == nil
 }
 
 // Generated reports whether f holds generated content: characters, recaps or a
-// description (provenance alone is none).
+// description (provenance alone is none, and so are chapters: they are the
+// book's chapters, not content /meta serves).
 func (f AttachmentFiles) Generated() bool {
 	return f.Characters != nil || f.Recaps != nil || f.Description != nil
 }
@@ -164,6 +168,15 @@ func ReadDescription(path string) (*model.Description, error) {
 		return nil, err
 	}
 	return ParseDescription(data)
+}
+
+// ReadChapterList is ReadCharacters for a chapters.json (ParseChapterList).
+func ReadChapterList(path string) (*ChapterList, error) {
+	data, err := readAttachment(path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseChapterList(data)
 }
 
 // ReadProvenance is ReadCharacters for a bridge.json (ParseProvenance).

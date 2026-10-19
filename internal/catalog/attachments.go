@@ -15,14 +15,15 @@ import (
 )
 
 // A book's .audiosilo/ attachments (metadata.AttachmentsDir) are the files the
-// Bridge generates for it: characters, recaps, a description and their
-// provenance. They are not
-// a metadata layer: nothing in the effective row reads them. The scan stores
-// them checked in book_attachments (migrations 0048, 0050), with the files' signature
-// on the book row (attachments_sig) and the indexed_at they were read with
-// (attachments_indexed_at), and /meta serves them beside the community data.
-// Derived from the files, so a move never carries them and a re-index reads
-// them again.
+// Bridge generates for it: characters, recaps, a description, chapters found in
+// the narration and their provenance. They are not a metadata layer: nothing in
+// the effective row reads them but the chapters, a chapter source of their own
+// (applyChapterSource). The scan stores them checked in book_attachments
+// (migrations 0048, 0050, 0051), with the files' signature on the book row
+// (attachments_sig) and the indexed_at they were read with
+// (attachments_indexed_at), and /meta serves the generated content beside the
+// community data. Derived from the files, so a move never carries them and a
+// re-index reads them again.
 
 // AttachmentsReading is a book's attachments as a scan found them: their
 // signature ("" for none) and what they say. Unread is a reading that couldn't
@@ -77,34 +78,42 @@ func sigParts(sig string) metadata.AttachmentParts {
 const attachmentsUncheckedExpr = `(attachments_indexed_at IS NOT indexed_at)`
 
 // writeAttachments replaces book id's book_attachments row with files, inside
-// tx: none when there is nothing to store.
-func writeAttachments(ctx context.Context, tx *sql.Tx, id int64, files metadata.AttachmentFiles, now string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM book_attachments WHERE book_id = ?`, id); err != nil {
-		return err
+// tx: none when there is nothing to store. It reports whether the chapters
+// column changed (came, went or says something else), the one file the book's
+// effective row reads.
+func writeAttachments(ctx context.Context, tx *sql.Tx, id int64, files metadata.AttachmentFiles, now string) (chaptersChanged bool, err error) {
+	var was string
+	err = tx.QueryRowContext(ctx, `DELETE FROM book_attachments WHERE book_id = ? RETURNING chapters`, id).Scan(&was)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
 	}
 	if files.Empty() {
-		return nil
+		return was != "", nil
 	}
 	chars, err := encodeAttachment(files.Characters)
 	if err != nil {
-		return err
+		return false, err
 	}
 	recaps, err := encodeAttachment(files.Recaps)
 	if err != nil {
-		return err
+		return false, err
 	}
 	desc, err := encodeAttachment(files.Description)
 	if err != nil {
-		return err
+		return false, err
+	}
+	chapters, err := encodeAttachment(files.Chapters)
+	if err != nil {
+		return false, err
 	}
 	prov, err := encodeAttachment(files.Provenance)
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO book_attachments(book_id, characters, recaps, description, provenance, updated_at) VALUES(?,?,?,?,?,?)`,
-		id, chars, recaps, desc, prov, now)
-	return err
+		`INSERT INTO book_attachments(book_id, characters, recaps, description, chapters, provenance, updated_at) VALUES(?,?,?,?,?,?,?)`,
+		id, chars, recaps, desc, chapters, prov, now)
+	return chapters != was, err
 }
 
 // encodeAttachment is a book_attachments column's value: v as JSON, "" for nil.
@@ -134,8 +143,13 @@ func decodeAttachment[T any](raw string) *T {
 // changed, gone or not read for this index, and the Bridge's attachments-only
 // rescan). A reading with Was is recorded only while the row still holds that
 // state (compare and set), else skipped: something recorded a newer reading
-// since. It commits every pathReadingBatch books. Nothing in a book's effective
-// row reads them, so no book is re-resolved.
+// since. It commits every pathReadingBatch books. A book whose chapters.json
+// changed (came, went or says something else) is re-resolved (refreshEffective:
+// the generated chapters are a chapter source) and announced (c.changed), and
+// so is one whose stored reading wasn't made for this index of it (an older
+// server re-indexed it, rebuilding its chapter rows without the generated ones
+// it kept stored); the rest of the files are read by nothing in the effective
+// row.
 func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings map[string]AttachmentsReading) error {
 	now := c.ts()
 	return c.eachPathBatch(ctx, "SetAttachments", slices.Collect(maps.Keys(readings)),
@@ -146,6 +160,11 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 			}
 			if err != nil {
 				return false, err
+			}
+			var unchecked bool
+			if err := tx.QueryRowContext(ctx, `SELECT `+attachmentsUncheckedExpr+` FROM books WHERE id = ?`, id).
+				Scan(&unchecked); err != nil {
+				return false, fmt.Errorf("%s: %w", relPath, err)
 			}
 			r := readings[relPath]
 			q, args := `UPDATE books SET attachments_sig = ?, attachments_indexed_at = indexed_at WHERE id = ?`, []any{r.Sig, id}
@@ -164,10 +183,17 @@ func (c *Catalog) SetAttachments(ctx context.Context, libraryID int64, readings 
 			if n, err := res.RowsAffected(); err != nil || n == 0 {
 				return false, err // a newer reading was recorded since: it stays
 			}
-			if err := writeAttachments(ctx, tx, id, r.Files, now); err != nil {
+			changed, err := writeAttachments(ctx, tx, id, r.Files, now)
+			if err != nil {
 				return false, fmt.Errorf("%s: %w", relPath, err)
 			}
-			return false, nil
+			if !changed && !unchecked {
+				return false, nil
+			}
+			if err := refreshEffective(ctx, tx, id); err != nil {
+				return false, fmt.Errorf("%s: %w", relPath, err)
+			}
+			return true, nil
 		})
 }
 

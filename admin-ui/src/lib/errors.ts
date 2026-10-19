@@ -77,6 +77,15 @@ const BY_CODE: Record<string, string> = {
   // Queueing sidecars.describe while a sidecars.generate job is open for the
   // book (it writes the description when it finishes).
   generate_open: 'errors.generateOpen',
+  // Queueing sidecars.generate while a chapters.detect job is queued or working
+  // for the book (the generate run reuses its transcription once it is done),
+  // or sidecars.describe while one is open (both rewrite the book's bridge.json).
+  detect_open: 'errors.detectOpen',
+  // Queueing chapters.detect while a sidecars.describe job is open for the book.
+  describe_open: 'errors.describeOpen',
+  // Queueing chapters.detect for a book whose chapter source an admin chose: the
+  // chapters found would never be used.
+  chapters_chosen: 'errors.chaptersChosen',
 };
 
 /** A failure as one sentence for a toast or a field. */

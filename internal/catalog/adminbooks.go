@@ -88,12 +88,16 @@ type AdminBook struct {
 	ScanErrorFile   string `json:"scan_error_file,omitempty"`
 	ScanErrorDetail string `json:"scan_error_detail,omitempty"`
 	SuspectParts    int    `json:"suspect_parts,omitempty"`
-	// ChaptersSource is where the chapters come from (ChaptersFromFiles or
-	// ChaptersFromCommunity) and ChaptersCheck the status of the book's last
-	// community chapter check ("" = none), so a list can say why a book has no
-	// community chapters.
+	// ChaptersSource is where the chapters come from (ChaptersFromFiles,
+	// ChaptersFromCommunity or ChaptersFromGenerated) and ChaptersCheck the
+	// status of the book's last community chapter check ("" = none), so a list
+	// can say why a book has no community chapters.
 	ChaptersSource string `json:"chapters_source"`
 	ChaptersCheck  string `json:"chapters_check,omitempty"`
+	// ChapterChoice is the admin's choice of chapter source (files or
+	// community; omitted when automatic), so a list can say why a book's
+	// chapters can't be detected: a found list stands in only with no choice.
+	ChapterChoice string `json:"chapter_choice,omitempty"`
 }
 
 // fieldList scans a comma-separated SQL list (group_concat) into field names,
@@ -133,6 +137,9 @@ const (
 		WHERE cc.library_id = b.library_id AND cc.path = b.rel_path), '')`
 	// chaptersSourceExpr is books.chapters_source with the scan's own named.
 	chaptersSourceExpr = `CASE WHEN b.chapters_source = '' THEN '` + ChaptersFromFiles + `' ELSE b.chapters_source END`
+	// chapterChoiceExpr is the book's chapter_choices source, '' for none.
+	chapterChoiceExpr = `COALESCE((SELECT ch.source FROM chapter_choices ch
+		WHERE ch.library_id = b.library_id AND ch.path = b.rel_path), '')`
 	// A single-file book has no book_files rows; it is one file.
 	fileCountExpr = `MAX(1, (SELECT COUNT(*) FROM book_files bf WHERE bf.book_id = b.id))`
 	matchedExpr   = `(b.asin <> '' OR b.isbn <> '')`
@@ -158,7 +165,7 @@ var adminBookCols = `b.id, b.library_id, l.name, b.rel_path, b.is_folder, b.titl
 	`b.size, b.added_at, ` + customCoverExpr + `, ` + chapterCountExpr + `, ` + fileCountExpr + `,
 	b.asin, b.isbn, ` + matchedExpr + `, ` + editedExpr + `, ` + editedFieldsExpr + `, ` + hasCoverExpr + `, ` + directPlayableExpr + `,
 	b.scan_error, b.scan_error_file, b.scan_error_detail, COALESCE(b.suspect_parts, 0), ` +
-	chaptersSourceExpr + `, ` + chaptersCheckExpr + `, b.cover_art, b.cover_color,
+	chaptersSourceExpr + `, ` + chaptersCheckExpr + `, ` + chapterChoiceExpr + `, b.cover_art, b.cover_color,
 	b.publisher, b.language, b.abridged, b.genres, b.tags`
 
 // scanAdminBook reads one row of adminBookCols into b.
@@ -202,7 +209,7 @@ func adminBookDest(b *AdminBook) (dest []any, finish func()) {
 			&b.Size, &b.AddedAt, &b.CustomCover, &b.ChapterCount, &b.FileCount,
 			&b.ASIN, &b.ISBN, &b.Matched, &b.Edited, &b.EditedFields, &b.HasCover, &b.DirectPlayable,
 			&b.ScanError, &b.ScanErrorFile, &b.ScanErrorDetail, &b.SuspectParts, &b.ChaptersSource, &b.ChaptersCheck,
-			&art, &color, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags},
+			&b.ChapterChoice, &art, &color, &b.Publisher, &b.Language, &b.Abridged, &genres, &tags},
 		func() {
 			b.Genres = append([]string{}, ParseLabels(genres)...)
 			b.Tags = append([]string{}, ParseLabels(tags)...)

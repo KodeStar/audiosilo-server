@@ -1410,6 +1410,11 @@ export interface AdminBook {
   chapters_source: ChapterSource;
   /** Its last community chapter check's status (absent: never checked). */
   chapters_check?: CommunityChaptersStatus;
+  /**
+   * The admin's choice of chapter source (absent: automatic). Chapters found in the
+   * narration stand in only with none, so Detect chapters isn't offered then.
+   */
+  chapter_choice?: ChapterChoice;
 }
 
 /** GET /admin/books (catalog.AdminPage). */
@@ -1630,7 +1635,13 @@ export interface AdminBookDetail {
   indexed_at: string;
   /** Where `chapters` come from now, and the admin's choice of it ("" = automatic). */
   chapter_source: ChapterSource;
-  chapter_choice: ChapterSource | '';
+  chapter_choice: ChapterChoice | '';
+  /**
+   * The book has chapters found in the narration (its chapters.json) that fit its
+   * files as they are now: they stand in with no choice when the community's don't
+   * apply (true while they do; absent otherwise).
+   */
+  generated_chapters_fit?: boolean;
   /** The last community chapter check (null: never checked), and whether one is running. */
   community_chapters: CommunityChapters | null;
   community_checking: boolean;
@@ -1654,8 +1665,14 @@ export interface GeneratedDescription {
   generated_at?: string;
 }
 
-/** Where a book's chapters come from: its own files, or a community list fitted onto them. */
-export type ChapterSource = 'files' | 'community';
+/**
+ * Where a book's chapters come from: its own files, a community list fitted onto
+ * them, or the chapters the Bridge found in the narration of a book with none.
+ */
+export type ChapterSource = 'files' | 'community' | 'generated';
+
+/** An admin's choice of chapter source ("generated" is never chosen: it stands in only with no choice). */
+export type ChapterChoice = 'files' | 'community';
 
 /**
  * A community chapter check's outcome (catalog.CommunityChapters, chapteralign.Status):
@@ -1726,7 +1743,7 @@ export interface BookEditRequest {
   source?: 'edited' | 'community';
   chapters?: { set?: Record<number, string>; revert?: number[] };
   /** Where the chapters come from: the files, the community's, or "auto" (the default). */
-  chapter_source?: ChapterSource | 'auto';
+  chapter_source?: ChapterChoice | 'auto';
 }
 
 /** catalog.Ref: a book by its identity. */
@@ -2419,6 +2436,10 @@ export interface BridgeEstimate {
   };
   /** The nearest earlier books of the series without recaps, in reading order (at most 10). */
   earlier: EarlierBook[];
-  /** An open sidecars.generate job for this book. */
+  /**
+   * An open sidecars.generate job for this book, else the open job of another kind
+   * that refuses a new one now (a queued or working chapters.detect job): its kind
+   * says which.
+   */
   open_job?: BridgeJob;
 }

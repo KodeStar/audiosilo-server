@@ -1,8 +1,10 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
-import type { AdminBookDetail, CommunityChapters } from '@/api/types';
+import type { AdminBookDetail, BridgeJob, CommunityChapters } from '@/api/types';
 import { mockFetch, type MockRequest, type MockRoute } from '@/test/fetch-mock';
+import { serverInfo } from '@/test/fixtures';
 import { adminBook, bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
@@ -184,6 +186,135 @@ describe('community chapters on the book page', () => {
       ),
     ).toBe(true);
   }, 12000);
+});
+
+describe('generated chapters on the book page', () => {
+  it('says the chapters were found in the narration, and names their title in a rename hint', async () => {
+    const detail = bookDetail({ chapter_source: 'generated' });
+    mockFetch(routes(detail));
+    renderApp(URL);
+    expect(await screen.findByText('Found in the narration on this server.')).toBeInTheDocument();
+    // The edited chapter's revert hint names the title as found.
+    expect(screen.getByTitle('Found: Chapter 2')).toBeInTheDocument();
+  });
+
+  it('rejects the found chapters for the file’s', async () => {
+    const calls = mockFetch(routes(bookDetail({ chapter_source: 'generated' })));
+    renderApp(URL);
+    await screen.findByText('Found in the narration on this server.');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Use the file’s chapters' }));
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect(patches(calls)[0].body).toEqual({ chapter_source: 'files' });
+  });
+
+  it('offers automatic again over a files choice that keeps found chapters out', async () => {
+    const calls = mockFetch(
+      routes(
+        bookDetail({
+          chapter_source: 'files',
+          chapter_choice: 'files',
+          generated_chapters_fit: true,
+        }),
+      ),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByText(
+        'Chapters found in the narration are saved for this book, but the file’s were chosen.',
+      ),
+    ).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Use automatic' }));
+    await waitFor(() => expect(patches(calls)).toHaveLength(1));
+    expect(patches(calls)[0].body).toEqual({ chapter_source: 'auto' });
+  });
+
+  it('clears a files choice with nothing found too, so chapters can be detected', async () => {
+    mockFetch(routes(bookDetail({ chapter_source: 'files', chapter_choice: 'files' })));
+    renderApp(URL);
+    expect(
+      await screen.findByText('The file’s chapters were chosen for this book.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use automatic' })).toBeInTheDocument();
+  });
+
+  it('leaves a files choice to the community’s part when its fill would apply', async () => {
+    mockFetch(
+      routes(
+        bookDetail({
+          chapter_source: 'files',
+          chapter_choice: 'files',
+          generated_chapters_fit: true,
+          community_chapters: check({ status: 'fill' }),
+        }),
+      ),
+    );
+    renderApp(URL);
+    expect(await screen.findByRole('button', { name: 'Use the community’s' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use automatic' })).not.toBeInTheDocument();
+  });
+
+  it('offers nothing over automatic chapters of the files', async () => {
+    mockFetch(routes(bookDetail()));
+    renderApp(URL);
+    await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
+    expect(screen.queryByRole('button', { name: 'Use automatic' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Use the file’s chapters' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('follows the book chapter detection, metadata off too, and shows what it found once it ends', async () => {
+    let ended = false;
+    const detect: BridgeJob = {
+      id: 41,
+      kind: 'chapters.detect',
+      library_id: 1,
+      path: BOOK_PATH,
+      params: {},
+      state: 'running',
+      progress: {},
+      result: {},
+      error: '',
+      requested_by: { id: 1, username: 'chris' },
+      priority: 0,
+      attempts: 1,
+      lease_until: null,
+      cancel_requested: false,
+      created_at: '2026-10-17T09:00:00Z',
+      updated_at: '2026-10-17T09:00:00Z',
+      claimed_at: '2026-10-17T09:00:05Z',
+      finished_at: null,
+    };
+    const calls = mockFetch(
+      routes(bookDetail(), {
+        'GET /server': {
+          body: {
+            ...serverInfo,
+            capabilities: { ...serverInfo.capabilities, metadata: false, bridge: true },
+          },
+        },
+        'GET /admin/libraries/1/book': () => ({
+          body: ended ? bookDetail({ chapter_source: 'generated' }) : bookDetail(),
+        }),
+        'GET /admin/bridge/jobs': () => ({
+          body: { jobs: [{ ...detect, state: ended ? 'done' : 'running' }] },
+        }),
+      }),
+    );
+    const { queryClient } = renderApp(URL);
+    const jobsKey = keys.bookBridgeJobs(1, BOOK_PATH);
+    // The card asks for the book's jobs (metadata off) and sees the detection running.
+    await waitFor(() => expect(queryClient.getQueryData(jobsKey)).toBeDefined());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(
+      calls.some((c) => c.path === '/admin/bridge/jobs' && c.query.get('path') === BOOK_PATH),
+    ).toBe(true);
+    expect(screen.queryByText('Found in the narration on this server.')).not.toBeInTheDocument();
+    // The job ends; the page's next look at its jobs sees it, and fetches the book again.
+    ended = true;
+    await act(() => queryClient.invalidateQueries({ queryKey: jobsKey }));
+    expect(await screen.findByText('Found in the narration on this server.')).toBeInTheDocument();
+  });
 });
 
 describe('communityState', () => {

@@ -22,11 +22,18 @@ type AdminBookDetail struct {
 	Shares      []BookShare           `json:"shares"`
 	Folder      BookFolder            `json:"folder"`
 	IndexedAt   string                `json:"indexed_at"`
-	// ChapterSource is where Chapters come from now (ChaptersFromFiles or
-	// ChaptersFromCommunity); ChapterChoice is the admin's choice of it, "" when
-	// it is left automatic.
+	// ChapterSource is where Chapters come from now (ChaptersFromFiles,
+	// ChaptersFromCommunity or ChaptersFromGenerated); ChapterChoice is the
+	// admin's choice of it (files or community, never generated), "" when it is
+	// left automatic.
 	ChapterSource string `json:"chapter_source"`
 	ChapterChoice string `json:"chapter_choice"`
+	// GeneratedChaptersFit: the book has a stored chapters.json (the chapters
+	// the Bridge found in the narration) that fits its files as they are now,
+	// so it stands in with no choice when the community's don't apply (true
+	// while it does; omitted otherwise). The book page offers "Use automatic"
+	// over a files choice that keeps it out.
+	GeneratedChaptersFit bool `json:"generated_chapters_fit,omitempty"`
 	// CommunityChapters is the book's last community chapter check, null when it
 	// has none; CommunityChecking is set (by the api) while one is running.
 	CommunityChapters *CommunityChapters `json:"community_chapters"`
@@ -129,9 +136,12 @@ func (c *Catalog) AdminBookDetail(ctx context.Context, libraryID int64, relPath 
 		return nil, err
 	}
 	d.Fields = layers.resolve()
-	d.ChapterSource = d.Book.ChaptersSource
-	if d.ChapterChoice, err = chapterChoice(ctx, c.db, libraryID, relPath); err != nil {
-		return nil, err
+	d.ChapterSource, d.ChapterChoice = d.Book.ChaptersSource, d.Book.ChapterChoice
+	d.GeneratedChaptersFit = d.ChapterSource == ChaptersFromGenerated
+	if !d.GeneratedChaptersFit && d.ChapterChoice != "" {
+		if d.GeneratedChaptersFit, err = generatedFits(ctx, c.db, bookID); err != nil {
+			return nil, err
+		}
 	}
 	if d.CommunityChapters, err = c.GetCommunityChapters(ctx, libraryID, relPath); err != nil {
 		return nil, err

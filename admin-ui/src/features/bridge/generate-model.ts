@@ -3,6 +3,7 @@ import type {
   BridgeEstimate,
   BridgeJob,
   BridgeJobRequest,
+  BridgeStatus,
   ServerInfo,
   SidecarsCoverage,
   SidecarsGenerateParams,
@@ -10,12 +11,13 @@ import type {
 import { refKey } from '@/lib/book-route';
 import { relBaseName } from '@/lib/paths';
 import { spanIn } from '@/features/library/series/series-model';
-import { isOpen, num, progressOf, safeHttpUrl, text } from './bridge-model';
+import { isOpen, mappingState, num, progressOf, safeHttpUrl, text } from './bridge-model';
 
-// Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), and the
-// description written from their notes (Phase 1c): the rules the book page's
-// Community card, its generate dialog, the series batch and the Bridge page's
-// job rows follow for `sidecars.generate` and `sidecars.describe`. Pure: no React, no i18n
+// Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), the
+// description written from their notes (Phase 1c) and the chapters found in the
+// narration (Phase 1d): the rules the book page's Community card, its generate
+// dialog, the series batch, Health's Detect chapters and the Bridge page's job
+// rows follow for `sidecars.generate`, `sidecars.describe` and `chapters.detect`. Pure: no React, no i18n
 // instance; callers pass the keys these return to t().
 
 /** The job kind, and the feature (job family) the Bridge advertises for it. */
@@ -23,9 +25,19 @@ export const KIND_GENERATE = 'sidecars.generate';
 export const FEATURE_SIDECARS = 'sidecars';
 /** Phase 1c's description-only kind: a description from the notes the Bridge kept. */
 export const KIND_DESCRIBE = 'sidecars.describe';
+/**
+ * Phase 1d's chapter detection for a book with no chapter markers (speech
+ * recognition, no agent), and its feature (job family).
+ */
+export const KIND_DETECT = 'chapters.detect';
+export const FEATURE_CHAPTERS = 'chapters';
 
-/** The kinds the book page follows: generate and describe (both in the sidecars family). */
-const BOOK_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE];
+/**
+ * The kinds the book page follows: generate and describe (both in the sidecars
+ * family; the Community card's sections) and chapter detection, whose end
+ * changes the book's chapters (the Chapters card follows it).
+ */
+const BOOK_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT];
 
 /**
  * Whether a kind is one the book page follows; its progress and result are
@@ -53,6 +65,52 @@ export function generateAvailable(server: ServerInfo | undefined): boolean {
 }
 
 /**
+ * Whether "Detect chapters" is offered (Health's books without chapters): an
+ * online Bridge offers the chapters family (chapters.detect). It needs no
+ * community metadata: the chapters are the book's own.
+ */
+export function detectAvailable(server: ServerInfo | undefined): boolean {
+  if (!server?.capabilities.bridge) return false;
+  return server.bridge?.features.includes(FEATURE_CHAPTERS) ?? false;
+}
+
+/** What the Detect chapters confirmation says about the books it queues. */
+export interface DetectPlan {
+  /**
+   * The transcription time in hours, all books together; null without the
+   * Bridge's figures (or a figure of 0), any known length, or a total that
+   * rounds to nothing.
+   */
+  asrHours: number | null;
+  /** A book's library the Bridge can't write to: the server refuses its job. */
+  notWritable: boolean;
+}
+
+/**
+ * The Detect chapters confirmation's figures, from the Bridge's status (its
+ * heartbeat's ASR figure and library mappings): the transcription time over
+ * the books' known lengths, rounded per book to hundredths of an hour as the
+ * server's generate estimate rounds asr_hours (and, as estimateView reads that,
+ * no time at all is no estimate), and whether any book's library can't be
+ * written to.
+ */
+export function detectPlan(
+  status: Pick<BridgeStatus, 'libraries' | 'estimates'> | undefined,
+  books: readonly Pick<AdminBook, 'library_id' | 'duration'>[],
+): DetectPlan {
+  const perHour = status?.estimates?.sidecars?.asr_seconds_per_audio_hour ?? 0;
+  const total = books
+    .filter((b) => b.duration > 0)
+    .reduce((sum, b) => sum + Math.round(((b.duration / 3600) * perHour) / 36) / 100, 0);
+  const writable = (id: number) =>
+    mappingState(status?.libraries.find((l) => l.id === id)?.mapping ?? null) === 'ready';
+  return {
+    asrHours: total > 0 ? total : null,
+    notWritable: status ? books.some((b) => !writable(b.library_id)) : false,
+  };
+}
+
+/**
  * Whether the book page should ask for its generate and describe jobs at all: a
  * server that knows the Bridge (it reports the capability, on or off) with
  * metadata on. A job queued while the Bridge was online stays worth showing
@@ -60,6 +118,15 @@ export function generateAvailable(server: ServerInfo | undefined): boolean {
  */
 export function generateJobsKnown(server: ServerInfo | undefined): boolean {
   return Boolean(server?.capabilities.metadata && server.capabilities.bridge !== undefined);
+}
+
+/**
+ * Whether the book page should follow its chapter detection jobs: a server
+ * that knows the Bridge (on or off). Detection needs no community metadata, so
+ * unlike generateJobsKnown this doesn't ask for it.
+ */
+export function detectJobsKnown(server: ServerInfo | undefined): boolean {
+  return server?.capabilities.bridge !== undefined;
 }
 
 /** What the card offers: Generate, Regenerate (local data exists), or nothing (the community has both). */
@@ -89,6 +156,33 @@ export function generatePollMs(
   return open.length ? GENERATE_PARKED_POLL_MS : false;
 }
 
+/**
+ * Whether a job keeps a new generate job from being queued for its book (the
+ * server's detect_open): a chapter detection queued or working, not being
+ * cancelled. A parked one gives way (the generate job cancels it, and finds the
+ * chapters itself), as one being cancelled does.
+ */
+export function blocksGenerate(j: Pick<BridgeJob, 'kind' | 'state' | 'cancel_requested'>): boolean {
+  return (
+    j.kind === KIND_DETECT &&
+    (j.state === 'queued' || j.state === 'claimed' || j.state === 'running') &&
+    !j.cancel_requested
+  );
+}
+
+/**
+ * The book's job that keeps Generate from being offered now (blocksGenerate):
+ * from its job list once loaded (the live answer), else the estimate's
+ * `open_job`, which names such a job when no generate job is open.
+ */
+export function generateBlocker(
+  jobs: readonly BridgeJob[] | undefined,
+  openJob: BridgeJob | undefined,
+): BridgeJob | undefined {
+  const j = jobs ? latestJobOf(jobs, KIND_DETECT) : openJob;
+  return j && blocksGenerate(j) ? j : undefined;
+}
+
 /** The book's newest job of a kind (the list is newest first), if any. */
 export function latestJobOf<J extends Pick<BridgeJob, 'kind'>>(
   jobs: readonly J[] | undefined,
@@ -103,9 +197,11 @@ export function latestJobOf<J extends Pick<BridgeJob, 'kind'>>(
  * otherwise), the book has characters or recaps generated here (their notes are
  * what the description is written from), it has no description yet, here or
  * from the community (which must have answered: unknown is never "none"), and
- * no generate or describe job is open for it (a generate job writes one when it
- * finishes; the estimate's own open generate job counts too, so a job list not
- * loaded yet can't offer what the server would refuse).
+ * no generate, describe or chapter detection job is open for it (a generate job
+ * writes one when it finishes; a detection, running or parked, holds the book
+ * on the Bridge, which fails a describe meanwhile; the estimate's own open
+ * generate job counts too, so a job list not loaded yet can't offer what the
+ * server would refuse).
  */
 export function describeOffered(
   e: Pick<BridgeEstimate, 'can_describe' | 'writable' | 'has' | 'open_job'> | undefined,
@@ -138,6 +234,7 @@ export const KNOWN_STAGES = [
   'inspecting',
   'splitting',
   'asr',
+  'chapter_detecting',
   'sanitizing',
   'qa_sweep',
   'qa_adjudicating',
@@ -178,6 +275,7 @@ export const KNOWN_PARKS = [
   'agent_rate_limited',
   'agent_validation_exhausted',
   'markers_not_confident',
+  'chapters_not_detected',
   'qa_no_converge',
   'spelling_gate_failure',
   'media_tools_unavailable',
@@ -281,6 +379,8 @@ export function generateProgress(progress: unknown): GenerateProgress {
 export interface GenerateResult {
   characters?: number;
   recaps?: number;
+  /** A chapters.detect job's chapters found. */
+  chapters?: number;
   costUsd?: number;
   /** The description was written (true) or not (false, with why); absent from an older Bridge. */
   description?: boolean;
@@ -289,7 +389,7 @@ export interface GenerateResult {
   contributed: { what: string; url: string }[];
 }
 
-/** Reads a sidecars.generate result leniently, or null when it holds none of its facts. */
+/** Reads a sidecars.generate (or chapters.detect) result leniently, or null when it holds none of its facts. */
 export function generateResult(result: unknown): GenerateResult | null {
   if (!result || typeof result !== 'object') return null;
   const r = result as Record<string, unknown>;
@@ -298,6 +398,8 @@ export function generateResult(result: unknown): GenerateResult | null {
   if (characters !== undefined) out.characters = characters;
   const recaps = amount(r.recaps);
   if (recaps !== undefined) out.recaps = recaps;
+  const chapters = amount(r.chapters);
+  if (chapters !== undefined) out.chapters = chapters;
   const cost = amount(r.cost_usd);
   if (cost !== undefined) out.costUsd = cost;
   if (typeof r.description === 'boolean') out.description = r.description;
@@ -312,6 +414,7 @@ export function generateResult(result: unknown): GenerateResult | null {
   const any =
     out.characters !== undefined ||
     out.recaps !== undefined ||
+    out.chapters !== undefined ||
     out.costUsd !== undefined ||
     out.description !== undefined ||
     out.contributed.length > 0;
@@ -431,7 +534,10 @@ export function seriesBatchOrder<B extends AdminBook>(books: readonly B[], serie
 export interface BatchCheck {
   /** It has recaps already, from the community or its own folder: skipped. */
   covered: boolean;
-  /** A generate job is already open for it (and not being cancelled): skipped. */
+  /**
+   * A generate job is already open for it (and not being cancelled), or its
+   * chapters are being found (the estimate's `open_job` names that job): skipped.
+   */
   open: boolean;
   /**
    * It couldn't be checked (its estimate failed: a book gone since the list was

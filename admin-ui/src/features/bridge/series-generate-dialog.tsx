@@ -21,7 +21,14 @@ import {
   type Contribute,
 } from './generate-model';
 import { ContributeSwitch, NotWritableNotice } from './generate-parts';
-import { estimateQuery, queueInOrder, queueReport } from './use-generate';
+import {
+  estimateQuery,
+  GENERATE_SKIPS,
+  queueInOrder,
+  queueReport,
+  requestTitle,
+  skipNotes,
+} from './use-generate';
 
 /** How many books' estimates are asked for at once. */
 const CHECK_AT_ONCE = 4;
@@ -118,18 +125,26 @@ function SeriesForm({
     // The queue is already in reading order, earlier books included; contributing
     // only when the Bridge can (the server refuses it otherwise).
     const requests = generatePlan(plan.queue, plan.canContribute ? contribute : 'local');
-    const out = await queueInOrder(qc, requests);
+    // A book whose chapters started being found since the check is passed over
+    // (named), not the end of the batch.
+    const out = await queueInOrder(qc, requests, { skip: GENERATE_SKIPS });
     setBusy(false);
     const failed = queueReport(out, requests.length, t, lang);
     if (failed !== undefined) {
       setError(failed);
       return;
     }
-    toast.add({
-      title: t('bridge.series.queued', { count: requests.length, n: fmt(requests.length) }),
-      description: t('bridge.series.queuedBody'),
-      type: 'success',
-    });
+    const titles = new Map(plan.queue.map((b) => [refKey(b), b.title]));
+    const notes = skipNotes(out, t, lang, (req) => requestTitle(titles, req)).join(' ');
+    toast.add(
+      out.queued
+        ? {
+            title: t('bridge.series.queued', { count: out.queued, n: fmt(out.queued) }),
+            description: notes || t('bridge.series.queuedBody'),
+            type: 'success',
+          }
+        : { title: t('bridge.queue.none'), description: notes },
+    );
     onDone();
   };
 

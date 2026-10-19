@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -430,6 +431,9 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 		if ev.Path != "" {
 			if book, err := a.cat.GetBookByPath(ctx, ev.LibraryID, ev.Path); err == nil {
 				ev.Title = book.Title
+				// Whether the chapters a detect job found are the ones listeners
+				// get (the Bridge rescans before it reports done).
+				ev.ChaptersSource = cmp.Or(book.ChaptersSource, catalog.ChaptersFromFiles)
 			}
 		}
 	}
@@ -438,8 +442,9 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 
 // writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,
 // finished, a kind the Bridge doesn't run, a library it can't write to, a
-// contribution it can't make or a generate job open for a describe, else 500)
-// and reports whether there was none.
+// contribution it can't make, an open job of another kind that refuses it
+// (generate_open, detect_open, describe_open), a detect for a book whose
+// chapter source an admin chose, else 500) and reports whether there was none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
 	case err == nil:
@@ -460,7 +465,16 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 		writeErrorCode(w, http.StatusConflict, "cannot_contribute", "the bridge can't contribute to the community")
 	case errors.Is(err, bridge.ErrGenerateOpen):
 		writeErrorCode(w, http.StatusConflict, "generate_open",
-			"a generate job is still open for this book; it writes the description when it finishes")
+			"a generate job is still open for this book; it writes this itself when it finishes")
+	case errors.Is(err, bridge.ErrDetectOpen):
+		writeErrorCode(w, http.StatusConflict, "detect_open",
+			"a chapter detection job is still open for this book; queue this once it has finished")
+	case errors.Is(err, bridge.ErrDescribeOpen):
+		writeErrorCode(w, http.StatusConflict, "describe_open",
+			"a description job is still open for this book; detect its chapters once it has finished")
+	case errors.Is(err, bridge.ErrChaptersChosen):
+		writeErrorCode(w, http.StatusConflict, "chapters_chosen",
+			"an admin chose this book's chapter source, so chapters found in the narration would never be used; set it back to automatic first")
 	default:
 		a.log.Warn(op, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not update the job")
@@ -476,8 +490,9 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 //     follows it as a scan's move detection would (Scanner.IndexMoved; a from that
 //     isn't that book moved is ignored).
 //   - mode "attachments": read only the book's .audiosilo/ attachments, never its
-//     audio (Scanner.RefreshAttachments), and answer 200 {path, attachments:
-//     {characters, recaps, description, bridge}} with what is now indexed. from
+//     audio (Scanner.RefreshAttachments: a changed chapters.json re-resolves
+//     the book's chapters), and answer 200 {path, attachments: {characters,
+//     recaps, description, chapters, bridge}} with what is now indexed. from
 //     is refused here.
 //
 // 404 code not_indexable when no book is there (for attachments: no indexed one).
@@ -651,10 +666,12 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // and the paired Bridge runs (409 code kind_unavailable; it may be offline: the
 // job waits), and a kind that writes (sidecars.generate, sidecars.describe)
 // needs a library the Bridge last reported mapped and writable (409 code
-// library_not_writable); a sidecars.describe job is refused while a
-// sidecars.generate job is open for the book (409 code generate_open). A path
-// names an indexed book (404 otherwise) and the job is about that book's own
-// path.
+// library_not_writable); a job is refused while an open job of another kind
+// refuses it (bridge.Enqueue: 409 code generate_open, detect_open or
+// describe_open), and a chapters.detect job for a book whose chapter source an
+// admin chose (409 code chapters_chosen: the list it finds would never be
+// used). A path names an indexed book (404 otherwise) and the job is about that
+// book's own path.
 func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind      string          `json:"kind"`
@@ -679,6 +696,17 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		nj.Path = &book.RelPath
+		if nj.Kind == bridge.KindDetectChapters {
+			choice, err := a.cat.ChapterChoice(r.Context(), book.LibraryID, book.RelPath)
+			if err != nil {
+				a.writeCatalogError(w, err, "bridge queue failed", "could not read the book's chapter choice")
+				return
+			}
+			if choice != "" {
+				a.writeBridgeError(w, bridge.ErrChaptersChosen, "bridge queue failed")
+				return
+			}
+		}
 	case nj.LibraryID != nil:
 		if _, ok := a.libraryFor(w, r, *nj.LibraryID, "bridge queue failed"); !ok {
 			return
