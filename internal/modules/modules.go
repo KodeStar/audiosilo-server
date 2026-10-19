@@ -50,7 +50,8 @@ type Module struct {
 type Registrar interface {
 	// Admin mounts an admin-only route.
 	Admin(pattern string, h http.Handler)
-	// User mounts a route for any signed-in user (a session or an API key).
+	// User mounts a route for a signed-in user (a session or an API key),
+	// never a kid's account or a demo account (403).
 	User(pattern string, h http.Handler)
 }
 

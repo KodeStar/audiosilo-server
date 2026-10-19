@@ -30,18 +30,24 @@ type SidecarsCost struct {
 }
 
 // EstimateSidecars costs a sidecars.generate run over a book of duration
-// seconds, reading its ebook when it has one, from the Bridge's figures (nil:
-// it sent none). Hours and dollars are rounded to hundredths.
-func EstimateSidecars(duration float64, ebook bool, est *SidecarsEstimates) SidecarsCost {
-	c := SidecarsCost{Source: SourceAudio}
+// seconds, reading its ebook when it has one, from the Bridge's figures (its
+// estimates.sidecars; none sent leaves every figure a default). Hours and
+// dollars are rounded to hundredths. CanContribute is the Bridge's own answer
+// (Status.CanContribute: its setup block's when it sent one), figures or not.
+func (st Status) EstimateSidecars(duration float64, ebook bool) SidecarsCost {
+	c := SidecarsCost{Source: SourceAudio, CanContribute: st.CanContribute()}
 	if ebook {
 		c.Source = SourceEbook
+	}
+	var est *SidecarsEstimates
+	if st.Estimates != nil {
+		est = st.Estimates.Sidecars
 	}
 	if est == nil {
 		return c
 	}
 	c.Figures = true
-	c.Subscription, c.AgentReady, c.CanContribute = est.Subscription, est.AgentReady, est.CanContribute
+	c.Subscription, c.AgentReady = est.Subscription, est.AgentReady
 	if ebook {
 		if est.AgentUSDPerEbook != nil {
 			c.AgentCostUSD = new(cents(*est.AgentUSDPerEbook))

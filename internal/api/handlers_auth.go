@@ -44,11 +44,25 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	// The online Bridge's version and features (its job families, plus
-	// contribute), only while capabilities.bridge is true.
-	if bridgeOn != nil {
+	// contribute), only while capabilities.bridge is true, and only to a
+	// signed-in caller (any role): the clients that read it (the player's
+	// admin-only generate action, the console) ask with their token, and an
+	// anonymous caller learns no more than the flags.
+	if bridgeOn != nil && a.signedIn(r) {
 		info["bridge"] = bridgeOn
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// signedIn reports whether r carries a session or an API key the server
+// accepts (Authorization header only), for a public route that says more to a
+// signed-in caller. A missing or refused token is simply anonymous, never a 401.
+func (a *API) signedIn(r *http.Request) bool {
+	if bearerToken(r, false) == "" {
+		return false
+	}
+	_, failure, _ := a.authenticate(r, false, sessionOrAPI)
+	return failure == ""
 }
 
 // coreCapabilities are GET /server's capability flags other than the managed

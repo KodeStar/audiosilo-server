@@ -56,7 +56,7 @@ func TestBridgeDetectQueue(t *testing.T) {
 		t.Fatalf("an older Bridge: %d %s, want 409 kind_unavailable", resp.StatusCode, body)
 	}
 	b.beatDetect(t, true)
-	if _, body := b.do(t, "GET", "/api/v1/server", "", ""); !strings.Contains(body, `"features":["bridge","chapters","sidecars"]`) {
+	if _, body := b.do(t, "GET", "/api/v1/server", b.userTok, ""); !strings.Contains(body, `"features":["bridge","chapters","sidecars"]`) {
 		t.Fatalf("features = %s", body)
 	}
 

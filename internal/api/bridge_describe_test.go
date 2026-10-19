@@ -63,7 +63,7 @@ func TestBridgeDescribeQueue(t *testing.T) {
 		t.Fatalf("an older Bridge: %d %s, want 409 kind_unavailable", resp.StatusCode, body)
 	}
 	b.beatDescribe(t, true)
-	_, body := b.do(t, "GET", "/api/v1/server", "", "")
+	_, body := b.do(t, "GET", "/api/v1/server", b.userTok, "")
 	if !strings.Contains(body, `"features":["bridge","sidecars"]`) {
 		t.Fatalf("features = %s", body)
 	}

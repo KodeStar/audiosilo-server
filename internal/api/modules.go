@@ -73,8 +73,24 @@ func (r moduleRoutes) Admin(pattern string, h http.Handler) {
 	r.mux.Handle(checkModulePattern(r.id, pattern), r.a.requireAdmin(r.a.requireModule(r.id, h)))
 }
 
+// User mounts a route for a signed-in listener: never a kid's account (403
+// kid_account) or a demo account (403 demo_account), since a module's actions
+// (contributing to the community, first of all) are a grown-up's own.
 func (r moduleRoutes) User(pattern string, h http.Handler) {
-	r.mux.Handle(checkModulePattern(r.id, pattern), r.a.requireAuth(r.a.requireModule(r.id, h)))
+	r.mux.Handle(checkModulePattern(r.id, pattern),
+		r.a.requireAuth(notKid(r.a.notDemo(r.a.requireModule(r.id, h)))))
+}
+
+// notDemo answers 403 demo_account for a demo account, else runs next. It reads
+// the account (nonDemoAccount): the token's lookup doesn't load is_demo, so the
+// request's user can't say.
+func (a *API) notDemo(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.nonDemoAccount(w, r) == nil {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // checkModulePattern returns pattern when it names a method and an API path

@@ -108,7 +108,7 @@ func TestModuleCapabilityMatrix(t *testing.T) {
 	if !capability(t, b.testEnv) {
 		t.Fatal("on, Bridge with the feature: flag false")
 	}
-	_, body := b.do(t, "GET", "/api/v1/server", "", "")
+	_, body := b.do(t, "GET", "/api/v1/server", b.userTok, "")
 	if !strings.Contains(body, `"features":["bridge","contribute","sidecars"]`) {
 		t.Fatalf("bridge.features without contribute: %s", body)
 	}

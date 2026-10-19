@@ -126,11 +126,7 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 	if !brief {
 		out.Ebook = library.BookEbook(lib.Root, book.RelPath, book.IsFolder)
 	}
-	var est *bridge.SidecarsEstimates
-	if h.Estimates != nil {
-		est = h.Estimates.Sidecars
-	}
-	out.SidecarsCost = bridge.EstimateSidecars(book.Duration, out.Ebook != "", est)
+	out.SidecarsCost = h.EstimateSidecars(book.Duration, out.Ebook != "")
 
 	out.Has.Community, out.Has.CommunityUnknown = a.communityContent(ctx, book)
 	if out.Has.Local, err = a.localContent(ctx, book); err != nil {
@@ -138,7 +134,7 @@ func (a *API) handleAdminBridgeEstimate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !brief {
-		if out.Earlier, err = a.earlierWithoutRecaps(ctx, book, est); err != nil {
+		if out.Earlier, err = a.earlierWithoutRecaps(ctx, book, h.Status); err != nil {
 			a.writeCatalogError(w, err, "bridge estimate failed", "could not list the series")
 			return
 		}
@@ -184,8 +180,8 @@ func (a *API) localContent(ctx context.Context, book *catalog.Book) (hasContent,
 // community work has none either (meta.Service.Coverages, batched a chunk at a
 // time over the nearest maxEarlierChecked at most; a book it can't ask about
 // right now is left out, never offered on a guess). Each carries what generating
-// it is expected to cost, from est (audio: no look into its folder).
-func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book, est *bridge.SidecarsEstimates) ([]earlierBook, error) {
+// it is expected to cost, from the Bridge's figures in st (audio: no look into its folder).
+func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book, st bridge.Status) ([]earlierBook, error) {
 	members, err := a.cat.EarlierInSeries(ctx, book.LibraryID, book)
 	if err != nil {
 		return nil, err
@@ -207,7 +203,7 @@ func (a *API) earlierWithoutRecaps(ctx context.Context, book *catalog.Book, est 
 				continue
 			}
 			m := chunk[i]
-			c := bridge.EstimateSidecars(m.Duration, false, est)
+			c := st.EstimateSidecars(m.Duration, false)
 			out = append(out, earlierBook{LibraryID: m.LibraryID, Path: m.RelPath, Title: m.Title,
 				SeriesIndex: catalog.FormatSeriesRange(m.Position, m.PositionEnd),
 				ASRHours:    c.ASRHours, AgentCostUSD: c.AgentCostUSD})
