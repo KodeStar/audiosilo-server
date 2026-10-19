@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/api/client';
 import { keys } from '@/api/hooks';
-import type { BridgeLibrary, BridgeStatus, SidecarsEstimates } from '@/api/types';
+import type { BridgeLibrary, BridgeSetup, BridgeStatus, SidecarsEstimates } from '@/api/types';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DangerZone } from '@/components/danger-zone';
 import { FactList } from '@/components/fact-list';
@@ -34,6 +34,7 @@ import { CardEmpty } from '@/features/settings/card-empty';
 import { queueJob } from './bridge-actions';
 import { JobsCard } from './bridge-jobs';
 import {
+  bridgeTabLink,
   KIND_VERIFY,
   kindName,
   MAPPING_TONE,
@@ -44,13 +45,7 @@ import {
 } from './bridge-model';
 import { PairDialog, type ShownCode } from './pair-dialog';
 import { BridgeSetupList } from './setup-list';
-import {
-  ACCOUNTS_TAB,
-  agentCredentialSet,
-  bridgeTabLink,
-  setupComplete,
-  setupProgress,
-} from './setup-model';
+import { ACCOUNTS_TAB, agentCredentialSet, setupComplete, setupProgress } from './setup-model';
 import { useBridge } from './use-bridge';
 import { VerifyDialog } from './verify-dialog';
 
@@ -186,12 +181,13 @@ function Paired({
   making: boolean;
 }) {
   const setup = status.setup;
+  const setupCard = setup ? <SetupCard status={status} setup={setup} /> : null;
   const setupFirst = setup ? !setupComplete(setup) : false;
   return (
     <>
-      {setup && setupFirst ? <SetupCard status={status} /> : null}
+      {setupFirst ? setupCard : null}
       <StatusCard status={status} onPair={onPair} making={making} />
-      {setup && !setupFirst ? <SetupCard status={status} /> : null}
+      {setupFirst ? null : setupCard}
       <LibrariesCard status={status} />
       <WorkersCard status={status} />
       <JobsCard libraryNames={libraryNames} uiUrl={status.ui_url} />
@@ -321,11 +317,9 @@ function StatusCard({
  * happens only on the Bridge's own page (the server never calls the Bridge), so
  * the card links to its Accounts tab.
  */
-function SetupCard({ status }: { status: BridgeStatus }) {
+function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
-  const setup = status.setup;
-  if (!setup) return null;
   const { done, total } = setupProgress(setup);
   const complete = done === total;
   const agent = agentCredentialSet(setup);

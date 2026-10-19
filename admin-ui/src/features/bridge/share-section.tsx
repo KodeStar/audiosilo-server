@@ -6,7 +6,6 @@ import { useServerInfo } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { queueJob } from './bridge-actions';
-import { jobActions } from './bridge-model';
 import {
   contributionsOn,
   generateAvailable,
@@ -15,7 +14,7 @@ import {
   shareOffered,
   shareRequest,
 } from './generate-model';
-import { JobCancelButton, JobSection } from './generate-parts';
+import { JobActions, JobSection } from './generate-parts';
 import { GenerateStatus } from './generate-status';
 import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-generate';
 
@@ -55,7 +54,6 @@ export function ShareSection({ book }: { book: AdminBook }) {
   // A cancelled job says nothing worth a line.
   const showJob = job && job.state !== 'cancelled';
   if (!offer && !showJob) return null;
-  const canCancel = job ? jobActions(job).cancel : false;
 
   const share = async () => {
     setBusy(true);
@@ -74,23 +72,18 @@ export function ShareSection({ book }: { book: AdminBook }) {
         </p>
       ) : null}
       {showJob && job ? <GenerateStatus job={job} uiUrl={uiUrl} /> : null}
-      {offer || (showJob && canCancel) ? (
-        <div className="flex flex-wrap gap-2">
-          {offer ? (
-            <Button variant="outline" size="sm" disabled={busy} onClick={() => void share()}>
-              {busy ? (
-                <LoaderCircle className="animate-spin" aria-hidden="true" />
-              ) : (
-                <Send aria-hidden="true" />
-              )}
-              {t('bridge.share.action')}
-            </Button>
-          ) : null}
-          {job && canCancel ? (
-            <JobCancelButton job={job} ariaLabel={t('bridge.share.cancelAria')} />
-          ) : null}
-        </div>
-      ) : null}
+      <JobActions job={job} cancelAria={t('bridge.share.cancelAria')}>
+        {offer ? (
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => void share()}>
+            {busy ? (
+              <LoaderCircle className="animate-spin" aria-hidden="true" />
+            ) : (
+              <Send aria-hidden="true" />
+            )}
+            {t('bridge.share.action')}
+          </Button>
+        ) : null}
+      </JobActions>
     </JobSection>
   );
 }

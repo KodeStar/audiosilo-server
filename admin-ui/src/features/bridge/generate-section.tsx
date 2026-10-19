@@ -1,12 +1,11 @@
 import { useState } from 'react';
-import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { RotateCw, Sparkles } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { STORY_CARD_ID } from '@/features/book/story-model';
-import { isOpen, jobActions } from './bridge-model';
+import { isOpen } from './bridge-model';
 import { GenerateDialog } from './generate-dialog';
 import {
   generateAction,
@@ -16,7 +15,7 @@ import {
   KIND_CONTRIBUTE,
   KIND_DETECT,
 } from './generate-model';
-import { JobCancelButton, JobSection } from './generate-parts';
+import { BridgeSettingsLink, JobActions, JobSection } from './generate-parts';
 import { GenerateStatus } from './generate-status';
 import { generateNeed } from './setup-model';
 import { useBookGenerateJob, useBridgeStatus, useGenerateEstimate } from './use-generate';
@@ -44,12 +43,6 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   // The brief estimate: enough for what the book has and so which action to offer.
   const estimate = useGenerateEstimate(book.library_id, book.path, available, { brief: true });
   const parked = job?.state === 'needs_attention';
-  // The Bridge's status: its page for a parked job's link, its checklist for
-  // what generating still needs.
-  const bridgeOnline = Boolean(server?.capabilities.bridge && server.capabilities.metadata);
-  const status = useBridgeStatus(parked || bridgeOnline);
-  const uiUrl = status?.ui_url;
-  const need = bridgeOnline ? generateNeed(status, book.library_id) : undefined;
   const [open, setOpen] = useState(false);
 
   const has = estimate.data?.has;
@@ -65,21 +58,26 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   const blocker = jobOpen ? undefined : generateBlocker(jobs, estimate.data?.open_job);
   const detect = blocker?.kind === KIND_DETECT ? blocker : undefined;
   const sharing = blocker?.kind === KIND_CONTRIBUTE;
+  const idle = !jobOpen && !blocker;
+  // The Bridge's status: its page for a parked job's link, its checklist for
+  // what generating still needs (asked only when that line could show).
+  const bridgeOnline = Boolean(server?.capabilities.bridge && server.capabilities.metadata);
+  const status = useBridgeStatus(parked || (bridgeOnline && idle && action !== 'covered'));
+  const uiUrl = status?.ui_url;
+  const need = bridgeOnline ? generateNeed(status, book.library_id) : undefined;
   // The action: with an answer that offers it, no job open, and not while the
   // Bridge is away (it couldn't run it).
-  const ready = available && !jobOpen && !blocker;
+  const ready = available && idle;
   // In its place, why there is none: the community has both, or the Bridge
   // still needs setting up for it (named; said whether or not the Bridge
   // offers the kind yet, since that is why it doesn't).
   const covered = ready && action === 'covered';
-  const why = need !== undefined && !jobOpen && !blocker && action !== 'covered';
+  const why = need !== undefined && idle && action !== 'covered';
   const offer = ready && !why && (action === 'generate' || action === 'regenerate');
   // A cancelled job says nothing worth a line.
   const showJob = job && job.state !== 'cancelled';
   // An open dialog stays (it says when the Bridge went away), whatever else changed.
   if (!open && !showJob && !offer && !covered && !generated && !blocker && !why) return null;
-
-  const canCancel = job ? jobActions(job).cancel : false;
 
   return (
     <JobSection
@@ -107,15 +105,7 @@ export function GenerateSection({ book }: { book: AdminBook }) {
       ) : null}
       {why ? (
         <p className="text-[12.5px] text-muted-foreground">
-          {t(`bridge.generate.needs.${need}`)}{' '}
-          <Link
-            to="/server/{-$section}"
-            params={{ section: undefined }}
-            search={{ topic: 'bridge' }}
-            className="font-semibold text-brand-ink hover:underline"
-          >
-            {t('bridge.generate.openSettings')}
-          </Link>
+          {t(`bridge.generate.needs.${need}`)} <BridgeSettingsLink />
         </p>
       ) : null}
       {sharing ? (
@@ -129,25 +119,20 @@ export function GenerateSection({ book }: { book: AdminBook }) {
       ) : showJob && job ? (
         <GenerateStatus job={job} uiUrl={uiUrl} />
       ) : null}
-      {(showJob && canCancel) || offer ? (
-        <div className="flex flex-wrap gap-2">
-          {offer ? (
-            <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-              {action === 'regenerate' ? (
-                <RotateCw aria-hidden="true" />
-              ) : (
-                <Sparkles aria-hidden="true" />
-              )}
-              {action === 'regenerate'
-                ? t('bridge.generate.regenerate')
-                : t('bridge.generate.action')}
-            </Button>
-          ) : null}
-          {job && canCancel ? (
-            <JobCancelButton job={job} ariaLabel={t('bridge.generate.cancelAria')} />
-          ) : null}
-        </div>
-      ) : null}
+      <JobActions job={job} cancelAria={t('bridge.generate.cancelAria')}>
+        {offer ? (
+          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+            {action === 'regenerate' ? (
+              <RotateCw aria-hidden="true" />
+            ) : (
+              <Sparkles aria-hidden="true" />
+            )}
+            {action === 'regenerate'
+              ? t('bridge.generate.regenerate')
+              : t('bridge.generate.action')}
+          </Button>
+        ) : null}
+      </JobActions>
       <GenerateDialog
         open={open}
         onOpenChange={setOpen}

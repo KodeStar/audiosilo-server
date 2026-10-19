@@ -3,8 +3,6 @@ import type { BridgeLibrary, BridgeSetup, BridgeSetupItem, BridgeStatus } from '
 import en from '@/i18n/locales/en.json';
 import {
   agentCredentialSet,
-  bridgeCanContribute,
-  bridgeTabLink,
   generateNeed,
   KNOWN_SETUP_ITEMS,
   setupComplete,
@@ -13,6 +11,7 @@ import {
   setupProgress,
   setupState,
 } from './setup-model';
+import { bridgeTabLink } from './bridge-model';
 
 const strings = en as Record<string, string>;
 
@@ -94,34 +93,10 @@ describe('the setup checklist', () => {
     expect(setupItemLink(ui, 'budget')).toBe('http://192.168.1.20:8090/#/settings');
     expect(setupItemLink(ui, 'paired')).toBeUndefined();
     expect(setupItemLink(ui, 'audible_login')).toBeUndefined();
+    // An id the Bridge may send that names an Object.prototype member links nowhere.
+    expect(setupItemLink(ui, 'constructor')).toBeUndefined();
     expect(setupItemLink(undefined, 'agent')).toBeUndefined();
     expect(bridgeTabLink('javascript:alert(1)', 'accounts')).toBeUndefined();
-  });
-});
-
-describe('whether the Bridge can contribute', () => {
-  it("prefers the checklist's answer, else the older estimates', else no", () => {
-    const estimates = {
-      sidecars: {
-        asr_seconds_per_audio_hour: 0,
-        agent_usd_per_audio_hour: null,
-        agent_usd_per_ebook: null,
-        samples: 0,
-        agent_backend: '',
-        agent_ready: false,
-        subscription: false,
-        can_contribute: true,
-        monthly_budget_usd: 0,
-        month_spent_usd: 0,
-      },
-    };
-    expect(bridgeCanContribute({ estimates, setup: setup([], { can_contribute: false }) })).toBe(
-      false,
-    );
-    expect(bridgeCanContribute({ setup: setup([], { can_contribute: true }) })).toBe(true);
-    expect(bridgeCanContribute({ estimates })).toBe(true);
-    expect(bridgeCanContribute({})).toBe(false);
-    expect(bridgeCanContribute(undefined)).toBe(false);
   });
 });
 

@@ -9,7 +9,13 @@ import { formatList, formatNumber } from '@/lib/format';
 import { refKey } from '@/lib/book-route';
 import { relBaseName } from '@/lib/paths';
 import { isOpen, kindName } from './bridge-model';
-import { generatePollMs, KIND_DETECT, KIND_GENERATE, latestJobOf } from './generate-model';
+import {
+  generatePollMs,
+  isFileKind,
+  KIND_DETECT,
+  KIND_GENERATE,
+  latestJobOf,
+} from './generate-model';
 
 /**
  * How many of a book's newest jobs are read to find its generate and describe
@@ -37,9 +43,9 @@ export function bookJobsQuery(libraryId: number, path: string, enabled: boolean)
  * and the book's newest jobs, asked again about every 10 s while a generate or
  * describe job works and every minute while one is parked, only while the page
  * showing it is mounted (TanStack Query polls for mounted observers only), then
- * not at all. Every kind shares one query. When the job ends, the book, its
- * estimates and its community metadata are fetched again, so the page shows
- * what changed.
+ * not at all. Every kind shares one query. When the job ends its estimates
+ * are fetched again and, for a kind that writes the book's files, the book and
+ * its community metadata too, so the page shows what changed.
  */
 export function useBookGenerateJob(
   libraryId: number,
@@ -56,8 +62,10 @@ export function useBookGenerateJob(
     seen.current = job;
     if (!before || !job || before.id !== job.id) return;
     if (!isOpen(before.state) || isOpen(job.state)) return;
-    // What the book has, and whether a job is open, changed with it.
+    // Whether a job is open changed with it, and, for a job that writes the
+    // book's files, what the book has (a share or a correction only files issues).
     void qc.invalidateQueries({ queryKey: keys.bridgeEstimate(libraryId, path) });
+    if (!isFileKind(job.kind)) return;
     void qc.invalidateQueries({ queryKey: keys.book(libraryId, path), exact: true });
     void qc.invalidateQueries({ queryKey: keys.bookMeta(libraryId, path) });
   }, [job, qc, libraryId, path]);

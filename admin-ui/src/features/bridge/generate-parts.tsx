@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { LockKeyhole, Unplug, X } from 'lucide-react';
+import { ExternalLink, LockKeyhole, Unplug, X } from 'lucide-react';
 import type { BridgeJob } from '@/api/types';
 import { Notice } from '@/components/notice';
 import { SettingRow } from '@/components/setting-row';
@@ -11,8 +11,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { formatDuration, formatNumber } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { cancelJob } from './bridge-actions';
-import { stateLook } from './bridge-model';
+import { jobActions, stateLook } from './bridge-model';
 import type { Contribute } from './generate-model';
 
 // The pieces the book's generate dialog and the series batch share, the
@@ -71,6 +72,73 @@ export function JobCancelButton({ job, ariaLabel }: { job: BridgeJob; ariaLabel:
 }
 
 /**
+ * A Community card section's actions: its offer (when there is one) and Cancel
+ * while the job can be cancelled. Renders nothing when there is neither.
+ */
+export function JobActions({
+  job,
+  cancelAria,
+  children,
+}: {
+  job?: BridgeJob;
+  cancelAria: string;
+  children?: ReactNode;
+}) {
+  const canCancel = job ? jobActions(job).cancel : false;
+  if (!children && !canCancel) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {children}
+      {job && canCancel ? <JobCancelButton job={job} ariaLabel={cancelAria} /> : null}
+    </div>
+  );
+}
+
+/** A link to Settings > Bridge, where the Bridge's mappings and setup are seen. */
+export function BridgeSettingsLink({ className }: { className?: string }) {
+  const { t } = useTranslation();
+  return (
+    <Link
+      to="/server/{-$section}"
+      params={{ section: undefined }}
+      search={{ topic: 'bridge' }}
+      className={cn('font-semibold text-brand-ink hover:underline', className)}
+    >
+      {t('bridge.generate.openSettings')}
+    </Link>
+  );
+}
+
+/** A link out (a new tab), in the job lines' small bold style with the external-link icon. */
+export function ExternalTextLink({
+  href,
+  className,
+  children,
+  'aria-label': ariaLabel,
+}: {
+  href: string;
+  className?: string;
+  children: ReactNode;
+  'aria-label'?: string;
+}) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={ariaLabel}
+      className={cn(
+        'inline-flex items-center gap-1 text-[12.5px] font-semibold text-brand-ink hover:underline',
+        className,
+      )}
+    >
+      {children}
+      <ExternalLink className="size-3.5" aria-hidden="true" />
+    </a>
+  );
+}
+
+/**
  * The contribute choice: this server only (off) or offered to the community too
  * (on, the default whenever it is offered: Phase 2b).
  */
@@ -111,16 +179,7 @@ export function NotWritableNotice() {
       icon={LockKeyhole}
       role="alert"
       title={t('bridge.generate.notWritable')}
-      actions={
-        <Link
-          to="/server/{-$section}"
-          params={{ section: undefined }}
-          search={{ topic: 'bridge' }}
-          className="text-[13px] font-semibold text-brand-ink hover:underline"
-        >
-          {t('bridge.generate.openSettings')}
-        </Link>
-      }
+      actions={<BridgeSettingsLink className="text-[13px]" />}
     >
       {t('bridge.generate.notWritableBody')}
     </Notice>

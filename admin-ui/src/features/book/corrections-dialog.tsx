@@ -15,9 +15,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { queueJob } from '@/features/bridge/bridge-actions';
-import { isOpen, jobActions } from '@/features/bridge/bridge-model';
-import { generateJobsKnown, KIND_CORRECT } from '@/features/bridge/generate-model';
-import { JobCancelButton, JobSection } from '@/features/bridge/generate-parts';
+import { isOpen } from '@/features/bridge/bridge-model';
+import { contributionsOn, generateJobsKnown, KIND_CORRECT } from '@/features/bridge/generate-model';
+import { JobActions, JobSection } from '@/features/bridge/generate-parts';
 import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
 import { shownValue } from './book-model';
@@ -50,7 +50,7 @@ export function CorrectionsSection({ detail }: { detail: AdminBookDetail }) {
   const { t } = useTranslation();
   const server = useServerInfo().data;
   const b = detail.book;
-  const on = Boolean(server?.capabilities.contributions);
+  const on = contributionsOn(server);
   const { job } = useBookGenerateJob(
     b.library_id,
     b.path,
@@ -66,7 +66,6 @@ export function CorrectionsSection({ detail }: { detail: AdminBookDetail }) {
   const offer = correctionsOffered(server, detail) && !(job && isOpen(job.state));
   const showJob = job && job.state !== 'cancelled';
   if (!open && !offer && !showJob) return null;
-  const canCancel = job ? jobActions(job).cancel : false;
 
   return (
     <JobSection
@@ -78,19 +77,14 @@ export function CorrectionsSection({ detail }: { detail: AdminBookDetail }) {
         <p className="text-[12.5px] text-muted-foreground">{t('book.corrections.pitch')}</p>
       ) : null}
       {showJob && job ? <GenerateStatus job={job} uiUrl={uiUrl} /> : null}
-      {offer || (showJob && canCancel) ? (
-        <div className="flex flex-wrap gap-2">
-          {offer ? (
-            <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-              <FilePenLine aria-hidden="true" />
-              {t('book.corrections.action')}
-            </Button>
-          ) : null}
-          {job && canCancel ? (
-            <JobCancelButton job={job} ariaLabel={t('book.corrections.cancelAria')} />
-          ) : null}
-        </div>
-      ) : null}
+      <JobActions job={job} cancelAria={t('book.corrections.cancelAria')}>
+        {offer ? (
+          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+            <FilePenLine aria-hidden="true" />
+            {t('book.corrections.action')}
+          </Button>
+        ) : null}
+      </JobActions>
       <CorrectionsDialog open={open} onOpenChange={setOpen} detail={detail} lastJob={job} />
     </JobSection>
   );

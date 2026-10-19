@@ -12,7 +12,15 @@ import type {
 import { refKey } from '@/lib/book-route';
 import { relBaseName } from '@/lib/paths';
 import { spanIn } from '@/features/library/series/series-model';
-import { isOpen, mappingState, num, progressOf, safeHttpUrl, text } from './bridge-model';
+import {
+  bridgeTabLink,
+  isOpen,
+  mappingState,
+  num,
+  progressOf,
+  safeHttpUrl,
+  text,
+} from './bridge-model';
 
 // Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), the
 // description written from their notes (Phase 1c), the chapters found in the
@@ -62,6 +70,11 @@ const BOOK_KINDS: readonly string[] = [
 
 /** The kinds that hold the book's generated files on the Bridge (a describe job waits for them). */
 const FILE_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT];
+
+/** Whether a kind writes the book's files (its end changes the book; a share or correction doesn't). */
+export function isFileKind(kind: string): boolean {
+  return FILE_KINDS.includes(kind);
+}
 
 /**
  * Whether a kind is one the book page follows; its progress and result are
@@ -288,6 +301,9 @@ export function generatePollMs(
   return open.length ? GENERATE_PARKED_POLL_MS : false;
 }
 
+/** The kinds whose open job keeps a new generate job from being queued (blocksGenerate). */
+const GENERATE_BLOCKER_KINDS: readonly string[] = [KIND_DETECT, KIND_CONTRIBUTE];
+
 /**
  * Whether a job keeps a new generate job from being queued for its book: a
  * chapter detection (the server's detect_open) or a share with the community
@@ -297,7 +313,7 @@ export function generatePollMs(
  */
 export function blocksGenerate(j: Pick<BridgeJob, 'kind' | 'state' | 'cancel_requested'>): boolean {
   return (
-    (j.kind === KIND_DETECT || j.kind === KIND_CONTRIBUTE) &&
+    GENERATE_BLOCKER_KINDS.includes(j.kind) &&
     (j.state === 'queued' || j.state === 'claimed' || j.state === 'running') &&
     !j.cancel_requested
   );
@@ -313,7 +329,7 @@ export function generateBlocker(
   openJob: BridgeJob | undefined,
 ): BridgeJob | undefined {
   if (!jobs) return openJob && blocksGenerate(openJob) ? openJob : undefined;
-  return [latestJobOf(jobs, KIND_DETECT), latestJobOf(jobs, KIND_CONTRIBUTE)].find(
+  return GENERATE_BLOCKER_KINDS.map((k) => latestJobOf(jobs, k)).find(
     (j): j is BridgeJob => j !== undefined && blocksGenerate(j),
   );
 }
@@ -442,11 +458,7 @@ export function parkKey(code: string): string {
 
 /** A parked job's page on the Bridge (`<ui_url>#/jobs/<id>`), only for an http(s) ui_url. */
 export function bridgeJobLink(uiUrl: string | undefined, jobId: number): string | undefined {
-  const base = safeHttpUrl(uiUrl);
-  if (!base) return undefined;
-  const u = new URL(base);
-  u.hash = `/jobs/${jobId}`;
-  return u.href;
+  return bridgeTabLink(uiUrl, `jobs/${jobId}`);
 }
 
 /** A figure that can't be below zero (a count, an ETA, a cost), else undefined. */
@@ -535,8 +547,7 @@ export interface GenerateResult {
 /** A list of non-blank strings from an opaque result, else undefined. */
 function strings(v: unknown): string[] | undefined {
   if (!Array.isArray(v)) return undefined;
-  const out = v.map(text).filter((s): s is string => s !== undefined);
-  return out;
+  return v.map(text).filter((s): s is string => s !== undefined);
 }
 
 /** Reads a sidecars.generate (or chapters.detect) result leniently, or null when it holds none of its facts. */
@@ -573,9 +584,9 @@ export function generateResult(result: unknown): GenerateResult | null {
   const changes = Array.isArray(r.changes) ? r.changes.length : amount(r.changes);
   if (changes !== undefined) out.changes = changes;
   const auto = strings(r.auto);
-  if (auto) out.auto = auto;
+  if (auto?.length) out.auto = auto;
   const maintainer = strings(r.maintainer);
-  if (maintainer) out.maintainer = maintainer;
+  if (maintainer?.length) out.maintainer = maintainer;
   const any =
     out.characters !== undefined ||
     out.recaps !== undefined ||

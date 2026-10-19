@@ -1,5 +1,5 @@
 import type { BridgeSetup, BridgeSetupItem, BridgeStatus } from '@/api/types';
-import { mappingState, safeHttpUrl } from './bridge-model';
+import { bridgeTabLink, mappingState } from './bridge-model';
 import { titleCase } from './generate-model';
 
 // The Bridge's setup checklist (BRIDGE-PLAN.md Phase 2b, FIRST-RUN-PLAN.md F2)
@@ -9,15 +9,27 @@ import { titleCase } from './generate-model';
 // heartbeat; sign-in and the rest happen on the Bridge's own page (the server
 // never calls the Bridge). Pure: no React, no i18n instance.
 
+/** The Accounts tab of the Bridge's page, where GitHub and the agent credential are signed in. */
+export const ACCOUNTS_TAB = 'accounts';
+
+/**
+ * The steps this console has words for, in the Bridge's order, and the Bridge
+ * page's tab that fixes each (its hash routes, lib/tabs.ts): sign-ins on
+ * Accounts, the ASR choice and the budget in Settings. Paired has nothing to
+ * fix there; an unknown step links nowhere. A Map, so an id like `constructor`
+ * finds nothing.
+ */
+const SETUP_TAB = new Map<string, string | undefined>([
+  ['paired', undefined],
+  ['libraries', 'libraries'],
+  ['asr', 'settings'],
+  ['agent', ACCOUNTS_TAB],
+  ['budget', 'settings'],
+  ['github', ACCOUNTS_TAB],
+]);
+
 /** The steps this console has words for, in the Bridge's order. */
-export const KNOWN_SETUP_ITEMS = [
-  'paired',
-  'libraries',
-  'asr',
-  'agent',
-  'budget',
-  'github',
-] as const;
+export const KNOWN_SETUP_ITEMS: readonly string[] = [...SETUP_TAB.keys()];
 
 /** A step's label key and its fallback (a step the console doesn't know reads title-cased). */
 export function setupItemLabel(id: string): { key: string; fallback: string } {
@@ -26,37 +38,12 @@ export function setupItemLabel(id: string): { key: string; fallback: string } {
 
 /** Whether a step's id is one this console words (else it shows title-cased, with no hint). */
 export function knownSetupItem(id: string): boolean {
-  return (KNOWN_SETUP_ITEMS as readonly string[]).includes(id);
-}
-
-/**
- * The Bridge page's tab that fixes each step (its hash routes, lib/tabs.ts):
- * sign-ins on Accounts, the ASR choice and the budget in Settings. Paired has
- * nothing to fix there; an unknown step links nowhere.
- */
-const SETUP_TAB: Record<string, string> = {
-  libraries: 'libraries',
-  asr: 'settings',
-  agent: 'accounts',
-  budget: 'settings',
-  github: 'accounts',
-};
-
-/** The Accounts tab of the Bridge's page, where GitHub and the agent credential are signed in. */
-export const ACCOUNTS_TAB = 'accounts';
-
-/** A tab of the Bridge's page (`<ui_url>#/<tab>`), only for an http(s) ui_url. */
-export function bridgeTabLink(uiUrl: string | undefined, tab: string): string | undefined {
-  const base = safeHttpUrl(uiUrl);
-  if (!base) return undefined;
-  const u = new URL(base);
-  u.hash = `/${tab}`;
-  return u.href;
+  return SETUP_TAB.has(id);
 }
 
 /** Where a step is fixed on the Bridge's page, when it has a tab and the page an address. */
 export function setupItemLink(uiUrl: string | undefined, id: string): string | undefined {
-  const tab = SETUP_TAB[id];
+  const tab = SETUP_TAB.get(id);
   return tab ? bridgeTabLink(uiUrl, tab) : undefined;
 }
 
@@ -86,18 +73,6 @@ export function setupComplete(setup: Pick<BridgeSetup, 'items'>): boolean {
  */
 export function agentCredentialSet(setup: Pick<BridgeSetup, 'items'>): boolean | undefined {
   return setup.items.find((i) => i.id === 'agent')?.done;
-}
-
-/**
- * Whether the Bridge can file contributions, as the server decides it
- * (bridge.Status.CanContribute): the checklist's answer when the Bridge sends
- * one, else its older estimates' figure, else no.
- */
-export function bridgeCanContribute(
-  status: Pick<BridgeStatus, 'setup' | 'estimates'> | undefined,
-): boolean {
-  if (status?.setup) return status.setup.can_contribute;
-  return status?.estimates?.sidecars?.can_contribute ?? false;
 }
 
 /** The steps generating characters and recaps waits on: the ones it can't run without. */

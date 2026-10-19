@@ -1,8 +1,9 @@
 import { useTranslation } from 'react-i18next';
-import { Circle, CircleCheck, CircleDashed, ExternalLink } from 'lucide-react';
+import { Circle, CircleCheck, CircleDashed } from 'lucide-react';
 import type { BridgeSetup } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { ExternalTextLink } from './generate-parts';
 import {
   knownSetupItem,
   setupItemLabel,
@@ -51,15 +52,14 @@ export function BridgeSetupList({
         const state = setupState(item);
         const Icon = STATE_ICON[state];
         const label = setupItemLabel(item.id);
+        const name = t(label.key, { defaultValue: label.fallback });
         const link = state === 'done' ? undefined : setupItemLink(uiUrl, item.id);
         return (
           <li key={item.id} className="flex items-start gap-3 py-2.5">
             <Icon className={cn('mt-0.5 size-4 shrink-0', STATE_TONE[state])} aria-hidden="true" />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">
-                  {t(label.key, { defaultValue: label.fallback })}
-                </span>
+                <span className="font-semibold">{name}</span>
                 <span className="sr-only">{t(`bridge.setup.state.${state}`)}</span>
                 {item.required ? null : (
                   <Badge variant="outline">{t('bridge.setup.optional')}</Badge>
@@ -76,18 +76,13 @@ export function BridgeSetupList({
               ) : null}
             </div>
             {link ? (
-              <a
+              <ExternalTextLink
                 href={link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex shrink-0 items-center gap-1 text-[12.5px] font-semibold text-brand-ink hover:underline"
-                aria-label={t('bridge.setup.fixAria', {
-                  step: t(label.key, { defaultValue: label.fallback }),
-                })}
+                className="shrink-0"
+                aria-label={t('bridge.setup.fixAria', { step: name })}
               >
                 {t('bridge.setup.fix')}
-                <ExternalLink className="size-3.5" aria-hidden="true" />
-              </a>
+              </ExternalTextLink>
             ) : null}
           </li>
         );

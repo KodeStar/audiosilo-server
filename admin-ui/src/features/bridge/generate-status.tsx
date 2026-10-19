@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { CircleCheck, ExternalLink, TriangleAlert } from 'lucide-react';
+import { CircleCheck, TriangleAlert } from 'lucide-react';
 import type { BridgeJob } from '@/api/types';
 import { ProgressBar } from '@/components/progress-bar';
 import { formatDuration, formatList, formatNumber, formatRelative, formatUsd } from '@/lib/format';
@@ -18,6 +18,7 @@ import {
   stageLabel,
   type GenerateResult,
 } from './generate-model';
+import { ExternalTextLink } from './generate-parts';
 import { isOpen } from './bridge-model';
 
 /**
@@ -72,31 +73,18 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
         ) : null}
         {job.kind === KIND_CORRECT && r ? <CorrectionFields t={t} lang={lang} result={r} /> : null}
         {r?.issue ? (
-          <a
-            href={r.issue.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 self-start text-[12.5px] font-semibold text-brand-ink hover:underline"
-          >
+          <ExternalTextLink href={r.issue.url} className="self-start">
             {r.issue.number
               ? t('bridge.correct.issueNumber', { n: r.issue.number })
               : t('bridge.correct.issue')}
-            <ExternalLink className="size-3.5" aria-hidden="true" />
-          </a>
+          </ExternalTextLink>
         ) : null}
         {r?.contributed.map((c) => (
-          <a
-            key={c.what}
-            href={c.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-brand-ink hover:underline"
-          >
+          <ExternalTextLink key={c.what} href={c.url}>
             {t('bridge.generate.contributed', {
               what: t(`bridge.generate.offered.${c.what}`, { defaultValue: c.what }),
             })}
-            <ExternalLink className="size-3.5" aria-hidden="true" />
-          </a>
+          </ExternalTextLink>
         ))}
       </div>
     );
@@ -141,15 +129,9 @@ export function GenerateStatus({ job, uiUrl }: { job: BridgeJob; uiUrl?: string 
           </p>
         ) : null}
         {link ? (
-          <a
-            href={link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 self-start text-[12.5px] font-semibold text-brand-ink hover:underline"
-          >
+          <ExternalTextLink href={link} className="self-start">
             {t('bridge.generate.openInBridge')}
-            <ExternalLink className="size-3.5" aria-hidden="true" />
-          </a>
+          </ExternalTextLink>
         ) : null}
       </div>
     );
