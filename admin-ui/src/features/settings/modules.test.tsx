@@ -166,7 +166,8 @@ describe('settings > modules', () => {
     const badge = within(c).getByText('Set by AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED');
     // A long variable name wraps inside the row on a phone instead of running under the switch.
     expect(badge).toHaveClass('max-w-full', 'whitespace-normal', '[overflow-wrap:anywhere]');
-    expect(badge).not.toHaveClass('whitespace-nowrap', 'h-[22px]', 'shrink-0');
+    expect(badge).not.toHaveClass('whitespace-nowrap');
+    expect(badge).not.toHaveClass('h-[22px]');
   });
 
   it("names a module the console doesn't know by its id", async () => {

@@ -46,7 +46,7 @@ export function SettingBadges({ settings, id }: { settings: AdminSettings; id: S
         <Badge
           variant="outline"
           title={t('settings.locked.hint')}
-          className="h-auto min-h-[22px] max-w-full shrink py-0.5 whitespace-normal [overflow-wrap:anywhere]"
+          className="h-auto min-h-[22px] max-w-full py-0.5 whitespace-normal [overflow-wrap:anywhere]"
         >
           <Lock aria-hidden="true" />
           {lock === 'launcher'

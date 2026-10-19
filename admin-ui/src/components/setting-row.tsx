@@ -30,7 +30,7 @@ export function SettingRow({
     <div className="flex flex-wrap items-center justify-between gap-4 py-4">
       <div className="flex min-w-0 flex-1 basis-60 flex-col gap-0.5">
         {badges ? (
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {label}
             {badges}
           </div>
