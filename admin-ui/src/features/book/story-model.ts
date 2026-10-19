@@ -1,13 +1,11 @@
 import type { MetaWork } from '@/api/types';
+import type { ContributedLinks } from '@/features/bridge/generate-model';
 
 // The book page's Characters and recaps card (BRIDGE-PLAN.md Phase 1e): where
 // each dimension came from, and the rows it lists. Pure: no React, no i18n.
 
 /** The card's anchor: the Community card's "covered" line links here. */
 export const STORY_CARD_ID = 'characters-and-recaps';
-
-/** Rows shown per tab before "Show all". */
-export const STORY_FIRST_ROWS = 10;
 
 /**
  * Where a dimension's entries came from: the community, this server's
@@ -40,9 +38,13 @@ export interface StorySources {
  */
 export function storySources(
   work: MetaWork | undefined,
-  contributed: Partial<Record<string, string>> = {},
+  contributed: ContributedLinks = {},
 ): StorySources {
-  const dimension = (has: boolean, generated: boolean, what: string): StoryDimension => {
+  const dimension = (
+    has: boolean,
+    generated: boolean,
+    what: keyof ContributedLinks,
+  ): StoryDimension => {
     if (!has) return { source: 'none' };
     if (!generated) return { source: 'community' };
     const out: StoryDimension = { source: 'generated' };
@@ -58,17 +60,20 @@ export function storySources(
       'characters',
     ),
     recaps: dimension(
-      Boolean(work?.recaps?.length || hasSummary(work)),
+      Boolean(work?.recaps?.length || summaryParts(work)),
       Boolean(work?.generated?.recaps),
       'recaps',
     ),
   };
 }
 
-/** Whether the work has a whole-book summary with any text. */
-export function hasSummary(work: MetaWork | undefined): boolean {
-  const s = work?.recap_summary;
-  return Boolean(s?.in_short?.trim() || s?.ending?.trim());
+/** The whole-book summary's parts with any text, or undefined when it has none. */
+export function summaryParts(
+  work: MetaWork | undefined,
+): { inShort?: string; ending?: string } | undefined {
+  const inShort = work?.recap_summary?.in_short?.trim();
+  const ending = work?.recap_summary?.ending?.trim();
+  return inShort || ending ? { inShort, ending } : undefined;
 }
 
 export type StoryRecap = NonNullable<MetaWork['recaps']>[number];
@@ -82,11 +87,9 @@ export function recapRows(work: MetaWork | undefined): StoryRecap[] {
 }
 
 /** The character roles audiosilo-meta's schema allows, each with a label of its own. */
-export const CHARACTER_ROLES = ['protagonist', 'antagonist', 'supporting', 'minor'] as const;
+const CHARACTER_ROLES = new Set(['protagonist', 'antagonist', 'supporting', 'minor']);
 
 /** A role's label key, or undefined for one the console has no label for (shown as sent). */
 export function roleKey(role: string | undefined): string | undefined {
-  return role && (CHARACTER_ROLES as readonly string[]).includes(role)
-    ? `book.story.role.${role}`
-    : undefined;
+  return role && CHARACTER_ROLES.has(role) ? `book.story.role.${role}` : undefined;
 }

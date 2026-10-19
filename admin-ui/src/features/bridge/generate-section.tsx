@@ -43,9 +43,7 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   const has = estimate.data?.has;
   const action = has ? generateAction(has) : undefined;
   // Files generated here before show nowhere once the community covers both.
-  const generated = Boolean(
-    has && action !== 'covered' && (has.local.characters || has.local.recaps),
-  );
+  const generated = action === 'regenerate';
   const jobOpen = job ? isOpen(job.state) : false;
   // The book's chapters being found: the server refuses a generate job until
   // that has finished (the run then reuses the transcription), so its status

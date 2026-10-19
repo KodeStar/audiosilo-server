@@ -42,6 +42,9 @@ import type {
 } from './types';
 
 // Query keys live here so invalidation and the hooks can't drift apart.
+/** What names a book and its community match: the key of its /meta answer. */
+export type BookIdentity = Pick<AdminBook, 'library_id' | 'path' | 'asin' | 'isbn'>;
+
 export const keys = {
   server: ['server'] as const,
   stats: ['admin', 'stats'] as const,
@@ -100,7 +103,10 @@ export const keys = {
   match: (libraryId: number, path: string, by: MatchBy) =>
     ['admin', 'book', libraryId, path, 'match', by] as const,
   communityCover: (url: string, size: ThumbSize) => ['admin', 'communityCover', size, url] as const,
+  /** A book's /meta answers (a prefix: a finished Bridge job changes them). */
   bookMeta: (libraryId: number, path: string) => ['meta', libraryId, path] as const,
+  /** A book's /meta answer, by identifiers: a new ASIN or ISBN (a new match) asks again. */
+  bookMetaOf: (b: BookIdentity) => ['meta', b.library_id, b.path, b.asin, b.isbn] as const,
   /** A book's community work, by identity and identifiers: a new ASIN or ISBN asks again. */
   bookWork: (b: AdminBook) => ['meta', 'work', b.library_id, b.path, b.asin, b.isbn] as const,
   /** The Health summary and the duplicate groups (a prefix: a scan or an ignore changes them). */
@@ -857,14 +863,16 @@ export function cachedCommunityCover(
 }
 
 /**
- * A book's community metadata (its series rails). The server caches it for a day;
- * here it is kept for the session.
+ * A book's community metadata (its series rails, characters and recaps). The
+ * server caches it for a day; here it is kept for an hour, and asked again
+ * when the book's ASIN or ISBN changes (a new match is a new work).
  */
-export function useBookMeta(libraryId: number, path: string, enabled: boolean) {
+export function useBookMeta(book: BookIdentity | undefined, enabled: boolean) {
+  const b = book ?? { library_id: 0, path: '', asin: '', isbn: '' };
   return useQuery({
-    queryKey: keys.bookMeta(libraryId, path),
-    queryFn: () => api.bookMeta(libraryId, path),
-    enabled,
+    queryKey: keys.bookMetaOf(b),
+    queryFn: () => api.bookMeta(b.library_id, b.path),
+    enabled: enabled && book !== undefined,
     retry: false,
     staleTime: 60 * 60_000,
   });

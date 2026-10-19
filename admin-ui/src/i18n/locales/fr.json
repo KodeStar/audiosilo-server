@@ -792,7 +792,6 @@
   "book.story.error": "Les personnages et résumés n'ont pas pu être chargés.",
   "book.story.noCharacters": "Aucun personnage pour le moment.",
   "book.story.noRecaps": "Aucun résumé pour le moment.",
-  "book.story.source.community": "Communauté",
   "book.story.source.generated": "Générés sur ce serveur",
   "book.story.contributed": "Proposés, en attente de relecture",
   "book.story.role.protagonist": "Protagoniste",

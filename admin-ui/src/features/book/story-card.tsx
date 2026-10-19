@@ -1,24 +1,25 @@
-import { useEffect, useId, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useId, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight, ExternalLink, Globe, Send, Sparkles } from 'lucide-react';
-import { keys, useBookMeta, useServerInfo } from '@/api/hooks';
+import { ChevronDown, ChevronRight, ExternalLink, Send, Sparkles } from 'lucide-react';
+import { useBookMeta, useServerInfo } from '@/api/hooks';
 import type { AdminBookDetail, MetaAttribution, MetaWork } from '@/api/types';
+import { ProvenanceMarker } from '@/components/provenance';
+import { QueryError } from '@/components/query-error';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { safeHttpUrl } from '@/features/bridge/bridge-model';
 import { contributedLinks, generateJobsKnown } from '@/features/bridge/generate-model';
-import { useBookGenerateJob } from '@/features/bridge/use-generate';
+import { bookJobsQuery } from '@/features/bridge/use-generate';
 import { formatDate, formatList } from '@/lib/format';
+import { FIRST_ROWS, ShowAllToggle } from './show-all-toggle';
 import {
-  hasSummary,
   recapRows,
   roleKey,
   STORY_CARD_ID,
-  STORY_FIRST_ROWS,
   storySources,
+  summaryParts,
   type StoryDimension,
   type StoryRecap,
 } from './story-model';
@@ -30,15 +31,16 @@ import {
  * still waiting for review, with its issue). Recaps stay closed until asked
  * for, one chapter at a time, since the admin may be mid-book. Shown while
  * community metadata is on (the generated content is served through /meta too).
+ * /meta is keyed by the book's ASIN and ISBN, so a rematch asks again.
  */
 export function StoryCard({ detail }: { detail: AdminBookDetail }) {
   const { t } = useTranslation();
   const server = useServerInfo().data;
   const b = detail.book;
   const on = Boolean(server?.capabilities.metadata);
-  const meta = useBookMeta(b.library_id, b.path, on);
-  const { jobs } = useBookGenerateJob(b.library_id, b.path, generateJobsKnown(server));
-  useMetaAfterRematch(detail);
+  const meta = useBookMeta(b, on);
+  // The jobs list only: GenerateSection follows the job and refreshes the page when it ends.
+  const jobs = useQuery(bookJobsQuery(b.library_id, b.path, generateJobsKnown(server))).data?.jobs;
   if (!on) return null;
 
   const work = meta.data?.work;
@@ -55,11 +57,12 @@ export function StoryCard({ detail }: { detail: AdminBookDetail }) {
           <span className="skel h-4 w-56" />
         </div>
       ) : meta.isError ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 p-5">
-          <p className="text-[13px] text-muted-foreground">{t('book.story.error')}</p>
-          <Button variant="outline" size="sm" onClick={() => void meta.refetch()}>
-            {t('common.tryAgain')}
-          </Button>
+        <div className="p-5">
+          <QueryError
+            title={t('book.story.error')}
+            error={meta.error}
+            onRetry={() => void meta.refetch()}
+          />
         </div>
       ) : (
         <Tabs defaultValue="characters">
@@ -73,22 +76,18 @@ export function StoryCard({ detail }: { detail: AdminBookDetail }) {
           </TabsList>
           <TabsPanel value="characters">
             <SourceLine dimension={sources.characters} attribution={work?.attribution} />
-            {characters.length ? (
+            {sources.characters.source !== 'none' ? (
               <CharacterList characters={characters} />
             ) : (
-              <p className="px-5 pb-5 text-[13px] text-muted-foreground">
-                {t('book.story.noCharacters')}
-              </p>
+              <Empty text={t('book.story.noCharacters')} />
             )}
           </TabsPanel>
           <TabsPanel value="recaps">
             <SourceLine dimension={sources.recaps} attribution={work?.attribution} />
-            {recaps.length || hasSummary(work) ? (
-              <RecapList recaps={recaps} summary={work?.recap_summary} />
+            {sources.recaps.source !== 'none' ? (
+              <RecapList recaps={recaps} summary={summaryParts(work)} />
             ) : (
-              <p className="px-5 pb-5 text-[13px] text-muted-foreground">
-                {t('book.story.noRecaps')}
-              </p>
+              <Empty text={t('book.story.noRecaps')} />
             )}
           </TabsPanel>
         </Tabs>
@@ -97,21 +96,19 @@ export function StoryCard({ detail }: { detail: AdminBookDetail }) {
   );
 }
 
-/**
- * Asks /meta again when the book's match changes (a new ASIN or ISBN is a new
- * community work), rather than showing the old work's entries for the hour the
- * answer is kept.
- */
-function useMetaAfterRematch(detail: AdminBookDetail) {
-  const qc = useQueryClient();
-  const { library_id, path, matched } = detail.book;
-  const ids = `${detail.fields.asin.value}|${detail.fields.isbn.value}|${matched}`;
-  const seen = useRef(ids);
-  useEffect(() => {
-    if (seen.current === ids) return;
-    seen.current = ids;
-    void qc.invalidateQueries({ queryKey: keys.bookMeta(library_id, path) });
-  }, [ids, qc, library_id, path]);
+function Empty({ text }: { text: string }) {
+  return <p className="px-5 pb-5 text-[13px] text-muted-foreground">{text}</p>;
+}
+
+/** An external link when there is a safe one, else the plain text. */
+function MaybeLink({ href, children }: { href?: string; children: string }) {
+  return href ? (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline">
+      {children}
+    </a>
+  ) : (
+    children
+  );
 }
 
 /** Where a dimension's entries came from, as badges, above its list. */
@@ -125,43 +122,18 @@ function SourceLine({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   if (dimension.source === 'none') return <div className="pt-4" />;
-  const sourceUrl = safeHttpUrl(attribution?.source_url);
-  const licenseUrl = safeHttpUrl(attribution?.license_url);
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-5 pt-4 pb-3 text-[12px] text-muted-foreground">
       {dimension.source === 'community' ? (
         <>
-          <Badge className="bg-prov-community-soft text-prov-community">
-            <Globe aria-hidden="true" />
-            {t('book.story.source.community')}
-          </Badge>
+          <ProvenanceMarker source="community" />
           {attribution ? (
             <span className="[overflow-wrap:anywhere]">
-              {sourceUrl ? (
-                <a
-                  href={sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:underline"
-                >
-                  {attribution.credit}
-                </a>
-              ) : (
-                attribution.credit
-              )}
+              <MaybeLink href={safeHttpUrl(attribution.source_url)}>{attribution.credit}</MaybeLink>
               {' · '}
-              {licenseUrl ? (
-                <a
-                  href={licenseUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:underline"
-                >
-                  {attribution.license}
-                </a>
-              ) : (
-                attribution.license
-              )}
+              <MaybeLink href={safeHttpUrl(attribution.license_url)}>
+                {attribution.license}
+              </MaybeLink>
             </span>
           ) : null}
         </>
@@ -192,34 +164,11 @@ function SourceLine({
   );
 }
 
-/** "Show all N" / "Show fewer" under a list cut at STORY_FIRST_ROWS. */
-function MoreToggle({
-  all,
-  total,
-  allKey,
-  onToggle,
-}: {
-  all: boolean;
-  total: number;
-  allKey: string;
-  onToggle: () => void;
-}) {
-  const { t } = useTranslation();
-  if (total <= STORY_FIRST_ROWS) return null;
-  return (
-    <div className="border-t px-3 py-2">
-      <Button variant="ghost" size="sm" onClick={onToggle}>
-        {all ? t('book.chapters.fewer') : t(allKey, { count: total })}
-      </Button>
-    </div>
-  );
-}
-
 function CharacterList({ characters }: { characters: NonNullable<MetaWork['characters']> }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const [all, setAll] = useState(false);
-  const shown = all ? characters : characters.slice(0, STORY_FIRST_ROWS);
+  const shown = all ? characters : characters.slice(0, FIRST_ROWS);
   return (
     <>
       <ul className="divide-y border-t">
@@ -252,10 +201,11 @@ function CharacterList({ characters }: { characters: NonNullable<MetaWork['chara
           );
         })}
       </ul>
-      <MoreToggle
+      <ShowAllToggle
+        className="border-t px-3 py-2"
         all={all}
         total={characters.length}
-        allKey="book.story.allCharacters"
+        label={t('book.story.allCharacters', { count: characters.length })}
         onToggle={() => setAll(!all)}
       />
     </>
@@ -267,13 +217,11 @@ function RecapList({
   summary,
 }: {
   recaps: StoryRecap[];
-  summary?: MetaWork['recap_summary'];
+  summary?: { inShort?: string; ending?: string };
 }) {
   const { t } = useTranslation();
   const [all, setAll] = useState(false);
-  const shown = all ? recaps : recaps.slice(0, STORY_FIRST_ROWS);
-  const inShort = summary?.in_short?.trim();
-  const ending = summary?.ending?.trim();
+  const shown = all ? recaps : recaps.slice(0, FIRST_ROWS);
   return (
     <>
       <p className="px-5 pb-3 text-[12.5px] text-muted-foreground">{t('book.story.recapsHint')}</p>
@@ -291,36 +239,33 @@ function RecapList({
             </Reveal>
           </li>
         ))}
-        {inShort || ending ? (
+        {summary ? (
           <li>
             <Reveal label={t('book.story.summary')}>
-              {inShort ? (
-                <div className="flex flex-col gap-0.5">
-                  <h5 className="text-[12px] font-semibold text-muted-foreground">
-                    {t('book.story.inShort')}
-                  </h5>
-                  <p className="text-[13px] whitespace-pre-line">{inShort}</p>
-                </div>
-              ) : null}
-              {ending ? (
-                <div className="flex flex-col gap-0.5">
-                  <h5 className="text-[12px] font-semibold text-muted-foreground">
-                    {t('book.story.ending')}
-                  </h5>
-                  <p className="text-[13px] whitespace-pre-line">{ending}</p>
-                </div>
-              ) : null}
+              <SummaryPart label={t('book.story.inShort')} text={summary.inShort} />
+              <SummaryPart label={t('book.story.ending')} text={summary.ending} />
             </Reveal>
           </li>
         ) : null}
       </ul>
-      <MoreToggle
+      <ShowAllToggle
+        className="border-t px-3 py-2"
         all={all}
         total={recaps.length}
-        allKey="book.story.allRecaps"
+        label={t('book.story.allRecaps', { count: recaps.length })}
         onToggle={() => setAll(!all)}
       />
     </>
+  );
+}
+
+function SummaryPart({ label, text }: { label: string; text?: string }) {
+  if (!text) return null;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <h5 className="text-[12px] font-semibold text-muted-foreground">{label}</h5>
+      <p className="text-[13px] whitespace-pre-line">{text}</p>
+    </div>
   );
 }
 

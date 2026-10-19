@@ -8,7 +8,7 @@ import { formatDate } from '@/lib/format';
 import { bookDetail } from '@/test/library-fixtures';
 import { renderApp } from '@/test/render-app';
 import { signedInRoutes } from '@/test/routes';
-import { hasSummary, recapRows, roleKey, storySources } from './story-model';
+import { recapRows, roleKey, storySources, summaryParts } from './story-model';
 
 // The book page's Characters and recaps card (Bridge Phase 1e): the entries
 // /meta serves, where each dimension came from, recaps closed until opened,
@@ -277,7 +277,10 @@ describe('story model', () => {
     expect(roleKey('minor')).toBe('book.story.role.minor');
     expect(roleKey('sidekick')).toBeUndefined();
     expect(roleKey(undefined)).toBeUndefined();
-    expect(hasSummary(work({ recap_summary: { in_short: ' ' } }))).toBe(false);
-    expect(hasSummary(work())).toBe(true);
+    expect(summaryParts(work({ recap_summary: { in_short: ' ' } }))).toBeUndefined();
+    expect(summaryParts(work({ recap_summary: { in_short: ' Short. ', ending: '' } }))).toEqual({
+      inShort: 'Short.',
+      ending: '',
+    });
   });
 });

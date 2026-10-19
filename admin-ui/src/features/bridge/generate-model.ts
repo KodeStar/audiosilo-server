@@ -158,12 +158,17 @@ export function generateAction(has: {
  */
 export function contributedLinks(
   jobs: readonly Pick<BridgeJob, 'kind' | 'state' | 'result'>[] | undefined,
-): Partial<Record<string, string>> {
+): ContributedLinks {
   const done = jobs?.find((j) => j.kind === KIND_GENERATE && j.state === 'done');
-  const out: Partial<Record<string, string>> = {};
-  for (const c of generateResult(done?.result)?.contributed ?? []) out[c.what] = c.url;
+  const out: ContributedLinks = {};
+  for (const c of generateResult(done?.result)?.contributed ?? []) {
+    if (c.what === 'characters' || c.what === 'recaps') out[c.what] = c.url;
+  }
   return out;
 }
+
+/** A generate job's community issues for the two dimensions it offers. */
+export type ContributedLinks = { characters?: string; recaps?: string };
 
 /**
  * How often a book's generate and describe jobs are asked again: about every

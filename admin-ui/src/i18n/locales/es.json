@@ -792,7 +792,6 @@
   "book.story.error": "No se pudieron cargar los personajes y resúmenes.",
   "book.story.noCharacters": "Aún no hay personajes.",
   "book.story.noRecaps": "Aún no hay resúmenes.",
-  "book.story.source.community": "Comunidad",
   "book.story.source.generated": "Generados en este servidor",
   "book.story.contributed": "Aportados, pendientes de revisión",
   "book.story.role.protagonist": "Protagonista",
