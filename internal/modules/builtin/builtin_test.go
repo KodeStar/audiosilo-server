@@ -19,8 +19,9 @@ func TestRegistryValidates(t *testing.T) {
 	if len(ms) == 0 || ms[0].ID != "contributions" || ms[0].RequiresBridge != bridge.FeatureContribute {
 		t.Fatalf("registry = %+v, want contributions first, needing contribute", ms)
 	}
-	// Phase 2a's contributions is an inert shell: 2b gives it routes and work.
-	if ms[0].Routes != nil || ms[0].Start != nil {
-		t.Fatal("contributions has routes or background work before Phase 2b")
+	// Contributions' actions are Bridge jobs (bridge.ModuleFor), not routes or
+	// background work of its own.
+	if ms[0].ID != bridge.ModuleContributions || ms[0].Routes != nil || ms[0].Start != nil {
+		t.Fatal("contributions has routes or background work of its own")
 	}
 }

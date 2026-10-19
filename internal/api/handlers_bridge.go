@@ -162,8 +162,12 @@ func (a *API) adminBridgeBook(w http.ResponseWriter, r *http.Request, libraryID 
 }
 
 // handleBridgeStatus serves PUT /bridge/status: the Bridge's heartbeat (its
-// version, the job kinds it runs, its library mappings, workers and LAN page).
-// It answers with the server's libraries, so the Bridge maps any it hasn't yet.
+// version, the job kinds it runs, its library mappings, workers and LAN page,
+// its estimates and, since Phase 2b, its setup checklist). It answers with the
+// server's libraries, so the Bridge maps any it hasn't yet, and accepts: the
+// optional top-level blocks this server reads (bridge.HeartbeatAccepts), which
+// the Bridge sends only after a reply lists them, since an older server refuses
+// a heartbeat with a field it doesn't know.
 func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	var st bridge.Status
 	if err := decodeJSON(r, &st, bridge.MaxStatusBytes); err != nil {
@@ -195,6 +199,7 @@ func (a *API) handleBridgeStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"server_time": time.Now().UTC().Format(time.RFC3339),
 		"libraries":   out,
+		"accepts":     bridge.HeartbeatAccepts(),
 	})
 }
 
@@ -443,7 +448,7 @@ func (a *API) notifyBridgeJob(ctx context.Context, job *bridge.Job) {
 // writeBridgeError maps a bridge error (400 invalid, 404 no job, 409 not held,
 // finished, a kind the Bridge doesn't run, a library it can't write to, a
 // contribution it can't make, an open job of another kind that refuses it
-// (generate_open, detect_open, describe_open), a detect for a book whose
+// (generate_open, detect_open, describe_open, contribute_open), a detect for a book whose
 // chapter source an admin chose, else 500) and reports whether there was none.
 func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool {
 	switch {
@@ -469,6 +474,9 @@ func (a *API) writeBridgeError(w http.ResponseWriter, err error, op string) bool
 	case errors.Is(err, bridge.ErrDetectOpen):
 		writeErrorCode(w, http.StatusConflict, "detect_open",
 			"a chapter detection job is still open for this book; queue this once it has finished")
+	case errors.Is(err, bridge.ErrContributeOpen):
+		writeErrorCode(w, http.StatusConflict, "contribute_open",
+			"this book's characters and recaps are being shared with the community; generate them again once that has finished")
 	case errors.Is(err, bridge.ErrDescribeOpen):
 		writeErrorCode(w, http.StatusConflict, "describe_open",
 			"a description job is still open for this book; detect its chapters once it has finished")
@@ -567,6 +575,9 @@ type adminBridge struct {
 	UIURL       string               `json:"ui_url,omitempty"`
 	// Estimates are the Bridge's costing figures (omitted when it sent none).
 	Estimates *bridge.Estimates `json:"estimates,omitempty"`
+	// Setup is the Bridge's onboarding checklist, with its GitHub login
+	// (omitted when it sent none: an older Bridge).
+	Setup *bridge.Setup `json:"setup,omitempty"`
 }
 
 // bridgePairing is a pairing code waiting to be exchanged.
@@ -607,7 +618,7 @@ func (a *API) handleAdminBridge(w http.ResponseWriter, r *http.Request) {
 		out.Online = h.Online(time.Now())
 		out.HeartbeatAt = h.At.UTC().Format(time.RFC3339)
 		out.Version, out.Kinds, out.Features, out.Workers, out.UIURL = h.Version, h.Kinds, h.Features(), h.Workers, h.UIURL
-		out.Estimates = h.Estimates
+		out.Estimates, out.Setup = h.Estimates, h.Setup
 	}
 	for _, l := range libs {
 		al := adminBridgeLibrary{bridgeLibrary: bridgeLibrary{ID: l.ID, Name: l.Name, Root: l.Root}}
@@ -670,8 +681,12 @@ func (a *API) handleAdminBridgeUnpair(w http.ResponseWriter, r *http.Request) {
 // refuses it (bridge.Enqueue: 409 code generate_open, detect_open or
 // describe_open), and a chapters.detect job for a book whose chapter source an
 // admin chose (409 code chapters_chosen: the list it finds would never be
-// used). A path names an indexed book (404 otherwise) and the job is about that
-// book's own path.
+// used). A job that files to the community (sidecars.contribute, meta.correct,
+// sidecars.generate with contribute "issue") is 404 code module_off while the
+// contributions module is off, and 409 code cannot_contribute unless the Bridge
+// says it can; a meta.correct job's changes must be the book's own edits (400
+// code not_edited, checkCorrections). A path names an indexed book (404
+// otherwise) and the job is about that book's own path.
 func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind      string          `json:"kind"`
@@ -681,6 +696,12 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &req, 32<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	// A job that needs a managed module (contributions: filing to the
+	// community) is unknown while the module is off, as the module's routes are.
+	if m := bridge.ModuleFor(req.Kind, req.Params); m != "" && !a.moduleOn(m) {
+		writeErrorCode(w, http.StatusNotFound, codeModuleOff, "this module is turned off")
 		return
 	}
 	nj := bridge.NewJob{Kind: req.Kind, LibraryID: req.LibraryID, Params: req.Params, RequestedBy: userFrom(r.Context()).ID}
@@ -696,6 +717,13 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		nj.Path = &book.RelPath
+		if nj.Kind == bridge.KindCorrect {
+			params, ok := a.checkCorrections(w, r, book, nj.Params)
+			if !ok {
+				return
+			}
+			nj.Params = params
+		}
 		if nj.Kind == bridge.KindDetectChapters {
 			choice, err := a.cat.ChapterChoice(r.Context(), book.LibraryID, book.RelPath)
 			if err != nil {
@@ -722,6 +750,48 @@ func (a *API) handleAdminBridgeQueue(w http.ResponseWriter, r *http.Request) {
 		a.audit(r, "bridge.job", job.Target(), map[string]any{"job": job.ID, "kind": job.Kind, "library": job.LibraryID})
 	}
 	writeJSON(w, status, job)
+}
+
+// codeNotEdited is a meta.correct change of a field the book doesn't hold an
+// admin's edit of, or whose corrected value isn't the book's value now.
+const codeNotEdited = "not_edited"
+
+// checkCorrections checks a meta.correct job's params against the book
+// (bridge.CheckCorrect first, 400 for what it refuses): each change must be a
+// field an admin edited on this book (catalog.SourceEdited, never a scanned,
+// path, community or ABS value) with the corrected value the book's edited
+// value now (catalog.SameFieldValue), else 400 not_edited naming the field.
+// It returns the params with each corrected value as the book holds it and
+// source stamped as this server (audiosilo-server/<version>), whatever the
+// request said; it answers the error itself and reports whether there was none.
+func (a *API) checkCorrections(w http.ResponseWriter, r *http.Request, book *catalog.Book, raw json.RawMessage) (json.RawMessage, bool) {
+	p, err := bridge.CheckCorrect(raw)
+	if err != nil {
+		a.writeBridgeError(w, err, "bridge queue failed")
+		return nil, false
+	}
+	st, err := a.cat.BookMatchState(r.Context(), book.LibraryID, book.RelPath)
+	if err != nil {
+		a.writeBookError(w, err, "bridge queue failed", "could not load the book")
+		return nil, false
+	}
+	for i := range p.Changes {
+		c := &p.Changes[i]
+		fv := st.Fields[c.Field]
+		if fv.Source != catalog.SourceEdited || !catalog.SameFieldValue(c.Field, fv.Value, c.Corrected) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": codeNotEdited, "field": c.Field,
+				"error": c.Field + " isn't an edit made on this server, or the book's value changed since"})
+			return nil, false
+		}
+		c.Corrected = fv.Value
+	}
+	p.Source = "audiosilo-server/" + Version
+	out, err := json.Marshal(p)
+	if err != nil {
+		a.writeBridgeError(w, err, "bridge queue failed")
+		return nil, false
+	}
+	return out, true
 }
 
 // handleAdminBridgeJobs serves GET /admin/bridge/jobs?library_id=&path=&state=

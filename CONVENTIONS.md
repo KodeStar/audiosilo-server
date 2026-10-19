@@ -1385,7 +1385,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `Retry-After` (the receiver reports a load error; the sender should say "busy, try again"); it
   marks the SENDER's session transcoded (`StreamMarks.Note` keys on `Credential.DeviceID`, the
   parent token, whose progress saves make the session).
-- **The Bridge (BRIDGE-PLAN.md Phases 0, 1a, 1c and 1d, capability `bridge`, `auth/bridge.go`, `internal/bridge`,
+- **The Bridge (BRIDGE-PLAN.md Phases 0, 1a, 1c, 1d and 2b, capability `bridge`, `auth/bridge.go`, `internal/bridge`,
   `api/handlers_bridge.go`, `handlers_bridge_estimate.go`; security-critical)**: the optional companion (repo `audiosilo-bridge`,
   private) that writes to the libraries and runs the heavy jobs, so this server stays read-only. **The
   server never connects to the Bridge**: it stores intents (jobs) and the Bridge's last heartbeat, and
@@ -1421,14 +1421,26 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `cleanText`, never refused, as is a job report's `error` (line breaks kept): it is partly the outside
   world's, and a refused report is retried for ever while its job is re-run; one row, never a history)
   answers `{server_time,
-  libraries[{id, name, root}]}`. **Capability**: `capabilities.bridge` is true only while the last
+  libraries[{id, name, root}], accepts}` (`accepts: ["setup"]`, `bridge.HeartbeatAccepts`: the optional
+  top-level blocks this server reads, since the strict decode refuses an unknown field; the Bridge sends
+  one only after a reply listed it, and drops them all and resends once on a 400). **Setup** (Phase 2b,
+  `bridge/setup.go`): `setup {items[{id, done, required, detail?, library_ids?}], can_contribute,
+  github_login?}`, the Bridge's onboarding checklist, read leniently like `estimates` (an unknown key
+  ignored, a block that doesn't decode dropped, never the heartbeat) and bounded (at most 16 items, an
+  item with a bad (`^[a-z][a-z0-9_]{0,31}$`) or repeated id left out, an unknown id kept, `detail` cleaned
+  to 256 bytes, library ids positive and once each, a login not GitHub's shape dropped); `GET /admin/bridge`
+  carries it (omitted when absent), `GET /server` never does. `Status.CanContribute()` is the setup
+  block's `can_contribute` when one was sent, else `estimates.sidecars.can_contribute` (the Bridge sends
+  both); the `contribute` feature, the estimate's `can_contribute` (`Status.EstimateSidecars`) and the
+  `cannot_contribute` refusal all read it. **Capability**: `capabilities.bridge` is true only while the last
   heartbeat is under `bridge.OnlineWindow` (2 min) old (`bridge.Service` caches the parsed heartbeat for
   `heartbeatTTL`, 5 s, so `GET /server` mostly reads no database; `Forget` drops it on a pairing or an
   unpair, and a read that began before a save or a `Forget` never replaces its answer: `hbGen`), with a
   top-level `bridge: {version, features}`
-  beside it (features = the families of the kinds the server knows, plus `contribute` while the last
-  heartbeat's `estimates.sidecars.can_contribute` is true (`bridge.FeatureContribute`, Phase 2a: no
-  heartbeat wire change), `[]` for none; `capabilities` stays all booleans).
+  beside it for a signed-in caller only (a session or an API key of any role, `api.signedIn`, asked only
+  while the Bridge is online; an anonymous, refused or bridge token sees the flag alone) (features = the families of the kinds the server knows, plus `contribute` while the last
+  heartbeat says it can contribute (`Status.CanContribute`; `bridge.FeatureContribute`), `[]` for none;
+  `capabilities` stays all booleans).
   **Jobs** (`bridge_jobs`): kinds allow-listed twice, inside `bridge.Service.Enqueue` (the server queues
   only a kind it knows, with per-kind params: 400, AND the Bridge advertised: `ErrKindUnavailable`, 409
   `kind_unavailable`); Phase 0's
@@ -1562,6 +1574,32 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   hidden path reading as missing, 404), so a book's `.audiosilo/` never becomes a phantom book or a
   streamable file; `findCover` never takes a hidden file (an AppleDouble `._x.jpg`) as a cover. Audited `bridge.code`, `bridge.paired` (system),
   `bridge.unpair`, `bridge.job`, `bridge.cancel`. `SetBridge` before `Handler()` (the launcher always calls it).
+  **Community jobs (Phase 2b, `bridge/contribute.go`)**: two kinds that file to the community metadata
+  database with the Bridge's GitHub sign-in and write nothing into the library (no
+  `library_not_writable`). `kindSpec.module` names the managed module a kind needs and `bridge.ModuleFor`
+  answers it (also `contributions` for a `sidecars.generate` job with `contribute: "issue"`): the queue
+  handler answers **404 `module_off`** for such a job while the module is off, before anything else about
+  it, and `Enqueue` refuses one 409 `cannot_contribute` unless `Status.CanContribute()`.
+  `sidecars.contribute` (family `sidecars`; "Share with the community" after a local run: the Bridge files
+  what its engine book holds): a book `path`, params strict `{work_id?, dimensions?}` (`dimensions` from
+  `characters`, `recaps`, each once, stored in that order; absent or empty = both); refused 409
+  `generate_open` while a `sidecars.generate` job is open for the book; a NEW generate job is refused 409
+  `contribute_open` (`ErrContributeOpen`) while a contribute job is queued or working, and cancels a parked
+  one ("replaced what it was sharing"). Result (the Bridge's): `{library_id, path, work_id,
+  contributed: {characters?, recaps?} (issue URLs), covered: [dimensions the community already had],
+  summary_dropped?}`. `meta.correct` (new family and feature `meta`; "Suggest corrections"): a book `path`,
+  params strict `{work_id, recording_id?, asin?, isbn?, region?, changes: [{field, current, corrected}],
+  evidence, source?}` (1-25 changes of `bridge.CorrectionFields` = title, author, narrator, series,
+  series_index, more_series, published, isbn, each once; values trimmed, one line, at most 500
+  characters, `corrected` set and different from `current`; `evidence` required, at most 2000 characters,
+  line breaks kept, CRLF stored as LF). The handler's `checkCorrections` (security-relevant: the server
+  files only an admin's own edits) then requires each change's field to be `catalog.SourceEdited` on the
+  book (`BookMatchState`; never a scanned, path, ABS or accepted-community value) with `corrected` the
+  book's value now (`catalog.SameFieldValue`), else **400 `not_edited`** naming the `field`, stores the
+  book's own spelling of each value and stamps `source` = `audiosilo-server/<version>` whatever was sent.
+  Result: `{issue_url, issue_number, changes, auto: [fields], maintainer: [fields]}`. Notifications word
+  them "Shared with the community" / "Corrections sent" (failed: "Sharing with the community failed",
+  "Corrections failed"), and the Bridge's `contrib_unavailable` park points at its Accounts tab.
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,
@@ -1575,7 +1613,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `ModulesConfig` field, `config.example.yaml`), its entry in `builtin` (`RequiresBridge` names a `bridge` constant, e.g. `bridge.FeatureContribute`), its console copy in every locale,
   and the player's registry entry (audiosilo-frontend `src/modules/registry.ts`) if listeners see it; a
   module's own settings are setting `<id>.<name>`, key `modules.<id>.<name>`. **Gating**: every route a
-  module registers (`Registrar.Admin` = `requireAdmin`, `.User` = `requireAuth`, then `requireModule`; a
+  module registers (`Registrar.Admin` = `requireAdmin`, `.User` = `requireAuth` + `notKid` (403 `kid_account`)
+  + `notDemo` (403 `demo_account`; it reads the account through `nonDemoAccount`, as the token's lookup
+  doesn't load `is_demo`), then `requireModule`; a
   pattern must be `"METHOD /api/v1/..."`, else `checkModulePattern` panics at start) answers **404
   `module_off`** while the toggle is off, and is always mounted, so a toggle needs no restart. The routes
   gate on the toggle ONLY: an action needing the Bridge keeps its own 409, so routes don't flap with
@@ -1598,8 +1638,10 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   status and refetched after every settings save) shows a card per module (switch, blurb, docs link,
   Bridge state line, the "hidden from listeners" note while enabled but not active); a page a module
   brings goes in `settings-model.ts` `MODULE_PAGES` and `visiblePages` lists it only while the toggle is
-  on (a `?topic=` for it opens General). Phase 2a ships one module,
-  `contributions` (needs `contribute`), as an inert shell: no routes, no `Start` (Phase 2b fills it).
+  on (a `?topic=` for it opens General). One module ships, `contributions` (needs `contribute`), with no
+  routes or `Start` of its own: its actions are the Bridge's community jobs (`bridge.ModuleFor`, see The
+  Bridge). `TestBuiltinModuleRoutePatterns` mounts every builtin module route through the real Registrar,
+  so a bad or clashing pattern fails a test, not a start.
   `transcode`, `metadata` and `bridge` stay out of the registry (shipped keys and flags, not a plain
   runtime on/off).
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`

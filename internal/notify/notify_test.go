@@ -424,12 +424,13 @@ func TestBridgeJobEnded(t *testing.T) {
 }
 
 // Each announced park reads as a sentence of its own: a refused credential
-// says where to replace it; a spent budget fits the book's and the month's
+// and a missing GitHub sign-in say where to fix them (the Bridge's Accounts tab); a spent budget fits the book's and the month's
 // alike (the monthly one resumes by itself); an unknown code points at the page.
 func TestBridgeParkReasons(t *testing.T) {
 	t.Parallel()
 	for code, want := range map[string]string{
-		"agent_credential_refused": "The agent's credential was refused. Replace it in the agent container, then retry the job on the Bridge.",
+		"agent_credential_refused": "The agent's credential was refused. Replace it on the Bridge's Accounts tab, then retry the job on the Bridge.",
+		"contrib_unavailable":      "The Bridge can't send to the community: it isn't signed in to GitHub. Sign in on its Accounts tab, then retry the job on the Bridge.",
 		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset.",
 		"something_new":            "See the job in Settings > Bridge.",
 	} {
@@ -558,6 +559,27 @@ func TestBridgeDescribeJobWording(t *testing.T) {
 	if m := compose(event(KindBridgeJobFailed, "needs_attention"), s.server()); m.Title != "A Bridge job needs attention: The Way of Kings" ||
 		!strings.Contains(m.Text, "spending limit") {
 		t.Errorf("parked = %+v", m)
+	}
+}
+
+// The community jobs (sidecars.contribute, meta.correct) are worded as what
+// went to the community, finished or failed.
+func TestBridgeCommunityJobWording(t *testing.T) {
+	t.Parallel()
+	s, _, _ := newService(t)
+	for kind, want := range map[string]struct{ done, text, failed string }{
+		"sidecars.contribute": {"Shared with the community: Mistborn", "went to the community for review", "Sharing with the community failed: Mistborn"},
+		"meta.correct":        {"Corrections sent: Mistborn", "corrections went to the community for review", "Corrections failed: Mistborn"},
+	} {
+		event := func(ev, state string) catalog.ServerEvent {
+			return catalog.ServerEvent{Kind: ev, Data: map[string]any{"job_kind": kind, "state": state, "title": "Mistborn"}}
+		}
+		if m := compose(event(KindBridgeJobFinished, "done"), s.server()); m.Title != want.done || !strings.Contains(m.Text, want.text) {
+			t.Errorf("%s finished = %+v", kind, m)
+		}
+		if m := compose(event(KindBridgeJobFailed, "failed"), s.server()); m.Title != want.failed {
+			t.Errorf("%s failed = %+v", kind, m)
+		}
 	}
 }
 

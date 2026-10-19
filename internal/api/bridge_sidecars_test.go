@@ -57,7 +57,7 @@ func TestBridgeSidecarsQueue(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
 	b.beatWith(t, true, true, "")
-	_, body := b.do(t, "GET", "/api/v1/server", "", "")
+	_, body := b.do(t, "GET", "/api/v1/server", b.userTok, "")
 	var info struct {
 		Bridge *bridgeInfo `json:"bridge"`
 	}
@@ -107,6 +107,13 @@ func TestBridgeSidecarsContribute(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
 	issue := `{"contribute":"issue"}`
+	// Denied: contributing needs the contributions module (Phase 2b), checked
+	// before the Bridge's answer; a local run doesn't.
+	resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, issue)
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"code":"module_off"`) {
+		t.Fatalf("module off: %d %s, want 404 module_off", resp.StatusCode, body)
+	}
+	setModule(t, b.testEnv, b.adminTok, true)
 	for name, est := range map[string]string{"no estimates": "", "can't": sidecarsEstimates} {
 		b.beatWith(t, true, true, est)
 		resp, body := b.queueSidecars(t, b.lib.ID, mistbornBook, issue)

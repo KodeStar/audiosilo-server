@@ -72,6 +72,24 @@ const KindDescribe = "sidecars.describe"
 // as chapters.json, which the server then uses as the book's chapters.
 const KindDetectChapters = "chapters.detect"
 
+// KindContribute is Phase 2b's "Share with the community": the Bridge files a
+// book's characters and recaps, generated earlier on this server and kept on
+// the Bridge, to the community metadata database as intake issues (what a
+// sidecars.generate run with contribute "issue" files at its end). It writes
+// nothing into the library.
+const KindContribute = "sidecars.contribute"
+
+// KindCorrect is Phase 2b's "Suggest corrections": the Bridge files an admin's
+// edits of a matched book's details (CorrectParams) to the community metadata
+// database as one corrections issue. It writes nothing into the library. Its
+// family is the meta feature.
+const KindCorrect = "meta.correct"
+
+// ModuleContributions is the managed module (its id: internal/modules/builtin)
+// a job that files to the community needs (kindSpec.module, ModuleFor): its
+// routes and jobs answer 404 module_off while it is off.
+const ModuleContributions = "contributions"
+
 // bookRule is whether a kind's job names a book.
 type bookRule int
 
@@ -100,6 +118,11 @@ type kindSpec struct {
 	// cancelsOpen: a new job cancels the open job of each kind named for the
 	// same book (cancelOpenTx, the value its error), in the same transaction.
 	cancelsOpen map[string]string
+	// module is the managed module a job of the kind needs ("" for none): the
+	// api answers 404 module_off while it is off (ModuleFor). A job that needs
+	// ModuleContributions files to the community, so it also needs a Bridge
+	// that can (ErrCannotContribute).
+	module string
 }
 
 // kinds are the job kinds the server can queue (and check). A kind the Bridge
@@ -108,15 +131,23 @@ type kindSpec struct {
 // job (ErrGenerateOpen); a generate job waits for a queued or working detect job
 // (ErrDetectOpen) and cancels a parked one, and cancels an open describe job;
 // describe and detect, which both rewrite the book's bridge.json on the Bridge,
-// wait for each other (ErrDetectOpen, ErrDescribeOpen).
+// wait for each other (ErrDetectOpen, ErrDescribeOpen). A contribute job,
+// which files what the last generate run made, waits for an open generate job
+// (ErrGenerateOpen); a generate job waits for a queued or working contribute job
+// (ErrContributeOpen: it would replace what is being filed) and cancels a parked
+// one.
 var kinds = map[string]kindSpec{
 	KindVerify: {needsLibrary: true, book: bookOptional, params: verifyParams},
 	KindSidecars: {needsLibrary: true, book: bookRequired, writes: true, params: sidecarsParams,
-		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen},
+		refusedWhileOpen: map[string]error{KindDetectChapters: ErrDetectOpen, KindContribute: ErrContributeOpen},
 		cancelsOpen: map[string]string{
 			KindDescribe:       "a generate job for the book replaced it",
 			KindDetectChapters: "a generate job for the book replaced it; it finds the chapters itself",
+			KindContribute:     "a generate job for the book replaced what it was sharing",
 		}},
+	KindContribute: {needsLibrary: true, book: bookRequired, params: contributeParams, module: ModuleContributions,
+		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen}},
+	KindCorrect: {needsLibrary: true, book: bookRequired, params: correctParams, module: ModuleContributions},
 	KindDescribe: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
 		refusedWhileOpen: map[string]error{KindSidecars: ErrGenerateOpen, KindDetectChapters: ErrDetectOpen}},
 	KindDetectChapters: {needsLibrary: true, book: bookRequired, writes: true, params: noParams,
@@ -202,11 +233,23 @@ func sidecarsParams(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
-// contributes reports whether sidecars.generate's params (as checkNew stored
-// them) ask for the results to be offered to the community.
+// contributes reports whether sidecars.generate's params ask for the results
+// to be offered to the community (read loosely: checkNew checks them).
 func contributes(params json.RawMessage) bool {
 	var p SidecarsParams
 	return json.Unmarshal(params, &p) == nil && p.Contribute == ContributeIssue
+}
+
+// ModuleFor is the managed module a job of kind with params needs ("" for
+// none, and for a kind the server doesn't know): the kind's own
+// (kindSpec.module), and for sidecars.generate, ModuleContributions when it
+// asks to contribute ("issue"). The api answers 404 module_off for such a job
+// while the module is off, before anything else about it is checked.
+func ModuleFor(kind string, params json.RawMessage) string {
+	if kind == KindSidecars && contributes(params) {
+		return ModuleContributions
+	}
+	return kinds[kind].module
 }
 
 // noParams checks the params of a kind that takes none (sidecars.describe,
@@ -407,6 +450,13 @@ var ErrGenerateOpen = errors.New("a generate job is open for the book")
 // rewrite the book's bridge.json): a 409 detect_open.
 var ErrDetectOpen = errors.New("a chapter detection job is open for the book")
 
+// ErrContributeOpen is a sidecars.generate job for a book with a
+// sidecars.contribute job queued or working: the generate run would replace the
+// characters and recaps being filed (a 409 contribute_open). A parked contribute
+// job (a GitHub sign-in refused, say) is cancelled by the new generate job
+// instead, which can file its own results.
+var ErrContributeOpen = errors.New("a contribute job is open for the book")
+
 // ErrDescribeOpen is a chapters.detect job for a book with a sidecars.describe
 // job still open: both rewrite the book's bridge.json on the Bridge, so the
 // second is refused (a 409 describe_open).
@@ -418,9 +468,10 @@ var ErrDescribeOpen = errors.New("a description job is open for the book")
 // chapters_chosen). The api checks it, as the catalog holds the choice.
 var ErrChaptersChosen = errors.New("an admin chose the book's chapter source")
 
-// ErrCannotContribute is a sidecars.generate job asking to contribute its
-// results (contribute "issue") to a Bridge whose last heartbeat doesn't say it
-// can (estimates.sidecars.can_contribute; none sent counts as can't): a 409
+// ErrCannotContribute is a job that files to the community (ModuleFor names
+// ModuleContributions: sidecars.contribute, meta.correct, a sidecars.generate
+// job with contribute "issue") for a Bridge whose last heartbeat doesn't say it
+// can (Status.CanContribute; none sent counts as can't): a 409
 // cannot_contribute.
 var ErrCannotContribute = errors.New("the bridge can't contribute to the community")
 
@@ -467,13 +518,13 @@ func checkNew(j *NewJob) error {
 // knows (ErrInvalid otherwise, as for bad params) and the paired Bridge runs
 // (ErrKindUnavailable); it may be offline, and the job waits. A kind that writes
 // into the library is queued only when the last heartbeat reports the library
-// mapped and writable (ErrLibraryNotWritable), a sidecars.generate job that
-// contributes only when it says the Bridge can (ErrCannotContribute), and any
+// mapped and writable (ErrLibraryNotWritable), a job that files to the
+// community only when it says the Bridge can (ErrCannotContribute), and any
 // job only while no open job of another kind refuses it (kindSpec's
-// refusedWhileOpen: ErrGenerateOpen, ErrDetectOpen, ErrDescribeOpen); the open
-// job of its own kind is still returned either way.
+// refusedWhileOpen: ErrGenerateOpen, ErrDetectOpen, ErrDescribeOpen,
+// ErrContributeOpen); the open job of its own kind is still returned either way.
 // The caller has resolved the library and the book (j.Path is the book's
-// indexed path).
+// indexed path) and checked the job's module is on (ModuleFor).
 func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool, err error) {
 	if err := checkNew(&j); err != nil {
 		return nil, false, err
@@ -489,7 +540,7 @@ func (s *Service) Enqueue(ctx context.Context, j NewJob) (job *Job, created bool
 	switch {
 	case kinds[j.Kind].writes && !h.Writable(*j.LibraryID):
 		refuse = ErrLibraryNotWritable
-	case j.Kind == KindSidecars && contributes(j.Params) && !h.CanContribute():
+	case ModuleFor(j.Kind, j.Params) == ModuleContributions && !h.CanContribute():
 		refuse = ErrCannotContribute
 	}
 	key := DedupeKey(j.Kind, j.LibraryID, j.Path)

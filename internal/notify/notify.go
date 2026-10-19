@@ -431,12 +431,17 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 
 // bridgeKindWords is how a message words each Bridge job kind it knows: its
 // label in a title and, for a kind whose finished job leaves something for
-// listeners, what is ready (the title's start) and where they see it.
+// listeners or the community, what is ready (the title's start) and where it
+// went.
 var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 	bridge.KindSidecars:       {"Characters and recaps", "Characters and recaps ready", "Listeners see them in the player now."},
 	bridge.KindDescribe:       {"Description", "Description ready", "Listeners see it in the player's About when the book has no other description."},
 	bridge.KindDetectChapters: {"Chapters", "Chapters found", "Listeners see them in the player now."},
-	bridge.KindVerify:         {label: "Bridge check"},
+	bridge.KindContribute: {"Sharing with the community", "Shared with the community",
+		"What this server generated for the book went to the community for review. The book page links it."},
+	bridge.KindCorrect: {"Corrections", "Corrections sent",
+		"The book's corrections went to the community for review. The book page links them."},
+	bridge.KindVerify: {label: "Bridge check"},
 }
 
 // bridgeJobLabel names a Bridge job's kind in a message title.
@@ -467,7 +472,9 @@ func bridgeParkReason(code string) string {
 	case "budget_exceeded":
 		return "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset."
 	case "agent_credential_refused":
-		return "The agent's credential was refused. Replace it in the agent container, then retry the job on the Bridge."
+		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab, then retry the job on the Bridge."
+	case "contrib_unavailable":
+		return "The Bridge can't send to the community: it isn't signed in to GitHub. Sign in on its Accounts tab, then retry the job on the Bridge."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	case "chapters_not_detected":
