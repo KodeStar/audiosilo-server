@@ -11,10 +11,12 @@ import { cn } from '@/lib/utils';
 import { DescribeSection } from '@/features/bridge/describe-section';
 import { GenerateSection } from '@/features/bridge/generate-section';
 import { ProgressMenu } from '@/features/people/progress-actions';
+import { StoryCard } from './story-card';
 
 /**
  * The right-hand column: who's listening, community metadata (and generating
- * characters, recaps and a description with the Bridge), and who can see the book.
+ * characters, recaps and a description with the Bridge), the characters and
+ * recaps themselves, and who can see the book.
  */
 export function BookAside({
   detail,
@@ -31,6 +33,7 @@ export function BookAside({
     <aside className="flex min-w-0 flex-col gap-4">
       <Listeners detail={detail} />
       <CommunityCard detail={detail} matchBlocked={matchBlocked} onMatch={onMatch} />
+      <StoryCard detail={detail} />
       <WhoCanSee detail={detail} onAddToShare={onAddToShare} />
     </aside>
   );

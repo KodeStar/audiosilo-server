@@ -129,15 +129,40 @@ export function detectJobsKnown(server: ServerInfo | undefined): boolean {
   return server?.capabilities.bridge !== undefined;
 }
 
-/** What the card offers: Generate, Regenerate (local data exists), or nothing (the community has both). */
-export type GenerateAction = 'generate' | 'regenerate' | 'hidden';
+/**
+ * What the card offers (BRIDGE-PLAN.md Phase 1e, the one offer rule the player
+ * follows too): `covered` when the community has both characters and recaps
+ * (no Generate; a line says so and links to the Characters and recaps card,
+ * even over files generated here before, which the community's masks), else
+ * Regenerate while either dimension was generated here, else Generate. Generated
+ * content only ever fills a dimension the community lacks (/meta's per-dimension
+ * merge), so Generate stays offered while either is missing. `community` is the
+ * community's own coverage (the estimate's `has.community`), never generated.
+ */
+export type GenerateAction = 'generate' | 'regenerate' | 'covered';
 
 export function generateAction(has: {
   community: SidecarsCoverage;
   local: SidecarsCoverage;
 }): GenerateAction {
-  if (has.community.characters && has.community.recaps) return 'hidden';
+  if (has.community.characters && has.community.recaps) return 'covered';
   return has.local.characters || has.local.recaps ? 'regenerate' : 'generate';
+}
+
+/**
+ * The community issues the book's newest finished generate job filed, by what
+ * each offers (`characters`, `recaps`): the Characters and recaps card's
+ * "Contributed, waiting for review" links. An open or failed job since doesn't
+ * hide them (they still wait), a newer finished one replaces them. Whether a
+ * contribution was reviewed doesn't reach the server yet (Phase 2b).
+ */
+export function contributedLinks(
+  jobs: readonly Pick<BridgeJob, 'kind' | 'state' | 'result'>[] | undefined,
+): Partial<Record<string, string>> {
+  const done = jobs?.find((j) => j.kind === KIND_GENERATE && j.state === 'done');
+  const out: Partial<Record<string, string>> = {};
+  for (const c of generateResult(done?.result)?.contributed ?? []) out[c.what] = c.url;
+  return out;
 }
 
 /**

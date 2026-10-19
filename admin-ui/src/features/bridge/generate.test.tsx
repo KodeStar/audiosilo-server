@@ -100,13 +100,42 @@ describe('generate characters and recaps', () => {
     expect(calls.some((c) => c.path.startsWith('/admin/bridge'))).toBe(false);
   });
 
-  it('hides the action when the community has both characters and recaps', async () => {
-    const calls = mockFetch(
+  it('says the community covers the book, with a link to the card, instead of the action', async () => {
+    const user = userEvent.setup();
+    mockFetch(
       routes({
         'GET /admin/bridge/estimate': {
           body: estimate({
             has: {
               community: { characters: true, recaps: true, description: false },
+              // Files generated here before: masked by the community's, so no note and no Regenerate.
+              local: { characters: true, recaps: true, description: false },
+            },
+          }),
+        },
+      }),
+    );
+    renderApp(URL);
+    await screen.findByText('The community already has characters and recaps for this book.');
+    expect(screen.queryByRole('button', { name: /generate characters/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).toBeNull();
+    expect(screen.queryByText('Generated on this server.')).toBeNull();
+    const card = document.getElementById('characters-and-recaps')!;
+    const scrolled = vi.spyOn(card, 'scrollIntoView');
+    const link = screen.getByRole('link', { name: 'See them' });
+    expect(link).toHaveAttribute('href', '#characters-and-recaps');
+    await user.click(link);
+    expect(scrolled).toHaveBeenCalled();
+    expect(card).toHaveFocus();
+  });
+
+  it('offers Generate while the community has only one of characters and recaps', async () => {
+    mockFetch(
+      routes({
+        'GET /admin/bridge/estimate': {
+          body: estimate({
+            has: {
+              community: { characters: true, recaps: false, description: false },
               local: { characters: false, recaps: false, description: false },
             },
           }),
@@ -114,12 +143,16 @@ describe('generate characters and recaps', () => {
       }),
     );
     renderApp(URL);
+    await screen.findByRole('button', { name: /generate characters/i });
+    expect(screen.queryByText(/already has characters and recaps/)).toBeNull();
+  });
+
+  it('shows no covered line while the Bridge is away', async () => {
+    const calls = mockFetch(routes({ 'GET /server': { body: serverInfo } }));
+    renderApp(URL);
     await screen.findByRole('heading', { level: 1, name: 'The Way of Kings' });
-    await waitFor(() => expect(calls.some((c) => c.path === '/admin/bridge/estimate')).toBe(true));
-    // Let the answer land: the section stays empty (no job, nothing generated here).
-    await new Promise((r) => setTimeout(r, 50));
-    expect(screen.queryByRole('button', { name: /generate characters/i })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Characters and recaps' })).toBeNull();
+    expect(calls.some((c) => c.path === '/admin/bridge/estimate')).toBe(false);
+    expect(screen.queryByText(/already has characters and recaps/)).toBeNull();
   });
 
   it('shows the estimate and queues the earlier books first, then this one', async () => {

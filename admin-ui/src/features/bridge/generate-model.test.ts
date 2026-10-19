@@ -14,6 +14,7 @@ import { adminBook } from '@/test/library-fixtures';
 import {
   batchCheck,
   batchPlan,
+  contributedLinks,
   blocksGenerate,
   generateBlocker,
   bridgeJobLink,
@@ -123,24 +124,55 @@ describe('the action gate', () => {
     expect(detectJobsKnown(undefined)).toBe(false);
   });
 
-  it('hides the action when the community has both, and says Regenerate over local data', () => {
-    const none = { characters: false, recaps: false, description: false };
-    const both = { characters: true, recaps: true, description: false };
-    expect(generateAction({ community: none, local: none })).toBe('generate');
-    expect(generateAction({ community: both, local: none })).toBe('hidden');
-    expect(generateAction({ community: both, local: both })).toBe('hidden');
+  it('follows the one offer rule: covered by the community, else Regenerate over local data, else Generate', () => {
+    const cov = (characters: boolean, recaps: boolean) => ({
+      characters,
+      recaps,
+      description: false,
+    });
+    // [community characters, community recaps, local characters, local recaps] -> action.
+    const table: [boolean, boolean, boolean, boolean, string][] = [
+      // The community has both: covered, whatever was generated here before.
+      [true, true, false, false, 'covered'],
+      [true, true, true, false, 'covered'],
+      [true, true, false, true, 'covered'],
+      [true, true, true, true, 'covered'],
+      // The community has one: the other is a gap Generate fills.
+      [true, false, false, false, 'generate'],
+      [false, true, false, false, 'generate'],
+      [true, false, false, true, 'regenerate'],
+      [false, true, true, false, 'regenerate'],
+      // The community has neither.
+      [false, false, false, false, 'generate'],
+      [false, false, true, false, 'regenerate'],
+      [false, false, false, true, 'regenerate'],
+      [false, false, true, true, 'regenerate'],
+    ];
+    for (const [cc, cr, lc, lr, want] of table) {
+      expect(
+        generateAction({ community: cov(cc, cr), local: cov(lc, lr) }),
+        `${cc}${cr}${lc}${lr}`,
+      ).toBe(want);
+    }
+  });
+
+  it("reads the newest finished generate job's community issues", () => {
+    const issue = 'https://github.com/KodeStar/audiosilo-meta-community/issues/7';
+    const done = (id: number, contributed: Record<string, unknown>) =>
+      job('done', { id, result: { characters: 3, contributed } });
+    expect(contributedLinks(undefined)).toEqual({});
+    expect(contributedLinks([])).toEqual({});
+    // An open job since doesn't hide the finished one's issues.
     expect(
-      generateAction({
-        community: { characters: true, recaps: false, description: false },
-        local: none,
-      }),
-    ).toBe('generate');
-    expect(
-      generateAction({
-        community: none,
-        local: { characters: false, recaps: true, description: false },
-      }),
-    ).toBe('regenerate');
+      contributedLinks([
+        job('running', { id: 9 }),
+        done(8, { characters: issue, recaps: 'javascript:x' }),
+      ]),
+    ).toEqual({ characters: issue });
+    // A newer finished job replaces them, even with none.
+    expect(contributedLinks([done(9, {}), done(8, { recaps: issue })])).toEqual({});
+    // Other kinds don't count.
+    expect(contributedLinks([{ ...done(9, { recaps: issue }), kind: KIND_DESCRIBE }])).toEqual({});
   });
 });
 
