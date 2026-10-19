@@ -87,8 +87,9 @@ func TestMetaGeneratedWhileTheCommunityIsDown(t *testing.T) {
 	}
 }
 
-// generatedBody is the slice of /meta the generated tests read.
+// generatedBody is the slice of /meta the generated tests read, and the raw body.
 type generatedBody struct {
+	raw     string
 	Matched bool `json:"matched"`
 	Work    *struct {
 		ID         string `json:"id"`
@@ -123,6 +124,7 @@ func getGenerated(t *testing.T, e *testEnv, libID int64, path, query, token stri
 	if err := json.Unmarshal([]byte(body), &g); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
+	g.raw = body
 	return g
 }
 
@@ -169,11 +171,9 @@ func TestMetaGeneratedFillsRecaps(t *testing.T) {
 	}
 }
 
-// TestMetaGeneratedBesideCommunitySummary: a community work with a whole-book
-// summary but no recap list takes the generated list and keeps its own summary,
-// which the mark leaves the community's (recap_summary absent, attribution
-// kept, recap_summary sent as false: a client falls back to recaps only when it
-// is absent); the estimate agrees the community has no recaps, so Generate is offered.
+// TestMetaGeneratedBesideCommunitySummary: a community work with a summary but
+// no recap list takes the generated list and keeps its own, credited summary
+// (recap_summary false); the estimate agrees it has no recaps.
 func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
 	t.Parallel()
 	e := generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
@@ -194,18 +194,8 @@ func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
 		g.Work.Attribution == nil {
 		t.Fatalf("work = %+v", g.Work)
 	}
-	metaResp, metaBody := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/meta?path="+escape("A/Two"), tok, "")
-	if metaResp.StatusCode != http.StatusOK {
-		t.Fatalf("meta: %d %s", metaResp.StatusCode, metaBody)
-	}
-	var raw struct {
-		Work struct {
-			Generated json.RawMessage `json:"generated"`
-		} `json:"work"`
-	}
-	decodeInto(t, metaBody, &raw)
-	if got, want := string(raw.Work.Generated), `{"characters":false,"recaps":true,"recap_summary":false,"description":false,"generated_at":"2026-10-15T10:00:00Z"}`; got != want {
-		t.Errorf("generated = %s, want %s", got, want)
+	if want := `"generated":{"characters":false,"recaps":true,"recap_summary":false,"description":false,"generated_at":"2026-10-15T10:00:00Z"}`; !strings.Contains(g.raw, want) {
+		t.Errorf("meta = %s, want %s", g.raw, want)
 	}
 
 	b.beatWith(t, true, true, sidecarsEstimates)

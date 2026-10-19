@@ -36,9 +36,9 @@ func (s *Service) CachedEnrichment(ctx context.Context, asin, isbn string) *Enri
 	return stored
 }
 
-// Coverage is what a book's community work carries: characters, a recap list
-// (as HasCharacters and HasRecaps read them: what generated content can't fill),
-// a description (its
+// Coverage is what a book's community work carries: characters and a recap
+// list (what generated content can't fill: fillable, so a summary alone is no
+// recaps and Generate is offered for it), a description (its
 // community_description or its core description: either is shown before a
 // generated one, so a generated one would never be read), and whether that is
 // known. Known is false when it couldn't be had right now (a lookup or
@@ -47,9 +47,12 @@ type Coverage struct {
 	Characters, Recaps, Description, Known bool
 }
 
-// coverageOf is a matched envelope's Coverage (known).
+// coverageOf is a matched envelope's Coverage (known): what fillable leaves
+// unfilled, plus a core description, which fillable doesn't count.
 func coverageOf(e *Enrichment) Coverage {
-	return Coverage{Characters: e.HasCharacters(), Recaps: e.HasRecaps(), Description: e.HasCommunityDescription() || (e != nil && e.Work != nil && strings.TrimSpace(e.Work.Description) != ""), Known: true}
+	f := e.Fillable()
+	core := e != nil && e.Work != nil && strings.TrimSpace(e.Work.Description) != ""
+	return Coverage{Characters: !f.Characters, Recaps: !f.Recaps, Description: !f.Description || core, Known: true}
 }
 
 // Coverages answers Coverage for many books at once (the Bridge's estimate: a
@@ -97,23 +100,4 @@ func (s *Service) Coverages(ctx context.Context, books []BookIDs) []Coverage {
 	}
 	wg.Wait()
 	return out
-}
-
-// HasCharacters and HasRecaps report whether a matched envelope's work carries
-// community characters, and a community recap list. A whole-book summary alone
-// is not recaps here: generated recaps still fill the list beside it (fillable,
-// the one rule /meta lays generated content in by), so a book with only a
-// summary is one Generate is offered for and the series batch queues.
-func (e *Enrichment) HasCharacters() bool {
-	return e != nil && e.Work != nil && len(e.Work.Characters) > 0
-}
-
-func (e *Enrichment) HasRecaps() bool {
-	return e != nil && e.Work != nil && len(e.Work.Recaps) > 0
-}
-
-// HasCommunityDescription reports whether a matched envelope's work carries the
-// community's description (community_description).
-func (e *Enrichment) HasCommunityDescription() bool {
-	return e != nil && e.Work != nil && e.Work.CommunityDescription != nil
 }

@@ -36,12 +36,9 @@ type Generated struct {
 // MetaGenerated says which parts of a work came from the server's generated
 // files rather than the community (MetaWork.Generated); omitted when none did.
 // Recaps is set when the recap list or the whole-book summary was generated
-// (as before RecapSummary existed, so an older client reads it unchanged);
-// RecapSummary, additive and always sent (a client falls back to Recaps only
-// when it is absent: an older server), says the summary itself was, so a client can credit a
-// community summary kept beside a generated list (a summary-only community
-// work, which fillable leaves the list to fill) to the community. Description
-// names the work's generated_description. GeneratedAt is when what it names
+// (unchanged for older clients); RecapSummary, always sent, when the summary
+// itself was, so a community summary beside a generated list keeps its credit
+// (CONVENTIONS.md). Description names the work's generated_description. GeneratedAt is when what it names
 // was generated: the characters' and recaps' run, or the description's own
 // time when the description is all it names.
 type MetaGenerated struct {
@@ -82,7 +79,8 @@ type Place struct {
 // the recaps), a description when it has no community description (its core
 // description, the publisher's kind, doesn't block it: the player orders
 // those). The one statement of the rule: /meta loads by it (Fillable) and lays
-// in by it (parts), so a part is never laid in without being loaded.
+// in by it (parts), so a part is never laid in without being loaded, and the
+// estimate's coverage is what it leaves unfilled (coverageOf).
 func fillable(c *MetaWork) metadata.AttachmentParts {
 	if c == nil {
 		return metadata.AllAttachmentParts

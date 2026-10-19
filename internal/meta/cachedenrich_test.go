@@ -82,13 +82,13 @@ func TestCachedEnrichment(t *testing.T) {
 	store.put(StoredEntry{Key: nsASIN.key("B0NOMATCH"), Version: storeVersion, Source: srv.URL, Expires: time.Now().Add(time.Hour)})
 	store.put(StoredEntry{Key: nsASIN.key("B0OTHER"), Version: storeVersion + 1, Source: srv.URL,
 		Payload: []byte(`{"matched":true,"work":{"id":"other"}}`), Expires: time.Now().Add(time.Hour)})
-	if env := svc.CachedEnrichment(ctx, "B0STALE", ""); env == nil || env.Work.ID != "stale" || !env.HasRecaps() || env.HasCharacters() {
+	if env := svc.CachedEnrichment(ctx, "B0STALE", ""); env == nil || env.Work.ID != "stale" || !coverageOf(env).Recaps || coverageOf(env).Characters {
 		t.Fatalf("stale stored row = %+v", env)
 	}
 	if _, hit, _ := cacheGet[Enrichment](svc.cache, nsASIN.key("B0STALE")); hit {
 		t.Error("a stale row warmed memory")
 	}
-	if env := svc.CachedEnrichment(ctx, "B0FRESH", ""); env == nil || env.Work.ID != "fresh" || !env.HasCharacters() {
+	if env := svc.CachedEnrichment(ctx, "B0FRESH", ""); env == nil || env.Work.ID != "fresh" || !coverageOf(env).Characters {
 		t.Fatalf("fresh stored row = %+v", env)
 	}
 	if e, hit, err := cacheGet[Enrichment](svc.cache, nsASIN.key("B0FRESH")); !hit || err != nil || e.Work.ID != "fresh" {
@@ -103,9 +103,8 @@ func TestCachedEnrichment(t *testing.T) {
 	if m.lookupHits.Load() != 1 {
 		t.Fatalf("lookups = %d, want only the Enrich's", m.lookupHits.Load())
 	}
-	var none *Enrichment
-	if none.HasCharacters() || none.HasRecaps() {
-		t.Fatal("a nil envelope has content")
+	if cov := coverageOf(nil); cov.Characters || cov.Recaps || cov.Description {
+		t.Fatalf("a nil envelope covers %+v", cov)
 	}
 }
 

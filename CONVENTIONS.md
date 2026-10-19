@@ -1500,7 +1500,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the Bridge sent none, so a false `agent_ready` means "not known"), `writable`, what the book already
   has (`has.community` via `meta.Service.Coverages`, cache first and never a full Enrich per book,
   `community_unknown` when it couldn't be asked; `has.local` from `book_attachments` (`catalog.BookAttachmentParts`: which columns are non-empty, nothing decoded); each with
-  `characters`, `recaps` (the recap LIST, `Enrichment.HasRecaps`, as `fillable` reads it: a community
+  `characters`, `recaps` (the recap LIST: `coverageOf` reads `fillable`, where a community
   summary alone is no recaps, so Generate is offered and the series batch queues it) and, since Phase 1c, `description`: the community work's `community_description`
   (`Coverage.Description`: its `community_description` or its core description, either shown before a generated one) or a stored generated one), `can_describe`
   (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier

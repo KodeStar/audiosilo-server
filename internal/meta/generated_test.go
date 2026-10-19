@@ -2,6 +2,7 @@ package meta
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -124,10 +125,6 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	}
 	if cov := coverageOf(&Enrichment{Work: &MetaWork{Recaps: []MetaRecap{{Text: "x"}}}}); !cov.Recaps {
 		t.Errorf("a work with a recap list covers %+v, want recaps", cov)
-	}
-	// The community summary keeps its source: only the list is marked generated.
-	if g := out.Work.Generated; g == nil || !g.Recaps || g.RecapSummary {
-		t.Errorf("generated mark beside a community summary = %+v", g)
 	}
 }
 
@@ -274,32 +271,31 @@ func TestAnswerUnmatched(t *testing.T) {
 	}
 }
 
-// TestGeneratedRecapSummaryOnTheWire: recap_summary is always sent, false
-// included (a client falls back to recaps only when it is absent: an older
-// server): false when generated recaps fill a list with no summary at all, or
-// beside the community's summary; true when the summary was generated.
+// TestGeneratedRecapSummaryOnTheWire: recap_summary is always sent, true only
+// when the summary itself was generated.
 func TestGeneratedRecapSummaryOnTheWire(t *testing.T) {
 	t.Parallel()
-	mark := func(w *MetaWork, g *Generated) string {
-		t.Helper()
-		b, err := json.Marshal(matched(t, &Enrichment{Matched: true, Work: w}, g, nil).Work.Generated)
+	noSummary := testGenerated()
+	noSummary.Recaps.InShort, noSummary.Recaps.Ending = "", ""
+	summed := communityWork()
+	summed.RecapSummary = &MetaRecapSummary{InShort: "Community short."}
+	for _, c := range []struct {
+		name    string
+		w       *MetaWork
+		g       *Generated
+		summary bool
+	}{
+		{"no summary", communityWork(), noSummary, false},
+		{"community summary", summed, testGenerated(), false},
+		{"generated summary", communityWork(), testGenerated(), true},
+	} {
+		raw, err := json.Marshal(matched(t, &Enrichment{Matched: true, Work: c.w}, c.g, nil).Work.Generated)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return string(b)
-	}
-	noSummary := testGenerated()
-	noSummary.Recaps.InShort, noSummary.Recaps.Ending = "", ""
-	at := noSummary.GeneratedAt
-	if got, want := mark(communityWork(), noSummary), `{"characters":false,"recaps":true,"recap_summary":false,"description":false,"generated_at":"`+at+`"}`; got != want {
-		t.Errorf("no summary: %s, want %s", got, want)
-	}
-	summed := communityWork()
-	summed.RecapSummary = &MetaRecapSummary{InShort: "Community short."}
-	if got, want := mark(summed, testGenerated()), `{"characters":false,"recaps":true,"recap_summary":false,"description":false,"generated_at":"`+at+`"}`; got != want {
-		t.Errorf("community summary: %s, want %s", got, want)
-	}
-	if got, want := mark(communityWork(), testGenerated()), `{"characters":false,"recaps":true,"recap_summary":true,"description":false,"generated_at":"`+at+`"}`; got != want {
-		t.Errorf("generated summary: %s, want %s", got, want)
+		want := fmt.Sprintf(`{"characters":false,"recaps":true,"recap_summary":%t,"description":false,"generated_at":%q}`, c.summary, c.g.GeneratedAt)
+		if string(raw) != want {
+			t.Errorf("%s: %s, want %s", c.name, raw, want)
+		}
 	}
 }
