@@ -29,7 +29,11 @@ Push to `main` (or tag `v*`). `.github/workflows/web.yml` exports the web build
 
 ## 2 - publish the server (this repo)
 
-Push a tag `v*` (or run the *server image* workflow manually).
+Push a tag `v*` (or run the *server image* workflow manually on that tag,
+`--ref v<version>`). A push to `main`, or a manual run on `main`, publishes only
+`:edge` and `sha-<short>` (see
+[Testing main before a release](#testing-main-before-a-release-edge)); a manual run
+on `main` with a pinned `web_version` gets only `sha-<short>`.
 `.github/workflows/image.yml` builds the multi-stage `Dockerfile`, baking in
 `ghcr.io/kodestar/audiosilo-web:latest`, and pushes
 `ghcr.io/kodestar/audiosilo-server`. Publish the web image first - this build
@@ -111,6 +115,26 @@ a draft: both archives' exact names and layout, each binary's `embedplayer` tag,
 4. **Native:** run the app from audiosilo-frontend (`expo start` / a dev build),
    scan the QR or open the invite to pair. For tap-to-open-app from the OS, set
    `app_links` (and serve over HTTPS on the claimed domain).
+
+## Testing main before a release (`:edge`)
+
+Every push to `main` publishes `ghcr.io/kodestar/audiosilo-server:edge`: server
+`main` with the newest `audiosilo-web:latest` (the player's `main`) baked in. It
+never moves `:latest`, which only a `v*` tag publishes. Each `main` build that
+finishes is also tagged `sha-<short>`, to pin one commit (a newer push cancels a
+build still running, so a superseded commit gets no tag). The console reports the
+version as `dev-<short sha>` (the same 7 characters as the `sha-` tag), and the
+update check ignores it. Release images carry no `sha-` tag: pin a release by its
+version.
+
+- **Player-only changes.** A push to the frontend's `main` refreshes
+  `audiosilo-web:latest` but does not rebuild `:edge`. Rebuild it by hand:
+  `gh workflow run image.yml -R KodeStar/audiosilo-server --ref main`.
+- **Run edge as its own container, on a copy of the data dir.** An edge build may
+  run database migrations the last release can't undo, so going back to `:latest`
+  on the same data may not work. Nor is it a tag swap on a LinuxServer.io install:
+  the ghcr image keeps its data in `/data` (see `docker-compose.yml`), not the
+  [LSIO image's](#2c---the-linuxserverio-image-follows-automatically) `/config`.
 
 ## Local dev without Docker
 

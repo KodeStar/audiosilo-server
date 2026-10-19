@@ -195,7 +195,8 @@ it they `t.Skip` and the suite still passes. Install `ffmpeg` to run them
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs build + vet + race
 tests + lint on every pull request and push to `main`, and **gates merges**
 (ffmpeg is installed in CI so the gated tests run). The image build
-([`image.yml`](.github/workflows/image.yml)) stays separate and only runs on tags.
+([`image.yml`](.github/workflows/image.yml)) stays separate: it publishes a
+release on `v*` tags and an unreleased `:edge` image on pushes to `main`.
 
 ## Architecture & maintainers
 

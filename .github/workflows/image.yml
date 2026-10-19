@@ -2,10 +2,15 @@
 # /app/web) and pushes it to ghcr.io/<owner>/audiosilo-server. Publish the web
 # image first (audiosilo-frontend → ghcr.io/<owner>/audiosilo-web), since this
 # build pulls it via COPY --from.
+#
+# A v* tag publishes the release (:<version> and :latest). Every push to main
+# publishes :edge (plus sha-<short>), an unreleased build for testing main
+# before a release; it never moves :latest.
 name: server image
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -16,6 +21,12 @@ on:
 permissions:
   contents: read
   packages: write
+
+# Quick successive pushes to main supersede each other rather than racing to
+# publish :edge. Each release tag is its own ref, so tag builds are unaffected.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -34,6 +45,12 @@ jobs:
         env:
           OWNER: ${{ github.repository_owner }}
 
+      # The 7-char sha a non-tag build stamps as VERSION (dev-<short>), matching
+      # metadata-action's sha-<short> tag.
+      - name: Short sha
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -49,7 +66,13 @@ jobs:
           flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
-            type=sha
+            # sha-<short> pins one build off a tag (main, dispatch). A release is
+            # pinned by its version, so a tag build of the same commit can't race
+            # an :edge build for the sha- tag.
+            type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
+            # :edge is main with the player's latest; a dispatch pinning an older
+            # web_version gets only its sha tag.
+            type=edge,branch=main,enable=${{ github.event_name == 'push' || github.event.inputs.web_version == 'latest' }}
             # Only a real release (a v* tag) may move the public :latest - a
             # workflow_dispatch from a feature branch must not republish it.
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
@@ -60,11 +83,12 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
+          # VERSION is the semver on a tag, else dev-<short sha> (the metadata
+          # version would be "edge" or a branch name). Keep comments out of
+          # build-args: it has no comment syntax, so a "#" line there becomes a
+          # build arg.
           build-args: |
             WEB_IMAGE=ghcr.io/${{ steps.owner.outputs.lc }}/audiosilo-web:${{ github.event.inputs.web_version || 'latest' }}
-            # On a tag build stamp the semver version; on dispatch (no semver tag) the
-            # metadata version would resolve to "latest", so fall back to a dev-<sha>
-            # marker rather than reporting the binary version as "latest".
-            VERSION=${{ startsWith(github.ref, 'refs/tags/') && steps.meta.outputs.version || format('dev-{0}', github.sha) }}
+            VERSION=${{ startsWith(github.ref, 'refs/tags/') && steps.meta.outputs.version || format('dev-{0}', steps.sha.outputs.short) }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
