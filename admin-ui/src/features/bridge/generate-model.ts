@@ -5,6 +5,7 @@ import type {
   BridgeJobRequest,
   BridgeStatus,
   ServerInfo,
+  SidecarsContributeParams,
   SidecarsCoverage,
   SidecarsGenerateParams,
 } from '@/api/types';
@@ -14,11 +15,13 @@ import { spanIn } from '@/features/library/series/series-model';
 import { isOpen, mappingState, num, progressOf, safeHttpUrl, text } from './bridge-model';
 
 // Characters and recaps from the Bridge (BRIDGE-PLAN.md Phase 1a), the
-// description written from their notes (Phase 1c) and the chapters found in the
-// narration (Phase 1d): the rules the book page's Community card, its generate
-// dialog, the series batch, Health's Detect chapters and the Bridge page's job
-// rows follow for `sidecars.generate`, `sidecars.describe` and `chapters.detect`. Pure: no React, no i18n
-// instance; callers pass the keys these return to t().
+// description written from their notes (Phase 1c), the chapters found in the
+// narration (Phase 1d) and sharing them and corrections with the community
+// (Phase 2b): the rules the book page's Community card, its generate dialog,
+// the series batch, Health's Detect chapters and the Bridge page's job rows
+// follow for `sidecars.generate`, `sidecars.describe`, `chapters.detect`,
+// `sidecars.contribute` and `meta.correct`. Pure: no React, no i18n instance;
+// callers pass the keys these return to t().
 
 /** The job kind, and the feature (job family) the Bridge advertises for it. */
 export const KIND_GENERATE = 'sidecars.generate';
@@ -31,13 +34,34 @@ export const KIND_DESCRIBE = 'sidecars.describe';
  */
 export const KIND_DETECT = 'chapters.detect';
 export const FEATURE_CHAPTERS = 'chapters';
+/**
+ * Phase 2b's "Share with the community": the community issues filed from the
+ * characters and recaps already generated for a book (sidecars family).
+ */
+export const KIND_CONTRIBUTE = 'sidecars.contribute';
+/**
+ * Phase 2b's corrections: an admin's edited fields filed as one correction-batch
+ * issue, and the feature (job family) the Bridge advertises for it.
+ */
+export const KIND_CORRECT = 'meta.correct';
+export const FEATURE_META = 'meta';
 
 /**
- * The kinds the book page follows: generate and describe (both in the sidecars
- * family; the Community card's sections) and chapter detection, whose end
- * changes the book's chapters (the Chapters card follows it).
+ * The kinds the book page follows: generate, describe and share (the sidecars
+ * family; the Community card's sections), corrections (its corrections part) and
+ * chapter detection, whose end changes the book's chapters (the Chapters card
+ * follows it).
  */
-const BOOK_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT];
+const BOOK_KINDS: readonly string[] = [
+  KIND_GENERATE,
+  KIND_DESCRIBE,
+  KIND_DETECT,
+  KIND_CONTRIBUTE,
+  KIND_CORRECT,
+];
+
+/** The kinds that hold the book's generated files on the Bridge (a describe job waits for them). */
+const FILE_KINDS: readonly string[] = [KIND_GENERATE, KIND_DESCRIBE, KIND_DETECT];
 
 /**
  * Whether a kind is one the book page follows; its progress and result are
@@ -47,11 +71,12 @@ export function isBookKind(kind: string): boolean {
   return BOOK_KINDS.includes(kind);
 }
 
-/** The book page's kinds' jobs that are still open. */
+/** The book's jobs of these kinds (the book page's, by default) that are still open. */
 function openBookJobs<J extends Pick<BridgeJob, 'kind' | 'state'>>(
   jobs: readonly J[] | undefined,
+  kinds: readonly string[] = BOOK_KINDS,
 ): J[] {
-  return jobs?.filter((j) => isBookKind(j.kind) && isOpen(j.state)) ?? [];
+  return jobs?.filter((j) => kinds.includes(j.kind) && isOpen(j.state)) ?? [];
 }
 
 /**
@@ -62,6 +87,25 @@ function openBookJobs<J extends Pick<BridgeJob, 'kind' | 'state'>>(
 export function generateAvailable(server: ServerInfo | undefined): boolean {
   if (!server?.capabilities.metadata || !server.capabilities.bridge) return false;
   return server.bridge?.features.includes(FEATURE_SIDECARS) ?? false;
+}
+
+/**
+ * Whether the contributions module is on (Settings > Modules, and an online
+ * Bridge that can contribute: the capability is both). Off, every Contribute,
+ * Share and Suggest corrections control is gone.
+ */
+export function contributionsOn(server: ServerInfo | undefined): boolean {
+  return Boolean(server?.capabilities.contributions);
+}
+
+/**
+ * Whether a generate dialog offers the contribute switch: the module is on and
+ * the Bridge can file contributions now (`canContribute`: the estimate's, which
+ * the server reads from the Bridge's checklist, else its older figures). The
+ * switch then starts on: a signed-in Bridge contributes unless told not to.
+ */
+export function contributeOffered(server: ServerInfo | undefined, canContribute: boolean): boolean {
+  return contributionsOn(server) && canContribute;
 }
 
 /**
@@ -150,16 +194,20 @@ export function generateAction(has: {
 }
 
 /**
- * The community issues the book's newest finished generate job filed, by what
- * each offers (`characters`, `recaps`): the Characters and recaps card's
- * "Contributed, waiting for review" links. An open or failed job since doesn't
- * hide them (they still wait), a newer finished one replaces them. Whether a
- * contribution was reviewed doesn't reach the server yet (Phase 2b).
+ * The community issues the book's newest finished generate or share job filed,
+ * by what each offers (`characters`, `recaps`): the Characters and recaps
+ * card's "Contributed, waiting for review" links, and what Share no longer
+ * offers. An open or failed job since doesn't hide them (they still wait), a
+ * newer finished one replaces them (a run kept on this server made new content,
+ * not yet offered). Whether a contribution was reviewed doesn't reach the
+ * server yet (decision D8).
  */
 export function contributedLinks(
   jobs: readonly Pick<BridgeJob, 'kind' | 'state' | 'result'>[] | undefined,
 ): ContributedLinks {
-  const done = jobs?.find((j) => j.kind === KIND_GENERATE && j.state === 'done');
+  const done = jobs?.find(
+    (j) => (j.kind === KIND_GENERATE || j.kind === KIND_CONTRIBUTE) && j.state === 'done',
+  );
   const out: ContributedLinks = {};
   for (const c of generateResult(done?.result)?.contributed ?? []) {
     if (c.what === 'characters' || c.what === 'recaps') out[c.what] = c.url;
@@ -169,6 +217,60 @@ export function contributedLinks(
 
 /** A generate job's community issues for the two dimensions it offers. */
 export type ContributedLinks = { characters?: string; recaps?: string };
+
+/** The two things a book's generated files offer the community. */
+export type ShareDimension = 'characters' | 'recaps';
+
+/**
+ * What "Share with the community" would offer: each dimension generated here
+ * that the community lacks and no finished job has filed yet.
+ */
+export function shareDimensions(
+  has: { community: SidecarsCoverage; local: SidecarsCoverage },
+  links: ContributedLinks,
+): ShareDimension[] {
+  return (['characters', 'recaps'] as const).filter(
+    (d) => has.local[d] && !has.community[d] && !links[d],
+  );
+}
+
+/**
+ * Whether the Community card offers "Share with the community" (Phase 2b's
+ * contribute later), and for what: the module is on, an online Bridge offers
+ * the sidecars family and can contribute now, the community answered (unknown
+ * is never "lacks"), no generate or share job is open for the book (the server
+ * refuses one then), and something generated here is still to offer. Empty
+ * when not offered.
+ */
+export function shareOffered(
+  server: ServerInfo | undefined,
+  e: Pick<BridgeEstimate, 'can_contribute' | 'has' | 'open_job'> | undefined,
+  jobs: readonly Pick<BridgeJob, 'kind' | 'state' | 'result'>[] | undefined,
+): ShareDimension[] {
+  if (!contributionsOn(server) || !generateAvailable(server)) return [];
+  if (!e?.can_contribute || e.has.community_unknown) return [];
+  // The estimate's open job: a generate run (it may contribute itself) or a
+  // share already queued (its status shows; never a second Share).
+  const oj = e.open_job;
+  if (oj && (oj.kind === KIND_GENERATE || oj.kind === KIND_CONTRIBUTE) && isOpen(oj.state))
+    return [];
+  if (openBookJobs(jobs, [KIND_GENERATE, KIND_CONTRIBUTE]).length) return [];
+  return shareDimensions(e.has, contributedLinks(jobs));
+}
+
+/** The share job for a book: only the dimensions still to offer (the Bridge skips what the community has). */
+export function shareRequest(
+  book: { library_id: number; path: string },
+  dimensions: readonly ShareDimension[],
+): BridgeJobRequest {
+  const params: SidecarsContributeParams = { dimensions: [...dimensions] };
+  return {
+    kind: KIND_CONTRIBUTE,
+    library_id: book.library_id,
+    path: book.path,
+    params: { ...params },
+  };
+}
 
 /**
  * How often a book's generate and describe jobs are asked again: about every
@@ -187,14 +289,15 @@ export function generatePollMs(
 }
 
 /**
- * Whether a job keeps a new generate job from being queued for its book (the
- * server's detect_open): a chapter detection queued or working, not being
- * cancelled. A parked one gives way (the generate job cancels it, and finds the
- * chapters itself), as one being cancelled does.
+ * Whether a job keeps a new generate job from being queued for its book: a
+ * chapter detection (the server's detect_open) or a share with the community
+ * (contribute_open, Phase 2b) queued or working, not being cancelled. A parked
+ * one gives way (the generate job cancels it: a detection's chapters it finds
+ * itself, a share it offers again from the new run), as one being cancelled does.
  */
 export function blocksGenerate(j: Pick<BridgeJob, 'kind' | 'state' | 'cancel_requested'>): boolean {
   return (
-    j.kind === KIND_DETECT &&
+    (j.kind === KIND_DETECT || j.kind === KIND_CONTRIBUTE) &&
     (j.state === 'queued' || j.state === 'claimed' || j.state === 'running') &&
     !j.cancel_requested
   );
@@ -209,8 +312,10 @@ export function generateBlocker(
   jobs: readonly BridgeJob[] | undefined,
   openJob: BridgeJob | undefined,
 ): BridgeJob | undefined {
-  const j = jobs ? latestJobOf(jobs, KIND_DETECT) : openJob;
-  return j && blocksGenerate(j) ? j : undefined;
+  if (!jobs) return openJob && blocksGenerate(openJob) ? openJob : undefined;
+  return [latestJobOf(jobs, KIND_DETECT), latestJobOf(jobs, KIND_CONTRIBUTE)].find(
+    (j): j is BridgeJob => j !== undefined && blocksGenerate(j),
+  );
 }
 
 /** The book's newest job of a kind (the list is newest first), if any. */
@@ -247,7 +352,7 @@ export function describeOffered(
   ) {
     return false;
   }
-  return openBookJobs(jobs).length === 0;
+  return openBookJobs(jobs, FILE_KINDS).length === 0;
 }
 
 /** A generated description long enough to clamp, with a Show more toggle (about four lines). */
@@ -417,6 +522,21 @@ export interface GenerateResult {
   descriptionError?: string;
   /** The community issues filed (http(s) links only), by what each offers. */
   contributed: { what: string; url: string }[];
+  /** A share job's dimensions the community already had (nothing filed for them). */
+  covered?: string[];
+  /** A corrections job's issue (an http(s) link) and its number. */
+  issue?: { url: string; number?: number };
+  /** A corrections job's change count, and its fields by who applies them. */
+  changes?: number;
+  auto?: string[];
+  maintainer?: string[];
+}
+
+/** A list of non-blank strings from an opaque result, else undefined. */
+function strings(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.map(text).filter((s): s is string => s !== undefined);
+  return out;
 }
 
 /** Reads a sidecars.generate (or chapters.detect) result leniently, or null when it holds none of its facts. */
@@ -441,13 +561,31 @@ export function generateResult(result: unknown): GenerateResult | null {
       if (safe) out.contributed.push({ what, url: safe });
     }
   }
+  const covered = strings(r.covered);
+  if (covered?.length) out.covered = covered;
+  const issueUrl = typeof r.issue_url === 'string' ? safeHttpUrl(r.issue_url) : undefined;
+  if (issueUrl) {
+    out.issue = { url: issueUrl };
+    const n = amount(r.issue_number);
+    if (n) out.issue.number = n;
+  }
+  // The change count, or the changes themselves.
+  const changes = Array.isArray(r.changes) ? r.changes.length : amount(r.changes);
+  if (changes !== undefined) out.changes = changes;
+  const auto = strings(r.auto);
+  if (auto) out.auto = auto;
+  const maintainer = strings(r.maintainer);
+  if (maintainer) out.maintainer = maintainer;
   const any =
     out.characters !== undefined ||
     out.recaps !== undefined ||
     out.chapters !== undefined ||
     out.costUsd !== undefined ||
     out.description !== undefined ||
-    out.contributed.length > 0;
+    out.contributed.length > 0 ||
+    out.covered !== undefined ||
+    out.issue !== undefined ||
+    out.changes !== undefined;
   return any ? out : null;
 }
 

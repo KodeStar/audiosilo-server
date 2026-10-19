@@ -19,6 +19,8 @@ import {
   generateBlocker,
   bridgeJobLink,
   clampsDescription,
+  contributeOffered,
+  contributionsOn,
   DESCRIPTION_CLAMP_CHARS,
   describeOffered,
   destinationKey,
@@ -36,6 +38,8 @@ import {
   generateProgress,
   generateResult,
   isBookKind,
+  KIND_CONTRIBUTE,
+  KIND_CORRECT,
   KIND_DESCRIBE,
   KIND_DETECT,
   KIND_GENERATE,
@@ -47,6 +51,9 @@ import {
   roundEta,
   seriesBatchOrder,
   settleLimited,
+  shareDimensions,
+  shareOffered,
+  shareRequest,
   stageLabel,
   titleCase,
   type BatchCheck,
@@ -911,5 +918,204 @@ describe('skipNotes', () => {
       'Waiting for attention on the Bridge: Book 1 and Book 8.',
       'Being generated, which finds the chapters too: Book 2, Book 3, Book 4, Book 5, and 2 more.',
     ]);
+  });
+});
+
+// Phase 2b: the contributions module's gates, Share with the community, and
+// the results of the share and corrections jobs.
+
+/** An online Bridge offering sidecars, with the contributions module on or off. */
+function contributing(on: boolean): ServerInfo {
+  const base = server({ bridge: true, features: ['bridge', 'sidecars', 'contribute'] });
+  return { ...base, capabilities: { ...base.capabilities, contributions: on } };
+}
+
+const localOnly = {
+  community: { characters: false, recaps: false, description: false },
+  local: { characters: true, recaps: true, description: false },
+};
+
+describe('contributing (Phase 2b)', () => {
+  it('reads the module from the capability, absent or off as off', () => {
+    expect(contributionsOn(contributing(true))).toBe(true);
+    expect(contributionsOn(contributing(false))).toBe(false);
+    expect(contributionsOn(server({ bridge: true }))).toBe(false);
+    expect(contributionsOn(undefined)).toBe(false);
+  });
+
+  it('offers the contribute switch only with the module on and a Bridge that can contribute', () => {
+    expect(contributeOffered(contributing(true), true)).toBe(true);
+    expect(contributeOffered(contributing(true), false)).toBe(false);
+    expect(contributeOffered(contributing(false), true)).toBe(false);
+  });
+
+  it('follows the share and corrections kinds on the book page, polling while they work', () => {
+    expect(isBookKind(KIND_CONTRIBUTE)).toBe(true);
+    expect(isBookKind(KIND_CORRECT)).toBe(true);
+    expect(generatePollMs([job('running', { kind: KIND_CONTRIBUTE })])).toBe(GENERATE_POLL_MS);
+    expect(generatePollMs([job('queued', { kind: KIND_CORRECT })])).toBe(GENERATE_POLL_MS);
+  });
+
+  it("doesn't hold a description back for an open share or corrections job", () => {
+    const e = estimate({
+      can_describe: true,
+      has: { ...localOnly, community_unknown: false },
+    });
+    expect(describeOffered(e, [job('running', { kind: KIND_CONTRIBUTE })])).toBe(true);
+    expect(describeOffered(e, [job('running', { kind: KIND_CORRECT })])).toBe(true);
+    expect(describeOffered(e, [job('running', { kind: KIND_GENERATE })])).toBe(false);
+  });
+
+  it("takes a finished share job's links, and drops them after a newer run kept here", () => {
+    const issue = 'https://github.com/KodeStar/audiosilo-meta-community/issues/4';
+    const share = job('done', {
+      id: 12,
+      kind: KIND_CONTRIBUTE,
+      result: { contributed: { recaps: issue } },
+    });
+    expect(contributedLinks([share])).toEqual({ recaps: issue });
+    // Newest first: a local regenerate since made new content, not yet offered.
+    const regen = job('done', { id: 13, result: { characters: 3, recaps: 2 } });
+    expect(contributedLinks([regen, share])).toEqual({});
+    // A failed share since leaves the earlier links waiting.
+    expect(contributedLinks([job('failed', { id: 14, kind: KIND_CONTRIBUTE }), share])).toEqual({
+      recaps: issue,
+    });
+  });
+
+  it('offers each dimension generated here that the community lacks and nobody filed', () => {
+    expect(shareDimensions(localOnly, {})).toEqual(['characters', 'recaps']);
+    expect(shareDimensions(localOnly, { characters: 'https://x.test/1' })).toEqual(['recaps']);
+    expect(
+      shareDimensions(
+        { ...localOnly, community: { characters: true, recaps: false, description: false } },
+        {},
+      ),
+    ).toEqual(['recaps']);
+    expect(
+      shareDimensions(
+        { ...localOnly, local: { characters: false, recaps: false, description: false } },
+        {},
+      ),
+    ).toEqual([]);
+  });
+
+  it('offers Share only with the module on, a Bridge that can contribute and nothing open', () => {
+    const e = estimate({ has: localOnly });
+    expect(shareOffered(contributing(true), e, [])).toEqual(['characters', 'recaps']);
+    // The module off, the Bridge away, or it can't contribute: nothing.
+    expect(shareOffered(contributing(false), e, [])).toEqual([]);
+    expect(shareOffered(server({ bridge: true }), e, [])).toEqual([]);
+    expect(
+      shareOffered(contributing(true), estimate({ has: localOnly, can_contribute: false }), []),
+    ).toEqual([]);
+    // The community couldn't be asked: never "lacks".
+    expect(
+      shareOffered(
+        contributing(true),
+        estimate({ has: { ...localOnly, community_unknown: true } }),
+        [],
+      ),
+    ).toEqual([]);
+    // A generate or share job open for the book (the server refuses one then).
+    expect(shareOffered(contributing(true), e, [job('running')])).toEqual([]);
+    expect(shareOffered(contributing(true), e, [job('queued', { kind: KIND_CONTRIBUTE })])).toEqual(
+      [],
+    );
+    expect(
+      shareOffered(
+        contributing(true),
+        estimate({ has: localOnly, open_job: job('queued') }),
+        undefined,
+      ),
+    ).toEqual([]);
+    // A detection or a correction open doesn't stop it.
+    expect(shareOffered(contributing(true), e, [job('running', { kind: KIND_CORRECT })])).toEqual([
+      'characters',
+      'recaps',
+    ]);
+    // Already filed by the last run: nothing left to offer.
+    const filed = job('done', {
+      result: { contributed: { characters: 'https://x.test/1', recaps: 'https://x.test/2' } },
+    });
+    expect(shareOffered(contributing(true), e, [filed])).toEqual([]);
+    expect(shareOffered(contributing(true), undefined, [])).toEqual([]);
+  });
+
+  it('queues the share for the dimensions still to offer', () => {
+    expect(shareRequest({ library_id: 2, path: 'A/B' }, ['recaps'])).toEqual({
+      kind: KIND_CONTRIBUTE,
+      library_id: 2,
+      path: 'A/B',
+      params: { dimensions: ['recaps'] },
+    });
+  });
+
+  it("reads a share job's result: links and what the community had", () => {
+    expect(
+      generateResult({
+        library_id: 1,
+        path: 'A/B',
+        work_id: 'w1',
+        contributed: {
+          characters: 'https://github.com/x/y/issues/1',
+          recaps: 'javascript:alert(1)',
+        },
+        covered: ['recaps', ''],
+      }),
+    ).toEqual({
+      contributed: [{ what: 'characters', url: 'https://github.com/x/y/issues/1' }],
+      covered: ['recaps'],
+    });
+    // Nothing filed, everything covered: still a result worth wording.
+    expect(generateResult({ contributed: {}, covered: ['characters', 'recaps'] })).toEqual({
+      contributed: [],
+      covered: ['characters', 'recaps'],
+    });
+  });
+
+  it("reads a corrections job's result: the issue (http(s) only), the count, who applies what", () => {
+    expect(
+      generateResult({
+        issue_url: 'https://github.com/KodeStar/audiosilo-meta/issues/88',
+        issue_number: 88,
+        changes: 3,
+        auto: ['title', 'published'],
+        maintainer: ['author'],
+      }),
+    ).toEqual({
+      contributed: [],
+      issue: { url: 'https://github.com/KodeStar/audiosilo-meta/issues/88', number: 88 },
+      changes: 3,
+      auto: ['title', 'published'],
+      maintainer: ['author'],
+    });
+    // The changes as a list count too; a bad link is dropped.
+    expect(generateResult({ issue_url: 'data:text/html,x', changes: [{}, {}] })).toEqual({
+      contributed: [],
+      changes: 2,
+    });
+  });
+});
+
+describe('a share job and Generate (Phase 2b)', () => {
+  it('holds Generate back while a share is queued or working, not once parked or stopping', () => {
+    const share = (state: BridgeJobState, over: Partial<BridgeJob> = {}) =>
+      job(state, { kind: KIND_CONTRIBUTE, cancel_requested: false, ...over });
+    expect(blocksGenerate(share('queued'))).toBe(true);
+    expect(blocksGenerate(share('running'))).toBe(true);
+    expect(blocksGenerate(share('needs_attention'))).toBe(false);
+    expect(blocksGenerate(share('running', { cancel_requested: true }))).toBe(false);
+    expect(generateBlocker([share('running')], undefined)?.kind).toBe(KIND_CONTRIBUTE);
+    // Before the job list loads, the estimate's open job says it.
+    expect(generateBlocker(undefined, share('queued'))?.kind).toBe(KIND_CONTRIBUTE);
+  });
+
+  it("never offers a second Share while the estimate's open job is one", () => {
+    const e = estimate({
+      has: localOnly,
+      open_job: job('queued', { kind: KIND_CONTRIBUTE }),
+    });
+    expect(shareOffered(contributing(true), e, undefined)).toEqual([]);
   });
 });

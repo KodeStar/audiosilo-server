@@ -70,7 +70,10 @@ export function JobCancelButton({ job, ariaLabel }: { job: BridgeJob; ariaLabel:
   );
 }
 
-/** The contribute choice: this server only (off, the default) or offered to the community too. */
+/**
+ * The contribute choice: this server only (off) or offered to the community too
+ * (on, the default whenever it is offered: Phase 2b).
+ */
 export function ContributeSwitch({
   value,
   onChange,

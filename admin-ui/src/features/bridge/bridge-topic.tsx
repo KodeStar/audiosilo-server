@@ -43,6 +43,14 @@ import {
   safeHttpUrl,
 } from './bridge-model';
 import { PairDialog, type ShownCode } from './pair-dialog';
+import { BridgeSetupList } from './setup-list';
+import {
+  ACCOUNTS_TAB,
+  agentCredentialSet,
+  bridgeTabLink,
+  setupComplete,
+  setupProgress,
+} from './setup-model';
 import { useBridge } from './use-bridge';
 import { VerifyDialog } from './verify-dialog';
 
@@ -161,7 +169,11 @@ function NotPaired({ onPair, making }: { onPair: () => void; making: boolean }) 
   );
 }
 
-/** The paired Bridge: its status, libraries, workers, jobs, and Unpair. */
+/**
+ * The paired Bridge: its setup checklist (first while a required step is still
+ * to do, as the Bridge's own page leads with it), its status, libraries,
+ * workers, jobs, and Unpair.
+ */
 function Paired({
   status,
   libraryNames,
@@ -173,9 +185,13 @@ function Paired({
   onPair: () => void;
   making: boolean;
 }) {
+  const setup = status.setup;
+  const setupFirst = setup ? !setupComplete(setup) : false;
   return (
     <>
+      {setup && setupFirst ? <SetupCard status={status} /> : null}
       <StatusCard status={status} onPair={onPair} making={making} />
+      {setup && !setupFirst ? <SetupCard status={status} /> : null}
       <LibrariesCard status={status} />
       <WorkersCard status={status} />
       <JobsCard libraryNames={libraryNames} uiUrl={status.ui_url} />
@@ -293,6 +309,91 @@ function StatusCard({
           <Link2 aria-hidden="true" />
           {t('bridge.pairAnother')}
         </Button>
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * The Bridge's setup checklist as its last heartbeat sent it (Phase 2b), and
+ * its accounts read-only (decision D6): the GitHub account signed in for
+ * contributing, or none, and whether the agent's credential is set. Signing in
+ * happens only on the Bridge's own page (the server never calls the Bridge), so
+ * the card links to its Accounts tab.
+ */
+function SetupCard({ status }: { status: BridgeStatus }) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? 'en';
+  const setup = status.setup;
+  if (!setup) return null;
+  const { done, total } = setupProgress(setup);
+  const complete = done === total;
+  const agent = agentCredentialSet(setup);
+  const accounts = bridgeTabLink(status.ui_url, ACCOUNTS_TAB);
+  return (
+    <Card aria-labelledby="bridge-setup-title">
+      <CardHeader
+        titleId="bridge-setup-title"
+        title={complete ? t('bridge.setup.title') : t('bridge.setup.titleTodo')}
+        description={
+          <StatusText tone={complete ? 'ok' : 'warn'} colored className="font-semibold">
+            {complete
+              ? t('bridge.setup.complete')
+              : t('bridge.setup.progress', {
+                  done: formatNumber(done, lang),
+                  total: formatNumber(total, lang),
+                })}
+          </StatusText>
+        }
+      />
+      <div className="flex flex-col gap-4 px-5 py-3">
+        <BridgeSetupList setup={setup} uiUrl={status.ui_url} />
+        <FactList
+          rows={[
+            [
+              t('bridge.setup.github'),
+              setup.github_login ? (
+                <span className="font-mono text-[12.5px]">{setup.github_login}</span>
+              ) : (
+                <StatusText tone="off">{t('bridge.setup.notSignedIn')}</StatusText>
+              ),
+            ],
+            ...(agent === undefined
+              ? []
+              : ([
+                  [
+                    t('bridge.setup.agentCredential'),
+                    <StatusText key="agent" tone={agent ? 'ok' : 'warn'}>
+                      {agent ? t('bridge.setup.credentialSet') : t('bridge.setup.credentialNotSet')}
+                    </StatusText>,
+                  ],
+                ] as [string, React.ReactNode][])),
+            [
+              t('bridge.setup.contributing'),
+              <StatusText key="contribute" tone={setup.can_contribute ? 'ok' : 'off'}>
+                {setup.can_contribute
+                  ? t('bridge.setup.canContribute')
+                  : t('bridge.setup.cantContribute')}
+              </StatusText>,
+            ],
+          ]}
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t px-5 py-3.5">
+        <span className="text-[12.5px] text-muted-foreground">
+          {t('bridge.setup.accountsBody')}
+        </span>
+        {accounts ? (
+          <a
+            href={accounts}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+          >
+            {t('bridge.setup.openAccounts')}
+            <ExternalLink aria-hidden="true" />
+          </a>
+        ) : null}
       </div>
     </Card>
   );

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { RotateCw, Sparkles } from 'lucide-react';
 import { useServerInfo } from '@/api/hooks';
@@ -12,10 +13,13 @@ import {
   generateAvailable,
   generateBlocker,
   generateJobsKnown,
+  KIND_CONTRIBUTE,
+  KIND_DETECT,
 } from './generate-model';
 import { JobCancelButton, JobSection } from './generate-parts';
 import { GenerateStatus } from './generate-status';
-import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-generate';
+import { generateNeed } from './setup-model';
+import { useBookGenerateJob, useBridgeStatus, useGenerateEstimate } from './use-generate';
 
 /**
  * The Community card's characters-and-recaps part: the book's generate job
@@ -26,8 +30,11 @@ import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-ge
  * queued or working chapters.detect job, whose status shows instead: the server
  * refuses a generate job until it has finished). When the community already has
  * both characters and recaps a line says so, with a link to the Characters and
- * recaps card, where the action would be (generateAction's `covered`). Renders
- * nothing when there is nothing to show.
+ * recaps card, where the action would be (generateAction's `covered`). While
+ * the online Bridge's setup checklist says a step generating needs is still to
+ * do (speech recognition, the agent's credential, this library's mapping), a
+ * line names it, with a link to Settings > Bridge, instead of the action
+ * (Phase 2b). Renders nothing when there is nothing to show.
  */
 export function GenerateSection({ book }: { book: AdminBook }) {
   const { t } = useTranslation();
@@ -37,7 +44,12 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   // The brief estimate: enough for what the book has and so which action to offer.
   const estimate = useGenerateEstimate(book.library_id, book.path, available, { brief: true });
   const parked = job?.state === 'needs_attention';
-  const uiUrl = useBridgeLink(parked);
+  // The Bridge's status: its page for a parked job's link, its checklist for
+  // what generating still needs.
+  const bridgeOnline = Boolean(server?.capabilities.bridge && server.capabilities.metadata);
+  const status = useBridgeStatus(parked || bridgeOnline);
+  const uiUrl = status?.ui_url;
+  const need = bridgeOnline ? generateNeed(status, book.library_id) : undefined;
   const [open, setOpen] = useState(false);
 
   const has = estimate.data?.has;
@@ -45,20 +57,27 @@ export function GenerateSection({ book }: { book: AdminBook }) {
   // Files generated here before show nowhere once the community covers both.
   const generated = action === 'regenerate';
   const jobOpen = job ? isOpen(job.state) : false;
-  // The book's chapters being found: the server refuses a generate job until
-  // that has finished (the run then reuses the transcription), so its status
-  // stands where the action would.
-  const detect = jobOpen ? undefined : generateBlocker(jobs, estimate.data?.open_job);
+  // The book's chapters being found, or its files being shared with the
+  // community: the server refuses a generate job until that has finished (a
+  // detection's transcription is reused), so it stands where the action would:
+  // a detection with its status, a share with a line (the Share part shows its
+  // status).
+  const blocker = jobOpen ? undefined : generateBlocker(jobs, estimate.data?.open_job);
+  const detect = blocker?.kind === KIND_DETECT ? blocker : undefined;
+  const sharing = blocker?.kind === KIND_CONTRIBUTE;
   // The action: with an answer that offers it, no job open, and not while the
   // Bridge is away (it couldn't run it).
-  const ready = available && !jobOpen && !detect;
-  const offer = ready && (action === 'generate' || action === 'regenerate');
-  // In its place, why there is none: the community has both.
+  const ready = available && !jobOpen && !blocker;
+  // In its place, why there is none: the community has both, or the Bridge
+  // still needs setting up for it (named; said whether or not the Bridge
+  // offers the kind yet, since that is why it doesn't).
   const covered = ready && action === 'covered';
+  const why = need !== undefined && !jobOpen && !blocker && action !== 'covered';
+  const offer = ready && !why && (action === 'generate' || action === 'regenerate');
   // A cancelled job says nothing worth a line.
   const showJob = job && job.state !== 'cancelled';
   // An open dialog stays (it says when the Bridge went away), whatever else changed.
-  if (!open && !showJob && !offer && !covered && !generated && !detect) return null;
+  if (!open && !showJob && !offer && !covered && !generated && !blocker && !why) return null;
 
   const canCancel = job ? jobActions(job).cancel : false;
 
@@ -85,6 +104,22 @@ export function GenerateSection({ book }: { book: AdminBook }) {
             {t('bridge.generate.coveredLink')}
           </a>
         </p>
+      ) : null}
+      {why ? (
+        <p className="text-[12.5px] text-muted-foreground">
+          {t(`bridge.generate.needs.${need}`)}{' '}
+          <Link
+            to="/server/{-$section}"
+            params={{ section: undefined }}
+            search={{ topic: 'bridge' }}
+            className="font-semibold text-brand-ink hover:underline"
+          >
+            {t('bridge.generate.openSettings')}
+          </Link>
+        </p>
+      ) : null}
+      {sharing ? (
+        <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.afterShare')}</p>
       ) : null}
       {detect ? (
         <>

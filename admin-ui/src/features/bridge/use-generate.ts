@@ -101,13 +101,17 @@ export function useGenerateEstimate(
 }
 
 /**
- * The Bridge's status for a link into its page (ui_url), read once while a
- * parked job needs it. It shares the Bridge page's query; this observer adds no
- * polling of its own.
+ * The Bridge's status (its page's address, its setup checklist, its library
+ * mappings), read while `enabled` and kept a minute. It shares the Bridge
+ * page's query; this observer adds no polling of its own.
  */
+export function useBridgeStatus(enabled: boolean) {
+  return useQuery({ queryKey: keys.bridge, queryFn: api.bridge, enabled, staleTime: 60_000 }).data;
+}
+
+/** The Bridge's page (ui_url), for a link into it, read while a parked job needs it. */
 export function useBridgeLink(enabled: boolean) {
-  const q = useQuery({ queryKey: keys.bridge, queryFn: api.bridge, enabled, staleTime: 60_000 });
-  return q.data?.ui_url;
+  return useBridgeStatus(enabled)?.ui_url;
 }
 
 /**
@@ -190,9 +194,10 @@ export async function queueInOrder(
 /**
  * The refusals a generate run passes a book over for: its chapters are being
  * found (a queued or working chapters.detect job; the generate job is queued once
- * that has finished, reusing its transcription).
+ * that has finished, reusing its transcription), or its files are being shared
+ * with the community (a queued or working sidecars.contribute job, Phase 2b).
  */
-export const GENERATE_SKIPS = ['detect_open'] as const;
+export const GENERATE_SKIPS = ['detect_open', 'contribute_open'] as const;
 
 /** How many books a skip note names before it counts the rest. */
 const NAMED = 5;
@@ -203,6 +208,7 @@ const SKIP_KEYS: Record<string, string> = {
   generate_open: 'bridge.queue.skip.generateOpen',
   detect_open: 'bridge.queue.skip.detectOpen',
   describe_open: 'bridge.queue.skip.describeOpen',
+  contribute_open: 'bridge.queue.skip.contributeOpen',
   chapters_chosen: 'bridge.queue.skip.chaptersChosen',
 };
 
