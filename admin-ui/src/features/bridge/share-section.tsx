@@ -25,8 +25,10 @@ import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-ge
  * and recaps the Bridge already generated (nothing is generated again). The
  * share job while it works, or how it ended with its issue links. Offered only
  * while the contributions module is on and the Bridge can contribute now, and
- * only for what the community still lacks (shareOffered). With the module off
- * the whole part is gone. Renders nothing when there is nothing to show.
+ * only for what the community still lacks (shareOffered). A share job that
+ * exists shows with its Cancel whatever the flag says now (the flag is also off
+ * while the Bridge is away, and a job exists only if the module was on); only a
+ * new Share needs it. Renders nothing when there is nothing to show.
  */
 export function ShareSection({ book }: { book: AdminBook }) {
   const { t } = useTranslation();
@@ -37,7 +39,7 @@ export function ShareSection({ book }: { book: AdminBook }) {
   const { job, jobs } = useBookGenerateJob(
     book.library_id,
     book.path,
-    on && generateJobsKnown(server),
+    generateJobsKnown(server),
     KIND_CONTRIBUTE,
   );
   // The same brief estimate the characters-and-recaps part reads (one query).
@@ -47,7 +49,6 @@ export function ShareSection({ book }: { book: AdminBook }) {
   const uiUrl = useBridgeLink(job?.state === 'needs_attention');
   const [busy, setBusy] = useState(false);
 
-  if (!on) return null;
   // Never from an estimate being fetched again (a job that just ended changed what the book has).
   const dimensions = estimate.isFetching ? [] : shareOffered(server, estimate.data, jobs);
   const offer = dimensions.length > 0;

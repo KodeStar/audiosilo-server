@@ -23,7 +23,6 @@ import {
   editedCorrectionFields,
   handling,
   lookupBy,
-  MAX_CHANGES,
   MAX_EVIDENCE,
   type CorrectionRow,
 } from './corrections-model';
@@ -237,8 +236,6 @@ describe('the review rows', () => {
     });
     const rows = [row('title'), row('author'), row('narrator', { tooLong: true })];
     expect([...defaultCorrectionTicks(rows, new Set(['author']))]).toEqual(['title']);
-    const many = Array.from({ length: 30 }, () => row('title'));
-    expect(defaultCorrectionTicks(many).size).toBeLessThanOrEqual(MAX_CHANGES);
   });
 
   it("remembers what the newest job suggested, while its value is still the book's", () => {
@@ -268,13 +265,12 @@ describe('the review rows', () => {
 });
 
 describe('sending', () => {
-  it('needs something ticked, at most the cap, and evidence within its limit', () => {
+  it('needs something ticked, and evidence within its limit', () => {
     expect(correctionProblem(0, 'x')).toBe('none');
-    expect(correctionProblem(MAX_CHANGES + 1, 'x')).toBe('tooMany');
     expect(correctionProblem(2, '   ')).toBe('noEvidence');
     expect(correctionProblem(2, 'x'.repeat(MAX_EVIDENCE + 1))).toBe('evidenceTooLong');
     expect(correctionProblem(2, '📚'.repeat(MAX_EVIDENCE))).toBeUndefined();
-    expect(correctionProblem(MAX_CHANGES, 'A store page')).toBeUndefined();
+    expect(correctionProblem(8, 'A store page')).toBeUndefined();
   });
 
   it("finds the marketplace of the book's ASIN", () => {

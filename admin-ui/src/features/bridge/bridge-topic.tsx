@@ -166,7 +166,8 @@ function NotPaired({ onPair, making }: { onPair: () => void; making: boolean }) 
 
 /**
  * The paired Bridge: its setup checklist (first while a required step is still
- * to do, as the Bridge's own page leads with it), its status, libraries,
+ * to do, as the Bridge's own page leads with it, but never above the offline
+ * notice: an offline Bridge's checklist is only what it last reported), its status, libraries,
  * workers, jobs, and Unpair.
  */
 function Paired({
@@ -182,7 +183,7 @@ function Paired({
 }) {
   const setup = status.setup;
   const setupCard = setup ? <SetupCard status={status} setup={setup} /> : null;
-  const setupFirst = setup ? !setupComplete(setup) : false;
+  const setupFirst = setup ? presence(status) !== 'offline' && !setupComplete(setup) : false;
   return (
     <>
       {setupFirst ? setupCard : null}
@@ -315,13 +316,15 @@ function StatusCard({
  * its accounts read-only (decision D6): the GitHub account signed in for
  * contributing, or none, and whether the agent's credential is set. Signing in
  * happens only on the Bridge's own page (the server never calls the Bridge), so
- * the card links to its Accounts tab.
+ * the card links to its Accounts tab. While the Bridge is offline the card says
+ * it is the last report and leaves out whether it can contribute (it can't now).
  */
 function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const { done, total } = setupProgress(setup);
   const complete = done === total;
+  const offline = presence(status) === 'offline';
   const agent = agentCredentialSet(setup);
   const accounts = bridgeTabLink(status.ui_url, ACCOUNTS_TAB);
   return (
@@ -330,14 +333,22 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
         titleId="bridge-setup-title"
         title={complete ? t('bridge.setup.title') : t('bridge.setup.titleTodo')}
         description={
-          <StatusText tone={complete ? 'ok' : 'warn'} colored className="font-semibold">
-            {complete
-              ? t('bridge.setup.complete')
-              : t('bridge.setup.progress', {
-                  done: formatNumber(done, lang),
-                  total: formatNumber(total, lang),
-                })}
-          </StatusText>
+          offline && status.heartbeat_at ? (
+            <StatusText tone="off" colored className="font-semibold">
+              {t('bridge.setup.lastReported', {
+                when: formatRelative(status.heartbeat_at, lang),
+              })}
+            </StatusText>
+          ) : (
+            <StatusText tone={complete ? 'ok' : 'warn'} colored className="font-semibold">
+              {complete
+                ? t('bridge.setup.complete')
+                : t('bridge.setup.progress', {
+                    done: formatNumber(done, lang),
+                    total: formatNumber(total, lang),
+                  })}
+            </StatusText>
+          )
         }
       />
       <div className="flex flex-col gap-4 px-5 py-3">
@@ -362,14 +373,18 @@ function SetupCard({ status, setup }: { status: BridgeStatus; setup: BridgeSetup
                     </StatusText>,
                   ],
                 ] as [string, React.ReactNode][])),
-            [
-              t('bridge.setup.contributing'),
-              <StatusText key="contribute" tone={setup.can_contribute ? 'ok' : 'off'}>
-                {setup.can_contribute
-                  ? t('bridge.setup.canContribute')
-                  : t('bridge.setup.cantContribute')}
-              </StatusText>,
-            ],
+            ...(offline
+              ? []
+              : ([
+                  [
+                    t('bridge.setup.contributing'),
+                    <StatusText key="contribute" tone={setup.can_contribute ? 'ok' : 'off'}>
+                      {setup.can_contribute
+                        ? t('bridge.setup.canContribute')
+                        : t('bridge.setup.cantContribute')}
+                    </StatusText>,
+                  ],
+                ] as [string, React.ReactNode][])),
           ]}
         />
       </div>

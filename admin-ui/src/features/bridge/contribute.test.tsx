@@ -237,6 +237,33 @@ describe('with the contributions module off', () => {
     expect(screen.queryByRole('button', { name: 'Suggest corrections' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Share with the community' })).toBeNull();
   });
+
+  it('still shows a share or corrections job that exists, with its Cancel, but offers no new one', async () => {
+    const detail = bookDetail();
+    detail.fields.author = { ...detail.fields.author, value: 'B. Sanderson', source: 'edited' };
+    mockFetch(
+      routes({
+        // Off, or the Bridge away (the flag is both): the jobs it queued are still there.
+        'GET /server': { body: server(false) },
+        'GET /admin/libraries/1/book': { body: detail },
+        'GET /admin/bridge/jobs': {
+          body: {
+            jobs: [
+              job({ id: 42, kind: 'meta.correct', state: 'queued' }),
+              job({ state: 'running' }),
+            ],
+          },
+        },
+      }),
+    );
+    renderApp(URL);
+    expect(
+      await screen.findByRole('button', { name: 'Cancel sharing with the community' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel the corrections' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Share with the community' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Suggest corrections' })).toBeNull();
+  });
 });
 
 describe('why Generate is missing', () => {
@@ -326,6 +353,26 @@ describe('Settings > Bridge setup', () => {
     renderApp(SETTINGS);
     expect(await screen.findByText('Everything required is done')).toBeInTheDocument();
     expect(screen.getByText('octocat')).toBeInTheDocument();
+  });
+
+  it('reads as the last report while the Bridge is offline, below the offline notice', async () => {
+    const s = status({
+      online: false,
+      heartbeat_at: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    s.setup!.items = s.setup!.items.map((i) => (i.id === 'agent' ? { ...i, done: false } : i));
+    mockFetch(routes({ 'GET /admin/bridge': { body: s } }));
+    renderApp(SETTINGS);
+    const notice = await screen.findByText("The Bridge hasn't reported for over two minutes");
+    const heading = screen.getByRole('heading', { name: 'Get set up' });
+    // Not leading the page: the offline notice comes first.
+    expect(notice.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const card = heading.closest('section, [aria-labelledby]') as HTMLElement;
+    expect(within(card).getByText(/^As last reported/)).toBeInTheDocument();
+    expect(within(card).queryByText(/required steps done/)).toBeNull();
+    // Whether it can contribute isn't claimed while it's away.
+    expect(within(card).queryByText('Contributing')).toBeNull();
+    expect(within(card).queryByText('Ready')).toBeNull();
   });
 
   it('shows no setup card for an older Bridge that sends no checklist', async () => {

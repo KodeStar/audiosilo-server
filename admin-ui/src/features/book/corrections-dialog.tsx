@@ -10,13 +10,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
-import { Field, FormError } from '@/components/ui/field';
+import { Field } from '@/components/ui/field';
 import { Textarea } from '@/components/ui/textarea';
 import { formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { queueJob } from '@/features/bridge/bridge-actions';
 import { isOpen } from '@/features/bridge/bridge-model';
-import { contributionsOn, generateJobsKnown, KIND_CORRECT } from '@/features/bridge/generate-model';
+import { generateJobsKnown, KIND_CORRECT } from '@/features/bridge/generate-model';
 import { JobActions, JobSection } from '@/features/bridge/generate-parts';
 import { GenerateStatus } from '@/features/bridge/generate-status';
 import { useBookGenerateJob, useBridgeLink } from '@/features/bridge/use-generate';
@@ -31,7 +31,6 @@ import {
   correctionsOffered,
   defaultCorrectionTicks,
   lookupBy,
-  MAX_CHANGES,
   MAX_EVIDENCE,
   MAX_VALUE,
   type CorrectionRow,
@@ -42,10 +41,11 @@ import {
  * "Suggest corrections" opens the review of the admin's edits against the
  * community's values, and the book's newest `meta.correct` job shows here
  * while it works and, once filed, with its issue. Offered only while the
- * contributions module is on and the rest of correctionsOffered holds; with the
- * module off the whole part is gone, except a review already open, which stays
- * (what was typed isn't lost when the Bridge goes away; sending says why it
- * can't). Renders nothing when there is nothing to show.
+ * contributions module is on and the rest of correctionsOffered holds. A
+ * corrections job that exists shows with its Cancel whatever the flag says now
+ * (the flag is also off while the Bridge is away, and a job exists only if the
+ * module was on), and a review already open stays (what was typed isn't lost;
+ * sending says why it can't). Renders nothing when there is nothing to show.
  */
 export function CorrectionsSection({
   detail,
@@ -58,20 +58,14 @@ export function CorrectionsSection({
   const { t } = useTranslation();
   const server = useServerInfo().data;
   const b = detail.book;
-  const on = contributionsOn(server);
-  const { job } = useBookGenerateJob(
-    b.library_id,
-    b.path,
-    on && generateJobsKnown(server),
-    KIND_CORRECT,
-  );
+  const { job } = useBookGenerateJob(b.library_id, b.path, generateJobsKnown(server), KIND_CORRECT);
   const uiUrl = useBridgeLink(job?.state === 'needs_attention');
   const [open, setOpen] = useState(false);
 
   // Not while one is queued or working: the server would hand that one back
   // and ignore new changes, so its status shows instead.
   const offer = correctionsOffered(server, detail) && !(job && isOpen(job.state));
-  const shown = on && job && job.state !== 'cancelled' ? job : undefined;
+  const shown = job && job.state !== 'cancelled' ? job : undefined;
   if (!open && !offer && !shown) return null;
 
   return (
@@ -242,11 +236,6 @@ function CorrectionsForm({
           />
         </Field>
         <p className="text-[12.5px] text-muted-foreground">{t('book.corrections.where')}</p>
-        {problem === 'tooMany' ? (
-          <FormError>
-            {t('book.corrections.tooMany', { max: formatNumber(MAX_CHANGES, lang) })}
-          </FormError>
-        ) : null}
       </>
     );
   }
@@ -256,7 +245,7 @@ function CorrectionsForm({
       <DialogBody className="flex flex-col gap-4">{body}</DialogBody>
       <DialogFormFooter
         busy={busy}
-        disabled={!candidate || problem === 'none' || problem === 'tooMany'}
+        disabled={!candidate || problem === 'none'}
         submitLabel={t('book.corrections.submit', {
           count: sending,
           n: formatNumber(sending, lang),

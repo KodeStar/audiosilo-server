@@ -22,8 +22,6 @@ import { clean, compareRows, defaultRecording, type CompareRow } from './match-m
 // what the community says, sent to the Bridge as one `meta.correct` job that
 // files a correction-batch issue on audiosilo-meta. Pure: no React, no i18n.
 
-/** The most changes one suggestion carries (meta's correction-batch cap). */
-export const MAX_CHANGES = 25;
 /** The longest value a change carries, either side. */
 export const MAX_VALUE = 500;
 /** The longest evidence. */
@@ -243,26 +241,20 @@ export function alreadySuggested(
 
 /**
  * Ticked to begin with: every row that can be sent and wasn't suggested
- * already, at most MAX_CHANGES of them.
+ * already (one row per field, so far under the server's 25-change cap).
  */
 export function defaultCorrectionTicks(
   rows: readonly CorrectionRow[],
   suggested: ReadonlySet<CorrectionField> = new Set(),
 ): Set<CorrectionField> {
-  return new Set(
-    rows
-      .filter((r) => !r.tooLong && !suggested.has(r.field))
-      .slice(0, MAX_CHANGES)
-      .map((r) => r.field),
-  );
+  return new Set(rows.filter((r) => !r.tooLong && !suggested.has(r.field)).map((r) => r.field));
 }
 
 /** Why the suggestion can't be sent yet, or undefined when it can. */
-export type CorrectionProblem = 'none' | 'tooMany' | 'noEvidence' | 'evidenceTooLong';
+export type CorrectionProblem = 'none' | 'noEvidence' | 'evidenceTooLong';
 
 export function correctionProblem(ticked: number, evidence: string): CorrectionProblem | undefined {
   if (ticked === 0) return 'none';
-  if (ticked > MAX_CHANGES) return 'tooMany';
   const e = evidence.trim();
   if (!e) return 'noEvidence';
   if (runes(e) > MAX_EVIDENCE) return 'evidenceTooLong';
