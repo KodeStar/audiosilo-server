@@ -1,7 +1,7 @@
 # Gates every pull request and push to main on race tests + lint (govet included),
 # plus the admin console's own gate (admin-ui: typecheck, lint, prettier, vitest).
 # The three jobs run side by side; the image build (image.yml) stays separate
-# and only runs on tags.
+# and runs on tags (releases) and pushes to main (:edge).
 name: ci
 
 on:

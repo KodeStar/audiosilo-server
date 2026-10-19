@@ -61,7 +61,6 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=sha
-            # :edge tracks the head of main (push or dispatch on main).
             type=edge,branch=main
             # Only a real release (a v* tag) may move the public :latest - a
             # workflow_dispatch from a feature branch must not republish it.
@@ -73,11 +72,9 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          # VERSION: on a tag build stamp the semver version; off a tag (main
-          # pushes and dispatch) the metadata version would resolve to "edge" or
-          # a branch name, so fall back to a dev-<sha> marker instead. (These are
-          # YAML comments on purpose: build-push-action has no comment syntax, so
-          # a "#" line inside the build-args literal would become a build arg.)
+          # VERSION is the semver on a tag, else dev-<sha> (the metadata version
+          # would be "edge" or a branch name). Keep comments out of build-args:
+          # it has no comment syntax, so a "#" line there becomes a build arg.
           build-args: |
             WEB_IMAGE=ghcr.io/${{ steps.owner.outputs.lc }}/audiosilo-web:${{ github.event.inputs.web_version || 'latest' }}
             VERSION=${{ startsWith(github.ref, 'refs/tags/') && steps.meta.outputs.version || format('dev-{0}', github.sha) }}
