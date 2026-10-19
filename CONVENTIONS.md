@@ -1426,8 +1426,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `heartbeatTTL`, 5 s, so `GET /server` mostly reads no database; `Forget` drops it on a pairing or an
   unpair, and a read that began before a save or a `Forget` never replaces its answer: `hbGen`), with a
   top-level `bridge: {version, features}`
-  beside it (features = the families of the kinds the server knows, `[]` for none; `capabilities` stays
-  all booleans).
+  beside it (features = the families of the kinds the server knows, plus `contribute` while the last
+  heartbeat's `estimates.sidecars.can_contribute` is true (`bridge.FeatureContribute`, Phase 2a: no
+  heartbeat wire change), `[]` for none; `capabilities` stays all booleans).
   **Jobs** (`bridge_jobs`): kinds allow-listed twice, inside `bridge.Service.Enqueue` (the server queues
   only a kind it knows, with per-kind params: 400, AND the Bridge advertised: `ErrKindUnavailable`, 409
   `kind_unavailable`); Phase 0's
@@ -1561,6 +1562,46 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   hidden path reading as missing, 404), so a book's `.audiosilo/` never becomes a phantom book or a
   streamable file; `findCover` never takes a hidden file (an AppleDouble `._x.jpg`) as a cover. Audited `bridge.code`, `bridge.paired` (system),
   `bridge.unpair`, `bridge.job`, `bridge.cancel`. `SetBridge` before `Handler()` (the launcher always calls it).
+- **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
+  that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
+  by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,
+  config key `modules.<id>.enabled`, setting `modules.<id>`, env `AUDIOSILO_MODULES_<ID>_ENABLED`, console
+  copy `settings.module.<id>.name|blurb|needs`), `RequiresBridge` (a Bridge feature from `bridge.features`,
+  `""` for none), `Routes(Registrar)` and `Start(ctx, Deps)`, either nil. The registry is
+  `modules/builtin.Modules()` (a sub-package, so a module's own `modules/<id>` package imports `modules`
+  without a cycle); the launcher's `API.SetModules` refuses to start on a `modules.Validate` error (id
+  `^[a-z][a-z0-9_]{0,31}$`, once only, not a core capability name (`coreCapabilities`), its config row
+  present: `config.HasModule`). **Adding a module**: its row in `config/settings.go`'s `fields` (+
+  `ModulesConfig` field, `config.example.yaml`), its entry in `builtin` (`RequiresBridge` names a `bridge` constant, e.g. `bridge.FeatureContribute`), its console copy in every locale,
+  and the player's registry entry (audiosilo-frontend `src/modules/registry.ts`) if listeners see it; a
+  module's own settings are setting `<id>.<name>`, key `modules.<id>.<name>`. **Gating**: every route a
+  module registers (`Registrar.Admin` = `requireAdmin`, `.User` = `requireAuth`, then `requireModule`; a
+  pattern must be `"METHOD /api/v1/..."`, else `checkModulePattern` panics at start) answers **404
+  `module_off`** while the toggle is off, and is always mounted, so a toggle needs no restart. The routes
+  gate on the toggle ONLY: an action needing the Bridge keeps its own 409, so routes don't flap with
+  heartbeat timing. The **capability flag** (`modules.Active` over `Module.BridgeState`, the framework's
+  rule; `api.moduleActive` feeds it) is the toggle AND the requirement met (an online Bridge whose features
+  hold it), `false` (never absent) while off; `GET /server` computes the
+  Bridge block once per request and reuses it. **Background work** (`modules.Runner`; the API holds one): `StartModules(ctx)` at launch (beside
+  `StartChapterChecks`, with `defer StopModules()`: cancel every run and wait, before the database
+  closes), then `syncModules` (`Runner.Sync`) in `handleUpdateSettings` right after the live config swap,
+  under the settings mutex: a module turned on starts `Start` in its own goroutine (a panic ends that
+  run only; a run that ended by itself while on starts again at the next save), one turned off is
+  cancelled without the save waiting; turned back on meanwhile, the new run waits for the old to return
+  (a run's `done` closes only after every earlier run's, so however often it is toggled, runs never
+  overlap). **`GET /admin/modules`** (admin only):
+  `{"modules":[{id, enabled, active, requires_bridge?, bridge_state?}]}` in registry order (`[]` when empty;
+  `bridge_state` `offline` | `no_feature` | `ready`, both omitted when no Bridge is needed); the lock is the
+  settings envelope's `locked["modules.<id>"]`, not repeated. A toggle is an ordinary settings save
+  (`settings.update` audited, `setting_locked` under its variable). **Console**: Settings > Modules
+  (`admin-ui` `features/settings/modules-topic.tsx`, `useModules`: polled every 15 s like the Bridge's
+  status and refetched after every settings save) shows a card per module (switch, blurb, docs link,
+  Bridge state line, the "hidden from listeners" note while enabled but not active); a page a module
+  brings goes in `settings-model.ts` `MODULE_PAGES` and `visiblePages` lists it only while the toggle is
+  on (a `?topic=` for it opens General). Phase 2a ships one module,
+  `contributions` (needs `contribute`), as an inert shell: no routes, no `Start` (Phase 2b fills it).
+  `transcode`, `metadata` and `bridge` stay out of the registry (shipped keys and flags, not a plain
+  runtime on/off).
 - **Server settings, system status, updates, logs (admin redesign Phase 5a)**: `internal/config/settings.go`
   is the ONE table of console settings (`fields`): each has an id `<section>.<name>` (also where it sits in
   `GET /admin/settings`), its config.yaml key, its `AUDIOSILO_*` variable, whether it is read only at start

@@ -130,6 +130,40 @@ const (
 	MaxMaxMembers     = 50
 )
 
+// ModulesConfig holds each managed module's settings (internal/modules), all
+// off by default. A module's toggle is modules.<id>.enabled (the console's
+// setting modules.<id>, AUDIOSILO_MODULES_<ID>_ENABLED); a module's own
+// settings would be modules.<id>.<name> (setting <id>.<name>). Every key
+// applies on the next request: a module starts and stops without a restart.
+type ModulesConfig struct {
+	Contributions ModuleConfig `yaml:"contributions"`
+}
+
+// ModuleConfig is one module's toggle.
+type ModuleConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// moduleToggle is module id's toggle in c, or nil when it has no config row.
+func (c *Config) moduleToggle(id string) *bool {
+	f := fieldByKey("modules." + id + ".enabled")
+	if f == nil {
+		return nil
+	}
+	on, _ := f.ptr(c).(*bool)
+	return on
+}
+
+// HasModule reports whether module id has its toggle's config row (the
+// registry is checked against it at start).
+func (c *Config) HasModule(id string) bool { return c.moduleToggle(id) != nil }
+
+// ModuleEnabled reports whether module id is turned on; false for an unknown id.
+func (c *Config) ModuleEnabled(id string) bool {
+	on := c.moduleToggle(id)
+	return on != nil && *on
+}
+
 // DemoConfig configures public demo mode: when enabled, an unauthenticated
 // visitor can mint a throwaway account via POST /api/v1/demo/session (granted the
 // named library), and idle demo accounts are reaped in the background.
@@ -266,6 +300,7 @@ type Config struct {
 	Backups        BackupConfig    `yaml:"backups"`   // database backups (internal/backup)
 	Activity       ActivityConfig  `yaml:"activity"`  // listening history retention
 	Household      HouseholdConfig `yaml:"household"` // household members
+	Modules        ModulesConfig   `yaml:"modules"`   // managed modules (internal/modules), each off by default
 
 	// fromEnv maps each field key (see fields) an AUDIOSILO_* variable set at load
 	// to that variable's name; file is the config as config.yaml had it, before the

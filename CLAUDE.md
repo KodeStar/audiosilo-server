@@ -126,6 +126,7 @@ internal/updates/     the update check: GitHub Releases' latest release, once a 
 internal/backup/      database backups: VACUUM INTO the backups folder on a schedule or on request, retention, restore applied at the next start
 internal/jsonfile/    the small JSON files beside the database (backup's restore marker/result, the mirror's state.json): Write is owner-only, temp file synced then renamed (all or nothing); Read[T] is nil without a file
 internal/bridge/      the Bridge's side on the server (BRIDGE-PLAN.md): its last heartbeat (status.go: validation, the 2-minute online window, features, the lenient `estimates`, Writable, CanContribute) and the job queue (jobs.go: kinds the server can check (`bridge.verify`, `sidecars.generate`, `sidecars.describe`, `chapters.detect`), dedupe, priority claim with a lease, long-poll wake, lease expiry, held updates and parks, cooperative cancel, `OnTransition` / `Job.Notable`); estimate.go (EstimateSidecars: a job's cost from the heartbeat's figures); pairing and the bridge token are auth's (auth/bridge.go)
+internal/modules/     managed modules (Bridge Phase 2a): Module (id = capability + config key, RequiresBridge, Routes, Start), Registrar, Deps, Validate, BridgeState/Active (the capability rule), Runner (each module's Start while on); modules/builtin is the registry (contributions, an inert shell until 2b)
 internal/notify/      the event feed (the console's bell) and its deliveries to webhook / ntfy / Discord destinations (incl. the Bridge's `bridge_job_finished` / `bridge_job_failed`)
 internal/api/         HTTP transport: routing (api.go), middleware, rate limiting, handlers_*.go
 internal/server/      HTTP(S) server, TLS modes (off/selfsigned/autocert), home HTTP on the self-signed port, graceful shutdown
@@ -315,6 +316,7 @@ keep this index in step (one line per topic).
   - Progress reconciliation
   - Chapters are normalized
   - Community chapters (incl. Generated chapters, Bridge Phase 1d)
+  - Managed modules (Bridge Phase 2a, `internal/modules`, `api/modules.go`)
   - Unavailable-root guard
 
 ## Roadmap
@@ -349,8 +351,8 @@ keep this index in step (one line per topic).
 `upload`, `transcode`, `websocket`, `api_keys`, `metadata`, `meta_bundle`, `meta_covers`,
 `export`, `browse_people`, `series_memberships`, `series_books`, `cover_sizes`, `next_book`, `queue`, `collections`,
 `user_stats`, `ratings`, `progress_edit`, `my_devices`, `annotations`, `addresses`, `household`, `cast`,
-`household_members`, `bridge`); flip them on
-as phases land. `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
+`household_members`, `bridge`), plus one flag per managed module (`contributions`); flip them on
+as phases land. A module's flag is its toggle AND its Bridge requirement met (see Managed modules). `bridge` is true only while a paired Bridge's heartbeat is under two minutes old, with
 the `bridge: {version, features}` block beside `capabilities` (see The Bridge above). `series_memberships` is true (books in several series: `memberships=1` on
 `/libraries/{id}/books?series=` and `/libraries/{id}/series`, and `series_list` on a player
 `Book` in more than one series; see API surface below). `series_books` is true (the first page of several
@@ -436,7 +438,7 @@ What to play after a book is `GET /libraries/{id}/next?path=` (authed, scoped li
 The library export is `GET /admin/libraries/{id}/export` (admin only; returns a
 JSON attachment, not the usual envelope - see Library export above).
 Server settings are `GET`/`PATCH /admin/settings` (admin only): a section-keyed
-envelope (`general`, `network`, `players`, `metadata`, `demo`, `household`, `backups`, plus `locked`,
+envelope (`general`, `network`, `players`, `metadata`, `demo`, `household`, `backups`, `modules`, plus `locked`,
 `restart_settings`, `restart_pending`) whose PATCH takes the same shape with only
 the settings to change (`{"metadata":{"enabled":false}}` still flips the lookup);
 see "Server settings" above.

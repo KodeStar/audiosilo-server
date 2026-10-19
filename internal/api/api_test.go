@@ -22,6 +22,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/media"
+	"github.com/kodestar/audiosilo-server/internal/modules/builtin"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/store"
 	"github.com/kodestar/audiosilo-server/internal/store/storetest"
@@ -95,6 +96,9 @@ func newTestEnvWith(t *testing.T, configure func(*config.Config)) *testEnv {
 	ntf := notify.New(cat, "test", a.NotifyIdentity, slog.Default())
 	a.SetRuntime(Runtime{Backups: backups, Notify: ntf})
 	a.SetBridge(bridge.New(db, time.Now))
+	if err := a.SetModules(builtin.Modules()); err != nil { // as the launcher does
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
 	return &testEnv{srv: srv, api: a, auth: authSvc, cat: cat, cfg: cfg, adminID: admin.ID, authCode: code,

@@ -28,6 +28,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/config"
 	"github.com/kodestar/audiosilo-server/internal/library"
 	"github.com/kodestar/audiosilo-server/internal/logring"
+	"github.com/kodestar/audiosilo-server/internal/modules/builtin"
 	"github.com/kodestar/audiosilo-server/internal/notify"
 	"github.com/kodestar/audiosilo-server/internal/server"
 	"github.com/kodestar/audiosilo-server/internal/store"
@@ -218,6 +219,11 @@ func Run(ctx context.Context, opts Options) error {
 	// The Bridge's status and job queue (BRIDGE-PLAN.md): the server keeps them;
 	// the Bridge calls in.
 	a.SetBridge(bridge.New(db, time.Now))
+	// The managed modules (Settings > Modules); a registry that doesn't check out
+	// is a programming error, so the server refuses to start.
+	if err := a.SetModules(builtin.Modules()); err != nil {
+		return fmt.Errorf("modules: %w", err)
+	}
 	// Mirror mode's local copy of the community metadata (nil in remote mode),
 	// in front of the metadata service before the background jobs below use it.
 	// Its checks stop while the live metadata.enabled is off.
@@ -248,6 +254,10 @@ func Run(ctx context.Context, opts Options) error {
 	go retention(ctx, cat, authSvc, a.SessionRetention, log)
 	a.SetBaseContext(ctx) // bind work detached from a request (a book's re-read) to the server lifecycle
 	a.StartChapterChecks(ctx)
+	a.StartModules(ctx)
+	// Before the database closes, and even when the server fails while ctx
+	// lives on (an embedding app's).
+	defer a.StopModules()
 	a.StartCoverColors(ctx)
 	a.SetRuntime(api.Runtime{FFprobe: ffprobe, Logs: logs, Updates: upd, Backups: backups, Notify: ntf})
 	ntf.Run(ctx)

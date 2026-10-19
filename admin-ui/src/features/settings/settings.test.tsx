@@ -1,11 +1,10 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { setToken } from '@/api/token';
-import type { AdminSettings } from '@/api/types';
 import { mockFetch, type MockRoute } from '@/test/fetch-mock';
 import { mirrorStatus, mirrorSystem, settingsWith, systemStatus } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
-import { signedInRoutes } from '@/test/routes';
+import { patchEcho, signedInRoutes } from '@/test/routes';
 
 // Server > Settings: topics, forms that send only what changed, refusals on
 // their field, locked and restart settings, and the switches that save at once.
@@ -15,18 +14,6 @@ function routes(over: Record<string, MockRoute> = {}) {
     'GET /admin/system': { body: systemStatus() },
     ...over,
   });
-}
-
-/** A PATCH that answers with the settings merged with what it sent. */
-function patchEcho(base: AdminSettings, extra: Partial<AdminSettings> = {}): MockRoute {
-  return (req) => {
-    const body = req.body as Record<string, Record<string, unknown>>;
-    const next = { ...base, ...extra } as unknown as Record<string, unknown>;
-    for (const [section, fields] of Object.entries(body)) {
-      next[section] = { ...(next[section] as object), ...fields };
-    }
-    return { body: next };
-  };
 }
 
 beforeEach(() => setToken('stored'));

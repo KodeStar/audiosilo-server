@@ -9,6 +9,7 @@ import {
   Import,
   Info,
   MonitorSmartphone,
+  Puzzle,
   Repeat2,
   RotateCcw,
   Settings2,
@@ -39,6 +40,7 @@ import { BridgeTopic } from '@/features/bridge/bridge-topic';
 import { ImportTopic } from '@/features/imports/import-topic';
 import { BackupsTopic } from './backups-topic';
 import { ClearMatchesZone } from './clear-matches';
+import { ModulesTopic } from './modules-topic';
 import { NotificationsTopic } from './notifications-topic';
 import { InstantSwitch, SettingBadges, SettingsForm } from './settings-form';
 import {
@@ -46,6 +48,7 @@ import {
   lockOf,
   METADATA_MODES,
   SETTINGS_PAGES,
+  visiblePages,
   type CertStatus,
   type SettingsPage,
 } from './settings-model';
@@ -62,6 +65,7 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   notifications: BellRing,
   import: Import,
   bridge: Waypoints,
+  modules: Puzzle,
 };
 
 /**
@@ -72,8 +76,12 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
  */
 export function SettingsPage() {
   const { t } = useTranslation();
-  const { topic = 'general' } = useSearch({ strict: false }) as { topic?: SettingsPage };
+  const { topic: asked = 'general' } = useSearch({ strict: false }) as { topic?: SettingsPage };
   const settings = useSettings();
+  // A module's page shows only while its module is on; asked for while it is
+  // off (an old link), General opens instead.
+  const pages = visiblePages(SETTINGS_PAGES, settings.data);
+  const topic = !settings.data || pages.includes(asked) ? asked : 'general';
 
   return (
     <Page>
@@ -83,7 +91,7 @@ export function SettingsPage() {
           aria-label={t('settings.topics')}
           className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-col md:overflow-visible md:p-0"
         >
-          {SETTINGS_PAGES.map((p) => {
+          {pages.map((p) => {
             const Icon = PAGE_ICONS[p];
             return (
               <Link
@@ -150,6 +158,8 @@ function Topic({ topic, settings }: { topic: SettingsPage; settings: AdminSettin
       return <ImportTopic />;
     case 'bridge':
       return <BridgeTopic />;
+    case 'modules':
+      return <ModulesTopic settings={settings} />;
     default:
       return <GeneralTopic settings={settings} />;
   }

@@ -20,8 +20,17 @@ export interface ServerInfo {
     metadata: boolean;
     /** A Bridge is paired and online (its heartbeat is under two minutes old); absent before Phase 0. */
     bridge?: boolean;
+    /**
+     * The contributions module (Settings > Modules): on, and an online Bridge
+     * offers `contribute`; absent before Bridge Phase 2a.
+     */
+    contributions?: boolean;
   };
-  /** The online Bridge's version and job families ("sidecars"), only while capabilities.bridge. */
+  /**
+   * The online Bridge's version and features, only while capabilities.bridge:
+   * its job families ("sidecars"), plus "contribute" while it can file
+   * contributions (bridge.Status.Features).
+   */
   bridge?: { version: string; features: string[] };
   auth: { methods: string[] };
   demo: { enabled: boolean };
@@ -556,6 +565,11 @@ export interface AdminSettings {
     /** Read-only here: config.yaml or AUDIOSILO_BACKUP_DIR. "" = <data>/backups. */
     dir: string;
   };
+  /**
+   * Each managed module's toggle, by module id (internal/modules; setting
+   * "modules.<id>"). GET /admin/modules says more about each.
+   */
+  modules: Record<string, boolean>;
   /** Setting id -> why the console can't change it: an AUDIOSILO_* variable, or "launcher". */
   locked: Record<string, string>;
   /** Setting ids read only at start. */
@@ -606,7 +620,7 @@ export interface MetaMirrorStatus {
 
 /** The sections of AdminSettings that hold settings. */
 export type SettingsSection =
-  'general' | 'network' | 'players' | 'metadata' | 'demo' | 'household' | 'backups';
+  'general' | 'network' | 'players' | 'metadata' | 'demo' | 'household' | 'backups' | 'modules';
 
 /** A PATCH body: only the settings to change, by section. */
 export type SettingsPatch = {
@@ -2230,6 +2244,32 @@ export type ImportCutoff = 'auto' | null | string;
 // The Bridge (BRIDGE-PLAN.md Phase 0, handlers_bridge.go, internal/bridge): the
 // optional companion that writes to the libraries and runs jobs. It pairs with a
 // one-time code and then calls in; the server never connects to it.
+
+/**
+ * Where a module stands with the Bridge feature it needs (api/modules.go):
+ * no paired Bridge heard from in two minutes, an online Bridge without the
+ * feature, or one offering it.
+ */
+export type ModuleBridgeState = 'ready' | 'offline' | 'no_feature';
+
+/** One managed module in GET /admin/modules (api/modules.go adminModule). */
+export interface AdminModule {
+  /** Its capability flag and setting name (modules.<id>). */
+  id: string;
+  /** The toggle as saved (the live config). */
+  enabled: boolean;
+  /** The capability flag: enabled, and its Bridge requirement met. */
+  active: boolean;
+  /** The Bridge feature it needs ("contribute"); absent when it needs none. */
+  requires_bridge?: string;
+  /** Absent when it needs no Bridge. */
+  bridge_state?: ModuleBridgeState;
+}
+
+/** GET /admin/modules: every module, in the server's order. */
+export interface AdminModules {
+  modules: AdminModule[];
+}
 
 /** One library's mapping as the Bridge last checked it (bridge.LibraryStatus). */
 export interface BridgeMapping {
