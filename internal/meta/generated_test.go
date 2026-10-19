@@ -191,7 +191,7 @@ func TestAnswerDescription(t *testing.T) {
 	}
 	raw, _ := json.Marshal(w)
 	if !strings.Contains(string(raw), `"generated_description":{"text":"`+testDescription+`"}`) ||
-		!strings.Contains(string(raw), `"generated":{"characters":false,"recaps":false,"description":true`) {
+		!strings.Contains(string(raw), `"generated":{"characters":false,"recaps":false,"recap_summary":false,"description":true`) {
 		t.Errorf("wire = %s", raw)
 	}
 	// spoilers=hide keeps it, from the start.
@@ -271,5 +271,35 @@ func TestAnswerUnmatched(t *testing.T) {
 	}
 	if raw, _ := json.Marshal(Answer(nil, "The Book", late, &Place{Chapter: 1})); string(raw) != `{"matched":false}` {
 		t.Errorf("gated to nothing = %s", raw)
+	}
+}
+
+// TestGeneratedRecapSummaryOnTheWire: recap_summary is always sent, false
+// included (a client falls back to recaps only when it is absent: an older
+// server): false when generated recaps fill a list with no summary at all, or
+// beside the community's summary; true when the summary was generated.
+func TestGeneratedRecapSummaryOnTheWire(t *testing.T) {
+	t.Parallel()
+	mark := func(w *MetaWork, g *Generated) string {
+		t.Helper()
+		b, err := json.Marshal(matched(t, &Enrichment{Matched: true, Work: w}, g, nil).Work.Generated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	noSummary := testGenerated()
+	noSummary.Recaps.InShort, noSummary.Recaps.Ending = "", ""
+	at := noSummary.GeneratedAt
+	if got, want := mark(communityWork(), noSummary), `{"characters":false,"recaps":true,"recap_summary":false,"description":false,"generated_at":"`+at+`"}`; got != want {
+		t.Errorf("no summary: %s, want %s", got, want)
+	}
+	summed := communityWork()
+	summed.RecapSummary = &MetaRecapSummary{InShort: "Community short."}
+	if got, want := mark(summed, testGenerated()), `{"characters":false,"recaps":true,"recap_summary":false,"description":false,"generated_at":"`+at+`"}`; got != want {
+		t.Errorf("community summary: %s, want %s", got, want)
+	}
+	if got, want := mark(communityWork(), testGenerated()), `{"characters":false,"recaps":true,"recap_summary":true,"description":false,"generated_at":"`+at+`"}`; got != want {
+		t.Errorf("generated summary: %s, want %s", got, want)
 	}
 }

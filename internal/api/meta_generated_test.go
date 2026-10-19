@@ -172,7 +172,8 @@ func TestMetaGeneratedFillsRecaps(t *testing.T) {
 // TestMetaGeneratedBesideCommunitySummary: a community work with a whole-book
 // summary but no recap list takes the generated list and keeps its own summary,
 // which the mark leaves the community's (recap_summary absent, attribution
-// kept); the estimate agrees the community has no recaps, so Generate is offered.
+// kept, recap_summary sent as false: a client falls back to recaps only when it
+// is absent); the estimate agrees the community has no recaps, so Generate is offered.
 func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
 	t.Parallel()
 	e := generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
@@ -203,7 +204,7 @@ func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
 		} `json:"work"`
 	}
 	decodeInto(t, metaBody, &raw)
-	if got, want := string(raw.Work.Generated), `{"characters":false,"recaps":true,"description":false,"generated_at":"2026-10-15T10:00:00Z"}`; got != want {
+	if got, want := string(raw.Work.Generated), `{"characters":false,"recaps":true,"recap_summary":false,"description":false,"generated_at":"2026-10-15T10:00:00Z"}`; got != want {
 		t.Errorf("generated = %s, want %s", got, want)
 	}
 

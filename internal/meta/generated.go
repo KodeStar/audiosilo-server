@@ -37,7 +37,8 @@ type Generated struct {
 // files rather than the community (MetaWork.Generated); omitted when none did.
 // Recaps is set when the recap list or the whole-book summary was generated
 // (as before RecapSummary existed, so an older client reads it unchanged);
-// RecapSummary, additive, says the summary itself was, so a client can credit a
+// RecapSummary, additive and always sent (a client falls back to Recaps only
+// when it is absent: an older server), says the summary itself was, so a client can credit a
 // community summary kept beside a generated list (a summary-only community
 // work, which fillable leaves the list to fill) to the community. Description
 // names the work's generated_description. GeneratedAt is when what it names
@@ -46,7 +47,7 @@ type Generated struct {
 type MetaGenerated struct {
 	Characters   bool   `json:"characters"`
 	Recaps       bool   `json:"recaps"`
-	RecapSummary bool   `json:"recap_summary,omitempty"`
+	RecapSummary bool   `json:"recap_summary"`
 	Description  bool   `json:"description"`
 	GeneratedAt  string `json:"generated_at,omitempty"`
 }

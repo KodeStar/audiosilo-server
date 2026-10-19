@@ -260,7 +260,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   with only a description answers `{matched: false, work: {title, generated_description, generated:
   {description: true, ...}, ...}}`. `generated.recaps` is set when the recap list or the whole-book summary
   came from the book's `recaps.json` (unchanged for older clients); the additive
-  `generated.recap_summary` (omitempty) is set only when the summary itself did, so a community work with
+  `generated.recap_summary` (always sent, false included: the player falls back to `recaps` only when
+  it is absent, an older server) is true only when the summary itself did, so a community work with
   a summary alone (which `fillable` leaves the list to fill) keeps its summary credited to the
   community beside a generated list. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
   **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
