@@ -40,7 +40,7 @@ export function defaultRecording(c: MatchCandidate): MatchRecording | undefined 
 }
 
 /** A community value as the server would store it ("" when absent or one it would refuse). */
-function clean(field: OverrideField, raw: string | undefined): string {
+export function clean(field: OverrideField, raw: string | undefined): string {
   if (!raw) return '';
   const { value, error } = checkField(field, raw);
   return error ? '' : value;

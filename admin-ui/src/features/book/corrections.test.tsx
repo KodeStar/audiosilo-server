@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { keys } from '@/api/hooks';
 import { setToken } from '@/api/token';
 import type {
   AdminBookDetail,
@@ -154,6 +155,36 @@ describe('suggest corrections', () => {
     expect(await within(dialog).findByText('Applied automatically')).toBeInTheDocument();
   });
 
+  it('keeps an open review when the Bridge goes away, so nothing typed is lost', async () => {
+    const user = userEvent.setup();
+    let info = server;
+    mockFetch(routes({ 'GET /server': () => ({ body: info }) }));
+    const { queryClient } = renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Suggest corrections' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Suggest corrections' });
+    await user.type(
+      await within(dialog).findByRole('textbox', { name: 'Evidence' }),
+      ' See the publisher page.',
+    );
+    // The heartbeat lapses: the module's capability goes with the Bridge.
+    info = {
+      ...server,
+      capabilities: { ...server.capabilities, bridge: false, contributions: false },
+    };
+    await queryClient.invalidateQueries({ queryKey: keys.server });
+    // The card took the news: its action is gone...
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'Suggest corrections', hidden: true }),
+      ).toBeNull(),
+    );
+    // ...but the review stays, with what was typed.
+    expect(screen.getByRole('dialog', { name: 'Suggest corrections' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('textbox', { name: 'Evidence' })).toHaveValue(
+      'Corrected in an AudioSilo server library (audiosilo-server 0.9.2). See the publisher page.',
+    );
+  });
+
   it('requires the evidence', async () => {
     const user = userEvent.setup();
     const calls = mockFetch(routes());
@@ -195,6 +226,20 @@ describe('suggest corrections', () => {
     expect(
       await within(dialog).findByText('The community has no record for this book'),
     ).toBeInTheDocument();
+  });
+
+  it('waits for unsaved edits, since the review reads the saved values', async () => {
+    const user = userEvent.setup();
+    mockFetch(routes());
+    renderApp(URL);
+    const action = await screen.findByRole('button', { name: 'Suggest corrections' });
+    expect(action).toBeEnabled();
+    await user.click(within(screen.getByRole('group', { name: 'Author' })).getByRole('button'));
+    await user.type(
+      within(screen.getByRole('group', { name: 'Author' })).getByRole('textbox'),
+      ' Jr{Enter}',
+    );
+    expect(screen.getByRole('button', { name: 'Suggest corrections' })).toBeDisabled();
   });
 
   it("isn't offered without the meta family, or with no edited field", async () => {

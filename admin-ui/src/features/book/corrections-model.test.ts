@@ -15,6 +15,7 @@ import {
   asinRegion,
   correctionCandidate,
   correctionProblem,
+  correctionRecording,
   correctionRequest,
   correctionRows,
   correctionsOffered,
@@ -132,7 +133,7 @@ describe('the review rows', () => {
       publisher: 'Tor',
     });
     const c = candidate();
-    const rows = correctionRows(d.fields, c, c.recordings[0]);
+    const rows = correctionRows(d.fields, c, correctionRecording(c, d.fields));
     // The title agrees with the community; the publisher is no correction field.
     expect(rows.map((r) => [r.field, r.current, r.corrected, r.handling])).toEqual([
       ['author', 'Brandon Sanderson', 'B. Sanderson', 'maintainer'],
@@ -145,12 +146,81 @@ describe('the review rows', () => {
     expect(handling('series')).toBe('maintainer');
   });
 
-  it("marks a value over the limit as one that can't be sent", () => {
+  it("marks a value over the limit as one that can't be sent, counting characters", () => {
     const d = detailWith({ series: 'S'.repeat(501) });
     const c = candidate();
-    const [row] = correctionRows(d.fields, c, c.recordings[0]);
+    const [row] = correctionRows(d.fields, c, correctionRecording(c, d.fields));
     expect(row.tooLong).toBe(true);
     expect(defaultCorrectionTicks([row]).size).toBe(0);
+    // Characters as the server counts them, not UTF-16 units: 300 emoji are 300.
+    const wide = detailWith({ series: '📚'.repeat(300) });
+    expect(correctionRows(wide.fields, c, correctionRecording(c, wide.fields))[0].tooLong).toBe(
+      false,
+    );
+  });
+
+  it("reads published as the recording's release date, never filing what it already says", () => {
+    const c = candidate({
+      first_published: '1965',
+      recordings: [recording({ release_date: '2006-12-05' })],
+    });
+    const rowFor = (published: string) => {
+      const d = detailWith({ published });
+      return correctionRows(d.fields, c, correctionRecording(c, d.fields));
+    };
+    // The release date, or the work's first publication, at any precision: nothing to file.
+    expect(rowFor('2006-12-05')).toEqual([]);
+    expect(rowFor('2006')).toEqual([]);
+    expect(rowFor('1965')).toEqual([]);
+    // Another date corrects the release date, which is what the community says now.
+    expect(rowFor('2006-12-06').map((r) => [r.current, r.corrected, r.handling])).toEqual([
+      ['2006-12-05', '2006-12-06', 'auto'],
+    ]);
+  });
+
+  it('takes an ISBN the recording lists as no change, and none without an ASIN', () => {
+    const c = candidate({
+      recordings: [recording({ isbns: ['978-0765326355', '9780765365279'] })],
+    });
+    const second = detailWith({ isbn: '9780765365279' });
+    expect(correctionRows(second.fields, c, correctionRecording(c, second.fields))).toEqual([]);
+    // Without an ASIN the ISBN is how the community finds the book: no correction.
+    const noAsin = detailWith({ isbn: '9780000000002' });
+    noAsin.fields.asin = { ...noAsin.fields.asin, value: '' };
+    expect(editedCorrectionFields(noAsin.fields)).toEqual([]);
+    expect(correctionsOffered(server(), noAsin)).toBe(false);
+  });
+
+  it('names only a recording the identifier names, never a guess', () => {
+    const d = detailWith({ published: '2011', narrator: 'Kate Reading' });
+    // The lookup's recording.
+    expect(correctionRecording(candidate(), d.fields)).toMatchObject({ known: true });
+    // No recording from the lookup: the one listing the book's ASIN.
+    const r2 = recording({ id: 'r2', asins: ['B00OTHER00'], asin_refs: [] });
+    const byAsin = candidate({ recording_id: undefined, recordings: [r2, recording()] });
+    expect(correctionRecording(byAsin, d.fields)).toEqual({
+      rec: byAsin.recordings[1],
+      known: true,
+    });
+    // None lists it: the likeliest is shown, but recording fields go to a maintainer
+    // and the request names no recording.
+    const guess = candidate({
+      recording_id: undefined,
+      default_recording_id: 'r2',
+      recordings: [r2, recording({ id: 'r3', asins: [], asin_refs: [] })],
+    });
+    const target = correctionRecording(guess, d.fields);
+    expect(target).toEqual({ rec: r2, known: false });
+    const rows = correctionRows(d.fields, guess, target);
+    expect(rows.map((r) => [r.field, r.handling])).toEqual([
+      ['narrator', 'maintainer'],
+      ['published', 'maintainer'],
+    ]);
+    const req = correctionRequest(d, guess, target, rows, new Set(['published']), 'e');
+    expect(req.params).not.toHaveProperty('recording_id');
+    expect(req.params).not.toHaveProperty('region');
+    expect(handling('published', false)).toBe('maintainer');
+    expect(handling('title', false)).toBe('auto');
   });
 
   it('ticks what can be sent and was not suggested before, at most the cap', () => {
@@ -203,6 +273,7 @@ describe('sending', () => {
     expect(correctionProblem(MAX_CHANGES + 1, 'x')).toBe('tooMany');
     expect(correctionProblem(2, '   ')).toBe('noEvidence');
     expect(correctionProblem(2, 'x'.repeat(MAX_EVIDENCE + 1))).toBe('evidenceTooLong');
+    expect(correctionProblem(2, '📚'.repeat(MAX_EVIDENCE))).toBeUndefined();
     expect(correctionProblem(MAX_CHANGES, 'A store page')).toBeUndefined();
   });
 
@@ -219,9 +290,9 @@ describe('sending', () => {
   it('queues one meta.correct job with the ticked changes, found by the ASIN', () => {
     const d = detailWith({ author: 'B. Sanderson', isbn: '9780765326355' });
     const c = candidate();
-    const rec = c.recordings[0];
-    const rows = correctionRows(d.fields, c, rec);
-    expect(correctionRequest(d, c, rec, rows, new Set(['isbn']), '  A store page  ')).toEqual({
+    const target = correctionRecording(c, d.fields);
+    const rows = correctionRows(d.fields, c, target);
+    expect(correctionRequest(d, c, target, rows, new Set(['isbn']), '  A store page  ')).toEqual({
       kind: 'meta.correct',
       library_id: d.book.library_id,
       path: d.book.path,
@@ -242,8 +313,9 @@ describe('sending', () => {
     d.fields.asin = { ...d.fields.asin, value: '' };
     d.fields.isbn = { ...d.fields.isbn, value: '9780765326355' };
     const c = candidate();
-    const rows = correctionRows(d.fields, c, undefined);
-    const req = correctionRequest(d, c, undefined, rows, new Set(['title']), 'e');
+    const none = { rec: undefined, known: false };
+    const rows = correctionRows(d.fields, c, none);
+    const req = correctionRequest(d, c, none, rows, new Set(['title']), 'e');
     expect(req.params).toEqual({
       work_id: 'the-way-of-kings',
       isbn: '9780765326355',

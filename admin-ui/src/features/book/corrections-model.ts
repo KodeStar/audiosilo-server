@@ -14,7 +14,8 @@ import {
 } from '@/api/types';
 import type { MatchBy } from '@/api/client';
 import { contributionsOn, FEATURE_META, KIND_CORRECT } from '@/features/bridge/generate-model';
-import { compareRows } from './match-model';
+import { runes } from './book-model';
+import { clean, compareRows, defaultRecording, type CompareRow } from './match-model';
 
 // Suggest corrections (BRIDGE-PLAN.md Phase 2b, decision 18; CORRECTIONS-SPIKE
 // sections 4.1 and 5): the admin's own edits to a matched book, set against
@@ -34,11 +35,20 @@ export const MAX_EVIDENCE = 2000;
  */
 const AUTO_FIELDS: ReadonlySet<CorrectionField> = new Set(['title', 'published', 'isbn']);
 
+/** The fields meta keeps on the recording (its narrators, release date and ISBNs). */
+const RECORDING_FIELDS: ReadonlySet<CorrectionField> = new Set(['narrator', 'published', 'isbn']);
+
 /** Who applies a field's correction on the community's side. */
 export type Handling = 'auto' | 'maintainer';
 
-export function handling(field: CorrectionField): Handling {
-  return AUTO_FIELDS.has(field) ? 'auto' : 'maintainer';
+/**
+ * Who applies a field's correction. A recording's field applies by itself only
+ * when the suggestion names the recording (`recordingKnown`): meta hands one
+ * addressed to the work to a maintainer, who finds the recording.
+ */
+export function handling(field: CorrectionField, recordingKnown = true): Handling {
+  if (!AUTO_FIELDS.has(field)) return 'maintainer';
+  return recordingKnown || !RECORDING_FIELDS.has(field) ? 'auto' : 'maintainer';
 }
 
 /** Whether a field is one a correction may carry. */
@@ -46,11 +56,21 @@ export function isCorrectionField(f: string): f is CorrectionField {
   return (CORRECTION_FIELDS as readonly string[]).includes(f);
 }
 
-/** The correction fields the admin edited on this book (with a value: clearing one is no correction). */
+/**
+ * The correction fields the admin edited on this book: with a value (clearing
+ * one is no correction), and the ISBN only beside an ASIN (without one, the
+ * ISBN is how the community finds the book, not a correction: CORRECTIONS-SPIKE
+ * section 5).
+ */
 export function editedCorrectionFields(
   fields: Record<OverrideField, FieldValue>,
 ): CorrectionField[] {
-  return CORRECTION_FIELDS.filter((f) => fields[f].source === 'edited' && fields[f].value !== '');
+  return CORRECTION_FIELDS.filter(
+    (f) =>
+      fields[f].source === 'edited' &&
+      fields[f].value !== '' &&
+      (f !== 'isbn' || fields.asin.value !== ''),
+  );
 }
 
 /**
@@ -88,6 +108,41 @@ export function correctionCandidate(
   return candidates?.find((c) => c.recording_id || c.reasons?.identifier);
 }
 
+/** The recording a suggestion is about, and whether the book's identifier names it. */
+export interface CorrectionRecording {
+  /** The recording whose values the review shows: the one named, else the likeliest. */
+  rec: MatchRecording | undefined;
+  /** The identifier names it, so the suggestion carries its id. */
+  known: boolean;
+}
+
+/**
+ * The recording the book is, as its identifier names it: the one the lookup
+ * resolved, else the one recording of the work that lists the book's ASIN
+ * (else its ISBN), as the Bridge picks one without an id (correct.recordingFor).
+ * When none or several do, the likeliest (defaultRecording, a guess from the
+ * runtime) is only shown: the suggestion names no recording, and meta hands
+ * the recording's fields to a maintainer, so a guess never has one applied by
+ * itself.
+ */
+export function correctionRecording(
+  c: MatchCandidate,
+  fields: Record<OverrideField, FieldValue>,
+): CorrectionRecording {
+  const recs = c.recordings ?? [];
+  const resolved = c.recording_id ? recs.find((r) => r.id === c.recording_id) : undefined;
+  if (resolved) return { rec: resolved, known: true };
+  const asin = fields.asin.value;
+  const isbn = fields.isbn.value;
+  const named = recs.filter((r) =>
+    asin
+      ? (r.asins ?? []).includes(asin) || (r.asin_refs ?? []).some((a) => a.asin === asin)
+      : isbn !== '' && (r.isbns ?? []).some((i) => clean('isbn', i) === isbn),
+  );
+  if (named.length === 1) return { rec: named[0], known: true };
+  return { rec: defaultRecording(c), known: false };
+}
+
 /** One row of the review: the community's value now, and the admin's edit. */
 export interface CorrectionRow {
   field: CorrectionField;
@@ -104,26 +159,63 @@ export interface CorrectionRow {
  * The review's rows: each edited correction field whose value differs from the
  * community's (the community lacking one counts: the correction adds it), in
  * field order. The community's values are the match dialog's (communityValues,
- * for the recording the book is).
+ * for the recording the book is), as a correction reads them (asCorrection).
  */
 export function correctionRows(
   fields: Record<OverrideField, FieldValue>,
   c: MatchCandidate,
-  rec: MatchRecording | undefined,
+  { rec, known }: CorrectionRecording,
 ): CorrectionRow[] {
   const edited = new Set<string>(editedCorrectionFields(fields));
   return compareRows(fields, c, rec)
-    .filter((r) => edited.has(r.field) && !r.same && isCorrectionField(r.field))
+    .filter((r) => edited.has(r.field) && isCorrectionField(r.field))
+    .map((r) => asCorrection(r, c, rec))
+    .filter((r) => !r.same)
     .map((r) => {
       const field = r.field as CorrectionField;
       return {
         field,
         current: r.theirs,
         corrected: r.mine,
-        handling: handling(field),
-        tooLong: r.mine.length > MAX_VALUE || r.theirs.length > MAX_VALUE,
+        handling: handling(field, known),
+        tooLong: runes(r.mine) > MAX_VALUE || runes(r.theirs) > MAX_VALUE,
       };
     });
+}
+
+/**
+ * A compare row as a correction reads it, where that differs from the match
+ * dialog: `published` is filed as the recording's release date, so that is the
+ * community's value now, and the community already says the admin's date when
+ * it is the release date or the work's first publication, or one of them more
+ * precisely (a coarser date corrects nothing); an ISBN is one more of the
+ * recording's (meta adds it), so one the recording lists already is no change.
+ */
+function asCorrection(
+  r: CompareRow,
+  c: MatchCandidate,
+  rec: MatchRecording | undefined,
+): CompareRow {
+  switch (r.field) {
+    case 'published': {
+      const release = clean('published', rec?.release_date);
+      const first = clean('published', c.first_published);
+      return {
+        ...r,
+        theirs: release,
+        same: saysNoMore(r.mine, release) || saysNoMore(r.mine, first),
+      };
+    }
+    case 'isbn':
+      return { ...r, same: r.same || (rec?.isbns ?? []).some((i) => clean('isbn', i) === r.mine) };
+    default:
+      return r;
+  }
+}
+
+/** Whether a date says nothing another doesn't: the same date, or it less precisely ("2010" beside "2010-08-31"). */
+function saysNoMore(date: string, other: string): boolean {
+  return other !== '' && (date === other || other.startsWith(`${date}-`));
 }
 
 /**
@@ -173,7 +265,7 @@ export function correctionProblem(ticked: number, evidence: string): CorrectionP
   if (ticked > MAX_CHANGES) return 'tooMany';
   const e = evidence.trim();
   if (!e) return 'noEvidence';
-  if (e.length > MAX_EVIDENCE) return 'evidenceTooLong';
+  if (runes(e) > MAX_EVIDENCE) return 'evidenceTooLong';
   return undefined;
 }
 
@@ -189,16 +281,17 @@ export function asinRegion(rec: MatchRecording | undefined, asin: string): strin
 }
 
 /**
- * The meta.correct job for the ticked rows: the work and recording, how the
- * book was found (its ASIN, else its ISBN: an edited ISBN is a change, not the
- * identity, when an ASIN found it), the changes in field order, and the
- * evidence. The server checks each change against the book's edits and stamps
- * the source.
+ * The meta.correct job for the ticked rows: the work and the recording (only
+ * one the identifier names, correctionRecording: a guess is never filed as
+ * the record), how the book was found (its ASIN, else its ISBN: an edited ISBN
+ * is a change, not the identity, when an ASIN found it), the changes in field
+ * order, and the evidence. The server checks each change against the book's
+ * edits and stamps the source.
  */
 export function correctionRequest(
   detail: Pick<AdminBookDetail, 'book' | 'fields'>,
   c: MatchCandidate,
-  rec: MatchRecording | undefined,
+  { rec, known }: CorrectionRecording,
   rows: readonly CorrectionRow[],
   ticks: ReadonlySet<CorrectionField>,
   evidence: string,
@@ -207,14 +300,15 @@ export function correctionRequest(
   const changes: MetaCorrectChange[] = rows
     .filter((r) => ticks.has(r.field) && !r.tooLong)
     .map((r) => ({ field: r.field, current: r.current, corrected: r.corrected }));
+  const named = known ? rec : undefined;
   const params: MetaCorrectParams = {
     work_id: c.work_id,
-    ...(rec ? { recording_id: rec.id } : {}),
+    ...(named ? { recording_id: named.id } : {}),
     ...(asin ? { asin } : { isbn: detail.fields.isbn.value }),
     changes,
     evidence: evidence.trim(),
   };
-  const region = asinRegion(rec, asin);
+  const region = asinRegion(named, asin);
   if (region) params.region = region;
   return {
     kind: KIND_CORRECT,

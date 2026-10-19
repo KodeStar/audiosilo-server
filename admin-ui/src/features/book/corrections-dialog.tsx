@@ -25,6 +25,7 @@ import {
   alreadySuggested,
   correctionCandidate,
   correctionProblem,
+  correctionRecording,
   correctionRequest,
   correctionRows,
   correctionsOffered,
@@ -35,7 +36,6 @@ import {
   MAX_VALUE,
   type CorrectionRow,
 } from './corrections-model';
-import { defaultRecording } from './match-model';
 
 /**
  * The Community card's corrections part (BRIDGE-PLAN.md Phase 2b, decision 18):
@@ -43,10 +43,18 @@ import { defaultRecording } from './match-model';
  * community's values, and the book's newest `meta.correct` job shows here
  * while it works and, once filed, with its issue. Offered only while the
  * contributions module is on and the rest of correctionsOffered holds; with the
- * module off the whole part is gone. Renders nothing when there is nothing to
- * show.
+ * module off the whole part is gone, except a review already open, which stays
+ * (what was typed isn't lost when the Bridge goes away; sending says why it
+ * can't). Renders nothing when there is nothing to show.
  */
-export function CorrectionsSection({ detail }: { detail: AdminBookDetail }) {
+export function CorrectionsSection({
+  detail,
+  blocked,
+}: {
+  detail: AdminBookDetail;
+  /** Unsaved edits on the page: the review reads the saved values, so it waits for them. */
+  blocked: boolean;
+}) {
   const { t } = useTranslation();
   const server = useServerInfo().data;
   const b = detail.book;
@@ -59,27 +67,22 @@ export function CorrectionsSection({ detail }: { detail: AdminBookDetail }) {
   );
   const uiUrl = useBridgeLink(job?.state === 'needs_attention');
   const [open, setOpen] = useState(false);
-  if (!on) return null;
 
   // Not while one is queued or working: the server would hand that one back
   // and ignore new changes, so its status shows instead.
   const offer = correctionsOffered(server, detail) && !(job && isOpen(job.state));
-  const showJob = job && job.state !== 'cancelled';
-  if (!open && !offer && !showJob) return null;
+  const shown = on && job && job.state !== 'cancelled' ? job : undefined;
+  if (!open && !offer && !shown) return null;
 
   return (
-    <JobSection
-      id="corrections-title"
-      title={t('book.corrections.title')}
-      job={showJob ? job : undefined}
-    >
+    <JobSection id="corrections-title" title={t('book.corrections.title')} job={shown}>
       {offer ? (
         <p className="text-[12.5px] text-muted-foreground">{t('book.corrections.pitch')}</p>
       ) : null}
-      {showJob && job ? <GenerateStatus job={job} uiUrl={uiUrl} /> : null}
-      <JobActions job={job} cancelAria={t('book.corrections.cancelAria')}>
+      {shown ? <GenerateStatus job={shown} uiUrl={uiUrl} /> : null}
+      <JobActions job={shown} cancelAria={t('book.corrections.cancelAria')}>
         {offer ? (
-          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+          <Button variant="outline" size="sm" disabled={blocked} onClick={() => setOpen(true)}>
             <FilePenLine aria-hidden="true" />
             {t('book.corrections.action')}
           </Button>
@@ -143,8 +146,8 @@ function CorrectionsForm({
   const b = detail.book;
   const search = useMatchCandidates(b.library_id, b.path, lookupBy(detail.fields), true);
   const candidate = correctionCandidate(search.data);
-  const rec = candidate ? defaultRecording(candidate) : undefined;
-  const rows = candidate ? correctionRows(detail.fields, candidate, rec) : [];
+  const recording = candidate ? correctionRecording(candidate, detail.fields) : undefined;
+  const rows = candidate && recording ? correctionRows(detail.fields, candidate, recording) : [];
   const suggested = alreadySuggested(lastJob, detail.fields);
   // The ticks start from the rows once the lookup answers (null until the admin changes one).
   const [ticks, setTicks] = useState<Set<CorrectionField> | null>(null);
@@ -161,11 +164,11 @@ function CorrectionsForm({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTouched(true);
-    if (!candidate || problem || busy) return;
+    if (!candidate || !recording || problem || busy) return;
     setBusy(true);
     const ok = await queueJob(
       qc,
-      correctionRequest(detail, candidate, rec, rows, ticked, evidence),
+      correctionRequest(detail, candidate, recording, rows, ticked, evidence),
       { name: b.title || b.path, online: Boolean(server?.capabilities.bridge) },
     );
     setBusy(false);

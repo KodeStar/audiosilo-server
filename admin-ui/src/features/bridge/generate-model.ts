@@ -207,23 +207,26 @@ export function generateAction(has: {
 }
 
 /**
- * The community issues the book's newest finished generate or share job filed,
- * by what each offers (`characters`, `recaps`): the Characters and recaps
- * card's "Contributed, waiting for review" links, and what Share no longer
- * offers. An open or failed job since doesn't hide them (they still wait), a
- * newer finished one replaces them (a run kept on this server made new content,
- * not yet offered). Whether a contribution was reviewed doesn't reach the
- * server yet (decision D8).
+ * The community issues filed for the book's generated files, by what each
+ * offers (`characters`, `recaps`): the Characters and recaps card's
+ * "Contributed, waiting for review" links, and what Share no longer offers.
+ * Read from the finished jobs newest first: each finished share adds the
+ * issues it filed (a share of one dimension leaves the other's link standing),
+ * down to the newest finished generate job, whose issues count too and before
+ * which none do (that run made new content, not yet offered). An open or
+ * failed job since doesn't hide them (they still wait). Whether a contribution
+ * was reviewed doesn't reach the server yet (decision D8).
  */
 export function contributedLinks(
   jobs: readonly Pick<BridgeJob, 'kind' | 'state' | 'result'>[] | undefined,
 ): ContributedLinks {
-  const done = jobs?.find(
-    (j) => (j.kind === KIND_GENERATE || j.kind === KIND_CONTRIBUTE) && j.state === 'done',
-  );
   const out: ContributedLinks = {};
-  for (const c of generateResult(done?.result)?.contributed ?? []) {
-    if (c.what === 'characters' || c.what === 'recaps') out[c.what] = c.url;
+  for (const j of jobs ?? []) {
+    if (j.state !== 'done' || (j.kind !== KIND_GENERATE && j.kind !== KIND_CONTRIBUTE)) continue;
+    for (const c of generateResult(j.result)?.contributed ?? []) {
+      if ((c.what === 'characters' || c.what === 'recaps') && !out[c.what]) out[c.what] = c.url;
+    }
+    if (j.kind === KIND_GENERATE) break;
   }
   return out;
 }
@@ -251,7 +254,8 @@ export function shareDimensions(
  * Whether the Community card offers "Share with the community" (Phase 2b's
  * contribute later), and for what: the module is on, an online Bridge offers
  * the sidecars family and can contribute now, the community answered (unknown
- * is never "lacks"), no generate or share job is open for the book (the server
+ * is never "lacks"), the book's jobs have loaded (what was filed already is
+ * read from them), no generate or share job is open for the book (the server
  * refuses one then), and something generated here is still to offer. Empty
  * when not offered.
  */
@@ -261,7 +265,7 @@ export function shareOffered(
   jobs: readonly Pick<BridgeJob, 'kind' | 'state' | 'result'>[] | undefined,
 ): ShareDimension[] {
   if (!contributionsOn(server) || !generateAvailable(server)) return [];
-  if (!e?.can_contribute || e.has.community_unknown) return [];
+  if (!e?.can_contribute || e.has.community_unknown || !jobs) return [];
   // The estimate's open job: a generate run (it may contribute itself) or a
   // share already queued (its status shows; never a second Share).
   const oj = e.open_job;
@@ -351,14 +355,16 @@ export function latestJobOf<J extends Pick<BridgeJob, 'kind'>>(
  * no generate, describe or chapter detection job is open for it (a generate job
  * writes one when it finishes; a detection, running or parked, holds the book
  * on the Bridge, which fails a describe meanwhile; the estimate's own open
- * generate job counts too, so a job list not loaded yet can't offer what the
- * server would refuse).
+ * generate or detection job counts too, so a job list not loaded yet can't
+ * offer what the server would refuse, but never its share: a share or a
+ * correction holds nothing back).
  */
 export function describeOffered(
   e: Pick<BridgeEstimate, 'can_describe' | 'writable' | 'has' | 'open_job'> | undefined,
   jobs: readonly Pick<BridgeJob, 'kind' | 'state'>[] | undefined,
 ): boolean {
-  if (!e?.can_describe || !e.writable || e.open_job) return false;
+  if (!e?.can_describe || !e.writable) return false;
+  if (e.open_job && isFileKind(e.open_job.kind)) return false;
   const { local, community, community_unknown } = e.has;
   if (
     !(local.characters || local.recaps) ||
@@ -628,8 +634,6 @@ export interface EstimateView {
   agentNotReady: boolean;
   /** The Bridge hasn't sent its figures yet: whether the agent is ready isn't known. */
   noFigures: boolean;
-  /** The Bridge can offer the results to the community: the contribute choice is offered. */
-  canContribute: boolean;
   /** The Bridge can't write to the library: nothing can be queued. */
   notWritable: boolean;
 }
@@ -644,12 +648,11 @@ export function estimateView(e: BridgeEstimate): EstimateView {
     subscription: e.subscription,
     agentNotReady: e.figures && !e.agent_ready,
     noFigures: !e.figures,
-    canContribute: e.can_contribute,
     notWritable: !e.writable,
   };
 }
 
-/** Where the results appear, by the contribute choice (decision 6: local by default). */
+/** Where the results appear, by the contribute choice. */
 export function destinationKey(contribute: Contribute): string {
   return contribute === 'issue' ? 'bridge.generate.whereIssue' : 'bridge.generate.whereLocal';
 }

@@ -199,7 +199,7 @@ function CommunityCard({
           </div>
         </>
       )}
-      {matched ? <CorrectionsSection detail={detail} /> : null}
+      {matched ? <CorrectionsSection detail={detail} blocked={matchBlocked} /> : null}
       <GenerateSection book={detail.book} />
       <ShareSection book={detail.book} />
       <DescribeSection

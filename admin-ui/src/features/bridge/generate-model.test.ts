@@ -388,7 +388,6 @@ describe('the estimate', () => {
       subscription: false,
       agentNotReady: false,
       noFigures: false,
-      canContribute: true,
       notWritable: false,
     });
   });
@@ -429,7 +428,6 @@ describe('the estimate', () => {
     );
     expect(none.noFigures).toBe(true);
     expect(none.agentNotReady).toBe(false);
-    expect(none.canContribute).toBe(false);
     const notReady = estimateView(estimate({ agent_ready: false }));
     expect(notReady.noFigures).toBe(false);
     expect(notReady.agentNotReady).toBe(true);
@@ -964,6 +962,13 @@ describe('contributing (Phase 2b)', () => {
     expect(describeOffered(e, [job('running', { kind: KIND_CONTRIBUTE })])).toBe(true);
     expect(describeOffered(e, [job('running', { kind: KIND_CORRECT })])).toBe(true);
     expect(describeOffered(e, [job('running', { kind: KIND_GENERATE })])).toBe(false);
+    // Nor for the estimate's open job when that is the share (its generate blocker).
+    const sharing = { ...e, open_job: job('running', { kind: KIND_CONTRIBUTE }) };
+    expect(describeOffered(sharing, undefined)).toBe(true);
+    expect(describeOffered({ ...e, open_job: job('running', { kind: KIND_DETECT }) }, [])).toBe(
+      false,
+    );
+    expect(describeOffered({ ...e, open_job: job('needs_attention') }, [])).toBe(false);
   });
 
   it("takes a finished share job's links, and drops them after a newer run kept here", () => {
@@ -981,6 +986,32 @@ describe('contributing (Phase 2b)', () => {
     expect(contributedLinks([job('failed', { id: 14, kind: KIND_CONTRIBUTE }), share])).toEqual({
       recaps: issue,
     });
+    // A share of one dimension leaves the run's issue for the other standing.
+    const run = job('done', {
+      id: 11,
+      result: { characters: 3, contributed: { characters: 'https://x.test/c' } },
+    });
+    expect(contributedLinks([share, run])).toEqual({
+      characters: 'https://x.test/c',
+      recaps: issue,
+    });
+    // The newest issue for a dimension wins.
+    const again = job('done', {
+      id: 15,
+      kind: KIND_CONTRIBUTE,
+      result: { contributed: { recaps: 'https://x.test/r2' } },
+    });
+    expect(contributedLinks([again, share, run])).toEqual({
+      characters: 'https://x.test/c',
+      recaps: 'https://x.test/r2',
+    });
+    // Nothing before the newest run counts, even for a dimension still without an issue.
+    const kept = job('done', { id: 10, result: { characters: 3, recaps: 2 } });
+    const older = job('done', {
+      id: 7,
+      result: { characters: 2, contributed: { characters: 'https://x.test/old' } },
+    });
+    expect(contributedLinks([share, kept, older])).toEqual({ recaps: issue });
   });
 
   it('offers each dimension generated here that the community lacks and nobody filed', () => {
@@ -1040,6 +1071,8 @@ describe('contributing (Phase 2b)', () => {
     });
     expect(shareOffered(contributing(true), e, [filed])).toEqual([]);
     expect(shareOffered(contributing(true), undefined, [])).toEqual([]);
+    // Before the book's jobs load (or when they can't), what was filed isn't known.
+    expect(shareOffered(contributing(true), e, undefined)).toEqual([]);
   });
 
   it('queues the share for the dimensions still to offer', () => {
