@@ -101,6 +101,11 @@ var fields = []field{
 	{key: "household.max_members", env: "AUDIOSILO_HOUSEHOLD_MAX_MEMBERS", setting: "household.max_members",
 		ptr: func(c *Config) any { return &c.Household.MaxMembers }},
 
+	// Managed modules (internal/modules): one toggle each, applied without a
+	// restart (the API starts and stops the module's background work).
+	{key: "modules.contributions.enabled", env: "AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED", setting: "modules.contributions",
+		ptr: func(c *Config) any { return &c.Modules.Contributions.Enabled }},
+
 	{key: "backups.schedule", env: "AUDIOSILO_BACKUP_SCHEDULE", setting: "backups.schedule",
 		ptr: func(c *Config) any { return &c.Backups.Schedule }, fix: fixBackupSchedule},
 	{key: "backups.keep", env: "AUDIOSILO_BACKUP_KEEP", setting: "backups.keep",

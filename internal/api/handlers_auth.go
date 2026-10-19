@@ -25,40 +25,17 @@ const pairingTTL = 10 * time.Minute
 // layer can build on it.
 func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	bridgeOn := a.bridgeOnline(r.Context())
+	caps := a.coreCapabilities(bridgeOn)
+	// Each managed module's flag: on AND its Bridge requirement met (modules.go).
+	for _, m := range a.modules {
+		caps[m.ID] = a.moduleActive(m, bridgeOn)
+	}
 	info := map[string]any{
-		"name":      a.config().DisplayName(),
-		"server_id": a.config().ServerID, // stable per-install identity; clients key per-server state on it
-		"version":   Version,
-		"api":       "v1",
-		"capabilities": map[string]bool{
-			"admin_ui":           true,                 // baked-in admin console at /admin
-			"web_player":         a.playerSource != "", // web player served at /web (when web_dir is populated)
-			"transcode":          a.ffmpeg != "",       // on-the-fly MP3 transcoding via ffmpeg
-			"upload":             false,                // Phase B
-			"websocket":          false,                // Phase C
-			"api_keys":           true,                 // user-minted personal access tokens (POST /auth/tokens)
-			"export":             true,                 // admin library export (GET /admin/libraries/{id}/export)
-			"metadata":           a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
-			"meta_bundle":        a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
-			"meta_covers":        a.metadataOn(),       // community covers from this server (GET /libraries/{id}/meta/cover)
-			"browse_people":      true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
-			"series_memberships": true,                 // books in several series: memberships=1 on /books?series= and /series, Book.series_list
-			"series_books":       true,                 // the first page of several series' books in one request (GET /libraries/{id}/series/books)
-			"cover_sizes":        true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
-			"next_book":          true,                 // what to play after a book (GET /libraries/{id}/next)
-			"queue":              true,                 // the up-next queue (/me/queue)
-			"collections":        true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
-			"user_stats":         true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
-			"ratings":            true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
-			"progress_edit":      true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
-			"my_devices":         true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
-			"annotations":        true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
-			"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
-			"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
-			"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
-			"household_members":  true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
-			"bridge":             bridgeOn != nil,      // a Bridge is paired and online (its heartbeat < 2 min old); see "bridge" below
-		},
+		"name":         a.config().DisplayName(),
+		"server_id":    a.config().ServerID, // stable per-install identity; clients key per-server state on it
+		"version":      Version,
+		"api":          "v1",
+		"capabilities": caps,
 		"auth": map[string]any{
 			"methods": []string{"auth_code", "password"},
 		},
@@ -72,6 +49,41 @@ func (a *API) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		info["bridge"] = bridgeOn
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// coreCapabilities are GET /server's capability flags other than the managed
+// modules' (a module may not take one of these names: modules.Validate).
+// bridgeOn is the online Bridge, or nil.
+func (a *API) coreCapabilities(bridgeOn *bridgeInfo) map[string]bool {
+	return map[string]bool{
+		"admin_ui":           true,                 // baked-in admin console at /admin
+		"web_player":         a.playerSource != "", // web player served at /web (when web_dir is populated)
+		"transcode":          a.ffmpeg != "",       // on-the-fly MP3 transcoding via ffmpeg
+		"upload":             false,                // Phase B
+		"websocket":          false,                // Phase C
+		"api_keys":           true,                 // user-minted personal access tokens (POST /auth/tokens)
+		"export":             true,                 // admin library export (GET /admin/libraries/{id}/export)
+		"metadata":           a.metadataOn(),       // community metadata lookup (GET /libraries/{id}/meta); runtime-toggleable
+		"meta_bundle":        a.metadataOn(),       // /libraries/{id}/meta?include=previous&spoilers=hide
+		"meta_covers":        a.metadataOn(),       // community covers from this server (GET /libraries/{id}/meta/cover)
+		"browse_people":      true,                 // player browse lists (GET /libraries/{id}/authors|narrators|series, /books?narrator=)
+		"series_memberships": true,                 // books in several series: memberships=1 on /books?series= and /series, Book.series_list
+		"series_books":       true,                 // the first page of several series' books in one request (GET /libraries/{id}/series/books)
+		"cover_sizes":        true,                 // cover thumbnails (GET /libraries/{id}/cover?size=160|320|640)
+		"next_book":          true,                 // what to play after a book (GET /libraries/{id}/next)
+		"queue":              true,                 // the up-next queue (/me/queue)
+		"collections":        true,                 // collections, shareable read-only (/me/collections, /me/share-targets)
+		"user_stats":         true,                 // the caller's own listening stats and yearly goal (GET /me/stats, /me/listening, /me/goal)
+		"ratings":            true,                 // own star ratings (GET/PUT/DELETE /libraries/{id}/rating, GET /me/ratings)
+		"progress_edit":      true,                 // PATCH /libraries/{id}/progress; started_at/finished_at on progress
+		"my_devices":         true,                 // own devices (GET /me/devices, DELETE /me/devices/{id})
+		"annotations":        true,                 // bookmark labels, PATCH /bookmarks|notes/{id}, GET /me/bookmarks|notes, paged /me/history with books
+		"addresses":          true,                 // home/away addresses on pairing, exchange and login; GET /addresses
+		"household":          true,                 // listening in the house (GET/PUT /me/household, GET /household/listening)
+		"cast":               true,                 // cast tokens for a receiver (POST /cast/token; ?token= on a book's cover/stream)
+		"household_members":  true,                 // household members (/me/household/members; user.managed_by/member_kind; also_members)
+		"bridge":             bridgeOn != nil,      // a Bridge is paired and online (its heartbeat < 2 min old); its block rides beside capabilities
+	}
 }
 
 // healthTimeout bounds the /healthz database probe so it returns promptly even

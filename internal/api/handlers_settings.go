@@ -43,7 +43,8 @@ func (a *API) metadataOff(w http.ResponseWriter) bool {
 // exists, so the switch can turn on), players.web_player (where /web is served
 // from: "embedded", "dir" or ""), demo.max_users_default (the cap while max_users
 // is null), household.max_members_default/_min/_max (the cap's default and
-// range).
+// range). The modules section is each managed module's toggle (modules.go; GET
+// /admin/modules says more about each).
 func (a *API) settingsEnvelope() map[string]any {
 	saved := a.config().saved
 	sections := saved.Settings()
@@ -105,6 +106,9 @@ func (a *API) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.live.Store(newLiveConfig(next, a.boot))
+	// A module turned on starts its background work, one turned off stops
+	// (without waiting for it), now that the live config says so.
+	a.syncModules()
 	if a.rt.Updates != nil && next.UpdateCheck != cur.UpdateCheck {
 		a.rt.Updates.SetEnabled(next.UpdateCheck)
 	}

@@ -157,10 +157,16 @@ func (h *Heartbeat) Online(now time.Time) bool {
 	return h != nil && !h.At.IsZero() && now.Sub(h.At) < OnlineWindow && h.At.Sub(now) < OnlineWindow
 }
 
-// Features are the job families the Bridge offers that the server knows: the
-// part of each known kind before its dot ("bridge.verify" is "bridge"), sorted,
-// once each, and never nil (the wire's features is a list, empty for none). The
-// bridge capability carries them.
+// FeatureContribute is the feature of a Bridge that can file contributions to
+// the community metadata database now (it holds a GitHub sign-in:
+// CanContribute). The contributions module needs it.
+const FeatureContribute = "contribute"
+
+// Features are what the Bridge offers that the server knows: the job families
+// (the part of each known kind before its dot, "bridge.verify" is "bridge"),
+// plus FeatureContribute while CanContribute; sorted, once each, and never nil
+// (the wire's features is a list, empty for none). The bridge capability
+// carries them, and a module's RequiresBridge names one.
 func (st Status) Features() []string {
 	out := []string{}
 	for _, k := range st.Kinds {
@@ -171,6 +177,9 @@ func (st Status) Features() []string {
 		if !slices.Contains(out, family) {
 			out = append(out, family)
 		}
+	}
+	if st.CanContribute() && !slices.Contains(out, FeatureContribute) {
+		out = append(out, FeatureContribute)
 	}
 	slices.Sort(out)
 	return out

@@ -163,6 +163,30 @@ func TestFeaturesIncludeSidecars(t *testing.T) {
 	}
 }
 
+// contribute is a feature while the Bridge can file contributions (it holds a
+// GitHub sign-in), never because of a kind; sorted among the families, once.
+func TestFeaturesIncludeContribute(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		st   Status
+		want []string
+	}{
+		{"no estimates", Status{Kinds: []string{KindSidecars}}, []string{"sidecars"}},
+		{"no sidecars estimates", Status{Kinds: []string{KindSidecars}, Estimates: &Estimates{}}, []string{"sidecars"}},
+		{"cannot contribute", Status{Kinds: []string{KindSidecars}, Estimates: &Estimates{Sidecars: &SidecarsEstimates{}}}, []string{"sidecars"}},
+		{"can contribute", Status{Kinds: []string{KindVerify, KindSidecars}, Estimates: &Estimates{Sidecars: &SidecarsEstimates{CanContribute: true}}},
+			[]string{"bridge", FeatureContribute, "sidecars"}},
+		{"can contribute, no kinds", Status{Estimates: &Estimates{Sidecars: &SidecarsEstimates{CanContribute: true}}}, []string{FeatureContribute}},
+		{"a kind named contribute is not it", Status{Kinds: []string{"contribute.file"}}, []string{}},
+	}
+	for _, c := range cases {
+		if got := c.st.Features(); !slices.Equal(got, c.want) {
+			t.Errorf("%s: Features = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // heard records what OnTransition is told, as "from>to:park code".
 func (q *testQueue) heard() *[]string {
 	var got []string

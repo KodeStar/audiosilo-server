@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -502,5 +503,67 @@ func TestHouseholdSettings(t *testing.T) {
 	t.Setenv("AUDIOSILO_HOUSEHOLD_MAX_MEMBERS", "99")
 	if _, _, err := Load(dir); err == nil {
 		t.Fatal("max_members 99 from the environment loaded")
+	}
+}
+
+func TestModuleSettings(t *testing.T) {
+	c := Default(t.TempDir())
+	if got := c.Settings()["modules"]; got["contributions"] != false {
+		t.Fatalf("modules default = %v, want contributions off", got)
+	}
+	if c.ModuleEnabled("contributions") || !c.HasModule("contributions") {
+		t.Fatal("contributions must have a config row and default off")
+	}
+	if c.ModuleEnabled("nope") || c.HasModule("nope") || c.HasModule("") {
+		t.Fatal("an unknown module has no row and is never on")
+	}
+	if slices.Contains(RestartSettings(), "modules.contributions") {
+		t.Fatal("a module toggle must apply without a restart")
+	}
+
+	next, err := c.WithSettings(patch(map[string]string{"modules.contributions": `true`}), Checks{})
+	if err != nil || !next.ModuleEnabled("contributions") || c.ModuleEnabled("contributions") {
+		t.Fatalf("toggle on = %v, %v (the original must stay off)", next.Modules, err)
+	}
+	if _, err := c.WithSettings(patch(map[string]string{"modules.contributions": `"yes"`}), Checks{}); settingErr(t, err).Reason != ReasonInvalid {
+		t.Fatal("a non-bool toggle was accepted")
+	}
+	if _, err := c.WithSettings(patch(map[string]string{"modules.nope": `true`}), Checks{}); settingErr(t, err).Reason != ReasonUnknown {
+		t.Fatal("an unknown module setting was accepted")
+	}
+	if got := ChangedSettings(c, next); len(got) != 1 || got[0].Setting != "modules.contributions" || got[0].From != false || got[0].To != true {
+		t.Fatalf("ChangedSettings = %+v", got)
+	}
+	if !next.Clone().ModuleEnabled("contributions") || !next.Effective(c).ModuleEnabled("contributions") {
+		t.Fatal("Clone and Effective must carry the toggle (it is not a restart setting)")
+	}
+
+	// From config.yaml, and from the environment (locked, never saved).
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte("modules:\n  contributions:\n    enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err = Load(dir)
+	if err != nil || !c.ModuleEnabled("contributions") || c.Locked()["modules.contributions"] != "" {
+		t.Fatalf("from config.yaml = %+v %v %v", c.Modules, c.Locked(), err)
+	}
+	t.Setenv("AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED", "false")
+	c, _, err = Load(dir)
+	if err != nil || c.ModuleEnabled("contributions") || c.Locked()["modules.contributions"] != "AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED" {
+		t.Fatalf("from the environment = %+v %v %v", c.Modules, c.Locked(), err)
+	}
+	if _, err := c.WithSettings(patch(map[string]string{"modules.contributions": `true`}), Checks{}); settingErr(t, err).Reason != ReasonLocked {
+		t.Fatal("an env-set module toggle must be locked")
+	}
+	next, err = c.WithSettings(patch(map[string]string{"general.name": `"Den"`}), Checks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Save(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AUDIOSILO_MODULES_CONTRIBUTIONS_ENABLED", "")
+	if c, _, err = Load(dir); err != nil || !c.ModuleEnabled("contributions") || c.Name != "Den" {
+		t.Fatalf("config.yaml must keep its own toggle under the variable: %+v %v", c.Modules, err)
 	}
 }

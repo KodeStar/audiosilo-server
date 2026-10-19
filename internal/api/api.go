@@ -23,6 +23,7 @@ import (
 	"github.com/kodestar/audiosilo-server/internal/media"
 	"github.com/kodestar/audiosilo-server/internal/meta"
 	"github.com/kodestar/audiosilo-server/internal/metamirror"
+	"github.com/kodestar/audiosilo-server/internal/modules"
 	"github.com/kodestar/audiosilo-server/internal/web"
 )
 
@@ -139,6 +140,11 @@ type API struct {
 
 	// bridge is the Bridge's status and job queue (SetBridge, before Handler).
 	bridge *bridge.Service
+
+	// modules is the managed module registry (SetModules, before Handler) and
+	// moduleRuns their background work while each is on (modules.go).
+	modules    []modules.Module
+	moduleRuns moduleRunner
 
 	// streams remembers recent transcoded streams per token, so the progress saves
 	// that follow mark the listening session as transcoded.
@@ -510,6 +516,11 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/v1/bridge/jobs/next", a.requireBridge(a.handleBridgeClaim))
 	mux.Handle("PATCH /api/v1/bridge/jobs/{id}", a.requireBridge(a.handleBridgeUpdate))
 	mux.Handle("POST /api/v1/bridge/rescan", a.requireBridge(a.handleBridgeRescan))
+
+	// Managed modules (modules.go): Settings > Modules' list, and each module's
+	// own routes, always mounted and answering 404 module_off while it is off.
+	mux.Handle("GET /api/v1/admin/modules", a.requireAdmin(http.HandlerFunc(a.handleAdminModules)))
+	a.mountModules(mux)
 
 	// Filesystem-based shares: named sets of path rules, granted to users.
 	mux.Handle("GET /api/v1/admin/shares", a.requireAdmin(http.HandlerFunc(a.handleListShares)))
