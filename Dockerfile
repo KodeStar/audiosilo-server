@@ -31,7 +31,8 @@ RUN npm run build
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
 # Release version stamped into the binary (reported by GET /server, the admin
-# console and the web player). image.yml passes the release tag; defaults to dev.
+# console and the web player). image.yml passes the release tag on a v* tag and
+# dev-<sha> otherwise (:edge, dispatch); defaults to dev.
 ARG VERSION=dev
 # Target platform for the cross-compile, provided by BuildKit per leg (empty on
 # a legacy single-platform build, where the host defaults apply).
