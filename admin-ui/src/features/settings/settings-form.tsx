@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Lock, RotateCcw, TriangleAlert } from 'lucide-react';
@@ -38,20 +38,34 @@ export function SettingBadges({ settings, id }: { settings: AdminSettings; id: S
   const { t } = useTranslation();
   const lock = lockOf(settings, id);
   const pending = settings.restart_pending.includes(id);
+  const lockText = lock
+    ? lock === 'launcher'
+      ? t('settings.locked.launcher')
+      : t('settings.locked.env', { name: lock })
+    : '';
+  const lockParts = lockText.split('_');
   return (
     <>
       {lock ? (
         // A variable's name can be longer than a phone's row: the pill grows to
-        // more lines and breaks inside the name rather than running under the control.
+        // more lines rather than running under the control, breaking after an
+        // underscore first and inside a segment only when one is longer than the row.
         <Badge
           variant="outline"
           title={t('settings.locked.hint')}
           className="h-auto min-h-[22px] max-w-full py-0.5 whitespace-normal [overflow-wrap:anywhere]"
         >
           <Lock aria-hidden="true" />
-          {lock === 'launcher'
-            ? t('settings.locked.launcher')
-            : t('settings.locked.env', { name: lock })}
+          {lockParts.map((part, i) => (
+            <Fragment key={i}>
+              {part}
+              {i < lockParts.length - 1 ? (
+                <>
+                  _<wbr />
+                </>
+              ) : null}
+            </Fragment>
+          ))}
         </Badge>
       ) : null}
       {pending ? (

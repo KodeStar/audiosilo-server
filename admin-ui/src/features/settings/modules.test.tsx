@@ -168,6 +168,8 @@ describe('settings > modules', () => {
     expect(badge).toHaveClass('max-w-full', 'whitespace-normal', '[overflow-wrap:anywhere]');
     expect(badge).not.toHaveClass('whitespace-nowrap');
     expect(badge).not.toHaveClass('h-[22px]');
+    // It breaks after an underscore before splitting a segment of the name.
+    expect(badge.querySelectorAll('wbr')).toHaveLength(3);
   });
 
   it("names a module the console doesn't know by its id", async () => {
