@@ -258,7 +258,11 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   characters' and recaps' run), or its `description.generated_at` (`Generated.DescriptionAt`) when the
   description is all the mark names: a description-only job keeps the run's time. An unmatched book
   with only a description answers `{matched: false, work: {title, generated_description, generated:
-  {description: true, ...}, ...}}`. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
+  {description: true, ...}, ...}}`. `generated.recaps` is set when the recap list or the whole-book summary
+  came from the book's `recaps.json` (unchanged for older clients); the additive
+  `generated.recap_summary` (omitempty) is set only when the summary itself did, so a community work with
+  a summary alone (which `fillable` leaves the list to fill) keeps its summary credited to the
+  community beside a generated list. Out of scope for now: no cover remote-fallback, no tag-based ASIN extraction.
   **Reading-order families** (metaserve schema_version 7): `seriesRails` collapses
   each family (key `ordering_of || id`) into ONE rail whose top-level view is the
   MAIN view - the ref with no `ordering_of` (the primary), else the first ref - so
@@ -1495,7 +1499,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   the Bridge sent none, so a false `agent_ready` means "not known"), `writable`, what the book already
   has (`has.community` via `meta.Service.Coverages`, cache first and never a full Enrich per book,
   `community_unknown` when it couldn't be asked; `has.local` from `book_attachments` (`catalog.BookAttachmentParts`: which columns are non-empty, nothing decoded); each with
-  `characters`, `recaps` and, since Phase 1c, `description`: the community work's `community_description`
+  `characters`, `recaps` (the recap LIST, `Enrichment.HasRecaps`, as `fillable` reads it: a community
+  summary alone is no recaps, so Generate is offered and the series batch queues it) and, since Phase 1c, `description`: the community work's `community_description`
   (`Coverage.Description`: its `community_description` or its core description, either shown before a generated one) or a stored generated one), `can_describe`
   (the Bridge is online and advertises `sidecars.describe`; brief too), up to 10 earlier
   books of its series in the library with no recaps (`catalog.EarlierInSeries`, each costed), and any

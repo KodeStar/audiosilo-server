@@ -54,7 +54,7 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	if len(w.Recaps) != 2 || w.Recaps[0].Text != "Local before." || w.RecapSummary == nil || w.RecapSummary.Ending != "Local ending." {
 		t.Errorf("recaps = %+v, summary = %+v, want the local ones", w.Recaps, w.RecapSummary)
 	}
-	if g := w.Generated; g == nil || g.Characters || !g.Recaps || g.GeneratedAt != "2026-10-15T10:00:00Z" {
+	if g := w.Generated; g == nil || g.Characters || !g.Recaps || !g.RecapSummary || g.GeneratedAt != "2026-10-15T10:00:00Z" {
 		t.Errorf("generated = %+v", g)
 	}
 	if w.Attribution == nil {
@@ -67,7 +67,7 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 	// Hidden at the start: the community hero (chapter 1) stays with its credit,
 	// the generated recap at chapter 0 stays marked, no summary.
 	hidden := matched(t, env, testGenerated(), &Place{}).Work
-	if hidden.Attribution == nil || hidden.Generated == nil || !hidden.Generated.Recaps || len(hidden.Recaps) != 1 || hidden.RecapSummary != nil {
+	if hidden.Attribution == nil || hidden.Generated == nil || !hidden.Generated.Recaps || hidden.Generated.RecapSummary || len(hidden.Recaps) != 1 || hidden.RecapSummary != nil {
 		t.Errorf("hidden = %+v / %+v", hidden, hidden.Generated)
 	}
 	// Community characters all gated away: the credit goes, and the generated
@@ -115,9 +115,19 @@ func TestAnswerFillsWhatTheCommunityLacks(t *testing.T) {
 		t.Errorf("community summary = %+v", out.Work)
 	}
 	// So the recaps are loaded for it: a summary alone leaves the recap list to
-	// fill (unlike HasRecaps, which counts the summary).
+	// fill, and the estimate's coverage agrees (Generate is offered for it).
 	if got := (&Enrichment{Work: summed}).Fillable(); got != metadata.AllAttachmentParts {
 		t.Errorf("a work with a summary alone fills %+v", got)
+	}
+	if cov := coverageOf(&Enrichment{Work: summed}); cov.Recaps || !cov.Known {
+		t.Errorf("a work with a summary alone covers %+v, want no recaps", cov)
+	}
+	if cov := coverageOf(&Enrichment{Work: &MetaWork{Recaps: []MetaRecap{{Text: "x"}}}}); !cov.Recaps {
+		t.Errorf("a work with a recap list covers %+v, want recaps", cov)
+	}
+	// The community summary keeps its source: only the list is marked generated.
+	if g := out.Work.Generated; g == nil || !g.Recaps || g.RecapSummary {
+		t.Errorf("generated mark beside a community summary = %+v", g)
 	}
 }
 
@@ -236,7 +246,7 @@ func TestAnswerUnmatched(t *testing.T) {
 	if w == nil || w.ID != "" || w.Title != "The Book" || len(w.Characters) != 2 || len(w.Recaps) != 2 || w.RecapSummary == nil {
 		t.Fatalf("work = %+v", w)
 	}
-	if w.Attribution != nil || w.Generated == nil || !w.Generated.Characters || !w.Generated.Recaps {
+	if w.Attribution != nil || w.Generated == nil || !w.Generated.Characters || !w.Generated.Recaps || !w.Generated.RecapSummary {
 		t.Errorf("attribution = %+v, generated = %+v", w.Attribution, w.Generated)
 	}
 	if raw, _ := json.Marshal(Unmatched{Work: w}); !json.Valid(raw) || string(raw[:17]) != `{"matched":false,` {

@@ -181,7 +181,7 @@ describe('the Characters and recaps card', () => {
           },
         },
         'GET /admin/bridge/jobs': { body: { jobs: [generateJob()] } },
-        // Community characters; recaps generated here fill the gap.
+        // Community characters; recaps and their summary generated here fill the gap.
         'GET /libraries/1/meta': {
           body: meta(
             work({
@@ -189,6 +189,7 @@ describe('the Characters and recaps card', () => {
               generated: {
                 characters: false,
                 recaps: true,
+                recap_summary: true,
                 description: false,
                 generated_at: '2026-10-15T12:10:00Z',
               },
@@ -209,6 +210,51 @@ describe('the Characters and recaps card', () => {
       within(c).getByRole('link', { name: 'Contributed, waiting for review' }),
     ).toHaveAttribute('href', ISSUE);
     expect(within(c).queryByText('Community')).toBeNull();
+  });
+
+  it('credits a community summary kept beside a generated list to the community', async () => {
+    const user = userEvent.setup();
+    mockFetch(
+      routes({
+        'GET /libraries/1/meta': {
+          body: meta(
+            work({
+              attribution,
+              // The community had only the summary: the list was generated here.
+              generated: {
+                characters: false,
+                recaps: true,
+                description: false,
+                generated_at: '2026-10-15T12:10:00Z',
+              },
+            }),
+          ),
+        },
+      }),
+    );
+    renderApp(URL);
+    const c = await card();
+    await user.click(within(c).getByRole('tab', { name: /Recaps/ }));
+    const panel = within(c).getByRole('tabpanel');
+    // The list's source heads the tab; the summary's row carries its own, with the credit.
+    expect(within(panel).getByText('Generated on this server')).toBeInTheDocument();
+    const row = within(panel).getByRole('button', { name: 'The whole book' }).closest('li')!;
+    expect(within(row).getByText('Community')).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: attribution.credit })).toHaveAttribute(
+      'href',
+      attribution.source_url,
+    );
+    expect(within(row).queryByText('Generated on this server')).toBeNull();
+  });
+
+  it("gives the summary no badge of its own when it shares the list's source", async () => {
+    const user = userEvent.setup();
+    mockFetch(routes());
+    renderApp(URL);
+    const c = await card();
+    await user.click(within(c).getByRole('tab', { name: /Recaps/ }));
+    const row = within(c).getByRole('button', { name: 'The whole book' }).closest('li')!;
+    expect(within(row).queryByText('Community')).toBeNull();
   });
 
   it('shows an empty state per dimension when the book has neither', async () => {
@@ -257,10 +303,12 @@ describe('story model', () => {
     expect(storySources(undefined)).toEqual({
       characters: { source: 'none' },
       recaps: { source: 'none' },
+      summary: { source: 'none' },
     });
     expect(storySources(work(), { characters: ISSUE, recaps: ISSUE })).toEqual({
       characters: { source: 'community' },
       recaps: { source: 'community' },
+      summary: { source: 'community' },
     });
     const generated = work({
       generated: { characters: true, recaps: false, description: false, generated_at: 'T' },
@@ -269,8 +317,22 @@ describe('story model', () => {
     });
     expect(storySources(generated, { characters: ISSUE })).toEqual({
       characters: { source: 'generated', generatedAt: 'T', contributed: ISSUE },
-      // A summary alone is still recaps.
-      recaps: { source: 'community' },
+      // No list; the summary has a source of its own.
+      recaps: { source: 'none' },
+      summary: { source: 'community' },
+    });
+    // A generated list beside the community's summary (recap_summary absent),
+    // and both generated (recap_summary true, the same contribution).
+    const list = { characters: false, recaps: true, description: false, generated_at: 'T' };
+    expect(storySources(work({ generated: list }), { recaps: ISSUE })).toMatchObject({
+      recaps: { source: 'generated', contributed: ISSUE },
+      summary: { source: 'community' },
+    });
+    expect(
+      storySources(work({ generated: { ...list, recap_summary: true } }), { recaps: ISSUE }),
+    ).toMatchObject({
+      recaps: { source: 'generated', contributed: ISSUE },
+      summary: { source: 'generated', generatedAt: 'T', contributed: ISSUE },
     });
   });
 

@@ -29,7 +29,14 @@ export interface StoryDimension {
 
 export interface StorySources {
   characters: StoryDimension;
+  /** The recap list. */
   recaps: StoryDimension;
+  /**
+   * The whole-book summary, which has a source of its own: a community work
+   * with only a summary keeps it beside a generated list (/meta's
+   * `generated.recap_summary` says which).
+   */
+  summary: StoryDimension;
 }
 
 /**
@@ -59,9 +66,11 @@ export function storySources(
       Boolean(work?.generated?.characters),
       'characters',
     ),
-    recaps: dimension(
-      Boolean(work?.recaps?.length || summaryParts(work)),
-      Boolean(work?.generated?.recaps),
+    recaps: dimension(Boolean(work?.recaps?.length), Boolean(work?.generated?.recaps), 'recaps'),
+    // The summary rides in the same recaps file, so the same contribution.
+    summary: dimension(
+      Boolean(summaryParts(work)),
+      Boolean(work?.generated?.recap_summary),
       'recaps',
     ),
   };

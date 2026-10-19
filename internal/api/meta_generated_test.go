@@ -105,9 +105,10 @@ type generatedBody struct {
 		} `json:"recap_summary"`
 		Attribution *json.RawMessage `json:"attribution"`
 		Generated   *struct {
-			Characters  bool   `json:"characters"`
-			Recaps      bool   `json:"recaps"`
-			GeneratedAt string `json:"generated_at"`
+			Characters   bool   `json:"characters"`
+			Recaps       bool   `json:"recaps"`
+			RecapSummary bool   `json:"recap_summary"`
+			GeneratedAt  string `json:"generated_at"`
 		} `json:"generated"`
 	} `json:"work"`
 }
@@ -151,7 +152,7 @@ func TestMetaGeneratedFillsRecaps(t *testing.T) {
 	if len(g.Work.Recaps) != 2 || g.Work.RecapSummary == nil || g.Work.RecapSummary.InShort != "Gen short." {
 		t.Errorf("recaps = %+v, summary = %+v", g.Work.Recaps, g.Work.RecapSummary)
 	}
-	if gen := g.Work.Generated; gen == nil || gen.Characters || !gen.Recaps || gen.GeneratedAt != "2026-10-15T10:00:00Z" {
+	if gen := g.Work.Generated; gen == nil || gen.Characters || !gen.Recaps || !gen.RecapSummary || gen.GeneratedAt != "2026-10-15T10:00:00Z" {
 		t.Errorf("generated = %+v", gen)
 	}
 	if g.Work.Attribution == nil {
@@ -165,6 +166,51 @@ func TestMetaGeneratedFillsRecaps(t *testing.T) {
 	}
 	if g := getGenerated(t, e, lib.ID, "A/Copy", "", tok); g.Work.Generated != nil || len(g.Work.Recaps) != 0 {
 		t.Errorf("the merge leaked into the cache: %+v", g.Work)
+	}
+}
+
+// TestMetaGeneratedBesideCommunitySummary: a community work with a whole-book
+// summary but no recap list takes the generated list and keeps its own summary,
+// which the mark leaves the community's (recap_summary absent, attribution
+// kept); the estimate agrees the community has no recaps, so Generate is offered.
+func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
+	t.Parallel()
+	e := generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
+		"characters":[{"id":"community-hero","name":"Hero","reveal":{"chapter":1}}],
+		"recap_summary":{"in_short":"Community short."}}`)
+	// The Bridge's env, for the estimate, holds the library the book goes in.
+	b := newBridgeEnvOn(t, e)
+	lib := b.lib
+	book := &catalog.Book{LibraryID: lib.ID, RelPath: "A/Two", Title: "Two", Author: "A", ASIN: "B0TWO", AddedAt: "2020-01-01"}
+	if _, err := e.cat.UpsertBook(context.Background(), book); err != nil {
+		t.Fatal(err)
+	}
+	setGenerated(t, e, lib.ID, "A/Two")
+	tok := b.adminTok
+
+	g := getGenerated(t, e, lib.ID, "A/Two", "", tok)
+	if g.Work == nil || len(g.Work.Recaps) != 2 || g.Work.RecapSummary == nil || g.Work.RecapSummary.InShort != "Community short." ||
+		g.Work.Attribution == nil {
+		t.Fatalf("work = %+v", g.Work)
+	}
+	metaResp, metaBody := e.do(t, "GET", "/api/v1/libraries/"+strconv.FormatInt(lib.ID, 10)+"/meta?path="+escape("A/Two"), tok, "")
+	if metaResp.StatusCode != http.StatusOK {
+		t.Fatalf("meta: %d %s", metaResp.StatusCode, metaBody)
+	}
+	var raw struct {
+		Work struct {
+			Generated json.RawMessage `json:"generated"`
+		} `json:"work"`
+	}
+	decodeInto(t, metaBody, &raw)
+	if got, want := string(raw.Work.Generated), `{"characters":false,"recaps":true,"description":false,"generated_at":"2026-10-15T10:00:00Z"}`; got != want {
+		t.Errorf("generated = %s, want %s", got, want)
+	}
+
+	b.beatWith(t, true, true, sidecarsEstimates)
+	resp, est, body := b.estimate(t, b.adminTok, lib.ID, "A/Two")
+	if resp.StatusCode != http.StatusOK || !est.Has.Community.Characters || est.Has.Community.Recaps || est.Has.CommunityUnknown {
+		t.Fatalf("estimate: %d %s", resp.StatusCode, body)
 	}
 }
 

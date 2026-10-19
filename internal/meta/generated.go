@@ -35,15 +35,20 @@ type Generated struct {
 
 // MetaGenerated says which parts of a work came from the server's generated
 // files rather than the community (MetaWork.Generated); omitted when none did.
-// Recaps covers the recap list and the whole-book summary alike; Description
-// the work's generated_description. GeneratedAt is when what it names was
-// generated: the characters' and recaps' run, or the description's own time
-// when the description is all it names.
+// Recaps is set when the recap list or the whole-book summary was generated
+// (as before RecapSummary existed, so an older client reads it unchanged);
+// RecapSummary, additive, says the summary itself was, so a client can credit a
+// community summary kept beside a generated list (a summary-only community
+// work, which fillable leaves the list to fill) to the community. Description
+// names the work's generated_description. GeneratedAt is when what it names
+// was generated: the characters' and recaps' run, or the description's own
+// time when the description is all it names.
 type MetaGenerated struct {
-	Characters  bool   `json:"characters"`
-	Recaps      bool   `json:"recaps"`
-	Description bool   `json:"description"`
-	GeneratedAt string `json:"generated_at,omitempty"`
+	Characters   bool   `json:"characters"`
+	Recaps       bool   `json:"recaps"`
+	RecapSummary bool   `json:"recap_summary,omitempty"`
+	Description  bool   `json:"description"`
+	GeneratedAt  string `json:"generated_at,omitempty"`
 }
 
 // MetaGeneratedDescription is a book's own-words description generated on this
@@ -182,7 +187,7 @@ func (gen *MetaWork) layInto(w *MetaWork, g *Generated) {
 		w.Recaps, mark.Recaps = gen.Recaps, true
 	}
 	if gen.RecapSummary != nil {
-		w.RecapSummary, mark.Recaps = gen.RecapSummary, true
+		w.RecapSummary, mark.Recaps, mark.RecapSummary = gen.RecapSummary, true, true
 	}
 	if gen.GeneratedDescription != nil {
 		w.GeneratedDescription, mark.Description = gen.GeneratedDescription, true

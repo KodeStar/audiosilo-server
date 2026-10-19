@@ -36,8 +36,9 @@ func (s *Service) CachedEnrichment(ctx context.Context, asin, isbn string) *Enri
 	return stored
 }
 
-// Coverage is what a book's community work carries: characters, recaps (as
-// HasCharacters and HasRecaps read them), a description (its
+// Coverage is what a book's community work carries: characters, a recap list
+// (as HasCharacters and HasRecaps read them: what generated content can't fill),
+// a description (its
 // community_description or its core description: either is shown before a
 // generated one, so a generated one would never be read), and whether that is
 // known. Known is false when it couldn't be had right now (a lookup or
@@ -99,13 +100,16 @@ func (s *Service) Coverages(ctx context.Context, books []BookIDs) []Coverage {
 }
 
 // HasCharacters and HasRecaps report whether a matched envelope's work carries
-// community characters, and recaps (a recap list or the whole-book summary).
+// community characters, and a community recap list. A whole-book summary alone
+// is not recaps here: generated recaps still fill the list beside it (fillable,
+// the one rule /meta lays generated content in by), so a book with only a
+// summary is one Generate is offered for and the series batch queues.
 func (e *Enrichment) HasCharacters() bool {
 	return e != nil && e.Work != nil && len(e.Work.Characters) > 0
 }
 
 func (e *Enrichment) HasRecaps() bool {
-	return e != nil && e.Work != nil && (len(e.Work.Recaps) > 0 || e.Work.RecapSummary != nil)
+	return e != nil && e.Work != nil && len(e.Work.Recaps) > 0
 }
 
 // HasCommunityDescription reports whether a matched envelope's work carries the

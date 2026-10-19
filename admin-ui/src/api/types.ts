@@ -1902,7 +1902,13 @@ export interface MetaAttribution {
  */
 export interface MetaGenerated {
   characters: boolean;
+  /** The recap list, or the summary, was generated (as older servers sent it). */
   recaps: boolean;
+  /**
+   * The whole-book summary itself was generated; absent (false) when it is the
+   * community's, kept beside a generated list.
+   */
+  recap_summary?: boolean;
   description: boolean;
   /** RFC3339; when what it names was generated. */
   generated_at?: string;

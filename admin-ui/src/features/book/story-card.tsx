@@ -13,6 +13,7 @@ import { safeHttpUrl } from '@/features/bridge/bridge-model';
 import { contributedLinks, generateJobsKnown } from '@/features/bridge/generate-model';
 import { bookJobsQuery } from '@/features/bridge/use-generate';
 import { formatDate, formatList } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { FIRST_ROWS, ShowAllToggle } from './show-all-toggle';
 import {
   recapHeading,
@@ -87,8 +88,16 @@ export function StoryCard({ detail }: { detail: AdminBookDetail }) {
           </TabsPanel>
           <TabsPanel value="recaps">
             <SourceLine dimension={sources.recaps} attribution={work?.attribution} />
-            {sources.recaps.source !== 'none' ? (
-              <RecapList recaps={recaps} summary={summary} />
+            {sources.recaps.source !== 'none' || summary ? (
+              <RecapList
+                recaps={recaps}
+                summary={summary}
+                // Its own source only where it differs from the list's above.
+                summarySource={
+                  sources.summary.source !== sources.recaps.source ? sources.summary : undefined
+                }
+                attribution={work?.attribution}
+              />
             ) : (
               <Empty text={t('book.story.noRecaps')} />
             )}
@@ -118,15 +127,22 @@ function MaybeLink({ href, children }: { href?: string; children: string }) {
 function SourceLine({
   dimension,
   attribution,
+  className = 'px-5 pt-4 pb-3',
 }: {
   dimension: StoryDimension;
   attribution?: MetaAttribution;
+  className?: string;
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   if (dimension.source === 'none') return <div className="pt-4" />;
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-5 pt-4 pb-3 text-[12px] text-muted-foreground">
+    <div
+      className={cn(
+        'flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[12px] text-muted-foreground',
+        className,
+      )}
+    >
       {dimension.source === 'community' ? (
         <>
           <ProvenanceMarker source="community" />
@@ -218,9 +234,14 @@ function CharacterList({ characters }: { characters: NonNullable<MetaWork['chara
 function RecapList({
   recaps,
   summary,
+  summarySource,
+  attribution,
 }: {
   recaps: StoryRecap[];
   summary?: { inShort?: string; ending?: string };
+  /** The summary's source, when it isn't the list's (shown on its row). */
+  summarySource?: StoryDimension;
+  attribution?: MetaAttribution;
 }) {
   const { t } = useTranslation();
   const [all, setAll] = useState(false);
@@ -241,6 +262,13 @@ function RecapList({
         })}
         {summary ? (
           <li>
+            {summarySource ? (
+              <SourceLine
+                dimension={summarySource}
+                attribution={attribution}
+                className="px-5 pt-2.5"
+              />
+            ) : null}
             <Reveal label={t('book.story.summary')}>
               <SummaryPart label={t('book.story.inShort')} text={summary.inShort} />
               <SummaryPart label={t('book.story.ending')} text={summary.ending} />
