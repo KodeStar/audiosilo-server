@@ -277,6 +277,10 @@ func TestGeneratedRecapSummaryOnTheWire(t *testing.T) {
 	t.Parallel()
 	noSummary := testGenerated()
 	noSummary.Recaps.InShort, noSummary.Recaps.Ending = "", ""
+	// A recaps file with a summary and no list: recaps keeps its old meaning
+	// (list or summary), so it is set with no generated list beside it.
+	summaryOnly := testGenerated()
+	summaryOnly.Recaps.Recaps = nil
 	summed := communityWork()
 	summed.RecapSummary = &MetaRecapSummary{InShort: "Community short."}
 	for _, c := range []struct {
@@ -288,6 +292,7 @@ func TestGeneratedRecapSummaryOnTheWire(t *testing.T) {
 		{"no summary", communityWork(), noSummary, false},
 		{"community summary", summed, testGenerated(), false},
 		{"generated summary", communityWork(), testGenerated(), true},
+		{"generated summary alone", communityWork(), summaryOnly, true},
 	} {
 		raw, err := json.Marshal(matched(t, &Enrichment{Matched: true, Work: c.w}, c.g, nil).Work.Generated)
 		if err != nil {

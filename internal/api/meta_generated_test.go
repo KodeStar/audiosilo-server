@@ -173,7 +173,8 @@ func TestMetaGeneratedFillsRecaps(t *testing.T) {
 
 // TestMetaGeneratedBesideCommunitySummary: a community work with a summary but
 // no recap list takes the generated list and keeps its own, credited summary
-// (recap_summary false); the estimate agrees it has no recaps.
+// (recap_summary false); the estimate agrees it has no recaps, and offers an
+// earlier book of the series whose work has a summary alone.
 func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
 	t.Parallel()
 	e := generatedMetaEnv(t, `{"id":"w","title":"Community Title","authors":[],"language":"en",
@@ -182,9 +183,14 @@ func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
 	// The Bridge's env, for the estimate, holds the library the book goes in.
 	b := newBridgeEnvOn(t, e)
 	lib := b.lib
-	book := &catalog.Book{LibraryID: lib.ID, RelPath: "A/Two", Title: "Two", Author: "A", ASIN: "B0TWO", AddedAt: "2020-01-01"}
-	if _, err := e.cat.UpsertBook(context.Background(), book); err != nil {
-		t.Fatal(err)
+	// Every lookup finds the same work, so the earlier book's has a summary alone too.
+	for _, book := range []*catalog.Book{
+		{LibraryID: lib.ID, RelPath: "A/One", Title: "One", Author: "A", Series: "Summed", SeriesIndex: 1, ASIN: "B0ONE", AddedAt: "2020-01-01"},
+		{LibraryID: lib.ID, RelPath: "A/Two", Title: "Two", Author: "A", Series: "Summed", SeriesIndex: 2, ASIN: "B0TWO", AddedAt: "2020-01-01"},
+	} {
+		if _, err := e.cat.UpsertBook(context.Background(), book); err != nil {
+			t.Fatal(err)
+		}
 	}
 	setGenerated(t, e, lib.ID, "A/Two")
 	tok := b.adminTok
@@ -200,7 +206,8 @@ func TestMetaGeneratedBesideCommunitySummary(t *testing.T) {
 
 	b.beatWith(t, true, true, sidecarsEstimates)
 	resp, est, body := b.estimate(t, b.adminTok, lib.ID, "A/Two")
-	if resp.StatusCode != http.StatusOK || !est.Has.Community.Characters || est.Has.Community.Recaps || est.Has.CommunityUnknown {
+	if resp.StatusCode != http.StatusOK || !est.Has.Community.Characters || est.Has.Community.Recaps || est.Has.CommunityUnknown ||
+		len(est.Earlier) != 1 || est.Earlier[0].Path != "A/One" {
 		t.Fatalf("estimate: %d %s", resp.StatusCode, body)
 	}
 }

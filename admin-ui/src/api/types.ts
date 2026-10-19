@@ -1905,8 +1905,9 @@ export interface MetaGenerated {
   /** The recap list, or the summary, was generated (as older servers sent it). */
   recaps: boolean;
   /**
-   * The whole-book summary itself was generated; absent (false) when it is the
-   * community's, kept beside a generated list.
+   * The whole-book summary itself was generated; false when it is the
+   * community's, kept beside a generated list. Always sent by this server (the
+   * console is version-matched); absent only from an older one.
    */
   recap_summary?: boolean;
   description: boolean;

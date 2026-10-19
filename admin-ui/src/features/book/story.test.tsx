@@ -224,6 +224,7 @@ describe('the Characters and recaps card', () => {
               generated: {
                 characters: false,
                 recaps: true,
+                recap_summary: false,
                 description: false,
                 generated_at: '2026-10-15T12:10:00Z',
               },

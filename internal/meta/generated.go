@@ -42,8 +42,11 @@ type Generated struct {
 // was generated: the characters' and recaps' run, or the description's own
 // time when the description is all it names.
 type MetaGenerated struct {
-	Characters   bool   `json:"characters"`
-	Recaps       bool   `json:"recaps"`
+	Characters bool `json:"characters"`
+	Recaps     bool `json:"recaps"`
+	// RecapSummary has no omitempty on purpose (unlike CROSS-REPO §15's usual
+	// new field): a client reads its absence as an older server and falls back
+	// to Recaps, so false must be sent.
 	RecapSummary bool   `json:"recap_summary"`
 	Description  bool   `json:"description"`
 	GeneratedAt  string `json:"generated_at,omitempty"`
