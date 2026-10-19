@@ -18,6 +18,7 @@ import {
   Languages,
   LogOut,
   MonitorSmartphone,
+  Puzzle,
   Repeat2,
   Settings2,
   ShieldCheck,
@@ -219,6 +220,7 @@ function PaletteBody({ close }: { close: () => void }) {
     topic('notifications', BellRing, ['alert', 'webhook', 'ntfy', 'discord', 'notify', 'push']),
     topic('import', Import, ['audiobookshelf', 'abs', 'import', 'history', 'migrate', 'listening']),
     topic('bridge', Waypoints, ['bridge', 'pair', 'companion', 'jobs', 'verify', 'worker']),
+    topic('modules', Puzzle, ['modules', 'plugins', 'features', 'contributions', 'optional']),
     {
       id: 'scan-settings',
       title: t('palette.setting.scanSettings'),

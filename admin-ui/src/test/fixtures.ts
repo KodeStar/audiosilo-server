@@ -268,6 +268,7 @@ export function settingsWith(over: Partial<AdminSettings> = {}): AdminSettings {
       max_members_max: 50,
     },
     backups: { schedule: 'daily:03:00', keep: 7, dir: '' },
+    modules: { contributions: false },
     locked: { 'players.web_dir': 'AUDIOSILO_WEB_DIR' },
     restart_settings: [
       'network.bind',

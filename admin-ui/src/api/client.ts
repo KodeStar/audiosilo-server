@@ -56,6 +56,7 @@ import type {
   PersonField,
   SeriesCount,
   AdminLibrary,
+  AdminModules,
   AdminSettings,
   AdminUser,
   AdminShare,
@@ -388,6 +389,9 @@ export const api = {
   /** The bell's feed, newest first; `before` is the previous page's next_before. */
   serverEvents: (opts: { before?: number; limit?: number; kind?: ServerEventKind } = {}) =>
     request<ServerEventPage>('GET', `/admin/events${bookQuery(opts)}`),
+
+  /** Settings > Modules: every managed module, its toggle and where it stands with the Bridge. */
+  modules: () => request<AdminModules>('GET', '/admin/modules'),
 
   // The Bridge (Settings > Bridge): pairing, its status, and its jobs.
   bridge: () => request<BridgeStatus>('GET', '/admin/bridge'),

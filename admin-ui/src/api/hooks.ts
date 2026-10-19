@@ -57,6 +57,8 @@ export const keys = {
   backups: ['admin', 'backups'] as const,
   notifyTargets: ['admin', 'notifications'] as const,
   bridge: ['admin', 'bridge', 'status'] as const,
+  /** Settings > Modules (a settings save or a Bridge status change moves it). */
+  modules: ['admin', 'modules'] as const,
   /** Every loaded Bridge job list (a prefix: invalidate after queueing or cancelling). */
   bridgeJobLists: ['admin', 'bridge', 'jobs'] as const,
   bridgeJobs: (state: string) => ['admin', 'bridge', 'jobs', state] as const,
@@ -171,6 +173,22 @@ export function useStats() {
 
 export function useSettings() {
   return useQuery({ queryKey: keys.settings, queryFn: api.settings, staleTime: 5 * 60_000 });
+}
+
+/** How often Settings > Modules asks again: as often as the Bridge's status does. */
+export const MODULES_POLL_MS = 15_000;
+
+/**
+ * Settings > Modules' list: each module's toggle, capability and Bridge state,
+ * asked again as often as the Bridge's status (a heartbeat can make a module
+ * ready) and after every settings save (useSaveSettings).
+ */
+export function useModules() {
+  return useQuery({
+    queryKey: keys.modules,
+    queryFn: api.modules,
+    refetchInterval: MODULES_POLL_MS,
+  });
 }
 
 /**

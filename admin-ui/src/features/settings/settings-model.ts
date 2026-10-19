@@ -22,8 +22,31 @@ export const SETTINGS_PAGES = [
   'notifications',
   'import',
   'bridge',
+  'modules',
 ] as const;
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
+
+/**
+ * The settings pages a managed module brings, by page: the module id whose
+ * toggle shows it (Settings > Modules). None yet: Bridge Phase 2b's
+ * contributions module is the first to add one.
+ */
+export const MODULE_PAGES: Partial<Record<SettingsPage, string>> = {};
+
+/**
+ * The pages the nav lists: every page, less those whose module is off (or
+ * unknown to the server, so absent from settings.modules).
+ */
+export function visiblePages(
+  pages: readonly SettingsPage[],
+  settings: Pick<AdminSettings, 'modules'> | undefined,
+  modulePages: Partial<Record<SettingsPage, string>> = MODULE_PAGES,
+): SettingsPage[] {
+  return pages.filter((p) => {
+    const id = modulePages[p];
+    return id === undefined || settings?.modules?.[id] === true;
+  });
+}
 
 /** Settings > Community metadata's source choices, the default (the service) first. */
 export const METADATA_MODES = ['remote', 'mirror'] as const satisfies readonly MetadataMode[];
