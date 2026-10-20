@@ -207,7 +207,7 @@
   "libraries.toast.exported": "{{name}} exportiert",
   "libraries.toast.exportFailed": "Die Bücherliste konnte nicht exportiert werden",
   "libraries.exportPaths.title": "{{name}} mit Dateipfaden und Schlagwörtern exportieren",
-  "libraries.exportPaths.description": "Jedes Buch der Liste erhält zusätzlich seine Schlagwörter und den Pfad jeder Kopie, damit deine eigenen Skripte es den Dateien zuordnen können.",
+  "libraries.exportPaths.description": "Jede Kopie eines Buchs erhält eine eigene Zeile mit ihrem Pfad, ihren Schlagwörtern und ihrer Beschreibung, damit deine eigenen Skripte sie den Dateien zuordnen können.",
   "libraries.exportPaths.warnTitle": "Diese Datei ist nur für dich",
   "libraries.exportPaths.warnBody": "Die Pfade zeigen, wie deine Ordner heißen und aufgebaut sind, und die Schlagwörter sind deine eigenen Notizen. Hänge diese Datei an kein öffentliches Issue und lade sie nicht auf die Community-Seite hoch; nimm dafür den normalen Export.",
   "libraries.exportPaths.confirm": "Mit Pfaden und Schlagwörtern exportieren",

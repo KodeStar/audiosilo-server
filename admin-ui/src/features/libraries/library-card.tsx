@@ -70,8 +70,9 @@ export function LibraryCard({
   // Waiting in the job queue behind another library's scan (a running one wins).
   const queued = !running && !!l.scan.queued;
 
-  // Personal, each row carries its books' paths and tags: a file for the admin's
-  // own scripts (the menu warns before it is made), never the default.
+  // Personal, each copy is its own row with its path, tags and description: a
+  // file for the admin's own scripts (the menu warns before it is made), never
+  // the default.
   const exportBooks = async (personal = false) => {
     setExporting(true);
     try {

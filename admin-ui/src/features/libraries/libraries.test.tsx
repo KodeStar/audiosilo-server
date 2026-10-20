@@ -315,13 +315,16 @@ describe('libraries', () => {
     expect(
       within(dialog).getByText(/Don't attach this file to a public issue/),
     ).toBeInTheDocument();
+    expect(within(dialog).getByText(/Each copy of a book gets its own row/)).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/admin/libraries/1/export')).toBe(false);
     await user.click(within(dialog).getByRole('button', { name: 'Export with paths and tags' }));
     expect(
       await screen.findByText('audiosilo-fiction-2026-10-03-private.json'),
     ).toBeInTheDocument();
     const exp = calls.find((c) => c.path === '/admin/libraries/1/export');
-    expect(exp?.query.get('include')).toBe('paths,tags');
+    // One row per copy, each with its own path, tags and description.
+    expect(exp?.query.get('include')).toBe('paths,tags,description');
+    expect(exp?.query.get('copies')).toBe('separate');
   });
 
   it('shows the empty state with no libraries', async () => {

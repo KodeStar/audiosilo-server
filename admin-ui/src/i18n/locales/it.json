@@ -212,7 +212,7 @@
   "libraries.toast.exported": "{{name}} esportata",
   "libraries.toast.exportFailed": "Impossibile esportare l'elenco dei libri",
   "libraries.exportPaths.title": "Esporta {{name}} con i percorsi dei file e le etichette",
-  "libraries.exportPaths.description": "Ogni libro dell'elenco riporta anche le sue etichette e il percorso di ogni copia, così i tuoi script possono ricondurlo ai file.",
+  "libraries.exportPaths.description": "Ogni copia di un libro ha una riga sua, con il percorso, le etichette e la descrizione, così i tuoi script possono ricondurla ai file.",
   "libraries.exportPaths.warnTitle": "Questo file è solo per te",
   "libraries.exportPaths.warnBody": "I percorsi mostrano come si chiamano e come sono organizzate le tue cartelle, e le etichette sono note tue. Non allegare questo file a una segnalazione pubblica e non caricarlo sul sito della community; per quello usa l'esportazione normale.",
   "libraries.exportPaths.confirm": "Esporta con percorsi ed etichette",

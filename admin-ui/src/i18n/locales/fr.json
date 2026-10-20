@@ -212,7 +212,7 @@
   "libraries.toast.exported": "{{name}} exportée",
   "libraries.toast.exportFailed": "Impossible d'exporter la liste des livres",
   "libraries.exportPaths.title": "Exporter {{name}} avec les chemins des fichiers et les étiquettes",
-  "libraries.exportPaths.description": "Chaque livre de la liste porte aussi ses étiquettes et le chemin de chaque copie, pour que vos propres scripts le rattachent aux fichiers.",
+  "libraries.exportPaths.description": "Chaque copie d'un livre a sa propre ligne, avec son chemin, ses étiquettes et sa description, pour que vos propres scripts la rattachent aux fichiers.",
   "libraries.exportPaths.warnTitle": "Ce fichier est pour vous seul",
   "libraries.exportPaths.warnBody": "Les chemins montrent le nom et l'organisation de vos dossiers, et les étiquettes sont vos propres notes. Ne joignez pas ce fichier à un ticket public et ne l'envoyez pas sur le site de la communauté ; utilisez pour cela l'export simple.",
   "libraries.exportPaths.confirm": "Exporter avec les chemins et les étiquettes",
