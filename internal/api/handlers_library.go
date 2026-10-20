@@ -93,10 +93,20 @@ func scopeIn(scopes []catalog.Scope, libraryID int64) (catalog.Scope, bool) {
 	return catalog.Scope{LibraryID: libraryID}, false
 }
 
-// scopedLibrary loads the library the caller's scope is for: 403 when the scope
-// grants nothing, 404 for no such library.
+// scopedLibrary loads the library the caller's scope is for: 403 without a
+// library grant, 404 for no such library. Private podcast filtering can leave a
+// granted library with no visible content; its empty listings remain readable.
 func (a *API) scopedLibrary(r *http.Request, scope catalog.Scope) (*catalog.Library, catalog.Scope, int, string) {
 	if !scope.AllowAll && len(scope.Paths) == 0 {
+		libs, err := a.cat.CallerLibraries(r.Context(), callerOf(r.Context()))
+		if err != nil {
+			return nil, scope, http.StatusInternalServerError, "access check failed"
+		}
+		for _, lib := range libs {
+			if lib.ID == scope.LibraryID && lib.Kind == catalog.KindPodcasts {
+				return &lib, scope, 0, ""
+			}
+		}
 		return nil, scope, http.StatusForbidden, "no access to this library"
 	}
 	lib, err := a.cat.GetLibrary(r.Context(), scope.LibraryID)

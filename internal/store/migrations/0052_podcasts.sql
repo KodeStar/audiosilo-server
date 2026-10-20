@@ -22,17 +22,20 @@ CREATE TABLE podcast_episodes (
  duration_source TEXT NOT NULL
 );
 CREATE INDEX idx_podcast_episodes_show ON podcast_episodes(library_id, show_path, published DESC);
+-- Follows survive index pruning; show_id prevents a replacement at the same
+-- path inheriting access. It deliberately has no FK to the show index.
 CREATE TABLE podcast_follows (
  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE, show_path TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(user_id, library_id, show_path)
+ show_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(user_id, library_id, show_path)
 );
 CREATE INDEX idx_podcast_follows_show ON podcast_follows(library_id, show_path);
 CREATE TABLE podcast_feed_state (
  library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE, show_path TEXT NOT NULL,
  etag TEXT NOT NULL DEFAULT '', last_modified TEXT NOT NULL DEFAULT '', last_checked_at TEXT,
  last_success_at TEXT, last_status INTEGER NOT NULL DEFAULT 0, error_code TEXT NOT NULL DEFAULT '',
- error TEXT NOT NULL DEFAULT '', failures INTEGER NOT NULL DEFAULT 0, next_poll_at TEXT,
+ error TEXT NOT NULL DEFAULT '', secret_missing INTEGER NOT NULL DEFAULT 0,
+ failures INTEGER NOT NULL DEFAULT 0, next_poll_at TEXT,
  PRIMARY KEY(library_id, show_path)
 );
 CREATE TABLE podcast_folded(job_id INTEGER PRIMARY KEY, at TEXT NOT NULL);

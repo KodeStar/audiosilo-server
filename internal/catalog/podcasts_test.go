@@ -65,7 +65,7 @@ func TestPodcastScopesAndAggregates(t *testing.T) {
 	if err != nil || s.AllowAll || len(s.Paths) != 0 {
 		t.Fatalf("private admin scope %+v %v", s, err)
 	}
-	if err := c.FollowPodcast(ctx, user, lib.ID, "Example Show"); err != nil {
+	if err := c.FollowPodcast(ctx, user, lib.ID, "Example Show", f.ShowID); err != nil {
 		t.Fatal(err)
 	}
 	s, err = c.CallerScope(ctx, who, lib.ID)
@@ -210,7 +210,7 @@ func TestPodcastFolding(t *testing.T) {
 	if _, err := c.IndexPodcastShow(ctx, lib.ID, "Example Show", "s", "", "", f, nil, false); err != nil {
 		t.Fatal(err)
 	}
-	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastSubscribe, LibraryID: &lib.ID, State: bridge.StateDone, RequestedBy: &bridge.Requester{ID: user}, Params: json.RawMessage(`{}`), Result: json.RawMessage(`{"show_path":"Example Show","status":200,"etag":"abc","next_poll_seconds":1}`)}
+	job := bridge.Job{ID: 1, Kind: bridge.KindPodcastSubscribe, LibraryID: &lib.ID, State: bridge.StateDone, RequestedBy: &bridge.Requester{ID: user}, Params: json.RawMessage(`{}`), Result: json.RawMessage(`{"show_path":"Example Show","show_id":"a1b2c3d4e5f60718","status":200,"etag":"abc","next_poll_seconds":1}`)}
 	if err := c.FoldPodcastJob(ctx, job); err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -185,7 +186,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Sync libraries declared in config into the database, then scan them in the
 	// background so the filesystem view is available immediately.
-	if err := syncLibraries(ctx, cfg, cat); err != nil {
+	if err := syncLibraries(ctx, cfg, cat, log); err != nil {
 		return err
 	}
 	scanner.Start(ctx)
@@ -466,7 +467,7 @@ func banner(cfg *config.Config, password, code string) {
 }
 
 // syncLibraries upserts config-declared libraries into the catalog.
-func syncLibraries(ctx context.Context, cfg *config.Config, cat *catalog.Catalog) error {
+func syncLibraries(ctx context.Context, cfg *config.Config, cat *catalog.Catalog, log *slog.Logger) error {
 	for _, l := range cfg.Libraries {
 		root, err := filepath.Abs(l.Root)
 		if err != nil {
@@ -475,6 +476,10 @@ func syncLibraries(ctx context.Context, cfg *config.Config, cat *catalog.Catalog
 		if _, err := cat.UpsertLibraryByName(ctx, catalog.Library{
 			Name: l.Name, Root: root,
 		}); err != nil {
+			if errors.Is(err, catalog.ErrRootOverlaps) {
+				log.Warn("config library root overlaps a podcast library; keeping the existing library if present", "library", l.Name, "root", root, "err", err)
+				continue
+			}
 			return err
 		}
 	}

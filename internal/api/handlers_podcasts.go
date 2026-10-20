@@ -251,8 +251,8 @@ func (a *API) handlePodcastFollow(w http.ResponseWriter, r *http.Request) {
 			a.writeCatalogError(w, err, "load feed state failed", "Could not load show.")
 			return
 		}
-		if state.ErrorCode != "feed_secret_missing" || req.Path != nil {
-			if err := a.cat.FollowPodcast(r.Context(), user, lib.ID, show.Path); err != nil {
+		if !state.SecretMissing || req.Path != nil {
+			if err := a.cat.FollowPodcast(r.Context(), user, lib.ID, show.Path, show.ShowID); err != nil {
 				a.writeCatalogError(w, err, "follow podcast failed", "Could not follow show.")
 				return
 			}

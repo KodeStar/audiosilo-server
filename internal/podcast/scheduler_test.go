@@ -36,7 +36,7 @@ func TestSchedulerDueAndWritableBackoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := modules.Deps{Log: slog.Default(), Catalog: cat, Bridge: queue}
-	if err := cat.FollowPodcast(ctx, 1, lib.ID, "Example Show"); err != nil {
+	if err := cat.FollowPodcast(ctx, 1, lib.ID, "Example Show", f.ShowID); err != nil {
 		t.Fatal(err)
 	}
 	// Offline means no scheduled work, even though the feed is due.
@@ -130,7 +130,7 @@ func TestSchedulerPassesOverAFailingShow(t *testing.T) {
 		if _, err := cat.IndexPodcastShow(ctx, lib.ID, show, "s", "", "", f, nil, false); err != nil {
 			t.Fatal(err)
 		}
-		if err := cat.FollowPodcast(ctx, 1, lib.ID, show); err != nil {
+		if err := cat.FollowPodcast(ctx, 1, lib.ID, show, f.ShowID); err != nil {
 			t.Fatal(err)
 		}
 	}

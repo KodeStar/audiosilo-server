@@ -166,7 +166,7 @@ func TestPodcastPrivateShowScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tok := range []string{b.userTok, b.adminTok} {
-		for _, route := range []string{"fs", "books", "item?path=" + url.QueryEscape(episode), "stream?path=" + url.QueryEscape(episode)} {
+		for _, route := range []string{"item?path=" + url.QueryEscape(episode), "stream?path=" + url.QueryEscape(episode)} {
 			resp, body := b.doHeaders(t, "GET", podcastRoute(b.lib.ID, route), tok, "", headers)
 			if resp.StatusCode != 403 {
 				t.Fatalf("non-follower %s %d %s", route, resp.StatusCode, body)
@@ -450,14 +450,14 @@ func TestPodcastCapabilityMarkerAndRescan(t *testing.T) {
 }
 
 func TestPodcastCheckRequiresFollowAndThrottles(t *testing.T) {
-	b, uid, _ := podcastEnv(t, false)
+	b, uid, f := podcastEnv(t, false)
 	h := podcastHeaders()
 	body := fmt.Sprintf(`{"library_id":%d,"path":"Example Show"}`, b.lib.ID)
 	resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/check", b.userTok, body, h)
 	if resp.StatusCode != 404 || !strings.Contains(out, "show_not_found") {
 		t.Fatalf("not following %d %s", resp.StatusCode, out)
 	}
-	if err := b.cat.FollowPodcast(context.Background(), uid, b.lib.ID, "Example Show"); err != nil {
+	if err := b.cat.FollowPodcast(context.Background(), uid, b.lib.ID, "Example Show", f.ShowID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.db.ExecContext(context.Background(), `INSERT INTO podcast_feed_state(library_id,show_path,last_checked_at) VALUES(?,'Example Show',?)`, b.lib.ID, time.Now().UTC().Format(time.RFC3339)); err != nil {
@@ -532,7 +532,7 @@ func TestPodcastRestoreKeepsPrivateURLOutOfJobs(t *testing.T) {
 	if _, _, err := b.api.scanner.IndexPodcastPath(ctx, *b.lib, "Example Show"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,error_code,error) VALUES(?,'Example Show','feed_secret_missing','lost')`, b.lib.ID); err != nil {
+	if _, err := b.db.ExecContext(ctx, `INSERT INTO podcast_feed_state(library_id,show_path,error_code,error,secret_missing) VALUES(?,'Example Show','feed_secret_missing','lost',1)`, b.lib.ID); err != nil {
 		t.Fatal(err)
 	}
 	resp, out := b.doHeaders(t, "POST", "/api/v1/podcasts/follow", b.userTok, fmt.Sprintf(`{"library_id":%d,"feed_url":%q}`, b.lib.ID, plain), podcastHeaders())

@@ -58,6 +58,7 @@ type PollParams struct {
 // listener's request both read it.
 type PodcastOutcome struct {
 	ShowPath          string `json:"show_path"`
+	ShowID            string `json:"show_id"`
 	Status            int    `json:"status"`
 	ETag              string `json:"etag"`
 	LastModified      string `json:"last_modified"`
