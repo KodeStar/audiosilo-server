@@ -3061,7 +3061,7 @@
   "bridge.park.supervisor_budget": "Il supervisore della Bridge ha raggiunto il suo limite di spesa.",
   "bridge.park.book_not_writable": "La Bridge non può scrivere nella cartella di questo libro.",
   "bridge.park.library_not_writable": "La Bridge non può più scrivere nella libreria di questo libro. Il lavoro riprende appena può.",
-  "bridge.park.agent_credential_refused": "La credenziale dell'agente è stata rifiutata. Sostituiscila nella scheda Accounts della Bridge, o nel container dell'agente se ne ha una propria.",
+  "bridge.park.agent_credential_refused": "La credenziale dell'agente è stata rifiutata. Sostituiscila nella scheda Accounts della Bridge e il lavoro riprende. Se il container dell'agente ne ha una propria, sostituiscila lì; il lavoro riprova da solo.",
   "bridge.park.unknown": "Il lavoro ti aspetta ({{code}}).",
   "bridge.generate.title": "Personaggi e riassunti",
   "bridge.generate.action": "Genera personaggi e riassunti",

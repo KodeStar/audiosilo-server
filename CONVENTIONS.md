@@ -1635,7 +1635,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   "Corrections failed"; a contribute job that filed nothing, its result's `contributed` empty and `covered`
   not, `bridge.Job.SharedNothing`: "Already in the community"), and the Bridge's `contrib_unavailable` and
   `agent_credential_refused` parks say to fix the credential on the Bridge, wherever it holds it (its
-  Accounts tab, the agent container).
+  Accounts tab, the agent container). A refused agent credential needs no Retry: a change on the Accounts
+  tab resumes the job at once (the Bridge's `agentCredentialChanged`), one in the agent container at the
+  park's `retry_at`.
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,

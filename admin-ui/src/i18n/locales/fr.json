@@ -3061,7 +3061,7 @@
   "bridge.park.supervisor_budget": "Le superviseur de la Bridge a atteint sa limite de dépenses.",
   "bridge.park.book_not_writable": "La Bridge ne peut pas écrire dans le dossier de ce livre.",
   "bridge.park.library_not_writable": "La Bridge ne peut plus écrire dans la bibliothèque de ce livre. La tâche reprend dès qu'elle le peut.",
-  "bridge.park.agent_credential_refused": "L'identifiant de l'agent a été refusé. Remplacez-le dans l'onglet Accounts de la Bridge, ou dans le conteneur de l'agent s'il a son propre identifiant.",
+  "bridge.park.agent_credential_refused": "L'identifiant de l'agent a été refusé. Remplacez-le dans l'onglet Accounts de la Bridge et la tâche reprend. Si le conteneur de l'agent a son propre identifiant, remplacez-le là ; la tâche réessaie d'elle-même.",
   "bridge.park.unknown": "La tâche vous attend ({{code}}).",
   "bridge.generate.title": "Personnages et résumés",
   "bridge.generate.action": "Générer les personnages et résumés",

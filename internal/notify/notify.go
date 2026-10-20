@@ -478,7 +478,7 @@ func bridgeParkReason(code string) string {
 	case "budget_exceeded":
 		return "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset."
 	case "agent_credential_refused":
-		return "The agent's credential was refused. Replace it where the Bridge gets it (its Accounts tab or the agent container), then retry the job on the Bridge."
+		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab and the job carries on. If the agent container has a credential of its own, replace it there; the job tries again by itself a little later."
 	case "contrib_unavailable":
 		return "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge, then retry the job there."
 	case "core_needed":

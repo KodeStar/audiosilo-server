@@ -2910,7 +2910,7 @@
   "bridge.park.supervisor_budget": "The Bridge's supervisor reached its spending limit.",
   "bridge.park.book_not_writable": "The Bridge can't write to this book's folder.",
   "bridge.park.library_not_writable": "The Bridge can't write to this book's library any more. The job carries on once it can.",
-  "bridge.park.agent_credential_refused": "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has a credential of its own.",
+  "bridge.park.agent_credential_refused": "The agent's credential was refused. Replace it on the Bridge's Accounts tab and the job carries on. If the agent container has a credential of its own, replace it there; the job tries again by itself.",
   "bridge.park.unknown": "The job is waiting for you ({{code}}).",
   "bridge.generate.title": "Characters and recaps",
   "bridge.generate.action": "Generate characters and recaps",
