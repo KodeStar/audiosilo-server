@@ -15,7 +15,7 @@ import {
 import type { MatchBy } from '@/api/client';
 import { contributionsOn, FEATURE_META, KIND_CORRECT } from '@/features/bridge/generate-model';
 import { runes } from './book-model';
-import { CONTROL } from './field-rules';
+import { CONTROL, CONTROL_IN_TEXT } from './field-rules';
 import { clean, compareRows, defaultRecording, type CompareRow } from './match-model';
 
 // Suggest corrections (BRIDGE-PLAN.md Phase 2b, decision 18; CORRECTIONS-SPIKE
@@ -37,62 +37,28 @@ export const MAX_EVIDENCE = 2000;
  */
 const BIDI = /[\u202A-\u202E\u2066-\u2069]/;
 
-/** A control character the evidence may not hold: CONTROL but a line break or a tab. */
-// eslint-disable-next-line no-control-regex
-const CONTROL_IN_EVIDENCE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
-
 /** The community issue form's blank field, which reads as none (bridge.noResponse). */
 const NO_RESPONSE = '_No response_';
 
 /** Go's unicode.IsSpace, which strings.TrimSpace trims and asRead reads a reference to as a space. */
-const GO_SPACE =
-  '\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';
-const IS_GO_SPACE = new RegExp(`^[${GO_SPACE}]$`);
-const GO_TRIM = new RegExp(`^[${GO_SPACE}]+|[${GO_SPACE}]+$`, 'g');
+const IS_GO_SPACE = /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/;
 
 /** v trimmed as the server trims it (Go's strings.TrimSpace, not String.trim: U+0085 yes, U+FEFF no). */
 export function goTrim(v: string): string {
-  return v.replace(GO_TRIM, '');
+  let i = 0;
+  let j = v.length;
+  while (i < j && IS_GO_SPACE.test(v[i])) i++;
+  while (j > i && IS_GO_SPACE.test(v[j - 1])) j--;
+  return v.slice(i, j);
 }
 
 /** An HTML character reference ending in ';', as the server finds them (bridge.charRef). */
 const CHAR_REF = /&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);/g;
 
 /** What HTML reads code points 0x80-0x9F in a numeric reference as (Windows-1252, as Go's html does). */
-const WINDOWS_1252 = [
-  '\u20ac',
-  '\u0081',
-  '\u201a',
-  '\u0192',
-  '\u201e',
-  '\u2026',
-  '\u2020',
-  '\u2021',
-  '\u02c6',
-  '\u2030',
-  '\u0160',
-  '\u2039',
-  '\u0152',
-  '\u008d',
-  '\u017d',
-  '\u008f',
-  '\u0090',
-  '\u2018',
-  '\u2019',
-  '\u201c',
-  '\u201d',
-  '\u2022',
-  '\u2013',
-  '\u2014',
-  '\u02dc',
-  '\u2122',
-  '\u0161',
-  '\u203a',
-  '\u0153',
-  '\u009d',
-  '\u017e',
-  '\u0178',
-];
+const WINDOWS_1252 =
+  '\u20ac\u0081\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\u008d\u017d\u008f' +
+  '\u0090\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u009d\u017e\u0178';
 
 /**
  * A numeric reference decoded as Go's html.UnescapeString decodes it: the
@@ -110,7 +76,9 @@ function numericRef(ref: string): string {
   return String.fromCodePoint(x);
 }
 
+/** Named references already decoded, at most MAX_NAMED_REFS (the names are typed, so unbounded). */
 const namedRefs = new Map<string, string>();
+const MAX_NAMED_REFS = 256;
 let refParser: DOMParser | undefined;
 
 /**
@@ -127,27 +95,30 @@ function namedRef(ref: string): string {
     // In the body: before it, the parser drops a reference decoding to whitespace.
     r =
       refParser.parseFromString(`<!doctype html><body>${ref}`, 'text/html').body.textContent ?? ref;
+    if (namedRefs.size >= MAX_NAMED_REFS) namedRefs.clear();
     namedRefs.set(ref, r);
   }
   return r;
 }
 
 /**
- * v as the community reads it, which is how the server checks it
- * (bridge.asRead): each character reference decoded, one decoding to a single
- * whitespace character read as a space and one decoding to more than two
- * characters left as written (it isn't one), then trimmed as Go trims.
+ * v with each character reference decoded as the community reads it
+ * (bridge.decodeRefs): one decoding to a single whitespace character read as
+ * a space, one decoding to more than two characters left as written (it isn't
+ * one). Untrimmed: a reference is ASCII, so every character written stays.
  */
+function decodeRefs(v: string): string {
+  if (!v.includes('&')) return v;
+  return v.replace(CHAR_REF, (ref) => {
+    const r = ref[1] === '#' ? numericRef(ref) : namedRef(ref);
+    if (runes(r) > 2) return ref;
+    return IS_GO_SPACE.test(r) ? ' ' : r;
+  });
+}
+
+/** v as the community reads it, which is how the server checks it (bridge.asRead): decoded, then trimmed as Go trims. */
 export function asRead(v: string): string {
-  const read = v.includes('&')
-    ? v.replace(CHAR_REF, (ref) => {
-        const r = ref[1] === '#' ? numericRef(ref) : namedRef(ref);
-        const n = runes(r);
-        if (n > 2) return ref;
-        return n === 1 && IS_GO_SPACE.test(r) ? ' ' : r;
-      })
-    : v;
-  return goTrim(read);
+  return goTrim(decodeRefs(v));
 }
 
 /**
@@ -288,9 +259,9 @@ export interface CorrectionRow {
   handling: Handling;
   /** A value is over MAX_VALUE: it can't be sent. */
   tooLong: boolean;
-  /** A value holds a control character, as written or read (asRead): it can't be sent. */
+  /** A value holds a control character, as written or as references decode it: it can't be sent. */
   control: boolean;
-  /** A value, read as the community reads it (asRead), holds a bidirectional control (BIDI): it can't be sent. */
+  /** A value, references decoded, holds a bidirectional control (BIDI): it can't be sent. */
   bidi: boolean;
   /**
    * The corrected value, read as the community reads it, is empty or the
@@ -300,9 +271,12 @@ export interface CorrectionRow {
   noChange: boolean;
 }
 
+/** A row's refusal flags, in the order the review names them (each is book.corrections.<flag>). */
+export const REFUSALS = ['tooLong', 'control', 'bidi', 'noChange'] as const;
+
 /** Whether a row can be sent: the server takes it (none of its refusal flags is set). */
 export function sendable(r: CorrectionRow): boolean {
-  return !r.tooLong && !r.control && !r.bidi && !r.noChange;
+  return !REFUSALS.some((k) => r[k]);
 }
 
 /**
@@ -323,19 +297,20 @@ export function correctionRows(
     .filter((r) => !r.same)
     .map((r) => {
       const field = r.field as CorrectionField;
-      // Each value as the server checks it (bridge.parseCorrect): trimmed,
-      // then as written and as the community reads it.
+      // Each value as the server checks it (bridge.parseCorrect, checkProse):
+      // trimmed, then its references decoded (which keeps what is written).
       const values = [goTrim(r.theirs), goTrim(r.mine)];
-      const read = values.map(asRead);
+      const decoded = values.map(decodeRefs);
+      const corrected = goTrim(decoded[1]);
       return {
         field,
         current: r.theirs,
         corrected: r.mine,
         handling: handling(field, known),
         tooLong: values.some((v) => runes(v) > MAX_VALUE),
-        control: [...values, ...read].some((v) => CONTROL.test(v)),
-        bidi: read.some((v) => BIDI.test(v)),
-        noChange: read[1] === '' || read[1] === values[0],
+        control: decoded.some((v) => CONTROL.test(v)),
+        bidi: decoded.some((v) => BIDI.test(v)),
+        noChange: corrected === '' || corrected === values[0],
       };
     });
 }
@@ -418,16 +393,17 @@ export type CorrectionProblem =
  * refuses, checked as it does (bridge.parseCorrect): CRLF read as LF and
  * trimmed as Go trims; the form's blank or reading as nothing is none; over
  * MAX_EVIDENCE as the issue carries it (issueLength); a control character but
- * a line break or a tab, as written or read; a bidirectional control as read.
+ * a line break or a tab (CONTROL_IN_TEXT), or a bidirectional control, as
+ * written or as references decode it.
  */
 export function correctionProblem(ticked: number, evidence: string): CorrectionProblem | undefined {
   if (ticked === 0) return 'none';
   const e = goTrim(evidence.replaceAll('\r\n', '\n'));
-  const read = asRead(e);
-  if (e === NO_RESPONSE || !read) return 'noEvidence';
+  const decoded = decodeRefs(e);
+  if (e === NO_RESPONSE || !goTrim(decoded)) return 'noEvidence';
   if (issueLength(e) > MAX_EVIDENCE) return 'evidenceTooLong';
-  if (CONTROL_IN_EVIDENCE.test(e) || CONTROL_IN_EVIDENCE.test(read)) return 'evidenceControl';
-  if (BIDI.test(read)) return 'evidenceBidi';
+  if (CONTROL_IN_TEXT.test(decoded)) return 'evidenceControl';
+  if (BIDI.test(decoded)) return 'evidenceBidi';
   return undefined;
 }
 
@@ -468,7 +444,7 @@ export function correctionRequest(
     ...(named ? { recording_id: named.id } : {}),
     ...(asin ? { asin } : { isbn: detail.fields.isbn.value }),
     changes,
-    evidence: evidence.trim(),
+    evidence: goTrim(evidence),
   };
   const region = asinRegion(named, asin);
   if (region) params.region = region;

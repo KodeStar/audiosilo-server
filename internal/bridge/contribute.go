@@ -230,23 +230,21 @@ func CheckCorrect(raw json.RawMessage) (CorrectParams, error) {
 	return parseCorrect(raw)
 }
 
-// checkProse bounds an admin's text: valid UTF-8, at most max characters, no
-// control characters (unicode.IsControl, C1 included as the Bridge refuses
-// them; but line breaks and tabs when lines allows them) as written or as the
-// community reads it (asRead, whose trim can drop a C1 space like U+0085
-// before a trailing "&#32;" the Bridge still files), and, read that way, no
-// bidirectional override (isBidiControl), which the community refuses in a
-// batch.
+// checkProse bounds an admin's text: valid UTF-8, at most max characters, and,
+// its references decoded (decodeRefs, untrimmed: a trim could drop a C1 space
+// like U+0085 before a trailing "&#32;" the Bridge still files), no control
+// characters (unicode.IsControl, C1 included as the Bridge refuses them; but
+// line breaks and tabs when lines allows them) and no bidirectional override
+// (isBidiControl), which the community refuses in a batch.
 func checkProse(name, v string, max int, lines bool) error {
 	if !utf8.ValidString(v) || utf8.RuneCountInString(v) > max {
 		return invalid("%s must be at most %d characters of text", name, max)
 	}
-	control := func(r rune) bool { return unicode.IsControl(r) && !(lines && (r == '\n' || r == '\t')) }
-	read := asRead(v)
-	if strings.ContainsFunc(v, control) || strings.ContainsFunc(read, control) {
+	decoded := decodeRefs(v)
+	if strings.ContainsFunc(decoded, func(r rune) bool { return unicode.IsControl(r) && !(lines && (r == '\n' || r == '\t')) }) {
 		return invalid("%s holds a control character", name)
 	}
-	if strings.ContainsFunc(read, isBidiControl) {
+	if strings.ContainsFunc(decoded, isBidiControl) {
 		return invalid("%s holds a bidirectional override character", name)
 	}
 	return nil
@@ -264,24 +262,31 @@ const noResponse = "_No response_"
 // ("&#X" too, which GitHub decodes though the community doesn't) or named.
 var charRef = regexp.MustCompile(`&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);`)
 
-// asRead is v as the community reads it, trimmed: each character reference
-// decoded, one decoding to whitespace read as a space, and one decoding to
-// more than two characters left as written (it isn't one: html.UnescapeString
-// reads "&copyright;" as "&copy" and "right;").
+// asRead is v as the community reads it: its references decoded (decodeRefs),
+// then trimmed.
 func asRead(v string) string {
-	if strings.Contains(v, "&") {
-		v = charRef.ReplaceAllStringFunc(v, func(ref string) string {
-			r := html.UnescapeString(ref)
-			if utf8.RuneCountInString(r) > 2 {
-				return ref
-			}
-			if c, n := utf8.DecodeRuneInString(r); n == len(r) && unicode.IsSpace(c) {
-				return " "
-			}
-			return r
-		})
+	return strings.TrimSpace(decodeRefs(v))
+}
+
+// decodeRefs is v with each character reference decoded as the community
+// reads it: one decoding to whitespace read as a space, and one decoding to
+// more than two characters left as written (it isn't one: html.UnescapeString
+// reads "&copyright;" as "&copy" and "right;"). A reference is ASCII, so every
+// other character of v stays as written.
+func decodeRefs(v string) string {
+	if !strings.Contains(v, "&") {
+		return v
 	}
-	return strings.TrimSpace(v)
+	return charRef.ReplaceAllStringFunc(v, func(ref string) string {
+		r := html.UnescapeString(ref)
+		if utf8.RuneCountInString(r) > 2 {
+			return ref
+		}
+		if c, n := utf8.DecodeRuneInString(r); n == len(r) && unicode.IsSpace(c) {
+			return " "
+		}
+		return r
+	})
 }
 
 // isBidiControl reports the bidirectional embedding, override and isolate

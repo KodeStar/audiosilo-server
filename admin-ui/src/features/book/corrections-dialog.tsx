@@ -33,6 +33,7 @@ import {
   lookupBy,
   MAX_EVIDENCE,
   MAX_VALUE,
+  REFUSALS,
   sendable,
   type CorrectionRow,
 } from './corrections-model';
@@ -177,16 +178,15 @@ function CorrectionsForm({
     if (ok) onDone();
   };
 
+  // Each evidence problem but noEvidence (said once touched) is its own key.
   const evidenceError =
-    touched && problem === 'noEvidence'
-      ? t('book.corrections.evidenceRequired')
-      : problem === 'evidenceTooLong'
-        ? t('book.corrections.evidenceTooLong', { max: formatNumber(MAX_EVIDENCE, lang) })
-        : problem === 'evidenceControl'
-          ? t('book.corrections.evidenceControl')
-          : problem === 'evidenceBidi'
-            ? t('book.corrections.evidenceBidi')
-            : undefined;
+    problem === 'noEvidence'
+      ? touched
+        ? t('book.corrections.evidenceRequired')
+        : undefined
+      : problem && problem !== 'none'
+        ? t(`book.corrections.${problem}`, { max: formatNumber(MAX_EVIDENCE, lang) })
+        : undefined;
 
   let body: React.ReactNode;
   if (search.isError) {
@@ -284,15 +284,8 @@ function ReviewRow({
   const id = useId();
   const label = t(`book.field.${r.field}`);
   const ok = sendable(r);
-  const refusal = r.tooLong
-    ? t('book.corrections.tooLong', { max: formatNumber(MAX_VALUE, lang) })
-    : r.control
-      ? t('book.corrections.control')
-      : r.bidi
-        ? t('book.corrections.bidi')
-        : r.noChange
-          ? t('book.corrections.noChange')
-          : undefined;
+  const flag = REFUSALS.find((k) => r[k]);
+  const refusal = flag && t(`book.corrections.${flag}`, { max: formatNumber(MAX_VALUE, lang) });
   return (
     <li className="flex items-start gap-3 px-4 py-3">
       <Checkbox
