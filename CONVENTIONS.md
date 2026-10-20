@@ -1594,8 +1594,7 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `generate_open` while a `sidecars.generate` job is open for the book; a NEW generate job is refused 409
   `contribute_open` (`ErrContributeOpen`) while a contribute job is queued or working, and cancels a parked
   one ("replaced what it was sharing"). Result (the Bridge's): `{library_id, path, work_id,
-  contributed: {characters?, recaps?} (issue URLs), covered: [dimensions the community already had],
-  summary_dropped?}`. `meta.correct` (new family and feature `meta`; "Suggest corrections"): a book `path`,
+  contributed: {characters?, recaps?} (issue URLs), covered: [dimensions the community already had]}`. `meta.correct` (new family and feature `meta`; "Suggest corrections"): a book `path`,
   params strict `{work_id, recording_id?, asin?, isbn?, region?, changes: [{field, current, corrected}],
   evidence, source?}` (1-25 changes of `bridge.CorrectionFields` = title, author, narrator, series,
   series_index, more_series, published, isbn, each once; values trimmed, one line, at most 500
