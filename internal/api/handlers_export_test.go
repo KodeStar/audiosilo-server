@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -153,5 +154,115 @@ func TestServerInfoExportCapability(t *testing.T) {
 	}
 	if !out.Capabilities["export"] {
 		t.Fatalf("capabilities.export = false, want true: %s", body)
+	}
+}
+
+// TestExportDescriptionAndCopies: the allowed and denied pairs for
+// ?include=description and ?copies=: a description only when asked for (the
+// file stays the shareable one), one row per copy with copies=separate and the
+// merged row by default, a member refused, an unknown value a 400.
+func TestExportDescriptionAndCopies(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t)
+	ctx := context.Background()
+	adminTok, memberTok, _ := adminAndMember(t, e)
+	lib, _ := e.cat.CreateLibrary(ctx, catalog.Library{Name: "My Books", Root: t.TempDir()})
+	for _, b := range []*catalog.Book{
+		{LibraryID: lib.ID, RelPath: "Rips/Die Trying.mp3", Title: "Die Trying", Author: "Lee Child", ASIN: "B0TESTASIN"},
+		{LibraryID: lib.ID, RelPath: "Lee Child/Die Trying", IsFolder: true, Title: "Die Trying", Author: "Lee Child", ASIN: "B0TESTASIN"},
+	} {
+		if _, err := e.cat.UpsertBook(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, set := range map[string]map[string]string{
+		"Rips/Die Trying.mp3":  {catalog.FieldTags: `["Rip"]`},
+		"Lee Child/Die Trying": {catalog.FieldTags: `["Owned"]`, catalog.FieldDescription: "Reacher is kidnapped.", catalog.FieldPublished: "1998"},
+	} {
+		if err := e.cat.EditBook(ctx, lib.ID, path, catalog.BookEdit{Set: set}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := "/api/v1/admin/libraries/" + strconv.FormatInt(lib.ID, 10) + "/export"
+	type row struct {
+		Paths       []string `json:"paths"`
+		Tags        []string `json:"tags"`
+		Published   string   `json:"published"`
+		Description string   `json:"description"`
+	}
+	export := func(query string) ([]row, string, string) {
+		t.Helper()
+		resp, body := e.do(t, "GET", path+query, adminTok, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("export%s = %d %s", query, resp.StatusCode, body)
+		}
+		var out struct {
+			Books []row `json:"books"`
+		}
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Books, resp.Header.Get("Content-Disposition"), body
+	}
+
+	// Default: the copies merge, the date rides along, no description.
+	rows, cd, body := export("")
+	if len(rows) != 1 || rows[0].Published != "1998" || strings.Contains(body, `"description"`) {
+		t.Errorf("default export = %s", body)
+	}
+	if strings.Contains(cd, "-private") {
+		t.Errorf("default Content-Disposition = %q", cd)
+	}
+	// Explicitly merged is the default.
+	if rows, _, body := export("?copies=merged"); len(rows) != 1 {
+		t.Errorf("copies=merged = %s", body)
+	}
+	// A description alone: present, and the file is still the shareable one.
+	rows, cd, body = export("?include=description")
+	if len(rows) != 1 || rows[0].Description != "Reacher is kidnapped." || strings.Contains(body, `"paths"`) || strings.Contains(body, `"tags"`) {
+		t.Errorf("include=description = %s", body)
+	}
+	if strings.Contains(cd, "-private") {
+		t.Errorf("include=description Content-Disposition = %q, want the shareable name", cd)
+	}
+	// The console's personal export: a row per copy, each with its own path and tags.
+	rows, cd, body = export("?include=paths,tags,description&copies=separate")
+	if len(rows) != 2 {
+		t.Fatalf("copies=separate rows = %d, want 2: %s", len(rows), body)
+	}
+	got := map[string]row{}
+	for _, r := range rows {
+		if len(r.Paths) != 1 {
+			t.Fatalf("row paths = %q, want one", r.Paths)
+		}
+		got[r.Paths[0]] = r
+	}
+	if r := got["Rips/Die Trying.mp3"]; !slices.Equal(r.Tags, []string{"Rip"}) || r.Description != "" {
+		t.Errorf("rip row = %+v", r)
+	}
+	if r := got["Lee Child/Die Trying"]; !slices.Equal(r.Tags, []string{"Owned"}) || r.Description != "Reacher is kidnapped." {
+		t.Errorf("tagged row = %+v", r)
+	}
+	if !strings.Contains(cd, "-private.json") {
+		t.Errorf("personal export Content-Disposition = %q, want -private", cd)
+	}
+
+	// Denied: a member, with or without the new values.
+	if resp, _ := e.do(t, "GET", path+"?include=description&copies=separate", memberTok, ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("member export = %d, want 403", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "GET", path+"?copies=separate", "", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("anonymous export = %d, want 401", resp.StatusCode)
+	}
+	// An unknown value is a 400, and the include= message names every value.
+	for _, q := range []string{"?copies=bogus", "?copies=Separate", "?copies=separate,merged"} {
+		if resp, _ := e.do(t, "GET", path+q, adminTok, ""); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("export%s = %d, want 400", q, resp.StatusCode)
+		}
+	}
+	resp, body := e.do(t, "GET", path+"?include=bogus", adminTok, "")
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "paths") ||
+		!strings.Contains(body, "tags") || !strings.Contains(body, "description") {
+		t.Errorf("include=bogus = %d %s, want a 400 naming paths, tags and description", resp.StatusCode, body)
 	}
 }

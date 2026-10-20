@@ -24,7 +24,9 @@ import (
 // or anything else describing the filesystem, nor the owner's own tags - because
 // it is meant to leave the server. ?include= takes a comma list for the admin's
 // own scripts (catalog.ExportOptions): paths adds each row's paths, tags its
-// tags; any other value is a 400, so a typo never silently drops what was asked
+// tags, description its description. ?copies=separate makes one row per indexed
+// book instead of merging copies of the same book (merged, the default). Any
+// other value of either is a 400, so a typo never silently drops what was asked
 // for.
 func (a *API) handleExportLibrary(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathInt(r, "id")
@@ -45,11 +47,21 @@ func (a *API) handleExportLibrary(w http.ResponseWriter, r *http.Request) {
 				opt.IncludePaths = true
 			case "tags":
 				opt.IncludeTags = true
+			case "description":
+				opt.IncludeDescription = true
 			default:
-				writeError(w, http.StatusBadRequest, `include must be a comma list of "paths" and "tags"`)
+				writeError(w, http.StatusBadRequest, `include must be a comma list of "paths", "tags" and "description"`)
 				return
 			}
 		}
+	}
+	switch r.URL.Query().Get("copies") {
+	case "", "merged":
+	case "separate":
+		opt.SeparateCopies = true
+	default:
+		writeError(w, http.StatusBadRequest, `copies must be "merged" or "separate"`)
+		return
 	}
 	exp, err := a.cat.ExportLibraryBooks(r.Context(), id, Version, opt)
 	if errors.Is(err, catalog.ErrNotFound) {

@@ -1727,6 +1727,8 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   so a user can mark which entries of a series they own. **The file leaves the
   server**, so by default it carries bibliographic facts only (title, subtitle, authors, narrators,
   series + position (`series_position` "1-3" for a range: the importer's grammar takes one),
+  `series_list` (`[{name, position}]`, main first, only for a book in more than its main series,
+  as the player's `Book.SeriesList`), `published`,
   publisher, language, abridged, genres, asin/isbn, runtime_min, chapters; `version` stays 1,
   the meta site's readers ignore keys they don't know) and **never by default** a path, size,
   codec, format or anything else about the filesystem, nor the book's tags (the owner's own notes,
@@ -1734,8 +1736,12 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   (`catalog.ExportOptions`; any other value is a 400): `paths` adds each row's `paths` (every copy
   collapsed into the row, index order; the envelope's `library.id` names the library, one export =
   one library) and `tags` its `tags` (every copy's, each once), for the admin's own scripts; such a
-  file is named `...-<YYYY-MM-DD>-private.json`, apart from the one to share; the console's "Export
-  with file paths and tags..." asks for both and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
+  file is named `...-<YYYY-MM-DD>-private.json`, apart from the one to share. `description` adds
+  each row's `description` (opt-in for size, not privacy: alone it keeps the shareable name), read
+  for the whole library in ONE query (`catalog.descriptions`, like `chapterCounts`), never per
+  book. `?copies=separate` (else `merged`, the default; any other value a 400) makes one row per
+  indexed book, no merging. The console's "Export with file paths and tags..." asks for
+  `include=paths,tags,description&copies=separate` and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
   `ListBooks`, never OFFSET; copies of the same book within the library collapse on
   `exposedDedupKey`, the kept entry taking each fact from whichever copy has it -
   `mergeExportBook`, since the copy that sorts first may be the untagged rip); the

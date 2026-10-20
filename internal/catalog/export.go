@@ -26,7 +26,10 @@ import (
 // owner's own note ("Owned", "Read"), neither of which its owner may mean to
 // publish. Only an admin asking for them (ExportOptions, for their own scripts,
 // which tie a row back to a book) gets each row's paths or tags, and the
-// console warns them the file is then theirs alone.
+// console warns them the file is then theirs alone. The description is opt-in
+// too, for size rather than privacy: it is long and usually a publisher's
+// blurb, so the file to share stays lean, and asking for it alone does not make
+// the file a private one.
 //
 // The envelope is the shape the metadata site's importer already parses; treat
 // it as a wire contract (additive changes only, `omitempty` everywhere).
@@ -55,7 +58,8 @@ type LibraryExport struct {
 	ExportedAt    string        `json:"exported_at"`
 	Books         []ExportBook  `json:"books"`
 	// private is set when the export holds paths or tags (ExportOptions): its
-	// file is named apart from the shareable one (Filename).
+	// file is named apart from the shareable one (Filename). A description is
+	// not personal, so it never sets it.
 	private bool
 }
 
@@ -67,10 +71,11 @@ type ExportLibrary struct {
 }
 
 // ExportBook is one book as the importer sees it: bibliographic facts only,
-// unless the export was asked for paths or tags. Every field but the title is
-// optional and omitted when unknown. The importer reads subtitle, publisher,
-// language and abridged and ignores keys it doesn't know (genres, tags, paths),
-// so the envelope's version stays 1.
+// unless the export was asked for paths, tags or descriptions. Every field but
+// the title is optional and omitted when unknown. The importer reads subtitle,
+// publisher, language and abridged and ignores keys it doesn't know (genres,
+// series_list, published, description, tags, paths), so the envelope's version
+// stays 1.
 type ExportBook struct {
 	Title          string   `json:"title"`
 	Subtitle       string   `json:"subtitle,omitempty"`
@@ -78,26 +83,47 @@ type ExportBook struct {
 	Narrators      []string `json:"narrators,omitempty"`
 	Series         string   `json:"series,omitempty"`
 	SeriesPosition string   `json:"series_position,omitempty"`
-	Publisher      string   `json:"publisher,omitempty"`
-	Language       string   `json:"language,omitempty"`
-	Abridged       *bool    `json:"abridged,omitempty"` // absent when unknown
-	Genres         []string `json:"genres,omitempty"`
-	Tags           []string `json:"tags,omitempty"` // only with ExportOptions.IncludeTags
-	ASIN           string   `json:"asin,omitempty"`
-	ISBN           string   `json:"isbn,omitempty"`
-	RuntimeMin     int      `json:"runtime_min,omitempty"`
-	Chapters       int      `json:"chapters,omitempty"`
+	// SeriesList is every series the book is in, the main one (Series) first,
+	// present exactly when the player's Book.SeriesList is: the book is in a
+	// series beyond its main one. Series/SeriesPosition stay the main series.
+	SeriesList []ExportSeries `json:"series_list,omitempty"`
+	// Published is the book's publication date, YYYY[-MM[-DD]].
+	Published   string   `json:"published,omitempty"`
+	Description string   `json:"description,omitempty"` // only with ExportOptions.IncludeDescription
+	Publisher   string   `json:"publisher,omitempty"`
+	Language    string   `json:"language,omitempty"`
+	Abridged    *bool    `json:"abridged,omitempty"` // absent when unknown
+	Genres      []string `json:"genres,omitempty"`
+	Tags        []string `json:"tags,omitempty"` // only with ExportOptions.IncludeTags
+	ASIN        string   `json:"asin,omitempty"`
+	ISBN        string   `json:"isbn,omitempty"`
+	RuntimeMin  int      `json:"runtime_min,omitempty"`
+	Chapters    int      `json:"chapters,omitempty"`
 	// Paths tie the row back to the books it stands for: the path of every copy
-	// that collapsed into it (index order), in the envelope's library. Only with
+	// that collapsed into it (index order; its own alone with
+	// ExportOptions.SeparateCopies), in the envelope's library. Only with
 	// ExportOptions.IncludePaths; absent otherwise.
 	Paths []string `json:"paths,omitempty"`
 }
 
-// ExportOptions is what an export holds beyond the bibliographic facts: for
-// the admin's own scripts, never for a file meant to be shared.
+// ExportSeries is one series a book is in, its position in the export's
+// string form ("2", "2.5", "1-3" for a range; FormatSeriesRange), omitted when
+// the book has none in that series.
+type ExportSeries struct {
+	Name     string `json:"name"`
+	Position string `json:"position,omitempty"`
+}
+
+// ExportOptions is what an export holds beyond the bibliographic facts, and
+// how its rows are made: for the admin's own scripts. Paths and tags are never
+// for a file meant to be shared (they make it private, Filename).
 type ExportOptions struct {
-	IncludePaths bool // each row's paths (ExportBook.Paths)
-	IncludeTags  bool // each row's tags (ExportBook.Tags)
+	IncludePaths       bool // each row's paths (ExportBook.Paths)
+	IncludeTags        bool // each row's tags (ExportBook.Tags)
+	IncludeDescription bool // each row's description (ExportBook.Description)
+	// SeparateCopies makes one row per indexed book: copies of the same book
+	// are not merged, so each row has its own path, tags and facts.
+	SeparateCopies bool
 }
 
 // Filename is the file name to offer the download as:
@@ -143,11 +169,17 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 	if err != nil {
 		return nil, err
 	}
+	var descriptions map[int64]string
+	if opt.IncludeDescription {
+		if descriptions, err = c.descriptions(ctx, libraryID); err != nil {
+			return nil, err
+		}
+	}
 
 	// seen collapses copies of the same book within the library (the same grouping
 	// key search/"recently added" de-duplicate on), mapping the key to the entry
 	// already emitted for it. A blank key means the metadata is too weak to merge
-	// on, so those books are always kept.
+	// on, so those books are always kept; with SeparateCopies nothing merges.
 	seen := map[string]int{}
 	cursor := ""
 	for {
@@ -169,7 +201,8 @@ func (c *Catalog) ExportLibraryBooks(ctx context.Context, libraryID int64, serve
 			if opt.IncludeTags {
 				eb.Tags = b.Tags
 			}
-			if key := exposedDedupKey(*b); key != "" {
+			eb.Description = descriptions[b.ID] // nil map: ""
+			if key := exposedDedupKey(*b); key != "" && !opt.SeparateCopies {
 				if at, ok := seen[key]; ok {
 					mergeExportBook(&out.Books[at], eb)
 					continue
@@ -197,6 +230,8 @@ func exportBook(b *Book, chapters int) ExportBook {
 		Narrators:      names.Split(b.Narrator),
 		Series:         strings.TrimSpace(b.Series),
 		SeriesPosition: FormatSeriesRange(b.SeriesIndex, b.SeriesIndexEnd),
+		SeriesList:     exportSeriesList(b.SeriesList),
+		Published:      strings.TrimSpace(b.Published),
 		Publisher:      strings.TrimSpace(b.Publisher),
 		Language:       strings.TrimSpace(b.Language),
 		Abridged:       b.Abridged,
@@ -206,6 +241,19 @@ func exportBook(b *Book, chapters int) ExportBook {
 		RuntimeMin:     runtimeMinutes(b.Duration),
 		Chapters:       chapters,
 	}
+}
+
+// exportSeriesList projects a book's series list onto the export shape; nil
+// (omitted) for a book with none.
+func exportSeriesList(list []SeriesRef) []ExportSeries {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]ExportSeries, len(list))
+	for i, s := range list {
+		out[i] = ExportSeries{Name: strings.TrimSpace(s.Name), Position: FormatSeriesRange(s.Position, s.PositionEnd)}
+	}
+	return out
 }
 
 // mergeExportBook folds another copy of an already-exported book into the entry
@@ -230,10 +278,15 @@ func mergeExportBook(dst *ExportBook, src ExportBook) {
 	list(&dst.Authors, src.Authors)
 	list(&dst.Narrators, src.Narrators)
 	list(&dst.Genres, src.Genres)
+	if len(dst.SeriesList) == 0 {
+		dst.SeriesList = src.SeriesList
+	}
 	dst.Title = cmp.Or(dst.Title, src.Title)
 	dst.Subtitle = cmp.Or(dst.Subtitle, src.Subtitle)
 	dst.Series = cmp.Or(dst.Series, src.Series)
 	dst.SeriesPosition = cmp.Or(dst.SeriesPosition, src.SeriesPosition)
+	dst.Published = cmp.Or(dst.Published, src.Published)
+	dst.Description = cmp.Or(dst.Description, src.Description)
 	dst.Publisher = cmp.Or(dst.Publisher, src.Publisher)
 	dst.Language = cmp.Or(dst.Language, src.Language)
 	dst.Abridged = cmp.Or(dst.Abridged, src.Abridged)
@@ -264,6 +317,30 @@ func (c *Catalog) chapterCounts(ctx context.Context, libraryID int64) (map[int64
 			return nil, err
 		}
 		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// descriptions returns the non-empty description per book id for a whole
+// library in one query: ListBooks leaves the (long) description out, and a
+// GetBook per book would be one query per row.
+func (c *Catalog) descriptions(ctx context.Context, libraryID int64) (map[int64]string, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT id, description FROM books WHERE library_id = ? AND description != ''`, libraryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var d string
+		if err := rows.Scan(&id, &d); err != nil {
+			return nil, err
+		}
+		if d = strings.TrimSpace(d); d != "" {
+			out[id] = d
+		}
 	}
 	return out, rows.Err()
 }
