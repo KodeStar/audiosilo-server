@@ -424,16 +424,20 @@ func TestBridgeJobEnded(t *testing.T) {
 }
 
 // Each announced park reads as a sentence of its own: a refused credential
-// says where to replace it and a missing GitHub sign-in where to sign in,
-// neither asking for a Retry (the Bridge resumes both); a spent budget fits the
-// book's and the month's alike (the monthly one resumes by itself); an unknown
-// code points at the page.
+// says where to replace it (the agent container's own one wins), with no Retry;
+// a GitHub credential the Bridge can't use says to sign in, and to retry the
+// job when the Bridge was signed in but couldn't reach GitHub (nothing resumes
+// that by itself); a spent budget fits the book's and the month's alike (one in
+// config.yaml or the environment takes a restart, the monthly one resets); a
+// book with no community record says it needs one; an unknown code points at
+// the page.
 func TestBridgeParkReasons(t *testing.T) {
 	t.Parallel()
 	for code, want := range map[string]string{
-		"agent_credential_refused": "The agent's credential was refused. Replace it on the Bridge's Accounts tab and the job carries on. If the agent container has a credential of its own, replace it there; the job tries again by itself a little later.",
-		"contrib_unavailable":      "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge's Accounts tab and the job carries on.",
-		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset.",
+		"agent_credential_refused": "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has one of its own, which it uses first; the job then carries on by itself.",
+		"contrib_unavailable":      "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, retry the job there once GitHub can be reached.",
+		"budget_exceeded":          "The job reached a spending limit set on the Bridge. Raise it there (one set in its config.yaml or environment needs a restart), or wait for the monthly limit to reset; the job then carries on by itself.",
+		"core_needed":              "The book needs a community record before it can be contributed.",
 		"something_new":            "See the job in Settings > Bridge.",
 	} {
 		if got := bridgeParkReason(code); got != want {

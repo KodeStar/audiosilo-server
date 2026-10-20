@@ -1633,11 +1633,18 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   Result: `{issue_url, issue_number, changes, auto: [fields], maintainer: [fields]}`. Notifications word
   them "Shared with the community" / "Corrections sent" (failed: "Sharing with the community failed",
   "Corrections failed"; a contribute job that filed nothing, its result's `contributed` empty and `covered`
-  not, `bridge.Job.SharedNothing`: "Already in the community"), and the Bridge's `contrib_unavailable` and
-  `agent_credential_refused` parks say to fix the credential on the Bridge, wherever it holds it (its
-  Accounts tab, the agent container). Neither needs a Retry: a GitHub sign-in on the Accounts tab resumes
-  the job at once (the Bridge's `githubChanged`), as does an agent credential replaced there
-  (`agentCredentialChanged`); one replaced in the agent container is picked up at the park's `retry_at`.
+  not, `bridge.Job.SharedNothing`: "Already in the community"). Neither kind parks on a credential: the
+  Bridge fails one it can't file for want of a GitHub sign-in, to be queued again. The credential parks
+  are other kinds', worded alike in the console (`bridge.park.<code>`) and the push
+  (`notify.bridgeParkReason`): `agent_credential_refused` (a `sidecars.generate` or `sidecars.describe`
+  job's) says to replace the credential where the agent gets it (the Bridge's Accounts tab, or the agent
+  container when it has one of its own, which wins), with no Retry: a change on the Accounts tab resumes
+  the job at once (the Bridge's `agentCredentialChanged`), one in the agent container at the park's
+  `retry_at`. `contrib_unavailable` (a `sidecars.generate` job's, at its `contribute: "issue"` stage) says
+  to sign in to GitHub on the Accounts tab, which resumes the job at once (`githubChanged`), and, for a
+  Bridge already signed in, to retry the job once GitHub can be reached: the Bridge parks it too when a
+  sign-in's token couldn't be refreshed (GitHub unreachable), and nothing resumes that by itself (no
+  `retry_at`, no re-admit at a restart).
 - **Managed modules (BRIDGE-PLAN.md Phase 2a, `internal/modules`, `api/modules.go`)**: optional features
   that ship **off**, turned on in the console's Settings > Modules without a restart; nothing turns one on
   by itself (pairing a Bridge doesn't). A module is a `modules.Module` value: `ID` (its capability flag,

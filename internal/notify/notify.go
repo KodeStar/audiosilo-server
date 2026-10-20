@@ -469,20 +469,23 @@ func bridgeJobBook(ev catalog.ServerEvent) string {
 // bridgeParkReason words a parked job's park code (the Bridge's
 // progress.park.code). A transient park (the agent's rate limit, a short
 // outage) is never announced (bridge.Job.Notable), so none is worded here. A
-// park the Bridge resumes on a change on its Accounts tab (a replaced agent
-// credential, a GitHub sign-in) says so; the others promise nothing either way,
-// as one may still resume by itself (a monthly budget at the month's turn). The
-// Bridge's own page says more.
+// sentence says the job carries on by itself only where the Bridge resumes it
+// with no Retry whatever the fix (a replaced agent credential, a raised or
+// reset budget), and names the Retry where one can still be needed: a Bridge
+// already signed in to GitHub parks contrib_unavailable too when GitHub couldn't
+// be reached, and only a new sign-in resumes that park by itself. The agent and
+// GitHub sentences are the console's (bridge.park.<code> in en.json), as the
+// bell shows them. The Bridge's own page says more.
 func bridgeParkReason(code string) string {
 	switch code {
 	case "book_not_writable":
 		return "The Bridge can't write into the book's folder."
 	case "budget_exceeded":
-		return "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset."
+		return "The job reached a spending limit set on the Bridge. Raise it there (one set in its config.yaml or environment needs a restart), or wait for the monthly limit to reset; the job then carries on by itself."
 	case "agent_credential_refused":
-		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab and the job carries on. If the agent container has a credential of its own, replace it there; the job tries again by itself a little later."
+		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has one of its own, which it uses first; the job then carries on by itself."
 	case "contrib_unavailable":
-		return "The Bridge can't send to the community: it has no GitHub sign-in. Sign in to GitHub on the Bridge's Accounts tab and the job carries on."
+		return "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, retry the job there once GitHub can be reached."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	case "chapters_not_detected":

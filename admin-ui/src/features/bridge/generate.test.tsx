@@ -553,7 +553,7 @@ describe('generate characters and recaps', () => {
     renderApp(URL);
     expect(
       await screen.findByText(
-        "The agent's credential was refused. Replace it on the Bridge's Accounts tab and the job carries on. If the agent container has a credential of its own, replace it there; the job tries again by itself.",
+        "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has one of its own, which it uses first; the job then carries on by itself.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText('Trying again now.')).toBeInTheDocument();
