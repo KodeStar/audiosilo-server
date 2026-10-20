@@ -2824,7 +2824,7 @@
   "settings.modules.bridge.no_feature": "Il tuo Bridge non può ancora farlo",
   "settings.modules.bridge.open": "Impostazioni del Bridge",
   "settings.module.contributions.name": "Contributi",
-  "settings.module.contributions.blurb": "Invia le tue correzioni ai libri, e i personaggi e i riassunti generati dal tuo Bridge, al database dei metadati della comunità, così ogni server AudioSilo può usarli. Arriva in una versione successiva.",
+  "settings.module.contributions.blurb": "Invia le tue correzioni ai libri, e i personaggi e i riassunti generati dal tuo Bridge, al database dei metadati della comunità, così ogni server AudioSilo può usarli.",
   "settings.module.contributions.needs": "Accedi a GitHub sul tuo Bridge",
   "bridge.title": "Bridge",
   "bridge.about": "La Bridge è un compagno facoltativo che funziona accanto al server. Scrive nelle tue librerie ed esegue i lavori pesanti, così il server resta in sola lettura. Il server non si collega mai a lei: una volta abbinata, è la Bridge a chiamare.",

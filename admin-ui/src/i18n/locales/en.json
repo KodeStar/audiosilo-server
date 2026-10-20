@@ -2675,7 +2675,7 @@
   "settings.modules.bridge.no_feature": "Your Bridge can't do this yet",
   "settings.modules.bridge.open": "Bridge settings",
   "settings.module.contributions.name": "Contributions",
-  "settings.module.contributions.blurb": "Send your book corrections, and the characters and recaps your Bridge generates, to the community metadata database, so every AudioSilo server can use them. Arrives in a later release.",
+  "settings.module.contributions.blurb": "Send your book corrections, and the characters and recaps your Bridge generates, to the community metadata database, so every AudioSilo server can use them.",
   "settings.module.contributions.needs": "Sign in to GitHub on your Bridge",
   "bridge.title": "Bridge",
   "bridge.about": "The Bridge is an optional companion that runs beside the server. It writes to your libraries and runs heavy jobs, so the server itself stays read-only. The server never connects to it: once paired, the Bridge calls in.",
