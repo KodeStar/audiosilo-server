@@ -21,6 +21,13 @@ const bridgeOn = {
   bridge: { version: '0.2.0', features: ['bridge', 'sidecars'] },
 };
 
+/** The contributions module on (Phase 2b): the contribute switch is offered. */
+const contributionsOn = {
+  ...bridgeOn,
+  capabilities: { ...bridgeOn.capabilities, contributions: true },
+  bridge: { version: '0.3.0', features: ['bridge', 'sidecars', 'contribute'] },
+};
+
 function estimate(over: Partial<BridgeEstimate> = {}): BridgeEstimate {
   return {
     kind: 'sidecars.generate',
@@ -159,6 +166,7 @@ describe('generate characters and recaps', () => {
     const user = userEvent.setup();
     const calls = mockFetch(
       routes({
+        'GET /server': { body: contributionsOn },
         'GET /admin/bridge/estimate': {
           body: estimate({
             source: 'ebook',
@@ -188,7 +196,11 @@ describe('generate characters and recaps', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
     expect(await within(dialog).findByText('The ebook beside it')).toBeInTheDocument();
     expect(within(dialog).getByText('The Way of Kings.epub')).toBeInTheDocument();
-    expect(within(dialog).getByText('On this server only')).toBeInTheDocument();
+    // A Bridge that can contribute, with the module on: the switch starts on.
+    expect(within(dialog).getByRole('switch')).toBeChecked();
+    expect(
+      within(dialog).getByText('On this server, and offered to the community metadata'),
+    ).toBeInTheDocument();
     const earlierBox = within(dialog).getByRole('checkbox', {
       name: /also generate for 1 earlier book in the series first/i,
     });
@@ -206,12 +218,6 @@ describe('generate characters and recaps', () => {
     // The card asked for the brief estimate; the dialog for the full one, once.
     expect(estimates(calls, true).length).toBeGreaterThan(0);
     expect(estimates(calls, false)).toHaveLength(1);
-
-    // Contributing says where the results go.
-    await user.click(within(dialog).getByRole('switch'));
-    expect(
-      within(dialog).getByText('On this server, and offered to the community metadata'),
-    ).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole('button', { name: 'Generate for 2 books' }));
     await waitFor(() => expect(queued(calls)).toHaveLength(2));
@@ -303,6 +309,7 @@ describe('generate characters and recaps', () => {
     const user = userEvent.setup();
     const calls = mockFetch(
       routes({
+        'GET /server': { body: contributionsOn },
         'GET /admin/bridge/estimate': { body: estimate({ can_contribute: false }) },
         'POST /admin/bridge/jobs': { status: 201, body: job({ state: 'queued' }) },
       }),
@@ -313,6 +320,46 @@ describe('generate characters and recaps', () => {
     expect(await within(dialog).findByText('On this server only')).toBeInTheDocument();
     expect(within(dialog).queryByRole('switch')).toBeNull();
     expect(within(dialog).queryByText('Also contribute to the community')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Generate' }));
+    await waitFor(() => expect(queued(calls)).toHaveLength(1));
+    expect(queued(calls)[0].body).toMatchObject({ params: { contribute: 'local' } });
+  });
+
+  it('offers no contribute switch while the contributions module is off, even when the Bridge can', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(
+      routes({
+        'GET /admin/bridge/estimate': { body: estimate({ can_contribute: true }) },
+        'POST /admin/bridge/jobs': { status: 201, body: job({ state: 'queued' }) },
+      }),
+    );
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    expect(await within(dialog).findByText('On this server only')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('switch')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Generate' }));
+    await waitFor(() => expect(queued(calls)).toHaveLength(1));
+    expect(queued(calls)[0].body).toMatchObject({ params: { contribute: 'local' } });
+  });
+
+  it('keeps the results on this server when the switch is turned off', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(
+      routes({
+        'GET /server': { body: contributionsOn },
+        'POST /admin/bridge/jobs': { status: 201, body: job({ state: 'queued' }) },
+      }),
+    );
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Generate characters and recaps' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Generate characters and recaps' });
+    const toggle = await within(dialog).findByRole('switch', {
+      name: 'Also contribute to the community',
+    });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    expect(within(dialog).getByText('On this server only')).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Generate' }));
     await waitFor(() => expect(queued(calls)).toHaveLength(1));
     expect(queued(calls)[0].body).toMatchObject({ params: { contribute: 'local' } });
@@ -506,7 +553,7 @@ describe('generate characters and recaps', () => {
     renderApp(URL);
     expect(
       await screen.findByText(
-        "The agent's credential was refused. Replace it in the agent container.",
+        "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has one of its own, which it uses first; the job then carries on by itself.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText('Trying again now.')).toBeInTheDocument();

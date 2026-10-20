@@ -18,7 +18,14 @@ import { formatSeriesPosition } from '@/lib/format';
 import { checkLabels, labelsText } from '@/lib/labels';
 import type { Phrase } from '@/lib/phrase';
 import { sameSeries } from '@/lib/series-key';
-import { CONTROL, MAX_SERIES_INDEX, MAX_SHORT, NUMBER, parseSeriesRange } from './field-rules';
+import {
+  CONTROL,
+  CONTROL_IN_TEXT,
+  MAX_SERIES_INDEX,
+  MAX_SHORT,
+  NUMBER,
+  parseSeriesRange,
+} from './field-rules';
 import {
   moreSeriesRefs,
   moreSeriesText,
@@ -43,15 +50,13 @@ export interface FieldCheck {
 
 const MAX_DESCRIPTION = 20000;
 const MAX_LANGUAGE = 64;
-// A description keeps line breaks and tabs.
-// eslint-disable-next-line no-control-regex
-const CONTROL_IN_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
 const PUBLISHED = /^\d{4}(-\d{2}(-\d{2})?)?$/;
 const ASIN = /^[A-Z0-9]{10}$/;
 /** An ISBN-10 or ISBN-13, upper case, without hyphens or spaces. */
 export const ISBN = /^(\d{9}[\dX]|\d{13})$/;
 
-const runes = (s: string) => [...s].length;
+/** A string's length in characters (code points), as the server counts it (utf8.RuneCountInString). */
+export const runes = (s: string) => [...s].length;
 
 /** Whether a YYYY[-MM[-DD]] string names a real date. */
 function realDate(v: string): boolean {

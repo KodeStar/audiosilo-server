@@ -433,6 +433,18 @@ func (c *Catalog) BookMatchState(ctx context.Context, libraryID int64, relPath s
 	return &st, nil
 }
 
+// EditedValue is field's value as the book holds it when that is an admin's
+// edit (SourceEdited, never a scanned, path, ABS or community value) saying the
+// same as value (sameFieldValue), with ok false otherwise: the Bridge's
+// meta.correct job files only an admin's own edits.
+func (st *MatchState) EditedValue(field, value string) (edited string, ok bool) {
+	fv := st.Fields[field]
+	if fv.Source != SourceEdited || !sameFieldValue(field, fv.Value, value) {
+		return "", false
+	}
+	return fv.Value, true
+}
+
 // CleanOverride is value as an override of field would store it, "" when the
 // field would refuse it (a community value that doesn't fit is left out, never
 // failing a whole edit).

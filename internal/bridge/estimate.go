@@ -18,30 +18,34 @@ type SidecarsCost struct {
 	AgentCostUSD *float64 `json:"agent_cost_usd"`
 	// Subscription, AgentReady and CanContribute are the Bridge's: the agent's
 	// credential is a subscription login (the cost is notional), the agent is
-	// ready to run, and the Bridge can offer the results to the community (a
-	// job may ask for contribute "issue").
+	// ready to run, and the Bridge can offer the results to the community
+	// (Status.CanContribute; the estimate's answer also needs the
+	// contributions module on, which the api adds).
 	Subscription  bool `json:"subscription"`
 	AgentReady    bool `json:"agent_ready"`
 	CanContribute bool `json:"can_contribute"`
 	// Figures: the Bridge has sent its figures (its heartbeat's estimates).
-	// Without them every field above is only a default, so a false agent_ready
-	// means "not known yet", not "not ready".
+	// Without them every field above but CanContribute is only a default, so a
+	// false agent_ready means "not known yet", not "not ready".
 	Figures bool `json:"figures"`
 }
 
 // EstimateSidecars costs a sidecars.generate run over a book of duration
-// seconds, reading its ebook when it has one, from the Bridge's figures (nil:
-// it sent none). Hours and dollars are rounded to hundredths.
-func EstimateSidecars(duration float64, ebook bool, est *SidecarsEstimates) SidecarsCost {
-	c := SidecarsCost{Source: SourceAudio}
+// seconds, reading its ebook when it has one, from the Bridge's figures (its
+// estimates.sidecars; none sent leaves every figure a default). Hours and
+// dollars are rounded to hundredths. CanContribute is the Bridge's own answer
+// (Status.CanContribute: its setup block's when it sent one), figures or not.
+func (st Status) EstimateSidecars(duration float64, ebook bool) SidecarsCost {
+	c := SidecarsCost{Source: SourceAudio, CanContribute: st.CanContribute()}
 	if ebook {
 		c.Source = SourceEbook
 	}
-	if est == nil {
+	if st.Estimates == nil || st.Estimates.Sidecars == nil {
 		return c
 	}
+	est := st.Estimates.Sidecars
 	c.Figures = true
-	c.Subscription, c.AgentReady, c.CanContribute = est.Subscription, est.AgentReady, est.CanContribute
+	c.Subscription, c.AgentReady = est.Subscription, est.AgentReady
 	if ebook {
 		if est.AgentUSDPerEbook != nil {
 			c.AgentCostUSD = new(cents(*est.AgentUSDPerEbook))

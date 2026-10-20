@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Bot, Hourglass, Sparkles } from 'lucide-react';
+import { useServerInfo } from '@/api/hooks';
 import type { BridgeEstimate } from '@/api/types';
 import { FactList } from '@/components/fact-list';
 import { Notice } from '@/components/notice';
@@ -13,6 +14,7 @@ import { refKey } from '@/lib/book-route';
 import { formatHours, formatNumber, formatUsd } from '@/lib/format';
 import { toast } from '@/lib/toast';
 import {
+  contributeOffered,
   destinationKey,
   estimateView,
   generatePlan,
@@ -39,8 +41,9 @@ import {
 /**
  * Generate characters and recaps for one book: what it will read (the audio,
  * or the ebook found beside it), the transcription and agent cost the Bridge's
- * history predicts, where the results appear, a contribute choice (this server
- * only by default; offered only when the Bridge can contribute), and the
+ * history predicts, where the results appear, a contribute choice (offered only
+ * while the contributions module is on and the Bridge can contribute, and then
+ * on by default: Phase 2b; otherwise this server only), and the
  * earlier books of the series without recaps, queued first. Nothing can be
  * queued while the Bridge can't write to the library. The Bridge going offline
  * while it is open (`offline`) doesn't close it: it says so, and what is queued
@@ -95,16 +98,19 @@ function GenerateForm({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
+  const server = useServerInfo().data;
   // The full estimate: the dialog quotes its source, earlier books and cost.
   const estimate = useGenerateEstimate(book.library_id, book.path, true, { brief: false });
-  const [contribute, setContribute] = useState<Contribute>('local');
+  const [contribute, setContribute] = useState<Contribute>('issue');
   const [includeEarlier, setIncludeEarlier] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const e = estimate.data;
   const earlier = e?.earlier ?? [];
-  // Contributing only when the Bridge can (the server refuses it otherwise).
-  const contributeAs: Contribute = e?.can_contribute ? contribute : 'local';
+  // Contributing only while the module is on and the Bridge can (the server
+  // refuses it otherwise).
+  const canContribute = contributeOffered(server, Boolean(e?.can_contribute));
+  const contributeAs: Contribute = canContribute ? contribute : 'local';
   const plan = generatePlan([...(includeEarlier ? earlier : []), book], contributeAs);
   const canConfirm = e !== undefined && !estimateView(e).notWritable;
 
@@ -159,6 +165,7 @@ function GenerateForm({
             estimate={e}
             regenerate={regenerate}
             offline={offline}
+            canContribute={canContribute}
             contribute={contributeAs}
             onContribute={setContribute}
             includeEarlier={includeEarlier}
@@ -188,6 +195,7 @@ function EstimateBody({
   estimate,
   regenerate,
   offline,
+  canContribute,
   contribute,
   onContribute,
   includeEarlier,
@@ -196,6 +204,7 @@ function EstimateBody({
   estimate: BridgeEstimate;
   regenerate: boolean;
   offline: boolean;
+  canContribute: boolean;
   contribute: Contribute;
   onContribute: (value: Contribute) => void;
   includeEarlier: boolean;
@@ -277,7 +286,7 @@ function EstimateBody({
       {regenerate ? (
         <p className="text-[12.5px] text-muted-foreground">{t('bridge.generate.replaces')}</p>
       ) : null}
-      {v.canContribute ? <ContributeSwitch value={contribute} onChange={onContribute} /> : null}
+      {canContribute ? <ContributeSwitch value={contribute} onChange={onContribute} /> : null}
       {earlier.length ? (
         <div className="flex flex-col gap-2 rounded-lg border px-4 py-3">
           <label htmlFor={`${id}-earlier`} className="flex cursor-pointer items-start gap-2.5">

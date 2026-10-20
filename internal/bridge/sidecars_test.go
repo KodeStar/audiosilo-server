@@ -383,45 +383,63 @@ func TestHeartbeatEstimates(t *testing.T) {
 	}
 }
 
+// estimateWith is a Status whose heartbeat sent est as its estimates (nil: none).
+func estimateWith(est *SidecarsEstimates) Status {
+	if est == nil {
+		return Status{}
+	}
+	return Status{Estimates: &Estimates{Sidecars: est}}
+}
+
 func TestEstimateSidecars(t *testing.T) {
 	t.Parallel()
 	est := &SidecarsEstimates{ASRSecondsPerAudioHour: 900, AgentUSDPerAudioHour: ptr(1.6), AgentUSDPerEbook: ptr(4.0),
 		AgentReady: true, Subscription: true, CanContribute: true}
 	// Ten hours of audio: 2.5 hours of ASR, 16 dollars of agent.
-	c := EstimateSidecars(36000, false, est)
+	c := estimateWith(est).EstimateSidecars(36000, false)
 	if c.Source != SourceAudio || c.ASRHours != 2.5 || c.AgentCostUSD == nil || *c.AgentCostUSD != 16 || !c.AgentReady || !c.Subscription ||
 		!c.CanContribute || !c.Figures {
 		t.Fatalf("audio = %+v", c)
 	}
 	// An ebook needs no ASR and costs its flat figure.
-	c = EstimateSidecars(36000, true, est)
+	c = estimateWith(est).EstimateSidecars(36000, true)
 	if c.Source != SourceEbook || c.ASRHours != 0 || c.AgentCostUSD == nil || *c.AgentCostUSD != 4 {
 		t.Fatalf("ebook = %+v", c)
 	}
 	// No history yet: no cost, the ASR time still.
-	c = EstimateSidecars(5400, false, &SidecarsEstimates{ASRSecondsPerAudioHour: 600})
+	c = estimateWith(&SidecarsEstimates{ASRSecondsPerAudioHour: 600}).EstimateSidecars(5400, false)
 	if c.AgentCostUSD != nil || c.ASRHours != 0.25 {
 		t.Fatalf("no history = %+v", c)
 	}
-	if c := EstimateSidecars(5400, true, &SidecarsEstimates{}); c.AgentCostUSD != nil {
+	if c := estimateWith(&SidecarsEstimates{}).EstimateSidecars(5400, true); c.AgentCostUSD != nil {
 		t.Fatalf("no ebook history = %+v", c)
 	}
 	// No figures at all (an older Bridge, or one just started): nothing but the
 	// source, and said so (figures false), so "not ready" isn't read into it.
-	if c := EstimateSidecars(36000, false, nil); c.Source != SourceAudio || c.ASRHours != 0 || c.AgentCostUSD != nil || c.AgentReady ||
+	if c := estimateWith(nil).EstimateSidecars(36000, false); c.Source != SourceAudio || c.ASRHours != 0 || c.AgentCostUSD != nil || c.AgentReady ||
 		c.CanContribute || c.Figures {
 		t.Fatalf("no figures = %+v", c)
 	}
 	// Rounded to hundredths; audio of unknown (or nonsense) length has no
 	// estimate, never a free run.
-	if c := EstimateSidecars(1000, false, &SidecarsEstimates{ASRSecondsPerAudioHour: 1000, AgentUSDPerAudioHour: ptr(1.0)}); c.ASRHours != 0.08 || *c.AgentCostUSD != 0.28 {
+	if c := estimateWith(&SidecarsEstimates{ASRSecondsPerAudioHour: 1000, AgentUSDPerAudioHour: ptr(1.0)}).EstimateSidecars(1000, false); c.ASRHours != 0.08 || *c.AgentCostUSD != 0.28 {
 		t.Fatalf("rounding = %+v", c)
 	}
-	if c := EstimateSidecars(0, false, est); c.ASRHours != 0 || c.AgentCostUSD != nil || !c.AgentReady {
+	if c := estimateWith(est).EstimateSidecars(0, false); c.ASRHours != 0 || c.AgentCostUSD != nil || !c.AgentReady {
 		t.Fatalf("unknown length = %+v", c)
 	}
-	if c := EstimateSidecars(-10, false, est); c.ASRHours != 0 || c.AgentCostUSD != nil {
+	if c := estimateWith(est).EstimateSidecars(-10, false); c.ASRHours != 0 || c.AgentCostUSD != nil {
 		t.Fatalf("negative duration = %+v", c)
+	}
+	// can_contribute is the Bridge's answer (Status.CanContribute): a setup
+	// block's wins over the estimates', and counts with no figures at all.
+	st := estimateWith(est)
+	st.Setup = &Setup{CanContribute: false}
+	if c := st.EstimateSidecars(36000, false); c.CanContribute || !c.Figures {
+		t.Fatalf("setup says no = %+v", c)
+	}
+	if c := (Status{Setup: &Setup{CanContribute: true}}).EstimateSidecars(36000, false); !c.CanContribute || c.Figures {
+		t.Fatalf("setup says yes, no figures = %+v", c)
 	}
 }
 

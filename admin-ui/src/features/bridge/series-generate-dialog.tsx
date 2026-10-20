@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Sparkles } from 'lucide-react';
+import { useServerInfo } from '@/api/hooks';
 import type { AdminBook } from '@/api/types';
 import { FactList } from '@/components/fact-list';
 import { ProgressBar } from '@/components/progress-bar';
@@ -13,6 +14,7 @@ import { toast } from '@/lib/toast';
 import {
   batchCheck,
   batchPlan,
+  contributeOffered,
   destinationKey,
   generatePlan,
   seriesBatchOrder,
@@ -81,10 +83,12 @@ function SeriesForm({
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? 'en';
   const qc = useQueryClient();
+  const server = useServerInfo().data;
   const ordered = useMemo(() => seriesBatchOrder(books, series), [books, series]);
   const [checked, setChecked] = useState(0);
   const [checks, setChecks] = useState<ReadonlyMap<string, BatchCheck> | null>(null);
-  const [contribute, setContribute] = useState<Contribute>('local');
+  // On by default once offered (Phase 2b): a signed-in Bridge contributes unless told not to.
+  const [contribute, setContribute] = useState<Contribute>('issue');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -107,6 +111,10 @@ function SeriesForm({
 
   const plan = checks ? batchPlan(ordered, checks) : undefined;
   const n = plan?.queue.length ?? 0;
+  // Contributing only while the module is on and the Bridge can for every book
+  // queued (the server refuses it otherwise).
+  const canContribute = contributeOffered(server, Boolean(plan?.canContribute));
+  const contributeAs: Contribute = canContribute ? contribute : 'local';
   const fmt = (v: number) => formatNumber(v, lang);
   // What the queued books cost in all, naming how many runs that is.
   let cost: string | undefined;
@@ -122,9 +130,8 @@ function SeriesForm({
     if (!plan || !n || plan.notWritable || busy) return;
     setBusy(true);
     setError(undefined);
-    // The queue is already in reading order, earlier books included; contributing
-    // only when the Bridge can (the server refuses it otherwise).
-    const requests = generatePlan(plan.queue, plan.canContribute ? contribute : 'local');
+    // The queue is already in reading order, earlier books included.
+    const requests = generatePlan(plan.queue, contributeAs);
     // A book whose chapters started being found since the check is passed over
     // (named), not the end of the batch.
     const out = await queueInOrder(qc, requests, { skip: GENERATE_SKIPS });
@@ -210,13 +217,11 @@ function SeriesForm({
                     ],
                   ]}
                 />
-                {plan.canContribute ? (
+                {canContribute ? (
                   <ContributeSwitch value={contribute} onChange={setContribute} />
                 ) : null}
                 <p className="text-[12.5px] text-muted-foreground">
-                  {t('bridge.generate.whereLabel', {
-                    where: t(destinationKey(plan.canContribute ? contribute : 'local')),
-                  })}
+                  {t('bridge.generate.whereLabel', { where: t(destinationKey(contributeAs)) })}
                 </p>
               </>
             ) : null}

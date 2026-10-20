@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody, DialogContent, DialogFormFooter } from '@/components/ui/dialog';
 import { formatRelative } from '@/lib/format';
 import { queueJob } from './bridge-actions';
-import { isOpen, jobActions } from './bridge-model';
+import { isOpen } from './bridge-model';
 import {
   clampsDescription,
   describeOffered,
@@ -16,7 +16,7 @@ import {
   generateJobsKnown,
   KIND_DESCRIBE,
 } from './generate-model';
-import { JobCancelButton, JobSection, OfflineNotice } from './generate-parts';
+import { JobActions, JobSection, OfflineNotice } from './generate-parts';
 import { GenerateStatus } from './generate-status';
 import { useBookGenerateJob, useBridgeLink, useGenerateEstimate } from './use-generate';
 
@@ -72,7 +72,6 @@ export function DescribeSection({
   const showJob = job && job.state !== 'cancelled' && !(description && !isOpen(job.state));
   if (!open && !showJob && !offer && !description) return null;
 
-  const canCancel = job ? jobActions(job).cancel : false;
   const clamps = description ? clampsDescription(description.text) : false;
   // The player's About shows another description first: the book's own, or the
   // community's (which /meta serves instead).
@@ -123,19 +122,14 @@ export function DescribeSection({
         </>
       ) : null}
       {showJob && job ? <GenerateStatus job={job} uiUrl={uiUrl} /> : null}
-      {(showJob && canCancel) || offer ? (
-        <div className="flex flex-wrap gap-2">
-          {offer ? (
-            <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-              <PenLine aria-hidden="true" />
-              {t('bridge.describe.action')}
-            </Button>
-          ) : null}
-          {job && canCancel ? (
-            <JobCancelButton job={job} ariaLabel={t('bridge.describe.cancelAria')} />
-          ) : null}
-        </div>
-      ) : null}
+      <JobActions job={job} cancelAria={t('bridge.describe.cancelAria')}>
+        {offer ? (
+          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+            <PenLine aria-hidden="true" />
+            {t('bridge.describe.action')}
+          </Button>
+        ) : null}
+      </JobActions>
       <DescribeDialog open={open} onOpenChange={setOpen} book={book} offline={!available} />
     </JobSection>
   );

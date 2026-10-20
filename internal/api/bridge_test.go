@@ -112,7 +112,7 @@ func TestBridgeLoop(t *testing.T) {
 	t.Parallel()
 	b := newBridgeEnv(t)
 
-	resp, body := b.do(t, "GET", "/api/v1/server", "", "")
+	resp, body := b.do(t, "GET", "/api/v1/server", b.userTok, "")
 	var info struct {
 		Capabilities map[string]bool `json:"capabilities"`
 		Bridge       *bridgeInfo     `json:"bridge"`
@@ -194,7 +194,7 @@ func TestBridgeCapabilityGoesStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.api.bridge.Forget() // the heartbeat cache would answer for a few seconds more
-	_, body := b.do(t, "GET", "/api/v1/server", "", "")
+	_, body := b.do(t, "GET", "/api/v1/server", b.userTok, "")
 	var info map[string]any
 	decodeInto(t, body, &info)
 	if caps := info["capabilities"].(map[string]any); caps["bridge"] != false {

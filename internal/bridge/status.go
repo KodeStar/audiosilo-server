@@ -39,6 +39,10 @@ type Status struct {
 	// Estimates are the Bridge's figures for costing a job before it is queued
 	// (GET /admin/bridge/estimate); nil when it sent none.
 	Estimates *Estimates `json:"estimates,omitempty"`
+	// Setup is the Bridge's onboarding checklist (Phase 2b, setup.go); nil when
+	// it sent none (an older Bridge, or one this server's heartbeat reply hasn't
+	// told it may: HeartbeatAccepts).
+	Setup *Setup `json:"setup,omitempty"`
 }
 
 // Estimates are the Bridge's costing figures, one block per job family. A key the
@@ -66,7 +70,8 @@ type SidecarsEstimates struct {
 	AgentReady   bool   `json:"agent_ready"`
 	Subscription bool   `json:"subscription"`
 	// CanContribute: the Bridge can offer a run's results to the community (it
-	// holds what contributing needs), so a job may ask for contribute "issue".
+	// holds what contributing needs). Phase 2a's answer: a setup block's
+	// can_contribute wins when one was sent (Status.CanContribute).
 	CanContribute bool `json:"can_contribute"`
 	// MonthlyBudgetUSD is the monthly agent cap (0 = none); MonthSpentUSD what
 	// this month has spent.
@@ -185,10 +190,15 @@ func (st Status) Features() []string {
 	return out
 }
 
-// CanContribute reports whether the Bridge last said it can offer a
-// sidecars.generate run's results to the community (estimates.sidecars
-// .can_contribute); false when it sent no estimates.
+// CanContribute reports whether the Bridge last said it can file contributions
+// to the community metadata database (it holds a GitHub sign-in): its setup
+// block's can_contribute when it sent one (Phase 2b), else its
+// estimates.sidecars.can_contribute (Phase 2a; a Bridge sends both, so an
+// older server still reads the second); false when it sent neither.
 func (st Status) CanContribute() bool {
+	if st.Setup != nil {
+		return st.Setup.CanContribute
+	}
 	return st.Estimates != nil && st.Estimates.Sidecars != nil && st.Estimates.Sidecars.CanContribute
 }
 
@@ -229,7 +239,8 @@ func invalid(format string, args ...any) error {
 // Validate checks a heartbeat before it is stored: kinds are well formed and
 // listed once, libraries listed once by a positive id, and ui_url, which the
 // console renders as a link, is an absolute http(s) URL or empty (anything else
-// is refused). An estimate out of its bounds is dropped. Its free text (the version,
+// is refused). An estimate out of its bounds is dropped, and so is a setup
+// block that doesn't decode (a setup item it can't keep is left out). Its free text (the version,
 // each mapping's paths and error, the workers, the estimates' backend) is
 // cleaned to printable bounded text instead (cleanText).
 func (st *Status) Validate() error {
@@ -272,6 +283,7 @@ func (st *Status) Validate() error {
 		}
 	}
 	st.Estimates.validate()
+	st.Setup = st.Setup.validate()
 	if st.Kinds == nil {
 		st.Kinds = []string{}
 	}

@@ -86,6 +86,12 @@ const BY_CODE: Record<string, string> = {
   // Queueing chapters.detect for a book whose chapter source an admin chose: the
   // chapters found would never be used.
   chapters_chosen: 'errors.chaptersChosen',
+  // Bridge Phase 2b: a contribution kind (or a generate job offered to the
+  // community) while the contributions module is off; a share while one is
+  // open for the book; a correction whose value isn't the book's edit any more.
+  module_off: 'errors.moduleOff',
+  contribute_open: 'errors.contributeOpen',
+  not_edited: 'errors.notEdited',
 };
 
 /** A failure as one sentence for a toast or a field. */

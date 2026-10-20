@@ -27,8 +27,9 @@ export interface ServerInfo {
     contributions?: boolean;
   };
   /**
-   * The online Bridge's version and features, only while capabilities.bridge:
-   * its job families ("sidecars"), plus "contribute" while it can file
+   * The online Bridge's version and features, only while capabilities.bridge
+   * and only to a signed-in caller (Bridge Phase 2b): its job families
+   * ("sidecars", "chapters", "meta"), plus "contribute" while it can file
    * contributions (bridge.Status.Features).
    */
   bridge?: { version: string; features: string[] };
@@ -2325,6 +2326,33 @@ export interface BridgeStatus {
   ui_url?: string;
   /** What the Bridge's history says jobs cost (its last heartbeat's; absent before it sends any). */
   estimates?: BridgeEstimates;
+  /** The Bridge's setup checklist (its last heartbeat's; absent from an older Bridge, Phase 2b). */
+  setup?: BridgeSetup;
+}
+
+/**
+ * One step of the Bridge's setup checklist (bridge.SetupItem, Phase 2b): known
+ * ids are paired, libraries, asr, agent, budget and github; an id this console
+ * doesn't know is still listed.
+ */
+export interface BridgeSetupItem {
+  id: string;
+  done: boolean;
+  /** Needed before the Bridge runs jobs; github is the optional one (contributing only). */
+  required: boolean;
+  /** A few plain words from the Bridge ("1 of 2 libraries writable", "local"). */
+  detail?: string;
+  /** The libraries the item is about (the libraries step). */
+  library_ids?: number[];
+}
+
+/** The heartbeat's `setup` block (PUT /bridge/status, Phase 2b), as GET /admin/bridge passes it on. */
+export interface BridgeSetup {
+  items: BridgeSetupItem[];
+  /** The Bridge can file contributions now (a GitHub account signed in and accepted). */
+  can_contribute: boolean;
+  /** The GitHub account signed in on the Bridge; absent when none. */
+  github_login?: string;
 }
 
 /** The heartbeat's `estimates` (PUT /bridge/status), per job family. */
@@ -2467,6 +2495,67 @@ export interface SidecarsResult {
   description_error?: string;
 }
 
+/** sidecars.contribute's params (Phase 2b): offer what was already generated, without regenerating. */
+export interface SidecarsContributeParams {
+  work_id?: string;
+  /** Both when absent. */
+  dimensions?: ('characters' | 'recaps')[];
+}
+
+/** sidecars.contribute's result on done. */
+export interface SidecarsContributeResult {
+  library_id: number;
+  path: string;
+  work_id: string;
+  /** The community issues filed, by what they offer. */
+  contributed: { characters?: string; recaps?: string };
+  /** What the community already had, so nothing was filed for it. */
+  covered: string[];
+}
+
+/** The fields a correction may carry (CORRECTIONS-SPIKE section 5), as the server names them. */
+export const CORRECTION_FIELDS = [
+  'title',
+  'author',
+  'narrator',
+  'series',
+  'series_index',
+  'more_series',
+  'published',
+  'isbn',
+] as const satisfies readonly OverrideField[];
+export type CorrectionField = (typeof CORRECTION_FIELDS)[number];
+
+/** One change of a meta.correct job: the community's value now, and the admin's edited one. */
+export interface MetaCorrectChange {
+  field: CorrectionField;
+  current: string;
+  corrected: string;
+}
+
+/**
+ * meta.correct's params (Phase 2b): the matched work and recording, how the
+ * book was found, 1-25 changes and the evidence. The server stamps `source`.
+ */
+export interface MetaCorrectParams {
+  work_id: string;
+  recording_id?: string;
+  asin?: string;
+  isbn?: string;
+  region?: string;
+  changes: MetaCorrectChange[];
+  evidence: string;
+}
+
+/** meta.correct's result on done: the correction-batch issue, and which fields apply by themselves. */
+export interface MetaCorrectResult {
+  issue_url: string;
+  issue_number: number;
+  changes: number;
+  auto: string[];
+  maintainer: string[];
+}
+
 /** Which characters, recaps and description a book has, from the community and from its own folder. */
 export interface SidecarsCoverage {
   characters: boolean;
@@ -2522,8 +2611,9 @@ export interface BridgeEstimate {
   earlier: EarlierBook[];
   /**
    * An open sidecars.generate job for this book, else the open job of another kind
-   * that refuses a new one now (a queued or working chapters.detect job): its kind
-   * says which.
+   * that refuses a new one now (a queued or working chapters.detect or
+   * sidecars.contribute job, never a share held while the contributions module is
+   * off): its kind says which.
    */
   open_job?: BridgeJob;
 }

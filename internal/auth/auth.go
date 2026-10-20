@@ -391,20 +391,22 @@ func (s *Service) ResolveRequest(ctx context.Context, secret string, p Presence,
 	return s.resolve(ctx, secret, p, nil, kinds)
 }
 
-// resolve is ResolveRequest and ResolveCastRequest: a cast token is valid only
-// when media names the book media the request reads and its grant covers it. A
-// bridge token (only ever listed by the Bridge's own routes) is valid only while
-// its admin is still an admin (lookupToken already refuses a disabled one).
+// Peek is ResolveRequest's answer without its write: secret's user when it is a
+// valid token of one of kinds, recording nothing about the request (no
+// last_seen, address or app), for a public route that only says more to a
+// signed-in caller (GET /server), so it never waits on the writer. Like
+// ResolveRequest, it never accepts a cast token.
+func (s *Service) Peek(ctx context.Context, secret string, kinds ...string) (*User, error) {
+	u, _, err := s.checkToken(ctx, secret, nil, kinds)
+	return u, err
+}
+
+// resolve is ResolveRequest and ResolveCastRequest: the token's checks
+// (checkToken), then the touch.
 func (s *Service) resolve(ctx context.Context, secret string, p Presence, media *bookMedia, kinds []string) (*User, Credential, error) {
-	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
+	u, row, err := s.checkToken(ctx, secret, media, kinds)
 	if err != nil {
 		return nil, Credential{}, err
-	}
-	if row.kind == KindCast && (media == nil || !row.grant.covers(*media)) {
-		return nil, Credential{}, ErrInvalidToken
-	}
-	if row.kind == KindBridge && u.Role != RoleAdmin {
-		return nil, Credential{}, ErrInvalidToken
 	}
 	cred := Credential{ID: row.id, Kind: row.kind, DeviceID: row.deviceID, DeviceName: row.deviceName, Client: row.client,
 		Book: row.grant.path}
@@ -429,6 +431,25 @@ func (s *Service) resolve(ctx context.Context, secret string, p Presence, media 
 		  WHERE id = ?6`,
 		s.ts(), p.IP, p.Client.App, p.Client.Version, p.Client.Platform, row.id)
 	return u, cred, nil
+}
+
+// checkToken is whether secret is a valid token of one of kinds, writing
+// nothing: lookupToken's checks, then a cast token only when media names the
+// book media the request reads and its grant covers it, and a bridge token
+// (only ever listed by the Bridge's own routes) only while its admin is still
+// an admin (lookupToken already refuses a disabled one).
+func (s *Service) checkToken(ctx context.Context, secret string, media *bookMedia, kinds []string) (*User, tokenRow, error) {
+	u, row, err := s.lookupToken(ctx, hashSecret(secret), kinds...)
+	if err != nil {
+		return nil, tokenRow{}, err
+	}
+	if row.kind == KindCast && (media == nil || !row.grant.covers(*media)) {
+		return nil, tokenRow{}, ErrInvalidToken
+	}
+	if row.kind == KindBridge && u.Role != RoleAdmin {
+		return nil, tokenRow{}, ErrInvalidToken
+	}
+	return u, row, nil
 }
 
 // needsTouch reports whether a request must write its token's row: last_seen is
@@ -465,8 +486,8 @@ type tokenRow struct {
 // lookupToken resolves a token hash whose kind is one of the accepted kinds to
 // its (partial) user and token row, applying the shared validity checks. The
 // user carries the household member fields (managed_by, member_kind, the member
-// rule), read through ownerJoin in the same statement, so a kid's refusal and a
-// member's scopes need no read of their own. Unknown, revoked and expired
+// rule) and is_demo, read through ownerJoin in the same statement, so a kid's
+// or a demo account's refusal and a member's scopes need no read of their own. Unknown, revoked and expired
 // tokens and disabled users all return ErrInvalidToken, and so does a cast token
 // without its grant or whose parent (the token that minted it) is signed out or
 // expired (castGrantOf). The single definition of "is this token valid", shared
@@ -488,12 +509,12 @@ func (s *Service) lookupToken(ctx context.Context, hash string, kinds ...string)
 	}
 	var member memberScan
 	err := s.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.role, u.disabled, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
+		`SELECT u.id, u.username, u.role, u.disabled, u.is_demo, t.id, t.kind, t.expires_at, t.revoked, t.auth_code_id,
 		        t.device_name, t.client_app, t.client_version, t.client_platform, t.last_seen, t.last_ip,
 		        `+memberColumns+`
 		   FROM tokens t JOIN users u ON u.id = t.user_id`+ownerJoin+`
 		  WHERE t.token_hash = ? AND t.kind IN (`+inPlaceholders(len(kinds))+`)`, args...).
-		Scan(append([]any{&u.ID, &u.Username, &u.Role, &u.Disabled, &row.id, &row.kind, &expires, &revoked, &row.codeID,
+		Scan(append([]any{&u.ID, &u.Username, &u.Role, &u.Disabled, &u.IsDemo, &row.id, &row.kind, &expires, &revoked, &row.codeID,
 			&row.deviceName, &row.client.App, &row.client.Version, &row.client.Platform, &row.lastSeen, &row.lastIP},
 			member.dest()...)...)
 	if errors.Is(err, sql.ErrNoRows) {

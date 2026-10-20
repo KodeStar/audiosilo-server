@@ -6,6 +6,9 @@ export const MAX_SERIES_INDEX = 100000;
 // unicode.IsControl: C0, DEL and C1.
 // eslint-disable-next-line no-control-regex
 export const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+/** CONTROL but a line break or a tab, which a description and the corrections' evidence keep. */
+// eslint-disable-next-line no-control-regex
+export const CONTROL_IN_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
 export const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 /** The widest range a series position may be (metadata.MaxSeriesSpan). */
 export const MAX_SERIES_SPAN = 100;

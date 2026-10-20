@@ -408,6 +408,12 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 		if str("job_kind") == bridge.KindDetectChapters && str("chapters_source") != catalog.ChaptersFromGenerated {
 			m.Text = "The chapters were saved, but the book uses other chapters. Choose its chapter source on the book page."
 		}
+		// A contribute job whose every dimension the community already had
+		// filed nothing, so nothing went for review.
+		if none, _ := ev.Data["shared_nothing"].(bool); none && str("job_kind") == bridge.KindContribute {
+			m.Title = "Already in the community: " + bridgeJobBook(ev)
+			m.Text = "The community already had what this server generated for the book, so nothing was sent."
+		}
 		m.Link, m.Tags = link("/server?topic=bridge"), []string{"white_check_mark"}
 	case KindBridgeJobFailed:
 		if str("state") == bridge.StateNeedsAttention {
@@ -431,12 +437,17 @@ func compose(ev catalog.ServerEvent, srv Server) message {
 
 // bridgeKindWords is how a message words each Bridge job kind it knows: its
 // label in a title and, for a kind whose finished job leaves something for
-// listeners, what is ready (the title's start) and where they see it.
+// listeners or the community, what is ready (the title's start) and where it
+// went.
 var bridgeKindWords = map[string]struct{ label, ready, readyText string }{
 	bridge.KindSidecars:       {"Characters and recaps", "Characters and recaps ready", "Listeners see them in the player now."},
 	bridge.KindDescribe:       {"Description", "Description ready", "Listeners see it in the player's About when the book has no other description."},
 	bridge.KindDetectChapters: {"Chapters", "Chapters found", "Listeners see them in the player now."},
-	bridge.KindVerify:         {label: "Bridge check"},
+	bridge.KindContribute: {"Sharing with the community", "Shared with the community",
+		"What this server generated for the book went to the community for review. The book page links it."},
+	bridge.KindCorrect: {"Corrections", "Corrections sent",
+		"The book's corrections went to the community for review. The book page links them."},
+	bridge.KindVerify: {label: "Bridge check"},
 }
 
 // bridgeJobLabel names a Bridge job's kind in a message title.
@@ -457,17 +468,24 @@ func bridgeJobBook(ev catalog.ServerEvent) string {
 
 // bridgeParkReason words a parked job's park code (the Bridge's
 // progress.park.code). A transient park (the agent's rate limit, a short
-// outage) is never announced (bridge.Job.Notable), so none is worded here; an
-// announced park may still resume by itself (a monthly budget at the month's
-// turn), so no sentence promises either way. The Bridge's own page says more.
+// outage) is never announced (bridge.Job.Notable), so none is worded here. A
+// sentence says the job carries on by itself only where the Bridge resumes it
+// with no Retry whatever the fix (a replaced agent credential, a raised or
+// reset budget), and names the Retry where one can still be needed: a Bridge
+// already signed in to GitHub parks contrib_unavailable too when GitHub couldn't
+// be reached, and only a new sign-in resumes that park by itself. The agent and
+// GitHub sentences are the console's (bridge.park.<code> in en.json), as the
+// bell shows them. The Bridge's own page says more.
 func bridgeParkReason(code string) string {
 	switch code {
 	case "book_not_writable":
 		return "The Bridge can't write into the book's folder."
 	case "budget_exceeded":
-		return "The job reached a spending limit set on the Bridge. Raise it there, or wait for the monthly limit to reset."
+		return "The job reached a spending limit set on the Bridge. Raise it there (one set in its config.yaml or environment needs a restart), or wait for the monthly limit to reset; the job then carries on by itself."
 	case "agent_credential_refused":
-		return "The agent's credential was refused. Replace it in the agent container, then retry the job on the Bridge."
+		return "The agent's credential was refused. Replace it on the Bridge's Accounts tab, or in the agent container if it has one of its own, which it uses first; the job then carries on by itself."
+	case "contrib_unavailable":
+		return "The Bridge can't share with the community: it has no GitHub sign-in it can use. Sign in to GitHub on the Bridge's Accounts tab and the job carries on; if the Bridge is signed in already, retry the job there once GitHub can be reached."
 	case "core_needed":
 		return "The book needs a community record before it can be contributed."
 	case "chapters_not_detected":
@@ -669,6 +687,10 @@ type BridgeJob struct {
 	// (catalog.ChaptersFrom*; "" when not known), so a finished chapters.detect
 	// job says whether listeners get the chapters it found.
 	ChaptersSource string
+	// SharedNothing: a finished sidecars.contribute job filed nothing, as the
+	// community already had all it was asked to share
+	// (bridge.Job.SharedNothing), so its message says so.
+	SharedNothing bool
 }
 
 // BridgeJobEnded reports a Bridge job that moved into done (bridge_job_finished)
@@ -686,6 +708,9 @@ func (s *Service) BridgeJobEnded(ctx context.Context, j BridgeJob) {
 	kind := KindBridgeJobFinished
 	if j.Kind == bridge.KindDetectChapters && j.State == bridge.StateDone && j.ChaptersSource != "" {
 		data["chapters_source"] = j.ChaptersSource
+	}
+	if j.Kind == bridge.KindContribute && j.State == bridge.StateDone && j.SharedNothing {
+		data["shared_nothing"] = true
 	}
 	if j.State != bridge.StateDone {
 		kind = KindBridgeJobFailed

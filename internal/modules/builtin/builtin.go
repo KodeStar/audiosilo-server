@@ -15,8 +15,10 @@ func Modules() []modules.Module {
 	return []modules.Module{
 		// Contributions (BRIDGE-PLAN.md Phase 2b): sending a book's corrections and
 		// generated sidecars to the community metadata database through the Bridge,
-		// which holds the GitHub sign-in. An inert shell until 2b: no routes, no
-		// background work.
-		{ID: "contributions", RequiresBridge: bridge.FeatureContribute},
+		// which holds the GitHub sign-in. No routes or background work of its own:
+		// its actions are Bridge jobs (sidecars.contribute, meta.correct, and
+		// sidecars.generate's contribute "issue"), which the job queue refuses
+		// while it is off (bridge.ModuleFor names it).
+		{ID: bridge.ModuleContributions, RequiresBridge: bridge.FeatureContribute},
 	}
 }

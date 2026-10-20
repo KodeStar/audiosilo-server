@@ -9,7 +9,13 @@ import { formatList, formatNumber } from '@/lib/format';
 import { refKey } from '@/lib/book-route';
 import { relBaseName } from '@/lib/paths';
 import { isOpen, kindName } from './bridge-model';
-import { generatePollMs, KIND_DETECT, KIND_GENERATE, latestJobOf } from './generate-model';
+import {
+  generatePollMs,
+  isFileKind,
+  KIND_DETECT,
+  KIND_GENERATE,
+  latestJobOf,
+} from './generate-model';
 
 /**
  * How many of a book's newest jobs are read to find its generate and describe
@@ -37,9 +43,9 @@ export function bookJobsQuery(libraryId: number, path: string, enabled: boolean)
  * and the book's newest jobs, asked again about every 10 s while a generate or
  * describe job works and every minute while one is parked, only while the page
  * showing it is mounted (TanStack Query polls for mounted observers only), then
- * not at all. Every kind shares one query. When the job ends, the book, its
- * estimates and its community metadata are fetched again, so the page shows
- * what changed.
+ * not at all. Every kind shares one query. When the job ends its estimates
+ * are fetched again and, for a kind that writes the book's files, the book and
+ * its community metadata too, so the page shows what changed.
  */
 export function useBookGenerateJob(
   libraryId: number,
@@ -56,8 +62,10 @@ export function useBookGenerateJob(
     seen.current = job;
     if (!before || !job || before.id !== job.id) return;
     if (!isOpen(before.state) || isOpen(job.state)) return;
-    // What the book has, and whether a job is open, changed with it.
+    // Whether a job is open changed with it, and, for a job that writes the
+    // book's files, what the book has (a share or a correction only files issues).
     void qc.invalidateQueries({ queryKey: keys.bridgeEstimate(libraryId, path) });
+    if (!isFileKind(job.kind)) return;
     void qc.invalidateQueries({ queryKey: keys.book(libraryId, path), exact: true });
     void qc.invalidateQueries({ queryKey: keys.bookMeta(libraryId, path) });
   }, [job, qc, libraryId, path]);
@@ -101,13 +109,17 @@ export function useGenerateEstimate(
 }
 
 /**
- * The Bridge's status for a link into its page (ui_url), read once while a
- * parked job needs it. It shares the Bridge page's query; this observer adds no
- * polling of its own.
+ * The Bridge's status (its page's address, its setup checklist, its library
+ * mappings), read while `enabled` and kept a minute. It shares the Bridge
+ * page's query; this observer adds no polling of its own.
  */
+export function useBridgeStatus(enabled: boolean) {
+  return useQuery({ queryKey: keys.bridge, queryFn: api.bridge, enabled, staleTime: 60_000 }).data;
+}
+
+/** The Bridge's page (ui_url), for a link into it, read while a parked job needs it. */
 export function useBridgeLink(enabled: boolean) {
-  const q = useQuery({ queryKey: keys.bridge, queryFn: api.bridge, enabled, staleTime: 60_000 });
-  return q.data?.ui_url;
+  return useBridgeStatus(enabled)?.ui_url;
 }
 
 /**
@@ -190,9 +202,11 @@ export async function queueInOrder(
 /**
  * The refusals a generate run passes a book over for: its chapters are being
  * found (a queued or working chapters.detect job; the generate job is queued once
- * that has finished, reusing its transcription).
+ * that has finished, reusing its transcription), or its files are being shared
+ * with the community (a queued or working sidecars.contribute job, Phase 2b; one
+ * queued while the contributions module is off gives way to the run instead).
  */
-export const GENERATE_SKIPS = ['detect_open'] as const;
+export const GENERATE_SKIPS = ['detect_open', 'contribute_open'] as const;
 
 /** How many books a skip note names before it counts the rest. */
 const NAMED = 5;
@@ -203,6 +217,7 @@ const SKIP_KEYS: Record<string, string> = {
   generate_open: 'bridge.queue.skip.generateOpen',
   detect_open: 'bridge.queue.skip.detectOpen',
   describe_open: 'bridge.queue.skip.describeOpen',
+  contribute_open: 'bridge.queue.skip.contributeOpen',
   chapters_chosen: 'bridge.queue.skip.chaptersChosen',
 };
 

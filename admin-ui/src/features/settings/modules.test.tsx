@@ -56,7 +56,7 @@ describe('settings > modules', () => {
     mockFetch(routes([contributions()]));
     renderApp('/server?topic=modules');
     const c = await card();
-    expect(within(c).getByText(/Arrives in a later release/)).toBeInTheDocument();
+    expect(within(c).getByText(/to the community metadata database/)).toBeInTheDocument();
     const docs = within(c).getByRole('link', { name: /Learn more about Contributions/ });
     expect(docs).toHaveAttribute('href', 'https://docs.audiosilo.app/users/admin/server#modules');
     expect(docs).toHaveAttribute('target', '_blank');
