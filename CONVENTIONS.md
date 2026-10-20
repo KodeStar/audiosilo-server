@@ -1744,7 +1744,9 @@ every session. CLAUDE.md keeps a one-line index of these topics.
   `include=paths,tags,description&copies=separate` and says the file is then not for a public issue. `catalog.ExportLibraryBooks` composes the envelope (keyset paging over
   `ListBooks`, never OFFSET; copies of the same book within the library collapse on
   `exposedDedupKey`, the kept entry taking each fact from whichever copy has it -
-  `mergeExportBook`, since the copy that sorts first may be the untagged rip); the
+  `mergeExportBook`, since the copy that sorts first may be the untagged rip; the main
+  series and its position are one fact, and a merged `series_list` is every series either
+  copy lists, the row's main one first, `mergeExportSeries`); the
   handler is transport-only and writes it with a `json.Encoder`. The leak guard
   asserts on the MARSHALLED key sets as an allowlist, so a field added to
   `ExportBook` fails the test even when its name (`format`, `files`) is invisible

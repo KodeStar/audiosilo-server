@@ -12,6 +12,7 @@ import (
 
 	"github.com/kodestar/audiosilo-server/internal/metadata"
 	"github.com/kodestar/audiosilo-server/internal/names"
+	"github.com/kodestar/audiosilo-server/pkg/match"
 )
 
 // Library export: a portable, filesystem-free list of the books a library holds.
@@ -83,9 +84,11 @@ type ExportBook struct {
 	Narrators      []string `json:"narrators,omitempty"`
 	Series         string   `json:"series,omitempty"`
 	SeriesPosition string   `json:"series_position,omitempty"`
-	// SeriesList is every series the book is in, the main one (Series) first,
-	// present exactly when the player's Book.SeriesList is: the book is in a
-	// series beyond its main one. Series/SeriesPosition stay the main series.
+	// SeriesList is every series the book is in, the main one (Series, when it
+	// has one) first, present when the player's Book.SeriesList is: the book is
+	// in a series beyond its main one, or in one with no main series. A row of
+	// merged copies lists every series either copy lists (mergeExportSeries).
+	// Series/SeriesPosition stay the main series.
 	SeriesList []ExportSeries `json:"series_list,omitempty"`
 	// Published is the book's publication date, YYYY[-MM[-DD]].
 	Published   string   `json:"published,omitempty"`
@@ -273,11 +276,9 @@ func mergeExportBook(dst *ExportBook, src ExportBook) {
 	fillEmpty(&dst.Authors, src.Authors)
 	fillEmpty(&dst.Narrators, src.Narrators)
 	fillEmpty(&dst.Genres, src.Genres)
-	fillEmpty(&dst.SeriesList, src.SeriesList)
+	mergeExportSeries(dst, src)
 	dst.Title = cmp.Or(dst.Title, src.Title)
 	dst.Subtitle = cmp.Or(dst.Subtitle, src.Subtitle)
-	dst.Series = cmp.Or(dst.Series, src.Series)
-	dst.SeriesPosition = cmp.Or(dst.SeriesPosition, src.SeriesPosition)
 	dst.Published = cmp.Or(dst.Published, src.Published)
 	dst.Description = cmp.Or(dst.Description, src.Description)
 	dst.Publisher = cmp.Or(dst.Publisher, src.Publisher)
@@ -287,6 +288,41 @@ func mergeExportBook(dst *ExportBook, src ExportBook) {
 	dst.ISBN = cmp.Or(dst.ISBN, src.ISBN)
 	dst.RuntimeMin = cmp.Or(dst.RuntimeMin, src.RuntimeMin)
 	dst.Chapters = cmp.Or(dst.Chapters, src.Chapters)
+}
+
+// mergeExportSeries folds src's series into dst's. The main series and its
+// position are one fact: a row in no series takes src's, one in the same series
+// fills a missing position from it, and a copy in another main series never
+// lends its position to this one. series_list, when either copy has one, is
+// every series either lists, the row's main one first, each once (an empty
+// position filled from a later copy), so it never leaves out or reorders the
+// main series; it stays absent when that adds nothing beyond the main series.
+func mergeExportSeries(dst *ExportBook, src ExportBook) {
+	switch {
+	case dst.Series == "" && src.Series != "":
+		dst.Series, dst.SeriesPosition = src.Series, src.SeriesPosition
+	case match.SameSeries(dst.Series, src.Series):
+		dst.SeriesPosition = cmp.Or(dst.SeriesPosition, src.SeriesPosition)
+	}
+	if len(dst.SeriesList) == 0 && len(src.SeriesList) == 0 {
+		return
+	}
+	var all []ExportSeries
+	main := ExportSeries{Name: dst.Series, Position: dst.SeriesPosition}
+	for _, s := range slices.Concat([]ExportSeries{main}, dst.SeriesList, src.SeriesList) {
+		if s.Name == "" {
+			continue
+		}
+		if i := slices.IndexFunc(all, func(o ExportSeries) bool { return match.SameSeries(o.Name, s.Name) }); i >= 0 {
+			all[i].Position = cmp.Or(all[i].Position, s.Position)
+			continue
+		}
+		all = append(all, s)
+	}
+	if len(all) < 2 && dst.Series != "" {
+		all = nil // the main series alone: no list, as for a single book
+	}
+	dst.SeriesList = all
 }
 
 // fillEmpty is cmp.Or for a list: src fills *dst only when *dst is empty.

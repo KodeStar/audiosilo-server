@@ -469,6 +469,55 @@ func TestExportLibraryBooksPublishedSeriesDescription(t *testing.T) {
 	}
 }
 
+// TestMergeExportSeries: merged copies keep the main series and its position
+// as one fact, and series_list lists every series either copy lists with the
+// row's main one first, never one copy's list without the row's main series.
+func TestMergeExportSeries(t *testing.T) {
+	t.Parallel()
+	type ser = ExportSeries
+	for _, tc := range []struct {
+		name     string
+		dst, src ExportBook
+		want     ExportBook
+	}{{
+		name: "no series takes the copy's whole",
+		dst:  ExportBook{},
+		src:  ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+	}, {
+		name: "the same series fills its position and list",
+		dst:  ExportBook{Series: "Jack Reacher"},
+		src:  ExportBook{Series: "jack reacher", SeriesPosition: "2", SeriesList: []ser{{"jack reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+	}, {
+		name: "another series never lends its position",
+		dst:  ExportBook{Series: "Discworld"},
+		src:  ExportBook{Series: "City Watch", SeriesPosition: "1"},
+		want: ExportBook{Series: "Discworld"},
+	}, {
+		name: "a list from a copy with no main series keeps the row's main first",
+		dst:  ExportBook{Series: "Jack Reacher", SeriesPosition: "2"},
+		src:  ExportBook{SeriesList: []ser{{"Reacher Omnibus", "1-3"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}}},
+	}, {
+		name: "a row with only a list gains the copy's main series first",
+		dst:  ExportBook{SeriesList: []ser{{"Reacher Omnibus", "1-3"}}},
+		src:  ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Collected", "4"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2", SeriesList: []ser{{"Jack Reacher", "2"}, {"Reacher Omnibus", "1-3"}, {"Collected", "4"}}},
+	}, {
+		name: "a list naming only the main series is no list",
+		dst:  ExportBook{Series: "Jack Reacher", SeriesPosition: "2"},
+		src:  ExportBook{SeriesList: []ser{{"Jack Reacher", "2"}}},
+		want: ExportBook{Series: "Jack Reacher", SeriesPosition: "2"},
+	}} {
+		dst := tc.dst
+		mergeExportSeries(&dst, tc.src)
+		if !reflect.DeepEqual(dst, tc.want) {
+			t.Errorf("%s: got %#v, want %#v", tc.name, dst, tc.want)
+		}
+	}
+}
+
 // TestExportLibraryBooksSeparateCopies: with SeparateCopies, every indexed copy
 // is its own row with its own path and tags; without it (the default) copies of
 // the same book still merge.

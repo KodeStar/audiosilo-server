@@ -255,7 +255,8 @@ func TestExportDescriptionAndCopies(t *testing.T) {
 		t.Errorf("anonymous export = %d, want 401", resp.StatusCode)
 	}
 	// An unknown value is a 400, and the include= message names every value.
-	for _, q := range []string{"?copies=bogus", "?copies=Separate", "?copies=separate,merged"} {
+	for _, q := range []string{"?copies=bogus", "?copies=Separate", "?copies=separate,merged",
+		"?copies=merged&copies=bogus", "?copies=merged&copies=separate"} {
 		if resp, _ := e.do(t, "GET", path+q, adminTok, ""); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("export%s = %d, want 400", q, resp.StatusCode)
 		}

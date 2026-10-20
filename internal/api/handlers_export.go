@@ -35,9 +35,10 @@ func (a *API) handleExportLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var opt catalog.ExportOptions
+	q := r.URL.Query()
 	// Every include= counts (?include=paths&include=tags as much as
 	// ?include=paths,tags), so none asked for is dropped.
-	for _, include := range r.URL.Query()["include"] {
+	for _, include := range q["include"] {
 		if include == "" {
 			continue
 		}
@@ -55,7 +56,13 @@ func (a *API) handleExportLibrary(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	switch r.URL.Query().Get("copies") {
+	// copies= is one choice: given twice (?copies=merged&copies=separate) it is
+	// a 400 too, rather than the first silently winning.
+	if len(q["copies"]) > 1 {
+		writeError(w, http.StatusBadRequest, `copies must be "merged" or "separate", given once`)
+		return
+	}
+	switch q.Get("copies") {
 	case "", "merged":
 	case "separate":
 		opt.SeparateCopies = true
