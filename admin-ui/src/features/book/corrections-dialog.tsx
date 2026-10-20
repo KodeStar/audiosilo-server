@@ -108,11 +108,18 @@ export function CorrectionsDialog({
   lastJob?: BridgeJob;
 }) {
   const { t } = useTranslation();
+  const name = detail.book.title || detail.book.path;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         title={t('book.corrections.dialog')}
-        description={detail.book.title || detail.book.path}
+        // Two lines at most, so a long title never squeezes the review on a
+        // phone; the whole of it stays in the text (read out) and on hover.
+        description={
+          <span className="line-clamp-2 [overflow-wrap:anywhere]" title={name}>
+            {name}
+          </span>
+        }
         icon={FilePenLine}
         tone="community"
         size="lg"
@@ -175,9 +182,11 @@ function CorrectionsForm({
       ? t('book.corrections.evidenceRequired')
       : problem === 'evidenceTooLong'
         ? t('book.corrections.evidenceTooLong', { max: formatNumber(MAX_EVIDENCE, lang) })
-        : problem === 'evidenceBidi'
-          ? t('book.corrections.evidenceBidi')
-          : undefined;
+        : problem === 'evidenceControl'
+          ? t('book.corrections.evidenceControl')
+          : problem === 'evidenceBidi'
+            ? t('book.corrections.evidenceBidi')
+            : undefined;
 
   let body: React.ReactNode;
   if (search.isError) {
@@ -275,6 +284,15 @@ function ReviewRow({
   const id = useId();
   const label = t(`book.field.${r.field}`);
   const ok = sendable(r);
+  const refusal = r.tooLong
+    ? t('book.corrections.tooLong', { max: formatNumber(MAX_VALUE, lang) })
+    : r.control
+      ? t('book.corrections.control')
+      : r.bidi
+        ? t('book.corrections.bidi')
+        : r.noChange
+          ? t('book.corrections.noChange')
+          : undefined;
   return (
     <li className="flex items-start gap-3 px-4 py-3">
       <Checkbox
@@ -317,13 +335,7 @@ function ReviewRow({
             {shownValue(t, r.field, r.corrected)}
           </span>
         </div>
-        {r.tooLong ? (
-          <p className="text-[12.5px] text-warning">
-            {t('book.corrections.tooLong', { max: formatNumber(MAX_VALUE, lang) })}
-          </p>
-        ) : r.bidi ? (
-          <p className="text-[12.5px] text-warning">{t('book.corrections.bidi')}</p>
-        ) : null}
+        {refusal ? <p className="text-[12.5px] text-warning">{refusal}</p> : null}
       </div>
     </li>
   );

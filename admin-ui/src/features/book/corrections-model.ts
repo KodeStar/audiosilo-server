@@ -15,6 +15,7 @@ import {
 import type { MatchBy } from '@/api/client';
 import { contributionsOn, FEATURE_META, KIND_CORRECT } from '@/features/bridge/generate-model';
 import { runes } from './book-model';
+import { CONTROL } from './field-rules';
 import { clean, compareRows, defaultRecording, type CompareRow } from './match-model';
 
 // Suggest corrections (BRIDGE-PLAN.md Phase 2b, decision 18; CORRECTIONS-SPIKE
@@ -35,6 +36,133 @@ export const MAX_EVIDENCE = 2000;
  * not among them.
  */
 const BIDI = /[\u202A-\u202E\u2066-\u2069]/;
+
+/** A control character the evidence may not hold: CONTROL but a line break or a tab. */
+// eslint-disable-next-line no-control-regex
+const CONTROL_IN_EVIDENCE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+
+/** The community issue form's blank field, which reads as none (bridge.noResponse). */
+const NO_RESPONSE = '_No response_';
+
+/** Go's unicode.IsSpace, which strings.TrimSpace trims and asRead reads a reference to as a space. */
+const GO_SPACE =
+  '\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';
+const IS_GO_SPACE = new RegExp(`^[${GO_SPACE}]$`);
+const GO_TRIM = new RegExp(`^[${GO_SPACE}]+|[${GO_SPACE}]+$`, 'g');
+
+/** v trimmed as the server trims it (Go's strings.TrimSpace, not String.trim: U+0085 yes, U+FEFF no). */
+export function goTrim(v: string): string {
+  return v.replace(GO_TRIM, '');
+}
+
+/** An HTML character reference ending in ';', as the server finds them (bridge.charRef). */
+const CHAR_REF = /&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);/g;
+
+/** What HTML reads code points 0x80-0x9F in a numeric reference as (Windows-1252, as Go's html does). */
+const WINDOWS_1252 = [
+  '\u20ac',
+  '\u0081',
+  '\u201a',
+  '\u0192',
+  '\u201e',
+  '\u2026',
+  '\u2020',
+  '\u2021',
+  '\u02c6',
+  '\u2030',
+  '\u0160',
+  '\u2039',
+  '\u0152',
+  '\u008d',
+  '\u017d',
+  '\u008f',
+  '\u0090',
+  '\u2018',
+  '\u2019',
+  '\u201c',
+  '\u201d',
+  '\u2022',
+  '\u2013',
+  '\u2014',
+  '\u02dc',
+  '\u2122',
+  '\u0161',
+  '\u203a',
+  '\u0153',
+  '\u009d',
+  '\u017e',
+  '\u0178',
+];
+
+/**
+ * A numeric reference decoded as Go's html.UnescapeString decodes it: the
+ * number accumulated in an int32 (wrapping as Go's does), 0x80-0x9F read as
+ * Windows-1252, and zero, a surrogate or anything out of range read as U+FFFD.
+ */
+function numericRef(ref: string): string {
+  const hex = ref[2] === 'x' || ref[2] === 'X';
+  let x = 0;
+  for (const c of ref.slice(hex ? 3 : 2, -1)) {
+    x = (Math.imul(x, hex ? 16 : 10) + parseInt(c, 16)) | 0;
+  }
+  if (x >= 0x80 && x <= 0x9f) return WINDOWS_1252[x - 0x80];
+  if (x <= 0 || (x >= 0xd800 && x <= 0xdfff) || x > 0x10ffff) return '\ufffd';
+  return String.fromCodePoint(x);
+}
+
+const namedRefs = new Map<string, string>();
+let refParser: DOMParser | undefined;
+
+/**
+ * A named reference decoded by the browser's own HTML parser, which reads the
+ * full HTML table as Go's html does (both follow the HTML standard, legacy
+ * prefixes like "&copy" in "&copyright;" included). Without a DOM it stays as
+ * written.
+ */
+function namedRef(ref: string): string {
+  let r = namedRefs.get(ref);
+  if (r === undefined) {
+    if (typeof DOMParser === 'undefined') return ref;
+    refParser ??= new DOMParser();
+    // In the body: before it, the parser drops a reference decoding to whitespace.
+    r =
+      refParser.parseFromString(`<!doctype html><body>${ref}`, 'text/html').body.textContent ?? ref;
+    namedRefs.set(ref, r);
+  }
+  return r;
+}
+
+/**
+ * v as the community reads it, which is how the server checks it
+ * (bridge.asRead): each character reference decoded, one decoding to a single
+ * whitespace character read as a space and one decoding to more than two
+ * characters left as written (it isn't one), then trimmed as Go trims.
+ */
+export function asRead(v: string): string {
+  const read = v.includes('&')
+    ? v.replace(CHAR_REF, (ref) => {
+        const r = ref[1] === '#' ? numericRef(ref) : namedRef(ref);
+        const n = runes(r);
+        if (n > 2) return ref;
+        return n === 1 && IS_GO_SPACE.test(r) ? ' ' : r;
+      })
+    : v;
+  return goTrim(read);
+}
+
+/**
+ * Evidence's length in characters as the community's issue carries it, which
+ * the server bounds (bridge.issueLength): a line starting with # (after its
+ * indent) is escaped, its indent dropped and a backslash added.
+ */
+export function issueLength(evidence: string): number {
+  let n = runes(evidence);
+  for (const line of evidence.split('\n')) {
+    const t = line.replace(/^[ \t]+/, '');
+    if (t.startsWith('#')) n += 1 - (line.length - t.length);
+  }
+  return n;
+}
 
 /**
  * The fields meta applies by itself once checked (work title, recording release
@@ -160,13 +288,21 @@ export interface CorrectionRow {
   handling: Handling;
   /** A value is over MAX_VALUE: it can't be sent. */
   tooLong: boolean;
-  /** A value holds a bidirectional control (BIDI): it can't be sent. */
+  /** A value holds a control character, as written or read (asRead): it can't be sent. */
+  control: boolean;
+  /** A value, read as the community reads it (asRead), holds a bidirectional control (BIDI): it can't be sent. */
   bidi: boolean;
+  /**
+   * The corrected value, read as the community reads it, is empty or the
+   * community's value as written ("Tom &amp; Jerry" for "Tom & Jerry"): it
+   * changes nothing and can't be sent.
+   */
+  noChange: boolean;
 }
 
-/** Whether a row can be sent: no value too long or holding a bidirectional control. */
+/** Whether a row can be sent: the server takes it (none of its refusal flags is set). */
 export function sendable(r: CorrectionRow): boolean {
-  return !r.tooLong && !r.bidi;
+  return !r.tooLong && !r.control && !r.bidi && !r.noChange;
 }
 
 /**
@@ -187,13 +323,19 @@ export function correctionRows(
     .filter((r) => !r.same)
     .map((r) => {
       const field = r.field as CorrectionField;
+      // Each value as the server checks it (bridge.parseCorrect): trimmed,
+      // then as written and as the community reads it.
+      const values = [goTrim(r.theirs), goTrim(r.mine)];
+      const read = values.map(asRead);
       return {
         field,
         current: r.theirs,
         corrected: r.mine,
         handling: handling(field, known),
-        tooLong: runes(r.mine) > MAX_VALUE || runes(r.theirs) > MAX_VALUE,
-        bidi: BIDI.test(r.mine) || BIDI.test(r.theirs),
+        tooLong: values.some((v) => runes(v) > MAX_VALUE),
+        control: [...values, ...read].some((v) => CONTROL.test(v)),
+        bidi: read.some((v) => BIDI.test(v)),
+        noChange: read[1] === '' || read[1] === values[0],
       };
     });
 }
@@ -268,14 +410,24 @@ export function defaultCorrectionTicks(
 }
 
 /** Why the suggestion can't be sent yet, or undefined when it can. */
-export type CorrectionProblem = 'none' | 'noEvidence' | 'evidenceTooLong' | 'evidenceBidi';
+export type CorrectionProblem =
+  'none' | 'noEvidence' | 'evidenceTooLong' | 'evidenceControl' | 'evidenceBidi';
 
+/**
+ * Why the suggestion can't be sent: nothing ticked, or evidence the server
+ * refuses, checked as it does (bridge.parseCorrect): CRLF read as LF and
+ * trimmed as Go trims; the form's blank or reading as nothing is none; over
+ * MAX_EVIDENCE as the issue carries it (issueLength); a control character but
+ * a line break or a tab, as written or read; a bidirectional control as read.
+ */
 export function correctionProblem(ticked: number, evidence: string): CorrectionProblem | undefined {
   if (ticked === 0) return 'none';
-  const e = evidence.trim();
-  if (!e) return 'noEvidence';
-  if (runes(e) > MAX_EVIDENCE) return 'evidenceTooLong';
-  if (BIDI.test(e)) return 'evidenceBidi';
+  const e = goTrim(evidence.replaceAll('\r\n', '\n'));
+  const read = asRead(e);
+  if (e === NO_RESPONSE || !read) return 'noEvidence';
+  if (issueLength(e) > MAX_EVIDENCE) return 'evidenceTooLong';
+  if (CONTROL_IN_EVIDENCE.test(e) || CONTROL_IN_EVIDENCE.test(read)) return 'evidenceControl';
+  if (BIDI.test(read)) return 'evidenceBidi';
   return undefined;
 }
 

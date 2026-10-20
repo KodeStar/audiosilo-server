@@ -231,6 +231,93 @@ describe('suggest corrections', () => {
     expect(queued(calls)).toHaveLength(0);
   });
 
+  it('reads character references as the server does, flagging what it would refuse', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(
+      routes({
+        'POST /admin/bridge/jobs': { status: 201, body: job() },
+        'GET /admin/libraries/1/book': {
+          body: edited({
+            author: 'B. &#x202E;Sanderson',
+            narrator: 'Michael Kramer&#32;',
+            title: 'The Way &#1;of Kings',
+            isbn: '9780765326355',
+          }),
+        },
+      }),
+    );
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Suggest corrections' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Suggest corrections' });
+    const rows = await within(dialog).findByRole('list', { name: 'Corrections to suggest' });
+    for (const field of ['Title', 'Author', 'Narrator']) {
+      const box = within(rows).getByRole('checkbox', { name: `Suggest ${field}` });
+      expect(box).not.toBeChecked();
+      expect(box).toHaveAttribute('data-disabled');
+    }
+    expect(within(rows).getByRole('checkbox', { name: 'Suggest ISBN' })).toBeChecked();
+    expect(
+      within(rows).getByText(
+        "Holds a hidden text-direction character the community refuses, so it can't be sent.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(rows).getByText(
+        "Holds a control character the community refuses, so it can't be sent.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(rows).getByText(/this changes nothing/)).toBeInTheDocument();
+
+    // The evidence: an override or a control by reference, the form's blank.
+    const evidence = within(dialog).getByRole('textbox', { name: 'Evidence' });
+    const submit = within(dialog).getByRole('button', { name: 'Suggest 1 correction' });
+    await user.type(evidence, ' See &#8238;it.');
+    expect(
+      within(dialog).getByText(
+        'The evidence holds a hidden text-direction character the community refuses. Retype any text you pasted.',
+      ),
+    ).toBeInTheDocument();
+    await user.clear(evidence);
+    await user.type(evidence, 'See&#1;it.');
+    expect(
+      within(dialog).getByText(
+        'The evidence holds a control character the community refuses. Retype any text you pasted.',
+      ),
+    ).toBeInTheDocument();
+    await user.clear(evidence);
+    await user.type(evidence, '_No response_');
+    await user.click(submit);
+    expect(await within(dialog).findByText('Say where the values come from.')).toBeInTheDocument();
+    expect(queued(calls)).toHaveLength(0);
+
+    // Markup by reference is fine, and only the ISBN goes.
+    await user.clear(evidence);
+    await user.type(evidence, 'The cover reads &lt;Kings&gt;.');
+    await user.click(submit);
+    await waitFor(() => expect(queued(calls)).toHaveLength(1));
+    expect(queued(calls)[0].body).toMatchObject({
+      params: {
+        changes: [{ field: 'isbn', current: '', corrected: '9780765326355' }],
+        evidence: 'The cover reads &lt;Kings&gt;.',
+      },
+    });
+  });
+
+  it('clamps a long book title in the header, keeping the whole of it', async () => {
+    const user = userEvent.setup();
+    const long = 'The Way of Kings '.repeat(30).trim();
+    const d = edited({ author: 'B. Sanderson' });
+    d.book = { ...d.book, title: long };
+    mockFetch(routes({ 'GET /admin/libraries/1/book': { body: d } }));
+    renderApp(URL);
+    await user.click(await screen.findByRole('button', { name: 'Suggest corrections' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Suggest corrections' });
+    const name = within(dialog).getByText(long);
+    expect(name).toHaveClass('line-clamp-2');
+    expect(name).toHaveAttribute('title', long);
+    expect(dialog).toHaveAccessibleDescription(long);
+  });
+
   it('says so when the community already agrees, and sends nothing', async () => {
     const user = userEvent.setup();
     mockFetch(

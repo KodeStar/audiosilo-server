@@ -13,6 +13,7 @@ import { bookDetail } from '@/test/library-fixtures';
 import {
   alreadySuggested,
   asinRegion,
+  asRead,
   correctionCandidate,
   correctionProblem,
   correctionRecording,
@@ -21,9 +22,12 @@ import {
   correctionsOffered,
   defaultCorrectionTicks,
   editedCorrectionFields,
+  goTrim,
   handling,
+  issueLength,
   lookupBy,
   MAX_EVIDENCE,
+  sendable,
   type CorrectionRow,
 } from './corrections-model';
 
@@ -171,6 +175,32 @@ describe('the review rows', () => {
     expect(rowFor('\u0645\u06cc\u200c\u062e \u200f\u05e2\u05d1\u200e').bidi).toBe(false);
   });
 
+  it('flags a value the server refuses as the community reads it, character references decoded', () => {
+    const c = candidate({ title: 'Tom & Jerry' });
+    const rowFor = (title: string) => {
+      const d = detailWith({ title });
+      return correctionRows(d.fields, c, correctionRecording(c, d.fields))[0];
+    };
+    // A bidirectional control written as a reference, hex, decimal or upper-case hex.
+    for (const v of ['Tom &#x202E;Jerry', 'Tom &#8238;Jerry', 'Tom &#X202e;Jerry']) {
+      expect(rowFor(v).bidi).toBe(true);
+      expect(sendable(rowFor(v))).toBe(false);
+    }
+    // A control character by reference, or a raw C1 space a trailing reference hides.
+    expect(rowFor('Tom &#1;Jerry').control).toBe(true);
+    expect(rowFor('Tom Jerry\u0085&#32;').control).toBe(true);
+    // Read, it is the community's value or nothing.
+    expect(rowFor('Tom &amp; Jerry').noChange).toBe(true);
+    expect(rowFor('&nbsp;').noChange).toBe(true);
+    expect(rowFor('&#x20;&#9;').noChange).toBe(true);
+    // Allowed: a mark by reference, an ampersand that starts none, a name it doesn't know.
+    for (const v of ['&lrm;\u05e2\u05d1', 'AT&T;', '&copyright;', 'Tom &amp; Jerry 2']) {
+      const r = rowFor(v);
+      expect(sendable(r), v).toBe(true);
+    }
+    expect(defaultCorrectionTicks([rowFor('Tom &amp; Jerry')]).size).toBe(0);
+  });
+
   it("reads published as the recording's release date, never filing what it already says", () => {
     const c = candidate({
       first_published: '1965',
@@ -245,7 +275,9 @@ describe('the review rows', () => {
       corrected: 'b',
       handling: 'maintainer',
       tooLong: false,
+      control: false,
       bidi: false,
+      noChange: false,
       ...over,
     });
     const rows = [
@@ -253,6 +285,8 @@ describe('the review rows', () => {
       row('author'),
       row('narrator', { tooLong: true }),
       row('series', { bidi: true }),
+      row('isbn', { control: true }),
+      row('published', { noChange: true }),
     ];
     expect([...defaultCorrectionTicks(rows, new Set(['author']))]).toEqual(['title']);
   });
@@ -291,6 +325,28 @@ describe('sending', () => {
     expect(correctionProblem(2, '📚'.repeat(MAX_EVIDENCE))).toBeUndefined();
     expect(correctionProblem(2, 'See \u2066the cover\u2069')).toBe('evidenceBidi');
     expect(correctionProblem(8, 'A store page')).toBeUndefined();
+  });
+
+  it('checks the evidence as the server does', () => {
+    // The issue form's blank, or a value reading as nothing, is no evidence.
+    expect(correctionProblem(1, '_No response_')).toBe('noEvidence');
+    expect(correctionProblem(1, ' _No response_\n')).toBe('noEvidence');
+    expect(correctionProblem(1, '&nbsp;&#32;')).toBe('noEvidence');
+    expect(correctionProblem(1, 'See _No response_')).toBeUndefined();
+    // A bidirectional control by reference.
+    expect(correctionProblem(1, 'see &#x202E;here')).toBe('evidenceBidi');
+    expect(correctionProblem(1, 'see &#8238;here')).toBe('evidenceBidi');
+    // Control characters, as written or read; line breaks and tabs are fine.
+    expect(correctionProblem(1, 'see\fhere')).toBe('evidenceControl');
+    expect(correctionProblem(1, 'see\rhere')).toBe('evidenceControl');
+    expect(correctionProblem(1, 'see &#1;here')).toBe('evidenceControl');
+    expect(correctionProblem(1, 'see here\u0085&#32;')).toBe('evidenceControl');
+    expect(correctionProblem(1, 'see\r\nhere,\tthere')).toBeUndefined();
+    // A whitespace control by reference reads as a space.
+    expect(correctionProblem(1, 'see&#12;here')).toBeUndefined();
+    // Length as the issue carries it: a line led by # counts one more, its indent none.
+    expect(correctionProblem(1, '#\n'.repeat(999) + '#')).toBe('evidenceTooLong');
+    expect(correctionProblem(1, 'x\n'.repeat(999) + 'x')).toBeUndefined();
   });
 
   it("finds the marketplace of the book's ASIN", () => {
@@ -349,5 +405,32 @@ describe('sending', () => {
       changes: [{ field: 'title', current: 'The Way of Kings', corrected: 'Kings' }],
       evidence: 'e',
     });
+  });
+});
+
+describe('reading as the community reads', () => {
+  it('decodes character references as the server does', () => {
+    expect(asRead('a&#x202E;b')).toBe('a\u202eb');
+    expect(asRead('a&#8238;b')).toBe('a\u202eb');
+    expect(asRead('Tom &amp; Jerry')).toBe('Tom & Jerry');
+    expect(asRead('R&#233;sum&eacute;')).toBe('R\u00e9sum\u00e9');
+    // Windows-1252 for 0x80-0x9F, U+FFFD for zero and out of range, int32 wrap as Go.
+    expect(asRead('&#133;')).toBe('\u2026');
+    expect(asRead('&#0;&#xD800;&#x110000;')).toBe('\ufffd\ufffd\ufffd');
+    expect(asRead('&#4294967361;')).toBe('A');
+    // A whitespace reference reads as a space; a name it doesn't know stays as written.
+    expect(asRead('a&#9;b&NewLine;c')).toBe('a b c');
+    expect(asRead('&copyright; AT&T;')).toBe('&copyright; AT&T;');
+    // Trimmed as Go trims: U+0085 yes, U+FEFF no.
+    expect(goTrim('\u0085a\u3000')).toBe('a');
+    expect(goTrim('\ufeffa')).toBe('\ufeffa');
+    expect(asRead('a\u0085&#32;')).toBe('a');
+  });
+
+  it("counts evidence as the community's issue carries it", () => {
+    expect(issueLength('plain')).toBe(5);
+    // 14 characters; each heading line adds a backslash and drops its indent (0, 2, 1).
+    expect(issueLength('# a\n  ## b\n\t#c')).toBe(14 + 1 + (1 - 2) + (1 - 1));
+    expect(issueLength('📚 #')).toBe(3);
   });
 });
