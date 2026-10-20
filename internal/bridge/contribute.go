@@ -230,17 +230,20 @@ func CheckCorrect(raw json.RawMessage) (CorrectParams, error) {
 	return parseCorrect(raw)
 }
 
-// checkProse bounds an admin's text: valid UTF-8, at most max characters, and,
-// read as the community reads it (asRead), no control characters
-// (unicode.IsControl, C1 included as the Bridge refuses them; but line breaks
-// and tabs when lines allows them) and no bidirectional override
-// (isBidiControl), which the community refuses in a batch.
+// checkProse bounds an admin's text: valid UTF-8, at most max characters, no
+// control characters (unicode.IsControl, C1 included as the Bridge refuses
+// them; but line breaks and tabs when lines allows them) as written or as the
+// community reads it (asRead, whose trim can drop a C1 space like U+0085
+// before a trailing "&#32;" the Bridge still files), and, read that way, no
+// bidirectional override (isBidiControl), which the community refuses in a
+// batch.
 func checkProse(name, v string, max int, lines bool) error {
 	if !utf8.ValidString(v) || utf8.RuneCountInString(v) > max {
 		return invalid("%s must be at most %d characters of text", name, max)
 	}
+	control := func(r rune) bool { return unicode.IsControl(r) && !(lines && (r == '\n' || r == '\t')) }
 	read := asRead(v)
-	if strings.ContainsFunc(read, func(r rune) bool { return unicode.IsControl(r) && !(lines && (r == '\n' || r == '\t')) }) {
+	if strings.ContainsFunc(v, control) || strings.ContainsFunc(read, control) {
 		return invalid("%s holds a control character", name)
 	}
 	if strings.ContainsFunc(read, isBidiControl) {

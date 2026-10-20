@@ -527,6 +527,9 @@ func TestCorrectReadsValuesAsTheCommunity(t *testing.T) {
 		"an upper-case hex reference":  {params("a", "b", "see &#X202E;here"), "bidirectional"},
 		"a control by reference":       {params("a", "A&#1;B", "e"), "control character"},
 		"a control in the evidence":    {params("a", "b", "see\fhere"), "control character"},
+		"a C1 space before a ref":      {params("a", "b\u0085&#32;", "e"), "control character"},
+		"a C1 space in the current":    {params("a\u0085&#x20;", "b", "e"), "control character"},
+		"a C1 space ending evidence":   {params("a", "b", "see\u0085&nbsp;"), "control character"},
 		"a no-break space for a value": {params("a", "&#160;", "e"), "must be set"},
 		"a named no-break space":       {params("a", "&nbsp;", "e"), "must be set"},
 		"the current value escaped":    {params("Tom & Jerry", "Tom &amp; Jerry", "e"), "differ"},
@@ -545,6 +548,8 @@ func TestCorrectReadsValuesAsTheCommunity(t *testing.T) {
 		"accents by reference":    {"Resume", "R&#233;sum&#233;", "e"},
 		"a record that spells it": {"Tom &amp; Jerry", "Tom & Jerry", "e"},
 		"markup in the evidence":  {"a", "b", "The cover reads &lt;Mistborn&gt;."},
+		"a space before a ref":    {"a", "b\u00a0&#32;", "e"},
+		"evidence ending a ref":   {"a", "b", "see\u00a0&nbsp;"},
 	} {
 		p, err := CheckCorrect(json.RawMessage(params(c.current, c.corrected, c.evidence)))
 		if err != nil || p.Changes[0].Corrected != c.corrected || p.Evidence != c.evidence {
