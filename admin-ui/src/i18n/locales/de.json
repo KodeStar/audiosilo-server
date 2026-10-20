@@ -2899,7 +2899,7 @@
   "bridge.park.fix_loop_exhausted": "Die Prüfungen fanden auch nach mehreren Korrekturen noch Fehler.",
   "bridge.park.asr_decode_timeout": "Ein Kapitel hat zu lange zum Transkribieren gebraucht.",
   "bridge.park.asr_worker_waiting": "Wartet auf einen ASR-Worker. Die Aufgabe läuft weiter, sobald sich einer verbindet.",
-  "bridge.park.contrib_unavailable": "Zum Beitragen braucht die Bridge ein GitHub-Token.",
+  "bridge.park.contrib_unavailable": "Die Bridge ist nicht bei GitHub angemeldet. Melde dich auf dem Tab Accounts der Bridge bei GitHub an, dann läuft die Aufgabe weiter.",
   "bridge.park.core_needed": "Die Community hat noch keinen Eintrag für dieses Buch. Lege auf der Bridge einen an, um beizutragen.",
   "bridge.park.core_pending": "Wartet darauf, dass der Community-Eintrag des Buchs angenommen wird.",
   "bridge.park.ebook_unreadable": "Das E-Book ließ sich nicht lesen. Es ist vielleicht kopiergeschützt.",

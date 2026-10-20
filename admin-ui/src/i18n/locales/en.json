@@ -2899,7 +2899,7 @@
   "bridge.park.fix_loop_exhausted": "The checks kept finding mistakes after several fixes.",
   "bridge.park.asr_decode_timeout": "A chapter took too long to transcribe.",
   "bridge.park.asr_worker_waiting": "Waiting for an ASR worker. The job carries on once one connects.",
-  "bridge.park.contrib_unavailable": "Contributing needs a GitHub token on the Bridge.",
+  "bridge.park.contrib_unavailable": "The Bridge has no GitHub sign-in. Sign in to GitHub on the Bridge's Accounts tab and the job carries on.",
   "bridge.park.core_needed": "The community has no entry for this book yet. Add one on the Bridge to contribute.",
   "bridge.park.core_pending": "Waiting for the book's community entry to be accepted.",
   "bridge.park.ebook_unreadable": "The ebook couldn't be read. It may be copy-protected.",

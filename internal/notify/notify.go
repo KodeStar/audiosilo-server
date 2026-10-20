@@ -468,9 +468,11 @@ func bridgeJobBook(ev catalog.ServerEvent) string {
 
 // bridgeParkReason words a parked job's park code (the Bridge's
 // progress.park.code). A transient park (the agent's rate limit, a short
-// outage) is never announced (bridge.Job.Notable), so none is worded here; an
-// announced park may still resume by itself (a monthly budget at the month's
-// turn), so no sentence promises either way. The Bridge's own page says more.
+// outage) is never announced (bridge.Job.Notable), so none is worded here. A
+// park the Bridge resumes on a change on its Accounts tab (a replaced agent
+// credential, a GitHub sign-in) says so; the others promise nothing either way,
+// as one may still resume by itself (a monthly budget at the month's turn). The
+// Bridge's own page says more.
 func bridgeParkReason(code string) string {
 	switch code {
 	case "book_not_writable":

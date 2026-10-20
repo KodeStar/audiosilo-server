@@ -3050,7 +3050,7 @@
   "bridge.park.fix_loop_exhausted": "Les vérifications trouvaient encore des erreurs après plusieurs corrections.",
   "bridge.park.asr_decode_timeout": "Un chapitre a mis trop de temps à être transcrit.",
   "bridge.park.asr_worker_waiting": "En attente d'un worker ASR. La tâche reprend dès qu'il s'en connecte un.",
-  "bridge.park.contrib_unavailable": "Pour contribuer, la Bridge a besoin d'un jeton GitHub.",
+  "bridge.park.contrib_unavailable": "La Bridge n'est pas connectée à GitHub. Connectez-vous à GitHub dans l'onglet Accounts de la Bridge et la tâche reprend.",
   "bridge.park.core_needed": "La communauté n'a pas encore d'entrée pour ce livre. Ajoutez-en une sur la Bridge pour contribuer.",
   "bridge.park.core_pending": "En attente de l'acceptation de l'entrée communautaire du livre.",
   "bridge.park.ebook_unreadable": "L'ebook n'a pas pu être lu. Il est peut-être protégé contre la copie.",

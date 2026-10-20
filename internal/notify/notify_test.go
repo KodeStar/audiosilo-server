@@ -424,12 +424,10 @@ func TestBridgeJobEnded(t *testing.T) {
 }
 
 // Each announced park reads as a sentence of its own: a refused credential
-// says where to replace it (the Bridge's Accounts tab, which resumes the job at
-// once, or the agent container, which the job tries again by itself) and needs
-// no Retry; a missing GitHub sign-in says where to sign in, which resumes the
-// job (the Bridge re-admits it), so it needs no Retry either; a
-// spent budget fits the book's and the month's alike (the monthly one resumes
-// by itself); an unknown code points at the page.
+// says where to replace it and a missing GitHub sign-in where to sign in,
+// neither asking for a Retry (the Bridge resumes both); a spent budget fits the
+// book's and the month's alike (the monthly one resumes by itself); an unknown
+// code points at the page.
 func TestBridgeParkReasons(t *testing.T) {
 	t.Parallel()
 	for code, want := range map[string]string{
